@@ -1329,3 +1329,34 @@ test "abstract exports and newtypes retain structural generation in their owning
           ("native", "owned newtype", "pass"),
         ]
         (runReport ["--engines", "eval,native"] target))
+
+test "native helper hygiene preserves user field names and counterexample labels" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Sample = Sample { __np_field : Int }\nprop \"prefixed field\" (__np_value : Sample) = __np_value.__np_field == __np_value.__np_field\nprop \"prefixed counterexample\" (__np_value : Sample) = False\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        gradeReport
+          1
+          [
+            ("eval", "prefixed field", "pass"),
+            ("eval", "prefixed counterexample", "fail"),
+            ("native", "prefixed field", "pass"),
+            ("native", "prefixed counterexample", "fail"),
+          ]
+          (Ok (code, report)),
+        expectTrue
+          (all
+            (row => match field "detail" row
+              Some detail =>
+                contains "__np_value =" detail && contains "__np_field" detail
+              None => False)
+            (filter
+              (row => field "name" row == Some "prefixed counterexample")
+              (propertyReports report))),
+      ])
