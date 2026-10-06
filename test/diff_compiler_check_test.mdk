@@ -806,36 +806,36 @@ letInBodyRows = [
   (
     "let_in_var_body",
     "f : Int -> String\nf x =\n  let y = x + 1 in y\nmain = println (f 1)\n",
-    ["let_in_var_body.mdk:3:19: Type mismatch: String vs Int"],
+    ["let_in_var_body.mdk:3:19: type mismatch: String vs Int"],
     [
-      "\"message\":\"Type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":20,\"line\":2},\"start\":{\"character\":19,\"line\":2}}",
+      "\"message\":\"type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":20,\"line\":2},\"start\":{\"character\":19,\"line\":2}}",
     ],
   ),
   (
     "let_in_if_body",
     "f : Int -> String\nf x =\n  let y = x + 1 in if y > 0 then y else \"n\"\nmain = println (f 1)\n",
     [
-      "let_in_if_body.mdk:3:40: Type mismatch: Int vs String",
-      "let_in_if_body.mdk:3:19: Type mismatch: String vs Int",
+      "let_in_if_body.mdk:3:40: type mismatch: Int vs String",
+      "let_in_if_body.mdk:3:19: type mismatch: String vs Int",
     ],
     [
-      "\"message\":\"Type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":43,\"line\":2},\"start\":{\"character\":19,\"line\":2}}",
+      "\"message\":\"type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":43,\"line\":2},\"start\":{\"character\":19,\"line\":2}}",
     ],
   ),
   (
     "let_in_tuple_body",
     "f : Int -> String\nf x =\n  let (a, b) = (x, x) in a + b\nmain = println (f 1)\n",
-    ["let_in_tuple_body.mdk:3:25: Type mismatch: String vs Int"],
+    ["let_in_tuple_body.mdk:3:25: type mismatch: String vs Int"],
     [
-      "\"message\":\"Type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":30,\"line\":2},\"start\":{\"character\":25,\"line\":2}}",
+      "\"message\":\"type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":30,\"line\":2},\"start\":{\"character\":25,\"line\":2}}",
     ],
   ),
   (
     "let_in_call_body",
     "g : Int -> Int\ng x = x\nf : Int -> String\nf x =\n  let y = 1 in g y\nmain = println (f 1)\n",
-    ["let_in_call_body.mdk:5:17: Type mismatch: String vs Int"],
+    ["let_in_call_body.mdk:5:17: type mismatch: String vs Int"],
     [
-      "\"message\":\"Type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":18,\"line\":4},\"start\":{\"character\":17,\"line\":4}}",
+      "\"message\":\"type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":18,\"line\":4},\"start\":{\"character\":17,\"line\":4}}",
     ],
   ),
 ]
