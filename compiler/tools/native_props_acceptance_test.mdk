@@ -1278,3 +1278,54 @@ test "properties and ordinary tests share global cells with captured functions" 
           [Some "pass", Some "pass"]
           (map (field "status") (unitReportRows report)),
       ])
+
+test "custom shrinking traverses nominal fields, list elements, and tuple components" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Box = Box Int\nimpl Arbitrary Box where\n  arbitrary () = Box 500000\n  shrink (Box 1) = []\n  shrink _ = [Box 1]\ndata Outer = Outer Box\nprop \"nominal nested shrink\" (value : Outer) = False\nprop \"list nested shrink\" (values : List Box) = match values\n  [] => True\n  _ => False\nprop \"tuple nested shrink\" (value : (Box, Int)) = False\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        gradeReport
+          1
+          [
+            ("eval", "nominal nested shrink", "fail"),
+            ("eval", "list nested shrink", "fail"),
+            ("eval", "tuple nested shrink", "fail"),
+            ("native", "nominal nested shrink", "fail"),
+            ("native", "list nested shrink", "fail"),
+            ("native", "tuple nested shrink", "fail"),
+          ]
+          (Ok (code, report)),
+        expectTrue
+          (all
+            (row => match field "detail" row
+              Some detail =>
+                (contains "Box 1" detail || contains "Box (1)" detail)
+                  && not (contains "500000" detail)
+              None => False)
+            (propertyReports report)),
+      ])
+
+test "abstract exports and newtypes retain structural generation in their owning module" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "export data Hidden = Hidden Int\nexport newtype Wrapped = Wrapped Int\nprop \"owned abstract data\" (value : Hidden) = match value\n  Hidden n => n == n\nprop \"owned newtype\" (value : Wrapped) = match value\n  Wrapped n => n == n\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "owned abstract data", "pass"),
+          ("eval", "owned newtype", "pass"),
+          ("native", "owned abstract data", "pass"),
+          ("native", "owned newtype", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
