@@ -3,8 +3,8 @@
 -- prints a pass/fail label of its own.
 
 import frontend.ast.{
-  Decl(..), Expr, PropParam(..), Ty(..), Variant(..), Field(..), ConPayload(..),
-  Pat(..)
+  Decl(..), Expr, PropParam(..), Ty(..), TyConOrigin(..), Variant(..),
+  Field(..), ConPayload(..), Pat(..)
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
@@ -14,8 +14,9 @@ import driver.build_cmd.{
 }
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import support.util.{
-  joinNl, joinWith, splitNl, filterList, lookupAssoc, listLen, zipL
+  joinNl, joinWith, splitNl, filterList, lookupAssoc, listLen, zipL, reverseL
 }
 import string.{toInt}
 import tools.probe_transcript.{
@@ -24,6 +25,13 @@ import tools.probe_transcript.{
   valuePrintExpr
 }
 import tools.printer.{exprToString, ppTy}
+import tools.prop_plan.{
+  PlanModule(..), TypeKey(..), CustomPlan(..), PlanEnv, GenPlan(..),
+  PlanDef(..), PlanCtor(..), PlanField(..), PlanError(..), PlanErrorReason(..),
+  planErrorText, buildPlanEnvModules, planFor, planDef, instantiateCtor,
+  typeKeyWord, ctorWeights, listLengthBound, optionWeights, resultWeights,
+  maxGenDepth
+}
 import tools.prop_runner.{
   PropResult(..), PropStatus(..), PropFailureKind(..), filterProps,
   filterPropsByName, propSeedValue, PropRequest(..), propRequestName,
@@ -56,54 +64,205 @@ expectedTags _ [] = [endTag]
 expectedTags i (_ :: rest) =
   [startTag i, seedTag i, boolTag i, detailTag i] ++ expectedTags (i + 1) rest
 
--- One native result for every selected property, preserving source order.
+-- The command path supplies paired raw/runtime declarations so the native
+-- renderer can share identity-aware planning with the evaluator.  The legacy
+-- entry remains for direct callers whose source is a self-contained module.
 export
-runNativeProps : String ->
+runNativePlannedPropRequests : String ->
   String ->
-  List (String, List Decl) ->
-  Int ->
-  Option String ->
-  <IO> List PropResult
-runNativeProps target tsrc modules cases filterOpt =
-  let props = filterPropsByName filterOpt (filterProps (desugarProps tsrc))
-  runNativePropRequests
-    target
-    tsrc
-    modules
-    (defaultRequests props cases (propSeedValue ()))
-
-defaultRequests : List Decl -> Int -> Int -> List PropRequest
-defaultRequests [] _ _ = []
-defaultRequests ((DProp _ name _ _) :: rest) cases seed =
-  PropRequest name seed cases :: defaultRequests rest cases seed
-defaultRequests (_ :: rest) cases seed = defaultRequests rest cases seed
-
-export
-runNativePropRequests : String ->
-  String ->
-  List (String, List Decl) ->
+  List PlanModule ->
   List PropRequest ->
   <IO> List PropResult
-runNativePropRequests target tsrc modules requests =
-  let jobs = requestedProps (filterProps (desugarProps tsrc)) requests
-  match jobs
-    [] => []
-    _ => match nativeRendered target tsrc modules jobs
-      Err e => map (nativeError e) jobs
-      Ok rows => rows
+runNativePlannedPropRequests target tsrc modules requests =
+  let props = filterProps (desugarProps tsrc)
+  match requestIndex requests omEmpty
+    Err duplicate => nativeProtocolErrors duplicate requests
+    Ok index => match duplicateSelectedPropName props index omEmpty
+      Some duplicate =>
+        nativeProtocolErrors
+          "duplicate property declaration name \"{duplicate}\""
+          requests
+      None => match buildPlanEnvModules (plannedRoot modules) modules
+        Err e =>
+          plannedResults (planCapabilities props index (planErrorText e)) []
+        Ok env =>
+          let outcomes = plannedOutcomes env modules props index
+          let runnable = plannedRunnable outcomes
+          match runnable
+            [] => plannedResults outcomes []
+            _ => match nativeRenderedPlanned target tsrc modules env runnable
+              Err e =>
+                plannedResults
+                  outcomes
+                  (map (nativePlannedBuildError e) runnable)
+              Ok rows => plannedResults outcomes rows
 
-requestedProps : List Decl -> List PropRequest -> List (Decl, PropRequest)
-requestedProps [] _ = []
-requestedProps ((d@(DProp _ name _ _)) :: rest) requests =
-  match requestNamed name requests
-    Some r => (d, r) :: requestedProps rest requests
-    None => requestedProps rest requests
-requestedProps (_ :: rest) requests = requestedProps rest requests
+plannedRoot : List PlanModule -> String
+plannedRoot [] = ""
+plannedRoot [PlanModule name _ _] = name
+plannedRoot (_ :: rest) = plannedRoot rest
 
-requestNamed : String -> List PropRequest -> Option PropRequest
-requestNamed _ [] = None
-requestNamed name (r :: rest) =
-  if name == propRequestName r then Some r else requestNamed name rest
+planCapabilities : List Decl ->
+  OrdMap PropRequest ->
+  String ->
+  List NativePlanOutcome
+planCapabilities [] _ _ = []
+planCapabilities ((d@(DProp _ _ _ _)) :: rest) requests message =
+  match omLookup (propName d) requests
+    Some r =>
+      NativeCapability d r message :: planCapabilities rest requests message
+    None => planCapabilities rest requests message
+planCapabilities (_ :: rest) requests message =
+  planCapabilities rest requests message
+
+-- Planning is deliberately per declaration, before the one shared native
+-- build.  A parameter the engines cannot generate is a capability result for
+-- that law only; it must not prevent an unrelated law in the same file from
+-- getting its compiled result.
+data NativePlanOutcome =
+  | NativeRunnable Decl PropRequest (List GenPlan)
+  | NativeCapability Decl PropRequest String
+
+plannedOutcomes : PlanEnv ->
+  List PlanModule ->
+  List Decl ->
+  OrdMap PropRequest ->
+  List NativePlanOutcome
+plannedOutcomes _ _ [] _ = []
+plannedOutcomes env modules ((d@(DProp _ _ _ _)) :: rest) requests =
+  match omLookup (propName d) requests
+    None => plannedOutcomes env modules rest requests
+    Some r => match runtimePropParams modules (propName d)
+      None =>
+        NativeCapability
+            d
+            r
+            "property declaration was absent from the elaborated module"
+          :: plannedOutcomes env modules rest requests
+      Some ps => match planParameters env (propName d) ps []
+        Ok plans =>
+          NativeRunnable d r plans :: plannedOutcomes env modules rest requests
+        Err e =>
+          NativeCapability d r (planErrorText e)
+            :: plannedOutcomes env modules rest requests
+plannedOutcomes env modules (_ :: rest) requests =
+  plannedOutcomes env modules rest requests
+
+runtimePropParams : List PlanModule -> String -> Option (List PropParam)
+runtimePropParams [] _ = None
+runtimePropParams [PlanModule _ _ runtime] name =
+  runtimePropParamsIn runtime name
+runtimePropParams (_ :: rest) name = runtimePropParams rest name
+
+runtimePropParamsIn : List Decl -> String -> Option (List PropParam)
+runtimePropParamsIn [] _ = None
+runtimePropParamsIn ((DProp _ name ps _) :: _) wanted
+  | name == wanted = Some ps
+runtimePropParamsIn (_ :: rest) wanted = runtimePropParamsIn rest wanted
+
+propName : Decl -> String
+propName (DProp _ name _ _) = name
+propName _ = "<invalid prop>"
+
+planParameters : PlanEnv ->
+  String ->
+  List PropParam ->
+  List GenPlan ->
+  Result PlanError (List GenPlan)
+planParameters _ _ [] acc = Ok (reverseL acc)
+planParameters env property ((PropParam name _ ty) :: rest) acc =
+  match planFor env property name ty
+    Ok p => planParameters env property rest (p :: acc)
+    Err e => Err e
+
+plannedRunnable : List NativePlanOutcome -> List NativePlanOutcome
+plannedRunnable [] = []
+plannedRunnable ((x@(NativeRunnable _ _ _)) :: rest) = x :: plannedRunnable rest
+plannedRunnable (_ :: rest) = plannedRunnable rest
+
+nativePlannedBuildError : String -> NativePlanOutcome -> PropResult
+nativePlannedBuildError e (NativeRunnable d r _) = nativeError e (d, r)
+nativePlannedBuildError e _ =
+  PropResult
+    "native"
+    "<invalid prop>"
+    PropErroredResult
+    (Some PropBuildError)
+    e
+    0
+    0
+
+plannedResults : List NativePlanOutcome -> List PropResult -> List PropResult
+plannedResults [] _ = []
+plannedResults ((NativeCapability d r message) :: rest) rows =
+  PropResult
+      "native"
+      (propName d)
+      PropErroredResult
+      (Some PropCapabilityError)
+      message
+      (propRequestSeed r)
+      (propRequestCases r)
+    :: plannedResults rest rows
+plannedResults ((NativeRunnable d r _) :: rest) rows =
+  nativeRowFor (propName d) r rows :: plannedResults rest rows
+
+nativeRowFor : String -> PropRequest -> List PropResult -> PropResult
+nativeRowFor _ r [] =
+  PropResult
+    "native"
+    (propRequestName r)
+    PropErroredResult
+    (Some PropRuntimeError)
+    "native property runner: the compiled probe omitted this property result"
+    (propRequestSeed r)
+    (propRequestCases r)
+nativeRowFor name r ((row@(PropResult _ rowName _ _ _ _ _)) :: rest) =
+  if name == rowName then row else nativeRowFor name r rest
+
+requestIndex : List PropRequest ->
+  OrdMap PropRequest ->
+  Result String (OrdMap PropRequest)
+requestIndex [] index = Ok index
+requestIndex (r :: rest) index =
+  let name = propRequestName r
+  if propRequestCases r <= 0 then
+    Err "property request \"{name}\" has a non-positive case budget"
+  else if omHasKey name index then
+    Err "duplicate property request name \"{name}\""
+  else
+    requestIndex rest (omInsert name r index)
+
+duplicateSelectedPropName : List Decl ->
+  OrdMap PropRequest ->
+  OrdMap Unit ->
+  Option String
+duplicateSelectedPropName [] _ _ = None
+duplicateSelectedPropName ((DProp _ name _ _) :: rest) requests seen =
+  if omHasKey name seen then
+    if omHasKey name requests then
+      Some name
+    else
+      duplicateSelectedPropName rest requests seen
+  else
+    duplicateSelectedPropName rest requests (omInsert name () seen)
+duplicateSelectedPropName (_ :: rest) requests seen =
+  duplicateSelectedPropName rest requests seen
+
+nativeProtocolErrors : String -> List PropRequest -> List PropResult
+nativeProtocolErrors duplicate requests =
+  map (nativeProtocolError duplicate) requests
+
+nativeProtocolError : String -> PropRequest -> PropResult
+nativeProtocolError duplicate r =
+  PropResult
+    "native"
+    (propRequestName r)
+    PropErroredResult
+    (Some PropProtocolError)
+    "native property runner: \{duplicate}"
+    (propRequestSeed r)
+    (propRequestCases r)
 
 desugarProps : String -> List Decl
 desugarProps src = desugar (parse src)
@@ -128,52 +287,52 @@ nativeError e (_, r) =
     (propRequestSeed r)
     (propRequestCases r)
 
-nativeRendered : String ->
+nativeRenderedPlanned : String ->
   String ->
-  List (String, List Decl) ->
-  List (Decl, PropRequest) ->
+  List PlanModule ->
+  PlanEnv ->
+  List NativePlanOutcome ->
   <IO> Result String (List PropResult)
-nativeRendered target tsrc modules props = match makeTempDir ()
+nativeRenderedPlanned target tsrc modules env jobs = match makeTempDir ()
   Err e =>
     Err "native property runner: could not create a scratch directory: \{e}"
   Ok tmp =>
     let nonce = mintNonce ()
-    let rendered = runInTmp target tsrc modules props tmp nonce
+    let rendered = runInTmpPlanned target tsrc modules env jobs tmp nonce
     let _ = cleanupTempDir tmp
     rendered
 
-scratchEntryName : String -> String
-scratchEntryName target = "prop_" ++ baseOf target
-
-runInTmp : String ->
+runInTmpPlanned : String ->
   String ->
-  List (String, List Decl) ->
-  List (Decl, PropRequest) ->
+  List PlanModule ->
+  PlanEnv ->
+  List NativePlanOutcome ->
   String ->
   String ->
   <IO> Result String (List PropResult)
-runInTmp target tsrc modules props tmp nonce =
+runInTmpPlanned target tsrc modules env jobs tmp nonce =
   let entry = joinPath tmp (scratchEntryName target)
   let out = joinPath tmp "prop_probe"
   let _ =
     writeFile
       (joinPath tmp "medaka.toml")
       (scratchProjectManifest "medaka_native_props" target)
-  match writeFile entry (probeSource nonce target tsrc modules props)
+  match writeFile entry (plannedProbeSource nonce target tsrc modules env jobs)
     Err e =>
       Err "native property runner: could not write the probe source: \{e}"
-    Ok _ => buildAndRun target entry out tmp props nonce
+    Ok _ => buildAndRunPlanned target entry out tmp jobs nonce
 
-buildAndRun : String ->
+buildAndRunPlanned : String ->
   String ->
   String ->
   String ->
-  List (Decl, PropRequest) ->
+  List NativePlanOutcome ->
   String ->
   <IO> Result String (List PropResult)
-buildAndRun target entry out tmp props nonce =
+buildAndRunPlanned target entry out tmp jobs nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let medaka = envOr "MEDAKA" "medaka"
+  let emitter = envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter")
   let cc = envOr "CC" "clang"
   match (runBuildNativeRoots
     root
@@ -190,16 +349,31 @@ buildAndRun target entry out tmp props nonce =
     Err rep =>
       Err
         "native property runner: could not build \{target} natively\n\{ppBuildReport rep}"
-    Ok _ => match runCommand out []
+    Ok _ => match runCommand "env" [
+      "MEDAKA_ROOT=" ++ root,
+      "MEDAKA=" ++ medaka,
+      "MEDAKA_EMITTER=" ++ emitter,
+      out,
+    ]
       Err e =>
         Err "native property runner: could not run the compiled probe: \{e}"
       Ok (code, stdout, stderr) =>
+        let props = plannedDeclRequests jobs
         let chunks = chunksOf (sentinelPrefix nonce) (splitNl stdout)
         if tagsInOrder (expectedTags 0 props) chunks then
           Ok (renderAll chunks (abortNote code stderr) 0 props)
         else
           Err
             "native property runner: the probe printed a forged or malformed transcript; no property result was trusted"
+
+plannedDeclRequests : List NativePlanOutcome -> List (Decl, PropRequest)
+plannedDeclRequests [] = []
+plannedDeclRequests ((NativeRunnable d r _) :: rest) =
+  (d, r) :: plannedDeclRequests rest
+plannedDeclRequests (_ :: rest) = plannedDeclRequests rest
+
+scratchEntryName : String -> String
+scratchEntryName target = "prop_" ++ baseOf target
 
 abortNote : Int -> String -> String
 abortNote code stderr =
@@ -264,20 +438,24 @@ renderOne chunks note cases i name = match (
 
 -- Probe source ---------------------------------------------------------------
 
-probeSource : String ->
+plannedProbeSource : String ->
   String ->
   String ->
-  List (String, List Decl) ->
-  List (Decl, PropRequest) ->
+  List PlanModule ->
+  PlanEnv ->
+  List NativePlanOutcome ->
   String
-probeSource nonce target tsrc modules props =
+plannedProbeSource nonce target tsrc modules env jobs =
   joinNl
-    (nativeImports modules (jobDecls props)
+    (plannedImports modules jobs env
       ++ [
         probeTargetSource target tsrc,
         "",
         "__np_state : Ref Int",
         "__np_state = Ref 0",
+        "",
+        "__np_custom_state : Ref U64",
+        "__np_custom_state = Ref 0",
         "",
         "__np_next _ =",
         "  let s = (!__np_state * 1103515245 + 12345) % 2147483648",
@@ -286,18 +464,814 @@ probeSource nonce target tsrc modules props =
         "",
         "__np_int _ = (__np_next () / 65536) % 2001 - 1000",
         "__np_bool _ = (__np_next () / 65536) % 2 == 0",
-        "",
         "__np_choose n = if n <= 1 then 0 else (__np_next () / 65536) % n",
+        "__np_char _ = charFromCodeUnsafe (32 + __np_choose 95)",
+        "",
+        "__np_delete_each [] = []",
+        "__np_delete_each (x :: xs) = xs :: map (ys => x :: ys) (__np_delete_each xs)",
+        "__np_replace_each f [] = []",
+        "__np_replace_each f (x :: xs) = map (ys => ys :: xs) (f x) ++ map (ys => x :: ys) (__np_replace_each f xs)",
         "",
       ]
-      ++ propLines modules props 0
+      ++ plannedPropLines modules env jobs 0
       ++ ["main ="]
-      ++ mainLines nonce props 0
+      ++ plannedMainLines nonce jobs 0
       ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
 
-jobDecls : List (Decl, PropRequest) -> List Decl
-jobDecls [] = []
-jobDecls ((d, _) :: rest) = d :: jobDecls rest
+-- Each imported module gets a probe-local alias. Constructor selection is by
+-- the TypeKey owner, never by a bare source spelling.
+plannedImports : List PlanModule ->
+  List NativePlanOutcome ->
+  PlanEnv ->
+  List String
+plannedImports modules jobs env =
+  uniqueStrings (flatMap (importsForOutcome modules env) jobs)
+
+importsForOutcome : List PlanModule ->
+  PlanEnv ->
+  NativePlanOutcome ->
+  List String
+importsForOutcome modules env (NativeRunnable _ _ plans) =
+  flatMap (importsForPlan modules env) plans
+importsForOutcome _ _ _ = []
+
+importsForPlan : List PlanModule -> PlanEnv -> GenPlan -> List String
+importsForPlan _ _ GInt = []
+importsForPlan _ _ GBool = []
+importsForPlan _ _ GFloat = []
+importsForPlan _ _ GChar = []
+importsForPlan _ _ GString = []
+importsForPlan _ _ GUnit = []
+importsForPlan modules env (GList p) = importsForPlan modules env p
+importsForPlan modules env (GArray p) = importsForPlan modules env p
+importsForPlan modules env (GOption p) = importsForPlan modules env p
+importsForPlan modules env (GResult e a) =
+  importsForPlan modules env e ++ importsForPlan modules env a
+importsForPlan modules env (GTuple ps) = flatMap (importsForPlan modules env) ps
+importsForPlan modules _ (GCustom (CustomPlan key _)) = importForKey modules key
+importsForPlan modules env (p@(GNominal key _)) = match planDef env key
+  Err _ => importForKey modules key
+  Ok (PlanDef _ _ _ _ ctors) =>
+    importForKey modules key
+      ++ flatMap
+        (ctor => match instantiateCtor env p ctor
+          Ok fields => flatMap (importsForPlan modules env) (map snd fields)
+          Err _ => [])
+        ctors
+
+importForKey : List PlanModule -> TypeKey -> List String
+importForKey modules (TypeKey _ (OriginModule owner)) =
+  match moduleAlias modules owner
+    Some alias => ["import \{owner} as \{alias}"]
+    None => []
+importForKey _ _ = []
+
+moduleAlias : List PlanModule -> String -> Option String
+moduleAlias modules owner = moduleAliasGo (dropLastPlanModule modules) owner 0
+
+moduleAliasGo : List PlanModule -> String -> Int -> Option String
+moduleAliasGo [] _ _ = None
+moduleAliasGo ((PlanModule name _ _) :: rest) owner i =
+  if name == owner then
+    Some "NP\{intToString i}"
+  else
+    moduleAliasGo rest owner (i + 1)
+
+dropLastPlanModule : List PlanModule -> List PlanModule
+dropLastPlanModule [] = []
+dropLastPlanModule [_] = []
+dropLastPlanModule (x :: xs) = x :: dropLastPlanModule xs
+
+uniqueStrings : List String -> List String
+uniqueStrings [] = []
+uniqueStrings (x :: xs) = x :: uniqueStrings (filterList (/= x) xs)
+
+plannedPropLines : List PlanModule ->
+  PlanEnv ->
+  List NativePlanOutcome ->
+  Int ->
+  List String
+plannedPropLines _ _ [] _ = []
+plannedPropLines modules env ((NativeRunnable (DProp _ _ params body) r plans) :: rest) i =
+  fnLines i params body
+    ++ plannedGenLines modules env i 0 params plans
+    ++ plannedRunLines modules env i params plans (propRequestCases r)
+    ++ plannedShrinkLines modules env i params plans
+    ++ plannedPropLines modules env rest (i + 1)
+plannedPropLines modules env (_ :: rest) i = plannedPropLines modules env rest i
+
+plannedGenLines : List PlanModule ->
+  PlanEnv ->
+  Int ->
+  Int ->
+  List PropParam ->
+  List GenPlan ->
+  List String
+plannedGenLines _ _ _ _ [] [] = []
+plannedGenLines modules env i j ((PropParam _ _ ty) :: rest) (p :: plans) =
+  match renderPlannedGen modules env (genName i j) p p 0
+    Ok expr =>
+      [
+          "\{genName i j} : Int -> \{ppTy ty}",
+          "\{genName i j} depth = \{expr}",
+          "",
+        ]
+        ++ plannedGenLines modules env i (j + 1) rest plans
+    Err _ => []
+plannedGenLines _ _ _ _ _ _ = []
+
+renderPlannedGen : List PlanModule ->
+  PlanEnv ->
+  String ->
+  GenPlan ->
+  GenPlan ->
+  Int ->
+  Result PlanError String
+renderPlannedGen _ _ _ _ GInt _ = Ok "__np_int ()"
+renderPlannedGen _ _ _ _ GBool _ = Ok "__np_bool ()"
+renderPlannedGen _ _ _ _ GFloat _ = Ok "intToFloat (__np_int ())"
+renderPlannedGen _ _ _ _ GChar _ = Ok "__np_char ()"
+renderPlannedGen _ _ _ _ GString depth = Ok (stringExpr depth)
+renderPlannedGen _ _ _ _ GUnit _ = Ok "()"
+renderPlannedGen _ _ _ _ (GCustom _) _ = Ok customDrawExpr
+renderPlannedGen modules env rootName root (GList p) depth =
+  listExpr "[" "]" modules env rootName root p depth
+renderPlannedGen modules env rootName root (GArray p) depth =
+  listExpr "[|" "|]" modules env rootName root p depth
+renderPlannedGen modules env rootName root (GOption p) depth =
+  map
+    (child => renderOptionAtDepth env p child 0)
+    (renderPlannedGen modules env rootName root p depth)
+renderPlannedGen modules env rootName root (GResult e a) depth = match (
+  renderPlannedGen modules env rootName root e depth,
+  renderPlannedGen modules env rootName root a depth,
+)
+  (Ok error, Ok ok) => Ok (renderResultAtDepth env e a error ok 0)
+  (Err x, _) => Err x
+  (_, Err x) => Err x
+renderPlannedGen modules env rootName root (GTuple ps) depth =
+  map
+    (xs => "(\{joinWith ", " xs})")
+    (renderPlanList modules env rootName root ps depth)
+renderPlannedGen modules env rootName root (p@(GNominal key _)) depth =
+  if depth > 0 && sameGenPlan p root then
+    Ok "\{rootName} (depth + 1)"
+  else
+    renderNominal modules env rootName root p key depth
+
+renderOptionChoice : List Int -> String -> String
+renderOptionChoice [noneWeight, someWeight] child =
+  if noneWeight <= 0 then
+    "Some (\{child})"
+  else if someWeight <= 0 then
+    "None"
+  else
+    "if __np_choose \{noneWeight + someWeight} < \{noneWeight} then None else Some (\{child})"
+renderOptionChoice _ child = "Some (\{child})"
+
+renderOptionAtDepth : PlanEnv -> GenPlan -> String -> Int -> String
+renderOptionAtDepth env p child level =
+  let here = renderOptionChoice (optionWeights env level p) child
+  if level >= maxGenDepth then
+    here
+  else
+    "if depth <= \{intToString level} then \{here} else \{renderOptionAtDepth env p child (level + 1)}"
+
+renderResultChoice : List Int -> String -> String -> String
+renderResultChoice [errWeight, okWeight] error ok =
+  if errWeight <= 0 then
+    "Ok (\{ok})"
+  else if okWeight <= 0 then
+    "Err (\{error})"
+  else
+    "if __np_choose \{errWeight + okWeight} < \{errWeight} then Err (\{error}) else Ok (\{ok})"
+renderResultChoice _ error _ = "Err (\{error})"
+
+renderResultAtDepth : PlanEnv ->
+  GenPlan ->
+  GenPlan ->
+  String ->
+  String ->
+  Int ->
+  String
+renderResultAtDepth env err ok error okExpr level =
+  let here = renderResultChoice (resultWeights env level err ok) error okExpr
+  if level >= maxGenDepth then
+    here
+  else
+    "if depth <= \{intToString level} then \{here} else \{renderResultAtDepth env err ok error okExpr (level + 1)}"
+
+customDrawExpr : String
+customDrawExpr =
+  "(let caller = randomState ()\n  let _ = restoreRandomState (!__np_custom_state)\n  let x = arbitrary ()\n  let next = randomState ()\n  let _ = __np_custom_state := next\n  let _ = restoreRandomState caller\n  x)"
+
+stringExpr : Int -> String
+stringExpr _ =
+  "match __np_choose (if depth >= \{intToString maxGenDepth} then 1 else 4)\n  0 => \"\"\n  1 => charToStr (__np_char ())\n  2 => charToStr (__np_char ()) ++ charToStr (__np_char ())\n  _ => charToStr (__np_char ()) ++ charToStr (__np_char ()) ++ charToStr (__np_char ())"
+
+listExpr : String ->
+  String ->
+  List PlanModule ->
+  PlanEnv ->
+  String ->
+  GenPlan ->
+  GenPlan ->
+  Int ->
+  Result PlanError String
+listExpr open close modules env rootName root p depth =
+  map
+    (child => renderListAtDepth open close env p child 0)
+    (renderPlannedGen modules env rootName root p depth)
+
+renderListAtDepth : String ->
+  String ->
+  PlanEnv ->
+  GenPlan ->
+  String ->
+  Int ->
+  String
+renderListAtDepth open close env p child level =
+  let here = renderListChoice open close child (listLengthBound env level p)
+  if level >= maxGenDepth then
+    here
+  else
+    "if depth <= \{intToString level} then \{here} else \{renderListAtDepth open close env p child (level + 1)}"
+
+renderListChoice : String -> String -> String -> Int -> String
+renderListChoice open close child bound =
+  "match __np_choose \{intToString (bound + 1)}\n\{renderListArms open close child bound 0}"
+
+renderListArms : String -> String -> String -> Int -> Int -> String
+renderListArms open close child bound n
+  | n > bound = ""
+renderListArms open close child bound n =
+  "  \{if n == bound then "_" else intToString n} => \{open}\{joinWith ", " (repeatString child n)}\{close}\n\{renderListArms open close child bound (n + 1)}"
+
+repeatString : String -> Int -> List String
+repeatString _ 0 = []
+repeatString x n = x :: repeatString x (n - 1)
+
+renderPlanList : List PlanModule ->
+  PlanEnv ->
+  String ->
+  GenPlan ->
+  List GenPlan ->
+  Int ->
+  Result PlanError (List String)
+renderPlanList _ _ _ _ [] _ = Ok []
+renderPlanList modules env rootName root (p :: rest) depth = match (
+  renderPlannedGen modules env rootName root p depth,
+  renderPlanList modules env rootName root rest depth,
+)
+  (Ok x, Ok xs) => Ok (x :: xs)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+renderNominal : List PlanModule ->
+  PlanEnv ->
+  String ->
+  GenPlan ->
+  GenPlan ->
+  TypeKey ->
+  Int ->
+  Result PlanError String
+renderNominal modules env rootName root p key depth = match planDef env key
+  Err e => Err e
+  Ok (PlanDef _ owner _ _ ctors) =>
+    renderCtorAtDepth modules env rootName root p owner ctors 0
+
+renderCtorAtDepth : List PlanModule ->
+  PlanEnv ->
+  String ->
+  GenPlan ->
+  GenPlan ->
+  String ->
+  List PlanCtor ->
+  Int ->
+  Result PlanError String
+renderCtorAtDepth modules env rootName root p owner ctors level =
+  match (renderCtorChoices
+    modules
+    env
+    rootName
+    root
+    p
+    owner
+    ctors
+    (ctorWeights env p level)
+    level)
+    Err e => Err e
+    Ok here =>
+      if level >= maxGenDepth then
+        Ok here
+      else
+        map
+          (next => "if depth <= \{intToString level} then \{here} else \{next}")
+          (renderCtorAtDepth
+            modules
+            env
+            rootName
+            root
+            p
+            owner
+            ctors
+            (level + 1))
+
+renderCtorChoices : List PlanModule ->
+  PlanEnv ->
+  String ->
+  GenPlan ->
+  GenPlan ->
+  String ->
+  List PlanCtor ->
+  List Int ->
+  Int ->
+  Result PlanError String
+renderCtorChoices modules env rootName root p owner ctors weights depth =
+  renderWeightedCtors
+    modules
+    env
+    rootName
+    root
+    p
+    owner
+    (zipL ctors weights)
+    depth
+
+renderWeightedCtors : List PlanModule ->
+  PlanEnv ->
+  String ->
+  GenPlan ->
+  GenPlan ->
+  String ->
+  List (PlanCtor, Int) ->
+  Int ->
+  Result PlanError String
+renderWeightedCtors _ _ _ _ _ _ [] _ =
+  Err (PlanError "" "" (TyVar "") PENoFiniteValue "no finite constructor")
+renderWeightedCtors modules env rootName root p owner [(ctor, weight)] depth =
+  if weight <= 0 then
+    Err (PlanError "" "" (TyVar "") PENoFiniteValue "no finite constructor")
+  else
+    renderCtor modules env rootName root p owner ctor depth
+renderWeightedCtors modules env rootName root p owner ((ctor, weight) :: rest) depth =
+  if weight <= 0 then
+    renderWeightedCtors modules env rootName root p owner rest depth
+  else match (
+    renderCtor modules env rootName root p owner ctor depth,
+    renderWeightedCtors modules env rootName root p owner rest depth,
+  )
+    (Ok here, Ok next) =>
+      Ok
+        "if __np_choose \{sumCtorWeights ((ctor, weight) :: rest)} < \{weight} then \{here} else \{next}"
+    (Err e, _) => Err e
+    (_, Err e) => Err e
+
+sumCtorWeights : List (PlanCtor, Int) -> Int
+sumCtorWeights [] = 0
+sumCtorWeights ((_, n) :: rest) = max 0 n + sumCtorWeights rest
+
+renderCtor : List PlanModule ->
+  PlanEnv ->
+  String ->
+  GenPlan ->
+  GenPlan ->
+  String ->
+  PlanCtor ->
+  Int ->
+  Result PlanError String
+renderCtor modules env rootName root p owner (ctor@(PlanCtor source _ _)) depth =
+  match instantiateCtor env p ctor
+    Err e => Err e
+    Ok fields =>
+      match (renderPlanList
+        modules
+        env
+        rootName
+        root
+        (map snd fields)
+        (depth + 1))
+        Err e => Err e
+        Ok values =>
+          let ctorRef = qualifiedCtor modules owner source
+          if hasNamedField fields then
+            Ok
+              "\{ctorRef} { \{joinWith ", " (namedAssignments fields values)} }"
+          else if listLen values == 0 then
+            Ok ctorRef
+          else
+            Ok "\{ctorRef} \{joinWith " " (map paren values)}"
+
+qualifiedCtor : List PlanModule -> String -> String -> String
+qualifiedCtor modules owner ctor = match moduleAlias modules owner
+  Some alias => "\{alias}.\{ctor}"
+  None => ctor
+
+hasNamedField : List (Option String, GenPlan) -> Bool
+hasNamedField [] = False
+hasNamedField ((Some _, _) :: _) = True
+hasNamedField (_ :: rest) = hasNamedField rest
+
+namedAssignments : List (Option String, GenPlan) -> List String -> List String
+namedAssignments [] _ = []
+namedAssignments _ [] = []
+namedAssignments ((Some name, _) :: rest) (value :: values) =
+  "\{name} = \{value}" :: namedAssignments rest values
+namedAssignments ((None, _) :: rest) (_ :: values) =
+  namedAssignments rest values
+
+paren : String -> String
+paren x = "(\{x})"
+
+sameGenPlan : GenPlan -> GenPlan -> Bool
+sameGenPlan GInt GInt = True
+sameGenPlan GBool GBool = True
+sameGenPlan GFloat GFloat = True
+sameGenPlan GChar GChar = True
+sameGenPlan GString GString = True
+sameGenPlan GUnit GUnit = True
+sameGenPlan (GNominal key args) (GNominal key2 args2) =
+  typeKeyWord key == typeKeyWord key2 && sameGenPlans args args2
+sameGenPlan _ _ = False
+
+sameGenPlans : List GenPlan -> List GenPlan -> Bool
+sameGenPlans [] [] = True
+sameGenPlans (a :: more) (b :: more2) =
+  sameGenPlan a b && sameGenPlans more more2
+sameGenPlans _ _ = False
+
+plannedRunLines : List PlanModule ->
+  PlanEnv ->
+  Int ->
+  List PropParam ->
+  List GenPlan ->
+  Int ->
+  List String
+plannedRunLines modules env i ps plans _ =
+  ["\{runName i} remaining =", "  if remaining <= 0 then (True, \"\") else"]
+    ++ plannedBindings i ps 0
+    ++ ["    let ok = \{fnName i} \{joinWith " " (map paramName ps)}"]
+    ++ plannedFailureLines i ps plans
+    ++ [""]
+
+plannedBindings : Int -> List PropParam -> Int -> List String
+plannedBindings _ [] _ = []
+plannedBindings i ((PropParam name _ _) :: rest) j =
+  ["    let \{name} = \{genName i j} 0"] ++ plannedBindings i rest (j + 1)
+
+plannedFailureLines : Int -> List PropParam -> List GenPlan -> List String
+plannedFailureLines i [] _ = [
+  "    if ok then \{runName i} (remaining - 1) else (False, \"counterexample\")",
+]
+plannedFailureLines i ps plans = [
+  "    if ok then \{runName i} (remaining - 1) else \{plannedShrinkStart i ps plans}",
+]
+
+plannedShrinkStart : Int -> List PropParam -> List GenPlan -> String
+plannedShrinkStart i ps plans =
+  "\{shrinkName i} 100 \{joinWith " " (map paramName ps)}"
+
+shrinkName : Int -> String
+shrinkName i = "__np_shrink_\{intToString i}"
+
+-- The generated shrinker tries every candidate, left-to-right, and restarts
+-- from parameter zero after each successful reduction.  Only custom plans may
+-- invoke `shrink`; structural plans deliberately use the shared construction
+-- policy above and remain displayable without imposing Debug on a nominal.
+plannedShrinkLines : List PlanModule ->
+  PlanEnv ->
+  Int ->
+  List PropParam ->
+  List GenPlan ->
+  List String
+plannedShrinkLines _ _ _ [] _ = []
+plannedShrinkLines modules env i ps plans =
+  shrinkTopLines modules env i ps plans
+    ++ shrinkTryLines modules env i ps plans 0
+
+shrinkTopLines : List PlanModule ->
+  PlanEnv ->
+  Int ->
+  List PropParam ->
+  List GenPlan ->
+  List String
+shrinkTopLines modules env i ps plans = [
+  "\{shrinkName i} fuel \{joinWith " " (map paramName ps)} =",
+  "  if fuel <= 0 then (False, \{plannedDetail modules env ps plans}) else \{shrinkTryName i 0} fuel \{candidateExpr modules env (nthPlan 0 plans) (nthParam 0 ps)} \{joinWith " " (map paramName ps)}",
+  "",
+]
+
+shrinkTryName : Int -> Int -> String
+shrinkTryName i j = "__np_try_\{intToString i}_\{intToString j}"
+
+shrinkTryLines : List PlanModule ->
+  PlanEnv ->
+  Int ->
+  List PropParam ->
+  List GenPlan ->
+  Int ->
+  List String
+shrinkTryLines _ _ _ [] _ _ = []
+shrinkTryLines modules env i ps plans j =
+  shrinkTryLine modules env i ps plans j
+    ++ shrinkTryLines modules env i ps plans (j + 1)
+
+shrinkTryLine : List PlanModule ->
+  PlanEnv ->
+  Int ->
+  List PropParam ->
+  List GenPlan ->
+  Int ->
+  List String
+shrinkTryLine modules env i ps plans j =
+  let current = nthParam j ps
+  let plan = nthPlan j plans
+  let params = map paramName ps
+  let after =
+    if j + 1 >= listLen ps then
+      "(False, \{plannedDetail modules env ps plans})"
+    else
+      "\{shrinkTryName i (j + 1)} fuel \{candidateExpr modules env plan current} \{joinWith " " params}"
+  let replacement = replaceName j "candidate" params
+  [
+    "\{shrinkTryName i j} fuel candidates \{joinWith " " params} =",
+    "  match candidates",
+    "    [] => \{after}",
+    "    candidate :: rest =>",
+    "      if \{fnName i} \{joinWith " " replacement} then \{shrinkTryName i j} fuel rest \{joinWith " " params}",
+    "      else \{shrinkName i} (fuel - 1) \{joinWith " " replacement}",
+    "",
+  ]
+
+nthParam : Int -> List PropParam -> String
+nthParam 0 ((PropParam name _ _) :: _) = name
+nthParam n (_ :: rest) = nthParam (n - 1) rest
+nthParam _ [] = "__np_missing"
+
+nthPlan : Int -> List GenPlan -> GenPlan
+nthPlan 0 (p :: _) = p
+nthPlan n (_ :: rest) = nthPlan (n - 1) rest
+nthPlan _ [] = GUnit
+
+candidateExpr : List PlanModule -> PlanEnv -> GenPlan -> String -> String
+candidateExpr _ _ GInt name = "if \{name} == 0 then [] else [0, \{name} / 2]"
+candidateExpr _ _ GBool name = "if \{name} then [False] else []"
+candidateExpr _ _ GFloat name =
+  "if \{name} == 0.0 then [] else [0.0, \{name} / 2.0]"
+candidateExpr _ _ GChar _ = "[]"
+candidateExpr _ _ GString name =
+  "if \{name} == \"\" then [] else [stringSlice 0 (stringLength \{name} / 2) \{name}]"
+candidateExpr _ _ GUnit _ = "[]"
+candidateExpr _ _ (GCustom _) name = "shrink \{name}"
+candidateExpr modules env (GList p) name =
+  "__np_delete_each \{name} ++ __np_replace_each (x => \{candidateExpr modules env p "x"}) \{name}"
+candidateExpr modules env (GArray p) name =
+  "map arrayFromList (__np_delete_each (toList \{name})) ++ map arrayFromList (__np_replace_each (x => \{candidateExpr modules env p "x"}) (toList \{name}))"
+candidateExpr modules env (GOption p) name =
+  "match \{name}\n  None => []\n  Some x => None :: map Some (\{candidateExpr modules env p "x"})"
+candidateExpr modules env (GResult e a) name =
+  "match \{name}\n  Err x => map Err (\{candidateExpr modules env e "x"})\n  Ok x => map Ok (\{candidateExpr modules env a "x"})"
+candidateExpr modules env (GTuple ps) name =
+  tupleCandidates modules env ps name 0
+candidateExpr modules env (p@(GNominal key _)) name =
+  nominalCandidates modules env p key name
+
+replaceName : Int -> String -> List String -> List String
+replaceName _ _ [] = []
+replaceName 0 replacement (_ :: rest) = replacement :: rest
+replaceName n replacement (x :: rest) =
+  x :: replaceName (n - 1) replacement rest
+
+plannedDetail : List PlanModule ->
+  PlanEnv ->
+  List PropParam ->
+  List GenPlan ->
+  String
+plannedDetail _ _ [] _ = "\"counterexample\""
+plannedDetail modules env ((PropParam name _ _) :: rest) (p :: plans) =
+  detailPiece modules env name p ++ plannedDetailTail modules env rest plans
+plannedDetail _ _ _ _ = "\"counterexample\""
+
+plannedDetailTail : List PlanModule ->
+  PlanEnv ->
+  List PropParam ->
+  List GenPlan ->
+  String
+plannedDetailTail _ _ [] _ = ""
+plannedDetailTail modules env ((PropParam name _ _) :: rest) (p :: plans) =
+  " ++ \"\\n\" ++ \{detailPiece modules env name p}\{plannedDetailTail modules env rest plans}"
+plannedDetailTail _ _ _ _ = ""
+
+detailPiece : List PlanModule -> PlanEnv -> String -> GenPlan -> String
+detailPiece modules env name p =
+  "\"\{name} = \" ++ \{displayExpr modules env p name}"
+
+tupleVars : Int -> List String
+tupleVars n = tupleVarsGo n 0
+
+tupleVarsGo : Int -> Int -> List String
+tupleVarsGo n i =
+  if i >= n then [] else "v\{intToString i}" :: tupleVarsGo n (i + 1)
+
+tupleCandidates : List PlanModule ->
+  PlanEnv ->
+  List GenPlan ->
+  String ->
+  Int ->
+  String
+tupleCandidates modules env ps name _ =
+  let vars = tupleVars (listLen ps)
+  "match \{name}\n  (\{joinWith ", " vars}) => \{tupleCandidateLists modules env ps vars 0}"
+
+tupleCandidateLists : List PlanModule ->
+  PlanEnv ->
+  List GenPlan ->
+  List String ->
+  Int ->
+  String
+tupleCandidateLists _ _ [] _ _ = "[]"
+tupleCandidateLists modules env (p :: ps) (v :: vs) i =
+  "map (candidate => (\{joinWith ", " (replaceName i "candidate" (v :: vs))})) (\{candidateExpr modules env p v}) ++ \{tupleCandidateLists modules env ps (v :: vs) (i + 1)}"
+tupleCandidateLists _ _ _ _ _ = "[]"
+
+nominalCandidates : List PlanModule ->
+  PlanEnv ->
+  GenPlan ->
+  TypeKey ->
+  String ->
+  String
+nominalCandidates modules env p key name = match planDef env key
+  Err _ => "[]"
+  Ok (PlanDef _ owner _ _ ctors) =>
+    "match \{name}\n\{joinNl (map (nominalCandidateArm modules env p owner) ctors)}"
+
+nominalCandidateArm : List PlanModule ->
+  PlanEnv ->
+  GenPlan ->
+  String ->
+  PlanCtor ->
+  String
+nominalCandidateArm modules env p owner (ctor@(PlanCtor source _ _)) =
+  match instantiateCtor env p ctor
+    Err _ => "  _ => []"
+    Ok fields =>
+      let vars = tupleVars (listLen fields)
+      let ref = qualifiedCtor modules owner source
+      if hasNamedField fields then
+        "  \{ref} { \{joinWith ", " (namedAssignments fields vars)} } => \{nominalFieldCandidates modules env ref fields fields vars True 0}"
+      else if listLen fields == 0 then
+        "  \{ref} => []"
+      else
+        "  \{ref} \{joinWith " " vars} => \{nominalFieldCandidates modules env ref fields fields vars False 0}"
+
+nominalFieldCandidates : List PlanModule ->
+  PlanEnv ->
+  String ->
+  List (Option String, GenPlan) ->
+  List (Option String, GenPlan) ->
+  List String ->
+  Bool ->
+  Int ->
+  String
+nominalFieldCandidates _ _ _ _ [] _ _ _ = "[]"
+nominalFieldCandidates modules env ref all ((_, p) :: rest) (v :: vs) named i =
+  "map (candidate => \{rebuildCtor ref all (replaceName i "candidate" (v :: vs)) named}) (\{candidateExpr modules env p v}) ++ \{nominalFieldCandidates modules env ref all rest (v :: vs) named (i + 1)}"
+nominalFieldCandidates _ _ _ _ _ _ _ _ = "[]"
+
+rebuildCtor : String ->
+  List (Option String, GenPlan) ->
+  List String ->
+  Bool ->
+  String
+rebuildCtor ref fields values named =
+  if named then
+    "\{ref} { \{joinWith ", " (namedAssignments fields values)} }"
+  else
+    "\{ref} \{joinWith " " (map paren values)}"
+
+displayExpr : List PlanModule -> PlanEnv -> GenPlan -> String -> String
+displayExpr _ _ GInt name = "intToString \{name}"
+displayExpr _ _ GBool name = "if \{name} then \"True\" else \"False\""
+displayExpr _ _ GFloat name = "debug \{name}"
+displayExpr _ _ GChar name = "debug \{name}"
+displayExpr _ _ GString name = "debug \{name}"
+displayExpr _ _ GUnit _ = "\"()\""
+displayExpr modules env (GCustom (CustomPlan key _)) name =
+  nominalDisplay modules env (GNominal key []) key name
+displayExpr modules env (GList p) name =
+  "\"[\" ++ joinWith \", \" (map (x => \{displayExpr modules env p "x"}) \{name}) ++ \"]\""
+displayExpr modules env (GArray p) name =
+  "\"[|\" ++ joinWith \", \" (map (x => \{displayExpr modules env p "x"}) (toList \{name})) ++ \"|]\""
+displayExpr modules env (GOption p) name =
+  "match \{name}\n  None => \"None\"\n  Some x => \"Some (\" ++ \{displayExpr modules env p "x"} ++ \")\""
+displayExpr modules env (GResult e a) name =
+  "match \{name}\n  Err x => \"Err (\" ++ \{displayExpr modules env e "x"} ++ \")\"\n  Ok x => \"Ok (\" ++ \{displayExpr modules env a "x"} ++ \")\""
+displayExpr modules env (GTuple ps) name =
+  let vars = tupleVars (listLen ps)
+  "match \{name}\n  (\{joinWith ", " vars}) => \"(\" ++ \{joinDisplay modules env ps vars} ++ \")\""
+displayExpr modules env (p@(GNominal key _)) name =
+  nominalDisplay modules env p key name
+
+joinDisplay : List PlanModule ->
+  PlanEnv ->
+  List GenPlan ->
+  List String ->
+  String
+joinDisplay _ _ [] _ = "\"\""
+joinDisplay modules env (p :: ps) (v :: vs) =
+  displayExpr modules env p v ++ joinDisplayTail modules env ps vs
+joinDisplay _ _ _ _ = "\"\""
+
+joinDisplayTail : List PlanModule ->
+  PlanEnv ->
+  List GenPlan ->
+  List String ->
+  String
+joinDisplayTail _ _ [] _ = ""
+joinDisplayTail modules env (p :: ps) (v :: vs) =
+  " ++ \", \" ++ \{displayExpr modules env p v}\{joinDisplayTail modules env ps vs}"
+joinDisplayTail _ _ _ _ = ""
+
+nominalDisplay : List PlanModule ->
+  PlanEnv ->
+  GenPlan ->
+  TypeKey ->
+  String ->
+  String
+nominalDisplay modules env p key name = match planDef env key
+  Err _ => "\"<unavailable>\""
+  Ok (PlanDef _ owner _ _ ctors) =>
+    "match \{name}\n\{joinNl (map (nominalDisplayArm modules env p owner) ctors)}"
+
+nominalDisplayArm : List PlanModule ->
+  PlanEnv ->
+  GenPlan ->
+  String ->
+  PlanCtor ->
+  String
+nominalDisplayArm modules env p owner (ctor@(PlanCtor source _ _)) =
+  match instantiateCtor env p ctor
+    Err _ => "  _ => \"<unavailable>\""
+    Ok fields =>
+      let vars = tupleVars (listLen fields)
+      let ref = qualifiedCtor modules owner source
+      let text =
+        if hasNamedField fields then
+          "\"\{source} { \" ++ \{joinNamedDisplay modules env fields vars} ++ \" }\""
+        else if listLen fields == 0 then
+          "\"\{source}\""
+        else
+          "\"\{source} (\" ++ \{joinDisplay modules env (map snd fields) vars} ++ \")\""
+      let pat =
+        if hasNamedField fields then
+          "\{ref} { \{joinWith ", " (namedAssignments fields vars)} }"
+        else if listLen fields == 0 then
+          ref
+        else
+          "\{ref} \{joinWith " " vars}"
+      "  \{pat} => \{text}"
+
+joinNamedDisplay : List PlanModule ->
+  PlanEnv ->
+  List (Option String, GenPlan) ->
+  List String ->
+  String
+joinNamedDisplay _ _ [] _ = ""
+joinNamedDisplay modules env ((Some field, p) :: rest) (v :: vs) =
+  "\{field} = \" ++ \{displayExpr modules env p v}\{joinNamedDisplayTail modules env rest vs}"
+joinNamedDisplay _ _ _ _ = ""
+
+joinNamedDisplayTail : List PlanModule ->
+  PlanEnv ->
+  List (Option String, GenPlan) ->
+  List String ->
+  String
+joinNamedDisplayTail _ _ [] _ = ""
+joinNamedDisplayTail modules env ((Some field, p) :: rest) (v :: vs) =
+  " ++ \", \" ++ \"\{field} = \" ++ \{displayExpr modules env p v}\{joinNamedDisplayTail modules env rest vs}"
+joinNamedDisplayTail _ _ _ _ = ""
+
+plannedMainLines : String -> List NativePlanOutcome -> Int -> List String
+plannedMainLines _ [] _ = []
+plannedMainLines nonce ((NativeRunnable (DProp _ _ params _) r plans) :: rest) i =
+  [
+      "  let _ = putStrLn \"\{sentinelFor nonce (startTag i)}\"",
+      "  let _ = __np_state := \{intToString (propRequestSeed r)}",
+      "  let _ = __np_custom_state := \{seedU64 (propRequestSeed r)}",
+      "  let seed = \{intToString (propRequestSeed r)}",
+      "  let _ = putStrLn \"\{sentinelFor nonce (seedTag i)}\"",
+      "  let _ = \{valuePrintExpr "intToString seed"}",
+      "  let (ok, detail) = \{runName i} \{intToString (propRequestCases r)}",
+      "  let _ = putStrLn \"\{sentinelFor nonce (boolTag i)}\"",
+      "  let _ = \{valuePrintExpr "debug ok"}",
+      "  let _ = putStrLn \"\{sentinelFor nonce (detailTag i)}\"",
+      "  let _ = \{valuePrintExpr "detail"}",
+    ]
+    ++ plannedMainLines nonce rest (i + 1)
+plannedMainLines nonce (_ :: rest) i = plannedMainLines nonce rest i
+
+seedU64 : Int -> String
+seedU64 n = if n < 0 then "0" else intToString n
 
 -- `core.mdk` is the auto-prelude, so splicing its declarations into a scratch
 -- entry duplicates every prelude binding.  Its property bodies can instead be
@@ -305,74 +1279,6 @@ jobDecls ((d, _) :: rest) = d :: jobDecls rest
 probeTargetSource : String -> String -> String
 probeTargetSource target src =
   if baseOf target == "core.mdk" then "" else renameUserMain src
-
--- Imported ADT constructors are not necessarily in the target's explicit use
--- list (`import trees.{Tree, mirror}` is intentionally abstract).  Add a
--- constructor import for only parameter heads declared in a dependency.  The
--- probe is a fresh module, so this is ordinary source-level visibility, not an
--- evaluator backdoor.
-nativeImports : List (String, List Decl) -> List Decl -> List String
-nativeImports modules props =
-  filterList
-    (/= "")
-    (map (importLine (dropLastModule modules)) (uniqueHeads props))
-
-dropLastModule : List (String, List Decl) -> List (String, List Decl)
-dropLastModule [] = []
-dropLastModule [_] = []
-dropLastModule (x :: xs) = x :: dropLastModule xs
-
-importLine : List (String, List Decl) -> String -> String
-importLine modules head = match moduleForType modules head
-  Some mod => "import \{mod}.{\{head}(..)}"
-  None => ""
-
-moduleForType : List (String, List Decl) -> String -> Option String
-moduleForType [] _ = None
-moduleForType ((mod, ds) :: rest) n =
-  if declaresType ds n then Some mod else moduleForType rest n
-
-declaresType : List Decl -> String -> Bool
-declaresType [] _ = False
-declaresType ((DData { dataName = n }) :: _) wanted = n == wanted
-declaresType ((DNewtype { newtypeName = n }) :: _) wanted = n == wanted
-declaresType (_ :: rest) wanted = declaresType rest wanted
-
-uniqueHeads : List Decl -> List String
-uniqueHeads ds = nubStrings (flatMap propHeads ds)
-
-propHeads : Decl -> List String
-propHeads (DProp _ _ ps _) = flatMap paramHeads ps
-propHeads _ = []
-
-paramHeads : PropParam -> List String
-paramHeads (PropParam _ _ ty) = headsOf ty
-
-headsOf : Ty -> List String
-headsOf (TyCon { tyConName = n }) = [n]
-headsOf (TyApp a b) = headsOf a ++ headsOf b
-headsOf (TyTuple ts) = flatMap headsOf ts
-headsOf (TyEffect _ _ t) = headsOf t
-headsOf (TyNamed _ t _) = headsOf t
-headsOf (TyQual t _ _) = headsOf t
-headsOf (TyConstrained _ t) = headsOf t
-headsOf _ = []
-
-nubStrings : List String -> List String
-nubStrings [] = []
-nubStrings (x :: xs) = x :: nubStrings (filterList (/= x) xs)
-
-propLines : List (String, List Decl) ->
-  List (Decl, PropRequest) ->
-  Int ->
-  List String
-propLines _ [] _ = []
-propLines modules ((DProp _ _ params body, r) :: rest) i =
-  fnLines i params body
-    ++ genLines modules i 0 params
-    ++ runLines modules i params (propRequestCases r)
-    ++ propLines modules rest (i + 1)
-propLines modules (_ :: rest) i = propLines modules rest (i + 1)
 
 fnName : Int -> String
 fnName i = "__np_prop_\{intToString i}"
@@ -389,216 +1295,3 @@ fnLines i ps body =
 
 paramName : PropParam -> String
 paramName (PropParam n _ _) = n
-
-genLines : List (String, List Decl) ->
-  Int ->
-  Int ->
-  List PropParam ->
-  List String
-genLines _ _ _ [] = []
-genLines modules i j ((PropParam _ _ ty) :: rest) =
-  [
-      "\{genName i j} : Unit -> \{ppTy ty}",
-      "\{genName i j} _ = \{genExpr modules ty 0}",
-      "",
-    ]
-    ++ genLines modules i (j + 1) rest
-
--- Bounded structural generation.  Its source is shared by all native cases;
--- values are generated at runtime, so this remains one clang build per file.
-genExpr : List (String, List Decl) -> Ty -> Int -> String
-genExpr _ (TyCon { tyConName = "Int" }) _ = "__np_int ()"
-genExpr _ (TyCon { tyConName = "Bool" }) _ = "__np_bool ()"
-genExpr _ (TyCon { tyConName = "Float" }) _ = "intToFloat (__np_int ())"
-genExpr _ (TyCon { tyConName = "Char" }) _ = "if __np_bool () then 'a' else 'b'"
-genExpr _ (TyCon { tyConName = "String" }) _ =
-  "if __np_bool () then \"\" else \"x\""
-genExpr _ (TyCon { tyConName = "Unit" }) _ = "()"
-genExpr modules (TyApp (TyCon { tyConName = "List" }) t) depth =
-  if depth >= 3 then
-    "[]"
-  else
-    "match __np_choose 3\n  0 => []\n  1 => [\{genExpr modules t (depth + 1)}]\n  _ => [\{genExpr modules t (depth + 1)}, \{genExpr modules t (depth + 1)}]"
-genExpr modules (TyApp (TyCon { tyConName = "Array" }) t) depth =
-  if depth >= 3 then
-    "[||]"
-  else
-    "if __np_bool () then [||] else [|\{genExpr modules t (depth + 1)}|]"
-genExpr modules (TyApp (TyCon { tyConName = "Option" }) t) depth =
-  "if __np_bool () then None else Some (\{genExpr modules t (depth + 1)})"
-genExpr modules (TyApp (TyApp (TyCon { tyConName = "Result" }) a) b) depth =
-  "if __np_bool () then Ok (\{genExpr modules b (depth + 1)}) else Err (\{genExpr modules a (depth + 1)})"
-genExpr modules (TyTuple ts) depth =
-  "(\{joinWith ", " (map (t => genExpr modules t (depth + 1)) ts)})"
-genExpr modules ty depth = userGen modules ty depth
-
-userGen : List (String, List Decl) -> Ty -> Int -> String
-userGen modules ty depth = match tyHeadArgs ty
-  None => "panic \"native property runner: unsupported parameter type\""
-  Some (name, args) => match lookupType modules name
-    None => "panic \"native property runner: no generator for \{name}\""
-    Some (params, variants) =>
-      if depth >= 4 then
-        variantExpr modules params args (firstTerminal variants) (depth + 1)
-      else
-        variantChoices modules params args variants (depth + 1) 0
-
-tyHeadArgs : Ty -> Option (String, List Ty)
-tyHeadArgs (TyCon { tyConName = n }) = Some (n, [])
-tyHeadArgs (TyApp f x) = map ((n, xs) => (n, xs ++ [x])) (tyHeadArgs f)
-tyHeadArgs _ = None
-
-lookupType : List (String, List Decl) ->
-  String ->
-  Option (List String, List Variant)
-lookupType [] _ = None
-lookupType ((_, ds) :: rest) name = match lookupTypeDecl ds name
-  Some x => Some x
-  None => lookupType rest name
-
-lookupTypeDecl : List Decl -> String -> Option (List String, List Variant)
-lookupTypeDecl [] _ = None
-lookupTypeDecl ((DData { dataName = n, dataParams = ps, dataCtors = vs }) :: _) wanted
-  | n == wanted = Some (ps, vs)
-lookupTypeDecl ((DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = c, newtypeFieldTy = t }) :: _) wanted
-  | n == wanted = Some (ps, [Variant c (ConPos [t])])
-lookupTypeDecl (_ :: rest) wanted = lookupTypeDecl rest wanted
-
-variantChoices : List (String, List Decl) ->
-  List String ->
-  List Ty ->
-  List Variant ->
-  Int ->
-  Int ->
-  String
-variantChoices _ _ _ [] _ _ =
-  "panic \"native property runner: data type has no constructors\""
-variantChoices modules ps args [v] depth _ = variantExpr modules ps args v depth
-variantChoices modules ps args (v :: rest) depth i =
-  "if __np_choose \{listLen (v :: rest)} == \{i} then \{variantExpr modules ps args v depth} else \{variantChoices modules ps args rest depth (i + 1)}"
-
-firstTerminal : List Variant -> Variant
-firstTerminal [] = panic "native property runner: data type has no constructors"
-firstTerminal ((v@(Variant _ (ConPos []))) :: _) = v
-firstTerminal (v :: rest) = firstTerminalOr v rest
-
-firstTerminalOr : Variant -> List Variant -> Variant
-firstTerminalOr fallback [] = fallback
-firstTerminalOr _ ((v@(Variant _ (ConPos []))) :: _) = v
-firstTerminalOr fallback (_ :: rest) = firstTerminalOr fallback rest
-
-variantExpr : List (String, List Decl) ->
-  List String ->
-  List Ty ->
-  Variant ->
-  Int ->
-  String
-variantExpr modules ps args (Variant ctor (ConPos fields)) depth =
-  "\{ctor}\{posFieldsExpr modules ps args fields depth}"
-variantExpr modules ps args (Variant ctor (ConNamed fields _)) depth =
-  "\{ctor} { \{joinWith ", " (map (field => fieldExpr modules ps args field depth) fields)} }"
-
-fieldExpr : List (String, List Decl) ->
-  List String ->
-  List Ty ->
-  Field ->
-  Int ->
-  String
-fieldExpr modules ps args (Field n t) depth =
-  "\{n} = \{genExpr modules (substTy (zipL ps args) t) depth}"
-
-posFieldsExpr : List (String, List Decl) ->
-  List String ->
-  List Ty ->
-  List Ty ->
-  Int ->
-  String
-posFieldsExpr _ _ _ [] _ = ""
-posFieldsExpr modules ps args fields depth =
-  " "
-    ++ joinWith
-      " "
-      (map
-        (f => "(\{genExpr modules (substTy (zipL ps args) f) depth})")
-        fields)
-
-substTy : List (String, Ty) -> Ty -> Ty
-substTy sub (TyVar n) = match lookupAssoc n sub
-  Some t => t
-  None => TyVar n
-substTy sub (TyApp a b) = TyApp (substTy sub a) (substTy sub b)
-substTy sub (TyTuple ts) = TyTuple (map (substTy sub) ts)
-substTy sub (TyEffect e r t) = TyEffect e r (substTy sub t)
-substTy sub (TyNamed n t d) = TyNamed n (substTy sub t) d
-substTy sub (TyQual t q l) = TyQual (substTy sub t) q l
-substTy sub (TyConstrained c t) = TyConstrained c (substTy sub t)
-substTy _ t = t
-
-runLines : List (String, List Decl) ->
-  Int ->
-  List PropParam ->
-  Int ->
-  List String
-runLines modules i ps cases =
-  ["\{runName i} n =", "  if n <= 0 then (True, \"\") else"]
-    ++ runBindings i ps 0
-    ++ ["    let ok = \{fnName i} \{joinWith " " (map paramName ps)}"]
-    ++ failLines modules i ps
-    ++ [""]
-
-failLines : List (String, List Decl) -> Int -> List PropParam -> List String
-failLines modules i [p@(PropParam n _ ty)] =
-  if hasArbitrary modules ty then
-    [
-      "    if ok then \{runName i} (n - 1) else",
-      "      let smaller = match shrink \{n}",
-      "        x :: _ => x",
-      "        [] => \{n}",
-      "      if \{fnName i} smaller then (False, \"\{n} = \" ++ debug \{n}) else (False, \"\{n} = \" ++ debug smaller)",
-    ]
-  else
-    [
-      "    if ok then \{runName i} (n - 1) else (False, \"\{n} = \" ++ debug \{n})",
-    ]
-failLines _ i ps = [
-  "    if ok then \{runName i} (n - 1) else (False, \"counterexample has multiple parameters\")",
-]
-
-hasArbitrary : List (String, List Decl) -> Ty -> Bool
-hasArbitrary modules ty = match tyHeadArgs ty
-  Some (name, []) => anyModuleArbitrary modules name
-  _ => False
-
-anyModuleArbitrary : List (String, List Decl) -> String -> Bool
-anyModuleArbitrary [] _ = False
-anyModuleArbitrary ((_, ds) :: rest) name =
-  hasArbitraryDecl ds name || anyModuleArbitrary rest name
-
-hasArbitraryDecl : List Decl -> String -> Bool
-hasArbitraryDecl [] _ = False
-hasArbitraryDecl ((DImpl { iface = "Arbitrary", tys = [TyCon { tyConName = n }], reqs = [] }) :: _) wanted =
-  n == wanted
-hasArbitraryDecl (_ :: rest) wanted = hasArbitraryDecl rest wanted
-
-runBindings : Int -> List PropParam -> Int -> List String
-runBindings _ [] _ = []
-runBindings i ((PropParam n _ _) :: rest) j =
-  ["    let \{n} = \{genName i j} ()"] ++ runBindings i rest (j + 1)
-
-mainLines : String -> List (Decl, PropRequest) -> Int -> List String
-mainLines _ [] _ = []
-mainLines nonce ((DProp _ _ _ _, r) :: rest) i =
-  [
-      "  let _ = putStrLn \"\{sentinelFor nonce (startTag i)}\"",
-      "  let _ = __np_state := \{intToString (propRequestSeed r)}",
-      "  let seed = !__np_state",
-      "  let _ = putStrLn \"\{sentinelFor nonce (seedTag i)}\"",
-      "  let _ = \{valuePrintExpr "intToString seed"}",
-      "  let (ok, detail) = \{runName i} \{intToString (propRequestCases r)}",
-      "  let _ = putStrLn \"\{sentinelFor nonce (boolTag i)}\"",
-      "  let _ = \{valuePrintExpr "debug ok"}",
-      "  let _ = putStrLn \"\{sentinelFor nonce (detailTag i)}\"",
-      "  let _ = \{valuePrintExpr "detail"}",
-    ]
-    ++ mainLines nonce rest (i + 1)
-mainLines nonce (_ :: rest) i = mainLines nonce rest (i + 1)
