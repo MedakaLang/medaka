@@ -1,5 +1,5 @@
 # META
-source_lines=54612
+source_lines=54613
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -10154,6 +10154,7 @@ stickyTypeErrorDiagsSince before =
     tcDiagGoalKey
     (reverseL (takeFirst (listLen now - listLen before) now))
 
+export
 tcDiagGoalKey : (String, TcDiag) -> String
 tcDiagGoalKey (mid, TcDiag code _ loc msg _ _) =
   "\{mid}|\{code}|\{locGoalKey loc}|\{msg}"
@@ -56146,7 +56147,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stickyTypeErrorDiags" (PWild) (EApp (EApp (EVar "dedupBy") (EVar "tcDiagGoalKey")) (EApp (EVar "reverseL") (EFieldAccess (EVar "typeErrorsStickyDiags") "value"))))
 (DTypeSig false "stickyTypeErrorDiagsSince" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
 (DFunDef false "stickyTypeErrorDiagsSince" ((PVar "before")) (EBlock (DoLet false false (PVar "now") (EFieldAccess (EVar "typeErrorsStickyDiags") "value")) (DoExpr (EApp (EApp (EVar "dedupBy") (EVar "tcDiagGoalKey")) (EApp (EVar "reverseL") (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EApp (EVar "listLen") (EVar "now")) (EApp (EVar "listLen") (EVar "before")))) (EVar "now")))))))
-(DTypeSig false "tcDiagGoalKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))
+(DTypeSig true "tcDiagGoalKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))
 (DFunDef false "tcDiagGoalKey" ((PTuple (PVar "mid") (PCon "TcDiag" (PVar "code") PWild (PVar "loc") (PVar "msg") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "mid"))) (ELit (LString "|"))) (EApp (EVar "display") (EVar "code"))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EVar "locGoalKey") (EVar "loc")))) (ELit (LString "|"))) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))
 (DTypeSig false "locGoalKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))
@@ -65174,7 +65175,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stickyTypeErrorDiags" (PWild) (EApp (EApp (EVar "dedupBy") (EVar "tcDiagGoalKey")) (EApp (EVar "reverseL") (EFieldAccess (EVar "typeErrorsStickyDiags") "value"))))
 (DTypeSig false "stickyTypeErrorDiagsSince" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
 (DFunDef false "stickyTypeErrorDiagsSince" ((PVar "before")) (EBlock (DoLet false false (PVar "now") (EFieldAccess (EVar "typeErrorsStickyDiags") "value")) (DoExpr (EApp (EApp (EVar "dedupBy") (EVar "tcDiagGoalKey")) (EApp (EVar "reverseL") (EApp (EApp (EVar "takeFirst") (EBinOp "-" (EApp (EVar "listLen") (EVar "now")) (EApp (EVar "listLen") (EVar "before")))) (EVar "now")))))))
-(DTypeSig false "tcDiagGoalKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))
+(DTypeSig true "tcDiagGoalKey" (TyFun (TyTuple (TyCon "String") (TyCon "TcDiag")) (TyCon "String")))
 (DFunDef false "tcDiagGoalKey" ((PTuple (PVar "mid") (PCon "TcDiag" (PVar "code") PWild (PVar "loc") (PVar "msg") PWild PWild))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "mid"))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EVar "code"))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EVar "locGoalKey") (EVar "loc")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))
 (DTypeSig false "locGoalKey" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "String")))
 (DFunDef false "locGoalKey" ((PCon "None")) (ELit (LString "")))

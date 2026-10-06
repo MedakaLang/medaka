@@ -1,5 +1,5 @@
 # META
-source_lines=268
+source_lines=347
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -36,7 +36,7 @@ stages=DESUGAR,MARK
 -- given run — can also spell.
 --
 -- The fix is a per-run token neither engine's tag vocabulary needs, but the
--- PREFIX does: `mintNonce` draws it from `<Rand>` at driver time, strictly
+-- PREFIX does: `mintNonce` draws it from OS entropy at driver time, strictly
 -- after the target's source was already committed to disk, so no source
 -- written before this invocation can contain it. Folded into the prefix via
 -- `noncedPrefix` and embedded as a literal in the generated probe's own
@@ -83,6 +83,8 @@ import frontend.lexer.{
   offsetToLineColFast,
 }
 import support.util.{joinNl, reverseL, splitNl, startsWith, stringTrim}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
+import string.{toInt}
 
 -- The tag of a sentinel line under `prefix`, or None for an ordinary output
 -- line.
@@ -104,18 +106,91 @@ export
 noncedPrefix : String -> String -> String
 noncedPrefix base nonce = "\{base}\{nonce}@@ "
 
--- A fresh per-invocation token, drawn at driver time. Two draws rather than
--- one so a forger who somehow learned the RNG's exact state at the START of a
--- run still cannot predict the SECOND draw without also knowing how many
--- other `<Rand>` calls preceded it in that run — irrelevant against a static
--- source with no side channel at all, but cheap to add and it costs nothing
--- correctness-wise (the two draws are just concatenated digits).
+-- A fresh per-invocation token, drawn at driver time.
+-- OS entropy keeps protocol tags independent of the program's deterministic
+-- random stream. Fixed-width bytes make the textual encoding injective.
 export
 mintNonce : Unit -> <IO> String
-mintNonce _ =
-  let a = randomInt 100000000 999999999
-  let b = randomInt 100000000 999999999
-  intToString a ++ intToString b
+mintNonce _ = nonceBytes (osEntropyBytes 16) 0
+
+nonceBytes : Array Int -> Int -> String
+nonceBytes bytes i =
+  if i >= arrayLength bytes then
+    ""
+  else
+    let byte = bytes[i]
+    let padding = if byte < 10 then "00" else if byte < 100 then "0" else ""
+    padding ++ intToString byte ++ nonceBytes bytes (i + 1)
+
+-- Reserve the entire generated namespace, including aliases. Indexing all
+-- occupied suffixes once avoids repeated source scans when many collide.
+export
+freshProbeNonce : String -> List String -> String -> String
+freshProbeNonce nonce prefixes source =
+  let (tokens, _) = tokenizeWithOffsetPairs source
+  let occupied = occupiedNonceTokens nonce prefixes tokens omEmpty
+  let index = freeNonceIndex occupied 0
+  if index == 0 then nonce else "\{nonce}_\{intToString index}"
+
+occupiedNonceTokens : String ->
+  List String ->
+  List Token ->
+  OrdMap Unit ->
+  OrdMap Unit
+occupiedNonceTokens _ _ [] occupied = occupied
+occupiedNonceTokens nonce prefixes ((TIdent name) :: rest) occupied =
+  occupiedNonceTokens
+    nonce
+    prefixes
+    rest
+    (occupiedNonceName nonce prefixes name occupied)
+occupiedNonceTokens nonce prefixes ((TUpper name) :: rest) occupied =
+  occupiedNonceTokens
+    nonce
+    prefixes
+    rest
+    (occupiedNonceName nonce prefixes name occupied)
+occupiedNonceTokens nonce prefixes (_ :: rest) occupied =
+  occupiedNonceTokens nonce prefixes rest occupied
+
+occupiedNonceName : String ->
+  List String ->
+  String ->
+  OrdMap Unit ->
+  OrdMap Unit
+occupiedNonceName _ [] _ occupied = occupied
+occupiedNonceName nonce (prefix :: rest) name occupied =
+  let stem = prefix ++ nonce
+  if startsWith stem name then
+    let tail = stringSlice (stringLength stem) (stringLength name) name
+    if tail == "" || startsWith "_" tail then
+      let used = omInsert "0" () occupied
+      let chars = stringToChars tail
+      let end = nonceSuffixEnd chars 1
+      let digits = if end > 20 then "" else stringSlice 1 end tail
+      let next = match toInt digits
+        Some index => omInsert (intToString index) () used
+        None => used
+      occupiedNonceName nonce rest name next
+    else
+      occupiedNonceName nonce rest name occupied
+  else
+    occupiedNonceName nonce rest name occupied
+
+nonceSuffixEnd : Array Char -> Int -> Int
+nonceSuffixEnd chars i =
+  if i >= arrayLength chars || i > 20 then
+    i
+  else
+    let char = chars[i]
+    if char >= '0' && char <= '9' then nonceSuffixEnd chars (i + 1) else i
+
+freeNonceIndex : OrdMap Unit -> Int -> Int
+freeNonceIndex occupied index =
+  if omHasKey (intToString index) occupied then
+    freeNonceIndex occupied (index + 1)
+  else
+    index
 
 -- The tag of the terminator both engines print last.
 export
@@ -167,7 +242,11 @@ tagsInOrder (e :: es) ((Chunk t _ _) :: cs) = e == t && tagsInOrder es cs
 -- either alone silently corrupts every value the driver reads.
 export
 valuePrintExpr : String -> String
-valuePrintExpr expr = "putStrLn (debugStringLit (\{expr}))"
+valuePrintExpr expr = valuePrintExprWith "putStrLn" "debugStringLit" expr
+
+export
+valuePrintExprWith : String -> String -> String -> String
+valuePrintExprWith printer encoder expr = "\{printer} (\{encoder} (\{expr}))"
 
 -- A chunk's lines back to the value that was printed.  Zero lines is the empty
 -- value (a doctest smoke example prints nothing but still evaluates); one line
@@ -273,6 +352,8 @@ renameHeads n (h :: hs) (l :: ls)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -280,7 +361,23 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString "@@ "))))
 (DTypeSig true "mintNonce" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "mintNonce" (PWild) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "randomInt") (ELit (LInt 100000000))) (ELit (LInt 999999999)))) (DoLet false false (PVar "b") (EApp (EApp (EVar "randomInt") (ELit (LInt 100000000))) (ELit (LInt 999999999)))) (DoExpr (EBinOp "++" (EApp (EVar "intToString") (EVar "a")) (EApp (EVar "intToString") (EVar "b"))))))
+(DFunDef false "mintNonce" (PWild) (EApp (EApp (EVar "nonceBytes") (EApp (EVar "osEntropyBytes") (ELit (LInt 16)))) (ELit (LInt 0))))
+(DTypeSig false "nonceBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "nonceBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "bytes"))) (ELit (LString "")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EVar "index") (EVar "bytes")) (EVar "i"))) (DoLet false false (PVar "padding") (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 10))) (ELit (LString "00")) (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 100))) (ELit (LString "0")) (ELit (LString ""))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "padding") (EApp (EVar "intToString") (EVar "byte"))) (EApp (EApp (EVar "nonceBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
+(DTypeSig true "freshProbeNonce" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "freshProbeNonce" ((PVar "nonce") (PVar "prefixes") (PVar "source")) (EBlock (DoLet false false (PTuple (PVar "tokens") PWild) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "source"))) (DoLet false false (PVar "occupied") (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "tokens")) (EVar "omEmpty"))) (DoLet false false (PVar "index") (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EVar "index") (ELit (LInt 0))) (EVar "nonce") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "index")))) (ELit (LString "")))))))
+(DTypeSig false "occupiedNonceTokens" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
+(DFunDef false "occupiedNonceTokens" (PWild PWild (PList) (PVar "occupied")) (EVar "occupied"))
+(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons (PCon "TIdent" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied"))))
+(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons (PCon "TUpper" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied"))))
+(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons PWild (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EVar "occupied")))
+(DTypeSig false "occupiedNonceName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
+(DFunDef false "occupiedNonceName" (PWild (PList) PWild (PVar "occupied")) (EVar "occupied"))
+(DFunDef false "occupiedNonceName" ((PVar "nonce") (PCons (PVar "prefix") (PVar "rest")) (PVar "name") (PVar "occupied")) (EBlock (DoLet false false (PVar "stem") (EBinOp "++" (EVar "prefix") (EVar "nonce"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "stem")) (EVar "name")) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "stem"))) (EApp (EVar "stringLength") (EVar "name"))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "tail") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "_"))) (EVar "tail"))) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "0"))) (ELit LUnit)) (EVar "occupied"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "tail"))) (DoLet false false (PVar "end") (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (ELit (LInt 1)))) (DoLet false false (PVar "digits") (EIf (EBinOp ">" (EVar "end") (ELit (LInt 20))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "end")) (EVar "tail")))) (DoLet false false (PVar "next") (EMatch (EApp (EVar "toInt") (EVar "digits")) (arm (PCon "Some" (PVar "index")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EVar "index"))) (ELit LUnit)) (EVar "used"))) (arm (PCon "None") () (EVar "used")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "next")))) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "occupied"))))) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "occupied"))))))
+(DTypeSig false "nonceSuffixEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "nonceSuffixEnd" ((PVar "chars") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EBinOp ">" (EVar "i") (ELit (LInt 20)))) (EVar "i") (EBlock (DoLet false false (PVar "char") (EApp (EApp (EVar "index") (EVar "chars")) (EVar "i"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "char") (ELit (LChar "0"))) (EBinOp "<=" (EVar "char") (ELit (LChar "9")))) (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))))
+(DTypeSig false "freeNonceIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "freeNonceIndex" ((PVar "occupied") (PVar "index")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EVar "index"))) (EVar "occupied")) (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (EBinOp "+" (EVar "index") (ELit (LInt 1)))) (EVar "index")))
 (DTypeSig true "endTag" (TyCon "String"))
 (DFunDef false "endTag" () (ELit (LString "END")))
 (DData Public "Chunk" () ((variant "Chunk" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))) ())
@@ -297,7 +394,9 @@ renameHeads n (h :: hs) (l :: ls)
 (DFunDef false "tagsInOrder" ((PList) (PCons PWild PWild)) (EVar "False"))
 (DFunDef false "tagsInOrder" ((PCons (PVar "e") (PVar "es")) (PCons (PCon "Chunk" (PVar "t") PWild PWild) (PVar "cs"))) (EBinOp "&&" (EBinOp "==" (EVar "e") (EVar "t")) (EApp (EApp (EVar "tagsInOrder") (EVar "es")) (EVar "cs"))))
 (DTypeSig true "valuePrintExpr" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "valuePrintExpr" ((PVar "expr")) (EBinOp "++" (EBinOp "++" (ELit (LString "putStrLn (debugStringLit (")) (EApp (EVar "display") (EVar "expr"))) (ELit (LString "))"))))
+(DFunDef false "valuePrintExpr" ((PVar "expr")) (EApp (EApp (EApp (EVar "valuePrintExprWith") (ELit (LString "putStrLn"))) (ELit (LString "debugStringLit"))) (EVar "expr")))
+(DTypeSig true "valuePrintExprWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "valuePrintExprWith" ((PVar "printer") (PVar "encoder") (PVar "expr")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "printer"))) (ELit (LString " ("))) (EApp (EVar "display") (EVar "encoder"))) (ELit (LString " ("))) (EApp (EVar "display") (EVar "expr"))) (ELit (LString "))"))))
 (DTypeSig true "decodeValue" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "decodeValue" ((PList)) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "decodeValue" ((PCons (PVar "l") (PList))) (EApp (EVar "unquoteLit") (EVar "l")))
@@ -335,6 +434,8 @@ renameHeads n (h :: hs) (l :: ls)
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
+(DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -342,7 +443,23 @@ renameHeads n (h :: hs) (l :: ls)
 (DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString "@@ "))))
 (DTypeSig true "mintNonce" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "mintNonce" (PWild) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "randomInt") (ELit (LInt 100000000))) (ELit (LInt 999999999)))) (DoLet false false (PVar "b") (EApp (EApp (EVar "randomInt") (ELit (LInt 100000000))) (ELit (LInt 999999999)))) (DoExpr (EBinOp "++" (EApp (EVar "intToString") (EVar "a")) (EApp (EVar "intToString") (EVar "b"))))))
+(DFunDef false "mintNonce" (PWild) (EApp (EApp (EVar "nonceBytes") (EApp (EVar "osEntropyBytes") (ELit (LInt 16)))) (ELit (LInt 0))))
+(DTypeSig false "nonceBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "nonceBytes" ((PVar "bytes") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "bytes"))) (ELit (LString "")) (EBlock (DoLet false false (PVar "byte") (EApp (EApp (EMethodRef "index") (EVar "bytes")) (EVar "i"))) (DoLet false false (PVar "padding") (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 10))) (ELit (LString "00")) (EIf (EBinOp "<" (EVar "byte") (ELit (LInt 100))) (ELit (LString "0")) (ELit (LString ""))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "padding") (EApp (EVar "intToString") (EVar "byte"))) (EApp (EApp (EVar "nonceBytes") (EVar "bytes")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))))))))
+(DTypeSig true "freshProbeNonce" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "freshProbeNonce" ((PVar "nonce") (PVar "prefixes") (PVar "source")) (EBlock (DoLet false false (PTuple (PVar "tokens") PWild) (EApp (EVar "tokenizeWithOffsetPairs") (EVar "source"))) (DoLet false false (PVar "occupied") (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "tokens")) (EVar "omEmpty"))) (DoLet false false (PVar "index") (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (ELit (LInt 0)))) (DoExpr (EIf (EBinOp "==" (EMethodRef "index") (ELit (LInt 0))) (EVar "nonce") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EMethodRef "index")))) (ELit (LString "")))))))
+(DTypeSig false "occupiedNonceTokens" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
+(DFunDef false "occupiedNonceTokens" (PWild PWild (PList) (PVar "occupied")) (EVar "occupied"))
+(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons (PCon "TIdent" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied"))))
+(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons (PCon "TUpper" (PVar "name")) (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "prefixes")) (EVar "name")) (EVar "occupied"))))
+(DFunDef false "occupiedNonceTokens" ((PVar "nonce") (PVar "prefixes") (PCons PWild (PVar "rest")) (PVar "occupied")) (EApp (EApp (EApp (EApp (EVar "occupiedNonceTokens") (EVar "nonce")) (EVar "prefixes")) (EVar "rest")) (EVar "occupied")))
+(DTypeSig false "occupiedNonceName" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))))
+(DFunDef false "occupiedNonceName" (PWild (PList) PWild (PVar "occupied")) (EVar "occupied"))
+(DFunDef false "occupiedNonceName" ((PVar "nonce") (PCons (PVar "prefix") (PVar "rest")) (PVar "name") (PVar "occupied")) (EBlock (DoLet false false (PVar "stem") (EBinOp "++" (EVar "prefix") (EVar "nonce"))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "stem")) (EVar "name")) (EBlock (DoLet false false (PVar "tail") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "stem"))) (EApp (EVar "stringLength") (EVar "name"))) (EVar "name"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "tail") (ELit (LString ""))) (EApp (EApp (EVar "startsWith") (ELit (LString "_"))) (EVar "tail"))) (EBlock (DoLet false false (PVar "used") (EApp (EApp (EApp (EVar "omInsert") (ELit (LString "0"))) (ELit LUnit)) (EVar "occupied"))) (DoLet false false (PVar "chars") (EApp (EVar "stringToChars") (EVar "tail"))) (DoLet false false (PVar "end") (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (ELit (LInt 1)))) (DoLet false false (PVar "digits") (EIf (EBinOp ">" (EVar "end") (ELit (LInt 20))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (EVar "end")) (EVar "tail")))) (DoLet false false (PVar "next") (EMatch (EApp (EVar "toInt") (EVar "digits")) (arm (PCon "Some" (PVar "index")) () (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "intToString") (EMethodRef "index"))) (ELit LUnit)) (EVar "used"))) (arm (PCon "None") () (EVar "used")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "next")))) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "occupied"))))) (EApp (EApp (EApp (EApp (EVar "occupiedNonceName") (EVar "nonce")) (EVar "rest")) (EVar "name")) (EVar "occupied"))))))
+(DTypeSig false "nonceSuffixEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "nonceSuffixEnd" ((PVar "chars") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "chars"))) (EBinOp ">" (EVar "i") (ELit (LInt 20)))) (EVar "i") (EBlock (DoLet false false (PVar "char") (EApp (EApp (EMethodRef "index") (EVar "chars")) (EVar "i"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EVar "char") (ELit (LChar "0"))) (EBinOp "<=" (EVar "char") (ELit (LChar "9")))) (EApp (EApp (EVar "nonceSuffixEnd") (EVar "chars")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))))
+(DTypeSig false "freeNonceIndex" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "freeNonceIndex" ((PVar "occupied") (PVar "index")) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "intToString") (EMethodRef "index"))) (EVar "occupied")) (EApp (EApp (EVar "freeNonceIndex") (EVar "occupied")) (EBinOp "+" (EMethodRef "index") (ELit (LInt 1)))) (EMethodRef "index")))
 (DTypeSig true "endTag" (TyCon "String"))
 (DFunDef false "endTag" () (ELit (LString "END")))
 (DData Public "Chunk" () ((variant "Chunk" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))) ())
@@ -359,7 +476,9 @@ renameHeads n (h :: hs) (l :: ls)
 (DFunDef false "tagsInOrder" ((PList) (PCons PWild PWild)) (EVar "False"))
 (DFunDef false "tagsInOrder" ((PCons (PVar "e") (PVar "es")) (PCons (PCon "Chunk" (PVar "t") PWild PWild) (PVar "cs"))) (EBinOp "&&" (EBinOp "==" (EVar "e") (EVar "t")) (EApp (EApp (EVar "tagsInOrder") (EVar "es")) (EVar "cs"))))
 (DTypeSig true "valuePrintExpr" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "valuePrintExpr" ((PVar "expr")) (EBinOp "++" (EBinOp "++" (ELit (LString "putStrLn (debugStringLit (")) (EApp (EMethodRef "display") (EVar "expr"))) (ELit (LString "))"))))
+(DFunDef false "valuePrintExpr" ((PVar "expr")) (EApp (EApp (EApp (EVar "valuePrintExprWith") (ELit (LString "putStrLn"))) (ELit (LString "debugStringLit"))) (EVar "expr")))
+(DTypeSig true "valuePrintExprWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "valuePrintExprWith" ((PVar "printer") (PVar "encoder") (PVar "expr")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "printer"))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EVar "encoder"))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EVar "expr"))) (ELit (LString "))"))))
 (DTypeSig true "decodeValue" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))
 (DFunDef false "decodeValue" ((PList)) (EApp (EVar "Some") (ELit (LString ""))))
 (DFunDef false "decodeValue" ((PCons (PVar "l") (PList))) (EApp (EVar "unquoteLit") (EVar "l")))

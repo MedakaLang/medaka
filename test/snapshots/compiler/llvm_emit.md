@@ -1,5 +1,5 @@
 # META
-source_lines=15904
+source_lines=15914
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -1153,9 +1153,9 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 -- scoping — but clearing per define costs nothing on that subset and is load-
 -- bearing on the `%tN`-keyed one, so all three tables are scoped uniformly.
 --
--- It also fixes a latent leak — both tables previously grew for the whole program.
+-- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int)))
+  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -1168,22 +1168,32 @@ data DefScope =
 beginDefine : Emit -> DefScope
 beginDefine e =
   let saved =
-    DefScope !e.defineCounter !e.closureArity !e.closureRetTy !e.directFn
+    DefScope
+      !e.defineCounter
+      !e.closureArity
+      !e.closureRetTy
+      !e.directFn
+      !e.trmcCtx
+      !e.gDispCtx
   let _ = markScope e
   e.defineCounter := 0
   e.closureArity := []
   e.closureRetTy := []
   e.directFn := []
+  e.trmcCtx := TrmcOff
+  e.gDispCtx := GDispOff
   saved
 
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
-endDefine e (DefScope n ar rt df) =
+endDefine e (DefScope n ar rt df trmc gd) =
   e.defineCounter := n
   e.closureArity := ar
   e.closureRetTy := rt
   e.directFn := df
+  e.trmcCtx := trmc
+  e.gDispCtx := gd
 
 emit : Emit -> String -> Unit
 emit e line = let buf = e.buf in buf := line :: !buf
@@ -16028,11 +16038,11 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "freshLocal" ((PVar "e")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EFieldAccess (EVar "e") "defineCounter"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EVar "n"))))
 (DTypeSig false "freshReg" (TyFun (TyCon "Emit") (TyCon "String")))
 (DFunDef false "freshReg" ((PVar "e")) (EBinOp "++" (ELit (LString "%t")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))))
-(DData Private "DefScope" () ((variant "DefScope" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))) ())
+(DData Private "DefScope" () ((variant "DefScope" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyCon "TrmcCtx") (TyCon "GDispCtx")))) ())
 (DTypeSig false "beginDefine" (TyFun (TyCon "Emit") (TyCon "DefScope")))
-(DFunDef false "beginDefine" ((PVar "e")) (EBlock (DoLet false false (PVar "saved") (EApp (EApp (EApp (EApp (EVar "DefScope") (EUnOp "!" (EFieldAccess (EVar "e") "defineCounter"))) (EUnOp "!" (EFieldAccess (EVar "e") "closureArity"))) (EUnOp "!" (EFieldAccess (EVar "e") "closureRetTy"))) (EUnOp "!" (EFieldAccess (EVar "e") "directFn")))) (DoLet false false PWild (EApp (EVar "markScope") (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureArity")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureRetTy")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EListLit))) (DoExpr (EVar "saved"))))
+(DFunDef false "beginDefine" ((PVar "e")) (EBlock (DoLet false false (PVar "saved") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DefScope") (EUnOp "!" (EFieldAccess (EVar "e") "defineCounter"))) (EUnOp "!" (EFieldAccess (EVar "e") "closureArity"))) (EUnOp "!" (EFieldAccess (EVar "e") "closureRetTy"))) (EUnOp "!" (EFieldAccess (EVar "e") "directFn"))) (EUnOp "!" (EFieldAccess (EVar "e") "trmcCtx"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx")))) (DoLet false false PWild (EApp (EVar "markScope") (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureArity")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureRetTy")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "trmcCtx")) (EVar "TrmcOff"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "GDispOff"))) (DoExpr (EVar "saved"))))
 (DTypeSig false "endDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "DefScope") (TyCon "Unit"))))
-(DFunDef false "endDefine" ((PVar "e") (PCon "DefScope" (PVar "n") (PVar "ar") (PVar "rt") (PVar "df"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureArity")) (EVar "ar"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureRetTy")) (EVar "rt"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EVar "df")))))
+(DFunDef false "endDefine" ((PVar "e") (PCon "DefScope" (PVar "n") (PVar "ar") (PVar "rt") (PVar "df") (PVar "trmc") (PVar "gd"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureArity")) (EVar "ar"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureRetTy")) (EVar "rt"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EVar "df"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "trmcCtx")) (EVar "trmc"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "gd")))))
 (DTypeSig false "emit" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "emit" ((PVar "e") (PVar "line")) (ELet false (PVar "buf") (EFieldAccess (EVar "e") "buf") (EApp (EApp (EVar "setRef") (EVar "buf")) (EBinOp "::" (EVar "line") (EUnOp "!" (EVar "buf"))))))
 (DTypeSig false "bufRef" (TyFun (TyCon "Emit") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))))
@@ -18923,11 +18933,11 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "freshLocal" ((PVar "e")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EFieldAccess (EVar "e") "defineCounter"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EVar "n"))))
 (DTypeSig false "freshReg" (TyFun (TyCon "Emit") (TyCon "String")))
 (DFunDef false "freshReg" ((PVar "e")) (EBinOp "++" (ELit (LString "%t")) (EApp (EVar "intToString") (EApp (EVar "freshLocal") (EVar "e")))))
-(DData Private "DefScope" () ((variant "DefScope" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int"))))))) ())
+(DData Private "DefScope" () ((variant "DefScope" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyCon "String") (TyCon "Int")))) (TyCon "TrmcCtx") (TyCon "GDispCtx")))) ())
 (DTypeSig false "beginDefine" (TyFun (TyCon "Emit") (TyCon "DefScope")))
-(DFunDef false "beginDefine" ((PVar "e")) (EBlock (DoLet false false (PVar "saved") (EApp (EApp (EApp (EApp (EVar "DefScope") (EUnOp "!" (EFieldAccess (EVar "e") "defineCounter"))) (EUnOp "!" (EFieldAccess (EVar "e") "closureArity"))) (EUnOp "!" (EFieldAccess (EVar "e") "closureRetTy"))) (EUnOp "!" (EFieldAccess (EVar "e") "directFn")))) (DoLet false false PWild (EApp (EVar "markScope") (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureArity")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureRetTy")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EListLit))) (DoExpr (EVar "saved"))))
+(DFunDef false "beginDefine" ((PVar "e")) (EBlock (DoLet false false (PVar "saved") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DefScope") (EUnOp "!" (EFieldAccess (EVar "e") "defineCounter"))) (EUnOp "!" (EFieldAccess (EVar "e") "closureArity"))) (EUnOp "!" (EFieldAccess (EVar "e") "closureRetTy"))) (EUnOp "!" (EFieldAccess (EVar "e") "directFn"))) (EUnOp "!" (EFieldAccess (EVar "e") "trmcCtx"))) (EUnOp "!" (EFieldAccess (EVar "e") "gDispCtx")))) (DoLet false false PWild (EApp (EVar "markScope") (EVar "e"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (ELit (LInt 0)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureArity")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureRetTy")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "trmcCtx")) (EVar "TrmcOff"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "GDispOff"))) (DoExpr (EVar "saved"))))
 (DTypeSig false "endDefine" (TyFun (TyCon "Emit") (TyFun (TyCon "DefScope") (TyCon "Unit"))))
-(DFunDef false "endDefine" ((PVar "e") (PCon "DefScope" (PVar "n") (PVar "ar") (PVar "rt") (PVar "df"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureArity")) (EVar "ar"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureRetTy")) (EVar "rt"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EVar "df")))))
+(DFunDef false "endDefine" ((PVar "e") (PCon "DefScope" (PVar "n") (PVar "ar") (PVar "rt") (PVar "df") (PVar "trmc") (PVar "gd"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "defineCounter")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureArity")) (EVar "ar"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "closureRetTy")) (EVar "rt"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "directFn")) (EVar "df"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "trmcCtx")) (EVar "trmc"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "gDispCtx")) (EVar "gd")))))
 (DTypeSig false "emit" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "emit" ((PVar "e") (PVar "line")) (ELet false (PVar "buf") (EFieldAccess (EVar "e") "buf") (EApp (EApp (EVar "setRef") (EVar "buf")) (EBinOp "::" (EVar "line") (EUnOp "!" (EVar "buf"))))))
 (DTypeSig false "bufRef" (TyFun (TyCon "Emit") (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "String")))))

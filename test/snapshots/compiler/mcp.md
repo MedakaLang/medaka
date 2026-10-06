@@ -1,5 +1,5 @@
 # META
-source_lines=1826
+source_lines=1872
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -79,7 +79,7 @@ import tools.lint.{
   stdlibIndexNeeded,
   StdlibIndex,
 }
-import tools.test_cmd.{runTestReport}
+import tools.test_cmd.{runTestGradedReport}
 import tools.doctest.{
   Example,
   ExResult(..),
@@ -95,10 +95,24 @@ import tools.doctest.{
   runDetails,
 }
 import tools.prop_runner.{
-  PropResult,
+  PropFailureKind(..),
   propResultName,
   propResultPassed,
   propResultDetail,
+  propResultEngine,
+  propResultSeed,
+  propResultCases,
+  propResultFailureKind,
+}
+import tools.test_pins_report.{
+  GradedProp,
+  gradedPropRaw,
+  gradedPropPassed,
+  gradedPropStatus,
+  gradedPropRawStatus,
+  gradedPropIssue,
+  gradedPropPinDetail,
+  knownRedCountProps,
 }
 import support.util.{joinWith}
 import regex.{Regex, Match, mustCompile, findAll}
@@ -1488,31 +1502,62 @@ doctestsJson run = jObject [
   ("examples", jArray (map exampleJson (runDetails run))),
 ]
 
-propJson : PropResult -> Json
+propJson : GradedProp -> Json
 -- Structurally identical to medaka_cli.mdk's `cliTestReportJson`-side
 -- `cliPropJson` (#2295's `medaka test --json`, slice 4) — both render the
 -- same `PropResult` shape for their own independent JSON envelope; neither
 -- module imports the other, so not worth a shared module for one 5-line fn.
 -- lint-disable-next-line rule-duplicate-body
-propJson p = jObject [
-  ("name", JString (propResultName p)),
-  ("status", JString (if propResultPassed p then "pass" else "fail")),
-  ("detail", JString (propResultDetail p)),
-]
+propJson row =
+  let p = gradedPropRaw row
+  jObject
+    ([
+        ("engine", JString (propResultEngine p)),
+        ("name", JString (propResultName p)),
+        ("status", JString (gradedPropStatus row)),
+        ("rawStatus", JString (gradedPropRawStatus row)),
+        ("detail", JString (propResultDetail p)),
+        ("failureKind", propFailureKindJson (propResultFailureKind p)),
+        ("seed", JInt (propResultSeed p)),
+        ("cases", JInt (propResultCases p)),
+      ]
+      ++ issueField (gradedPropIssue row)
+      ++ pinField (gradedPropPinDetail row))
 
-allPropsPass : List PropResult -> Bool
+issueField : Option Int -> List (String, Json)
+issueField None = []
+issueField (Some issue) = [("issue", JInt issue)]
+
+pinField : Option String -> List (String, Json)
+pinField None = []
+pinField (Some detail) = [("pin", JString detail)]
+
+propFailureKindJson : Option PropFailureKind -> Json
+propFailureKindJson None = JNull
+propFailureKindJson (Some kind) = JString (propFailureKindText kind)
+
+propFailureKindText : PropFailureKind -> String
+propFailureKindText PropLawFalse = "law-false"
+propFailureKindText PropCapabilityError = "capability"
+propFailureKindText PropBuildError = "build"
+propFailureKindText PropRuntimeError = "runtime"
+propFailureKindText PropProtocolError = "protocol"
+propFailureKindText PropTypeError = "type"
+
+allPropsPass : List GradedProp -> Bool
 allPropsPass [] = True
-allPropsPass (p :: rest) = propResultPassed p && allPropsPass rest
+allPropsPass (p :: rest) = gradedPropPassed p && allPropsPass rest
 
-countPassProps : List PropResult -> Int
+countPassProps : List GradedProp -> Int
 countPassProps [] = 0
 countPassProps (p :: rest) =
-  (if propResultPassed p then 1 else 0) + countPassProps rest
+  (if propResultPassed (gradedPropRaw p) && gradedPropPassed p then 1 else 0)
+    + countPassProps rest
 
-countFailProps : List PropResult -> Int
+countFailProps : List GradedProp -> Int
 countFailProps [] = 0
 countFailProps (p :: rest) =
-  (if propResultPassed p then 0 else 1) + countFailProps rest
+  (if gradedPropPassed p then 0 else 1) + countFailProps rest
 
 -- The first (a call runs exactly one engine) doctest run, keyed off whichever engine actually
 -- ran it — `runTestReport` positionally tags each `RunResult` by the `Engine`
@@ -1529,7 +1574,7 @@ primaryDoctestRun ((_, run) :: _) = run
 -- empty in that case anyway).
 testReportOk : Option String ->
   List (Engine, RunResult) ->
-  List PropResult ->
+  List GradedProp ->
   Bool
 testReportOk typeError runs props =
   isNone typeError && allDoctestRunsOk runs && allPropsPass props
@@ -1599,7 +1644,7 @@ testReportJson : String ->
   List Engine ->
   Option String ->
   List (Engine, RunResult) ->
-  List PropResult ->
+  List GradedProp ->
   Bool ->
   Json
 testReportJson path requested typeError runs props typecheckSkipped =
@@ -1631,6 +1676,7 @@ testReportJson path requested typeError runs props typecheckSkipped =
                   + runErrors (primaryDoctestRun runs)
                   + countFailProps props),
             ),
+            ("knownRed", JInt (knownRedCountProps props)),
             ("ok", JBool (testReportOk typeError runs props)),
           ],
         ),
@@ -1666,7 +1712,7 @@ runTestTool runtimeSrc coreSrc stdlibDir args = match fieldStr "file" args
         -- here, not merely unreported — a panicking `test "…"` decl in the
         -- target file can no longer crash the MCP server on this path.
         let (typeError, runs, props, _testResults, typecheckSkipped) =
-          runTestReport
+          runTestGradedReport
             engines
             runtimeSrc
             coreSrc
@@ -1837,9 +1883,10 @@ unit = ()
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndex" false) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
-(DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestReport" false))))
+(DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReport" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropFailureKind" true) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false))))
+(DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "gradedPropRaw" false) (mem "gradedPropPassed" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "knownRedCountProps" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
 (DTypeSig false "mcpSupportedVersions" (TyApp (TyCon "List") (TyCon "String")))
@@ -2021,21 +2068,37 @@ unit = ()
 (DFunDef false "exampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "exResultJsonFields") (EVar "res")))))
 (DTypeSig false "doctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
 (DFunDef false "doctestsJson" ((PVar "run")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "total")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "run")) (EApp (EVar "runFailed") (EVar "run"))) (EApp (EVar "runErrors") (EVar "run"))))) (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EApp (EVar "runPassed") (EVar "run")))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EApp (EVar "runFailed") (EVar "run")))) (ETuple (ELit (LString "errors")) (EApp (EVar "JInt") (EApp (EVar "runErrors") (EVar "run")))) (ETuple (ELit (LString "examples")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "exampleJson")) (EApp (EVar "runDetails") (EVar "run"))))))))
-(DTypeSig false "propJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
-(DFunDef false "propJson" ((PVar "p")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LString "pass")) (ELit (LString "fail"))))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))))))
-(DTypeSig false "allPropsPass" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Bool")))
+(DTypeSig false "propJson" (TyFun (TyCon "GradedProp") (TyCon "Json")))
+(DFunDef false "propJson" ((PVar "row")) (EBlock (DoLet false false (PVar "p") (EApp (EVar "gradedPropRaw") (EVar "row"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "propResultEngine") (EVar "p")))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EApp (EVar "gradedPropStatus") (EVar "row")))) (ETuple (ELit (LString "rawStatus")) (EApp (EVar "JString") (EApp (EVar "gradedPropRawStatus") (EVar "row")))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))) (ETuple (ELit (LString "failureKind")) (EApp (EVar "propFailureKindJson") (EApp (EVar "propResultFailureKind") (EVar "p")))) (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EApp (EVar "propResultSeed") (EVar "p")))) (ETuple (ELit (LString "cases")) (EApp (EVar "JInt") (EApp (EVar "propResultCases") (EVar "p"))))) (EApp (EVar "issueField") (EApp (EVar "gradedPropIssue") (EVar "row")))) (EApp (EVar "pinField") (EApp (EVar "gradedPropPinDetail") (EVar "row"))))))))
+(DTypeSig false "issueField" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "issueField" ((PCon "None")) (EListLit))
+(DFunDef false "issueField" ((PCon "Some" (PVar "issue"))) (EListLit (ETuple (ELit (LString "issue")) (EApp (EVar "JInt") (EVar "issue")))))
+(DTypeSig false "pinField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "pinField" ((PCon "None")) (EListLit))
+(DFunDef false "pinField" ((PCon "Some" (PVar "detail"))) (EListLit (ETuple (ELit (LString "pin")) (EApp (EVar "JString") (EVar "detail")))))
+(DTypeSig false "propFailureKindJson" (TyFun (TyApp (TyCon "Option") (TyCon "PropFailureKind")) (TyCon "Json")))
+(DFunDef false "propFailureKindJson" ((PCon "None")) (EVar "JNull"))
+(DFunDef false "propFailureKindJson" ((PCon "Some" (PVar "kind"))) (EApp (EVar "JString") (EApp (EVar "propFailureKindText") (EVar "kind"))))
+(DTypeSig false "propFailureKindText" (TyFun (TyCon "PropFailureKind") (TyCon "String")))
+(DFunDef false "propFailureKindText" ((PCon "PropLawFalse")) (ELit (LString "law-false")))
+(DFunDef false "propFailureKindText" ((PCon "PropCapabilityError")) (ELit (LString "capability")))
+(DFunDef false "propFailureKindText" ((PCon "PropBuildError")) (ELit (LString "build")))
+(DFunDef false "propFailureKindText" ((PCon "PropRuntimeError")) (ELit (LString "runtime")))
+(DFunDef false "propFailureKindText" ((PCon "PropProtocolError")) (ELit (LString "protocol")))
+(DFunDef false "propFailureKindText" ((PCon "PropTypeError")) (ELit (LString "type")))
+(DTypeSig false "allPropsPass" (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Bool")))
 (DFunDef false "allPropsPass" ((PList)) (EVar "True"))
-(DFunDef false "allPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "propResultPassed") (EVar "p")) (EApp (EVar "allPropsPass") (EVar "rest"))))
-(DTypeSig false "countPassProps" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Int")))
+(DFunDef false "allPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "gradedPropPassed") (EVar "p")) (EApp (EVar "allPropsPass") (EVar "rest"))))
+(DTypeSig false "countPassProps" (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Int")))
 (DFunDef false "countPassProps" ((PList)) (ELit (LInt 0)))
-(DFunDef false "countPassProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 1)) (ELit (LInt 0))) (EApp (EVar "countPassProps") (EVar "rest"))))
-(DTypeSig false "countFailProps" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Int")))
+(DFunDef false "countPassProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EBinOp "&&" (EApp (EVar "propResultPassed") (EApp (EVar "gradedPropRaw") (EVar "p"))) (EApp (EVar "gradedPropPassed") (EVar "p"))) (ELit (LInt 1)) (ELit (LInt 0))) (EApp (EVar "countPassProps") (EVar "rest"))))
+(DTypeSig false "countFailProps" (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Int")))
 (DFunDef false "countFailProps" ((PList)) (ELit (LInt 0)))
-(DFunDef false "countFailProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "countFailProps") (EVar "rest"))))
+(DFunDef false "countFailProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "gradedPropPassed") (EVar "p")) (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "countFailProps") (EVar "rest"))))
 (DTypeSig false "primaryDoctestRun" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "RunResult")))
 (DFunDef false "primaryDoctestRun" ((PList)) (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
 (DFunDef false "primaryDoctestRun" ((PCons (PTuple PWild (PVar "run")) PWild)) (EVar "run"))
-(DTypeSig false "testReportOk" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Bool")))))
+(DTypeSig false "testReportOk" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Bool")))))
 (DFunDef false "testReportOk" ((PVar "typeError") (PVar "runs") (PVar "props")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "allDoctestRunsOk") (EVar "runs"))) (EApp (EVar "allPropsPass") (EVar "props"))))
 (DTypeSig false "allDoctestRunsOk" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "Bool")))
 (DFunDef false "allDoctestRunsOk" ((PList)) (EVar "True"))
@@ -2054,10 +2117,10 @@ unit = ()
 (DFunDef false "typecheckSkippedField" ((PCon "True")) (EListLit (ETuple (ELit (LString "typecheckSkipped")) (EApp (EVar "JBool") (EVar "True")))))
 (DTypeSig false "testDeclsSkippedField" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))
 (DFunDef false "testDeclsSkippedField" () (EListLit (ETuple (ELit (LString "testDeclsSkipped")) (EApp (EVar "JBool") (EVar "True")))))
-(DTypeSig false "testReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyCon "Bool") (TyCon "Json"))))))))
-(DFunDef false "testReportJson" ((PVar "path") (PVar "requested") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "requested"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
+(DTypeSig false "testReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyFun (TyCon "Bool") (TyCon "Json"))))))))
+(DFunDef false "testReportJson" ((PVar "path") (PVar "requested") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "requested"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "knownRed")) (EApp (EVar "JInt") (EApp (EVar "knownRedCountProps") (EVar "props")))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "runTestTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "mcpTestEnginesArg") (EVar "args")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "toolArgError") (EVar "msg"))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "engines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
+(DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "mcpTestEnginesArg") (EVar "args")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "toolArgError") (EVar "msg"))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestGradedReport") (EVar "engines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "handleToolsCall" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyEffect ("IO") None (TyCon "Unit")))))))))
 (DFunDef false "handleToolsCall" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "idJson") (PVar "params") (PVar "stalenessCheck")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "name"))) (EVar "params")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32602)))) (ELit (LString "tools/call: missing 'name'"))))) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "fieldOr") (ELit (LString "arguments"))) (EVar "params"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "logMcpCall") (ELit (LString "tools/call"))) (EVar "name")) (EApp (EVar "stringify") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "callTool") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "name")) (EVar "args")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Unknown tool: ")) (EVar "name")))))) (arm (PCon "Some" (PVar "result")) () (EBlock (DoLet false false (PVar "augmented") (EApp (EApp (EVar "attachStaleness") (EVar "stalenessCheck")) (EVar "result"))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "augmented"))))))))))))
 (DTypeSig false "dispatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))))
@@ -2079,9 +2142,10 @@ unit = ()
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "parseResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("tools" "fmt") ((mem "formatSource" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "Finding" false) (mem "lintFileDiagTripleParsed" false) (mem "mergeCrossFileIntoTriples" false) (mem "runCrossFileRules" false) (mem "applySuppressionsMulti" false) (mem "applyFindingDeny" false) (mem "splitLintNames" false) (mem "buildStdlibIndex" false) (mem "emptyStdlibIndex" false) (mem "stdlibIndexNeeded" false) (mem "StdlibIndex" false))))
-(DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestReport" false))))
+(DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestGradedReport" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
-(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
+(DUse false (UseGroup ("tools" "prop_runner") ((mem "PropFailureKind" true) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false) (mem "propResultEngine" false) (mem "propResultSeed" false) (mem "propResultCases" false) (mem "propResultFailureKind" false))))
+(DUse false (UseGroup ("tools" "test_pins_report") ((mem "GradedProp" false) (mem "gradedPropRaw" false) (mem "gradedPropPassed" false) (mem "gradedPropStatus" false) (mem "gradedPropRawStatus" false) (mem "gradedPropIssue" false) (mem "gradedPropPinDetail" false) (mem "knownRedCountProps" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
 (DTypeSig false "mcpSupportedVersions" (TyApp (TyCon "List") (TyCon "String")))
@@ -2263,21 +2327,37 @@ unit = ()
 (DFunDef false "exampleJson" ((PTuple (PVar "ex") (PVar "res"))) (EApp (EVar "jObject") (EBinOp "++" (EListLit (ETuple (ELit (LString "line")) (EApp (EVar "JInt") (EApp (EVar "exampleLine") (EVar "ex")))) (ETuple (ELit (LString "input")) (EApp (EVar "JString") (EApp (EVar "exampleInput") (EVar "ex"))))) (EApp (EVar "exResultJsonFields") (EVar "res")))))
 (DTypeSig false "doctestsJson" (TyFun (TyCon "RunResult") (TyCon "Json")))
 (DFunDef false "doctestsJson" ((PVar "run")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "total")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runPassed") (EVar "run")) (EApp (EVar "runFailed") (EVar "run"))) (EApp (EVar "runErrors") (EVar "run"))))) (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EApp (EVar "runPassed") (EVar "run")))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EApp (EVar "runFailed") (EVar "run")))) (ETuple (ELit (LString "errors")) (EApp (EVar "JInt") (EApp (EVar "runErrors") (EVar "run")))) (ETuple (ELit (LString "examples")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "exampleJson")) (EApp (EVar "runDetails") (EVar "run"))))))))
-(DTypeSig false "propJson" (TyFun (TyCon "PropResult") (TyCon "Json")))
-(DFunDef false "propJson" ((PVar "p")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LString "pass")) (ELit (LString "fail"))))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))))))
-(DTypeSig false "allPropsPass" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Bool")))
+(DTypeSig false "propJson" (TyFun (TyCon "GradedProp") (TyCon "Json")))
+(DFunDef false "propJson" ((PVar "row")) (EBlock (DoLet false false (PVar "p") (EApp (EVar "gradedPropRaw") (EVar "row"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "propResultEngine") (EVar "p")))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EApp (EVar "propResultName") (EVar "p")))) (ETuple (ELit (LString "status")) (EApp (EVar "JString") (EApp (EVar "gradedPropStatus") (EVar "row")))) (ETuple (ELit (LString "rawStatus")) (EApp (EVar "JString") (EApp (EVar "gradedPropRawStatus") (EVar "row")))) (ETuple (ELit (LString "detail")) (EApp (EVar "JString") (EApp (EVar "propResultDetail") (EVar "p")))) (ETuple (ELit (LString "failureKind")) (EApp (EVar "propFailureKindJson") (EApp (EVar "propResultFailureKind") (EVar "p")))) (ETuple (ELit (LString "seed")) (EApp (EVar "JInt") (EApp (EVar "propResultSeed") (EVar "p")))) (ETuple (ELit (LString "cases")) (EApp (EVar "JInt") (EApp (EVar "propResultCases") (EVar "p"))))) (EApp (EVar "issueField") (EApp (EVar "gradedPropIssue") (EVar "row")))) (EApp (EVar "pinField") (EApp (EVar "gradedPropPinDetail") (EVar "row"))))))))
+(DTypeSig false "issueField" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "issueField" ((PCon "None")) (EListLit))
+(DFunDef false "issueField" ((PCon "Some" (PVar "issue"))) (EListLit (ETuple (ELit (LString "issue")) (EApp (EVar "JInt") (EVar "issue")))))
+(DTypeSig false "pinField" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json")))))
+(DFunDef false "pinField" ((PCon "None")) (EListLit))
+(DFunDef false "pinField" ((PCon "Some" (PVar "detail"))) (EListLit (ETuple (ELit (LString "pin")) (EApp (EVar "JString") (EVar "detail")))))
+(DTypeSig false "propFailureKindJson" (TyFun (TyApp (TyCon "Option") (TyCon "PropFailureKind")) (TyCon "Json")))
+(DFunDef false "propFailureKindJson" ((PCon "None")) (EVar "JNull"))
+(DFunDef false "propFailureKindJson" ((PCon "Some" (PVar "kind"))) (EApp (EVar "JString") (EApp (EVar "propFailureKindText") (EVar "kind"))))
+(DTypeSig false "propFailureKindText" (TyFun (TyCon "PropFailureKind") (TyCon "String")))
+(DFunDef false "propFailureKindText" ((PCon "PropLawFalse")) (ELit (LString "law-false")))
+(DFunDef false "propFailureKindText" ((PCon "PropCapabilityError")) (ELit (LString "capability")))
+(DFunDef false "propFailureKindText" ((PCon "PropBuildError")) (ELit (LString "build")))
+(DFunDef false "propFailureKindText" ((PCon "PropRuntimeError")) (ELit (LString "runtime")))
+(DFunDef false "propFailureKindText" ((PCon "PropProtocolError")) (ELit (LString "protocol")))
+(DFunDef false "propFailureKindText" ((PCon "PropTypeError")) (ELit (LString "type")))
+(DTypeSig false "allPropsPass" (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Bool")))
 (DFunDef false "allPropsPass" ((PList)) (EVar "True"))
-(DFunDef false "allPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "propResultPassed") (EVar "p")) (EApp (EVar "allPropsPass") (EVar "rest"))))
-(DTypeSig false "countPassProps" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Int")))
+(DFunDef false "allPropsPass" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "&&" (EApp (EVar "gradedPropPassed") (EVar "p")) (EApp (EVar "allPropsPass") (EVar "rest"))))
+(DTypeSig false "countPassProps" (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Int")))
 (DFunDef false "countPassProps" ((PList)) (ELit (LInt 0)))
-(DFunDef false "countPassProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 1)) (ELit (LInt 0))) (EApp (EVar "countPassProps") (EVar "rest"))))
-(DTypeSig false "countFailProps" (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Int")))
+(DFunDef false "countPassProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EBinOp "&&" (EApp (EVar "propResultPassed") (EApp (EVar "gradedPropRaw") (EVar "p"))) (EApp (EVar "gradedPropPassed") (EVar "p"))) (ELit (LInt 1)) (ELit (LInt 0))) (EApp (EVar "countPassProps") (EVar "rest"))))
+(DTypeSig false "countFailProps" (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Int")))
 (DFunDef false "countFailProps" ((PList)) (ELit (LInt 0)))
-(DFunDef false "countFailProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "propResultPassed") (EVar "p")) (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "countFailProps") (EVar "rest"))))
+(DFunDef false "countFailProps" ((PCons (PVar "p") (PVar "rest"))) (EBinOp "+" (EIf (EApp (EVar "gradedPropPassed") (EVar "p")) (ELit (LInt 0)) (ELit (LInt 1))) (EApp (EVar "countFailProps") (EVar "rest"))))
 (DTypeSig false "primaryDoctestRun" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "RunResult")))
 (DFunDef false "primaryDoctestRun" ((PList)) (EApp (EApp (EApp (EApp (EApp (EVar "RunResult") (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (EListLit)))
 (DFunDef false "primaryDoctestRun" ((PCons (PTuple PWild (PVar "run")) PWild)) (EVar "run"))
-(DTypeSig false "testReportOk" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyCon "Bool")))))
+(DTypeSig false "testReportOk" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyCon "Bool")))))
 (DFunDef false "testReportOk" ((PVar "typeError") (PVar "runs") (PVar "props")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "allDoctestRunsOk") (EVar "runs"))) (EApp (EVar "allPropsPass") (EVar "props"))))
 (DTypeSig false "allDoctestRunsOk" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyCon "Bool")))
 (DFunDef false "allDoctestRunsOk" ((PList)) (EVar "True"))
@@ -2296,10 +2376,10 @@ unit = ()
 (DFunDef false "typecheckSkippedField" ((PCon "True")) (EListLit (ETuple (ELit (LString "typecheckSkipped")) (EApp (EVar "JBool") (EVar "True")))))
 (DTypeSig false "testDeclsSkippedField" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))))
 (DFunDef false "testDeclsSkippedField" () (EListLit (ETuple (ELit (LString "testDeclsSkipped")) (EApp (EVar "JBool") (EVar "True")))))
-(DTypeSig false "testReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "PropResult")) (TyFun (TyCon "Bool") (TyCon "Json"))))))))
-(DFunDef false "testReportJson" ((PVar "path") (PVar "requested") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "requested"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
+(DTypeSig false "testReportJson" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Engine") (TyCon "RunResult"))) (TyFun (TyApp (TyCon "List") (TyCon "GradedProp")) (TyFun (TyCon "Bool") (TyCon "Json"))))))))
+(DFunDef false "testReportJson" ((PVar "path") (PVar "requested") (PVar "typeError") (PVar "runs") (PVar "props") (PVar "typecheckSkipped")) (EBlock (DoLet false false (PVar "engines") (EIf (EApp (EVar "isNone") (EVar "typeError")) (EApp (EVar "doctestRunEngineNames") (EVar "runs")) (EVar "requested"))) (DoExpr (EApp (EVar "jObject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "path"))) (ETuple (ELit (LString "engine")) (EApp (EVar "JString") (EApp (EVar "primaryEngineName") (EVar "engines")))) (ETuple (ELit (LString "note")) (EApp (EVar "JString") (EApp (EVar "mcpTestCaveat") (EVar "engines"))))) (EApp (EVar "typeErrorField") (EVar "typeError"))) (EApp (EVar "typecheckSkippedField") (EVar "typecheckSkipped"))) (EVar "testDeclsSkippedField")) (EListLit (ETuple (ELit (LString "doctests")) (EApp (EVar "doctestsJson") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (ETuple (ELit (LString "properties")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EVar "propJson")) (EVar "props")))) (ETuple (ELit (LString "summary")) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "passed")) (EApp (EVar "JInt") (EBinOp "+" (EApp (EVar "runPassed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "countPassProps") (EVar "props"))))) (ETuple (ELit (LString "failed")) (EApp (EVar "JInt") (EBinOp "+" (EBinOp "+" (EApp (EVar "runFailed") (EApp (EVar "primaryDoctestRun") (EVar "runs"))) (EApp (EVar "runErrors") (EApp (EVar "primaryDoctestRun") (EVar "runs")))) (EApp (EVar "countFailProps") (EVar "props"))))) (ETuple (ELit (LString "knownRed")) (EApp (EVar "JInt") (EApp (EVar "knownRedCountProps") (EVar "props")))) (ETuple (ELit (LString "ok")) (EApp (EVar "JBool") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "runTestTool" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyEffect ("IO") None (TyCon "Json")))))))
-(DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "mcpTestEnginesArg") (EVar "args")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "toolArgError") (EVar "msg"))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "engines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
+(DFunDef false "runTestTool" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "args")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "file"))) (EVar "args")) (arm (PCon "None") () (EApp (EVar "toolArgError") (ELit (LString "medaka_test: missing or invalid argument — require 'file' (string)")))) (arm (PCon "Some" (PVar "path")) () (EMatch (EApp (EVar "mcpTestEnginesArg") (EVar "args")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "toolArgError") (EVar "msg"))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "toolArgError") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka_test: cannot read file '")) (EVar "path") (ELit (LString "': ")) (EVar "e"))))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "_testResults") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestGradedReport") (EVar "engines")) (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "path")) (EVar "tsrc")) (EVar "stdlibDir")) (ELit (LInt 100))) (EVar "None")) (EVar "False"))) (DoExpr (EApp (EApp (EVar "toolTextResult") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testReportJson") (EVar "path")) (EVar "engines")) (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "typecheckSkipped")))) (EApp (EVar "not") (EApp (EApp (EApp (EVar "testReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")))))))))))))
 (DTypeSig false "handleToolsCall" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyEffect ("IO") None (TyCon "Unit")))))))))
 (DFunDef false "handleToolsCall" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "stdlibDir") (PVar "idJson") (PVar "params") (PVar "stalenessCheck")) (EMatch (EApp (EApp (EVar "fieldStr") (ELit (LString "name"))) (EVar "params")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32602)))) (ELit (LString "tools/call: missing 'name'"))))) (arm (PCon "Some" (PVar "name")) () (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "fieldOr") (ELit (LString "arguments"))) (EVar "params"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "logMcpCall") (ELit (LString "tools/call"))) (EVar "name")) (EApp (EVar "stringify") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "callTool") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "stdlibDir")) (EVar "name")) (EVar "args")) (arm (PCon "None") () (EApp (EVar "writeMessage") (EApp (EApp (EApp (EVar "errorMsg") (EVar "idJson")) (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 32601)))) (EApp (EVar "stringConcat") (EListLit (ELit (LString "Unknown tool: ")) (EVar "name")))))) (arm (PCon "Some" (PVar "result")) () (EBlock (DoLet false false (PVar "augmented") (EApp (EApp (EVar "attachStaleness") (EVar "stalenessCheck")) (EVar "result"))) (DoExpr (EApp (EVar "writeMessage") (EApp (EApp (EVar "responseMsg") (EVar "idJson")) (EVar "augmented"))))))))))))
 (DTypeSig false "dispatchMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Json") (TyFun (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))))
