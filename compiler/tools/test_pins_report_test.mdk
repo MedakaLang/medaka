@@ -22,7 +22,10 @@ import tools.test_pins_report.{
   gradedPropPinDetail,
   gradedPropStatus,
   gradedTestPassed,
+  gradedTestPinDetail,
   gradedTestRawStatus,
+  gradedTestStatus,
+  knownRedCountTests,
 }
 import support.ordmap.{omEmpty}
 
@@ -149,6 +152,34 @@ test "unit pins require their exact assertion message" =
     ("a changed assertion fails the run", expectFalse (onlyTestPassed changed)),
   ]
 
+test "held drained and changed unit pins retain their human details" =
+  let held = gradeTests index "main.mdk" [
+    ("eval", "assertion", 4, Fail "expected detail" "left" "right"),
+  ]
+  let drained =
+    gradeTests index "main.mdk" [("eval", "assertion", 4, Pass "left" "right")]
+  let changed = gradeTests index "main.mdk" [
+    ("eval", "assertion", 4, Fail "different detail" "left" "right"),
+  ]
+  expectEach [
+    (
+      "a held pin has its own human status",
+      expectEqual "known-red" (onlyTestStatus held),
+    ),
+    (
+      "a drained pin explains its unexpected pass",
+      expectEqual
+        (Some "known-red issue #73 unexpected pass; remove its pin")
+        (onlyTestPinDetail drained),
+    ),
+    (
+      "a changed pin explains the different assertion",
+      expectEqual
+        (Some "known-red issue #73 changed: assertion failure detail changed")
+        (onlyTestPinDetail changed),
+    ),
+  ]
+
 test "an exact native error pin retains the raw error outcome" =
   let held = gradeTests index "main.mdk" [
     ("native", "native error", 7, Errored "native detail"),
@@ -158,6 +189,10 @@ test "an exact native error pin retains the raw error outcome" =
     (
       "grading retains the engine error status",
       expectEqual "error" (onlyTestRawStatus held),
+    ),
+    (
+      "a held raw error has a separate known-red count",
+      expectEqual 1 (knownRedCountTests held),
     ),
   ]
 
@@ -180,6 +215,14 @@ onlyTestPassed _ = False
 onlyTestRawStatus : List GradedTest -> String
 onlyTestRawStatus [row] = gradedTestRawStatus row
 onlyTestRawStatus _ = ""
+
+onlyTestStatus : List GradedTest -> String
+onlyTestStatus [row] = gradedTestStatus row
+onlyTestStatus _ = ""
+
+onlyTestPinDetail : List GradedTest -> Option String
+onlyTestPinDetail [row] = gradedTestPinDetail row
+onlyTestPinDetail _ = None
 
 summaryInt : String -> Json -> Option Int
 summaryInt field report =

@@ -8,3 +8,12 @@ engine = "native"
 issue = 3857
 detail_lines = ["native test run ended (probe exit 1) — runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running"]
 failure = "error"
+
+[[pin]]
+file = "tools/test_pins_report_test.mdk"
+kind = "test"
+name = "held drained and changed unit pins retain their human details"
+engine = "native"
+issue = 3857
+detail_lines = ["native test run ended (probe exit 1) — runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running"]
+failure = "error"

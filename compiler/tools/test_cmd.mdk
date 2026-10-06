@@ -1420,9 +1420,15 @@ printGradedPropRows (row :: rest) =
       rawDetail
   let _ =
     putStrLn
-      "Testing \"\{propResultName raw}\" [\{propResultEngine raw}] ... \{if gradedPropPassed row then "OK" else "FAILED"} (\{detail})"
+      "Testing \"\{propResultName raw}\" [\{propResultEngine raw}] ... \{gradedPropHumanStatus row} (\{detail})"
   let restPassed = printGradedPropRows rest
   gradedPropPassed row && restPassed
+
+gradedPropHumanStatus : GradedProp -> String
+gradedPropHumanStatus row
+  | gradedPropStatus row == "known-red" = "KNOWN-RED"
+  | gradedPropPassed row = "OK"
+  | otherwise = "FAILED"
 
 -- The root module's elaborated decls — the prop and `test "…"` bodies both come
 -- from here.  The root module is the LAST in the list (the loader returns
@@ -1465,6 +1471,7 @@ runTestDeclsPinned engines pair runtimeDecls target tsrc userDecls filterOpt fil
   | not (hasTests userDecls) = True
   | otherwise =
     printGradedTestRows
+      engines
       target
       (gradeTests
         index
@@ -1481,9 +1488,49 @@ runTestDeclsPinned engines pair runtimeDecls target tsrc userDecls filterOpt fil
             file
             index)))
 
-printGradedTestRows : String -> List GradedTest -> <IO> Bool
-printGradedTestRows _ [] = True
-printGradedTestRows target (row :: rest) =
+printGradedTestRows : List Engine -> String -> List GradedTest -> <IO> Bool
+printGradedTestRows [] _ _ = True
+printGradedTestRows [engine] target rows =
+  printGradedTestGroup target (gradedTestsForEngine (engineName engine) rows)
+printGradedTestRows engines target rows =
+  printGradedTestEngineGroups engines target rows
+
+printGradedTestEngineGroups : List Engine ->
+  String ->
+  List GradedTest ->
+  <IO> Bool
+printGradedTestEngineGroups [] _ _ = True
+printGradedTestEngineGroups (engine :: rest) target rows =
+  let _ = putStrLn ""
+  let _ = putStrLn "-- \{engineName engine} --"
+  let passed =
+    printGradedTestGroup target (gradedTestsForEngine (engineName engine) rows)
+  let restPassed = printGradedTestEngineGroups rest target rows
+  passed && restPassed
+
+gradedTestsForEngine : String -> List GradedTest -> List GradedTest
+gradedTestsForEngine _ [] = []
+gradedTestsForEngine engine (row :: rest) =
+  let next = gradedTestsForEngine engine rest
+  let (rowEngine, _, _, _) = gradedTestRaw row
+  if rowEngine == engine then row :: next else next
+
+printGradedTestGroup : String -> List GradedTest -> <IO> Bool
+printGradedTestGroup target rows =
+  let passed = printGradedTestLines target rows
+  let passedCount = cliCountPassedGradedTests rows
+  let (failedCount, errorCount) = gradedTestHumanFailureCounts rows
+  let knownRed = knownRedCountTests rows
+  let total = listLen rows
+  let _ =
+    putStr "\n\{target}: \{intToString passedCount}/\{intToString total} passed"
+  let _ = putStr (gradedTestSummarySuffix failedCount errorCount knownRed)
+  let _ = putStr "\n"
+  passed
+
+printGradedTestLines : String -> List GradedTest -> <IO> Bool
+printGradedTestLines _ [] = True
+printGradedTestLines target (row :: rest) =
   let (engine, name, line, raw) = gradedTestRaw row
   let label = "\{name} [\{engine}]"
   let _ = printTestRunning target line label
@@ -1491,10 +1538,35 @@ printGradedTestRows target (row :: rest) =
     if gradedTestStatus row == "known-red" then
       putStrLn
         "  known-red \{target}:\{intToString line}: \{label} (\{gradedTestPinDetailText row})"
-    else
-      printTestVerdict target line label raw
-  let restPassed = printGradedTestRows target rest
+    else do
+      let _ = printTestVerdict target line label raw
+      match gradedTestPinDetail row
+        Some detail => putStrLn "  pin: \{detail}"
+        None => ()
+  let restPassed = printGradedTestLines target rest
   gradedTestPassed row && restPassed
+
+-- Human summaries preserve raw test failures and errors, while a held pin gets
+-- its own count rather than being laundered into the pass numerator.
+gradedTestHumanFailureCounts : List GradedTest -> (Int, Int)
+gradedTestHumanFailureCounts [] = (0, 0)
+gradedTestHumanFailureCounts (row :: rest) =
+  let (failed, errors) = gradedTestHumanFailureCounts rest
+  if gradedTestStatus row == "known-red" then
+    (failed, errors)
+  else
+    let (_, _, _, raw) = gradedTestRaw row
+    match raw
+      Pass _ _ =>
+        if gradedTestPassed row then (failed, errors) else (failed + 1, errors)
+      Fail _ _ _ => (failed + 1, errors)
+      Errored _ => (failed, errors + 1)
+
+gradedTestSummarySuffix : Int -> Int -> Int -> String
+gradedTestSummarySuffix failed errors knownRed
+  | failed == 0 && errors == 0 && knownRed == 0 = ""
+  | otherwise =
+    " (\{intToString failed} failed, \{intToString errors} errors, \{intToString knownRed} known-red)"
 
 gradedTestPinDetailText : GradedTest -> String
 gradedTestPinDetailText row = match gradedTestPinDetail row
@@ -3343,6 +3415,8 @@ testHelpText = stringConcat [
   "                      affects a program under test's own random draws\n",
   "  --cases <n>           run each property with <n> generated cases\n",
   "                      instead of the default 100\n", "\n",
+  "  --props-worker        internal evaluator property worker, invoked by the test runner\n",
+  "                      and unavailable for direct use\n", "\n",
   "--native and --engines are mutually exclusive. With neither, the default\n",
   "is the native backend alone.\n", "\n",
   "With no target, tests the project containing the current directory: the\n",
