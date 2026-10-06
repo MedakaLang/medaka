@@ -1041,3 +1041,93 @@ test "abstract custom counterexamples preserve module privacy on both engines" =
               None => False)
             (propertyReports report)),
       ])
+
+genericTreeSource : String
+genericTreeSource =
+  "data Tree a = Leaf a | Node (Tree a)\nimpl Arbitrary (Tree a) requires Arbitrary a where\n  arbitrary () = Node (Leaf (arbitrary ()))\n  shrink (Node inner) = [inner]\n  shrink (Leaf _) = []\n"
+
+test "generic custom generators discharge prerequisites and shrink recursive carriers" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "import test.{expectEqual}\n"
+          ++ genericTreeSource
+          ++ "prop \"generic generator\" (value : Tree Int) = match value\n  Node _ => True\n  Leaf _ => False\nprop \"generic shrink\" (value : Tree Int) = False\ntest \"ordinary test after generic properties\" = expectEqual 4 (2 + 2)\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        gradeReport
+          1
+          [
+            ("eval", "generic generator", "pass"),
+            ("eval", "generic shrink", "fail"),
+            ("native", "generic generator", "pass"),
+            ("native", "generic shrink", "fail"),
+          ]
+          (Ok (code, report)),
+        expectTrue
+          (all
+            (row => match field "detail" row
+              Some detail =>
+                contains "value = Leaf" detail && not (contains "Node" detail)
+              None => False)
+            (filter
+              (row => field "name" row == Some "generic shrink")
+              (propertyReports report))),
+        expectEqual
+          [
+            (
+              Some "eval",
+              Some "ordinary test after generic properties",
+              Some "pass",
+            ),
+            (
+              Some "native",
+              Some "ordinary test after generic properties",
+              Some "pass",
+            ),
+          ]
+          (map
+            (row => (field "engine" row, field "name" row, field "status" row))
+            (unitReportRows report)),
+      ])
+
+test "missing generic prerequisites reject only dependent properties" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        genericTreeSource
+          ++ "data Token = Token\nprop \"missing prerequisite\" (value : Tree Token) = True\nprop \"neighbor\" (n : Int) = n == n\n",
+      ),
+    ]
+    (target =>
+      gradeCapabilityNeighbor
+        "missing prerequisite"
+        (runReport ["--engines", "eval,native"] target))
+
+test "imported generic custom carriers retain their module and nested argument identities" =
+  withFixtures
+    [
+      (
+        "boxes.mdk",
+        "public export data Box a = Box a\nexport impl Arbitrary (Box a) requires Arbitrary a where\n  arbitrary () = Box (arbitrary ())\n  shrink _ = []\nexport\nisBounded : Box Int -> Bool\nisBounded (Box n) = n >= (0 - 1000) && n <= 1000\n",
+      ),
+      (
+        "main.mdk",
+        "import boxes.{Box, isBounded}\nprop \"imported generic carrier\" (value : Box Int) = isBounded value\nprop \"nested generic carrier\" (value : Box (List Int)) = True\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "imported generic carrier", "pass"),
+          ("eval", "nested generic carrier", "pass"),
+          ("native", "imported generic carrier", "pass"),
+          ("native", "nested generic carrier", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
