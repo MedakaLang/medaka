@@ -2,7 +2,7 @@ import driver.build_cmd.{makeTempDir, cleanupTempDir}
 import test.{Expectation, expectEqual, expectTrue, fail}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import frontend.ast.{Decl, Ty(..), TyConOrigin(..), mapTyInDecl}
+import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), mapTyInDecl}
 import string.{contains}
 import tools.native_props.{
   runNativePlannedPropRequests, renderNativePlannedProbe
@@ -92,16 +92,57 @@ rendered text = renderNativePlannedProbe
 
 nativeModules : String -> List PlanModule
 nativeModules text =
-  let raw = map stampBuiltinIntDecl (parse text)
+  let parsed = parse text
+  let names = localNominalNames parsed
+  let raw = map (stampDecl names) parsed
   [PlanModule "main" raw (desugar raw)]
 
-stampBuiltinIntDecl : Decl -> Decl
-stampBuiltinIntDecl decl = fst (mapTyInDecl stampBuiltinInt decl)
+localNominalNames : List Decl -> List String
+localNominalNames [] = []
+localNominalNames ((DData { dataName }) :: rest) =
+  dataName :: localNominalNames rest
+localNominalNames ((DNewtype { newtypeName }) :: rest) =
+  newtypeName :: localNominalNames rest
+localNominalNames ((DAttrib _ decl) :: rest) = localNominalNames (decl :: rest)
+localNominalNames (_ :: rest) = localNominalNames rest
 
-stampBuiltinInt : Ty -> (Ty, Bool)
-stampBuiltinInt (t@(TyCon { tyConName = "Int", tyConOrigin = OriginUnresolved })) =
-  (TyCon { t | tyConOrigin = OriginBuiltin }, True)
-stampBuiltinInt ty = (ty, False)
+stampDecl : List String -> Decl -> Decl
+stampDecl names decl = fst (mapTyInDecl (stampTy names) (stampDeclOwner decl))
+
+stampDeclOwner : Decl -> Decl
+stampDeclOwner (decl@(DData { dataOrigin = OriginUnresolved })) =
+  DData { decl | dataOrigin = OriginModule "main" }
+stampDeclOwner (decl@(DNewtype { newtypeOrigin = OriginUnresolved })) =
+  DNewtype { decl | newtypeOrigin = OriginModule "main" }
+stampDeclOwner (DAttrib attrs decl) = DAttrib attrs (stampDeclOwner decl)
+stampDeclOwner decl = decl
+
+stampTy : List String -> Ty -> (Ty, Bool)
+stampTy names (ty@(TyCon { tyConName, tyConOrigin = OriginUnresolved })) =
+  if builtinName tyConName then
+    (TyCon { ty | tyConOrigin = OriginBuiltin }, True)
+  else if hasName tyConName names then
+    (TyCon { ty | tyConOrigin = OriginModule "main" }, True)
+  else
+    (ty, False)
+stampTy _ ty = (ty, False)
+
+builtinName : String -> Bool
+builtinName name =
+  name == "Int"
+    || name == "Bool"
+    || name == "Float"
+    || name == "Char"
+    || name == "String"
+    || name == "Unit"
+    || name == "List"
+    || name == "Array"
+    || name == "Option"
+    || name == "Result"
+
+hasName : String -> List String -> Bool
+hasName _ [] = False
+hasName name (current :: rest) = name == current || hasName name rest
 
 test "native source closes every recursive plan behind parameter-scoped helpers" =
   let text =

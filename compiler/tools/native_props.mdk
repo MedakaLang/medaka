@@ -65,8 +65,7 @@ expectedTags i (_ :: rest) =
   [startTag i, seedTag i, boolTag i, detailTag i] ++ expectedTags (i + 1) rest
 
 -- The command path supplies paired raw/runtime declarations so the native
--- renderer can share identity-aware planning with the evaluator.  The legacy
--- entry remains for direct callers whose source is a self-contained module.
+-- renderer can share identity-aware planning with the evaluator.
 export
 runNativePlannedPropRequests : String ->
   String ->
@@ -490,8 +489,12 @@ plannedProbeSource nonce target tsrc modules env jobs =
         "__np_int _ = (__np_next () / 65536) % 2001 - 1000",
         "__np_bool _ = (__np_next () / 65536) % 2 == 0",
         "__np_choose n = if n <= 1 then 0 else (__np_next () / 65536) % n",
-        "__np_char _ = charFromCodeUnsafe (32 + __np_choose 95)",
+        "__np_char _ = optionOr ' ' (charFromCode (32 + __np_choose 95))",
         "__np_string n = if n <= 0 then \"\" else charToStr (__np_char ()) ++ __np_string (n - 1)",
+        "",
+        "__np_join_strings _ [] = \"\"",
+        "__np_join_strings _ (x :: []) = x",
+        "__np_join_strings sep (x :: xs) = x ++ sep ++ __np_join_strings sep xs",
         "",
         "__np_delete_each [] = []",
         "__np_delete_each (x :: xs) = xs :: map (ys => x :: ys) (__np_delete_each xs)",
@@ -1093,11 +1096,12 @@ displayNodeBody _ _ _ _ GFloat name = "debug \{name}"
 displayNodeBody _ _ _ _ GChar name = "debug \{name}"
 displayNodeBody _ _ _ _ GString name = "debug \{name}"
 displayNodeBody _ _ _ _ GUnit _ = "\"()\""
-displayNodeBody _ _ _ _ (GCustom _) name = "debug \{name}"
+displayNodeBody modules env graph prefix (GCustom (CustomPlan key _)) name =
+  graphNominalDisplay modules env graph prefix (GNominal key []) key name
 displayNodeBody _ _ graph prefix (GList p) name =
-  "\"[\" ++ joinWith \", \" (map (x => \{graphDisplayRef graph prefix p "x"}) \{name}) ++ \"]\""
+  "\"[\" ++ __np_join_strings \", \" (map (x => \{graphDisplayRef graph prefix p "x"}) \{name}) ++ \"]\""
 displayNodeBody _ _ graph prefix (GArray p) name =
-  "\"[|\" ++ joinWith \", \" (map (x => \{graphDisplayRef graph prefix p "x"}) (toList \{name})) ++ \"|]\""
+  "\"[|\" ++ __np_join_strings \", \" (map (x => \{graphDisplayRef graph prefix p "x"}) (toList \{name})) ++ \"|]\""
 displayNodeBody _ _ graph prefix (GOption p) name =
   "match \{name}\n  None => \"None\"\n  Some x => \"Some (\" ++ \{graphDisplayRef graph prefix p "x"} ++ \")\""
 displayNodeBody _ _ graph prefix (GResult err ok) name =
@@ -1209,6 +1213,8 @@ graphNominalDisplay modules env graph prefix plan (TypeKey typeName origin) name
   match planDef env (TypeKey typeName origin)
     Err _ => "\"<unavailable>\""
     Ok (PlanDef _ _ _ PlanAbstract _) => "\"<\{typeName}>\""
+    Ok (PlanDef _ owner _ PlanLocal _) if owner /= plannedRoot modules =>
+      "\"<\{typeName}>\""
     Ok (PlanDef _ owner _ _ ctors) =>
       "match \{name}\n\{joinNl (map (graphNominalDisplayArm modules env graph prefix plan owner) ctors)}"
 
@@ -1393,7 +1399,7 @@ nthPlan _ [] = GUnit
 
 candidateExprAt : PlanEnv -> Int -> Int -> GenPlan -> String -> String
 candidateExprAt env i j plan name =
-  graphShrinkRef (buildGraph env plan) (genNodePrefix i j) plan name
+  "(\{graphShrinkRef (buildGraph env plan) (genNodePrefix i j) plan name})"
 
 replaceName : Int -> String -> List String -> List String
 replaceName _ _ [] = []
