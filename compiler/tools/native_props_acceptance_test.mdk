@@ -1154,3 +1154,35 @@ test "custom helpers retain the Arbitrary interface identity under standalone me
           [Some "pass", Some "pass"]
           (map (field "status") (unitReportRows report)),
       ])
+
+test "typed custom helpers close over nominal fields and isolate missing prerequisites" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        genericTreeSource
+          ++ "data Seeded = Seeded Int\nimpl Arbitrary Seeded where\n  arbitrary () = Seeded 999999\n  shrink _ = []\ndata Outer = Outer Seeded\ndata Token = Token\ndata Missing = Missing (Tree Token)\nprop \"nested custom carrier\" (value : Outer) = match value\n  Outer (Seeded n) => n == 999999\nprop \"nested missing prerequisite\" (value : Missing) = True\nprop \"neighbor\" (n : Int) = n == n\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        gradeReport
+          1
+          [
+            ("eval", "nested custom carrier", "pass"),
+            ("eval", "nested missing prerequisite", "error"),
+            ("eval", "neighbor", "pass"),
+            ("native", "nested custom carrier", "pass"),
+            ("native", "nested missing prerequisite", "error"),
+            ("native", "neighbor", "pass"),
+          ]
+          (Ok (code, report)),
+        expectEqual
+          [Some "capability", Some "capability"]
+          (map
+            (field "failureKind")
+            (filter
+              (row => field "name" row == Some "nested missing prerequisite")
+              (propertyReports report))),
+      ])
