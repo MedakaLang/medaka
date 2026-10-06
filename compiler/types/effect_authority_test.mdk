@@ -1136,7 +1136,7 @@ test "a residual relates two quantified authorities and is checked at each use" 
 test "a residual names the binding whose scheme carried it" =
   expectTrue
     (anyList
-      (m => S.contains "'subIn' needs" m)
+      (m => S.contains "`subIn` needs" m)
       (messagesOf (residual "use _ = subIn cfg etc\n")))
 
 test "a residual may bound a variable by a join of two others" = expectAll [
@@ -1631,7 +1631,7 @@ test "a binder's written domain gives a qualifier a domain and charges nothing" 
     -- with no domain written, the qualifier's report names the binder form first
     expectTrue
       (anyMentions
-        "Write the domain on the binder, `(a : String @FileRead)`"
+        "write one on the binder, `(a : String @FileRead)`"
         (messagesOf "idQ : (a : String) -> String @a\nidQ a = a\n")),
   ]
 
@@ -1781,7 +1781,7 @@ test "two written index rows must still be equal" = expectAll [
       "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n"),
   expectTrue
     (anyMentions
-      "must be EQUAL"
+      "is invariant"
       (messagesOf
         (jobPrelude
           ++ "narrow : Job <Store \"cfg/*\"> Int -> Job <Store \"data/*\"> Int\nnarrow j = j\n"))),
@@ -1872,7 +1872,7 @@ test "an interpolated binder is read through the prelude's display only" =
       -- appending the body already does
       expectTrue
         (anyMentions
-          "is this module's own"
+          "this module's own `display`"
           (messagesOf
             (ownDisplay ++ under ++ "under d x = load \"\\{d}/\\{x}\"\n"))),
       expectFalse
@@ -2009,7 +2009,7 @@ test "a malformed pattern-slot argument is reported by its most specific rule" =
     -- otherwise the kind error names the slot with its `*`
     expectTrue
       (anyMentions
-        "this argument slot is `Authority Store*`"
+        "this slot is `Authority Store*`"
         (messagesOf
           (handleP
             ++ "both : (p : String @Store*) -> (q : String @Store*) -> Bool -> H (p | q)\nboth p q b = if b then H p else H q\n"))),

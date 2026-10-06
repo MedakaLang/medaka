@@ -114,7 +114,7 @@ orphanMessages src =
 
 orphanMessage : String -> String
 orphanMessage n =
-  "Type signature for '\{n}' has no binding in this module. Define '\{n}' below its signature, or remove the signature"
+  "type signature for `\{n}` has no binding in this module; define `\{n}` or remove the signature"
 
 test "a signature with no binding is an orphan, bare, under an attribute, or exported" = expectEach
   [
@@ -141,7 +141,7 @@ test "a signature with no binding is an orphan, bare, under an attribute, or exp
 test "a misspelled binding is named in the orphan signature's message" =
   expectEqual
     [
-      "Type signature for 'total' has no binding in this module. Did you mean 'totl'? Rename the signature or the binding so the two names match",
+      "type signature for `total` has no binding in this module; did you mean `totl`?",
     ]
     (orphanMessages "total : List Int -> Int\ntotl xs = 0\n")
 

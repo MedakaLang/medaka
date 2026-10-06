@@ -585,7 +585,7 @@ noConstructors : String
 noConstructors = "exports no constructors"
 
 exportedAbstractly : String
-exportedAbstractly = "exported abstractly"
+exportedAbstractly = "exports it abstractly"
 
 -- | The cells that use the public opaque API legitimately and must check.
 passCells : List String
@@ -595,18 +595,18 @@ passCells = [
 ]
 
 test "opacity attack rejected: opaque_field_sentinel_attack" =
-  expectCellRejected "pds/test/opaque_field_sentinel_attack.mdk" "Type mismatch"
+  expectCellRejected "pds/test/opaque_field_sentinel_attack.mdk" "type mismatch"
 
 test "opacity attack rejected: opaque_scalar_sentinel_attack" =
   expectCellRejected
     "pds/test/opaque_scalar_sentinel_attack.mdk"
-    "Type mismatch"
+    "type mismatch"
 
 test "opacity attack rejected: opaque_field_raw_forgery" =
-  expectCellRejected "pds/test/opaque_field_raw_forgery.mdk" "Type mismatch"
+  expectCellRejected "pds/test/opaque_field_raw_forgery.mdk" "type mismatch"
 
 test "opacity attack rejected: opaque_scalar_raw_forgery" =
-  expectCellRejected "pds/test/opaque_scalar_raw_forgery.mdk" "Type mismatch"
+  expectCellRejected "pds/test/opaque_scalar_raw_forgery.mdk" "type mismatch"
 
 test "abstract constructor import rejected: opaque_field_constructor_import" =
   expectCellRejectedBoth

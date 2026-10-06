@@ -43,7 +43,7 @@ test "a Product label must declare its axes" = expectCheckReject (fixture
 ]
 test "a written product may name only the declared axes" = expectCheckReject
   (fixture "prod_unknown_axis.mdk")
-  ["unknown product axis 'Host' (declared axes: Table, Op)"]
+  ["unknown product axis `Host`; declared axes: Table, Op"]
 
 test "every axis takes a binder, each in its own axis's domain" =
   expectCheckAccept (fixture "prod_axis_binder_accept.mdk")
@@ -53,7 +53,7 @@ test "every axis takes a binder, each in its own axis's domain" =
 test "a runtime argument on the Method axis is that axis's top" = expectCheckReject
   (fixture "prod_axis_binder_runtime.mdk")
   [
-    "where <FFI, Http Host=\"api.example.com/*\" Method={\"GET\"}> is allowed, but it performs <Http Host=\"api.example.com/users\">",
+    "performs <Http Host=\"api.example.com/users\"> where only <FFI, Http Host=\"api.example.com/*\" Method={\"GET\"}> is allowed",
   ]
 
 test "arguments passed swapped are charged on the axes they land on" = expectCheckReject
@@ -62,7 +62,7 @@ test "arguments passed swapped are charged on the axes they land on" = expectChe
 
 test "an axis names only a binder written to its left" = expectCheckReject
   (fixture "prod_axis_binder_unbound.mdk")
-  ["Unknown authority 'method'"]
+  ["unknown authority `method`"]
 
 test "a product that names arguments prints back as written" =
   expectVerbExitStartsWith
@@ -131,7 +131,7 @@ test "check-policy refuses a pattern on a Set axis rather than reading it as one
   (policyRun "Net=Host=\"idp.example.com/*\";Method=GET,FFI")
   1
   "rejected"
-  ["axis 'Method' takes a set, not a pattern"]
+  ["axis `Method` takes a set, not a pattern"]
 
 test "check-policy refuses an axis without a value rather than widening it" = expectVerbExitStartsWithAndContains
   "check-policy"
@@ -145,7 +145,7 @@ test "check-policy refuses an undeclared axis" = expectVerbExitStartsWithAndCont
   (policyRun "Net=Host=\"idp.example.com/*\";Verb={GET},FFI")
   1
   "rejected"
-  ["unknown product axis 'Verb'"]
+  ["unknown product axis `Verb`"]
 
 test "a 16-member Set axis beside an axis binder is accepted" =
   expectCheckAccept (fixture "prod_binder_set16_accept.mdk")
