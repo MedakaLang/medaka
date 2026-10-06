@@ -447,6 +447,49 @@ arrItems : Array a -> Int -> Int -> List a
 arrItems arr i n =
   if i >= n then [] else arrayGetUnsafe i arr :: arrItems arr (i + 1) n
 
+-- Tail-recursive walks backing the `Foldable (Array a)` impl below.
+arrToListGo : Array a -> Int -> List a -> List a
+arrToListGo arr i acc =
+  if i < 0 then acc else arrToListGo arr (i - 1) (arrayGetUnsafe i arr :: acc)
+
+arrFoldGo : (b -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
+arrFoldGo f arr i n acc =
+  if i >= n then
+    acc
+  else
+    arrFoldGo f arr (i + 1) n (f acc (arrayGetUnsafe i arr))
+
+arrFoldRightGo : (a -> b -> <e> b) -> Array a -> Int -> b -> <e> b
+arrFoldRightGo f arr i acc =
+  if i < 0 then
+    acc
+  else
+    arrFoldRightGo f arr (i - 1) (f (arrayGetUnsafe i arr) acc)
+
+export impl Mappable Array where
+  map f arr = arrayMakeWith (arrayLength arr) (i => f (arrayGetUnsafe i arr))
+
+export impl Foldable Array where
+  fold f z arr = arrFoldGo f arr 0 (arrayLength arr) z
+  foldRight f z arr = arrFoldRightGo f arr (arrayLength arr - 1) z
+  toList arr = arrToListGo arr (arrayLength arr - 1) []
+  isEmpty arr = arrayLength arr == 0
+  length arr = arrayLength arr
+
+export impl Semigroup (Array a) where
+  append a b = arrayMakeWith (arrayLength a + arrayLength b) (i =>
+    if i < arrayLength a then
+      arrayGetUnsafe i a
+    else
+      arrayGetUnsafe (i - arrayLength a) b)
+
+{- | The empty array.
+
+   > length (empty : Array Int)
+   0 -}
+export impl Monoid (Array a) where
+  empty = [||]
+
 export impl Debug (Option a) requires Debug a where
   debug None = "None"
   debug (Some x) = "Some " ++ derivedShowWrap (debug x)
@@ -2257,3 +2300,20 @@ prop "Hashable List: a 1,000-element list hashes as its array and its step fold"
   let xs = map (i => bitXor i x) [1..1000]
   eq (hash xs) (hash (arrayFromList xs))
     && eq (hash xs) (fold derivedHashStep 0 (map hash xs))
+
+-- LAW: the Array `Mappable`/`Foldable`/`Semigroup` impls are prelude impls,
+-- so this module (which imports nothing) can use them; each agrees with the
+-- List meaning of the same call.
+prop "Array Foldable agrees with List Foldable" (xs : List Int) =
+  let arr = arrayFromList xs
+  eq (length arr) (length xs)
+    && eq (toList arr) xs
+    && eq
+      (fold (acc x => acc * 31 + x) 7 arr)
+      (fold (acc x => acc * 31 + x) 7 xs)
+    && eq (foldRight (x acc => x :: acc) [] arr) xs
+
+prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List Int) =
+  eq
+    (toList (append (map (x => x + 1) (arrayFromList xs)) (arrayFromList ys)))
+    (map (x => x + 1) xs ++ ys)

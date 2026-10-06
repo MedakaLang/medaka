@@ -150,11 +150,6 @@ export
 last : Array a -> Option a
 last arr = get (arrayLength arr - 1) arr
 
--- Tail-recursive list build, used by the Foldable Array impl's `toList`.
-toListGo : Array a -> Int -> List a -> List a
-toListGo arr i acc =
-  if i < 0 then acc else toListGo arr (i - 1) (arrayGetUnsafe i arr :: acc)
-
 -- # Transformation
 
 -- `map` is provided by `impl Mappable Array` below; not re-exported as a
@@ -515,21 +510,8 @@ mergeStep cmp left right il ir nl nr acc =
 
 -- # Searching
 
--- `fold`, `foldRight`, `any`, `all` are reachable via the Foldable machinery
--- in core once `impl Foldable Array` is loaded.  The tail-recursive helpers
--- live here because the impl bodies and the search functions below both call
--- them.
-
-foldGo : (b -> a -> <e> b) -> Array a -> Int -> Int -> b -> <e> b
-foldGo f arr i n acc =
-  if i >= n then acc else foldGo f arr (i + 1) n (f acc (arrayGetUnsafe i arr))
-
-foldRightGo : (a -> b -> <e> b) -> Array a -> Int -> b -> <e> b
-foldRightGo f arr i acc =
-  if i < 0 then
-    acc
-  else
-    foldRightGo f arr (i - 1) (f (arrayGetUnsafe i arr) acc)
+-- `fold`, `foldRight`, `any`, `all` are reachable via the Foldable impl in
+-- `stdlib/core.mdk`.
 
 {- | The first element satisfying `pred`, or `None`.
 
@@ -650,33 +632,11 @@ mapWithIndex f arr =
 
 -- ── Typeclass impls ─────────────────────────────────────────────────────
 
-export impl Mappable Array where
-  map f arr = arrayMakeWith (arrayLength arr) (i => f (arrayGetUnsafe i arr))
-
-export impl Foldable Array where
-  fold f z arr = foldGo f arr 0 (arrayLength arr) z
-  foldRight f z arr = foldRightGo f arr (arrayLength arr - 1) z
-  toList arr = toListGo arr (arrayLength arr - 1) []
-  isEmpty arr = arrayLength arr == 0
-  length arr = arrayLength arr
-
-export impl Semigroup (Array a) where
-  append a b = arrayMakeWith (arrayLength a + arrayLength b) (i =>
-    if i < arrayLength a then
-      arrayGetUnsafe i a
-    else
-      arrayGetUnsafe (i - arrayLength a) b)
-
-{- | The empty array.
-
-   > length (empty : Array Int)
-   0 -}
-export impl Monoid (Array a) where
-  empty = [||]
-
--- `impl Eq (Array a)` lives in `stdlib/core.mdk` (the prelude), alongside
--- `Debug`/`Index`, so `deriving (Eq)` over an array field builds without an
--- `import array`.
+-- The `Mappable`, `Foldable`, `Semigroup` and `Monoid` impls for `Array`, like
+-- `Eq`/`Debug`/`Index`, live in `stdlib/core.mdk` (the prelude), so
+-- `length (toChars s)` and `map f arr` work without an `import array`.
+-- `impl Eq (Array a)` lives in core for the same reason: `deriving (Eq)` over
+-- an array field builds without an `import array`.
 
 -- ── Properties (executed by `medaka test`) ──────────────────────────────
 
