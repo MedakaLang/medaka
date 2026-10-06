@@ -1335,7 +1335,7 @@ test "native helper hygiene preserves user field names and counterexample labels
     [
       (
         "main.mdk",
-        "data Sample = Sample { __np_field : Int }\nprop \"prefixed field\" (__np_value : Sample) = __np_value.__np_field == __np_value.__np_field\nprop \"prefixed counterexample\" (__np_value : Sample) = False\n",
+        "data Sample = Sample { __np_field : Int, __np_state : Int, __np_int : Int }\nprop \"prefixed field\" (__np_arg_0 : Sample) = __np_arg_0.__np_field == __np_arg_0.__np_field && __np_arg_0.__np_state == __np_arg_0.__np_state && __np_arg_0.__np_int == __np_arg_0.__np_int\nprop \"prefixed counterexample\" (__np_arg_0 : Sample) = False\n",
       ),
     ]
     (target => match runReport ["--engines", "eval,native"] target
@@ -1354,7 +1354,10 @@ test "native helper hygiene preserves user field names and counterexample labels
           (all
             (row => match field "detail" row
               Some detail =>
-                contains "__np_value =" detail && contains "__np_field" detail
+                contains "__np_arg_0 =" detail
+                  && contains "__np_field" detail
+                  && contains "__np_state" detail
+                  && contains "__np_int" detail
               None => False)
             (filter
               (row => field "name" row == Some "prefixed counterexample")
