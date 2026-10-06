@@ -299,3 +299,8 @@ test "custom helper discovery follows instantiated nominal fields" =
       [CustomPlan (TypeKey "Box" _) _ _] => True
       _ => False)
     Err _ => expectTrue False
+
+test "exported newtypes stay opaque to structural property generation" = expectTrue
+  (match planned "export newtype Wrapped = Wrapped Int\n" (namedTy "Wrapped")
+    Ok _ => False
+    Err _ => True)

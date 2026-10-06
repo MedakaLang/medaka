@@ -311,7 +311,7 @@ visibilityOf VisPublic = PlanPublicCtors
 visibilityOf VisAbstract = PlanAbstract
 
 newtypeVisibility : Bool -> PlanVisibility
-newtypeVisibility True = PlanPublicCtors
+newtypeVisibility True = PlanAbstract
 newtypeVisibility False = PlanLocal
 
 ownerOf : TyConOrigin -> String

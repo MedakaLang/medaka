@@ -23,7 +23,7 @@ import frontend.ast.{
 }
 import u32 as U32
 import eval.eval.{
-  Value(..), EvalEnv(..), apply, eval, extendEnv, force, ppValue
+  Value(..), EvalEnv(..), apply, eval, extendEnv, force, lookupEnv, ppValue
 }
 import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
@@ -32,7 +32,7 @@ import tools.prop_plan.{
   replaceEach,
   prepend,
   prependBefore,
-  PlanEnv,
+  PlanEnv(..),
   PlanError,
   PlanModule,
   TypeKey(..),
@@ -40,6 +40,7 @@ import tools.prop_plan.{
   CustomPlan(..),
   PlanDef(..),
   PlanCtor(..),
+  PlanVisibility(..),
   planFor,
   planErrorText,
   planDef,
@@ -201,9 +202,9 @@ shrinkInt n =
 -- evalEnv is the program's binding environment (List (String, Value)); each
 -- prop body is evaluated in a frame extending it with the generated inputs.
 
-checkProp : List (String, Value e) -> Expr -> List (String, Value e) -> <e> Bool
-checkProp evalEnv body inputs =
-  let env = extendEnv (EvalEnv [[]]) (inputs ++ evalEnv)
+checkProp : EvalEnv (Value e) -> Expr -> List (String, Value e) -> <e> Bool
+checkProp rootEnv body inputs =
+  let env = extendEnv rootEnv inputs
   match force (eval env body)
     VBool b => b
     _ => False
@@ -251,6 +252,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
   -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
   -- of what ran before it, so it is the number to print on failure.
   let seedAtStart = !propRngStateRef
+  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
   match planPropParams (genEnvPlan genEnv) name params
     Err e =>
       let _ = putStrLn ("ERROR: " ++ planErrorText e)
@@ -261,7 +263,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
         False
       None =>
         let _ = beginCustomPropStream seedAtStart
-        match findFailure genEnv evalEnv params body maxTests 1
+        match findFailure genEnv rootEnv params body maxTests 1
           PropPassed =>
             let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
             True
@@ -282,7 +284,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
 runProp _genEnv _evalEnv _decl _maxTests _target _propLines = True
 
 findFailure : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   Int ->
@@ -303,7 +305,7 @@ findFailure genEnv evalEnv params body maxTests run
       (checkProp evalEnv body inputs)
 
 findFailurePlanned : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   List GenPlan ->
   Expr ->
@@ -314,18 +316,14 @@ findFailurePlanned genEnv evalEnv params plans body maxTests run
   | run > maxTests = PropPassed
   | otherwise =
     let inputs = genInputsPlanned genEnv evalEnv params plans
-    findFailureStep
-      genEnv
-      evalEnv
-      params
-      body
-      maxTests
-      run
-      inputs
-      (checkProp evalEnv body inputs)
+    if checkProp evalEnv body inputs then
+      findFailurePlanned genEnv evalEnv params plans body maxTests (run + 1)
+    else
+      let (shrunk, fuelExhausted) = shrinkLoop genEnv evalEnv params body inputs
+      PropFailed run shrunk fuelExhausted
 
 findFailureStep : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   Int ->
@@ -340,7 +338,7 @@ findFailureStep genEnv evalEnv params body _ run inputs False =
   PropFailed run shrunk fuelExhausted
 
 genInputs : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   <e> List (String, Value e)
 genInputs _ _ [] = []
@@ -348,7 +346,7 @@ genInputs genEnv evalEnv ((PropParam x _ ty) :: rest) =
   (x, genParam genEnv evalEnv ty) :: genInputs genEnv evalEnv rest
 
 genInputsPlanned : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   List GenPlan ->
   <e> List (String, Value e)
@@ -359,7 +357,7 @@ genInputsPlanned genEnv evalEnv ((PropParam x _ _) :: rest) (plan :: plans) =
 genInputsPlanned _ _ _ _ =
   panic "property runner: prepared parameter plan mismatch"
 
-genParam : GenEnv -> List (String, Value e) -> Ty -> <e> Value e
+genParam : GenEnv -> EvalEnv (Value e) -> Ty -> <e> Value e
 genParam (ge@(GenEnv planEnv _)) evalEnv ty =
   match planFor planEnv "" "property parameter" ty
     Ok plan => genFromPlan ge evalEnv 0 plan
@@ -367,7 +365,7 @@ genParam (ge@(GenEnv planEnv _)) evalEnv ty =
 
 -- Interpret the same finite plan the native runner renders. Imported nominals
 -- resolve through PlanEnv by TypeKey, never through a spelling-only registry.
-genFromPlan : GenEnv -> List (String, Value e) -> Int -> GenPlan -> <e> Value e
+genFromPlan : GenEnv -> EvalEnv (Value e) -> Int -> GenPlan -> <e> Value e
 genFromPlan _ _ _ GInt = VInt (randIntRange intMin intMax)
 genFromPlan _ _ _ GBool = VBool (randBoolL ())
 genFromPlan _ _ _ GFloat = genFloat ()
@@ -416,16 +414,15 @@ genEnvPlan (GenEnv planEnv _) = planEnv
 -- `randomState`/`restoreRandomState` are invoked through the same evaluator
 -- environment as the property, so this keeps all three engines' public RNG
 -- contract rather than reaching into an interpreter-global ref.
-drawCustomArbitrary : GenEnv -> List (String, Value e) -> GenPlan -> <e> Value e
+drawCustomArbitrary : GenEnv -> EvalEnv (Value e) -> GenPlan -> <e> Value e
 drawCustomArbitrary ge env custom =
   let programState = readRandomState env
   let _ = ensureCustomRandomState env
   let (hi, lo) = !customRngStateRef
   let _ = restoreRandomStateValue env (VU64 hi lo)
   let value = match customHelper ge custom
-    Some (PropHelper _ genName _) => match lookupAssoc genName env
-      Some gen => force (apply (force gen) VUnit)
-      None => panic "property runner: missing selected typed generator helper"
+    Some (PropHelper _ genName _) =>
+      force (apply (force (lookupEnv env genName)) VUnit)
     None => panic "property runner: missing selected typed custom helper"
   let customState = readRandomState env
   customRngStateRef := u64Pair customState
@@ -469,7 +466,7 @@ helperFailurePlan ge env (GTuple plans) = helperFailure ge env plans
 helperFailurePlan ge env (GNominal _ plans) = helperFailure ge env plans
 helperFailurePlan _ _ _ = None
 
-ensureCustomRandomState : List (String, Value e) -> <e> Unit
+ensureCustomRandomState : EvalEnv (Value e) -> <e> Unit
 ensureCustomRandomState env =
   if !customRngReadyRef then
     ()
@@ -481,37 +478,27 @@ ensureCustomRandomState env =
     let _ = restoreRandomStateValue env programState
     customRngReadyRef := True
 
-readRandomState : List (String, Value e) -> <e> Value e
-readRandomState env = match lookupAssoc "randomState" env
-  Some f => force (apply (force f) VUnit)
-  None =>
-    panic
-      "property runner: randomState is unavailable for a custom Arbitrary generator"
+readRandomState : EvalEnv (Value e) -> <e> Value e
+readRandomState env = force (apply (force (lookupEnv env "randomState")) VUnit)
 
-restoreRandomStateValue : List (String, Value e) -> Value e -> <e> Unit
-restoreRandomStateValue env state = match lookupAssoc "restoreRandomState" env
-  Some f => match force (apply (force f) state)
+restoreRandomStateValue : EvalEnv (Value e) -> Value e -> <e> Unit
+restoreRandomStateValue env state =
+  match force (apply (force (lookupEnv env "restoreRandomState")) state)
     VUnit => ()
     _ => panic "property runner: restoreRandomState returned a non-Unit value"
-  None =>
-    panic
-      "property runner: restoreRandomState is unavailable for a custom Arbitrary generator"
 
-callRandomSetSeed : List (String, Value e) -> Int -> <e> Unit
-callRandomSetSeed env seed = match lookupAssoc "setSeed" env
-  Some f => match force (apply (force f) (VInt seed))
+callRandomSetSeed : EvalEnv (Value e) -> Int -> <e> Unit
+callRandomSetSeed env seed =
+  match force (apply (force (lookupEnv env "setSeed")) (VInt seed))
     VUnit => ()
     _ => panic "property runner: setSeed returned a non-Unit value"
-  None =>
-    panic
-      "property runner: setSeed is unavailable for a custom Arbitrary generator"
 
 u64Pair : Value e -> (Int, Int)
 u64Pair (VU64 hi lo) = (hi, lo)
 u64Pair _ = panic "property runner: randomState returned a non-U64 value"
 
 genPlanList : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   Int ->
   GenPlan ->
   Int ->
@@ -521,7 +508,7 @@ genPlanList ge env depth plan n =
   genFromPlan ge env depth plan :: genPlanList ge env depth plan (n - 1)
 
 chooseOption : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   Int ->
   GenPlan ->
   List Int ->
@@ -533,7 +520,7 @@ chooseOption ge env depth plan weights =
     VCon "Some" [genFromPlan ge env depth plan]
 
 chooseResult : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   Int ->
   GenPlan ->
   GenPlan ->
@@ -585,7 +572,7 @@ nthList (_ :: rest) n = nthList rest (n - 1)
 nthList [] _ = panic "property runner: index out of range"
 
 genPlannedCtor : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   Int ->
   GenPlan ->
   PlanCtor ->
@@ -597,7 +584,7 @@ genPlannedCtor ge env depth nominal (ctor@(PlanCtor _ runtime _)) =
     Err e => panic (planErrorText e)
 
 genPlannedFields : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   Int ->
   List (Option String, GenPlan) ->
   <e> List (Option String, Value e)
@@ -627,20 +614,19 @@ positionalPlanFields ((Some _, _) :: _) =
   panic "property runner: mixed positional and named constructor fields"
 
 shrinkForParam : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   Ty ->
   Value e ->
   <e> List (Value e)
 shrinkForParam ge env ty value =
   match planFor (genEnvPlan ge) "" "property parameter" ty
     Ok (custom@(GCustom _)) => match customHelper ge custom
-      Some (PropHelper _ _ shrinkName) => match lookupAssoc shrinkName env
-        Some shrink => match force (apply (force shrink) value)
+      Some (PropHelper _ _ shrinkName) =>
+        match force (apply (force (lookupEnv env shrinkName)) value)
           VList smaller => smaller
           _ =>
             panic
               "property runner: typed custom shrink returned a non-List value"
-        None => panic "property runner: missing selected typed shrink helper"
       None => panic "property runner: missing selected typed custom helper"
     Ok plan => structuralShrink ge plan value
     Err e => panic (planErrorText e)
@@ -782,7 +768,7 @@ shrinkFuel = 10000
 -- also performs <IO>" when tried). The exhaustion flag is instead reported
 -- by the caller, `runProp`, which is unconditionally <IO> already.
 shrinkLoop : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   List (String, Value e) ->
@@ -791,7 +777,7 @@ shrinkLoop genEnv evalEnv params body candidate =
   shrinkLoopFuel genEnv evalEnv params body candidate shrinkFuel
 
 shrinkLoopFuel : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   List (String, Value e) ->
@@ -806,7 +792,7 @@ shrinkLoopFuel genEnv evalEnv params body candidate fuel =
 -- Try each param in order; return the first candidate where some smaller value
 -- still fails the prop.
 tryShrinkOne : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   List (String, Value e) ->
@@ -822,7 +808,7 @@ tryShrinkOne genEnv evalEnv params body candidate i
       Some better => Some better
       None => tryShrinkOne genEnv evalEnv params body candidate (i + 1)
 
-findSmaller : List (String, Value e) ->
+findSmaller : EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   List (String, Value e) ->
@@ -1024,10 +1010,17 @@ runAllPropsResults : Int ->
   <e> List PropResult
 runAllPropsResults cases filterOpt propLines evalEnv program allDecls =
   let props = filterPropsByName filterOpt (filterProps program)
+  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
   if isEmptyL props then
     []
   else
-    runEachResult cases propLines (buildGenEnv program allDecls) evalEnv props
+    runEachResult
+      cases
+      propLines
+      (buildGenEnv program allDecls)
+      evalEnv
+      rootEnv
+      props
 
 -- Request-driven structured execution is the command layer's raw contract.  A
 -- pin may supply its own replay seed and case budget, so deriving these from a
@@ -1130,35 +1123,40 @@ runPreparedPropRequestsResults : PlanEnv ->
   List Decl ->
   <e> List PropResult
 runPreparedPropRequestsResults planEnv helpers rows propLines evalEnv runtimeDecls =
+  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
   runPreparedRows
     (buildGenEnvWithHelpers runtimeDecls planEnv helpers)
     rows
     propLines
     evalEnv
+    rootEnv
 
 runPreparedRows : GenEnv ->
   List PreparedPropRequest ->
   List (String, Int) ->
   List (String, Value e) ->
+  EvalEnv (Value e) ->
   <e> List PropResult
-runPreparedRows _ [] _ _ = []
-runPreparedRows genEnv ((PreparedResult result) :: rest) propLines evalEnv =
-  result :: runPreparedRows genEnv rest propLines evalEnv
-runPreparedRows genEnv ((PreparedRun (PropRequest name seed cases) (DProp _ _ params body) plans) :: rest) propLines evalEnv =
+runPreparedRows _ [] _ _ _ = []
+runPreparedRows genEnv ((PreparedResult result) :: rest) propLines evalEnv rootEnv =
+  result :: runPreparedRows genEnv rest propLines evalEnv rootEnv
+runPreparedRows genEnv ((PreparedRun (PropRequest name seed cases) (DProp _ _ params body) plans) :: rest) propLines evalEnv rootEnv =
   let _ = seedPropRng seed
   (match helperFailure genEnv evalEnv plans
       Some detail => runtimeResult name seed cases detail
       None =>
         let _ = beginCustomPropStream seed
         propResultOf
+          (genEnvPlan genEnv)
+          plans
           cases
           seed
           (lineOfPropName name propLines)
           name
-          (findFailurePlanned genEnv evalEnv params plans body cases 1))
-    :: runPreparedRows genEnv rest propLines evalEnv
-runPreparedRows genEnv (_ :: rest) propLines evalEnv =
-  runPreparedRows genEnv rest propLines evalEnv
+          (findFailurePlanned genEnv rootEnv params plans body cases 1))
+    :: runPreparedRows genEnv rest propLines evalEnv rootEnv
+runPreparedRows genEnv (_ :: rest) propLines evalEnv rootEnv =
+  runPreparedRows genEnv rest propLines evalEnv rootEnv
 
 export
 runAllPlannedPropRequestsWithHelpersResults : String ->
@@ -1196,23 +1194,33 @@ runPropRequests : List PropRequest ->
   List Decl ->
   <e> List PropResult
 runPropRequests requests propLines genEnv evalEnv props =
-  runPropRequestsChecked requests requests propLines genEnv evalEnv props
+  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
+  runPropRequestsChecked
+    requests
+    requests
+    propLines
+    genEnv
+    evalEnv
+    rootEnv
+    props
 
 runPropRequestsChecked : List PropRequest ->
   List PropRequest ->
   List (String, Int) ->
   GenEnv ->
   List (String, Value e) ->
+  EvalEnv (Value e) ->
   List Decl ->
   <e> List PropResult
-runPropRequestsChecked _ [] _ _ _ _ = []
-runPropRequestsChecked all ((request@(PropRequest name seed cases)) :: rest) propLines genEnv evalEnv props =
+runPropRequestsChecked _ [] _ _ _ _ _ = []
+runPropRequestsChecked all ((request@(PropRequest name seed cases)) :: rest) propLines genEnv evalEnv rootEnv props =
   let result =
     if requestNameRepeated name all then
       duplicateRequest name seed cases
     else
-      runPropRequest request propLines genEnv evalEnv props
-  result :: runPropRequestsChecked all rest propLines genEnv evalEnv props
+      runPropRequest request propLines genEnv evalEnv rootEnv props
+  result
+    :: runPropRequestsChecked all rest propLines genEnv evalEnv rootEnv props
 
 requestNameRepeated : String -> List PropRequest -> Bool
 requestNameRepeated name requests = requestNameCount name requests > 1
@@ -1237,9 +1245,10 @@ runPropRequest : PropRequest ->
   List (String, Int) ->
   GenEnv ->
   List (String, Value e) ->
+  EvalEnv (Value e) ->
   List Decl ->
   <e> PropResult
-runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv props =
+runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv rootEnv props =
   let matches = propsNamed name props
   if cases <= 0 then
     PropResult
@@ -1261,11 +1270,13 @@ runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv 
             None =>
               let _ = beginCustomPropStream seed
               propResultOf
+                (genEnvPlan genEnv)
+                plans
                 cases
                 seed
                 (lineOfPropName name propLines)
                 name
-                (findFailure genEnv evalEnv params body cases 1)
+                (findFailure genEnv rootEnv params body cases 1)
       _ => missingRequest request
   else if listLen matches == 0 then
     missingRequest request
@@ -1301,10 +1312,11 @@ runEachResult : Int ->
   List (String, Int) ->
   GenEnv ->
   List (String, Value e) ->
+  EvalEnv (Value e) ->
   List Decl ->
   <e> List PropResult
-runEachResult _ _ _ _ [] = []
-runEachResult cases propLines genEnv evalEnv ((DProp _ name params body) :: rest) =
+runEachResult _ _ _ _ _ [] = []
+runEachResult cases propLines genEnv evalEnv rootEnv ((DProp _ name params body) :: rest) =
   let seedAtStart = !propRngStateRef
   (match planPropParams (genEnvPlan genEnv) name params
       Err e => capabilityResult name seedAtStart cases e
@@ -1313,14 +1325,16 @@ runEachResult cases propLines genEnv evalEnv ((DProp _ name params body) :: rest
         None =>
           let _ = beginCustomPropStream seedAtStart
           propResultOf
+            (genEnvPlan genEnv)
+            plans
             cases
             seedAtStart
             (lineOfPropName name propLines)
             name
-            (findFailure genEnv evalEnv params body cases 1))
-    :: runEachResult cases propLines genEnv evalEnv rest
-runEachResult cases propLines genEnv evalEnv (_ :: rest) =
-  runEachResult cases propLines genEnv evalEnv rest
+            (findFailure genEnv rootEnv params body cases 1))
+    :: runEachResult cases propLines genEnv evalEnv rootEnv rest
+runEachResult cases propLines genEnv evalEnv rootEnv (_ :: rest) =
+  runEachResult cases propLines genEnv evalEnv rootEnv rest
 
 planPropParams : PlanEnv ->
   String ->
@@ -1356,13 +1370,15 @@ runtimeResult name seed cases detail =
     detail
     seed
     cases
-propResultOf : Int ->
+propResultOf : PlanEnv ->
+  List GenPlan ->
+  Int ->
   Int ->
   Int ->
   String ->
   PropOutcome (Value e) ->
   PropResult
-propResultOf cases seed _line name PropPassed =
+propResultOf _ _ cases seed _line name PropPassed =
   PropResult
     "eval"
     name
@@ -1371,7 +1387,7 @@ propResultOf cases seed _line name PropPassed =
     "\{intToString cases} tests passed"
     seed
     cases
-propResultOf cases seed line name (PropFailed run shrunk fuelExhausted) =
+propResultOf planEnv plans cases seed line name (PropFailed run shrunk fuelExhausted) =
   PropResult
     "eval"
     name
@@ -1385,7 +1401,7 @@ propResultOf cases seed line name (PropFailed run shrunk fuelExhausted) =
         " test; counterexample: "
       else
         " tests; counterexample: ",
-      renderCounterexample shrunk,
+      renderCounterexample planEnv plans shrunk,
       if fuelExhausted then
         " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
       else
@@ -1398,11 +1414,181 @@ lineDetailPrefix : Int -> String
 lineDetailPrefix 0 = ""
 lineDetailPrefix line = "line \{intToString line}: "
 
-renderCounterexample : List (String, Value e) -> String
-renderCounterexample [] = ""
-renderCounterexample [(x, v)] = stringConcat [x, " = ", ppValue v]
-renderCounterexample ((x, v) :: rest) =
-  stringConcat [x, " = ", ppValue v, ", ", renderCounterexample rest]
+renderCounterexample : PlanEnv ->
+  List GenPlan ->
+  List (String, Value e) ->
+  String
+renderCounterexample _ _ [] = ""
+renderCounterexample env (plan :: plans) [(name, value)] =
+  "\{name} = \{renderPlanValue env plan value}"
+renderCounterexample env (plan :: plans) ((name, value) :: rest) = stringConcat
+  [
+    name,
+    " = ",
+    renderPlanValue env plan value,
+    ", ",
+    renderCounterexample env plans rest,
+  ]
+renderCounterexample _ _ [(name, _)] = name ++ " = <unplanned>"
+renderCounterexample env [] ((name, _) :: rest) =
+  "\{name} = <unplanned>, \{renderCounterexample env [] rest}"
+
+renderPlanValue : PlanEnv -> GenPlan -> Value e -> String
+renderPlanValue _ GInt value = ppValue value
+renderPlanValue _ GBool value = ppValue value
+renderPlanValue _ GFloat value = ppValue value
+renderPlanValue _ GChar value = ppValue value
+renderPlanValue _ GString value = ppValue value
+renderPlanValue _ GUnit value = ppValue value
+renderPlanValue env (GList plan) (VList values) =
+  "[" ++ renderPlanValues env plan values ++ "]"
+renderPlanValue env (GArray plan) (VArray values) =
+  "[" ++ renderPlanValues env plan (arrayValues values) ++ "]"
+renderPlanValue _ (GOption _) (VCon "None" []) = "None"
+renderPlanValue env (GOption plan) (VCon "Some" [value]) =
+  "Some(" ++ renderPlanValue env plan value ++ ")"
+renderPlanValue env (GResult err _) (VCon "Err" [value]) =
+  "Err(" ++ renderPlanValue env err value ++ ")"
+renderPlanValue env (GResult _ ok) (VCon "Ok" [value]) =
+  "Ok(" ++ renderPlanValue env ok value ++ ")"
+renderPlanValue env (GTuple plans) (VTuple values) =
+  "(" ++ renderPlanValuePairs env plans values ++ ")"
+renderPlanValue env (nominal@(GNominal key _)) value =
+  renderNominalValue env nominal key value
+renderPlanValue env (GCustom (CustomPlan key carrier _)) value =
+  match displayCarrierPlans env (carrierArgs carrier)
+    Some args => renderNominalValue env (GNominal key args) key value
+    None => hiddenType key
+renderPlanValue _ _ _ = "<value>"
+
+renderPlanValues : PlanEnv -> GenPlan -> List (Value e) -> String
+renderPlanValues _ _ [] = ""
+renderPlanValues env plan [value] = renderPlanValue env plan value
+renderPlanValues env plan (value :: rest) =
+  "\{renderPlanValue env plan value}, \{renderPlanValues env plan rest}"
+
+arrayValues : Array a -> List a
+arrayValues values = arrayValuesGo values 0 (arrayLength values)
+
+arrayValuesGo : Array a -> Int -> Int -> List a
+arrayValuesGo _ index size
+  | index >= size = []
+arrayValuesGo values index size =
+  arrayGetUnsafe index values :: arrayValuesGo values (index + 1) size
+
+renderPlanValuePairs : PlanEnv -> List GenPlan -> List (Value e) -> String
+renderPlanValuePairs _ [] [] = ""
+renderPlanValuePairs env (plan :: plans) (value :: values) =
+  let rendered = renderPlanValue env plan value
+  if isEmptyL plans || isEmptyL values then
+    rendered
+  else
+    "\{rendered}, \{renderPlanValuePairs env plans values}"
+renderPlanValuePairs _ _ _ = "<value>"
+
+renderNominalValue : PlanEnv -> GenPlan -> TypeKey -> Value e -> String
+renderNominalValue env nominal key value = match planDef env key
+  Ok (PlanDef _ owner _ visibility ctors) =>
+    if nominalVisible env owner visibility then
+      renderVisibleNominal env nominal key ctors value
+    else
+      hiddenType key
+  Err _ => hiddenType key
+
+nominalVisible : PlanEnv -> String -> PlanVisibility -> Bool
+nominalVisible _ _ PlanPublicCtors = True
+nominalVisible (PlanEnv root _ _ _ _) owner PlanLocal = owner == root
+nominalVisible _ _ PlanAbstract = False
+
+hiddenType : TypeKey -> String
+hiddenType (TypeKey name _) = "<" ++ name ++ ">"
+
+renderVisibleNominal : PlanEnv ->
+  GenPlan ->
+  TypeKey ->
+  List PlanCtor ->
+  Value e ->
+  String
+renderVisibleNominal env nominal key ctors (VCon runtime values) =
+  match runtimeCtor runtime ctors
+    Some ctor => match instantiateCtor env nominal ctor
+      Ok fields => renderPositionalCtor env ctor fields values
+      Err _ => hiddenType key
+    None => hiddenType key
+renderVisibleNominal env nominal key ctors (VRecord runtime values) =
+  match runtimeCtor runtime ctors
+    Some ctor => match instantiateCtor env nominal ctor
+      Ok fields => renderNamedCtor env ctor fields values
+      Err _ => hiddenType key
+    None => hiddenType key
+renderVisibleNominal _ _ key _ _ = hiddenType key
+
+runtimeCtor : String -> List PlanCtor -> Option PlanCtor
+runtimeCtor _ [] = None
+runtimeCtor runtime ((ctor@(PlanCtor _ actual _)) :: rest)
+  | runtime == actual = Some ctor
+  | otherwise = runtimeCtor runtime rest
+
+renderPositionalCtor : PlanEnv ->
+  PlanCtor ->
+  List (Option String, GenPlan) ->
+  List (Value e) ->
+  String
+renderPositionalCtor env (PlanCtor source _ _) fields values =
+  "\{source}(\{renderFields env fields values})"
+
+renderNamedCtor : PlanEnv ->
+  PlanCtor ->
+  List (Option String, GenPlan) ->
+  List (String, Value e) ->
+  String
+renderNamedCtor env (PlanCtor source _ _) fields values =
+  "\{source} { \{renderNamedFields env fields values} }"
+
+renderFields : PlanEnv ->
+  List (Option String, GenPlan) ->
+  List (Value e) ->
+  String
+renderFields _ [] [] = ""
+renderFields env ((_, plan) :: plans) (value :: values) =
+  let rendered = renderPlanValue env plan value
+  if isEmptyL plans || isEmptyL values then
+    rendered
+  else
+    "\{rendered}, \{renderFields env plans values}"
+renderFields _ _ _ = "<value>"
+
+renderNamedFields : PlanEnv ->
+  List (Option String, GenPlan) ->
+  List (String, Value e) ->
+  String
+renderNamedFields _ [] _ = ""
+renderNamedFields env ((Some name, plan) :: rest) values =
+  match lookupAssoc name values
+    Some value =>
+      let rendered = "\{name} = \{renderPlanValue env plan value}"
+      if isEmptyL rest then
+        rendered
+      else
+        "\{rendered}, \{renderNamedFields env rest values}"
+    None => name ++ " = <value>"
+renderNamedFields _ ((None, _) :: _) _ = "<value>"
+
+carrierArgs : Ty -> List Ty
+carrierArgs carrier = carrierArgsGo [] carrier
+
+carrierArgsGo : List Ty -> Ty -> List Ty
+carrierArgsGo acc (TyApp head arg) = carrierArgsGo (arg :: acc) head
+carrierArgsGo acc _ = acc
+
+displayCarrierPlans : PlanEnv -> List Ty -> Option (List GenPlan)
+displayCarrierPlans _ [] = Some []
+displayCarrierPlans env (ty :: rest) = match (
+  planFor env "" "display" ty,
+  displayCarrierPlans env rest,
+)
+  (Ok plan, Some plans) => Some (plan :: plans)
+  _ => None
 
 export
 hasProps : List Decl -> Bool
