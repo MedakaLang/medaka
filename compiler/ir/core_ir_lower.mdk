@@ -1001,25 +1001,26 @@ lowerProgramEmit target prog =
   -- same reason.
   let _ = dictWitnessTagGuard target prog
   let sited = match target
-    TargetNative => siteTrapCalls prog
-    _ => prog
+    TargetBothUnknown => prog
+    _ => siteTrapCalls prog
   let raw = lowerProgramWith (installedDispositionsOpt ()) sited
   let fo = declaredRecordFieldOrders prog
   hoistNullaryMemo
     (match target
       -- the let decisions are refolded after the record-pattern rewrite, which
       -- resolves the record patterns `patCanMiss` reads
-      TargetNative =>
+      TargetBothUnknown =>
+        rewriteProgramRecPats fo (refoldProgram noLetCheck raw)
+      _ =>
         let rewritten = rewriteProgramRecPats fo raw
         refoldProgram
           (patCanMiss (siblingTable (cprogramCtorTypes raw)))
-          rewritten
-      _ => rewriteProgramRecPats fo (refoldProgram noLetCheck raw))
+          rewritten)
 
 cprogramCtorTypes : CProgram -> List (String, String)
 cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
 
--- ── located `panic` and `xs[i]` (native backend) ─────────────────────────────
+-- ── located `panic` and `xs[i]` (native and wasm backends) ─────────────────────────────
 -- A saturated `panic m` and an `xs[i]` that reads one of the prelude's own
 -- `Index` impls trap inside a body that knows nothing of the caller, so the
 -- caller's site travels in as an argument: `panic m` becomes `panicAt <site> m`

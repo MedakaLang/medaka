@@ -9,12 +9,12 @@
 -- These are `medaka run` scripts — NOT compiled into the `medaka` binary and NOT
 -- in the emitter seed graph — so this module may freely import the whole compiler.
 
-import frontend.ast.{Decl}
+import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..)}
 import types.typecheck.{TcDiag}
 import frontend.parser.{parse}
-import frontend.desugar.{desugar}
+import frontend.desugar.{desugar, mapProg}
 export import support.util.{rootsOrDefault}
-import support.util.{splitLast}
+import support.util.{splitLast, startsWith}
 import types.typecheck.{
   elaborateOne,
   elaborateModules,
@@ -22,7 +22,8 @@ import types.typecheck.{
   resetTypeErrorsSticky,
   setStdlibOwnership,
 }
-import support.path.{dirOf}
+import support.path.{dirOf, joinPath}
+import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
 import driver.diagnostics.{
   emitDiagExitCode,
   emitGateDiags,
@@ -34,6 +35,8 @@ import driver.loader.{
   dropPathTriple,
   loadErrorMessage,
   loadProgramFilesLocatedE,
+  findProjectRoot,
+  manifestSiteRoot,
   modIdToPath,
   stdlibOwnership,
   unknownModuleIdOf,
@@ -503,3 +506,93 @@ driveParseSources render = match args ()
       Err msg => failWith msg
       Ok v => v
   _ => failWith usageRuntime
+
+-- ── trap-site files ──────────────────────────────────────────────────────────
+-- The emit drivers' trap sites name their file.  [mods] is the loader's
+-- (module, path, decls) and [modules1] the elaborated modules; the entry path is
+-- argv[2] (`<runtime> <core> <entry> [root ...]`).
+export
+stampSiteFiles : List (String, String, List Decl) ->
+  List (String, List Decl) ->
+  <IO> List (String, List Decl)
+stampSiteFiles mods modules1 =
+  let base = siteBaseOf (entryArgOf (args ()))
+  stampModulePaths (map (modulePath base) mods) modules1
+
+-- Stamp each module's path, given as (module, path), into its trap sites.
+export
+stampModulePaths : List (String, String) ->
+  List (String, List Decl) ->
+  List (String, List Decl)
+stampModulePaths pairs modules1 =
+  let paths = omFromPairs pairs omEmpty
+  map (stampModuleFile paths) modules1
+
+entryArgOf : List String -> String
+entryArgOf (_ :: _ :: entry :: _) = entry
+entryArgOf _ = ""
+
+-- The parser leaves a `Loc`'s file empty.  Each module's path goes into the
+-- spans its trap sites are read from (a located `ELoc`, a block `let`'s site,
+-- a function's or local binding's first-clause site) here, in the emitter only, so no diagnostic of the build sees a filled one.
+-- The path is the loader's, the spelling `medaka run` prints, unless the
+-- entry's project names a `site-root` (`driver.loader.manifestSiteRoot`): a
+-- path under that directory is then written relative to it.
+modulePath : Option String ->
+  (String, String, List Decl) ->
+  <IO> (String, String)
+modulePath base (mid, path, _) = (mid, sitePath base path)
+
+-- The canonical `site-root` directory of [entry]'s project, if it names one.
+siteBaseOf : String -> <IO> Option String
+siteBaseOf entry = match findProjectRoot (dirOf entry)
+  None => None
+  Some root => siteBaseUnder root (manifestSiteRoot root)
+
+siteBaseUnder : String -> Option String -> <IO> Option String
+siteBaseUnder _ None = None
+siteBaseUnder root (Some rel) = Some (canonicalizePath (joinPath root rel))
+
+sitePath : Option String -> String -> <IO> String
+sitePath None path = path
+sitePath (Some base) path =
+  let canon = canonicalizePath path
+  let prefix = base ++ "/"
+  if startsWith prefix canon then
+    stringSlice (stringLength prefix) (stringLength canon) canon
+  else
+    path
+
+stampModuleFile : OrdMap String -> (String, List Decl) -> (String, List Decl)
+stampModuleFile paths (mid, decls) = match omLookup mid paths
+  Some path =>
+    (mid, map (stampDeclFile path) (mapProg (stampSiteFile path) decls))
+  None => (mid, decls)
+
+-- A function's first-clause site, which a call no clause accepts reports.
+stampDeclFile : String -> Decl -> Decl
+stampDeclFile path (DFunDef pub n ps e site) =
+  DFunDef pub n ps e (withSiteFile path site)
+stampDeclFile path (DLetGroup r binds) =
+  DLetGroup r (map (stampBindFile path) binds)
+stampDeclFile path (DAttrib attrs d) = DAttrib attrs (stampDeclFile path d)
+stampDeclFile _ d = d
+
+stampBindFile : String -> LetBind -> LetBind
+stampBindFile path (LetBind n clauses site) =
+  LetBind n clauses (withSiteFile path site)
+
+stampSiteFile : String -> Expr -> Expr
+stampSiteFile path (ELoc l e) = ELoc (withSiteFile path l) e
+stampSiteFile path (EBlock stmts) = EBlock (map (stampStmtFile path) stmts)
+stampSiteFile path (ELetGroup binds body) =
+  ELetGroup (map (stampBindFile path) binds) body
+stampSiteFile _ e = e
+
+stampStmtFile : String -> DoStmt -> DoStmt
+stampStmtFile path (DoLet m r p e site) = DoLet m r p e (withSiteFile path site)
+stampStmtFile _ s = s
+
+withSiteFile : String -> Loc -> Loc
+withSiteFile path (Loc "" sl sc el ec) = Loc path sl sc el ec
+withSiteFile _ l = l

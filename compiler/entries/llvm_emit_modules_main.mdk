@@ -26,8 +26,7 @@
 -- The keys ELABORATION itself uses are the author's spellings under that order, so
 -- this argument covers the emitted program and not elaboration's own tables.
 
-import frontend.ast.{Decl(..), Expr(..), DoStmt(..), LetBind(..), Loc(..)}
-import frontend.desugar.{mapProg}
+import frontend.ast.{Decl(..)}
 import types.typecheck.{
   constrainedSigNames,
   preludeReturnPosDictNames,
@@ -56,12 +55,9 @@ import backend.llvm_emit.{
   preludeImplSymbols,
 }
 import ir.dce.{dceFilter}
-import entries.entry_support.{driveEmitLocated}
+import entries.entry_support.{driveEmitLocated, stampSiteFiles}
 import support.timer.{statsEnabled, emitStats}
-import support.util.{endsWith, filterList, startsWith}
-import support.path.{dirOf, joinPath}
-import driver.loader.{findProjectRoot, manifestSiteRoot}
-import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
+import support.util.{endsWith, filterList}
 import driver.main_autoprint.{autoPrintPinName}
 
 -- The entry-module path is argv[2] (`<runtime> <core> <entry> [root ...]`); hand it
@@ -130,9 +126,7 @@ emitTail : List (String, String, List Decl) ->
   <IO> Unit
 emitTail mods runtimeDecls coreD modules1 =
   let half = emitHalfOfEnv
-  let base = siteBaseOf (srcNameFromArgs (args ()))
-  let paths = omFromPairs (map (modulePath base) mods) omEmpty
-  let modules2 = map (stampModuleFile paths) modules1
+  let modules2 = stampSiteFiles mods modules1
   let allDecls0 = coreD ++ flatMap snd modules2
   -- SOURCE DCE IS OFF in the prelude-object modes.  It is per-program by
   -- construction, so it would (1) shrink prelude.o to whatever the stub entry
@@ -171,72 +165,6 @@ emitTail mods runtimeDecls coreD modules1 =
     putStr text
   else
     putStr (emitProgram input (lowerProgramEmit TargetNative allDecls))
--- ── trap-site files ──────────────────────────────────────────────────────────
--- The parser leaves a `Loc`'s file empty.  Each module's path goes into the
--- spans its trap sites are read from (a located `ELoc`, a block `let`'s site,
--- a function's or local binding's first-clause site) here, in the emitter only, so no diagnostic of the build sees a filled one.
--- The path is the loader's, the spelling `medaka run` prints, unless the
--- entry's project names a `site-root` (`driver.loader.manifestSiteRoot`): a
--- path under that directory is then written relative to it.
-modulePath : Option String ->
-  (String, String, List Decl) ->
-  <IO> (String, String)
-modulePath base (mid, path, _) = (mid, sitePath base path)
-
--- The canonical `site-root` directory of [entry]'s project, if it names one.
-siteBaseOf : String -> <IO> Option String
-siteBaseOf entry = match findProjectRoot (dirOf entry)
-  None => None
-  Some root => siteBaseUnder root (manifestSiteRoot root)
-
-siteBaseUnder : String -> Option String -> <IO> Option String
-siteBaseUnder _ None = None
-siteBaseUnder root (Some rel) = Some (canonicalizePath (joinPath root rel))
-
-sitePath : Option String -> String -> <IO> String
-sitePath None path = path
-sitePath (Some base) path =
-  let canon = canonicalizePath path
-  let prefix = base ++ "/"
-  if startsWith prefix canon then
-    stringSlice (stringLength prefix) (stringLength canon) canon
-  else
-    path
-
-stampModuleFile : OrdMap String -> (String, List Decl) -> (String, List Decl)
-stampModuleFile paths (mid, decls) = match omLookup mid paths
-  Some path =>
-    (mid, map (stampDeclFile path) (mapProg (stampSiteFile path) decls))
-  None => (mid, decls)
-
--- A function's first-clause site, which a call no clause accepts reports.
-stampDeclFile : String -> Decl -> Decl
-stampDeclFile path (DFunDef pub n ps e site) =
-  DFunDef pub n ps e (withSiteFile path site)
-stampDeclFile path (DLetGroup r binds) =
-  DLetGroup r (map (stampBindFile path) binds)
-stampDeclFile path (DAttrib attrs d) = DAttrib attrs (stampDeclFile path d)
-stampDeclFile _ d = d
-
-stampBindFile : String -> LetBind -> LetBind
-stampBindFile path (LetBind n clauses site) =
-  LetBind n clauses (withSiteFile path site)
-
-stampSiteFile : String -> Expr -> Expr
-stampSiteFile path (ELoc l e) = ELoc (withSiteFile path l) e
-stampSiteFile path (EBlock stmts) = EBlock (map (stampStmtFile path) stmts)
-stampSiteFile path (ELetGroup binds body) =
-  ELetGroup (map (stampBindFile path) binds) body
-stampSiteFile _ e = e
-
-stampStmtFile : String -> DoStmt -> DoStmt
-stampStmtFile path (DoLet m r p e site) = DoLet m r p e (withSiteFile path site)
-stampStmtFile _ s = s
-
-withSiteFile : String -> Loc -> Loc
-withSiteFile path (Loc "" sl sc el ec) = Loc path sl sc el ec
-withSiteFile _ l = l
-
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, AFTER elaborateModules and over its output (#2809) — same
 -- flat-emit @mdk_<name> collision risk the bootstrap driver fixes.  The gate

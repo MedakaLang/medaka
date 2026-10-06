@@ -244,6 +244,14 @@ NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
     [ -f "$entry" ] || continue
     printf '%s\t%s\t%s\n' "$(basename "${dir%/}")" "$entry" "${dir%/}"
   done
+  # The located-trap fixtures: native and wasm must print the same
+  # `file:line:col: runtime error [E-..]: ..` line (test/diff_compiler_eval_json_test.mdk
+  # pins that line against `medaka run`).  Their imported module sits in a
+  # subdirectory, so each is its own root.
+  for f in "$ROOT"/test/trap_site_fixtures/*.mdk; do
+    [ -f "$f" ] || continue
+    printf '%s\t%s\t%s\n' "trap_site_$(basename "$f")" "$f" "$(dirname "$f")"
+  done
   # An entry file whose name is not a WAT identifier: its module id is part of
   # every type word it declares (`café(1).Mod5`, #1397), and the emitted type
   # and impl names must still be legal.  Generated here, not committed, so the

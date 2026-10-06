@@ -1,5 +1,5 @@
 # META
-source_lines=3124
+source_lines=3125
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1005,25 +1005,26 @@ lowerProgramEmit target prog =
   -- same reason.
   let _ = dictWitnessTagGuard target prog
   let sited = match target
-    TargetNative => siteTrapCalls prog
-    _ => prog
+    TargetBothUnknown => prog
+    _ => siteTrapCalls prog
   let raw = lowerProgramWith (installedDispositionsOpt ()) sited
   let fo = declaredRecordFieldOrders prog
   hoistNullaryMemo
     (match target
       -- the let decisions are refolded after the record-pattern rewrite, which
       -- resolves the record patterns `patCanMiss` reads
-      TargetNative =>
+      TargetBothUnknown =>
+        rewriteProgramRecPats fo (refoldProgram noLetCheck raw)
+      _ =>
         let rewritten = rewriteProgramRecPats fo raw
         refoldProgram
           (patCanMiss (siblingTable (cprogramCtorTypes raw)))
-          rewritten
-      _ => rewriteProgramRecPats fo (refoldProgram noLetCheck raw))
+          rewritten)
 
 cprogramCtorTypes : CProgram -> List (String, String)
 cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
 
--- ── located `panic` and `xs[i]` (native backend) ─────────────────────────────
+-- ── located `panic` and `xs[i]` (native and wasm backends) ─────────────────────────────
 -- A saturated `panic m` and an `xs[i]` that reads one of the prelude's own
 -- `Index` impls trap inside a body that knows nothing of the caller, so the
 -- caller's site travels in as an argument: `panic m` becomes `panicAt <site> m`
@@ -3489,7 +3490,7 @@ nodeTag _ = "?"
 (DFunDef false "isSomeLoc" ((PCon "None")) (EVar "False"))
 (DData Public "EmitTarget" () ((variant "TargetNative" (ConPos)) (variant "TargetWasm" (ConPos)) (variant "TargetBothUnknown" (ConPos))) ())
 (DTypeSig true "lowerProgramEmit" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoLet false false (PVar "sited") (EMatch (EVar "target") (arm (PCon "TargetNative") () (EApp (EVar "siteTrapCalls") (EVar "prog"))) (arm PWild () (EVar "prog")))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (EVar "sited"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EMatch (EVar "target") (arm (PCon "TargetNative") () (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten"))))) (arm PWild () (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "raw")))))))))
+(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoLet false false (PVar "sited") (EMatch (EVar "target") (arm (PCon "TargetBothUnknown") () (EVar "prog")) (arm PWild () (EApp (EVar "siteTrapCalls") (EVar "prog"))))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (EVar "sited"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EMatch (EVar "target") (arm (PCon "TargetBothUnknown") () (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "raw")))) (arm PWild () (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten"))))))))))
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild)) (EVar "ctorTypes"))
 (DTypeSig false "siteTrapCalls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
@@ -4479,7 +4480,7 @@ nodeTag _ = "?"
 (DFunDef false "isSomeLoc" ((PCon "None")) (EVar "False"))
 (DData Public "EmitTarget" () ((variant "TargetNative" (ConPos)) (variant "TargetWasm" (ConPos)) (variant "TargetBothUnknown" (ConPos))) ())
 (DTypeSig true "lowerProgramEmit" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram"))))
-(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoLet false false (PVar "sited") (EMatch (EVar "target") (arm (PCon "TargetNative") () (EApp (EVar "siteTrapCalls") (EVar "prog"))) (arm PWild () (EVar "prog")))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (EVar "sited"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EMatch (EVar "target") (arm (PCon "TargetNative") () (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten"))))) (arm PWild () (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "raw")))))))))
+(DFunDef false "lowerProgramEmit" ((PVar "target") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoLet false false (PVar "sited") (EMatch (EVar "target") (arm (PCon "TargetBothUnknown") () (EVar "prog")) (arm PWild () (EApp (EVar "siteTrapCalls") (EVar "prog"))))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "lowerProgramWith") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (EVar "sited"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoExpr (EApp (EVar "hoistNullaryMemo") (EMatch (EVar "target") (arm (PCon "TargetBothUnknown") () (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "raw")))) (arm PWild () (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten"))))))))))
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild)) (EVar "ctorTypes"))
 (DTypeSig false "siteTrapCalls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
