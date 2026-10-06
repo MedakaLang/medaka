@@ -33,7 +33,8 @@ import tools.prop_plan.{
   instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
   optionWeights, resultWeights, maxGenDepth, intMin, intMax,
   structuralRngModulus, structuralRngMultiplier, structuralRngIncrement,
-  structuralRngMixMultiplier1, structuralRngMixMultiplier2, ShrinkAction(..),
+  structuralRngMixMultiplier1, structuralRngMixMultiplier2,
+  structuralRngWordModulus, structuralRngWordHalf, ShrinkAction(..),
   shrinkActions, IntShrinkStep(..), intShrinkSteps
 }
 import tools.prop_runner.{
@@ -546,7 +547,6 @@ probeNamespacePrefixes = [
   "__np_",
   "NpCore_",
   "NpRuntime_",
-  "NpU32_",
   "NpModule_",
   runtimeDependencyPrefix,
 ]
@@ -569,15 +569,28 @@ plannedProbeSource nonce target tsrc modules env jobs =
         "\{generatedPrefix nonce}custom_state : Ref U64",
         "\{generatedPrefix nonce}custom_state = \{runtimeAlias nonce}.Ref 0",
         "",
+        "\{generatedPrefix nonce}word n = ((n % \{intToString structuralRngWordModulus}) + \{intToString structuralRngWordModulus}) % \{intToString structuralRngWordModulus}",
+        "",
+        "\{generatedPrefix nonce}mul_word left right =",
+        "  let x = \{generatedPrefix nonce}word left",
+        "  let y = \{generatedPrefix nonce}word right",
+        "  let x_low = x % \{intToString structuralRngWordHalf}",
+        "  let x_high = x / \{intToString structuralRngWordHalf}",
+        "  let y_low = y % \{intToString structuralRngWordHalf}",
+        "  let y_high = y / \{intToString structuralRngWordHalf}",
+        "  let low = x_low * y_low",
+        "  let cross = x_low * y_high + x_high * y_low",
+        "  \{generatedPrefix nonce}word (low + (cross % \{intToString structuralRngWordHalf}) * \{intToString structuralRngWordHalf})",
+        "",
         "\{generatedPrefix nonce}next _ =",
         "  let s = (!\{generatedPrefix nonce}state * \{intToString structuralRngMultiplier} + \{intToString structuralRngIncrement}) % \{intToString structuralRngModulus}",
         "  \{generatedPrefix nonce}state := s",
-        "  let word = \{u32Alias nonce}.truncate s",
-        "  let h1 = \{u32Alias nonce}.bitXor word (\{u32Alias nonce}.shiftRight word 16)",
-        "  let h2 = h1 * \{u32Alias nonce}.truncate \{intToString structuralRngMixMultiplier1}",
-        "  let h3 = \{u32Alias nonce}.bitXor h2 (\{u32Alias nonce}.shiftRight h2 13)",
-        "  let h4 = h3 * \{u32Alias nonce}.truncate \{intToString structuralRngMixMultiplier2}",
-        "  \{u32Alias nonce}.toInt (\{u32Alias nonce}.bitXor h4 (\{u32Alias nonce}.shiftRight h4 16))",
+        "  let word = \{generatedPrefix nonce}word s",
+        "  let h1 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor word (\{runtimeAlias nonce}.shiftRight word 16))",
+        "  let h2 = \{generatedPrefix nonce}mul_word h1 \{intToString structuralRngMixMultiplier1}",
+        "  let h3 = \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h2 (\{runtimeAlias nonce}.shiftRight h2 13))",
+        "  let h4 = \{generatedPrefix nonce}mul_word h3 \{intToString structuralRngMixMultiplier2}",
+        "  \{generatedPrefix nonce}word (\{runtimeAlias nonce}.bitXor h4 (\{runtimeAlias nonce}.shiftRight h4 16))",
         "",
         "\{generatedPrefix nonce}int _ = \{generatedPrefix nonce}choose \{intToString (intMax - intMin + 1)} + \{intToString intMin}",
         "\{generatedPrefix nonce}bool _ = \{generatedPrefix nonce}choose 2 == 1",
@@ -616,9 +629,6 @@ coreAlias nonce = "NpCore_\{probeNameNonce nonce}"
 runtimeAlias : String -> String
 runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
 
-u32Alias : String -> String
-u32Alias nonce = "NpU32_\{probeNameNonce nonce}"
-
 probeNameNonce : String -> String
 probeNameNonce nonce = replaceAll "-" "_" nonce
 
@@ -636,7 +646,6 @@ plannedImports : String ->
 plannedImports nonce modules jobs env =
   "import core as \{coreAlias nonce}"
     :: "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}"
-    :: "import \{runtimeDependencyName nonce}.u32 as \{u32Alias nonce}"
     :: map (importLine nonce modules) (omKeys (importOwners jobs env omEmpty))
 
 importOwners : List NativePlanOutcome -> PlanEnv -> OrdMap Unit -> OrdMap Unit

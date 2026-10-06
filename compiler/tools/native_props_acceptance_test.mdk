@@ -176,6 +176,14 @@ test "native property execution works for the core auto-prelude itself" =
       ["--native", "--filter", "neq is the negation of eq"]
       "\{medakaRoot}/stdlib/core.mdk")
 
+test "native property generation keeps stdlib array on its original identity graph" =
+  gradeReport
+    0
+    [("native", "makeWith length", "pass")]
+    (runReport
+      ["--native", "--filter", "makeWith length"]
+      "\{medakaRoot}/stdlib/array.mdk")
+
 test "native generators explore containers, characters and independent Boolean draws" =
   withFixtures
     [
@@ -642,7 +650,7 @@ test "both engines share structural fmix draws for scalars containers and constr
         (runSingleSeededReport 2147483665 "wide rng bool" target),
     ])
 
-test "native structural RNG imports canonical u32 beside a user u32 module" =
+test "native structural RNG uses canonical bit kernels beside user shadows" =
   withFixtures
     [
       (
@@ -651,15 +659,15 @@ test "native structural RNG imports canonical u32 beside a user u32 module" =
       ),
       (
         "main.mdk",
-        "import u32.{marker}\nprop \"user u32 stays local\" (n : Int) = marker == 7 && n /= (0 - 153)\n",
+        "import u32.{marker}\nbitXor : Int -> Int -> Int\nbitXor _ _ = 0\nshiftRight : Int -> Int -> Int\nshiftRight _ _ = 0\nprop \"user kernels stay local\" (n : Int) = marker == 7 && n /= (0 - 153)\n",
       ),
     ]
     (target =>
       gradeStructuralWitness
         1
-        "user u32 stays local"
+        "user kernels stay local"
         "n = -153"
-        (runSingleSeededReport 1 "user u32 stays local" target))
+        (runSingleSeededReport 1 "user kernels stay local" target))
 
 drawCounterexamples : Result String (Int, Json) -> List (List String)
 drawCounterexamples (Err _) = []

@@ -16,7 +16,6 @@ import frontend.ast.{
   sameTyConHead,
 }
 import types.route_key.{typeTagOf, implRouteKeyWord}
-import u32 as U32
 import support.ordmap.{
   OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup, omSize
 }
@@ -25,7 +24,10 @@ import support.util.{lookupAssoc, zipL}
 -- Structural property generation has one engine-neutral stream. Its 31-bit
 -- state advances without overflowing Int; every consumer draws one fmix32 word
 -- and reduces it only after mixing. Native probes render the same constants
--- with the canonical stdlib u32 module.
+-- with public runtime bit operations and overflow-safe arithmetic. The
+-- generated probe must not import the higher-level u32 module: that module
+-- pulls ordinary stdlib instances into a scratch project that has already
+-- copied the target graph.
 export
 structuralRngModulus : Int
 structuralRngModulus = 2147483648
@@ -47,6 +49,14 @@ structuralRngMixMultiplier2 : Int
 structuralRngMixMultiplier2 = 3266489909
 
 export
+structuralRngWordModulus : Int
+structuralRngWordModulus = 4294967296
+
+export
+structuralRngWordHalf : Int
+structuralRngWordHalf = 65536
+
+export
 structuralRngSeed : Int -> Int
 structuralRngSeed n =
   (n % structuralRngModulus + structuralRngModulus) % structuralRngModulus
@@ -57,15 +67,35 @@ structuralRngAdvance state =
   (state * structuralRngMultiplier + structuralRngIncrement)
     % structuralRngModulus
 
+structuralRngWord : Int -> Int
+structuralRngWord n =
+  (n % structuralRngWordModulus + structuralRngWordModulus)
+    % structuralRngWordModulus
+
+-- Multiply two words modulo 2^32 without asking the `Int` multiplier to hold
+-- a 64-bit product. Each half product and the assembled low word fit in Int.
+structuralRngMulWord : Int -> Int -> Int
+structuralRngMulWord left right =
+  let x = structuralRngWord left
+  let y = structuralRngWord right
+  let xLow = x % structuralRngWordHalf
+  let xHigh = x / structuralRngWordHalf
+  let yLow = y % structuralRngWordHalf
+  let yHigh = y / structuralRngWordHalf
+  let low = xLow * yLow
+  let cross = xLow * yHigh + xHigh * yLow
+  structuralRngWord
+    (low + cross % structuralRngWordHalf * structuralRngWordHalf)
+
 export
 structuralRngMix : Int -> Int
 structuralRngMix state =
-  let word = U32.truncate state
-  let h1 = U32.bitXor word (U32.shiftRight word 16)
-  let h2 = h1 * U32.truncate structuralRngMixMultiplier1
-  let h3 = U32.bitXor h2 (U32.shiftRight h2 13)
-  let h4 = h3 * U32.truncate structuralRngMixMultiplier2
-  U32.toInt (U32.bitXor h4 (U32.shiftRight h4 16))
+  let word = structuralRngWord state
+  let h1 = structuralRngWord (bitXor word (shiftRight word 16))
+  let h2 = structuralRngMulWord h1 structuralRngMixMultiplier1
+  let h3 = structuralRngWord (bitXor h2 (shiftRight h2 13))
+  let h4 = structuralRngMulWord h3 structuralRngMixMultiplier2
+  structuralRngWord (bitXor h4 (shiftRight h4 16))
 
 export
 structuralRngRange : Int -> Int -> Int -> Int
