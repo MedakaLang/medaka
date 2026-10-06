@@ -1363,3 +1363,22 @@ test "native helper hygiene preserves user field names and counterexample labels
               (row => field "name" row == Some "prefixed counterexample")
               (propertyReports report))),
       ])
+
+test "native constructor import aliases preserve user import aliases" =
+  withFixtures
+    [
+      ("flags.mdk", "export\nlive : Bool\nlive = True\n"),
+      ("numbers.mdk", "public export data Box = Box Int\n"),
+      (
+        "main.mdk",
+        "import flags as NP0\nimport flags as NP1\nimport numbers.{Box}\nprop \"user import aliases\" (value : Box) = NP0.live && NP1.live\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "user import aliases", "pass"),
+          ("native", "user import aliases", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))

@@ -1,5 +1,5 @@
 import driver.build_cmd.{makeTempDir, cleanupTempDir}
-import test.{Expectation, expectEqual, expectTrue, fail}
+import test.{Expectation, expectAll, expectEqual, expectTrue, fail}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), mapTyInDecl}
@@ -82,6 +82,37 @@ nonPositiveBudget target =
 
 test "native requests reject a non-positive case budget" =
   withTarget nonPositiveBudget
+
+test "native runtime failures retain the requested replay seed and budget" = withTarget
+  (target =>
+    let text = "prop \"trapped\" (n : Int) = panic \"trap proof\"\n"
+    match writeFile target text
+      Err message => fail message
+      Ok _ =>
+        match (runNativePlannedPropRequests target text (nativeModules text) [
+          PropRequest "trapped" (0 - 20261005) 7,
+        ])
+          [result] => expectAll [
+            expectEqual
+              ("trapped", 0 - 20261005, 7)
+              (
+                propResultName result,
+                propResultSeed result,
+                propResultCases result,
+              ),
+            expectEqual
+              (True, True, True)
+              (
+                match propResultStatus result
+                  PropErroredResult => True
+                  _ => False,
+                match propResultFailureKind result
+                  Some PropRuntimeError => True
+                  _ => False,
+                contains "trap proof" (propResultDetail result),
+              ),
+          ]
+          _ => fail "expected one native runtime failure")
 
 rendered : String -> Result String String
 rendered text = renderNativePlannedProbe
