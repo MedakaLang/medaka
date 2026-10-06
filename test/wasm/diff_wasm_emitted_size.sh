@@ -90,7 +90,11 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    with no headroom.  The `mdk_entry_split` export marker costs one function
 #    and about 35 B in every modules program; the cost is intentional, since it
 #    stops an old-shape module from running `main` twice under a new host.
-MODULES_BYTES_CEIL=3497378
+#    Re-baselined to the measured 3021731 B (funcs unchanged), with no headroom.
+#    A function declares only the W7 scratch locals its own body references
+#    (#3882); every function used to declare all of them, about 22 per match
+#    depth, so the modules corpus drops about 14% of its bytes.
+MODULES_BYTES_CEIL=3021731
 MODULES_FUNCS_CEIL=5504
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 

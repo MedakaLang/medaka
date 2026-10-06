@@ -1056,8 +1056,8 @@ leafMathU = leafRuntimeProgram [
   ],
 ]
 
--- Float `/` stays over-approximated by the divisor-local scan: it needs the
--- ref-mode local even though IEEE division never traps on zero.
+-- Float `/` never traps on zero, so its function declares no `$__divr` divisor
+-- local: a function declares only the W7 locals its body references.
 featureFloatDivProgram : CProgram
 featureFloatDivProgram =
   CProgram

@@ -39,14 +39,7 @@ if (!BASE_URL || !SCREENSHOT_DIR || !ENGINES[ENGINE]) {
   process.exit(2);
 }
 
-const EXPECTED_FAIL = {
-  firefox: {
-    // Firefox 155 traps with "compiler trap: too much recursion" compiling any
-    // program that imports async, time, regex, toml, i64 or byteparser; the
-    // default program and the type-error diagnostic import none and must pass.
-    overlap: '#3882 Firefox "too much recursion" compiler trap',
-  },
-};
+const EXPECTED_FAIL = {};
 
 // stdout of the default program (EXAMPLES.shapes in main.js), as `medaka run` prints it.
 const DEFAULT_OUTPUT = 'areas: [3.14159, 12.0]\n';
