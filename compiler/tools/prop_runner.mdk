@@ -57,6 +57,10 @@ import tools.prop_plan.{
   structuralRngRange,
   structuralRngChoose,
   customPlansReachable,
+  ShrinkAction(..),
+  shrinkActions,
+  IntShrinkStep(..),
+  intShrinkSteps,
 }
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
@@ -179,9 +183,12 @@ genStringGo n = genCharStr () :: genStringGo (n - 1)
 
 shrinkInt : Int -> List (Value e)
 shrinkInt 0 = []
-shrinkInt n =
-  let cands = [0, n / 2, n + (if n > 0 then -1 else 1)]
-  map VInt (filterList (/= n) cands)
+shrinkInt n = map (step => VInt (intShrinkCandidate n step)) intShrinkSteps
+
+intShrinkCandidate : Int -> IntShrinkStep -> Int
+intShrinkCandidate _ IntToZero = 0
+intShrinkCandidate n IntHalf = n / 2
+intShrinkCandidate n IntTowardZero = n + (if n > 0 then -1 else 1)
 
 -- ── prop evaluation ──────────────────────────────────────────────────────────
 -- evalEnv is the program's binding environment (List (String, Value)); each
@@ -656,27 +663,98 @@ structuralShrink _ _ GString (VString s) =
 structuralShrink _ _ GChar (VChar _) = []
 structuralShrink _ _ GUnit _ = []
 structuralShrink ge env (GList plan) (VList values) =
-  map VList (deleteEach values) ++ map VList (shrinkElements ge env plan values)
+  shrinkListByActions ge env plan values (shrinkActions (GList plan))
 structuralShrink ge env (GArray plan) (VArray values) =
-  let xs = toList values
-  map (xs2 => VArray (arrayFromList xs2)) (deleteEach xs)
-    ++ map (xs2 => VArray (arrayFromList xs2)) (shrinkElements ge env plan xs)
+  shrinkArrayByActions ge env plan (toList values) (shrinkActions (GArray plan))
 structuralShrink ge env (GOption plan) (VCon "Some" [value]) =
-  VCon "None" []
-    :: map (v => VCon "Some" [v]) (structuralShrink ge env plan value)
+  shrinkOptionByActions ge env plan value (shrinkActions (GOption plan))
 structuralShrink _ _ (GOption _) _ = []
-structuralShrink ge env (GResult err _) (VCon "Err" [value]) =
-  map (v => VCon "Err" [v]) (structuralShrink ge env err value)
-structuralShrink ge env (GResult _ ok) (VCon "Ok" [value]) =
-  map (v => VCon "Ok" [v]) (structuralShrink ge env ok value)
+structuralShrink ge env (result@(GResult err _)) (VCon "Err" [value]) =
+  shrinkResultByActions ge env err "Err" value (shrinkActions result)
+structuralShrink ge env (result@(GResult _ ok)) (VCon "Ok" [value]) =
+  shrinkResultByActions ge env ok "Ok" value (shrinkActions result)
 structuralShrink _ _ (GResult _ _) _ = []
 structuralShrink ge env (GTuple plans) (VTuple values) =
-  map VTuple (shrinkPlanValues ge env plans values)
+  shrinkTupleByActions ge env plans values (shrinkActions (GTuple plans))
 structuralShrink ge env (nominal@(GNominal key _)) value =
   shrinkNominal ge env nominal key value
 structuralShrink ge env (custom@(GCustom _)) value =
   shrinkCustom ge env custom value
 structuralShrink _ _ _ _ = []
+
+shrinkListByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List (Value e) ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkListByActions _ _ _ _ [] = []
+shrinkListByActions ge env plan values (DeleteElements :: actions) =
+  map VList (deleteEach values)
+    ++ shrinkListByActions ge env plan values actions
+shrinkListByActions ge env plan values (ShrinkChildren :: actions) =
+  map VList (shrinkElements ge env plan values)
+    ++ shrinkListByActions ge env plan values actions
+shrinkListByActions ge env plan values (_ :: actions) =
+  shrinkListByActions ge env plan values actions
+
+shrinkArrayByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List (Value e) ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkArrayByActions _ _ _ _ [] = []
+shrinkArrayByActions ge env plan values (DeleteElements :: actions) =
+  map (xs => VArray (arrayFromList xs)) (deleteEach values)
+    ++ shrinkArrayByActions ge env plan values actions
+shrinkArrayByActions ge env plan values (ShrinkChildren :: actions) =
+  map (xs => VArray (arrayFromList xs)) (shrinkElements ge env plan values)
+    ++ shrinkArrayByActions ge env plan values actions
+shrinkArrayByActions ge env plan values (_ :: actions) =
+  shrinkArrayByActions ge env plan values actions
+
+shrinkOptionByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  Value e ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkOptionByActions _ _ _ _ [] = []
+shrinkOptionByActions ge env plan value (ReplaceEarlierNullary :: actions) =
+  VCon "None" [] :: shrinkOptionByActions ge env plan value actions
+shrinkOptionByActions ge env plan value (ShrinkChildren :: actions) =
+  map (v => VCon "Some" [v]) (structuralShrink ge env plan value)
+    ++ shrinkOptionByActions ge env plan value actions
+shrinkOptionByActions ge env plan value (_ :: actions) =
+  shrinkOptionByActions ge env plan value actions
+
+shrinkResultByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  String ->
+  Value e ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkResultByActions _ _ _ _ _ [] = []
+shrinkResultByActions ge env plan tag value (ShrinkChildren :: actions) =
+  map (v => VCon tag [v]) (structuralShrink ge env plan value)
+    ++ shrinkResultByActions ge env plan tag value actions
+shrinkResultByActions ge env plan tag value (_ :: actions) =
+  shrinkResultByActions ge env plan tag value actions
+
+shrinkTupleByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  List GenPlan ->
+  List (Value e) ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkTupleByActions _ _ _ _ [] = []
+shrinkTupleByActions ge env plans values (ShrinkChildren :: actions) =
+  map VTuple (shrinkPlanValues ge env plans values)
+    ++ shrinkTupleByActions ge env plans values actions
+shrinkTupleByActions ge env plans values (_ :: actions) =
+  shrinkTupleByActions ge env plans values actions
 
 shrinkElements : GenEnv ->
   EvalEnv (Value e) ->
@@ -707,14 +785,57 @@ shrinkNominal : GenEnv ->
   <e> List (Value e)
 shrinkNominal ge env nominal key value = match planDef (genEnvPlan ge) key
   Ok (PlanDef _ _ _ _ ctors) =>
-    nullaryCtorValues ctors ++ shrinkNominalFields ge env nominal ctors value
+    shrinkNominalByActions ge env nominal ctors value (shrinkActions nominal)
   Err _ => []
 
-nullaryCtorValues : List PlanCtor -> List (Value e)
-nullaryCtorValues [] = []
-nullaryCtorValues ((PlanCtor _ runtime []) :: rest) =
-  VCon runtime [] :: nullaryCtorValues rest
-nullaryCtorValues (_ :: rest) = nullaryCtorValues rest
+shrinkNominalByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List PlanCtor ->
+  Value e ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkNominalByActions _ _ _ _ _ [] = []
+shrinkNominalByActions ge env nominal ctors value (ReplaceEarlierNullary :: actions) =
+  earlierNullaryCtorValue ctors value
+    ++ shrinkNominalByActions ge env nominal ctors value actions
+shrinkNominalByActions ge env nominal ctors value (ShrinkChildren :: actions) =
+  shrinkNominalFields ge env nominal ctors value
+    ++ shrinkNominalByActions ge env nominal ctors value actions
+shrinkNominalByActions ge env nominal ctors value (_ :: actions) =
+  shrinkNominalByActions ge env nominal ctors value actions
+
+earlierNullaryCtorValue : List PlanCtor -> Value e -> List (Value e)
+earlierNullaryCtorValue ctors value = match nominalRuntime value
+  None => []
+  Some runtime => match earlierNullaryCtor ctors runtime None
+    None => []
+    Some (PlanCtor _ earlierRuntime []) => [VCon earlierRuntime []]
+    Some _ => []
+
+nominalRuntime : Value e -> Option String
+nominalRuntime (VCon runtime _) = Some runtime
+nominalRuntime (VRecord runtime _) = Some runtime
+nominalRuntime _ = None
+
+-- The first nullary constructor before the current constructor gives every
+-- replacement a smaller declaration-order rank.  Never offering the current
+-- constructor prevents the old nullary self-cycle from spending shrink fuel.
+earlierNullaryCtor : List PlanCtor ->
+  String ->
+  Option PlanCtor ->
+  Option PlanCtor
+earlierNullaryCtor [] _ earlier = earlier
+earlierNullaryCtor ((ctor@(PlanCtor _ runtime [])) :: rest) current None =
+  if runtime == current then
+    None
+  else
+    earlierNullaryCtor rest current (Some ctor)
+earlierNullaryCtor ((PlanCtor _ runtime _) :: rest) current earlier =
+  if runtime == current then
+    earlier
+  else
+    earlierNullaryCtor rest current earlier
 
 shrinkNominalFields : GenEnv ->
   EvalEnv (Value e) ->

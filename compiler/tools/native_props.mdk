@@ -33,7 +33,8 @@ import tools.prop_plan.{
   instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
   optionWeights, resultWeights, maxGenDepth, intMin, intMax,
   structuralRngModulus, structuralRngMultiplier, structuralRngIncrement,
-  structuralRngMixMultiplier1, structuralRngMixMultiplier2
+  structuralRngMixMultiplier1, structuralRngMixMultiplier2, ShrinkAction(..),
+  shrinkActions, IntShrinkStep(..), intShrinkSteps
 }
 import tools.prop_runner.{
   PropResult(..), PropStatus(..), PropFailureKind(..), filterProps,
@@ -1355,8 +1356,7 @@ candidateNodeBody : String ->
   GenPlan ->
   String ->
   String
-candidateNodeBody _ _ _ _ _ _ GInt name =
-  "if \{name} == 0 then [] else [0, \{name} / 2]"
+candidateNodeBody _ _ _ _ _ _ GInt name = nativeIntCandidates name
 candidateNodeBody _ _ _ _ _ _ GBool name = "if \{name} then [False] else []"
 candidateNodeBody _ _ _ _ _ _ GFloat name =
   "if \{name} == 0.0 then [] else [0.0, \{name} / 2.0]"
@@ -1366,15 +1366,15 @@ candidateNodeBody nonce _ _ _ _ _ GString name =
 candidateNodeBody _ _ _ _ _ _ GUnit _ = "[]"
 candidateNodeBody _ _ _ core _ _ (GCustom _) name = "\{core}.shrink \{name}"
 candidateNodeBody nonce modules env _ graph prefix (GList p) name =
-  "\{generatedPrefix nonce}delete_each \{name} ++ \{generatedPrefix nonce}replace_each (x => \{graphShrinkRef graph prefix p "x"}) \{name}"
+  graphListCandidates nonce graph prefix p name (shrinkActions (GList p))
 candidateNodeBody nonce modules env _ graph prefix (GArray p) name =
-  "\{coreAlias nonce}.map \{runtimeAlias nonce}.arrayFromList (\{generatedPrefix nonce}delete_each (\{generatedPrefix nonce}array_to_list \{name})) ++ \{coreAlias nonce}.map \{runtimeAlias nonce}.arrayFromList (\{generatedPrefix nonce}replace_each (x => \{graphShrinkRef graph prefix p "x"}) (\{generatedPrefix nonce}array_to_list \{name}))"
+  graphArrayCandidates nonce graph prefix p name (shrinkActions (GArray p))
 candidateNodeBody nonce modules env _ graph prefix (GOption p) name =
-  "match \{name}\n  None => []\n  Some x => None :: \{coreAlias nonce}.map Some (\{graphShrinkRef graph prefix p "x"})"
-candidateNodeBody nonce modules env _ graph prefix (GResult err ok) name =
-  "match \{name}\n  Err x => \{coreAlias nonce}.map Err (\{graphShrinkRef graph prefix err "x"})\n  Ok x => \{coreAlias nonce}.map Ok (\{graphShrinkRef graph prefix ok "x"})"
+  graphOptionCandidates nonce graph prefix p name (shrinkActions (GOption p))
+candidateNodeBody nonce modules env _ graph prefix (result@(GResult err ok)) name =
+  graphResultCandidates nonce graph prefix err ok name (shrinkActions result)
 candidateNodeBody nonce _ _ _ graph prefix (GTuple ps) name =
-  graphTupleCandidates nonce graph prefix ps name
+  graphTupleCandidates nonce graph prefix ps name (shrinkActions (GTuple ps))
 candidateNodeBody nonce modules env _ graph prefix (plan@(GNominal key _)) name =
   graphNominalCandidates nonce modules env graph prefix plan key name
 
@@ -1412,15 +1412,151 @@ displayNodeBody _ _ _ graph prefix (GTuple ps) name =
 displayNodeBody nonce modules env graph prefix (plan@(GNominal key _)) name =
   graphNominalDisplay nonce modules env graph prefix plan key name
 
+nativeIntCandidates : String -> String
+nativeIntCandidates name =
+  "if \{name} == 0 then [] else [\{joinWith ", " (map (nativeIntStep name) intShrinkSteps)}]"
+
+nativeIntStep : String -> IntShrinkStep -> String
+nativeIntStep _ IntToZero = "0"
+nativeIntStep name IntHalf = "\{name} / 2"
+nativeIntStep name IntTowardZero = "\{name} + (if \{name} > 0 then -1 else 1)"
+
+joinCandidateFamilies : List String -> String
+joinCandidateFamilies [] = "[]"
+joinCandidateFamilies [family] = family
+joinCandidateFamilies (family :: families) =
+  "\{family} ++ \{joinCandidateFamilies families}"
+
+graphListCandidates : String ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  String ->
+  List ShrinkAction ->
+  String
+graphListCandidates nonce graph prefix plan name actions =
+  joinCandidateFamilies
+    (graphListCandidateFamilies nonce graph prefix plan name actions)
+
+graphListCandidateFamilies : String ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  String ->
+  List ShrinkAction ->
+  List String
+graphListCandidateFamilies _ _ _ _ _ [] = []
+graphListCandidateFamilies nonce graph prefix plan name (DeleteElements :: actions) =
+  "\{generatedPrefix nonce}delete_each \{name}"
+    :: graphListCandidateFamilies nonce graph prefix plan name actions
+graphListCandidateFamilies nonce graph prefix plan name (ShrinkChildren :: actions) =
+  "\{generatedPrefix nonce}replace_each (x => \{graphShrinkRef graph prefix plan "x"}) \{name}"
+    :: graphListCandidateFamilies nonce graph prefix plan name actions
+graphListCandidateFamilies nonce graph prefix plan name (_ :: actions) =
+  graphListCandidateFamilies nonce graph prefix plan name actions
+
+graphArrayCandidates : String ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  String ->
+  List ShrinkAction ->
+  String
+graphArrayCandidates nonce graph prefix plan name actions =
+  joinCandidateFamilies
+    (graphArrayCandidateFamilies nonce graph prefix plan name actions)
+
+graphArrayCandidateFamilies : String ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  String ->
+  List ShrinkAction ->
+  List String
+graphArrayCandidateFamilies _ _ _ _ _ [] = []
+graphArrayCandidateFamilies nonce graph prefix plan name (DeleteElements :: actions) =
+  "\{coreAlias nonce}.map \{runtimeAlias nonce}.arrayFromList (\{generatedPrefix nonce}delete_each (\{generatedPrefix nonce}array_to_list \{name}))"
+    :: graphArrayCandidateFamilies nonce graph prefix plan name actions
+graphArrayCandidateFamilies nonce graph prefix plan name (ShrinkChildren :: actions) =
+  "\{coreAlias nonce}.map \{runtimeAlias nonce}.arrayFromList (\{generatedPrefix nonce}replace_each (x => \{graphShrinkRef graph prefix plan "x"}) (\{generatedPrefix nonce}array_to_list \{name}))"
+    :: graphArrayCandidateFamilies nonce graph prefix plan name actions
+graphArrayCandidateFamilies nonce graph prefix plan name (_ :: actions) =
+  graphArrayCandidateFamilies nonce graph prefix plan name actions
+
+graphOptionCandidates : String ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  String ->
+  List ShrinkAction ->
+  String
+graphOptionCandidates nonce graph prefix plan name actions =
+  "match \{name}\n  None => []\n  Some x => \{joinCandidateFamilies (graphOptionCandidateFamilies nonce graph prefix plan actions)}"
+
+graphOptionCandidateFamilies : String ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  List ShrinkAction ->
+  List String
+graphOptionCandidateFamilies _ _ _ _ [] = []
+graphOptionCandidateFamilies nonce graph prefix plan (ReplaceEarlierNullary :: actions) =
+  "[None]" :: graphOptionCandidateFamilies nonce graph prefix plan actions
+graphOptionCandidateFamilies nonce graph prefix plan (ShrinkChildren :: actions) =
+  "\{coreAlias nonce}.map Some (\{graphShrinkRef graph prefix plan "x"})"
+    :: graphOptionCandidateFamilies nonce graph prefix plan actions
+graphOptionCandidateFamilies nonce graph prefix plan (_ :: actions) =
+  graphOptionCandidateFamilies nonce graph prefix plan actions
+
+graphResultCandidates : String ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  GenPlan ->
+  String ->
+  List ShrinkAction ->
+  String
+graphResultCandidates nonce graph prefix err ok name actions =
+  "match \{name}\n  Err x => \{joinCandidateFamilies (graphResultCandidateFamilies nonce graph prefix err "Err" actions)}\n  Ok x => \{joinCandidateFamilies (graphResultCandidateFamilies nonce graph prefix ok "Ok" actions)}"
+
+graphResultCandidateFamilies : String ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  String ->
+  List ShrinkAction ->
+  List String
+graphResultCandidateFamilies _ _ _ _ _ [] = []
+graphResultCandidateFamilies nonce graph prefix plan tag (ShrinkChildren :: actions) =
+  "\{coreAlias nonce}.map \{tag} (\{graphShrinkRef graph prefix plan "x"})"
+    :: graphResultCandidateFamilies nonce graph prefix plan tag actions
+graphResultCandidateFamilies nonce graph prefix plan tag (_ :: actions) =
+  graphResultCandidateFamilies nonce graph prefix plan tag actions
+
 graphTupleCandidates : String ->
   NativeGraph ->
   String ->
   List GenPlan ->
   String ->
+  List ShrinkAction ->
   String
-graphTupleCandidates nonce graph prefix plans name =
+graphTupleCandidates nonce graph prefix plans name actions =
   let values = tupleVars (listLen plans)
-  "match \{name}\n  (\{joinWith ", " values}) => \{graphTupleCandidateLists nonce graph prefix plans values values 0}"
+  "match \{name}\n  (\{joinWith ", " values}) => \{graphTupleCandidatesByActions nonce graph prefix plans values values actions}"
+
+graphTupleCandidatesByActions : String ->
+  NativeGraph ->
+  String ->
+  List GenPlan ->
+  List String ->
+  List String ->
+  List ShrinkAction ->
+  String
+graphTupleCandidatesByActions _ _ _ _ _ _ [] = "[]"
+graphTupleCandidatesByActions nonce graph prefix plans all values (ShrinkChildren :: actions) =
+  "\{graphTupleCandidateLists nonce graph prefix plans all values 0} ++ \{graphTupleCandidatesByActions nonce graph prefix plans all values actions}"
+graphTupleCandidatesByActions nonce graph prefix plans all values (_ :: actions) =
+  graphTupleCandidatesByActions nonce graph prefix plans all values actions
 
 graphTupleCandidateLists : String ->
   NativeGraph ->
@@ -1449,9 +1585,47 @@ graphNominalCandidates nonce modules env graph prefix plan key name =
     Err _ => "[]"
     Ok (PlanDef _ owner _ visibility ctors) =>
       if nominalCtorsVisible env owner visibility then
-        "match \{name}\n\{joinNl (map (graphNominalCandidateArm nonce modules env graph prefix plan owner) ctors)}"
+        "match \{name}\n\{joinNl (graphNominalCandidateArms nonce modules env graph prefix plan owner ctors None)}"
       else
         "[]"
+
+graphNominalCandidateArms : String ->
+  List PlanModule ->
+  PlanEnv ->
+  NativeGraph ->
+  String ->
+  GenPlan ->
+  String ->
+  List PlanCtor ->
+  Option PlanCtor ->
+  List String
+graphNominalCandidateArms _ _ _ _ _ _ _ [] _ = []
+graphNominalCandidateArms nonce modules env graph prefix plan owner (ctor :: ctors) earlier =
+  graphNominalCandidateArm
+      nonce
+      modules
+      env
+      graph
+      prefix
+      plan
+      owner
+      earlier
+      ctor
+    :: graphNominalCandidateArms
+      nonce
+      modules
+      env
+      graph
+      prefix
+      plan
+      owner
+      ctors
+      (nextEarlierNullary earlier ctor)
+
+nextEarlierNullary : Option PlanCtor -> PlanCtor -> Option PlanCtor
+nextEarlierNullary None (ctor@(PlanCtor _ _ [])) = Some ctor
+nextEarlierNullary earlier (PlanCtor _ _ []) = earlier
+nextEarlierNullary earlier _ = earlier
 
 graphNominalCandidateArm : String ->
   List PlanModule ->
@@ -1460,20 +1634,79 @@ graphNominalCandidateArm : String ->
   String ->
   GenPlan ->
   String ->
+  Option PlanCtor ->
   PlanCtor ->
   String
-graphNominalCandidateArm nonce modules env graph prefix plan owner (ctor@(PlanCtor source _ _)) =
+graphNominalCandidateArm nonce modules env graph prefix plan owner earlier (ctor@(PlanCtor source _ _)) =
   match instantiateCtor env plan ctor
     Err _ => "  _ => []"
     Ok fields =>
       let values = tupleVars (listLen fields)
       let ref = qualifiedCtor nonce modules owner source
+      let replacements =
+        graphNominalReplacementByActions
+          nonce
+          modules
+          owner
+          earlier
+          (shrinkActions plan)
       if hasNamedField fields then
-        "  \{ref} { \{joinWith ", " (namedAssignments fields values)} } => \{graphNominalFieldCandidates nonce graph prefix ref fields fields values values True 0}"
+        "  \{ref} { \{joinWith ", " (namedAssignments fields values)} } => \{joinCandidateFamilies [replacements, graphNominalFieldCandidatesByActions nonce graph prefix ref fields fields values values True 0 (shrinkActions plan)]}"
       else if listLen values == 0 then
-        "  \{ref} => []"
+        "  \{ref} => \{joinCandidateFamilies [replacements]}"
       else
-        "  \{ref} \{joinWith " " values} => \{graphNominalFieldCandidates nonce graph prefix ref fields fields values values False 0}"
+        "  \{ref} \{joinWith " " values} => \{joinCandidateFamilies [replacements, graphNominalFieldCandidatesByActions nonce graph prefix ref fields fields values values False 0 (shrinkActions plan)]}"
+
+graphNominalReplacementByActions : String ->
+  List PlanModule ->
+  String ->
+  Option PlanCtor ->
+  List ShrinkAction ->
+  String
+graphNominalReplacementByActions _ _ _ _ [] = "[]"
+graphNominalReplacementByActions nonce modules owner earlier (ReplaceEarlierNullary :: _) =
+  graphNominalReplacement nonce modules owner earlier
+graphNominalReplacementByActions nonce modules owner earlier (_ :: actions) =
+  graphNominalReplacementByActions nonce modules owner earlier actions
+
+graphNominalReplacement : String ->
+  List PlanModule ->
+  String ->
+  Option PlanCtor ->
+  String
+graphNominalReplacement _ _ _ None = "[]"
+graphNominalReplacement nonce modules owner (Some (PlanCtor source _ [])) =
+  "[\{qualifiedCtor nonce modules owner source}]"
+graphNominalReplacement _ _ _ (Some _) = "[]"
+
+graphNominalFieldCandidatesByActions : String ->
+  NativeGraph ->
+  String ->
+  String ->
+  List (Option String, GenPlan) ->
+  List (Option String, GenPlan) ->
+  List String ->
+  List String ->
+  Bool ->
+  Int ->
+  List ShrinkAction ->
+  String
+graphNominalFieldCandidatesByActions _ _ _ _ _ _ _ _ _ _ [] = "[]"
+graphNominalFieldCandidatesByActions nonce graph prefix ref all fields allValues values named index (ShrinkChildren :: actions) =
+  "\{graphNominalFieldCandidates nonce graph prefix ref all fields allValues values named index} ++ \{graphNominalFieldCandidatesByActions nonce graph prefix ref all fields allValues values named index actions}"
+graphNominalFieldCandidatesByActions nonce graph prefix ref all fields allValues values named index (_ :: actions) =
+  graphNominalFieldCandidatesByActions
+    nonce
+    graph
+    prefix
+    ref
+    all
+    fields
+    allValues
+    values
+    named
+    index
+    actions
 
 graphNominalFieldCandidates : String ->
   NativeGraph ->
@@ -1666,7 +1899,7 @@ shrinkTopLines nonce modules env i ps plans =
     candidateExprAt nonce env i 0 (nthPlan 0 plans) (slotName nonce i 0)
   [
     "\{shrinkName nonce i} \{generatedPrefix nonce}fuel \{joinWith " " (paramSlots nonce i ps)} =",
-    "  if \{generatedPrefix nonce}fuel <= 0 then (False, \{plannedDetailSlots nonce modules env i ps plans}) else \{shrinkTryName nonce i 0} \{generatedPrefix nonce}fuel \{startCandidates} \{joinWith " " (paramSlots nonce i ps)}",
+    "  if \{generatedPrefix nonce}fuel <= 0 then (False, \{plannedDetailSlots nonce modules env i ps plans} ++ \" (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)\") else \{shrinkTryName nonce i 0} \{generatedPrefix nonce}fuel \{startCandidates} \{joinWith " " (paramSlots nonce i ps)}",
     "",
   ]
 

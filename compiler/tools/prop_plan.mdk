@@ -1472,30 +1472,29 @@ planDivergesSeen env truth (nominal@(GNominal _ _)) seen =
   planCanDivergeNominal env truth nominal seen
 planDivergesSeen _ _ (GCustom _) _ = False
 
--- Structural shrink action ordering is shared as data.  Adapters map these to
--- their value representation and retain the same greedy first-failing choice.
+-- Structural shrink action ordering is shared as data. Both adapters consume
+-- these actions in order; value representation and emitted syntax never pick
+-- an independent candidate family.
 public export data ShrinkAction =
-  | DeleteAt Int
-  | ShrinkChild Int
-  | ReplaceCtor Int
+  | DeleteElements
+  | ShrinkChildren
+  | ReplaceEarlierNullary
 
 export
-shrinkActions : GenPlan -> Int -> List ShrinkAction
-shrinkActions (GList _) n = sequenceDeletes n 0 ++ sequenceChildren n 0
-shrinkActions (GArray _) n = sequenceDeletes n 0 ++ sequenceChildren n 0
-shrinkActions (GTuple _) n = sequenceChildren n 0
-shrinkActions (GOption _) n =
-  if n == 0 then [] else ReplaceCtor 0 :: sequenceChildren n 0
-shrinkActions (GResult _ _) n = sequenceChildren n 0
-shrinkActions (GNominal _ _) n = sequenceChildren n 0
-shrinkActions _ _ = []
+shrinkActions : GenPlan -> List ShrinkAction
+shrinkActions (GList _) = [DeleteElements, ShrinkChildren]
+shrinkActions (GArray _) = [DeleteElements, ShrinkChildren]
+shrinkActions (GTuple _) = [ShrinkChildren]
+shrinkActions (GOption _) = [ReplaceEarlierNullary, ShrinkChildren]
+shrinkActions (GResult _ _) = [ShrinkChildren]
+shrinkActions (GNominal _ _) = [ReplaceEarlierNullary, ShrinkChildren]
+shrinkActions _ = []
 
-sequenceDeletes : Int -> Int -> List ShrinkAction
-sequenceDeletes n i
-  | i >= n = []
-sequenceDeletes n i = DeleteAt i :: sequenceDeletes n (i + 1)
+-- Integer candidates need source-level rendering natively, so their order is
+-- a separate shared policy.  The adapters map the same three steps to their
+-- own representation; toward-zero is deliberately last, after zero and half.
+public export data IntShrinkStep = IntToZero | IntHalf | IntTowardZero
 
-sequenceChildren : Int -> Int -> List ShrinkAction
-sequenceChildren n i
-  | i >= n = []
-sequenceChildren n i = ShrinkChild i :: sequenceChildren n (i + 1)
+export
+intShrinkSteps : List IntShrinkStep
+intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
