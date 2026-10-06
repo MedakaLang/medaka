@@ -102,8 +102,8 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    bytes.  The bytes include each program's trap-site file table, which
 #    spells the fixture and core.mdk paths as given, i.e. absolute, so they
 #    depend on the checkout root (#3879).
-MODULES_BYTES_CEIL=9999999
-MODULES_FUNCS_CEIL=99999
+MODULES_BYTES_CEIL=3105616
+MODULES_FUNCS_CEIL=5716
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
@@ -132,7 +132,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=99999  # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
+MODULES_F1_RATIO_CEIL_X1000=3765  # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node
