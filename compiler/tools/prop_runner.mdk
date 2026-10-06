@@ -30,6 +30,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), apply, eval, extendEnv, force, hasKey, ppValue
 }
 import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import tools.prop_plan.{
   deleteEach,
   replaceEach,
@@ -158,7 +159,8 @@ randBoolL _ = rngNextLocal () % 2 == 1
 -- ── what a draw may consult ─────────────────────────────────────────────────
 -- The shared PlanEnv makes every structural and capability decision. GenEnv
 -- only retains evaluator routes for a selected custom Arbitrary implementation.
-public export data GenEnv = GenEnv (List ArbImpl) PlanEnv
+public export data PropHelper = PropHelper String String String
+public export data GenEnv = GenEnv (List ArbImpl) PlanEnv (OrdMap PropHelper)
 
 -- Where a chosen declaration's runtime `arbitrary` value is to be found: the
 -- canonical impl route word its methods are tagged with at install time, this
@@ -194,10 +196,22 @@ public export data ArbImpl = ArbImpl String TyConOrigin ArbRoute
 -- included).
 export
 buildGenEnv : List Decl -> List Decl -> GenEnv
-buildGenEnv _ allDecls = GenEnv (arbImplsOf allDecls) (buildPlanEnv allDecls)
+buildGenEnv _ allDecls =
+  GenEnv (arbImplsOf allDecls) (buildPlanEnv allDecls) omEmpty
 
 buildGenEnvWithPlan : List Decl -> PlanEnv -> GenEnv
-buildGenEnvWithPlan allDecls planEnv = GenEnv (arbImplsOf allDecls) planEnv
+buildGenEnvWithPlan allDecls planEnv =
+  GenEnv (arbImplsOf allDecls) planEnv omEmpty
+
+export
+buildGenEnvWithHelpers : List Decl -> PlanEnv -> List PropHelper -> GenEnv
+buildGenEnvWithHelpers allDecls planEnv helpers =
+  GenEnv (arbImplsOf allDecls) planEnv (helperMap helpers omEmpty)
+
+helperMap : List PropHelper -> OrdMap PropHelper -> OrdMap PropHelper
+helperMap [] acc = acc
+helperMap ((helper@(PropHelper word _ _)) :: rest) acc =
+  helperMap rest (omInsert word helper acc)
 
 arbImplsOf : List Decl -> List ArbImpl
 arbImplsOf decls = arbImplsGo decls [] (filterMap arbCandidateWord decls)
@@ -397,7 +411,7 @@ genInputs genEnv evalEnv ((PropParam x _ ty) :: rest) =
   (x, genParam genEnv evalEnv ty) :: genInputs genEnv evalEnv rest
 
 genParam : GenEnv -> List (String, Value e) -> Ty -> <e> Value e
-genParam (ge@(GenEnv _ planEnv)) evalEnv ty =
+genParam (ge@(GenEnv _ planEnv _)) evalEnv ty =
   match planFor planEnv "" "property parameter" ty
     Ok plan => genFromPlan ge evalEnv 0 plan
     Err e => panic (planErrorText e)
@@ -447,7 +461,7 @@ genFromPlan ge env depth (nominal@(GNominal key _)) =
 genFromPlan ge env _ (custom@(GCustom _)) = drawCustomArbitrary ge env custom
 
 genEnvPlan : GenEnv -> PlanEnv
-genEnvPlan (GenEnv _ planEnv) = planEnv
+genEnvPlan (GenEnv _ planEnv _) = planEnv
 
 -- Swap the evaluated program's complete U64 RNG state around one custom draw.
 -- `randomState`/`restoreRandomState` are invoked through the same evaluator
@@ -459,15 +473,25 @@ drawCustomArbitrary ge env custom =
   let _ = ensureCustomRandomState env
   let (hi, lo) = !customRngStateRef
   let _ = restoreRandomStateValue env (VU64 hi lo)
-  let value = match userArbitrary ge env (planTy custom)
-    Some v => v
-    None =>
-      panic
-        "property runner: planned Arbitrary instance was not available in the evaluator environment"
+  let value = match customHelper ge custom
+    Some (PropHelper _ genName _) => match lookupAssoc genName env
+      Some gen => force (apply (force gen) VUnit)
+      None =>
+        panic "property runner: selected typed generator helper is unavailable"
+    None => match userArbitrary ge env (planTy custom)
+      Some v => v
+      None =>
+        panic
+          "property runner: planned Arbitrary instance was not available in the evaluator environment"
   let customState = readRandomState env
   customRngStateRef := u64Pair customState
   let _ = restoreRandomStateValue env programState
   value
+
+customHelper : GenEnv -> GenPlan -> Option PropHelper
+customHelper (GenEnv _ _ helpers) (GCustom (CustomPlan _ _ word)) =
+  omLookup word helpers
+customHelper _ _ = None
 
 ensureCustomRandomState : List (String, Value e) -> <e> Unit
 ensureCustomRandomState env =
@@ -645,7 +669,7 @@ positionalPlanFields ((Some _, _) :: _) =
 -- position among the declarations sharing that word when the word alone leaves
 -- more than one candidate.
 userArbitrary : GenEnv -> List (String, Value e) -> Ty -> <e> Option (Value e)
-userArbitrary (GenEnv arbs _) evalEnv (TyCon { tyConName = n, tyConOrigin = o }) =
+userArbitrary (GenEnv arbs _ _) evalEnv (TyCon { tyConName = n, tyConOrigin = o }) =
   match arbImplKeyFor arbs n o
     Some route => match lookupAssoc "arbitrary" evalEnv
       Some m => userArbitraryAt route (force m)
@@ -693,12 +717,21 @@ shrinkForParam : GenEnv ->
   <e> List (Value e)
 shrinkForParam ge env ty value =
   match planFor (genEnvPlan ge) "" "property parameter" ty
-    Ok (GCustom (CustomPlan (TypeKey n o) True)) =>
-      match userShrinkAt ge env n o value
-        Some smaller => smaller
-        None =>
-          panic
-            "property runner: planned custom shrink was not available in the evaluator environment"
+    Ok (custom@(GCustom (CustomPlan (TypeKey n o) _ _))) =>
+      match customHelper ge custom
+        Some (PropHelper _ _ shrinkName) => match lookupAssoc shrinkName env
+          Some shrink => match force (apply (force shrink) value)
+            VList smaller => smaller
+            _ =>
+              panic
+                "property runner: typed custom shrink returned a non-List value"
+          None =>
+            panic "property runner: selected typed shrink helper is unavailable"
+        None => match userShrinkAt ge env n o value
+          Some smaller => smaller
+          None =>
+            panic
+              "property runner: planned custom shrink was not available in the evaluator environment"
     Ok plan => structuralShrink ge plan value
     Err e => panic (planErrorText e)
 
@@ -708,7 +741,7 @@ userShrinkAt : GenEnv ->
   TyConOrigin ->
   Value e ->
   <e> Option (List (Value e))
-userShrinkAt (GenEnv arbs _) env n o value = match (
+userShrinkAt (GenEnv arbs _ _) env n o value = match (
   arbImplKeyFor arbs n o,
   lookupAssoc "shrink" env,
 )
@@ -1161,6 +1194,26 @@ runAllPlannedPropRequestsResults root modules requests propLines evalEnv program
         requests
         propLines
         (buildGenEnvWithPlan (runtimeModuleDecls modules) planEnv)
+        evalEnv
+        (filterProps program)
+    Err err => map (requestPlanError err) requests
+
+export
+runAllPlannedPropRequestsWithHelpersResults : String ->
+  List PlanModule ->
+  List PropHelper ->
+  List PropRequest ->
+  List (String, Int) ->
+  List (String, Value e) ->
+  List Decl ->
+  <e> List PropResult
+runAllPlannedPropRequestsWithHelpersResults root modules helpers requests propLines evalEnv program =
+  match buildPlanEnvModules root modules
+    Ok planEnv =>
+      runPropRequests
+        requests
+        propLines
+        (buildGenEnvWithHelpers (runtimeModuleDecls modules) planEnv helpers)
         evalEnv
         (filterProps program)
     Err err => map (requestPlanError err) requests

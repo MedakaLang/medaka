@@ -66,7 +66,7 @@ public export data PlanCtor = PlanCtor String String (List PlanField)
 public export data PlanDef =
   | PlanDef TypeKey String (List String) PlanVisibility (List PlanCtor)
 
-public export data CustomPlan = CustomPlan TypeKey Bool
+public export data CustomPlan = CustomPlan TypeKey Ty String
 
 public export data GenPlan =
   | GInt
@@ -82,6 +82,22 @@ public export data GenPlan =
   | GTuple (List GenPlan)
   | GNominal TypeKey (List GenPlan)
   | GCustom CustomPlan
+
+export
+customPlansReachable : List GenPlan -> List CustomPlan
+customPlansReachable [] = []
+customPlansReachable (plan :: rest) =
+  customPlansIn plan ++ customPlansReachable rest
+
+customPlansIn : GenPlan -> List CustomPlan
+customPlansIn (GList plan) = customPlansIn plan
+customPlansIn (GArray plan) = customPlansIn plan
+customPlansIn (GOption plan) = customPlansIn plan
+customPlansIn (GResult err ok) = customPlansIn err ++ customPlansIn ok
+customPlansIn (GTuple plans) = customPlansReachable plans
+customPlansIn (GNominal _ plans) = customPlansReachable plans
+customPlansIn (GCustom custom) = [custom]
+customPlansIn _ = []
 
 public export data PlanErrorReason =
   | PEUnboundTyVar
@@ -119,7 +135,7 @@ reasonText PEInaccessibleConstructors =
 -- One row per nominal declaration and one per Arbitrary decision.  The maps are
 -- built once for the whole loaded graph, then queried by identity rather than
 -- rescanning declarations for every generated value.
-public export data ArbPlan = ArbPlan TypeKey Bool Bool
+public export data ArbPlan = ArbPlan Ty String
 public export data PlanEnv =
   | PlanEnv String (OrdMap (List PlanDef)) (OrdMap (List ArbPlan)) (OrdMap Unit) (OrdMap Unit)
 
@@ -328,22 +344,11 @@ namedField (Field n t) = PlanField (Some n) t
 
 addArbitrary : Decl -> PlanEnv -> PlanEnv
 addArbitrary (DAttrib _ d) env = addArbitrary d env
-addArbitrary (DImpl { iface = "Arbitrary", implOrigin = (OriginModule "core"), tys = [TyCon { tyConName = n, tyConOrigin = o }], reqs = reqs, methods }) env =
-  let key = TypeKey n o
-  let row = ArbPlan key (emptyReqs reqs) (hasMethod "shrink" methods)
-  insertArb row env
+addArbitrary (DImpl { iface = "Arbitrary", implOrigin = (OriginModule "core"), tys = [carrier], reqs = [] }) env =
+  insertArb (ArbPlan carrier (arbCarrierWord carrier)) env
 addArbitrary (DImpl { iface = "Arbitrary", implOrigin = (OriginModule "core"), tys = [t] }) env =
   markUnusable t env
 addArbitrary _ env = env
-
-emptyReqs : List a -> Bool
-emptyReqs [] = True
-emptyReqs _ = False
-
-hasMethod : String -> List ImplMethod -> Bool
-hasMethod _ [] = False
-hasMethod wanted ((ImplMethod n _ _) :: rest) =
-  n == wanted || hasMethod wanted rest
 
 markUnusable : Ty -> PlanEnv -> PlanEnv
 markUnusable ty (PlanEnv root defs arbs bad aliases) =
@@ -359,8 +364,7 @@ insertDef (def@(PlanDef key _ _ _ _)) (PlanEnv root defs arbs bad aliases) =
   PlanEnv root (omInsert word (def :: prior) defs) arbs bad aliases
 
 insertArb : ArbPlan -> PlanEnv -> PlanEnv
-insertArb (arb@(ArbPlan key _ _)) (PlanEnv root defs arbs bad aliases) =
-  let word = typeKeyWord key
+insertArb (arb@(ArbPlan _ word)) (PlanEnv root defs arbs bad aliases) =
   let prior = optionList (omLookup word arbs)
   PlanEnv root defs (omInsert word (arb :: prior) arbs) bad aliases
 
@@ -447,12 +451,12 @@ planNominal : PlanEnv ->
   List Ty ->
   Result PlanError GenPlan
 planNominal (PlanEnv root defs arbs bad aliases) propName param key args =
-  match matchingArb key (optionList (omLookup (typeKeyWord key) arbs))
-    Some (ArbPlan actual usable explicitShrink) if sameTypeKey key actual
-      && usable => Ok (GCustom (CustomPlan key explicitShrink))
-    Some (ArbPlan actual _ _) if sameTypeKey key actual =>
-      Err (PlanError propName param (rebuildTy key args) PEUnusableArbitrary "")
-    _ if isSome (omLookup (arbCarrierWord (rebuildTy key args)) bad) =>
+  let carrier = rebuildTy key args
+  let word = arbCarrierWord carrier
+  match optionList (omLookup word arbs)
+    [ArbPlan actual route] => Ok (GCustom (CustomPlan key actual route))
+    _ :: _ :: _ => Err (PlanError propName param carrier PEUnusableArbitrary "")
+    _ if isSome (omLookup word bad) =>
       Err (PlanError propName param (rebuildTy key args) PEUnusableArbitrary "")
     _ => match matchingDef key (optionList (omLookup (typeKeyWord key) defs))
       None if isSome (omLookup (typeKeyWord key) aliases) =>
@@ -492,11 +496,6 @@ planNominal (PlanEnv root defs arbs bad aliases) propName param key args =
         map
           (GNominal key)
           (planMany (PlanEnv root defs arbs bad aliases) propName param args)
-
-matchingArb : TypeKey -> List ArbPlan -> Option ArbPlan
-matchingArb _ [] = None
-matchingArb key ((a@(ArbPlan actual _ _)) :: rest) =
-  if sameTypeKey key actual then Some a else matchingArb key rest
 
 matchingDef : TypeKey -> List PlanDef -> Option PlanDef
 matchingDef _ [] = None
@@ -648,7 +647,7 @@ planTy (GNominal (TypeKey n o) ps) =
   foldTy
     TyCon { tyConName = n, tyConLoc = None, tyConOrigin = o }
     (map planTy ps)
-planTy (GCustom (CustomPlan key _)) = planTy (GNominal key [])
+planTy (GCustom (CustomPlan _ carrier _)) = carrier
 
 builtinTy : String -> Ty
 builtinTy n =
