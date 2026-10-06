@@ -29,7 +29,6 @@ import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import tools.prop_plan.{
   deleteEach,
-  replaceEach,
   prepend,
   prependBefore,
   PlanEnv(..),
@@ -53,6 +52,7 @@ import tools.prop_plan.{
   resultWeights,
   intMin,
   intMax,
+  customPlansReachable,
 }
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
@@ -257,7 +257,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
     Err e =>
       let _ = putStrLn ("ERROR: " ++ planErrorText e)
       False
-    Ok plans => match helperFailure genEnv evalEnv plans
+    Ok plans => match helperFailure genEnv plans
       Some detail =>
         let _ = putStrLn ("ERROR: " ++ detail)
         False
@@ -437,34 +437,16 @@ customHelper _ _ = None
 -- Before a property starts, validate every helper the selected plans can call.
 -- A caller may therefore return a normal protocol/runtime result rather than
 -- entering generation and tripping an evaluator panic for an absent helper.
-helperFailure : GenEnv ->
-  List (String, Value e) ->
-  List GenPlan ->
-  Option String
-helperFailure _ _ [] = None
-helperFailure ge env (plan :: rest) = match helperFailurePlan ge env plan
-  Some detail => Some detail
-  None => helperFailure ge env rest
+helperFailure : GenEnv -> List GenPlan -> Option String
+helperFailure ge plans =
+  helperFailureCustoms ge (customPlansReachable (genEnvPlan ge) plans)
 
-helperFailurePlan : GenEnv -> List (String, Value e) -> GenPlan -> Option String
-helperFailurePlan ge env (GCustom custom) =
+helperFailureCustoms : GenEnv -> List CustomPlan -> Option String
+helperFailureCustoms _ [] = None
+helperFailureCustoms ge (custom :: rest) =
   match customHelper ge (GCustom custom)
+    Some _ => helperFailureCustoms ge rest
     None => Some "selected typed custom helper is unavailable"
-    Some (PropHelper _ genName shrinkName) =>
-      if isSome (lookupAssoc genName env)
-        && isSome (lookupAssoc shrinkName env) then
-        None
-      else
-        Some "selected typed custom helper binding is unavailable"
-helperFailurePlan ge env (GList plan) = helperFailurePlan ge env plan
-helperFailurePlan ge env (GArray plan) = helperFailurePlan ge env plan
-helperFailurePlan ge env (GOption plan) = helperFailurePlan ge env plan
-helperFailurePlan ge env (GResult err ok) = match helperFailurePlan ge env err
-  Some detail => Some detail
-  None => helperFailurePlan ge env ok
-helperFailurePlan ge env (GTuple plans) = helperFailure ge env plans
-helperFailurePlan ge env (GNominal _ plans) = helperFailure ge env plans
-helperFailurePlan _ _ _ = None
 
 ensureCustomRandomState : EvalEnv (Value e) -> <e> Unit
 ensureCustomRandomState env =
@@ -628,60 +610,92 @@ shrinkForParam ge env ty value =
             panic
               "property runner: typed custom shrink returned a non-List value"
       None => panic "property runner: missing selected typed custom helper"
-    Ok plan => structuralShrink ge plan value
+    Ok plan => structuralShrink ge env plan value
     Err e => panic (planErrorText e)
+
+shrinkCustom : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  Value e ->
+  <e> List (Value e)
+shrinkCustom ge env custom value = match customHelper ge custom
+  Some (PropHelper _ _ shrinkName) =>
+    match force (apply (force (lookupEnv env shrinkName)) value)
+      VList smaller => smaller
+      _ =>
+        panic "property runner: typed custom shrink returned a non-List value"
+  None => panic "property runner: missing selected typed custom helper"
 
 -- Interpret the planner's structural order for evaluator values.  The action
 -- algebra supplies deletion/child ordering; constructor replacement is kept
 -- ahead of fields, so native and eval take the same greedy path.
-structuralShrink : GenEnv -> GenPlan -> Value e -> List (Value e)
-structuralShrink _ GInt (VInt n) = shrinkInt n
-structuralShrink _ GBool (VBool True) = [VBool False]
-structuralShrink _ GBool _ = []
-structuralShrink _ GFloat (VFloat x) =
+structuralShrink : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  Value e ->
+  <e> List (Value e)
+structuralShrink _ _ GInt (VInt n) = shrinkInt n
+structuralShrink _ _ GBool (VBool True) = [VBool False]
+structuralShrink _ _ GBool _ = []
+structuralShrink _ _ GFloat (VFloat x) =
   if x == 0.0 then [] else [VFloat 0.0, VFloat (x / 2.0)]
-structuralShrink _ GString (VString s) =
+structuralShrink _ _ GString (VString s) =
   if s == "" then [] else [VString (stringSlice 0 (stringLength s / 2) s)]
-structuralShrink _ GChar (VChar _) = []
-structuralShrink _ GUnit _ = []
-structuralShrink ge (GList plan) (VList values) =
-  map VList (deleteEach values)
-    ++ map VList (replaceEach (structuralShrink ge plan) values)
-structuralShrink ge (GArray plan) (VArray values) =
+structuralShrink _ _ GChar (VChar _) = []
+structuralShrink _ _ GUnit _ = []
+structuralShrink ge env (GList plan) (VList values) =
+  map VList (deleteEach values) ++ map VList (shrinkElements ge env plan values)
+structuralShrink ge env (GArray plan) (VArray values) =
   let xs = toList values
   map (xs2 => VArray (arrayFromList xs2)) (deleteEach xs)
-    ++ map
-      (xs2 => VArray (arrayFromList xs2))
-      (replaceEach (structuralShrink ge plan) xs)
-structuralShrink ge (GOption plan) (VCon "Some" [value]) =
-  VCon "None" [] :: map (v => VCon "Some" [v]) (structuralShrink ge plan value)
-structuralShrink _ (GOption _) _ = []
-structuralShrink ge (GResult err _) (VCon "Err" [value]) =
-  map (v => VCon "Err" [v]) (structuralShrink ge err value)
-structuralShrink ge (GResult _ ok) (VCon "Ok" [value]) =
-  map (v => VCon "Ok" [v]) (structuralShrink ge ok value)
-structuralShrink _ (GResult _ _) _ = []
-structuralShrink ge (GTuple plans) (VTuple values) =
-  map VTuple (shrinkPlanValues ge plans values)
-structuralShrink ge (nominal@(GNominal key _)) value =
-  shrinkNominal ge nominal key value
-structuralShrink _ (GCustom _) _ = []
-structuralShrink _ _ _ = []
+    ++ map (xs2 => VArray (arrayFromList xs2)) (shrinkElements ge env plan xs)
+structuralShrink ge env (GOption plan) (VCon "Some" [value]) =
+  VCon "None" []
+    :: map (v => VCon "Some" [v]) (structuralShrink ge env plan value)
+structuralShrink _ _ (GOption _) _ = []
+structuralShrink ge env (GResult err _) (VCon "Err" [value]) =
+  map (v => VCon "Err" [v]) (structuralShrink ge env err value)
+structuralShrink ge env (GResult _ ok) (VCon "Ok" [value]) =
+  map (v => VCon "Ok" [v]) (structuralShrink ge env ok value)
+structuralShrink _ _ (GResult _ _) _ = []
+structuralShrink ge env (GTuple plans) (VTuple values) =
+  map VTuple (shrinkPlanValues ge env plans values)
+structuralShrink ge env (nominal@(GNominal key _)) value =
+  shrinkNominal ge env nominal key value
+structuralShrink ge env (custom@(GCustom _)) value =
+  shrinkCustom ge env custom value
+structuralShrink _ _ _ _ = []
+
+shrinkElements : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List (Value e) ->
+  <e> List (List (Value e))
+shrinkElements _ _ _ [] = []
+shrinkElements ge env plan (value :: values) =
+  let here = map (prependBefore values) (structuralShrink ge env plan value)
+  here ++ map (prepend value) (shrinkElements ge env plan values)
 
 shrinkPlanValues : GenEnv ->
+  EvalEnv (Value e) ->
   List GenPlan ->
   List (Value e) ->
-  List (List (Value e))
-shrinkPlanValues _ [] _ = []
-shrinkPlanValues _ _ [] = []
-shrinkPlanValues ge (plan :: plans) (value :: values) =
-  map (prependBefore values) (structuralShrink ge plan value)
-    ++ map (prepend value) (shrinkPlanValues ge plans values)
+  <e> List (List (Value e))
+shrinkPlanValues _ _ [] _ = []
+shrinkPlanValues _ _ _ [] = []
+shrinkPlanValues ge env (plan :: plans) (value :: values) =
+  map (prependBefore values) (structuralShrink ge env plan value)
+    ++ map (prepend value) (shrinkPlanValues ge env plans values)
 
-shrinkNominal : GenEnv -> GenPlan -> TypeKey -> Value e -> List (Value e)
-shrinkNominal ge nominal key value = match planDef (genEnvPlan ge) key
+shrinkNominal : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  TypeKey ->
+  Value e ->
+  <e> List (Value e)
+shrinkNominal ge env nominal key value = match planDef (genEnvPlan ge) key
   Ok (PlanDef _ _ _ _ ctors) =>
-    nullaryCtorValues ctors ++ shrinkNominalFields ge nominal ctors value
+    nullaryCtorValues ctors ++ shrinkNominalFields ge env nominal ctors value
   Err _ => []
 
 nullaryCtorValues : List PlanCtor -> List (Value e)
@@ -691,29 +705,30 @@ nullaryCtorValues ((PlanCtor _ runtime []) :: rest) =
 nullaryCtorValues (_ :: rest) = nullaryCtorValues rest
 
 shrinkNominalFields : GenEnv ->
+  EvalEnv (Value e) ->
   GenPlan ->
   List PlanCtor ->
   Value e ->
-  List (Value e)
-shrinkNominalFields ge nominal ctors (VCon runtime values) =
+  <e> List (Value e)
+shrinkNominalFields ge env nominal ctors (VCon runtime values) =
   match planCtorRuntime runtime ctors
     Some ctor => match instantiateCtor (genEnvPlan ge) nominal ctor
       Ok fields =>
         map
           (vs => VCon runtime vs)
-          (shrinkPlanValues ge (fieldPlans fields) values)
+          (shrinkPlanValues ge env (fieldPlans fields) values)
       Err _ => []
     None => []
-shrinkNominalFields ge nominal ctors (VRecord runtime fields) =
+shrinkNominalFields ge env nominal ctors (VRecord runtime fields) =
   match planCtorRuntime runtime ctors
     Some ctor => match instantiateCtor (genEnvPlan ge) nominal ctor
       Ok plans =>
         map
           (vs => VRecord runtime (zipNames (fieldNames fields) vs))
-          (shrinkPlanValues ge (fieldPlans plans) (fieldValues fields))
+          (shrinkPlanValues ge env (fieldPlans plans) (fieldValues fields))
       Err _ => []
     None => []
-shrinkNominalFields _ _ _ _ = []
+shrinkNominalFields _ _ _ _ _ = []
 
 planCtorRuntime : String -> List PlanCtor -> Option PlanCtor
 planCtorRuntime _ [] = None
@@ -1051,13 +1066,13 @@ runAllPlannedPropRequestsResults : String ->
   List PlanModule ->
   List PropRequest ->
   List (String, Int) ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List Decl ->
   <e> List PropResult
 runAllPlannedPropRequestsResults root modules requests propLines evalEnv program =
   match buildPlanEnvModules root modules
     Ok planEnv =>
-      runPropRequests
+      runPropRequestsInEnv
         requests
         propLines
         (buildGenEnvWithPlan (runtimeModuleDecls modules) planEnv)
@@ -1119,30 +1134,27 @@ runPreparedPropRequestsResults : PlanEnv ->
   List PropHelper ->
   List PreparedPropRequest ->
   List (String, Int) ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List Decl ->
   <e> List PropResult
 runPreparedPropRequestsResults planEnv helpers rows propLines evalEnv runtimeDecls =
-  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
   runPreparedRows
     (buildGenEnvWithHelpers runtimeDecls planEnv helpers)
     rows
     propLines
     evalEnv
-    rootEnv
 
 runPreparedRows : GenEnv ->
   List PreparedPropRequest ->
   List (String, Int) ->
-  List (String, Value e) ->
   EvalEnv (Value e) ->
   <e> List PropResult
-runPreparedRows _ [] _ _ _ = []
-runPreparedRows genEnv ((PreparedResult result) :: rest) propLines evalEnv rootEnv =
-  result :: runPreparedRows genEnv rest propLines evalEnv rootEnv
-runPreparedRows genEnv ((PreparedRun (PropRequest name seed cases) (DProp _ _ params body) plans) :: rest) propLines evalEnv rootEnv =
+runPreparedRows _ [] _ _ = []
+runPreparedRows genEnv ((PreparedResult result) :: rest) propLines evalEnv =
+  result :: runPreparedRows genEnv rest propLines evalEnv
+runPreparedRows genEnv ((PreparedRun (PropRequest name seed cases) (DProp _ _ params body) plans) :: rest) propLines evalEnv =
   let _ = seedPropRng seed
-  (match helperFailure genEnv evalEnv plans
+  (match helperFailure genEnv plans
       Some detail => runtimeResult name seed cases detail
       None =>
         let _ = beginCustomPropStream seed
@@ -1153,10 +1165,10 @@ runPreparedRows genEnv ((PreparedRun (PropRequest name seed cases) (DProp _ _ pa
           seed
           (lineOfPropName name propLines)
           name
-          (findFailurePlanned genEnv rootEnv params plans body cases 1))
-    :: runPreparedRows genEnv rest propLines evalEnv rootEnv
-runPreparedRows genEnv (_ :: rest) propLines evalEnv rootEnv =
-  runPreparedRows genEnv rest propLines evalEnv rootEnv
+          (findFailurePlanned genEnv evalEnv params plans body cases 1))
+    :: runPreparedRows genEnv rest propLines evalEnv
+runPreparedRows genEnv (_ :: rest) propLines evalEnv =
+  runPreparedRows genEnv rest propLines evalEnv
 
 export
 runAllPlannedPropRequestsWithHelpersResults : String ->
@@ -1164,13 +1176,13 @@ runAllPlannedPropRequestsWithHelpersResults : String ->
   List PropHelper ->
   List PropRequest ->
   List (String, Int) ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List Decl ->
   <e> List PropResult
 runAllPlannedPropRequestsWithHelpersResults root modules helpers requests propLines evalEnv program =
   match buildPlanEnvModules root modules
     Ok planEnv =>
-      runPropRequests
+      runPropRequestsInEnv
         requests
         propLines
         (buildGenEnvWithHelpers (runtimeModuleDecls modules) planEnv helpers)
@@ -1203,6 +1215,15 @@ runPropRequests requests propLines genEnv evalEnv props =
     evalEnv
     rootEnv
     props
+
+runPropRequestsInEnv : List PropRequest ->
+  List (String, Int) ->
+  GenEnv ->
+  EvalEnv (Value e) ->
+  List Decl ->
+  <e> List PropResult
+runPropRequestsInEnv requests propLines genEnv rootEnv props =
+  runPropRequestsChecked requests requests propLines genEnv [] rootEnv props
 
 runPropRequestsChecked : List PropRequest ->
   List PropRequest ->
@@ -1265,7 +1286,7 @@ runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv 
       [DProp _ _ params body] =>
         match planPropParams (genEnvPlan genEnv) name params
           Err e => capabilityResult name seed cases e
-          Ok plans => match helperFailure genEnv evalEnv plans
+          Ok plans => match helperFailure genEnv plans
             Some detail => runtimeResult name seed cases detail
             None =>
               let _ = beginCustomPropStream seed
@@ -1320,7 +1341,7 @@ runEachResult cases propLines genEnv evalEnv rootEnv ((DProp _ name params body)
   let seedAtStart = !propRngStateRef
   (match planPropParams (genEnvPlan genEnv) name params
       Err e => capabilityResult name seedAtStart cases e
-      Ok plans => match helperFailure genEnv evalEnv plans
+      Ok plans => match helperFailure genEnv plans
         Some detail => runtimeResult name seedAtStart cases detail
         None =>
           let _ = beginCustomPropStream seedAtStart
@@ -1498,7 +1519,7 @@ renderNominalValue env nominal key value = match planDef env key
 nominalVisible : PlanEnv -> String -> PlanVisibility -> Bool
 nominalVisible _ _ PlanPublicCtors = True
 nominalVisible (PlanEnv root _ _ _ _) owner PlanLocal = owner == root
-nominalVisible _ _ PlanAbstract = False
+nominalVisible (PlanEnv root _ _ _ _) owner PlanAbstract = owner == root
 
 hiddenType : TypeKey -> String
 hiddenType (TypeKey name _) = "<" ++ name ++ ">"

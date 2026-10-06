@@ -311,8 +311,7 @@ visibilityOf VisPublic = PlanPublicCtors
 visibilityOf VisAbstract = PlanAbstract
 
 newtypeVisibility : Bool -> PlanVisibility
-newtypeVisibility True = PlanAbstract
-newtypeVisibility False = PlanLocal
+newtypeVisibility _ = PlanLocal
 
 ownerOf : TyConOrigin -> String
 ownerOf (OriginModule m) = m
@@ -463,7 +462,7 @@ planNominal (PlanEnv root defs arbs bad aliases) propName param key args =
               (rebuildTy key args)
               PEOpaqueNominal
               "no visible data declaration")
-        Some (PlanDef _ _ _ PlanAbstract _) =>
+        Some (PlanDef _ owner _ PlanAbstract _) if owner /= root =>
           Err (PlanError propName param (rebuildTy key args) PEOpaqueNominal "")
         Some (PlanDef _ owner _ PlanLocal _) if owner /= root =>
           Err
@@ -512,7 +511,7 @@ exactArbs carrier ((arb@(ArbPlan pattern _)) :: rest)
 matchingArbs : Ty -> List ArbPlan -> List ArbPlan
 matchingArbs _ [] = []
 matchingArbs carrier ((arb@(ArbPlan pattern _)) :: rest) =
-  match matchArbCarrier pattern carrier []
+  match matchArbCarrier pattern carrier omEmpty
     Some _ => arb :: matchingArbs carrier rest
     None => matchingArbs carrier rest
 
@@ -520,14 +519,14 @@ matchingArbs carrier ((arb@(ArbPlan pattern _)) :: rest) =
 -- compiler's canonical route word.  This accepts `Tree a` for `Tree Int` and
 -- rejects `Pair a a` for `Pair Int Bool`; it never confuses same-spelled
 -- nominal heads from separate modules.
-matchArbCarrier : Ty -> Ty -> List (String, Ty) -> Option (List (String, Ty))
-matchArbCarrier (TyVar name) actual bindings = match lookupAssoc name bindings
+matchArbCarrier : Ty -> Ty -> OrdMap Ty -> Option (OrdMap Ty)
+matchArbCarrier (TyVar name) actual bindings = match omLookup name bindings
   Some bound =>
     if arbCarrierWord bound == arbCarrierWord actual then
       Some bindings
     else
       None
-  None => Some ((name, actual) :: bindings)
+  None => Some (omInsert name actual bindings)
 matchArbCarrier (TyApp pf pa) (TyApp af aa) bindings =
   match matchArbCarrier pf af bindings
     Some next => matchArbCarrier pa aa next
@@ -540,10 +539,7 @@ matchArbCarrier pattern actual bindings =
   else
     None
 
-matchArbCarriers : List Ty ->
-  List Ty ->
-  List (String, Ty) ->
-  Option (List (String, Ty))
+matchArbCarriers : List Ty -> List Ty -> OrdMap Ty -> Option (OrdMap Ty)
 matchArbCarriers [] [] bindings = Some bindings
 matchArbCarriers (p :: ps) (a :: restActuals) bindings =
   match matchArbCarrier p a bindings
