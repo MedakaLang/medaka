@@ -1,1 +1,1 @@
-Extern 'len' must not have a definition body
+extern `len` must not have a body

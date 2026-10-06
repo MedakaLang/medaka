@@ -13,7 +13,7 @@ fa = [10, 20, 30].[1]
 -- List receiver (forced by cons) -> element.
 fl x a = let _ = (x :: a) in a.[0]
 # TYPES
-TYPE ERROR: Unbound variable: index
-TYPE ERROR: Unbound variable: index
-TYPE ERROR: Unbound variable: index
-TYPE ERROR: Unbound variable: index
+TYPE ERROR: unbound variable `index`
+TYPE ERROR: unbound variable `index`
+TYPE ERROR: unbound variable `index`
+TYPE ERROR: unbound variable `index`

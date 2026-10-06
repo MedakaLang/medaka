@@ -1,1 +1,1 @@
-TYPE ERROR: Effectful value used where <FileRead "/etc/host"> is allowed, but it performs <FileRead "/etc/hostname">
+TYPE ERROR: performs <FileRead "/etc/hostname"> where only <FileRead "/etc/host"> is allowed

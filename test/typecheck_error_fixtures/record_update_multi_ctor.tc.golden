@@ -1,1 +1,1 @@
-TYPE ERROR: Record update of 'x' is not supported on 'T': it has more than one constructor (A, B), and the type does not say which one the value holds. Match on the constructor and build the new value in its arm, e.g. 'A { ... } => A { x = ... }'
+TYPE ERROR: cannot update field `x` on `T`, which has more than one constructor (`A`, `B`); match on the constructor and rebuild the value in its arm, as in `A { ... } => A { x = ... }`

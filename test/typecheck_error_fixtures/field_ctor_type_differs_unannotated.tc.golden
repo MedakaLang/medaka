@@ -1,1 +1,1 @@
-TYPE ERROR: Field 'x' has different types in the constructors of 'T': it is 'Int' in 'A' but 'String' in 'B'. A 'T' value carries no constructor tag, so '.x' cannot be typed; match on the constructor instead
+TYPE ERROR: field `x` has different types in the constructors of `T`: it is `Int` in `A` but `String` in `B`; match on the constructor instead of using `.x`

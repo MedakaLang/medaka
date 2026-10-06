@@ -254,7 +254,7 @@ cli_flag_verdict() {
 # consumers.
 cli_rejects_as_unknown() {
   printf '%s' "$1" | grep -qi \
-    "unknown flag: $2\|unrecognized flag '$2'\|unknown option '$2'\|unknown argument '$2'\|unknown codemod '$2'\|unknown subcommand '$2'"
+    "unknown flag: $2\|unrecognized flag '$2'\|unknown option '$2'\|unknown argument '$2'\|unknown codemod \`$2\`\|unknown subcommand \`$2\`"
 }
 
 # ── cli_crossref_pairs ───────────────────────────────────────────────────────

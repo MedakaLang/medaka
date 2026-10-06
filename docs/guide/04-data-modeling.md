@@ -236,9 +236,8 @@ main = println (area (Triangle 3.0 4.0))
 Checking that program reports:
 
 ```
-warning: shape.mdk:6:14: non-exhaustive match of 'Shape'. Missing case:
-'Triangle _ _'; add a 'Triangle _ _ => …' arm, or a '_' wildcard arm to catch
-the rest.
+warning: shape.mdk:6:14: non-exhaustive match on `Shape`: missing `Triangle _ _`; add a
+`Triangle _ _ => ...` arm or a `_` wildcard
 ```
 
 This is what makes adding a constructor to a type safe. Add `Triangle` to `Shape`,

@@ -1,1 +1,1 @@
-TYPE ERROR: 'f' is bound by 'let rec' but its right-hand side is not a function
+TYPE ERROR: `f` is bound by `let rec` but its right-hand side is not a function

@@ -1,11 +1,11 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/tuple_call_syntax.mdk:2:16: No impl of Num for (Int, Int)
+error: test/error_quality_fixtures/typecheck/tuple_call_syntax.mdk:2:16: no impl of Num for (Int, Int)
   |
 2 | main = println (add(1, 2))
   |                 ^
-error: test/error_quality_fixtures/typecheck/tuple_call_syntax.mdk:2:7: No impl of Display for ((Int, Int) -> (Int, Int))
+error: test/error_quality_fixtures/typecheck/tuple_call_syntax.mdk:2:7: no impl of Display for ((Int, Int) -> (Int, Int))
   |
 2 | main = println (add(1, 2))
   |        ^

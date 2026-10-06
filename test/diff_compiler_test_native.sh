@@ -282,7 +282,7 @@ st_rc=$?
 checked=$((checked + 1))
 if [ "$st_rc" -eq 0 ]; then
   bad "exempt_illtyped.mdk: 'medaka test --native' exited 0 — the explicit Bool/Int mismatch must fail the probe build (#2679). See $st_out"
-elif ! grep -qF 'Type mismatch: Bool vs Int' "$st_out"; then
+elif ! grep -qF 'type mismatch: Bool vs Int' "$st_out"; then
   bad "exempt_illtyped.mdk: 'medaka test --native' failed without naming the type error the emitter recorded — the failure must carry the diagnostic, not just a nonzero code. See $st_out"
 else
   note "ok   exempt_illtyped.mdk: the native probe build is strict — emitter-recorded type errors fail the run and are named"

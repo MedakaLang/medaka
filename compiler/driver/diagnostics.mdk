@@ -168,7 +168,7 @@ export
 resErrorHelpFix : ResError -> (Option String, Option Fix)
 resErrorHelpFix e = match resErrorDidYouMean e
   Some (bad, sug) =>
-    let help = Some "did you mean '\{sug}'?"
+    let help = Some "did you mean `\{sug}`?"
     let fix = match resErrorLoc e
       Some l => didYouMeanFix e bad sug l
       None => None
@@ -454,28 +454,29 @@ parseErrCode : String -> String
 parseErrCode msg
   | startsWith "unterminated string" msg = "L-UNTERMINATED-STRING"
   | startsWith "unterminated block" msg = "L-UNTERMINATED-COMMENT"
+  | startsWith "unterminated character" msg = "L-BAD-CHAR-LITERAL"
   | startsWith "invalid escape" msg = "L-BAD-ESCAPE"
   | startsWith "unicode escape" msg = "L-BAD-UNICODE-ESCAPE"
   | startsWith "bare unicode escape" msg = "L-BARE-UNICODE-ESCAPE"
   | startsWith "character literal" msg = "L-BAD-CHAR-LITERAL"
-  | startsWith "unexpected '\\'" msg = "L-HS-LAMBDA"
-  | startsWith "Medaka has no '$'" msg = "L-HS-DOLLAR"
+  | startsWith "Medaka has no `\\x" msg = "L-HS-LAMBDA"
+  | startsWith "Medaka has no `$`" msg = "L-HS-DOLLAR"
   | startsWith "unexpected character" msg = "L-BAD-CHAR"
   | startsWith "integer literal too large" msg = "L-INT-OVERFLOW"
   | startsWith "float literal out of range" msg = "L-FLOAT-OVERFLOW"
   | startsWith "malformed radix literal" msg = "L-MALFORMED-RADIX"
   | startsWith "malformed float literal" msg = "L-MALFORMED-FLOAT"
   | startsWith "unexpected end of input" msg = "P-UNEXPECTED-EOF"
-  | startsWith "unexpected '!='" msg = "P-BAD-NEQ"
-  | startsWith "Medaka has no 'case" msg = "P-HS-CASE"
-  | startsWith "Medaka's `match` has no `with`" msg = "P-OCAML-MATCH-WITH"
+  | startsWith "unexpected `!=`" msg = "P-BAD-NEQ"
+  | startsWith "Medaka has no `case" msg = "P-HS-CASE"
+  | startsWith "Medaka has no `match ... with`" msg = "P-OCAML-MATCH-WITH"
   | startsWith "Medaka has no `**`" msg = "P-NO-POW-OPERATOR"
-  | startsWith "Use '::' for List cons" msg = "P-HS-SIG"
-  | startsWith "Medaka has no '/* " msg = "L-BLOCKCOMMENT"
-  | startsWith "unexpected '{'. Medaka has no brace" msg = "P-BRACE-BLOCK"
-  | startsWith "Medaka has no 'for'" msg = "P-FOR-WHILE"
-  | startsWith "Medaka has no 'while'" msg = "P-FOR-WHILE"
-  | startsWith "Medaka has no 'def'" msg = "P-DEF-KEYWORD"
+  | startsWith "`::` is the list cons operator" msg = "P-HS-SIG"
+  | startsWith "Medaka has no `/* " msg = "L-BLOCKCOMMENT"
+  | startsWith "Medaka has no `{ ... }` blocks" msg = "P-BRACE-BLOCK"
+  | startsWith "Medaka has no `for`" msg = "P-FOR-WHILE"
+  | startsWith "Medaka has no `while`" msg = "P-FOR-WHILE"
+  | startsWith "Medaka has no `def`" msg = "P-DEF-KEYWORD"
   | startsWith "Medaka has no statement terminator" msg = "L-SEMICOLON"
   | startsWith "missing `where` on this " msg = "P-MISSING-WHERE"
   | startsWith "a `where` block must start on the next line" msg =
@@ -489,7 +490,7 @@ parseErrCode msg
 
 doEndsInBindingHelp : String
 doEndsInBindingHelp =
-  "end the block with the expression whose value it should have, such as `pure x` or the call that produces the result; a binding (`let` or `x <- e`) only names a value for the statements after it"
+  "end the block with the expression whose value it should have, such as `pure x`"
 
 -- Build the (help, fix) pair for the two parse-error hints with a clean,
 -- mechanical single-token fix (the Haskell `::`-signature carveout and the
@@ -503,12 +504,12 @@ doEndsInBindingHelp =
 export
 parseErrHelpFix : String -> Loc -> (Option String, Option Fix)
 parseErrHelpFix msg (Loc f sl sc el ec)
-  | startsWith "Use '::' for List cons" msg = (
-    Some "replace '::' with ':' for a type signature",
+  | startsWith "`::` is the list cons operator" msg = (
+    Some "replace `::` with `:`",
     Some (Fix (Loc f sl sc sl (sc + 2)) ":"),
   )
-  | startsWith "unexpected '!='" msg = (
-    Some "replace '!=' with '/=' for not-equal",
+  | startsWith "unexpected `!=`" msg = (
+    Some "replace `!=` with `/=`",
     Some (Fix (Loc f sl sc sl (sc + 2)) "/="),
   )
   | startsWith intMinLiteralMsg msg = (Some intMinLiteralHelp, None)
@@ -526,18 +527,15 @@ parseErrHelpFix msg (Loc f sl sc el ec)
   -- malformed-radix/malformed-float hints use just above — no bespoke
   -- fix-building needed.
   | startsWith "bare unicode escape" msg = (
-    Some
-      "Medaka's unicode escape is braced (`\\u{XXXX}`) — there is no bare `\\uXXXX` form",
+    Some "write the unicode escape braced, `\\u{XXXX}`",
     map (oldNewFixOf f sl sc) (twoBacktickWords msg),
   )
   | startsWith "malformed radix literal" msg = (
-    Some
-      "the digit separator '_' can only appear BETWEEN digits, never immediately after the base prefix ('0x'/'0b'/'0o')",
+    Some "the digit separator `_` may only appear between digits",
     map (oldNewFixOf f sl sc) (twoBacktickWords msg),
   )
   | startsWith "malformed float literal" msg = (
-    Some
-      "Medaka requires a digit on both sides of the decimal point in a float literal",
+    Some "a float literal needs a digit on both sides of the decimal point",
     map (oldNewFixOf f sl sc) (twoBacktickWords msg),
   )
   -- A reserved keyword used as a name: rename by appending `_` (any reserved word
@@ -547,7 +545,7 @@ parseErrHelpFix msg (Loc f sl sc el ec)
   | isReservedKwMsg msg = match wordBetweenBackticks msg
     Some w => (
       Some
-        "rename it — appending `_` (e.g. `\{w}_`) makes any reserved word a valid identifier",
+        "rename it to `\{w}_`; any reserved word plus `_` is a valid identifier",
       Some (Fix (Loc f sl sc sl (sc + stringLength w)) "\{w}_"),
     )
     None => (None, None)
@@ -556,9 +554,8 @@ parseErrHelpFix msg (Loc f sl sc el ec)
   -- itself (captured via `getPos` before it's consumed), so `sc` already
   -- points at its first char — the fix is a clean single-token deletion, the
   -- same shape as the reserved-keyword rename above.
-  | startsWith "`public` only applies to `data` declarations" msg = (
-    Some
-      "`public` only makes a `data` export its constructors too; a function or value is exported with plain `export` — drop `public` here",
+  | startsWith "`public` applies only to `data` declarations" msg = (
+    Some "drop `public`; a function or value is exported with plain `export`",
     Some (Fix (Loc f sl sc sl (sc + stringLength "public")) ""),
   )
   -- Missing `where` on an `interface`/`impl` header (#1160), and a member
@@ -571,27 +568,25 @@ parseErrHelpFix msg (Loc f sl sc el ec)
   -- worse than none: an agent applies it verbatim.
   | startsWith "missing `where` on this " msg = (
     Some
-      "`interface` and `impl` headers end with `where`, and their members are indented on the lines below — a header with no `where` swallows the next line as another type argument, which is why the error the parser used to report landed there",
+      "end the header with `where`; without it the next line is read as another type argument",
     None,
   )
   | startsWith "a `do` block must end" msg = (Some doEndsInBindingHelp, None)
   | startsWith "a `defer` block must end" msg = (Some doEndsInBindingHelp, None)
   | startsWith "a `where` block must start on the next line" msg = (
     Some
-      "`where` opens a block only when it is the LAST token on its line (docs/spec/LAYOUT-SEMANTICS.md §7.1); anything written after it on the same line is not in the block",
+      "`where` opens a block only when it ends the line; move the member to the next line",
     None,
   )
   -- Guard-keyword confusion (#591): the parser anchors each diagnostic AT the
   -- offending keyword (`|` / `if`), so `sc` is its first char — the fix is a
   -- clean single-token swap to the other spelling.
   | startsWith "a match-arm guard uses" msg = (
-    Some
-      "match-arm guards use `if`; replace `|` with `if` (or move this clause to an equation with `|` guards)",
+    Some "replace `|` with `if`",
     Some (Fix (Loc f sl sc sl (sc + 1)) "if"),
   )
   | startsWith "an equation guard uses" msg = (
-    Some
-      "equation guards use `|`; replace `if` with `|` (match-arm guards, by contrast, use `if`)",
+    Some "replace `if` with `|`",
     Some (Fix (Loc f sl sc sl (sc + 2)) "|"),
   )
   | otherwise = (None, None)
@@ -1103,20 +1098,15 @@ preludeShadowWarnToDiag modName (_, mname, loc) =
     SevWarning
     "W-PRELUDE-METHOD-SHADOW"
     (stringConcat [
-      "interface method '",
+      "interface method `",
       mname,
-      "' shadows the prelude function '",
+      "` shadows the prelude function `",
       mname,
-      "', which is no longer reachable by its bare name anywhere in ",
+      "`, which is no longer reachable by its bare name in ",
       moduleScopeText modName,
     ])
     loc
-    (Some
-      (stringConcat [
-        "rename the interface method, or call the prelude's '", mname,
-        "' from a module that does not declare this interface and re-export it",
-        " under another name"
-      ]))
+    (Some (stringConcat ["rename the interface method `", mname, "`"]))
     None
 
 -- #2738 / `SHADOW-SEMANTICS.md` S1-PRELUDE (b)'s register, one direction over:
@@ -1138,28 +1128,26 @@ importShadowWarnToDiag modName (name, iface, sty, mty, loc) =
     SevWarning
     "W-IMPORT-METHOD-SHADOW"
     (stringConcat [
-      "imported '",
+      "imported `",
       name,
       " : ",
       importedSchemeText sty,
-      "' is shadowed in ",
+      "` is shadowed in ",
       moduleScopeText modName,
-      " by interface method '",
+      " by interface method `",
       iface,
       ".",
       name,
       " : ",
       ppTy mty,
-      "'; the two types differ, so an occurrence at a receiver with an impl of '",
+      "`; at a receiver with an impl of `",
       iface,
-      "' means the method, not the imported function",
+      "` the name means the method",
     ])
     (Some loc)
     (Some
       (stringConcat [
-        "import it under another name (`import … {", name, " as ", name,
-        "'}`), or drop the import of '", iface,
-        "' if the method is not the one you meant"
+        "import it under another name, `import m.{", name, " as ", name, "2}`"
       ]))
     None
 
@@ -1175,7 +1163,7 @@ importedSchemeText None = "no declared signature"
 -- does not (an inline source, the LSP live buffer) — never "module ''".
 moduleScopeText : String -> String
 moduleScopeText "" = "this module"
-moduleScopeText m = stringConcat ["module '", m, "'"]
+moduleScopeText m = stringConcat ["module `", m, "`"]
 
 exhaustWarnCode : String -> String
 exhaustWarnCode msg
@@ -2437,9 +2425,7 @@ residualOrGeneric pathMap target residual = match renderTcDiags pathMap residual
   [] =>
     "error: type error in "
       ++ target
-      ++ ", detected during elaboration (the run/build type pass); no located"
-      ++ " diagnostic is available for it, and `medaka check` may not report this"
-      ++ " program at all — see issue #1812"
+      ++ " detected during elaboration; no located diagnostic is available for it"
   rendered => joinNl rendered
 
 export
@@ -2654,12 +2640,11 @@ mainBodyLoc _ = None
 export
 mainArityMsg : String
 mainArityMsg =
-  "'main' must be a value, not a function. Write 'main = …', not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and nothing ever calls it"
+  "`main` must be a value, not a function; write `main = ...`, not `main () = ...`"
 
 export
 mainMissingMsg : String
-mainMissingMsg =
-  "no 'main' found. Add a top-level 'main = …' (e.g. 'main = println \"hi\"')"
+mainMissingMsg = "no `main` in this file; add `main = ...`"
 
 -- The function shape (`main () = …` / `main x = …`) needs no type info, so it
 -- is safe to call before (or without) any typecheck.
@@ -2715,7 +2700,7 @@ mainImportedMsg modName (UseMember origin _ _ alias) =
   let written = match alias
     Some a => "\{origin} as \{a}"
     None => origin
-  "'main' must be defined in the entry file; 'import \{modName}.{\{written}}' does not count. Add a top-level 'main = …' to this file"
+  "`main` must be defined in the entry file, not imported by `import \{modName}.{\{written}}`; add `main = ...` to this file"
 
 importedMainMember : List Decl -> Option (String, UseMember)
 importedMainMember [] = None

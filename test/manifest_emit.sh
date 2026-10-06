@@ -216,7 +216,7 @@ assert_refuse "manifest-import-illtyped" \
   "$ROOT/test/check_policy_fixtures/policy_xmod_bad_main.mdk" "transform"
 bad_err="$("$NATIVE" manifest --fn transform \
   "$ROOT/test/check_policy_fixtures/policy_xmod_bad_main.mdk" 2>&1 >/dev/null)"
-if printf '%s' "$bad_err" | grep -qF "policy_xmod_bad_helper.mdk:4:10: No impl of Num for String"; then
+if printf '%s' "$bad_err" | grep -qF "policy_xmod_bad_helper.mdk:4:10: no impl of Num for String"; then
   ok_case "manifest-import-illtyped-located (error names the import's file and line)"
 else
   fail_case "manifest-import-illtyped-located" "stderr: $bad_err"

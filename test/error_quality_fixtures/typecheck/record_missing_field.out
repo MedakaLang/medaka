@@ -1,11 +1,11 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/record_missing_field.mdk:2:23: Missing field 'age' in construction of record 'Person'
+error: test/error_quality_fixtures/typecheck/record_missing_field.mdk:2:23: missing field `age` in `Person`
   |
 2 | main = println (debug (Person { name = "Alice" }))
   |                        ^
-error: test/error_quality_fixtures/typecheck/record_missing_field.mdk:2:16: No impl of Debug for Person; add 'deriving Debug' to the 'Person' type, or write an 'impl Debug Person'.
+error: test/error_quality_fixtures/typecheck/record_missing_field.mdk:2:16: no impl of Debug for Person; add `deriving Debug` to `Person` or write `impl Debug Person`
   |
 2 | main = println (debug (Person { name = "Alice" }))
   |                 ^

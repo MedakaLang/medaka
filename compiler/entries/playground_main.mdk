@@ -449,7 +449,7 @@ mainHeadLoc body =
 
 mainArityMsg : String
 mainArityMsg =
-  "'main' must be a value, not a function. Write 'main = …', not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and nothing ever calls it"
+  "`main` must be a value, not a function; write `main = ...`, not `main () = ...`"
 
 -- Some d ⇒ block emit with a located ERROR; None ⇒ a valid nullary main (or
 -- any other shape typecheck already accepts), safe to fall through to emit.

@@ -1,1 +1,1 @@
-TYPE ERROR: Effectful value used where <> is allowed, but it performs <IO>
+TYPE ERROR: performs <IO> where only <> is allowed

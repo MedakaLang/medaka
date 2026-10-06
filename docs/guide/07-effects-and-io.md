@@ -63,7 +63,7 @@ effects, and the compiler holds it to that. Add a `println` to its body and chec
 fails:
 
 ```
-error: probe.mdk:3:10: Effectful value used where <> is allowed, but it performs <Stdout>
+error: probe.mdk:3:10: performs <Stdout> where only <> is allowed
   |
 3 |   println "doubling"
   |           ^
@@ -143,9 +143,8 @@ here. Medaka has `do`, and chapter 8 is about it, but it is for chaining `Option
 a `do` block is an error:
 
 ```
-error: probe.mdk:3:12: this `do` block needs a Thenable value here (like `Option` or
-`Result`), but got Unit. If Unit isn't itself monadic, use 'let' instead of '<-' to
-bind it.
+error: probe.mdk:3:12: this `do` block needs a `Thenable` value here, such as `Option` or
+`Result`, but got `Unit`; bind a plain `Unit` with `let` instead of `<-`
   |
 3 |     println "step one"
   |             ^

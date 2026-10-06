@@ -1,1 +1,1 @@
-TYPE ERROR: Recursive type alias `R`. Type aliases cannot be recursive or cyclic
+TYPE ERROR: type alias `R` is recursive; a type alias cannot refer to itself, so declare a `data` type instead

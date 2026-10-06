@@ -1,1 +1,1 @@
-{"files":[{"file":"<fixture>","diagnostics":[{"code":"P-PARSE","kind":"parse","message":"`test` names must be plain string literals; string interpolation is not allowed in a `test` name","range":{"end":{"character":1,"line":4},"start":{"character":0,"line":4}},"severity":1,"source":"medaka"}]}]}
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"P-PARSE","kind":"parse","message":"a `test` name must be a plain string literal, not an interpolated string","range":{"end":{"character":1,"line":4},"start":{"character":0,"line":4}},"severity":1,"source":"medaka"}]}]}

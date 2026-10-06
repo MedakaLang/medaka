@@ -1,1 +1,1 @@
-TYPE ERROR: Cannot construct infinite type involving a
+TYPE ERROR: cannot construct an infinite type involving `a`

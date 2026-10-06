@@ -7,4 +7,4 @@ f a =
   x <- a
   x
 # TYPES
-TYPE ERROR: `<-` bind is only valid inside a `do` block. For IO sequencing use a bare indented block without `<-`
+TYPE ERROR: `<-` is only valid inside a `do` block; outside one, bind the value with `let x = ...`

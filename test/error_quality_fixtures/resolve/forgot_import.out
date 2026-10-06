@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/resolve/forgot_import.mdk:1:23: Unbound variable: fromList. (Did you forget to 'import array.{fromList}', 'import hash_map.{fromList}', 'import hash_set.{fromList}', 'import map.{fromList}', 'import nonempty.{fromList}', 'import set.{fromList}' or 'import vector.{fromList}'?)
+error: test/error_quality_fixtures/resolve/forgot_import.mdk:1:23: unbound variable `fromList`; add `import array.{fromList}`, `import hash_map.{fromList}`, `import hash_set.{fromList}`, `import map.{fromList}`, `import nonempty.{fromList}`, `import set.{fromList}` or `import vector.{fromList}`
   |
 1 | main = println (debug (fromList [1, 2, 3]))
   |                        ^

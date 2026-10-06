@@ -356,7 +356,7 @@ so:
 
 ```
 $ medaka check paths.mdk
-error: paths.mdk:2:25: Effectful value used where <> is allowed, but it performs <FileRead "data/blocks/*">
+error: paths.mdk:2:25: performs <FileRead "data/blocks/*"> where only <> is allowed
   |
 2 | loadBlock cid = readFile ("data/blocks/" ++ cid)
   |                          ^

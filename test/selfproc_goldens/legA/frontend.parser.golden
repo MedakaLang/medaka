@@ -157,6 +157,7 @@ expectGo : Token -> Token -> ParserE <> Unit
 expectMinus : ParserE <> Unit
 expectMinusGo : Token -> ParserE <> Unit
 expectTok : Token -> ParserE <> Unit
+expectedTokenMsg : Token -> String
 exprStmtFor : Int -> Expr -> Token -> ParserE <> (List DoStmt)
 exprToParams : Expr -> List Pat
 exprToPat : Expr -> Pat
@@ -642,6 +643,8 @@ tyQualTailFor : Ty -> Token -> Token -> ParserE <> Ty
 tyTupleOrSingle : List Ty -> Ty
 unaryFor : Token -> ParserE <> Expr
 unexpectedLeftoverMsg : String -> Array Token -> Array Int -> Int -> Int -> String
+unexpectedTokenMsg : Token -> String
+unexpectedTokenText : Token -> String
 unitStarts : Unit -> List (Int, Int, Int)
 unitStartsRef : Ref (List (Int, Int, Int))
 unrecordSoleStmt : List DoStmt -> ParserE <> Unit

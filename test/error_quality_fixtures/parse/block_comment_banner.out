@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/parse/block_comment_banner.mdk:1:0: Medaka has no '/* … */' block comments. Use '{- … -}' (block) or '--' (line)
+error: test/error_quality_fixtures/parse/block_comment_banner.mdk:1:0: Medaka has no `/* ... */` comments; write `{- ... -}` or `--`
   |
 1 | /*****************
   | ^

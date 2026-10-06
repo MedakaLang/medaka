@@ -1,1 +1,1 @@
-TYPE ERROR: Effectful value used where <Env, FileRead "config/*"> is allowed, but it performs <FileRead>
+TYPE ERROR: performs <FileRead> where only <Env, FileRead "config/*"> is allowed

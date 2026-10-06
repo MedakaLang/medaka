@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/parse/ocaml_match_with.mdk:2:10: Medaka's `match` has no `with`. Write `match e` and put the `pattern => body` arms on indented lines below
+error: test/error_quality_fixtures/parse/ocaml_match_with.mdk:2:10: Medaka has no `match ... with`; write `match e` with indented `pattern => body` arms
   |
 2 |   match n with
   |           ^

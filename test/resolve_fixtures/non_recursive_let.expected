@@ -1,1 +1,1 @@
-'x' is not in scope in its own binding. Non-function `let` is not recursive; write `let rec x = ...` (RHS must be a lambda)
+`x` is not in scope in its own binding: a value `let` is not recursive; write `let rec x = ...` with a lambda on the right
