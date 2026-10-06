@@ -1,6 +1,12 @@
 import driver.build_cmd.{makeTempDir, cleanupTempDir}
 import test.{Expectation, expectEqual, expectTrue, fail}
-import tools.native_props.{runNativePlannedPropRequests}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import frontend.ast.{Decl, Ty(..), TyConOrigin(..), mapTyInDecl}
+import string.{contains}
+import tools.native_props.{
+  runNativePlannedPropRequests, renderNativePlannedProbe
+}
 import tools.prop_plan.{PlanModule(..)}
 import tools.prop_runner.{
   PropRequest(..), propResultName, propResultSeed, propResultCases,
@@ -38,15 +44,11 @@ rows target =
       propResultPassed r,
       propResultDetail r,
     ))
-    (runNativePlannedPropRequests
-      target
-      source
-      [PlanModule "main" [] []]
-      [
-        PropRequest "first" 1 3,
-        PropRequest "second" 2 7,
-        PropRequest "observer" 99 1,
-      ])
+    (runNativePlannedPropRequests target source (nativeModules source) [
+      PropRequest "first" 1 3,
+      PropRequest "second" 2 7,
+      PropRequest "observer" 99 1,
+    ])
 
 test "native requests isolate per-law seeds and budgets in one probe" = withTarget
   (target =>
@@ -60,11 +62,9 @@ test "native requests isolate per-law seeds and budgets in one probe" = withTarg
 
 nonPositiveBudget : String -> <Exec, IO> Expectation
 nonPositiveBudget target =
-  match (runNativePlannedPropRequests
-    target
-    source
-    [PlanModule "main" [] []]
-    [PropRequest "first" 5 0])
+  match (runNativePlannedPropRequests target source (nativeModules source) [
+    PropRequest "first" 5 0,
+  ])
     [r] =>
       let status = match propResultStatus r
         PropErroredResult => True
@@ -82,3 +82,36 @@ nonPositiveBudget target =
 
 test "native requests reject a non-positive case budget" =
   withTarget nonPositiveBudget
+
+rendered : String -> Result String String
+rendered text = renderNativePlannedProbe
+  "/tmp/native_props_render.mdk"
+  text
+  (nativeModules text)
+  [PropRequest "shape" 1 1]
+
+nativeModules : String -> List PlanModule
+nativeModules text =
+  let raw = map stampBuiltinIntDecl (parse text)
+  [PlanModule "main" raw (desugar raw)]
+
+stampBuiltinIntDecl : Decl -> Decl
+stampBuiltinIntDecl decl = fst (mapTyInDecl stampBuiltinInt decl)
+
+stampBuiltinInt : Ty -> (Ty, Bool)
+stampBuiltinInt (t@(TyCon { tyConName = "Int", tyConOrigin = OriginUnresolved })) =
+  (TyCon { t | tyConOrigin = OriginBuiltin }, True)
+stampBuiltinInt ty = (ty, False)
+
+test "native source closes every recursive plan behind parameter-scoped helpers" =
+  let text =
+    "data Tree a = Leaf a | Fork (List (Tree a)) (Tree a)\nprop \"shape\" (left : List (Tree Int)) (right : Tree Int) = left == left && right == right\n"
+  match rendered text
+    Err message => fail message
+    Ok probe =>
+      expectTrue
+        (contains "__np_gen_0_0_node_" probe
+          && contains "__np_gen_0_1_node_" probe
+          && contains "__np_gen_0_0_shrink_" probe
+          && contains "__np_gen_0_1_display_" probe
+          && not (contains "__np_missing_plan" probe))
