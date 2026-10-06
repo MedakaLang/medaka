@@ -2,7 +2,9 @@
 -- known-red pin separately. These tests exercise that boundary directly.
 
 import test.{expectEach, expectEqual, expectFalse, expectTrue}
-import tools.doctest.{ExResult(..)}
+import tools.doctest.{Engine(..), ExResult(..)}
+import tools.test_cmd.{cliGradedTestReportJson}
+import json.{Json, asInt, get}
 import tools.prop_runner.{PropFailureKind(..), PropResult(..), PropStatus(..)}
 import tools.test_pins.{
   PinIndex,
@@ -103,6 +105,36 @@ test "a law false is held while an XPASS and engine error remain failures" =
       "a runtime error cannot hold a false-law pin",
       expectFalse (onlyPropPassed errored),
     ),
+    (
+      "a held raw failure is counted as known-red rather than a pass",
+      expectEqual
+        (Some 0)
+        (summaryInt
+          "passed"
+          (cliGradedTestReportJson
+            "main.mdk"
+            None
+            [EngNative]
+            []
+            held
+            []
+            False)),
+    ),
+    (
+      "the known-red count is separate from raw pass counts",
+      expectEqual
+        (Some 1)
+        (summaryInt
+          "knownRed"
+          (cliGradedTestReportJson
+            "main.mdk"
+            None
+            [EngNative]
+            []
+            held
+            []
+            False)),
+    ),
   ]
 
 test "unit pins require their exact assertion message" =
@@ -148,3 +180,7 @@ onlyTestPassed _ = False
 onlyTestRawStatus : List GradedTest -> String
 onlyTestRawStatus [row] = gradedTestRawStatus row
 onlyTestRawStatus _ = ""
+
+summaryInt : String -> Json -> Option Int
+summaryInt field report =
+  flatMap (summary => flatMap asInt (get field summary)) (get "summary" report)

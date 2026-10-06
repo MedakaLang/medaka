@@ -93,6 +93,7 @@ import tools.doctest.{
 import tools.prop_runner.{
   PropFailureKind(..),
   propResultName,
+  propResultPassed,
   propResultDetail,
   propResultEngine,
   propResultSeed,
@@ -1546,7 +1547,8 @@ allPropsPass (p :: rest) = gradedPropPassed p && allPropsPass rest
 countPassProps : List GradedProp -> Int
 countPassProps [] = 0
 countPassProps (p :: rest) =
-  (if gradedPropPassed p then 1 else 0) + countPassProps rest
+  (if propResultPassed (gradedPropRaw p) && gradedPropPassed p then 1 else 0)
+    + countPassProps rest
 
 countFailProps : List GradedProp -> Int
 countFailProps [] = 0

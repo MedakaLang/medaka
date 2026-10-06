@@ -2739,7 +2739,11 @@ cliPinField (Some detail) = [("pin", JString detail)]
 cliCountPassedGradedProps : List GradedProp -> Int
 cliCountPassedGradedProps [] = 0
 cliCountPassedGradedProps (row :: rest) =
-  (if gradedPropPassed row then 1 else 0) + cliCountPassedGradedProps rest
+  (if propResultPassed (gradedPropRaw row) && gradedPropPassed row then
+      1
+    else
+      0)
+    + cliCountPassedGradedProps rest
 
 cliCountFailedGradedProps : List GradedProp -> Int
 cliCountFailedGradedProps [] = 0
@@ -2749,7 +2753,13 @@ cliCountFailedGradedProps (row :: rest) =
 cliCountPassedGradedTests : List GradedTest -> Int
 cliCountPassedGradedTests [] = 0
 cliCountPassedGradedTests (row :: rest) =
-  (if gradedTestPassed row then 1 else 0) + cliCountPassedGradedTests rest
+  let (_, _, _, raw) = gradedTestRaw row
+  (if rawTestPassed raw && gradedTestPassed row then 1 else 0)
+    + cliCountPassedGradedTests rest
+
+rawTestPassed : ExResult -> Bool
+rawTestPassed (Pass _ _) = True
+rawTestPassed _ = False
 
 cliCountFailedGradedTests : List GradedTest -> Int
 cliCountFailedGradedTests [] = 0
