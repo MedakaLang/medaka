@@ -158,6 +158,7 @@ test: medaka
 	./medaka test compiler/tools/native_probe_printer_test.mdk
 	./medaka test compiler/tools/native_props_acceptance_test.mdk
 	./medaka test compiler/tools/native_props_test.mdk
+	./medaka test compiler/tools/eval_props_test.mdk
 	./medaka test compiler/tools/prop_plan_test.mdk
 	./medaka test compiler/tools/test_pins_test.mdk
 	./medaka test compiler/tools/test_pins_io_test.mdk

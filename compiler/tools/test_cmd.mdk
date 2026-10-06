@@ -148,6 +148,15 @@ import tools.prop_runner.{
   propSeedValue,
 }
 import tools.prop_helpers.{PropHelpers(..), propHelpersForPlans}
+import tools.eval_props.{
+  emitEvalPropRows,
+  decodeEvalPropRows,
+  propResultJson,
+  propFailureKindJson,
+  startEvalPropWorker,
+  takeEvalPropBootstrap,
+}
+import tools.probe_transcript.{firstNonEmptyLine}
 import tools.test_pins.{
   PinIndex,
   PinKind(..),
@@ -219,9 +228,9 @@ import support.util.{
 }
 import support.path.{dirOf, baseOf, joinPath}
 import args.{
-  ArgSpec, Args, spec, switch, value, flag, flagValue, withStrictDash
+  ArgSpec, Args, spec, switch, value, internal, flag, flagValue, withStrictDash
 }
-import json.{Json(..), jObject, jArray}
+import json.{Json(..), jObject, jArray, stringify}
 import tools.lint.{splitLintNames}
 import string.{toInt}
 
@@ -2037,7 +2046,7 @@ propsReportPinned engines pair target tsrc userDecls cases filterOpt file index
         file
         index)
 
-propsReportEngines : List Engine ->
+propsReportEnginesInProcess : List Engine ->
   List Decl ->
   List Decl ->
   List Decl ->
@@ -2051,8 +2060,8 @@ propsReportEngines : List Engine ->
   String ->
   PinIndex ->
   <IO> List PropResult
-propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ = []
-propsReportEngines engines runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+propsReportEnginesInProcess [] _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEnginesInProcess engines runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
   let modules = planModules rawCoreM coreM rawM modsM
   let root = rootPlanModuleId rawM target
   let planningRequests =
@@ -2106,6 +2115,339 @@ propsReportEngines engines runtimeM rawCoreM coreM rawM modsM target tsrc userDe
             filterOpt
             file
             index
+
+-- The parent keeps the native engine in-process, but isolates every interpreter
+-- property batch. A language panic cannot cross this process boundary, so native
+-- results still arrive after a panicking generator, shrinker, or property body.
+propsReportEngines : List Engine ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  String ->
+  PinIndex ->
+  <IO> List PropResult
+propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEngines (EngInterp :: rest) runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  superviseEvalProps
+      target
+      (propRequestsFor index file "eval" userDecls cases filterOpt)
+    ++ propsReportEngines
+      rest
+      runtimeM
+      rawCoreM
+      coreM
+      rawM
+      modsM
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+      file
+      index
+propsReportEngines (EngNative :: rest) runtimeM rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  propsReportEnginesInProcess
+      [EngNative]
+      runtimeM
+      rawCoreM
+      coreM
+      rawM
+      modsM
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+      file
+      index
+    ++ propsReportEngines
+      rest
+      runtimeM
+      rawCoreM
+      coreM
+      rawM
+      modsM
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+      file
+      index
+
+-- The evaluator child is deliberately one process per target, not per property:
+-- refs and memoized globals remain shared between every selected law and case.
+superviseEvalProps : String -> List PropRequest -> <IO> List PropResult
+superviseEvalProps _ [] = []
+superviseEvalProps target requests =
+  let medaka = envOr "MEDAKA" (executablePath ())
+  let argv = ["test", "--props-worker"] ++ workerPositionals target requests
+  match runCommand medaka argv
+    Err message =>
+      workerRuntimeRows
+        requests
+        "could not start interpreter property worker: \{message}"
+    Ok (code, stdout, stderr) => match takeEvalPropBootstrap stdout
+      Err message =>
+        if code == 0 then
+          workerProtocolRows requests message
+        else
+          workerRuntimeRows requests (workerAbortDetail code stderr)
+      Ok (nonce, transcript) =>
+        match decodeEvalPropRows nonce requests transcript
+          Ok rows =>
+            if code == 0 then
+              rows
+            else
+              workerRuntimeRows requests (workerAbortDetail code stderr)
+          Err message =>
+            if code == 0 then
+              workerProtocolRows requests message
+            else
+              workerRuntimeRows requests (workerAbortDetail code stderr)
+
+workerAbortDetail : Int -> String -> String
+workerAbortDetail code stderr =
+  let first = firstNonEmptyLine (splitNl stderr)
+  "interpreter property worker batch aborted (exit \{intToString code})"
+    ++ (if first == "" then "" else " — \{first}")
+
+workerPositionals : String -> List PropRequest -> List String
+workerPositionals target requests = target :: workerRequestPositionals requests
+
+workerRequestPositionals : List PropRequest -> List String
+workerRequestPositionals [] = []
+workerRequestPositionals ((PropRequest name seed cases) :: rest) =
+  stringify (JString name)
+    :: stringify (JString (intToString seed))
+    :: stringify (JString (intToString cases))
+    :: workerRequestPositionals rest
+
+workerRuntimeRows : List PropRequest -> String -> List PropResult
+workerRuntimeRows [] _ = []
+workerRuntimeRows ((PropRequest name seed cases) :: rest) message =
+  PropResult
+      "eval"
+      name
+      PropErroredResult
+      (Some PropRuntimeError)
+      message
+      seed
+      cases
+    :: workerRuntimeRows rest message
+
+workerProtocolRows : List PropRequest -> String -> List PropResult
+workerProtocolRows [] _ = []
+workerProtocolRows ((PropRequest name seed cases) :: rest) message =
+  PropResult
+      "eval"
+      name
+      PropErroredResult
+      (Some PropProtocolError)
+      message
+      seed
+      cases
+    :: workerProtocolRows rest message
+
+-- The internal worker reuses the normal loading, elaboration, helper injection,
+-- and actual-root-environment paths. It deliberately runs no doctests or test
+-- declarations: this child exists solely to contain property evaluation panics.
+export
+runEvalPropsWorker : String -> List PropRequest -> <IO> Unit
+runEvalPropsWorker target requests =
+  let nonce = startEvalPropWorker ()
+  let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+  let runtimePath = joinPath root "stdlib/runtime.mdk"
+  let corePath = joinPath root "stdlib/core.mdk"
+  let stdlibDir = joinPath root "stdlib"
+  match readPreludeFile runtimePath
+    Err message => evalWorkerDie "could not read runtime prelude: \{message}"
+    Ok runtimeSrc => match readPreludeFile corePath
+      Err message => evalWorkerDie "could not read core prelude: \{message}"
+      Ok coreSrc => match readSource target
+        Err message =>
+          evalWorkerDie "could not read property target: \{message}"
+        Ok tsrc => match parseResult tsrc
+          Err _ => evalWorkerDie "could not parse property target"
+          Ok parsed =>
+            runEvalPropsWorkerSource
+              target
+              nonce
+              requests
+              runtimeSrc
+              coreSrc
+              stdlibDir
+              tsrc
+              (desugar parsed)
+
+evalWorkerDie : String -> <IO> Unit
+evalWorkerDie message = do
+  let _ = ePutStrLn "medaka test --props-worker: \{message}"
+  exit 1
+
+runEvalPropsWorkerSource : String ->
+  String ->
+  List PropRequest ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  <IO> Unit
+runEvalPropsWorkerSource target nonce requests runtimeSrc coreSrc stdlibDir tsrc userDecls =
+  let runtimeDecls = desugaredPrelude runtimeSrc
+  let coreDecls = desugaredPrelude coreSrc
+  let roots = entrySearchRoots (dirOf target) ++ [stdlibDir]
+  let exempt = typecheckExempt target userDecls tsrc
+  currentEvalFile := target
+  if hasUseDecls userDecls then
+    let prepared = prepareMulti runtimeSrc coreSrc target roots exempt False []
+    match prepared
+      (Some message, _) => evalWorkerDie (typecheckGateFail target message)
+      (None, work) =>
+        let rows = withEvidencePreserved (_ =>
+          runEvalRequestRows
+            (forcePrepared runtimeSrc coreSrc work)
+            target
+            tsrc
+            userDecls
+            requests)
+        emitEvalPropRows nonce rows
+  else match (if exempt then
+    None
+  else
+    singleFileTypeErrors target tsrc runtimeSrc coreSrc)
+    Some message => evalWorkerDie (typecheckGateFail target message)
+    None =>
+      let rows = withEvidencePreserved (_ =>
+        runEvalRequestRows
+          (prepareSingle runtimeDecls coreDecls target roots userDecls)
+          target
+          tsrc
+          userDecls
+          requests)
+      emitEvalPropRows nonce rows
+
+runEvalRequestRows : TestPair ->
+  String ->
+  String ->
+  List Decl ->
+  List PropRequest ->
+  <IO> List PropResult
+runEvalRequestRows (TestPairErr message) _ _ _ requests =
+  workerRuntimeRows
+    requests
+    "interpreter property worker could not prepare properties: \{message}"
+runEvalRequestRows (TestPair runtimeM rawCoreM coreM rawM modsM) target tsrc userDecls requests =
+  let root = rootPlanModuleId rawM target
+  let modules = planModules rawCoreM coreM rawM modsM
+  match (preparePlannedPropRequests
+    root
+    modules
+    requests
+    (elaboratedRootProps modsM userDecls))
+    Err err => preparedResults (map (preparedPlanError "eval" err) requests)
+    Ok (planEnv, rows) =>
+      match customPlansReachable planEnv (preparedPlans rows)
+        [] => runEvalPreparedRows planEnv [] rows tsrc coreM modsM
+        _ =>
+          runValidatedEvalRequests
+            (validateHelperPlans
+              planEnv
+              runtimeM
+              rawCoreM
+              rawM
+              (preparedPlans rows))
+            target
+            tsrc
+            userDecls
+            requests
+
+runValidatedEvalRequests : HelperValidation ->
+  String ->
+  String ->
+  List Decl ->
+  List PropRequest ->
+  <IO> List PropResult
+runValidatedEvalRequests (HelperValidation pair helpers rejected protocol) target tsrc userDecls requests =
+  match protocol
+    Some message =>
+      runEvalProtocolRequests pair message target tsrc userDecls requests
+    None => match pair
+      TestPairErr message =>
+        workerRuntimeRows
+          requests
+          "interpreter property helpers could not prepare: \{message}"
+      TestPair _runtimeM rawCoreM coreM rawM modsM =>
+        let root = rootPlanModuleId rawM target
+        let modules = planModules rawCoreM coreM rawM modsM
+        match (preparePlannedPropRequests
+          root
+          modules
+          requests
+          (elaboratedRootProps modsM userDecls))
+          Err err =>
+            preparedResults (map (preparedPlanError "eval" err) requests)
+          Ok (planEnv, rows) =>
+            runEvalPreparedRows
+              planEnv
+              helpers
+              (rejectPreparedHelpers planEnv "eval" rejected rows)
+              tsrc
+              coreM
+              modsM
+
+runEvalProtocolRequests : TestPair ->
+  String ->
+  String ->
+  String ->
+  List Decl ->
+  List PropRequest ->
+  <IO> List PropResult
+runEvalProtocolRequests (TestPairErr message) _ _ _ _ requests =
+  workerRuntimeRows
+    requests
+    "interpreter property helpers could not prepare: \{message}"
+runEvalProtocolRequests (TestPair _runtimeM rawCoreM coreM rawM modsM) message target tsrc userDecls requests =
+  let root = rootPlanModuleId rawM target
+  let modules = planModules rawCoreM coreM rawM modsM
+  match (preparePlannedPropRequests
+    root
+    modules
+    requests
+    (elaboratedRootProps modsM userDecls))
+    Err err => preparedResults (map (preparedPlanError "eval" err) requests)
+    Ok (planEnv, rows) =>
+      runEvalPreparedRows
+        planEnv
+        []
+        (rejectPreparedProtocolCustom planEnv "eval" message rows)
+        tsrc
+        coreM
+        modsM
+
+runEvalPreparedRows : PlanEnv ->
+  List PropHelper ->
+  List PreparedPropRequest ->
+  String ->
+  List Decl ->
+  List (String, List Decl) ->
+  <IO> List PropResult
+runEvalPreparedRows env helpers rows tsrc coreM modsM =
+  runPreparedPropRequestsResults
+    env
+    helpers
+    rows
+    (propLineTests tsrc)
+    (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
+    (coreM ++ flatMap snd modsM)
 
 -- The structural-only path keeps the established engine behavior unchanged.
 propsReportEnginesPlain : List Engine ->
@@ -3036,6 +3378,10 @@ testArgSpec =
       value ["--filter"] "SUBSTRING" "run only matching examples",
       value ["--seed"] "N" "seed the property RNG",
       value ["--cases"] "N" "property cases per test",
+      internal
+        (switch
+          ["--props-worker"]
+          "INTERNAL: run isolated interpreter properties"),
     ])
 
 -- `--cases <n>`/`--seed <n>` must parse as integers — same "named + located"
@@ -3195,37 +3541,7 @@ cliDoctestsJson run = jObject [
 ]
 
 cliPropJson : PropResult -> Json
--- Structurally identical to mcp.mdk's `propJson` — both render the same
--- `PropResult` shape for their own JSON envelope, and neither module imports
--- the other (mcp.mdk is a CLI-independent server surface); not worth a shared
--- module for one 5-line function.
--- lint-disable-next-line rule-duplicate-body
-cliPropJson p = jObject [
-  ("engine", JString (propResultEngine p)),
-  ("name", JString (propResultName p)),
-  ("status", JString (propStatusText (propResultStatus p))),
-  ("detail", JString (propResultDetail p)),
-  ("failureKind", propFailureKindJson (propResultFailureKind p)),
-  ("seed", JInt (propResultSeed p)),
-  ("cases", JInt (propResultCases p)),
-]
-
-propStatusText : PropStatus -> String
-propStatusText PropPassedResult = "pass"
-propStatusText PropFailedResult = "fail"
-propStatusText PropErroredResult = "error"
-
-propFailureKindJson : Option PropFailureKind -> Json
-propFailureKindJson None = JNull
-propFailureKindJson (Some kind) = JString (propFailureKindText kind)
-
-propFailureKindText : PropFailureKind -> String
-propFailureKindText PropLawFalse = "law-false"
-propFailureKindText PropCapabilityError = "capability"
-propFailureKindText PropBuildError = "build"
-propFailureKindText PropRuntimeError = "runtime"
-propFailureKindText PropProtocolError = "protocol"
-propFailureKindText PropTypeError = "type"
+cliPropJson = propResultJson
 
 -- #2588: every `test "…"` result names the engine that produced it. Under
 -- `--engines eval,native` the same test appears twice, once per engine, and the

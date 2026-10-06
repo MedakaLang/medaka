@@ -91,7 +91,6 @@ import tools.doctest.{
   runDetails,
 }
 import tools.prop_runner.{
-  PropFailureKind(..),
   propResultName,
   propResultPassed,
   propResultDetail,
@@ -100,6 +99,7 @@ import tools.prop_runner.{
   propResultCases,
   propResultFailureKind,
 }
+import tools.eval_props.{propFailureKindJson}
 import tools.test_pins_report.{
   GradedProp,
   gradedPropRaw,
@@ -1527,18 +1527,6 @@ issueField (Some issue) = [("issue", JInt issue)]
 pinField : Option String -> List (String, Json)
 pinField None = []
 pinField (Some detail) = [("pin", JString detail)]
-
-propFailureKindJson : Option PropFailureKind -> Json
-propFailureKindJson None = JNull
-propFailureKindJson (Some kind) = JString (propFailureKindText kind)
-
-propFailureKindText : PropFailureKind -> String
-propFailureKindText PropLawFalse = "law-false"
-propFailureKindText PropCapabilityError = "capability"
-propFailureKindText PropBuildError = "build"
-propFailureKindText PropRuntimeError = "runtime"
-propFailureKindText PropProtocolError = "protocol"
-propFailureKindText PropTypeError = "type"
 
 allPropsPass : List GradedProp -> Bool
 allPropsPass [] = True
