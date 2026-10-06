@@ -91,10 +91,10 @@ runNativePlannedPropRequests target tsrc modules requests =
           match runnable
             [] => plannedResults outcomes []
             _ => match nativeRenderedPlanned target tsrc modules env runnable
-              Err e =>
+              Err failure =>
                 plannedResults
                   outcomes
-                  (map (nativePlannedBuildError e) runnable)
+                  (map (nativePlannedFailure failure) runnable)
               Ok rows => plannedResults outcomes rows
 
 -- Expose the rendered probe without compiling it so the registry shape can be
@@ -207,15 +207,21 @@ plannedRunnable [] = []
 plannedRunnable ((x@(NativeRunnable _ _ _)) :: rest) = x :: plannedRunnable rest
 plannedRunnable (_ :: rest) = plannedRunnable rest
 
-nativePlannedBuildError : String -> NativePlanOutcome -> PropResult
-nativePlannedBuildError e (NativeRunnable d r _) = nativeError e (d, r)
-nativePlannedBuildError e _ =
+data NativeFailure =
+  | NativeBuildFailure String
+  | NativeRuntimeFailure String
+  | NativeProtocolFailure String
+
+nativePlannedFailure : NativeFailure -> NativePlanOutcome -> PropResult
+nativePlannedFailure failure (NativeRunnable d r _) =
+  nativeFailure failure (d, r)
+nativePlannedFailure failure _ =
   PropResult
     "native"
     "<invalid prop>"
     PropErroredResult
-    (Some PropBuildError)
-    e
+    (Some (nativeFailureKind failure))
+    (nativeFailureText failure)
     0
     0
 
@@ -294,23 +300,33 @@ nativeProtocolError duplicate r =
 desugarProps : String -> List Decl
 desugarProps src = desugar (parse src)
 
-nativeError : String -> (Decl, PropRequest) -> PropResult
-nativeError e (DProp _ name _ _, r) =
+nativeFailureKind : NativeFailure -> PropFailureKind
+nativeFailureKind (NativeBuildFailure _) = PropBuildError
+nativeFailureKind (NativeRuntimeFailure _) = PropRuntimeError
+nativeFailureKind (NativeProtocolFailure _) = PropProtocolError
+
+nativeFailureText : NativeFailure -> String
+nativeFailureText (NativeBuildFailure text) = text
+nativeFailureText (NativeRuntimeFailure text) = text
+nativeFailureText (NativeProtocolFailure text) = text
+
+nativeFailure : NativeFailure -> (Decl, PropRequest) -> PropResult
+nativeFailure failure (DProp _ name _ _, r) =
   PropResult
     "native"
     name
     PropErroredResult
-    (Some PropBuildError)
-    e
+    (Some (nativeFailureKind failure))
+    (nativeFailureText failure)
     (propRequestSeed r)
     (propRequestCases r)
-nativeError e (_, r) =
+nativeFailure failure (_, r) =
   PropResult
     "native"
     "<invalid prop>"
     PropErroredResult
-    (Some PropBuildError)
-    e
+    (Some (nativeFailureKind failure))
+    (nativeFailureText failure)
     (propRequestSeed r)
     (propRequestCases r)
 
@@ -319,10 +335,12 @@ nativeRenderedPlanned : String ->
   List PlanModule ->
   PlanEnv ->
   List NativePlanOutcome ->
-  <IO> Result String (List PropResult)
+  <IO> Result NativeFailure (List PropResult)
 nativeRenderedPlanned target tsrc modules env jobs = match makeTempDir ()
   Err e =>
-    Err "native property runner: could not create a scratch directory: \{e}"
+    Err
+      (NativeRuntimeFailure
+        "native property runner: could not create a scratch directory: \{e}")
   Ok tmp =>
     let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
     let rendered = runInTmpPlanned target tsrc modules env jobs tmp nonce
@@ -336,7 +354,7 @@ runInTmpPlanned : String ->
   List NativePlanOutcome ->
   String ->
   String ->
-  <IO> Result String (List PropResult)
+  <IO> Result NativeFailure (List PropResult)
 runInTmpPlanned target tsrc modules env jobs tmp nonce =
   let entry = joinPath tmp (scratchEntryName target)
   let out = joinPath tmp "prop_probe"
@@ -346,7 +364,9 @@ runInTmpPlanned target tsrc modules env jobs tmp nonce =
       (scratchProjectManifest "medaka_native_props" target)
   match writeFile entry (plannedProbeSource nonce target tsrc modules env jobs)
     Err e =>
-      Err "native property runner: could not write the probe source: \{e}"
+      Err
+        (NativeBuildFailure
+          "native property runner: could not write the probe source: \{e}")
     Ok _ => buildAndRunPlanned target entry out tmp jobs nonce
 
 buildAndRunPlanned : String ->
@@ -355,7 +375,7 @@ buildAndRunPlanned : String ->
   String ->
   List NativePlanOutcome ->
   String ->
-  <IO> Result String (List PropResult)
+  <IO> Result NativeFailure (List PropResult)
 buildAndRunPlanned target entry out tmp jobs nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let medaka = envOr "MEDAKA" (joinPath root "medaka")
@@ -375,7 +395,8 @@ buildAndRunPlanned target entry out tmp jobs nonce =
     False)
     Err rep =>
       Err
-        "native property runner: could not build \{target} natively\n\{ppBuildReport rep}"
+        (NativeBuildFailure
+          "native property runner: could not build \{target} natively\n\{ppBuildReport rep}")
     Ok _ => match runCommand "env" [
       "MEDAKA_ROOT=" ++ root,
       "MEDAKA=" ++ medaka,
@@ -383,7 +404,9 @@ buildAndRunPlanned target entry out tmp jobs nonce =
       out,
     ]
       Err e =>
-        Err "native property runner: could not run the compiled probe: \{e}"
+        Err
+          (NativeRuntimeFailure
+            "native property runner: could not run the compiled probe: \{e}")
       Ok (code, stdout, stderr) =>
         let props = plannedDeclRequests jobs
         let chunks = chunksOf (sentinelPrefix nonce) (splitNl stdout)
@@ -391,7 +414,8 @@ buildAndRunPlanned target entry out tmp jobs nonce =
           Ok (renderAll chunks (abortNote code stderr) 0 props)
         else
           Err
-            "native property runner: the probe printed a forged or malformed transcript; no property result was trusted"
+            (NativeProtocolFailure
+              "native property runner: the probe printed a forged or malformed transcript; no property result was trusted")
 
 plannedDeclRequests : List NativePlanOutcome -> List (Decl, PropRequest)
 plannedDeclRequests [] = []
@@ -432,7 +456,13 @@ renderOne chunks note request i name =
   match complete (seedTag i) chunks
     Some text if toInt text /= Some seed =>
       nativeProtocolError "invalid replay seed in native transcript" request
-    _ => renderReportedOutcome chunks note request i name seed cases
+    _ => match complete (boolTag i) chunks
+      Some "True" => renderReportedOutcome chunks note request i name seed cases
+      Some "False" =>
+        renderReportedOutcome chunks note request i name seed cases
+      Some _ =>
+        nativeProtocolError "invalid result value in native transcript" request
+      None => renderReportedOutcome chunks note request i name seed cases
 
 renderReportedOutcome : List Chunk ->
   String ->
