@@ -1,5 +1,5 @@
 # META
-source_lines=2242
+source_lines=2259
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -1349,11 +1349,18 @@ export interface IndexMut c k v requires Index c k v where
    Panics with an index error when `i` is out of range; `array.get` is the
    `Option`-returning form. -}
 export impl Index (Array a) Int a where
-  index arr i =
-    if i < 0 || i >= arrayLength arr then
-      indexErrorAt i
-    else
-      arrayGetUnsafe i arr
+  index arr i = arrayIndexAt 0 arr i
+
+-- The `Index` impls' bodies, with the packed source site of the read their
+-- out-of-range error reports (0 for none).  A native build calls one straight
+-- from a located `xs[i]` with that site (`core_ir_lower.siteTrapCalls`); the
+-- impls pass 0.
+arrayIndexAt : Int -> Array a -> Int -> a
+arrayIndexAt site arr i =
+  if i < 0 || i >= arrayLength arr then
+    indexErrorAtSite site i
+  else
+    arrayGetUnsafe i arr
 
 {- | Writes the element at `i` in place, in `O(1)`.
 
@@ -1372,23 +1379,33 @@ export impl IndexMut (Array a) Int a where
    `Option`-returning form. Lists are immutable, so there is no `IndexMut`
    instance. -}
 export impl Index (List a) Int a where
-  index xs i = if i < 0 then indexErrorAt i else indexGo xs i i
+  index xs i = listIndexAt 0 xs i
+
+listIndexAt : Int -> List a -> Int -> a
+listIndexAt site xs i =
+  if i < 0 then indexErrorAtSite site i else indexGo site xs i i
 
 -- Threads the caller's ORIGINAL index alongside the one being decremented down
 -- to the base case, so the out-of-bounds message can name the index the caller
 -- passed rather than the leftover 0 from the recursion.
-indexGo : List a -> Int -> Int -> a
-indexGo [] i0 _ = indexError "index \{intToString i0} out of bounds"
-indexGo (h :: t) i0 i = if i <= 0 then h else indexGo t i0 (i - 1)
+indexGo : Int -> List a -> Int -> Int -> a
+indexGo site [] i0 _ = indexErrorAtSite site i0
+indexGo site (h :: t) i0 i = if i <= 0 then h else indexGo site t i0 (i - 1)
 
 {- | The character at a codepoint position: `s[i]`.
 
    Panics with an index error when the position is out of range. Positions
    count codepoints, matching `string.toChars`. -}
 export impl Index String Int Char where
-  index s i =
-    let cs = stringToChars s
-    if i < 0 || i >= arrayLength cs then indexErrorAt i else arrayGetUnsafe i cs
+  index s i = stringIndexAt 0 s i
+
+stringIndexAt : Int -> String -> Int -> Char
+stringIndexAt site s i =
+  let cs = stringToChars s
+  if i < 0 || i >= arrayLength cs then
+    indexErrorAtSite site i
+  else
+    arrayGetUnsafe i cs
 
 {- | Containers that can be sliced by a half-open index range.
 
@@ -2347,7 +2364,10 @@ forEach : Thenable c => (a -> <b> c Unit) -> List a -> <b> c Unit
 each : (a -> <b> Unit) -> List a -> <b> Unit
 runEach : Thenable a => List (a b) -> a Unit
 guard : Alternative a => Bool -> a Unit
-indexGo : List a -> Int -> Int -> a
+arrayIndexAt : Int -> Array a -> Int -> a
+indexGo : Int -> List a -> Int -> Int -> a
+listIndexAt : Int -> List a -> Int -> a
+stringIndexAt : Int -> String -> Int -> Char
 sliceLastIndex : Int -> Int
 sliceInclusiveEnd : Int -> Int
 sliceListGo : List a -> Int -> Int -> Int -> List a

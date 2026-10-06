@@ -14,7 +14,14 @@ import test.{
   fail,
 }
 import frontend.ast.{
-  Decl(..), EvId(..), EvVal(..), Expr(..), Loc(..), Route(..), TyConOrigin(..)
+  Decl(..),
+  EvId(..),
+  EvVal(..),
+  Expr(..),
+  Loc(..),
+  Route(..),
+  TyConOrigin(..),
+  noDeclLoc,
 }
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
@@ -1329,7 +1336,7 @@ returnMethodRoutes _ = None
 
 returnBindRoutes : List CBind -> Option (List String)
 returnBindRoutes [] = None
-returnBindRoutes ((CBind "value" [CClause _ body]) :: _) =
+returnBindRoutes ((CBind "value" [CClause _ body] _) :: _) =
   returnMethodRoutes body
 returnBindRoutes (_ :: rest) = returnBindRoutes rest
 
@@ -2368,7 +2375,7 @@ methodHeadArity _ _ = None
 
 bindMethodArity : String -> String -> List CBind -> Option Int
 bindMethodArity _ _ [] = None
-bindMethodArity bindName method ((CBind name clauses) :: rest)
+bindMethodArity bindName method ((CBind name clauses _) :: rest)
   | name == bindName = match clauses
     (CClause _ body) :: _ => methodHeadArity method body
     [] => None
@@ -2464,12 +2471,12 @@ test "value-position shadow publishes the selected standalone arity" =
 test "Core IR round-trip preserves method occurrence arity" =
   let original =
     CProgram
-      [CBind "main" [CClause [] (CMethod "probe" "" 7 RNone [] [])]]
+      [CBind "main" [CClause [] (CMethod "probe" "" 7 RNone [] [])] noDeclLoc]
       []
       []
       []
   match parseCProgram (cprogramToSexp original)
-    CProgram [CBind "main" [CClause [] (CMethod "probe" "" arity RNone [] [])]] _ _ _ =>
+    CProgram [CBind "main" [CClause [] (CMethod "probe" "" arity RNone [] [])] _] _ _ _ =>
       expectEqual 7 arity
     _ => fail "expected the round-tripped CProgram to keep the same shape"
 
@@ -2508,7 +2515,7 @@ localCoreExprFacts (CMethod "fromInt" _ _ route _ _) = match route
 localCoreExprFacts _ = emptyLocalCoreFacts
 
 blockRecValueFacts : CBind -> LocalCoreFacts
-blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet True _ (CLam _ localBody), CSExpr (CApp _ _)])]) =
+blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet True _ (CLam _ localBody), CSExpr (CApp _ _)])] _) =
   let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
     localCoreExprFacts localBody
   LocalCoreFacts True addRoutes fromIntRoutes primCount
@@ -2550,7 +2557,7 @@ lamThenGroupSource = joinNl [
 ]
 
 lamThenGroupBindFacts : CBind -> LocalCoreFacts
-lamThenGroupBindFacts (CBind "lamThenGroup" [CClause _ (CLet _ _ (CLam _ (CLetGroup [CBind _ [CClause _ gBody]] (CApp _ _))) (CApp _ _))]) =
+lamThenGroupBindFacts (CBind "lamThenGroup" [CClause _ (CLet _ _ (CLam _ (CLetGroup [CBind _ [CClause _ gBody] _] (CApp _ _))) (CApp _ _))] _) =
   let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
     localCoreExprFacts gBody
   LocalCoreFacts True addRoutes fromIntRoutes primCount

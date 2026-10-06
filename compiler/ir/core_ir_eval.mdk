@@ -427,14 +427,14 @@ cevalLetGroup env binds body =
   ceval env2 body
 
 cBindCell : CBind -> (String, Ref (Value e))
-cBindCell (CBind name _) = (name, Ref VUnit)
+cBindCell (CBind name _ _) = (name, Ref VUnit)
 
 cInstallGroup : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
 cInstallGroup _ _ [] = ()
-cInstallGroup env cells ((CBind name clauses) :: rest) =
+cInstallGroup env cells ((CBind name clauses _) :: rest) =
   findCell cells name := cGroupValue env clauses
   cInstallGroup env cells rest
 
@@ -524,14 +524,14 @@ cImplMethodValue env positions [] body
 cImplMethodValue env _ pats body = VClosureF env pats (e => ceval e body)
 
 cBindName : CBind -> String
-cBindName (CBind n _) = n
+cBindName (CBind n _ _) = n
 
 cInstallTopGroups : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
 cInstallTopGroups _ _ [] = ()
-cInstallTopGroups env cells ((CBind n clauses) :: rest) =
+cInstallTopGroups env cells ((CBind n clauses _) :: rest) =
   findCell cells n := cTopGroupValue env clauses
   cInstallTopGroups env cells rest
 

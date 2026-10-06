@@ -48,6 +48,7 @@ loadedSourceOf : String -> Option String
 loadedSourcesLimit : Int
 loadedSourcesRef : Ref (List (String, String))
 manifestAllowsInternal : String -> <IO> Bool
+manifestSiteRoot : String -> <IO> Option String
 mdkBaseName : String -> Option String
 modIdToPath : (String, String, List Decl) -> (String, String)
 moduleIdOfPath : List String -> String -> String
@@ -73,6 +74,7 @@ rewriteDecl : List (String, String) -> List String -> Decl -> <IO> Decl
 rewriteDecls : List (String, String) -> List String -> List Decl -> <IO> List Decl
 rewriteUsePath : String -> UsePath -> UsePath
 scanAllowInternal : Bool -> List String -> Bool
+scanSiteRoot : Bool -> List String -> Option String
 slashToDot : String -> String
 sourceNotUtf8Message : String -> String
 splitDot : String -> List String

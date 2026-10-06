@@ -59,7 +59,10 @@ import ir.core_ir.{
   CTBranch(..),
   CHead(..),
   FailSite(..),
+  siteSentinelName,
 }
+import frontend.desugar.{mapProg}
+import frontend.marker.{localBoundNames}
 import types.disposition.{
   DispositionTable,
   InstanceShape(..),
@@ -729,7 +732,8 @@ lowerField : FieldAssign -> CField
 lowerField (FieldAssign k e) = CField k (lower e)
 
 lowerBind : LetBind -> CBind
-lowerBind (LetBind name clauses _) = CBind name (map lowerClause clauses)
+lowerBind (LetBind name clauses site) =
+  CBind name (map lowerClause clauses) site
 
 lowerClause : FunClause -> CClause
 lowerClause (FunClause pats body) = CClause pats (lower body)
@@ -850,7 +854,8 @@ refoldProgram keep (CProgram groups ctorArs ctorTypes implEntries) =
     (map (refoldImpl keep) implEntries)
 
 refoldBind : (Pat -> Bool) -> CBind -> CBind
-refoldBind keep (CBind n clauses) = CBind n (map (refoldClause keep) clauses)
+refoldBind keep (CBind n clauses site) =
+  CBind n (map (refoldClause keep) clauses) site
 
 refoldClause : (Pat -> Bool) -> CClause -> CClause
 refoldClause keep (CClause pats body) = CClause pats (refoldExpr keep body)
@@ -995,7 +1000,10 @@ lowerProgramEmit target prog =
   -- either backend's tag width the caller's `target` cannot rule out.  Same seam,
   -- same reason.
   let _ = dictWitnessTagGuard target prog
-  let raw = lowerProgramWith (installedDispositionsOpt ()) prog
+  let sited = match target
+    TargetNative => siteTrapCalls prog
+    _ => prog
+  let raw = lowerProgramWith (installedDispositionsOpt ()) sited
   let fo = declaredRecordFieldOrders prog
   hoistNullaryMemo
     (match target
@@ -1010,6 +1018,140 @@ lowerProgramEmit target prog =
 
 cprogramCtorTypes : CProgram -> List (String, String)
 cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
+
+-- ── located `panic` and `xs[i]` (native backend) ─────────────────────────────
+-- A saturated `panic m` and an `xs[i]` that reads one of the prelude's own
+-- `Index` impls trap inside a body that knows nothing of the caller, so the
+-- caller's site travels in as an argument: `panic m` becomes `panicAt <site> m`
+-- and `xs[i]` the impl's site-carrying twin, `arrayIndexAt <site> xs i`.  The
+-- site is the start of the application, where `medaka run` reports it, as a
+-- `siteSentinelName` literal the emitter packs.  Only a site with a file is
+-- rewritten, so a build whose driver stamps no files lowers as before.
+siteTrapCalls : List Decl -> List Decl
+siteTrapCalls prog =
+  let twins = indexTwins (topFunNames prog omEmpty)
+  map (siteTrapDecl twins) prog
+
+-- The Core IR cannot tell the `panic` extern from a local of the same name, so
+-- a declaration that binds `panic` anywhere keeps every `panic` call as it was.
+siteTrapDecl : OrdMap String -> Decl -> Decl
+siteTrapDecl twins d =
+  let panicFree = not (contains "panic" (declBinders d))
+  match mapProg (siteTrapExpr panicFree twins) [d]
+    [d2] => d2
+    _ => d
+
+siteTrapExpr : Bool -> OrdMap String -> Expr -> Expr
+siteTrapExpr panicFree twins (e@(EApp h m))
+  | panicFree && isPanicHead h =
+    sitedCall (exprStartLoc e) (EVar "panicAt") [m] e
+siteTrapExpr _ twins (e@(EApp (EApp h a) i)) = match indexTwinOf twins h
+  Some twin => sitedCall (exprStartLoc e) (EVar twin) [a, i] e
+  None => e
+siteTrapExpr _ _ e = e
+
+-- `f <site> args…`, or [orig] when [site] names no file. The second clause is
+-- `noDeclLoc`'s span after the driver stamped a file onto it: still no site.
+sitedCall : Loc -> Expr -> List Expr -> Expr -> Expr
+sitedCall (Loc "" _ _ _ _) _ _ orig = orig
+sitedCall (Loc _ 1 0 1 0) _ _ orig = orig
+sitedCall (Loc f sl sc _ _) fn args _ =
+  applyAll (EApp fn (siteLiteral f sl sc)) args
+
+applyAll : Expr -> List Expr -> Expr
+applyAll f [] = f
+applyAll f (x :: rest) = applyAll (EApp f x) rest
+
+siteLiteral : String -> Int -> Int -> Expr
+siteLiteral f line col =
+  EApp
+    (EApp (EApp (EVar siteSentinelName) (ELit (LString f))) (ELit (LInt line)))
+    (ELit (LInt col))
+
+isPanicHead : Expr -> Bool
+isPanicHead (ELoc _ e) = isPanicHead e
+isPanicHead (EVar "panic") = True
+isPanicHead (EVarId "panic" _) = True
+isPanicHead (EVarAt "panic" AGlobal) = True
+isPanicHead _ = False
+
+-- The prelude's `Index` impls, by route key, and the twin each one's body is.
+-- A twin the program does not define (a driver that lowers no prelude) is left
+-- out, so its `xs[i]` keeps the plain method call.
+indexTwins : OrdMap Unit -> OrdMap String
+indexTwins names =
+  indexTwinsGo
+    names
+    [
+      ("core::Index|(Array a) Int a|", "arrayIndexAt"),
+      ("core::Index|(List a) Int a|", "listIndexAt"),
+      ("core::Index|String Int Char|", "stringIndexAt"),
+    ]
+    omEmpty
+
+indexTwinsGo : OrdMap Unit ->
+  List (String, String) ->
+  OrdMap String ->
+  OrdMap String
+indexTwinsGo _ [] acc = acc
+indexTwinsGo names ((key, twin) :: rest) acc = match preludeFunName names twin
+  Some n => indexTwinsGo names rest (omInsert key n acc)
+  None => indexTwinsGo names rest acc
+
+-- [n]'s emitted name: mangled as a prelude function, or bare when unmangled.
+preludeFunName : OrdMap Unit -> String -> Option String
+preludeFunName names n
+  | omHasKey ("core__" ++ n) names = Some ("core__" ++ n)
+  | omHasKey n names = Some n
+  | otherwise = None
+
+topFunNames : List Decl -> OrdMap Unit -> OrdMap Unit
+topFunNames [] acc = acc
+topFunNames ((DFunDef _ n _ _ _) :: rest) acc =
+  topFunNames rest (omInsert n () acc)
+topFunNames ((DAttrib _ d) :: rest) acc = topFunNames (d :: rest) acc
+topFunNames (_ :: rest) acc = topFunNames rest acc
+
+indexTwinOf : OrdMap String -> Expr -> Option String
+indexTwinOf twins (ELoc _ h) = indexTwinOf twins h
+indexTwinOf twins (EMethodAt "index" _ ev) = match evMethodRoutes ev
+  (_, _, RKey key _ _, _, _) => omLookup key twins
+  _ => None
+indexTwinOf _ _ = None
+
+-- Every name a pattern or a local function binds in [d], its own parameters
+-- and its methods' included.
+declBinders : Decl -> List String
+declBinders (DImpl { methods, ... }) = flatMap implMethodBinders methods
+declBinders (DInterface { methods, ... }) = flatMap ifaceMethodBinders methods
+declBinders (DAttrib _ d) = declBinders d
+declBinders d = localBoundNames [d] ++ localFunNames d
+
+implMethodBinders : ImplMethod -> List String
+implMethodBinders (ImplMethod n ps body) =
+  declBinders (DFunDef False n ps body noDeclLoc)
+
+ifaceMethodBinders : IfaceMethod -> List String
+ifaceMethodBinders (IfaceMethod n _ (Some (MethodDefault ps body)) _) =
+  declBinders (DFunDef False n ps body noDeclLoc)
+ifaceMethodBinders _ = []
+
+-- the names of the `let`/`where` functions [d] defines (`localBoundNames`
+-- counts their parameters but not the names themselves).
+localFunNames : Decl -> List String
+localFunNames d =
+  let acc = Ref []
+  let _ = mapProg (noteLocalFuns acc) [d]
+  !acc
+
+noteLocalFuns : Ref (List String) -> Expr -> Expr
+noteLocalFuns acc (e@(ELetGroup binds _)) =
+  acc := map letBindName binds ++ !acc
+  e
+noteLocalFuns _ e = e
+
+letBindName : LetBind -> String
+letBindName (LetBind n _ _) = n
 
 -- ── the ONE authority on a record's field order (#1513) ──────────────────────
 -- ctor name → [field label in declared order], from every DData named-field
@@ -1101,7 +1243,8 @@ rewriteProgramRecPats fo (CProgram groups ctorArs ctorTypes implEntries) =
     (map (rewriteImplRP fo) implEntries)
 
 rewriteBindRP : List (String, List String) -> CBind -> CBind
-rewriteBindRP fo (CBind n clauses) = CBind n (map (rewriteClauseRP fo) clauses)
+rewriteBindRP fo (CBind n clauses site) =
+  CBind n (map (rewriteClauseRP fo) clauses) site
 
 rewriteClauseRP : List (String, List String) -> CClause -> CClause
 rewriteClauseRP fo (CClause pats body) =
@@ -1521,9 +1664,11 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
     CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2
 
 memoCafBind : (String, String, String) -> CBind
-memoCafBind (sel, key, method) = CBind (memoBindName sel method) [
-  CClause [] (CMethod method "" 0 (RKey key [] []) [] []),
-]
+memoCafBind (sel, key, method) =
+  CBind
+    (memoBindName sel method)
+    [CClause [] (CMethod method "" 0 (RKey key [] []) [] [])]
+    noDeclLoc
 
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
 -- private O(n²) `List`-as-a-set scan).  Both components are unconstrained
@@ -1536,7 +1681,8 @@ memoRefKey : (String, String, String) -> String
 memoRefKey (sel, _, method) = lenKey sel ++ method
 
 hoistBind : LowerState -> CBind -> CBind
-hoistBind st (CBind n clauses) = CBind n (map (hoistClause st) clauses)
+hoistBind st (CBind n clauses site) =
+  CBind n (map (hoistClause st) clauses) site
 
 hoistClause : LowerState -> CClause -> CClause
 hoistClause st (CClause pats body) = CClause pats (hoistExpr st body)
@@ -1649,17 +1795,17 @@ lowerGroups : List Decl -> List CBind
 lowerGroups prog = map (refoldBind noLetCheck) (lowerGroupsRaw prog)
 
 lowerGroupsRaw : List Decl -> List CBind
-lowerGroupsRaw prog = lgGroup (funClausesOf prog)
+lowerGroupsRaw prog = lgGroup (bindSites prog omEmpty) (funClausesOf prog)
 
 -- O(n log n) group-by-name, IDENTICAL output to
 -- `map (n => CBind n (clausesFor n clauses)) (groupNames clauses [])`: preserves
 -- clause order within a name AND first-occurrence order of names, via an
 -- index-carrying merge sort (no map, no typeclass dispatch). Replaces the old
 -- O(names·clauses) groupNames+clausesFor rescan. Elements are ((name, idx), clause).
-lgGroup : List (String, CClause) -> List CBind
-lgGroup clauses =
+lgGroup : OrdMap Loc -> List (String, CClause) -> List CBind
+lgGroup sites clauses =
   let groups = lgRuns (lgSortName (lgTag clauses 0))
-  map lgToBind (lgSortIdx groups)
+  map (lgToBind sites) (lgSortIdx groups)
 
 lgTag : List (String, CClause) -> Int -> List ((String, Int), CClause)
 lgTag [] _ = []
@@ -1734,8 +1880,28 @@ lgMergeIdx (((n1, i1), cs1) :: xs) (((n2, i2), cs2) :: ys) =
   else
     ((n2, i2), cs2) :: lgMergeIdx (((n1, i1), cs1) :: xs) ys
 
-lgToBind : ((String, Int), List CClause) -> CBind
-lgToBind ((n, _), cs) = CBind n cs
+lgToBind : OrdMap Loc -> ((String, Int), List CClause) -> CBind
+lgToBind sites ((n, _), cs) = match omLookup n sites
+  Some site => CBind n cs site
+  None => CBind n cs noDeclLoc
+
+-- name -> the site of its first clause, over the decls `funClausesOf` reads.
+bindSites : List Decl -> OrdMap Loc -> OrdMap Loc
+bindSites [] acc = acc
+bindSites ((DFunDef _ n _ _ site) :: rest) acc =
+  bindSites rest (firstSite n site acc)
+bindSites ((DLetGroup _ binds) :: rest) acc =
+  bindSites rest (letBindSites binds acc)
+bindSites ((DAttrib _ d) :: rest) acc = bindSites (d :: rest) acc
+bindSites (_ :: rest) acc = bindSites rest acc
+
+letBindSites : List LetBind -> OrdMap Loc -> OrdMap Loc
+letBindSites [] acc = acc
+letBindSites ((LetBind n _ site) :: rest) acc =
+  letBindSites rest (firstSite n site acc)
+
+firstSite : String -> Loc -> OrdMap Loc -> OrdMap Loc
+firstSite n site acc = if omHasKey n acc then acc else omInsert n site acc
 
 -- ── typeclass impls / interface defaults (slice 5) ─────────────────────────
 -- Mirror eval.mdk's `declImplEntries` exactly: build the iface dispatch-position
@@ -2351,8 +2517,8 @@ specializeRow row (CListSlice a lo hi incl) =
 specializeRow row (CBlock stmts) = CBlock (map (specializeStmt row) stmts)
 
 specializeBind : DefaultRow -> CBind -> CBind
-specializeBind row (CBind n clauses) =
-  CBind n (map (specializeClause row) clauses)
+specializeBind row (CBind n clauses site) =
+  CBind n (map (specializeClause row) clauses) site
 
 specializeClause : DefaultRow -> CClause -> CClause
 specializeClause row (CClause pats body) = CClause pats (specializeRow row body)

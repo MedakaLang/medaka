@@ -52,7 +52,9 @@ echo "minting seed: NATIVE emission of the build driver's own graph ..."
 trim_unit "$TMP"
 [ -s "$TMP" ] || { echo "FAIL: empty seed IR"; exit 1; }
 
-# 3. gzip the minted seed into the committed location.
+# 3. gzip the minted seed into the committed location.  `-n` leaves the scratch
+#    file's name and mtime out of the header, so the committed bytes are a
+#    function of the IR alone, the same from every checkout.
 mkdir -p "$(dirname "$SEED_GZ")"
-gzip -9 -c "$TMP" > "$SEED_GZ"
+gzip -9 -n -c "$TMP" > "$SEED_GZ"
 echo "seed refreshed: $SEED_GZ ($(wc -c < "$SEED_GZ") bytes gz, $(wc -c < "$TMP") bytes raw)"

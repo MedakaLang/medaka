@@ -1,0 +1,3 @@
+g : (Int -> Int) -> Int
+g panic = panic 41
+main = println (g (x => x + 1))

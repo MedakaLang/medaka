@@ -370,6 +370,7 @@ pI32Truncate : Value a -> <a> Value a
 pI64FromBits : Value a -> <a> Value a
 pI64ToBits : Value a -> <a> Value a
 pIndexErrorAt : Value a -> <a> Value a
+pIndexErrorAtSite : Value a -> Value a -> <a> Value a
 pIntBitsToFloat : Value a -> <a> Value a
 pIntToFloat : Value a -> <a> Value a
 pIntToString : Value a -> <a> Value a
@@ -382,6 +383,7 @@ pMonotonicSec : Value a -> <a> Value a
 pMonotonicSecIO : Value a -> <Clock | a> Value a
 pOsEntropyBytes : Value a -> <Rand | a> Value a
 pPanic : Value a -> <a> b
+pPanicAt : Value a -> Value a -> <a> b
 pPow : Value a -> Value a -> <a> Value a
 pPutStr : Value a -> <a> Value a
 pPutStrLn : Value a -> <a> Value a

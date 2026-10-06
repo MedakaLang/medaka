@@ -145,7 +145,7 @@ eagerVarsStmts b (_ :: rest) = eagerVarsStmts b rest
 
 eagerVarsBinds : OrdMap Unit -> List CBind -> List String
 eagerVarsBinds _ [] = []
-eagerVarsBinds b ((CBind _ [CClause [] rhs]) :: rest) =
+eagerVarsBinds b ((CBind _ [CClause [] rhs] _) :: rest) =
   eagerVars b rhs ++ eagerVarsBinds b rest
 eagerVarsBinds b (_ :: rest) = eagerVarsBinds b rest
 
@@ -179,7 +179,7 @@ eagerVarsBinds b (_ :: rest) = eagerVarsBinds b rest
 -- parameter never masquerades as a global; lambda bodies not descended), INCLUDING
 -- the direct callee of every eager call (`CVar`/`CDict` head — see `eagerVars`).
 bindEagerCallees : CBind -> List String
-bindEagerCallees (CBind _ clauses) = dedup (clauseEagerVars clauses)
+bindEagerCallees (CBind _ clauses _) = dedup (clauseEagerVars clauses)
 
 clauseEagerVars : List CClause -> List String
 clauseEagerVars [] = []
@@ -195,7 +195,7 @@ paramBound (p :: rest) = patVars p ++ paramBound rest
 -- order the sort decides; reach sets are restricted to these.
 valGlobalNames : List CBind -> List String
 valGlobalNames [] = []
-valGlobalNames ((CBind name [CClause [] _]) :: rest) =
+valGlobalNames ((CBind name [CClause [] _] _) :: rest) =
   name :: valGlobalNames rest
 valGlobalNames (_ :: rest) = valGlobalNames rest
 
@@ -328,7 +328,7 @@ insertReach (n :: rest) reached acc =
 -- backends (replaces the old direct-only `eagerVars [] body`).
 export
 bindEagerReach : OrdMap (List String) -> CBind -> List String
-bindEagerReach rm (CBind name [CClause [] _]) = optionOr [] (omLookup name rm)
+bindEagerReach rm (CBind name [CClause [] _] _) = optionOr [] (omLookup name rm)
 bindEagerReach _ _ = []
 
 -- #623: the value-init topo sort must not carry the SAME binding list twice — as
@@ -426,7 +426,7 @@ listHaveMethod (e :: rest) = eagerHasMethod e || listHaveMethod rest
 -- eagerVarsBinds does — a nested function's body is deferred to its own call.
 bindsHaveMethod : List CBind -> Bool
 bindsHaveMethod [] = False
-bindsHaveMethod ((CBind _ [CClause [] rhs]) :: rest) =
+bindsHaveMethod ((CBind _ [CClause [] rhs] _) :: rest) =
   eagerHasMethod rhs || bindsHaveMethod rest
 bindsHaveMethod (_ :: rest) = bindsHaveMethod rest
 
@@ -461,7 +461,7 @@ fieldsHaveMethod ((CField _ ex) :: rest) =
 -- eagerly (a value global has one nullary clause; a helper fn may have several, and
 -- calling it eagerly runs the matched clause's body eagerly — so any clause taints).
 bindDirectMethod : CBind -> Bool
-bindDirectMethod (CBind _ clauses) = clausesHaveMethod clauses
+bindDirectMethod (CBind _ clauses _) = clausesHaveMethod clauses
 
 clausesHaveMethod : List CClause -> Bool
 clausesHaveMethod [] = False

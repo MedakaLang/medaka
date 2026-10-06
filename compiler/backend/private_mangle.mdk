@@ -48,7 +48,7 @@
 --
 -- EXCLUDED (never mangled):
 --   • the ENTRY unit's `main` — the emitter emits it as `@main`, the program entry
---     point (llvm_emit.mdk `isFnBind (CBind "main" _) = False`); renaming it would
+--     point (llvm_emit.mdk `isFnBind (CBind "main" _ _) = False`); renaming it would
 --     lose the entry.  Only the entry unit (the LAST unit: the loader hands modules
 --     dependency-first) keeps the key `main` unrenamed (`isEntryMainKey`).  Any other
 --     unit's `main` is an ordinary top-level name and mangles to `<mid>__main`, so it

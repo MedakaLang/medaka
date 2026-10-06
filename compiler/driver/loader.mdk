@@ -1219,6 +1219,41 @@ scanAllowInternal inDeps (line :: rest) =
   else
     scanAllowInternal inDeps rest
 
+-- The directory a native build of the project at [root] writes its trap-site
+-- file names relative to: `site-root = "<dir>"` in `<root>/medaka.toml`, read
+-- relative to [root].  A project that names none gets the loader's spelling of
+-- each path, the one `medaka run` prints.  The compiler's manifest names the
+-- repository root, so a compiler binary and the seed name `compiler/…` and
+-- `stdlib/…` whichever directory built them.  Parsed like `allow-internal`:
+-- `[dependencies]` entries are skipped and a trailing `#` comment is inert.
+export
+manifestSiteRoot : String -> <IO> Option String
+manifestSiteRoot root =
+  let tomlPath = stringConcat [root, "/medaka.toml"]
+  if fileExists tomlPath then match readFile tomlPath
+    Err _ => None
+    Ok src => scanSiteRoot False (splitNl src)
+  else
+    None
+
+scanSiteRoot : Bool -> List String -> Option String
+scanSiteRoot _ [] = None
+scanSiteRoot inDeps (line :: rest) =
+  let t = stringTrim line
+  let header = match splitOnChar "#" t
+    h :: _ => stringTrim h
+    [] => t
+  if startsWith "[" header then
+    scanSiteRoot (header == "[dependencies]") rest
+  else if inDeps then
+    scanSiteRoot inDeps rest
+  else if keyBeforeEq t
+    == "site-root" then match splitOnChar "#" (rawValAfterEq t)
+    value :: _ => Some (unquote (stringTrim value))
+    [] => None
+  else
+    scanSiteRoot inDeps rest
+
 -- A module is trusted when the root it resolved under is a trusted root, or
 -- when its file lies anywhere under `stdlibRoot`. The second arm is what
 -- trusts a nested stdlib module (`stdlib/crypto/hmac.mdk`) checked as the

@@ -6367,6 +6367,29 @@ IDENT "index"
 IDENT "arr"
 IDENT "i"
 EQUAL
+IDENT "arrayIndexAt"
+INT 0
+IDENT "arr"
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "arrayIndexAt"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Array"
+IDENT "a"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+NEWLINE
+IDENT "arrayIndexAt"
+IDENT "site"
+IDENT "arr"
+IDENT "i"
+EQUAL
 INDENT
 IF
 IDENT "i"
@@ -6379,7 +6402,8 @@ IDENT "arrayLength"
 IDENT "arr"
 THEN
 INDENT
-IDENT "indexErrorAt"
+IDENT "indexErrorAtSite"
+IDENT "site"
 IDENT "i"
 NEWLINE
 DEDENT
@@ -6388,8 +6412,6 @@ INDENT
 IDENT "arrayGetUnsafe"
 IDENT "i"
 IDENT "arr"
-NEWLINE
-DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -6460,15 +6482,41 @@ IDENT "index"
 IDENT "xs"
 IDENT "i"
 EQUAL
+IDENT "listIndexAt"
+INT 0
+IDENT "xs"
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "listIndexAt"
+COLON
+UPPER "Int"
+ARROW
+UPPER "List"
+IDENT "a"
+ARROW
+UPPER "Int"
+ARROW
+IDENT "a"
+NEWLINE
+IDENT "listIndexAt"
+IDENT "site"
+IDENT "xs"
+IDENT "i"
+EQUAL
+INDENT
 IF
 IDENT "i"
 LT
 INT 0
 THEN
-IDENT "indexErrorAt"
+IDENT "indexErrorAtSite"
+IDENT "site"
 IDENT "i"
 ELSE
 IDENT "indexGo"
+IDENT "site"
 IDENT "xs"
 IDENT "i"
 IDENT "i"
@@ -6477,6 +6525,8 @@ DEDENT
 NEWLINE
 IDENT "indexGo"
 COLON
+UPPER "Int"
+ARROW
 UPPER "List"
 IDENT "a"
 ARROW
@@ -6487,18 +6537,18 @@ ARROW
 IDENT "a"
 NEWLINE
 IDENT "indexGo"
+IDENT "site"
 LBRACKET
 RBRACKET
 IDENT "i0"
 UNDERSCORE
 EQUAL
-IDENT "indexError"
-INTERP_OPEN "index "
-IDENT "intToString"
+IDENT "indexErrorAtSite"
+IDENT "site"
 IDENT "i0"
-INTERP_END " out of bounds"
 NEWLINE
 IDENT "indexGo"
+IDENT "site"
 LPAREN
 IDENT "h"
 CONS
@@ -6515,6 +6565,7 @@ THEN
 IDENT "h"
 ELSE
 IDENT "indexGo"
+IDENT "site"
 IDENT "t"
 IDENT "i0"
 LPAREN
@@ -6535,6 +6586,28 @@ IDENT "index"
 IDENT "s"
 IDENT "i"
 EQUAL
+IDENT "stringIndexAt"
+INT 0
+IDENT "s"
+IDENT "i"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "stringIndexAt"
+COLON
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Char"
+NEWLINE
+IDENT "stringIndexAt"
+IDENT "site"
+IDENT "s"
+IDENT "i"
+EQUAL
 INDENT
 LET
 IDENT "cs"
@@ -6552,9 +6625,14 @@ GEQ
 IDENT "arrayLength"
 IDENT "cs"
 THEN
-IDENT "indexErrorAt"
+INDENT
+IDENT "indexErrorAtSite"
+IDENT "site"
 IDENT "i"
+NEWLINE
+DEDENT
 ELSE
+INDENT
 IDENT "arrayGetUnsafe"
 IDENT "i"
 IDENT "cs"

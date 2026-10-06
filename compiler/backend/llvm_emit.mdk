@@ -203,6 +203,7 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   FailSite(..),
+  siteSentinelName,
 }
 import ir.core_ir_lower.{
   compileTree,
@@ -379,14 +380,39 @@ isFallthroughVar x = x == fallthroughName || startsWith ftPrefix x
 -- and the EMatch decision tree raise for an unmatched scrutinee.  `@mdk_nonexhaustive_match`
 -- is not a terminator, so the caller's store+branch stays well-formed; the `br` path
 -- leaves them in a dead anonymous block, which LLVM discards.
+-- A sentinel labelled with `siteFtLabel` instead aborts at the site it names:
+-- the guards of a function's last clause failed, and its first clause is where
+-- `medaka run` reports that.
 emitFallthrough : Emit -> String -> (String, LTy)
 emitFallthrough e fname = match ftLabelOf fname
   Some lbl =>
-    let _ = emit e ("  br label %" ++ lbl)
+    let _ =
+      if startsWith "@" lbl then
+        emitTrapCall
+          e
+          "mdk_nonexhaustive_match"
+          ""
+          (stringSlice 1 (stringLength lbl) lbl)
+      else
+        emit e ("  br label %" ++ lbl)
     ("0", LTInt)
   None =>
     let _ = emit e "  call void @mdk_nonexhaustive_match()"
     ("0", LTInt)
+
+-- The fall-through label of a function's LAST clause: its packed first-clause
+-- [site] behind an `@`, which no block label starts with, or "" (leave the
+-- sentinel bare) when the site is unlocated.
+siteFtLabel : Emit -> Loc -> String
+siteFtLabel e site =
+  let imm = siteImm e site
+  if imm == "0" then "" else "@" ++ imm
+
+-- a single-clause body whose guards fall through to its function's [site].
+siteFtBody : Emit -> Loc -> CExpr -> CExpr
+siteFtBody e site body = match siteFtLabel e site
+  "" => body
+  lbl => labelFallthrough body lbl
 
 -- ── TRMC (tail-recursion-modulo-cons) context (PLAN #56, TRMC-DESIGN.md) ─────
 -- When a top-level NON-DICT self-recursive define is `trmcEligible` — its tail
@@ -1280,11 +1306,11 @@ installDefArityMap e binds =
   e.defArityMap := Some (omFromPairs (map (defArityPair e) binds) omEmpty)
 
 defArityPair : Emit -> CBind -> (String, Int)
-defArityPair e (CBind name [CClause pats body]) =
+defArityPair e (CBind name [CClause pats body] _) =
   let (pats2, _) = etaSaturateMethodBody e name pats body
   (name, listLen pats2)
-defArityPair e (CBind name (c :: rest)) = (name, clauseArityC (c :: rest))
-defArityPair _ (CBind name []) = (name, 0)
+defArityPair e (CBind name (c :: rest) _) = (name, clauseArityC (c :: rest))
+defArityPair _ (CBind name [] _) = (name, 0)
 
 -- the recorded emitted define arity of `name` (None when the name is absent — fall
 -- back to the unconditional direct call).  RUN-EMIT-003: the table is always
@@ -2644,14 +2670,31 @@ emitIoExtern e _ name _ = gapE e ("unsupported IO extern " ++ name)
 -- auto-print emitted downstream is dead code.  Return ("1", LTUnit) so
 -- emitPrint sees LTUnit (safe) rather than LTCon/LTClosure (compile panic).
 isAbortExtern : String -> Bool
-isAbortExtern name =
-  contains name ["panic", "exit", "indexError", "indexErrorAt", "sliceError"]
+isAbortExtern name = contains name [
+  "panic",
+  "exit",
+  "indexError",
+  "indexErrorAt",
+  "sliceError",
+  "panicAt",
+  "indexErrorAtSite",
+]
 
 emitAbortExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
   List CExpr ->
   (String, LTy)
+-- panicAt (site, msg): `panic msg` reporting the packed site.  The lowering
+-- passes a trap-site literal, which is packed here straight to the immediate.
+emitAbortExtern e env "panicAt" [site, msg] = match emitArgs e env [msg]
+  [m] =>
+    let raw = match siteLiteralLoc site
+      Some l => siteImm e l
+      None => untagInt e (fst (emitExpr e env site))
+    let _ = emitTrapCall e "mdk_panic" "i64 \{m}" raw
+    ("1", LTUnit)
+  _ => panic "llvm: emitAbortExtern: panicAt takes a site and a message"
 emitAbortExtern e env name args = match emitArgs e env args
   [a] =>
     if name == "indexError" then
@@ -2683,6 +2726,12 @@ emitAbortExtern e env name args = match emitArgs e env args
       let lo_raw = untagInt e a
       let hi_raw = untagInt e b
       let _ = emit e "  call void @mdk_slice_oob(i64 \{lo_raw}, i64 \{hi_raw})"
+      ("1", LTUnit)
+    else if name == "indexErrorAtSite" then
+      -- indexErrorAtSite (site, idx): indexErrorAt idx reporting the caller's
+      -- packed site, which an `Index` impl's twin receives as a parameter.
+      let idx_raw = untagInt e b
+      let _ = emitTrapCall e "mdk_oob_at" "i64 \{idx_raw}" (untagInt e a)
       ("1", LTUnit)
     else
       panic ("llvm: emitAbortExtern: " ++ name ++ " takes two arguments")
@@ -4299,7 +4348,7 @@ u32Inline e env f args =
   else
     let name = canonFnName e f
     match omLookup name !e.gDispBindMap
-      Some (CBind _ [CClause pats body]) => match declSigOf e name
+      Some (CBind _ [CClause pats body] _) => match declSigOf e name
         Some (_, rname) =>
           if isW32Head rname
             && lengthS pats == lengthS args
@@ -4622,7 +4671,7 @@ tupleInline e f args n =
   else
     let name = canonFnName e f
     match omLookup name !e.gDispBindMap
-      Some (CBind _ [CClause pats body]) =>
+      Some (CBind _ [CClause pats body] _) =>
         if lengthS pats == lengthS args
           && hasArgs args
           && allPVar pats
@@ -4652,7 +4701,7 @@ tupleBody _ _ = None
 -- non-negative literal amount, where that refusal cannot fire.
 u64KernelAlias : Emit -> String -> List CExpr -> Option String
 u64KernelAlias e f args = match omLookup (canonFnName e f) !e.gDispBindMap
-  Some (CBind _ [CClause pats body]) => match paramNames pats
+  Some (CBind _ [CClause pats body] _) => match paramNames pats
     Some ps =>
       if lengthS ps == lengthS args then u64AliasBody ps body args else None
     None => None
@@ -6138,13 +6187,35 @@ emitDivZeroGuard e op ri site =
 -- The packed site of [l], or "0" when [l] names no file, is the placeholder span,
 -- or does not fit its fields.  The prelude half defines no table of its own.
 siteImm : Emit -> Loc -> String
-siteImm e (Loc f sl sc el ec)
-  | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = "0"
-  | e.input.emitHalf == emitHalfPrelude = "0"
-  | sl < 0 || sl >= 16777216 || sc < 0 || sc >= 1048576 = "0"
+siteImm e l = intToString (sitePacked e l)
+
+sitePacked : Emit -> Loc -> Int
+sitePacked e (Loc f sl sc el ec)
+  | f == "" || sl == 1 && sc == 0 && el == 1 && ec == 0 = 0
+  | e.input.emitHalf == emitHalfPrelude = 0
+  | sl < 0 || sl >= 16777216 || sc < 0 || sc >= 1048576 = 0
   | otherwise = match siteFileNumber e f
-    Some n => intToString (n * 17592186044416 + sl * 1048576 + sc)
-    None => "0"
+    Some n => n * 17592186044416 + sl * 1048576 + sc
+    None => 0
+
+-- A trap-site literal (`siteSentinelName` applied to a file, a line and a
+-- column) is the packed site as an Int word, 0 when it does not pack.
+emitSiteLiteral : Emit -> List CExpr -> (String, LTy)
+emitSiteLiteral e args = match siteLiteralLocOf args
+  Some l => emitLit e (LInt (sitePacked e l))
+  None => gapE e "a trap-site literal takes a file, a line and a column"
+
+-- the site a trap-site literal names, if [x] is one.
+siteLiteralLoc : CExpr -> Option Loc
+siteLiteralLoc x = match flattenApp x []
+  (CVar v _, args) =>
+    if v == siteSentinelName then siteLiteralLocOf args else None
+  _ => None
+
+siteLiteralLocOf : List CExpr -> Option Loc
+siteLiteralLocOf [CLit (LString f), CLit (LInt line), CLit (LInt col)] =
+  Some (Loc f line col line (col + 1))
+siteLiteralLocOf _ = None
 
 -- [f]'s 1-based number in the site file table, assigned on first use; None once
 -- the 16-bit field is full.
@@ -6179,6 +6250,8 @@ siteTrapDeclares e = map siteTrapDeclare (reverseL !e.siteTraps)
 siteTrapDeclare : String -> String
 siteTrapDeclare "mdk_int_overflow" =
   "declare void @mdk_int_overflow_at(i64, i64, i64, i64) noreturn"
+siteTrapDeclare "mdk_panic" = "declare void @mdk_panic_at(i64, i64) noreturn"
+siteTrapDeclare "mdk_oob_at" = "declare void @mdk_oob_at_at(i64, i64) noreturn"
 siteTrapDeclare fn = "declare void @\{fn}_at(i64) noreturn"
 
 -- The site file table, a NULL-terminated array of the files' paths behind the
@@ -6617,19 +6690,19 @@ emitLetGroup : Emit ->
   CExpr ->
   (String, LTy)
 emitLetGroup e env [] body = emitExpr e env body
-emitLetGroup e env ((CBind name [CClause [] rhs]) :: rest) body =
+emitLetGroup e env ((CBind name [CClause [] rhs] _) :: rest) body =
   let (v, ty) = emitExpr e env rhs
   emitLetGroup e (omInsert name (v, ty) env) rest body
-emitLetGroup e env ((CBind name clauses) :: rest) body
+emitLetGroup e env ((CBind name clauses site) :: rest) body
   | refsLater name clauses (bindNames rest) =
-    emitKnotRun e env (CBind name clauses :: rest) body
+    emitKnotRun e env (CBind name clauses site :: rest) body
   | otherwise =
     -- The region this binding is in scope over is exactly the rest of the group
     -- plus the body, i.e. `CLetGroup rest body`.  When every occurrence of `name`
     -- there is the head of an application of exactly its arity, its call sites
     -- may skip the closure's code_ptr load (`e.directFn`).
     let direct = satOnlyUses name (clauseArityC clauses) (CLetGroup rest body)
-    let (w, ty) = emitGroupBind e env (CBind name clauses) direct
+    let (w, ty) = emitGroupBind e env (CBind name clauses site) direct
     emitLetGroup e (omInsert name (w, ty) env) rest body
 
 -- knot-tie the maximal leading run of function bindings of `binds`, then continue
@@ -6656,7 +6729,7 @@ emitKnotRun e env binds body =
 -- VALUE binding (`CBind _ [CClause [] _]`) ends the run.
 takeFnRun : List CBind -> List CBind
 takeFnRun [] = []
-takeFnRun ((CBind _ [CClause [] _]) :: _) = []
+takeFnRun ((CBind _ [CClause [] _] _) :: _) = []
 takeFnRun (b :: rest) = b :: takeFnRun rest
 
 dropS : Int -> List a -> List a
@@ -6667,7 +6740,7 @@ dropS n (x :: xs) = if n <= 0 then x :: xs else dropS (n - 1) xs
 -- (i.e. a later value binding) — the case knot-tying cannot tie.
 anyRefsOutsideRun : List CBind -> List String -> List String -> Bool
 anyRefsOutsideRun [] _ _ = False
-anyRefsOutsideRun ((CBind name clauses) :: rest) runNames laterOutside
+anyRefsOutsideRun ((CBind name clauses _) :: rest) runNames laterOutside
   | anyInList (dedupS (clausesFreeVars name clauses)) laterOutside = True
   | otherwise = anyRefsOutsideRun rest runNames laterOutside
 anyRefsOutsideRun (_ :: rest) runNames laterOutside =
@@ -6702,13 +6775,13 @@ anyInList (x :: xs) ys = if contains x ys then True else anyInList xs ys
 -- the binding's scope is a saturated application head; the cell is built either
 -- way, and the flag only registers it as a direct-call target (`e.directFn`).
 emitGroupBind : Emit -> OrdMap (String, LTy) -> CBind -> Bool -> (String, LTy)
-emitGroupBind e env (CBind name clauses) direct =
+emitGroupBind e env (CBind name clauses site) direct =
   let lamName = "mdk_lam" ++ mangleScoped e
   let arity = clauseArity (clauseList clauses)
   let captured =
     keepInEnv env (removeStr name (dedupS (clausesFreeVars name clauses)))
   let captureWords = capWords e env captured
-  let _ = emitGroupBindDefine e env lamName name arity clauses captured
+  let _ = emitGroupBindDefine e env lamName name arity clauses captured site
   let (w, ty) = match captureWords
     -- S-1: capture-free ⇒ every cell field is a compile-time constant, so hoist the
     -- cell to an `internal constant` module global instead of allocating a fresh one
@@ -6854,7 +6927,7 @@ satOnlyStmts name arity ((CSAssign target ex) :: rest) =
 -- patterns treated as shadowing binders.
 satOnlyBinds : String -> Int -> List CBind -> Bool
 satOnlyBinds _ _ [] = True
-satOnlyBinds name arity ((CBind _ clauses) :: rest) =
+satOnlyBinds name arity ((CBind _ clauses _) :: rest) =
   satOnlyClauses name arity clauses && satOnlyBinds name arity rest
 
 satOnlyClauses : String -> Int -> List CClause -> Bool
@@ -6875,8 +6948,9 @@ emitGroupBindDefine : Emit ->
   Int ->
   List CClause ->
   List String ->
+  Loc ->
   Unit
-emitGroupBindDefine e env lamName name arity clauses captured =
+emitGroupBindDefine e env lamName name arity clauses captured site =
   let saved = (bufRef e).value
   bufRef e := []
   let scope = beginDefine e
@@ -6893,6 +6967,7 @@ emitGroupBindDefine e env lamName name arity clauses captured =
       arity
       (clauseList clauses)
       ""
+      site
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
@@ -6960,12 +7035,12 @@ knotAlloc : Emit ->
   List CBind ->
   (List KnotCell, OrdMap (String, LTy))
 knotAlloc _ env _ [] = ([], env)
-knotAlloc e env cellEnv ((CBind name clauses) :: rest) =
+knotAlloc e env cellEnv ((CBind name clauses site) :: rest) =
   let lamName = "mdk_lam" ++ mangleScoped e
   let arity = clauseArity (clauseList clauses)
   let captured =
     keepInEnv cellEnv (removeStr name (dedupS (clausesFreeVars name clauses)))
-  let _ = emitGroupBindDefine e cellEnv lamName name arity clauses captured
+  let _ = emitGroupBindDefine e cellEnv lamName name arity clauses captured site
   let (cellPtr, cellWord) =
     emitClosureAllocPatch e lamName arity (lengthS captured)
   let (cells, env2) =
@@ -7210,6 +7285,8 @@ emitApp e env app =
         emitRefAlloc e env args
       else if fname == "setRef" then
         emitSetRef e env args
+      else if fname == siteSentinelName then
+        emitSiteLiteral e args
       else if isLocal env fname then
         -- A LOCALLY-BOUND name (param / let-binding) SHADOWS any same-named ctor /
         -- known top-level fn / interface method / extern: it is a runtime closure
@@ -9343,7 +9420,8 @@ trmcImplTry e fname method tag key positions arity clauses =
     let single = listLen clauses == 1 && allClausesPVar clauses
     let _ = tmcMarker e fname "trmc"
     let _ = emitTrmcHeader e fname arity
-    let _ = emitTrmcLoopBody e self arity slotTys clauses single spats sbody
+    let _ =
+      emitTrmcLoopBody e self arity slotTys clauses single spats sbody noDeclLoc
     let _ = emit e "}"
     let _ = emit e ""
     True
@@ -9473,9 +9551,21 @@ emitGroupBody e fname tag positions arity (clauses@[(pats, body)]) =
     let env = paramEnvByPos pats tyList 0
     emitFnBody e env fname body
   else
-    emitClauseTree e (implParamEnvByPos tag positions arity 0) arity clauses ""
+    emitClauseTree
+      e
+      (implParamEnvByPos tag positions arity 0)
+      arity
+      clauses
+      ""
+      noDeclLoc
 emitGroupBody e fname tag positions arity clauses =
-  emitClauseTree e (implParamEnvByPos tag positions arity 0) arity clauses ""
+  emitClauseTree
+    e
+    (implParamEnvByPos tag positions arity 0)
+    arity
+    clauses
+    ""
+    noDeclLoc
 
 -- build a LTy list of length n, typed as tagToLTy tag at positions ∈ positions,
 -- LTInt elsewhere.
@@ -9520,19 +9610,22 @@ paramEnvByPos _ _ _ = omEmpty
 -- either opens a fresh `define` — where inheriting a parent function's block label
 -- would emit invalid cross-function LLVM, issue #53 — or sits at top level), so
 -- making it explicit costs one argument and buys a call-site-local answer.
+-- `site` is the function's first-clause site, where a call no clause accepts
+-- aborts (`noDeclLoc` for an impl method, which has none).
 emitClauseTree : Emit ->
   OrdMap (String, LTy) ->
   Int ->
   List (List Pat, CExpr) ->
   String ->
+  Loc ->
   Unit
-emitClauseTree e env arity clauses outer =
+emitClauseTree e env arity clauses outer site =
   let roots = emitArgs e env (implScrutVars arity 0)
   let slot = freshReg e
   let _ = emit e ("  " ++ slot ++ " = alloca i64")
   let endL = "decend" ++ intToString (freshLocal e)
   let rty = Ref LTInt
-  let _ = emitClauseChain e env arity clauses roots slot endL rty outer
+  let _ = emitClauseChain e env arity clauses roots slot endL rty outer site
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
@@ -9560,9 +9653,10 @@ emitClauseChain : Emit ->
   String ->
   Ref LTy ->
   String ->
+  Loc ->
   Unit
-emitClauseChain _ _ _ [] _ _ _ _ _ = ()
-emitClauseChain e env arity (c :: rest) roots slot endL rty outer =
+emitClauseChain _ _ _ [] _ _ _ _ _ _ = ()
+emitClauseChain e env arity (c :: rest) roots slot endL rty outer site =
   let nextL = chainNextLabel e rest outer
   -- Stamp this clause's next-clause label INTO its `__fallthrough__` sentinels
   -- (emit_support's labelFallthrough) before building the arms, so the sentinel
@@ -9571,9 +9665,9 @@ emitClauseChain e env arity (c :: rest) roots slot endL rty outer =
   -- emitDecision NULLED, so a refutable pattern-guard clause (whose guard chain
   -- desugars to a body-level CDecision) fell through to `@mdk_oob` instead of the
   -- next clause.  (That Ref is gone as of issue #354; the label is now threaded.)
-  let c2 = ftClause nextL c
+  let c2 = ftClause (if nextL == "" then siteFtLabel e site else nextL) c
   let arms = [clauseArm arity c2]
-  let tree = compileTree (NoArm noDeclLoc) [False] (implRows [c2] 0)
+  let tree = compileTree (NoArm site) [False] (implRows [c2] 0)
   -- This tree is SINGLE-ROW (one clause), so its CTFail means "this clause's pattern
   -- missed" → resume at nextL.  Handed to emitTree as an argument (issue #354); it is
   -- the only emitTree entry point with a live fallthrough — the other three (a
@@ -9583,11 +9677,12 @@ emitClauseChain e env arity (c :: rest) roots slot endL rty outer =
     ()
   else
     let _ = emit e (nextL ++ ":")
-    emitClauseChain e env arity rest roots slot endL rty outer
+    emitClauseChain e env arity rest roots slot endL rty outer site
 
 -- label a clause's fall-through sentinels with the block to resume at.  An EMPTY
--- label means "no next clause" (the last clause of a top-level chain): leave the
--- sentinels BARE so emitFallthrough lowers them to the non-exhaustive abort.
+-- label means "no next clause" and no site to report (an impl method's last
+-- clause): leave the sentinels BARE so emitFallthrough lowers them to the
+-- unlocated non-exhaustive abort.
 ftClause : String -> (List Pat, CExpr) -> (List Pat, CExpr)
 ftClause "" c = c
 ftClause lbl (pats, body) = (pats, labelFallthrough body lbl)
@@ -10063,6 +10158,7 @@ emitPatLamDefine e env lamName extra pats captured body =
       arity
       [(pats, body)]
       ""
+      noDeclLoc
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
@@ -11908,33 +12004,33 @@ emitFns e (b :: rest) =
 -- (v3/v4 prove nothing outside the group references it); the ROOT emits the whole
 -- group define at its own bind position (deterministic emission order).
 emitFn : Emit -> CBind -> Unit
-emitFn e (CBind name [CClause pats body]) =
+emitFn e (CBind name [CClause pats body] site) =
   match dispGroupOf !e.gDispGroups name
     Some grp => if dispRootOf grp == name then emitGDispGroup e grp
     None => match omLookup name !e.rawWorkers
-      Some w => emitRawWorkerFn e name pats body w
-      None => emitFnSingle e name pats body
+      Some w => emitRawWorkerFn e name pats (siteFtBody e site body) w
+      None => emitFnSingle e name pats (siteFtBody e site body) site
 
-emitFn e (CBind name (c :: rest)) = match dispGroupOf !e.gDispGroups name
+emitFn e (CBind name (c :: rest) site) = match dispGroupOf !e.gDispGroups name
   Some grp => if dispRootOf grp == name then emitGDispGroup e grp
   None =>
     let clauses = clausePairs (c :: rest)
-    if trmcTryFn e name clauses False then
+    if trmcTryFn e name clauses False site then
       ()
     else
-      emitMultiClauseFn e name clauses
-emitFn e (CBind _ []) = gapU e "top-level function with no clauses"
+      emitMultiClauseFn e name clauses site
+emitFn e (CBind _ [] _) = gapU e "top-level function with no clauses"
 
 -- a single-clause function with no raw U64 worker.
-emitFnSingle : Emit -> String -> List Pat -> CExpr -> Unit
-emitFnSingle e name pats body =
+emitFnSingle : Emit -> String -> List Pat -> CExpr -> Loc -> Unit
+emitFnSingle e name pats body site =
   let (pats2, body2) = etaSaturateMethodBody e name pats body
-  if trmcTryFn e name [(pats2, body2)] True then
+  if trmcTryFn e name [(pats2, body2)] True site then
     ()
   else if allPVar pats2 then
     emitFnClause e name pats2 body2
   else
-    emitMultiClauseFn e name [(pats2, body2)]
+    emitMultiClauseFn e name [(pats2, body2)] site
 
 -- TRMC branch point (TRMC-DESIGN.md §"Emitter touchpoints" #2): if `name`'s
 -- clauses are TRMC-eligible AND its leading-dict count is uniform across clauses
@@ -11945,8 +12041,8 @@ emitFnSingle e name pats body =
 -- return False so the caller falls back to the current (stack-growing) codegen.
 -- `forceSingle` marks the all-PVar single-clause path so emitTrmcFn descends the
 -- CIf-guarded body directly instead of the decision-tree chain.
-trmcTryFn : Emit -> String -> List (List Pat, CExpr) -> Bool -> Bool
-trmcTryFn e name clauses forceSingle =
+trmcTryFn : Emit -> String -> List (List Pat, CExpr) -> Bool -> Loc -> Bool
+trmcTryFn e name clauses forceSingle site =
   let arity = clauseArity clauses
   let single = forceSingle && allClausesPVar clauses
   if arity > 0
@@ -11958,7 +12054,7 @@ trmcTryFn e name clauses forceSingle =
     let (spats, sbody) = match clauses
       (ps, b) :: _ => (ps, b)
       [] => ([], CLit LUnit)
-    let _ = emitTrmcFn e name arity ptys clauses single spats sbody
+    let _ = emitTrmcFn e name arity ptys clauses single spats sbody site
     True
   else
     False
@@ -12152,8 +12248,8 @@ applyEtaArgs body (_ :: rest) = applyEtaArgs body rest
 -- `aK` scrutinee params are typed from the fn's inferred signature (sigTable /
 -- FnSig) so body arithmetic/printing selects the right instruction; absent a
 -- sig, params default to Int (the impl-path behaviour).
-emitMultiClauseFn : Emit -> String -> List (List Pat, CExpr) -> Unit
-emitMultiClauseFn e name clauses =
+emitMultiClauseFn : Emit -> String -> List (List Pat, CExpr) -> Loc -> Unit
+emitMultiClauseFn e name clauses site =
   let arity = clauseArity clauses
   let ptys = match sigLookup e name
     Some (FnSig ts _) => ts
@@ -12162,7 +12258,7 @@ emitMultiClauseFn e name clauses =
   let _ = beginDefine e
   let _ = emit e "define i64 @mdk_\{name}(\{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
-  let _ = emitClauseTree e env arity clauses ""
+  let _ = emitClauseTree e env arity clauses "" site
   let _ = emit e "}"
   emit e ""
 
@@ -12213,8 +12309,9 @@ emitTrmcFn : Emit ->
   Bool ->
   List Pat ->
   CExpr ->
+  Loc ->
   Unit
-emitTrmcFn e name arity ptys clauses single singlePats singleBody =
+emitTrmcFn e name arity ptys clauses single singlePats singleBody site =
   let _ = tmcMarker e name "trmc"
   let _ = emitTrmcHeader e ("mdk_" ++ name) arity
   let _ =
@@ -12227,6 +12324,7 @@ emitTrmcFn e name arity ptys clauses single singlePats singleBody =
       single
       singlePats
       singleBody
+      site
   let _ = emit e "}"
   emit e ""
 
@@ -12258,8 +12356,9 @@ emitTrmcLoopBody : Emit ->
   Bool ->
   List Pat ->
   CExpr ->
+  Loc ->
   Unit
-emitTrmcLoopBody e self arity slotTys clauses single singlePats singleBody =
+emitTrmcLoopBody e self arity slotTys clauses single singlePats singleBody site =
   let hole = freshReg e
   let _ = emit e ("  " ++ hole ++ " = alloca i64")
   let destSlot = freshReg e
@@ -12283,6 +12382,7 @@ emitTrmcLoopBody e self arity slotTys clauses single singlePats singleBody =
       singlePats
       reloaded
       singleBody
+      site
   e.trmcCtx := saved
   let _ = emit e (exitL ++ ":")
   let r = freshReg e
@@ -12343,13 +12443,14 @@ trmcEmitDispatch : Emit ->
   List Pat ->
   List (String, (String, LTy)) ->
   CExpr ->
+  Loc ->
   Unit
-trmcEmitDispatch e reloaded arity clauses single singlePats aenv singleBody =
+trmcEmitDispatch e reloaded arity clauses single singlePats aenv singleBody site =
   if single then
     let env = trmcRenameEnv singlePats aenv
     emitTrmcBody e env singleBody
   else
-    emitClauseTree e (omFromPairs reloaded omEmpty) arity clauses ""
+    emitClauseTree e (omFromPairs reloaded omEmpty) arity clauses "" site
 
 -- bind the clause's PVar param names to the reloaded `aK` operand words (single
 -- clause, all-PVar params — the slice-2 ABI requirement also holds for TRMC).
@@ -12425,7 +12526,7 @@ emitTrmcBody e env ex = emitTrmcLeaf e env ex
 -- every binding is a nullary value binding (the descendable let-group shape).
 allNullaryBinds : List CBind -> Bool
 allNullaryBinds [] = True
-allNullaryBinds ((CBind _ [CClause [] _]) :: rest) = allNullaryBinds rest
+allNullaryBinds ((CBind _ [CClause [] _] _) :: rest) = allNullaryBinds rest
 allNullaryBinds _ = False
 
 -- emit each nullary value binding left-to-right, threading the env (mirrors
@@ -12435,7 +12536,7 @@ trmcBindNullaryGroup : Emit ->
   List CBind ->
   OrdMap (String, LTy)
 trmcBindNullaryGroup _ env [] = env
-trmcBindNullaryGroup e env ((CBind name [CClause [] rhs]) :: rest) =
+trmcBindNullaryGroup e env ((CBind name [CClause [] rhs] _) :: rest) =
   let (v, ty) = emitExpr e env rhs
   trmcBindNullaryGroup e (omInsert name (v, ty) env) rest
 trmcBindNullaryGroup _ env (_ :: rest) = env
@@ -12673,7 +12774,7 @@ emitGDispMembers e binds (m :: rest) =
 -- gDispCtx-aware).  Each member's clause chain is emitted with "" as its outer
 -- fallthrough (each member manages its own fallthroughs).
 emitGDispMember : Emit -> CBind -> Unit
-emitGDispMember e (CBind name clauses) = match !e.gDispCtx
+emitGDispMember e (CBind name clauses site) = match !e.gDispCtx
   GDispOff => gapU e "(b') member emit with no active group context"
   GDispOn _ _ uslots _ _ =>
     let arity = clauseArityOf clauses
@@ -12686,10 +12787,10 @@ emitGDispMember e (CBind name clauses) = match !e.gDispCtx
     match pairs
       [(pats, body)] =>
         if allPVar pats then
-          emitGDispBody e (trmcRenameEnv pats reloaded) body
+          emitGDispBody e (trmcRenameEnv pats reloaded) (siteFtBody e site body)
         else
-          emitClauseTree e (omFromPairs reloaded omEmpty) arity pairs ""
-      _ => emitClauseTree e (omFromPairs reloaded omEmpty) arity pairs ""
+          emitClauseTree e (omFromPairs reloaded omEmpty) arity pairs "" site
+      _ => emitClauseTree e (omFromPairs reloaded omEmpty) arity pairs "" site
 
 gDispTake : Int -> List a -> List a
 gDispTake n _
@@ -12851,7 +12952,8 @@ emitGDispEdge e env f args uslots =
 -- first clause's param count) — the detection's isFn/fa hooks read it.
 gDispFnArsOf : List CBind -> List (String, Int)
 gDispFnArsOf [] = []
-gDispFnArsOf ((CBind n cs) :: rest) = (n, clauseArityOf cs) :: gDispFnArsOf rest
+gDispFnArsOf ((CBind n cs _) :: rest) =
+  (n, clauseArityOf cs) :: gDispFnArsOf rest
 
 -- would the LLVM Stage-1 self-TMC (trmcTryFn's gate) already claim this fn?
 -- (the shared dispValidate v5 keeps such singletons on Stage-1.)
@@ -12879,7 +12981,7 @@ gDispKeepEtaStable e binds (g :: rest) =
 gDispMembersEtaStable : Emit -> List CBind -> List String -> Bool
 gDispMembersEtaStable _ _ [] = True
 gDispMembersEtaStable e binds (m :: rest) = match omLookup m !e.gDispBindMap
-  Some (CBind name [CClause pats body]) =>
+  Some (CBind name [CClause pats body] _) =>
     etaDeficit e name pats body (methodBodyDeficit e body) == 0
       && gDispMembersEtaStable e binds rest
   Some _ => gDispMembersEtaStable e binds rest
@@ -13020,7 +13122,7 @@ floatFwEligible e name pats ptys body =
 -- collect the float-fw set from the program's single-clause function binds.
 collectFloatFw : Emit -> List CBind -> List (String, (Int, List Int))
 collectFloatFw _ [] = []
-collectFloatFw e ((CBind name ((CClause pats body) :: [])) :: rest) =
+collectFloatFw e ((CBind name ((CClause pats body) :: []) _) :: rest) =
   let ptys = match sigLookup e name
     Some (FnSig ts _) => ts
     None => allInt pats
@@ -13040,7 +13142,7 @@ collectFloatFw e (_ :: rest) = collectFloatFw e rest
 
 collectFloatClosureFns : Emit -> List CBind -> List String
 collectFloatClosureFns _ [] = []
-collectFloatClosureFns e ((CBind name ((CClause pats body) :: [])) :: rest) =
+collectFloatClosureFns e ((CBind name ((CClause pats body) :: []) _) :: rest) =
   if isFloatClosureBody e name pats body then
     name :: collectFloatClosureFns e rest
   else
@@ -13253,7 +13355,7 @@ emitFloatWorkerFn e name pats ptys body =
 -- (whose own worker is `__fw`), and none of the shapes emitFn routes elsewhere
 -- (a dispatch-group member, a TRMC loop, an eta-saturated method body).
 rawWorkerOf : Emit -> Bool -> CBind -> Option RawWorker
-rawWorkerOf e refine (CBind name [CClause pats body]) = match declSigOf e name
+rawWorkerOf e refine (CBind name [CClause pats body] _) = match declSigOf e name
   Some (pnames, rname) =>
     let arity = lengthS pats
     let declaredRk = rawKindOfHead rname
@@ -13293,7 +13395,7 @@ rawWorkerOf _ _ _ = None
 -- of its cell's payload.
 collectConstGlobals : List CBind -> OrdMap Lit
 collectConstGlobals [] = omEmpty
-collectConstGlobals ((CBind name [CClause [] (CLit l)]) :: rest) =
+collectConstGlobals ((CBind name [CClause [] (CLit l)] _) :: rest) =
   omInsert name l (collectConstGlobals rest)
 collectConstGlobals (_ :: rest) = collectConstGlobals rest
 
@@ -13712,8 +13814,8 @@ emitValueRet e env ex =
 -- ── classifying top-level bindings ──────────────────────────────────────────
 -- a function binding = non-`main`, first clause has at least one parameter.
 isFnBind : CBind -> Bool
-isFnBind (CBind "main" _) = False
-isFnBind (CBind _ ((CClause (_ :: _) _) :: _)) = True
+isFnBind (CBind "main" _ _) = False
+isFnBind (CBind _ ((CClause (_ :: _) _) :: _) _) = True
 isFnBind _ = False
 
 collectFns : List CBind -> List String
@@ -13728,7 +13830,7 @@ fnBinds (b :: rest) = if isFnBind b then b :: fnBinds rest else fnBinds rest
 -- the nullary value bindings (non-`main`, no parameters), in source order.
 valBinds : List CBind -> List CBind
 valBinds [] = []
-valBinds ((CBind "main" cs) :: rest) = valBinds rest
+valBinds ((CBind "main" cs _) :: rest) = valBinds rest
 valBinds (b :: rest) = if isFnBind b then valBinds rest else b :: valBinds rest
 
 -- value bindings ORDERED so a binding precedes the ones that reference it (E1b).
@@ -13976,7 +14078,7 @@ letGroupEnv : OrdMap FnSig ->
   List CBind ->
   List (String, LTy)
 letGroupEnv _ env [] = env
-letGroupEnv sigs env ((CBind name [CClause [] rhs]) :: rest) =
+letGroupEnv sigs env ((CBind name [CClause [] rhs] _) :: rest) =
   letGroupEnv sigs ((name, typeOf sigs env rhs) :: env) rest
 letGroupEnv _ env _ = env
 
@@ -14184,11 +14286,11 @@ firstSome None y = y
 
 -- infer one function's full signature against the current (partial) sig table.
 inferOneSig : OrdMap FnSig -> Option (List String, String) -> CBind -> FnSig
-inferOneSig sigs dsig (CBind _ [CClause pats body]) =
+inferOneSig sigs dsig (CBind _ [CClause pats body] _) =
   let ptys = inferParamTysSeed sigs dsig pats body 0
   let env = zipParamEnv pats ptys
   FnSig ptys (seedRetTy dsig (typeOf sigs env body))
-inferOneSig sigs dsig (CBind _ (c :: rest)) =
+inferOneSig sigs dsig (CBind _ (c :: rest) _) =
   inferMultiSig sigs dsig (c :: rest)
 inferOneSig _ _ _ = FnSig [] LTInt
 
@@ -14719,7 +14821,7 @@ indexOfStr x (y :: rest) =
 
 collectRecords : List CBind -> List (String, List String)
 collectRecords [] = []
-collectRecords ((CBind _ clauses) :: rest) =
+collectRecords ((CBind _ clauses _) :: rest) =
   collectRecordsClauses clauses ++ collectRecords rest
 
 collectRecordsClauses : List CClause -> List (String, List String)
@@ -15782,7 +15884,7 @@ emitLines e (line :: rest) =
 -- a value binding should have"), never which of the two causes produced it.
 emitTopGlobals : Emit -> List CBind -> Unit
 emitTopGlobals _ [] = ()
-emitTopGlobals e ((CBind name [CClause [] body]) :: rest) =
+emitTopGlobals e ((CBind name [CClause [] body] _) :: rest) =
   -- #2753 review S2-1: the prologue stays in `@mdk_program_main`'s own scope,
   -- NOT each bind's module.  An initializer is emitted INSIDE this define, so
   -- everything it lifts — a const cell, a `@.strc.` literal, a lambda — is
@@ -15796,7 +15898,7 @@ emitTopGlobals e ((CBind name [CClause [] body]) :: rest) =
   let _ = emit e "  store i64 \{v}, ptr @mdk_g_\{name}"
   let _ = markGlobalInit e name ty
   emitTopGlobals e rest
-emitTopGlobals _ ((CBind name _) :: _) =
+emitTopGlobals _ ((CBind name _ _) :: _) =
   panic
     ("llvm: top-level function '"
       ++ name
@@ -15826,7 +15928,7 @@ emitLazyForces e binds = emitLazyForcesGo e (lazyValBinds e binds)
 
 emitLazyForcesGo : Emit -> List CBind -> Unit
 emitLazyForcesGo _ [] = ()
-emitLazyForcesGo e ((CBind name [CClause [] body]) :: rest) =
+emitLazyForcesGo e ((CBind name [CClause [] body] _) :: rest) =
   -- an ordinary forcer is its bind's module; the synthesized `$memo_<Tag>_<m>`
   -- cells carry no `__` and fall to `program` through `moduleIdOf`.
   let _ = setScopeOfBind e name
@@ -15931,8 +16033,8 @@ mainBody e [] =
       ++ " — a program must define 'main' as a zero-arg value: write 'main = …', not"
       ++ " 'main () = …'. ('medaka run'/'build' never applies main; it forces a"
       ++ " zero-arg main for its effects.)")
-mainBody _ ((CBind "main" [CClause [] body]) :: _) = body
-mainBody e ((CBind "main" _) :: _) =
+mainBody _ ((CBind "main" [CClause [] body] _) :: _) = body
+mainBody e ((CBind "main" _ _) :: _) =
   panic
     ("llvm: 'main'"
       ++ emitSrcWhere e
@@ -15997,9 +16099,9 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
 
 emitFnsGaps : Emit -> List CBind -> Unit
 emitFnsGaps _ [] = ()
-emitFnsGaps e ((CBind name cs) :: rest) =
+emitFnsGaps e ((CBind name cs site) :: rest) =
   let _ = setGapBind e ("fn " ++ name)
-  let _ = emitFn e (CBind name cs)
+  let _ = emitFn e (CBind name cs site)
   emitFnsGaps e rest
 
 emitImplsGaps : Emit -> List CImplEntry -> Unit
@@ -16014,11 +16116,11 @@ emitGroupsGaps e (g :: rest) =
 
 emitTopBindsGaps : Emit -> OrdMap (String, LTy) -> List CBind -> Unit
 emitTopBindsGaps _ _ [] = ()
-emitTopBindsGaps e env ((CBind name [CClause [] body]) :: rest) =
+emitTopBindsGaps e env ((CBind name [CClause [] body] _) :: rest) =
   let _ = setGapBind e ("val " ++ name)
   let (v, ty) = emitExpr e env body
   emitTopBindsGaps e (omInsert name (v, ty) env) rest
-emitTopBindsGaps e env ((CBind name _) :: rest) =
+emitTopBindsGaps e env ((CBind name _ _) :: rest) =
   let _ = setGapBind e ("val " ++ name)
   let _ = gapU e "non-nullary / multi-clause value binding"
   emitTopBindsGaps e env rest

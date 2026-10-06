@@ -172,7 +172,7 @@ freeVarsStmts b (_ :: rest) = freeVarsStmts b rest
 export
 freeVarsBinds : List String -> List CBind -> List String
 freeVarsBinds _ [] = []
-freeVarsBinds b ((CBind _ clauses) :: rest) =
+freeVarsBinds b ((CBind _ clauses _) :: rest) =
   freeVarsClauses b clauses ++ freeVarsBinds b rest
 
 -- A CLetGroup's names are already present in [b]. Each clause adds its own
@@ -191,7 +191,7 @@ bindNames bs = map bindName bs
 
 export
 bindName : CBind -> String
-bindName (CBind name _) = name
+bindName (CBind name _ _) = name
 
 -- the variables a pattern binds.
 export
@@ -607,7 +607,7 @@ mentionsSelfMethodStmt method tag (CSAssign _ ex) =
 export
 mentionsSelfMethodBinds : String -> String -> List CBind -> Bool
 mentionsSelfMethodBinds _ _ [] = False
-mentionsSelfMethodBinds method tag ((CBind _ clauses) :: rest) =
+mentionsSelfMethodBinds method tag ((CBind _ clauses _) :: rest) =
   mentionsSelfMethodClauses method tag clauses
     || mentionsSelfMethodBinds method tag rest
 
@@ -712,7 +712,7 @@ mentionsSelfDictStmt self (CSAssign _ ex) = mentionsSelfDict self ex
 
 mentionsSelfDictBinds : String -> List CBind -> Bool
 mentionsSelfDictBinds _ [] = False
-mentionsSelfDictBinds self ((CBind _ clauses) :: rest) =
+mentionsSelfDictBinds self ((CBind _ clauses _) :: rest) =
   mentionsSelfDictClauses self clauses || mentionsSelfDictBinds self rest
 
 mentionsSelfDictClauses : String -> List CClause -> Bool
@@ -737,9 +737,9 @@ dropFirstN n (_ :: rest) = dropFirstN (n - 1) rest
 export
 selfRefersToBinds : SelfRef -> List CBind -> Bool
 selfRefersToBinds _ [] = False
-selfRefersToBinds self ((CBind _ [CClause [] rhs]) :: rest) =
+selfRefersToBinds self ((CBind _ [CClause [] rhs] _) :: rest) =
   not (selfFree self rhs) || selfRefersToBinds self rest
-selfRefersToBinds self ((CBind _ clauses) :: rest) =
+selfRefersToBinds self ((CBind _ clauses _) :: rest) =
   selfRefersToBindClauses self clauses || selfRefersToBinds self rest
 selfRefersToBinds self (_ :: rest) = selfRefersToBinds self rest
 
@@ -1084,7 +1084,7 @@ dispTryRoot : (String -> String) ->
   OrdMap Unit ->
   CBind ->
   (Option DispGroup, OrdMap Unit)
-dispTryRoot cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets claimed doomed (CBind root clauses) =
+dispTryRoot cf isFn fa s1 fnSet bindIx headsMap headsIx implHeads consTargets claimed doomed (CBind root clauses _) =
   let arity = clauseArityOf clauses
   if arity > 0
     && dispNonDict clauses
@@ -1245,7 +1245,7 @@ dispBindConsTargets : (String -> String) ->
   OrdMap Unit ->
   CBind ->
   List String
-dispBindConsTargets cf isFn fa fnSet (CBind _ clauses) =
+dispBindConsTargets cf isFn fa fnSet (CBind _ clauses _) =
   flatMap (c => dispExprConsTargets cf isFn fa fnSet (clauseBodyOf c)) clauses
 
 dispExprConsTargets : (String -> String) ->
@@ -1336,7 +1336,7 @@ dispGuardHeads cf (CGBind _ e) = allCallHeads cf e
 -- every head referenced anywhere in a bind's clause bodies (pass-0 table for the
 -- external-entry + helper-closure checks).
 dispBindHeads : (String -> String) -> CBind -> List String
-dispBindHeads cf (CBind _ clauses) =
+dispBindHeads cf (CBind _ clauses _) =
   flatMap (c => allCallHeads cf (clauseBodyOf c)) clauses
 
 -- every head referenced from a lowered impl/default body (impl bodies are outside
@@ -1404,7 +1404,7 @@ dispGrow cf isFn fa bindIx fnSet claimed root [] back accRev accSet parents doom
 dispGrow cf isFn fa bindIx fnSet claimed root (m :: rest) back accRev accSet parents doomed =
   match omLookup m bindIx
     None => (None, doomed)
-    Some (CBind _ clauses) =>
+    Some (CBind _ clauses _) =>
       -- a non-root member must be non-dict (it is emitted via the normal clause
       -- machinery with redirected leaves); it MAY have literal- or ctor-pattern
       -- clauses (singleOp dispatch on a Char, `layout` dispatch on the RawTok
@@ -1507,8 +1507,8 @@ dispMarkDoomed parents m doomed =
 export
 dispFindBind : List CBind -> String -> Option CBind
 dispFindBind [] _ = None
-dispFindBind ((CBind n cs) :: rest) m =
-  if n == m then Some (CBind n cs) else dispFindBind rest m
+dispFindBind ((CBind n cs site) :: rest) m =
+  if n == m then Some (CBind n cs site) else dispFindBind rest m
 
 -- check every clause's every tail leaf; collect the NEW group fns referenced by case-(2)
 -- cons bottoms and case-(3) tail-calls.  Returns None if any leaf is an unsupported shape.
@@ -1641,7 +1641,7 @@ dispMemberHasSpineCons : (String -> String) ->
   String ->
   Bool
 dispMemberHasSpineCons cf isFn fa bindIx memberSet m = match omLookup m bindIx
-  Some (CBind _ cs) =>
+  Some (CBind _ cs _) =>
     anyListM
       (c =>
         isNonEmptyL (dispExprConsTargets cf isFn fa memberSet (clauseBodyOf c)))
@@ -1661,7 +1661,7 @@ dispMemberNonTailHeads : (String -> String) ->
   String ->
   List String
 dispMemberNonTailHeads cf isFn fa bindIx memberSet m = match omLookup m bindIx
-  Some (CBind _ clauses) =>
+  Some (CBind _ clauses _) =>
     flatMap
       (c => dispNonTailHeads cf isFn fa memberSet (clauseBodyOf c))
       clauses
