@@ -2654,3 +2654,17 @@ Five slices, four fix rounds, 5 issues closed, 4 filed. What the end review and 
 - **Coalescing output without a drain loses the last lines before a hang.** Slice 4's 50 ms batching dropped the lines a learner needs most; the review's first-hand headless-Chrome probe found it, and the fix is a burst budget (post immediately while quiet).
 - **Shell classifier in an isolated worktree:** refuses compound commands, heredocs whose text names git, and any command with the word `eval` in an argument (`--engines eval`). Write a script file to the scratchpad and run it.
 - **A battery harness can time out on identical consecutive output** (#3841); read a TIMEOUT row alone before concluding anything.
+
+## the-browser-can-wait (async on wasm, 2026-10-05/06)
+
+Four slices, two fix rounds, 1 issue closed (#2426), 6 filed (#3859-#3864), one production incident. What the review, CI and the deploy caught that no slice report did:
+
+- **A contract premise can be wrong in the design AND the contract, and the implementer's refusal is what finds it.** Both said `no_starvation` had no `Net`; it listens and spawns an echo server. The first dispatch of slice 2 REFUSED with the build error; reading the fixture myself (not the refusal's summary) settled it. Before cutting a slice around "this fixture is X", read the fixture.
+- **A detector can be proven and still not detect what the packet said.** The "return-at-once host reds the wall bound" claim was false: the scheduler spins to its own deadline, so wall stays high and it is the extra-CPU bound that fires. Prove each assertion under its own mutation and report which one fires.
+- **A ruling can rest on a refuted premise.** Ruling 2 said `ioPoll` was unreachable without `<Net>`; `waitRead` takes a raw `Int`. The reviewer's probe (native `timed out`, wasm `stdin ready`) went to Val, who reversed the mechanism. When a ruling's rationale is "no program observes it", ask the review for the program that does.
+- **Aggregate size gates have zero headroom by policy.** A deliberate +59-function marker reds `wasm_diff_wasm_emitted_size`; the precedent (#3298) is re-baseline to the measured values in the same PR, with one comment saying what it costs and why it is intentional.
+- **A deploy can break a feature its own checks pass.** `curl -sI /` and `/worker.js` showed the new headers; two unchanged worker scripts kept stale edge headers and Run was empty for every visitor. The immutable deploy URL working while the production origin did not is the discriminating probe. See [WEB-EDGE-STALE-HEADERS] in `AGENTS.md`.
+- **A subagent's "report written to <path>" is a claim.** The style-pass agent returned four findings and said it had written `reports/STYLE.md`; the file did not exist (39 s, 8 tool calls). `ls` the path before relying on a report, and verify any finding you act on yourself.
+- **`sprint-resync.sh` short-circuits on an existing merge commit** and skips golden re-derivation; it also needs three oracles built first (#3864). Until fixed, after a resync run `sh test/capture_goldens.sh --frozen selfproc_legA` and `make snapshot-check` yourself and read the diff.
+- **Packet branch names collide with long-lived agent worktrees** (`slice-work` was held by another worktree); use `slice-work-<stage>-<n>` (#3864).
+- **Shell classifier in an isolated worktree:** also refuses a compound loop that calls `gh api graphql` with a jq template, and any command whose arguments include a computed shell variable. Put polling in a script file and run `sh <file>`.

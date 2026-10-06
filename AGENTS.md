@@ -282,6 +282,12 @@ playground is the site: static Cloudflare Pages, compiler in WasmGC. Deploy:
 - 🚨 **[WEB-STALE-DIST]** It ships whatever `playground/dist/` holds. Before deploying: run
   `bash playground/build_playground_wasm.sh`, `rm -rf playground/site`, deploy, then compile
   a probe against the live wasm.
+- 🚨 **[WEB-EDGE-STALE-HEADERS]** A `playground/_headers` change for a file whose bytes did
+  not change is not served: the edge revalidates (304) and keeps the headers it cached, and a
+  COEP page then refuses an un-headered worker with an empty console and no error. After a
+  deploy, run a real program on the live origin, not just `curl -sI`:
+  `node test/visitor_battery/tools/browser_battery.mjs https://medaka-lang.dev/ <out-dir> 01_`
+  and read the console text (the battery's `ok` only means Run re-enabled).
 - ⚠️ **[WEB-OG-ABSOLUTE]** `og:image` is absolute, so preview origins show no card. That's
   expected.
 - ⚠️ **[WEB-SH-IS-A-GATE]** preflight executes any new `.sh` under `playground/` unless it is

@@ -160,9 +160,21 @@ require-corp` on the playground route and its three workers, and on nothing else
 
 ```sh
 curl -sI https://medaka-lang.dev/ | grep -i '^cross-origin'            # both headers
-curl -sI https://medaka-lang.dev/worker.js | grep -i '^cross-origin'   # COEP
+for w in worker compiler-worker language-worker; do
+  curl -sI "https://medaka-lang.dev/$w.js" | grep -ci '^cross-origin-embedder'   # 1 each
+done
 curl -sI https://medaka-lang.dev/blog/index.html | grep -ci '^cross-origin'  # 0
 ```
+
+Then run a real program on the live origin and read its output (a header check alone
+passed while Run was dead, see below):
+`node test/visitor_battery/tools/browser_battery.mjs https://medaka-lang.dev/ <out-dir> 01_`.
+
+⚠️ **A `_headers` change for a file whose bytes did not change is not served.** The edge
+revalidates (304) and keeps the headers it cached. A COEP page refuses a worker script
+without COEP, so Run is silently empty. Change the file's bytes in the same deploy; the
+immutable `<hash>.medaka.pages.dev` url shown by the deploy is the reference to compare
+against.
 
 Without them a guest `sleep` fails with a named `CapabilityError`.
 `node playground/headers_rules_test.mjs` checks the same scoping offline.
