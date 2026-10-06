@@ -24,7 +24,9 @@ import tools.prop_runner.{
   PreparedPropRequest(..),
   runPreparedPropRequestsResults,
 }
-import eval.eval.{EvalEnv(..), Value(..), lookupRuntimeBinding}
+import eval.eval.{
+  EvalEnv(..), Value(..), lookupEnv, lookupRuntimeBinding, runtimeCellsOf
+}
 import list.{nub}
 import frontend.ast.{
   Decl(..),
@@ -361,18 +363,56 @@ missingHelperIsRuntimeResult = match missingHelperPlan
 test "a missing selected helper binding is a runtime result" =
   expectTrue missingHelperIsRuntimeResult
 
-runtimeShadowValue : Int -> Int -> Int
-runtimeShadowValue local global =
-  let env = EvalEnv [
-    [("randomState", Ref (VInt local))],
-    [("randomState", Ref (VInt global))],
+runtimeShadowResults : ((Int, Int, Int), (Int, Int, Int))
+runtimeShadowResults =
+  let canonical = runtimeCellsOf [
+    ("randomState", VInt 19),
+    ("restoreRandomState", VInt 23),
+    ("setSeed", VInt 29),
   ]
-  match lookupRuntimeBinding env "randomState"
-    VInt n => n
-    _ => -1
+  let env = EvalEnv [
+    [
+      ("randomState", Ref (VInt 7)),
+      ("restoreRandomState", Ref (VInt 11)),
+      ("setSeed", Ref (VInt 13)),
+    ],
+    canonical,
+  ]
+  let local = (
+    match lookupEnv env "randomState"
+      VInt n => n
+      _ => -1,
+    match lookupEnv env "restoreRandomState"
+      VInt n => n
+      _ => -1,
+    match lookupEnv env "setSeed"
+      VInt n => n
+      _ => -1,
+  )
+  let runtime = (
+    match lookupRuntimeBinding env "randomState"
+      VInt n => n
+      _ => -1,
+    match lookupRuntimeBinding env "restoreRandomState"
+      VInt n => n
+      _ => -1,
+    match lookupRuntimeBinding env "setSeed"
+      VInt n => n
+      _ => -1,
+  )
+  (local, runtime)
 
-test "canonical runtime lookup ignores a nearer user shadow" =
-  expectEqual 19 (runtimeShadowValue 7 19)
+test "canonical runtime lookup ignores method-frame shadows for every RNG primitive" = expectEach
+  [
+    (
+      "ordinary lookup retains the method frame",
+      expectEqual (7, 11, 13) (fst runtimeShadowResults),
+    ),
+    (
+      "runtime lookup reaches canonical primitives",
+      expectEqual (19, 23, 29) (snd runtimeShadowResults),
+    ),
+  ]
 
 wrappedTy : Ty
 wrappedTy = TyCon {

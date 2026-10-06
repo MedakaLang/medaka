@@ -703,11 +703,10 @@ export
 lookupEnv : EvalEnv (Value e) -> String -> <e> Value e
 lookupEnv (EvalEnv frames) name = lookupFrames frames name
 
--- Runtime externs live in the shared global frame. A module environment also
--- carries nearer local/import frames (and a trailing file-tag frame), so a
--- normal lexical lookup may resolve a user declaration with the same spelling.
--- Walk all frames and retain the final cell, which is the global extern cell
--- for the runtime names installed by `externBindings`.
+-- Runtime externs have their own final frame. A module environment also carries
+-- nearer local/import frames and a mutable global dispatcher frame, where a user
+-- interface method may share an extern's spelling. Normal lexical lookup keeps
+-- that method behavior; this lookup reaches the retained primitive cell instead.
 export
 lookupRuntimeBinding : EvalEnv (Value e) -> String -> <e> Value e
 lookupRuntimeBinding (EvalEnv frames) name =
@@ -4019,6 +4018,16 @@ installConsts cells ((n, v) :: rest) =
   findCell cells n := v
   installConsts cells rest
 
+-- Keep one cell set for the installed primitives, apart from the global cells
+-- that receive interface dispatchers. Duplicate extra extern rows preserve the
+-- ordinary install order: the later row replaces the first matching cell.
+export
+runtimeCellsOf : List (String, Value e) -> <e> List (String, Ref (Value e))
+runtimeCellsOf externs =
+  let cells = map (n => (n, Ref VUnit)) (map fst externs)
+  let _ = installConsts cells externs
+  cells
+
 installGroups : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List (String, List (List Pat, Expr)) ->
@@ -4250,11 +4259,14 @@ evalModulesWith extraExterns preludeDecls0 modules0 =
       ++ implMethodNames allDecls
       ++ map fst preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
+  let runtimeCells = runtimeCellsOf externs
   let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
-  let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
+  let globalEnv =
+    EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
   let mods =
     buildModInfos
       globalCells
+      runtimeCells
       (coreImportExports privateCells globalCells preludeDecls)
       []
       modules
@@ -4281,12 +4293,13 @@ evalModulesWith extraExterns preludeDecls0 modules0 =
 -- One list cannot answer both — a single frame is first-match, so whichever cell
 -- it holds is the only one either consumer can see.
 buildModInfos : List (String, Ref (Value e)) ->
+  List (String, Ref (Value e)) ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (ModInfo (Value e))
-buildModInfos _ _ _ [] = []
-buildModInfos globalCells coreExports exportsMap ((mid, decls) :: rest) =
+buildModInfos _ _ _ _ [] = []
+buildModInfos globalCells runtimeCells coreExports exportsMap ((mid, decls) :: rest) =
   let grps = groupsOf decls
   -- P0-9: each module's OWN constructors ALSO live in its LOCAL frame (they stay
   -- in the shared global too — see evalModules — for by-name / `Type(..)`
@@ -4303,19 +4316,25 @@ buildModInfos globalCells coreExports exportsMap ((mid, decls) :: rest) =
   -- almost always) never reaches it — only the once-per-call lookup in
   -- applyClosure/applyClosureF (below) ever searches this far.
   let fileTagFrame = [(evalFileTagName, Ref (VString (moduleFileOf mid)))]
-  let menv = EvalEnv [localCells, imports, globalCells, fileTagFrame]
+  let menv =
+    EvalEnv [localCells, imports, globalCells, fileTagFrame, runtimeCells]
   let exports =
     ModExports
       (localCells
-        ++ publicExternCells globalCells decls
+        ++ publicExternCells runtimeCells decls
         ++ methodCellsOf globalCells decls
         ++ pubReexports coreExports exportsMap decls)
       (ctorsByTypeOf decls)
   ModInfo mid decls grps localCells menv
-    :: buildModInfos globalCells coreExports ((mid, exports) :: exportsMap) rest
+    :: buildModInfos
+      globalCells
+      runtimeCells
+      coreExports
+      ((mid, exports) :: exportsMap)
+      rest
 
--- Runtime externs likewise already have one shared global cell.  A public extern
--- export must expose that cell under an import spelling, rather than allocate a
+-- Runtime externs likewise retain one canonical cell. A public extern export
+-- must expose that cell under an import spelling, rather than allocate a
 -- module-local placeholder that would never receive the primitive value.
 export
 publicExternCells : List (String, Ref (Value e)) ->
@@ -4476,11 +4495,14 @@ buildRootModuleStateWith extraExterns preludeDecls0 modules0 =
       ++ implMethodNames allDecls
       ++ map fst preludeShared
   let globalCells = map (n => (n, Ref VUnit)) globalNames
+  let runtimeCells = runtimeCellsOf externs
   let privateCells = map (n => (n, Ref VUnit)) (map fst preludePrivate)
-  let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
+  let globalEnv =
+    EvalEnv (globalFramesWith privateCells globalCells ++ [runtimeCells])
   let mods =
     buildModInfos
       globalCells
+      runtimeCells
       (coreImportExports privateCells globalCells preludeDecls)
       []
       modules
