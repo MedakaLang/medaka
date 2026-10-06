@@ -2655,17 +2655,17 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "diff_async"
 area = "infra"
-shard = "gates_6"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
 kind = "native"
 migration = "done"
 run = "test/diff_async_test.mdk"
-oracles = []
-sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "compiler/eval/eval.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk"]
+oracles = ["wasm_emit_modules_main"]
+sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "compiler/backend/wasm_emit.mdk", "compiler/backend/wasm_preamble.mdk", "test/wasm/run.js", "compiler/eval/eval.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/async_fixtures"]
-toolchain = ["clang"]
+toolchain = ["clang", "wasm-tools", "node>=24"]
 
 [[gate]]
 name = "effect_builtin_param_domain"

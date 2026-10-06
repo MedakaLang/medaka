@@ -525,10 +525,10 @@ async function main() {
       check('34 readLine: names the extern as unavailable in the browser',
         stdin.includes('readLine is not available in the browser playground')
           && !stdin.includes('compiler trap'), JSON.stringify(stdin));
-      const asy = await runBattery(page, '49_async');
-      check('49 import async: says the module is native-only',
-        asy.includes('native-only and not available in the browser playground')
-          && !asy.includes('unknown module'), JSON.stringify(asy));
+      const asy = await runBattery(page, '64_async_defer');
+      check('64 import async: the deferred program runs and prints 3',
+        /(^|\n)3\n/.test(asy) && asy.includes('compiled & ran')
+          && !asy.includes('native-only'), JSON.stringify(asy));
       const inf = await runBattery(page, '51_infinite_loop', 40000);
       check('51 infinite loop: states the time limit',
         inf.includes("stopped after 10 s (the playground's time limit)")

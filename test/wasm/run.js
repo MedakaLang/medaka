@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // WasmGC runner — instantiate a module, supply the host IO imports, capture what
-// the module writes. `(start $__init)` runs the value-binding prologue + `main`
-// during instantiation.
+// the module writes. `(start $__init)` runs the value-binding prologue during
+// instantiation; the program itself runs when this host calls the `mdk_main`
+// export.  The hand-written test/wasm/w1_add.wat predates that entry and runs
+// in its start function, so a module without the export is only instantiated.
 //
 // Host-import ABI (WASMGC-DESIGN §6 / §10 fork e — byte-level custom shim, W6):
 //   * env.mdk_write_byte (i32) — write ONE byte (0..255) to stdout.
@@ -128,6 +130,7 @@ function mdkHexFloat(ip, fp, pexp) {
 }
 // --- END SHARED SHIM mdkStrToFloat ---
 
+let waitCell = null;
 const imports = { env: {
   mdk_write_byte: (b) => { acc.push(b & 0xff); },
   // W8 stderr seam (ePutStr / ePutStrLn): the diff gate checks stdout plus exact
@@ -182,14 +185,38 @@ const imports = { env: {
     try { vfs.writeFile(takePath(), Buffer.from(writeBuf)); writeBuf = []; return 1; }
     catch (e) { resultBuf = Buffer.from(String(e.message || e), 'utf8'); writeBuf = []; return 0; }
   },
+  // Clock host surface (design WA-1): reads in seconds, sleep in milliseconds.  A
+  // non-positive sleep returns at once, as medaka_rt.c's mdk_sleep_ms does.  The wait
+  // cell is made on first sleep so a page without SharedArrayBuffer still loads.
+  mdk_wall_time_sec: () => Date.now() / 1000,
+  mdk_monotonic_sec: () => performance.now() / 1000,
+  mdk_sleep_ms: (ms) => {
+    ms = Number(ms);
+    if (ms > 0) {
+      waitCell = waitCell || new Int32Array(new SharedArrayBuffer(4));
+      Atomics.wait(waitCell, 0, 0, ms);
+    }
+  },
   mdk_exit: (code) => { process.stdout.write(Buffer.from(acc).toString('utf8')); process.exit(code | 0); },
 } };
-WebAssembly.instantiate(bytes, imports)
-  .then(() => {
+// A module that exports `mdk_main` without the `mdk_entry_split` marker was emitted
+// with `main` inside its start function: instantiating it runs the program, and
+// calling `mdk_main` would run it again.  It is refused before instantiation.
+class OldEntryShape extends Error {}
+WebAssembly.compile(bytes)
+  .then((module) => {
+    const names = WebAssembly.Module.exports(module).map((e) => e.name);
+    if (names.includes('mdk_main') && !names.includes('mdk_entry_split'))
+      throw new OldEntryShape('this module was built by an older compiler: its start function runs main itself; rebuild it');
+    return WebAssembly.instantiate(module, imports);
+  })
+  .then((instance) => {
+    if (typeof instance.exports.mdk_main === 'function') instance.exports.mdk_main();
     process.stdout.write(Buffer.from(acc).toString('utf8'));
     if (eacc.length) process.stderr.write(Buffer.from(eacc).toString('utf8'));
   })
   .catch((e) => {
+    if (e instanceof OldEntryShape) { process.stderr.write('error: ' + e.message + '\n'); process.exit(1); }
     // A Medaka runtime trap: the guest streamed a coded `runtime error [E-CODE]: …`
     // line to stderr (via mdk_write_err_byte) and any pre-trap stdout to stdout BEFORE
     // the `unreachable`. Flush BOTH (native + playground preserve partial stdout too),

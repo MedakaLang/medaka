@@ -12,26 +12,32 @@ const [, , PLAYGROUND_ROOT, PORT_ARG, SCREENSHOT_DIR, SERVE_ROOT] = process.argv
 const PORT = parseInt(PORT_ARG, 10);
 
 let server;
+let noIsoServer;
 try {
   server = await startServer(PORT, SERVE_ROOT || PLAYGROUND_ROOT);
   console.log(`Static server up at ${server.url} (serving ${server.root})`);
+  // Same tree with COOP/COEP withheld: a deploy whose _headers did not apply.
+  noIsoServer = await startServer(PORT + 1, SERVE_ROOT || PLAYGROUND_ROOT, { NO_ISOLATION: '1' });
+  console.log(`No-isolation server up at ${noIsoServer.url}`);
 
-  const runSpec = (testFile) => new Promise((resolve) => {
+  const runSpec = (testFile, ...extra) => new Promise((resolve) => {
     // The spec's CLI contract stays `<base-url> <screenshots-dir>` so the same
     // spec still verifies a LIVE origin (README: `node tests/playground.spec.mjs
     // https://medaka-lang.dev /tmp/shots`). Whether the guide MUST be there is an
     // env flag, not an argument, for the same reason: it is a property of the
     // origin under test, and a live origin has no local root to hand over.
-    const child = spawn(process.execPath, [testFile, server.url, SCREENSHOT_DIR], {
+    const child = spawn(process.execPath, [testFile, server.url, SCREENSHOT_DIR, ...extra], {
       cwd: PLAYGROUND_ROOT,
       stdio: 'inherit',
     });
     child.on('exit', (code) => resolve(code ?? 1));
   });
   const status = (await runSpec(join(HERE, '..', 'tests', 'playground.spec.mjs')))
-    || (await runSpec(join(HERE, '..', 'runaway.spec.mjs')));
+    || (await runSpec(join(HERE, '..', 'runaway.spec.mjs')))
+    || (await runSpec(join(HERE, '..', 'async.spec.mjs'), noIsoServer.url));
   process.exitCode = status;
 } finally {
+  if (noIsoServer) await noIsoServer.stop();
   if (server) {
     console.log('Tearing down static server...');
     await server.stop();

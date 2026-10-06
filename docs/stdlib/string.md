@@ -8,9 +8,8 @@ grapheme clusters. Character classification and case mapping are ASCII
 only: a non-ASCII character is never a letter, digit, or space to these
 functions, and passes through `toUpper` and `toLower` unchanged.
 
-`length` and `isEmpty` are not defined here, to leave the `Foldable`
-methods of those names unshadowed. Use `stringLength s`, the codepoint
-count, and `s == ""`; `byteLength` counts UTF-8 bytes.
+`length s` counts codepoints; `byteLength` counts UTF-8 bytes.
+Use `s == ""` to test whether a string is empty.
 `intToString` renders an integer.
 
 ## Characters
@@ -201,6 +200,22 @@ a `bytes.Bytes`.
 ```medaka
 > fromUtf8 (toUtf8 "héllo→")
 "héllo→"
+```
+
+### `length`
+
+```
+length : String -> Int
+length s
+```
+
+The number of Unicode codepoints in `s`.
+
+```medaka
+> length "héllo"
+5
+> length ""
+0
 ```
 
 ### `byteLength`
