@@ -1253,3 +1253,28 @@ test "imported newtypes use exported custom generators while keeping counterexam
               (row => field "name" row == Some "private newtype value")
               (propertyReports report))),
       ])
+
+test "properties and ordinary tests share global cells with captured functions" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "import test.{expectEqual}\ncalls : Ref Int\ncalls = Ref 0\nincrement () = calls := !calls + 1\nprop \"captured global cell\" (n : Int) =\n  let prior = !calls\n  let _ = increment ()\n  !calls == prior + 1 && n == n\nprop \"captured mutation persists across laws\" (n : Int) = !calls == 20 && n == n\ntest \"captured global in ordinary test\" =\n  let prior = !calls\n  let _ = increment ()\n  expectEqual (prior + 1) (!calls)\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        gradeReport
+          0
+          [
+            ("eval", "captured global cell", "pass"),
+            ("eval", "captured mutation persists across laws", "pass"),
+            ("native", "captured global cell", "pass"),
+            ("native", "captured mutation persists across laws", "pass"),
+          ]
+          (Ok (code, report)),
+        expectEqual
+          [Some "pass", Some "pass"]
+          (map (field "status") (unitReportRows report)),
+      ])

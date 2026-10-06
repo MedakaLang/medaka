@@ -4378,7 +4378,26 @@ evalModulesRootEnvWith : List (String, Value e) ->
   List Decl ->
   List (String, List Decl) ->
   <e> List (String, Value e)
-evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
+evalModulesRootEnvWith extraExterns preludeDecls modules =
+  let (mods, globalCells) =
+    buildRootModuleStateWith extraExterns preludeDecls modules
+  rootFullEnv mods globalCells
+
+export
+evalModulesRootEvalEnvWith : List (String, Value e) ->
+  List Decl ->
+  List (String, List Decl) ->
+  <e> EvalEnv (Value e)
+evalModulesRootEvalEnvWith extraExterns preludeDecls modules =
+  let (mods, globalCells) =
+    buildRootModuleStateWith extraExterns preludeDecls modules
+  rootFullEvalEnv mods globalCells
+
+buildRootModuleStateWith : List (String, Value e) ->
+  List Decl ->
+  List (String, List Decl) ->
+  <e> (List (ModInfo (Value e)), List (String, Ref (Value e)))
+buildRootModuleStateWith extraExterns preludeDecls0 modules0 =
   -- [T-EVAL-LOCKSTEP] third driver: same rename, same reason as evalModulesWith.
   let (preludeDecls, modules) = mangleCtorCollisions preludeDecls0 modules0
   let externs = externBindings () ++ extraExterns
@@ -4418,7 +4437,7 @@ evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
   let _ = installGroups globalEnv globalCells preludeShared
   let _ = installGroups globalEnv privateCells preludePrivate
   let _ = installModGroups mods
-  rootFullEnv mods globalCells
+  (mods, globalCells)
 
 -- Flatten the root module's frame stack (locals first, then imports, then
 -- globals) to an assoc list — local names shadow imports shadow globals, which
@@ -4426,9 +4445,14 @@ evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
 rootFullEnv : List (ModInfo (Value e)) ->
   List (String, Ref (Value e)) ->
   <e> List (String, Value e)
-rootFullEnv [] globalCells = map cellResult globalCells
-rootFullEnv [ModInfo _ _ _ cells menv] globalCells = flattenEnv menv
-rootFullEnv (_ :: rest) globalCells = rootFullEnv rest globalCells
+rootFullEnv mods globalCells = flattenEnv (rootFullEvalEnv mods globalCells)
+
+rootFullEvalEnv : List (ModInfo (Value e)) ->
+  List (String, Ref (Value e)) ->
+  EvalEnv (Value e)
+rootFullEvalEnv [] globalCells = EvalEnv [globalCells]
+rootFullEvalEnv [ModInfo _ _ _ _ menv] _ = menv
+rootFullEvalEnv (_ :: rest) globalCells = rootFullEvalEnv rest globalCells
 
 flattenEnv : EvalEnv (Value e) -> <e> List (String, Value e)
 flattenEnv (EvalEnv frames) = map cellResult (concatList frames)
