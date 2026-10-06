@@ -1431,11 +1431,11 @@ mcpTestEnginesArg args = match get "engine" args
 
 -- The caveat sentence, derived from `engines`: an interpreter-only run keeps
 -- the original #81 warning; a run that includes the native engine says which
--- engine the verdict is under and that property tests stay on the interpreter.
+-- engine produced both its doctest and property verdicts.
 mcpTestCaveat : List Engine -> String
 mcpTestCaveat engines
   | mcpTestEngineHasNative engines =
-    "Results are under the NATIVE backend, the same engine `medaka test` defaults to; property tests always run under the interpreter. If the native build is unavailable (no clang), engine \"eval\" asks for the interpreter instead."
+    "Results are under the NATIVE backend, the same engine `medaka test` defaults to, for both doctests and property tests. If the native build is unavailable (no clang), engine \"eval\" asks for the interpreter instead."
   | otherwise =
     "⚠️ RESULTS ARE UNDER THE INTERPRETER (\{engineName EngInterp}), NOT the native backend — report as \"passes under eval\", never unqualified (#81)."
 
@@ -1469,7 +1469,7 @@ medakaTestSchema = jObject [
           (
             "description",
             JString
-              "Execution engine for the doctests. Default \"native\" (what `medaka test` defaults to); \"eval\" runs the interpreter.",
+              "Execution engine for doctests and property tests. Default \"native\" (what `medaka test` defaults to); \"eval\" runs the interpreter.",
           ),
         ],
       ),
