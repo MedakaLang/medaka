@@ -145,7 +145,7 @@ readFileNotUtf8Suffix = ": not valid UTF-8 (use readFileBytes for raw bytes)"
 export
 sourceNotUtf8Message : String -> String
 sourceNotUtf8Message path =
-  "\{path}: not valid UTF-8. Medaka source files must be UTF-8 text; re-save this file as UTF-8"
+  "\{path}: not valid UTF-8; re-save the file as UTF-8"
 
 -- `readSourceE` with the failure as the line a verb prints: the encoding
 -- refusal as an `Error:` naming the path, any other failure `readFile`'s own
@@ -525,14 +525,14 @@ availableModulesText stdlibDir = match availableModuleIds stdlibDir
   ids => stringConcat ["available modules: ", joinWith ", " ids]
 
 -- Render the hint SUFFIX appended to an `unknown module: <id>` CLI-text
--- message, e.g. " — available modules: array, list, map, string".  `[]` (no
+-- message, e.g. "; available modules: array, list, map, string".  `[]` (no
 -- stdlib dir readable) yields "" so callers can unconditionally append without
 -- a conditional.
 export
 availableModulesHint : String -> <IO> String
 availableModulesHint stdlibDir = match availableModulesText stdlibDir
   "" => ""
-  txt => " — " ++ txt
+  txt => "; " ++ txt
 
 -- ── file resolution + parsing ──
 
@@ -1576,7 +1576,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "readFileNotUtf8Suffix" (TyCon "String"))
 (DFunDef false "readFileNotUtf8Suffix" () (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))
 (DTypeSig true "sourceNotUtf8Message" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "sourceNotUtf8Message" ((PVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": not valid UTF-8. Medaka source files must be UTF-8 text; re-save this file as UTF-8"))))
+(DFunDef false "sourceNotUtf8Message" ((PVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": not valid UTF-8; re-save the file as UTF-8"))))
 (DTypeSig true "readSource" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "readSource" ((PVar "path")) (EMatch (EApp (EVar "readSourceE") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EVar "src"))) (arm (PCon "Err" (PCon "None")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "Error: ")) (EApp (EVar "display") (EApp (EVar "sourceNotUtf8Message") (EVar "path")))) (ELit (LString ""))))) (arm (PCon "Err" (PCon "Some" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
@@ -1652,7 +1652,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "availableModulesText" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModuleIds") (EVar "stdlibDir")) (arm (PList) () (ELit (LString ""))) (arm (PVar "ids") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "available modules: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ids")))))))
 (DTypeSig true "availableModulesHint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "availableModulesHint" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (ELit (LString ""))) (arm (PVar "txt") () (EBinOp "++" (ELit (LString " — ")) (EVar "txt")))))
+(DFunDef false "availableModulesHint" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (ELit (LString ""))) (arm (PVar "txt") () (EBinOp "++" (ELit (LString "; ")) (EVar "txt")))))
 (DTypeSig false "findModuleFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "findModuleFile" ((PVar "deps") (PVar "roots") (PVar "modId")) (EMatch (EApp (EApp (EVar "resolveDepFile") (EVar "deps")) (EVar "modId")) (arm (PCon "Some" (PVar "pathRoot")) () (EApp (EVar "Some") (EVar "pathRoot"))) (arm (PCon "None") () (EApp (EApp (EVar "findInRoots") (EVar "roots")) (EVar "modId")))))
 (DTypeSig false "findInRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
@@ -1813,7 +1813,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig false "readFileNotUtf8Suffix" (TyCon "String"))
 (DFunDef false "readFileNotUtf8Suffix" () (ELit (LString ": not valid UTF-8 (use readFileBytes for raw bytes)")))
 (DTypeSig true "sourceNotUtf8Message" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "sourceNotUtf8Message" ((PVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": not valid UTF-8. Medaka source files must be UTF-8 text; re-save this file as UTF-8"))))
+(DFunDef false "sourceNotUtf8Message" ((PVar "path")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": not valid UTF-8; re-save the file as UTF-8"))))
 (DTypeSig true "readSource" (TyFun (TyCon "String") (TyEffect ("FileRead") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "readSource" ((PVar "path")) (EMatch (EApp (EVar "readSourceE") (EVar "path")) (arm (PCon "Ok" (PVar "src")) () (EApp (EVar "Ok") (EVar "src"))) (arm (PCon "Err" (PCon "None")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "Error: ")) (EApp (EMethodRef "display") (EApp (EVar "sourceNotUtf8Message") (EVar "path")))) (ELit (LString ""))))) (arm (PCon "Err" (PCon "Some" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig true "findProjectRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
@@ -1889,7 +1889,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig true "availableModulesText" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "availableModulesText" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModuleIds") (EVar "stdlibDir")) (arm (PList) () (ELit (LString ""))) (arm (PVar "ids") () (EApp (EVar "stringConcat") (EListLit (ELit (LString "available modules: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "ids")))))))
 (DTypeSig true "availableModulesHint" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "availableModulesHint" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (ELit (LString ""))) (arm (PVar "txt") () (EBinOp "++" (ELit (LString " — ")) (EVar "txt")))))
+(DFunDef false "availableModulesHint" ((PVar "stdlibDir")) (EMatch (EApp (EVar "availableModulesText") (EVar "stdlibDir")) (arm (PLit (LString "")) () (ELit (LString ""))) (arm (PVar "txt") () (EBinOp "++" (ELit (LString "; ")) (EVar "txt")))))
 (DTypeSig false "findModuleFile" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "findModuleFile" ((PVar "deps") (PVar "roots") (PVar "modId")) (EMatch (EApp (EApp (EVar "resolveDepFile") (EVar "deps")) (EVar "modId")) (arm (PCon "Some" (PVar "pathRoot")) () (EApp (EVar "Some") (EVar "pathRoot"))) (arm (PCon "None") () (EApp (EApp (EVar "findInRoots") (EVar "roots")) (EVar "modId")))))
 (DTypeSig false "findInRoots" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))

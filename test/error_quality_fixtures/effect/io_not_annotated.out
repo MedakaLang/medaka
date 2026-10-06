@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/effect/io_not_annotated.mdk:2:20: Effectful value used where <> is allowed, but it performs <Stdout>
+error: test/error_quality_fixtures/effect/io_not_annotated.mdk:2:20: performs <Stdout> where only <> is allowed
   |
 2 | logIt msg = println msg
   |                     ^

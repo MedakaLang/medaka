@@ -1,1 +1,1 @@
-error: 'foo' is already defined at line 1. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent
+error: duplicate definition of `foo`, first defined at line 1; rename or remove this one

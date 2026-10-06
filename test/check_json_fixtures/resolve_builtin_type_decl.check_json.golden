@@ -1,1 +1,1 @@
-{"files":[{"file":"<fixture>","diagnostics":[{"code":"R-DUPLICATE-DEF","kind":"resolve","message":"'Int' is a built-in type: a program cannot declare a type of that name. Rename the declaration","range":{"end":{"character":8,"line":0},"start":{"character":5,"line":0}},"severity":1,"source":"medaka"}]}]}
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"R-DUPLICATE-DEF","kind":"resolve","message":"`Int` is a built-in type; rename the declaration","range":{"end":{"character":8,"line":0},"start":{"character":5,"line":0}},"severity":1,"source":"medaka"}]}]}

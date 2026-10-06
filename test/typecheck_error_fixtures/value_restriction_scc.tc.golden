@@ -1,2 +1,2 @@
-TYPE ERROR: Type mismatch: Int vs String
-TYPE ERROR: No impl of Num for String
+TYPE ERROR: type mismatch: Int vs String
+TYPE ERROR: no impl of Num for String

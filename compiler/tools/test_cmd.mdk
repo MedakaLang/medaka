@@ -610,7 +610,7 @@ renderFileErrors (path, src, diags) =
 
 typecheckGateFail : String -> String -> String
 typecheckGateFail target errText =
-  "type error in \{target} — `medaka test` requires it to `medaka check` first:\n\{errText}"
+  "type error in \{target}; `medaka test` requires it to `medaka check` first:\n\{errText}"
 
 -- The announcement for the `test "…"`/`prop "…"` exemption (issue #1680).  Names
 -- the module, the disjunct of `hasProps || hasTests` that exempted it, and the
@@ -618,7 +618,7 @@ typecheckGateFail target errText =
 -- the possible uncaught type error it may be.
 typecheckSkipNotice : String -> List Decl -> String
 typecheckSkipNotice target userDecls =
-  "note: typechecking was skipped for \{target}\n  reason: the module declares \{skipReasonDecls userDecls} and no doctests, so `medaka test` exempts it from the type checker (issue #1229) — those phases exist to exercise eval on constructs `medaka check` rejects.\n  a runtime error below may therefore be an uncaught TYPE error.\n  to type-check it: medaka check \{target}"
+  "note: typechecking was skipped for \{target}: it declares \{skipReasonDecls userDecls} and no doctests, so `medaka test` runs it untyped and a runtime error below may be an uncaught type error; to type-check it, run `medaka check \{target}`"
 
 -- Which disjunct of the exemption predicate fired.  Both are reported when both
 -- hold: the two are independent reasons and a reader debugging one should not be
@@ -1675,7 +1675,7 @@ attachRawLines ((_, l, _) :: rawRest) ((name, _, body) :: rest) =
 -- the diagnostic points at.
 uncapableExternsMsg : String -> List String -> String
 uncapableExternsMsg target names =
-  "\{target}: `test \"…\"` declarations here reach \{externWord names} \{joinCommas names}, which `medaka test` does not provide under the interpreter — its capability policy covers the clock, allocation counts and stderr only, so no filesystem, environment, stdin, network or subprocess extern is bound. No test was run. Run these tests natively instead: `medaka test --native \{target}`."
+  "\{target}: `test \"…\"` declarations reach \{externWord names} \{joinCommas names}, which `medaka test` does not provide under the interpreter, so no test was run; run them natively with `medaka test --native \{target}`"
 
 externWord : List String -> String
 externWord [_] = "the extern"
@@ -3503,7 +3503,7 @@ parseTestIntFlag nm a = match flagValue nm a
   None => Ok None
   Some s => match toInt s
     Some n => Ok (Some n)
-    None => Err "\{nm} requires an integer value, got '\{s}'"
+    None => Err "\{nm} requires an integer value, got `\{s}`"
 
 -- `--cases 0`/`--cases -3` parse as integers but `findFailure`'s `run >
 -- maxTests` guard makes any `n <= 0` an instant vacuous pass (0 draws,
@@ -3516,7 +3516,7 @@ parseTestCasesFlag a = match parseTestIntFlag "--cases" a
   Ok None => Ok None
   Ok (Some n) =>
     if n <= 0 then
-      Err "--cases requires a positive integer value, got '\{intToString n}'"
+      Err "--cases requires a positive integer, got \{intToString n}"
     else
       Ok (Some n)
 
@@ -3553,7 +3553,7 @@ parseEngineList spec =
 parseEngineNames : List String -> Result String (List Engine)
 parseEngineNames [] = Ok []
 parseEngineNames (n :: rest) = match engineOfName n
-  None => Err "unknown engine '\{n}' (known: eval, native)"
+  None => Err "unknown engine `\{n}` (known: eval, native)"
   Some e => map (e :: _) (parseEngineNames rest)
 
 engineOfName : String -> Option Engine
@@ -3998,7 +3998,7 @@ testChildArgs engines cases filterOpt seedOpt f =
 -- panic in file 3 of 20 would abort the whole in-process loop, so files
 -- 4-20 print nothing (#2589 item 1). Spawning per file means a
 -- dead file is contained to its own `runCommand` result: its stdout up to
--- the crash still prints, it is named DEAD in the aggregate, and the walk
+-- the crash still prints, it is named as died in the aggregate, and the walk
 -- continues. `envOr "MEDAKA" (executablePath ())` mirrors
 -- `native_doctest.mdk`'s spawn precedent but defaults to the RUNNING
 -- binary's own absolute path rather than a bare "medaka" that a bare `PATH`
@@ -4037,7 +4037,8 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
       else
         let _ = ePutStr err
         let _ =
-          ePutStrLn "medaka test: \{f}: DEAD (child exited \{intToString code})"
+          ePutStrLn
+            "medaka test: \{f}: test runner died (child exited \{intToString code})"
         False
   testFilesGo
     engines

@@ -914,10 +914,10 @@ nonExhaustiveClausesMsg oracle name arity rows =
     1)
     Some (w :: _) =>
       let witnessStr = renderClauseWitness arity w
-      let hint = "add a '\{witnessStr}' clause, or a '_' catch-all clause."
-      "Warning: non-exhaustive clauses of '\{name}'. Missing case: '\{witnessStr}'; \{hint}"
+      let hint = "add a `\{witnessStr}` clause"
+      "Warning: non-exhaustive clauses of `\{name}`: missing `\{witnessStr}`; \{hint}"
     _ =>
-      "Warning: non-exhaustive clauses of '\{name}'. Not all cases are covered"
+      "Warning: non-exhaustive clauses of `\{name}`: not all cases are covered"
 
 -- Arity-1 witnesses are a 1-tuple wrapper around the single missing pattern;
 -- unwrap so the rendered case is the bare pattern.  Higher arities render as the

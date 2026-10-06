@@ -182,6 +182,20 @@ if [ -n "$missing" ]; then
   exit 1
 fi
 
+# Import closure: a shipped module may only import modules that are shipped
+# too, else `import <mod>` dies in the browser with "unknown module: <dep>".
+# Reads the `import` lines of the .mdk files actually in site/dist.
+unshipped=""
+for f in "$SITE"/dist/*.mdk; do
+  for dep in $(sed -n 's/^import \([a-z_0-9]*\).*/\1/p' "$f" | sort -u); do
+    [ -f "$SITE/dist/$dep.mdk" ] || unshipped="$unshipped $(basename "$f" .mdk)->$dep"
+  done
+done
+if [ -n "$unshipped" ]; then
+  echo "FAIL: shipped modules import modules that are not shipped (add to EXTRA_MODULES in main.js and build_playground_wasm.sh):$unshipped" >&2
+  exit 1
+fi
+
 # Same shape, same reason, for the guide: the expected page set is DERIVED from
 # docs/guide/ (minus OUTLINE.md, the guide's planning doc — build_guide.sh
 # excludes it, so this must too), never a hardcoded chapter list. A chapter added

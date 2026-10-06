@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/resolve/import_missing_export_typo.mdk:1:17: Module 'map' has no exported name 'delet'. Did you mean 'delete'
+error: test/error_quality_fixtures/resolve/import_missing_export_typo.mdk:1:17: module `map` has no export `delet`; did you mean `delete`?
   |
 1 | import map.{Map, delet}
   |                  ^

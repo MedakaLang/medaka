@@ -1,7 +1,7 @@
 cmd: medaka build
 exit: 1
 ---
-error: test/error_quality_fixtures/build/main_takes_unit.mdk:1:10: 'main' must be a value, not a function. Write 'main = …', not 'main () = …' or 'main x = …': a program starts by evaluating 'main', and nothing ever calls it
+error: test/error_quality_fixtures/build/main_takes_unit.mdk:1:10: `main` must be a value, not a function; write `main = ...`, not `main () = ...`
   |
 1 | main () = println "this never runs"
   |           ^

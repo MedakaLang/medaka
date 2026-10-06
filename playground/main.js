@@ -309,7 +309,7 @@ function applyDiagnostics(files) {
 const EXTRA_MODULES = [
   'args', 'array', 'async', 'base64', 'bytebuilder', 'byteparser', 'bytes',
   'hash_map', 'hash_set', 'hex', 'i32', 'i64', 'json', 'list', 'map', 'math',
-  'nonempty', 'path', 'regex', 'set', 'string', 'time', 'toml', 'u16', 'u32',
+  'mut_bytes', 'nonempty', 'path', 'regex', 'set', 'string', 'time', 'toml', 'u16', 'u32',
   'u64', 'u8', 'validation', 'vector',
 ];
 

@@ -113,7 +113,7 @@ main = println (double 21)
 ```
 
 ```
-error: rows.mdk:3:10: Effectful value used where <> is allowed, but it performs <Stdout>
+error: rows.mdk:3:10: performs <Stdout> where only <> is allowed
   |
 3 |   println "doubling"
   |           ^
@@ -204,7 +204,7 @@ A function cannot claim a row that leaves out what it calls. Declaring
 `say : String -> <Stderr> Unit` and defining it as `say s = println s` is refused:
 
 ```
-error: rows.mdk:2:16: Effectful value used where <Stderr> is allowed, but it performs <Stdout>
+error: rows.mdk:2:16: performs <Stdout> where only <Stderr> is allowed
   |
 2 | say s = println s
   |                 ^
@@ -271,7 +271,7 @@ Inside a block, each line is a statement, and a statement that produces anything
 other than `Unit` is an error:
 
 ```
-error: rows.mdk:11:2: this statement's value (String) is silently discarded — only a `Unit`-typed expression may stand alone as a statement
+error: rows.mdk:11:2: this statement's value (`String`) is discarded; only a `Unit` expression may stand alone as a statement
   |
 11 |   "a string statement"
   |   ^

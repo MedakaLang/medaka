@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/missing_constraint.mdk:2:12: Could not deduce 'Eq a' from the signature of 'allEq'. Its body requires it; add 'Eq a =>' to the declared type
+error: test/error_quality_fixtures/typecheck/missing_constraint.mdk:2:12: the body of `allEq` requires `Eq a`, which its signature does not declare; add `Eq a =>`
   |
 2 | allEq x y = x == y
   |             ^

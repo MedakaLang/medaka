@@ -612,7 +612,7 @@ unknownDerive tyName supported (DeriveRef n loc)
 -- ("unknown interface") — `Num` IS a real interface, it just has no deriver here.
 cannotDeriveMsg : String -> List String -> String -> String
 cannotDeriveMsg tyName supported n =
-  "cannot derive '\{n}' for '\{tyName}'; supported: \{joinWith ", " supported}"
+  "cannot derive `\{n}` for `\{tyName}`; supported: \{joinWith ", " supported}"
 
 -- rewrite a generated impl's head/constraints for the type's params:
 -- `data Box a deriving Eq` → `impl Eq (Box a) requires Eq a`

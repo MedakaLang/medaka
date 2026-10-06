@@ -1,1 +1,1 @@
-error: Duplicate binding 'int': it is already defined in this scope. A value binding has exactly one definition — rename this one or remove it
+error: duplicate definition of `int`; rename or remove this one

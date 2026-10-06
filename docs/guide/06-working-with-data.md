@@ -65,8 +65,8 @@ of the same names (`get`, `take`, `drop`, `sort`, `sortBy`), so if you wildcard-
 both, using one of those names is an error at the use site:
 
 ```
-probe.mdk:4:16: Ambiguous occurrence: 'get' is exported by both `list` and `array`.
-Qualify, or select with `import <mod>.{get}`
+probe.mdk:4:16: ambiguous occurrence: `get` is exported by both `list` and `array`; import it
+from one of them under an alias with `import <mod>.{get as <alias>}`
 ```
 
 `import array as A` gives you a prefix and avoids the question.

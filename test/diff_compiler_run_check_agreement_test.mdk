@@ -315,10 +315,10 @@ compileRefusals = [
   ),
   (
     "wide_literal_generic",
-    literalRefused
-      "wide_literal_generic.mdk:6:"
-      "0xFFFFFFFFFFFFFFFF"
-      "a type that is not known to be U64",
+    [
+      "wide_literal_generic.mdk:6:",
+      "integer literal 0xFFFFFFFFFFFFFFFF fits only `U64` or `I64`",
+    ],
   ),
   (
     "wide_literal_negated",
@@ -333,7 +333,7 @@ compileRefusals = [
   ),
   (
     "pattern_u64_literal",
-    ["pattern_u64_literal.mdk:", "a literal pattern cannot match a U64"],
+    ["pattern_u64_literal.mdk:", "cannot match a `U64`"],
   ),
   (
     "byteparser_non_byte_element",

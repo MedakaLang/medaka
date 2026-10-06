@@ -254,7 +254,7 @@ memo_two_calls () {
 memo_case () {
   want="$1"
   label="$2"
-  got=$(memo_two_calls | grep -c 'No impl of Display for H')
+  got=$(memo_two_calls | grep -c 'no impl of Display for H')
   if [ "$got" = "$want" ]; then
     pass=$((pass+1)); printf 'ok   memo-hit main-shape (%s: %s missing-Display errors over two calls)\n' "$label" "$want"
   else

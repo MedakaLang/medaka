@@ -1279,7 +1279,7 @@ intMinLiteralMsg = "integer literal too large for Int (max 4611686018427387903)"
 export
 intMinLiteralHelp : String
 intMinLiteralHelp =
-  "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`"
+  "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`"
 
 -- ── evidence identity (#2549 M2) ──────────────────────────────────────────────
 -- A site and the goal that solves it are associated today by `Ref` cell IDENTITY:
@@ -2785,7 +2785,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "intMinLiteralMsg" (TyCon "String"))
 (DFunDef false "intMinLiteralMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903)")))
 (DTypeSig true "intMinLiteralHelp" (TyCon "String"))
-(DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`")))
+(DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())
@@ -3199,7 +3199,7 @@ mapKvsB f ((k, v) :: rest) =
 (DTypeSig true "intMinLiteralMsg" (TyCon "String"))
 (DFunDef false "intMinLiteralMsg" () (ELit (LString "integer literal too large for Int (max 4611686018427387903)")))
 (DTypeSig true "intMinLiteralHelp" (TyCon "String"))
-(DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the NEGATIVE -4611686018427387904, so write it with its `-`")))
+(DFunDef false "intMinLiteralHelp" () (ELit (LString "`Int` is 63-bit, spanning [-4611686018427387904, 4611686018427387903]; 4611686018427387904 fits only as the negative -4611686018427387904, so write it with its `-`")))
 (DData Public "EvId" () ((variant "EvId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DData Public "EvVal" () ((variant "EvOne" (ConPos (TyCon "Route"))) (variant "EvMany" (ConPos (TyApp (TyCon "List") (TyCon "Route")))) (variant "EvMethod" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "EvEntry" () ((variant "EvEntry" (ConPos (TyCon "EvId") (TyCon "EvVal")))) ())

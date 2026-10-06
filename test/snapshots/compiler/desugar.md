@@ -616,7 +616,7 @@ unknownDerive tyName supported (DeriveRef n loc)
 -- ("unknown interface") — `Num` IS a real interface, it just has no deriver here.
 cannotDeriveMsg : String -> List String -> String -> String
 cannotDeriveMsg tyName supported n =
-  "cannot derive '\{n}' for '\{tyName}'; supported: \{joinWith ", " supported}"
+  "cannot derive `\{n}` for `\{tyName}`; supported: \{joinWith ", " supported}"
 
 -- rewrite a generated impl's head/constraints for the type's params:
 -- `data Box a deriving Eq` → `impl Eq (Box a) requires Eq a`
@@ -1360,7 +1360,7 @@ desugar prog =
 (DTypeSig false "unknownDerive" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "DeriveRef") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
 (DFunDef false "unknownDerive" ((PVar "tyName") (PVar "supported") (PCon "DeriveRef" (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "supported")) (EListLit) (EIf (EVar "otherwise") (EListLit (ETuple (EApp (EApp (EApp (EVar "cannotDeriveMsg") (EVar "tyName")) (EVar "supported")) (EVar "n")) (EVar "loc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cannotDeriveMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "cannotDeriveMsg" ((PVar "tyName") (PVar "supported") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot derive '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' for '"))) (EApp (EVar "display") (EVar "tyName"))) (ELit (LString "'; supported: "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "supported")))) (ELit (LString ""))))
+(DFunDef false "cannotDeriveMsg" ((PVar "tyName") (PVar "supported") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot derive `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` for `"))) (EApp (EVar "display") (EVar "tyName"))) (ELit (LString "`; supported: "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "supported")))) (ELit (LString ""))))
 (DTypeSig false "applyDeriveParams" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyCon "Decl") (TyCon "Decl"))))))
 (DFunDef false "applyDeriveParams" ((PVar "name") (PVar "params") (PVar "kinds") (PAs "d" (PRec "DImpl" ((rf "iface" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EListLit (EApp (EApp (EVar "appliedHead") (EVar "name")) (EVar "params")))) (fa "reqs" (EApp (EApp (EVar "paramRequires") (EVar "iface")) (EApp (EApp (EVar "typeKindedParams") (EVar "params")) (EVar "kinds")))))))
 (DFunDef false "applyDeriveParams" (PWild PWild PWild (PVar "d")) (EVar "d"))
@@ -1778,7 +1778,7 @@ desugar prog =
 (DTypeSig false "unknownDerive" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "DeriveRef") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))))
 (DFunDef false "unknownDerive" ((PVar "tyName") (PVar "supported") (PCon "DeriveRef" (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "supported")) (EListLit) (EIf (EVar "otherwise") (EListLit (ETuple (EApp (EApp (EApp (EVar "cannotDeriveMsg") (EVar "tyName")) (EVar "supported")) (EVar "n")) (EVar "loc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cannotDeriveMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "cannotDeriveMsg" ((PVar "tyName") (PVar "supported") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot derive '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' for '"))) (EApp (EMethodRef "display") (EVar "tyName"))) (ELit (LString "'; supported: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "supported")))) (ELit (LString ""))))
+(DFunDef false "cannotDeriveMsg" ((PVar "tyName") (PVar "supported") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot derive `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` for `"))) (EApp (EMethodRef "display") (EVar "tyName"))) (ELit (LString "`; supported: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "supported")))) (ELit (LString ""))))
 (DTypeSig false "applyDeriveParams" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "KindAnn"))) (TyFun (TyCon "Decl") (TyCon "Decl"))))))
 (DFunDef false "applyDeriveParams" ((PVar "name") (PVar "params") (PVar "kinds") (PAs "d" (PRec "DImpl" ((rf "iface" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "tys" (EListLit (EApp (EApp (EVar "appliedHead") (EVar "name")) (EVar "params")))) (fa "reqs" (EApp (EApp (EVar "paramRequires") (EVar "iface")) (EApp (EApp (EVar "typeKindedParams") (EVar "params")) (EVar "kinds")))))))
 (DFunDef false "applyDeriveParams" (PWild PWild PWild (PVar "d")) (EVar "d"))

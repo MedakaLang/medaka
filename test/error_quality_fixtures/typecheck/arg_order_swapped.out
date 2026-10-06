@@ -1,11 +1,11 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/typecheck/arg_order_swapped.mdk:3:24: Type mismatch: Int vs String
+error: test/error_quality_fixtures/typecheck/arg_order_swapped.mdk:3:24: type mismatch: Int vs String
   |
 3 | main = println (greet 3 "Alice")
   |                         ^
-error: test/error_quality_fixtures/typecheck/arg_order_swapped.mdk:3:22: Type mismatch: Int literal vs String
+error: test/error_quality_fixtures/typecheck/arg_order_swapped.mdk:3:22: type mismatch: Int literal vs String
   |
 3 | main = println (greet 3 "Alice")
   |                       ^

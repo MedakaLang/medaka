@@ -197,8 +197,8 @@ use it. Without `a` in the type there is nothing to dispatch on, and the compile
 says so:
 
 ```
-error: d2.mdk:4:13: Method 'currency' in interface 'Priced' does not mention
-interface parameter(s) 'a'; cannot dispatch
+error: d2.mdk:4:13: method `currency` of interface `Priced` does not mention the interface
+parameter `a`, so it cannot be dispatched
 ```
 
 ## Conditional implementations: `impl … requires …`

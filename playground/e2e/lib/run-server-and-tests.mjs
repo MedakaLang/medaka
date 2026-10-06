@@ -32,9 +32,15 @@ try {
     });
     child.on('exit', (code) => resolve(code ?? 1));
   });
-  const status = (await runSpec(join(HERE, '..', 'tests', 'playground.spec.mjs')))
+  let status = (await runSpec(join(HERE, '..', 'tests', 'playground.spec.mjs')))
     || (await runSpec(join(HERE, '..', 'runaway.spec.mjs')))
     || (await runSpec(join(HERE, '..', 'async.spec.mjs'), noIsoServer.url));
+  // The cross-engine smoke runs on every engine even after a failure, so a red
+  // run names each engine that broke rather than only the first.
+  for (const engine of ['chromium', 'firefox', 'webkit']) {
+    const s = await runSpec(join(HERE, '..', 'smoke.spec.mjs'), engine);
+    status = status || s;
+  }
   process.exitCode = status;
 } finally {
   if (noIsoServer) await noIsoServer.stop();

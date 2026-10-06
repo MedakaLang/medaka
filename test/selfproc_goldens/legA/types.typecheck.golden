@@ -97,6 +97,7 @@ ambiguousImportTyvarId : Int
 ambiguousImports : List (String, (Option String, a)) -> Map String Unit
 ambiguousImportsGo : List (String, (Option String, a)) -> Map String String -> Map String Unit -> Map String Unit
 ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
+ambiguousShadowHelp : String
 andList : List String -> String
 annotTooGeneralMsg : Ty -> String
 annotateImportedMethodRows : TcEnv -> List String -> Map String Unit -> Map String Unit -> Registry MethodSchemeRow -> TcEnv
@@ -161,9 +162,11 @@ argReqRoute : IfaceRef -> String -> ScopeId -> List (String, Mono) -> List Ty ->
 argRwOf : MarkCtx -> Map String Unit -> (String -> EvId -> Unit) -> (String -> Bool) -> ArgRw
 argsCarry : List TabKey -> String -> TabKey -> Int -> List Ty -> Bool
 argumentAuthority : TcEnv -> Param -> Option Expr -> Mono -> Authority
+argumentCount : Int -> String
 argumentInto : TcEnv -> Option Expr -> Mono -> Mono -> Unit
 argumentIntoOrd : Bool -> TcEnv -> Option Expr -> Mono -> Mono -> Unit
 argumentIntoTyped : Mono -> Mono -> Unit
+argumentNoun : Int -> String
 arithDispatchMethod : String -> Option String
 arithEntry : Obligation -> List (Ref Route, Mono)
 arithGoalsIn : List Obligation -> List (Ref Route, Mono)
@@ -239,6 +242,7 @@ authvarIdOf : (String, Ref Authvar) -> Int
 axisAtomBinders : EffAtomTy -> List (String, Param)
 axisNamesArgument : List (String, EffParamTy) -> Bool
 axisProblems : List (String, Param) -> String -> Param -> List String
+backticked : String -> String
 bangOnBoolHelp : String
 bangOnBoolMsg : String
 bareLocalBound : BareLocals -> String -> Bool
@@ -2196,6 +2200,7 @@ nonExhaustiveMsg : Mono -> List (List Pat) -> (String, Option String)
 nonGuardedRows : List Arm -> List (List Pat)
 notAFunctionHint : Option String -> String
 notAFunctionMsg : String -> String
+notAFunctionMsgFor : Option String -> String -> String
 noteArgumentShape : TcEnv -> Param -> Bool -> Authority -> Expr -> Mono -> Unit
 noteAssumption : ScopeId -> AssumAnswer -> Unit
 noteBuiltinExternNames : List Decl -> Unit
@@ -3069,6 +3074,7 @@ tyTabKey : TyConOrigin -> String -> TabKey
 tyVarArgNames : List Ty -> List String
 tyVarNames : Ty -> List String
 tyVarNamesWithConstraints : Ty -> List String
+tyVarNoun : List String -> String
 tyVarTypeOcc : String -> Ty -> Bool
 tyVarTypeOccSlots : String -> List Kind -> List Ty -> Bool
 typeAsAuthorityMsg : String -> String -> String

@@ -118,9 +118,8 @@ This form binds no names. `hello` is not in scope afterwards, and `greet.hello` 
 not work either, because only aliases support the `Module.name` qualifier:
 
 ```
-./main.mdk:3:15: Unbound variable: greet. 'greet' is an imported module, not a value — a
-bare 'import greet' binds no names. Bind what you need: 'import greet.{name, ...}', or
-'import greet as M' then 'M.name'
+./main.mdk:3:15: unbound variable `greet`: `greet` is an imported module, not a value; write
+`import greet.{name}` to bind what you need
 ```
 
 What any import does, including this one, is bring the module's `impl`s into scope
@@ -152,7 +151,7 @@ Delete the `import display_widget` line and `Widget 5` still compiles, since
 `impl Display Widget` in the program is in a file this one no longer imports:
 
 ```
-error: ./main.mdk:3:16: No impl of Display for Widget; add 'deriving Display' to the 'Widget' type, or write an 'impl Display Widget'.
+error: ./main.mdk:3:16: no impl of Display for Widget; add `deriving Display` to `Widget` or write `impl Display Widget`
   |
 3 | main = println (display (Widget 5))
   |                 ^
@@ -194,7 +193,7 @@ main = println (balanceOf (mkAccount 100))
 exported with `public`. Trying the same on `Account` is refused at the import:
 
 ```
-./main.mdk:1:16: 'Account' exports no constructors from module 'account' (exported abstractly). Remove `(..)`, or export them: declare 'Account' a `public export data` where it is defined, and name it `Account(..)` in any `export import` that re-exports it (`public` is a parse error on `import`)
+./main.mdk:1:16: `Account` exports no constructors from module `account`, which exports it abstractly; remove `(..)` or declare `Account` a `public export data` in `account`
 ```
 
 An abstract export is how a module keeps control of a type's representation.

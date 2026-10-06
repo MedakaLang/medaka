@@ -291,7 +291,7 @@ imported_main_case() {
   im_status=$?
   im_errs="$(grep -c '^error:' "$im_err")"
   if [ "$im_status" -eq 1 ] && [ "$im_errs" -eq 1 ] &&
-     grep -qF "'main' must be defined in the entry file; 'import lib2.{main}' does not count" "$im_err" &&
+     grep -qF '`main` must be defined in the entry file, not imported by `import lib2.{main}`' "$im_err" &&
      ! grep -qE 'E-PANIC|emitter failed' "$im_err"; then
     pass=$((pass+1)); printf 'ok   %s/imported_main (exit 1, one located error naming the import)\n' "$im_verb"
   else
@@ -300,8 +300,8 @@ imported_main_case() {
   fi
 }
 if [ "$RUN_WIRED" = 1 ]; then
-  main_refuse_case run main_fn ":1:10: 'main' must be a value, not a function"
-  main_refuse_case run no_main ": no 'main' found"
+  main_refuse_case run main_fn ':1:10: `main` must be a value, not a function'
+  main_refuse_case run no_main ': no `main` in this file'
   imported_main_case run
 fi
 
@@ -586,8 +586,8 @@ else
   else
     fail=$((fail+1)); printf 'FAIL build/main_shape_nonunit (want exit 0 + empty stderr + binary printing 4, got exit %s stderr [%s] stdout [%s])\n' "$nub_status" "$(cat "$nub_err" 2>/dev/null)" "$nub_out"
   fi
-  main_refuse_case build main_fn ":1:10: 'main' must be a value, not a function"
-  main_refuse_case build no_main ": no 'main' found"
+  main_refuse_case build main_fn ':1:10: `main` must be a value, not a function'
+  main_refuse_case build no_main ': no `main` in this file'
   imported_main_case build
 
   # `build --json` reports the SAME single refusal as one diagnostic on stdout,

@@ -199,7 +199,7 @@ readPreludeFile : String -> <IO> Result String String
 readPreludeFile path = match readFile path
   Err e =>
     Err
-      "error: cannot read the stdlib prelude at \"\{path}\" (\{e})\n  set MEDAKA_ROOT to your medaka repo/install root, run from the project root, or place stdlib/ next to the medaka binary"
+      "error: cannot read the stdlib prelude at `\{path}`: \{e}; set MEDAKA_ROOT to your medaka checkout"
   Ok src => match parseResult src
     Err pe =>
       Err
@@ -457,11 +457,11 @@ libgcMissingError _ = match runCommand "uname" ["-s"]
   -- Linux/GNU-flavored advice below, the same default the `_` arm gives.
   Ok (0, out, _) =>
     if stringTrim out == "Darwin" then
-      "error: libgc (bdw-gc) not found — install bdw-gc: brew install bdw-gc (or set GC_PREFIX to its install prefix)"
+      "error: libgc not found; install it with `brew install bdw-gc` or set GC_PREFIX to its prefix"
     else
-      "error: libgc (bdw-gc) not found — install bdw-gc: apt install libgc-dev (or your distribution's libgc-dev/gc-devel package; or set GC_PREFIX to its install prefix)"
+      "error: libgc not found; install it with `apt install libgc-dev` or set GC_PREFIX to its prefix"
   _ =>
-    "error: libgc (bdw-gc) not found — install bdw-gc: apt install libgc-dev (or your distribution's libgc-dev/gc-devel package; or set GC_PREFIX to its install prefix)"
+    "error: libgc not found; install it with `apt install libgc-dev` or set GC_PREFIX to its prefix"
 
 -- ---- section-level dead-code-elim flags (issue #120) ----
 -- -ffunction-sections/-fdata-sections put each fn/global in its own section so
@@ -741,11 +741,10 @@ clangMissingError cc = match runCommand "uname" ["-s"]
   -- Linux/GNU-flavored advice below, the same default the `_` arm gives.
   Ok (0, out, _) =>
     if stringTrim out == "Darwin" then
-      "error: \{cc} not found — install the Xcode Command Line Tools: xcode-select --install"
+      "error: \{cc} not found; install the Xcode Command Line Tools with `xcode-select --install`"
     else
-      "error: \{cc} not found — install clang: apt install clang (or your distribution's clang package)"
-  _ =>
-    "error: \{cc} not found — install clang: apt install clang (or your distribution's clang package)"
+      "error: \{cc} not found; install it with `apt install clang`"
+  _ => "error: \{cc} not found; install it with `apt install clang`"
 
 -- Like runBuildNativeIn, but callers may supply extraRoots — additional
 -- search roots appended AFTER the P0-13 inputRoots set. Needed by a caller
@@ -857,7 +856,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   let tEmit1 = now ()
   let _ = emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
   match emitRes
-    Err e => buildErr "error: could not run emitter (\{emitProg}): \{e}"
+    Err e => buildErr "error: could not run the emitter `\{emitProg}`: \{e}"
     Ok (code, irRaw, emitErr) =>
       if code == emitDiagExitCode then
         buildErr (dropTrailingNewline emitErr)
@@ -1001,17 +1000,17 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
   -- that names neither the variable nor the fix.
   if wasmEmitter == "" then
     buildErr
-      "error: --target wasm needs a compiled wasm emitter — set MEDAKA_WASM_EMITTER to its path\n  build one with: sh test/wasm/build_wasm_oracle.sh (produces test/bin/wasm_emit_modules_main)"
+      "error: --target wasm needs a wasm emitter; build one with `sh test/wasm/build_wasm_oracle.sh` and set MEDAKA_WASM_EMITTER to its path"
   else if not (fileExists wasmEmitter) then
     buildErr
-      "error: MEDAKA_WASM_EMITTER points to a missing binary: \{wasmEmitter}\n  build it with: sh test/wasm/build_wasm_oracle.sh (produces test/bin/wasm_emit_modules_main)"
+      "error: MEDAKA_WASM_EMITTER points to a missing binary: \{wasmEmitter}; build it with `sh test/wasm/build_wasm_oracle.sh`"
   else match probeWasmTools ()
     None =>
       buildErr
-        "error: wasm-tools not found on PATH — install wasm-tools (cargo install wasm-tools or brew install wasm-tools) for --target wasm"
+        "error: wasm-tools not found on PATH; install it with `cargo install wasm-tools`"
     Some _ => match runCommand wasmEmitter emitArgsBase
       Err e =>
-        buildErr "error: could not run wasm emitter (\{wasmEmitter}): \{e}"
+        buildErr "error: could not run the wasm emitter `\{wasmEmitter}`: \{e}"
       Ok (code, watRaw, emitErr) =>
         if code == emitDiagExitCode then
           buildErr (dropTrailingNewline emitErr)
@@ -1196,7 +1195,7 @@ foreignLibErrGo cc tmpDir projRoot probeC ((name, dir) :: rest) =
   let probeOut = joinPath tmpDir "ffi_lib_probe.out"
   match runCommand cc ([probeC, "-o", probeOut] ++ libLinkFlags [(name, dir)])
     Err e =>
-      "error: could not run clang (\{cc}) to check foreign library '\{name}': \{e}"
+      "error: could not run \{cc} to check the foreign library `\{name}`: \{e}"
     -- bucket-adjacent, not fail-open and not converted: a probe failure here
     -- deliberately replaces the probe's own stderr with missingLibMsg, a
     -- purpose-built diagnostic naming the library/manifest key/searched
@@ -1213,13 +1212,12 @@ missingLibMsg projRoot name dir =
     if dir == "" then
       "the linker's default search path"
     else
-      "\{dir}, nor on the linker's default search path"
+      "\{dir} or on the linker's default search path"
   stringConcat [
-    "error [B-FFI-LIB-NOT-FOUND]: foreign library '", name,
-    "' was not found in ", searched, "\n", "  declared by the key '", name,
-    "' under [foreign-libraries] in ", projRoot, "/medaka.toml\n",
-    "  install the library, or point that key at the directory holding it: ",
-    name, " = \"vendor/lib\""
+    "error [B-FFI-LIB-NOT-FOUND]: foreign library `", name, "` not found in ",
+    searched, "; point the key `", name, "` under [foreign-libraries] in ",
+    projRoot, "/medaka.toml", " at the directory holding it, such as `", name,
+    " = \"vendor/lib\"`"
   ]
 
 -- ---- build provenance (`medaka build --stamp-build`, issue #2960) ---------
@@ -1839,7 +1837,8 @@ emitPreludeObjIn cc root medaka outObjPath tmpDir = match detectGC cc tmpDir
           if useNative then emitArgsBase else "run" :: emitter :: emitArgsBase
         let (emitProg, emitArgs) = withEmitHalf "prelude" emitProg0 emitArgs0
         match runCommand emitProg emitArgs
-          Err e => buildErr "error: could not run emitter (\{emitProg}): \{e}"
+          Err e =>
+            buildErr "error: could not run the emitter `\{emitProg}`: \{e}"
           Ok (code, irRaw, emitErr) =>
             if code /= 0 then
               buildErr

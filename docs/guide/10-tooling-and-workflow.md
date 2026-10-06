@@ -10,7 +10,7 @@ chapter is a tour of each.
 this guide goes through it. A type error looks like this:
 
 ```
-error: file.mdk:1:16: No impl of Num for String
+error: file.mdk:1:16: no impl of Num for String
   |
 1 | main = println (1 + "x")
   |                 ^

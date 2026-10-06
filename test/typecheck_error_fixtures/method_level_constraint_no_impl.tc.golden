@@ -1,1 +1,1 @@
-TYPE ERROR: No impl of Ord for NoOrd; add 'deriving Ord' to the 'NoOrd' type, or write an 'impl Ord NoOrd'.
+TYPE ERROR: no impl of Ord for NoOrd; add `deriving Ord` to `NoOrd` or write `impl Ord NoOrd`

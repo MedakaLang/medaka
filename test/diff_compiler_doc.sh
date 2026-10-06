@@ -223,7 +223,7 @@ cp "$LIBFIXDIR/beta.mdk" "$DUPDIR/b/samename.mdk"
 dupout="$("$MEDAKA" doc --out "$DUPDIR/out" "$DUPDIR/a/samename.mdk" "$DUPDIR/b/samename.mdk" 2>&1)"
 dupstatus=$?
 if [ "$dupstatus" -ne 0 ] \
-  && printf '%s\n' "$dupout" | grep -q "share the module name 'samename'" \
+  && printf '%s\n' "$dupout" | grep -q 'share the module name `samename`' \
   && [ ! -f "$DUPDIR/out/samename.md" ]; then
   pass=$((pass + 1))
   printf 'ok   library-mode refuses a duplicate module basename\n'

@@ -625,7 +625,7 @@ checkDomainAxes loc l (Some "Product") [] =
     loc
     (effectParamMsg
       l
-      "a Product label declares its axes: `effect \{l} Product (Host : Prefix, Method : Set)`, the first axis being the one a bare literal lifts into")
+      "a Product label declares its axes; write `effect \{l} Product (Host : Prefix, Method : Set)`")
 checkDomainAxes loc l (Some "Product") axes =
   let _ =
     fold
@@ -633,9 +633,7 @@ checkDomainAxes loc l (Some "Product") axes =
         pushTypeErrorAt
           "T-EFFECT-PARAM"
           loc
-          (effectParamMsg
-            l
-            "axis '\{name}' of label '\{l}' is declared twice; each axis is one name"))
+          (effectParamMsg l "axis `\{name}` of `\{l}` is declared twice"))
       ()
       (repeatedNames (map fst axes) [])
   fold
@@ -648,7 +646,7 @@ checkDomainAxes loc l (Some "Product") axes =
           loc
           (effectParamMsg
             l
-            "axis '\{fst a}' of label '\{l}' names the domain '\{other}'; an axis is drawn from `Prefix` or `Set`"))
+            "axis `\{fst a}` of `\{l}` names the domain `\{other}`; an axis is `Prefix` or `Set`"))
     ()
     axes
 checkDomainAxes _ _ _ [] = ()
@@ -1151,9 +1149,9 @@ reportRowFailure failure =
       ]
       pushTypeError
         "T-EFFECT-INDEX-MISMATCH"
-        ("Effect index mismatch: "
+        ("effect index mismatch: "
           ++ joinWith " vs " rows
-          ++ ". Effect indices are invariant: write equal rows on both sides.")
+          ++ "; an effect row in a type argument is invariant, so write the same row on both sides")
     else if isNonEmptyL escaping && isEmptyL upperCells then
       effectLeakCheck escaping upper
     else
@@ -1179,11 +1177,11 @@ effectInclusionMsg : String -> List Atom -> List String -> String
 effectInclusionMsg name escaping [required, allowed] =
   if isNonEmptyL escaping then
     let labels = renderAtoms escaping
-    "Binding '\{name}' performs <\{labels}>, but the row it must fit, \{rowText allowed}, is chosen by its caller: a caller may instantiate that row to <> and would then run <\{labels}> from a value typed pure. \{declareRemedy labels allowed}, or perform it only through an argument whose row the caller sees."
+    "`\{name}` performs <\{labels}> on a caller-chosen row \{rowText allowed}; \{declareRemedy labels allowed}, or perform it through an argument"
   else
-    "Binding '\{name}' runs the effect row \{rowText required}, which its caller chooses (an argument's or a callback's row), but only \{rowText allowed} is allowed there: a caller may instantiate \{rowText required} to an effectful row and would then run it from a position typed \{rowText allowed}. Declare that row at the arrow that runs it (write `-> \{rowText required} …`), or defer the value instead of running it."
+    "`\{name}` runs the caller-chosen row \{rowText required} where only \{rowText allowed} is allowed; declare it on the arrow that runs it, `-> \{rowText required} ...`"
 effectInclusionMsg name _ rows =
-  "Cannot prove effect row inclusion in binding '\{name}': \{joinWith ", " rows}"
+  "cannot prove effect row inclusion in `\{name}`: \{joinWith ", " rows}"
 
 -- A bare tail renders without brackets; the prose reads better with them.
 rowText : String -> String
@@ -1194,9 +1192,9 @@ rowText s = if stringSlice 0 1 s == "<" then s else "<\{s}>"
 declareRemedy : String -> String -> String
 declareRemedy labels allowed =
   if stringSlice 0 1 allowed == "<" then
-    "Declare <\{labels}> among that row's labels"
+    "declare <\{labels}> in that row"
   else
-    "Declare <\{labels}> in that row (write `<\{labels} | \{allowed}>` where the signature writes `<\{allowed}>`)"
+    "declare it, `<\{labels} | \{allowed}>`"
 
 -- The row walker is DAG-aware. Type trees are visited once per boundary; maps
 -- accumulate roots without quadratic duplicate elimination across a large SCC.
@@ -1343,7 +1341,7 @@ indexOutsidePatterns term =
 patternIndexMsg : Authority -> String
 patternIndexMsg term =
   let t = authorityTermTextIn (Ref []) (Ref 0) term
-  "A pattern-ranging authority index (an `Authority L*` slot) is equated with \{t}, which is not a pattern: an exact element admits no extension of itself, and an authority the caller chooses may be one. An index is invariant, so the two sides must be equal; write a pattern (`\"data/*\"`) or `*` for it, or declare the other binder pattern-ranging (`@L*`)"
+  "a pattern-ranging `Authority L*` index is equated with \{t}, which is not a pattern; write a pattern there, such as `\"data/*\"` or `*`"
 
 substituteIndexLinked : Ref Authvar -> Authority -> Unit
 substituteIndexLinked cell term =
@@ -1514,7 +1512,7 @@ renderAtomsOrEmpty ls = renderAtoms ls
 
 joinMismatchMsg : String -> String -> String
 joinMismatchMsg a b =
-  "Effect rows \{a} and \{b} cannot be made equal: each carries an effect variable the other side has no room for. A method's effect variables are the caller's to choose, so an impl may not tie one of them to another (or to the instance head's row); where the effects genuinely combine, the signature must say so with a join in the result index (`f (e | e2) b`)."
+  "effect rows \{a} and \{b} cannot be made equal: each carries an effect variable the other has no room for; keep the method's effect variables distinct, or join them in the result index, `f (e | e2) b`"
 
 -- #839 STRICTNESS AUDIT.  The four arms below are classified against
 -- EFFECTS-SEMANTICS §5 (docs/spec/EFFECTS-SEMANTICS.md:335-371) and §6
@@ -1544,7 +1542,7 @@ unifyRowPlain (EffRow l1 (Some v1)) (EffRow l2 (Some v2))
         if isRigidCell v1 then
           pushTypeError
             "T-EFFECT-LAUNDER"
-            "A caller-chosen effect row cannot be required to contain <\{renderAtoms missing}>. Declare the concrete effects outside the row variable."
+            "a caller-chosen effect row cannot be required to contain <\{renderAtoms missing}>; declare those effects as labels beside the row variable"
         else
           let next = freshEffvarAt (effvarLevel v1)
           linkRow v1 (EffRow missing (Some next))
@@ -1773,7 +1771,7 @@ indexRowEqCheck _ _ l1 l2 =
 -- Symmetric phrasing because `unify` has no expected/actual role.
 indexRowMismatchMsg : List Atom -> List Atom -> String
 indexRowMismatchMsg l1 l2 =
-  "Effect index mismatch: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. An effect row written as a type argument is invariant — the two rows must be EQUAL, not merely compatible, so no sub-effecting step is allowed here (unlike a function's own effect row). Write the same row on both sides, or make the type row-polymorphic there (e.g. \{openRowHint l1}) if it really should accept more."
+  "effect index mismatch: <\{renderAtoms l1}> vs <\{renderAtoms l2}>; an effect row in a type argument is invariant, so write the same row on both sides or use a row variable, \{openRowHint l1}"
 
 -- The "make it row-polymorphic" spelling for a row that may be EMPTY: `<>` has no
 -- labels, so the naive `<\{renderAtoms l1} | e>` renders the un-writable `< | e>`.
@@ -1814,21 +1812,21 @@ closedRowEqCheck l1 l2 = match (atomsEscape l1 l2, atomsEscape l2 l1)
 -- side here; the remedy names the seams where a purer value IS accepted.
 closedRowMismatchMsg : List Atom -> List Atom -> String
 closedRowMismatchMsg l1 l2 =
-  "Effect rows <\{renderAtoms l1}> and <\{renderAtoms l2}> cannot be made equal: these two values must have one type, and their rows meet at a position where a row is neither widened nor narrowed, so the rows must match exactly. Write the same effect row on both sides, or give the two values different types. Only a value flowing into a signature, an argument, or a field may perform fewer effects than the slot permits."
+  "effect rows <\{renderAtoms l1}> and <\{renderAtoms l2}> cannot be made equal: the two values must have one type, and this position neither widens nor narrows a row; write the same row on both sides"
 
 effectLeakMsg : List Atom -> List Atom -> String
 effectLeakMsg bound extras =
-  "Effectful value used where <\{renderAtoms bound}> is allowed, but it performs <\{renderAtoms extras}>"
+  "performs <\{renderAtoms extras}> where only <\{renderAtoms bound}> is allowed"
 
 -- v2 Stage 2a: diagnostic for a rejected written effect param.
 effectParamMsg : String -> String -> String
-effectParamMsg label why = "Invalid effect parameter on <\{label}>: \{why}"
+effectParamMsg label why = "invalid effect parameter on <\{label}>: \{why}"
 
 -- The refusal for an empty Prefix element, parameterized by the noun (`pattern`
 -- for a top-level Prefix param, `<axis> pattern` for a product axis).
 prefixPatternErrMsg : String -> String
 prefixPatternErrMsg noun =
-  "\{noun} is empty; name the element (the whole domain is the bare label, with no parameter)"
+  "\{noun} is empty; name the element, or write the bare label for the whole domain"
 
 -- validate every written effect param in a program's type annotations against
 -- the registry: a Prefix label's pattern must pass prefixPatternOk; an atomic
@@ -2100,11 +2098,11 @@ rangedOver l pat = pat && domainHasPatterns (dtopFor l)
 
 patternDomainMsg : String -> String -> String
 patternDomainMsg written l =
-  "`\{written}` ranges over the patterns of `\{l}`'s domain, but `\{l}` is not a path-prefix domain: its elements are exact names, so the only pattern among them is the whole domain. A pattern-ranging binder needs a `Prefix` label, or a `Product` whose first axis is `Prefix`; drop the `*`"
+  "`\{written}` ranges over patterns, but `\{l}` is not a `Prefix` domain and has none; drop the `*`"
 
 authorityAtomicLabelMsg : String -> String
 authorityAtomicLabelMsg l =
-  "`Authority \{l}` ranges over the domain the label declares, but `\{l}` declares none: it is an atomic label, performed or not, with no path prefix, name set or product to be an authority of. Declare the label with a domain, `effect \{l} Prefix`, or index by a label that has one"
+  "`Authority \{l}` needs a domain, but `\{l}` is an atomic label and declares none; declare it `effect \{l} Prefix`"
 
 -- A constructor CARRYING an `Authority` parameter in no field is a phantom
 -- index: applying it proves nothing, so it may invent any authority.  Its
@@ -2205,19 +2203,19 @@ nthOpt i (x :: rest) = if i == 0 then Some x else nthOpt (i - 1) rest
 
 phantomExportMsg : String -> String -> String -> String
 phantomExportMsg tyName ctor p =
-  "Constructor '\{ctor}' of public type '\{tyName}' carries its authority parameter '\{p}' in no field, so applying it from another module would invent an authority nothing proves. Export '\{tyName}' abstractly (`export data`, constructing it only here), or give '\{ctor}' a field that carries '\{p}': a qualifier (`String @\{p}`), a tuple holding one, or an index of a type whose every constructor carries it (`Handle \{p}`; not `List (Handle \{p})`, whose empty list carries nothing, and not a closure)"
+  "constructor `\{ctor}` of public type `\{tyName}` carries its authority parameter `\{p}` in no field, so another module could invent an authority; export `\{tyName}` abstractly with `export data`, or give `\{ctor}` a field that carries `\{p}`"
 
 authorityParamAsRowMsg : String -> String -> String
 authorityParamAsRowMsg name p =
-  "Type '\{name}' declares parameter '\{p}' as an authority, but a field uses it as an effect row. An `Authority` parameter fills a qualifier (`String @\{p}`), an atom (`<L \{p}>`) or an index slot, never a row tail"
+  "type `\{name}` declares `\{p}` as an authority, but a field uses it as an effect row; write a different variable for the row"
 
 authorityParamAsTypeMsg : String -> String -> String
 authorityParamAsTypeMsg name p =
-  "Type '\{name}' declares parameter '\{p}' as an authority, but a field uses it as a type. An `Authority` parameter fills a qualifier (`String @\{p}`), an atom (`<L \{p}>`) or an index slot, never a type position"
+  "type `\{name}` declares `\{p}` as an authority, but a field uses it as a type; write a different variable for the type"
 
 ifaceParamAuthorityKindMsg : String -> String -> String
 ifaceParamAuthorityKindMsg name p =
-  "Interface '\{name}' declares parameter '\{p}' as an authority; an interface parameter is a type or a graded constructor, so an authority cannot index it. Index a data type with `(\{p} : Authority L)` and implement the interface for that type"
+  "interface `\{name}` declares `\{p}` as an authority, but an interface parameter is a type or a graded constructor; index a data type with `(\{p} : Authority L)` and implement the interface for it"
 
 -- data / newtype / alias heads: [fieldTys] are every type the declaration's
 -- body mentions.
@@ -2414,35 +2412,35 @@ findIfaceDecl (_ :: rest) n = findIfaceDecl rest n
 
 unannotatedRowParamMsg : String -> String -> String
 unannotatedRowParamMsg name p =
-  "Type parameter `\{p}` of `\{name}` is used as an effect row (in an effect tail or an Effect-kinded argument slot), but its head does not declare it one. A parameter is Effect-kinded only when written so: declare the head as `\{name} (\{p} : Effect) …`."
+  "type parameter `\{p}` of `\{name}` is used as an effect row, but its head does not declare it one; declare the head as `\{name} (\{p} : Effect) ...`"
 
 typeParamAsRowMsg : String -> String -> String
 typeParamAsRowMsg name p =
-  "Type parameter `\{p}` of `\{name}` is declared `(\{p} : Type)` but is used as an effect row (in an effect tail or an Effect-kinded argument slot). Declare it `(\{p} : Effect)`, or use it as an ordinary type."
+  "type parameter `\{p}` of `\{name}` is declared `(\{p} : Type)` but is used as an effect row; declare it `(\{p} : Effect)`"
 
 effectParamAsTypeMsg : String -> String -> String
 effectParamAsTypeMsg name p =
-  "Type parameter `\{p}` of `\{name}` is declared `(\{p} : Effect)` but is used as an ordinary type. An Effect-kinded parameter may occur only as an arrow's effect row (`Unit -> <\{p}> a`) or in an Effect-kinded argument slot (`Async \{p} a`). Drop the annotation, or move the parameter into an effect position."
+  "type parameter `\{p}` of `\{name}` is declared `(\{p} : Effect)` but is used as an ordinary type; drop the annotation, or move `\{p}` into an effect position such as `Unit -> <\{p}> a`"
 
 effectArrowOnDataHeadMsg : String -> String -> KindAnn -> String
 effectArrowOnDataHeadMsg name p k =
-  "Type parameter `\{p}` of `\{name}` is declared with kind `\{kindAnnSource k}`. An arrow kind containing `Effect` is supported on interface heads only; a data, newtype, or type-alias parameter may be `Effect` or an ordinary (Effect-free) kind."
+  "type parameter `\{p}` of `\{name}` is declared with kind `\{kindAnnSource k}`, but an arrow kind containing `Effect` is allowed on interface heads only; declare it `Effect` or an Effect-free kind"
 
 ifaceSlotDeclaredTypeMsg : String -> String -> KindAnn -> String
 ifaceSlotDeclaredTypeMsg name p k =
-  "Type parameter `\{p}` of interface `\{name}` is declared `(\{p} : \{kindAnnSource k})`, but a method signature uses one of its `Type` slots as an effect row (the same name appears in that slot and in an effect tail). Declare that slot `Effect`, or use a different variable in the effect tail."
+  "type parameter `\{p}` of interface `\{name}` is declared `(\{p} : \{kindAnnSource k})`, but a method uses one of its `Type` slots as an effect row; declare that slot `Effect`"
 
 ifaceParamEffectKindMsg : String -> String -> String
 ifaceParamEffectKindMsg name p =
-  "Type parameter `\{p}` of interface `\{name}` is declared `(\{p} : Effect)`. An interface parameter is a type constructor, so its kind is an arrow — write `(\{p} : Effect -> Type -> Type)` for an effect-indexed constructor."
+  "type parameter `\{p}` of interface `\{name}` is declared `(\{p} : Effect)`, but an interface parameter is a type constructor; write `(\{p} : Effect -> Type -> Type)` for an effect-indexed constructor"
 
 unannotatedGradedParamMsg : String -> String -> List Kind -> String
 unannotatedGradedParamMsg name p inferred =
-  "Type parameter `\{p}` of interface `\{name}` is used as an effect-indexed constructor (a method puts a variable at one of its slots and uses that variable in an effect tail), but its head does not declare it one. A parameter is Effect-kinded only when written so: declare the head as `\{name} (\{p} : \{renderKindArrow inferred}) …`."
+  "type parameter `\{p}` of interface `\{name}` is used as an effect-indexed constructor, but its head does not declare it one; declare the head as `\{name} (\{p} : \{renderKindArrow inferred}) ...`"
 
 requiresKindMsg : String -> String -> String
 requiresKindMsg name sh =
-  "Interface `\{name}` requires `\{sh}` at a parameter whose kind differs from `\{sh}`'s own: a `requires` clause is an ordinary kind application, and there is no coercion between `Type` and `Effect`. The two families (plain and Deferred*) are peers and cannot be chained — declare both heads at the same kind."
+  "interface `\{name}` requires `\{sh}` at a parameter whose kind differs from `\{sh}`'s own, and there is no coercion between `Type` and `Effect`; declare both heads at the same kind"
 
 checkIfaceMethodEffs : String ->
   List (String, List Kind) ->
@@ -2853,15 +2851,15 @@ argAtomsMsgFor None fname v esc = argAtomsUncoveredFnMsg fname v esc
 
 argAtomsUncoveredFnMsg : String -> String -> List Atom -> String
 argAtomsUncoveredFnMsg fname v esc =
-  "Effect variable <\{v}> in function '\{fname}' carries <\{renderAtoms esc}> at an argument position, but a row carrying <\{v}> does not include it: a body that uses that argument performs <\{renderAtoms esc}> on a row a caller can instantiate to <>, laundering it. Declare <\{renderAtoms esc}> (or `<IO | \{v}>`) at every row where <\{v}> appears, or remove the concrete label from the argument's row."
+  "effect variable <\{v}> in function `\{fname}` carries <\{renderAtoms esc}> at an argument position, but a row carrying <\{v}> does not include it; declare <\{renderAtoms esc}> at every row where <\{v}> appears"
 
 argOnlyEffVarMsg : String -> String -> String -> String
 argOnlyEffVarMsg iface mname v =
-  "Argument-only effect variable <\{v}> in method '\{mname}' of interface '\{iface}': <\{v}> rides an argument (a callback or row-kinded value) but appears in none of the method's own effect rows, so an impl that uses that argument performs <\{v}> with no row charging it — a caller can pass an effectful callback to a method typed pure and it silently runs. Thread <\{v}> through the method's row (e.g. `-> <\{v}> …`), or drop it from the argument."
+  "argument-only effect variable <\{v}> in method `\{mname}` of interface `\{iface}`: it rides an argument but appears in none of the method's own effect rows; thread it through the method's row, `-> <\{v}> ...`"
 
 argAtomsUncoveredMsg : String -> String -> String -> List Atom -> String
 argAtomsUncoveredMsg iface mname v esc =
-  "Effect variable <\{v}> in method '\{mname}' of interface '\{iface}' carries <\{renderAtoms esc}> at an argument position, but a method row carrying <\{v}> does not include it: an impl that uses that argument performs <\{renderAtoms esc}> on a row a caller can instantiate to <>, laundering it. Declare <\{renderAtoms esc}> (or `<IO | \{v}>`) at every row where <\{v}> appears, or remove the concrete label from the argument's row."
+  "effect variable <\{v}> in method `\{mname}` of interface `\{iface}` carries <\{renderAtoms esc}> at an argument position, but a method row carrying <\{v}> does not include it; declare <\{renderAtoms esc}> at every row where <\{v}> appears"
 
 -- The predicate: return-position effect tail vars minus argument-carried ones.
 -- An effect var is argument-carried — hence soundly pinned at every call site —
@@ -2903,7 +2901,7 @@ renderEffTailVars vs = joinWith ", " (map (v => "<\{v}>") vs)
 
 effectUndeterminedMsg : String -> String -> List String -> String
 effectUndeterminedMsg iface mname vars =
-  "Under-determined effect variable \{renderEffTailVars vars} in method '\{mname}' of interface '\{iface}': the effect appears only in the method's return type, pinned by no argument, so a caller can instantiate it to <> and launder the real effect (a function typed pure would silently perform it). Use a concrete effect row (e.g. `<Stdout>`) or thread the effect through an argument (e.g. a callback `a -> <e> b`)."
+  "under-determined effect variable \{renderEffTailVars vars} in method `\{mname}` of interface `\{iface}`: it appears only in the return type, pinned by no argument; use a concrete row such as `<Stdout>`, or thread it through a callback `a -> <e> b`"
 
 -- #822 (graded interfaces): an instance head must have the KIND the interface's
 -- corresponding type parameter has.  A graded interface binds the whole row-indexed
@@ -3081,17 +3079,20 @@ implKindMismatchMsg : String ->
   List Kind ->
   String
 implKindMismatchMsg iface ctor nApplied want got =
-  "Instance head has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but \{implHeadKindClause ctor nApplied got}, so the grade the methods index by has nowhere to live and every index a caller reads off a result would be fabricated. \{implKindMismatchFix iface ctor nApplied}"
+  "instance head has the wrong kind for interface `\{iface}`: its type parameter is graded, kind `\{renderKindArrow want}`, but \{implHeadKindClause ctor nApplied got}; \{implKindMismatchFix iface ctor nApplied}"
 
 -- The "but …" clause: an UNAPPLIED head states its own kind; a partially applied one
 -- (`impl I (Async e)` — the fixed-row shape a graded interface forbids) must say so,
 -- because the leftover kind is NOT the constructor's kind and reporting it as such is
 -- simply false (`Async` is `Row -> Type -> Type`; `Async e` is `Type -> Type`).
+argumentNoun : Int -> String
+argumentNoun n = if n == 1 then "argument" else "arguments"
+
 implHeadKindClause : String -> Int -> List Kind -> String
 implHeadKindClause ctor nApplied got
   | nApplied <= 0 = "`\{ppConName ctor}` has kind `\{renderKindArrow got}`"
   | otherwise =
-    "this head already applies \{intToString nApplied} argument(s) to `\{ppConName ctor}`, leaving kind `\{renderKindArrow got}`"
+    "this head applies \{intToString nApplied} \{argumentNoun nApplied} to `\{ppConName ctor}`, leaving kind `\{renderKindArrow got}`"
 
 -- The remedy, conditioned on which mistake was actually made.  Telling an author who
 -- wrote `impl GThenable Box` to "write `impl GThenable Box`" is a tautology — that
@@ -3100,16 +3101,16 @@ implHeadKindClause ctor nApplied got
 implKindMismatchFix : String -> String -> Int -> String
 implKindMismatchFix iface ctor nApplied
   | nApplied > 0 =
-    "A graded interface binds the whole row-indexed FAMILY, never a fixed-row application: drop the argument(s) and write `impl \{iface} \{ppConName ctor}`."
+    "a graded interface binds the whole row-indexed family, so write `impl \{iface} \{ppConName ctor}` with no arguments"
   | otherwise =
-    "Give `\{ppConName ctor}` a parameter used in an effect position at each `Row` slot — a constructor field of the shape `Unit -> <e> a` is what makes a parameter row-kinded — or implement a non-graded interface for it instead."
+    "give `\{ppConName ctor}` a parameter used in an effect position at each `Row` slot, such as a field `Unit -> <e> a`, or implement a non-graded interface for it"
 
 -- A saturated TUPLE head, which needs its own message: a tuple is kind `Type` and cannot
 -- be given a row parameter, so the ordinary "add a `Unit -> <e> a` field" remedy would
 -- send the author after something that does not exist.
 implTupleHeadKindMsg : String -> Int -> List Kind -> String
 implTupleHeadKindMsg iface n want =
-  "Instance head `\{ppConName (tupleHeadTagTc n)}` has the wrong kind for interface '\{iface}': the interface's type parameter is graded — kind `\{renderKindArrow want}` — but a saturated tuple type is always kind `Type`, so there is no slot for the grade the methods index by. A tuple cannot be given a row parameter; implement a non-graded interface for it, or use a row-indexed data type (one with a constructor field of the shape `Unit -> <e> a`) as the instance head."
+  "instance head `\{ppConName (tupleHeadTagTc n)}` has the wrong kind for interface `\{iface}`: its type parameter is graded, kind `\{renderKindArrow want}`, but a tuple is kind `Type`; implement a non-graded interface for it, or use a row-indexed data type as the head"
 
 checkEffectParamsTy : Ty -> Unit
 checkEffectParamsTy (TyFun (TyNamed n a d) b) =
@@ -3232,18 +3233,19 @@ effectParamProblems l _ (EPLit _) = [atomicLabelParamText l]
 -- other elements its label writes.
 effectParamProblems _ (PSet None) (EPSet _) = []
 effectParamProblems l (PPrefix None) (EPSet _) =
-  ["label '\{l}' takes a prefix pattern, not a set"]
+  ["label `\{l}` takes a prefix pattern, not a set"]
 effectParamProblems l (PPath None) (EPSet _) =
-  ["label '\{l}' takes a prefix pattern, not a set"]
-effectParamProblems l (PProduct _) (EPSet _) =
-  ["label '\{l}' takes named axes (`Host=… Method=…`), not a bare set"]
+  ["label `\{l}` takes a prefix pattern, not a set"]
+effectParamProblems l (PProduct _) (EPSet _) = [
+  "label `\{l}` takes named axes such as `Host=... Method=...`, not a bare set",
+]
 effectParamProblems l _ (EPSet _) = [atomicLabelParamText l]
 effectParamProblems _ (PProduct schema) (EPProduct axes) =
   map repeatedAxisText (repeatedNames (map fst axes) [])
     ++ productAxesProblems schema (PProduct (map (checkedAxis schema) axes))
 effectParamProblems l PUnit (EPProduct _) = [atomicLabelParamText l]
 effectParamProblems l _ (EPProduct _) =
-  ["label '\{l}' is not a product domain and takes no axes"]
+  ["label `\{l}` is not a product domain and takes no axes"]
 
 -- A written parameter as an element of [label]'s declared domain, or the
 -- first problem that keeps it from being one (`effectParamMsg`'s wording).
@@ -3267,7 +3269,7 @@ prefixLiteralProblems l pat =
     if stringLength pat > 0 then
       []
     else
-      ["the library pattern is empty; name the library, e.g. <FFI \"curl\">"]
+      ["the library pattern is empty; name the library, `<FFI \"curl\">`"]
   else if prefixPatternOk pat then
     []
   else
@@ -3310,7 +3312,7 @@ checkBinderDomain n a (Some l) =
 
 binderDomainTypeMsg : String -> String -> String
 binderDomainTypeMsg n ty =
-  "Named argument '\{n}' has type `\{ty}`, but it is written with a domain: only a `String` argument has an authority. Give '\{n}' the type `String`, or drop the domain"
+  "named argument `\{n}` has type `\{ty}` but is written with a domain, and only a `String` argument has an authority; give `\{n}` the type `String` or drop the domain"
 
 isStringTy : Ty -> Bool
 isStringTy (TyCon { tyConName = n }) = n == "String"
@@ -3322,15 +3324,15 @@ sameDomainTop p q = domainKey p == domainKey q
 
 binderTypeMsg : String -> String -> String
 binderTypeMsg n ty =
-  "Named argument '\{n}' has type `\{ty}`, but an effect atom names it as an authority: only a `String` argument can determine an effect's parameter. Give '\{n}' the type `String`, or write the label bare for any authority"
+  "named argument `\{n}` has type `\{ty}`, but an effect atom names it as an authority, and only a `String` argument can be one; give `\{n}` the type `String` or write the label bare"
 
 binderDomainMsg : String -> String
 binderDomainMsg n =
-  "Authority '\{n}' is used at labels from different domains (a path prefix, a name set and each Product schema are different kinds of authority). One authority has one domain: name a second binder for the other label"
+  "authority `\{n}` is used at labels from different domains, and one authority has one domain; name a second binder for the other label"
 
 atomicLabelParamText : String -> String
 atomicLabelParamText l =
-  "label '\{l}' is atomic and takes no parameter (declare it `effect \{l} Prefix` to parameterize)"
+  "label `\{l}` is atomic and takes no parameter; declare it `effect \{l} Prefix` to parameterize it"
 
 -- A bare literal is checked as the first axis's value BEFORE it is lifted:
 -- the lift canonicalises it, and an empty pattern canonicalises to the top.
@@ -3351,7 +3353,7 @@ productAxesProblems _ _ = []
 -- elements, written as two.
 repeatedAxisText : String -> String
 repeatedAxisText name =
-  "axis '\{name}' is written twice; one element names each axis once, so write each value as its own element"
+  "axis `\{name}` is written twice; write each value as its own element"
 
 -- The names that occur more than once, each once, in first-occurrence order.
 repeatedNames : List String -> List String -> List String
@@ -3364,7 +3366,7 @@ repeatedNames (n :: rest) seen
 axisProblems : List (String, Param) -> String -> Param -> List String
 axisProblems schema name p = match lookupAxis name schema
   None => [
-    "unknown product axis '\{name}' (declared axes: \{joinWith ", " (map fst schema)})",
+    "unknown product axis `\{name}`; declared axes: \{joinWith ", " (map fst schema)}",
   ]
   Some (PPrefix _) => match p
     PPrefix (Some pat) =>
@@ -3373,10 +3375,10 @@ axisProblems schema name p = match lookupAxis name schema
       else
         [prefixPatternErrMsg "\{name} pattern"]
     PPrefix None => []
-    _ => ["axis '\{name}' takes a prefix pattern, not a set"]
+    _ => ["axis `\{name}` takes a prefix pattern, not a set"]
   Some (PSet _) => match p
     PSet _ => []
-    _ => ["axis '\{name}' takes a set, not a pattern"]
+    _ => ["axis `\{name}` takes a set, not a pattern"]
   Some _ => []
 
 -- replace a row's bound tail effvar with its fresh instance from [esub], so each
@@ -12086,7 +12088,9 @@ occursAdjustUnbound id level cell id2 lvl2
     perRun.value.occursCheckFailed := True
     pushTypeError
       "T-INFINITE-TYPE"
-      ("Cannot construct infinite type involving " ++ ppMono (TVar cell))
+      ("cannot construct an infinite type involving `"
+        ++ ppMono (TVar cell)
+        ++ "`")
   | lvl2 > level = cell := Unbound id2 level
   | otherwise = ()
 
@@ -12346,7 +12350,7 @@ authorityIndexMsg a b =
   let sa = authorityTermTextIn ctx cnt a
   let sb = authorityTermTextIn ctx cnt b
   let (x, y) = if sa <= sb then (sa, sb) else (sb, sa)
-  "Authority index mismatch: \{x} vs \{y}. An authority written as a type argument is invariant, so the two indices must be EQUAL, not merely one within the other: a `Handle \"cfg/app\"` is not a `Handle \"cfg/*\"`. Write the same index on both sides, or name the index (`Handle p`) where any authority is meant"
+  "authority index mismatch: \{x} vs \{y}; an authority in a type argument is invariant, so write the same index on both sides or name it, `Handle p`"
 
 -- An index row's atom its other side cannot absorb must lie within that
 -- side's authority for the label: coverage, not equality.
@@ -12356,7 +12360,7 @@ authorityCoverMsg lower upper =
   let cnt = Ref 0
   let lo = authorityTermTextIn ctx cnt lower
   let hi = authorityTermTextIn ctx cnt upper
-  "Authority index mismatch: \{lo} is not covered by \{hi}. An effect row written as a type argument must cover every atom the other side carries that its own tail cannot take, so the authority reached here must lie within \{hi}. Stay within \{hi}, or widen the row's authority for the label to cover what is reached"
+  "authority index mismatch: \{lo} is not covered by \{hi}; stay within \{hi}, or widen the row's authority for the label"
 
 -- An authority as a message names it: the top as the whole domain, a term
 -- as it is written, under a naming context shared by every term of one
@@ -12392,7 +12396,7 @@ authorityFailureMsg name label origin lower upper written =
 -- the relation is the callee's, so the bound is not one this binding wrote.
 residualFailureMsg : String -> String -> String -> String
 residualFailureMsg callee lo hi =
-  "'\{callee}' needs \{lo} to lie within \{hi} here: its inferred type relates those authorities (a `<=` in its context), and this use does not satisfy the relation. Pass values whose authorities satisfy it"
+  "`\{callee}` needs \{lo} to lie within \{hi} here, but this use does not satisfy it; pass values whose authorities do"
 
 -- A bound over binders the caller chooses says what a body may do with
 -- them.  A `*` is offered only where it would help: the body extends a
@@ -12409,18 +12413,18 @@ boundFailureMsg : String ->
   String
 boundFailureMsg name label lower lo hi upper written =
   if mentionsOpened upper then
-    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is the authority of the value this arm or clause opened, which nothing but that value and what derives from it is known to lie within. Relate the operation to the opened value, or widen the declared row to the label bare"
+    "`\{name}` reaches \{lo} where only \{hi} is admitted, the authority of the value this arm or clause opened; derive the operation from the opened value, or widen the declared row to the label bare"
   else if authHasVars upper
     && binderIn perRun.value.displayHiddenBindersRef upper then
-    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: an interpolated part is converted by `display`, and the `display` used for interpolation here is this module's own, defined or imported, not the prelude's, so the interpolated string is not known to derive from \{hi}. Build the value with `++` from the named argument, or stop bringing another `display` into scope"
+    "`\{name}` reaches \{lo} where only \{hi} is admitted: the interpolation uses this module's own `display`, not the prelude's, so the string is not known to derive from \{hi}; build it with `++` from the named argument"
   else if authHasVars upper && allList authvarIsPattern (authVars upper) then
-    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is a pattern-ranging authority the caller chooses, so a body may forward the named argument or append to it on the right (`root ++ suffix`), which stays within it, never reach a value it does not derive that way. Build the value by appending to the named argument, or widen the declared row to the label bare"
+    "`\{name}` reaches \{lo} where only \{hi} is admitted, a pattern-ranging authority the caller chooses; build the value by appending to the named argument, `root ++ suffix`, or widen the declared row to the label bare"
   else if authHasVars upper then
     ordinaryBoundFailureMsg name label lower lo hi upper
   else if solvedUpper written then
-    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is not a written bound but what this binding's other uses of the same authority determined together. Make every use lie within one bound, or write the bound the binding means"
+    "`\{name}` reaches \{lo} where only \{hi} is admitted, the bound this binding's other uses of the same authority determined; make every use lie within one bound, or write the bound"
   else
-    "Binding '\{name}' reaches \{lo} where its declared bound admits only \{hi}. Stay within the declared bound, or widen it to cover what the body reaches"
+    "`\{name}` reaches \{lo} where its declared bound admits only \{hi}; stay within the bound, or widen it"
 
 -- An ordinary binder: an extension of it is the whole domain.  The `*` is
 -- offered, spelled with the program's own label, only when the body
@@ -12434,29 +12438,28 @@ ordinaryBoundFailureMsg : String ->
   String
 ordinaryBoundFailureMsg name label lower lo hi upper =
   let head =
-    "Binding '\{name}' reaches \{lo} where only \{hi} is admitted: \{hi} is an authority the caller chooses, so a body may forward the named argument or use it in an operation that keeps its authority, never reach a value it does not derive from"
+    "`\{name}` reaches \{lo} where only \{hi} is admitted, an authority the caller chooses"
   let extended =
     filterList
       (c => IdMap.has (authvarId c) perRun.value.extendedBindersRef.value)
       (authVars upper)
   if authIsTop lower && isNonEmptyL extended then
-    let tail =
-      "; an extension of it is the whole domain, since the caller may choose an exact element, which admits no extension of itself. Perform the operation on the named argument and build any extended value at the call site"
+    let tail = "; an extension of it is the whole domain, so "
     match filterList (c => domainHasPatterns (authvarDomain c)) extended
       c :: _ =>
         let n = optionOr hi (authvarName c)
         let star = starSpelling n (binderLabel name n label)
-        "\{head}\{tail}, declare \{star} so an extension stays within it, or widen the declared row to the label bare"
-      [] => "\{head}\{tail}, or widen the declared row to the label bare"
+        "\{head}\{tail}declare \{star}"
+      [] =>
+        "\{head}\{tail}perform the operation on the named argument and extend the value at the call site"
   else
-    "\{head}. Perform the operation on the named argument, or widen the declared row to the label bare"
+    "\{head}; perform the operation on the named argument, or widen the declared row to the label bare"
 
 -- The pattern-ranging spelling of binder [n], on label [l] when it is known.
 starSpelling : String -> Option String -> String
 starSpelling n (Some l) =
-  "'\{n}' pattern-ranging with a `*` on its label, `(\{n} : String @\{l}*)` on a named argument or `(\{n} : Authority \{l}*)` on a type parameter,"
-starSpelling n None =
-  "'\{n}' pattern-ranging with a `*` on its label (`@L*` on a named argument, `Authority L*` on a type parameter)"
+  "`\{n}` pattern-ranging, `(\{n} : String @\{l}*)` or `(\{n} : Authority \{l}*)`"
+starSpelling n None = "`\{n}` pattern-ranging, `@L*` or `Authority L*`"
 
 -- The label binder [n] of binding [fn] is written under: the binding's
 -- signature says, else the label of the atom the failed obligation came from
@@ -12772,7 +12775,7 @@ paramRowAtomsOf key = lookupTab key perRun.value.dataParamRowAtomsRef.value
 -- binding, a lambda-argument head).
 paramVarianceMismatchMsg : List Atom -> List Atom -> String
 paramVarianceMismatchMsg l1 l2 =
-  "Effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>. This type parameter is used contravariantly, or behind a mutable cell, so the two rows must be EQUAL — weakening one to the other would let an effectful value be reached through a type that no longer mentions its effects. Write the same effect row on both sides. A FRESHLY built value (`Ref f` at a signed binding) may perform fewer effects than its declared slot permits; what is rejected here is an already-typed value being re-typed at a different row, in either direction, because both readers of the same cell must agree. If this value really is fresh and the site is not covered by its signature, eta-expand the mismatched function — write `(s => f s)` in place of `f`, rebuilding any wrapper around it (e.g. `Ref (s => f s)`); a value that performs MORE effects than the slot permits is rejected either way, so that recovery cannot widen a row."
+  "effect row mismatch inside a non-covariant type argument: <\{renderAtoms l1}> vs <\{renderAtoms l2}>; the two rows must be equal here, so write the same row on both sides, or eta-expand a freshly built function, `(s => f s)`"
 
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 unifyVars c1 c2 = if tyvarId c1 == tyvarId c2 then () else bindVar c1 (TVar c2)
@@ -12859,7 +12862,7 @@ typeMismatchReport a b = match !currentMethodMismatch
   Some mname =>
     pushTypeError
       "T-METHOD-MISMATCH"
-      "Method '\{mname}': expected type \{ppMono a} but got \{ppMono b}"
+      "method `\{mname}` has type \{ppMono b} but its interface declares \{ppMono a}"
   None => typeMismatchReportJoin a b
 
 -- A mismatch inside the join of an `if` with no `else` branch is that `if`'s
@@ -12872,7 +12875,7 @@ typeMismatchReportJoin a b = match !currentJoinContext
     pushTypeErrorHelpFixAt
       "T-TYPE-MISMATCH"
       !currentLoc
-      "Type mismatch: \{ppMono a} vs \{ppMono b} — \{elselessIfHelp}"
+      "type mismatch: \{ppMono a} vs \{ppMono b}; \{elselessIfHelp}"
       elselessIfHelp
       None
   _ => match (!currentDoOrigin, constrainedApplicationHelp a b)
@@ -12880,14 +12883,14 @@ typeMismatchReportJoin a b = match !currentJoinContext
       pushTypeErrorHelpFixAt
         "T-TYPE-MISMATCH"
         !currentLoc
-        "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}"
+        "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
         help
         None
     _ => typeMismatchReportRest a b
 
 elselessIfHelp : String
 elselessIfHelp =
-  "an `if` without `else` has type Unit, so its `then` branch must be Unit too; add an `else` branch"
+  "an `if` without `else` has type Unit, so add an `else` branch or make the `then` branch Unit"
 
 -- One side is an unsolved variable applied to arguments (`m Unit`), the other a
 -- type with no application for that variable to take (`Unit`, an arrow).  Such
@@ -12921,9 +12924,8 @@ ifacesConstrainingVar id =
 
 constrainedApplicationText : Mono -> Mono -> List String -> String
 constrainedApplicationText app plain ifaces =
-  let ctor = ppMono (spineHead app)
-  let names = joinWith " and " ifaces
-  "`\{ppMono app}` is a value of a type that implements \{names} (`\{ctor}` stands for that type), and a plain \{ppMono plain} is not one"
+  let names = joinWith " and " (map (i => "`\{i}`") ifaces)
+  "`\{ppMono app}` is a value whose type implements \{names}, and `\{ppMono plain}` is not"
 
 typeMismatchReportRest : Mono -> Mono -> Unit
 typeMismatchReportRest a b = match !currentDoOrigin
@@ -12935,7 +12937,7 @@ typeMismatchReportRest a b = match !currentDoOrigin
       pushTypeErrorHelpFixAt
         "T-TYPE-MISMATCH"
         !currentLoc
-        "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}"
+        "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
         help
         fix
     None => match sameSpellingHint a b
@@ -12948,13 +12950,13 @@ typeMismatchReportRest a b = match !currentDoOrigin
         pushTypeErrorHelpFixAt
           "T-TYPE-MISMATCH"
           !currentLoc
-          "Type mismatch: \{ppMono a} vs \{ppMono b} — \{help}"
+          "type mismatch: \{ppMono a} vs \{ppMono b}; \{help}"
           help
           None
       None =>
         pushTypeError
           "T-TYPE-MISMATCH"
-          "Type mismatch: \{ppMono a} vs \{ppMono b}"
+          "type mismatch: \{ppMono a} vs \{ppMono b}"
 
 -- ── same-spelling mismatch hint (#1111 A-2.10) ─────────────────────────────
 -- Fires ONLY when the two sides RENDER identically and some head inside them
@@ -12982,10 +12984,10 @@ idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idConflictHelp (name, o1, o2) =
   let remedy =
     if isPreludeOrigin o1 || isPreludeOrigin o2 then
-      "a program's own type shadows the prelude's where it is declared or imported, and the prelude's constructors still build the prelude's type: build this value with the constructors of the type the position expects"
+      "build this value with the constructors of the type this position expects"
     else
-      "import the one you mean rather than declaring a second type of the same name"
-  "these are two DIFFERENT types that share the name '\{name}': one comes from \{originPhrase o1}, the other from \{originPhrase o2} — \{remedy}"
+      "import the one you mean instead of declaring a second type with that name"
+  "two different types share the name `\{name}`: one comes from \{originPhrase o1}, the other from \{originPhrase o2}; \{remedy}"
 
 isPreludeOrigin : TyConOrigin -> Bool
 isPreludeOrigin (OriginModule m) = m == "core"
@@ -12997,7 +12999,7 @@ isPreludeOrigin _ = False
 originPhrase : TyConOrigin -> String
 originPhrase (OriginModule "core") = "the prelude"
 originPhrase (OriginModule "__user__") = "this program"
-originPhrase (OriginModule m) = "module '\{m}'"
+originPhrase (OriginModule m) = "module `\{m}`"
 originPhrase OriginBuiltin = "the language itself"
 originPhrase OriginUnresolved = "an unknown module"
 
@@ -13043,7 +13045,7 @@ typeMismatchInDo a b doLoc
   | monoIsApp (normalize a) /= monoIsApp (normalize b) =
     recordDoMonadError doLoc
   | otherwise =
-    pushTypeError "T-TYPE-MISMATCH" "Type mismatch: \{ppMono a} vs \{ppMono b}"
+    pushTypeError "T-TYPE-MISMATCH" "type mismatch: \{ppMono a} vs \{ppMono b}"
 
 -- issue 1146 PR1: this is the SIXTH push site — it open-coded the cons + sticky set
 -- rather than going through one of the five named `pushTypeError*` helpers, so it is
@@ -13069,18 +13071,18 @@ monoIsApp _ = False
 
 doRequiresMonadMsg : String
 doRequiresMonadMsg =
-  "`do` requires a Thenable impl (e.g. `Option`/`Result`). For IO sequencing use a bare indented block, not `do`"
+  "`do` needs a value whose type implements `Thenable`, such as `Option` or `Result`; for IO sequencing use a bare indented block instead of `do`"
 
 deferRequiresMonadMsg : String
 deferRequiresMonadMsg =
-  "`defer` requires a DeferredThenable impl — an effect-indexed constructor such as `Async` (its `defer` block registers effects in the index and performs nothing until forced). For a strict container (`Option`/`Result`/`List`) use `do`; for IO sequencing use a bare indented block"
+  "`defer` needs a value whose type implements `DeferredThenable`, such as `Async`; for `Option`, `Result` or `List` use `do` instead"
 
 -- SYMMETRIC complement of doRequiresMonadMsg: a `<-` bind reached a bare
 -- (non-`do`) block.  `<-` is monadic-`do`-only; a bare indented block is IO
 -- sequencing and does not allow it (language-design.md; "IO is not a monad").
 bindOutsideDoMsg : String
 bindOutsideDoMsg =
-  "`<-` bind is only valid inside a `do` block. For IO sequencing use a bare indented block without `<-`"
+  "`<-` is only valid inside a `do` block; outside one, bind the value with `let x = ...`"
 
 -- ── generalization & instantiation ────────────────────────────────────────
 -- Quantify a mono for DISPLAY (the LSP hover fallback, `mapLocalSchemes`):
@@ -13812,9 +13814,9 @@ emitCyclicAliasErrors (name :: rest) =
   let _ =
     pushTypeErrorOnce
       "T-RECURSIVE-ALIAS"
-      ("Recursive type alias `"
+      ("type alias `"
         ++ name
-        ++ "`. Type aliases cannot be recursive or cyclic")
+        ++ "` is recursive; a type alias cannot refer to itself, so declare a `data` type instead")
   emitCyclicAliasErrors rest
 
 -- Cycle-detection pre-pass over aliasTableRef.  MUST run after the aliases are
@@ -14089,15 +14091,15 @@ reportUnboundAuthorityNames ty sv =
 
 qualifierBinderTypeMsg : String -> String -> String
 qualifierBinderTypeMsg n ty =
-  "Named argument '\{n}' has type `\{ty}`, but a qualifier names it as an authority: only a `String` argument has one. Qualify by a `String` argument, or drop '\{n}' from the qualifier"
+  "named argument `\{n}` has type `\{ty}`, but a qualifier names it as an authority, and only a `String` argument has one; qualify by a `String` argument or drop `\{n}` from the qualifier"
 
 binderNoDomainMsg : String -> String
 binderNoDomainMsg n =
-  "The qualifier names '\{n}', but no binder domain, effect atom or index in this signature names '\{n}', so its authority has no domain: an authority is a path prefix, a name set or a product only as some label's parameter. Write the domain on the binder, `(\{n} : String @FileRead)`, name the label it bounds, `<FileRead \{n}>`, or index a handle by it, `Handle \{n}`, or drop the qualifier"
+  "the qualifier names `\{n}`, but no binder domain, effect atom or index in this signature gives it a domain; write one on the binder, `(\{n} : String @FileRead)`, or name the label it bounds, `<FileRead \{n}>`"
 
 joinDomainMsg : List String -> String
 joinDomainMsg ns =
-  "The joined qualifier \{qualifierSource escStr (map EPName ns)} joins authorities from different domains (a path prefix, a name set and each Product schema are different kinds of authority); a join is within one domain. Qualify by authorities of one label's domain"
+  "the joined qualifier \{qualifierSource escStr (map EPName ns)} joins authorities from different domains; qualify by authorities of one label's domain"
 
 -- First occurrence of each name, keeping its span.
 dedupLocated : List (String, Option Loc) ->
@@ -14123,7 +14125,7 @@ writtenQualifiers _ = []
 
 nameNotAuthorityMsg : String -> String
 nameNotAuthorityMsg n =
-  "'\{n}' is used as an authority, but nothing binds it as one: a name to its left is an authority only as a named argument `(\{n} : String) ->`, in an `Authority`-kinded type argument (`Handle \{n}`), or as an `Authority` parameter of the enclosing data declaration; elsewhere a lowercase name is a type variable"
+  "`\{n}` is used as an authority, but nothing binds it as one; bind it as a named argument, `(\{n} : String) ->`, or an `Authority`-kinded index"
 
 -- The names written in authority position, atom parameters and qualifiers,
 -- each with the span of the atom or qualifier that writes it.
@@ -14506,7 +14508,7 @@ qualifyByTerms etbl ps loc t =
         let problems =
           if isEmptyL cells && anyList isEPProduct lits then
             [
-              "a qualifier written as axes needs a binder to name its label, which declares the axes and which is primary: `(p : String) -> <Web p> … String @(p | Host=\"…\")`",
+              "a qualifier written as axes needs a binder that names its label; write `(p : String) -> <Web p> ... String @(p | Host=\"...\")`",
             ]
           else
             writtenTermProblems "qualifier" top lits
@@ -14516,7 +14518,7 @@ qualifyByTerms etbl ps loc t =
               pushTypeErrorOnceAt
                 "T-EFFECT-PARAM"
                 loc
-                "Invalid authority in the qualifier `\{src}`: \{why}")
+                "invalid authority in the qualifier `\{src}`: \{why}")
             ()
             problems
         TQual
@@ -14582,7 +14584,7 @@ qualifyByAll etbl ns t =
 -- forward reference, fine: this module is resolved as a whole, not top-down).
 rowKindMismatchMsg : List EffAtomTy -> List String -> String
 rowKindMismatchMsg labels tail =
-  "A row <\{ppEffInsideTy labels tail}> was written here, but this type-argument position isn't row-kinded — it expects an ordinary type, not an effect row. Rows can only be written where a type constructor's parameter has row kind (e.g. the `e` of `Async e a`)."
+  "the row <\{ppEffInsideTy labels tail}> is written at a type-argument position that is not row-kinded; write an ordinary type here"
 
 -- A type alias applied to the wrong number of arguments — over-applied,
 -- under-applied, or (got=0) used unapplied.  v1 requires a parameterized alias
@@ -14591,7 +14593,12 @@ rowKindMismatchMsg labels tail =
 -- `Mono` repeatedly during inference.
 aliasArityMsg : String -> Int -> Int -> String
 aliasArityMsg n expected got =
-  "Type alias `\{n}` expects \{intToString expected} argument(s), got \{intToString got}"
+  "type alias `\{n}` takes \{argumentCount expected} but is applied to \{intToString got}"
+
+-- Count-correct `1 argument` / `2 arguments`.
+argumentCount : Int -> String
+argumentCount 1 = "1 argument"
+argumentCount n = "\{intToString n} arguments"
 
 -- the opaque fall-through for a TyCon-headed spine: keep the head as a bare
 -- `TCon n` and apply the (alias-expanded) argument Monos left-nested.  This is
@@ -14945,28 +14952,28 @@ authTermOf _ _ l _ p = AConst (writtenParam (dtopFor l) p)
 -- whole domain: the caller could choose an exact element for it.
 ordinaryInPatternSlotMsg : String -> String -> String
 ordinaryInPatternSlotMsg n l =
-  "'\{n}' ranges over every authority of `\{l}`, but it fills an `Authority \{l}*` slot, which takes only patterns: a caller could choose an exact element for '\{n}', and an exact element admits no extension of itself. Declare '\{n}' pattern-ranging, `(\{n} : String @\{l}*)` on a named argument or `(\{n} : Authority \{l}*)` on a type parameter"
+  "`\{n}` ranges over every authority of `\{l}`, but it fills an `Authority \{l}*` slot, which takes only patterns; declare `\{n}` pattern-ranging, `(\{n} : String @\{l}*)` or `(\{n} : Authority \{l}*)`"
 
 -- A pattern slot filled by a written exact element.
 exactInPatternSlotMsg : String -> String -> String -> String
 exactInPatternSlotMsg l written closed =
-  "`\{written}` is an exact element of `\{l}`'s domain, but it fills an `Authority \{l}*` slot, which takes only patterns: a value within this authority may be extended, and an exact element admits no extension of itself. Write the pattern it begins, `\{closed}`, or the whole domain, `*`"
+  "`\{written}` is an exact element of `\{l}`, but it fills an `Authority \{l}*` slot, which takes only patterns; write the pattern it begins, `\{closed}`, or `*`"
 
 authorityAsTypeMsg : String -> String
 authorityAsTypeMsg n =
-  "'\{n}' is an authority binder, but it is used here as a type. An authority fills a qualifier (`String @\{n}`), an atom (`<L \{n}>`) or an `Authority`-kinded index slot; write a different name for the type variable"
+  "`\{n}` is an authority binder but is used here as a type; write a different name for the type variable"
 
 authorityTermAsTypeMsg : List EffParamTy -> String
 authorityTermAsTypeMsg p =
-  "The authority term `\{authTermsSurface escStr p}` is written where a type goes. It belongs only in an `Authority`-kinded type argument, such as `Handle \{authTermsSurface escStr p}`"
+  "the authority term `\{authTermsSurface escStr p}` is written where a type goes; it belongs in an `Authority`-kinded type argument such as `Handle \{authTermsSurface escStr p}`"
 
 typeVarAsAuthorityMsg : String -> String -> String
 typeVarAsAuthorityMsg n l =
-  "'\{n}' is a type variable, but this argument slot is `Authority \{l}`: it takes an authority — a named argument's name, another index's name, or a written term such as `\"pattern/*\"` or `*`"
+  "`\{n}` is a type variable, but this slot is `Authority \{l}`; write an authority here: a binder's name, or a term such as `\"pattern/*\"` or `*`"
 
 typeAsAuthorityMsg : String -> String -> String
 typeAsAuthorityMsg ty l =
-  "`\{ty}` is a type, but this argument slot is `Authority \{l}`: it takes an authority — a name bound to its left, a literal of the label's domain, or `*` for the whole domain"
+  "`\{ty}` is a type, but this slot is `Authority \{l}`; write an authority here: a binder's name, a literal of the label's domain, or `*`"
 
 -- a row sitting in a KRow type-app slot: a bare name resolves through the shared
 -- etbl (seeded by the caller so the cell aliases the field/sig tail); an explicit
@@ -15009,7 +15016,7 @@ rowArgOf _ ty =
 -- but do not read the type name in the message as making the key per-slot.
 typeInRowSlotMsg : Ty -> String
 typeInRowSlotMsg ty =
-  "The type `\{ppTy ty}` was written here, but this type-argument position is row-kinded — it expects an effect row, not an ordinary type. Write the row you mean (`<>` for no effects, `<Stdout>`, `<IO | e>`, …), or a row variable bound by the enclosing signature."
+  "the type `\{ppTy ty}` is written at a row-kinded type-argument position; write an effect row here, such as `<>`, `<Stdout>` or `<IO | e>`"
 
 -- names a type uses in a KRow type-app argument slot (so a caller can seed them
 -- into an etbl with shared effvars before elaborating).  Walks the whole type.
@@ -15055,7 +15062,7 @@ qualifiedArgumentKinds loc scope (kinds :: restKinds) ((TyVar name) :: restArgs)
           pushTypeErrorOnceAt
             "T-EFFECT-KIND-MISMATCH"
             loc
-            "Signature parameter '\{name}' has incompatible required kinds '\{renderKindArrow previous}' and '\{renderKindArrow kinds}'. Use separate parameters or constraints requiring the same kind."
+            "signature parameter `\{name}` has incompatible required kinds `\{renderKindArrow previous}` and `\{renderKindArrow kinds}`; use separate parameters, or constraints requiring one kind"
       scope
   qualifiedArgumentKinds loc next restKinds restArgs
 qualifiedArgumentKinds loc scope (_ :: restKinds) (_ :: restArgs) =
@@ -15482,7 +15489,7 @@ inferPatRng lo hi =
   let _ =
     pushTypeError
       "T-TYPE-MISMATCH"
-      "Type mismatch: \{ppMono (litType lo)} vs \{ppMono (litType hi)}"
+      "type mismatch: \{ppMono (litType lo)} vs \{ppMono (litType hi)}"
   (tconBuiltin "Int", [])
 
 inferPatRec : TcEnv ->
@@ -15624,7 +15631,7 @@ refuseOpenedExistentials _ =
 
 existentialScopeMsg : Option String -> String
 existentialScopeMsg name =
-  "This pattern opens the existential authority '\{optionOr "?" name}', which only a `match` arm or a function clause can scope: the arm or clause ends where the authority's uses must end. Match on the value, or take it as a clause parameter, and use it inside"
+  "this pattern opens the existential authority `\{optionOr "?" name}`, which only a `match` arm or a function clause can scope; match on the value, or take it as a clause parameter"
 
 settlePatLitsOnly : List (Mono, Int, Option Loc) -> Unit
 settlePatLitsOnly saved =
@@ -15698,7 +15705,7 @@ refuseBoxedLitPat tag lit loc =
       "T-TYPE-MISMATCH"
       1
       (orElseLoc loc !currentLoc)
-      "a literal pattern cannot match \{if isI64Head tag then "an" else "a"} \{tag} (the literal \{lit})"
+      "the literal pattern `\{lit}` cannot match \{if isI64Head tag then "an" else "a"} `\{tag}`; compare in a guard instead"
       (Some "compare in a guard instead: `x if x == \{lit}`")
       None)
 
@@ -18065,7 +18072,7 @@ isExemptInPlaceSetIndex t e = match headTyconNameMono t
   None => False
 
 pushDiscardedValueError : Mono -> Expr -> Unit
-pushDiscardedValueError nt e = pushDiscardedValueDesc (ppMono nt) e
+pushDiscardedValueError nt e = pushDiscardedValueDesc "`\{ppMono nt}`" e
 
 pushDiscardedValueDesc : String -> Expr -> Unit
 pushDiscardedValueDesc desc e =
@@ -18074,12 +18081,12 @@ pushDiscardedValueDesc desc e =
     "T-DISCARDED-VALUE"
     loc
     (discardedValueMsg desc)
-    "bind it with 'let _ = …' if dropping the value is intentional, or use its value"
+    "bind it with `let _ = ...` if dropping the value is intentional"
     (discardedValueFix loc)
 
 discardedValueMsg : String -> String
 discardedValueMsg desc =
-  "this statement's value (\{desc}) is silently discarded — only a `Unit`-typed expression may stand alone as a statement"
+  "this statement's value (\{desc}) is discarded; only a `Unit` expression may stand alone as a statement"
 
 discardedValueFix : Option Loc -> Option (Loc, String)
 discardedValueFix (Some (Loc f sl sc _ _)) =
@@ -18569,7 +18576,7 @@ pushCtorFieldConflict fname tname (CtorTypesDiffer a ta b tb) =
 
 fieldNotInAllCtorsMsg : String -> String -> String -> String
 fieldNotInAllCtorsMsg fname tname sib =
-  "Field '\{fname}' is not declared by every constructor of '\{tname}': constructor '\{sib}' has no '\{fname}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
+  "field `\{fname}` is not declared by every constructor of `\{tname}`: `\{sib}` has no `\{fname}`; match on the constructor instead of using `.\{fname}`"
 
 fieldPositionDiffersMsg : String ->
   String ->
@@ -18577,7 +18584,7 @@ fieldPositionDiffersMsg : String ->
   (String, Int) ->
   String
 fieldPositionDiffersMsg fname tname (a, i) (b, j) =
-  "Field '\{fname}' is at different positions in the constructors of '\{tname}': it is field \{intToString (i + 1)} of '\{a}' but field \{intToString (j + 1)} of '\{b}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be resolved; match on the constructor instead"
+  "field `\{fname}` is at different positions in the constructors of `\{tname}`: it is field \{intToString (i + 1)} of `\{a}` but field \{intToString (j + 1)} of `\{b}`; match on the constructor instead of using `.\{fname}`"
 
 -- The two types render under one naming context, so a parameter shared by both
 -- prints as the same letter.
@@ -18593,7 +18600,7 @@ fieldTypeDiffersMsg fname tname a ta b tb =
   let cnt = Ref 0
   let sa = ppGo ctx cnt 0 ta
   let sb = ppGo ctx cnt 0 tb
-  "Field '\{fname}' has different types in the constructors of '\{tname}': it is '\{sa}' in '\{a}' but '\{sb}' in '\{b}'. A '\{tname}' value carries no constructor tag, so '.\{fname}' cannot be typed; match on the constructor instead"
+  "field `\{fname}` has different types in the constructors of `\{tname}`: it is `\{sa}` in `\{a}` but `\{sb}` in `\{b}`; match on the constructor instead of using `.\{fname}`"
 
 -- ── #3727/#3726: `{ v | f = e }` on a type with more than one constructor ──
 --
@@ -18632,7 +18639,7 @@ updateMultiCtorMsg : String ->
 updateMultiCtorMsg fn tname rname others ctors =
   let pat = if isEmptyL others then "..." else joinWith ", " others
   let rebuilt = joinWith ", " ("\{fn} = ..." :: others)
-  "Record update of '\{fn}' is not supported on '\{tname}': it has more than one constructor (\{joinWith ", " ctors}), and the type does not say which one the value holds. Match on the constructor and build the new value in its arm, e.g. '\{rname} { \{pat} } => \{rname} { \{rebuilt} }'"
+  "cannot update field `\{fn}` on `\{tname}`, which has more than one constructor (\{joinWith ", " (map backticked ctors)}); match on the constructor and rebuild the value in its arm, as in `\{rname} { \{pat} } => \{rname} { \{rebuilt} }`"
 
 -- field_owners (Phase 72): every registry KEY whose RecordInfo declares `fname`,
 -- sorted + deduped.  For a plain record the key is its type name; for a
@@ -19029,15 +19036,15 @@ ambiguousFieldDeclsMsg fname owners cands =
   else
     let tys = sortUniqS (map fieldDeclTypeName cands)
     let descrs = sortUniqS (map fieldDeclDescr cands)
-    "Ambiguous field access: '.\{fname}' is declared by \{joinWith " and by " descrs}; the record type is undetermined. Add a type annotation (e.g. '(r : \{headL tys}).\{fname}')"
+    "ambiguous field `.\{fname}`: it is declared by \{joinWith " and by " descrs} and the record type is undetermined; annotate the record, as in `(r : \{headL tys}).\{fname}`"
 
 fieldDeclTypeName : (String, RecordInfo) -> String
 fieldDeclTypeName (k, ri) = optionOr k (headTyconNameMono (recordResultMono ri))
 
 fieldDeclDescr : (String, RecordInfo) -> String
 fieldDeclDescr (k, ri) = match recordOwnerModule ri
-  Some mid => "'\{fieldDeclTypeName (k, ri)}' from module '\{mid}'"
-  None => "'\{fieldDeclTypeName (k, ri)}'"
+  Some mid => "`\{fieldDeclTypeName (k, ri)}` from module `\{mid}`"
+  None => "`\{fieldDeclTypeName (k, ri)}`"
 
 -- #1383: a concrete receiver's field is answered by the receiver's own
 -- declaration.  The floor `recordByNameRef` keeps one row per bare key, so when a
@@ -19344,8 +19351,8 @@ pushUnknownFieldMaybeSuggest fname rname declared =
       pushTypeErrorHelpFixAt
         "T-UNKNOWN-FIELD"
         !currentLoc
-        (unknownFieldMsg fname rname ++ ". Did you mean '\{sug}'?")
-        "did you mean '\{sug}'?"
+        (unknownFieldMsg fname rname ++ "; did you mean `\{sug}`?")
+        "did you mean `\{sug}`?"
         (fieldFixFrom !currentLoc fname sug)
 
 -- "did you mean" for a record field: nearest declared field name by
@@ -19408,36 +19415,37 @@ fieldFixFrom (Some (Loc f _ _ el ec)) written sug =
 fieldFixFrom None _ _ = None
 
 unknownFieldMsg : String -> String -> String
-unknownFieldMsg fname rname =
-  "Field '\{fname}' does not belong to record '\{rname}'"
+unknownFieldMsg fname rname = "no field `\{fname}` in `\{rname}`"
 
 -- Dot-access on a type exported abstractly: byte-identical to resolve.mdk's
 -- AbstractFieldAccess ppResError, so a destructure (`Point { x }`, caught in
 -- resolve) and a dot-access (`p.x`, caught here in typecheck) read the same.
 abstractFieldMsg : String -> String -> String
 abstractFieldMsg tname fname =
-  "'\{tname}' is exported abstractly. Field '\{fname}' is not accessible; declare it `public export` to expose its fields"
+  "`\{tname}` is exported abstractly, so its field `\{fname}` is not accessible; declare it `public export` to expose its fields"
 
 -- TYPECHECK-AUDIT OBS4.
 missingFieldMsg : String -> String -> String
-missingFieldMsg fname rname =
-  "Missing field '\{fname}' in construction of record '\{rname}'"
+missingFieldMsg fname rname = "missing field `\{fname}` in `\{rname}`"
 
 ambiguousFieldMsg : String -> List String -> String
 ambiguousFieldMsg fname owners =
-  "Ambiguous field access: '.\{fname}' is declared by \{joinWith ", " owners}; the record type is undetermined. Add a type annotation (e.g. '(r : \{headL owners}).\{fname}')"
+  "ambiguous field `.\{fname}`: it is declared by \{joinAnd (map backticked owners)} and the record type is undetermined; annotate the record, as in `(r : \{headL owners}).\{fname}`"
+
+backticked : String -> String
+backticked s = "`\{s}`"
 
 -- TYPECHECK-AUDIT D1: convert resolve-not-pre-screened error shapes (unknown
 -- record / constructor, unbound variable) from uncatchable interpreter panics
 -- into accumulated typeErrors + a fresh-var placeholder, so inference continues.
 unknownRecordMsg : String -> String
-unknownRecordMsg name = "Unknown record type: " ++ name
+unknownRecordMsg name = "unknown record type `" ++ name ++ "`"
 
 unknownCtorMsg : String -> String
-unknownCtorMsg name = "Unknown constructor: " ++ name
+unknownCtorMsg name = "unknown constructor `" ++ name ++ "`"
 
 unboundVarMsg : String -> String
-unboundVarMsg name = "Unbound variable: " ++ name
+unboundVarMsg name = "unbound variable `" ++ name ++ "`"
 
 -- push the message + return a fresh placeholder type so the continued path stays
 -- in a valid state (the oracle accumulate-and-continue analog for these shapes).
@@ -20250,7 +20258,7 @@ checkWideLiterals ((m, lx, hi, lo, negated, loc) :: rest) =
           1
           at
           "integer literal \{shown} does not fit \{tag}"
-          (Some "only a U64 or an I64 holds a literal above 2^62")
+          (Some "only a `U64` or an `I64` holds a literal above 2^62")
           None)
     _ =>
       recordTypeError
@@ -20258,7 +20266,7 @@ checkWideLiterals ((m, lx, hi, lo, negated, loc) :: rest) =
           "L-INT-OVERFLOW"
           1
           at
-          "integer literal \{shown} does not fit a type that is not known to be U64 or I64"
+          "integer literal \{shown} fits only `U64` or `I64`, and its type here is undetermined"
           (Some (wideAnnotateHelp shown negated))
           None)
   checkWideLiterals rest
@@ -20267,7 +20275,7 @@ checkWideLiterals ((m, lx, hi, lo, negated, loc) :: rest) =
 wideAnnotateHelp : String -> Bool -> String
 wideAnnotateHelp shown negated =
   let ty = if negated then "I64" else "U64"
-  "only a U64 or an I64 holds a literal above 2^62; annotate it, `(\{shown} : \{ty})`"
+  "only a `U64` or an `I64` holds a literal above 2^62; annotate it as `(\{shown} : \{ty})`"
 
 recordNumlitLoc : Mono -> Unit
 recordNumlitLoc a = match !currentLoc
@@ -20524,11 +20532,12 @@ monoIsBool (TCon "Bool" _) = True
 monoIsBool _ = False
 
 bangOnBoolMsg : String
-bangOnBoolMsg = "`!` is dereference (Ref), not boolean negation — use `not x`"
+bangOnBoolMsg =
+  "`!` dereferences a `Ref` and does not negate a `Bool`; use `not x`"
 
 bangOnBoolHelp : String
 bangOnBoolHelp =
-  "use `not x` — `!x` reads the cell of a `Ref`, so it needs a `Ref a`, not a `Bool`"
+  "use `not x`; `!x` reads a `Ref` cell, so it needs a `Ref a`, not a `Bool`"
 
 -- Roadmap #18c: unary minus `-x` carries a `Num` obligation on its operand type —
 -- a verbatim mirror of `numArithOp`/`recordIfaceObligation` for binary `+`/`-`/…,
@@ -21019,7 +21028,7 @@ checkAdmittedOccObl env (name, mono, loc) =
       pushTypeErrorAt
         "T-NO-IMPL"
         loc
-        "No impl of \{joinWith " or " (map (ir => ir.irName) ifs)} for \{recv}; write an impl of one of them for it."
+        "no impl of \{joinWith " or " (map (ir => ir.irName) ifs)} for \{recv}; write an impl of one of them for it"
 
 -- `Some True` if any admitted declaration's impl query hits; `Some False` if every
 -- one can be asked and none hits; `None` if any one cannot be asked.
@@ -21568,7 +21577,7 @@ contraRowCheck extras le la =
 
 contraRowMsg : List Atom -> List Atom -> List Atom -> String
 contraRowMsg le la extras =
-  "Function whose parameter admits only <\{renderAtoms la}> used where one whose parameter admits <\{renderAtoms le}> is expected: a caller could pass it an argument performing <\{renderAtoms extras}>, which it would run under a <\{renderAtoms la}> row. Declare that parameter with <\{renderAtoms le}> (or wider), or pass a function whose parameter admits <\{renderAtoms le}>."
+  "a function whose parameter admits only <\{renderAtoms la}> is used where one admitting <\{renderAtoms le}> is expected, so a caller could pass an argument performing <\{renderAtoms extras}>; declare that parameter with <\{renderAtoms le}>"
 
 -- the type after peeling [n] arrows off [t] (normalizing at each level), or
 -- None when [t] has fewer.
@@ -23204,22 +23213,26 @@ appSpineArgCount _ = 0
 -- being applied.  Base wording names the offending type; the context-aware
 -- form names the over-applied callee and its arity.
 notAFunctionMsg : String -> String
-notAFunctionMsg tyName =
-  "This expression has type \{tyName}, which is not a function, so it cannot be applied to an argument."
+notAFunctionMsg tyName = notAFunctionMsgFor None tyName
 
--- F-dimension actionable-fix hint appended to `notAFunctionMsg` (2026-07-04):
--- names the offending value when the spine head is a plain variable, else
--- falls back to a name-free phrasing.  No mechanical `fix` — the caller
--- decides whether to drop the argument or call a different function.
+notAFunctionMsgFor : Option String -> String -> String
+notAFunctionMsgFor (Some name) tyName =
+  "`\{name}` has type \{tyName} and is not a function; it cannot be applied to an argument"
+notAFunctionMsgFor None tyName =
+  "this expression has type \{tyName} and is not a function; it cannot be applied to an argument"
+
+-- F-dimension actionable-fix hint carried as the `help` of `notAFunctionMsg`
+-- (2026-07-04): names the offending value when the spine head is a plain
+-- variable, else falls back to a name-free phrasing.  No mechanical `fix` — the
+-- caller decides whether to drop the argument or call a different function.
 notAFunctionHint : Option String -> String
 notAFunctionHint (Some name) =
-  " '\{name}' is a value, not a function; remove the argument, or call a function here."
-notAFunctionHint None =
-  " This is a value, not a function; remove the argument, or call a function here."
+  "`\{name}` is a value, not a function; remove the argument"
+notAFunctionHint None = "this is a value, not a function; remove the argument"
 
 overAppliedMsg : String -> Int -> Int -> String
 overAppliedMsg name takes applied =
-  "'\{name}' takes \{intToString takes} argument(s) but is applied to \{intToString applied}."
+  "`\{name}` takes \{argumentCount takes} but is applied to \{intToString applied}"
 
 -- Batch B #6 reframe (2026-07-04): a container-consuming HOF whose next declared
 -- parameter is a higher-kinded container `f a` (an unresolved tyvar head applied
@@ -23250,18 +23263,17 @@ containerParamScalarArg ft xt = match normalize ft
 containerArgMsg : Option String -> String -> String
 containerArgMsg fn argTy =
   let who = match fn
-    Some n => "'\{n}'"
-    None => "This function"
-  "\{who} expects a container (like List or Array) here, but got \{argTy}\{containerArgHint argTy}"
+    Some n => "`\{n}`"
+    None => "this function"
+  "\{who} expects a container such as `List` here but got `\{argTy}`; \{containerArgHint argTy}"
 
 -- Actionable-fix hint appended to `containerArgMsg`.  Special-cases `String`
 -- (the most common scalar handed to `map`): a String's characters are reachable
 -- via `string.toChars`, so name that conversion rather than a generic one.
 containerArgHint : String -> String
 containerArgHint "String" =
-  ". Pass a List or Array; to work over a string's characters, convert it with `string.toChars` first."
-containerArgHint argTy =
-  ". Pass a List or Array, or convert the \{argTy} to one first."
+  "to work over the string's characters, convert it with `string.toChars` first"
+containerArgHint argTy = "convert the `\{argTy}` to a `List` first"
 
 -- #894: `containerArgMsg` above hard-codes "a container (like List or Array)",
 -- which is right for a genuine container-consuming HOF (`map`, `filter`, …) but
@@ -23281,11 +23293,10 @@ containerArgHint argTy =
 -- advice there.
 doBindArgMsg : String -> String
 doBindArgMsg argTy =
-  "this `do` block needs a Thenable value here (like `Option` or `Result`), but got \{argTy}\{doBindArgHint argTy}"
+  "this `do` block needs a `Thenable` value here, such as `Option` or `Result`, but got `\{argTy}`; \{doBindArgHint argTy}"
 
 doBindArgHint : String -> String
-doBindArgHint argTy =
-  ". If \{argTy} isn't itself monadic, use 'let' instead of '<-' to bind it."
+doBindArgHint argTy = "bind a plain `\{argTy}` with `let` instead of `<-`"
 
 -- #894 review finding 1: is `appExpr`'s own callee EXACTLY the synthesized
 -- `andThen` `lowerDo` builds for a `do`-bind (`callAndThen`,
@@ -23410,13 +23421,13 @@ buildTupleCallHint name es f x = match renderCallArgs es
     let argsSpaced = joinWith " " parts
     let spread = "\{name} \{argsSpaced}"
     let help =
-      "Medaka calls functions with spaces, not parentheses: `\{name}(\{argsCsv})` applies `\{name}` to one tuple `(\{argsCsv})`. Did you mean `\{spread}`?"
+      "Medaka calls functions with spaces, not parentheses: `\{name}(\{argsCsv})` passes the single tuple `(\{argsCsv})`; did you mean `\{spread}`?"
     let fix = map (span => (span, spread)) (tupleCallSpanLoc f x)
     (help, fix)
   None =>
     let n = listLen es
     let help =
-      "Medaka calls functions with spaces, not parentheses: `\{name}(…)` passes a single \{intToString n}-tuple, not \{intToString n} arguments. Separate them with spaces, e.g. `\{name} x y`."
+      "Medaka calls functions with spaces, not parentheses: `\{name}(...)` passes one \{intToString n}-tuple, not \{intToString n} arguments; separate them with spaces, as in `\{name} x y`"
     (help, None)
 
 -- detect the tuple-call shape on the PRISTINE ft (before inferApp) and return the
@@ -23719,20 +23730,18 @@ inferAppNotFunction appExpr ft r =
       if takes >= 1 then
         pushTypeError "T-NOT-A-FUNCTION" (overAppliedMsg name takes applied)
       else
-        let hint = notAFunctionHint (Some name)
         pushTypeErrorHelpFixAt
           "T-NOT-A-FUNCTION"
           currentLoc.value
-          (notAFunctionMsg (ppMono (normalize ft)) ++ hint)
-          hint
+          (notAFunctionMsgFor (Some name) (ppMono (normalize ft)))
+          (notAFunctionHint (Some name))
           None
     None =>
-      let hint = notAFunctionHint None
       pushTypeErrorHelpFixAt
         "T-NOT-A-FUNCTION"
         currentLoc.value
-        (notAFunctionMsg (ppMono (normalize ft)) ++ hint)
-        hint
+        (notAFunctionMsg (ppMono (normalize ft)))
+        (notAFunctionHint None)
         None
   let _ = poisonMismatchVars r r
   r
@@ -24257,7 +24266,7 @@ inferMatch env scrutTy arms =
 -- A scrutinee whose type is still unknown after its arms (only literal, variable
 -- and wildcard patterns, e.g. a lambda's parameter matched against integer
 -- literals) is checked at the module's end instead, once `settleDeferredPatLits`
--- has given it its type, so the warning names it (`non-exhaustive match of 'U8'`).
+-- has given it its type, so the warning names it (`non-exhaustive match on U8`).
 checkMatchChecks : Mono -> List Arm -> Unit
 checkMatchChecks scrutTy arms =
   let _ = checkMatchExhaustive scrutTy arms
@@ -24281,7 +24290,7 @@ checkDeferredMatches ((scrutTy, arms, loc) :: rest) =
 -- generic form is the fallback if no witness is recoverable.
 nonExhaustiveMatchWarning : String
 nonExhaustiveMatchWarning =
-  "Warning: non-exhaustive match. Not all cases are covered"
+  "Warning: non-exhaustive match; not every case is covered"
 
 -- Warn if an all-wildcard query is still useful against the matrix of the
 -- non-guarded arms — i.e. some scrutinee value escapes every arm.  Guarded arms
@@ -24309,7 +24318,7 @@ checkMatchExhaustive scrutTy arms =
 -- the dead arm, not the match head.
 unreachableArmWarning : String
 unreachableArmWarning =
-  "Warning: unreachable match arm. This pattern is already covered by an earlier arm"
+  "Warning: unreachable match arm; an earlier arm already covers this pattern"
 
 checkMatchRedundant : Mono -> List Arm -> Unit
 checkMatchRedundant scrutTy arms =
@@ -24417,9 +24426,12 @@ nonExhaustiveMsg scrutTy rows =
     Some (w :: _) =>
       let witnessStr = renderWitness w
       let hint =
-        "add a '\{witnessStr} => …' arm, or a '_' wildcard arm to catch the rest."
+        if witnessStr == "_" then
+          "add a `_ => ...` arm"
+        else
+          "add a `\{witnessStr} => ...` arm or a `_` wildcard"
       let msg =
-        "Warning: non-exhaustive match\{tyOfMsg (matchCol0Type scrutTy)}. Missing case: '\{witnessStr}'; \{hint}"
+        "Warning: non-exhaustive match\{tyOfMsg (matchCol0Type scrutTy)}: missing `\{witnessStr}`; \{hint}"
       (msg, Some hint)
     _ => (nonExhaustiveMatchWarning, None)
 
@@ -24432,7 +24444,7 @@ tyOfMsg : Option TabKey -> String
 tyOfMsg None = ""
 tyOfMsg (Some k) =
   let t = tabKeyName k
-  if isTupleTyName t then "" else " of '\{t}'"
+  if isTupleTyName t then "" else " on `\{t}`"
 
 isTupleTyName : String -> Bool
 isTupleTyName t = stringLength t >= 7 && stringSlice 0 7 t == "__tuple"
@@ -24587,7 +24599,7 @@ closeExistentialScope (ExistentialScope opened level) t loc =
 
 existentialEscapeMsg : Option String -> String
 existentialEscapeMsg name =
-  "The existential authority '\{optionOr "?" name}' escapes the arm or clause that opened it: its value, or something outside it, carries a type at that authority, which nothing outside can name. Consume the value inside the arm or clause, or return it repacked in its existential constructor"
+  "the existential authority `\{optionOr "?" name}` escapes the arm or clause that opened it; consume the value inside it, or return it repacked in its existential constructor"
 
 -- Thread an arm's guard qualifiers left-to-right: a `GBool` must be `Bool` and leaves the env unchanged; a
 -- `GBind p e` infers `e`, binds `p` against it, and extends the env so the bound
@@ -24825,7 +24837,7 @@ updateAuthority rname fields assigned id source
 
 partialExistentialUpdateMsg : String -> List String -> String
 partialExistentialUpdateMsg rname names =
-  "Updating '\{rname}' replaces a field under an existential authority binder, but not every field that mentions the binder (\{joinWith ", " names}): one binder cannot name two values at different authorities. Replace them all together, or rebuild the record"
+  "updating `\{rname}` replaces a field under an existential authority binder, but the binder's fields \{quotedNames names} must change together; replace them all, or rebuild the record"
 
 -- A universal freshens flexible, as at any use.  An existential binder is
 -- opened only by a pattern; a field read or update sees the value without
@@ -25703,9 +25715,9 @@ clauseIsNonFunction (FunClause _ _) = False
 
 letRecNonFunctionMsg : String -> String
 letRecNonFunctionMsg name =
-  "'"
+  "`"
     ++ name
-    ++ "' is bound by 'let rec' but its right-hand side is not a function"
+    ++ "` is bound by `let rec` but its right-hand side is not a function"
 
 -- #799: the guard above (checkLetRecDecls/checkLetBind) only walks TOP-LEVEL
 -- DLetGroup declarations. BLOCK-level (`let rec x = v` as a DoStmt) and
@@ -27877,14 +27889,18 @@ pushAmbiguousShadowDecl name ifs dloc =
   pushTypeErrorHelpFixAt
     "T-AMBIGUOUS-SHADOW-DECL"
     dloc
-    "'\{name}' is ambiguous here: \{joinWith " and " (map shadowIfaceLabel ifs)} each declare a method '\{name}' and are both in scope, and they do not agree on what '\{name}' denotes at this call."
-    "Bring only one of those interfaces into scope — import the other module without naming its interface — or rename one of the methods. With two interfaces admitted and no discriminator written in the source, any choice here would be the compiler's rather than yours."
+    "`\{name}` is ambiguous here: \{joinWith " and " (map shadowIfaceLabel ifs)} each declare a method `\{name}` and are both in scope; \{ambiguousShadowHelp}"
+    ambiguousShadowHelp
     None
+
+ambiguousShadowHelp : String
+ambiguousShadowHelp =
+  "bring only one of those interfaces into scope by importing the other module without naming its interface, or rename one of the methods"
 
 shadowIfaceLabel : IfaceRef -> String
 shadowIfaceLabel ir = match ir.irOrigin
-  OriginModule m => "'\{ir.irName}' (from '\{m}')"
-  _ => "'\{ir.irName}'"
+  OriginModule m => "`\{ir.irName}` (from `\{m}`)"
+  _ => "`\{ir.irName}`"
 
 -- 🚨 STILL SPELLING-KEYED, THROUGH `dispHeadTab`/`headTabIs` — the retest keeps the
 -- projection strength of the bucket it scans and NOT a stronger one.  The BUCKET moved
@@ -28956,7 +28972,7 @@ checkImplHeadIndices _ = ()
 
 implHeadIndexMsg : String -> String -> String
 implHeadIndexMsg head written =
-  "An impl head abstracts over an `Authority` index: `impl I (\{head} p)` covers every index, since an instance is chosen by the type's head and the index is erased. Write a name in the slot instead of `\{written}`"
+  "impl head `\{head} \{written}` writes an `Authority` index, but an instance is chosen by the type's head and covers every index; write a name in the slot instead of `\{written}`"
 
 -- #1559 A-3.7: THE `IE`→`CohImpl` ADAPTER — coherence's input, relocated off the decl
 -- walk.  Every one of the four things coherence judges on comes out of the row:
@@ -29285,7 +29301,7 @@ cohPpEach ctx cnt (m :: ms) = ppGo ctx cnt 0 m :: cohPpEach ctx cnt ms
 cohOverlapMsg : String -> List Mono -> List Mono -> String
 cohOverlapMsg iface xs ys = match cohPpPair xs ys
   (s1, s2) =>
-    "Overlapping impls of \{iface}: \{s1} and \{s2} can match the same type. Make them disjoint, or wrap one type in a newtype"
+    "overlapping impls of \{iface}: \{s1} and \{s2} can match the same type; make them disjoint or wrap one type in a newtype"
 
 -- ── F-3d (#614/#311): the declaration-time sweep is CLASSIFIED, not deleted ──
 -- DICT-SEMANTICS §6.1 choice-point 2 commits to condition **(c)** — per-goal unique
@@ -29604,11 +29620,11 @@ cohIncomparableMsg : String ->
   String
 cohIncomparableMsg iface xs ys mid1 mid2 = match cohPpPair xs ys
   (s1, s2) =>
-    "Warning: Overlapping impls of \{iface}\{cohWhereSuffix mid1 mid2}: \{s1} and \{s2} are not ordered by specificity — neither head is more specific than the other, so a goal matching both has no most-specific impl to pick"
+    "Warning: overlapping impls of \{iface}\{cohWhereSuffix mid1 mid2}: neither \{s1} nor \{s2} is more specific than the other, so a goal matching both has no impl to pick"
 
 cohWhereSuffix : String -> String -> String
 cohWhereSuffix mid1 mid2
-  | cohIsCrossModule mid1 mid2 = " (defined in \{mid2} and \{mid1})"
+  | cohIsCrossModule mid1 mid2 = " (defined in `\{mid2}` and `\{mid1}`)"
   | otherwise = ""
 
 -- ERROR-QUALITY dim F: the actionable half, carried as structured `help` rather than
@@ -29624,12 +29640,12 @@ cohWhereSuffix mid1 mid2
 -- the wrong inference about the program in front of them.
 cohIncomparableHelp : String
 cohIncomparableHelp =
-  "add an impl at the two heads' common instance so it is more specific than both, or make the two heads disjoint; without one, a goal matching both is rejected as ambiguous once its type is fully determined, and until then silently takes the first-declared impl (see issue 1183)"
+  "add an impl at the two heads' common instance so it is more specific than both, or make the two heads disjoint"
 
 -- cross-module conflict wording: names the interface and BOTH owning modules.
 cohCrossModuleMsg : String -> String -> String -> String
 cohCrossModuleMsg iface mid1 mid2 =
-  "Conflicting `impl \{iface}`. Defined in \{mid2} and \{mid1}"
+  "conflicting `impl \{iface}`: defined in both `\{mid2}` and `\{mid1}`"
 
 cohImplIface : CohImpl -> IfaceRef
 cohImplIface (CohImpl i _ _ _) = i
@@ -30127,8 +30143,8 @@ aliasAmbiguityMsg : String ->
   String
 aliasAmbiguityMsg k hits =
   let mods =
-    joinWith " and " (map (m => "'\{m}'") (sortUniqS (map aliasRowModule hits)))
-  "'\{k}' is ambiguous: this alias names more than one module declaring a method '\{aliasRowMethodOf hits}' — \{mods}. An occurrence of '\{k}' could not be attributed to any of them. Give those imports different alias names, or import the method by name."
+    joinWith " and " (map backticked (sortUniqS (map aliasRowModule hits)))
+  "`\{k}` is ambiguous: the alias names more than one module declaring a method `\{aliasRowMethodOf hits}` (\{mods}); give those imports different alias names"
 
 aliasRowMethodOf : List (String, String, String, Ident, Loc) -> String
 aliasRowMethodOf [] = ""
@@ -30798,7 +30814,7 @@ recordCandImported prog n (ident, owner, _) =
 
 missingImplMethodMsg : String -> List Ty -> String -> String
 missingImplMethodMsg iface tys method =
-  "'impl \{iface} \{joinWith " " (map ppTyAtom tys)}' is missing method '\{method}'. Every interface method without a default body must be implemented — define '\{method}' in the impl (or check for a typo in a method name)"
+  "`impl \{iface} \{joinWith " " (map ppTyAtom tys)}` is missing the method `\{method}`; define `\{method}` in the impl"
 
 -- ── WS-5: phantom interface method detection ──────────────────────────────
 -- A method whose declared type mentions NONE of the interface's type parameters
@@ -30855,8 +30871,9 @@ phantomMethodMsg ifaceName typarams (mname, mty, _) =
   else if anyMember (tyVarNames mty) typarams then
     []
   else
+    let noun = if listLen typarams == 1 then "parameter" else "parameters"
     [
-      "Method '\{mname}' in interface '\{ifaceName}' does not mention interface parameter(s) \{intercalateComma typarams}; cannot dispatch",
+      "method `\{mname}` of interface `\{ifaceName}` does not mention the interface \{noun} \{intercalateComma (map backticked typarams)}, so it cannot be dispatched",
     ]
 
 intercalateComma : List String -> String
@@ -31121,7 +31138,7 @@ containsRowKey k (r :: rest)
 -- e.g. ["A", "B", "A"] → "cyclic superinterface: A requires B requires A"
 cyclicSuperIfaceMsg : List String -> String
 cyclicSuperIfaceMsg path =
-  "Cyclic superinterface: " ++ joinWith " requires " path
+  "cyclic superinterface: " ++ joinWith " requires " (map backticked path)
 
 -- the missing-superinterface error messages for one user decl (a DImpl, possibly
 -- wrapped in DAttrib); [] for any non-impl decl or when every super impl exists.
@@ -31190,7 +31207,8 @@ substParams (p :: rest) subst = match lookupAssoc p subst
 -- head and the super are printed with the same space-joined atom-position args.
 missingSuperImplMsg : String -> List Ty -> String -> List Ty -> String
 missingSuperImplMsg iface implTys superName superTys =
-  "'impl \{iface} \{joinWith " " (map ppTyAtom implTys)}' requires a superinterface 'impl \{superName} \{joinWith " " (map ppTyAtom superTys)}', which is missing"
+  let superHead = "impl \{superName} \{joinWith " " (map ppTyAtom superTys)}"
+  "`impl \{iface} \{joinWith " " (map ppTyAtom implTys)}` requires the superinterface `\{superHead}`, which is missing; add `\{superHead}`"
 
 -- The type parameters and direct supers of one interface, by identity.
 superLookup : IfaceRef -> Option (List String, List Super)
@@ -31811,11 +31829,11 @@ openGoalCommitWarnCode = "W-OPEN-GOAL-COMMITTED"
 
 openGoalCommitMsg : String -> List Mono -> List KeyEntry -> String
 openGoalCommitMsg iface goals cands =
-  "Instance for `\{iface}` chosen by declaration order. The goal `\{iface} \{ppPredArgsShared goals}` is still undetermined here and matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)} — so the first of them to be declared is the one that runs"
+  "instance for `\{iface}` chosen by declaration order: the goal `\{iface} \{ppPredArgsShared goals}` is still undetermined here and matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)}, so the first declared is the one that runs"
 
 openGoalCommitHelp : String
 openGoalCommitHelp =
-  "Annotate this expression with a type only one of these impls matches, so the choice does not depend on the order the impls were declared."
+  "annotate this expression with a type only one of these impls matches"
 
 -- §6.2 T3's "closed": every variable of the goal is *"either quantified by the scheme
 -- just produced or already ground"* — the ground goals PLUS the rigid-variable ones.
@@ -31872,7 +31890,7 @@ keyEntryIface (KeyEntry _ _ _ _ ifn _ _ _) = ifn
 -- module id, so the message cannot name which impl that is.
 ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
 ambiguousOverlapMsg iface goals cands =
-  "Ambiguous instance for `\{iface}`. The goal `\{iface} \{ppPredArgsShared goals}` matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)}. Overlapping impls are allowed only when one of them is more specific than every other match — make them disjoint, or add an impl more specific than all of them. If one of these is a prelude or imported impl you cannot edit, annotate this expression to a type only one of them matches"
+  "ambiguous instance for `\{iface}`: the goal `\{iface} \{ppPredArgsShared goals}` matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)}; make them disjoint, or annotate this expression with a type only one of them matches"
 
 -- "neither is more specific than the other" reads better than the general form at the
 -- overwhelmingly common arity, and presupposes exactly two, so it is gated on two.
@@ -33481,9 +33499,9 @@ implHeadTagForIface _ _ = []
 
 ambiguousImplMsg : String -> String
 ambiguousImplMsg iface =
-  "Ambiguous instance for `"
+  "ambiguous instance for `"
     ++ iface
-    ++ "`. Cannot determine which impl; add a type annotation"
+    ++ "`: the type here does not determine which impl applies; add a type annotation"
 
 -- Native #54/#21 residual: the activeDictVar-AWARE requires recursion.  Recursing
 -- via routeOf (not the removed blind reqRoute) keeps every nesting level
@@ -34364,9 +34382,9 @@ checkFileValueFlow (loc, upper, lower) =
     pushTypeErrorOnceAt
       "T-FILE-BOUND-VALUE"
       loc
-      ("Cannot change a function's file bound inside a container. The value and required types are: "
+      ("a function's file bound cannot change inside a container: "
         ++ ppMonosShared [lower, upper]
-        ++ ". Annotate the function with the required FileRead or FileWrite bound before packing it into the container.")
+        ++ "; annotate the function with the container's FileRead or FileWrite bound before packing it")
 
 changesPackedFileBound : Bool -> Mono -> Mono -> Bool
 changesPackedFileBound packed upper lower = match (
@@ -38005,7 +38023,7 @@ undeterminedNoImplMsg iface args =
   let positions = indexed args
   let fixed = filterList (p => monoClosed (snd p)) positions
   let open = filterList (p => not (monoClosed (snd p))) positions
-  let head = "No impl of \{iface} for \{ppPredArgsShared shown}"
+  let head = "no impl of \{iface} for \{ppPredArgsShared shown}"
   if isNonEmptyL fixed && allList (p => isBareTyvarMono (snd p)) open then
     let has =
       joinWith
@@ -38016,9 +38034,9 @@ undeterminedNoImplMsg iface args =
           fixed)
     let free = joinWith " and " (map (p => ordinalWord (fst p)) open)
     let noun = if listLen open == 1 then "position" else "positions"
-    "\{head}: no instance of `\{iface}` has \{has}, so no type for the \{free} \{noun} can satisfy it."
+    "\{head}; no impl of `\{iface}` has \{has}, so no type for the \{free} \{noun} can satisfy it"
   else
-    "\{head}: no instance of `\{iface}` has that shape, so no choice of types for the `_` can satisfy it."
+    "\{head}; no impl of `\{iface}` has that shape, so no type for `_` can satisfy it"
 
 -- The ordinal of the zero-based position [i].
 ordinalWord : Int -> String
@@ -38145,8 +38163,8 @@ sigVarGoalMsg sigTvMaps sigVarIds iface args =
   let named = map snd owners
   let pred =
     "\{iface.irName} \{joinWith " " (ppEach (Ref named) (Ref 0) 3 args)}"
-  let vars = joinWith " and " (map (owner => "'\{snd (snd owner)}'") owners)
-  "Could not deduce '\{pred}' from the signature of '\{member}'. Its body requires it, and an instance matches it only if \{vars} is a specific type, but the caller chooses \{vars}. Write that type in the signature, or add '\{pred} =>' to the declared type"
+  let vars = joinWith " and " (map (owner => "`\{snd (snd owner)}`") owners)
+  "the body of `\{member}` requires `\{pred}`, which its signature does not declare and which only a specific \{vars} satisfies; write that type in the signature or add `\{pred} =>`"
 
 -- (member, (id, declared name)) for the signature in [sigTvMaps] that declares [id].
 sigVarOwner : List (String, Ty, List (String, Mono)) ->
@@ -38503,8 +38521,8 @@ spineHeadMono t = match peelQual t
 -- reject (`No impl of Eq for List Int`) renders byte-identically.  This message is prose,
 -- not source — `renderConstraintCtx` is the surface that owes parens unconditionally.
 noImplFoundMsg : String -> List Mono -> String
-noImplFoundMsg iface [arg] = "No impl of \{iface} for \{ppMonosShared [arg]}"
-noImplFoundMsg iface args = "No impl of \{iface} for \{ppPredArgsShared args}"
+noImplFoundMsg iface [arg] = "no impl of \{iface} for \{ppMonosShared [arg]}"
+noImplFoundMsg iface args = "no impl of \{iface} for \{ppPredArgsShared args}"
 
 -- Actionable-fix hint (F dimension) for a `No impl of <iface> for <ty>` reject:
 -- only when [args] is a single user-declared data type (a `dataParamKindsRef`
@@ -38570,8 +38588,8 @@ noImplHintFor iface n
 noImplAdvice : String -> String -> String
 noImplAdvice iface n
   | derivableIface iface =
-    "add 'deriving \{iface}' to the '\{n}' type, or write an 'impl \{iface} \{n}'."
-  | otherwise = "write an 'impl \{iface} \{n}'."
+    "add `deriving \{iface}` to `\{n}` or write `impl \{iface} \{n}`"
+  | otherwise = "write `impl \{iface} \{n}`"
 
 -- The interfaces desugar.mdk can actually synthesize an impl for (deriveForData /
 -- deriveForNewtype).  `Generic` is data-only; the other four cover both.
@@ -38580,7 +38598,7 @@ derivableIface iface =
   contains iface ["Eq", "Ord", "Debug", "Display", "Generic"]
 
 -- Append the hint (when applicable) to the plain `noImplFoundMsg`, mirroring
--- the did-you-mean append convention (base message ++ " — " ++ hint).
+-- the did-you-mean append convention (base message ++ "; " ++ hint).
 noImplFoundMsgHinted : String -> List Mono -> (String, Option String)
 noImplFoundMsgHinted iface args =
   let base = noImplFoundMsg iface args
@@ -38600,7 +38618,7 @@ pushNoImplError iface loc args = match firstTupleCallHint args
     pushTypeErrorHelpFixAt
       "T-NO-IMPL"
       loc
-      "\{noImplFoundMsg iface args} — \{help}"
+      "\{noImplFoundMsg iface args}; \{help}"
       help
       fix
   None =>
@@ -38623,10 +38641,11 @@ reportNumOrNoImpl iface args loc
 numlitMismatchPush : List Mono -> Option Loc -> Unit
 numlitMismatchPush args loc =
   let hint = numlitMismatchHint loc args
+  let msg = numlitMismatchMsg loc args
   pushTypeErrorHelpFixAt
     "T-TYPE-MISMATCH"
     loc
-    (numlitMismatchMsg loc args ++ hint)
+    (if hint == "" then msg else "\{msg}; \{hint}")
     hint
     None
 
@@ -38643,26 +38662,18 @@ numlitReframeLoc None = False
 numlitMismatchMsg : Option Loc -> List Mono -> String
 numlitMismatchMsg loc args = match numlitCtxKind loc
   Some JoinIf =>
-    "'if' branches have different types: Int vs \{ppMonosShared args}"
+    "`if` branches have different types: Int vs \{ppMonosShared args}"
   Some JoinList =>
-    "List elements have different types: Int vs \{ppMonosShared args}"
-  Some JoinCons =>
-    "Cons (::) type mismatch: head is Int but the list holds \{ppMonosShared args}"
-  _ => "Type mismatch: Int literal vs \{ppMonosShared args}"
+    "list elements have different types: Int vs \{ppMonosShared args}"
+  Some JoinCons => "`::` head is Int but the list holds \{ppMonosShared args}"
+  _ => "type mismatch: Int literal vs \{ppMonosShared args}"
 
--- F-dimension actionable-fix hint appended to `numlitMismatchMsg` (2026-07-04):
--- mirrors its per-context wording, reusing the SAME two type strings the
--- message already interpolates (never recomputed).  No hint for the
--- context-less fallback (`_`) — there's no branch/element/head to name.
+-- Hint appended to `numlitMismatchMsg`.  Only the else-less `if` has a remedy
+-- the message itself does not already state; the if/list/cons joins name both
+-- types, so a "make them the same" hint would only repeat the fault.
 numlitMismatchHint : Option Loc -> List Mono -> String
-numlitMismatchHint loc args = match numlitCtxKind loc
-  Some JoinIf =>
-    ". Both branches must have the same type; change the else branch to Int, or the then branch to \{ppMonosShared args}."
-  Some JoinList =>
-    ". All elements must have the same type; convert the \{ppMonosShared args} element, or make the list hold \{ppMonosShared args}."
-  Some JoinCons =>
-    ". The head's type must match the list's elements; change the head to \{ppMonosShared args}, or use a list of Int."
-  Some JoinElselessIf => " — \{elselessIfHelp}"
+numlitMismatchHint loc _ = match numlitCtxKind loc
+  Some JoinElselessIf => elselessIfHelp
   _ => ""
 
 numlitCtxKind : Option Loc -> Option JoinContext
@@ -39674,7 +39685,7 @@ implBodyLoc _ = None
 
 effectLaunderMsg : String -> String -> List Atom -> String
 effectLaunderMsg iface mname escaping =
-  "Effect laundering in impl of '\{mname}' for interface '\{iface}': the body performs <\{renderAtoms escaping}>, which is not sourced from any argument and is not declared by the method's effect row, so a caller can instantiate the method's effect variable to <> and a function typed pure would then silently perform it. Either declare the effect as a concrete label in the method's return row (e.g. `<\{renderAtoms escaping}>`), or perform it only through an argument (a callback carrying `<e>`) so the caller sees it."
+  "effect laundering in impl of `\{mname}` for `\{iface}`: the body performs <\{renderAtoms escaping}>, which no argument sources and the method's row does not declare; declare <\{renderAtoms escaping}> in the method's row, or perform it through an argument"
 
 -- #814 (S0): W3 method-scheme fidelity — the post-unify rigidity check, type-variable
 -- and constraint axes (the effect axis is `checkMethodEffVarRigidity`).  The method
@@ -39787,7 +39798,7 @@ monoIndexEffvarIds m = match normalize m
 
 aliasesHeadRowMsg : String -> Ty -> String
 aliasesHeadRowMsg subject mty =
-  "\{subject} identifies a method effect variable with the instance head's own effect-row parameter: the declared type '\{ppTy mty}' promises every caller its own choice of that variable, but this body ties it to the row the head fixes, so an effect registered at build time would be charged there and performed later, at force time, from a value whose type no longer mentions it. Implement the Deferred* interfaces for an effect-indexed constructor instead (the callback's row then rides the index), or keep the method's effect variable independent of the head's."
+  "\{subject} identifies a method effect variable with the instance head's own effect-row parameter, which the declared type `\{ppTy mty}` keeps distinct; keep the method's effect variable independent of the head's"
 
 -- A default body's survivor set: [tvs] is sigToSchemeTvs' name→scheme-var map and
 -- [subst] instantiateTracked's scheme-var-id→fresh-mono subst; crossing them
@@ -39803,11 +39814,10 @@ defaultSurvivorMap ((name, m) :: rest) subst =
     None => defaultSurvivorMap rest subst
 
 implSubject : String -> String -> String
-implSubject iface mname = "Impl of '\{mname}' for interface '\{iface}'"
+implSubject iface mname = "impl of `\{mname}` for `\{iface}`"
 
 defaultSubject : String -> String -> String
-defaultSubject iface mname =
-  "Default body of '\{mname}' in interface '\{iface}'"
+defaultSubject iface mname = "default body of `\{mname}` in `\{iface}`"
 
 -- the constraint axis of W3: a predicate the body records on a method-scheme
 -- var must be entailed by a DECLARED method-level constraint on that var,
@@ -40020,7 +40030,7 @@ narrowedImplHead iface site =
 
 narrowsImplHeadMsg : String -> List String -> String -> String
 narrowsImplHeadMsg subject narrowed head =
-  "\{subject} fixes the instance-head type variable(s) \{quotedNames narrowed}, but the impl is declared for every type in their place, so a receiver of another type would reach this body with a value of the wrong type. Narrow the head to `\{head}`, or make the body parametric in \{quotedNames narrowed}."
+  "\{subject} fixes the instance-head type \{tyVarNoun narrowed} \{quotedNames narrowed}, but the impl is declared for every type in their place; narrow the head to `\{head}`, or make the body parametric in \{quotedNames narrowed}"
 
 -- The constraint axis of W3-inst: every predicate this body leaves on head variables
 -- must be given by the impl.  Each goal mentioning a head variable is reduced through
@@ -40503,7 +40513,7 @@ effVarChargedOccs _ = []
 
 indexEagerMsg : String -> String -> String
 indexEagerMsg subject evar =
-  "\{subject} performs the effect variable <\{evar}> at call time, but the method's signature charges <\{evar}> only in a result INDEX (`f \{evar} …`), which promises the effect when the value is later forced, not now. The body applies its <\{evar}>-callback (or forces an <\{evar}>-indexed argument) on an arrow the signature declares pure, so a caller's effectful callback would run from a call typed pure. Defer it — store the callback under the container's own <\{evar}> thunk (e.g. `Suspend (u => g a)`) — or charge the method's own arrow (`-> <\{evar}> …`)."
+  "\{subject} performs the effect variable <\{evar}> at call time, but the signature charges <\{evar}> only in a result index, `f \{evar} ...`; defer it under the container's own <\{evar}> thunk, or charge the method's arrow, `-> <\{evar}> ...`"
 
 checkEffVarAtoms : String ->
   List (String, List Atom) ->
@@ -40569,39 +40579,43 @@ effVarTailIds ((_, cell) :: rest) = match effrowNorm (EffRow [] (Some cell))
   EffRow _ None => effVarTailIds rest
 
 quotedNames : List String -> String
-quotedNames names = joinWith ", " (map (n => "'" ++ n ++ "'") names)
+quotedNames names = joinWith ", " (map (n => "`" ++ n ++ "`") names)
+
+tyVarNoun : List String -> String
+tyVarNoun [_] = "variable"
+tyVarNoun _ = "variables"
 
 pinsTyvarMsg : String -> Ty -> List String -> String
 pinsTyvarMsg subject mty pinned =
-  "\{subject} pins the method's quantified type variable(s) \{quotedNames pinned}: the declared type '\{ppTy mty}' promises every caller its own choice of \{quotedNames pinned}, but this body fixes them to specific types. A caller instantiating them differently would get a value of the wrong type — or, if the pinned type carries an effect row, a value typed pure that silently performs effects. Make the body parametric in \{quotedNames pinned}, or name the intended concrete type in the method's signature."
+  "\{subject} pins the method's quantified type \{tyVarNoun pinned} \{quotedNames pinned}, which the declared type `\{ppTy mty}` leaves to the caller; make the body parametric in \{quotedNames pinned}"
 
 undeclaredConstraintMsg : String -> Ty -> String -> String -> String
 undeclaredConstraintMsg subject mty oiface vname =
-  "\{subject} requires '\{oiface}' on the method's quantified type variable '\{vname}', but the declared type '\{ppTy mty}' does not: every caller instantiates '\{vname}' freely (including to a type with no '\{oiface}' impl), so the body may not assume it. Add the constraint to the method's signature (`\{oiface} \{vname} => …`), or make the body parametric in '\{vname}'."
+  "\{subject} requires `\{oiface}` on the method's quantified type variable `\{vname}`, which the declared type `\{ppTy mty}` does not; add `\{oiface} \{vname} =>` to the method's signature"
 
 undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeclaredImplPrerequisiteMsg subject oiface vname =
-  "\{subject} requires '\{oiface}' on the instance-head type variable '\{vname}', but the impl does not declare that prerequisite. Add `requires \{oiface} \{vname}` to the impl."
+  "\{subject} requires `\{oiface}` on the instance-head type variable `\{vname}`, which the impl does not declare; add `requires \{oiface} \{vname}` to the impl"
 
 undeclaredImplPredicateMsg : String -> String -> String
 undeclaredImplPredicateMsg subject pred =
-  "\{subject} requires '\{pred}' on the instance head's type variables, but the impl does not declare that prerequisite. Add `requires \{pred}` to the impl."
+  "\{subject} requires `\{pred}` on the instance head's type variables, which the impl does not declare; add `requires \{pred}` to the impl"
 
 collapsesTyvarsMsg : String -> Ty -> String
 collapsesTyvarsMsg subject mty =
-  "\{subject} identifies quantified type variables that the declared type '\{ppTy mty}' keeps distinct (two method variables forced equal, or a method variable forced equal to an impl-head variable). Every caller may instantiate each independently, so the body must keep them independent."
+  "\{subject} identifies quantified type variables that the declared type `\{ppTy mty}` keeps distinct; keep them independent in the body"
 
 defaultEffectLaunderMsg : String -> List Atom -> String
 defaultEffectLaunderMsg subject escaping =
-  "\{subject} launders an effect: the body performs <\{renderAtoms escaping}>, which is not sourced from any argument and is not declared by the method's effect row, so a caller can instantiate the method's effect variable to <> and a value typed pure would silently perform it. Declare the effect as a concrete label in the method's row, or perform it only through an argument so the caller sees it."
+  "\{subject} launders an effect: the body performs <\{renderAtoms escaping}>, which no argument sources and the method's row does not declare; declare <\{renderAtoms escaping}> in the method's row, or perform it through an argument"
 
 collapsesEffvarsMsg : String -> Ty -> String
 collapsesEffvarsMsg subject mty =
-  "\{subject} identifies effect variables that the declared type '\{ppTy mty}' keeps distinct. Every caller instantiates each independently, so unifying them lets an effect flow to a row the caller pinned to <>. Keep the body's effects on the variable the signature declares at that position."
+  "\{subject} identifies effect variables that the declared type `\{ppTy mty}` keeps distinct; keep the body's effects on the variable the signature declares at each position"
 
 effVarLaunderMsg : String -> String -> List Atom -> String
 effVarLaunderMsg subject evar escaping =
-  "\{subject} launders an effect: the body performs <\{renderAtoms escaping}> inside the method's effect variable <\{evar}>, at a position whose declared row does not include it, so a caller can instantiate <\{evar}> to <> and a value typed pure would silently perform it. Declare the effect as a concrete label at that position in the method's signature, or perform it only through an argument (a callback carrying <\{evar}>) so the caller sees it."
+  "\{subject} launders an effect: the body performs <\{renderAtoms escaping}> inside the effect variable <\{evar}> at a position whose declared row does not include it; declare <\{renderAtoms escaping}> at that position, or perform it through an argument"
 
 -- Register an impl method's OWN method-level constraints (`Thenable m => …`) into
 -- activeDictVars, one slot per constraint, so a return-position method in the impl
@@ -41568,7 +41582,7 @@ ffiCheckShadowGo (_ :: rest) = ffiCheckShadowGo rest
 
 ffiShadowMsg : String -> String -> String -> String
 ffiShadowMsg n want got =
-  "Foreign declaration '\{n}' redeclares a built-in runtime name at a type the built-in does not have: the built-in is '\{want}', this declaration claims '\{got}'. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says, so its callers would be typed against a signature the called code does not honour. A redeclaration may fix the built-in's type variables and authorities, and must otherwise be its type. Rename the extern to a name the runtime does not already define, or declare it at the built-in's own signature"
+  "foreign declaration `\{n}` redeclares a built-in at a type it does not have: the built-in is `\{want}`, this declaration claims `\{got}`; rename the extern, or declare it at the built-in's signature"
 
 -- The substitution under which `decl` is the catalog signature `cat` with
 -- some of its variables fixed, or `None` when it is not. A catalog type, row
@@ -41951,7 +41965,7 @@ ffiExpandTails sub (v :: vs) =
 
 ffiCatalogTailMsg : String -> String -> List String -> String
 ffiCatalogTailMsg n arrow missing =
-  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row\{arrow}: the built-in also performs the row variable \{joinWith ", " missing}, which this declaration's row does not carry. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, so '\{n}' performs whatever that variable stands for at each call. Write the row variable in the declaration's row, or rename the extern"
+  "foreign declaration `\{n}` redeclares a built-in with a narrower effect row\{arrow}: the built-in also performs the row variable \{joinWith ", " missing}; write that variable in the row, or rename the extern"
 
 -- Both rows are lifted with the SAME authority variable per argument
 -- position, so a binder covers the catalog's binder only when it names the
@@ -42029,7 +42043,7 @@ ffiCatalogNarrowMsg : String ->
   List Atom ->
   String
 ffiCatalogNarrowMsg n arrow cat decl missing =
-  "Foreign declaration '\{n}' redeclares a built-in runtime name with a NARROWER effect row\{arrow}: the built-in performs <\{renderAtoms cat}>, this declaration claims <\{renderAtoms decl}>, which does not cover <\{renderAtoms missing}>. A local extern whose name matches a stdlib/runtime.mdk built-in is always lowered as that built-in, whatever the local signature says — so '\{n}' really does perform <\{renderAtoms missing}>, and every caller typechecked against this declaration would be told it does not.\{ffiCatalogTopNote missing} Declare the built-in's own row `<\{renderAtoms cat}>` (a WIDER row such as `<IO>` is also accepted — over-declaring is safe), or rename the extern to a name the runtime does not already define"
+  "foreign declaration `\{n}` redeclares a built-in with a narrower effect row\{arrow}: the built-in performs <\{renderAtoms cat}>, which this row does not cover at <\{renderAtoms missing}>\{ffiCatalogTopNote missing}; declare `<\{renderAtoms cat}>` or wider, or rename the extern"
 
 -- S3-1 (`ffi-boundary-honesty` review round): a parameterised label whose param is
 -- ⊤ renders as the BARE LABEL — `drenderN (PPrefix None)` is "" by design, and a
@@ -42053,8 +42067,7 @@ ffiCatalogTopNote : List Atom -> String
 ffiCatalogTopNote missing =
   match map atomLabel (filterList atomParamIsTop (atomsNorm missing))
     [] => ""
-    ls =>
-      " Read \{joinWith "/" ls} there as ANY value, not none: the built-in's catalog row leaves that label's parameter UNCONSTRAINED (⊤), and an unconstrained parameter renders as the bare label."
+    ls => " (\{joinWith "/" ls} there admits any value, not none)"
 
 -- ⊤ in a PARAMETERISED domain (see `ffiCatalogTopNote`): `PUnit` is excluded on
 -- purpose — it is "no parameter", not "any value".
@@ -42106,7 +42119,7 @@ ffiCheckReservedGo (_ :: rest) = ffiCheckReservedGo rest
 
 ffiReservedMsg : String -> String
 ffiReservedMsg n =
-  "Foreign declaration '\{n}' claims a reserved name: the 'mdk_' prefix is the Medaka runtime's own C symbol namespace (runtime/medaka_rt.c), and a foreign declaration's name is used verbatim as the C symbol it links to. Declaring '\{n}' would bind your calls to a compiler-internal function rather than to a symbol of your own. Rename the extern; if the C symbol you actually need is named '\{n}', it cannot be reached from Medaka in v1"
+  "foreign declaration `\{n}` claims a reserved name: the `mdk_` prefix is the runtime's own C symbol namespace; rename the extern"
 
 -- ── signature heads, for the emitter's FFI rows ─────────────────────────────
 --
@@ -42250,7 +42263,7 @@ ffiCheckExternPos n fb t
 
 ffiNonCrossableMsg : String -> Ty -> String
 ffiNonCrossableMsg n t =
-  "Type '\{ppTy t}' cannot cross the foreign-function boundary in extern '\{n}'. A foreign declaration may only mention Int, Float, Bool, Char, String, Unit, U8, U16, U32, U64, I32, I64, or Array Int (compiler/FFI-ABI.md section 1). Marshal '\{ppTy t}' into one of those on the Medaka side and declare the extern in terms of it"
+  "type `\{ppTy t}` cannot cross the foreign-function boundary in extern `\{n}`; marshal it into one of Int, Float, Bool, Char, String, Unit, U8, U16, U32, U64, I32, I64 or Array Int"
 
 -- ── the DECLARED-ROW HONESTY rule (F1, epic #2070) ──────────────────────────
 --
@@ -42324,11 +42337,11 @@ ffiCheckExternLabel n fb ty = match ffiRowHasFFITy ty
 
 ffiNullaryMsg : String -> String
 ffiNullaryMsg n =
-  "Foreign declaration '\{n}' has no arrow in its signature, so it declares a foreign VALUE rather than a foreign call. Medaka cannot express that: an effect row lives on an arrow's result, so there is nowhere to write the required '<FFI>' label, and the emitter has no lowering for a foreign value — it would hand you a function pointer where a value is expected. Declare it as a call instead: 'extern \{n} : Unit -> <FFI> T', invoked as '\{n} ()'"
+  "foreign declaration `\{n}` has no arrow in its signature, so it declares a foreign value rather than a foreign call; declare a call instead, `extern \{n} : Unit -> <FFI> T`, invoked as `\{n} ()`"
 
 ffiUnlabelledMsg : String -> String
 ffiUnlabelledMsg n =
-  "Foreign declaration '\{n}' does not name the 'FFI' effect in its result row. Every user-declared 'extern' is a foreign call, so its declared row must say so: write '<FFI>' (or '<FFI \"libname\">' to name the library), joined with whatever else the row already names — 'String -> <Net \"a.com/*\"> String' becomes 'String -> <FFI, Net \"a.com/*\"> String'. The compiler does not add the label for you: a row it rewrote would no longer be the row you read"
+  "foreign declaration `\{n}` does not name the `FFI` effect in its result row; write `<FFI>` joined with whatever else the row names, such as `<FFI, Net \"a.com/*\">`"
 
 -- The `DExtern` sublist, in order.  Its own clause rather than a `filter` with a
 -- lambda predicate: `Decl` has no cheap "is an extern" projection, so the pattern
@@ -43248,7 +43261,7 @@ reportUnsolvedExport grouped seen (name, ids) =
       pushTypeErrorAt
         "T-EXPORT-UNSOLVED-AUTHORITY"
         loc
-        "Exported binding '\{name}' has an authority in its type that nothing in this module determines: it belongs to a value the value restriction keeps from being generalized (this binding or one it uses), so no use in an importing module can supply it. Give '\{name}', or the value it uses, a type signature that names the authority, or use it in this module at the authority it is meant for"
+        "exported binding `\{name}` has an authority in its type that nothing in this module determines; give `\{name}`, or the value it uses, a type signature that names the authority"
     IdMap.union seen ids
 -- per-name dependencies: the other group names a binding's bodies reference FREE.
 -- Consumed by depGraphMap → Tarjan.  An over-approximated edge is not harmless:
@@ -44417,7 +44430,7 @@ concreteAtom a = not (authHasVars (atomAuth a))
 -- A closed row passes no tail at all and renders exactly as before.
 effectEscapeMsg : String -> List Atom -> List String -> List Atom -> String
 effectEscapeMsg name declared tail extras =
-  "Function '\{name}' declared with \{renderDeclaredRow declared tail} but also performs <\{renderAtoms extras}>"
+  "`\{name}` performs <\{renderAtoms extras}> but its signature allows only \{renderDeclaredRow declared tail}; add <\{renderAtoms extras}> to the declared row"
 
 renderDeclaredRow : List Atom -> List String -> String
 renderDeclaredRow declared [] = "<\{renderAtoms declared}>"
@@ -44585,7 +44598,7 @@ checkSigsOverExpansive env grouped ((m, ty, tvs) :: rest) =
 
 sigOverExpansiveMsg : String -> Ty -> String
 sigOverExpansiveMsg name ty =
-  "Declared signature of '\{name}' is polymorphic ('\{ppTy ty}') but its body is not a value, so it cannot be generalized: a zero-argument binding is evaluated once and shared. Give it a parameter (write '\{name} x = … x') or declare the monomorphic type"
+  "the signature of `\{name}` is polymorphic (`\{ppTy ty}`) but its body is not a value, so it cannot be generalized; give `\{name}` a parameter or declare a monomorphic type"
 
 -- ── signature-too-general check ──────────────────────────────────────────────
 -- After body inference, the declared signature's type variables must map to
@@ -44607,7 +44620,7 @@ checkSigTooGeneral name ty tvs =
       pushTypeErrorOnceAt
         "T-TYPE-TOO-GENERAL"
         (firstTyLoc ty)
-        "Declared type variable '\{vname}' in '\{name}' must remain universal, but the body requires '\{ppMono actual}'. Write that type in the signature, or make the body work for every '\{vname}'."
+        "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the body requires `\{ppMono actual}`; write that type in the signature or make the body work for every `\{vname}`"
     None =>
       if hasDupI tvarIds then
         pushTypeError "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
@@ -44658,7 +44671,7 @@ checkSigsFixedBy fixed ((name, ty, tvs) :: rest) =
       pushTypeErrorOnceAt
         "T-TYPE-TOO-GENERAL"
         (firstTyLoc ty)
-        "Declared type variable '\{vname}' in '\{name}' must remain universal, but the zero-argument sibling '\{sibling}' shares it and is evaluated once. Give '\{sibling}' a parameter (write '\{sibling} x = … x') or declare its monomorphic type, or make '\{name}' work for every '\{vname}'."
+        "type variable `\{vname}` in the signature of `\{name}` must remain universal, but the zero-argument sibling `\{sibling}` shares it and is evaluated once; give `\{sibling}` a parameter or declare its monomorphic type"
     None => ()
   checkSigsFixedBy fixed rest
 
@@ -44693,13 +44706,13 @@ hasDupI (x :: xs) = containsI x xs || hasDupI xs
 
 sigTooGeneralMsg : String -> Ty -> String
 sigTooGeneralMsg name ty =
-  "Declared signature of '\{name}' is more general than its body. '\{ppTy ty}' claims type variables that are the same type after inference"
+  "the signature of `\{name}` is more general than its body: `\{ppTy ty}` claims type variables that inference makes the same type"
 
 annotTooGeneralMsg : Ty -> String
 annotTooGeneralMsg ty =
-  "Type annotation '"
+  "type annotation `"
     ++ ppTy ty
-    ++ "' is more polymorphic than the expression. A type variable in the annotation is actually a specific type (or two annotation variables are the same type)"
+    ++ "` is more polymorphic than the expression: a type variable in it is a specific type, or two of its variables are the same type"
 
 -- ── inferred-constraint promotion (unsignatured `=>` — the two-pass layer) ──
 -- After a group is generalized, an UNSIGNATURED eligible member that uses a
@@ -46647,7 +46660,7 @@ ieAnyRowForIface ((ImplRow _ _ ir _ _ _) :: rest) iface =
 -- than shape-specific.
 requiresUnroutedMsg : IfaceRef -> List Mono -> String
 requiresUnroutedMsg iface args =
-  "Cannot pass a dictionary for `\{iface.irName} \{ppPredArgsShared args}`: a matching `impl \{iface.irName} …` does exist in this program and is a candidate here, but this compiler cannot yet route its evidence to this code — the impl is declared in a module that this one does not import. This is a compiler limitation, not a missing impl: accepting it would build a program that reads a dictionary that was never passed. Add an `import` of the module that declares that impl to THIS module, or move this code into a module that already imports it. If this binding carries a hand-written type signature, that import is necessary but may not be sufficient: the signature must also declare every constraint its body needs, and the next error will name the missing one"
+  "cannot pass a dictionary for `\{iface.irName} \{ppPredArgsShared args}`: a matching `impl \{iface.irName} ...` exists but is declared in a module this one does not import; import that module here, and if this binding has a signature, declare the constraint there too"
 
 -- does at least ONE argument carry a concrete head tycon?  The per-argument twin of
 -- `allConcreteHeads`: `False` means the whole vector is head-free, hence terminal for
@@ -46680,7 +46693,7 @@ anyConcreteHead args = anyListM (m => isSome (headTyconNameMono m)) args
 -- as issue 1576.  "1562 is fixed" means the DEFERRED cell, not every deep chain.
 requiresDepthMsg : IfaceRef -> List Mono -> String
 requiresDepthMsg iface args =
-  "Cannot resolve this constraint: following the `requires` clauses of the matching impls exceeded the maximum depth of \{intToString residualReduceFuel}, and still needed `\{iface.irName} \{ppPredArgsShared args}` after \{intToString residualReduceFuel} steps. Each conditional `impl \{iface.irName} … requires …` discharged along the way adds one level. Reduce the nesting at this call site, or add a direct `impl \{iface.irName} …` for one of the types in the chain so resolution bottoms out sooner"
+  "cannot resolve this constraint: following the `requires` clauses of the matching impls still needed `\{iface.irName} \{ppPredArgsShared args}` after \{intToString residualReduceFuel} steps, the maximum depth; reduce the nesting at this call site or add a direct `impl \{iface.irName} ...` for one of the types in the chain"
 
 residualPredOne : Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 residualPredOne fuel (iface, args) = residualPredsOf (fuel - 1) iface args
@@ -46962,7 +46975,7 @@ allPairsIn iface ids declaredPairs =
 missingConstraintVecMsg : String -> String -> List String -> String
 missingConstraintVecMsg name iface varNames =
   let pred = joinWith " " (iface :: varNames)
-  "Could not deduce '\{pred}' from the signature of '\{name}'. Its body requires it; add '\{pred} =>' to the declared type"
+  "the body of `\{name}` requires `\{pred}`, which its signature does not declare; add `\{pred} =>`"
 
 -- one type_error per inferred (iface, id) not covered by the declared-closed set.
 reportUncovered : String ->
@@ -47018,7 +47031,7 @@ findTvName id ((n, mono) :: rest) = match normalize mono
 
 missingConstraintMsg : String -> String -> String -> String
 missingConstraintMsg name iface varName =
-  "Could not deduce '\{iface} \{varName}' from the signature of '\{name}'. Its body requires it; add '\{iface} \{varName} =>' to the declared type"
+  "the body of `\{name}` requires `\{iface} \{varName}`, which its signature does not declare; add `\{iface} \{varName} =>`"
 
 -- the member's own quantified tyvar ids that a body method site / propagated
 -- constrained-call sits at. This is the legacy trace/fallback supply; complete
@@ -49867,11 +49880,11 @@ pushAmbiguousImports depId loc ((n, mids) :: rest) =
 -- this cause.
 ambigReexportMsg : String -> String -> List String -> String
 ambigReexportMsg n depId mids =
-  "Ambiguous `\{n}` imported from `\{depId}`. Defined in \{andList mids}"
+  "ambiguous `\{n}` imported from `\{depId}`: defined in both \{andList (map backticked mids)}"
 
 ambigReexportHelp : String -> String -> List String -> String
 ambigReexportHelp n depId mids =
-  "`\{depId}` re-exports more than one `\{n}`, so this import has no single meaning and which one it names is decided by the order of its `export import` lines; import the definition you mean directly (for example `import \{firstMid mids}.{\{n}}`), or drop one of `\{depId}`'s `export import` lines"
+  "`\{depId}` re-exports more than one `\{n}`; import the definition you mean directly, as in `import \{firstMid mids}.{\{n}}`"
 
 firstMid : List String -> String
 firstMid (m :: _) = m

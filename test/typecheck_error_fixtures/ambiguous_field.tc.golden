@@ -1,1 +1,1 @@
-TYPE ERROR: Ambiguous field access: '.name' is declared by Box, Cat; the record type is undetermined. Add a type annotation (e.g. '(r : Box).name')
+TYPE ERROR: ambiguous field `.name`: it is declared by `Box` and `Cat` and the record type is undetermined; annotate the record, as in `(r : Box).name`

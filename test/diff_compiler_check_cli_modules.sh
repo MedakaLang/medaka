@@ -75,7 +75,7 @@ else fail=$((fail+1)); printf 'FAIL exit0/good (exit %d)\n' "$?"; fi
 bad_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/bad.mdk" 2>/dev/null)"
 bad_code=$?
 case "$bad_out" in
-  *bad.mdk:*:*:*"Type mismatch"*) if [ "$bad_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   type-err/bad (located file:L:C diagnostic, exit 1)\n'
+  *bad.mdk:*:*:*"type mismatch"*) if [ "$bad_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   type-err/bad (located file:L:C diagnostic, exit 1)\n'
                   else fail=$((fail+1)); printf 'FAIL type-err/bad (located but exit %d)\n' "$bad_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL type-err/bad (no located diagnostic: [%s])\n' "$bad_out" ;;
 esac
@@ -109,7 +109,7 @@ EOF
 num_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/numbad.mdk" 2>/dev/null)"
 num_code=$?
 case "$num_out" in
-  *"No impl of Num for List (List Int)"*|*"Int literal vs List (List Int)"*) if [ "$num_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   numlit-soundness (cross-module literal Num obligation enforced)\n'
+  *"no impl of Num for List (List Int)"*|*"Int literal vs List (List Int)"*) if [ "$num_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   numlit-soundness (cross-module literal Num obligation enforced)\n'
                   else fail=$((fail+1)); printf 'FAIL numlit-soundness (rejected but exit %d)\n' "$num_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL numlit-soundness (cross-module Num literal hole: [%s])\n' "$num_out" ;;
 esac
@@ -159,7 +159,7 @@ EOF
 nosup_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/mono_bad.mdk" 2>/dev/null)"
 nosup_code=$?
 case "$nosup_out" in
-  *"requires a superinterface 'impl Semigroup Color', which is missing"*)
+  *'requires the superinterface `impl Semigroup Color`, which is missing'*)
     if [ "$nosup_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   super-xmod/reject (no super anywhere still rejected)\n'
     else fail=$((fail+1)); printf 'FAIL super-xmod/reject (rejected but exit %d)\n' "$nosup_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL super-xmod/reject (under-rejection regressed: [%s])\n' "$nosup_out" ;;
@@ -183,7 +183,7 @@ EOF
 ord_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/orduse.mdk" 2>/dev/null)"
 ord_code=$?
 case "$ord_out" in
-  *"No impl of Ord"*) fail=$((fail+1)); printf 'FAIL ord-xmod (spurious prelude-Ord reject: [%s])\n' "$ord_out" ;;
+  *"no impl of Ord"*) fail=$((fail+1)); printf 'FAIL ord-xmod (spurious prelude-Ord reject: [%s])\n' "$ord_out" ;;
   *) if [ "$ord_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   ord-xmod (prelude Ord Int obligation satisfied cross-module)\n'
      else fail=$((fail+1)); printf 'FAIL ord-xmod (exit %d: [%s])\n' "$ord_code" "$ord_out"; fi ;;
 esac
@@ -222,7 +222,7 @@ EOF
 coh_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/cohtop.mdk" 2>/dev/null)"
 coh_code=$?
 case "$coh_out" in
-  *Conflicting*)
+  *onflicting*)
     case "$coh_out" in *cohm1*) m1seen=yes ;; *) m1seen=no ;; esac
     case "$coh_out" in *cohm2*) m2seen=yes ;; *) m2seen=no ;; esac
     if [ "$coh_code" -eq 1 ] && [ "$m1seen" = yes ] && [ "$m2seen" = yes ]; then
@@ -263,7 +263,7 @@ EOF
 dia_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/dtop.mdk" 2>/dev/null)"
 dia_code=$?
 case "$dia_out" in
-  *Conflicting*) fail=$((fail+1)); printf 'FAIL coh-xmod/diamond (benign shared impl falsely rejected: [%s])\n' "$dia_out" ;;
+  *onflicting*) fail=$((fail+1)); printf 'FAIL coh-xmod/diamond (benign shared impl falsely rejected: [%s])\n' "$dia_out" ;;
   *) if [ "$dia_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   coh-xmod/diamond (single shared impl accepted)\n'
      else fail=$((fail+1)); printf 'FAIL coh-xmod/diamond (exit %d: [%s])\n' "$dia_code" "$dia_out"; fi ;;
 esac
@@ -353,7 +353,7 @@ dfn_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/dmain.mdk" 2>&1)"
 dfn_code=$?
 # The standalone WINS: `size (Box 3)` must be a LOCATED reject against `size : Int -> Int`.
 case "$dfn_out" in
-  *"dmain.mdk:7:10: Type mismatch: Int vs Box"*)
+  *"dmain.mdk:7:10: type mismatch: Int vs Box"*)
     if [ "$dfn_code" -ne 0 ]; then pass=$((pass+1)); printf 'ok   definer-shadow-xmod/check (S2 inversion: standalone wins, located reject at the call)\n'
     else fail=$((fail+1)); printf 'FAIL definer-shadow-xmod/check (diagnosed but exit 0)\n'; fi ;;
   *) fail=$((fail+1)); printf 'FAIL definer-shadow-xmod/check (want located "Int vs Box" at 7:10, got exit %d: [%s])\n' "$dfn_code" "$dfn_out" ;;
@@ -382,21 +382,21 @@ EOF
 imp_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/impuse.mdk" 2>&1)"
 imp_chk_code=$?
 case "$imp_chk" in
-  *badhelper.mdk:*:*:*"Type mismatch"*) if [ "$imp_chk_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   imported-diag/check (imported error located, exit 1)\n'
+  *badhelper.mdk:*:*:*"type mismatch"*) if [ "$imp_chk_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   imported-diag/check (imported error located, exit 1)\n'
                   else fail=$((fail+1)); printf 'FAIL imported-diag/check (located but exit %d)\n' "$imp_chk_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL imported-diag/check (imported error not located: [%s])\n' "$imp_chk" ;;
 esac
 imp_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/impuse.mdk" 2>&1)"
 imp_run_code=$?
 case "$imp_run" in
-  *badhelper.mdk:*:*:*"Type mismatch"*) if [ "$imp_run_code" -ne 0 ]; then pass=$((pass+1)); printf 'ok   imported-diag/run (imported error located, nonzero exit)\n'
+  *badhelper.mdk:*:*:*"type mismatch"*) if [ "$imp_run_code" -ne 0 ]; then pass=$((pass+1)); printf 'ok   imported-diag/run (imported error located, nonzero exit)\n'
                   else fail=$((fail+1)); printf 'FAIL imported-diag/run (located but exit 0)\n'; fi ;;
   *) fail=$((fail+1)); printf 'FAIL imported-diag/run (imported error not located: [%s])\n' "$imp_run" ;;
 esac
 imp_bld="$(MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/impuse.mdk" -o "$TMP/impuse.out" 2>&1)"
 imp_bld_code=$?
 case "$imp_bld" in
-  *badhelper.mdk:*:*:*"Type mismatch"*) if [ "$imp_bld_code" -ne 0 ] && [ ! -x "$TMP/impuse.out" ]; then pass=$((pass+1)); printf 'ok   imported-diag/build (imported error located, no binary)\n'
+  *badhelper.mdk:*:*:*"type mismatch"*) if [ "$imp_bld_code" -ne 0 ] && [ ! -x "$TMP/impuse.out" ]; then pass=$((pass+1)); printf 'ok   imported-diag/build (imported error located, no binary)\n'
                   else fail=$((fail+1)); printf 'FAIL imported-diag/build (located but built? exit %d)\n' "$imp_bld_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL imported-diag/build (imported error not located: [%s])\n' "$imp_bld" ;;
 esac
@@ -420,8 +420,8 @@ EOF
 res_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/resuse.mdk" 2>&1)"
 res_chk_code=$?
 case "$res_chk" in
-  *resuse.mdk:*"Unbound variable"*) fail=$((fail+1)); printf 'FAIL imported-resolve/attr (#41 regressed: imported error mislabeled as entry: [%s])\n' "$res_chk" ;;
-  *reshelper.mdk:*:*:*"Unbound variable"*) if [ "$res_chk_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   imported-resolve/attr (#41: imported resolve error located at its OWN file)\n'
+  *resuse.mdk:*"unbound variable"*) fail=$((fail+1)); printf 'FAIL imported-resolve/attr (#41 regressed: imported error mislabeled as entry: [%s])\n' "$res_chk" ;;
+  *reshelper.mdk:*:*:*"unbound variable"*) if [ "$res_chk_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   imported-resolve/attr (#41: imported resolve error located at its OWN file)\n'
                   else fail=$((fail+1)); printf 'FAIL imported-resolve/attr (located but exit %d)\n' "$res_chk_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL imported-resolve/attr (imported resolve error not located: [%s])\n' "$res_chk" ;;
 esac
@@ -444,16 +444,16 @@ esac
 res_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/resuse.mdk" 2>&1)"
 res_run_code=$?
 case "$res_run" in
-  *resuse.mdk:*"Unbound variable"*) fail=$((fail+1)); printf 'FAIL imported-resolve/run (#186: imported resolve error mislabeled as entry: [%s])\n' "$res_run" ;;
-  *reshelper.mdk:*:*:*"Unbound variable"*) if [ "$res_run_code" -ne 0 ]; then pass=$((pass+1)); printf 'ok   imported-resolve/run (#186: located at its OWN file)\n'
+  *resuse.mdk:*"unbound variable"*) fail=$((fail+1)); printf 'FAIL imported-resolve/run (#186: imported resolve error mislabeled as entry: [%s])\n' "$res_run" ;;
+  *reshelper.mdk:*:*:*"unbound variable"*) if [ "$res_run_code" -ne 0 ]; then pass=$((pass+1)); printf 'ok   imported-resolve/run (#186: located at its OWN file)\n'
                   else fail=$((fail+1)); printf 'FAIL imported-resolve/run (located but exit 0)\n'; fi ;;
   *) fail=$((fail+1)); printf 'FAIL imported-resolve/run (imported resolve error not located: [%s])\n' "$res_run" ;;
 esac
 res_bld="$(MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/resuse.mdk" -o "$TMP/resuse.out" 2>&1)"
 res_bld_code=$?
 case "$res_bld" in
-  *resuse.mdk:*"Unbound variable"*) fail=$((fail+1)); printf 'FAIL imported-resolve/build (#186: imported resolve error mislabeled as entry: [%s])\n' "$res_bld" ;;
-  *reshelper.mdk:*:*:*"Unbound variable"*) if [ "$res_bld_code" -ne 0 ] && [ ! -x "$TMP/resuse.out" ]; then pass=$((pass+1)); printf 'ok   imported-resolve/build (#186: located at its OWN file, no binary)\n'
+  *resuse.mdk:*"unbound variable"*) fail=$((fail+1)); printf 'FAIL imported-resolve/build (#186: imported resolve error mislabeled as entry: [%s])\n' "$res_bld" ;;
+  *reshelper.mdk:*:*:*"unbound variable"*) if [ "$res_bld_code" -ne 0 ] && [ ! -x "$TMP/resuse.out" ]; then pass=$((pass+1)); printf 'ok   imported-resolve/build (#186: located at its OWN file, no binary)\n'
                   else fail=$((fail+1)); printf 'FAIL imported-resolve/build (located but built? exit %d)\n' "$res_bld_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL imported-resolve/build (imported resolve error not located: [%s])\n' "$res_bld" ;;
 esac
@@ -496,7 +496,7 @@ ent_bld_pos="${ent_bld%%: *}"
 # emitted nothing, both prefixes would be empty and a bare equality check would
 # report `ok` having proven nothing (12b asserts all three; so must this).
 case "$ent_bld" in
-  *entryres.mdk:*:*:*"Unbound variable"*) : ;;
+  *entryres.mdk:*:*:*"unbound variable"*) : ;;
   *) fail=$((fail+1)); printf 'FAIL entry-resolve/build-pos (entry resolve error not located at the entry: [%s])\n' "$ent_bld"; ent_bld_pos="<unasserted>" ;;
 esac
 case "$ent_bld_pos" in
@@ -587,7 +587,7 @@ EOF
 lr_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/lruse.mdk" 2>&1)"
 lr_code=$?
 case "$lr_out" in
-  *lrdep.mdk:*:*:*"is bound by 'let rec' but its right-hand side is not a function"*)
+  *lrdep.mdk:*:*:*'is bound by `let rec` but its right-hand side is not a function'*)
     if [ "$lr_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   letrec-xmod (#201: imported let-rec non-function located + rejected)\n'
     else fail=$((fail+1)); printf 'FAIL letrec-xmod (located but exit %d)\n' "$lr_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL letrec-xmod (#201 regressed: imported let-rec non-function not rejected: [%s])\n' "$lr_out" ;;
@@ -707,7 +707,7 @@ EOF
 bare_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/x674_bare.mdk" 2>/dev/null)"
 bare_code=$?
 case "$bare_out" in
-  *"Type mismatch"*|*Ambiguous*) fail=$((fail+1)); printf 'FAIL 674c/bare-import-valid (bare import wrongly rejected: [%s])\n' "$bare_out" ;;
+  *"type mismatch"*|*Ambiguous*) fail=$((fail+1)); printf 'FAIL 674c/bare-import-valid (bare import wrongly rejected: [%s])\n' "$bare_out" ;;
   *) if [ "$bare_code" -eq 0 ]; then
        if MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$TMP/x674_bare.mdk" -o "$TMP/x674_bare.bin" >/dev/null 2>&1 && [ "$("$TMP/x674_bare.bin" 2>/dev/null)" = "111" ]; then
          pass=$((pass+1)); printf 'ok   674c/bare-import-valid (bare import stays impls-only; check+build run to 111)\n'
@@ -745,7 +745,7 @@ EOF
 x673r_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/x673_reject.mdk" 2>/dev/null)"
 x673r_code=$?
 case "$x673r_out" in
-  *"No impl of Display for (Int, Int, Int, Int, Int, Int)"*)
+  *"no impl of Display for (Int, Int, Int, Int, Int, Int)"*)
     if [ "$x673r_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   673a/prelude-fn-obligation (cross-module println Display obligation enforced)\n'
     else fail=$((fail+1)); printf 'FAIL 673a/prelude-fn-obligation (rejected but exit %d)\n' "$x673r_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL 673a/prelude-fn-obligation (cross-module obligation dropped: [%s])\n' "$x673r_out" ;;
@@ -855,7 +855,7 @@ EOF
 x749_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/x749_use.mdk" 2>/dev/null)"
 x749_code=$?
 case "$x749_out" in
-  *"No impl of Display for NoD"*)
+  *"no impl of Display for NoD"*)
     if [ "$x749_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   749/usermodule-fn-obligation-check (user-module Display obligation enforced on check)\n'
     else fail=$((fail+1)); printf 'FAIL 749/usermodule-fn-obligation-check (located but exit %d)\n' "$x749_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL 749/usermodule-fn-obligation-check (obligation dropped on check: [%s])\n' "$x749_out" ;;
@@ -885,7 +885,7 @@ EOF
 x749a_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/x749_alias.mdk" 2>/dev/null)"
 x749a_code=$?
 case "$x749a_out" in
-  *"No impl of Display for NoD"*)
+  *"no impl of Display for NoD"*)
     if [ "$x749a_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   749/aliased-usermodule-fn-obligation-check (aliased user obligation enforced on check)\n'
     else fail=$((fail+1)); printf 'FAIL 749/aliased-usermodule-fn-obligation-check (located but exit %d)\n' "$x749a_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL 749/aliased-usermodule-fn-obligation-check (aliased obligation dropped: [%s])\n' "$x749a_out" ;;
@@ -1047,7 +1047,7 @@ done
 # on trades an S0 for an S2 rather than fixing it, and no other gate looks at this
 # text: the two must-fail fixtures that reached this shape are deleted.
 a210_hint="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/a210_rej_fn.mdk" 2>&1)"
-if printf '%s' "$a210_hint" | grep -q "share the name 'Tk'" \
+if printf '%s' "$a210_hint" | grep -q 'share the name `Tk`' \
   && printf '%s' "$a210_hint" | grep -q "a210_defa" \
   && printf '%s' "$a210_hint" | grep -q "a210_rej_fn"; then
   pass=$((pass+1)); printf 'ok   A-2.10/reject-names-both-modules\n'
@@ -1230,7 +1230,7 @@ EOF
 nest_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/nest/src/main.mdk" 2>&1)"
 nest_chk_code=$?
 case "$nest_chk" in
-  *"Type mismatch"*) fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-check (one file, two modIds, two identities: [%s])\n' "$nest_chk" ;;
+  *"type mismatch"*) fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-check (one file, two modIds, two identities: [%s])\n' "$nest_chk" ;;
   *) if [ "$nest_chk_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   A-2.10/nested-project-check (src/ entry under a medaka.toml: one file, one identity)\n'
      else fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-check (exit %d: [%s])\n' "$nest_chk_code" "$nest_chk"; fi ;;
 esac
@@ -1269,7 +1269,7 @@ EOF
 nest_imp="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/nest/src/impls.mdk" 2>&1)"
 nest_imp_code=$?
 case "$nest_imp" in
-  *Conflicting*) fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-impl (one file counted twice: [%s])\n' "$nest_imp" ;;
+  *onflicting*) fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-impl (one file counted twice: [%s])\n' "$nest_imp" ;;
   *) if [ "$nest_imp_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   A-2.10/nested-project-impl (a single export impl is not double-counted)\n'
      else fail=$((fail+1)); printf 'FAIL A-2.10/nested-project-impl (exit %d: [%s])\n' "$nest_imp_code" "$nest_imp"; fi ;;
 esac
@@ -1347,7 +1347,7 @@ EOF
 n3_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/nest3/src/m.mdk" 2>&1)"
 n3_code=$?
 case "$n3_out" in
-  *Conflicting*)
+  *onflicting*)
     case "$n3_out" in *other*) n3a=yes ;; *) n3a=no ;; esac
     case "$n3_out" in *lib.t*) n3b=yes ;; *) n3b=no ;; esac
     if [ "$n3_code" -eq 1 ] && [ "$n3a" = yes ] && [ "$n3b" = yes ]; then
@@ -1508,7 +1508,7 @@ EOF
 sh_chk="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/a210_shmain.mdk" 2>&1)"
 sh_chk_code=$?
 case "$sh_chk" in
-  *Conflicting*) fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-check (false overlap on two DIFFERENT types: [%s])\n' "$sh_chk" ;;
+  *onflicting*) fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-check (false overlap on two DIFFERENT types: [%s])\n' "$sh_chk" ;;
   *) if [ "$sh_chk_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   A-2.10/samename-impls-check (same-named types no longer overlap)\n'
      else fail=$((fail+1)); printf 'FAIL A-2.10/samename-impls-check (exit %d: [%s])\n' "$sh_chk_code" "$sh_chk"; fi ;;
 esac
@@ -1822,7 +1822,7 @@ EOF
 x1530_no="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/x1530_noimpl.mdk" 2>&1)"
 x1530_no_code=$?
 case "$x1530_no" in
-  *"No impl of IG or IP"*|*"No impl of IP or IG"*) x1530_no_named=1 ;;
+  *"no impl of IG or IP"*|*"no impl of IP or IG"*) x1530_no_named=1 ;;
   *) x1530_no_named=0 ;;
 esac
 if [ "$x1530_no_code" -eq 1 ] && [ "$x1530_no_named" -eq 1 ]; then
@@ -2184,7 +2184,7 @@ fi
 # modules: `Type mismatch: Option vs Option` is true and unactionable, and no other
 # gate reads this text once the must-fail fixture is deleted.  The prelude's side
 # is named "the prelude" rather than its module id `core` (#3465).
-if printf '%s' "$x1280_rej" | grep -q "share the name 'Option'" \
+if printf '%s' "$x1280_rej" | grep -q "share the name \`Option\`" \
   && printf '%s' "$x1280_rej" | grep -q "x1280_evil" \
   && printf '%s' "$x1280_rej" | grep -q "the prelude"; then
   pass=$((pass+1)); printf 'ok   1280/reject-names-both-modules\n'
@@ -2497,8 +2497,8 @@ main = println (use 3)
 EOF
 cyc_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/cycuse.mdk" 2>&1)"
 cyc_code=$?
-cyc_lib="$(printf '%s\n' "$cyc_out" | grep -c 'cyclib.mdk:.*Recursive type alias')"
-cyc_ent="$(printf '%s\n' "$cyc_out" | grep -c 'cycuse.mdk:.*Recursive type alias')"
+cyc_lib="$(printf '%s\n' "$cyc_out" | grep -c 'cyclib.mdk:.*type alias .* is recursive')"
+cyc_ent="$(printf '%s\n' "$cyc_out" | grep -c 'cycuse.mdk:.*type alias .* is recursive')"
 if [ "$cyc_code" -eq 1 ] && [ "$cyc_lib" -ge 1 ] && [ "$cyc_ent" -ge 1 ]; then
   pass=$((pass+1)); printf 'ok   1512-A32b/alias-cycle-importer (both modules diagnose; no recursion)\n'
 else
@@ -2725,7 +2725,7 @@ EOF
 sa3b_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3b/main.mdk" 2>&1)"
 sa3b_code=$?
 case "$sa3b_out" in
-  *"requires a superinterface 'impl Sup W', which is missing"*)
+  *"requires the superinterface \`impl Sup W\`, which is missing"*)
     if [ "$sa3b_code" -eq 1 ]; then
       pass=$((pass+1)); printf 'ok   SA-3/super-absent-rejects (the check can still fail — Module arm)\n'
     else
@@ -2752,7 +2752,7 @@ EOF
 sa3f_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3flat.mdk" 2>&1)"
 sa3f_code=$?
 case "$sa3f_out" in
-  *"requires a superinterface 'impl Sup W', which is missing"*)
+  *"requires the superinterface \`impl Sup W\`, which is missing"*)
     if [ "$sa3f_code" -eq 1 ]; then
       pass=$((pass+1)); printf 'ok   SA-3/flat-super-absent (the check can still fail — Flat arm)\n'
     else
@@ -2786,7 +2786,7 @@ EOF
 sa3d_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3d/main.mdk" 2>&1)"
 sa3d_code=$?
 case "$sa3d_out" in
-  *"requires a superinterface 'impl Sup W', which is missing"*)
+  *"requires the superinterface \`impl Sup W\`, which is missing"*)
     if [ "$sa3d_code" -eq 1 ]; then
       pass=$((pass+1)); printf 'ok   SA-3/same-spelled-super (identity decides; the spelling does not)\n'
     else
@@ -3143,7 +3143,7 @@ EOF
 a1586_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/attrib1586.mdk" 2>&1)"
 a1586_code=$?
 case "$a1586_out" in
-  *"Ambiguous field access: '.s1586'"*) if [ "$a1586_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   1586/attributed-owner-votes (attributed record is a field-owner candidate, exit 1)\n'
+  *"ambiguous field \`.s1586\`"*) if [ "$a1586_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   1586/attributed-owner-votes (attributed record is a field-owner candidate, exit 1)\n'
                   else fail=$((fail+1)); printf 'FAIL 1586/attributed-owner-votes (ambiguity reported but exit %d)\n' "$a1586_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL 1586/attributed-owner-votes (attribute still drops the owner: [%s])\n' "$a1586_out" ;;
 esac
@@ -3203,7 +3203,7 @@ EOF
 no1597_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/main1597imp.mdk" 2>&1)"
 no1597_code=$?
 case "$no1597_out" in
-  *"Ambiguous field access: '.tag1597'"*) if [ "$no1597_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   1597/imported-still-votes (reachable rival still votes, exit 1)\n'
+  *"ambiguous field \`.tag1597\`"*) if [ "$no1597_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   1597/imported-still-votes (reachable rival still votes, exit 1)\n'
                   else fail=$((fail+1)); printf 'FAIL 1597/imported-still-votes (ambiguity reported but exit %d)\n' "$no1597_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL 1597/imported-still-votes (over-suppressed a REAL ambiguity: [%s])\n' "$no1597_out" ;;
 esac
@@ -3274,7 +3274,7 @@ EOF
 shadow_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/shadow/user.mdk" 2>&1)"
 shadow_code=$?
 case "$shadow_out" in
-  *"Unbound variable: L."*) fail=$((fail+1)); printf 'FAIL shadow/check (user list.mdk hijacked the stdlib: [%s])\n' "$shadow_out" ;;
+  *'unbound variable `L.'*) fail=$((fail+1)); printf 'FAIL shadow/check (user list.mdk hijacked the stdlib: [%s])\n' "$shadow_out" ;;
   *) if [ "$shadow_code" -eq 0 ]; then pass=$((pass+1)); printf 'ok   shadow/check (same-named user module does not reach into the stdlib)\n'
      else fail=$((fail+1)); printf 'FAIL shadow/check (exit %d: [%s])\n' "$shadow_code" "$shadow_out"; fi ;;
 esac
@@ -3332,17 +3332,17 @@ MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" bound "$MEDAKA" build "$resid_src" -o "$TMP
 resid_build_code=$?
 resid_build="$(cat "$TMP/resid/build.log")"
 case "$resid_check" in
-  *"error: "*.mdk:[0-9]*:[0-9]*:*"Type mismatch"*"exit:1") pass=$((pass+1)); printf 'ok   elab-located/check (located diagnostic, exit 1)\n' ;;
-  *) fail=$((fail+1)); printf 'FAIL elab-located/check (want a located `<file>.mdk:L:C: Type mismatch` line and exit 1, got: [%s])\n' "$resid_check" ;;
+  *"error: "*.mdk:[0-9]*:[0-9]*:*"type mismatch"*"exit:1") pass=$((pass+1)); printf 'ok   elab-located/check (located diagnostic, exit 1)\n' ;;
+  *) fail=$((fail+1)); printf 'FAIL elab-located/check (want a located `<file>.mdk:L:C: type mismatch` line and exit 1, got: [%s])\n' "$resid_check" ;;
 esac
 case "$resid_run" in
-  *"error: "*.mdk:[0-9]*:[0-9]*:*"Type mismatch"*"exit:1") pass=$((pass+1)); printf 'ok   elab-located/run (located elaboration diagnostic, exit 1)\n' ;;
-  *) fail=$((fail+1)); printf 'FAIL elab-located/run (want a located `<file>.mdk:L:C: Type mismatch` line and exit 1, got: [%s])\n' "$resid_run" ;;
+  *"error: "*.mdk:[0-9]*:[0-9]*:*"type mismatch"*"exit:1") pass=$((pass+1)); printf 'ok   elab-located/run (located elaboration diagnostic, exit 1)\n' ;;
+  *) fail=$((fail+1)); printf 'FAIL elab-located/run (want a located `<file>.mdk:L:C: type mismatch` line and exit 1, got: [%s])\n' "$resid_run" ;;
 esac
 case "$resid_build" in
-  *"error: "*.mdk:[0-9]*:[0-9]*:*"Type mismatch"*) if [ "$resid_build_code" -ne 0 ] && [ ! -x "$TMP/resid/bin" ]; then pass=$((pass+1)); printf 'ok   elab-located/build (located elaboration diagnostic, no binary)\n'
+  *"error: "*.mdk:[0-9]*:[0-9]*:*"type mismatch"*) if [ "$resid_build_code" -ne 0 ] && [ ! -x "$TMP/resid/bin" ]; then pass=$((pass+1)); printf 'ok   elab-located/build (located elaboration diagnostic, no binary)\n'
     else fail=$((fail+1)); printf 'FAIL elab-located/build (located but exit %d, binary present=%s)\n' "$resid_build_code" "$([ -x "$TMP/resid/bin" ] && echo yes || echo no)"; fi ;;
-  *) fail=$((fail+1)); printf 'FAIL elab-located/build (want a located `<file>.mdk:L:C: Type mismatch` line, got: [%s])\n' "$resid_build" ;;
+  *) fail=$((fail+1)); printf 'FAIL elab-located/build (want a located `<file>.mdk:L:C: type mismatch` line, got: [%s])\n' "$resid_build" ;;
 esac
 
 # 11. resolve-rejected, no typecheck cascade (#1288, #2563): a module resolve rejected
@@ -3458,7 +3458,7 @@ EOF
 m0_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/m0/not_member.mdk" 2>&1; echo "exit:$?")"
 case "$m0_run" in
   *"<unknown location>"*) fail=$((fail+1)); printf 'FAIL not-member/located (unlocated: [%s])\n' "$m0_run" ;;
-  *"not_member.mdk:8:12: Method 'extra' is not part of interface 'Sz'"*"exit:1") pass=$((pass+1)); printf 'ok   not-member/located (reported at the method, exit 1)\n' ;;
+  *'not_member.mdk:8:12: interface `Sz` has no method `extra`'*"exit:1") pass=$((pass+1)); printf 'ok   not-member/located (reported at the method, exit 1)\n' ;;
   *) fail=$((fail+1)); printf 'FAIL not-member/located (want not_member.mdk:8:12 and exit 1, got: [%s])\n' "$m0_run" ;;
 esac
 

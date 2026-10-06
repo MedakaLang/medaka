@@ -1,1 +1,1 @@
-TYPE ERROR: Field 'alpha' is at different positions in the constructors of 'Wrap': it is field 1 of 'Cfg' but field 2 of 'Dfg'. A 'Wrap' value carries no constructor tag, so '.alpha' cannot be resolved; match on the constructor instead
+TYPE ERROR: field `alpha` is at different positions in the constructors of `Wrap`: it is field 1 of `Cfg` but field 2 of `Dfg`; match on the constructor instead of using `.alpha`

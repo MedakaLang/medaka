@@ -102,14 +102,14 @@ test "manifest grants an interpolated pattern-ranging directory's instantiation"
 test "a `..` after a written directory is outside a FileWrite bound on it" = expectCheckReject
   (fixture "filewrite_dotdot_bound_reject.mdk")
   [
-    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"data/../*\">",
+    "performs <FileWrite \"data/../*\"> where only <FileWrite \"data/*\"> is allowed",
   ]
 
 test "a `..` that pops a named component is outside a narrower FileWrite bound" = expectCheckReject
   (fixture "filewrite_popped_bound_reject.mdk")
   [
-    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"a/../data/*\">",
-    "where <FileWrite \"data/*\"> is allowed, but it performs <FileWrite \"data/sub/../*\">",
+    "performs <FileWrite \"a/../data/*\"> where only <FileWrite \"data/*\"> is allowed",
+    "performs <FileWrite \"data/sub/../*\"> where only <FileWrite \"data/*\"> is allowed",
   ]
 
 test "`.` and empty components keep a FileWrite path under its directory" =
@@ -208,11 +208,11 @@ test "a performed IO fits a bound naming the eleven host labels" =
   expectCheckAccept (fixture "io_join_accept.mdk")
 
 test "a performed IO under ten host labels is refused naming the missing one" =
-  expectCheckReject (fixture "io_join_reject.mdk") ["but it performs <Net>"]
+  expectCheckReject (fixture "io_join_reject.mdk") ["performs <Net> where only"]
 
 test "an IO value stored at eleven labels is refused when applied under ten" = expectCheckReject
   (fixture "io_join_launder_reject.mdk")
-  ["but it performs <Net>"]
+  ["performs <Net> where only"]
 
 test "a Signal bound admits the runtime's signal externs" =
   expectCheckAccept (fixture "signal_bound_accept.mdk")
@@ -222,11 +222,11 @@ test "IO subsumes a Signal-performing body" =
 
 test "Net does not subsume a Signal-performing body" = expectCheckReject
   (fixture "signal_net_reject.mdk")
-  ["but it performs <Signal>"]
+  ["performs <Signal> where only"]
 
 test "a bound naming every other host label refuses Signal, naming it" = expectCheckReject
   (fixture "signal_ten_labels_reject.mdk")
-  ["but it performs <Signal>"]
+  ["performs <Signal> where only"]
 
 test "manifest renders a Signal grant" =
   expectManifest
@@ -256,7 +256,7 @@ test "args and the build stamps read under a pure signature" =
 test "an extern row missing FFI is rejected even when the row is non-empty" = expectCheckReject
   (fixture "ffi_stamp_missing_reject.mdk")
   [
-    "Foreign declaration 'ffiFetch' does not name the 'FFI' effect in its result row",
+    "foreign declaration `ffiFetch` does not name the `FFI` effect in its result row",
   ]
 
 test "an empty caller row does not subsume a declared FFI row" =
@@ -270,23 +270,23 @@ test "an extern row may name FFI beside its refined effect" =
 
 test "the FFI boundary rejects a Tuple result" = expectCheckReject (fixture
   "ffi_cross_tuple_reject.mdk") [
-  "Type '(Int, Int)' cannot cross the foreign-function boundary in extern 'ffiPair'",
+  "type `(Int, Int)` cannot cross the foreign-function boundary in extern `ffiPair`",
 ]
 
 test "the FFI boundary rejects a List parameter" = expectCheckReject (fixture
   "ffi_cross_list_reject.mdk") [
-  "Type 'List Int' cannot cross the foreign-function boundary in extern 'ffiSum'",
+  "type `List Int` cannot cross the foreign-function boundary in extern `ffiSum`",
 ]
 
 test "the FFI boundary rejects an Array with non-Int elements" = expectCheckReject
   (fixture "ffi_cross_array_elem_reject.mdk")
   [
-    "Type 'Array String' cannot cross the foreign-function boundary in extern 'ffiWidths'",
+    "type `Array String` cannot cross the foreign-function boundary in extern `ffiWidths`",
   ]
 
 test "the FFI boundary rejects a user ADT" = expectCheckReject (fixture
   "ffi_cross_adt_reject.mdk") [
-  "Type 'Color' cannot cross the foreign-function boundary in extern 'ffiColorCode'",
+  "type `Color` cannot cross the foreign-function boundary in extern `ffiColorCode`",
 ]
 
 -- The novel name proves the builtin-name exemption did not swallow every
@@ -294,20 +294,20 @@ test "the FFI boundary rejects a user ADT" = expectCheckReject (fixture
 test "the FFI boundary rejects Ref under a novel extern name" = expectCheckReject
   (fixture "ffi_cross_ref_reject.mdk")
   [
-    "Type 'Ref Int' cannot cross the foreign-function boundary in extern 'ffiPeek'",
+    "type `Ref Int` cannot cross the foreign-function boundary in extern `ffiPeek`",
   ]
 
 test "the FFI boundary rejects a function parameter" = expectCheckReject
   (fixture "ffi_cross_fnparam_reject.mdk")
   [
-    "Type 'Int -> <> Int' cannot cross the foreign-function boundary in extern 'ffiApply'",
+    "type `Int -> <> Int` cannot cross the foreign-function boundary in extern `ffiApply`",
   ]
 
 test "the FFI boundary rejects a polymorphic extern at its own line" = expectCheckRejectLine
   (fixture "ffi_cross_poly_reject.mdk")
   [
     "ffi_cross_poly_reject.mdk:11:",
-    "Type 'a' cannot cross the foreign-function boundary in extern 'ffiWrapAll'",
+    "type `a` cannot cross the foreign-function boundary in extern `ffiWrapAll`",
   ]
 
 test "Int crosses the FFI boundary" =
@@ -349,28 +349,28 @@ test "an empty FFI library pattern is rejected" = expectCheckReject (fixture
 -- above so a broader ban cannot satisfy the rejection cells.
 test "a nullary extern is rejected because it has no row for FFI" = expectCheckReject
   (fixture "ffi_nullary_reject.mdk")
-  ["Foreign declaration 'gNullary' has no arrow in its signature"]
+  ["foreign declaration `gNullary` has no arrow in its signature"]
 
 test "a builtin name with an incompatible signature is rejected" = expectCheckReject
   (fixture "ffi_builtin_shadow_reject.mdk")
   [
-    "Foreign declaration 'log' redeclares a built-in runtime name at a type the built-in does not have",
+    "foreign declaration `log` redeclares a built-in at a type it does not have",
   ]
 
 test "an extern cannot claim the runtime's mdk_ symbol namespace" = expectCheckReject
   (fixture "ffi_reserved_prefix_reject.mdk")
-  ["Foreign declaration 'mdk_nil' claims a reserved name"]
+  ["foreign declaration `mdk_nil` claims a reserved name"]
 
 test "a builtin redeclaration cannot narrow the catalog effect row" = expectCheckReject
   (fixture "ffi_catalog_narrow_reject.mdk")
   [
-    "Foreign declaration 'getEnv' redeclares a built-in runtime name with a NARROWER effect row",
+    "foreign declaration `getEnv` redeclares a built-in with a narrower effect row",
   ]
 
 test "writeFile cannot be redeclared with an empty effect row" = expectCheckReject
   (fixture "ffi_catalog_writefile_narrow_reject.mdk")
   [
-    "Foreign declaration 'writeFile' redeclares a built-in runtime name with a NARROWER effect row",
+    "foreign declaration `writeFile` redeclares a built-in with a narrower effect row",
   ]
 
 test "a builtin redeclaration may preserve the catalog effect row" =
@@ -378,16 +378,16 @@ test "a builtin redeclaration may preserve the catalog effect row" =
 
 test "a direct alias does not hide a nullary extern" = expectCheckReject
   (fixture "ffi_nullary_alias_direct_reject.mdk")
-  ["Foreign declaration 'k' has no arrow in its signature"]
+  ["foreign declaration `k` has no arrow in its signature"]
 
 test "a constrained alias does not hide a nullary extern" = expectCheckReject
   (fixture "ffi_nullary_alias_constrained_reject.mdk")
-  ["Foreign declaration 'k' has no arrow in its signature"]
+  ["foreign declaration `k` has no arrow in its signature"]
 
 test "an alias's Effect argument is the row an extern declares" = expectAll [
   expectCheckAccept (fixture "ffi_effect_alias_accept.mdk"),
   expectCheckReject (fixture "ffi_effect_alias_reject.mdk") [
-    "Foreign declaration 'cCall' does not name the 'FFI' effect in its result row",
+    "foreign declaration `cCall` does not name the `FFI` effect in its result row",
   ],
 ]
 
@@ -580,7 +580,7 @@ test "check-policy reads every entry of a label, in either order" = expectAll [
 
 test "a qualifier or an index past the cap is refused, not folded" = expectAll [
   expectCheckReject (fixture "written_term_cap_reject.mdk") [
-    "Invalid authority in the qualifier",
+    "invalid authority in the qualifier",
     "a bound admits at most 16 elements of one label, and this one writes 17",
   ],
   expectCheckAccept (fixture "written_term_cap_accept.mdk"),
@@ -589,14 +589,14 @@ test "a qualifier or an index past the cap is refused, not folded" = expectAll [
 test "a qualifier or an index literal is an element of its domain" = expectCheckReject
   (fixture "written_term_domain_reject.mdk")
   [
-    "Invalid authority in the qualifier `@\"\"`: pattern is empty",
-    "Invalid effect parameter on <Net>: label 'Net' takes a prefix pattern, not a set",
+    "invalid authority in the qualifier `@\"\"`: pattern is empty",
+    "invalid effect parameter on <Net>: label `Net` takes a prefix pattern, not a set",
   ]
 
 test "Set members split across atoms are capped as one set" = expectAll [
   expectCheckReject (fixture "written_split_cap_reject.mdk") [
-    "Invalid effect parameter on <Env>: a set holds at most 16 members, and this one has 17",
-    "Invalid effect parameter on <Web>: a bound admits at most 16 elements of one label, and this one writes 17",
+    "invalid effect parameter on <Env>: a set holds at most 16 members, and this one has 17",
+    "invalid effect parameter on <Web>: a bound admits at most 16 elements of one label, and this one writes 17",
   ],
   expectCheckAccept (fixture "written_split_cap_accept.mdk"),
 ]
@@ -699,7 +699,7 @@ test "a Product bound with many Set axes is kept as written" =
 
 test "a Product qualifier needs a binder to name its label" = expectCheckReject
   (fixture "qualifier_product_needs_binder_reject.mdk")
-  ["Invalid authority in the qualifier"]
+  ["invalid authority in the qualifier"]
 
 test "a linked authority variable keeps its label's declared schema" = expectAll
   [
@@ -712,11 +712,11 @@ test "a linked authority variable keeps its label's declared schema" = expectAll
 test "a Product constant carries its schema, by instantiation or alias" = expectAll
   [
     expectCheckReject (fixture "product_constant_schema_inst_reject.mdk") [
-      "Binding 'g' reaches Method={\"a.com/x\"}",
+      "`g` reaches Method={\"a.com/x\"}",
     ],
     expectCheckAccept (fixture "product_constant_schema_inst_accept.mdk"),
     expectCheckReject (fixture "product_constant_schema_alias_reject.mdk") [
-      "Binding 'g' reaches Method={\"a.com/x\"}",
+      "`g` reaches Method={\"a.com/x\"}",
     ],
     expectCheckAccept (fixture "product_constant_schema_alias_accept.mdk"),
     expectCheckAccept (fixture "product_constant_schema_primary_accept.mdk"),
@@ -726,21 +726,21 @@ test "a Product constant carries its schema, by instantiation or alias" = expect
 test "two Product schemas are two domains, whatever their axes are named" = expectAll
   [
     expectCheckReject (fixture "product_cross_schema_reject.mdk") [
-      "is allowed, but it performs <Web2>",
+      "performs <Web2> where only",
     ],
     expectCheckAccept (fixture "product_cross_schema_accept.mdk"),
   ]
 
 test "a binder at two Product labels needs one schema" = expectAll [
   expectCheckReject (fixture "product_binder_two_schemas_reject.mdk") [
-    "Authority 'u' is used at labels from different domains",
+    "authority `u` is used at labels from different domains",
   ],
   expectCheckAccept (fixture "product_binder_one_schema_accept.mdk"),
 ]
 
 test "a written Product names each axis once" = expectAll [
   expectCheckReject (fixture "product_repeated_axis_reject.mdk") [
-    "axis 'Host' is written twice",
+    "axis `Host` is written twice",
   ],
   expectCheckAccept (fixture "product_repeated_axis_accept.mdk"),
 ]
@@ -749,27 +749,27 @@ test "a declaration's authority parameter is used at its own domain" = expectAll
   [
     expectCheckRejectLine (fixture "decl_authority_index_reject.mdk") [
       "decl_authority_index_reject.mdk:8:",
-      "Authority 'p' is used at labels from different domains",
+      "authority `p` is used at labels from different domains",
     ],
     expectCheckReject (fixture "decl_authority_atom_reject.mdk") [
-      "Authority 'p' is used at labels from different domains",
+      "authority `p` is used at labels from different domains",
     ],
     expectCheckReject (fixture "decl_authority_existential_reject.mdk") [
-      "Authority 'q' is used at labels from different domains",
+      "authority `q` is used at labels from different domains",
     ],
     expectCheckReject (fixture "decl_authority_newtype_reject.mdk") [
-      "Authority 'p' is used at labels from different domains",
+      "authority `p` is used at labels from different domains",
     ],
     expectCheckReject (fixture "newtype_field_param_reject.mdk") [
-      "axis 'Host' is written twice",
+      "axis `Host` is written twice",
     ],
     expectCheckAccept (fixture "decl_authority_domain_accept.mdk"),
   ]
 
 test "a catalog redeclaration at an index join covers every term" = expectAll [
   expectCheckReject (fixture "catalog_index_var_join_reject.mdk") [
-    "redeclares a built-in runtime name with a NARROWER effect row",
-    "does not cover <Net \"a.com/*\"",
+    "redeclares a built-in with a narrower effect row",
+    "does not cover at <Net \"a.com/*\"",
   ],
   expectCheckAccept (fixture "catalog_index_var_join_accept.mdk"),
 ]

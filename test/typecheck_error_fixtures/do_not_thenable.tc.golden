@@ -1,1 +1,1 @@
-TYPE ERROR: `do` requires a Thenable impl (e.g. `Option`/`Result`). For IO sequencing use a bare indented block, not `do`
+TYPE ERROR: `do` needs a value whose type implements `Thenable`, such as `Option` or `Result`; for IO sequencing use a bare indented block instead of `do`

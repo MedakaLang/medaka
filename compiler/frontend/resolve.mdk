@@ -1269,13 +1269,13 @@ optStrEq (Some x) sug = x == sug
 optStrEq None _ = False
 
 -- The CLI-text parenthetical appended after a did-you-mean hint when it came
--- from a curated Haskell alias, e.g. "('fmap' is Haskell; Medaka uses
--- 'map')".  Empty string (no-op append) when the hint is a plain
--- edit-distance suggestion.
+-- from a curated Haskell alias, e.g. " (Haskell's `fmap` is `map` in Medaka)".
+-- Empty string (no-op append) when the hint is a plain edit-distance
+-- suggestion.
 haskellNote : String -> String -> String
 haskellNote bad sug =
   if isHaskellAliasPair bad sug then
-    " ('\{bad}' is Haskell; Medaka uses '\{sug}')"
+    " (Haskell's `\{bad}` is `\{sug}` in Medaka)"
   else
     ""
 
@@ -2911,11 +2911,11 @@ resolveProgramG2 internalGuard runtimeDecls preludeDecls prog =
   let env = buildEnv runtimeDecls preludeDecls prog internalGuard
   dedupResErrors (buildErrors preludeDecls prog ++ flatMap (checkDecl env) prog)
 
--- `'import m.{n}'` for each module exporting `n`, joined as alternatives:
--- "'import a.{n}', 'import b.{n}' or 'import c.{n}'".
+-- `` `import m.{n}` `` for each module exporting `n`, joined as alternatives:
+-- "`import a.{n}`, `import b.{n}` or `import c.{n}`".
 importChoices : String -> List String -> String
 importChoices n ms =
-  let choices = map (m => "'import \{m}.{\{n}}'") ms
+  let choices = map (m => "`import \{m}.{\{n}}`") ms
   match reverseL choices
     [] => ""
     [only] => only
@@ -2928,90 +2928,87 @@ export
 ppResError : ResError -> String
 ppResError (UnboundVariable n _ s) = match s
   Some sug =>
-    "Unbound variable: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
+    "unbound variable `\{n}`; did you mean `\{sug}`?" ++ haskellNote n sug
   None => match lookupAssoc n foreignKeywordNotes
-    Some note => "Unbound variable: \{n}. \{note}"
-    None => "Unbound variable: \{n}"
+    Some note => "unbound variable `\{n}`: \{note}"
+    None => "unbound variable `\{n}`"
 ppResError (UnboundVariableExported n ms _) =
-  "Unbound variable: \{n}. (Did you forget to \{importChoices n ms}?)"
+  "unbound variable `\{n}`; add \{importChoices n ms}"
 ppResError (UnboundVariableIsModule n _) =
-  "Unbound variable: \{n}. '\{n}' is an imported module, not a value — a bare "
-    ++ "'import \{n}' binds no names. Bind what you need: 'import \{n}.{name, "
-    ++ "...}', or 'import \{n} as M' then 'M.name'"
+  "unbound variable `\{n}`: `\{n}` is an imported module, not a value; write `import \{n}.{name}` to bind what you need"
 ppResError (UnboundQualifiedElsewhere n a b _) =
-  "Unbound variable: \{n}. '\{b}' is not defined (or re-exported) by the module aliased as '\{a}' — it resolves unqualified, from elsewhere (the prelude, or another module). An alias only qualifies names the aliased module itself defines or re-exports, not a name it merely has an `impl` for. Call it unqualified as '\{b}', or alias the module that actually defines it"
+  "unbound variable `\{n}`: the module aliased as `\{a}` does not define `\{b}`; write `\{b}` unqualified"
 ppResError (UnknownConstructor n _ s) = match s
   Some sug =>
-    "Unknown constructor: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
-  None => "Unknown constructor: " ++ n
+    "unknown constructor `\{n}`; did you mean `\{sug}`?" ++ haskellNote n sug
+  None => "unknown constructor `\{n}`"
 ppResError (UnknownType n _ s) = match s
-  Some sug => "Unknown type: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
-  None => "Unknown type: " ++ n
+  Some sug => "unknown type `\{n}`; did you mean `\{sug}`?" ++ haskellNote n sug
+  None => "unknown type `\{n}`"
 ppResError (UnknownEffect n _) =
   if n == "Mut" || n == "Panic" then
-    "Unknown effect: \{n} — the `Mut`/`Panic` purity labels were removed. Delete the annotation: purity is no longer tracked as an effect label, and effect labels now name host capabilities (`IO`, `Rand`, `FileRead`, …)"
+    "unknown effect `\{n}`: the `Mut` and `Panic` purity labels were removed; delete the annotation"
   else
-    "Unknown effect: " ++ n
-ppResError (UnknownField n _) = "Unknown field: " ++ n
-ppResError (FieldNotInRecord f r _) =
-  "Unknown field: \{f}. Record '\{r}' has no field '\{f}'"
+    "unknown effect `\{n}`"
+ppResError (UnknownField n _) = "unknown field `\{n}`"
+ppResError (FieldNotInRecord f r _) = "no field `\{f}` in `\{r}`"
 ppResError (DuplicateDefinition "built-in type" n _) =
-  "'\{n}' is a built-in type: a program cannot declare a type of that name. Rename the declaration"
+  "`\{n}` is a built-in type; rename the declaration"
 ppResError (DuplicateDefinition "built-in constructor" n _) =
-  "'\{n}' is a built-in constructor: a program cannot declare a constructor of that name. Rename the constructor"
+  "`\{n}` is a built-in constructor; rename the constructor"
 ppResError (DuplicateDefinition "prelude constructor" n _) =
-  "'\{n}' is a constructor of the prelude, and a program's own constructor cannot reuse a prelude constructor's name yet (#3471). Rename the constructor; the type itself may keep a prelude type's name"
+  "`\{n}` is a prelude constructor, and a program's constructor cannot reuse its name; rename the constructor"
 ppResError (DuplicateDefinition "prelude interface" n _) =
-  "'\{n}' is an interface of the prelude: a program's own interface cannot share a prelude interface's name (a type may; an interface does not shadow the prelude's). Rename the interface"
-ppResError (DuplicateDefinition k n _) = "Duplicate \{k}: \{n}"
-ppResError (UnknownInterface n _) = "Unknown interface: " ++ n
+  "`\{n}` is a prelude interface, and a program's interface cannot share its name; rename the interface"
+ppResError (DuplicateDefinition k n _) =
+  "duplicate definition of `\{n}`; rename this \{k}"
+ppResError (UnknownInterface n _) = "unknown interface `\{n}`"
 ppResError (MethodNotInInterface m i _) =
-  "Method '\{m}' is not part of interface '\{i}'"
-ppResError (ExternWithBody n _) =
-  "Extern '" ++ n ++ "' must not have a definition body"
+  "interface `\{i}` has no method `\{m}`"
+ppResError (ExternWithBody n _) = "extern `\{n}` must not have a body"
 ppResError (PrivateNameAccess n m _ s) = match s
   Some sug =>
-    "Module '\{m}' has no exported name '\{n}'. Did you mean '\{sug}'"
+    "module `\{m}` has no export `\{n}`; did you mean `\{sug}`?"
       ++ haskellNote n sug
-  None => "Module '\{m}' has no exported name '\{n}'"
+  None => "module `\{m}` has no export `\{n}`"
 ppResError (NoExportedConstructors n m _) =
-  "'\{n}' exports no constructors from module '\{m}' (exported abstractly). Remove `(..)`, or export them: declare '\{n}' a `public export data` where it is defined, and name it `\{n}(..)` in any `export import` that re-exports it (`public` is a parse error on `import`)"
+  "`\{n}` exports no constructors from module `\{m}`, which exports it abstractly; remove `(..)` or declare `\{n}` a `public export data` in `\{m}`"
 ppResError (NewtypeCtorNotExported n m _) =
-  "'\{n}' exports no constructors: a `newtype`'s constructor is always module-private, and `public` is a parse error on `newtype`. Expose it with an accessor function, or declare '\{n}' as a `public export data` with one variant"
+  "`\{n}` exports no constructors: a `newtype` constructor is always module-private; expose it with an accessor function"
 ppResError (BareCtorImport n t _) =
-  "'\{n}' is a constructor of '\{t}'. Import it as `\{t}(..)` to bring in \{t}'s constructors as a set, or alias the module and write `<alias>.\{n}`"
+  "`\{n}` is a constructor of `\{t}`; import it as `\{t}(..)`"
 ppResError (AbstractCtorImport n t m _) =
-  "'\{n}' is a constructor of '\{t}', which module '\{m}' exports abstractly, so its constructors are not exported. Declare '\{t}' a `public export data` where it is defined to export them"
+  "`\{n}` is a constructor of `\{t}`, which module `\{m}` exports abstractly; declare `\{t}` a `public export data` in `\{m}`"
 ppResError (EffectLabelNoMembers n m _) =
-  "'\{n}' is an effect label, not a type: `(..)` names constructors to bring into scope, and an effect label has none. Remove `(..)` and import '\{n}' directly"
+  "`\{n}` is an effect label, not a type, and has no constructors; remove `(..)`"
 ppResError (AbstractFieldAccess t f _) =
-  "'\{t}' is exported abstractly. Field '\{f}' is not accessible; declare it `public export` to expose its fields"
-ppResError (UnknownModule n _) = "Unknown module: " ++ n
+  "`\{t}` is exported abstractly, so its field `\{f}` is not accessible; declare it `public export` to expose its fields"
+ppResError (UnknownModule n _) = "unknown module `\{n}`"
 ppResError (AsPatternMisplaced _) =
-  "`@` as-patterns are only allowed in a binding position (a lambda parameter, a do-block bind, or a match pattern)"
+  "an `@` as-pattern is only allowed in a binding position: a lambda parameter, a do-block bind or a match pattern"
 ppResError (NonRecursiveValueLet n _) =
-  "'\{n}' is not in scope in its own binding. Non-function `let` is not recursive; write `let rec \{n} = ...` (RHS must be a lambda)"
+  "`\{n}` is not in scope in its own binding: a value `let` is not recursive; write `let rec \{n} = ...` with a lambda on the right"
 ppResError (DuplicateBinding n _) =
-  "Clauses of '\{n}' must be contiguous. An earlier same-named binding is separated by another declaration; group all clauses (and the signature) together"
+  "clauses of `\{n}` must be contiguous; group its clauses and signature together"
 ppResError (DuplicateValueBinding n _) =
-  "Duplicate binding '\{n}': it is already defined in this scope. A value binding has exactly one definition — rename this one or remove it"
+  "duplicate definition of `\{n}`; rename or remove this one"
 ppResError (DuplicateSignature n _ (Some (Loc _ l _ _ _))) =
-  "'\{n}' is already defined at line \{intToString l}. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"
+  "duplicate definition of `\{n}`, first defined at line \{intToString l}; rename or remove this one"
 ppResError (DuplicateSignature n _ None) =
-  "'\{n}' is already defined earlier in this file. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"
+  "duplicate definition of `\{n}`, first defined earlier in this file; rename or remove this one"
 ppResError (OrphanSignature n _ (Some sug)) =
-  "Type signature for '\{n}' has no binding in this module. Did you mean '\{sug}'? Rename the signature or the binding so the two names match"
+  "type signature for `\{n}` has no binding in this module; did you mean `\{sug}`?"
 ppResError (OrphanSignature n _ None) =
-  "Type signature for '\{n}' has no binding in this module. Define '\{n}' below its signature, or remove the signature"
+  "type signature for `\{n}` has no binding in this module; define `\{n}` or remove the signature"
 ppResError (DuplicateBinder k n _) =
-  "Duplicate binder: '\{n}' is bound more than once in this \{k}. Each binder must be distinct — rename one occurrence"
+  "`\{n}` is bound more than once in this \{k}; rename one occurrence"
 -- `mods` holds one importing module per distinct declaration, so a module
 -- whose imports bind the name to two of its declarations appears twice.
 ppResError (AmbiguousOccurrence n mods _) = match dedup mods
   [m] =>
-    "Ambiguous occurrence: '\{n}' is bound to \{intToString (listLen mods)} different declarations imported from `\{m}`. Keep '\{n}' for one of them and import the other under a different name: `import \{m}.{<name> as <alias>}`"
+    "ambiguous occurrence: `\{n}` is bound to \{intToString (listLen mods)} declarations imported from `\{m}`; import one of them under an alias with `import \{m}.{<name> as <alias>}`"
   distinct =>
-    "Ambiguous occurrence: '\{n}' is exported by \{ambigModPhrase distinct}. Qualify, or import it under a new name from one module: `import <mod>.{\{n} as <alias>}` — a plain `import <mod>.{\{n}}` still collides with the other module's wildcard import"
+    "ambiguous occurrence: `\{n}` is exported by \{ambigModPhrase distinct}; import it from one of them under an alias with `import <mod>.{\{n} as <alias>}`"
 -- An alias-qualified constructor spelling parses since #1287, but it does not
 -- SEPARATE two modules' constructors the way it separates their types: resolve
 -- strips the alias prefix before typecheck, whose constructor table is keyed by the
@@ -3022,18 +3019,18 @@ ppResError (AmbiguousOccurrence n mods _) = match dedup mods
 -- constructors — with the other left as a bare `import <mod>` (or without `(..)`),
 -- which binds its impls but not its constructors.
 ppResError (AmbiguousConstructor n mods _) =
-  "Ambiguous constructor: '\{n}' is brought into scope by \{ambigModPhrase mods}. A module alias cannot tell two constructors apart. Bring in the constructors of only one — e.g. `import <mod>.{T(..)}` — and import the other without `(..)` and without an alias"
+  "ambiguous constructor: `\{n}` is brought into scope by \{ambigModPhrase mods}; import the constructors of only one owning type with `import <mod>.{T(..)}`"
 -- The remedy is a RENAME and nothing else, unlike every other member of this
 -- family.  The alias already names the module the author meant, so there is no
 -- narrower import to offer and no second alias to reach for: both constructors
 -- land on one bare key whatever the import clauses say.
 ppResError (AmbiguousAliasCtor n mid _) =
-  "Ambiguous constructor: '\{n}' names `\{mid}`'s constructor, but this module declares a constructor of that name itself. The alias prefix is dropped before the constructor table is consulted, and that table is keyed by the bare name, so the two cannot be told apart. Rename one of them"
+  "ambiguous constructor: `\{n}` names a constructor of `\{mid}`, and this module declares a constructor of the same name; rename one of them"
 -- `import m as A` binds m's TYPES as `A.name`, same as it does values (#2412,
 -- `docs/spec/SYNTAX.md` "Import aliasing"), so qualifying with a module alias
 -- resolves the collision the same way it does for an ordinary value — offer it.
 ppResError (AmbiguousType n mods _) =
-  "Ambiguous type: '\{n}' is brought into scope by \{ambigModPhrase mods}. Qualify with the owning module's alias — `import <mod> as <alias>` then write `<alias>.\{n}` — or drop '\{n}' from the other's import list"
+  "ambiguous type: `\{n}` is brought into scope by \{ambigModPhrase mods}; qualify it with a module alias, `import <mod> as <alias>` then `<alias>.\{n}`"
 -- The type remedy above now reaches an interface too: since #1287 an alias
 -- qualifies an interface in all four occurrence positions, and two same-named
 -- interfaces reached that way stay distinct, because an interface occurrence is
@@ -3042,28 +3039,26 @@ ppResError (AmbiguousType n mods _) =
 -- `import m.{Foo as Bar}` is rejected — so the message offers the two fixes that
 -- exist and not that one.
 ppResError (UnboundAuthority n _) =
-  "Unknown authority '\{n}': an authority name refers to a binder written to its left in the same signature — a named argument `(\{n} : String) -> <FileRead \{n}> …`, an `Authority`-kinded type argument such as `Handle \{n}` — or to an `Authority` parameter of the enclosing data declaration. Bind it there, or write the label bare for any authority"
+  "unknown authority `\{n}`: an authority name must be bound to its left in the same signature, such as `(\{n} : String) -> <FileRead \{n}>`; bind it there or write the label bare"
 ppResError (MisplacedAuthorityBinder n _) =
-  "A named argument `(\{n} : …)` can only be the argument of an arrow: the name is an authority the rest of that signature refers to. Move it to an arrow's argument position, or drop the name"
+  "a named argument `(\{n} : ...)` can only be the argument of an arrow; move it to an arrow's argument position or drop the name"
 ppResError (AmbiguousEffect n mods _) =
-  "Ambiguous effect label: '\{n}' is declared by \{ambigModPhrase mods}, and both declarations are in scope. A label is identified by the module that declares it, so these are two different effects and a row cannot tell them apart by spelling. Import only one of those modules here, or rename one of the declarations"
+  "ambiguous effect label: `\{n}` is declared by \{ambigModPhrase mods}, and both are in scope; import only one of those modules here"
 ppResError (AmbiguousInterface n mods _) =
-  "Ambiguous interface: '\{n}' is brought into scope by \{ambigModPhrase mods}. Qualify with the owning module's alias — `import <mod> as <alias>` then write `<alias>.\{n}` — or drop '\{n}' from the other's import list"
+  "ambiguous interface: `\{n}` is brought into scope by \{ambigModPhrase mods}; qualify it with a module alias, `import <mod> as <alias>` then `<alias>.\{n}`"
 ppResError (InternalExternAccess n _) =
-  "'"
-    ++ n
-    ++ "' is an internal-only primitive. Cannot be used outside the standard library (pass --allow-internal to override)"
+  "`\{n}` is an internal-only primitive and cannot be used outside the standard library; pass `--allow-internal` to override"
 -- ⚠️ THE HELP TEXT SAYS THE NARROWING OUT LOUD, DELIBERATELY. This rejects a
 -- program shape that compiled before (two interfaces sharing a method name at
 -- DISJOINT receivers ran fine), so the message must not pretend the program was
 -- always illegal — it says the rule is on the DECLARATION and names the two
--- interfaces plus the fix. The parenthetical bounds the rule: a collision with a
--- PRELUDE method is a different case, ruled a warning-not-error by
+-- interfaces plus the fix. The rule is bounded: a collision with a PRELUDE
+-- method is a different case, ruled a warning-not-error by
 -- docs/spec/SHADOW-SEMANTICS.md S1-PRELUDE (#1499), and is NOT what this fires on.
 ppResError (DuplicateInterfaceMethod m a b _) =
-  "Method '\{m}' is declared by two interfaces in this module: '\{a}' and '\{b}'. Two interfaces declared together may not share a method name — an occurrence of '\{m}' could not be attributed to either. Rename the method in one of them, or merge the two interfaces. (A method name shared with a PRELUDE interface is a different case and stays legal.)"
+  "method `\{m}` is declared by two interfaces in this module, `\{a}` and `\{b}`; rename it in one of them"
 ppResError (ReassignImmutable n _) =
-  "Cannot reassign '\{n}' — bindings are immutable. To bind a new value, shadow it with `let \{n} = ...`. For mutable state, use a `Ref`: `let \{n} = Ref 0`, then write `\{n} := !\{n} + 1` (read the cell with `!\{n}`)"
+  "cannot reassign `\{n}`: bindings are immutable; shadow it with `let \{n} = ...`, or make it a `Ref` and write `\{n} := ...`"
 
 -- Stable diagnostic code (DIAGNOSTIC-CODES-DESIGN §2) for a resolve error — one
 -- `R-*` code per ResError constructor.  Authored here (a single chokepoint), so

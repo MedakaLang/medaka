@@ -1,7 +1,7 @@
 cmd: medaka check
 exit: 1
 ---
-error: test/error_quality_fixtures/parse/hs_pow_operator.mdk:1:18: Medaka has no `**` operator. Use `pow x y` for Float exponentiation
+error: test/error_quality_fixtures/parse/hs_pow_operator.mdk:1:18: Medaka has no `**`; write `pow x y`
   |
 1 | main = println (2 ** 10)
   |                   ^

@@ -456,7 +456,7 @@ checkSourceStaleness argv = match sourceStalenessVerdict ()
     let msg =
       "warning: this ./medaka was built from compiler source that differs from "
         ++ compilerDir
-        ++ " — it may be stale; rebuild with 'make medaka'."
+        ++ "; rebuild with `make medaka`"
     if envOr "MEDAKA_STRICT" "" /= "" then
       dieMsg msg
     else if runJsonInvocation argv then
@@ -627,8 +627,8 @@ usage _ =
 -- name the offending token and point at the roster.
 unknownSubcommand : String -> <IO> Unit
 unknownSubcommand sub =
-  let _ = ePutStrLn ("medaka: unknown subcommand '" ++ sub ++ "'")
-  dieMsg "  run `medaka help` for the list of subcommands"
+  dieMsg
+    "medaka: unknown subcommand `\{sub}`; run `medaka help` for the list of subcommands"
 
 -- ── check ─────────────────────────────────────────────────────────────────
 
@@ -742,7 +742,7 @@ runCheckCmd argv =
               let _ =
                 if typesMode then
                   ePutStrLn
-                    "medaka check: --types has no effect under --json (envelope has no scheme-dump field)"
+                    "medaka check: --types has no effect under --json; the envelope carries no scheme dump"
               runCheckJsonCmd allowInternal rsrc csrc target stdlibDir
             else match readSource target
               Err msg => dieMsg msg
@@ -999,9 +999,8 @@ genericResidualDiag target =
     "T-RESIDUAL"
     ("type error in "
       ++ target
-      ++ ", detected during elaboration (the run/build type pass); no located"
-      ++ " diagnostic is available for it, and `medaka check` may not report"
-      ++ " this program at all — see issue #1812")
+      ++ ", detected during elaboration; no located diagnostic is available,"
+      ++ " and `medaka check` may not report it")
     None
 
 -- `run --json`'s structured counterpart to `residualOrGeneric`/`renderTcDiags` —
@@ -1514,7 +1513,7 @@ cjFileNotFoundJson target err =
   cjUnlocatedJson
     target
     "R-FILE-NOT-FOUND"
-    "cannot read file '\{target}': \{err}"
+    "cannot read file `\{target}`: \{err}"
 
 -- The envelope for a target the entry read refused: `R-FILE-NOT-UTF8` for a
 -- file that exists but is not UTF-8 text, else `R-FILE-NOT-FOUND`.
@@ -1616,9 +1615,12 @@ emitWarningLines ls = ePutStrLn (joinNl ls)
 -- name the count and point at `--json`, which already reports them per-file.
 emitHiddenDiagNote : Int -> <IO> Unit
 emitHiddenDiagNote 0 = ()
+emitHiddenDiagNote 1 =
+  ePutStrLn
+    "1 further diagnostic in imported modules; rerun with --json to see it"
 emitHiddenDiagNote n =
   ePutStrLn
-    "\{intToString n} further diagnostic(s) in imported modules; rerun with --json to see them"
+    "\{intToString n} further diagnostics in imported modules; rerun with --json to see them"
 
 -- The (path, src, warnings) triple of a SINGLE-file analysis.  The single-module
 -- twin of what `locatedProjectDiags` returns, so both `run` arms hand
@@ -1808,7 +1810,7 @@ assertFmtOneMode argv = match fmtModeConflict argv
   many =>
     let _ =
       ePutStrLn
-        "medaka fmt: \{joinWith " " many} are mutually exclusive — pick one."
+        "medaka fmt: \{joinWith " " many} are mutually exclusive; pass one"
     exit 1
 
 runFmtArgs : Args -> <IO> Unit
@@ -1897,7 +1899,7 @@ fmtWriteSummaryLine n = "formatted \{intToString n} files"
 -- The line `fmt` and the codemods print for a file they could not read: the
 -- encoding refusal carries its own path, any other failure is prefixed with it.
 sourceReadLine : String -> Option String -> String
-sourceReadLine file None = "Error: \{sourceNotUtf8Message file}"
+sourceReadLine file None = "error: \{sourceNotUtf8Message file}"
 sourceReadLine file (Some msg) = "\{file}: \{msg}"
 
 -- Like `fmtOne` but reports to stdout/stderr and RETURNS (hadErr, changed)
@@ -2024,9 +2026,9 @@ runCodemodCmd (name :: rest) = match findCodemod name
     let _ =
       if lintTargetExists name then
         ePutStrLn
-          "medaka codemod: missing codemod name — '\{name}' is a path, and a codemod name must come first"
+          "medaka codemod: missing codemod name; `\{name}` is a path, and the codemod name comes first"
       else
-        ePutStrLn "medaka codemod: unknown codemod '\{name}'"
+        ePutStrLn "medaka codemod: unknown codemod `\{name}`"
     listCodemodsAndExit ()
   Some cm => match splitCodemodArgv rest CmDry [] []
     Err msg => dieMsg msg
@@ -2090,7 +2092,7 @@ splitCodemodArgv (tok :: rest) mode cargs paths =
     Some (nm, v) => splitCodemodArgv rest mode (v :: nm :: cargs) paths
     None => match rest
       v :: rest2 => splitCodemodArgv rest2 mode (v :: tok :: cargs) paths
-      [] => Err "medaka codemod: flag '\{tok}' requires a value"
+      [] => Err "medaka codemod: flag `\{tok}` requires a value"
   else
     splitCodemodArgv rest mode cargs (tok :: paths)
 
@@ -2624,7 +2626,7 @@ parseTarget : String -> Result String BuildTarget
 parseTarget "native" = Ok TNative
 parseTarget "wasm" = Ok TWasm
 parseTarget other =
-  Err ("error: unknown --target '" ++ other ++ "' (expected native|wasm)")
+  Err ("error: unknown --target `" ++ other ++ "` (known: native, wasm)")
 
 finishBuildArgs : List String ->
   Option String ->
@@ -3210,7 +3212,7 @@ runTestCmd argv0 =
               if jsonMode then
                 let _ =
                   ePutStrLn
-                    "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project, and --json reports on one file only"
+                    "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project"
                 exit 1
               else
                 runTestProjectCmd engines cases filterOpt seedOpt
@@ -3299,7 +3301,7 @@ runTestProjectCmd engines cases filterOpt seedOpt =
   match findProjectRoot cwd
     None =>
       dieMsg
-        "medaka test: no target given, and no medaka.toml in \{cwd} or any directory above it; pass a file.mdk or directory target, or run inside a project"
+        "medaka test: no target given and no medaka.toml in \{cwd} or any directory above it; pass a file.mdk or directory target, or run inside a project"
     Some root =>
       let _ =
         ePutStrLn "medaka test: no target given; testing the project at \{root}"
@@ -3553,7 +3555,7 @@ checkDistinctGo (md :: rest) seen =
   if elemStrCli n seen then
     let _ =
       ePutStrLn
-        "medaka doc --out: two targets share the module name '\{n}' — they would write the same page '\{n}.md'. Rename one, or document them in separate runs."
+        "medaka doc --out: two targets share the module name `\{n}` and would write the same page `\{n}.md`; rename one"
     exit 1
   else
     checkDistinctGo rest (n :: seen)
@@ -4049,7 +4051,7 @@ runLintWriteBaselineCmd idx disableNames onlyNames denyNames cwd out files =
     lintFilesToDiagTriples idx disableNames onlyNames denyNames None files
   let perFile = map (t => baselineFileCodes cwd t) triples
   match writeFile out (renderLintBaseline perFile)
-    Err msg => dieMsg "medaka lint: cannot write '\{out}': \{msg}"
+    Err msg => dieMsg "medaka lint: cannot write `\{out}`: \{msg}"
     Ok _ =>
       ePutStrLn
         "medaka lint: wrote \{out} from \{intToString (listLen files)} file(s)"
@@ -4172,14 +4174,14 @@ assertBlessIsScoped blessOn targets =
   else
     let _ =
       ePutStrLn
-        "medaka snapshot: --bless requires explicit targets — there is no whole-suite bless."
-    let _ = ePutStrLn "  Name what you are approving, e.g.:"
+        "medaka snapshot: --bless requires explicit targets; there is no whole-suite bless"
+    let _ = ePutStrLn "  name what you are approving, such as:"
     let _ =
       ePutStrLn
         "    medaka snapshot --bless --out test/snapshots/compiler compiler/frontend/lexer.mdk"
     let _ =
       ePutStrLn
-        "  (or, family-aware:  sh test/snapshot_bless.sh --bless compiler/frontend/lexer.mdk)"
+        "  or, family-aware: sh test/snapshot_bless.sh --bless compiler/frontend/lexer.mdk"
     exit 1
 
 snapshotHelpText : String
@@ -4260,7 +4262,7 @@ runSnapshotCmd argv0 =
     None =>
       let _ =
         ePutStrLn
-          "medaka snapshot: pass --check (verify), --new (create missing snapshots) or --bless (rewrite existing ones)"
+          "medaka snapshot: pass --check, --new or --bless; exactly one mode is required"
       exit 1
     Some mode =>
       let ok =
@@ -4287,7 +4289,7 @@ snapshotMode a =
     many =>
       let _ =
         ePutStrLn
-          "medaka snapshot: \{joinWith " " many} are mutually exclusive — pick one."
+          "medaka snapshot: \{joinWith " " many} are mutually exclusive; pass one"
       let _ = exit 1
       None
 

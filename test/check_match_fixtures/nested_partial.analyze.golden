@@ -1,1 +1,1 @@
-error: 'Some' is a constructor of the prelude, and a program's own constructor cannot reuse a prelude constructor's name yet (#3471). Rename the constructor; the type itself may keep a prelude type's name
+error: `Some` is a prelude constructor, and a program's constructor cannot reuse its name; rename the constructor

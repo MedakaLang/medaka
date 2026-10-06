@@ -986,7 +986,7 @@ selfNamedRun = match selfNamedScratch
         expectSpawnFailsAll
           medakaBin
           ["check", "\{dir}/use_nt.mdk"]
-          ["Unbound variable: NT"]
+          ["unbound variable `NT`"]
       let _ = runVerb "rm" ["-rf", dir]
       result
 

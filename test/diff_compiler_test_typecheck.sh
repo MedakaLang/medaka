@@ -428,7 +428,7 @@ EOF
 # A rejection must name BOTH the check-first remedy and the underlying diagnostic:
 # an exit 1 with no explanation would be a different (and also bad) outcome.
 run_case 'a zero-doctest ill-typed' "$TMP/a_nodoc_broken.mdk" 1 \
-  'requires it to `medaka check` first' 'Unbound variable: nosuchvariable'
+  'requires it to `medaka check` first' 'unbound variable `nosuchvariable`'
 
 run_case 'b zero-doctest clean' "$TMP/b_nodoc_clean.mdk" 0 \
   '(no doctests found)'
@@ -453,7 +453,7 @@ run_case 'h exemption preserved (hasProps)' "$TMP/h_exempt_via_prop.mdk" 0 \
 ENGINE_ARGS=''
 
 run_case 'h native property compilation checks the exempt target' "$TMP/h_exempt_via_prop.mdk" 1 \
-  '[native] ... FAILED' 'could not build' 'Unbound variable: nosuchvariable'
+  '[native] ... FAILED' 'could not build' 'unbound variable `nosuchvariable`'
 
 # ── issue #1680: the exemption ANNOUNCES itself ──────────────────────────────
 # Cells e/h above pin that the exempted module still RUNS. These pin that it also
@@ -473,11 +473,11 @@ run_case 'h native property compilation checks the exempt target' "$TMP/h_exempt
 # claim every type-checked module went unchecked.
 ENGINE_ARGS='--engines eval'
 run_case 'i announcement on the hasTests exemption' "$TMP/e_exempt_via_testdecl.mdk" 0 \
-  'note: typechecking was skipped for' '`test "…"` decls' 'to type-check it: medaka check' \
+  'note: typechecking was skipped for' '`test "…"` decls' 'to type-check it, run `medaka check' \
   '1/1 passed'
 
 run_case 'k announcement on the hasProps exemption' "$TMP/h_exempt_via_prop.mdk" 0 \
-  'note: typechecking was skipped for' '`prop "…"` decls' 'to type-check it: medaka check' \
+  'note: typechecking was skipped for' '`prop "…"` decls' 'to type-check it, run `medaka check' \
   '[eval] ... OK (100 tests passed)'
 ENGINE_ARGS=''
 
@@ -486,7 +486,7 @@ ENGINE_ARGS=''
 # note that explains it does too.
 ENGINE_ARGS='--engines eval'
 run_case 'l 1680 repro: the panic is explained' "$TMP/i_1680_repro.mdk" 1 \
-  'note: typechecking was skipped for' 'may therefore be an uncaught TYPE error' \
+  'note: typechecking was skipped for' 'may be an uncaught type error' \
   "runtime error [E-PANIC]: unknown op '+'"
 ENGINE_ARGS=''
 
@@ -494,10 +494,10 @@ ENGINE_ARGS=''
 # fail the SAME way cell a does (a real type error, not the exempted-and-panics
 # shape cells i/l pin), even though it carries a `test "…"` decl with no doctest.
 run_case 'n narrowing: compiler-prefix vehicle no longer exempt' "$TMP/compiler/types/n_narrow_compiler_vehicle_test.mdk" 1 \
-  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+  'requires it to `medaka check` first' 'type mismatch: Int vs String'
 
 run_case 'o narrowing: stdlib-prefix vehicle no longer exempt' "$TMP/stdlib/o_narrow_stdlib_vehicle_test.mdk" 1 \
-  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+  'requires it to `medaka check` first' 'type mismatch: Int vs String'
 
 # p: same content, `_test.mdk` suffix, but no `compiler/`/`stdlib/` prefix — suffix
 # alone must NOT narrow the exemption (this is the shape `sqlite/test/*_test.mdk`
@@ -513,11 +513,11 @@ ENGINE_ARGS=''
 # asserting the exit code alone would not discriminate: both shapes exit 1.
 CASE_DIR="$TMP/compiler/types"
 run_case 'q narrowing survives a relative invocation form' 'n_narrow_compiler_vehicle_test.mdk' 1 \
-  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+  'requires it to `medaka check` first' 'type mismatch: Int vs String'
 CASE_DIR="."
 
 run_case 'u narrowing: this repo own test dir no longer exempt' "$TMP/repo/test/u_repo_test_dir_test.mdk" 1 \
-  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+  'requires it to `medaka check` first' 'type mismatch: Int vs String'
 
 ENGINE_ARGS='--engines eval'
 run_case 'v test dir without a compiler sibling: stays exempt' "$TMP/norepo/test/v_no_compiler_sibling_stays_exempt_test.mdk" 1 \
@@ -544,7 +544,7 @@ run_case 'f directory with ill-typed member' "$TMP/dir" 1 \
   'requires it to `medaka check` first'
 
 run_case 'g import-bearing, zero doctests, ill-typed' "$TMP/proj/main.mdk" 1 \
-  'requires it to `medaka check` first' 'Type mismatch: Int vs String'
+  'requires it to `medaka check` first' 'type mismatch: Int vs String'
 
 agree_case 't import-bearing, module-own impl: test agrees with check' "$TMP/agree/main.mdk"
 

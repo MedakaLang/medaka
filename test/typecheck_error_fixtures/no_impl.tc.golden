@@ -1,1 +1,1 @@
-TYPE ERROR: No impl of Printable for Foo; write an 'impl Printable Foo'.
+TYPE ERROR: no impl of Printable for Foo; write `impl Printable Foo`

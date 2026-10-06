@@ -1,1 +1,1 @@
-TYPE ERROR: No impl of Semigroup for Box; write an 'impl Semigroup Box'.
+TYPE ERROR: no impl of Semigroup for Box; write `impl Semigroup Box`

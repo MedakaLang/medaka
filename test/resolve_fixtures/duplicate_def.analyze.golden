@@ -1,1 +1,1 @@
-error: Duplicate type: T
+error: duplicate definition of `T`; rename this type

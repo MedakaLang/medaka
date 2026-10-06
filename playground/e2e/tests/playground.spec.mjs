@@ -169,7 +169,7 @@ async function main() {
     await page.click('#run-btn');
     try {
       await page.waitForFunction(
-        () => document.getElementById('console')?.textContent?.includes('No impl of Num for String'),
+        () => document.getElementById('console')?.textContent?.includes('no impl of Num for String'),
         null,
         { timeout: 15000 },
       );
@@ -178,8 +178,8 @@ async function main() {
     check('inline squiggle (.cm-lintRange-error) present', hasSquiggle);
     check('gutter marker (.cm-lint-marker-error) present', hasGutterMarker);
     check(
-      'console reports "No impl of Num for String"',
-      consoleProblemsText.includes('No impl of Num for String'),
+      'console reports "no impl of Num for String"',
+      consoleProblemsText.includes('no impl of Num for String'),
       consoleProblemsText.slice(0, 200),
     );
     await page.screenshot({ path: `${SCREENSHOT_DIR}/04_squiggle.png` });

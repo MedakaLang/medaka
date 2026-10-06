@@ -4499,21 +4499,21 @@ verbTable = [
     vlabel =
       "SINGLE-FILE `W-OPEN-GOAL-COMMITTED` on `run`, which NOTHING in the tree graded before this row -- the code is `test/t4_census.sh`s subject and that tool is report-only. ⚠️ NOT a test of the allowlist: single-file `run`/`build` take `allWarnTriples`, the ONE place they widen past `runBuildWarnCodes`, so this row stays green with the allowlist entry deleted (measured). It guards the UNFILTERED arm; the s6-t4-channel-multimodule rows below guard the filtered one, and neither substitutes for the other",
     verb = "run",
-    assertion = AHas "Instance for .Sh. chosen by declaration order",
+    assertion = AHas "instance for .Sh. chosen by declaration order",
   },
   VerbRow {
     ventry = "s6-2-t4-open-goal-deferred.mdk",
     vlabel =
       "...and on `build`, the sibling verb of the same widened single-file arm",
     verb = "build",
-    assertion = AHas "Instance for .Sh. chosen by declaration order",
+    assertion = AHas "instance for .Sh. chosen by declaration order",
   },
   VerbRow {
     ventry = "s6-2-t4-open-goal-deferred.mdk",
     vlabel =
       "...and on `check`, whose stderr carries it even for an ENTRY module -- the baseline the two verbs above had to catch up to, and the only one of the three that was ever audible",
     verb = "check",
-    assertion = AHas "Instance for .Sh. chosen by declaration order",
+    assertion = AHas "instance for .Sh. chosen by declaration order",
   },
   VerbRow {
     ventry = "s6-t4-channel-multimodule/main.mdk",
@@ -4522,7 +4522,7 @@ verbTable = [
     verb = "run",
     assertion =
       AOnce
-        "lib\\.mdk:[0-9]+:[0-9]+: Instance for .Sh. chosen by declaration order",
+        "lib\\.mdk:[0-9]+:[0-9]+: instance for .Sh. chosen by declaration order",
   },
   VerbRow {
     ventry = "s6-t4-channel-multimodule/main.mdk",
@@ -4538,7 +4538,7 @@ verbTable = [
     verb = "build",
     assertion =
       AOnce
-        "lib\\.mdk:[0-9]+:[0-9]+: Instance for .Sh. chosen by declaration order",
+        "lib\\.mdk:[0-9]+:[0-9]+: instance for .Sh. chosen by declaration order",
   },
   VerbRow {
     ventry = "s6-t4-channel-multimodule/main.mdk",
@@ -4554,7 +4554,7 @@ verbTable = [
     verb = "check",
     assertion =
       AOnce
-        "lib\\.mdk:[0-9]+:[0-9]+: Instance for .Sh. chosen by declaration order",
+        "lib\\.mdk:[0-9]+:[0-9]+: instance for .Sh. chosen by declaration order",
   },
   VerbRow {
     ventry = "s6-t4-channel-multimodule/main.mdk",
@@ -4574,7 +4574,7 @@ verbTable = [
     vlabel =
       "the demoted warning is VISIBLE on `run`, located, in human caret form",
     verb = "run",
-    assertion = AHas "Overlapping impls of Sh",
+    assertion = AHas "overlapping impls of Sh",
   },
   VerbRow {
     ventry = "s6-2-t4-open-goal-deferred.mdk",
@@ -4587,7 +4587,7 @@ verbTable = [
     vlabel =
       "the demoted warning is VISIBLE on `build` too -- the verb that had NO warning surface at all before F-3d",
     verb = "build",
-    assertion = AHas "Overlapping impls of Sh",
+    assertion = AHas "overlapping impls of Sh",
   },
   VerbRow {
     ventry = "s6-2-t4-open-goal-deferred.mdk",
@@ -4601,14 +4601,14 @@ verbTable = [
     vlabel =
       "the HARD class still rejects LOUDLY on run (it was never demoted)",
     verb = "run",
-    assertion = AHas "Overlapping impls of Tag",
+    assertion = AHas "overlapping impls of Tag",
   },
   VerbRow {
     ventry = "s6-1c-multimodule-overlap/main.mdk",
     vlabel =
       "🚨 THE REGRESSION `cohSoftInScope` TRADED FOR THE DE-DUPLICATION: human `check` reported the pair for the ENTRY and for the split-across-modules case but NOTHING AT ALL when it sat in an imported module -- 0 occurrences on either channel while --json/run/build all said 1. Measured across all seven graph positions a pair can occupy. `dropEntryTriple` closes it; this row is the only thing that grades `check` for a NON-ENTRY module",
     verb = "check",
-    assertion = AOnce "lib.mdk:[0-9]+:[0-9]+: Overlapping impls of C",
+    assertion = AOnce "lib.mdk:[0-9]+:[0-9]+: overlapping impls of C",
   },
   VerbRow {
     ventry = "s6-1c-multimodule-overlap/main.mdk",
@@ -4634,34 +4634,34 @@ verbTable = [
     vlabel =
       "SAME-MODULE pair inside an IMPORTED module: seen by lib`s own sweep AND the whole-graph one, so it printed TWICE on run before `cohSoftInScope`. EXACTLY ONCE, with lib`s own span",
     verb = "run",
-    assertion = AOnce "lib.mdk:[0-9]+:[0-9]+: Overlapping impls of C",
+    assertion = AOnce "lib.mdk:[0-9]+:[0-9]+: overlapping impls of C",
   },
   VerbRow {
     ventry = "s6-1c-multimodule-overlap/main.mdk",
     vlabel =
       "CROSS-MODULE pair: no per-module sweep can see it (one `D` impl each), so `globalCoherenceConflict` alone reports it, naming both owners. The ONLY in-tree coverage of that path -- it had none",
     verb = "run",
-    assertion = AOnce "Overlapping impls of D .defined in lib and other.",
+    assertion = AOnce "overlapping impls of D .defined in .lib. and .other..",
   },
   VerbRow {
     ventry = "s6-1c-multimodule-overlap/main.mdk",
     vlabel = "...and both reach `build` too",
     verb = "build",
-    assertion = AHas "Overlapping impls of D .defined in lib and other.",
+    assertion = AHas "overlapping impls of D .defined in .lib. and .other..",
   },
   VerbRow {
     ventry = "s6-1c-unrelated-warning-not-surfaced.mdk",
     vlabel =
       "S-warning-parity (#2400/F4, this diff): single-file `run` now surfaces the FULL warning channel, not just the coherence allowlist -- #1185`s cross-module constructor-oracle spew this row used to guard against cannot fire single-file (no imported constructor universe to draw from), so `W-NONEXHAUSTIVE` correctly reaches `run` here now. This row FLIPPED from EMPTY; see the fixture`s own header for the updated spec derivation",
     verb = "run",
-    assertion = AHas "non-exhaustive match of .Colour.",
+    assertion = AHas "non-exhaustive match on .Colour.",
   },
   VerbRow {
     ventry = "s6-1c-unrelated-warning-not-surfaced.mdk",
     vlabel =
       "...and the same on `build` -- single-file `build` shares the widened arm, and #1185`s spew (the 0 -> 4896 lines measurement this row`s name refers to) is a MULTI-MODULE-only failure mode, unaffected here",
     verb = "build",
-    assertion = AHas "non-exhaustive match of .Colour.",
+    assertion = AHas "non-exhaustive match on .Colour.",
   },
   VerbRow {
     ventry = "s3-min-subsumes.mdk",

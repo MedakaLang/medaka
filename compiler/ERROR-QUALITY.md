@@ -21,6 +21,53 @@ stringly-typed and under-designed is the `String` message itself.
 
 ---
 
+## 0. Copy standard
+
+The text after `error: file:L:C: ` (or `warning: `) is one line of plain prose. Every
+diagnostic follows these rules; the corpus was swept to them on 2026-10-05.
+
+1. **Shape.** `<fault>` or `<fault>; <remedy>`, at most two sentences, no trailing
+   period. Aim under 120 characters before interpolated names; about 200 is the ceiling.
+2. **Fault first, in the program's vocabulary.** Name what is wrong with the user's own
+   identifiers and types. The *why* belongs in the docs, not the message; if one short
+   reason is essential, it is one clause.
+3. **One remedy, the most likely one,** as an imperative (`add ...`, `write ...`,
+   `import ...`). A suggestion is always ``did you mean `x`?``. No menus of alternatives.
+4. **Lowercase first letter,** unless the message starts with an identifier, type, label,
+   keyword or proper noun (`` `main` must be a value``, `Medaka has no ...`).
+5. **Quoting.** Backticks around identifiers, types, keywords, operators, snippets and
+   effect rows that appear in prose. The operands of a structured slot are bare:
+   `type mismatch: Int vs String`, `no impl of Num for String`. Never single or double
+   quotes around code.
+6. **Banned.** Em- and en-dashes (use `;`, `:` or a new sentence); ALL-CAPS emphasis;
+   `e.g.`/`i.e.` (give the example in backticks, or write `such as`); `like X or Y` asides;
+   parentheticals longer than a few words; issue numbers, doc paths and PR references;
+   `please`, `simply`, `just`, `actually`, `really`, `genuinely`, `silently`, `note that`;
+   exclamation marks; any question other than `did you mean ...?`; the word `Medaka`
+   except as the subject of a foreign-syntax hint.
+7. **Plurals are count-correct:** `1 argument`, `2 arguments`, never `argument(s)`.
+8. **Warnings** take the same shape. The renderer strips a `Warning: ` prefix inside the
+   text; nothing may rely on it.
+
+Canonical heads. Tests and docs pin these; a new diagnostic in the same family reuses
+the head rather than inventing a sibling:
+
+| Family | Head |
+|---|---|
+| resolve | ``unbound variable `x` `` · ``unknown type `T` `` · ``unknown constructor `C` `` · ``unknown module `m` `` · ``unknown effect `E` `` · ``module `m` has no export `x` `` · ``duplicate definition of `x` `` |
+| suggestion | ``...; did you mean `y`?`` · ``...; add `import list.{x}` `` |
+| types | `type mismatch: A vs B` · `no impl of I for T` · ``the body of `f` requires `C a`, which its signature does not declare; add `C a =>` `` |
+| application | `` `f` takes 1 argument but is applied to 2`` · `` `n` has type Int and is not a function`` |
+| records | ``no field `f` in `R` `` · ``missing field `f` in `R` `` |
+| effects | `performs <Stdout> where only <> is allowed` |
+| exhaustiveness | ``non-exhaustive match on `T`: missing `P`; add a `P => ...` arm`` · ``non-exhaustive clauses of `f`: missing `P` `` · `unreachable match arm` |
+| syntax | ``unexpected `tok` `` · `unterminated string literal` · `unterminated character literal` · `unterminated block comment` · ``invalid escape sequence `\q` `` |
+| foreign syntax | ``Medaka has no `while`; write a recursive function`` |
+| deriving | ``cannot derive `X` for `T`; supported: Eq, Ord, ...`` |
+| entry | `` `main` must be a value, not a function; write `main = ...` `` · ``no `main` in this file; add `main = ...` `` |
+
+---
+
 ## 1. Principles
 
 ### Dual audience — human developers AND LLM coding agents, co-equal

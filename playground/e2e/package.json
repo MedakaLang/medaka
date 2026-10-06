@@ -8,6 +8,6 @@
     "test": "./run.sh"
   },
   "devDependencies": {
-    "playwright": "1.48.2"
+    "playwright": "1.63.0"
   }
 }
