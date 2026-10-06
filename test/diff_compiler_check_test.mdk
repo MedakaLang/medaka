@@ -111,7 +111,7 @@ import string.{
   unlines,
   words,
 }
-import test.{Expectation, fail, pass}
+import test.{Expectation, expectEach, fail, pass}
 import test_process.{
   boundedVerb,
   expectSpawnFailsAll,
@@ -796,6 +796,71 @@ test "a cycle closed by a non-entry module is located in that module" =
     ]
     ["check", "@main.mdk"]
     ["b.mdk:1:0: cyclic dependency: a → b → a", "1 | import a.*"]
+
+-- # A statement `let … in` is located at its body
+
+-- A clause whose body is a statement `let … in` reports a mismatch against the
+-- signature at the body, the expression whose type disagrees, not at `let`.
+letInBodyRows : List (String, String, List String, List String)
+letInBodyRows = [
+  (
+    "let_in_var_body",
+    "f : Int -> String\nf x =\n  let y = x + 1 in y\nmain = println (f 1)\n",
+    ["let_in_var_body.mdk:3:19: Type mismatch: String vs Int"],
+    [
+      "\"message\":\"Type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":20,\"line\":2},\"start\":{\"character\":19,\"line\":2}}",
+    ],
+  ),
+  (
+    "let_in_if_body",
+    "f : Int -> String\nf x =\n  let y = x + 1 in if y > 0 then y else \"n\"\nmain = println (f 1)\n",
+    [
+      "let_in_if_body.mdk:3:40: Type mismatch: Int vs String",
+      "let_in_if_body.mdk:3:19: Type mismatch: String vs Int",
+    ],
+    [
+      "\"message\":\"Type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":43,\"line\":2},\"start\":{\"character\":19,\"line\":2}}",
+    ],
+  ),
+  (
+    "let_in_tuple_body",
+    "f : Int -> String\nf x =\n  let (a, b) = (x, x) in a + b\nmain = println (f 1)\n",
+    ["let_in_tuple_body.mdk:3:25: Type mismatch: String vs Int"],
+    [
+      "\"message\":\"Type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":30,\"line\":2},\"start\":{\"character\":25,\"line\":2}}",
+    ],
+  ),
+  (
+    "let_in_call_body",
+    "g : Int -> Int\ng x = x\nf : Int -> String\nf x =\n  let y = 1 in g y\nmain = println (f 1)\n",
+    ["let_in_call_body.mdk:5:17: Type mismatch: String vs Int"],
+    [
+      "\"message\":\"Type mismatch: String vs Int\",\"range\":{\"end\":{\"character\":18,\"line\":4},\"start\":{\"character\":17,\"line\":4}}",
+    ],
+  ),
+]
+
+letInBodyChecks : (String, String, List String, List String) ->
+  <Exec, FileWrite, IO> List (String, Expectation)
+letInBodyChecks (name, source, located, ranges) =
+  let files = [("\{name}.mdk", source)]
+  [
+    (
+      "\{name} check",
+      cycleTreeRun name files ["check", "@\{name}.mdk"] located,
+    ),
+    (
+      "\{name} check --json",
+      cycleTreeRun
+        "\{name}_json"
+        files
+        ["check", "--json", "@\{name}.mdk"]
+        ranges,
+    ),
+  ]
+
+test "a statement let-in's body mismatch is located at the body" =
+  expectEach (flatMap letInBodyChecks letInBodyRows)
 
 -- # A valid multi-module program: no false positives
 

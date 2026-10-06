@@ -185,8 +185,10 @@ exprSexp (EDictAt _ _) =
     "unreachable: programToSexp serializes pre-annotate ASTs; EDictAt is introduced by typecheck elaboration"
 exprSexp (EApp f x) = node "EApp" [exprSexp f, exprSexp x]
 exprSexp (ELam ps b) = node "ELam" [slist (map patSexp ps), exprSexp b]
-exprSexp (ELet m _isf p e1 e2) =
-  node "ELet" [boolStr m, patSexp p, exprSexp e1, exprSexp e2]
+-- The leading "false" is the slot the retired `let mut` flag printed in; the
+-- site that replaced it is not rendered.
+exprSexp (ELet _ _isf p e1 e2) =
+  node "ELet" [boolStr False, patSexp p, exprSexp e1, exprSexp e2]
 exprSexp (EMatch s arms) = node "EMatch" (exprSexp s :: map armSexp arms)
 exprSexp (EIf c t el) = node "EIf" [exprSexp c, exprSexp t, exprSexp el]
 exprSexp (EBinOp op a b _) = node "EBinOp" [escStr op, exprSexp a, exprSexp b]

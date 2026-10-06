@@ -47,6 +47,7 @@ import frontend.ast.{
   FunClause(..),
   LetBind(..),
   Expr(..),
+  Loc,
   UseMember(..),
   UsePath(..),
   PropParam(..),
@@ -183,7 +184,7 @@ annotateExpr fr (EDoOrigin l e) = EDoOrigin l (annotateExpr fr e)
 -- let-rec `let f = …` binds f in a fresh frame over BOTH the RHS and the body
 -- (eval's evalRecLet pushFrame [f]); any other let evaluates the RHS in the
 -- OUTER scope and pushes the pattern's bindings for the body only (evalLet).
-annotateLet : List (List String) -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
+annotateLet : List (List String) -> Loc -> Bool -> Pat -> Expr -> Expr -> Expr
 annotateLet fr m True (PVar f fl) e1 e2 =
   let inner = [f] :: fr
   ELet m True (PVar f fl) (annotateExpr inner e1) (annotateExpr inner e2)

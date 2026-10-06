@@ -113,7 +113,7 @@ test "an interpolated part is top unless display is the prelude method" =
       (alphaPrefixWith
         True
         qualifiedNames
-        (ELet False False (PVar "display" at) (EVar "f") dirPath)),
+        (ELet at False (PVar "display" at) (EVar "f") dirPath)),
   ]
 
 test "an interpolated part keeps a qualifier only on a String operand" = expectAll

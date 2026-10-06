@@ -5373,7 +5373,7 @@ stampExpr env (ESection s) = ESection (stampSection env s)
 stampExpr env (ELoc l e) = ELoc l (stampExpr env e)
 stampExpr env (EDoOrigin l e) = EDoOrigin l (stampExpr env e)
 
-stampLet : OrdMap Int -> Bool -> Bool -> Pat -> Expr -> Expr -> Expr
+stampLet : OrdMap Int -> Loc -> Bool -> Pat -> Expr -> Expr -> Expr
 stampLet env m True (PVar f fl) e1 e2 =
   let inner = insertZero [f] env
   ELet m True (PVar f fl) (stampExpr inner e1) (stampExpr inner e2)
@@ -8345,7 +8345,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EApp (EVar "stampSection") (EVar "env")) (EVar "s"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e"))))
-(DTypeSig false "stampLet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))))
+(DTypeSig false "stampLet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Loc") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))))
 (DFunDef false "stampLet" ((PVar "env") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f") (PVar "fl")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "insertZero") (EListLit (EVar "f"))) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EApp (EVar "PVar") (EVar "f")) (EVar "fl"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e2"))))))
 (DFunDef false "stampLet" ((PVar "env") (PVar "m") (PVar "isRec") (PVar "pat") (PVar "e1") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "isRec")) (EVar "pat")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertZero") (EApp (EVar "patBindings") (EVar "pat"))) (EVar "env"))) (EVar "e2"))))
 (DTypeSig false "stampLetGroup" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
@@ -10013,7 +10013,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ESection" (PVar "s"))) (EApp (EVar "ESection") (EApp (EApp (EVar "stampSection") (EVar "env")) (EVar "s"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e"))))
 (DFunDef false "stampExpr" ((PVar "env") (PCon "EDoOrigin" (PVar "l") (PVar "e"))) (EApp (EApp (EVar "EDoOrigin") (EVar "l")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e"))))
-(DTypeSig false "stampLet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))))
+(DTypeSig false "stampLet" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Loc") (TyFun (TyCon "Bool") (TyFun (TyCon "Pat") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr"))))))))
 (DFunDef false "stampLet" ((PVar "env") (PVar "m") (PCon "True") (PCon "PVar" (PVar "f") (PVar "fl")) (PVar "e1") (PVar "e2")) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "insertZero") (EListLit (EVar "f"))) (EVar "env"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "True")) (EApp (EApp (EVar "PVar") (EVar "f")) (EVar "fl"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EVar "inner")) (EVar "e2"))))))
 (DFunDef false "stampLet" ((PVar "env") (PVar "m") (PVar "isRec") (PVar "pat") (PVar "e1") (PVar "e2")) (EApp (EApp (EApp (EApp (EApp (EVar "ELet") (EVar "m")) (EVar "isRec")) (EVar "pat")) (EApp (EApp (EVar "stampExpr") (EVar "env")) (EVar "e1"))) (EApp (EApp (EVar "stampExpr") (EApp (EApp (EVar "insertZero") (EApp (EVar "patBindings") (EVar "pat"))) (EVar "env"))) (EVar "e2"))))
 (DTypeSig false "stampLetGroup" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyCon "Expr") (TyCon "Expr")))))

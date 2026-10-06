@@ -1,5 +1,5 @@
 # META
-source_lines=5268
+source_lines=5265
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1640,7 +1640,7 @@ eval env (app@(EApp f x)) =
   apply fv xv
 eval env (ELam pats body) = VClosure env pats body noTrapLoc
 eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
-eval env (ELet _ _ pat e1 e2) = evalLet noTrapLoc env pat e1 e2
+eval env (ELet site _ pat e1 e2) = evalLet site env pat e1 e2
 eval env (ELetGroup binds body) = evalLetGroup env binds body
 eval env (EMatch scrut arms) = evalMatch noTrapLoc env (eval env scrut) arms
 eval env (EIf c t e) = evalIf env (eval env c) t e
@@ -1688,9 +1688,6 @@ eval env (ERangeArray lo hi incl) =
 eval env (ELoc l (EMatch scrut arms)) =
   let _ = updateEvalLoc l
   evalMatch l env (eval env scrut) arms
-eval env (ELoc l (ELet _ False pat e1 e2)) =
-  let _ = updateEvalLoc l
-  evalLet l env pat e1 e2
 eval env (ELoc l e) =
   let _ = updateEvalLoc l
   eval env e
@@ -5851,7 +5848,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PAs "app" (PCon "EApp" (PVar "f") (PVar "x")))) (EBlock (DoLet false false (PVar "fv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "f"))) (DoLet false false (PVar "xv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))) (DoLet false false PWild (EApp (EVar "markTrapSite") (EVar "app"))) (DoExpr (EApp (EApp (EVar "apply") (EVar "fv")) (EVar "xv")))))
 (DFunDef false "eval" ((PVar "env") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "noTrapLoc")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
-(DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "noTrapLoc")) (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
+(DFunDef false "eval" ((PVar "env") (PCon "ELet" (PVar "site") PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "site")) (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "evalLetGroup") (EVar "env")) (EVar "binds")) (EVar "body")))
 (DFunDef false "eval" ((PVar "env") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EApp (EVar "evalMatch") (EVar "noTrapLoc")) (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "eval" ((PVar "env") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "evalIf") (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "c"))) (EVar "t")) (EVar "e")))
@@ -5873,7 +5870,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeListMk")))
 (DFunDef false "eval" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeArrayMk")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PCon "EMatch" (PVar "scrut") (PVar "arms")))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "evalMatch") (EVar "l")) (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))))
-(DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2")))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "l")) (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))))
 (DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))))
 (DFunDef false "eval" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
 (DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node"))))
@@ -7589,7 +7585,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PAs "app" (PCon "EApp" (PVar "f") (PVar "x")))) (EBlock (DoLet false false (PVar "fv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "f"))) (DoLet false false (PVar "xv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))) (DoLet false false PWild (EApp (EVar "markTrapSite") (EVar "app"))) (DoExpr (EApp (EApp (EVar "apply") (EVar "fv")) (EVar "xv")))))
 (DFunDef false "eval" ((PVar "env") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "noTrapLoc")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
-(DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "noTrapLoc")) (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
+(DFunDef false "eval" ((PVar "env") (PCon "ELet" (PVar "site") PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "site")) (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EApp (EVar "evalLetGroup") (EVar "env")) (EVar "binds")) (EVar "body")))
 (DFunDef false "eval" ((PVar "env") (PCon "EMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EApp (EApp (EVar "evalMatch") (EVar "noTrapLoc")) (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))
 (DFunDef false "eval" ((PVar "env") (PCon "EIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "evalIf") (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "c"))) (EVar "t")) (EVar "e")))
@@ -7611,7 +7607,6 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "ERangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeListMk")))
 (DFunDef false "eval" ((PVar "env") (PCon "ERangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeArrayMk")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PCon "EMatch" (PVar "scrut") (PVar "arms")))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "evalMatch") (EVar "l")) (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "scrut"))) (EVar "arms")))))
-(DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PCon "ELet" PWild (PCon "False") (PVar "pat") (PVar "e1") (PVar "e2")))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "l")) (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))))
 (DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))))
 (DFunDef false "eval" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
 (DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node"))))

@@ -383,7 +383,7 @@ genLet ctx t depth =
   let _ = setScope ctx ((name, bt) :: saved)
   let body = genExpr ctx t (depth - 1)
   let _ = setScope ctx saved
-  ELet False False (PVar name (Loc "" 0 0 0 0)) rhs body
+  ELet noDeclLoc False (PVar name (Loc "" 0 0 0 0)) rhs body
 
 -- construct an ADT value: pick a variant, fill positional fields.
 applyFields : Ctx -> Int -> Expr -> List Gty -> <Rand> Expr

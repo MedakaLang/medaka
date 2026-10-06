@@ -584,6 +584,8 @@ stampBindFile path (LetBind n clauses site) =
 
 stampSiteFile : String -> Expr -> Expr
 stampSiteFile path (ELoc l e) = ELoc (withSiteFile path l) e
+stampSiteFile path (ELet site r p e1 e2) =
+  ELet (withSiteFile path site) r p e1 e2
 stampSiteFile path (EBlock stmts) = EBlock (map (stampStmtFile path) stmts)
 stampSiteFile path (ELetGroup binds body) =
   ELetGroup (map (stampBindFile path) binds) body

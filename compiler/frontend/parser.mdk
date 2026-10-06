@@ -43,7 +43,6 @@ import frontend.ast.{
   Expr(..),
   Loc(..),
   noDeclLoc,
-  atDeclSite,
   UseMember(..),
   UsePath(..),
   useMemberOrigin,
@@ -1521,9 +1520,11 @@ branchBlock = parseBracketBlock
 -- mutually-recursive `let rec f = … with g = … in e2` (→ ELetGroup).
 parseLet : Parser Expr
 parseLet = defer
+  s <- getPos
   expectTok TLet
   t <- peekP
-  letExprKind t
+  e <- letExprKind t
+  deferPure (atLetSite (locOfSpan s (s + 1)) e)
 
 letExprKind : Token -> Parser Expr
 -- beta mutability model: `let mut` has been removed (bindings are immutable).
@@ -1574,19 +1575,19 @@ letIdentExprRest name nameLoc [] TColon = defer
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  deferPure (ELet False False (PVar name nameLoc) (EAnnot e1 ty) e2)
+  deferPure (ELet noDeclLoc False (PVar name nameLoc) (EAnnot e1 ty) e2)
 letIdentExprRest name nameLoc [] TEqual = defer
   advance
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  deferPure (ELet False False (PVar name nameLoc) e1 e2)
+  deferPure (ELet noDeclLoc False (PVar name nameLoc) e1 e2)
 letIdentExprRest name nameLoc params TEqual = defer
   advance
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  deferPure (ELet False True (PVar name nameLoc) (curryLam params e1) e2)
+  deferPure (ELet noDeclLoc True (PVar name nameLoc) (curryLam params e1) e2)
 letIdentExprRest _ _ _ _ = failP "expected : or = in let"
 
 -- non-IDENT pattern: `let (a, b) = e in e2`, `let Some x = e in e2`, …
@@ -1597,7 +1598,7 @@ letPatExpr = defer
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  deferPure (ELet False False pat e1 e2)
+  deferPure (ELet noDeclLoc False pat e1 e2)
 
 -- `let rec f a… = e in e2` → ELetGroup with a single binding (Phase 57 inline
 -- form). Mutual-recursion grouping via `with` has been removed — each
@@ -4448,13 +4449,18 @@ parseLetStmt = defer
   stmt <- letKind t
   deferPure (letStmtAt (locOfSpan s (s + 1)) stmt)
 
--- `letKind`'s productions build a statement `DoLet` with `noDeclLoc`, or a
--- `let … in` statement with no location; the site of either is the `let`
--- keyword, which only `parseLetStmt` has seen.
+-- `letKind`'s productions build a statement `DoLet` or a `let … in` with
+-- `noDeclLoc`; the site of either is the `let` keyword, which only
+-- `parseLetStmt` has seen.
 letStmtAt : Loc -> DoStmt -> DoStmt
 letStmtAt site (DoLet m r p e _) = DoLet m r p e site
-letStmtAt site (DoExpr (e@(ELet _ _ _ _ _))) = DoExpr (atDeclSite site e)
+letStmtAt site (DoExpr e) = DoExpr (atLetSite site e)
 letStmtAt _ stmt = stmt
+
+-- [e] with [site] as its `let` keyword's span when it is a `let … in`.
+atLetSite : Loc -> Expr -> Expr
+atLetSite site (ELet _ r p e1 e2) = ELet site r p e1 e2
+atLetSite _ e = e
 
 letKind : Token -> Parser DoStmt
 -- beta mutability model: `let mut` has been removed — rejected at the parser
@@ -4518,7 +4524,8 @@ letFunTailFor : String -> Loc -> List Pat -> Expr -> Token -> Parser DoStmt
 letFunTailFor name nameLoc pats e1 TIn = defer
   advance
   e2 <- parseExpr
-  deferPure (DoExpr (ELet False True (PVar name nameLoc) (curryLam pats e1) e2))
+  deferPure
+    (DoExpr (ELet noDeclLoc True (PVar name nameLoc) (curryLam pats e1) e2))
 letFunTailFor name nameLoc pats e1 _ =
   deferPure (DoLet False True (PVar name nameLoc) (curryLam pats e1) noDeclLoc)
 
@@ -4535,7 +4542,7 @@ letTailFor : Pat -> Expr -> Token -> Parser DoStmt
 letTailFor pat e1 TIn = defer
   advance
   e2 <- parseExpr
-  deferPure (DoExpr (ELet False False pat e1 e2))
+  deferPure (DoExpr (ELet noDeclLoc False pat e1 e2))
 letTailFor pat e1 _ = deferPure (DoLet False False pat e1 noDeclLoc)
 
 -- mirror the reference `curry_lam`: one single-arg ELam per param

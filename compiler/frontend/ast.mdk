@@ -42,22 +42,12 @@ public export data Lit =
 -- native emitter prints it.
 public export data Loc = Loc String Int Int Int Int
 
--- The site a synthesized `DFunDef` or `DoLet` carries: the zero-width 1:0 span
--- the unlocated `parse` path gives every token, which the evaluator's trap-site
--- tracking reads as "no location".
+-- The site a synthesized `DFunDef`, `DoLet` or `ELet` carries: the zero-width
+-- 1:0 span the unlocated `parse` path gives every token, which the evaluator's
+-- trap-site tracking reads as "no location".
 export
 noDeclLoc : Loc
 noDeclLoc = Loc "" 1 0 1 0
-
--- [e] under an `ELoc` at [site], or [e] itself when [site] is that placeholder.
--- A `let … in` built from a statement (a block's `let … in`, a lowered `do`
--- `let`) keeps its `let` keyword's span this way, as the expression form's
--- located atom does.
-export
-atDeclSite : Loc -> Expr -> Expr
-atDeclSite (site@(Loc _ sl sc el ec)) e
-  | sl == 1 && sc == 0 && el == 1 && ec == 0 = e
-  | otherwise = ELoc site e
 
 -- ── Type-constructor identity (#1110, A-1 carrier) ────────────────────────
 -- WHERE a type-constructor head was declared.  `DICT-SEMANTICS.md` §8 I4 says
@@ -1428,9 +1418,12 @@ public export data Expr =
   | EVar String
   | EApp Expr Expr
   | ELam (List Pat) Expr
-  -- ELet <mut> <rec> pat rhs body. The `mut` Bool is ALWAYS False (see DoLet
-  -- above): `let mut` is a parser error, so no mut-flag logic exists downstream.
-  | ELet Bool Bool Pat Expr Expr
+  -- ELet <site> <rec> pat rhs body.  The site is the `let` keyword's span,
+  -- where a pattern that fails to match is reported; a synthesized `let`
+  -- carries `noDeclLoc`.  It is a field rather than an `ELoc` around the node
+  -- because the typechecker reads every `ELoc` as the span of the expression
+  -- it wraps.  No printer or dump renders it.
+  | ELet Loc Bool Pat Expr Expr
   | EMatch Expr (List Arm)
   | EIf Expr Expr Expr
   -- Phase 151 / Gap G: the trailing route ref is filled by the typed pipeline
