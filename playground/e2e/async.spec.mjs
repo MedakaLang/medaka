@@ -10,6 +10,7 @@
 // (b) a 15 s sleep hits the 10 s limit; the pre-sleep output survives and the page
 //     stays responsive while the worker is blocked in Atomics.wait.
 // (b2) 300 lines printed before a 15 s sleep all show after the stop.
+// (b3) a partial line (no newline) printed before a 15 s sleep survives the stop.
 // (c) without isolation the first sleep is a named CapabilityError, not a hang.
 import { chromium } from 'playwright';
 
@@ -45,6 +46,16 @@ burst n =
 main : Async <Clock, Stdout> Unit
 main = defer
   liftIO (u => burst 1)
+  _ <- sleep (millis ${ms})
+  liftIO (u => putStrLn "after")
+`;
+
+const partialProg = (ms) => `import async.{Async, liftIO, sleep}
+import time.{millis}
+
+main : Async <Clock, Stdout> Unit
+main = defer
+  liftIO (u => putStr "partial")
   _ <- sleep (millis ${ms})
   liftIO (u => putStrLn "after")
 `;
@@ -123,6 +134,17 @@ async function main() {
     check('lines 1 to 300 intact',
       lines.length === 300 && lines[0] === 'L1' && lines[299] === 'L300' && lines.every((l, i) => l === `L${i + 1}`),
       `count=${lines.length} first=${lines[0]} last=${lines[lines.length - 1]}`);
+
+    console.log('Test: a partial line printed before a 15 s sleep survives the stop');
+    await startRun(page, partialProg(15000));
+    const t2 = Date.now();
+    let f = '';
+    while (Date.now() - t2 < 25000) {
+      f = await consoleText(page).catch(() => '');
+      if (f.includes(STOP_MSG)) break;
+      await sleep(1500);
+    }
+    check('stop message shown and the unterminated "partial" is intact', f.includes(STOP_MSG) && f.includes('partial'), JSON.stringify(f.slice(-200)));
 
     if (NOISO_URL) {
       console.log('Test: without isolation the first sleep is a named error');

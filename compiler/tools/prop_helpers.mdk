@@ -85,13 +85,14 @@ helperDecls i (CustomPlan _ carrier _) =
     DTypeSig
       False
       generator
-      (TyFun unitTy (TyEffect [effAtomBare "Rand"] [] carrier)),
+      (TyFun unitTy (TyEffect [effAtomBare "Rand"] [] carrier))
+      loc,
     DFunDef
       False
       generator
       [PLit LUnit]
       (ELoc loc (EApp (EVar "$prop_core.arbitrary") (ELit LUnit))),
-    DTypeSig False shrinker (TyFun carrier (TyApp listTy carrier)),
+    DTypeSig False shrinker (TyFun carrier (TyApp listTy carrier)) loc,
     DFunDef
       False
       shrinker

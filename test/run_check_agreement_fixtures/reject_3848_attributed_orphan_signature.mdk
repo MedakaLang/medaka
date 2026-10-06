@@ -1,0 +1,6 @@
+-- Issue 3848: an orphan signature under a declaration attribute (the #3467
+-- shape) is rejected the same as a bare one.
+@inline
+orph : Int -> Int
+
+main = println "hi"

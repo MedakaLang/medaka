@@ -1,5 +1,5 @@
 # META
-source_lines=6998
+source_lines=7046
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -198,6 +198,13 @@ public export data ResError =
   -- distinct, out-of-scope feature (redundant-clause/exhaustiveness
   -- analysis, not name resolution).
   | DuplicateSignature String (Option Loc) (Option Loc)
+  -- A top-level type signature whose name no declaration in the same module
+  -- binds (`total : List Int -> Int` beside `totl xs = …`).  Fields: the
+  -- signature's name, the span of that name, and the nearest same-module
+  -- binding that has no signature of its own, when one is close enough to be
+  -- the other half of a misspelling.  That binding is the did-you-mean, whose
+  -- fix renames the signature.
+  | OrphanSignature String (Option Loc) (Option String)
   -- a variable bound more than once among binders introduced TOGETHER: a
   -- non-linear pattern (`(x, x)`, `Pair x x`) or a repeated parameter (`f x x`,
   -- `x x => …`).  The binder is non-linear → all but one occurrence is silently
@@ -284,6 +291,7 @@ resErrorDidYouMean (UnboundVariable n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (PrivateNameAccess n _ _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownConstructor n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownType n _ (Some sug)) = Some (n, sug)
+resErrorDidYouMean (OrphanSignature n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean _ = None
 
 -- True for a PrivateNameAccess, the one did-you-mean error whose location can
@@ -322,6 +330,7 @@ resErrorLoc (NonRecursiveValueLet _ l) = l
 resErrorLoc (DuplicateBinding _ l) = l
 resErrorLoc (DuplicateValueBinding _ l) = l
 resErrorLoc (DuplicateSignature _ l _) = l
+resErrorLoc (OrphanSignature _ l _) = l
 resErrorLoc (DuplicateBinder _ _ l) = l
 resErrorLoc (AsPatternMisplaced l) = l
 resErrorLoc (AmbiguousOccurrence _ _ l) = l
@@ -1839,7 +1848,7 @@ checkDecl env (DLetGroup _ binds) =
   -- top-level where-group: all group names are in scope for every clause body
   -- (mutual recursion).
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
-checkDecl env (DTypeSig _ _ t) = checkType None env t
+checkDecl env (DTypeSig _ _ t _) = checkType None env t
 checkDecl env (DExtern _ _ t) = checkType None env t
 checkDecl env (DData { dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs }) =
   checkKindLabels env ks
@@ -2082,7 +2091,7 @@ interfaceList (_ :: rest) = interfaceList rest
 preludeValueNames : List Decl -> List String
 preludeValueNames [] = []
 preludeValueNames ((DFunDef _ n _ _) :: rest) = n :: preludeValueNames rest
-preludeValueNames ((DTypeSig _ n _) :: rest) = n :: preludeValueNames rest
+preludeValueNames ((DTypeSig _ n _ _) :: rest) = n :: preludeValueNames rest
 preludeValueNames ((DImpl { methods, ... }) :: rest) =
   map implMethodNm methods ++ preludeValueNames rest
 preludeValueNames ((DInterface { methods, ... }) :: rest) =
@@ -2094,7 +2103,7 @@ preludeValueNames (_ :: rest) = preludeValueNames rest
 userValueNames : List Decl -> List String
 userValueNames [] = []
 userValueNames ((DFunDef _ n _ _) :: rest) = n :: userValueNames rest
-userValueNames ((DTypeSig _ n _) :: rest) = n :: userValueNames rest
+userValueNames ((DTypeSig _ n _ _) :: rest) = n :: userValueNames rest
 userValueNames ((DExtern _ n _) :: rest) = n :: userValueNames rest
 userValueNames ((DLetGroup _ bs) :: rest) =
   map letBindName bs ++ userValueNames rest
@@ -2291,6 +2300,7 @@ buildErrors preludeDecls prog =
     ++ duplicateErrors preludeDecls prog
     ++ coreUseErrors preludeDecls prog
     ++ sigDups
+    ++ orphanSignatureErrors prog
     ++ contigErrs
     ++ dupValErrs
 
@@ -2375,8 +2385,40 @@ dupSigGo (d :: rest) seen = match dupSigOf d
 -- (name, loc) for a top-level DTypeSig; None for any other decl.
 dupSigOf : Decl -> Option (String, Option Loc)
 dupSigOf (DAttrib _ d) = dupSigOf d
-dupSigOf (DTypeSig _ n ty) = Some (n, firstTyLoc ty)
+dupSigOf (DTypeSig _ n _ site) = Some (n, Some site)
 dupSigOf _ = None
+
+-- A top-level signature must name a value the same module binds: a clause run,
+-- a `let rec` group member, or an extern.  Interface and impl member
+-- signatures live inside their `DInterface`/`DImpl` and are never seen here.
+-- The did-you-mean candidates are the module's bindings that carry no
+-- signature, since a misspelling leaves exactly one such name on each side.
+orphanSignatureErrors : List Decl -> List ResError
+orphanSignatureErrors prog =
+  let sigs = flatMap sigEntryOf prog
+  let bound = omFromNames (flatMap valueBinderNames prog) omEmpty
+  let signed = omFromNames (map fst sigs) omEmpty
+  let unsigned = filter (n => not (omHasKey n signed)) (omKeys bound)
+  flatMap (orphanSigError bound unsigned) sigs
+
+sigEntryOf : Decl -> List (String, Option Loc)
+sigEntryOf d = match dupSigOf d
+  Some entry => [entry]
+  None => []
+
+valueBinderNames : Decl -> List String
+valueBinderNames (DAttrib _ d) = valueBinderNames d
+valueBinderNames (DExtern _ n _) = [n]
+valueBinderNames d = declBindNames d
+
+orphanSigError : OrdMap Unit ->
+  List String ->
+  (String, Option Loc) ->
+  List ResError
+orphanSigError bound unsigned (n, loc)
+  | omHasKey n bound = []
+  | stringLength n < 3 = [OrphanSignature n loc None]
+  | otherwise = [OrphanSignature n loc (bestOfNames (sugQueryOf n) unsigned)]
 
 -- A nullary top-level VALUE binding (`x = e`, zero params) admits EXACTLY ONE
 -- clause: there is no argument to discriminate on, so a second same-named
@@ -2434,7 +2476,7 @@ declBindNames _ = []
 -- a transparent decl (DTypeSig) is skipped entirely by the contiguity walk
 isTransparentDecl : Decl -> Bool
 isTransparentDecl (DAttrib _ d) = isTransparentDecl d
-isTransparentDecl (DTypeSig _ _ _) = True
+isTransparentDecl (DTypeSig _ _ _ _) = True
 isTransparentDecl _ = False
 
 contiguityErrors : List Decl -> List ResError
@@ -2795,6 +2837,7 @@ resErrorSexp (DuplicateValueBinding n _) =
   "(DuplicateValueBinding " ++ escStr n ++ ")"
 resErrorSexp (DuplicateSignature n _ _) =
   "(DuplicateSignature " ++ escStr n ++ ")"
+resErrorSexp (OrphanSignature n _ _) = "(OrphanSignature " ++ escStr n ++ ")"
 resErrorSexp (DuplicateBinder k n _) =
   "(DuplicateBinder \{escStr k} \{escStr n})"
 resErrorSexp (AsPatternMisplaced _) = "AsPatternMisplaced"
@@ -2960,6 +3003,10 @@ ppResError (DuplicateSignature n _ (Some (Loc _ l _ _ _))) =
   "'\{n}' is already defined at line \{intToString l}. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"
 ppResError (DuplicateSignature n _ None) =
   "'\{n}' is already defined earlier in this file. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"
+ppResError (OrphanSignature n _ (Some sug)) =
+  "Type signature for '\{n}' has no binding in this module. Did you mean '\{sug}'? Rename the signature or the binding so the two names match"
+ppResError (OrphanSignature n _ None) =
+  "Type signature for '\{n}' has no binding in this module. Define '\{n}' below its signature, or remove the signature"
 ppResError (DuplicateBinder k n _) =
   "Duplicate binder: '\{n}' is bound more than once in this \{k}. Each binder must be distinct — rename one occurrence"
 -- `mods` holds one importing module per distinct declaration, so a module
@@ -3053,6 +3100,7 @@ resErrorCode (NonRecursiveValueLet _ _) = "R-NONREC-VALUE-LET"
 resErrorCode (DuplicateBinding _ _) = "R-DUPLICATE-BINDING"
 resErrorCode (DuplicateValueBinding _ _) = "R-DUP-BINDING"
 resErrorCode (DuplicateSignature _ _ _) = "R-DUPLICATE-SIGNATURE"
+resErrorCode (OrphanSignature _ _ _) = "R-ORPHAN-SIGNATURE"
 resErrorCode (DuplicateBinder _ _ _) = "R-DUP-BINDER"
 resErrorCode (AsPatternMisplaced _) = "R-AS-PATTERN-MISPLACED"
 resErrorCode (AmbiguousOccurrence _ _ _) = "R-AMBIGUOUS-OCCURRENCE"
@@ -4488,7 +4536,7 @@ nsValues = ExpNs {
   nsGet = exp => exp.expValues,
   nsDirectOf =
     d => match d
-      DTypeSig True n _ => [n]
+      DTypeSig True n _ _ => [n]
       DExtern True n _ => [n]
       DFunDef True n _ _ => [n]
       _ => [],
@@ -7006,12 +7054,13 @@ addOriginsProvenance acc n base (m :: rest) =
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("test") ((mem "expectTrue" false))))
-(DData Public "ResError" () ((variant "UnboundVariable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnboundVariableExported" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundVariableIsModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundQualifiedElsewhere" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownConstructor" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownType" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownEffect" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownField" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "FieldNotInRecord" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateDefinition" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownInterface" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MethodNotInInterface" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ExternWithBody" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "PrivateNameAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "NoExportedConstructors" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NewtypeCtorNotExported" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "BareCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "EffectLabelNoMembers" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractFieldAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NonRecursiveValueLet" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateValueBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateBinder" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AsPatternMisplaced" (ConPos (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousOccurrence" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousConstructor" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousAliasCtor" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousType" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousInterface" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousEffect" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundAuthority" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MisplacedAuthorityBinder" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "InternalExternAccess" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ReassignImmutable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateInterfaceMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Public "ResError" () ((variant "UnboundVariable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnboundVariableExported" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundVariableIsModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundQualifiedElsewhere" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownConstructor" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownType" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownEffect" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownField" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "FieldNotInRecord" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateDefinition" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownInterface" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MethodNotInInterface" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ExternWithBody" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "PrivateNameAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "NoExportedConstructors" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NewtypeCtorNotExported" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "BareCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "EffectLabelNoMembers" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractFieldAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NonRecursiveValueLet" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateValueBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "OrphanSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "DuplicateBinder" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AsPatternMisplaced" (ConPos (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousOccurrence" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousConstructor" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousAliasCtor" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousType" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousInterface" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousEffect" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundAuthority" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MisplacedAuthorityBinder" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "InternalExternAccess" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ReassignImmutable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateInterfaceMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "resErrorDidYouMean" (TyFun (TyCon "ResError") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "resErrorDidYouMean" ((PCon "UnboundVariable" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" ((PCon "PrivateNameAccess" (PVar "n") PWild PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" ((PCon "UnknownConstructor" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" ((PCon "UnknownType" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
+(DFunDef false "resErrorDidYouMean" ((PCon "OrphanSignature" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" (PWild) (EVar "None"))
 (DTypeSig true "resErrorIsPrivateName" (TyFun (TyCon "ResError") (TyCon "Bool")))
 (DFunDef false "resErrorIsPrivateName" ((PCon "PrivateNameAccess" PWild PWild PWild PWild)) (EVar "True"))
@@ -7042,6 +7091,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "resErrorLoc" ((PCon "DuplicateBinding" PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "DuplicateValueBinding" PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "DuplicateSignature" PWild (PVar "l") PWild)) (EVar "l"))
+(DFunDef false "resErrorLoc" ((PCon "OrphanSignature" PWild (PVar "l") PWild)) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "DuplicateBinder" PWild PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "AsPatternMisplaced" (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "AmbiguousOccurrence" PWild PWild (PVar "l"))) (EVar "l"))
@@ -7418,7 +7468,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "checkDecl" (TyFun (TyCon "Env") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DFunDef" PWild PWild (PVar "pats") (PVar "body"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EApp (EVar "firstExprLoc") (EVar "body"))) (ELit (LString "parameter list"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "binds"))))) (EVar "binds")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
+(DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "vs")) (rf "dataCtorBinders" (PVar "bs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "vs")) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs")))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DProp" PWild PWild (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EVar "checkProp") (EVar "env")) (EVar "params")) (EVar "body")))
@@ -7517,7 +7567,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "preludeValueNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeValueNames" ((PList)) (EListLit))
 (DFunDef false "preludeValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "preludeValueNames") (EVar "rest"))))
-(DFunDef false "preludeValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "preludeValueNames") (EVar "rest"))))
+(DFunDef false "preludeValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "preludeValueNames") (EVar "rest"))))
 (DFunDef false "preludeValueNames" ((PCons (PRec "DImpl" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "implMethodNm")) (EVar "methods")) (EApp (EVar "preludeValueNames") (EVar "rest"))))
 (DFunDef false "preludeValueNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "ifaceMethodNm")) (EVar "methods")) (EApp (EVar "preludeValueNames") (EVar "rest"))))
 (DFunDef false "preludeValueNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "preludeValueNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -7525,7 +7575,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "userValueNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "userValueNames" ((PList)) (EListLit))
 (DFunDef false "userValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
-(DFunDef false "userValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
+(DFunDef false "userValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DLetGroup" PWild (PVar "bs")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "letBindName")) (EVar "bs")) (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "ifaceMethodNm")) (EVar "methods")) (EApp (EVar "userValueNames") (EVar "rest"))))
@@ -7591,7 +7641,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "whenL" ((PCon "True") (PVar "xs")) (EVar "xs"))
 (DFunDef false "whenL" ((PCon "False") PWild) (EListLit))
 (DTypeSig false "buildErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "buildErrors" ((PVar "preludeDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "dupValErrs") (EApp (EVar "dupValueBindingErrors") (EVar "prog"))) (DoLet false false (PVar "nullaryDupNames") (EApp (EApp (EVar "map") (EVar "dvbName")) (EVar "dupValErrs"))) (DoLet false false (PVar "sigDups") (EApp (EApp (EApp (EVar "filterOutNamesIn") (EVar "nullaryDupNames")) (EVar "dupSigName")) (EApp (EVar "dupSignatureErrors") (EVar "prog")))) (DoLet false false (PVar "sigDupNames") (EApp (EApp (EVar "map") (EVar "dupSigName")) (EVar "sigDups"))) (DoLet false false (PVar "contigErrs") (EApp (EApp (EApp (EVar "filterOutNamesIn") (EVar "sigDupNames")) (EVar "dbName")) (EApp (EVar "contiguityErrors") (EVar "prog")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "externWithBodyErrors") (EApp (EVar "externNames") (EVar "prog"))) (EVar "prog")) (EApp (EApp (EVar "duplicateErrors") (EVar "preludeDecls")) (EVar "prog"))) (EApp (EApp (EVar "coreUseErrors") (EVar "preludeDecls")) (EVar "prog"))) (EVar "sigDups")) (EVar "contigErrs")) (EVar "dupValErrs")))))
+(DFunDef false "buildErrors" ((PVar "preludeDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "dupValErrs") (EApp (EVar "dupValueBindingErrors") (EVar "prog"))) (DoLet false false (PVar "nullaryDupNames") (EApp (EApp (EVar "map") (EVar "dvbName")) (EVar "dupValErrs"))) (DoLet false false (PVar "sigDups") (EApp (EApp (EApp (EVar "filterOutNamesIn") (EVar "nullaryDupNames")) (EVar "dupSigName")) (EApp (EVar "dupSignatureErrors") (EVar "prog")))) (DoLet false false (PVar "sigDupNames") (EApp (EApp (EVar "map") (EVar "dupSigName")) (EVar "sigDups"))) (DoLet false false (PVar "contigErrs") (EApp (EApp (EApp (EVar "filterOutNamesIn") (EVar "sigDupNames")) (EVar "dbName")) (EApp (EVar "contiguityErrors") (EVar "prog")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "externWithBodyErrors") (EApp (EVar "externNames") (EVar "prog"))) (EVar "prog")) (EApp (EApp (EVar "duplicateErrors") (EVar "preludeDecls")) (EVar "prog"))) (EApp (EApp (EVar "coreUseErrors") (EVar "preludeDecls")) (EVar "prog"))) (EVar "sigDups")) (EApp (EVar "orphanSignatureErrors") (EVar "prog"))) (EVar "contigErrs")) (EVar "dupValErrs")))))
 (DTypeSig false "coreUseErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "coreUseErrors" ((PVar "preludeDecls") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EVar "coreUseErrorsOf") (EApp (EVar "coreExports") (EVar "preludeDecls")))) (EVar "prog")))
 (DTypeSig false "coreUseErrorsOf" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -7617,8 +7667,18 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "dupSigGo" ((PCons (PVar "d") (PVar "rest")) (PVar "seen")) (EMatch (EApp (EVar "dupSigOf") (EVar "d")) (arm (PCon "Some" (PTuple (PVar "n") (PVar "loc"))) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "Some" (PVar "earlierLoc")) () (EBinOp "::" (EApp (EApp (EApp (EVar "DuplicateSignature") (EVar "n")) (EVar "loc")) (EVar "earlierLoc")) (EApp (EApp (EVar "dupSigGo") (EVar "rest")) (EVar "seen")))) (arm (PCon "None") () (EApp (EApp (EVar "dupSigGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "loc")) (EVar "seen")))))) (arm (PCon "None") () (EApp (EApp (EVar "dupSigGo") (EVar "rest")) (EVar "seen")))))
 (DTypeSig false "dupSigOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "dupSigOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "dupSigOf") (EVar "d")))
-(DFunDef false "dupSigOf" ((PCon "DTypeSig" PWild (PVar "n") (PVar "ty"))) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "firstTyLoc") (EVar "ty")))))
+(DFunDef false "dupSigOf" ((PCon "DTypeSig" PWild (PVar "n") PWild (PVar "site"))) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "Some") (EVar "site")))))
 (DFunDef false "dupSigOf" (PWild) (EVar "None"))
+(DTypeSig false "orphanSignatureErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
+(DFunDef false "orphanSignatureErrors" ((PVar "prog")) (EBlock (DoLet false false (PVar "sigs") (EApp (EApp (EVar "flatMap") (EVar "sigEntryOf")) (EVar "prog"))) (DoLet false false (PVar "bound") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "flatMap") (EVar "valueBinderNames")) (EVar "prog"))) (EVar "omEmpty"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "sigs"))) (EVar "omEmpty"))) (DoLet false false (PVar "unsigned") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "signed"))))) (EApp (EVar "omKeys") (EVar "bound")))) (DoExpr (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "orphanSigError") (EVar "bound")) (EVar "unsigned"))) (EVar "sigs")))))
+(DTypeSig false "sigEntryOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "sigEntryOf" ((PVar "d")) (EMatch (EApp (EVar "dupSigOf") (EVar "d")) (arm (PCon "Some" (PVar "entry")) () (EListLit (EVar "entry"))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "valueBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "valueBinderNames") (EVar "d")))
+(DFunDef false "valueBinderNames" ((PCon "DExtern" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "valueBinderNames" ((PVar "d")) (EApp (EVar "declBindNames") (EVar "d")))
+(DTypeSig false "orphanSigError" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "orphanSigError" ((PVar "bound") (PVar "unsigned") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EListLit) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EVar "None"))) (EIf (EVar "otherwise") (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EApp (EApp (EVar "bestOfNames") (EApp (EVar "sugQueryOf") (EVar "n"))) (EVar "unsigned")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "dupValueBindingErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
 (DFunDef false "dupValueBindingErrors" ((PVar "prog")) (EApp (EApp (EApp (EVar "dupValGo") (EVar "None")) (EVar "False")) (EVar "prog")))
 (DTypeSig false "dupValGo" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -7638,7 +7698,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "declBindNames" (PWild) (EListLit))
 (DTypeSig false "isTransparentDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isTransparentDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isTransparentDecl") (EVar "d")))
-(DFunDef false "isTransparentDecl" ((PCon "DTypeSig" PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isTransparentDecl" ((PCon "DTypeSig" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isTransparentDecl" (PWild) (EVar "False"))
 (DTypeSig false "contiguityErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
 (DFunDef false "contiguityErrors" ((PVar "prog")) (EApp (EApp (EApp (EVar "contigGo") (EVar "omEmpty")) (EListLit)) (EVar "prog")))
@@ -7768,6 +7828,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "resErrorSexp" ((PCon "DuplicateBinding" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(DuplicateBinding ")) (EApp (EVar "escStr") (EVar "n"))) (ELit (LString ")"))))
 (DFunDef false "resErrorSexp" ((PCon "DuplicateValueBinding" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(DuplicateValueBinding ")) (EApp (EVar "escStr") (EVar "n"))) (ELit (LString ")"))))
 (DFunDef false "resErrorSexp" ((PCon "DuplicateSignature" (PVar "n") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(DuplicateSignature ")) (EApp (EVar "escStr") (EVar "n"))) (ELit (LString ")"))))
+(DFunDef false "resErrorSexp" ((PCon "OrphanSignature" (PVar "n") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(OrphanSignature ")) (EApp (EVar "escStr") (EVar "n"))) (ELit (LString ")"))))
 (DFunDef false "resErrorSexp" ((PCon "DuplicateBinder" (PVar "k") (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(DuplicateBinder ")) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "k")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "n")))) (ELit (LString ")"))))
 (DFunDef false "resErrorSexp" ((PCon "AsPatternMisplaced" PWild)) (ELit (LString "AsPatternMisplaced")))
 (DFunDef false "resErrorSexp" ((PCon "AmbiguousOccurrence" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(AmbiguousOccurrence ")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EApp (EVar "escStr") (EVar "n")) (EApp (EApp (EVar "map") (EVar "escStr")) (EVar "mods"))))) (ELit (LString ")"))))
@@ -7825,6 +7886,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "ppResError" ((PCon "DuplicateValueBinding" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "Duplicate binding '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "': it is already defined in this scope. A value binding has exactly one definition — rename this one or remove it"))))
 (DFunDef false "ppResError" ((PCon "DuplicateSignature" (PVar "n") PWild (PCon "Some" (PCon "Loc" PWild (PVar "l") PWild PWild PWild)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is already defined at line "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "l")))) (ELit (LString ". A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"))))
 (DFunDef false "ppResError" ((PCon "DuplicateSignature" (PVar "n") PWild (PCon "None"))) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is already defined earlier in this file. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"))))
+(DFunDef false "ppResError" ((PCon "OrphanSignature" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type signature for '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' has no binding in this module. Did you mean '"))) (EApp (EVar "display") (EVar "sug"))) (ELit (LString "'? Rename the signature or the binding so the two names match"))))
+(DFunDef false "ppResError" ((PCon "OrphanSignature" (PVar "n") PWild (PCon "None"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type signature for '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' has no binding in this module. Define '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' below its signature, or remove the signature"))))
 (DFunDef false "ppResError" ((PCon "DuplicateBinder" (PVar "k") (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Duplicate binder: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is bound more than once in this "))) (EApp (EVar "display") (EVar "k"))) (ELit (LString ". Each binder must be distinct — rename one occurrence"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousOccurrence" (PVar "n") (PVar "mods") PWild)) (EMatch (EApp (EVar "dedup") (EVar "mods")) (arm (PList (PVar "m")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous occurrence: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is bound to "))) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "mods"))))) (ELit (LString " different declarations imported from `"))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "`. Keep '"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' for one of them and import the other under a different name: `import "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ".{<name> as <alias>}`")))) (arm (PVar "distinct") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous occurrence: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is exported by "))) (EApp (EVar "display") (EApp (EVar "ambigModPhrase") (EVar "distinct")))) (ELit (LString ". Qualify, or import it under a new name from one module: `import <mod>.{"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString " as <alias>}` — a plain `import <mod>.{"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString "}` still collides with the other module's wildcard import"))))))
 (DFunDef false "ppResError" ((PCon "AmbiguousConstructor" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous constructor: '")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "' is brought into scope by "))) (EApp (EVar "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ". A module alias cannot tell two constructors apart. Bring in the constructors of only one — e.g. `import <mod>.{T(..)}` — and import the other without `(..)` and without an alias"))))
@@ -7863,6 +7926,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "resErrorCode" ((PCon "DuplicateBinding" PWild PWild)) (ELit (LString "R-DUPLICATE-BINDING")))
 (DFunDef false "resErrorCode" ((PCon "DuplicateValueBinding" PWild PWild)) (ELit (LString "R-DUP-BINDING")))
 (DFunDef false "resErrorCode" ((PCon "DuplicateSignature" PWild PWild PWild)) (ELit (LString "R-DUPLICATE-SIGNATURE")))
+(DFunDef false "resErrorCode" ((PCon "OrphanSignature" PWild PWild PWild)) (ELit (LString "R-ORPHAN-SIGNATURE")))
 (DFunDef false "resErrorCode" ((PCon "DuplicateBinder" PWild PWild PWild)) (ELit (LString "R-DUP-BINDER")))
 (DFunDef false "resErrorCode" ((PCon "AsPatternMisplaced" PWild)) (ELit (LString "R-AS-PATTERN-MISPLACED")))
 (DFunDef false "resErrorCode" ((PCon "AmbiguousOccurrence" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-OCCURRENCE")))
@@ -8108,7 +8172,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "typeCtorsAllOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest")))
 (DData Private "ExpNs" ("a") ((variant "ExpNs" (ConNamed (field "nsGet" (TyFun (TyCon "ModuleExports") (TyApp (TyCon "List") (TyVar "a")))) (field "nsDirectOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a")))) (field "nsCarry" (TyFun (TyCon "UsePath") (TyFun (TyCon "ModuleExports") (TyApp (TyCon "List") (TyVar "a")))))))) ())
 (DTypeSig false "nsValues" (TyApp (TyCon "ExpNs") (TyCon "String")))
-(DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PCon "True") (PVar "n") PWild) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
+(DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PCon "True") (PVar "n") PWild) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig false "nsTypes" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsTypes" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expTypes"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expTypes")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig false "nsAbstractData" (TyApp (TyCon "ExpNs") (TyCon "String")))
@@ -8659,12 +8723,13 @@ addOriginsProvenance acc n base (m :: rest) =
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "editDistance" false) (mem "minI" false) (mem "maxI" false) (mem "listLen" false) (mem "escStr" false) (mem "joinNl" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "reverseL" false) (mem "initList" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "splitOnChar" false) (mem "startsWith" false) (mem "sortUniqS" false))))
 (DUse false (UseGroup ("test") ((mem "expectTrue" false))))
-(DData Public "ResError" () ((variant "UnboundVariable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnboundVariableExported" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundVariableIsModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundQualifiedElsewhere" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownConstructor" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownType" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownEffect" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownField" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "FieldNotInRecord" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateDefinition" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownInterface" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MethodNotInInterface" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ExternWithBody" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "PrivateNameAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "NoExportedConstructors" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NewtypeCtorNotExported" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "BareCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "EffectLabelNoMembers" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractFieldAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NonRecursiveValueLet" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateValueBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateBinder" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AsPatternMisplaced" (ConPos (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousOccurrence" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousConstructor" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousAliasCtor" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousType" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousInterface" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousEffect" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundAuthority" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MisplacedAuthorityBinder" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "InternalExternAccess" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ReassignImmutable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateInterfaceMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
+(DData Public "ResError" () ((variant "UnboundVariable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnboundVariableExported" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundVariableIsModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundQualifiedElsewhere" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownConstructor" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownType" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "UnknownEffect" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownField" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "FieldNotInRecord" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateDefinition" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownInterface" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MethodNotInInterface" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ExternWithBody" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "PrivateNameAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "NoExportedConstructors" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NewtypeCtorNotExported" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "BareCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractCtorImport" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "EffectLabelNoMembers" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AbstractFieldAccess" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnknownModule" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "NonRecursiveValueLet" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateValueBinding" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "OrphanSignature" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")) (TyApp (TyCon "Option") (TyCon "String")))) (variant "DuplicateBinder" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AsPatternMisplaced" (ConPos (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousOccurrence" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousConstructor" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousAliasCtor" (ConPos (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousType" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousInterface" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "AmbiguousEffect" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "UnboundAuthority" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "MisplacedAuthorityBinder" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "InternalExternAccess" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "ReassignImmutable" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (variant "DuplicateInterfaceMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))) ())
 (DTypeSig true "resErrorDidYouMean" (TyFun (TyCon "ResError") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "resErrorDidYouMean" ((PCon "UnboundVariable" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" ((PCon "PrivateNameAccess" (PVar "n") PWild PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" ((PCon "UnknownConstructor" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" ((PCon "UnknownType" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
+(DFunDef false "resErrorDidYouMean" ((PCon "OrphanSignature" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "sug"))))
 (DFunDef false "resErrorDidYouMean" (PWild) (EVar "None"))
 (DTypeSig true "resErrorIsPrivateName" (TyFun (TyCon "ResError") (TyCon "Bool")))
 (DFunDef false "resErrorIsPrivateName" ((PCon "PrivateNameAccess" PWild PWild PWild PWild)) (EVar "True"))
@@ -8695,6 +8760,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "resErrorLoc" ((PCon "DuplicateBinding" PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "DuplicateValueBinding" PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "DuplicateSignature" PWild (PVar "l") PWild)) (EVar "l"))
+(DFunDef false "resErrorLoc" ((PCon "OrphanSignature" PWild (PVar "l") PWild)) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "DuplicateBinder" PWild PWild (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "AsPatternMisplaced" (PVar "l"))) (EVar "l"))
 (DFunDef false "resErrorLoc" ((PCon "AmbiguousOccurrence" PWild PWild (PVar "l"))) (EVar "l"))
@@ -9071,7 +9137,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "checkDecl" (TyFun (TyCon "Env") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DFunDef" PWild PWild (PVar "pats") (PVar "body"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "checkPat") (EApp (EVar "firstExprLoc") (EVar "body"))) (EVar "env"))) (EVar "pats")) (EApp (EApp (EApp (EVar "patGroupDupErrors") (EApp (EVar "firstExprLoc") (EVar "body"))) (ELit (LString "parameter list"))) (EVar "pats"))) (EApp (EApp (EApp (EApp (EVar "checkExpr") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EVar "patsBindings") (EVar "pats")))) (EVar "body"))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DLetGroup" PWild (PVar "binds"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "checkLetBind") (EVar "None")) (EVar "env")) (EApp (EVar "mkScope") (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "binds"))))) (EVar "binds")))
-(DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
+(DFunDef false "checkDecl" ((PVar "env") (PCon "DTypeSig" PWild PWild (PVar "t") PWild)) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DExtern" PWild PWild (PVar "t"))) (EApp (EApp (EApp (EVar "checkType") (EVar "None")) (EVar "env")) (EVar "t")))
 (DFunDef false "checkDecl" ((PVar "env") (PRec "DData" ((rf "dataParams" (PVar "ps")) (rf "dataParamKinds" (PVar "ks")) (rf "dataCtors" (PVar "vs")) (rf "dataCtorBinders" (PVar "bs"))) false)) (EBinOp "++" (EApp (EApp (EVar "checkKindLabels") (EVar "env")) (EVar "ks")) (EApp (EApp (EApp (EApp (EVar "checkVariants") (EVar "env")) (EApp (EApp (EVar "authorityParams") (EVar "ps")) (EVar "ks"))) (EVar "vs")) (EApp (EApp (EVar "padBinders") (EVar "vs")) (EVar "bs")))))
 (DFunDef false "checkDecl" ((PVar "env") (PCon "DProp" PWild PWild (PVar "params") (PVar "body"))) (EApp (EApp (EApp (EVar "checkProp") (EVar "env")) (EVar "params")) (EVar "body")))
@@ -9170,7 +9236,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "preludeValueNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "preludeValueNames" ((PList)) (EListLit))
 (DFunDef false "preludeValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "preludeValueNames") (EVar "rest"))))
-(DFunDef false "preludeValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "preludeValueNames") (EVar "rest"))))
+(DFunDef false "preludeValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "preludeValueNames") (EVar "rest"))))
 (DFunDef false "preludeValueNames" ((PCons (PRec "DImpl" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "implMethodNm")) (EVar "methods")) (EApp (EVar "preludeValueNames") (EVar "rest"))))
 (DFunDef false "preludeValueNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNm")) (EVar "methods")) (EApp (EVar "preludeValueNames") (EVar "rest"))))
 (DFunDef false "preludeValueNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "preludeValueNames") (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -9178,7 +9244,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DTypeSig false "userValueNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "userValueNames" ((PList)) (EListLit))
 (DFunDef false "userValueNames" ((PCons (PCon "DFunDef" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
-(DFunDef false "userValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
+(DFunDef false "userValueNames" ((PCons (PCon "DTypeSig" PWild (PVar "n") PWild PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DExtern" PWild (PVar "n") PWild) (PVar "rest"))) (EBinOp "::" (EVar "n") (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PCon "DLetGroup" PWild (PVar "bs")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "letBindName")) (EVar "bs")) (EApp (EVar "userValueNames") (EVar "rest"))))
 (DFunDef false "userValueNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "ifaceMethodNm")) (EVar "methods")) (EApp (EVar "userValueNames") (EVar "rest"))))
@@ -9244,7 +9310,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "whenL" ((PCon "True") (PVar "xs")) (EVar "xs"))
 (DFunDef false "whenL" ((PCon "False") PWild) (EListLit))
 (DTypeSig false "buildErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError")))))
-(DFunDef false "buildErrors" ((PVar "preludeDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "dupValErrs") (EApp (EVar "dupValueBindingErrors") (EVar "prog"))) (DoLet false false (PVar "nullaryDupNames") (EApp (EApp (EMethodRef "map") (EVar "dvbName")) (EVar "dupValErrs"))) (DoLet false false (PVar "sigDups") (EApp (EApp (EApp (EVar "filterOutNamesIn") (EVar "nullaryDupNames")) (EVar "dupSigName")) (EApp (EVar "dupSignatureErrors") (EVar "prog")))) (DoLet false false (PVar "sigDupNames") (EApp (EApp (EMethodRef "map") (EVar "dupSigName")) (EVar "sigDups"))) (DoLet false false (PVar "contigErrs") (EApp (EApp (EApp (EVar "filterOutNamesIn") (EVar "sigDupNames")) (EVar "dbName")) (EApp (EVar "contiguityErrors") (EVar "prog")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "externWithBodyErrors") (EApp (EVar "externNames") (EVar "prog"))) (EVar "prog")) (EApp (EApp (EVar "duplicateErrors") (EVar "preludeDecls")) (EVar "prog"))) (EApp (EApp (EVar "coreUseErrors") (EVar "preludeDecls")) (EVar "prog"))) (EVar "sigDups")) (EVar "contigErrs")) (EVar "dupValErrs")))))
+(DFunDef false "buildErrors" ((PVar "preludeDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "dupValErrs") (EApp (EVar "dupValueBindingErrors") (EVar "prog"))) (DoLet false false (PVar "nullaryDupNames") (EApp (EApp (EMethodRef "map") (EVar "dvbName")) (EVar "dupValErrs"))) (DoLet false false (PVar "sigDups") (EApp (EApp (EApp (EVar "filterOutNamesIn") (EVar "nullaryDupNames")) (EVar "dupSigName")) (EApp (EVar "dupSignatureErrors") (EVar "prog")))) (DoLet false false (PVar "sigDupNames") (EApp (EApp (EMethodRef "map") (EVar "dupSigName")) (EVar "sigDups"))) (DoLet false false (PVar "contigErrs") (EApp (EApp (EApp (EVar "filterOutNamesIn") (EVar "sigDupNames")) (EVar "dbName")) (EApp (EVar "contiguityErrors") (EVar "prog")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "externWithBodyErrors") (EApp (EVar "externNames") (EVar "prog"))) (EVar "prog")) (EApp (EApp (EVar "duplicateErrors") (EVar "preludeDecls")) (EVar "prog"))) (EApp (EApp (EVar "coreUseErrors") (EVar "preludeDecls")) (EVar "prog"))) (EVar "sigDups")) (EApp (EVar "orphanSignatureErrors") (EVar "prog"))) (EVar "contigErrs")) (EVar "dupValErrs")))))
 (DTypeSig false "coreUseErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "coreUseErrors" ((PVar "preludeDecls") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "coreUseErrorsOf") (EApp (EVar "coreExports") (EVar "preludeDecls")))) (EVar "prog")))
 (DTypeSig false "coreUseErrorsOf" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "ResError")))))
@@ -9270,8 +9336,18 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "dupSigGo" ((PCons (PVar "d") (PVar "rest")) (PVar "seen")) (EMatch (EApp (EVar "dupSigOf") (EVar "d")) (arm (PCon "Some" (PTuple (PVar "n") (PVar "loc"))) () (EMatch (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "seen")) (arm (PCon "Some" (PVar "earlierLoc")) () (EBinOp "::" (EApp (EApp (EApp (EVar "DuplicateSignature") (EVar "n")) (EVar "loc")) (EVar "earlierLoc")) (EApp (EApp (EVar "dupSigGo") (EVar "rest")) (EVar "seen")))) (arm (PCon "None") () (EApp (EApp (EVar "dupSigGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EVar "loc")) (EVar "seen")))))) (arm (PCon "None") () (EApp (EApp (EVar "dupSigGo") (EVar "rest")) (EVar "seen")))))
 (DTypeSig false "dupSigOf" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
 (DFunDef false "dupSigOf" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "dupSigOf") (EVar "d")))
-(DFunDef false "dupSigOf" ((PCon "DTypeSig" PWild (PVar "n") (PVar "ty"))) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "firstTyLoc") (EVar "ty")))))
+(DFunDef false "dupSigOf" ((PCon "DTypeSig" PWild (PVar "n") PWild (PVar "site"))) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EVar "Some") (EVar "site")))))
 (DFunDef false "dupSigOf" (PWild) (EVar "None"))
+(DTypeSig false "orphanSignatureErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
+(DFunDef false "orphanSignatureErrors" ((PVar "prog")) (EBlock (DoLet false false (PVar "sigs") (EApp (EApp (EDictApp "flatMap") (EVar "sigEntryOf")) (EVar "prog"))) (DoLet false false (PVar "bound") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EDictApp "flatMap") (EVar "valueBinderNames")) (EVar "prog"))) (EVar "omEmpty"))) (DoLet false false (PVar "signed") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "sigs"))) (EVar "omEmpty"))) (DoLet false false (PVar "unsigned") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "signed"))))) (EApp (EVar "omKeys") (EVar "bound")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "orphanSigError") (EVar "bound")) (EVar "unsigned"))) (EVar "sigs")))))
+(DTypeSig false "sigEntryOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))
+(DFunDef false "sigEntryOf" ((PVar "d")) (EMatch (EApp (EVar "dupSigOf") (EVar "d")) (arm (PCon "Some" (PVar "entry")) () (EListLit (EVar "entry"))) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "valueBinderNames" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "valueBinderNames" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "valueBinderNames") (EVar "d")))
+(DFunDef false "valueBinderNames" ((PCon "DExtern" PWild (PVar "n") PWild)) (EListLit (EVar "n")))
+(DFunDef false "valueBinderNames" ((PVar "d")) (EApp (EVar "declBindNames") (EVar "d")))
+(DTypeSig false "orphanSigError" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "ResError"))))))
+(DFunDef false "orphanSigError" ((PVar "bound") (PVar "unsigned") (PTuple (PVar "n") (PVar "loc"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "bound")) (EListLit) (EIf (EBinOp "<" (EApp (EVar "stringLength") (EVar "n")) (ELit (LInt 3))) (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EVar "None"))) (EIf (EVar "otherwise") (EListLit (EApp (EApp (EApp (EVar "OrphanSignature") (EVar "n")) (EVar "loc")) (EApp (EApp (EVar "bestOfNames") (EApp (EVar "sugQueryOf") (EVar "n"))) (EVar "unsigned")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "dupValueBindingErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
 (DFunDef false "dupValueBindingErrors" ((PVar "prog")) (EApp (EApp (EApp (EVar "dupValGo") (EVar "None")) (EVar "False")) (EVar "prog")))
 (DTypeSig false "dupValGo" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))))
@@ -9291,7 +9367,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "declBindNames" (PWild) (EListLit))
 (DTypeSig false "isTransparentDecl" (TyFun (TyCon "Decl") (TyCon "Bool")))
 (DFunDef false "isTransparentDecl" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "isTransparentDecl") (EVar "d")))
-(DFunDef false "isTransparentDecl" ((PCon "DTypeSig" PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isTransparentDecl" ((PCon "DTypeSig" PWild PWild PWild PWild)) (EVar "True"))
 (DFunDef false "isTransparentDecl" (PWild) (EVar "False"))
 (DTypeSig false "contiguityErrors" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "ResError"))))
 (DFunDef false "contiguityErrors" ((PVar "prog")) (EApp (EApp (EApp (EVar "contigGo") (EVar "omEmpty")) (EListLit)) (EVar "prog")))
@@ -9421,6 +9497,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "resErrorSexp" ((PCon "DuplicateBinding" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(DuplicateBinding ")) (EApp (EVar "escStr") (EVar "n"))) (ELit (LString ")"))))
 (DFunDef false "resErrorSexp" ((PCon "DuplicateValueBinding" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(DuplicateValueBinding ")) (EApp (EVar "escStr") (EVar "n"))) (ELit (LString ")"))))
 (DFunDef false "resErrorSexp" ((PCon "DuplicateSignature" (PVar "n") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(DuplicateSignature ")) (EApp (EVar "escStr") (EVar "n"))) (ELit (LString ")"))))
+(DFunDef false "resErrorSexp" ((PCon "OrphanSignature" (PVar "n") PWild PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(OrphanSignature ")) (EApp (EVar "escStr") (EVar "n"))) (ELit (LString ")"))))
 (DFunDef false "resErrorSexp" ((PCon "DuplicateBinder" (PVar "k") (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(DuplicateBinder ")) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "k")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "n")))) (ELit (LString ")"))))
 (DFunDef false "resErrorSexp" ((PCon "AsPatternMisplaced" PWild)) (ELit (LString "AsPatternMisplaced")))
 (DFunDef false "resErrorSexp" ((PCon "AmbiguousOccurrence" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "(AmbiguousOccurrence ")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EApp (EVar "escStr") (EVar "n")) (EApp (EApp (EMethodRef "map") (EVar "escStr")) (EVar "mods"))))) (ELit (LString ")"))))
@@ -9478,6 +9555,8 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "ppResError" ((PCon "DuplicateValueBinding" (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "Duplicate binding '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "': it is already defined in this scope. A value binding has exactly one definition — rename this one or remove it"))))
 (DFunDef false "ppResError" ((PCon "DuplicateSignature" (PVar "n") PWild (PCon "Some" (PCon "Loc" PWild (PVar "l") PWild PWild PWild)))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is already defined at line "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "l")))) (ELit (LString ". A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"))))
 (DFunDef false "ppResError" ((PCon "DuplicateSignature" (PVar "n") PWild (PCon "None"))) (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is already defined earlier in this file. A name may have only one type signature — rename or remove this duplicate definition, or merge the clauses into a single multi-clause function if that was the intent"))))
+(DFunDef false "ppResError" ((PCon "OrphanSignature" (PVar "n") PWild (PCon "Some" (PVar "sug")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type signature for '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' has no binding in this module. Did you mean '"))) (EApp (EMethodRef "display") (EVar "sug"))) (ELit (LString "'? Rename the signature or the binding so the two names match"))))
+(DFunDef false "ppResError" ((PCon "OrphanSignature" (PVar "n") PWild (PCon "None"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Type signature for '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' has no binding in this module. Define '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' below its signature, or remove the signature"))))
 (DFunDef false "ppResError" ((PCon "DuplicateBinder" (PVar "k") (PVar "n") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Duplicate binder: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is bound more than once in this "))) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString ". Each binder must be distinct — rename one occurrence"))))
 (DFunDef false "ppResError" ((PCon "AmbiguousOccurrence" (PVar "n") (PVar "mods") PWild)) (EMatch (EApp (EVar "dedup") (EVar "mods")) (arm (PList (PVar "m")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous occurrence: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is bound to "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EVar "listLen") (EVar "mods"))))) (ELit (LString " different declarations imported from `"))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "`. Keep '"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' for one of them and import the other under a different name: `import "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ".{<name> as <alias>}`")))) (arm (PVar "distinct") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous occurrence: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is exported by "))) (EApp (EMethodRef "display") (EApp (EVar "ambigModPhrase") (EVar "distinct")))) (ELit (LString ". Qualify, or import it under a new name from one module: `import <mod>.{"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " as <alias>}` — a plain `import <mod>.{"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "}` still collides with the other module's wildcard import"))))))
 (DFunDef false "ppResError" ((PCon "AmbiguousConstructor" (PVar "n") (PVar "mods") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Ambiguous constructor: '")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "' is brought into scope by "))) (EApp (EMethodRef "display") (EApp (EVar "ambigModPhrase") (EVar "mods")))) (ELit (LString ". A module alias cannot tell two constructors apart. Bring in the constructors of only one — e.g. `import <mod>.{T(..)}` — and import the other without `(..)` and without an alias"))))
@@ -9516,6 +9595,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "resErrorCode" ((PCon "DuplicateBinding" PWild PWild)) (ELit (LString "R-DUPLICATE-BINDING")))
 (DFunDef false "resErrorCode" ((PCon "DuplicateValueBinding" PWild PWild)) (ELit (LString "R-DUP-BINDING")))
 (DFunDef false "resErrorCode" ((PCon "DuplicateSignature" PWild PWild PWild)) (ELit (LString "R-DUPLICATE-SIGNATURE")))
+(DFunDef false "resErrorCode" ((PCon "OrphanSignature" PWild PWild PWild)) (ELit (LString "R-ORPHAN-SIGNATURE")))
 (DFunDef false "resErrorCode" ((PCon "DuplicateBinder" PWild PWild PWild)) (ELit (LString "R-DUP-BINDER")))
 (DFunDef false "resErrorCode" ((PCon "AsPatternMisplaced" PWild)) (ELit (LString "R-AS-PATTERN-MISPLACED")))
 (DFunDef false "resErrorCode" ((PCon "AmbiguousOccurrence" PWild PWild PWild)) (ELit (LString "R-AMBIGUOUS-OCCURRENCE")))
@@ -9761,7 +9841,7 @@ addOriginsProvenance acc n base (m :: rest) =
 (DFunDef false "typeCtorsAllOf" ((PCons PWild (PVar "rest"))) (EApp (EVar "typeCtorsAllOf") (EVar "rest")))
 (DData Private "ExpNs" ("a") ((variant "ExpNs" (ConNamed (field "nsGet" (TyFun (TyCon "ModuleExports") (TyApp (TyCon "List") (TyVar "a")))) (field "nsDirectOf" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyVar "a")))) (field "nsCarry" (TyFun (TyCon "UsePath") (TyFun (TyCon "ModuleExports") (TyApp (TyCon "List") (TyVar "a")))))))) ())
 (DTypeSig false "nsValues" (TyApp (TyCon "ExpNs") (TyCon "String")))
-(DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PCon "True") (PVar "n") PWild) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
+(DFunDef false "nsValues" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expValues"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PCon "DTypeSig" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm (PCon "DExtern" (PCon "True") (PVar "n") PWild) () (EListLit (EVar "n"))) (arm (PCon "DFunDef" (PCon "True") (PVar "n") PWild PWild) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "carriedValuesFrom") (EVar "src")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig false "nsTypes" (TyApp (TyCon "ExpNs") (TyCon "String")))
 (DFunDef false "nsTypes" () (ERecordCreate "ExpNs" ((fa "nsGet" (ELam ((PVar "exp")) (EFieldAccess (EVar "exp") "expTypes"))) (fa "nsDirectOf" (ELam ((PVar "d")) (EMatch (EVar "d") (arm (PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisPublic")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DData" ((rf "dataVis" (PCon "VisAbstract")) (rf "dataName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm (PRec "DTypeAlias" ((rf "tyAliasPub" (PCon "True")) (rf "tyAliasName" (PVar "n"))) false) () (EListLit (EVar "n"))) (arm PWild () (EListLit))))) (fa "nsCarry" (ELam ((PVar "path") (PVar "src")) (EApp (EApp (EVar "localsExportedFrom") (EFieldAccess (EVar "src") "expTypes")) (EApp (EApp (EVar "reexportBindings") (EVar "path")) (EVar "src"))))))))
 (DTypeSig false "nsAbstractData" (TyApp (TyCon "ExpNs") (TyCon "String")))

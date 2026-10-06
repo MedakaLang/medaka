@@ -14,6 +14,7 @@ import frontend.ast.{
   ImplMethod(..),
   LetBind(..),
   Lit(..),
+  Loc(..),
   MethodDefault(..),
   Ty(..),
   dImplUnresolved,
@@ -141,7 +142,7 @@ test "DCE agrees with the independent oracle on every three-node call graph" =
 
 test "DCE preserves unrelated declarations but does not root prop or test bodies" =
   let decls = [
-    DTypeSig False "declared" (TyVar "a"),
+    DTypeSig False "declared" (TyVar "a") (Loc "<dce-test>" 1 1 1 1),
     DExtern False "foreign" (TyVar "a"),
     funDecl "main" [],
     funDecl "propOnly" [],

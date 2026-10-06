@@ -308,6 +308,8 @@ originOfTyName : Map String TyConOrigin -> String -> TyConOrigin
 originTraceEnabled : Ref Bool
 originTraceLog : Ref (List (String, List Decl))
 originsByName : Map String (List String) -> List (String, String) -> Map String (List String)
+orphanSigError : Map String Unit -> List String -> (String, Option Loc) -> List ResError
+orphanSignatureErrors : List Decl -> List ResError
 overPubUse : ModuleExports -> Map String ModuleExports -> (UsePath -> ModuleExports -> List a) -> UsePath -> List a
 ownDups : String -> List (String, Option Loc) -> Map String Unit -> List ResError
 ownEffOrigin : String -> String -> (String, TyConOrigin)
@@ -380,6 +382,7 @@ scopeNames : Scope -> List String
 scoreCand : SugQuery -> String -> Option (String, Int) -> Option (String, Int)
 selfBinding : String -> (String, String)
 setOriginTrace : Bool -> Unit
+sigEntryOf : Decl -> List (String, Option Loc)
 singleFileImportErrors : List Decl -> List ResError
 stampArm : Map String Int -> Arm -> Arm
 stampBinders : Map String TyConOrigin -> List (String, KindAnn) -> List (String, KindAnn)
@@ -489,6 +492,7 @@ usePathLocsOf : List Decl -> List (UsePath, Loc)
 usePathsOf : List Decl -> List UsePath
 useStubNames : UsePath -> List String
 userValueNames : List Decl -> List String
+valueBinderNames : Decl -> List String
 valueDeclOf : ModuleExports -> Map String (String, String) -> String -> (String, String)
 valueDeclsOf : ModuleExports -> Map String (String, String)
 valueProvenance : Map String ModuleExports -> List UsePath -> Map String (List String)

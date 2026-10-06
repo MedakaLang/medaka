@@ -958,7 +958,7 @@ that sentinel when a method is called at a concrete receiver the general instanc
   (`hashName "__none__"`) — a tag a caller's dict never carries — so control fell to
   `unreachable`. eval mis-resolved it via the arg-tag punt (`run` = 111, the wrong concrete
   sibling); native "worked" only as a `clang -O2` accident (at `-O0` the same IR prints garbage,
-  e.g. `70365815715828`); wasm trapped (`instantiate failed: unreachable`).
+  e.g. `70365815715828`); wasm trapped (`runtime error: unreachable`).
 
 **Fix (all three engines, mirroring the existing default-fallback structure at the time — no new
 mechanism):** originally, a general instance was selected via a reserved tag

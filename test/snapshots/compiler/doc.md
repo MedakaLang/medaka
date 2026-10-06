@@ -436,7 +436,7 @@ ppIfaceMethod (IfaceMethod mname mty _ _) = "  \{mname} : \{ppTyDoc mty}"
 -- per-module exception (keyed on the derived module name) and not a global
 -- "ignore `pub`" relaxation.
 renderSig : Bool -> Decl -> List (String, Scheme) -> Option (String, String)
-renderSig _ (DTypeSig True name ty) schemes =
+renderSig _ (DTypeSig True name ty _) schemes =
   Some (name, valueSig name schemes (Some ty))
 renderSig _ (DFunDef True name _ _) schemes =
   Some (name, valueSig name schemes None)
@@ -1952,7 +1952,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "ppIfaceMethod" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "ppIfaceMethod" ((PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "mname"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppTyDoc") (EVar "mty")))) (ELit (LString ""))))
 (DTypeSig false "renderSig" (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "renderSig" (PWild (PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty")) (PVar "schemes")) (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EApp (EVar "Some") (EVar "ty"))))))
+(DFunDef false "renderSig" (PWild (PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty") PWild) (PVar "schemes")) (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EApp (EVar "Some") (EVar "ty"))))))
 (DFunDef false "renderSig" (PWild (PCon "DFunDef" (PCon "True") (PVar "name") PWild PWild) (PVar "schemes")) (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EVar "None")))))
 (DFunDef false "renderSig" ((PVar "bare") (PCon "DExtern" (PVar "pub") (PVar "name") (PVar "ty")) (PVar "schemes")) (EIf (EBinOp "||" (EVar "pub") (EVar "bare")) (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EApp (EVar "Some") (EVar "ty"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "renderSig" (PWild (PCon "DLetGroup" (PCon "True") (PVar "bindings")) (PVar "schemes")) (EMatch (EVar "bindings") (arm (PCons (PCon "LetBind" (PVar "name") PWild) PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EVar "None"))))) (arm (PList) () (EVar "None"))))
@@ -2403,7 +2403,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "ppIfaceMethod" (TyFun (TyCon "IfaceMethod") (TyCon "String")))
 (DFunDef false "ppIfaceMethod" ((PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppTyDoc") (EVar "mty")))) (ELit (LString ""))))
 (DTypeSig false "renderSig" (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "renderSig" (PWild (PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty")) (PVar "schemes")) (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EApp (EVar "Some") (EVar "ty"))))))
+(DFunDef false "renderSig" (PWild (PCon "DTypeSig" (PCon "True") (PVar "name") (PVar "ty") PWild) (PVar "schemes")) (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EApp (EVar "Some") (EVar "ty"))))))
 (DFunDef false "renderSig" (PWild (PCon "DFunDef" (PCon "True") (PVar "name") PWild PWild) (PVar "schemes")) (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EVar "None")))))
 (DFunDef false "renderSig" ((PVar "bare") (PCon "DExtern" (PVar "pub") (PVar "name") (PVar "ty")) (PVar "schemes")) (EIf (EBinOp "||" (EVar "pub") (EVar "bare")) (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EApp (EVar "Some") (EVar "ty"))))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "renderSig" (PWild (PCon "DLetGroup" (PCon "True") (PVar "bindings")) (PVar "schemes")) (EMatch (EVar "bindings") (arm (PCons (PCon "LetBind" (PVar "name") PWild) PWild) () (EApp (EVar "Some") (ETuple (EVar "name") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EVar "None"))))) (arm (PList) () (EVar "None"))))

@@ -1,0 +1,6 @@
+-- Issue 3848: a top-level type signature that nothing in the module binds.
+-- Its type is only type variables, so only the name can locate it (#3869).
+-- check, run and build must each reject it with R-ORPHAN-SIGNATURE.
+orph : a -> a
+
+main = println "hi"
