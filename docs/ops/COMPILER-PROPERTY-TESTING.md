@@ -53,6 +53,10 @@ core calls and runtime primitive calls use canonical module aliases, so a valid
 user declaration named `map`, `debug` or `randomState` keeps its own meaning
 without capturing runner machinery. The evaluator likewise selects runtime RNG
 bindings from a preserved primitive frame, separately from method dispatch cells.
+Native scratch projects declare a nonce-qualified dependency on the installed
+stdlib runtime catalog, so a target's sibling `runtime.mdk` retains its own
+meaning while probe primitives resolve to the runtime. An existing dependency
+with the generated name produces a build error rather than being replaced.
 User bodies, labels and field names
 are preserved rather than rewritten after rendering.
 
@@ -118,6 +122,9 @@ The `Makefile` test target reaches the support siblings explicitly. New
 `compiler/types/*_test.mdk` siblings are reached by its existing directory
 target. An exit code alone is insufficient evidence: read the named property
 and executed test counts. A `--filter` run may legitimately exclude one phase.
+Other compiler siblings need an explicit `Makefile` test invocation. A stdlib
+test module needs both a `suites` row and its matching `floorExpectation` test
+in `test/stdlib_suite_test.mdk`; the required CI `inlang` job runs `make test`.
 
 Run a file directly, with a recorded seed and case count:
 

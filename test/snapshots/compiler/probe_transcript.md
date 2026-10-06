@@ -1,5 +1,5 @@
 # META
-source_lines=333
+source_lines=346
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/probe_transcript.mdk — the sentinel-delimited stdout format
@@ -70,7 +70,7 @@ import frontend.lexer.{
 }
 import support.util.{joinNl, reverseL, splitNl, startsWith, stringTrim}
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert}
-import string.{toInt}
+import string.{replaceAll, toInt}
 
 -- The tag of a sentinel line under `prefix`, or None for an ordinary output
 -- line.
@@ -91,6 +91,19 @@ sentinelLine prefix tag = prefix ++ tag
 export
 noncedPrefix : String -> String -> String
 noncedPrefix base nonce = "\{base}\{nonce}@@ "
+
+-- A scratch probe imports the runtime catalog through this generated dependency
+-- name.  It is deliberately separate from the probe's aliases: dependency
+-- resolution happens before ordinary module search roots, so a target sibling
+-- named `runtime.mdk` cannot supply the probe's printing or RNG externs.
+export
+runtimeDependencyPrefix : String
+runtimeDependencyPrefix = "np_runtime_dep_"
+
+export
+runtimeDependencyName : String -> String
+runtimeDependencyName nonce =
+  runtimeDependencyPrefix ++ replaceAll "-" "_" nonce
 
 -- A fresh per-invocation token, drawn at driver time.
 -- OS entropy keeps protocol tags independent of the program's deterministic
@@ -339,13 +352,17 @@ renameHeads n (h :: hs) (l :: ls)
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
-(DUse false (UseGroup ("string") ((mem "toInt" false))))
+(DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "sentinelLine" ((PVar "prefix") (PVar "tag")) (EBinOp "++" (EVar "prefix") (EVar "tag")))
 (DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "base"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "nonce"))) (ELit (LString "@@ "))))
+(DTypeSig true "runtimeDependencyPrefix" (TyCon "String"))
+(DFunDef false "runtimeDependencyPrefix" () (ELit (LString "np_runtime_dep_")))
+(DTypeSig true "runtimeDependencyName" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "runtimeDependencyName" ((PVar "nonce")) (EBinOp "++" (EVar "runtimeDependencyPrefix") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "-"))) (ELit (LString "_"))) (EVar "nonce"))))
 (DTypeSig true "mintNonce" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "mintNonce" (PWild) (EApp (EApp (EVar "nonceBytes") (EApp (EVar "osEntropyBytes") (ELit (LInt 16)))) (ELit (LInt 0))))
 (DTypeSig false "nonceBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
@@ -421,13 +438,17 @@ renameHeads n (h :: hs) (l :: ls)
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false) (mem "lineStartsOf" false) (mem "offsetToLineColFast" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "reverseL" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false))))
-(DUse false (UseGroup ("string") ((mem "toInt" false))))
+(DUse false (UseGroup ("string") ((mem "replaceAll" false) (mem "toInt" false))))
 (DTypeSig true "sentTagOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "sentTagOf" ((PVar "prefix") (PVar "line")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "line")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sentinelLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "sentinelLine" ((PVar "prefix") (PVar "tag")) (EBinOp "++" (EVar "prefix") (EVar "tag")))
 (DTypeSig true "noncedPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "noncedPrefix" ((PVar "base") (PVar "nonce")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "base"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "nonce"))) (ELit (LString "@@ "))))
+(DTypeSig true "runtimeDependencyPrefix" (TyCon "String"))
+(DFunDef false "runtimeDependencyPrefix" () (ELit (LString "np_runtime_dep_")))
+(DTypeSig true "runtimeDependencyName" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "runtimeDependencyName" ((PVar "nonce")) (EBinOp "++" (EVar "runtimeDependencyPrefix") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "-"))) (ELit (LString "_"))) (EVar "nonce"))))
 (DTypeSig true "mintNonce" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
 (DFunDef false "mintNonce" (PWild) (EApp (EApp (EVar "nonceBytes") (EApp (EVar "osEntropyBytes") (ELit (LInt 16)))) (ELit (LInt 0))))
 (DTypeSig false "nonceBytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "String"))))
