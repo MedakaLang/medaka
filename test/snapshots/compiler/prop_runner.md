@@ -1,5 +1,5 @@
 # META
-source_lines=1650
+source_lines=1755
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -10,14 +10,13 @@ stages=DESUGAR,MARK
 -- max_tests draws.  On the first failing draw, greedily shrink the
 -- counterexample and report it.
 --
--- Generation draws from this module's own private LCG (`rngNextLocal`), seeded
--- by `--seed`/`seedPropRng` and isolated from the program under test — it does
+-- Generation draws from the shared structural RNG policy, seeded by
+-- `--seed`/`seedPropRng` and isolated from the program under test — it does
 -- NOT go through eval.mdk's `randomInt`/`randomBool` externs, which use a
 -- separate SplitMix64 generator for the program's own `random*` calls.  A
--- PASSING prop's output (`OK (100 tests)`) is RNG-independent, so it matches
--- `medaka test`.  A FAILING prop's shrunk counterexample is RNG-dependent and
--- diverges across all three runners — see the report in
--- test/diff_compiler_fmt_test.mdk's `testGoldenFailure`.
+-- Structural draws and structural shrink candidates use the same policy as the
+-- native property probe. Custom Arbitrary methods remain program code and may
+-- consume their own program RNG state.
 
 import frontend.ast.{
   Decl(..),
@@ -25,7 +24,6 @@ import frontend.ast.{
   PropParam,
   Ty(..),
 }
-import u32 as U32
 import eval.eval.{
   Value(..), EvalEnv(..), apply, eval, extendEnv, force, lookupEnv,
   lookupRuntimeBinding, ppValue
@@ -57,7 +55,16 @@ import tools.prop_plan.{
   resultWeights,
   intMin,
   intMax,
+  structuralRngSeed,
+  structuralRngAdvance,
+  structuralRngMix,
+  structuralRngRange,
+  structuralRngChoose,
   customPlansReachable,
+  ShrinkAction(..),
+  shrinkActions,
+  IntShrinkStep(..),
+  intShrinkSteps,
 }
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
@@ -101,13 +108,12 @@ customSeedRef : Ref Int
 customSeedRef = Ref 123456789
 
 -- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
--- `rngStateRef`. Only the draw state is reduced into `0 .. 2^31 - 1`, so
--- `rngNextLocal`'s multiply cannot overflow. Replay metadata retains the
--- original integer seed.
+-- `rngStateRef`. The shared policy reduces the draw state into its safe
+-- 31-bit range; replay metadata retains the original integer seed.
 export
 seedPropRng : Int -> Unit
 seedPropRng n =
-  let normalized = (n % 2147483648 + 2147483648) % 2147483648
+  let normalized = structuralRngSeed n
   propRngStateRef := normalized
   propSeedRef := n
   customSeedRef := normalized
@@ -123,39 +129,20 @@ propSeedValue : Unit -> Int
 propSeedValue _ = !propSeedRef
 
 rngNextLocal : Unit -> Int
--- Odd multiplier and odd increment make bit `i` of consecutive `s` values
--- have period <= 2^(i+1) (Knuth), so ANY contiguous bit-window read straight
--- off `s` — including a shifted/truncated one — inherits a short period at
--- its own low end. A caller drawing many values (an 8-parameter prop can
--- draw hundreds) can exhaust a short-period window's whole range and still
--- silently miss most of the assignment space.
---
--- Run the raw state through a Murmur3-style `fmix32` finalizer instead: two
--- multiply/xor-shift rounds so every output bit depends nonlinearly on many
--- state bits (full avalanche), leaving no short-period window for a caller
--- to extract. The finalizer's words are `U32`, so each multiply wraps
--- modulo 2^32 as `fmix32` requires. The state stays an `Int` below 2^31, so
--- its advancement cannot overflow and `--seed` reproducibility is unaffected.
 rngNextLocal _ =
-  let s = (!propRngStateRef * 1103515245 + 12345) % 2147483648
+  let s = structuralRngAdvance !propRngStateRef
   propRngStateRef := s
-  let h1 = fromInt (bitXor s (shiftRight s 16)) : U32
-  let h2 = h1 * 2246822507
-  let h3 = U32.bitXor h2 (U32.shiftRight h2 13)
-  let h4 = h3 * 3266489909
-  U32.toInt (U32.bitXor h4 (U32.shiftRight h4 16))
+  structuralRngMix s
 
 randIntRange : Int -> Int -> Int
-randIntRange lo hi =
-  let range = hi - lo + 1
-  if range <= 0 then lo else lo + rngNextLocal () % range
+randIntRange lo hi = structuralRngRange (rngNextLocal ()) lo hi
 
 -- Exported so a distribution regression test can seed the runner's private
 -- RNG (`seedPropRng`) and draw a raw sequence directly, without going through
 -- a `prop`'s randomized-length `List Bool` generation.
 export
 randBoolL : Unit -> Bool
-randBoolL _ = rngNextLocal () % 2 == 1
+randBoolL _ = structuralRngChoose (rngNextLocal ()) 2 == 1
 
 -- ── what a draw may consult ─────────────────────────────────────────────────
 -- The shared PlanEnv makes every structural and capability decision. GenEnv
@@ -181,13 +168,14 @@ helperMap ((helper@(PropHelper word _ _)) :: rest) acc =
 
 genFloat : Unit -> <e> Value e
 genFloat _ =
-  let r = rngNextLocal () % 2000001
+  let r = structuralRngChoose (rngNextLocal ()) 2000001
   VFloat (intToFloat r * (1.0 / 1000000.0) - 1.0)
 
 genCharStr : Unit -> String
-genCharStr _ = match charFromCode (32 + rngNextLocal () % 95)
-  Some c => charToStr c
-  None => " "
+genCharStr _ =
+  match charFromCode (32 + structuralRngChoose (rngNextLocal ()) 95)
+    Some c => charToStr c
+    None => " "
 
 -- random String of printable ASCII, length 0..10
 genString : Unit -> String
@@ -199,9 +187,12 @@ genStringGo n = genCharStr () :: genStringGo (n - 1)
 
 shrinkInt : Int -> List (Value e)
 shrinkInt 0 = []
-shrinkInt n =
-  let cands = [0, n / 2, n + (if n > 0 then -1 else 1)]
-  map VInt (filterList (/= n) cands)
+shrinkInt n = map (step => VInt (intShrinkCandidate n step)) intShrinkSteps
+
+intShrinkCandidate : Int -> IntShrinkStep -> Int
+intShrinkCandidate _ IntToZero = 0
+intShrinkCandidate n IntHalf = n / 2
+intShrinkCandidate n IntTowardZero = n + (if n > 0 then -1 else 1)
 
 -- ── prop evaluation ──────────────────────────────────────────────────────────
 -- evalEnv is the program's binding environment (List (String, Value)); each
@@ -676,27 +667,98 @@ structuralShrink _ _ GString (VString s) =
 structuralShrink _ _ GChar (VChar _) = []
 structuralShrink _ _ GUnit _ = []
 structuralShrink ge env (GList plan) (VList values) =
-  map VList (deleteEach values) ++ map VList (shrinkElements ge env plan values)
+  shrinkListByActions ge env plan values (shrinkActions (GList plan))
 structuralShrink ge env (GArray plan) (VArray values) =
-  let xs = toList values
-  map (xs2 => VArray (arrayFromList xs2)) (deleteEach xs)
-    ++ map (xs2 => VArray (arrayFromList xs2)) (shrinkElements ge env plan xs)
+  shrinkArrayByActions ge env plan (toList values) (shrinkActions (GArray plan))
 structuralShrink ge env (GOption plan) (VCon "Some" [value]) =
-  VCon "None" []
-    :: map (v => VCon "Some" [v]) (structuralShrink ge env plan value)
+  shrinkOptionByActions ge env plan value (shrinkActions (GOption plan))
 structuralShrink _ _ (GOption _) _ = []
-structuralShrink ge env (GResult err _) (VCon "Err" [value]) =
-  map (v => VCon "Err" [v]) (structuralShrink ge env err value)
-structuralShrink ge env (GResult _ ok) (VCon "Ok" [value]) =
-  map (v => VCon "Ok" [v]) (structuralShrink ge env ok value)
+structuralShrink ge env (result@(GResult err _)) (VCon "Err" [value]) =
+  shrinkResultByActions ge env err "Err" value (shrinkActions result)
+structuralShrink ge env (result@(GResult _ ok)) (VCon "Ok" [value]) =
+  shrinkResultByActions ge env ok "Ok" value (shrinkActions result)
 structuralShrink _ _ (GResult _ _) _ = []
 structuralShrink ge env (GTuple plans) (VTuple values) =
-  map VTuple (shrinkPlanValues ge env plans values)
+  shrinkTupleByActions ge env plans values (shrinkActions (GTuple plans))
 structuralShrink ge env (nominal@(GNominal key _)) value =
   shrinkNominal ge env nominal key value
 structuralShrink ge env (custom@(GCustom _)) value =
   shrinkCustom ge env custom value
 structuralShrink _ _ _ _ = []
+
+shrinkListByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List (Value e) ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkListByActions _ _ _ _ [] = []
+shrinkListByActions ge env plan values (DeleteElements :: actions) =
+  map VList (deleteEach values)
+    ++ shrinkListByActions ge env plan values actions
+shrinkListByActions ge env plan values (ShrinkChildren :: actions) =
+  map VList (shrinkElements ge env plan values)
+    ++ shrinkListByActions ge env plan values actions
+shrinkListByActions ge env plan values (_ :: actions) =
+  shrinkListByActions ge env plan values actions
+
+shrinkArrayByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List (Value e) ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkArrayByActions _ _ _ _ [] = []
+shrinkArrayByActions ge env plan values (DeleteElements :: actions) =
+  map (xs => VArray (arrayFromList xs)) (deleteEach values)
+    ++ shrinkArrayByActions ge env plan values actions
+shrinkArrayByActions ge env plan values (ShrinkChildren :: actions) =
+  map (xs => VArray (arrayFromList xs)) (shrinkElements ge env plan values)
+    ++ shrinkArrayByActions ge env plan values actions
+shrinkArrayByActions ge env plan values (_ :: actions) =
+  shrinkArrayByActions ge env plan values actions
+
+shrinkOptionByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  Value e ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkOptionByActions _ _ _ _ [] = []
+shrinkOptionByActions ge env plan value (ReplaceEarlierNullary :: actions) =
+  VCon "None" [] :: shrinkOptionByActions ge env plan value actions
+shrinkOptionByActions ge env plan value (ShrinkChildren :: actions) =
+  map (v => VCon "Some" [v]) (structuralShrink ge env plan value)
+    ++ shrinkOptionByActions ge env plan value actions
+shrinkOptionByActions ge env plan value (_ :: actions) =
+  shrinkOptionByActions ge env plan value actions
+
+shrinkResultByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  String ->
+  Value e ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkResultByActions _ _ _ _ _ [] = []
+shrinkResultByActions ge env plan tag value (ShrinkChildren :: actions) =
+  map (v => VCon tag [v]) (structuralShrink ge env plan value)
+    ++ shrinkResultByActions ge env plan tag value actions
+shrinkResultByActions ge env plan tag value (_ :: actions) =
+  shrinkResultByActions ge env plan tag value actions
+
+shrinkTupleByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  List GenPlan ->
+  List (Value e) ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkTupleByActions _ _ _ _ [] = []
+shrinkTupleByActions ge env plans values (ShrinkChildren :: actions) =
+  map VTuple (shrinkPlanValues ge env plans values)
+    ++ shrinkTupleByActions ge env plans values actions
+shrinkTupleByActions ge env plans values (_ :: actions) =
+  shrinkTupleByActions ge env plans values actions
 
 shrinkElements : GenEnv ->
   EvalEnv (Value e) ->
@@ -727,14 +789,57 @@ shrinkNominal : GenEnv ->
   <e> List (Value e)
 shrinkNominal ge env nominal key value = match planDef (genEnvPlan ge) key
   Ok (PlanDef _ _ _ _ ctors) =>
-    nullaryCtorValues ctors ++ shrinkNominalFields ge env nominal ctors value
+    shrinkNominalByActions ge env nominal ctors value (shrinkActions nominal)
   Err _ => []
 
-nullaryCtorValues : List PlanCtor -> List (Value e)
-nullaryCtorValues [] = []
-nullaryCtorValues ((PlanCtor _ runtime []) :: rest) =
-  VCon runtime [] :: nullaryCtorValues rest
-nullaryCtorValues (_ :: rest) = nullaryCtorValues rest
+shrinkNominalByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List PlanCtor ->
+  Value e ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkNominalByActions _ _ _ _ _ [] = []
+shrinkNominalByActions ge env nominal ctors value (ReplaceEarlierNullary :: actions) =
+  earlierNullaryCtorValue ctors value
+    ++ shrinkNominalByActions ge env nominal ctors value actions
+shrinkNominalByActions ge env nominal ctors value (ShrinkChildren :: actions) =
+  shrinkNominalFields ge env nominal ctors value
+    ++ shrinkNominalByActions ge env nominal ctors value actions
+shrinkNominalByActions ge env nominal ctors value (_ :: actions) =
+  shrinkNominalByActions ge env nominal ctors value actions
+
+earlierNullaryCtorValue : List PlanCtor -> Value e -> List (Value e)
+earlierNullaryCtorValue ctors value = match nominalRuntime value
+  None => []
+  Some runtime => match earlierNullaryCtor ctors runtime None
+    None => []
+    Some (PlanCtor _ earlierRuntime []) => [VCon earlierRuntime []]
+    Some _ => []
+
+nominalRuntime : Value e -> Option String
+nominalRuntime (VCon runtime _) = Some runtime
+nominalRuntime (VRecord runtime _) = Some runtime
+nominalRuntime _ = None
+
+-- The first nullary constructor before the current constructor gives every
+-- replacement a smaller declaration-order rank.  Never offering the current
+-- constructor prevents the old nullary self-cycle from spending shrink fuel.
+earlierNullaryCtor : List PlanCtor ->
+  String ->
+  Option PlanCtor ->
+  Option PlanCtor
+earlierNullaryCtor [] _ earlier = earlier
+earlierNullaryCtor ((ctor@(PlanCtor _ runtime [])) :: rest) current None =
+  if runtime == current then
+    None
+  else
+    earlierNullaryCtor rest current (Some ctor)
+earlierNullaryCtor ((PlanCtor _ runtime _) :: rest) current earlier =
+  if runtime == current then
+    earlier
+  else
+    earlierNullaryCtor rest current earlier
 
 shrinkNominalFields : GenEnv ->
   EvalEnv (Value e) ->
@@ -1654,11 +1759,10 @@ anyDecl _ [] = False
 anyDecl p (d :: rest) = p d || anyDecl p rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "Ty" true))))
-(DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "lookupEnv" false) (mem "lookupRuntimeBinding" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
-(DUse false (UseGroup ("tools" "prop_plan") ((mem "deleteEach" false) (mem "prepend" false) (mem "prependBefore" false) (mem "PlanEnv" true) (mem "PlanError" false) (mem "PlanModule" false) (mem "TypeKey" true) (mem "GenPlan" true) (mem "CustomPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanVisibility" true) (mem "planFor" false) (mem "planErrorText" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "buildPlanEnv" false) (mem "buildPlanEnvModules" false) (mem "listLengthBound" false) (mem "ctorWeights" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "customPlansReachable" false))))
+(DUse false (UseGroup ("tools" "prop_plan") ((mem "deleteEach" false) (mem "prepend" false) (mem "prependBefore" false) (mem "PlanEnv" true) (mem "PlanError" false) (mem "PlanModule" false) (mem "TypeKey" true) (mem "GenPlan" true) (mem "CustomPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanVisibility" true) (mem "planFor" false) (mem "planErrorText" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "buildPlanEnv" false) (mem "buildPlanEnvModules" false) (mem "listLengthBound" false) (mem "ctorWeights" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngSeed" false) (mem "structuralRngAdvance" false) (mem "structuralRngMix" false) (mem "structuralRngRange" false) (mem "structuralRngChoose" false) (mem "customPlansReachable" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
@@ -1672,17 +1776,17 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "customSeedRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "customSeedRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "seedPropRng" ((PVar "n")) (EBlock (DoLet false false (PVar "normalized") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 2147483648))) (ELit (LInt 2147483648))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propSeedRef")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
+(DFunDef false "seedPropRng" ((PVar "n")) (EBlock (DoLet false false (PVar "normalized") (EApp (EVar "structuralRngSeed") (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propSeedRef")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
 (DTypeSig false "beginCustomPropStream" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "beginCustomPropStream" ((PVar "seed")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "seed"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
 (DTypeSig true "propSeedValue" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "propSeedValue" (PWild) (EUnOp "!" (EVar "propSeedRef")))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoLet false false (PVar "h1") (EAnnot (EApp (EVar "fromInt") (EApp (EApp (EVar "bitXor") (EVar "s")) (EApp (EApp (EVar "shiftRight") (EVar "s")) (ELit (LInt 16))))) (TyCon "U32"))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (ELit (LInt 2246822507)))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (ELit (LInt 3266489909)))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EApp (EVar "structuralRngAdvance") (EUnOp "!" (EVar "propRngStateRef")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EApp (EVar "structuralRngMix") (EVar "s")))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
+(DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "structuralRngRange") (EApp (EVar "rngNextLocal") (ELit LUnit))) (EVar "lo")) (EVar "hi")))
 (DTypeSig true "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
-(DFunDef false "randBoolL" (PWild) (EBinOp "==" (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (ELit (LInt 2))) (ELit (LInt 1))))
+(DFunDef false "randBoolL" (PWild) (EBinOp "==" (EApp (EApp (EVar "structuralRngChoose") (EApp (EVar "rngNextLocal") (ELit LUnit))) (ELit (LInt 2))) (ELit (LInt 1))))
 (DData Public "PropHelper" () ((variant "PropHelper" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DData Public "GenEnv" () ((variant "GenEnv" (ConPos (TyCon "PlanEnv") (TyApp (TyCon "OrdMap") (TyCon "PropHelper"))))) ())
 (DTypeSig true "buildGenEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "GenEnv"))))
@@ -1695,9 +1799,9 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "helperMap" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "helperMap" ((PCons (PAs "helper" (PCon "PropHelper" (PVar "word") PWild PWild)) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "helperMap") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (EVar "helper")) (EVar "acc"))))
 (DTypeSig false "genFloat" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "genFloat" (PWild) (EBlock (DoLet false false (PVar "r") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (ELit (LInt 2000001)))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "r")) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 1000000.0)))) (ELit (LFloat 1.0)))))))
+(DFunDef false "genFloat" (PWild) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EVar "structuralRngChoose") (EApp (EVar "rngNextLocal") (ELit LUnit))) (ELit (LInt 2000001)))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "r")) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 1000000.0)))) (ELit (LFloat 1.0)))))))
 (DTypeSig false "genCharStr" (TyFun (TyCon "Unit") (TyCon "String")))
-(DFunDef false "genCharStr" (PWild) (EMatch (EApp (EVar "charFromCode") (EBinOp "+" (ELit (LInt 32)) (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (ELit (LInt 95))))) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToStr") (EVar "c"))) (arm (PCon "None") () (ELit (LString " ")))))
+(DFunDef false "genCharStr" (PWild) (EMatch (EApp (EVar "charFromCode") (EBinOp "+" (ELit (LInt 32)) (EApp (EApp (EVar "structuralRngChoose") (EApp (EVar "rngNextLocal") (ELit LUnit))) (ELit (LInt 95))))) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToStr") (EVar "c"))) (arm (PCon "None") () (ELit (LString " ")))))
 (DTypeSig false "genString" (TyFun (TyCon "Unit") (TyCon "String")))
 (DFunDef false "genString" (PWild) (EApp (EVar "stringConcat") (EApp (EVar "genStringGo") (EApp (EApp (EVar "randIntRange") (ELit (LInt 0))) (ELit (LInt 10))))))
 (DTypeSig false "genStringGo" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
@@ -1705,7 +1809,11 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genStringGo" ((PVar "n")) (EBinOp "::" (EApp (EVar "genCharStr") (ELit LUnit)) (EApp (EVar "genStringGo") (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
 (DTypeSig false "shrinkInt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "shrinkInt" ((PLit (LInt 0))) (EListLit))
-(DFunDef false "shrinkInt" ((PVar "n")) (EBlock (DoLet false false (PVar "cands") (EListLit (ELit (LInt 0)) (EBinOp "/" (EVar "n") (ELit (LInt 2))) (EBinOp "+" (EVar "n") (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1))) (ELit (LInt 1)))))) (DoExpr (EApp (EApp (EVar "map") (EVar "VInt")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "n")))) (EVar "cands"))))))
+(DFunDef false "shrinkInt" ((PVar "n")) (EApp (EApp (EVar "map") (ELam ((PVar "step")) (EApp (EVar "VInt") (EApp (EApp (EVar "intShrinkCandidate") (EVar "n")) (EVar "step"))))) (EVar "intShrinkSteps")))
+(DTypeSig false "intShrinkCandidate" (TyFun (TyCon "Int") (TyFun (TyCon "IntShrinkStep") (TyCon "Int"))))
+(DFunDef false "intShrinkCandidate" (PWild (PCon "IntToZero")) (ELit (LInt 0)))
+(DFunDef false "intShrinkCandidate" ((PVar "n") (PCon "IntHalf")) (EBinOp "/" (EVar "n") (ELit (LInt 2))))
+(DFunDef false "intShrinkCandidate" ((PVar "n") (PCon "IntTowardZero")) (EBinOp "+" (EVar "n") (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1))) (ELit (LInt 1)))))
 (DTypeSig false "checkProp" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyCon "Bool"))))))
 (DFunDef false "checkProp" ((PVar "rootEnv") (PVar "body") (PVar "inputs")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EVar "rootEnv")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VBool" (PVar "b")) () (EVar "b")) (arm PWild () (EVar "False"))))))
 (DData Public "PropOutcome" ("v") ((variant "PropPassed" (ConPos)) (variant "PropFailed" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "v"))) (TyCon "Bool")))) ())
@@ -1832,17 +1940,40 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GString") (PCon "VString" (PVar "s"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "VString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (EVar "s"))))))
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GChar") (PCon "VChar" PWild)) (EListLit))
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GUnit") PWild) (EListLit))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GList" (PVar "plan")) (PCon "VList" (PVar "values"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "VList")) (EApp (EVar "deleteEach") (EVar "values"))) (EApp (EApp (EVar "map") (EVar "VList")) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")))))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GArray" (PVar "plan")) (PCon "VArray" (PVar "values"))) (EBlock (DoLet false false (PVar "xs") (EApp (EVar "toList") (EVar "values"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "xs2")) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EVar "xs2"))))) (EApp (EVar "deleteEach") (EVar "xs"))) (EApp (EApp (EVar "map") (ELam ((PVar "xs2")) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EVar "xs2"))))) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "xs")))))))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GOption" (PVar "plan")) (PCon "VCon" (PLit (LString "Some")) (PList (PVar "value")))) (EBinOp "::" (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GList" (PVar "plan")) (PCon "VList" (PVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkListByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EApp (EVar "shrinkActions") (EApp (EVar "GList") (EVar "plan")))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GArray" (PVar "plan")) (PCon "VArray" (PVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkArrayByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EApp (EVar "toList") (EVar "values"))) (EApp (EVar "shrinkActions") (EApp (EVar "GArray") (EVar "plan")))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GOption" (PVar "plan")) (PCon "VCon" (PLit (LString "Some")) (PList (PVar "value")))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkOptionByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")) (EApp (EVar "shrinkActions") (EApp (EVar "GOption") (EVar "plan")))))
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GOption" PWild) PWild) (EListLit))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GResult" (PVar "err") PWild) (PCon "VCon" (PLit (LString "Err")) (PList (PVar "value")))) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "err")) (EVar "value"))))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GResult" PWild (PVar "ok")) (PCon "VCon" (PLit (LString "Ok")) (PList (PVar "value")))) (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (ELit (LString "Ok"))) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "ok")) (EVar "value"))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PAs "result" (PCon "GResult" (PVar "err") PWild)) (PCon "VCon" (PLit (LString "Err")) (PList (PVar "value")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkResultByActions") (EVar "ge")) (EVar "env")) (EVar "err")) (ELit (LString "Err"))) (EVar "value")) (EApp (EVar "shrinkActions") (EVar "result"))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PAs "result" (PCon "GResult" PWild (PVar "ok"))) (PCon "VCon" (PLit (LString "Ok")) (PList (PVar "value")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkResultByActions") (EVar "ge")) (EVar "env")) (EVar "ok")) (ELit (LString "Ok"))) (EVar "value")) (EApp (EVar "shrinkActions") (EVar "result"))))
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GResult" PWild PWild) PWild) (EListLit))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GTuple" (PVar "plans")) (PCon "VTuple" (PVar "values"))) (EApp (EApp (EVar "map") (EVar "VTuple")) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values"))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GTuple" (PVar "plans")) (PCon "VTuple" (PVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkTupleByActions") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values")) (EApp (EVar "shrinkActions") (EApp (EVar "GTuple") (EVar "plans")))))
 (DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PAs "nominal" (PCon "GNominal" (PVar "key") PWild)) (PVar "value")) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominal") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "key")) (EVar "value")))
 (DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PAs "custom" (PCon "GCustom" PWild)) (PVar "value")) (EApp (EApp (EApp (EApp (EVar "shrinkCustom") (EVar "ge")) (EVar "env")) (EVar "custom")) (EVar "value")))
 (DFunDef false "structuralShrink" (PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "shrinkListByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
+(DFunDef false "shrinkListByActions" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkListByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons (PCon "DeleteElements") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "VList")) (EApp (EVar "deleteEach") (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkListByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkListByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "VList")) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkListByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkListByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkListByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions")))
+(DTypeSig false "shrinkArrayByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
+(DFunDef false "shrinkArrayByActions" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkArrayByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons (PCon "DeleteElements") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "xs")) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EVar "xs"))))) (EApp (EVar "deleteEach") (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkArrayByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkArrayByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "xs")) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EVar "xs"))))) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkArrayByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkArrayByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkArrayByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions")))
+(DTypeSig false "shrinkOptionByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
+(DFunDef false "shrinkOptionByActions" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkOptionByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "value") (PCons (PCon "ReplaceEarlierNullary") (PVar "actions"))) (EBinOp "::" (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkOptionByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkOptionByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "value") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkOptionByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkOptionByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "value") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkOptionByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")) (EVar "actions")))
+(DTypeSig false "shrinkResultByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "shrinkResultByActions" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkResultByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "tag") (PVar "value") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (EVar "tag")) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkResultByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "tag")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkResultByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "tag") (PVar "value") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkResultByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "tag")) (EVar "value")) (EVar "actions")))
+(DTypeSig false "shrinkTupleByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
+(DFunDef false "shrinkTupleByActions" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkTupleByActions" ((PVar "ge") (PVar "env") (PVar "plans") (PVar "values") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EVar "map") (EVar "VTuple")) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkTupleByActions") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkTupleByActions" ((PVar "ge") (PVar "env") (PVar "plans") (PVar "values") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkTupleByActions") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values")) (EVar "actions")))
 (DTypeSig false "shrinkElements" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "shrinkElements" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "shrinkElements" ((PVar "ge") (PVar "env") (PVar "plan") (PCons (PVar "value") (PVar "values"))) (EBlock (DoLet false false (PVar "here") (EApp (EApp (EVar "map") (EApp (EVar "prependBefore") (EVar "values"))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EVar "map") (EApp (EVar "prepend") (EVar "value"))) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")))))))
@@ -1851,11 +1982,22 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "shrinkPlanValues" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "shrinkPlanValues" ((PVar "ge") (PVar "env") (PCons (PVar "plan") (PVar "plans")) (PCons (PVar "value") (PVar "values"))) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "prependBefore") (EVar "values"))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value"))) (EApp (EApp (EVar "map") (EApp (EVar "prepend") (EVar "value"))) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values")))))
 (DTypeSig false "shrinkNominal" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyCon "TypeKey") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
-(DFunDef false "shrinkNominal" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "key") (PVar "value")) (EMatch (EApp (EApp (EVar "planDef") (EApp (EVar "genEnvPlan") (EVar "ge"))) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EBinOp "++" (EApp (EVar "nullaryCtorValues") (EVar "ctors")) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalFields") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")))) (arm (PCon "Err" PWild) () (EListLit))))
-(DTypeSig false "nullaryCtorValues" (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "nullaryCtorValues" ((PList)) (EListLit))
-(DFunDef false "nullaryCtorValues" ((PCons (PCon "PlanCtor" PWild (PVar "runtime") (PList)) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "VCon") (EVar "runtime")) (EListLit)) (EApp (EVar "nullaryCtorValues") (EVar "rest"))))
-(DFunDef false "nullaryCtorValues" ((PCons PWild (PVar "rest"))) (EApp (EVar "nullaryCtorValues") (EVar "rest")))
+(DFunDef false "shrinkNominal" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "key") (PVar "value")) (EMatch (EApp (EApp (EVar "planDef") (EApp (EVar "genEnvPlan") (EVar "ge"))) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalByActions") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EApp (EVar "shrinkActions") (EVar "nominal")))) (arm (PCon "Err" PWild) () (EListLit))))
+(DTypeSig false "shrinkNominalByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "shrinkNominalByActions" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkNominalByActions" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PVar "value") (PCons (PCon "ReplaceEarlierNullary") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EVar "earlierNullaryCtorValue") (EVar "ctors")) (EVar "value")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalByActions") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkNominalByActions" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PVar "value") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalFields") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalByActions") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkNominalByActions" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PVar "value") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalByActions") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EVar "actions")))
+(DTypeSig false "earlierNullaryCtorValue" (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "earlierNullaryCtorValue" ((PVar "ctors") (PVar "value")) (EMatch (EApp (EVar "nominalRuntime") (EVar "value")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "runtime")) () (EMatch (EApp (EApp (EApp (EVar "earlierNullaryCtor") (EVar "ctors")) (EVar "runtime")) (EVar "None")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PCon "PlanCtor" PWild (PVar "earlierRuntime") (PList))) () (EListLit (EApp (EApp (EVar "VCon") (EVar "earlierRuntime")) (EListLit)))) (arm (PCon "Some" PWild) () (EListLit))))))
+(DTypeSig false "nominalRuntime" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "nominalRuntime" ((PCon "VCon" (PVar "runtime") PWild)) (EApp (EVar "Some") (EVar "runtime")))
+(DFunDef false "nominalRuntime" ((PCon "VRecord" (PVar "runtime") PWild)) (EApp (EVar "Some") (EVar "runtime")))
+(DFunDef false "nominalRuntime" (PWild) (EVar "None"))
+(DTypeSig false "earlierNullaryCtor" (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "PlanCtor")) (TyApp (TyCon "Option") (TyCon "PlanCtor"))))))
+(DFunDef false "earlierNullaryCtor" ((PList) PWild (PVar "earlier")) (EVar "earlier"))
+(DFunDef false "earlierNullaryCtor" ((PCons (PAs "ctor" (PCon "PlanCtor" PWild (PVar "runtime") (PList))) (PVar "rest")) (PVar "current") (PCon "None")) (EIf (EBinOp "==" (EVar "runtime") (EVar "current")) (EVar "None") (EApp (EApp (EApp (EVar "earlierNullaryCtor") (EVar "rest")) (EVar "current")) (EApp (EVar "Some") (EVar "ctor")))))
+(DFunDef false "earlierNullaryCtor" ((PCons (PCon "PlanCtor" PWild (PVar "runtime") PWild) (PVar "rest")) (PVar "current") (PVar "earlier")) (EIf (EBinOp "==" (EVar "runtime") (EVar "current")) (EVar "earlier") (EApp (EApp (EApp (EVar "earlierNullaryCtor") (EVar "rest")) (EVar "current")) (EVar "earlier"))))
 (DTypeSig false "shrinkNominalFields" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "shrinkNominalFields" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PCon "VCon" (PVar "runtime") (PVar "values"))) (EMatch (EApp (EApp (EVar "planCtorRuntime") (EVar "runtime")) (EVar "ctors")) (arm (PCon "Some" (PVar "ctor")) () (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EApp (EVar "genEnvPlan") (EVar "ge"))) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "fields")) () (EApp (EApp (EVar "map") (ELam ((PVar "vs")) (EApp (EApp (EVar "VCon") (EVar "runtime")) (EVar "vs")))) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EApp (EVar "fieldPlans") (EVar "fields"))) (EVar "values")))) (arm (PCon "Err" PWild) () (EListLit)))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "shrinkNominalFields" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PCon "VRecord" (PVar "runtime") (PVar "fields"))) (EMatch (EApp (EApp (EVar "planCtorRuntime") (EVar "runtime")) (EVar "ctors")) (arm (PCon "Some" (PVar "ctor")) () (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EApp (EVar "genEnvPlan") (EVar "ge"))) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "plans")) () (EApp (EApp (EVar "map") (ELam ((PVar "vs")) (EApp (EApp (EVar "VRecord") (EVar "runtime")) (EApp (EApp (EVar "zipNames") (EApp (EVar "fieldNames") (EVar "fields"))) (EVar "vs"))))) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EApp (EVar "fieldPlans") (EVar "plans"))) (EApp (EVar "fieldValues") (EVar "fields"))))) (arm (PCon "Err" PWild) () (EListLit)))) (arm (PCon "None") () (EListLit))))
@@ -2093,11 +2235,10 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "anyDecl" ((PVar "p") (PCons (PVar "d") (PVar "rest"))) (EBinOp "||" (EApp (EVar "p") (EVar "d")) (EApp (EApp (EVar "anyDecl") (EVar "p")) (EVar "rest"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "PropParam" false) (mem "Ty" true))))
-(DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "apply" false) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "lookupEnv" false) (mem "lookupRuntimeBinding" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "lookupAssoc" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omLookup" false))))
-(DUse false (UseGroup ("tools" "prop_plan") ((mem "deleteEach" false) (mem "prepend" false) (mem "prependBefore" false) (mem "PlanEnv" true) (mem "PlanError" false) (mem "PlanModule" false) (mem "TypeKey" true) (mem "GenPlan" true) (mem "CustomPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanVisibility" true) (mem "planFor" false) (mem "planErrorText" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "buildPlanEnv" false) (mem "buildPlanEnvModules" false) (mem "listLengthBound" false) (mem "ctorWeights" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "customPlansReachable" false))))
+(DUse false (UseGroup ("tools" "prop_plan") ((mem "deleteEach" false) (mem "prepend" false) (mem "prependBefore" false) (mem "PlanEnv" true) (mem "PlanError" false) (mem "PlanModule" false) (mem "TypeKey" true) (mem "GenPlan" true) (mem "CustomPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanVisibility" true) (mem "planFor" false) (mem "planErrorText" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "buildPlanEnv" false) (mem "buildPlanEnvModules" false) (mem "listLengthBound" false) (mem "ctorWeights" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngSeed" false) (mem "structuralRngAdvance" false) (mem "structuralRngMix" false) (mem "structuralRngRange" false) (mem "structuralRngChoose" false) (mem "customPlansReachable" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig false "propRngStateRef" (TyApp (TyCon "Ref") (TyCon "Int")))
@@ -2111,17 +2252,17 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DTypeSig false "customSeedRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "customSeedRef" () (EApp (EVar "Ref") (ELit (LInt 123456789))))
 (DTypeSig true "seedPropRng" (TyFun (TyCon "Int") (TyCon "Unit")))
-(DFunDef false "seedPropRng" ((PVar "n")) (EBlock (DoLet false false (PVar "normalized") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (ELit (LInt 2147483648))) (ELit (LInt 2147483648))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propSeedRef")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
+(DFunDef false "seedPropRng" ((PVar "n")) (EBlock (DoLet false false (PVar "normalized") (EApp (EVar "structuralRngSeed") (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propSeedRef")) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "normalized"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
 (DTypeSig false "beginCustomPropStream" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "beginCustomPropStream" ((PVar "seed")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "customSeedRef")) (EVar "seed"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "customRngReadyRef")) (EVar "False")))))
 (DTypeSig true "propSeedValue" (TyFun (TyCon "Unit") (TyCon "Int")))
 (DFunDef false "propSeedValue" (PWild) (EUnOp "!" (EVar "propSeedRef")))
 (DTypeSig false "rngNextLocal" (TyFun (TyCon "Unit") (TyCon "Int")))
-(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EBinOp "%" (EBinOp "+" (EBinOp "*" (EUnOp "!" (EVar "propRngStateRef")) (ELit (LInt 1103515245))) (ELit (LInt 12345))) (ELit (LInt 2147483648)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoLet false false (PVar "h1") (EAnnot (EApp (EMethodRef "fromInt") (EApp (EApp (EVar "bitXor") (EVar "s")) (EApp (EApp (EVar "shiftRight") (EVar "s")) (ELit (LInt 16))))) (TyCon "U32"))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (ELit (LInt 2246822507)))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (ELit (LInt 3266489909)))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
+(DFunDef false "rngNextLocal" (PWild) (EBlock (DoLet false false (PVar "s") (EApp (EVar "structuralRngAdvance") (EUnOp "!" (EVar "propRngStateRef")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "propRngStateRef")) (EVar "s"))) (DoExpr (EApp (EVar "structuralRngMix") (EVar "s")))))
 (DTypeSig false "randIntRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "range") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "range") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (EVar "range")))))))
+(DFunDef false "randIntRange" ((PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "structuralRngRange") (EApp (EVar "rngNextLocal") (ELit LUnit))) (EVar "lo")) (EVar "hi")))
 (DTypeSig true "randBoolL" (TyFun (TyCon "Unit") (TyCon "Bool")))
-(DFunDef false "randBoolL" (PWild) (EBinOp "==" (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (ELit (LInt 2))) (ELit (LInt 1))))
+(DFunDef false "randBoolL" (PWild) (EBinOp "==" (EApp (EApp (EVar "structuralRngChoose") (EApp (EVar "rngNextLocal") (ELit LUnit))) (ELit (LInt 2))) (ELit (LInt 1))))
 (DData Public "PropHelper" () ((variant "PropHelper" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DData Public "GenEnv" () ((variant "GenEnv" (ConPos (TyCon "PlanEnv") (TyApp (TyCon "OrdMap") (TyCon "PropHelper"))))) ())
 (DTypeSig true "buildGenEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "GenEnv"))))
@@ -2134,9 +2275,9 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "helperMap" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "helperMap" ((PCons (PAs "helper" (PCon "PropHelper" (PVar "word") PWild PWild)) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "helperMap") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (EVar "helper")) (EVar "acc"))))
 (DTypeSig false "genFloat" (TyFun (TyCon "Unit") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "genFloat" (PWild) (EBlock (DoLet false false (PVar "r") (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (ELit (LInt 2000001)))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "r")) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 1000000.0)))) (ELit (LFloat 1.0)))))))
+(DFunDef false "genFloat" (PWild) (EBlock (DoLet false false (PVar "r") (EApp (EApp (EVar "structuralRngChoose") (EApp (EVar "rngNextLocal") (ELit LUnit))) (ELit (LInt 2000001)))) (DoExpr (EApp (EVar "VFloat") (EBinOp "-" (EBinOp "*" (EApp (EVar "intToFloat") (EVar "r")) (EBinOp "/" (ELit (LFloat 1.0)) (ELit (LFloat 1000000.0)))) (ELit (LFloat 1.0)))))))
 (DTypeSig false "genCharStr" (TyFun (TyCon "Unit") (TyCon "String")))
-(DFunDef false "genCharStr" (PWild) (EMatch (EApp (EVar "charFromCode") (EBinOp "+" (ELit (LInt 32)) (EBinOp "%" (EApp (EVar "rngNextLocal") (ELit LUnit)) (ELit (LInt 95))))) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToStr") (EVar "c"))) (arm (PCon "None") () (ELit (LString " ")))))
+(DFunDef false "genCharStr" (PWild) (EMatch (EApp (EVar "charFromCode") (EBinOp "+" (ELit (LInt 32)) (EApp (EApp (EVar "structuralRngChoose") (EApp (EVar "rngNextLocal") (ELit LUnit))) (ELit (LInt 95))))) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToStr") (EVar "c"))) (arm (PCon "None") () (ELit (LString " ")))))
 (DTypeSig false "genString" (TyFun (TyCon "Unit") (TyCon "String")))
 (DFunDef false "genString" (PWild) (EApp (EVar "stringConcat") (EApp (EVar "genStringGo") (EApp (EApp (EVar "randIntRange") (ELit (LInt 0))) (ELit (LInt 10))))))
 (DTypeSig false "genStringGo" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
@@ -2144,7 +2285,11 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genStringGo" ((PVar "n")) (EBinOp "::" (EApp (EVar "genCharStr") (ELit LUnit)) (EApp (EVar "genStringGo") (EBinOp "-" (EVar "n") (ELit (LInt 1))))))
 (DTypeSig false "shrinkInt" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "shrinkInt" ((PLit (LInt 0))) (EListLit))
-(DFunDef false "shrinkInt" ((PVar "n")) (EBlock (DoLet false false (PVar "cands") (EListLit (ELit (LInt 0)) (EBinOp "/" (EVar "n") (ELit (LInt 2))) (EBinOp "+" (EVar "n") (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1))) (ELit (LInt 1)))))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "VInt")) (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "n")))) (EVar "cands"))))))
+(DFunDef false "shrinkInt" ((PVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "step")) (EApp (EVar "VInt") (EApp (EApp (EVar "intShrinkCandidate") (EVar "n")) (EVar "step"))))) (EVar "intShrinkSteps")))
+(DTypeSig false "intShrinkCandidate" (TyFun (TyCon "Int") (TyFun (TyCon "IntShrinkStep") (TyCon "Int"))))
+(DFunDef false "intShrinkCandidate" (PWild (PCon "IntToZero")) (ELit (LInt 0)))
+(DFunDef false "intShrinkCandidate" ((PVar "n") (PCon "IntHalf")) (EBinOp "/" (EVar "n") (ELit (LInt 2))))
+(DFunDef false "intShrinkCandidate" ((PVar "n") (PCon "IntTowardZero")) (EBinOp "+" (EVar "n") (EIf (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1))) (ELit (LInt 1)))))
 (DTypeSig false "checkProp" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyEffect () (Some "e") (TyCon "Bool"))))))
 (DFunDef false "checkProp" ((PVar "rootEnv") (PVar "body") (PVar "inputs")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EVar "rootEnv")) (EVar "inputs"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VBool" (PVar "b")) () (EVar "b")) (arm PWild () (EVar "False"))))))
 (DData Public "PropOutcome" ("v") ((variant "PropPassed" (ConPos)) (variant "PropFailed" (ConPos (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "v"))) (TyCon "Bool")))) ())
@@ -2271,17 +2416,40 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GString") (PCon "VString" (PVar "s"))) (EIf (EBinOp "==" (EVar "s") (ELit (LString ""))) (EListLit) (EListLit (EApp (EVar "VString") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "/" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 2)))) (EVar "s"))))))
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GChar") (PCon "VChar" PWild)) (EListLit))
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GUnit") PWild) (EListLit))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GList" (PVar "plan")) (PCon "VList" (PVar "values"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "VList")) (EApp (EVar "deleteEach") (EVar "values"))) (EApp (EApp (EMethodRef "map") (EVar "VList")) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")))))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GArray" (PVar "plan")) (PCon "VArray" (PVar "values"))) (EBlock (DoLet false false (PVar "xs") (EApp (EMethodRef "toList") (EVar "values"))) (DoExpr (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "xs2")) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EVar "xs2"))))) (EApp (EVar "deleteEach") (EVar "xs"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "xs2")) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EVar "xs2"))))) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "xs")))))))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GOption" (PVar "plan")) (PCon "VCon" (PLit (LString "Some")) (PList (PVar "value")))) (EBinOp "::" (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GList" (PVar "plan")) (PCon "VList" (PVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkListByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EApp (EVar "shrinkActions") (EApp (EVar "GList") (EVar "plan")))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GArray" (PVar "plan")) (PCon "VArray" (PVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkArrayByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EApp (EMethodRef "toList") (EVar "values"))) (EApp (EVar "shrinkActions") (EApp (EVar "GArray") (EVar "plan")))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GOption" (PVar "plan")) (PCon "VCon" (PLit (LString "Some")) (PList (PVar "value")))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkOptionByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")) (EApp (EVar "shrinkActions") (EApp (EVar "GOption") (EVar "plan")))))
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GOption" PWild) PWild) (EListLit))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GResult" (PVar "err") PWild) (PCon "VCon" (PLit (LString "Err")) (PList (PVar "value")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (ELit (LString "Err"))) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "err")) (EVar "value"))))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GResult" PWild (PVar "ok")) (PCon "VCon" (PLit (LString "Ok")) (PList (PVar "value")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (ELit (LString "Ok"))) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "ok")) (EVar "value"))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PAs "result" (PCon "GResult" (PVar "err") PWild)) (PCon "VCon" (PLit (LString "Err")) (PList (PVar "value")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkResultByActions") (EVar "ge")) (EVar "env")) (EVar "err")) (ELit (LString "Err"))) (EVar "value")) (EApp (EVar "shrinkActions") (EVar "result"))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PAs "result" (PCon "GResult" PWild (PVar "ok"))) (PCon "VCon" (PLit (LString "Ok")) (PList (PVar "value")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkResultByActions") (EVar "ge")) (EVar "env")) (EVar "ok")) (ELit (LString "Ok"))) (EVar "value")) (EApp (EVar "shrinkActions") (EVar "result"))))
 (DFunDef false "structuralShrink" (PWild PWild (PCon "GResult" PWild PWild) PWild) (EListLit))
-(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GTuple" (PVar "plans")) (PCon "VTuple" (PVar "values"))) (EApp (EApp (EMethodRef "map") (EVar "VTuple")) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values"))))
+(DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PCon "GTuple" (PVar "plans")) (PCon "VTuple" (PVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkTupleByActions") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values")) (EApp (EVar "shrinkActions") (EApp (EVar "GTuple") (EVar "plans")))))
 (DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PAs "nominal" (PCon "GNominal" (PVar "key") PWild)) (PVar "value")) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominal") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "key")) (EVar "value")))
 (DFunDef false "structuralShrink" ((PVar "ge") (PVar "env") (PAs "custom" (PCon "GCustom" PWild)) (PVar "value")) (EApp (EApp (EApp (EApp (EVar "shrinkCustom") (EVar "ge")) (EVar "env")) (EVar "custom")) (EVar "value")))
 (DFunDef false "structuralShrink" (PWild PWild PWild PWild) (EListLit))
+(DTypeSig false "shrinkListByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
+(DFunDef false "shrinkListByActions" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkListByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons (PCon "DeleteElements") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "VList")) (EApp (EVar "deleteEach") (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkListByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkListByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "VList")) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkListByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkListByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkListByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions")))
+(DTypeSig false "shrinkArrayByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
+(DFunDef false "shrinkArrayByActions" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkArrayByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons (PCon "DeleteElements") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "xs")) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EVar "xs"))))) (EApp (EVar "deleteEach") (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkArrayByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkArrayByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "xs")) (EApp (EVar "VArray") (EApp (EVar "arrayFromList") (EVar "xs"))))) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkArrayByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkArrayByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "values") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkArrayByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")) (EVar "actions")))
+(DTypeSig false "shrinkOptionByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
+(DFunDef false "shrinkOptionByActions" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkOptionByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "value") (PCons (PCon "ReplaceEarlierNullary") (PVar "actions"))) (EBinOp "::" (EApp (EApp (EVar "VCon") (ELit (LString "None"))) (EListLit)) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkOptionByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkOptionByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "value") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (ELit (LString "Some"))) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkOptionByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkOptionByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "value") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkOptionByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")) (EVar "actions")))
+(DTypeSig false "shrinkResultByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "shrinkResultByActions" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkResultByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "tag") (PVar "value") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "v")) (EApp (EApp (EVar "VCon") (EVar "tag")) (EListLit (EVar "v"))))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkResultByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "tag")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkResultByActions" ((PVar "ge") (PVar "env") (PVar "plan") (PVar "tag") (PVar "value") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkResultByActions") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "tag")) (EVar "value")) (EVar "actions")))
+(DTypeSig false "shrinkTupleByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
+(DFunDef false "shrinkTupleByActions" (PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkTupleByActions" ((PVar "ge") (PVar "env") (PVar "plans") (PVar "values") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EVar "VTuple")) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkTupleByActions") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values")) (EVar "actions"))))
+(DFunDef false "shrinkTupleByActions" ((PVar "ge") (PVar "env") (PVar "plans") (PVar "values") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkTupleByActions") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values")) (EVar "actions")))
 (DTypeSig false "shrinkElements" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "shrinkElements" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "shrinkElements" ((PVar "ge") (PVar "env") (PVar "plan") (PCons (PVar "value") (PVar "values"))) (EBlock (DoLet false false (PVar "here") (EApp (EApp (EMethodRef "map") (EApp (EVar "prependBefore") (EVar "values"))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value")))) (DoExpr (EBinOp "++" (EVar "here") (EApp (EApp (EMethodRef "map") (EApp (EVar "prepend") (EVar "value"))) (EApp (EApp (EApp (EApp (EVar "shrinkElements") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "values")))))))
@@ -2290,11 +2458,22 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "shrinkPlanValues" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "shrinkPlanValues" ((PVar "ge") (PVar "env") (PCons (PVar "plan") (PVar "plans")) (PCons (PVar "value") (PVar "values"))) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "prependBefore") (EVar "values"))) (EApp (EApp (EApp (EApp (EVar "structuralShrink") (EVar "ge")) (EVar "env")) (EVar "plan")) (EVar "value"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "prepend") (EVar "value"))) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EVar "plans")) (EVar "values")))))
 (DTypeSig false "shrinkNominal" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyCon "TypeKey") (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
-(DFunDef false "shrinkNominal" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "key") (PVar "value")) (EMatch (EApp (EApp (EVar "planDef") (EApp (EVar "genEnvPlan") (EVar "ge"))) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EBinOp "++" (EApp (EVar "nullaryCtorValues") (EVar "ctors")) (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalFields") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")))) (arm (PCon "Err" PWild) () (EListLit))))
-(DTypeSig false "nullaryCtorValues" (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))
-(DFunDef false "nullaryCtorValues" ((PList)) (EListLit))
-(DFunDef false "nullaryCtorValues" ((PCons (PCon "PlanCtor" PWild (PVar "runtime") (PList)) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "VCon") (EVar "runtime")) (EListLit)) (EApp (EVar "nullaryCtorValues") (EVar "rest"))))
-(DFunDef false "nullaryCtorValues" ((PCons PWild (PVar "rest"))) (EApp (EVar "nullaryCtorValues") (EVar "rest")))
+(DFunDef false "shrinkNominal" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "key") (PVar "value")) (EMatch (EApp (EApp (EVar "planDef") (EApp (EVar "genEnvPlan") (EVar "ge"))) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalByActions") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EApp (EVar "shrinkActions") (EVar "nominal")))) (arm (PCon "Err" PWild) () (EListLit))))
+(DTypeSig false "shrinkNominalByActions" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "ShrinkAction")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))))))
+(DFunDef false "shrinkNominalByActions" (PWild PWild PWild PWild PWild (PList)) (EListLit))
+(DFunDef false "shrinkNominalByActions" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PVar "value") (PCons (PCon "ReplaceEarlierNullary") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EVar "earlierNullaryCtorValue") (EVar "ctors")) (EVar "value")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalByActions") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkNominalByActions" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PVar "value") (PCons (PCon "ShrinkChildren") (PVar "actions"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalFields") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalByActions") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EVar "actions"))))
+(DFunDef false "shrinkNominalByActions" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PVar "value") (PCons PWild (PVar "actions"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "shrinkNominalByActions") (EVar "ge")) (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EVar "value")) (EVar "actions")))
+(DTypeSig false "earlierNullaryCtorValue" (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "earlierNullaryCtorValue" ((PVar "ctors") (PVar "value")) (EMatch (EApp (EVar "nominalRuntime") (EVar "value")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "runtime")) () (EMatch (EApp (EApp (EApp (EVar "earlierNullaryCtor") (EVar "ctors")) (EVar "runtime")) (EVar "None")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PCon "PlanCtor" PWild (PVar "earlierRuntime") (PList))) () (EListLit (EApp (EApp (EVar "VCon") (EVar "earlierRuntime")) (EListLit)))) (arm (PCon "Some" PWild) () (EListLit))))))
+(DTypeSig false "nominalRuntime" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "nominalRuntime" ((PCon "VCon" (PVar "runtime") PWild)) (EApp (EVar "Some") (EVar "runtime")))
+(DFunDef false "nominalRuntime" ((PCon "VRecord" (PVar "runtime") PWild)) (EApp (EVar "Some") (EVar "runtime")))
+(DFunDef false "nominalRuntime" (PWild) (EVar "None"))
+(DTypeSig false "earlierNullaryCtor" (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "PlanCtor")) (TyApp (TyCon "Option") (TyCon "PlanCtor"))))))
+(DFunDef false "earlierNullaryCtor" ((PList) PWild (PVar "earlier")) (EVar "earlier"))
+(DFunDef false "earlierNullaryCtor" ((PCons (PAs "ctor" (PCon "PlanCtor" PWild (PVar "runtime") (PList))) (PVar "rest")) (PVar "current") (PCon "None")) (EIf (EBinOp "==" (EVar "runtime") (EVar "current")) (EVar "None") (EApp (EApp (EApp (EVar "earlierNullaryCtor") (EVar "rest")) (EVar "current")) (EApp (EVar "Some") (EVar "ctor")))))
+(DFunDef false "earlierNullaryCtor" ((PCons (PCon "PlanCtor" PWild (PVar "runtime") PWild) (PVar "rest")) (PVar "current") (PVar "earlier")) (EIf (EBinOp "==" (EVar "runtime") (EVar "current")) (EVar "earlier") (EApp (EApp (EApp (EVar "earlierNullaryCtor") (EVar "rest")) (EVar "current")) (EVar "earlier"))))
 (DTypeSig false "shrinkNominalFields" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DFunDef false "shrinkNominalFields" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PCon "VCon" (PVar "runtime") (PVar "values"))) (EMatch (EApp (EApp (EVar "planCtorRuntime") (EVar "runtime")) (EVar "ctors")) (arm (PCon "Some" (PVar "ctor")) () (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EApp (EVar "genEnvPlan") (EVar "ge"))) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "fields")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "vs")) (EApp (EApp (EVar "VCon") (EVar "runtime")) (EVar "vs")))) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EApp (EVar "fieldPlans") (EVar "fields"))) (EVar "values")))) (arm (PCon "Err" PWild) () (EListLit)))) (arm (PCon "None") () (EListLit))))
 (DFunDef false "shrinkNominalFields" ((PVar "ge") (PVar "env") (PVar "nominal") (PVar "ctors") (PCon "VRecord" (PVar "runtime") (PVar "fields"))) (EMatch (EApp (EApp (EVar "planCtorRuntime") (EVar "runtime")) (EVar "ctors")) (arm (PCon "Some" (PVar "ctor")) () (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EApp (EVar "genEnvPlan") (EVar "ge"))) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "plans")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "vs")) (EApp (EApp (EVar "VRecord") (EVar "runtime")) (EApp (EApp (EVar "zipNames") (EApp (EVar "fieldNames") (EVar "fields"))) (EVar "vs"))))) (EApp (EApp (EApp (EApp (EVar "shrinkPlanValues") (EVar "ge")) (EVar "env")) (EApp (EVar "fieldPlans") (EVar "plans"))) (EApp (EVar "fieldValues") (EVar "fields"))))) (arm (PCon "Err" PWild) () (EListLit)))) (arm (PCon "None") () (EListLit))))

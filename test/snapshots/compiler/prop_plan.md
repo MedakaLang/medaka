@@ -1,5 +1,5 @@
 # META
-source_lines=1445
+source_lines=1500
 stages=DESUGAR,MARK
 # SOURCE
 -- The engine-neutral property planning layer.
@@ -20,10 +20,66 @@ import frontend.ast.{
   sameTyConHead,
 }
 import types.route_key.{typeTagOf, implRouteKeyWord}
+import u32 as U32
 import support.ordmap.{
   OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup, omSize
 }
 import support.util.{lookupAssoc, zipL}
+
+-- Structural property generation has one engine-neutral stream. Its 31-bit
+-- state advances without overflowing Int; every consumer draws one fmix32 word
+-- and reduces it only after mixing. Native probes render the same constants
+-- with the canonical stdlib u32 module.
+export
+structuralRngModulus : Int
+structuralRngModulus = 2147483648
+
+export
+structuralRngMultiplier : Int
+structuralRngMultiplier = 1103515245
+
+export
+structuralRngIncrement : Int
+structuralRngIncrement = 12345
+
+export
+structuralRngMixMultiplier1 : Int
+structuralRngMixMultiplier1 = 2246822507
+
+export
+structuralRngMixMultiplier2 : Int
+structuralRngMixMultiplier2 = 3266489909
+
+export
+structuralRngSeed : Int -> Int
+structuralRngSeed n =
+  (n % structuralRngModulus + structuralRngModulus) % structuralRngModulus
+
+export
+structuralRngAdvance : Int -> Int
+structuralRngAdvance state =
+  (state * structuralRngMultiplier + structuralRngIncrement)
+    % structuralRngModulus
+
+export
+structuralRngMix : Int -> Int
+structuralRngMix state =
+  let word = U32.truncate state
+  let h1 = U32.bitXor word (U32.shiftRight word 16)
+  let h2 = h1 * U32.truncate structuralRngMixMultiplier1
+  let h3 = U32.bitXor h2 (U32.shiftRight h2 13)
+  let h4 = h3 * U32.truncate structuralRngMixMultiplier2
+  U32.toInt (U32.bitXor h4 (U32.shiftRight h4 16))
+
+export
+structuralRngRange : Int -> Int -> Int -> Int
+structuralRngRange word lo hi =
+  let width = hi - lo + 1
+  if width <= 0 then lo else lo + word % width
+
+export
+structuralRngChoose : Int -> Int -> Int
+structuralRngChoose word width = if width <= 0 then 0 else word % width
 
 -- Container candidate order is policy, not an implementation detail of an
 -- engine: deletion left-to-right precedes recursive element shrinking.
@@ -1420,38 +1476,58 @@ planDivergesSeen env truth (nominal@(GNominal _ _)) seen =
   planCanDivergeNominal env truth nominal seen
 planDivergesSeen _ _ (GCustom _) _ = False
 
--- Structural shrink action ordering is shared as data.  Adapters map these to
--- their value representation and retain the same greedy first-failing choice.
+-- Structural shrink action ordering is shared as data. Both adapters consume
+-- these actions in order; value representation and emitted syntax never pick
+-- an independent candidate family.
 public export data ShrinkAction =
-  | DeleteAt Int
-  | ShrinkChild Int
-  | ReplaceCtor Int
+  | DeleteElements
+  | ShrinkChildren
+  | ReplaceEarlierNullary
 
 export
-shrinkActions : GenPlan -> Int -> List ShrinkAction
-shrinkActions (GList _) n = sequenceDeletes n 0 ++ sequenceChildren n 0
-shrinkActions (GArray _) n = sequenceDeletes n 0 ++ sequenceChildren n 0
-shrinkActions (GTuple _) n = sequenceChildren n 0
-shrinkActions (GOption _) n =
-  if n == 0 then [] else ReplaceCtor 0 :: sequenceChildren n 0
-shrinkActions (GResult _ _) n = sequenceChildren n 0
-shrinkActions (GNominal _ _) n = sequenceChildren n 0
-shrinkActions _ _ = []
+shrinkActions : GenPlan -> List ShrinkAction
+shrinkActions (GList _) = [DeleteElements, ShrinkChildren]
+shrinkActions (GArray _) = [DeleteElements, ShrinkChildren]
+shrinkActions (GTuple _) = [ShrinkChildren]
+shrinkActions (GOption _) = [ReplaceEarlierNullary, ShrinkChildren]
+shrinkActions (GResult _ _) = [ShrinkChildren]
+shrinkActions (GNominal _ _) = [ReplaceEarlierNullary, ShrinkChildren]
+shrinkActions _ = []
 
-sequenceDeletes : Int -> Int -> List ShrinkAction
-sequenceDeletes n i
-  | i >= n = []
-sequenceDeletes n i = DeleteAt i :: sequenceDeletes n (i + 1)
+-- Integer candidates need source-level rendering natively, so their order is
+-- a separate shared policy.  The adapters map the same three steps to their
+-- own representation; toward-zero is deliberately last, after zero and half.
+public export data IntShrinkStep = IntToZero | IntHalf | IntTowardZero
 
-sequenceChildren : Int -> Int -> List ShrinkAction
-sequenceChildren n i
-  | i >= n = []
-sequenceChildren n i = ShrinkChild i :: sequenceChildren n (i + 1)
+export
+intShrinkSteps : List IntShrinkStep
+intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "DataVis" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true) (mem "ImplMethod" true) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false))))
+(DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "zipL" false))))
+(DTypeSig true "structuralRngModulus" (TyCon "Int"))
+(DFunDef false "structuralRngModulus" () (ELit (LInt 2147483648)))
+(DTypeSig true "structuralRngMultiplier" (TyCon "Int"))
+(DFunDef false "structuralRngMultiplier" () (ELit (LInt 1103515245)))
+(DTypeSig true "structuralRngIncrement" (TyCon "Int"))
+(DFunDef false "structuralRngIncrement" () (ELit (LInt 12345)))
+(DTypeSig true "structuralRngMixMultiplier1" (TyCon "Int"))
+(DFunDef false "structuralRngMixMultiplier1" () (ELit (LInt 2246822507)))
+(DTypeSig true "structuralRngMixMultiplier2" (TyCon "Int"))
+(DFunDef false "structuralRngMixMultiplier2" () (ELit (LInt 3266489909)))
+(DTypeSig true "structuralRngSeed" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "structuralRngSeed" ((PVar "n")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "structuralRngModulus")) (EVar "structuralRngModulus")) (EVar "structuralRngModulus")))
+(DTypeSig true "structuralRngAdvance" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "structuralRngAdvance" ((PVar "state")) (EBinOp "%" (EBinOp "+" (EBinOp "*" (EVar "state") (EVar "structuralRngMultiplier")) (EVar "structuralRngIncrement")) (EVar "structuralRngModulus")))
+(DTypeSig true "structuralRngMix" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "structuralRngMix" ((PVar "state")) (EBlock (DoLet false false (PVar "word") (EApp (EVar "U32.truncate") (EVar "state"))) (DoLet false false (PVar "h1") (EApp (EApp (EVar "U32.bitXor") (EVar "word")) (EApp (EApp (EVar "U32.shiftRight") (EVar "word")) (ELit (LInt 16))))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (EApp (EVar "U32.truncate") (EVar "structuralRngMixMultiplier1")))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (EApp (EVar "U32.truncate") (EVar "structuralRngMixMultiplier2")))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
+(DTypeSig true "structuralRngRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "structuralRngRange" ((PVar "word") (PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "width") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "width") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EVar "word") (EVar "width")))))))
+(DTypeSig true "structuralRngChoose" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "structuralRngChoose" ((PVar "word") (PVar "width")) (EIf (EBinOp "<=" (EVar "width") (ELit (LInt 0))) (ELit (LInt 0)) (EBinOp "%" (EVar "word") (EVar "width"))))
 (DTypeSig true "deleteEach" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "deleteEach" ((PList)) (EListLit))
 (DFunDef false "deleteEach" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "xs") (EApp (EApp (EVar "map") (EApp (EVar "prepend") (EVar "x"))) (EApp (EVar "deleteEach") (EVar "xs")))))
@@ -1986,26 +2062,44 @@ sequenceChildren n i = ShrinkChild i :: sequenceChildren n (i + 1)
 (DFunDef false "planDivergesSeen" ((PVar "env") (PVar "truth") (PCon "GTuple" (PVar "plans")) (PVar "seen")) (EApp (EApp (EApp (EApp (EVar "anyPlansDivergeSeen") (EVar "env")) (EVar "truth")) (EVar "plans")) (EVar "seen")))
 (DFunDef false "planDivergesSeen" ((PVar "env") (PVar "truth") (PAs "nominal" (PCon "GNominal" PWild PWild)) (PVar "seen")) (EApp (EApp (EApp (EApp (EVar "planCanDivergeNominal") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "seen")))
 (DFunDef false "planDivergesSeen" (PWild PWild (PCon "GCustom" PWild) PWild) (EVar "False"))
-(DData Public "ShrinkAction" () ((variant "DeleteAt" (ConPos (TyCon "Int"))) (variant "ShrinkChild" (ConPos (TyCon "Int"))) (variant "ReplaceCtor" (ConPos (TyCon "Int")))) ())
-(DTypeSig true "shrinkActions" (TyFun (TyCon "GenPlan") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "ShrinkAction")))))
-(DFunDef false "shrinkActions" ((PCon "GList" PWild) (PVar "n")) (EBinOp "++" (EApp (EApp (EVar "sequenceDeletes") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0)))))
-(DFunDef false "shrinkActions" ((PCon "GArray" PWild) (PVar "n")) (EBinOp "++" (EApp (EApp (EVar "sequenceDeletes") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0)))))
-(DFunDef false "shrinkActions" ((PCon "GTuple" PWild) (PVar "n")) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0))))
-(DFunDef false "shrinkActions" ((PCon "GOption" PWild) (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EListLit) (EBinOp "::" (EApp (EVar "ReplaceCtor") (ELit (LInt 0))) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0))))))
-(DFunDef false "shrinkActions" ((PCon "GResult" PWild PWild) (PVar "n")) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0))))
-(DFunDef false "shrinkActions" ((PCon "GNominal" PWild PWild) (PVar "n")) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0))))
-(DFunDef false "shrinkActions" (PWild PWild) (EListLit))
-(DTypeSig false "sequenceDeletes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "ShrinkAction")))))
-(DFunDef false "sequenceDeletes" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "sequenceDeletes" ((PVar "n") (PVar "i")) (EBinOp "::" (EApp (EVar "DeleteAt") (EVar "i")) (EApp (EApp (EVar "sequenceDeletes") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
-(DTypeSig false "sequenceChildren" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "ShrinkAction")))))
-(DFunDef false "sequenceChildren" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "sequenceChildren" ((PVar "n") (PVar "i")) (EBinOp "::" (EApp (EVar "ShrinkChild") (EVar "i")) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
+(DData Public "ShrinkAction" () ((variant "DeleteElements" (ConPos)) (variant "ShrinkChildren" (ConPos)) (variant "ReplaceEarlierNullary" (ConPos))) ())
+(DTypeSig true "shrinkActions" (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "ShrinkAction"))))
+(DFunDef false "shrinkActions" ((PCon "GList" PWild)) (EListLit (EVar "DeleteElements") (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GArray" PWild)) (EListLit (EVar "DeleteElements") (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GTuple" PWild)) (EListLit (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GOption" PWild)) (EListLit (EVar "ReplaceEarlierNullary") (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GResult" PWild PWild)) (EListLit (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GNominal" PWild PWild)) (EListLit (EVar "ReplaceEarlierNullary") (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" (PWild) (EListLit))
+(DData Public "IntShrinkStep" () ((variant "IntToZero" (ConPos)) (variant "IntHalf" (ConPos)) (variant "IntTowardZero" (ConPos))) ())
+(DTypeSig true "intShrinkSteps" (TyApp (TyCon "List") (TyCon "IntShrinkStep")))
+(DFunDef false "intShrinkSteps" () (EListLit (EVar "IntToZero") (EVar "IntHalf") (EVar "IntTowardZero")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "DataVis" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true) (mem "ImplMethod" true) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false))))
+(DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "zipL" false))))
+(DTypeSig true "structuralRngModulus" (TyCon "Int"))
+(DFunDef false "structuralRngModulus" () (ELit (LInt 2147483648)))
+(DTypeSig true "structuralRngMultiplier" (TyCon "Int"))
+(DFunDef false "structuralRngMultiplier" () (ELit (LInt 1103515245)))
+(DTypeSig true "structuralRngIncrement" (TyCon "Int"))
+(DFunDef false "structuralRngIncrement" () (ELit (LInt 12345)))
+(DTypeSig true "structuralRngMixMultiplier1" (TyCon "Int"))
+(DFunDef false "structuralRngMixMultiplier1" () (ELit (LInt 2246822507)))
+(DTypeSig true "structuralRngMixMultiplier2" (TyCon "Int"))
+(DFunDef false "structuralRngMixMultiplier2" () (ELit (LInt 3266489909)))
+(DTypeSig true "structuralRngSeed" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "structuralRngSeed" ((PVar "n")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "structuralRngModulus")) (EVar "structuralRngModulus")) (EVar "structuralRngModulus")))
+(DTypeSig true "structuralRngAdvance" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "structuralRngAdvance" ((PVar "state")) (EBinOp "%" (EBinOp "+" (EBinOp "*" (EVar "state") (EVar "structuralRngMultiplier")) (EVar "structuralRngIncrement")) (EVar "structuralRngModulus")))
+(DTypeSig true "structuralRngMix" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "structuralRngMix" ((PVar "state")) (EBlock (DoLet false false (PVar "word") (EApp (EVar "U32.truncate") (EVar "state"))) (DoLet false false (PVar "h1") (EApp (EApp (EVar "U32.bitXor") (EVar "word")) (EApp (EApp (EVar "U32.shiftRight") (EVar "word")) (ELit (LInt 16))))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (EApp (EVar "U32.truncate") (EVar "structuralRngMixMultiplier1")))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (EApp (EVar "U32.truncate") (EVar "structuralRngMixMultiplier2")))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
+(DTypeSig true "structuralRngRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "structuralRngRange" ((PVar "word") (PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "width") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "width") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EVar "word") (EVar "width")))))))
+(DTypeSig true "structuralRngChoose" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "structuralRngChoose" ((PVar "word") (PVar "width")) (EIf (EBinOp "<=" (EVar "width") (ELit (LInt 0))) (ELit (LInt 0)) (EBinOp "%" (EVar "word") (EVar "width"))))
 (DTypeSig true "deleteEach" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "deleteEach" ((PList)) (EListLit))
 (DFunDef false "deleteEach" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "xs") (EApp (EApp (EMethodRef "map") (EApp (EVar "prepend") (EVar "x"))) (EApp (EVar "deleteEach") (EVar "xs")))))
@@ -2540,18 +2634,15 @@ sequenceChildren n i = ShrinkChild i :: sequenceChildren n (i + 1)
 (DFunDef false "planDivergesSeen" ((PVar "env") (PVar "truth") (PCon "GTuple" (PVar "plans")) (PVar "seen")) (EApp (EApp (EApp (EApp (EVar "anyPlansDivergeSeen") (EVar "env")) (EVar "truth")) (EVar "plans")) (EVar "seen")))
 (DFunDef false "planDivergesSeen" ((PVar "env") (PVar "truth") (PAs "nominal" (PCon "GNominal" PWild PWild)) (PVar "seen")) (EApp (EApp (EApp (EApp (EVar "planCanDivergeNominal") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "seen")))
 (DFunDef false "planDivergesSeen" (PWild PWild (PCon "GCustom" PWild) PWild) (EVar "False"))
-(DData Public "ShrinkAction" () ((variant "DeleteAt" (ConPos (TyCon "Int"))) (variant "ShrinkChild" (ConPos (TyCon "Int"))) (variant "ReplaceCtor" (ConPos (TyCon "Int")))) ())
-(DTypeSig true "shrinkActions" (TyFun (TyCon "GenPlan") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "ShrinkAction")))))
-(DFunDef false "shrinkActions" ((PCon "GList" PWild) (PVar "n")) (EBinOp "++" (EApp (EApp (EVar "sequenceDeletes") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0)))))
-(DFunDef false "shrinkActions" ((PCon "GArray" PWild) (PVar "n")) (EBinOp "++" (EApp (EApp (EVar "sequenceDeletes") (EVar "n")) (ELit (LInt 0))) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0)))))
-(DFunDef false "shrinkActions" ((PCon "GTuple" PWild) (PVar "n")) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0))))
-(DFunDef false "shrinkActions" ((PCon "GOption" PWild) (PVar "n")) (EIf (EBinOp "==" (EVar "n") (ELit (LInt 0))) (EListLit) (EBinOp "::" (EApp (EVar "ReplaceCtor") (ELit (LInt 0))) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0))))))
-(DFunDef false "shrinkActions" ((PCon "GResult" PWild PWild) (PVar "n")) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0))))
-(DFunDef false "shrinkActions" ((PCon "GNominal" PWild PWild) (PVar "n")) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (ELit (LInt 0))))
-(DFunDef false "shrinkActions" (PWild PWild) (EListLit))
-(DTypeSig false "sequenceDeletes" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "ShrinkAction")))))
-(DFunDef false "sequenceDeletes" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "sequenceDeletes" ((PVar "n") (PVar "i")) (EBinOp "::" (EApp (EVar "DeleteAt") (EVar "i")) (EApp (EApp (EVar "sequenceDeletes") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
-(DTypeSig false "sequenceChildren" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "ShrinkAction")))))
-(DFunDef false "sequenceChildren" ((PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "sequenceChildren" ((PVar "n") (PVar "i")) (EBinOp "::" (EApp (EVar "ShrinkChild") (EVar "i")) (EApp (EApp (EVar "sequenceChildren") (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
+(DData Public "ShrinkAction" () ((variant "DeleteElements" (ConPos)) (variant "ShrinkChildren" (ConPos)) (variant "ReplaceEarlierNullary" (ConPos))) ())
+(DTypeSig true "shrinkActions" (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "ShrinkAction"))))
+(DFunDef false "shrinkActions" ((PCon "GList" PWild)) (EListLit (EVar "DeleteElements") (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GArray" PWild)) (EListLit (EVar "DeleteElements") (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GTuple" PWild)) (EListLit (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GOption" PWild)) (EListLit (EVar "ReplaceEarlierNullary") (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GResult" PWild PWild)) (EListLit (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" ((PCon "GNominal" PWild PWild)) (EListLit (EVar "ReplaceEarlierNullary") (EVar "ShrinkChildren")))
+(DFunDef false "shrinkActions" (PWild) (EListLit))
+(DData Public "IntShrinkStep" () ((variant "IntToZero" (ConPos)) (variant "IntHalf" (ConPos)) (variant "IntTowardZero" (ConPos))) ())
+(DTypeSig true "intShrinkSteps" (TyApp (TyCon "List") (TyCon "IntShrinkStep")))
+(DFunDef false "intShrinkSteps" () (EListLit (EVar "IntToZero") (EVar "IntHalf") (EVar "IntTowardZero")))

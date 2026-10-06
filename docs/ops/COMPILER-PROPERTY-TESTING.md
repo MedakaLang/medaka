@@ -28,7 +28,8 @@ Backend output also requires the existing eval/native/Wasm differential infrastr
 The initial audit found that directory/multi-target invocations dropped
 `--seed` at the child-process boundary ([#3854](https://github.com/MedakaLang/medaka/issues/3854)).
 Its regression compares direct-file and directory reports at two seeds without
-pinning an RNG draw, shrink result or case count. A test-infrastructure gap
+pinning an RNG draw or shrink result. It also checks the requested replay
+metadata. A test-infrastructure gap
 blocks this campaign until its capability is built; do not preserve a workaround
 in the algorithm suites.
 
@@ -65,6 +66,13 @@ seeds. Normalizing a structural generator's internal state does not normalize
 its replay metadata.
 Human failure and known-red property rows print the seed and requested case
 budget so the reported witness can be replayed with the same CLI options.
+
+Passing laws in both engines do not establish that they received the same
+inputs. Runner regressions must also compare seeded draw witnesses and final
+shrunk counterexamples, with expected values derived independently. Include
+negative and wide seeds and nested structural values. A shrinker that exhausts
+its fuel must report that its counterexample may not be minimal in either
+engine.
 
 Evaluator properties run in one supervised process per target, sharing their
 original module cells within that process. A panic in a body, generator or

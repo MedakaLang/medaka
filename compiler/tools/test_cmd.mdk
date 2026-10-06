@@ -247,10 +247,10 @@ substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 -- returns False (P0-212): a file that couldn't even be opened is a FAILURE,
 -- not a vacuous pass, so callers that gate `exit 1` on this Bool (rather than
 -- on the printed report, since the report is prose, not a signal) see it.
--- `engines` selects which execution engine(s) run the doctest and `test "…"`
--- phases — `[EngNative]` (the default, what `medaka build` would produce),
+-- `engines` selects which execution engine(s) run doctests, `test "…"`
+-- declarations and properties — `[EngNative]` (the default),
 -- `[EngInterp]` under `--engines eval`, or an explicit `--engines eval,native`
--- list. It has NO effect on the prop phase, which is interpreter-only.
+-- list. Each selected engine reports its own results.
 -- `cases` overrides the prop sample count (`--cases`, default 100 at the CLI);
 -- `filterOpt` restricts doctests/`test "…"`/`prop "…"` to names containing a
 -- substring (`--filter`, #2295).

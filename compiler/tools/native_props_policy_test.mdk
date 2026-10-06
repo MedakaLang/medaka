@@ -1,10 +1,11 @@
--- Cross-engine regressions for the shared structural shrink policy.  These
+-- Cross-engine regressions for the shared structural shrink policy. These
 -- invoke the public test command so the evaluator interpreter and emitted
 -- native probe consume exactly the same candidate order.
 
 import driver.build_cmd.{cleanupTempDir, makeTempDir}
 import json.{Json, asArray, asInt, asString, get, parse, stringify}
-import string.{contains}
+import string.{contains, endsWith}
+import support.util.{listLen}
 import test.{Expectation, expectAll, expectEqual, expectTrue, fail, labelFail}
 import test_process.{boundedVerbSeconds, medakaBin}
 import tools.native_fixture_test_support_test.{writeFixtureFiles}
@@ -61,34 +62,28 @@ propertyRow engine name (row :: rows) =
   else
     propertyRow engine name rows
 
-lawFailureWith : String -> String -> List String -> List Json -> Bool
-lawFailureWith engine name snippets rows = match propertyRow engine name rows
-  None => False
-  Some row =>
-    field "status" row == Some "fail"
-      && field "rawStatus" row == Some "fail"
-      && field "failureKind" row == Some "law-false"
-      && intField "seed" row == Some 1
-      && intField "cases" row == Some 20
-      && all
-        (snippet => match field "detail" row
-          None => False
-          Some detail => contains snippet detail)
-        snippets
+warningText : String
+warningText =
+  "WARNING: shrink fuel exhausted, counterexample may not be minimal"
 
-lawFailureWithout : String -> String -> String -> List Json -> Bool
-lawFailureWithout engine name forbidden rows =
+hasExpectedDetail : String -> Bool -> Json -> Bool
+hasExpectedDetail expectedDetail expectsWarning row = match field "detail" row
+  None => False
+  Some detail =>
+    endsWith expectedDetail detail
+      && contains warningText detail == expectsWarning
+
+lawFailureDetail : String -> String -> String -> Bool -> List Json -> Bool
+lawFailureDetail engine name expectedDetail expectsWarning rows =
   match propertyRow engine name rows
     None => False
-    Some row => match field "detail" row
-      None => False
-      Some detail =>
-        field "status" row == Some "fail"
-          && field "rawStatus" row == Some "fail"
-          && field "failureKind" row == Some "law-false"
-          && intField "seed" row == Some 1
-          && intField "cases" row == Some 20
-          && not (contains forbidden detail)
+    Some row =>
+      field "status" row == Some "fail"
+        && field "rawStatus" row == Some "fail"
+        && field "failureKind" row == Some "law-false"
+        && intField "seed" row == Some 1
+        && intField "cases" row == Some 20
+        && hasExpectedDetail expectedDetail expectsWarning row
 
 policyFixture : String
 policyFixture =
@@ -100,40 +95,105 @@ test "eval and native consume the shared structural shrink policy" = withFixture
     Err message => fail message
     Ok (code, report) =>
       let rows = propertyRows report
-      let warning =
-        "WARNING: shrink fuel exhausted, counterexample may not be minimal"
       expectAll [
         labelFail (stringify report) (expectEqual 1 code),
+        labelFail (stringify report) (expectEqual 14 (listLen rows)),
         expectTrue
-          (lawFailureWith "eval" "negative integer floor" ["n = -11"] rows),
+          (lawFailureDetail
+            "eval"
+            "negative integer floor"
+            "n = -11"
+            False
+            rows),
         expectTrue
-          (lawFailureWith "native" "negative integer floor" ["n = -11"] rows),
+          (lawFailureDetail
+            "native"
+            "negative integer floor"
+            "n = -11"
+            False
+            rows),
         expectTrue
-          (lawFailureWith "eval" "positive integer floor" ["n = 11"] rows),
+          (lawFailureDetail
+            "eval"
+            "positive integer floor"
+            "n = 11"
+            False
+            rows),
         expectTrue
-          (lawFailureWith "native" "positive integer floor" ["n = 11"] rows),
-        expectTrue (lawFailureWith "eval" "list integer floor" ["-11"] rows),
-        expectTrue (lawFailureWith "native" "list integer floor" ["-11"] rows),
-        expectTrue (lawFailureWith "eval" "array integer floor" ["-11"] rows),
-        expectTrue (lawFailureWith "native" "array integer floor" ["-11"] rows),
+          (lawFailureDetail
+            "native"
+            "positive integer floor"
+            "n = 11"
+            False
+            rows),
         expectTrue
-          (lawFailureWithout "eval" "single nullary terminates" warning rows),
+          (lawFailureDetail
+            "eval"
+            "list integer floor"
+            "xs = [-11]"
+            False
+            rows),
         expectTrue
-          (lawFailureWithout "native" "single nullary terminates" warning rows),
+          (lawFailureDetail
+            "native"
+            "list integer floor"
+            "xs = [-11]"
+            False
+            rows),
         expectTrue
-          (lawFailureWithout
+          (lawFailureDetail
+            "eval"
+            "array integer floor"
+            "xs = [-11]"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "native"
+            "array integer floor"
+            "xs = [|-11|]"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "eval"
+            "single nullary terminates"
+            "value = One()"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
+            "native"
+            "single nullary terminates"
+            "value = One"
+            False
+            rows),
+        expectTrue
+          (lawFailureDetail
             "eval"
             "multiple nullaries terminate"
-            warning
+            "value = First()"
+            False
             rows),
         expectTrue
-          (lawFailureWithout
+          (lawFailureDetail
             "native"
             "multiple nullaries terminate"
-            warning
+            "value = First"
+            False
             rows),
         expectTrue
-          (lawFailureWith "eval" "custom self cycle warns" [warning] rows),
+          (lawFailureDetail
+            "eval"
+            "custom self cycle warns"
+            "value = Wrap(1) (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
+            True
+            rows),
         expectTrue
-          (lawFailureWith "native" "custom self cycle warns" [warning] rows),
+          (lawFailureDetail
+            "native"
+            "custom self cycle warns"
+            "value = Wrap (1) (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
+            True
+            rows),
       ])
