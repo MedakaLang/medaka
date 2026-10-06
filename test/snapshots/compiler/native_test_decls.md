@@ -1,5 +1,5 @@
 # META
-source_lines=392
+source_lines=440
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/native_test_decls.mdk — the NATIVE execution engine for
@@ -48,7 +48,7 @@ import frontend.ast.{Decl(..), Expr, Pat(..), noDeclLoc}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
-  scratchProjectManifest,
+  scratchProbeManifest,
   cleanupTempDir,
   runBuildNativeRoots,
   envOr,
@@ -57,20 +57,24 @@ import driver.build_cmd.{
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
 import support.util.{joinNl, splitNl}
+import string.{replaceAll}
 import tools.doctest.{ExResult(..)}
 import tools.probe_transcript.{
   Chunk(..),
   chunksOf,
   decodeValue,
   endTag,
+  freshProbeNonce,
   firstNonEmptyLine,
   lookupChunk,
   mintNonce,
   noncedPrefix,
   renameUserMain,
+  runtimeDependencyName,
+  runtimeDependencyPrefix,
   sentinelLine,
   tagsInOrder,
-  valuePrintExpr,
+  valuePrintExprWith,
 }
 import tools.printer.{declToString}
 
@@ -141,7 +145,7 @@ nativeRendered target tsrc tests = match makeTempDir ()
     -- The nonce is drawn HERE, before the probe source is written, so it
     -- reaches `runInTmp` in time to land in the generated code the target's
     -- own (already-fixed) source cannot see or influence.
-    let nonce = mintNonce ()
+    let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
     -- `results` is bound (and so fully forced — Medaka is strict) BEFORE the
     -- teardown, so the probe binary still exists while it runs.
     let results = runInTmp target tsrc tests tmpDir nonce
@@ -154,9 +158,7 @@ nativeRendered target tsrc tests = match makeTempDir ()
 -- documents the measurement behind that rule.  It also carries the target
 -- project's own `[dependencies]`, without which the probe cannot resolve a
 -- cross-project import the interpreter arm resolves fine — see
--- `scratchProjectManifest`.
-scratchManifest : String -> <IO> String
-scratchManifest target = scratchProjectManifest "medaka_native_test" target
+-- `scratchProbeManifest`.
 
 -- Named `ts_<basename>` so the copy cannot claim the same module id as the
 -- original (which the loader would then have to choose between).
@@ -172,10 +174,19 @@ runInTmp : String ->
 runInTmp target tsrc tests tmpDir nonce =
   let entryPath = joinPath tmpDir (scratchEntryName target)
   let outPath = joinPath tmpDir "ts_probe"
-  let _ = writeFile (joinPath tmpDir "medaka.toml") (scratchManifest target)
-  match writeFile entryPath (probeSource nonce tsrc tests)
-    Err e => Err "native test runner: could not write the probe source: \{e}"
-    Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce
+  match (scratchProbeManifest
+    "medaka_native_test"
+    target
+    (runtimeDependencyName nonce))
+    Err e =>
+      Err "native test runner: could not create the scratch manifest: \{e}"
+    Ok manifest => match writeFile (joinPath tmpDir "medaka.toml") manifest
+      Err e =>
+        Err "native test runner: could not write the scratch manifest: \{e}"
+      Ok _ => match writeFile entryPath (probeSource nonce tsrc tests)
+        Err e =>
+          Err "native test runner: could not write the probe source: \{e}"
+        Ok _ => buildAndRun target entryPath outPath tmpDir tests nonce
 
 buildAndRun : String ->
   String ->
@@ -186,7 +197,8 @@ buildAndRun : String ->
   <IO> Result String (List ExResult)
 buildAndRun target entryPath outPath tmpDir tests nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let medaka = envOr "MEDAKA" "medaka"
+  let medaka = envOr "MEDAKA" (joinPath root "medaka")
+  let emitter = envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter")
   let cc = envOr "CC" "clang"
   -- The scratch entry sits in a `mktemp -d`, so its own search roots resolve
   -- nothing; the target's real roots are passed as extraRoots.
@@ -210,7 +222,12 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
     Err rep =>
       Err
         "native test runner: could not build \{target} natively\n\{ppBuildReport rep}"
-    Ok _ => match runCommand outPath []
+    Ok _ => match runCommand "env" [
+      "MEDAKA_ROOT=" ++ root,
+      "MEDAKA=" ++ medaka,
+      "MEDAKA_EMITTER=" ++ emitter,
+      outPath,
+    ]
       Err e => Err "native test runner: could not run the compiled probe: \{e}"
       Ok (code, out, errOut) =>
         let chunks = chunksOf (sentinelPrefix nonce) (splitNl out)
@@ -240,26 +257,51 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
 -- ([T-MAIN-ZERO-ARG]), which here would present as every test aborting.
 -- Referencing every `__tse_i__` from `main` is also what keeps `dceFilter` from
 -- dropping them.
-expectationAlias : String
-expectationAlias = "MdkProbeTest__"
+expectationAlias : String -> String
+expectationAlias nonce = "NpTest_\{probeNameNonce nonce}"
+
+runtimeAlias : String -> String
+runtimeAlias nonce = "NpRuntime_\{probeNameNonce nonce}"
+
+probeNameNonce : String -> String
+probeNameNonce nonce = replaceAll "-" "_" nonce
+
+probeNamespacePrefixes : List String
+probeNamespacePrefixes = [
+  "__ts_",
+  "__tse_",
+  "__tsv_",
+  "NpTest_",
+  "NpRuntime_",
+  runtimeDependencyPrefix,
+]
 
 probeSource : String -> String -> List (String, Int, Expr) -> String
 probeSource nonce tsrc tests =
   joinNl
-    (["import test as \{expectationAlias}", "", renameUserMain tsrc, ""]
+    ([
+        "import test as \{expectationAlias nonce}",
+        "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}",
+        "",
+        renameUserMain tsrc,
+        "",
+      ]
       ++ testBindings nonce 0 tests
       ++ ["main ="]
       ++ mainLines nonce 0 tests
-      ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
+      ++ [
+        "  \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce endTag}\"",
+        "",
+      ])
 
-bindingName : Int -> String
-bindingName i = "__ts_\{intToString i}__"
+bindingName : String -> Int -> String
+bindingName nonce i = "__ts_\{probeNameNonce nonce}_\{intToString i}__"
 
-printerName : Int -> String
-printerName i = "__tse_\{intToString i}__"
+printerName : String -> Int -> String
+printerName nonce i = "__tse_\{probeNameNonce nonce}_\{intToString i}__"
 
-valueName : Int -> String
-valueName i = "__tsv_\{intToString i}__"
+valueName : String -> Int -> String
+valueName nonce i = "__tsv_\{probeNameNonce nonce}_\{intToString i}__"
 
 -- Per test: the body as a binding, plus a printer that emits the constructor
 -- tag and the three rendered fields between sentinels.
@@ -276,7 +318,10 @@ valueName i = "__tsv_\{intToString i}__"
 testBindings : String -> Int -> List (String, Int, Expr) -> List String
 testBindings _ _ [] = []
 testBindings nonce i ((_, _, body) :: rest) =
-  [declToString (DFunDef False (bindingName i) [PWild] body noDeclLoc), ""]
+  [
+      declToString (DFunDef False (bindingName nonce i) [PWild] body noDeclLoc),
+      "",
+    ]
     ++ printerDecl nonce i
     ++ testBindings nonce (i + 1) rest
 
@@ -286,34 +331,37 @@ testBindings nonce i ((_, _, body) :: rest) =
 -- account lands in that chunk rather than inside a field.
 printerDecl : String -> Int -> List String
 printerDecl nonce i =
-  ["\{printerName i} _ =", "  let \{valueName i} = \{bindingName i} ()"]
-    ++ emit nonce i "tag" (accessor "expectationTag" i)
-    ++ emit nonce i "msg" (accessor "expectationMessage" i)
-    ++ emit nonce i "exp" (accessor "expectationExpected" i)
-    ++ lastEmit nonce i "act" (accessor "expectationActual" i)
+  [
+      "\{printerName nonce i} _ =",
+      "  let \{valueName nonce i} = \{bindingName nonce i} ()",
+    ]
+    ++ emit nonce i "tag" (accessor nonce "expectationTag" i)
+    ++ emit nonce i "msg" (accessor nonce "expectationMessage" i)
+    ++ emit nonce i "exp" (accessor nonce "expectationExpected" i)
+    ++ lastEmit nonce i "act" (accessor nonce "expectationActual" i)
     ++ [""]
 
-accessor : String -> Int -> String
-accessor f i = "\{expectationAlias}.\{f} \{valueName i}"
+accessor : String -> String -> Int -> String
+accessor nonce f i = "\{expectationAlias nonce}.\{f} \{valueName nonce i}"
 
 emit : String -> Int -> String -> String -> List String
 emit nonce i f expr = [
-  "  let _ = putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
-  "  let _ = \{valuePrintExpr expr}",
+  "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
+  "  let _ = \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") expr}",
 ]
 
 lastEmit : String -> Int -> String -> String -> List String
 lastEmit nonce i f expr = [
-  "  let _ = putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
-  "  \{valuePrintExpr expr}",
+  "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (fieldTag i f)}\"",
+  "  \{valuePrintExprWith (runtimeAlias nonce ++ ".putStrLn") (runtimeAlias nonce ++ ".debugStringLit") expr}",
 ]
 
 mainLines : String -> Int -> List (String, Int, Expr) -> List String
 mainLines _ _ [] = []
 mainLines nonce i (_ :: rest) =
   [
-      "  let _ = putStrLn \"\{sentinelFor nonce (startTag i)}\"",
-      "  let _ = \{printerName i} ()",
+      "  let _ = \{runtimeAlias nonce}.putStrLn \"\{sentinelFor nonce (startTag i)}\"",
+      "  let _ = \{printerName nonce i} ()",
     ]
     ++ mainLines nonce (i + 1) rest
 
@@ -396,12 +444,13 @@ fromFields note _ _ _ _ =
     "native test runner: the probe's output for this test was incomplete (\{note})"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Pat" true) (mem "noDeclLoc" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProbeManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("string") ((mem "replaceAll" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "renameUserMain" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExpr" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "renameUserMain" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_test__@@")))
@@ -419,39 +468,43 @@ fromFields note _ _ _ _ =
 (DTypeSig true "runNativeTests" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "ExResult")))))))
 (DFunDef false "runNativeTests" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EApp (EApp (EVar "nativeRendered") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (arm (PCon "Err" (PVar "reason")) () (EApp (EApp (EVar "map") (ELam (PWild) (EApp (EVar "Errored") (EVar "reason")))) (EVar "tests"))) (arm (PCon "Ok" (PVar "results")) () (EVar "results"))))
 (DTypeSig false "nativeRendered" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult"))))))))
-(DFunDef false "nativeRendered" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create a scratch directory: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EVar "runInTmp") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (EVar "tmpDir")) (EVar "nonce"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "results"))))))
-(DTypeSig false "scratchManifest" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "scratchManifest" ((PVar "target")) (EApp (EApp (EVar "scratchProjectManifest") (ELit (LString "medaka_native_test"))) (EVar "target")))
+(DFunDef false "nativeRendered" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create a scratch directory: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "nonce") (EApp (EApp (EApp (EVar "freshProbeNonce") (EApp (EVar "mintNonce") (ELit LUnit))) (EVar "probeNamespacePrefixes")) (EVar "tsrc"))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EVar "runInTmp") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (EVar "tmpDir")) (EVar "nonce"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "results"))))))
 (DTypeSig false "scratchEntryName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "scratchEntryName" ((PVar "target")) (EBinOp "++" (ELit (LString "ts_")) (EApp (EVar "baseOf") (EVar "target"))))
 (DTypeSig false "runInTmp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult"))))))))))
-(DFunDef false "runInTmp" ((PVar "target") (PVar "tsrc") (PVar "tests") (PVar "tmpDir") (PVar "nonce")) (EBlock (DoLet false false (PVar "entryPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (EApp (EVar "scratchEntryName") (EVar "target")))) (DoLet false false (PVar "outPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ts_probe")))) (DoLet false false PWild (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "medaka.toml")))) (EApp (EVar "scratchManifest") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "entryPath")) (EApp (EApp (EApp (EVar "probeSource") (EVar "nonce")) (EVar "tsrc")) (EVar "tests"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not write the probe source: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildAndRun") (EVar "target")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "tests")) (EVar "nonce")))))))
+(DFunDef false "runInTmp" ((PVar "target") (PVar "tsrc") (PVar "tests") (PVar "tmpDir") (PVar "nonce")) (EBlock (DoLet false false (PVar "entryPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (EApp (EVar "scratchEntryName") (EVar "target")))) (DoLet false false (PVar "outPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ts_probe")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "scratchProbeManifest") (ELit (LString "medaka_native_test"))) (EVar "target")) (EApp (EVar "runtimeDependencyName") (EVar "nonce"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create the scratch manifest: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "manifest")) () (EMatch (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "medaka.toml")))) (EVar "manifest")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not write the scratch manifest: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "writeFile") (EVar "entryPath")) (EApp (EApp (EApp (EVar "probeSource") (EVar "nonce")) (EVar "tsrc")) (EVar "tests"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not write the probe source: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildAndRun") (EVar "target")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "tests")) (EVar "nonce")))))))))))
 (DTypeSig false "buildAndRun" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult")))))))))))
-(DFunDef false "buildAndRun" ((PVar "target") (PVar "entryPath") (PVar "outPath") (PVar "tmpDir") (PVar "tests") (PVar "nonce")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "extraRoots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRoots") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "False")) (EVar "extraRoots")) (EVar "True")) (EVar "False")) (EVar "False")) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not build ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString " natively\n"))) (EApp (EVar "display") (EApp (EVar "ppBuildReport") (EVar "rep")))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommand") (EVar "outPath")) (EListLit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not run the compiled probe: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "out")))) (DoExpr (EIf (EApp (EApp (EVar "tagsInOrder") (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "tests"))) (EVar "chunks")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "tests"))) (EApp (EVar "Err") (EVar "forgedTranscript"))))))))))))
-(DTypeSig false "expectationAlias" (TyCon "String"))
-(DFunDef false "expectationAlias" () (ELit (LString "MdkProbeTest__")))
+(DFunDef false "buildAndRun" ((PVar "target") (PVar "entryPath") (PVar "outPath") (PVar "tmpDir") (PVar "tests") (PVar "nonce")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka"))))) (DoLet false false (PVar "emitter") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_emitter"))))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "extraRoots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRoots") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "False")) (EVar "extraRoots")) (EVar "True")) (EVar "False")) (EVar "False")) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not build ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString " natively\n"))) (EApp (EVar "display") (EApp (EVar "ppBuildReport") (EVar "rep")))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EListLit (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EVar "root")) (EBinOp "++" (ELit (LString "MEDAKA=")) (EVar "medaka")) (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EVar "emitter")) (EVar "outPath"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not run the compiled probe: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "out")))) (DoExpr (EIf (EApp (EApp (EVar "tagsInOrder") (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "tests"))) (EVar "chunks")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "tests"))) (EApp (EVar "Err") (EVar "forgedTranscript"))))))))))))
+(DTypeSig false "expectationAlias" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "expectationAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpTest_")) (EApp (EVar "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
+(DTypeSig false "runtimeAlias" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "runtimeAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpRuntime_")) (EApp (EVar "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
+(DTypeSig false "probeNameNonce" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "probeNameNonce" ((PVar "nonce")) (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "-"))) (ELit (LString "_"))) (EVar "nonce")))
+(DTypeSig false "probeNamespacePrefixes" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "probeNamespacePrefixes" () (EListLit (ELit (LString "__ts_")) (ELit (LString "__tse_")) (ELit (LString "__tsv_")) (ELit (LString "NpTest_")) (ELit (LString "NpRuntime_")) (EVar "runtimeDependencyPrefix")))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyCon "String")))))
-(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EVar "display") (EVar "expectationAlias"))) (ELit (LString ""))) (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  putStrLn \"")) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
-(DTypeSig false "bindingName" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "bindingName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__ts_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
-(DTypeSig false "printerName" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "printerName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tse_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
-(DTypeSig false "valueName" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "valueName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tsv_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
+(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EVar "display") (EApp (EVar "expectationAlias") (EVar "nonce")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EVar "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ""))) (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
+(DTypeSig false "bindingName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "bindingName" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "__ts_")) (EApp (EVar "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
+(DTypeSig false "printerName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "printerName" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "__tse_")) (EApp (EVar "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
+(DTypeSig false "valueName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "valueName" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "__tsv_")) (EApp (EVar "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
 (DTypeSig false "testBindings" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "testBindings" (PWild PWild (PList)) (EListLit))
-(DFunDef false "testBindings" ((PVar "nonce") (PVar "i") (PCons (PTuple PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "declToString") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EApp (EVar "bindingName") (EVar "i"))) (EListLit (EVar "PWild"))) (EVar "body")) (EVar "noDeclLoc"))) (ELit (LString ""))) (EApp (EApp (EVar "printerDecl") (EVar "nonce")) (EVar "i"))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "testBindings" ((PVar "nonce") (PVar "i") (PCons (PTuple PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "declToString") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EApp (EApp (EVar "bindingName") (EVar "nonce")) (EVar "i"))) (EListLit (EVar "PWild"))) (EVar "body")) (EVar "noDeclLoc"))) (ELit (LString ""))) (EApp (EApp (EVar "printerDecl") (EVar "nonce")) (EVar "i"))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "printerDecl" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "printerDecl" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "printerName") (EVar "i")))) (ELit (LString " _ ="))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let ")) (EApp (EVar "display") (EApp (EVar "valueName") (EVar "i")))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EVar "bindingName") (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "tag"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationTag"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "msg"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationMessage"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "exp"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationExpected"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "lastEmit") (EVar "nonce")) (EVar "i")) (ELit (LString "act"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationActual"))) (EVar "i")))) (EListLit (ELit (LString "")))))
-(DTypeSig false "accessor" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "accessor" ((PVar "f") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "expectationAlias"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "f"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "valueName") (EVar "i")))) (ELit (LString ""))))
+(DFunDef false "printerDecl" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "printerName") (EVar "nonce")) (EVar "i")))) (ELit (LString " _ ="))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let ")) (EApp (EVar "display") (EApp (EApp (EVar "valueName") (EVar "nonce")) (EVar "i")))) (ELit (LString " = "))) (EApp (EVar "display") (EApp (EApp (EVar "bindingName") (EVar "nonce")) (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "tag"))) (EApp (EApp (EApp (EVar "accessor") (EVar "nonce")) (ELit (LString "expectationTag"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "msg"))) (EApp (EApp (EApp (EVar "accessor") (EVar "nonce")) (ELit (LString "expectationMessage"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "exp"))) (EApp (EApp (EApp (EVar "accessor") (EVar "nonce")) (ELit (LString "expectationExpected"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "lastEmit") (EVar "nonce")) (EVar "i")) (ELit (LString "act"))) (EApp (EApp (EApp (EVar "accessor") (EVar "nonce")) (ELit (LString "expectationActual"))) (EVar "i")))) (EListLit (ELit (LString "")))))
+(DTypeSig false "accessor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "accessor" ((PVar "nonce") (PVar "f") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "expectationAlias") (EVar "nonce")))) (ELit (LString "."))) (EApp (EVar "display") (EVar "f"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "valueName") (EVar "nonce")) (EVar "i")))) (ELit (LString ""))))
 (DTypeSig false "emit" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emit" ((PVar "nonce") (PVar "i") (PVar "f") (PVar "expr")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn \"")) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EVar "valuePrintExpr") (EVar "expr")))) (ELit (LString "")))))
+(DFunDef false "emit" ((PVar "nonce") (PVar "i") (PVar "f") (PVar "expr")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "valuePrintExprWith") (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".putStrLn")))) (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".debugStringLit")))) (EVar "expr")))) (ELit (LString "")))))
 (DTypeSig false "lastEmit" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "lastEmit" ((PVar "nonce") (PVar "i") (PVar "f") (PVar "expr")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn \"")) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EVar "valuePrintExpr") (EVar "expr")))) (ELit (LString "")))))
+(DFunDef false "lastEmit" ((PVar "nonce") (PVar "i") (PVar "f") (PVar "expr")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "valuePrintExprWith") (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".putStrLn")))) (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".debugStringLit")))) (EVar "expr")))) (ELit (LString "")))))
 (DTypeSig false "mainLines" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "mainLines" (PWild PWild (PList)) (EListLit))
-(DFunDef false "mainLines" ((PVar "nonce") (PVar "i") (PCons PWild (PVar "rest"))) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn \"")) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EVar "startTag") (EVar "i"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EVar "printerName") (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "mainLines" ((PVar "nonce") (PVar "i") (PCons PWild (PVar "rest"))) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EVar "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EVar "startTag") (EVar "i"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EVar "display") (EApp (EApp (EVar "printerName") (EVar "nonce")) (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "completeField" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "completeField" ((PVar "chunks") (PVar "i") (PVar "f")) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))) (EVar "chunks")) (arm (PCon "Some" (PCon "Chunk" PWild (PVar "ls") (PCon "True"))) () (EApp (EVar "decodeValue") (EVar "ls"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "startedTest" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "Int") (TyCon "Bool"))))
@@ -475,12 +528,13 @@ fromFields note _ _ _ _ =
 (DFunDef false "fromFields" ((PVar "note") PWild PWild PWild PWild) (EApp (EVar "Errored") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: the probe's output for this test was incomplete (")) (EApp (EVar "display") (EVar "note"))) (ELit (LString ")")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Pat" true) (mem "noDeclLoc" false))))
-(DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
+(DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProbeManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "splitNl" false))))
+(DUse false (UseGroup ("string") ((mem "replaceAll" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "ExResult" true))))
-(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "renameUserMain" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExpr" false))))
+(DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "freshProbeNonce" false) (mem "firstNonEmptyLine" false) (mem "lookupChunk" false) (mem "mintNonce" false) (mem "noncedPrefix" false) (mem "renameUserMain" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "declToString" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_test__@@")))
@@ -498,39 +552,43 @@ fromFields note _ _ _ _ =
 (DTypeSig true "runNativeTests" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "ExResult")))))))
 (DFunDef false "runNativeTests" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EApp (EApp (EVar "nativeRendered") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (arm (PCon "Err" (PVar "reason")) () (EApp (EApp (EMethodRef "map") (ELam (PWild) (EApp (EVar "Errored") (EVar "reason")))) (EVar "tests"))) (arm (PCon "Ok" (PVar "results")) () (EVar "results"))))
 (DTypeSig false "nativeRendered" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult"))))))))
-(DFunDef false "nativeRendered" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create a scratch directory: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "nonce") (EApp (EVar "mintNonce") (ELit LUnit))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EVar "runInTmp") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (EVar "tmpDir")) (EVar "nonce"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "results"))))))
-(DTypeSig false "scratchManifest" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
-(DFunDef false "scratchManifest" ((PVar "target")) (EApp (EApp (EVar "scratchProjectManifest") (ELit (LString "medaka_native_test"))) (EVar "target")))
+(DFunDef false "nativeRendered" ((PVar "target") (PVar "tsrc") (PVar "tests")) (EMatch (EApp (EVar "makeTempDir") (ELit LUnit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create a scratch directory: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "tmpDir")) () (EBlock (DoLet false false (PVar "nonce") (EApp (EApp (EApp (EVar "freshProbeNonce") (EApp (EVar "mintNonce") (ELit LUnit))) (EVar "probeNamespacePrefixes")) (EVar "tsrc"))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EApp (EApp (EVar "runInTmp") (EVar "target")) (EVar "tsrc")) (EVar "tests")) (EVar "tmpDir")) (EVar "nonce"))) (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "tmpDir"))) (DoExpr (EVar "results"))))))
 (DTypeSig false "scratchEntryName" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "scratchEntryName" ((PVar "target")) (EBinOp "++" (ELit (LString "ts_")) (EApp (EVar "baseOf") (EVar "target"))))
 (DTypeSig false "runInTmp" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult"))))))))))
-(DFunDef false "runInTmp" ((PVar "target") (PVar "tsrc") (PVar "tests") (PVar "tmpDir") (PVar "nonce")) (EBlock (DoLet false false (PVar "entryPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (EApp (EVar "scratchEntryName") (EVar "target")))) (DoLet false false (PVar "outPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ts_probe")))) (DoLet false false PWild (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "medaka.toml")))) (EApp (EVar "scratchManifest") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EVar "writeFile") (EVar "entryPath")) (EApp (EApp (EApp (EVar "probeSource") (EVar "nonce")) (EVar "tsrc")) (EVar "tests"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not write the probe source: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildAndRun") (EVar "target")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "tests")) (EVar "nonce")))))))
+(DFunDef false "runInTmp" ((PVar "target") (PVar "tsrc") (PVar "tests") (PVar "tmpDir") (PVar "nonce")) (EBlock (DoLet false false (PVar "entryPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (EApp (EVar "scratchEntryName") (EVar "target")))) (DoLet false false (PVar "outPath") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "ts_probe")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "scratchProbeManifest") (ELit (LString "medaka_native_test"))) (EVar "target")) (EApp (EVar "runtimeDependencyName") (EVar "nonce"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not create the scratch manifest: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "manifest")) () (EMatch (EApp (EApp (EVar "writeFile") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "medaka.toml")))) (EVar "manifest")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not write the scratch manifest: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "writeFile") (EVar "entryPath")) (EApp (EApp (EApp (EVar "probeSource") (EVar "nonce")) (EVar "tsrc")) (EVar "tests"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not write the probe source: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildAndRun") (EVar "target")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "tests")) (EVar "nonce")))))))))))
 (DTypeSig false "buildAndRun" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ExResult")))))))))))
-(DFunDef false "buildAndRun" ((PVar "target") (PVar "entryPath") (PVar "outPath") (PVar "tmpDir") (PVar "tests") (PVar "nonce")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "extraRoots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRoots") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "False")) (EVar "extraRoots")) (EVar "True")) (EVar "False")) (EVar "False")) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not build ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString " natively\n"))) (EApp (EMethodRef "display") (EApp (EVar "ppBuildReport") (EVar "rep")))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommand") (EVar "outPath")) (EListLit)) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not run the compiled probe: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "out")))) (DoExpr (EIf (EApp (EApp (EVar "tagsInOrder") (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "tests"))) (EVar "chunks")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "tests"))) (EApp (EVar "Err") (EVar "forgedTranscript"))))))))))))
-(DTypeSig false "expectationAlias" (TyCon "String"))
-(DFunDef false "expectationAlias" () (ELit (LString "MdkProbeTest__")))
+(DFunDef false "buildAndRun" ((PVar "target") (PVar "entryPath") (PVar "outPath") (PVar "tmpDir") (PVar "tests") (PVar "nonce")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka"))))) (DoLet false false (PVar "emitter") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_EMITTER"))) (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "medaka_emitter"))))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "extraRoots") (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf") (EVar "target")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuildNativeRoots") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "entryPath")) (EVar "outPath")) (EVar "tmpDir")) (EVar "False")) (EVar "extraRoots")) (EVar "True")) (EVar "False")) (EVar "False")) (arm (PCon "Err" (PVar "rep")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not build ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString " natively\n"))) (EApp (EMethodRef "display") (EApp (EVar "ppBuildReport") (EVar "rep")))) (ELit (LString ""))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "env"))) (EListLit (EBinOp "++" (ELit (LString "MEDAKA_ROOT=")) (EVar "root")) (EBinOp "++" (ELit (LString "MEDAKA=")) (EVar "medaka")) (EBinOp "++" (ELit (LString "MEDAKA_EMITTER=")) (EVar "emitter")) (EVar "outPath"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: could not run the compiled probe: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "errOut"))) () (EBlock (DoLet false false (PVar "chunks") (EApp (EApp (EVar "chunksOf") (EApp (EVar "sentinelPrefix") (EVar "nonce"))) (EApp (EVar "splitNl") (EVar "out")))) (DoExpr (EIf (EApp (EApp (EVar "tagsInOrder") (EApp (EApp (EVar "expectedTags") (ELit (LInt 0))) (EVar "tests"))) (EVar "chunks")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EVar "renderAll") (EVar "chunks")) (EApp (EApp (EVar "abortNote") (EVar "code")) (EVar "errOut"))) (ELit (LInt 0))) (EVar "tests"))) (EApp (EVar "Err") (EVar "forgedTranscript"))))))))))))
+(DTypeSig false "expectationAlias" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "expectationAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpTest_")) (EApp (EMethodRef "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
+(DTypeSig false "runtimeAlias" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "runtimeAlias" ((PVar "nonce")) (EBinOp "++" (EBinOp "++" (ELit (LString "NpRuntime_")) (EApp (EMethodRef "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString ""))))
+(DTypeSig false "probeNameNonce" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "probeNameNonce" ((PVar "nonce")) (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "-"))) (ELit (LString "_"))) (EVar "nonce")))
+(DTypeSig false "probeNamespacePrefixes" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "probeNamespacePrefixes" () (EListLit (ELit (LString "__ts_")) (ELit (LString "__tse_")) (ELit (LString "__tsv_")) (ELit (LString "NpTest_")) (ELit (LString "NpRuntime_")) (EVar "runtimeDependencyPrefix")))
 (DTypeSig false "probeSource" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyCon "String")))))
-(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EMethodRef "display") (EVar "expectationAlias"))) (ELit (LString ""))) (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  putStrLn \"")) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
-(DTypeSig false "bindingName" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "bindingName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__ts_")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
-(DTypeSig false "printerName" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "printerName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tse_")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
-(DTypeSig false "valueName" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "valueName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tsv_")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
+(DFunDef false "probeSource" ((PVar "nonce") (PVar "tsrc") (PVar "tests")) (EApp (EVar "joinNl") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "import test as ")) (EApp (EMethodRef "display") (EApp (EVar "expectationAlias") (EVar "nonce")))) (ELit (LString ""))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "import ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeDependencyName") (EVar "nonce")))) (ELit (LString ".runtime as "))) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ""))) (ELit (LString "")) (EApp (EVar "renameUserMain") (EVar "tsrc")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (ELit (LString "main =")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (ELit (LInt 0))) (EVar "tests"))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EVar "endTag")))) (ELit (LString "\""))) (ELit (LString ""))))))
+(DTypeSig false "bindingName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "bindingName" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "__ts_")) (EApp (EMethodRef "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
+(DTypeSig false "printerName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "printerName" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "__tse_")) (EApp (EMethodRef "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
+(DTypeSig false "valueName" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "valueName" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "__tsv_")) (EApp (EMethodRef "display") (EApp (EVar "probeNameNonce") (EVar "nonce")))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString "__"))))
 (DTypeSig false "testBindings" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "testBindings" (PWild PWild (PList)) (EListLit))
-(DFunDef false "testBindings" ((PVar "nonce") (PVar "i") (PCons (PTuple PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "declToString") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EApp (EVar "bindingName") (EVar "i"))) (EListLit (EVar "PWild"))) (EVar "body")) (EVar "noDeclLoc"))) (ELit (LString ""))) (EApp (EApp (EVar "printerDecl") (EVar "nonce")) (EVar "i"))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "testBindings" ((PVar "nonce") (PVar "i") (PCons (PTuple PWild PWild (PVar "body")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EListLit (EApp (EVar "declToString") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EApp (EApp (EVar "bindingName") (EVar "nonce")) (EVar "i"))) (EListLit (EVar "PWild"))) (EVar "body")) (EVar "noDeclLoc"))) (ELit (LString ""))) (EApp (EApp (EVar "printerDecl") (EVar "nonce")) (EVar "i"))) (EApp (EApp (EApp (EVar "testBindings") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "printerDecl" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "printerDecl" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "printerName") (EVar "i")))) (ELit (LString " _ ="))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let ")) (EApp (EMethodRef "display") (EApp (EVar "valueName") (EVar "i")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EVar "bindingName") (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "tag"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationTag"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "msg"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationMessage"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "exp"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationExpected"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "lastEmit") (EVar "nonce")) (EVar "i")) (ELit (LString "act"))) (EApp (EApp (EVar "accessor") (ELit (LString "expectationActual"))) (EVar "i")))) (EListLit (ELit (LString "")))))
-(DTypeSig false "accessor" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "accessor" ((PVar "f") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "expectationAlias"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "valueName") (EVar "i")))) (ELit (LString ""))))
+(DFunDef false "printerDecl" ((PVar "nonce") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "printerName") (EVar "nonce")) (EVar "i")))) (ELit (LString " _ ="))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "valueName") (EVar "nonce")) (EVar "i")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "bindingName") (EVar "nonce")) (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "tag"))) (EApp (EApp (EApp (EVar "accessor") (EVar "nonce")) (ELit (LString "expectationTag"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "msg"))) (EApp (EApp (EApp (EVar "accessor") (EVar "nonce")) (ELit (LString "expectationMessage"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "emit") (EVar "nonce")) (EVar "i")) (ELit (LString "exp"))) (EApp (EApp (EApp (EVar "accessor") (EVar "nonce")) (ELit (LString "expectationExpected"))) (EVar "i")))) (EApp (EApp (EApp (EApp (EVar "lastEmit") (EVar "nonce")) (EVar "i")) (ELit (LString "act"))) (EApp (EApp (EApp (EVar "accessor") (EVar "nonce")) (ELit (LString "expectationActual"))) (EVar "i")))) (EListLit (ELit (LString "")))))
+(DTypeSig false "accessor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "accessor" ((PVar "nonce") (PVar "f") (PVar "i")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "expectationAlias") (EVar "nonce")))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "valueName") (EVar "nonce")) (EVar "i")))) (ELit (LString ""))))
 (DTypeSig false "emit" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emit" ((PVar "nonce") (PVar "i") (PVar "f") (PVar "expr")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn \"")) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EVar "valuePrintExpr") (EVar "expr")))) (ELit (LString "")))))
+(DFunDef false "emit" ((PVar "nonce") (PVar "i") (PVar "f") (PVar "expr")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "valuePrintExprWith") (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".putStrLn")))) (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".debugStringLit")))) (EVar "expr")))) (ELit (LString "")))))
 (DTypeSig false "lastEmit" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "lastEmit" ((PVar "nonce") (PVar "i") (PVar "f") (PVar "expr")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn \"")) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EVar "valuePrintExpr") (EVar "expr")))) (ELit (LString "")))))
+(DFunDef false "lastEmit" ((PVar "nonce") (PVar "i") (PVar "f") (PVar "expr")) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "valuePrintExprWith") (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".putStrLn")))) (EBinOp "++" (EApp (EVar "runtimeAlias") (EVar "nonce")) (ELit (LString ".debugStringLit")))) (EVar "expr")))) (ELit (LString "")))))
 (DTypeSig false "mainLines" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "mainLines" (PWild PWild (PList)) (EListLit))
-(DFunDef false "mainLines" ((PVar "nonce") (PVar "i") (PCons PWild (PVar "rest"))) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = putStrLn \"")) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EVar "startTag") (EVar "i"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EVar "printerName") (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DFunDef false "mainLines" ((PVar "nonce") (PVar "i") (PCons PWild (PVar "rest"))) (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EVar "runtimeAlias") (EVar "nonce")))) (ELit (LString ".putStrLn \""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "sentinelFor") (EVar "nonce")) (EApp (EVar "startTag") (EVar "i"))))) (ELit (LString "\""))) (EBinOp "++" (EBinOp "++" (ELit (LString "  let _ = ")) (EApp (EMethodRef "display") (EApp (EApp (EVar "printerName") (EVar "nonce")) (EVar "i")))) (ELit (LString " ()")))) (EApp (EApp (EApp (EVar "mainLines") (EVar "nonce")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "completeField" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "completeField" ((PVar "chunks") (PVar "i") (PVar "f")) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EApp (EVar "fieldTag") (EVar "i")) (EVar "f"))) (EVar "chunks")) (arm (PCon "Some" (PCon "Chunk" PWild (PVar "ls") (PCon "True"))) () (EApp (EVar "decodeValue") (EVar "ls"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "startedTest" (TyFun (TyApp (TyCon "List") (TyCon "Chunk")) (TyFun (TyCon "Int") (TyCon "Bool"))))

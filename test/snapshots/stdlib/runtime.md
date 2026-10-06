@@ -1,5 +1,5 @@
 # META
-source_lines=949
+source_lines=972
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -35,6 +35,7 @@ stages=DESUGAR,MARK
 extern putStr : String -> <Stdout> Unit
 
 -- | Writes a string and a newline to standard output.
+export
 extern putStrLn : String -> <Stdout> Unit
 
 -- | Writes a string to standard error.
@@ -70,6 +71,7 @@ extern readExactly : Int -> <Stdin> Option String
 
 -- | A new mutable cell holding a value. Read it with `!r` and write it
 -- with `r := v`.
+export
 extern Ref : a -> Ref a
 
 -- The primitive behind `r := v`; the operator is the surface form and this
@@ -468,7 +470,17 @@ extern randomChar : Unit -> <Rand> Char
 
 -- | Seeds the random number generator, making the following draws
 -- repeatable.
+export
 extern setSeed : Int -> <Rand> Unit
+
+-- | The complete deterministic RNG state, for replay or an isolated stream.
+-- Capturing it does not draw a value. OS entropy is a separate source.
+export
+extern randomState : Unit -> <Rand> U64
+
+-- | Restores a state captured by `randomState`, including all 64 bits.
+export
+extern restoreRandomState : U64 -> <Rand> Unit
 
 -- | Exactly the given number of bytes from the operating system's entropy
 -- source.
@@ -520,6 +532,7 @@ extern charMinBound : Char
 extern charMaxBound : Char
 
 -- | An integer as a float.
+export
 extern intToFloat : Int -> Float
 
 -- | A float truncated towards zero as an integer.
@@ -540,6 +553,7 @@ extern bitAnd : Int -> Int -> Int
 extern bitOr : Int -> Int -> Int
 
 -- | Bitwise exclusive or.
+export
 extern bitXor : Int -> Int -> Int
 
 -- | The first argument shifted left by the second, in bits. The bits shifted
@@ -550,6 +564,7 @@ extern shiftLeft : Int -> Int -> Int
 -- | The first argument shifted right by the second, in bits, each vacated bit
 -- a copy of the sign. An amount of 63 or more gives `0`, or `-1` for a
 -- negative value. A negative amount panics.
+export
 extern shiftRight : Int -> Int -> Int
 
 -- | Bitwise complement.
@@ -650,12 +665,14 @@ extern floatToBytes64 : Float -> Array Int
 -- `Display` path uses, so `debug` agrees with `println` on numbers.
 
 -- | An integer in decimal.
+export
 extern intToString : Int -> String
 
 -- | A float in decimal.
 extern floatToString : Float -> String
 
 -- | A string as a quoted, escaped Medaka literal.
+export
 extern debugStringLit : String -> String
 
 -- | A character as a quoted, escaped Medaka literal.
@@ -669,6 +686,7 @@ extern debugCharLit : Char -> String
 -- bounds-checked indexing goes through `arr[i]` (panics on OOB).
 
 -- | The number of elements.
+export
 extern arrayLength : Array a -> Int
 
 -- | A new array of the given length, every element a copy of the value.
@@ -697,6 +715,7 @@ extern arrayBlit : Array a -> Int -> Array a -> Int -> Int -> Unit
 extern arrayFill : a -> Array a -> Unit
 
 -- | A new array holding the elements of a list.
+export
 extern arrayFromList : List a -> Array a
 
 -- Fixed-width integers.  Every extern in this group is internal, so the group
@@ -888,6 +907,7 @@ extern stringToUtf8Bytes : String -> Array Int
 extern stringFromUtf8Bytes : Array Int -> String
 
 -- | A one-character string.
+export
 extern charToStr : Char -> String
 
 -- | A character's codepoint.
@@ -895,12 +915,15 @@ extern charCode : Char -> Int
 
 -- | The character with a codepoint, or `None` when the codepoint is not a
 -- Unicode scalar value.
+export
 extern charFromCode : Int -> Option Char
 
 -- | The number of codepoints in a string.
+export
 extern stringLength : String -> Int
 
 -- | The characters at positions `[lo, hi)`, clamped to the string.
+export
 extern stringSlice : Int -> Int -> String -> String
 
 -- | The strings joined end to end.
@@ -953,7 +976,7 @@ extern stringToUpper : String -> String
 extern stringToLower : String -> String
 # DESUGAR
 (DExtern false "putStr" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
-(DExtern false "putStrLn" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
+(DExtern true "putStrLn" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DExtern false "ePutStr" (TyFun (TyCon "String") (TyEffect ("Stderr") None (TyCon "Unit"))))
 (DExtern false "ePutStrLn" (TyFun (TyCon "String") (TyEffect ("Stderr") None (TyCon "Unit"))))
 (DExtern false "flushStdout" (TyFun (TyCon "Unit") (TyEffect ("Stdout") None (TyCon "Unit"))))
@@ -961,7 +984,7 @@ extern stringToLower : String -> String
 (DExtern false "readLineOpt" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "readAll" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyCon "String"))))
 (DExtern false "readExactly" (TyFun (TyCon "Int") (TyEffect ("Stdin") None (TyApp (TyCon "Option") (TyCon "String")))))
-(DExtern false "Ref" (TyFun (TyVar "a") (TyApp (TyCon "Ref") (TyVar "a"))))
+(DExtern true "Ref" (TyFun (TyVar "a") (TyApp (TyCon "Ref") (TyVar "a"))))
 (DExtern false "setRef" (TyFun (TyApp (TyCon "Ref") (TyVar "a")) (TyFun (TyVar "a") (TyCon "Unit"))))
 (DExtern false "readFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DExtern false "readFileBytes" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
@@ -1033,7 +1056,9 @@ extern stringToLower : String -> String
 (DExtern false "randomBool" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Bool"))))
 (DExtern false "randomFloat" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Float"))))
 (DExtern false "randomChar" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Char"))))
-(DExtern false "setSeed" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyCon "Unit"))))
+(DExtern true "setSeed" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyCon "Unit"))))
+(DExtern true "randomState" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "U64"))))
+(DExtern true "restoreRandomState" (TyFun (TyCon "U64") (TyEffect ("Rand") None (TyCon "Unit"))))
 (DExtern false "osEntropyBytes" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "Array") (TyCon "Int")))))
 (DExtern false "hashInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "hashFloat" (TyFun (TyCon "Float") (TyCon "Int")))
@@ -1046,14 +1071,14 @@ extern stringToLower : String -> String
 (DExtern false "intMaxBound" (TyCon "Int"))
 (DExtern false "charMinBound" (TyCon "Char"))
 (DExtern false "charMaxBound" (TyCon "Char"))
-(DExtern false "intToFloat" (TyFun (TyCon "Int") (TyCon "Float")))
+(DExtern true "intToFloat" (TyFun (TyCon "Int") (TyCon "Float")))
 (DExtern false "floatToInt" (TyFun (TyCon "Float") (TyCon "Int")))
 (DExtern false "floatRem" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DExtern false "bitAnd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "bitOr" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DExtern false "bitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern true "bitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "shiftLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DExtern false "shiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern true "shiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "bitNot" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "sqrt" (TyFun (TyCon "Float") (TyCon "Float")))
 (DExtern false "cbrt" (TyFun (TyCon "Float") (TyCon "Float")))
@@ -1080,11 +1105,11 @@ extern stringToLower : String -> String
 (DExtern false "intBitsToFloat" (TyFun (TyCon "Int") (TyCon "Float")))
 (DExtern false "bytesToFloat64" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Float"))))
 (DExtern false "floatToBytes64" (TyFun (TyCon "Float") (TyApp (TyCon "Array") (TyCon "Int"))))
-(DExtern false "intToString" (TyFun (TyCon "Int") (TyCon "String")))
+(DExtern true "intToString" (TyFun (TyCon "Int") (TyCon "String")))
 (DExtern false "floatToString" (TyFun (TyCon "Float") (TyCon "String")))
-(DExtern false "debugStringLit" (TyFun (TyCon "String") (TyCon "String")))
+(DExtern true "debugStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DExtern false "debugCharLit" (TyFun (TyCon "Char") (TyCon "String")))
-(DExtern false "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))
+(DExtern true "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))
 (DExtern false "arrayMake" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
 (DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "Array") (TyVar "a"))))))
 (DExtern false "arrayGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyVar "a"))))
@@ -1092,7 +1117,7 @@ extern stringToLower : String -> String
 (DExtern false "arrayCopy" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
 (DExtern false "arrayBlit" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DExtern false "arrayFill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
-(DExtern false "arrayFromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
+(DExtern true "arrayFromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
 (DExtern false "u8Truncate" (TyFun (TyCon "Int") (TyCon "U8")))
 (DExtern false "u8ToInt" (TyFun (TyCon "U8") (TyCon "Int")))
 (DExtern false "u16Truncate" (TyFun (TyCon "Int") (TyCon "U16")))
@@ -1132,11 +1157,11 @@ extern stringToLower : String -> String
 (DExtern false "stringFromChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String")))
 (DExtern false "stringToUtf8Bytes" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DExtern false "stringFromUtf8Bytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
-(DExtern false "charToStr" (TyFun (TyCon "Char") (TyCon "String")))
+(DExtern true "charToStr" (TyFun (TyCon "Char") (TyCon "String")))
 (DExtern false "charCode" (TyFun (TyCon "Char") (TyCon "Int")))
-(DExtern false "charFromCode" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
-(DExtern false "stringLength" (TyFun (TyCon "String") (TyCon "Int")))
-(DExtern false "stringSlice" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
+(DExtern true "charFromCode" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
+(DExtern true "stringLength" (TyFun (TyCon "String") (TyCon "Int")))
+(DExtern true "stringSlice" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DExtern false "stringConcat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DExtern false "stringIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DExtern false "stringCompare" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ordering"))))
@@ -1152,7 +1177,7 @@ extern stringToLower : String -> String
 (DExtern false "stringToLower" (TyFun (TyCon "String") (TyCon "String")))
 # MARK
 (DExtern false "putStr" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
-(DExtern false "putStrLn" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
+(DExtern true "putStrLn" (TyFun (TyCon "String") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DExtern false "ePutStr" (TyFun (TyCon "String") (TyEffect ("Stderr") None (TyCon "Unit"))))
 (DExtern false "ePutStrLn" (TyFun (TyCon "String") (TyEffect ("Stderr") None (TyCon "Unit"))))
 (DExtern false "flushStdout" (TyFun (TyCon "Unit") (TyEffect ("Stdout") None (TyCon "Unit"))))
@@ -1160,7 +1185,7 @@ extern stringToLower : String -> String
 (DExtern false "readLineOpt" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyApp (TyCon "Option") (TyCon "String")))))
 (DExtern false "readAll" (TyFun (TyCon "Unit") (TyEffect ("Stdin") None (TyCon "String"))))
 (DExtern false "readExactly" (TyFun (TyCon "Int") (TyEffect ("Stdin") None (TyApp (TyCon "Option") (TyCon "String")))))
-(DExtern false "Ref" (TyFun (TyVar "a") (TyApp (TyCon "Ref") (TyVar "a"))))
+(DExtern true "Ref" (TyFun (TyVar "a") (TyApp (TyCon "Ref") (TyVar "a"))))
 (DExtern false "setRef" (TyFun (TyApp (TyCon "Ref") (TyVar "a")) (TyFun (TyVar "a") (TyCon "Unit"))))
 (DExtern false "readFile" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String")))))
 (DExtern false "readFileBytes" (TyFun (TyNamed "path" (TyCon "String")) (TyEffect ((atom "FileRead" (name "path"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))
@@ -1232,7 +1257,9 @@ extern stringToLower : String -> String
 (DExtern false "randomBool" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Bool"))))
 (DExtern false "randomFloat" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Float"))))
 (DExtern false "randomChar" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "Char"))))
-(DExtern false "setSeed" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyCon "Unit"))))
+(DExtern true "setSeed" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyCon "Unit"))))
+(DExtern true "randomState" (TyFun (TyCon "Unit") (TyEffect ("Rand") None (TyCon "U64"))))
+(DExtern true "restoreRandomState" (TyFun (TyCon "U64") (TyEffect ("Rand") None (TyCon "Unit"))))
 (DExtern false "osEntropyBytes" (TyFun (TyCon "Int") (TyEffect ("Rand") None (TyApp (TyCon "Array") (TyCon "Int")))))
 (DExtern false "hashInt" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "hashFloat" (TyFun (TyCon "Float") (TyCon "Int")))
@@ -1245,14 +1272,14 @@ extern stringToLower : String -> String
 (DExtern false "intMaxBound" (TyCon "Int"))
 (DExtern false "charMinBound" (TyCon "Char"))
 (DExtern false "charMaxBound" (TyCon "Char"))
-(DExtern false "intToFloat" (TyFun (TyCon "Int") (TyCon "Float")))
+(DExtern true "intToFloat" (TyFun (TyCon "Int") (TyCon "Float")))
 (DExtern false "floatToInt" (TyFun (TyCon "Float") (TyCon "Int")))
 (DExtern false "floatRem" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DExtern false "bitAnd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "bitOr" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DExtern false "bitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern true "bitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "shiftLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DExtern false "shiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern true "shiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "bitNot" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "sqrt" (TyFun (TyCon "Float") (TyCon "Float")))
 (DExtern false "cbrt" (TyFun (TyCon "Float") (TyCon "Float")))
@@ -1279,11 +1306,11 @@ extern stringToLower : String -> String
 (DExtern false "intBitsToFloat" (TyFun (TyCon "Int") (TyCon "Float")))
 (DExtern false "bytesToFloat64" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Float"))))
 (DExtern false "floatToBytes64" (TyFun (TyCon "Float") (TyApp (TyCon "Array") (TyCon "Int"))))
-(DExtern false "intToString" (TyFun (TyCon "Int") (TyCon "String")))
+(DExtern true "intToString" (TyFun (TyCon "Int") (TyCon "String")))
 (DExtern false "floatToString" (TyFun (TyCon "Float") (TyCon "String")))
-(DExtern false "debugStringLit" (TyFun (TyCon "String") (TyCon "String")))
+(DExtern true "debugStringLit" (TyFun (TyCon "String") (TyCon "String")))
 (DExtern false "debugCharLit" (TyFun (TyCon "Char") (TyCon "String")))
-(DExtern false "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))
+(DExtern true "arrayLength" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Int")))
 (DExtern false "arrayMake" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
 (DExtern false "arrayMakeWith" (TyFun (TyCon "Int") (TyFun (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "Array") (TyVar "a"))))))
 (DExtern false "arrayGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyVar "a"))))
@@ -1291,7 +1318,7 @@ extern stringToLower : String -> String
 (DExtern false "arrayCopy" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
 (DExtern false "arrayBlit" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DExtern false "arrayFill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
-(DExtern false "arrayFromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
+(DExtern true "arrayFromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
 (DExtern false "u8Truncate" (TyFun (TyCon "Int") (TyCon "U8")))
 (DExtern false "u8ToInt" (TyFun (TyCon "U8") (TyCon "Int")))
 (DExtern false "u16Truncate" (TyFun (TyCon "Int") (TyCon "U16")))
@@ -1331,11 +1358,11 @@ extern stringToLower : String -> String
 (DExtern false "stringFromChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String")))
 (DExtern false "stringToUtf8Bytes" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DExtern false "stringFromUtf8Bytes" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
-(DExtern false "charToStr" (TyFun (TyCon "Char") (TyCon "String")))
+(DExtern true "charToStr" (TyFun (TyCon "Char") (TyCon "String")))
 (DExtern false "charCode" (TyFun (TyCon "Char") (TyCon "Int")))
-(DExtern false "charFromCode" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
-(DExtern false "stringLength" (TyFun (TyCon "String") (TyCon "Int")))
-(DExtern false "stringSlice" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
+(DExtern true "charFromCode" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
+(DExtern true "stringLength" (TyFun (TyCon "String") (TyCon "Int")))
+(DExtern true "stringSlice" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DExtern false "stringConcat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DExtern false "stringIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DExtern false "stringCompare" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Ordering"))))

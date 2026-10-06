@@ -1,5 +1,5 @@
 # META
-source_lines=197
+source_lines=235
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted `test "…" = <expr>` runner (Phase 127 restored 2026-07-11).
@@ -67,8 +67,15 @@ operandText v = match force v
 -- that genuinely panics is unrecoverable and aborts the whole run.
 export
 runOneTest : List (String, Value e) -> Expr -> <e> ExResult
-runOneTest evalEnv body =
-  let env = extendEnv (EvalEnv [[]]) evalEnv
+runOneTest evalEnv body = runOneTestEnv (extendEnv (EvalEnv [[]]) evalEnv) body
+
+-- The command path already owns an evaluated root module graph.  Reuse that
+-- graph's cells so a captured Ref in a global function stays identical to the
+-- cell a test body sees.
+export
+runOneTestEnv : EvalEnv (Value e) -> Expr -> <e> ExResult
+runOneTestEnv evalEnv body =
+  let env = extendEnv evalEnv []
   match force (eval env body)
     VCon "Pass" [e, a] => Pass (operandText e) (operandText a)
     VCon "Fail" [m, e, a] =>
@@ -107,7 +114,24 @@ uncapableExterns : List Decl ->
   List (String, Int, Expr) ->
   List String
 uncapableExterns corpus env tests =
-  let unbound = unboundExternNames corpus (boundNameSet env)
+  uncapableExternNames corpus (boundNameSet env) tests
+
+-- Capability prechecking needs only names.  Reading the environment frame
+-- shape avoids flattening or forcing the values in the root evaluator cells.
+export
+uncapableExternsEnv : List Decl ->
+  EvalEnv (Value e) ->
+  List (String, Int, Expr) ->
+  List String
+uncapableExternsEnv corpus env tests = match env
+  EvalEnv frames => uncapableExternNames corpus (boundFrameNameSet frames) tests
+
+uncapableExternNames : List Decl ->
+  HashMap String Unit ->
+  List (String, Int, Expr) ->
+  List String
+uncapableExternNames corpus bound tests =
+  let unbound = unboundExternNames corpus bound
   match unbound
     [] => []
     _ =>
@@ -129,6 +153,20 @@ boundNameSet env =
   let s = new ()
   let _ = insertNames (map fst env) s
   s
+
+boundFrameNameSet : List (List (String, Ref (Value e))) -> HashMap String Unit
+boundFrameNameSet frames =
+  let s = new ()
+  let _ = insertFrameNames frames s
+  s
+
+insertFrameNames : List (List (String, Ref (Value e))) ->
+  HashMap String Unit ->
+  Unit
+insertFrameNames [] _ = ()
+insertFrameNames (frame :: rest) names =
+  let _ = insertNames (map fst frame) names
+  insertFrameNames rest names
 
 insertNames : List String -> HashMap String Unit -> Unit
 insertNames [] _ = ()
@@ -220,13 +258,24 @@ closureOver graph seen (w :: work)
 (DTypeSig false "operandText" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyCon "String"))))
 (DFunDef false "operandText" ((PVar "v")) (EMatch (EApp (EVar "force") (EVar "v")) (arm (PCon "VString" (PVar "s")) () (EVar "s")) (arm (PVar "other") () (EApp (EVar "ppValue") (EVar "other")))))
 (DTypeSig true "runOneTest" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
-(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
+(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EApp (EApp (EVar "runOneTestEnv") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (EVar "body")))
+(DTypeSig true "runOneTestEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
+(DFunDef false "runOneTestEnv" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EVar "evalEnv")) (EListLit))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
 (DTypeSig true "uncapableExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "uncapableExterns" ((PVar "corpus") (PVar "env") (PVar "tests")) (EBlock (DoLet false false (PVar "unbound") (EApp (EApp (EVar "unboundExternNames") (EVar "corpus")) (EApp (EVar "boundNameSet") (EVar "env")))) (DoExpr (EMatch (EVar "unbound") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closureOver") (EApp (EVar "refGraph") (EVar "corpus"))) (EVar "seen")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "t")) (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (ELit (LString ""))) (EListLit)) (EApp (EVar "thd3") (EVar "t"))) (EVar "noDeclLoc"))))) (EVar "tests")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")))) (EVar "unbound")))))))))
+(DFunDef false "uncapableExterns" ((PVar "corpus") (PVar "env") (PVar "tests")) (EApp (EApp (EApp (EVar "uncapableExternNames") (EVar "corpus")) (EApp (EVar "boundNameSet") (EVar "env"))) (EVar "tests")))
+(DTypeSig true "uncapableExternsEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "uncapableExternsEnv" ((PVar "corpus") (PVar "env") (PVar "tests")) (EMatch (EVar "env") (arm (PCon "EvalEnv" (PVar "frames")) () (EApp (EApp (EApp (EVar "uncapableExternNames") (EVar "corpus")) (EApp (EVar "boundFrameNameSet") (EVar "frames"))) (EVar "tests")))))
+(DTypeSig false "uncapableExternNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "uncapableExternNames" ((PVar "corpus") (PVar "bound") (PVar "tests")) (EBlock (DoLet false false (PVar "unbound") (EApp (EApp (EVar "unboundExternNames") (EVar "corpus")) (EVar "bound"))) (DoExpr (EMatch (EVar "unbound") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closureOver") (EApp (EVar "refGraph") (EVar "corpus"))) (EVar "seen")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "t")) (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (ELit (LString ""))) (EListLit)) (EApp (EVar "thd3") (EVar "t"))) (EVar "noDeclLoc"))))) (EVar "tests")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")))) (EVar "unbound")))))))))
 (DTypeSig false "thd3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "c")))
 (DFunDef false "thd3" ((PTuple PWild PWild (PVar "c"))) (EVar "c"))
 (DTypeSig false "boundNameSet" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "boundNameSet" ((PVar "env")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "insertNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "env"))) (EVar "s"))) (DoExpr (EVar "s"))))
+(DTypeSig false "boundFrameNameSet" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "boundFrameNameSet" ((PVar "frames")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "insertFrameNames") (EVar "frames")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DTypeSig false "insertFrameNames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
+(DFunDef false "insertFrameNames" ((PList) PWild) (ELit LUnit))
+(DFunDef false "insertFrameNames" ((PCons (PVar "frame") (PVar "rest")) (PVar "names")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "insertNames") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "frame"))) (EVar "names"))) (DoExpr (EApp (EApp (EVar "insertFrameNames") (EVar "rest")) (EVar "names")))))
 (DTypeSig false "insertNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "insertNames" ((PList) PWild) (ELit LUnit))
 (DFunDef false "insertNames" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "insertNames") (EVar "rest")) (EVar "s")))))
@@ -270,13 +319,24 @@ closureOver graph seen (w :: work)
 (DTypeSig false "operandText" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyEffect () (Some "e") (TyCon "String"))))
 (DFunDef false "operandText" ((PVar "v")) (EMatch (EApp (EVar "force") (EVar "v")) (arm (PCon "VString" (PVar "s")) () (EVar "s")) (arm (PVar "other") () (EApp (EVar "ppValue") (EVar "other")))))
 (DTypeSig true "runOneTest" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
-(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
+(DFunDef false "runOneTest" ((PVar "evalEnv") (PVar "body")) (EApp (EApp (EVar "runOneTestEnv") (EApp (EApp (EVar "extendEnv") (EApp (EVar "EvalEnv") (EListLit (EListLit)))) (EVar "evalEnv"))) (EVar "body")))
+(DTypeSig true "runOneTestEnv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyCon "ExResult")))))
+(DFunDef false "runOneTestEnv" ((PVar "evalEnv") (PVar "body")) (EBlock (DoLet false false (PVar "env") (EApp (EApp (EVar "extendEnv") (EVar "evalEnv")) (EListLit))) (DoExpr (EMatch (EApp (EVar "force") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "body"))) (arm (PCon "VCon" (PLit (LString "Pass")) (PList (PVar "e") (PVar "a"))) () (EApp (EApp (EVar "Pass") (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PCon "VCon" (PLit (LString "Fail")) (PList (PVar "m") (PVar "e") (PVar "a"))) () (EApp (EApp (EApp (EVar "Fail") (EApp (EVar "operandText") (EVar "m"))) (EApp (EVar "operandText") (EVar "e"))) (EApp (EVar "operandText") (EVar "a")))) (arm (PVar "other") () (EApp (EVar "Errored") (EBinOp "++" (ELit (LString "test body did not evaluate to an Expectation: ")) (EApp (EVar "ppValue") (EVar "other")))))))))
 (DTypeSig true "uncapableExterns" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "uncapableExterns" ((PVar "corpus") (PVar "env") (PVar "tests")) (EBlock (DoLet false false (PVar "unbound") (EApp (EApp (EVar "unboundExternNames") (EVar "corpus")) (EApp (EVar "boundNameSet") (EVar "env")))) (DoExpr (EMatch (EVar "unbound") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closureOver") (EApp (EVar "refGraph") (EVar "corpus"))) (EVar "seen")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "t")) (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (ELit (LString ""))) (EListLit)) (EApp (EVar "thd3") (EVar "t"))) (EVar "noDeclLoc"))))) (EVar "tests")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")))) (EVar "unbound")))))))))
+(DFunDef false "uncapableExterns" ((PVar "corpus") (PVar "env") (PVar "tests")) (EApp (EApp (EApp (EVar "uncapableExternNames") (EVar "corpus")) (EApp (EVar "boundNameSet") (EVar "env"))) (EVar "tests")))
+(DTypeSig true "uncapableExternsEnv" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "uncapableExternsEnv" ((PVar "corpus") (PVar "env") (PVar "tests")) (EMatch (EVar "env") (arm (PCon "EvalEnv" (PVar "frames")) () (EApp (EApp (EApp (EVar "uncapableExternNames") (EVar "corpus")) (EApp (EVar "boundFrameNameSet") (EVar "frames"))) (EVar "tests")))))
+(DTypeSig false "uncapableExternNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Expr"))) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "uncapableExternNames" ((PVar "corpus") (PVar "bound") (PVar "tests")) (EBlock (DoLet false false (PVar "unbound") (EApp (EApp (EVar "unboundExternNames") (EVar "corpus")) (EVar "bound"))) (DoExpr (EMatch (EVar "unbound") (arm (PList) () (EListLit)) (arm PWild () (EBlock (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closureOver") (EApp (EVar "refGraph") (EVar "corpus"))) (EVar "seen")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "t")) (EApp (EVar "freeRefsOf") (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (ELit (LString ""))) (EListLit)) (EApp (EVar "thd3") (EVar "t"))) (EVar "noDeclLoc"))))) (EVar "tests")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "has") (EVar "n")) (EVar "seen")))) (EVar "unbound")))))))))
 (DTypeSig false "thd3" (TyFun (TyTuple (TyVar "a") (TyVar "b") (TyVar "c")) (TyVar "c")))
 (DFunDef false "thd3" ((PTuple PWild PWild (PVar "c"))) (EVar "c"))
 (DTypeSig false "boundNameSet" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
 (DFunDef false "boundNameSet" ((PVar "env")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "insertNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "env"))) (EVar "s"))) (DoExpr (EVar "s"))))
+(DTypeSig false "boundFrameNameSet" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit"))))
+(DFunDef false "boundFrameNameSet" ((PVar "frames")) (EBlock (DoLet false false (PVar "s") (EApp (EVar "new") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "insertFrameNames") (EVar "frames")) (EVar "s"))) (DoExpr (EVar "s"))))
+(DTypeSig false "insertFrameNames" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e")))))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
+(DFunDef false "insertFrameNames" ((PList) PWild) (ELit LUnit))
+(DFunDef false "insertFrameNames" ((PCons (PVar "frame") (PVar "rest")) (PVar "names")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "insertNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "frame"))) (EVar "names"))) (DoExpr (EApp (EApp (EVar "insertFrameNames") (EVar "rest")) (EVar "names")))))
 (DTypeSig false "insertNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyCon "Unit"))))
 (DFunDef false "insertNames" ((PList) PWild) (ELit LUnit))
 (DFunDef false "insertNames" ((PCons (PVar "n") (PVar "rest")) (PVar "s")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "n")) (ELit LUnit)) (EVar "s"))) (DoExpr (EApp (EApp (EVar "insertNames") (EVar "rest")) (EVar "s")))))

@@ -43,15 +43,13 @@ running doctests in stdlib/array.mdk
   ok   stdlib/array.mdk:630: toList (mapWithIndex (i x => i + x) (fromList ([] : List Int)))
 
 stdlib/array.mdk: 42/42 passed
-stdlib/array.mdk:655: Testing "sortBy ascending and length-preserving" ... OK (100 tests)
-stdlib/array.mdk:660: Testing "sortBy idempotent" ... OK (100 tests)
-stdlib/array.mdk:665: Testing "sortBy stable: equal keys preserve original order" ... OK (100 tests)
-stdlib/array.mdk:670: Testing "makeWith length" ... OK (100 tests)
-stdlib/array.mdk:674: Testing "makeWith element at index 0" ... OK (100 tests)
-stdlib/array.mdk:683: Testing "foldWithIndex matches fold over zip with range" ... OK (100 tests)
-stdlib/array.mdk:690: Testing "forEachWithIndex visits every index once, in order, matching zip with range" ... OK (100 tests)
-stdlib/array.mdk:703: Testing "mapWithIndex with an index-ignoring callback is map" ... OK (100 tests)
-stdlib/array.mdk:707: Testing "mapWithIndex hands the callback 0..n-1 in order" ... OK (100 tests)
-stdlib/array.mdk:711: Testing "mapWithIndex agrees with zipWith over range" ... OK (100 tests)
-
-10 passed, 0 failed
+Testing "sortBy ascending and length-preserving" [eval] ... OK (100 tests passed)
+Testing "sortBy idempotent" [eval] ... OK (100 tests passed)
+Testing "sortBy stable: equal keys preserve original order" [eval] ... OK (100 tests passed)
+Testing "makeWith length" [eval] ... OK (100 tests passed)
+Testing "makeWith element at index 0" [eval] ... OK (100 tests passed)
+Testing "foldWithIndex matches fold over zip with range" [eval] ... OK (100 tests passed)
+Testing "forEachWithIndex visits every index once, in order, matching zip with range" [eval] ... OK (100 tests passed)
+Testing "mapWithIndex with an index-ignoring callback is map" [eval] ... OK (100 tests passed)
+Testing "mapWithIndex hands the callback 0..n-1 in order" [eval] ... OK (100 tests passed)
+Testing "mapWithIndex agrees with zipWith over range" [eval] ... OK (100 tests passed)
