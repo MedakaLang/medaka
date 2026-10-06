@@ -1131,3 +1131,26 @@ test "imported generic custom carriers retain their module and nested argument i
           ("native", "nested generic carrier", "pass"),
         ]
         (runReport ["--engines", "eval,native"] target))
+
+test "custom helpers retain the Arbitrary interface identity under standalone method shadows" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "import test.{expectEqual}\ndata Box = Box Int\nimpl Arbitrary Box where\n  arbitrary () = Box 42\n  shrink _ = []\narbitrary : Unit -> Int\narbitrary () = 99\nshrink : Int -> List Int\nshrink _ = []\nprop \"custom method identity\" (value : Box) = match value\n  Box n => n == 42\ntest \"ordinary shadow remains visible\" = expectEqual 99 (arbitrary ())\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        gradeReport
+          0
+          [
+            ("eval", "custom method identity", "pass"),
+            ("native", "custom method identity", "pass"),
+          ]
+          (Ok (code, report)),
+        expectEqual
+          [Some "pass", Some "pass"]
+          (map (field "status") (unitReportRows report)),
+      ])
