@@ -1269,24 +1269,6 @@ testSpawn rel roots =
     Err e => Err "could not spawn test_main: \{e}"
     Ok (code, out, err) => Ok (code, testRelative out, testRelative err)
 
-{- | The standalone oracle must locate the production CLI without inheriting
-   a harness-selected binary or root. This is the environment in which the
-   evaluator property worker used to resolve its parent `test/bin` directory
-   as the project root and fail before evaluating any law. -}
-testSpawnWithoutMedakaEnv : String ->
-  List String ->
-  <Exec, IO> Result String (Int, String, String)
-testSpawnWithoutMedakaEnv rel roots =
-  let bin = underRoot "test/bin/test_main"
-  let rt = underRoot "stdlib/runtime.mdk"
-  let core = underRoot "stdlib/core.mdk"
-  let args =
-    ["-u", "MEDAKA", "-u", "MEDAKA_ROOT", bin, rt, core, underRoot rel]
-      ++ map underRoot roots
-  match boundedVerbSeconds testReportSeconds "env" args
-    Err e => Err "could not spawn environment-clean test_main: \{e}"
-    Ok (code, out, err) => Ok (code, testRelative out, testRelative err)
-
 {- | One corpus module's report against its committed `.test.golden`.
 
    The exit code is NOT graded here: three of the fixtures exist to hold a
@@ -1360,12 +1342,16 @@ testContentFailureWithoutMedakaEnv : String ->
   List String ->
   <Exec, IO> Option String
 testContentFailureWithoutMedakaEnv label rel roots wantZero wanted unwanted =
-  testContentResult
-    label
-    wantZero
-    wanted
-    unwanted
-    (testSpawnWithoutMedakaEnv rel roots)
+  let bin = underRoot "test/bin/test_main"
+  let rt = underRoot "stdlib/runtime.mdk"
+  let core = underRoot "stdlib/core.mdk"
+  let args =
+    ["-u", "MEDAKA", "-u", "MEDAKA_ROOT", bin, rt, core, underRoot rel]
+      ++ map underRoot roots
+  let spawned = match boundedVerbSeconds testReportSeconds "env" args
+    Err e => Err "could not spawn environment-clean test_main: \{e}"
+    Ok (code, out, err) => Ok (code, testRelative out, testRelative err)
+  testContentResult label wantZero wanted unwanted spawned
 
 testContentResult : String ->
   Bool ->
