@@ -76,7 +76,9 @@ import frontend.marker.{declRefs}
 import frontend.lexer.{collectComments}
 import eval.eval.{
   Value,
+  EvalEnv,
   evalOneRootEnvWith,
+  evalModulesRootEvalEnvWith,
   evalModulesRootEnvWith,
   currentEvalFile,
   modulePathMap,
@@ -180,7 +182,7 @@ import tools.test_pins_report.{
 }
 import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
 import tools.test_runner.{
-  collectTests, exprLine, runOneTest, hasTests, uncapableExterns
+  collectTests, exprLine, runOneTestEnv, hasTests, uncapableExternsEnv
 }
 import driver.diagnostics.{
   analyzeLocated,
@@ -2126,7 +2128,7 @@ propsReportEnginesPlain (EngInterp :: rest) rawCoreM coreM rawM modsM target tsr
       (planModules rawCoreM coreM rawM modsM)
       (propRequestsFor index file "eval" userDecls cases filterOpt)
       (propLineTests tsrc)
-      (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
+      (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
       (elaboratedRootProps modsM userDecls)
     ++ propsReportEnginesPlain
       rest
@@ -2462,7 +2464,7 @@ runProtocolHelperEnginesGo (engine :: rest) message rawCoreM coreM rawM modsM ta
             []
             rows
             (propLineTests tsrc)
-            (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
+            (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
             (coreM ++ flatMap snd modsM)
         EngNative => runPreparedNativeRows rows target tsrc modules
       here ++ next
@@ -2520,7 +2522,7 @@ runValidatedPropEnginesGo (engine :: rest) helpers rejected rawCoreM coreM rawM 
             helpers
             rows
             (propLineTests tsrc)
-            (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
+            (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
             (coreM ++ flatMap snd modsM)
         EngNative => runPreparedNativeRows rows target tsrc modules
       here
@@ -2884,7 +2886,7 @@ testDeclsReportOn EngInterp (TestPair _runtimeM _rawCoreM coreM _rawM modsM) run
   gatedTestsCollect
     target
     (runtimeDecls ++ coreM ++ flatMap snd modsM)
-    (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
+    (evalModulesRootEvalEnvWith (testCapableExterns ()) coreM modsM)
     (rootTestsOf filterOpt tsrc modsM userDecls)
 testDeclsReportOn EngNative _pair _runtimeDecls target tsrc _userDecls filterOpt file index =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
@@ -2945,12 +2947,12 @@ nativeTestsWithPinnedErrors target tsrc index file ((selected@(name, line, _)) :
 -- silently empty `tests` array.
 gatedTestsCollect : String ->
   List Decl ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List (String, Int, Expr) ->
   <e> List (String, Int, ExResult)
 gatedTestsCollect target corpus env tests =
-  match uncapableExterns corpus env tests
-    [] => runTestsCollect env tests
+  match uncapableExternsEnv corpus env tests
+    [] => runTestsCollectEnv env tests
     names =>
       let msg = uncapableExternsMsg target names
       map (t => (fst3 t, snd3 t, Errored msg)) tests
@@ -2958,12 +2960,12 @@ gatedTestsCollect target corpus env tests =
 snd3 : (a, b, c) -> b
 snd3 (_, b, _) = b
 
-runTestsCollect : List (String, Value e) ->
+runTestsCollectEnv : EvalEnv (Value e) ->
   List (String, Int, Expr) ->
   <e> List (String, Int, ExResult)
-runTestsCollect _ [] = []
-runTestsCollect env ((name, line, body) :: rest) =
-  (name, line, runOneTest env body) :: runTestsCollect env rest
+runTestsCollectEnv _ [] = []
+runTestsCollectEnv env ((name, line, body) :: rest) =
+  (name, line, runOneTestEnv env body) :: runTestsCollectEnv env rest
 
 -- ── test: flags, engine selection, --json rendering ─────────────────────
 -- Moved from `driver/medaka_cli.mdk` (S-test-verb): the engine/flag
