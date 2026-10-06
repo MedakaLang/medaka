@@ -119,7 +119,7 @@
 --   * Ref: $refbox = a 1-field mutable struct (declared on use; the Ref/setRef
 --     externs' full lowering rides on W8's extern surface — the type is reserved).
 -- The range/index/slice/record-update codegen uses depth-keyed typed scratch locals
--- ($__rli<d>/$__raarr<d>/…), declared per function over depths 0..maxDepth.
+-- ($__rli<d>/$__raarr<d>/…); a function declares the ones its body references (w7Local).
 --
 -- ── W8b SCOPE (Float + the last externs; MVP-completing) ──────────
 -- Float is now a boxed (struct $float (f64)) (ref eq).  CLOSED this slice:
@@ -215,6 +215,7 @@ import support.ordmap.{
   omInsert,
   omLookup,
   omHasKey,
+  omKeys,
   omFromNames,
   omFromPairs,
   omMapValues,
@@ -382,7 +383,6 @@ data WasmEmit = WasmEmit {
   intRtUsed : Ref (List String),
   useEPut : Ref Bool,
   useDivGuard : Ref Bool,
-  useRecUpdate : Ref Bool,
   useRng : Ref Bool,
   useHash : Ref Bool,
   useFloatHash : Ref Bool,
@@ -429,6 +429,9 @@ data WasmEmit = WasmEmit {
   floatLocals : Ref (List String),
   numPolyLocals : Ref (List String),
   wDispCtx : Ref WDispCtx,
+  -- the W7 scratch locals (`__rli2`, ...) the function being emitted references;
+  -- see w7ScopeOpen.
+  w7Used : Ref (OrdMap Unit),
 }
 
 freshWasmEmit : WGapMode -> WasmEmit
@@ -454,7 +457,6 @@ freshWasmEmit mode = WasmEmit {
   intRtUsed = Ref [],
   useEPut = Ref False,
   useDivGuard = Ref False,
-  useRecUpdate = Ref False,
   useRng = Ref False,
   useHash = Ref False,
   useFloatHash = Ref False,
@@ -491,6 +493,7 @@ freshWasmEmit mode = WasmEmit {
   floatLocals = Ref [],
   numPolyLocals = Ref [],
   wDispCtx = Ref WDispOff,
+  w7Used = Ref omEmpty,
 }
 
 -- Declaration-derived semantic input. Raw lists retain table order where a full
@@ -1131,30 +1134,6 @@ gapL3P prog reason = gapL3 (progEmit prog) reason
 -- per-arity struct `$C_TupN`.  Records reuse the EXISTING per-ctor struct ($C_<ctor>,
 -- already declared by the W3 ctor type section since a named-field ctor is in the
 -- ctor table) — they need no new type, only the field-order table below.
--- `WasmEmit.useRecUpdate`: does this emission contain a
--- `CRecordUpdate`/`CVariantUpdate`?
--- Gates the `$__rub<d>` scratch local that `emitUpdateCopy` stashes the update base
--- in — the ONLY consumer of that local, and reached from exactly those two nodes.
---
--- It must not be gated on whether the construction-field fallback is non-empty, i.e. on the
--- CONSTRUCTION-SITE scan, which asks a different question and gets it wrong the
--- moment the resolvers read declaration-seeded WasmEmitInput indexes:
--- a program whose only record is constructed somewhere `scanRecFields` does not
--- walk (a match-arm guard) but which UPDATES that record emitted `local.set
--- $__rub0` with no `(local $__rub0 …)` to match. MEASURED on this branch before
--- this gate changed: `test/bin/wasm_emit_main` exits 0 and `wasm-tools parse` then
--- fails with `unknown local: failed to find name $__rub0`. Loud either way — before
--- #1513 that same program was a clean `gapL "CRecordUpdate on unknown field"` — but
--- an invalid module is a worse loud than a named gap.
---
--- `scanProgW7`/`scanImplsW7` is the walk its three sibling locals ($__rlacc,
--- $__raarr, $__divr) already gate on, and unlike `scanRecFields` it DOES descend
--- match-arm guards, block statements and `CLetGroup`. Its residual blind spots
--- (`CStringIndex`/`CStringSlice`/`CListIndex`/`CListSlice` fall to the trailing
--- wildcard) are shared with those siblings and are not introduced here; if one is
--- ever reached the failure is again a wasm-tools validation error, never a wrong
--- answer. A record LAYOUT question must rest on the declaration; a scratch-local
--- declaration is not a layout question.
 -- ── W8 extern-use state ──────────────────────────────────────────────────────
 -- Which W8 LEAF runtime groups the program reaches (gates their preamble
 -- emission, peer to useStr).  useStrLeaf: any pure-WAT string leaf op
@@ -2452,11 +2431,9 @@ scanExprW7 emit (CRecord _ fields) =
   forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex
 scanExprW7 emit (CRecordUpdate _ base fields) =
-  let _ = setRef emit.useRecUpdate True
   let _ = scanExprW7 emit base in
     forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CVariantUpdate _ base fields) =
-  let _ = setRef emit.useRecUpdate True
   let _ = scanExprW7 emit base in
     forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
 scanExprW7 emit (CApp f a) =
@@ -2711,8 +2688,8 @@ noteW8Binop emit "++" =
   let _ = setRef emit.useStr True
   setRef emit.useList True
 noteW8Binop emit "::" = setRef emit.useList True
--- B5: a concrete-Int `/`/`%` needs the divisor-guard scratch local (declared per fn
--- via w7LocalsAtDepth / the scalar fn+init decls).  Float `/` never traps on zero.
+-- B5: a concrete-Int `/`/`%` needs the divisor-guard scratch local (the scalar fn+init
+-- decls; ref mode declares `$__divr<d>` through w7Local).  Float `/` never traps on zero.
 noteW8Binop emit "/" = setRef emit.useDivGuard True
 noteW8Binop emit "%" = setRef emit.useDivGuard True
 noteW8Binop _ _ = ()
@@ -4254,8 +4231,12 @@ emitRefInit prog groups =
     filterList
       (b => not (isLazyGlobalW prog (bindName b)))
       (topoSortValBinds groups (filterList isValBind groups))
+  let initW7Outer = w7ScopeOpen (progEmit prog)
   let valInit = flatMap (emitRefValInit prog) valBinds
+  let initW7Used = w7ScopeClose (progEmit prog) initW7Outer
+  let mainW7Outer = w7ScopeOpen (progEmit prog)
   let mainLines = emitRefMain prog groups
+  let mainW7Used = w7ScopeClose (progEmit prog) mainW7Outer
   let valLocals = flatMap collectBindLocals valBinds
   let mainBodies = match findMain (progEmit prog) groups
     Some body => [body]
@@ -4274,9 +4255,8 @@ emitRefInit prog groups =
     map
       (l => "  " ++ localDeclRef l)
       (dedupKeep mainLocals ++ scratchLocals mainDepth)
-  let w7DeclsAt = d => map ("  " ++ _) (w7LocalDecls (progEmit prog) d)
-  let initW7Decls = w7DeclsAt valDepth
-  let mainW7Decls = w7DeclsAt mainDepth
+  let initW7Decls = map ("  " ++ _) (w7LocalDecls initW7Used valDepth)
+  let mainW7Decls = map ("  " ++ _) (w7LocalDecls mainW7Used mainDepth)
   -- `start` runs only the eager value inits; `main` is the exported
   -- `mdk_main`, which every host calls after instantiation.  A module
   -- instantiated without that call runs no program code.  A suspending
@@ -4335,12 +4315,16 @@ emitRefForceFns prog groups =
 emitRefForceFn : Prog -> CBind -> List String
 emitRefForceFn prog (CBind name [CClause [] body]) =
   let g = gname name
+  let w7Outer = w7ScopeOpen (progEmit prog)
   let instrs = emitRefExpr prog [] 0 body
   let bodyLocals = dedupKeep (collectExprLocals body)
   let maxDepth = maxRefDepth body
   let scratch = scratchLocals maxDepth
   let localDecls = map (l => "  " ++ localDeclRef l) (bodyLocals ++ scratch)
-  let w7Decls = map ("  " ++ _) (w7LocalDecls (progEmit prog) maxDepth)
+  let w7Decls =
+    map
+      ("  " ++ _)
+      (w7LocalDecls (w7ScopeClose (progEmit prog) w7Outer) maxDepth)
   let cyclic =
     wasmTrap
       (progEmit prog)
@@ -4777,6 +4761,7 @@ emitRefFnBind prog (CBind name clauses0) =
           else
             [])
       None =>
+        let w7Outer = w7ScopeOpen (progEmit prog)
         let bodyLines = emitClausesRef prog name params arity clauses
         let allLocals = clauseLocals clauses
         let extraLocals = filterList (notIn params) (dedupKeep allLocals)
@@ -4784,7 +4769,10 @@ emitRefFnBind prog (CBind name clauses0) =
         let sig =
           "  (func $\{gname name}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
         let localDecls = map localDeclRef (extraLocals ++ scratch)
-        let w7Decls = w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
+        let w7Decls =
+          w7LocalDecls
+            (w7ScopeClose (progEmit prog) w7Outer)
+            (clausesMaxDepth clauses)
         let fnDef =
           [sig]
             ++ map ("  " ++ _) (localDecls ++ w7Decls)
@@ -6304,6 +6292,7 @@ emitImplGroup prog (ImplG method headTag key arity clauses fnName) =
         setRef
           (progEmit prog).implSelfCtx
           (ImplSelfOn method headTag key fnName arity)
+      let w7Outer = w7ScopeOpen (progEmit prog)
       let bodyLines = emitClausesImpl prog fnName params arity clauses
       let _ = setRef (progEmit prog).implSelfCtx savedImplSelf
       let _ = setRef (progEmit prog).floatLocals []
@@ -6313,7 +6302,10 @@ emitImplGroup prog (ImplG method headTag key arity clauses fnName) =
       let sig =
         "  (func $\{fnName}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
       let localDecls = map localDeclRef (extraLocals ++ scratch)
-      let w7Decls = w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
+      let w7Decls =
+        w7LocalDecls
+          (w7ScopeClose (progEmit prog) w7Outer)
+          (clausesMaxDepth clauses)
       [sig]
         ++ map ("  " ++ _) (localDecls ++ w7Decls)
         ++ indent bodyLines
@@ -6893,8 +6885,8 @@ emitExternEtaClosure prog name =
   -- S-4: an extern eta captures nothing (the comment above says so) ⇒ hoisted global.
   wConstClos (progEmit prog) lamName arity
 
--- The depth-0 `$__aex*`/`$__raarr*` array-intrinsic scratch locals (a flat copy of the
--- useArray block in w7LocalsAtDepth at depth 0) that an ARRAY-extern eta (func …)
+-- The depth-0 `$__aex*`/`$__raarr*` array-intrinsic scratch locals (the array-extern
+-- rows of w7LocalKinds at depth 0) that an ARRAY-extern eta (func …)
 -- must declare to host emitArrayExternRef's loop counter / size / result $arr / list
 -- cursor / closure-init-value cells / i64 reinterpret accumulator.
 arrayEtaScratchLocals : List String
@@ -6921,6 +6913,9 @@ emitExternEtaDefine prog lamName name arity =
   -- `$__aex*`/`$__raarr*` scratch locals (loop counter, size, result $arr, list cursor,
   -- closure/init/value cells, i64 reinterpret accumulator), which the synthesized eta
   -- (func …) must declare itself (its localLines otherwise only cover the param locals).
+  -- the eta declares its own fixed scratch set (arrayEtaScratchLocals), so its body's
+  -- W7 references must not land in the function whose codegen reached it.
+  let w7Outer = w7ScopeOpen (progEmit prog)
   let call =
     if isStrExternW name then
       emitStrExternRef prog params 0 name argVars
@@ -6930,6 +6925,7 @@ emitExternEtaDefine prog lamName name arity =
       emitByteBlockExternRef prog params 0 name argVars
     else
       emitLeafExternRef prog params 0 name argVars
+  let _ = w7ScopeClose (progEmit prog) w7Outer
   let arrayScratch = if isArrayExternW name then arrayEtaScratchLocals else []
   let localLines = map (l => localDeclRef l) params ++ arrayScratch
   [
@@ -7106,7 +7102,7 @@ emitIntBinRef prog env d op l r tag =
   if op == "/" || op == "%" then
     li
       ++ ri
-      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
+      ++ emitDivZeroGuard (progEmit prog) op (divrLocal prog d)
       ++ opInstrs
       ++ fixedWidthWrapW tag op
       ++ ["call $mdk_box_int"]
@@ -7132,7 +7128,7 @@ emitU64BinRef prog env d op l r =
   if op == "/" || op == "%" then
     li
       ++ ri
-      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
+      ++ emitDivZeroGuard (progEmit prog) op (divrLocal prog d)
       ++ [wasmU64Op op, "struct.new $u64"]
   else if isCmpOp op then
     li ++ ri ++ [wasmU64Op op, "ref.i31"]
@@ -7161,7 +7157,7 @@ emitI64BinRef prog env d op l r =
   if op == "/" || op == "%" then
     li
       ++ ri
-      ++ emitDivZeroGuard (progEmit prog) op ("$__divr" ++ intToString d)
+      ++ emitDivZeroGuard (progEmit prog) op (divrLocal prog d)
       ++ [instr, "struct.new $i64"]
   else if isCmpOp op then
     li ++ ri ++ [instr, "ref.i31"]
@@ -8425,9 +8421,9 @@ emitArrayExternRef prog env d "arrayMake" _ =
   gapLP prog "wasm W10: arrayMake takes exactly two arguments"
 emitArrayExternRef prog env d "arrayCopy" [a] =
   let sfx = intToString d
-  let srcL = "$__aexarr" ++ sfx
-  let dstL = "$__raarr" ++ sfx
-  let nL = "$__aexn" ++ sfx
+  let srcL = w7Local (progEmit prog) "__aexarr" sfx
+  let dstL = w7Local (progEmit prog) "__raarr" sfx
+  let nL = w7Local (progEmit prog) "__aexn" sfx
   emitRefExpr prog env d a
     ++ ["ref.cast (ref $arr)", "local.set " ++ srcL]
     ++ [
@@ -8470,10 +8466,10 @@ emitArrayExternRef prog env d "arraySetUnsafe" _ =
 -- array.set arr i (apply f [i]).  f is applied via the universal $__mdk_apply.
 emitArrayExternRef prog env d "arrayMakeWith" [n, f] =
   let sfx = intToString d
-  let arrL = "$__aexarr" ++ sfx
-  let iL = "$__aexi" ++ sfx
-  let nL = "$__aexn" ++ sfx
-  let fL = "$__aexf" ++ sfx
+  let arrL = w7Local (progEmit prog) "__aexarr" sfx
+  let iL = w7Local (progEmit prog) "__aexi" sfx
+  let nL = w7Local (progEmit prog) "__aexn" sfx
+  let fL = w7Local (progEmit prog) "__aexf" sfx
   emitRefExpr prog env d n
     ++ ["ref.cast (ref i31)", "i31.get_s", "local.set " ++ nL]
     ++ emitRefExpr prog env d f
@@ -8512,10 +8508,10 @@ emitArrayExternRef prog env d "arrayMakeWith" _ =
 -- walk the chain again filling cells in order.  Two-pass over a $C_Cons cursor.
 emitArrayExternRef prog env d "arrayFromList" [lst] =
   let sfx = intToString d
-  let arrL = "$__aexarr" ++ sfx
-  let iL = "$__aexi" ++ sfx
-  let nL = "$__aexn" ++ sfx
-  let curL = "$__aexlst" ++ sfx
+  let arrL = w7Local (progEmit prog) "__aexarr" sfx
+  let iL = w7Local (progEmit prog) "__aexi" sfx
+  let nL = w7Local (progEmit prog) "__aexn" sfx
+  let curL = w7Local (progEmit prog) "__aexlst" sfx
   -- pass 1: length.  cursor = lst; while not i31: n++, cursor = tail.
   emitRefExpr prog env d lst
     ++ ["local.set " ++ curL]
@@ -8577,13 +8573,13 @@ emitArrayExternRef prog env d "arrayBlit" [src, srcOff, dst, dstOff, len] =
 emitArrayExternRef prog env d "arrayBlit" _ =
   gapLP prog "wasm stage-A: arrayBlit takes exactly five arguments"
 -- stage-A: arrayFill val arr — sets every element of arr to val via a loop.
--- Reuses the $__aex* locals declared by w7LocalsAtDepth when useArray.
+-- Uses the $__aex* W7 scratch locals (w7Local).
 emitArrayExternRef prog env d "arrayFill" [val, arr] =
   let sfx = intToString d
-  let arrL = "$__aexarr" ++ sfx
-  let iL = "$__aexi" ++ sfx
-  let nL = "$__aexn" ++ sfx
-  let vL = "$__aexv" ++ sfx
+  let arrL = w7Local (progEmit prog) "__aexarr" sfx
+  let iL = w7Local (progEmit prog) "__aexi" sfx
+  let nL = w7Local (progEmit prog) "__aexn" sfx
+  let vL = w7Local (progEmit prog) "__aexv" sfx
   emitRefExpr prog env d arr
     ++ ["ref.cast (ref $arr)", "local.set " ++ arrL]
     ++ [
@@ -8620,8 +8616,8 @@ emitArrayExternRef prog env d "arrayFill" _ =
 -- runtime/medaka_rt.c:mdk_float_to_bytes64 exactly (cell[i+1] = byte at (bits>>(8*(7-i)))&0xFF).
 emitArrayExternRef prog env d "floatToBytes64" [f] =
   let sfx = intToString d
-  let arrL = "$__aexarr" ++ sfx
-  let bitsL = "$__aexbits" ++ sfx
+  let arrL = w7Local (progEmit prog) "__aexarr" sfx
+  let bitsL = w7Local (progEmit prog) "__aexbits" sfx
   emitRefExpr prog env d f
     ++ [
       "ref.cast (ref $float)",
@@ -8646,9 +8642,9 @@ emitArrayExternRef prog env d "floatToBytes64" _ =
 -- f64.reinterpret_i64 + box into a $float.  Matches runtime/medaka_rt.c:mdk_bytes_to_float64.
 emitArrayExternRef prog env d "bytesToFloat64" [arr, off] =
   let sfx = intToString d
-  let arrL = "$__aexarr" ++ sfx
-  let offL = "$__aexi" ++ sfx
-  let bitsL = "$__aexbits" ++ sfx
+  let arrL = w7Local (progEmit prog) "__aexarr" sfx
+  let offL = w7Local (progEmit prog) "__aexi" sfx
+  let bitsL = w7Local (progEmit prog) "__aexbits" sfx
   emitRefExpr prog env d arr
     ++ ["ref.cast (ref $arr)", "local.set " ++ arrL]
     ++ emitRefExpr prog env d off
@@ -9476,6 +9472,7 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
   let loopLbl = "$tmcloop"
   let exitLbl = "$tmcexit"
   let isBuiltinList = wTrmcBuildsBuiltinList prog self arity clauses
+  let w7Outer = w7ScopeOpen (progEmit prog)
   let saved = (progEmit prog).trmcCtx.value
   let _ =
     setRef
@@ -9520,7 +9517,10 @@ emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
   let extraLocals = filterList (notIn params) (dedupKeep allLocals)
   let scratch = scratchLocals (clausesMaxDepth clauses)
   let localDecls = map localDeclRef (extraLocals ++ scratch)
-  let w7Decls = w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
+  let w7Decls =
+    w7LocalDecls
+      (w7ScopeClose (progEmit prog) w7Outer)
+      (clausesMaxDepth clauses)
   let sig =
     "  (func $\{funcSym}\{joinWith "" (map paramDeclRef params)} (result (ref eq))"
   wTmcMarker funcSym "trmc"
@@ -9747,6 +9747,7 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
   -- call it makes to `scan` is arity-5.  It also carries the MEMBER SET so spine
   -- cons leaves targeting a non-root member return_call that member directly.
   let rootArity = progFnArity prog root
+  let w7Outer = w7ScopeOpen (progEmit prog)
   let saved = (progEmit prog).wDispCtx.value
   let _ =
     setRef
@@ -9769,7 +9770,10 @@ emitWDispMemberFn prog grp emitName origName arity clauses =
   -- the member needs the tmc temp local ($__tmc_t0 = the fresh cell stash).
   let tmcLocal = ["(local " ++ wTrmcTempL 0 ++ " (ref null eq))"]
   let localDecls = map localDeclRef (extraLocals ++ scratch)
-  let w7Decls = w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
+  let w7Decls =
+    w7LocalDecls
+      (w7ScopeClose (progEmit prog) w7Outer)
+      (clausesMaxDepth clauses)
   marker
     ++ [sig]
     ++ map ("  " ++ _) (tmcLocal ++ localDecls ++ w7Decls)
@@ -10447,6 +10451,7 @@ emitLamDefine prog lamName pats captured body =
   -- (possibly-destructuring) pattern against that local via bindPatRef (the same
   -- field-extraction machinery match-arm leaves / destructuring-lets use).
   let synthPs = map (i => "__lp" ++ intToString i) (rangeList 0 arity)
+  let w7Outer = w7ScopeOpen (progEmit prog)
   let capPrologue = flatMap capLoadAt (zipIdx captured 0)
   let argLoads = flatMap argLoadAt (zipIdx synthPs 0)
   let (paramBinds, bodyEnv0) =
@@ -10463,7 +10468,6 @@ emitLamDefine prog lamName pats captured body =
       ++ map
         (l => localDeclRef l)
         (synthPs ++ captured ++ patBoundVars ++ bodyLocals ++ scratch)
-      ++ w7LocalDecls (progEmit prog) (maxRefDepth body)
   let setup =
     ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
   -- A lifted lambda is an INDEPENDENT function: it must NOT inherit the enclosing
@@ -10489,12 +10493,14 @@ emitLamDefine prog lamName pats captured body =
   let _ = setRef (progEmit prog).numPolyLocals savedNumPoly
   let _ = setRef (progEmit prog).trmcCtx savedTrmc
   let _ = setRef (progEmit prog).wDispCtx savedDisp
+  let w7Decls =
+    w7LocalDecls (w7ScopeClose (progEmit prog) w7Outer) (maxRefDepth body)
   [
       "  (func "
         ++ lamName
         ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
     ]
-    ++ map ("  " ++ _) localLines
+    ++ map ("  " ++ _) (localLines ++ w7Decls)
     ++ indent (setup ++ capPrologue ++ argLoads ++ paramBinds ++ bodyLines)
     ++ ["  )"]
 
@@ -10727,6 +10733,7 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
   let _ = noteFuncRef (progEmit prog) lamName
   let arity = clauseArityOf clauses
   let params = synthParams arity
+  let w7Outer = w7ScopeOpen (progEmit prog)
   let capPrologue = flatMap capLoadAt (zipIdx groupCaps 0)
   let memberRebuilds = liftedMemberRebuilds prog gid groupCaps binds
   let argPrologue = flatMap argLoadAt (zipIdx params 0)
@@ -10753,7 +10760,9 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses) =
       ++ map
         (l => localDeclRef l)
         (params ++ groupCaps ++ bodyLocals ++ scratch)
-      ++ w7LocalDecls (progEmit prog) (clausesMaxDepth clauses)
+      ++ w7LocalDecls
+        (w7ScopeClose (progEmit prog) w7Outer)
+        (clausesMaxDepth clauses)
   let setup =
     ["local.get $self", "ref.cast (ref $clos)", "local.set $__self_clos"]
   let def =
@@ -10979,9 +10988,9 @@ emitRangeListRef prog env d lo hi incl =
   let loI = emitRefExpr prog env d lo ++ ["call $mdk_unbox_int"]
   let hiI = emitRefExpr prog env d hi ++ ["call $mdk_unbox_int"]
   let sfx = intToString d
-  let accL = "$__rlacc" ++ sfx
-  let iL = "$__rli" ++ sfx
-  let loL = "$__rllo" ++ sfx
+  let accL = w7Local (progEmit prog) "__rlacc" sfx
+  let iL = w7Local (progEmit prog) "__rli" sfx
+  let loL = w7Local (progEmit prog) "__rllo" sfx
   -- count = (incl ? hi+1 : hi) - lo ; clamped at 0 by the loop guard.
   let adj = if incl then ["i64.const 1", "i64.add"] else []
   -- stash lo, init acc=Nil, i = count-1, loop i>=0: acc = Cons (lo+i) acc.
@@ -11026,10 +11035,10 @@ emitRangeArrayRef prog env d lo hi incl =
   let loI = emitRefExpr prog env d lo ++ ["call $mdk_unbox_int"]
   let hiI = emitRefExpr prog env d hi ++ ["call $mdk_unbox_int"]
   let sfx = intToString d
-  let arrL = "$__raarr" ++ sfx
-  let iL = "$__rai" ++ sfx
-  let loL = "$__ralo" ++ sfx
-  let cntL = "$__racnt" ++ sfx
+  let arrL = w7Local (progEmit prog) "__raarr" sfx
+  let iL = w7Local (progEmit prog) "__rai" sfx
+  let loL = w7Local (progEmit prog) "__ralo" sfx
+  let cntL = w7Local (progEmit prog) "__racnt" sfx
   -- the bound and count arithmetic is i64, as in emitRangeListRef; the slot index
   -- stays i32, the width `array.new`/`array.set` take.
   let adj = if incl then ["i64.const 1", "i64.add"] else []
@@ -11095,8 +11104,8 @@ emitRangeArrayRef prog env d lo hi incl =
 emitIndexRef : Prog -> List String -> Int -> CExpr -> CExpr -> List String
 emitIndexRef prog env d a i =
   let sfx = intToString d
-  let arrL = "$__ixarr" ++ sfx
-  let idxL = "$__ixi" ++ sfx
+  let arrL = w7Local (progEmit prog) "__ixarr" sfx
+  let idxL = w7Local (progEmit prog) "__ixi" sfx
   let arrI =
     emitRefExpr prog env d a ++ ["ref.cast (ref $arr)", "local.set " ++ arrL]
   let idxI =
@@ -11165,10 +11174,10 @@ emitSliceRef : Prog ->
   List String
 emitSliceRef prog env d a lo hi incl =
   let sfx = intToString d
-  let srcL = "$__slsrc" ++ sfx
-  let dstL = "$__sldst" ++ sfx
-  let loL = "$__sllo" ++ sfx
-  let lenL = "$__sllen" ++ sfx
+  let srcL = w7Local (progEmit prog) "__slsrc" sfx
+  let dstL = w7Local (progEmit prog) "__sldst" sfx
+  let loL = w7Local (progEmit prog) "__sllo" sfx
+  let lenL = w7Local (progEmit prog) "__sllen" sfx
   let arrI =
     emitRefExpr prog env d a ++ ["ref.cast (ref $arr)", "local.set " ++ srcL]
   let loI =
@@ -11351,7 +11360,7 @@ emitUpdateCopy : Prog ->
   List String
 emitUpdateCopy prog env d ctor labels base fields =
   let sfx = intToString d
-  let bL = "$__rub" ++ sfx
+  let bL = w7Local (progEmit prog) "__rub" sfx
   let baseI =
     emitRefExpr prog env d base
       ++ ["ref.cast (ref $" ++ ctorStructName ctor ++ ")", "local.set " ++ bL]
@@ -12196,61 +12205,96 @@ collectStmtLocals (CSLet _ pat ex) = patVars pat ++ collectExprLocals ex
 collectStmtLocals (CSAssign _ ex) = collectExprLocals ex
 
 -- ── W7 scratch-local declarations ────────────────────────────────────────────
--- The range/index/slice/record-update codegen uses depth-keyed scratch locals
--- ($__rli<d> etc.) with specific WAT types (i32 counters, (ref $arr) array temps,
--- (ref eq) accumulators).  A W7 node is emitted at the same depth `d` the surrounding
--- match nesting threads, so declaring the locals for every depth 0..maxDepth (the
--- bound `maxRefDepth` already computes for $__rf<d>) covers every site (unused locals
--- are valid WasmGC, so over-declaring is harmless).  Gated by the per-kind usage refs
--- so a program that uses none declares none.  Returns full `(local …)` lines.
-w7LocalDecls : WasmEmit -> Int -> List String
-w7LocalDecls emit maxDepth =
-  flatMap (d => w7LocalsAtDepth emit d) (rangeList 0 (maxI maxDepth 1))
+-- The range/index/slice/record-update/array-extern/divisor-guard codegen uses
+-- depth-keyed scratch locals ($__rli<d> etc.) with specific WAT types (i32 counters,
+-- (ref $arr) array temps, (ref eq) accumulators).  Each site names its local through
+-- `w7Local`, which records the name in `w7Used`, and a function declares exactly the
+-- W7 locals its own body recorded.  A local is a stack slot in every frame of its
+-- function on some engines (Firefox), so declaring every W7 local in every function
+-- multiplied frame sizes and overflowed deep but legitimate recursion (#3882).
+--
+-- A function's emitter brackets the codegen of its body with `w7ScopeOpen` and
+-- `w7ScopeClose`.  The pair saves and restores the enclosing function's set, because
+-- a lifted lambda or let-group member is emitted while its parent's body is
+-- being emitted.
 
-w7LocalsAtDepth : WasmEmit -> Int -> List String
-w7LocalsAtDepth emit d =
+-- the `$`-prefixed name of the W7 scratch local `stem` at depth suffix `sfx`, recorded
+-- as referenced by the function being emitted.
+w7Local : WasmEmit -> String -> String -> String
+w7Local emit stem sfx =
+  let name = stem ++ sfx
+  let _ = setRef emit.w7Used (omInsert name () !emit.w7Used)
+  "$" ++ name
+
+-- start recording a new function's W7 locals; returns the enclosing function's set,
+-- which `w7ScopeClose` restores.
+w7ScopeOpen : WasmEmit -> OrdMap Unit
+w7ScopeOpen emit =
+  let outer = !emit.w7Used
+  let _ = setRef emit.w7Used omEmpty
+  outer
+
+-- the W7 locals recorded since the matching `w7ScopeOpen`; restores `outer`.
+w7ScopeClose : WasmEmit -> OrdMap Unit -> OrdMap Unit
+w7ScopeClose emit outer =
+  let used = !emit.w7Used
+  let _ = setRef emit.w7Used outer
+  used
+
+-- The `(local …)` lines for the W7 locals in `used`, over depths 0..maxDepth (the
+-- bound `maxRefDepth` already computes for $__rf<d>, which covers every W7 site),
+-- in depth-major then `w7LocalKinds` order.
+w7LocalDecls : OrdMap Unit -> Int -> List String
+w7LocalDecls used maxDepth = match omKeys used
+  [] => []
+  _ => flatMap (d => w7LocalsAtDepth used d) (rangeList 0 (maxI maxDepth 1))
+
+w7LocalsAtDepth : OrdMap Unit -> Int -> List String
+w7LocalsAtDepth used d =
   let sfx = intToString d
-  let rl =
-    if !emit.useList then
-      [
-        "(local $__rlacc" ++ sfx ++ " (ref eq))",
-        "(local $__rli" ++ sfx ++ " i64)",
-        "(local $__rllo" ++ sfx ++ " i64)",
-      ]
-    else
-      []
-  let ra =
-    if !emit.useArray then
-      [
-        "(local $__raarr" ++ sfx ++ " (ref null $arr))",
-        "(local $__rai" ++ sfx ++ " i32)",
-        "(local $__ralo" ++ sfx ++ " i64)",
-        "(local $__racnt" ++ sfx ++ " i64)",
-        "(local $__ixarr" ++ sfx ++ " (ref null $arr))",
-        "(local $__ixi" ++ sfx ++ " i32)",
-        "(local $__slsrc" ++ sfx ++ " (ref null $arr))",
-        "(local $__sldst" ++ sfx ++ " (ref null $arr))",
-        "(local $__sllo" ++ sfx ++ " i32)",
-        "(local $__sllen" ++ sfx ++ " i32)",
-        -- W10 array-intrinsic-extern scratch (loop counter, size, result array, list cursor,
-        -- closure/init value) for arrayMake/arrayMakeWith/arrayFromList/arraySetUnsafe.
-        "(local $__aexi" ++ sfx ++ " i32)",
-        "(local $__aexn" ++ sfx ++ " i32)",
-        "(local $__aexarr" ++ sfx ++ " (ref null $arr))",
-        "(local $__aexlst" ++ sfx ++ " (ref eq))",
-        "(local $__aexf" ++ sfx ++ " (ref eq))",
-        "(local $__aexv" ++ sfx ++ " (ref eq))",
-        -- stage-B: i64 bit accumulator for floatToBytes64/bytesToFloat64 reinterpret.
-        "(local $__aexbits" ++ sfx ++ " i64)",
-      ]
-    else
-      []
-  let ru =
-    if !emit.useRecUpdate then ["(local $__rub" ++ sfx ++ " (ref eq))"] else []
-  -- B5: the i64 divisor-guard scratch for a concrete-Int `/`/`%` at this depth.
-  let dv =
-    if !emit.useDivGuard then ["(local $__divr" ++ sfx ++ " i64)"] else []
-  rl ++ ra ++ ru ++ dv
+  flatMap
+    ((stem, ty) =>
+      if omHasKey (stem ++ sfx) used then
+        ["(local $\{stem}\{sfx} \{ty})"]
+      else
+        [])
+    w7LocalKinds
+
+-- the divisor-guard scratch local of a concrete `/`/`%` at depth `d`.
+divrLocal : Prog -> Int -> String
+divrLocal prog d = w7Local (progEmit prog) "__divr" (intToString d)
+
+-- every W7 scratch local's name stem and WAT type, in declaration order.
+w7LocalKinds : List (String, String)
+w7LocalKinds = [
+  ("__rlacc", "(ref eq)"),
+  ("__rli", "i64"),
+  ("__rllo", "i64"),
+  ("__raarr", "(ref null $arr)"),
+  ("__rai", "i32"),
+  ("__ralo", "i64"),
+  ("__racnt", "i64"),
+  ("__ixarr", "(ref null $arr)"),
+  ("__ixi", "i32"),
+  ("__slsrc", "(ref null $arr)"),
+  ("__sldst", "(ref null $arr)"),
+  ("__sllo", "i32"),
+  ("__sllen", "i32"),
+  -- W10 array-intrinsic-extern scratch (loop counter, size, result array, list cursor,
+  -- closure/init value) for arrayMake/arrayMakeWith/arrayFromList/arraySetUnsafe.
+  ("__aexi", "i32"),
+  ("__aexn", "i32"),
+  ("__aexarr", "(ref null $arr)"),
+  ("__aexlst", "(ref eq)"),
+  ("__aexf", "(ref eq)"),
+  ("__aexv", "(ref eq)"),
+  -- stage-B: i64 bit accumulator for floatToBytes64/bytesToFloat64 reinterpret.
+  ("__aexbits", "i64"),
+  -- the record/variant update base (emitUpdateCopy).
+  ("__rub", "(ref eq)"),
+  -- B5: the i64 divisor-guard scratch for a concrete-Int `/`/`%`.
+  ("__divr", "i64"),
+]
 
 -- an arm contributes its pattern's bound vars + its body's locals + guard locals.
 collectArmLocals : CArm -> List String
