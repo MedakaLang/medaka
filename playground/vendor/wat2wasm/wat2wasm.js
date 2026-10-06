@@ -230,3 +230,5 @@ async function __wbg_init(module_or_path) {
 }
 
 export { initSync, __wbg_init as default };
+// Served with Cross-Origin-Embedder-Policy (playground/_headers): WebKit refuses a module
+// worker's import without it, and the edge serves a new header rule only for changed bytes.

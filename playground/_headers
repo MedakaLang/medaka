@@ -15,7 +15,9 @@
 # `sleep` can block a worker on Atomics.wait (SharedArrayBuffer needs isolation).
 # Rules stack by URL pattern, so each path is listed exactly: no splat, so /blog/*
 # and /guide/* (which embed third-party content) never receive COEP. Every worker
-# the page spawns needs COEP itself under require-corp.
+# the page spawns needs COEP itself under require-corp, and so does every module a
+# module worker imports: WebKit (every iOS browser) refuses an import without it,
+# which kills the worker before it runs. Chrome checks only the worker script.
 /
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
@@ -27,4 +29,8 @@
 /compiler-worker.js
   Cross-Origin-Embedder-Policy: require-corp
 /language-worker.js
+  Cross-Origin-Embedder-Policy: require-corp
+/compile.mjs
+  Cross-Origin-Embedder-Policy: require-corp
+/vendor/wat2wasm/wat2wasm.js
   Cross-Origin-Embedder-Policy: require-corp

@@ -155,19 +155,24 @@ preview on purpose.
 
 ⚠️ **`sleep` needs cross-origin isolation.** `_headers` sends
 `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
-require-corp` on the playground route and its three workers, and on nothing else
-(the blog and guide embed third-party content). After a deploy, check both sides:
+require-corp` on the playground route, its three workers, and every module the module
+workers import (`compile.mjs`, `vendor/wat2wasm/wat2wasm.js`), and on nothing else
+(the blog and guide embed third-party content). WebKit, and so every iOS browser,
+refuses a module worker's import that lacks COEP; Chrome checks only the worker
+script, so a Chrome-only check passes while Safari's Run fails with
+`compiler-worker error: undefined`. `node playground/headers_rules_test.mjs` derives
+the import set from the workers' source. After a deploy, check both sides:
 
 ```sh
 curl -sI https://medaka-lang.dev/ | grep -i '^cross-origin'            # both headers
-for w in worker compiler-worker language-worker; do
-  curl -sI "https://medaka-lang.dev/$w.js" | grep -ci '^cross-origin-embedder'   # 1 each
+for p in worker.js compiler-worker.js language-worker.js compile.mjs vendor/wat2wasm/wat2wasm.js; do
+  curl -sI "https://medaka-lang.dev/$p" | grep -ci '^cross-origin-embedder'   # 1 each
 done
 curl -sI https://medaka-lang.dev/blog/index.html | grep -ci '^cross-origin'  # 0
 ```
 
-Then run a real program on the live origin and read its output (a header check alone
-passed while Run was dead, see below):
+Then run a real program on the live origin, in Chrome **and WebKit**, and read its
+output (a header check alone passed while Run was dead, see below):
 `node test/visitor_battery/tools/browser_battery.mjs https://medaka-lang.dev/ <out-dir> 01_`.
 
 ⚠️ **A `_headers` change for a file whose bytes did not change is not served.** The edge

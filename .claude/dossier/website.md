@@ -78,3 +78,11 @@ README only named `/` and `/worker.js`, and no CI gate runs the page. Derive, af
 deploy that touches `_headers`: all three worker URLs carry COEP, then a program's output
 in a real browser against `https://medaka-lang.dev/`, then the same against the deploy URL if
 they differ. Tracked: #3860.
+
+🚨 **[WEB-WEBKIT-COEP-IMPORTS] The same deploy left Run dead on every iOS browser for a
+day (2026-10-06).** WebKit applies COEP to each module a module worker imports, so
+`compile.mjs` and `vendor/wat2wasm/wat2wasm.js` without the header killed both module
+workers (`compiler-worker error: undefined`). Chrome checks only the worker script, and
+every check that night was Chrome. Fix: COEP on both imports, which
+`playground/headers_rules_test.mjs` now derives from the workers' source. Run the
+live-origin check in WebKit too (Playwright `webkit`, installed with `--with-deps`).
