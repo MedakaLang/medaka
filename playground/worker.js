@@ -112,7 +112,7 @@ function mdkHexFloat(ip, fp, pexp) {
 // --- END SHARED SHIM mdkStrToFloat ---
 
 // Thrown by the IO-capability stubs below. Caught in the instantiate .catch handler
-// and surfaced verbatim (no "instantiate failed:" prefix, no generic panic wording).
+// and surfaced verbatim (no "instantiate failed:" / "runtime error:" prefix, no generic panic wording).
 class CapabilityError extends Error {}
 // Thrown for a module built before the start/mdk_main split; surfaced verbatim too.
 class OldEntryShape extends Error {}
@@ -186,6 +186,9 @@ self.onmessage = function(e) {
   stderrAll = [];
   floatFmtBuf = [];
 
+  // False while compiling and instantiating, true once mdk_main runs: a failure after that
+  // is the program's, not the instantiation's.
+  let inProgram = false;
   const imports = { env: {
     mdk_write_byte: (b) => {
       stdoutBuf.push(b & 0xff);
@@ -249,8 +252,9 @@ self.onmessage = function(e) {
           throw new CapabilityError(
             '`sleep` needs cross-origin isolation, which this deployment does not provide');
         waitCell = waitCell || new Int32Array(new SharedArrayBuffer(4));
-        // Lines held back by the burst throttle would otherwise sit behind the wait, and a
-        // kill mid-sleep would lose them.
+        // A partial line (no newline yet) and lines held back by the burst throttle would
+        // otherwise sit behind the wait, and a kill mid-sleep would lose them.
+        flushStdout();
         postPending(true);
         Atomics.wait(waitCell, 0, 0, ms);
       }
@@ -272,6 +276,7 @@ self.onmessage = function(e) {
       return WebAssembly.instantiate(module, imports);
     })
     .then((instance) => {
+      inProgram = true;
       instance.exports.mdk_main();
       flushStdout();
       flushStderr();
@@ -300,7 +305,8 @@ self.onmessage = function(e) {
       const message = named ? engineMsg
         : overflow ? STACK_OVERFLOW_MSG
         : coded ? coded
-        : (isPanic ? 'program panicked' : 'instantiate failed: ' + engineMsg);
+        : isPanic ? 'program panicked'
+        : (inProgram ? 'runtime error: ' : 'instantiate failed: ') + engineMsg;
       self.postMessage({ type: 'error', message, shown: !!coded && !overflow && !named });
     });
 };

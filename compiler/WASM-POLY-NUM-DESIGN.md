@@ -26,7 +26,7 @@ wasm = `test/bin/wasm_emit_main f | wasm-tools parse | node test/wasm/run.js`.
 
 "native bare" = the value-`main` as written (auto-print). "native anchored" = wrapped through a
 `Float -> Float` identity to isolate the *arithmetic* from the separate auto-print type-loss.
-Verbatim wasm error is `instantiate failed: illegal cast` in every trap row.
+Verbatim wasm error is `runtime error: illegal cast` in every trap row.
 
 | # | probe | shape | native (bare / anchored) | wasm | verdict |
 |---|-------|-------|--------------------------|------|---------|
