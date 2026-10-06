@@ -5,29 +5,46 @@
    `netTryRecv`, `netTryRecvBytes`, `netTrySend`, `netTrySendFrom`,
    `netSetNonblock`, `netConnectStart`, `netConnectCheck`) are bound by the LLVM backend
    (`compiler/backend/llvm_emit.mdk`) and implemented in `runtime/medaka_rt.c`
-   only — `compiler/eval/eval.mdk` never binds any of them. There is
-   therefore no interpreter arm to run, let alone compare against a native
-   one: `medaka run` on one of these fixtures does not silently do nothing,
-   it panics on the first readiness call with "unbound identifier". The
-   corpus is graded on the native arm alone, and the absence of the other
-   arm is a declared, checked property of this file (the last test below),
-   not a call this file quietly never makes.
+   only — `compiler/eval/eval.mdk` never binds any of them. `medaka run` on a
+   fixture that uses one does not silently do nothing, it panics on the first
+   readiness call with "unbound identifier".
 
-   For each fixture under `test/async_fixtures/`, `medaka check` must accept
-   it, `medaka build` + exec must succeed, and its stdout must match the
-   committed `<name>.expected` exactly (mod trailing newlines, the same as
-   the shell predecessor's `$(...)` comparison).
+   The two Net fixtures (`echo_overlap`, `no_starvation`) are therefore
+   native-only, and the absence of their other arms is a declared, checked
+   property of this file (the last test below), not a call this file quietly
+   never makes. `overlap_sleeps` uses only the clock, which the WasmGC
+   backend binds, so it has a native arm and a wasm arm sharing one
+   `.expected`. `async_deadlock` is compute-only and is graded on `run`,
+   native and wasm, for its exit status and coded stderr line.
+
+   The WasmGC backend lowers `ioPoll` to a coded runtime error, after
+   evaluating its arguments left to right. `wasm_poll_order` (a direct call)
+   and `wasm_poll_stdin` (the scheduler waiting on descriptor 0 with no `Net`)
+   pin that on their wasm arm; natively their output depends on which
+   descriptors the harness left open, so they have no native arm.
+
+   For each fixture under `test/async_fixtures/` that is meant to finish,
+   `medaka check` must accept it, `medaka build` + exec must succeed, and its
+   stdout must match the committed `<name>.expected` exactly (mod trailing
+   newlines, the same as the shell predecessor's `$(...)` comparison).
 
    What the corpus proves (guarantees G1-G9 of the design doc):
      overlap_sleeps   G6/G7 — parked tasks overlap; the program times itself
                       and prints "overlapped" only if three 100 ms sleeps
                       finish in under 250 ms (an order-of-magnitude margin).
+                      On wasm the program's own check cannot see a host whose
+                      sleep returns at once (that also prints "overlapped"),
+                      so the wasm run is additionally bracketed from outside:
+                      wall time at least 90 ms, and child CPU within 50 ms of
+                      a compute-only module's, which a busy-wait host fails.
      echo_overlap     the A3 payoff — one thread, an accept loop that spawns
                       a handler per connection, a slow client that does not
                       stall a fast one, a deadline that fires, and a serve
                       loop that ends when its listener closes.
      no_starvation    a slow sleeper and a fast ping both make progress
                        under one event loop.
+     async_deadlock   every task waiting on a flag nothing sets is reported
+                      as a deadlock (exit 1, coded stderr line), not a hang.
 
    No I/O completion order is pinned beyond what the fixtures make
    deterministic by construction (G2): every ordering claim in an `.expected`
@@ -39,10 +56,19 @@
 
 import compiler_cli_test_support.{chompNewlines, fixtureStems}
 import fs.{expectUnitCount}
+import io.{getEnvOr}
 import list.{somes, sort}
-import string.{contains, unlines}
-import test.{Expectation, fail, pass}
-import test_process.{boundedVerbSeconds, medakaBin, medakaRoot, scratchDir}
+import string.{
+  contains, lines, split, stripSuffix, toFloat, trim, unlines, words
+}
+import test.{
+  Expectation,
+  expectEqual,
+  fail,
+  pass,
+}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
+import time.{monotonic}
 
 corpus : <IO> String
 corpus = "\{medakaRoot}/test/async_fixtures"
@@ -50,15 +76,37 @@ corpus = "\{medakaRoot}/test/async_fixtures"
 -- | The size of the corpus, written down so that a corpus which silently
 -- shrank is red. Growing it is expected: add the row and raise this.
 declaredFixtureCount : Int
-declaredFixtureCount = 3
+declaredFixtureCount = 6
+
+-- | Fixtures that use `Net`, which no wasm host binds: native arm only.
+nativeOnlyRoster : List String
+nativeOnlyRoster = ["echo_overlap", "no_starvation"]
+
+-- | Fixtures with both a native and a wasm arm. A `Net` fixture added here
+-- is red (see the no-Net test below), because its wasm build cannot succeed.
+wasmRoster : List String
+wasmRoster = ["overlap_sleeps"]
+
+-- | The fixture that must end in a coded panic rather than exit 0.
+deadlockFixture : String
+deadlockFixture = "async_deadlock"
+
+-- | Wasm-only fixtures that must print their `.expected` stdout and then stop
+-- at an `ioPoll` with `ioPollLine`.
+ioPollTrapRoster : List String
+ioPollTrapRoster = ["wasm_poll_order", "wasm_poll_stdin"]
+
+-- | Fixtures that are built and must exit 0 with their `.expected` stdout.
+exitZeroRoster : List String
+exitZeroRoster = nativeOnlyRoster ++ wasmRoster
 
 -- | The fixtures this gate knows about, by name, matched against disk both
 -- ways below: a fixture with no row here is graded by nothing, and a row
 -- with no fixture would otherwise surface later as an unreadable path.
 roster : List String
-roster = ["echo_overlap", "no_starvation", "overlap_sleeps"]
+roster = exitZeroRoster ++ [deadlockFixture] ++ ioPollTrapRoster
 
-test "diff_async: exactly 3 fixtures on disk, matching the roster" =
+test "diff_async: exactly 6 fixtures on disk, matching the roster" =
   match fixtureStems corpus
     Err e => fail "\{corpus}: \{e}"
     Ok found => match expectUnitCount declaredFixtureCount found
@@ -68,6 +116,21 @@ test "diff_async: exactly 3 fixtures on disk, matching the roster" =
           pass
         else
           fail "\{corpus}: found \{debug found}, want \{debug roster}"
+
+-- `Some name` when `name`'s source mentions the Net effect or a net module.
+netUser : String -> <FileRead, IO> Option String
+netUser name = match readFile "\{corpus}/\{name}.mdk"
+  Err _ => Some name
+  Ok src =>
+    if contains "Net" src || contains "import net" src then Some name else None
+
+test "diff_async: no wasm-roster fixture uses Net" =
+  let bad = somes (map netUser (wasmRoster ++ ioPollTrapRoster))
+  match bad
+    [] => pass
+    _ =>
+      fail
+        "fixture(s) in wasmRoster use Net, which no wasm host binds: \{debug bad}"
 
 -- Builds `\{corpus}/\{name}.mdk` into `\{scratch}/\{name}` and executes it
 -- once, without ever invoking `medaka run` — see the file header for why.
@@ -91,43 +154,314 @@ buildAndRun scratch name =
             Err e => Err "\{name}: could not run the built binary: \{e}"
             Ok r => Ok r
 
+-- The wasm emitter binary the CLI's `--target wasm` path execs.
+wasmEmitter : <IO> String
+wasmEmitter =
+  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+
+-- Builds the .mdk file `entry` for wasm into `out`.
+buildWasmFile : String -> String -> <Exec, IO> Result String Unit
+buildWasmFile entry out =
+  let args = [
+    "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+    medakaBin,
+    "build",
+    "--target",
+    "wasm",
+    entry,
+    "-o",
+    out,
+  ]
+  match boundedVerbSeconds 120 "env" args
+    Err e => Err "could not run `medaka build --target wasm`: \{e}"
+    Ok (0, _, _) => Ok ()
+    Ok (code, o, err) =>
+      Err
+        "`medaka build --target wasm \{entry}` exited \{intToString code}: \{o ++ err}"
+
+-- Executes a built wasm module under the Node host; an exit other than `want`
+-- is an error carrying the code and stderr, so a crash is never a result.
+runWasmFile : String -> Int -> <Exec, IO> Result String (Int, String, String)
+runWasmFile wasmPath want = match boundedVerbSeconds 30 "node" [
+  "\{medakaRoot}/test/wasm/run.js",
+  wasmPath,
+]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= want then
+      Err
+        "node exited \{intToString code}, want \{intToString want}: stdout=\{debug out} stderr=\{debug err}"
+    else
+      Ok (code, out, err)
+
+-- Builds fixture `name` for wasm and runs it, requiring exit `want`.
+buildAndRunWasm : String ->
+  String ->
+  Int ->
+  <Exec, IO> Result String (Int, String, String)
+buildAndRunWasm scratch name want =
+  let wasmPath = "\{scratch}/\{name}.wasm"
+  match buildWasmFile "\{corpus}/\{name}.mdk" wasmPath
+    Err e => Err "\{name}: \{e}"
+    Ok _ => runWasmFile wasmPath want
+
+-- A new empty directory per call. `test_process.scratchDir` is one value
+-- shared by every test in the file, so a test that removes its own scratch
+-- directory would pull it from under the others.
+freshDir : Unit -> <Exec> Result String String
+freshDir u = match boundedVerbSeconds 10 "mktemp" ["-d"]
+  Err e => Err "mktemp -d: \{e}"
+  Ok (0, out, _) => Ok (trim out)
+  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
+
 -- `name`'s committed expected stdout, without its trailing newlines — the
 -- same comparison the retired shell gate made via `$(cat …)`.
 wantOutput : String -> <FileRead, IO> Result String String
 wantOutput name = map chompNewlines (readFile "\{corpus}/\{name}.expected")
 
+-- Grades one arm's result: exit 0 and stdout equal to the shared `.expected`.
+gradeRun : String ->
+  String ->
+  String ->
+  Result String (Int, String, String) ->
+  Option String
+gradeRun arm name _ (Err e) = Some "  \{arm} \{name}: \{e}"
+gradeRun arm name want (Ok (code, out, err)) =
+  let got = chompNewlines out
+  if code /= 0 then
+    Some
+      "  \{arm} \{name}: exited \{intToString code}: stdout=\{debug got} stderr=\{debug err}"
+  else if got /= want then
+    Some
+      "  \{arm} \{name}: stdout mismatch: want \{debug want}, got \{debug got}"
+  else
+    None
+
 gradeFixture : String -> String -> <Exec, FileRead, IO> Option String
 gradeFixture scratch name = match wantOutput name
   Err e => Some "  \{name}: \{e}"
-  Ok want => match buildAndRun scratch name
-    Err e => Some "  \{name}: \{e}"
-    Ok (code, out, err) =>
-      let got = chompNewlines out
-      if code /= 0 then
-        Some
-          "  \{name}: exited \{intToString code}: stdout=\{debug got} stderr=\{debug err}"
-      else if got /= want then
-        Some "  \{name}: stdout mismatch: want \{debug want}, got \{debug got}"
-      else
-        None
+  Ok want => gradeRun "native" name want (buildAndRun scratch name)
 
-test "diff_async: build+exec matches the committed stdout for every fixture" =
-  match scratchDir
+gradeWasmFixture : String -> String -> <Exec, FileRead, IO> Option String
+gradeWasmFixture scratch name = match wantOutput name
+  Err e => Some "  \{name}: \{e}"
+  Ok want => gradeRun "wasm" name want (buildAndRunWasm scratch name 0)
+
+-- Runs `grade` over `names` in a fresh scratch directory and passes when
+-- every row grades clean.
+gradeAll : String ->
+  (String -> String -> <Exec, FileRead, IO> Option String) ->
+  List String ->
+  <Exec, FileRead, IO> Expectation
+gradeAll what grade names = match freshDir ()
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok scratch =>
+    let failures = somes (map (grade scratch) names)
+    let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+    match failures
+      [] => pass
+      _ =>
+        fail
+          "\{intToString (length failures)} of \{intToString (length names)} \{what} fixtures under \{corpus} missed their expected stdout:\n\{unlines failures}"
+
+test "diff_async: build+exec matches the committed stdout for every native fixture" =
+  gradeAll "native" gradeFixture exitZeroRoster
+
+test "diff_async: wasm build+run matches the same committed stdout for every wasm fixture" =
+  gradeAll "wasm" gradeWasmFixture wasmRoster
+
+-- # The wasm progress detector
+--
+-- `overlap_sleeps` prints "overlapped" on a host whose sleep returns at once,
+-- so its stdout alone cannot show a sleep happened. Two outside measurements
+-- do: the run's wall time reaches the sleep (a return-at-once host collapses
+-- below it), and the CPU the run burns stays near a compute-only module's (a
+-- busy-wait host adds the whole sleep). Margins are an order of magnitude,
+-- never tight: same-duration sleeps wake in park order and nothing finer is
+-- claimed.
+
+-- | The run's wall time must reach one 100 ms sleep, less slack.
+minWallMs : Float
+minWallMs = 90.0
+
+-- | Child CPU beyond a compute-only module's must stay below this.
+maxExtraCpuMs : Float
+maxExtraCpuMs = 50.0
+
+-- "0m0.040s" (the POSIX `times` token) as milliseconds.
+timesToken : String -> Option Float
+timesToken tok = match stripSuffix "s" tok
+  None => None
+  Some body => match split "m" body
+    [m, s] => match (toFloat m, toFloat s)
+      (Some mins, Some secs) => Some ((mins * 60.0 + secs) * 1000.0)
+      _ => None
+    _ => None
+
+-- Child user+sys milliseconds from `times` output: its second line holds the
+-- children's user and system times.
+childCpuMs : String -> Option Float
+childCpuMs out = match lines (trim out)
+  [_, kids] => match map timesToken (words kids)
+    [Some u, Some s] => Some (u + s)
+    _ => None
+  _ => None
+
+test "diff_async: `times` output parses to child CPU milliseconds" =
+  expectEqual (Some 150.0) (childCpuMs "0m0.010s 0m0.020s\n0m0.100s 0m0.050s\n")
+
+-- Runs the wasm module under Node and returns (wall ms, child CPU ms).
+measureWasm : String -> <Exec, IO, Clock> Result String (Float, Float)
+measureWasm wasmPath =
+  let t0 = monotonic ()
+  let ran = boundedVerbSeconds 60 "sh" [
+    "-c",
+    "node \{medakaRoot}/test/wasm/run.js \{wasmPath} >/dev/null; rc=$?; times; exit $rc",
+  ]
+  let t1 = monotonic ()
+  match ran
+    Err e => Err "could not run the wasm module: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err
+          "the wasm module exited \{intToString code}: stdout=\{debug out} stderr=\{debug err}"
+      else match childCpuMs out
+        None => Err "could not parse `times` output: \{debug out}"
+        Some cpu => Ok ((t1 - t0) * 1000.0, cpu)
+
+-- Grades the two bounds on (wall ms, CPU ms beyond the baseline).
+gradeDetector : Float -> Float -> Expectation
+gradeDetector wall extraCpu =
+  if wall < minWallMs then
+    fail
+      "wall bound: run took \{debug wall} ms, under \{debug minWallMs} ms, so no sleep happened"
+  else if extraCpu > maxExtraCpuMs then
+    fail
+      "extra-CPU bound: run burned \{debug extraCpu} ms of CPU beyond the baseline, over \{debug maxExtraCpuMs} ms, so the wait spun"
+  else
+    pass
+
+-- Builds the baseline and `overlap_sleeps`, measures both, grades the run.
+detectOverlap : String -> <Exec, IO, Clock> Expectation
+detectOverlap scratch =
+  let baseline = "\{scratch}/baseline.wasm"
+  let overlap = "\{scratch}/overlap_sleeps.wasm"
+  let built = (
+    buildWasmFile "\{scratch}/baseline.mdk" baseline,
+    buildWasmFile "\{corpus}/overlap_sleeps.mdk" overlap,
+  )
+  match built
+    (Ok _, Ok _) => match (measureWasm baseline, measureWasm overlap)
+      (Ok (_, baseCpu), Ok (wall, cpu)) => gradeDetector wall (cpu - baseCpu)
+      (Err e, _) => fail "baseline: \{e}"
+      (_, Err e) => fail "overlap_sleeps: \{e}"
+    (Err e, _) => fail "baseline build: \{e}"
+    (_, Err e) => fail "overlap_sleeps build: \{e}"
+
+test "diff_async: overlap_sleeps on wasm really sleeps without burning CPU" =
+  match freshDir ()
     Err e => fail "could not make a scratch directory: \{e}"
     Ok scratch =>
-      let failures = somes (map (gradeFixture scratch) roster)
+      let _ = writeFile "\{scratch}/baseline.mdk" "main = putStrLn \"x\"\n"
+      let verdict = detectOverlap scratch
       let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
-      match failures
-        [] => pass
-        _ =>
-          fail
-            "\{intToString (length failures)} of \{intToString declaredFixtureCount} fixtures under \{corpus} missed their expected stdout:\n\{unlines failures}"
+      verdict
+
+-- # The deadlock fixture
+--
+-- It exits 1 on every engine, so the exit-0 loop above skips it. Its stdout
+-- is `start`; the coded panic line is on stderr, which a stdout comparison
+-- cannot pin.
+
+deadlockLine : String
+deadlockLine =
+  "runtime error [E-PANIC]: async: every remaining task is waiting on a task that can never finish (deadlock)"
+
+-- Grades fixture `name`'s `(exit, stdout, stderr)`: exit 1, the `.expected`
+-- stdout, and `line` contained in stderr (`run` prefixes a `file:line:col`).
+gradeCoded : String ->
+  String ->
+  String ->
+  Result String (Int, String, String) ->
+  <FileRead, IO> Expectation
+gradeCoded line name arm result = match (result, wantOutput name)
+  (Err e, _) => fail "\{arm} \{name}: \{e}"
+  (_, Err e) => fail "\{arm} \{name}: \{e}"
+  (Ok (code, out, err), Ok want) =>
+    if code /= 1 then
+      fail
+        "\{arm} \{name}: exited \{intToString code}, want 1: stdout=\{debug out} stderr=\{debug err}"
+    else if chompNewlines out /= want then
+      fail
+        "\{arm} \{name}: stdout \{debug (chompNewlines out)}, want \{debug want}"
+    else if contains line err then
+      pass
+    else
+      fail "\{arm} \{name}: stderr lacks \{debug line}: \{debug err}"
+
+gradeDeadlock : String ->
+  Result String (Int, String, String) ->
+  <FileRead, IO> Expectation
+gradeDeadlock = gradeCoded deadlockLine deadlockFixture
+
+test "diff_async: async_deadlock under `medaka run` exits 1 with the coded line" =
+  gradeCoded
+    deadlockLine
+    deadlockFixture
+    "run"
+    (boundedVerbSeconds 30 medakaBin [
+      "run",
+      "\{corpus}/\{deadlockFixture}.mdk",
+    ])
+
+test "diff_async: async_deadlock built native exits 1 with the coded line" =
+  match freshDir ()
+    Err e => fail "could not make a scratch directory: \{e}"
+    Ok scratch =>
+      let verdict = gradeDeadlock "native" (buildAndRun scratch deadlockFixture)
+      let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+      verdict
+
+test "diff_async: async_deadlock built for wasm exits 1 with the coded line" =
+  match freshDir ()
+    Err e => fail "could not make a scratch directory: \{e}"
+    Ok scratch =>
+      let verdict =
+        gradeDeadlock "wasm" (buildAndRunWasm scratch deadlockFixture 1)
+      let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+      verdict
+
+-- # ioPoll on wasm
+--
+-- Each fixture prints its `.expected` stdout, then stops at an `ioPoll` with
+-- this line on stderr and exit 1.  For `wasm_poll_order` the stdout is the
+-- three arguments' effects in left-to-right order.
+
+ioPollLine : String
+ioPollLine =
+  "runtime error [E-WASM-NO-BINDING]: ioPoll: descriptor readiness has no wasm binding"
+
+-- Builds `name` for wasm, runs it and grades it against `ioPollLine`.
+gradeIoPollTrap : String -> <Exec, FileRead, IO> Expectation
+gradeIoPollTrap name = match freshDir ()
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok scratch =>
+    let verdict =
+      gradeCoded ioPollLine name "wasm" (buildAndRunWasm scratch name 1)
+    let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+    verdict
+
+test "diff_async: wasm_poll_order evaluates ioPoll's arguments left to right on wasm, then exits 1 with the coded line" =
+  gradeIoPollTrap "wasm_poll_order"
+
+test "diff_async: wasm_poll_stdin's wait on descriptor 0 exits 1 with the coded line on wasm" =
+  gradeIoPollTrap "wasm_poll_stdin"
 
 -- The readiness externs the async runtime is built on — those
--- `echo_overlap`, `no_starvation` and `overlap_sleeps` exercise, and the
--- rest of the family, which share their native-only binding. Kept as data
--- rather than a hardcoded count so that a future extern joining this list
--- carries the same proof.
+-- `echo_overlap` and `no_starvation` exercise, and the rest of the family,
+-- which share their native-only binding. Kept as data rather than a
+-- hardcoded count so that a future extern joining this list carries the
+-- same proof.
 readinessExterns : List String
 readinessExterns = [
   "ioPoll",
@@ -152,4 +486,4 @@ test "diff_async: the readiness externs have no eval binding — the missing arm
         [] => pass
         _ =>
           fail
-            "\{path}: readiness extern(s) \{debug leaked} now appear in eval.mdk — diff_async's native-only premise no longer holds and this gate needs a run arm, not a silent skip"
+            "\{path}: readiness extern(s) \{debug leaked} now appear in eval.mdk — the Net fixtures' native-only premise no longer holds and this gate needs a run arm, not a silent skip"

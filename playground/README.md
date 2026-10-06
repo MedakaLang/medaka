@@ -41,6 +41,7 @@ Browser
 │                      │                                             │
 │                      └─► worker.js (runner Worker)                 │
 │                            WebAssembly.instantiate(bytes, glue)   │
+│                            then exports.mdk_main() runs main      │
 │                            mdk_write_byte → console (#console)    │
 │                            10 s wall-clock kill-timer             │
 └──────────────────────────────────────────────────────────────────┘
@@ -151,6 +152,32 @@ infers the branch from git, so deploying from a topic branch publishes a
 **preview**: it prints "Deployment complete" and a url, exits 0, and the
 production origin keeps serving 404. Set `CF_PAGES_BRANCH` only to publish a
 preview on purpose.
+
+⚠️ **`sleep` needs cross-origin isolation.** `_headers` sends
+`Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy:
+require-corp` on the playground route and its three workers, and on nothing else
+(the blog and guide embed third-party content). After a deploy, check both sides:
+
+```sh
+curl -sI https://medaka-lang.dev/ | grep -i '^cross-origin'            # both headers
+for w in worker compiler-worker language-worker; do
+  curl -sI "https://medaka-lang.dev/$w.js" | grep -ci '^cross-origin-embedder'   # 1 each
+done
+curl -sI https://medaka-lang.dev/blog/index.html | grep -ci '^cross-origin'  # 0
+```
+
+Then run a real program on the live origin and read its output (a header check alone
+passed while Run was dead, see below):
+`node test/visitor_battery/tools/browser_battery.mjs https://medaka-lang.dev/ <out-dir> 01_`.
+
+⚠️ **A `_headers` change for a file whose bytes did not change is not served.** The edge
+revalidates (304) and keeps the headers it cached. A COEP page refuses a worker script
+without COEP, so Run is silently empty. Change the file's bytes in the same deploy; the
+immutable `<hash>.medaka.pages.dev` url shown by the deploy is the reference to compare
+against.
+
+Without them a guest `sleep` fails with a named `CapabilityError`.
+`node playground/headers_rules_test.mjs` checks the same scoping offline.
 
 ⚠️ **`og:image` in `index.html` is an absolute `https://medaka-lang.dev/…` url**
 — scrapers don't resolve relative ones — so no link-preview card renders when the

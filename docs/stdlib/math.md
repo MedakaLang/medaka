@@ -11,9 +11,6 @@ interpolation, and exact integer division, `gcd`, `lcm`, and `powInt`.
 `abs`, `signum`, `min`, `max`, and `clamp` come from the prelude and
 work on floats already.
 
-The float functions run on the native backend only. On the WebAssembly
-backend they trap.
-
 ## Angles
 
 ### `toRadians`

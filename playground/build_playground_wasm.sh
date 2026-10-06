@@ -67,12 +67,12 @@ rm -f "$WAT"   # keep dist lean; WAT is huge and regenerable
 cp "$RUNTIME" "$DIST/runtime.mdk"
 cp "$CORE"    "$DIST/core.mdk"
 
-# Pure / wasm-safe stdlib modules the browser bundles so `import <mod>` works.
+# Stdlib modules the browser bundles so `import <mod>` works.
 # EXCLUDED on purpose (native-only externs that trap/LinkError on wasm):
-#   math (libm), fs (file IO), net (sockets), time (<Clock>), io (file/stdin),
-#   test (runExpectation).  Keep this list in sync with EXTRA_MODULES in main.js.
+#   fs (file IO), net (sockets), io (file/stdin), test (runExpectation).
+#   Keep this list in sync with EXTRA_MODULES in main.js.
 EXTRA_MODULES="args array async base64 bytebuilder byteparser bytes hash_map hash_set hex \
-i32 i64 json list map nonempty path set string toml u16 u32 u64 u8 validation vector"
+i32 i64 json list map math nonempty path regex set string time toml u16 u32 u64 u8 validation vector"
 for m in $EXTRA_MODULES; do
   cp "$ROOT/stdlib/$m.mdk" "$DIST/$m.mdk"
 done

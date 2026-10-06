@@ -61,3 +61,20 @@ lists. `deploy_cloudflare.sh` was missing that entry and preflight **ran a live
 production deploy** on a diff that only touched `playground/README.md`. Ledger any
 new script there, and prove it by measuring the SIDE EFFECT (deployment count),
 not the gate list.
+
+🚨 **[WEB-EDGE-STALE-HEADERS] The first `sleep` deploy broke Run for every visitor, silently
+(2026-10-06, sprint the-browser-can-wait).** `_headers` gained COOP/COEP for the playground
+route and its three workers. The deploy printed "Deployment complete" and `/` and
+`/worker.js` showed the new headers, but `/compiler-worker.js` and `/language-worker.js`
+still came back without `Cross-Origin-Embedder-Policy`: their bodies were unchanged, so
+Cloudflare answered the revalidation with a 304 (`cf-cache-status: REVALIDATED`) and kept
+the headers it had cached. A COEP page refuses a worker script that lacks COEP, so Run
+produced an empty console and no page error, for `main = putStrLn "hello"` as much as for
+a sleeping program. The immutable deploy URL (`<hash>.medaka.pages.dev`) was correct, which is
+the discriminating probe. Fix: change the two files' bytes (a comment stating the
+constraint, PR #3858) and redeploy; verified in Chrome on the live origin. The battery's
+`ok` column did not catch it (it means the Run button re-enabled), the header `curl` of the
+README only named `/` and `/worker.js`, and no CI gate runs the page. Derive, after any
+deploy that touches `_headers`: all three worker URLs carry COEP, then a program's output
+in a real browser against `https://medaka-lang.dev/`, then the same against the deploy URL if
+they differ. Tracked: #3860.

@@ -59,6 +59,7 @@ let floatFmtBuf = [];
 let pathBuf = [];
 const takePath = () => { const s = new TextDecoder('utf-8').decode(new Uint8Array(pathBuf)); pathBuf = []; return s; };
 let strToFloatOk = 0;   // #370: latched by mdk_str_to_float, read by mdk_str_to_float_ok
+let waitCell = null;    // Atomics.wait cell for mdk_sleep_ms, made on first sleep
 
 // --- BEGIN SHARED SHIM mdkStrToFloat --- (byte-identical in test/wasm/run.js,
 // playground/worker.js and playground/compile.mjs — WASM-SEMANTICS WH2/WH3; enforced
@@ -113,13 +114,15 @@ function mdkHexFloat(ip, fp, pexp) {
 // Thrown by the IO-capability stubs below. Caught in the instantiate .catch handler
 // and surfaced verbatim (no "instantiate failed:" prefix, no generic panic wording).
 class CapabilityError extends Error {}
+// Thrown for a module built before the start/mdk_main split; surfaced verbatim too.
+class OldEntryShape extends Error {}
 const capabilityStub = (name) => () => {
   throw new CapabilityError(
     `${name} is not available in the online playground — use \`medaka build\` locally for file/IO access.`
   );
 };
 
-// A wasm stack overflow during the run (start function) is the guest's recursion depth,
+// A wasm stack overflow during the run (mdk_main or a value init) is the guest's recursion depth,
 // worded like the interpreter's E-STACK-OVERFLOW.
 const STACK_OVERFLOW_MSG =
   'stack overflow: recursion too deep for the browser; the native compiler has a larger stack';
@@ -176,7 +179,7 @@ function flushStderr() {
 }
 
 self.onmessage = function(e) {
-  const { wasm } = e.data;
+  const { wasm, isolated } = e.data;
 
   stdoutBuf.length = 0;
   stderrBuf.length = 0;
@@ -230,12 +233,46 @@ self.onmessage = function(e) {
     mdk_arg_byte: capabilityStub('args'),
     mdk_result_len: capabilityStub('readFile/getEnv result'),
     mdk_result_byte: capabilityStub('readFile/getEnv result'),
+    // Clock host surface (design WA-1): reads in seconds, sleep in milliseconds.  A
+    // non-positive sleep returns at once, as medaka_rt.c's mdk_sleep_ms does.  The wait
+    // cell is made on first sleep so a page without SharedArrayBuffer still loads; there
+    // the sleep is a CapabilityError (main.js passes `crossOriginIsolated` in the run message).
+    mdk_wall_time_sec: () => Date.now() / 1000,
+    mdk_monotonic_sec: () => performance.now() / 1000,
+    mdk_sleep_ms: (ms) => {
+      ms = Number(ms);
+      if (ms > 0) {
+        // Atomics.wait needs a SharedArrayBuffer, which exists only when the page is
+        // cross-origin isolated.  Without it a sleep fails by name; returning at once
+        // would be a silently wrong program.
+        if (!isolated || typeof SharedArrayBuffer === 'undefined')
+          throw new CapabilityError(
+            '`sleep` needs cross-origin isolation, which this deployment does not provide');
+        waitCell = waitCell || new Int32Array(new SharedArrayBuffer(4));
+        // Lines held back by the burst throttle would otherwise sit behind the wait, and a
+        // kill mid-sleep would lose them.
+        postPending(true);
+        Atomics.wait(waitCell, 0, 0, ms);
+      }
+    },
     mdk_exit: capabilityStub('exit'),
   } };
 
-  // (start $__init) runs main during instantiate — no entry to call after.
-  WebAssembly.instantiate(wasm, imports)
-    .then(() => {
+  // (start $__init) runs only the value inits; the program is the mdk_main export.
+  // Calling it inside this chain keeps its exit/trap on the .catch path below.  A
+  // module with mdk_main but no mdk_entry_split marker runs main in its start
+  // function, so calling mdk_main would run it twice: it is refused before it is
+  // instantiated.
+  WebAssembly.compile(wasm)
+    .then((module) => {
+      const names = WebAssembly.Module.exports(module).map((e) => e.name);
+      if (names.includes('mdk_main') && !names.includes('mdk_entry_split'))
+        throw new OldEntryShape(
+          'this program was built by an older compiler: its start function runs main itself; reload the page');
+      return WebAssembly.instantiate(module, imports);
+    })
+    .then((instance) => {
+      instance.exports.mdk_main();
       flushStdout();
       flushStderr();
       // Final flush with stream:false to emit any incomplete multi-byte sequence.
@@ -259,10 +296,11 @@ self.onmessage = function(e) {
       // A coded trap already reached the console through the stderr stream above, so
       // the error message is withheld (shown: true) instead of printing it twice.
       const overflow = /call stack|stack overflow/i.test(engineMsg);
-      const message = err instanceof CapabilityError ? engineMsg
+      const named = err instanceof CapabilityError || err instanceof OldEntryShape;
+      const message = named ? engineMsg
         : overflow ? STACK_OVERFLOW_MSG
         : coded ? coded
         : (isPanic ? 'program panicked' : 'instantiate failed: ' + engineMsg);
-      self.postMessage({ type: 'error', message, shown: !!coded && !overflow && !(err instanceof CapabilityError) });
+      self.postMessage({ type: 'error', message, shown: !!coded && !overflow && !named });
     });
 };
