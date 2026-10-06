@@ -341,7 +341,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "gzip/test/deflate_oracle"
 area = "engines"
-shard = "gates_2"
+shard = "gates_6"
 project = "gzip"
 tiers = ["merge"]
 cost = "cheap"
@@ -580,7 +580,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/encodings_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_6"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -660,7 +660,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/mst_vectors"
 area = "engines"
-shard = "gates_8"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -769,7 +769,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/rfc6979_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -829,7 +829,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/sha256_vectors"
 area = "engines"
-shard = "gates_7"
+shard = "gates_6"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -874,7 +874,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/store_persistence"
 area = "engines"
-shard = "gates_6"
+shard = "gates_7"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -1108,7 +1108,7 @@ toolchain = []
 [[gate]]
 name = "build_construct_coverage"
 area = "backend"
-shard = "gates_6"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -1348,7 +1348,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_call_arity"
 area = "infra"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1527,7 +1527,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_dict_semantics_ir"
 area = "infra"
-shard = "gates_6"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1548,7 +1548,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_dict_semantics_permute"
 area = "infra"
-shard = "gates_3"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -1593,7 +1593,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_doc"
 area = "tools"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1713,7 +1713,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval"
 area = "eval"
-shard = "gates_5"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1728,7 +1728,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_fixture_corpus_coverage"
 area = "infra"
-shard = "gates_5"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1803,7 +1803,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_iface_order"
 area = "infra"
-shard = "gates_8"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1833,7 +1833,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_index_oob"
 area = "infra"
-shard = "gates_2"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1863,7 +1863,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_internal_extern"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1923,7 +1923,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_lint_cache"
 area = "tools"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2077,7 +2077,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_llvm_symbol_collision"
 area = "backend"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2445,7 +2445,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_slice_oob"
 area = "infra"
-shard = "gates_7"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2625,7 +2625,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_native_stack"
 area = "infra"
-shard = "gates_7"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2670,7 +2670,7 @@ toolchain = ["clang", "wasm-tools", "node>=24"]
 [[gate]]
 name = "effect_builtin_param_domain"
 area = "infra"
-shard = "gates_6"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2700,7 +2700,7 @@ toolchain = []
 [[gate]]
 name = "effect_product_domain"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
