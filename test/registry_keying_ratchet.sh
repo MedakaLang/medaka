@@ -34,8 +34,10 @@
 #   2. the cross-module WRITER ratchet: every `crossRun.value.*` /
 #      `driverState.value.*` WRITE site -- `setRef r v` or `r := v`, both live --
 #      pinned by TARGET FIELD (load-bearing)
-#   3. the THREE parallel engine module drivers' frame-seeding parity
-#      (evalModulesWith / evalModulesRootEnvWith / cevalModules)
+#   3. the THREE parallel engine module-state builders' frame-seeding parity,
+#      plus exact delegation by the two root-environment wrappers
+#      (evalModulesWith / buildRootModuleStateWith / cevalModules;
+#      evalModulesRootEnvWith / evalModulesRootEvalEnvWith)
 #   4. #1112 A-3.4 the IE namespace ratchet
 #   5. #1519 A-3.3 the CE construction ratchet
 #   6. #2796 Module-mode ENTRY PARITY: `checkModulesPreambleK` and
@@ -68,8 +70,10 @@
 #            "line is accounted for") instead of per-OCCURRENCE, and
 #            this ratchet is already holed exactly like that one was.
 #   E  delete the `installDispatchTables allDecls` line from ONE of
-#      the three module drivers (eval.mdk's evalModulesWith or
-#      evalModulesRootEnvWith, or core_ir_eval.mdk's cevalModules)    -> FAIL (check 3)
+#      the three module-state builders (eval.mdk's evalModulesWith or
+#      buildRootModuleStateWith, or core_ir_eval.mdk's cevalModules)  -> FAIL (check 3)
+#      Change either root wrapper's `buildRootModuleStateWith` call to use
+#      different arguments                                             -> FAIL (check 3)
 #   F  add a COMMENT line mentioning `setRef crossRun.value.foo`      -> pass
 #      (a side comment is not a write: must not false-positive)
 #
@@ -475,24 +479,25 @@ fi
 echo "  ok: $cross_write_n crossRun.value.* write target(s), $driver_write_n driverState.value.* write target(s), no rogue writer"
 
 # ═══════════════════════════════════════════════════════════════════════════
-# CHECK 3 — the engine frame ratchet (THREE parallel module drivers)
+# CHECK 3 — the engine frame ratchet (THREE parallel module-state builders)
 # ═══════════════════════════════════════════════════════════════════════════
-# There are three, not two: evalModulesWith / evalModulesRootEnvWith
+# There are three state builders: evalModulesWith / buildRootModuleStateWith
 # (compiler/eval/eval.mdk) and cevalModules (compiler/ir/core_ir_eval.mdk).
-# evalModulesRootEnvWith's own comment (eval.mdk:3045-3046) says it is "kept
-# in LOCKSTEP with evalModulesWith" -- this check turns that prose into a
-# gate: each of the three must seed its frame with the SAME four operations
-# (the ctorToTypeRef seed, installDispatchTables allDecls, collectCtors
-# allDecls -> globalNames, and the globalCells construction), because a fix
-# to one driver silently absent from another is the repo's #1 recurring bug
-# class (the P0-9 constructor-collision fix originally shipped patching only
-# eval.mdk's evalModules, leaving core_ir_eval.mdk's cevalModules broken for
-# months).
-echo "checking #1111 three-way engine module-driver frame parity ..."
+# The two root-environment APIs are intentionally wrappers over the shared
+# builder, so they must forward their original inputs once and must not grow a
+# second frame initialization. This check turns both requirements into a gate:
+# each builder seeds the SAME four operations (the ctorToTypeRef seed,
+# installDispatchTables allDecls, collectCtors allDecls -> globalNames, and the
+# globalCells construction). A fix absent from any builder is the recurring
+# P0-9 shape; copied initialization in a wrapper recreates the parallel-driver
+# drift the shared builder was introduced to prevent.
+echo "checking #1111 three-way engine module-state builder parity ..."
 
 ceval_body=$(body_of "$CIE" '^cevalModules preludeDecls0 modules0 =')
 withA_body=$(body_of "$EV" '^evalModulesWith extraExterns preludeDecls0 modules0 =')
-withB_body=$(body_of "$EV" '^evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =')
+root_builder_body=$(body_of "$EV" '^buildRootModuleStateWith extraExterns preludeDecls0 modules0 =')
+root_env_body=$(body_of "$EV" '^evalModulesRootEnvWith extraExterns preludeDecls modules =')
+root_eval_env_body=$(body_of "$EV" '^evalModulesRootEvalEnvWith extraExterns preludeDecls modules =')
 
 frame_check() {
   # $1 = driver label, $2 = body text
@@ -523,10 +528,49 @@ frame_check() {
 
 frame_check "cevalModules (core_ir_eval.mdk)" "$ceval_body"
 frame_check "evalModulesWith (eval.mdk)" "$withA_body"
-frame_check "evalModulesRootEnvWith (eval.mdk)" "$withB_body"
+frame_check "buildRootModuleStateWith (eval.mdk)" "$root_builder_body"
+
+root_wrapper_check() {
+  # $1 = wrapper label, $2 = body text, $3 = final root-env constructor
+  label="$1"
+  body="$2"
+  final="$3"
+  code=$(printf '%s\n' "$body" | strip_comments)
+  delegates=$(printf '%s\n' "$code" | grep -Fc 'buildRootModuleStateWith')
+  original_args=$(printf '%s\n' "$code" | grep -Fc 'buildRootModuleStateWith extraExterns preludeDecls modules')
+  final_calls=$(printf '%s\n' "$code" | grep -Fc "$final mods globalCells")
+  if [ "$delegates" -ne 1 ] || [ "$original_args" -ne 1 ] || [ "$final_calls" -ne 1 ]; then
+    echo "FAIL: $label must delegate exactly once to buildRootModuleStateWith"
+    echo "  with its original extraExterns/preludeDecls/modules arguments, then"
+    echo "  construct its declared root environment once (found delegate=$delegates,"
+    echo "  original-args=$original_args, final=$final_calls)."
+    echo "  Keep this wrapper thin; frame initialization belongs only in"
+    echo "  buildRootModuleStateWith."
+    exit 1
+  fi
+  for marker in \
+    'ctorToTypeRef := buildCtorToType allDecls' \
+    'installDispatchTables allDecls' \
+    'collectCtors allDecls' \
+    'let globalCells = map (n => (n, Ref VUnit)) globalNames'
+  do
+    c=$(printf '%s\n' "$code" | grep -Fc "$marker")
+    if [ "$c" -ne 0 ]; then
+      echo "FAIL: $label duplicates frame initialization ($marker, found $c)."
+      echo "  Frame seeding belongs in buildRootModuleStateWith; do not restore a"
+      echo "  parallel copy in this wrapper."
+      exit 1
+    fi
+  done
+  echo "  ok: $label delegates once with original arguments and has no frame seed"
+  return 0
+}
+
+root_wrapper_check "evalModulesRootEnvWith (eval.mdk)" "$root_env_body" "rootFullEnv"
+root_wrapper_check "evalModulesRootEvalEnvWith (eval.mdk)" "$root_eval_env_body" "rootFullEvalEnv"
 
 # "exactly these three" -- a whole-file total (not body-scoped) catches a
-# phantom fourth driver anywhere else in either file. Uses the SAME binder
+# phantom fourth state builder anywhere else in either file. Uses the SAME binder
 # names (`disp`, `ctors`) the three real drivers use for installDispatchTables
 # / collectCtors, which also dodges the false collision with those two
 # functions' OWN one-line definitions elsewhere in eval.mdk (installDispatchTables
@@ -541,15 +585,15 @@ for pair in "ctorToTypeRef seed:$total_ctortotype" "installDispatchTables call:$
   cnt="${pair##*:}"
   if [ "$cnt" -ne 3 ]; then
     echo "FAIL: expected the $what to appear in EXACTLY 3 places across"
-    echo "  eval.mdk + core_ir_eval.mdk (the three known module drivers), found $cnt."
-    echo "  Either a driver is missing it (see the per-driver check above for"
-    echo "  which one) or a FOURTH place now has it -- a phantom parallel"
-    echo "  driver this ratchet was not told about. Add it to the frame_check"
-    echo "  calls above and this total list, and justify the new driver in the PR."
+    echo "  eval.mdk + core_ir_eval.mdk (the three known module-state builders), found $cnt."
+    echo "  Either a state builder is missing it (see the per-builder check above"
+    echo "  for which one) or a FOURTH place now has it -- a phantom parallel"
+    echo "  builder this ratchet was not told about. Add it to the frame_check"
+    echo "  calls above and this total list, and justify the new builder in the PR."
     exit 1
   fi
 done
-echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom driver)"
+echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom builder)"
 
 # ⚠️ ONE KNOWN, DELIBERATE ASYMMETRY: ctorFieldOrdersRef is seeded ONLY by the
 # INTERPRETER drivers, never by either eval.mdk tree-walk driver. Since #1954
@@ -558,12 +602,14 @@ echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom 
 # The single-program seeding used to happen in core_ir_lower.mdk's lowerProgram
 # -- lowering seeding interpreter state, dead on every emit path -- and moving
 # it here is what took the total from 1 to 3. What the asymmetry actually
-# protects is UNCHANGED and is the pair below it: evalModulesWith and
-# evalModulesRootEnvWith must stay at 0. eval.mdk:1823-1835's own
+# protects is UNCHANGED and is the tree-walk state builders plus their root
+# wrappers below: evalModulesWith, buildRootModuleStateWith,
+# evalModulesRootEnvWith and evalModulesRootEvalEnvWith must stay at 0.
+# eval.mdk:1823-1835's own
 # comment: the tree-walk `run` path's ERecordCreate arm (eval.mdk:1518-1522)
 # looks up ctorFieldOrdersRef and falls back to `VRecord` when the table has
 # no entry for that constructor -- and since evalModulesWith /
-# evalModulesRootEnvWith never populate it, ctorFieldOrdersRef.value stays its
+# buildRootModuleStateWith never populate it, ctorFieldOrdersRef.value stays its
 # initial `[]` for the whole tree-walk run, so evalVariantUpdate's VRecord arm
 # is the one that always fires there; it never reaches the VCon arm that
 # needs the field-order table. Re-verified at this HEAD (not just cited):
@@ -618,22 +664,26 @@ echo "  ok: all 4 frame operations appear in exactly 3 places total (no phantom 
 #     it as a proof of absence.
 ceval_cfo=$(printf '%s\n' "$ceval_body" | grep -Fc 'ctorFieldOrdersRef := buildCtorFieldOrders allDecls')
 withA_cfo=$(printf '%s\n' "$withA_body" | grep -Fc 'ctorFieldOrdersRef :=')
-withB_cfo=$(printf '%s\n' "$withB_body" | grep -Fc 'ctorFieldOrdersRef :=')
+root_builder_cfo=$(printf '%s\n' "$root_builder_body" | grep -Fc 'ctorFieldOrdersRef :=')
+root_env_cfo=$(printf '%s\n' "$root_env_body" | grep -Fc 'ctorFieldOrdersRef :=')
+root_eval_env_cfo=$(printf '%s\n' "$root_eval_env_body" | grep -Fc 'ctorFieldOrdersRef :=')
 cevalMainOf_body=$(body_of "$CIE" '^cevalMainOf decls prog =')
 cevalOutputOf_body=$(body_of "$CIE" '^cevalOutputOf decls prog =')
 cevalMainOf_cfo=$(printf '%s\n' "$cevalMainOf_body" | grep -Fc 'ctorFieldOrdersRef := buildCtorFieldOrders decls')
 cevalOutputOf_cfo=$(printf '%s\n' "$cevalOutputOf_body" | grep -Fc 'ctorFieldOrdersRef := buildCtorFieldOrders decls')
 total_cfo=$(grep -F -c 'ctorFieldOrdersRef :=' "$EV" "$CIE" | awk -F: '{s+=$2} END{print s+0}')
-if [ "$ceval_cfo" -ne 1 ] || [ "$withA_cfo" -ne 0 ] || [ "$withB_cfo" -ne 0 ] || \
+if [ "$ceval_cfo" -ne 1 ] || [ "$withA_cfo" -ne 0 ] || [ "$root_builder_cfo" -ne 0 ] || \
+   [ "$root_env_cfo" -ne 0 ] || [ "$root_eval_env_cfo" -ne 0 ] || \
    [ "$cevalMainOf_cfo" -ne 1 ] || [ "$cevalOutputOf_cfo" -ne 1 ] || [ "$total_cfo" -ne 3 ]; then
   echo "FAIL: the ctorFieldOrdersRef asymmetry changed shape (cevalModules=$ceval_cfo,"
-  echo "  evalModulesWith=$withA_cfo, evalModulesRootEnvWith=$withB_cfo,"
+  echo "  evalModulesWith=$withA_cfo, buildRootModuleStateWith=$root_builder_cfo,"
+  echo "  evalModulesRootEnvWith=$root_env_cfo, evalModulesRootEvalEnvWith=$root_eval_env_cfo,"
   echo "  cevalMainOf=$cevalMainOf_cfo, cevalOutputOf=$cevalOutputOf_cfo, total=$total_cfo;"
-  echo "  expected 1/0/0/1/1/3 -- the three writers are cevalModules, cevalMainOf and"
+  echo "  expected 1/0/0/0/0/1/1/3 -- the three writers are cevalModules, cevalMainOf and"
   echo "  cevalOutputOf, all in core_ir_eval.mdk). This table's seeding just moved"
   echo "  between drivers, or"
   echo "  a NEW driver writes it. If the tree-walk path (evalModulesWith /"
-  echo "  evalModulesRootEnvWith) now genuinely needs it -- i.e. its ERecordCreate"
+  echo "  buildRootModuleStateWith) now genuinely needs it -- i.e. its ERecordCreate"
   echo "  arm can now produce a VCon for a named-field constructor -- update this"
   echo "  block's expected counts AND re-verify eval.mdk:1184-1493's VRecord/VCon"
   echo "  split still matches your new reasoning; do not just bump the numbers."
@@ -1058,4 +1108,4 @@ if [ -n "$missing" ]; then
 fi
 echo "  ok: every driver-state publisher the CLI calls is also called in the child"
 
-echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-driver frame parity, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 single Module-mode entry, parent/child driver-state parity)."
+echo "PASS: #1111 registry keying ratchet (CrossRun/DriverState/DeclEnvs fields, writer sites, three-builder frame parity plus root-wrapper delegation, #1112 A-3.4 IE namespace, #1519 A-3.3 CE construction, #2796 single Module-mode entry, parent/child driver-state parity)."
