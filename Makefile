@@ -1,7 +1,7 @@
 # Medaka — convenience targets.
 #
-# The native, self-hosted `medaka` (CANONICAL post-2026-06-12 flip) — built
-# OCaml-free.  Day-to-day: a 2-stage rebuild from current source (no seed).
+# The native, self-hosted `medaka`.  Day-to-day: a 2-stage rebuild from current
+# source (no seed).
 # Fresh clone: cold-bootstrapped once from the gzipped IR seed.
 #
 # Quick start:   make medaka && ./medaka run yourfile.mdk
@@ -15,9 +15,9 @@ export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA
 
 .PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census doc-census t4-census jev-census jev-eval bytes-census
 
-## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
+## medaka  — build the native `medaka` CLI.
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
-##           no seed/OCaml.  COLD (fresh clone): bootstrap from the gzipped seed first.
+##           no seed.  COLD (fresh clone): bootstrap from the gzipped seed first.
 medaka:
 	sh test/build_native_medaka.sh
 
@@ -47,7 +47,7 @@ bootstrap:
 seed-health:
 	sh test/bootstrap_from_seed.sh
 
-## seed    — RE-MINT the gzipped IR seed via the NATIVE emitter (OCaml-free)
+## seed    — RE-MINT the gzipped IR seed via the native emitter
 seed:
 	sh test/refresh_seed.sh
 

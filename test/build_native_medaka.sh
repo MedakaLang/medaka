@@ -1,8 +1,8 @@
 #!/bin/sh
-# BUILD THE NATIVE `medaka` CLI — OCaml-free.  Two modes, auto-selected:
+# BUILD THE NATIVE `medaka` CLI.  Two modes, auto-selected:
 #
 #   WARM (./medaka_emitter present — the day-to-day loop): a 2-stage rebuild from
-#   CURRENT source with NO seed, NO OCaml, NO C3a gate.
+#   CURRENT source with NO seed and NO C3a gate.
 #     stage A: the existing emitter compiles compiler/entries/llvm_emit_modules_main.mdk
 #              -> a FRESH ./medaka_emitter (re-emits its own graph; clang).
 #     stage B: the fresh emitter compiles compiler/driver/medaka_cli.mdk -> ./medaka.
@@ -25,9 +25,9 @@
 #   directory, or failed entry validation falls back to the build described above.
 #
 # Either way the result is a self-contained native `medaka` binary doing
-# check/fmt/new/build/run/test/repl/lsp with no OCaml at runtime OR build time.
-# (`medaka build` itself shells out to an emitter; set MEDAKA_EMITTER=./medaka_emitter
-#  so user builds are also OCaml-free — see the printed hint at the end.)
+# check/fmt/new/build/run/test/repl/lsp.  `medaka build` shells out to the emitter,
+# which it finds beside itself (`<exeDir>/medaka_emitter`); a binary written anywhere
+# else needs MEDAKA_EMITTER, which the hint printed at the end gives.
 #
 # OPT-IN like the other LLVM scripts: skips cleanly (exit 2) when clang or libgc
 # is absent.
@@ -1178,5 +1178,7 @@ if [ "$CLI_STAMP_APPLIES" = "1" ]; then
 fi
 
 echo
-echo "BUILT $OUT — native, OCaml-free."
-echo "For OCaml-free user builds too, export MEDAKA_EMITTER=$EMITTER (so 'medaka build' uses the native emitter)."
+echo "BUILT $OUT"
+if [ "$(cd "$(dirname "$OUT")" && pwd)" != "$ROOT" ]; then
+  echo "'medaka build' looks for medaka_emitter beside the binary; for $OUT, export MEDAKA_EMITTER=$EMITTER"
+fi
