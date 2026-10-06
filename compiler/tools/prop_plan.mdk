@@ -16,7 +16,9 @@ import frontend.ast.{
   sameTyConHead,
 }
 import types.route_key.{typeTagOf, implRouteKeyWord}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omKeys, omLookup}
+import support.ordmap.{
+  OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup, omSize
+}
 import support.util.{lookupAssoc, zipL}
 
 -- Container candidate order is policy, not an implementation detail of an
@@ -733,7 +735,7 @@ ctorLowersFiniteHeight env nominal ctor = match (
   _ => False
 
 planHasFiniteValue : PlanEnv -> GenPlan -> Bool
-planHasFiniteValue env plan = isSome (planFiniteHeight env plan [])
+planHasFiniteValue env plan = abstractFinite env (finiteTruth env plan) plan
 
 -- Finite search is bounded by the reachable abstract carrier space. A nominal
 -- carrier consists of its declaration identity and one finite/non-finite bit
@@ -743,53 +745,220 @@ planHasFiniteValue env plan = isSome (planFiniteHeight env plan [])
 -- may change parameter positions until a container supplies an empty value.
 planFiniteHeight : PlanEnv -> GenPlan -> List TypeKey -> Option Int
 planFiniteHeight env plan _ =
-  findFiniteHeight env plan 0 (finiteHeightLimit env plan)
+  let truth = finiteTruth env plan
+  if abstractFinite env truth plan then
+    findFiniteHeight env plan 0 (finiteHeightLimit env truth plan)
+  else
+    None
 
-finiteHeightLimit : PlanEnv -> GenPlan -> Int
-finiteHeightLimit env (GNominal _ args) =
-  max 1 (abstractCarrierCount env + greatestArgumentHeight env args)
-finiteHeightLimit _ GInt = 0
-finiteHeightLimit _ GBool = 0
-finiteHeightLimit _ GFloat = 0
-finiteHeightLimit _ GChar = 0
-finiteHeightLimit _ GString = 0
-finiteHeightLimit _ GUnit = 0
-finiteHeightLimit _ (GList _) = 0
-finiteHeightLimit _ (GArray _) = 0
-finiteHeightLimit _ (GOption _) = 0
-finiteHeightLimit env (GResult err ok) =
-  max (argumentHeight env err) (argumentHeight env ok)
-finiteHeightLimit env (GTuple plans) = greatestArgumentHeight env plans
-finiteHeightLimit _ (GCustom _) = 0
+finiteHeightLimit : PlanEnv -> OrdMap Unit -> GenPlan -> Int
+finiteHeightLimit env truth (nominal@(GNominal _ args)) =
+  max
+    1
+    (omSize (reachableStates env truth nominal) + greatestWitnessBound env args)
+finiteHeightLimit _ _ GInt = 0
+finiteHeightLimit _ _ GBool = 0
+finiteHeightLimit _ _ GFloat = 0
+finiteHeightLimit _ _ GChar = 0
+finiteHeightLimit _ _ GString = 0
+finiteHeightLimit _ _ GUnit = 0
+finiteHeightLimit _ _ (GList _) = 0
+finiteHeightLimit _ _ (GArray _) = 0
+finiteHeightLimit _ _ (GOption _) = 0
+finiteHeightLimit env _ (GResult err ok) =
+  max (witnessBound env err) (witnessBound env ok)
+finiteHeightLimit env _ (GTuple plans) = greatestWitnessBound env plans
+finiteHeightLimit _ _ (GCustom _) = 0
 
-abstractCarrierCount : PlanEnv -> Int
-abstractCarrierCount (PlanEnv _ defs _ _ _) =
-  countCarrierBuckets (omKeys defs) defs
+-- A truth map holds the least fixed point of nominal finite inhabitants. A
+-- state key contains a nominal identity and the already-classified bits of its
+-- arguments. Classifying a nominal only looks up that key; it never unfolds a
+-- declaration, so mutually applied empty cycles stay at bottom.
+finiteTruth : PlanEnv -> GenPlan -> OrdMap Unit
+finiteTruth env root = finiteTruthLoop env root omEmpty
 
-countCarrierBuckets : List String -> OrdMap (List PlanDef) -> Int
-countCarrierBuckets [] _ = 0
-countCarrierBuckets (word :: rest) defs =
-  countCarrierDefs (optionList (omLookup word defs))
-    + countCarrierBuckets rest defs
+finiteTruthLoop : PlanEnv -> GenPlan -> OrdMap Unit -> OrdMap Unit
+finiteTruthLoop env root truth =
+  let states = reachableStates env truth root
+  let next = addFiniteStates env truth states truth
+  if omSize next == omSize truth then next else finiteTruthLoop env root next
 
-countCarrierDefs : List PlanDef -> Int
-countCarrierDefs [] = 0
-countCarrierDefs ((PlanDef _ _ params _ _) :: rest) =
-  boolVectorCount params + countCarrierDefs rest
+addFiniteStates : PlanEnv ->
+  OrdMap Unit ->
+  OrdMap GenPlan ->
+  OrdMap Unit ->
+  OrdMap Unit
+addFiniteStates env truth states result =
+  addFiniteWords env truth (omKeys states) states result
 
-boolVectorCount : List a -> Int
-boolVectorCount [] = 1
-boolVectorCount (_ :: rest) = 2 * boolVectorCount rest
+addFiniteWords : PlanEnv ->
+  OrdMap Unit ->
+  List String ->
+  OrdMap GenPlan ->
+  OrdMap Unit ->
+  OrdMap Unit
+addFiniteWords _ _ [] _ result = result
+addFiniteWords env truth (word :: rest) states result =
+  let next = match omLookup word states
+    Some state =>
+      if stateFiniteUnder env truth state then
+        omInsert word () result
+      else
+        result
+    None => result
+  addFiniteWords env truth rest states next
 
-greatestArgumentHeight : PlanEnv -> List GenPlan -> Int
-greatestArgumentHeight _ [] = 0
-greatestArgumentHeight env (plan :: rest) =
-  max (argumentHeight env plan) (greatestArgumentHeight env rest)
+stateFiniteUnder : PlanEnv -> OrdMap Unit -> GenPlan -> Bool
+stateFiniteUnder env truth (nominal@(GNominal key _)) = match planDef env key
+  Ok (PlanDef _ _ _ _ ctors) => anyCtorFiniteUnder env truth nominal ctors
+  Err _ => False
+stateFiniteUnder _ _ _ = False
 
-argumentHeight : PlanEnv -> GenPlan -> Int
-argumentHeight env plan = match planFiniteHeight env plan []
-  Some height => height
-  None => 0
+anyCtorFiniteUnder : PlanEnv -> OrdMap Unit -> GenPlan -> List PlanCtor -> Bool
+anyCtorFiniteUnder _ _ _ [] = False
+anyCtorFiniteUnder env truth nominal (ctor :: rest) =
+  match instantiateCtor env nominal ctor
+    Ok fields =>
+      allFiniteUnder env truth (fieldPlansOnly fields)
+        || anyCtorFiniteUnder env truth nominal rest
+    Err _ => anyCtorFiniteUnder env truth nominal rest
+
+allFiniteUnder : PlanEnv -> OrdMap Unit -> List GenPlan -> Bool
+allFiniteUnder _ _ [] = True
+allFiniteUnder env truth (plan :: rest) =
+  abstractFinite env truth plan && allFiniteUnder env truth rest
+
+abstractFinite : PlanEnv -> OrdMap Unit -> GenPlan -> Bool
+abstractFinite _ _ GInt = True
+abstractFinite _ _ GBool = True
+abstractFinite _ _ GFloat = True
+abstractFinite _ _ GChar = True
+abstractFinite _ _ GString = True
+abstractFinite _ _ GUnit = True
+abstractFinite _ _ (GList _) = True
+abstractFinite _ _ (GArray _) = True
+abstractFinite _ _ (GOption _) = True
+abstractFinite env truth (GResult err ok) =
+  abstractFinite env truth err || abstractFinite env truth ok
+abstractFinite env truth (GTuple plans) = allFiniteUnder env truth plans
+abstractFinite _ _ (GCustom _) = True
+abstractFinite env truth (GNominal key args) =
+  omHasKey (stateWord env truth key args) truth
+
+reachableStates : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap GenPlan
+reachableStates env truth root =
+  discoverStates env truth [root] (seedArgumentStates env truth root omEmpty)
+
+seedArgumentStates : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  OrdMap GenPlan ->
+  OrdMap GenPlan
+seedArgumentStates env truth (GNominal _ args) states =
+  seedPlans env truth args states
+seedArgumentStates _ _ _ states = states
+
+seedPlans : PlanEnv ->
+  OrdMap Unit ->
+  List GenPlan ->
+  OrdMap GenPlan ->
+  OrdMap GenPlan
+seedPlans _ _ [] states = states
+seedPlans env truth (plan :: rest) states =
+  seedPlans env truth rest (seedPlan env truth plan states)
+
+seedPlan : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap GenPlan -> OrdMap GenPlan
+seedPlan env truth (GList plan) states = seedPlan env truth plan states
+seedPlan env truth (GArray plan) states = seedPlan env truth plan states
+seedPlan env truth (GOption plan) states = seedPlan env truth plan states
+seedPlan env truth (GResult err ok) states =
+  seedPlan env truth ok (seedPlan env truth err states)
+seedPlan env truth (GTuple plans) states = seedPlans env truth plans states
+seedPlan env truth (nominal@(GNominal key args)) states =
+  seedPlans
+    env
+    truth
+    args
+    (omInsert (stateWord env truth key args) nominal states)
+seedPlan _ _ _ states = states
+
+discoverStates : PlanEnv ->
+  OrdMap Unit ->
+  List GenPlan ->
+  OrdMap GenPlan ->
+  OrdMap GenPlan
+discoverStates _ _ [] states = states
+discoverStates env truth (plan :: rest) states = match plan
+  GList child => discoverStates env truth (child :: rest) states
+  GArray child => discoverStates env truth (child :: rest) states
+  GOption child => discoverStates env truth (child :: rest) states
+  GResult err ok =>
+    discoverStates env truth rest (discoverStates env truth [err, ok] states)
+  GTuple plans =>
+    discoverStates env truth rest (discoverStates env truth plans states)
+  nominal@(GNominal key args) =>
+    let word = stateWord env truth key args
+    if omHasKey word states then
+      discoverStates env truth rest (seedPlans env truth args states)
+    else match planDef env key
+      Ok (PlanDef _ _ _ _ ctors) =>
+        discoverStates
+          env
+          truth
+          rest
+          (discoverCtorFields
+            env
+            truth
+            nominal
+            ctors
+            (omInsert word nominal states))
+      Err _ => discoverStates env truth rest (omInsert word nominal states)
+  _ => discoverStates env truth rest states
+
+discoverCtorFields : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  List PlanCtor ->
+  OrdMap GenPlan ->
+  OrdMap GenPlan
+discoverCtorFields _ _ _ [] states = states
+discoverCtorFields env truth nominal (ctor :: rest) states =
+  let afterCtor = match instantiateCtor env nominal ctor
+    Ok fields => discoverStates env truth (fieldPlansOnly fields) states
+    Err _ => states
+  discoverCtorFields env truth nominal rest afterCtor
+
+stateWord : PlanEnv -> OrdMap Unit -> TypeKey -> List GenPlan -> String
+stateWord env truth key args = "\{typeKeyWord key}#\{stateBits env truth args}"
+
+stateBits : PlanEnv -> OrdMap Unit -> List GenPlan -> String
+stateBits _ _ [] = ""
+stateBits env truth (plan :: rest) =
+  (if abstractFinite env truth plan then "1" else "0")
+    ++ stateBits env truth rest
+
+greatestWitnessBound : PlanEnv -> List GenPlan -> Int
+greatestWitnessBound _ [] = 0
+greatestWitnessBound env (plan :: rest) =
+  max (witnessBound env plan) (greatestWitnessBound env rest)
+
+witnessBound : PlanEnv -> GenPlan -> Int
+witnessBound _ GInt = 0
+witnessBound _ GBool = 0
+witnessBound _ GFloat = 0
+witnessBound _ GChar = 0
+witnessBound _ GString = 0
+witnessBound _ GUnit = 0
+witnessBound _ (GList _) = 0
+witnessBound _ (GArray _) = 0
+witnessBound _ (GOption _) = 0
+witnessBound env (GResult err ok) =
+  max (witnessBound env err) (witnessBound env ok)
+witnessBound env (GTuple plans) = greatestWitnessBound env plans
+witnessBound env (nominal@(GNominal _ args)) =
+  omSize (reachableStates env (finiteTruth env nominal) nominal)
+    + greatestWitnessBound env args
+witnessBound _ (GCustom _) = 0
 
 findFiniteHeight : PlanEnv -> GenPlan -> Int -> Int -> Option Int
 findFiniteHeight _ _ height limit
@@ -856,20 +1025,21 @@ allPlansBelow env height (plan :: rest) = match planFiniteHeight env plan []
 export
 planFor : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
 planFor env propName param ty = match planForGo env propName param ty
-  Ok plan => match validateReachableFields env plan []
-    Err (PlanError _ _ badTy reason detail) =>
-      Err (PlanError propName param badTy reason detail)
-    Ok _ =>
-      if planHasFiniteValue env plan then
-        Ok plan
-      else
-        Err
-          (PlanError
-            propName
-            param
-            ty
-            PENoFiniteValue
-            "no constructor path reaches finite values")
+  Ok plan =>
+    match validateReachableFields env (finiteTruth env plan) plan omEmpty
+      Err (PlanError _ _ badTy reason detail) =>
+        Err (PlanError propName param badTy reason detail)
+      Ok _ =>
+        if planHasFiniteValue env plan then
+          Ok plan
+        else
+          Err
+            (PlanError
+              propName
+              param
+              ty
+              PENoFiniteValue
+              "no constructor path reaches finite values")
   Err e => Err e
 
 -- A property may have one finite constructor while another reachable
@@ -878,80 +1048,71 @@ planFor env propName param ty = match planForGo env propName param ty
 -- check every reachable structural field before handing the plan to a runner.
 -- The carrier uses finite/non-finite argument states; it terminates for
 -- nonregular recursion while retaining the instantiated generic distinction.
-data PlanCarrier = PlanCarrier TypeKey (List Bool)
-
 validateReachableFields : PlanEnv ->
+  OrdMap Unit ->
   GenPlan ->
-  List PlanCarrier ->
+  OrdMap Unit ->
   Result PlanError Unit
-validateReachableFields _ GInt _ = Ok ()
-validateReachableFields _ GBool _ = Ok ()
-validateReachableFields _ GFloat _ = Ok ()
-validateReachableFields _ GChar _ = Ok ()
-validateReachableFields _ GString _ = Ok ()
-validateReachableFields _ GUnit _ = Ok ()
-validateReachableFields env (GList plan) seen =
-  validateReachableFields env plan seen
-validateReachableFields env (GArray plan) seen =
-  validateReachableFields env plan seen
-validateReachableFields env (GOption plan) seen =
-  validateReachableFields env plan seen
-validateReachableFields env (GResult err ok) seen = match (
-  validateReachableFields env err seen,
-  validateReachableFields env ok seen,
+validateReachableFields _ _ GInt _ = Ok ()
+validateReachableFields _ _ GBool _ = Ok ()
+validateReachableFields _ _ GFloat _ = Ok ()
+validateReachableFields _ _ GChar _ = Ok ()
+validateReachableFields _ _ GString _ = Ok ()
+validateReachableFields _ _ GUnit _ = Ok ()
+validateReachableFields env truth (GList plan) seen =
+  validateReachableFields env truth plan seen
+validateReachableFields env truth (GArray plan) seen =
+  validateReachableFields env truth plan seen
+validateReachableFields env truth (GOption plan) seen =
+  validateReachableFields env truth plan seen
+validateReachableFields env truth (GResult err ok) seen = match (
+  validateReachableFields env truth err seen,
+  validateReachableFields env truth ok seen,
 )
   (Ok _, Ok _) => Ok ()
   (Err e, _) => Err e
   (_, Err e) => Err e
-validateReachableFields env (GTuple plans) seen =
-  validateReachablePlans env plans seen
-validateReachableFields _ (GCustom _) _ = Ok ()
-validateReachableFields env (nominal@(GNominal key args)) seen =
-  let carrier = PlanCarrier key (map (planHasFiniteValue env) args)
-  if carrierIn carrier seen then
+validateReachableFields env truth (GTuple plans) seen =
+  validateReachablePlans env truth plans seen
+validateReachableFields _ _ (GCustom _) _ = Ok ()
+validateReachableFields env truth (nominal@(GNominal key args)) seen =
+  let word = stateWord env truth key args
+  if omHasKey word seen then
     Ok ()
   else match planDef env key
     Ok (PlanDef _ _ _ _ ctors) =>
-      validateReachableCtors env nominal ctors (carrier :: seen)
+      validateReachableCtors env truth nominal ctors (omInsert word () seen)
     Err e => Err e
 
 validateReachablePlans : PlanEnv ->
+  OrdMap Unit ->
   List GenPlan ->
-  List PlanCarrier ->
+  OrdMap Unit ->
   Result PlanError Unit
-validateReachablePlans _ [] _ = Ok ()
-validateReachablePlans env (plan :: rest) seen = match (
-  validateReachableFields env plan seen,
-  validateReachablePlans env rest seen,
+validateReachablePlans _ _ [] _ = Ok ()
+validateReachablePlans env truth (plan :: rest) seen = match (
+  validateReachableFields env truth plan seen,
+  validateReachablePlans env truth rest seen,
 )
   (Ok _, Ok _) => Ok ()
   (Err e, _) => Err e
   (_, Err e) => Err e
 
 validateReachableCtors : PlanEnv ->
+  OrdMap Unit ->
   GenPlan ->
   List PlanCtor ->
-  List PlanCarrier ->
+  OrdMap Unit ->
   Result PlanError Unit
-validateReachableCtors _ _ [] _ = Ok ()
-validateReachableCtors env nominal (ctor :: rest) seen = match (
+validateReachableCtors _ _ _ [] _ = Ok ()
+validateReachableCtors env truth nominal (ctor :: rest) seen = match (
   instantiateCtor env nominal ctor,
-  validateReachableCtors env nominal rest seen,
+  validateReachableCtors env truth nominal rest seen,
 )
-  (Ok fields, Ok _) => validateReachablePlans env (fieldPlansOnly fields) seen
+  (Ok fields, Ok _) =>
+    validateReachablePlans env truth (fieldPlansOnly fields) seen
   (Err e, _) => Err e
   (_, Err e) => Err e
-
-carrierIn : PlanCarrier -> List PlanCarrier -> Bool
-carrierIn _ [] = False
-carrierIn (PlanCarrier key states) ((PlanCarrier otherKey otherStates) :: rest) =
-  sameTypeKey key otherKey && sameBoolPlans states otherStates
-    || carrierIn (PlanCarrier key states) rest
-
-sameBoolPlans : List Bool -> List Bool -> Bool
-sameBoolPlans [] [] = True
-sameBoolPlans (a :: restA) (b :: restB) = a == b && sameBoolPlans restA restB
-sameBoolPlans _ _ = False
 
 export
 listLengthBound : PlanEnv -> Int -> GenPlan -> Int
@@ -1032,60 +1193,76 @@ planCanDiverge env (GOption p) = planCanDiverge env p
 planCanDiverge env (GResult a b) = planCanDiverge env a || planCanDiverge env b
 planCanDiverge env (GTuple ps) = anyPlanDiverges env ps
 planCanDiverge env (nominal@(GNominal _ _)) =
-  planCanDivergeNominal env nominal []
+  planCanDivergeNominal env (finiteTruth env nominal) nominal omEmpty
 planCanDiverge _ (GCustom _) = False
 
 anyPlanDiverges : PlanEnv -> List GenPlan -> Bool
 anyPlanDiverges _ [] = False
 anyPlanDiverges env (p :: ps) = planCanDiverge env p || anyPlanDiverges env ps
 
-planCanDivergeNominal : PlanEnv -> GenPlan -> List PlanCarrier -> Bool
-planCanDivergeNominal env (nominal@(GNominal key args)) seen =
-  let carrier = PlanCarrier key (map (planHasFiniteValue env) args)
-  if carrierIn carrier seen then
+planCanDivergeNominal : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap Unit -> Bool
+planCanDivergeNominal env truth (nominal@(GNominal key args)) seen =
+  let word = stateWord env truth key args
+  if omHasKey word seen then
     True
   else match planDef env key
     Ok (PlanDef _ _ _ _ ctors) =>
-      anyCtorPlanDiverges env nominal ctors (carrier :: seen)
+      anyCtorPlanDiverges env truth nominal ctors (omInsert word () seen)
     Err _ => False
-planCanDivergeNominal _ _ _ = False
+planCanDivergeNominal _ _ _ _ = False
 
 anyCtorPlanDiverges : PlanEnv ->
+  OrdMap Unit ->
   GenPlan ->
   List PlanCtor ->
-  List PlanCarrier ->
+  OrdMap Unit ->
   Bool
-anyCtorPlanDiverges _ _ [] _ = False
-anyCtorPlanDiverges env nominal (ctor :: rest) seen =
-  ctorPlanDiverges env nominal ctor seen
-    || anyCtorPlanDiverges env nominal rest seen
+anyCtorPlanDiverges _ _ _ [] _ = False
+anyCtorPlanDiverges env truth nominal (ctor :: rest) seen =
+  ctorPlanDiverges env truth nominal ctor seen
+    || anyCtorPlanDiverges env truth nominal rest seen
 
-ctorPlanDiverges : PlanEnv -> GenPlan -> PlanCtor -> List PlanCarrier -> Bool
-ctorPlanDiverges env nominal ctor seen = match instantiateCtor env nominal ctor
-  Ok fields => anyPlansDivergeSeen env (fieldPlansOnly fields) seen
-  Err _ => False
+ctorPlanDiverges : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  PlanCtor ->
+  OrdMap Unit ->
+  Bool
+ctorPlanDiverges env truth nominal ctor seen =
+  match instantiateCtor env nominal ctor
+    Ok fields => anyPlansDivergeSeen env truth (fieldPlansOnly fields) seen
+    Err _ => False
 
-anyPlansDivergeSeen : PlanEnv -> List GenPlan -> List PlanCarrier -> Bool
-anyPlansDivergeSeen _ [] _ = False
-anyPlansDivergeSeen env (plan :: rest) seen =
-  planDivergesSeen env plan seen || anyPlansDivergeSeen env rest seen
+anyPlansDivergeSeen : PlanEnv ->
+  OrdMap Unit ->
+  List GenPlan ->
+  OrdMap Unit ->
+  Bool
+anyPlansDivergeSeen _ _ [] _ = False
+anyPlansDivergeSeen env truth (plan :: rest) seen =
+  planDivergesSeen env truth plan seen
+    || anyPlansDivergeSeen env truth rest seen
 
-planDivergesSeen : PlanEnv -> GenPlan -> List PlanCarrier -> Bool
-planDivergesSeen _ GInt _ = False
-planDivergesSeen _ GBool _ = False
-planDivergesSeen _ GFloat _ = False
-planDivergesSeen _ GChar _ = False
-planDivergesSeen _ GString _ = False
-planDivergesSeen _ GUnit _ = False
-planDivergesSeen env (GList plan) seen = planDivergesSeen env plan seen
-planDivergesSeen env (GArray plan) seen = planDivergesSeen env plan seen
-planDivergesSeen env (GOption plan) seen = planDivergesSeen env plan seen
-planDivergesSeen env (GResult err ok) seen =
-  planDivergesSeen env err seen || planDivergesSeen env ok seen
-planDivergesSeen env (GTuple plans) seen = anyPlansDivergeSeen env plans seen
-planDivergesSeen env (nominal@(GNominal _ _)) seen =
-  planCanDivergeNominal env nominal seen
-planDivergesSeen _ (GCustom _) _ = False
+planDivergesSeen : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap Unit -> Bool
+planDivergesSeen _ _ GInt _ = False
+planDivergesSeen _ _ GBool _ = False
+planDivergesSeen _ _ GFloat _ = False
+planDivergesSeen _ _ GChar _ = False
+planDivergesSeen _ _ GString _ = False
+planDivergesSeen _ _ GUnit _ = False
+planDivergesSeen env truth (GList plan) seen =
+  planDivergesSeen env truth plan seen
+planDivergesSeen env truth (GArray plan) seen =
+  planDivergesSeen env truth plan seen
+planDivergesSeen env truth (GOption plan) seen =
+  planDivergesSeen env truth plan seen
+planDivergesSeen env truth (GResult err ok) seen =
+  planDivergesSeen env truth err seen || planDivergesSeen env truth ok seen
+planDivergesSeen env truth (GTuple plans) seen =
+  anyPlansDivergeSeen env truth plans seen
+planDivergesSeen env truth (nominal@(GNominal _ _)) seen =
+  planCanDivergeNominal env truth nominal seen
+planDivergesSeen _ _ (GCustom _) _ = False
 
 -- Structural shrink action ordering is shared as data.  Adapters map these to
 -- their value representation and retain the same greedy first-failing choice.

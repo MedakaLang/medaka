@@ -199,6 +199,40 @@ test "finite planning uses instantiated generic arguments and rejects empty recu
           Err _ => False),
     ),
     (
+      "the rotating wrapper is finite on its own",
+      expectTrue
+        (match (planned
+          "data Loop = Again Loop\ndata Empty a = Empty\n"
+          (TyApp (namedTy "Empty") (namedTy "Loop")))
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
+      "a direct finite rotating exit is recognized",
+      expectTrue
+        (match (planned
+          "data Loop = Again Loop\ndata Empty a = Empty\ndata Rotate a b c = RotateNext (Rotate b c (Empty a)) | RotateEnd (Empty a)\n"
+          rotateLoop)
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
+      "mutually applied recursion without a base stays uninhabited",
+      expectTrue
+        (match planned "data A = Wrap (B A)\ndata B a = Pack a\n" (namedTy "A")
+          Ok _ => False
+          Err _ => True),
+    ),
+    (
+      "mutually applied recursion with a base has a finite witness",
+      expectTrue
+        (match (planned
+          "data A = Base | Wrap (B A)\ndata B a = Pack a\n"
+          (namedTy "A"))
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
       "a reachable unsupported constructor is a planning error",
       expectTrue
         (match (planned
