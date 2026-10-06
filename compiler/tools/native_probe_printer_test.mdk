@@ -2,22 +2,37 @@
 -- transcript primitive and probe identifier. A passing transcript proves the
 -- generated ordinary-test and doctest programs used their private aliases.
 
-import driver.build_cmd.{cleanupTempDir, makeTempDir}
+import driver.build_cmd.{cleanupTempDir, makeTempDir, scratchProbeManifest}
 import tools.native_fixture_test_support_test.{writeFixtureFiles}
-import test.{Expectation, expectAll, expectEqual, expectTextContainsAll, fail}
+import test.{
+  Expectation,
+  expectAll,
+  expectEqual,
+  expectErrContains,
+  expectOkThen,
+  expectTextContainsAll,
+  fail,
+}
 import test_process.{boundedVerbSeconds, medakaBin}
+
+defaultFixtureManifest : String
+defaultFixtureManifest = "[package]\nname = \"native_probe_printer\"\n"
 
 withFixtures : List (String, String) ->
   (String -> <Exec, IO> Expectation) ->
   <Exec, IO> Expectation
-withFixtures files inspect = match makeTempDir ()
+withFixtures files inspect =
+  withProjectFixtures defaultFixtureManifest files inspect
+
+withProjectFixtures : String ->
+  List (String, String) ->
+  (String -> <Exec, IO> Expectation) ->
+  <Exec, IO> Expectation
+withProjectFixtures manifest files inspect = match makeTempDir ()
   Err message => fail message
   Ok dir =>
     let result =
-      match (writeFixtureFiles
-        dir
-        (("medaka.toml", "[package]\nname = \"native_probe_printer\"\n")
-          :: files))
+      match writeFixtureFiles dir (("medaka.toml", manifest) :: files)
         Err message => fail message
         Ok _ => inspect "\{dir}/main.mdk"
     let _ = cleanupTempDir dir
@@ -73,4 +88,35 @@ test "native probes isolate their runtime catalog from a sibling runtime module"
             "1/1 passed",
           ]
           out,
+      ])
+
+collisionManifest : String
+collisionManifest =
+  "[package]\nname = \"native_probe_manifest\"\n\n[dependencies]\nnp_runtime_dep_fixture = \".\"\n"
+
+test "native probe manifests refuse a runtime dependency collision" =
+  withProjectFixtures
+    collisionManifest
+    [("main.mdk", "main = 1\n")]
+    (target =>
+      let collision =
+        scratchProbeManifest
+          "native_probe_collision"
+          target
+          "np_runtime_dep_fixture"
+      let noncolliding =
+        scratchProbeManifest
+          "native_probe_collision"
+          target
+          "np_runtime_extra_fixture"
+      expectAll [
+        expectErrContains
+          "np_runtime_dep_fixture is already declared"
+          collision,
+        expectOkThen
+          (manifest =>
+            expectTextContainsAll
+              ["np_runtime_dep_fixture", "np_runtime_extra_fixture"]
+              manifest)
+          noncolliding,
       ])
