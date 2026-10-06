@@ -2490,7 +2490,7 @@ localCoreExprFacts (CApp f x) =
 localCoreExprFacts (CLam _ body) = localCoreExprFacts body
 localCoreExprFacts (CLet _ _ rhs body) =
   mergeLocalCoreFacts (localCoreExprFacts rhs) (localCoreExprFacts body)
-localCoreExprFacts (CBinPrim op lhs rhs _) =
+localCoreExprFacts (CBinPrim op lhs rhs _ _) =
   let nested =
     mergeLocalCoreFacts (localCoreExprFacts lhs) (localCoreExprFacts rhs)
   let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) = nested

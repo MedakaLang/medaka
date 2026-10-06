@@ -1676,7 +1676,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_eval_json_test.mdk"
 oracles = []
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/driver/*", "test/compiler_cli_test_support.mdk"]
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/driver/*", "test/compiler_cli_test_support.mdk", "compiler/ir/core_ir_lower.mdk", "compiler/backend/llvm_emit.mdk", "compiler/entries/llvm_emit_modules_main.mdk", "runtime/medaka_rt.c"]
 corpus = ["test/error_quality_fixtures", "test/trap_site_fixtures"]
 toolchain = []
 

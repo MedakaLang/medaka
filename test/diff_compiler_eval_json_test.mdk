@@ -37,7 +37,10 @@
    where the two answers differ. `xmod_guard/` holds a module one fixture
    imports, kept out of the roster the same way `xmod1542/` is. These rows
    are the oracle the native and wasm backends' located runtime errors
-   match.
+   match: for the trap kinds the native backend locates (arithmetic, an
+   explicit `match`, a refutable `let`), each such fixture is also built
+   and run, and the binary must exit and print to stdout as `medaka run`
+   does, with the run row's line as its whole stderr.
 
    Runs under `medaka test --native`: it spawns subprocesses and reads
    source files and goldens, none of which the interpreter binds. -}
@@ -47,7 +50,14 @@ import fs.{expectUnitCount}
 import list.{somes, sort}
 import string.{contains, lines, replaceAll, split, startsWith, trim, unlines}
 import test.{Expectation, expectEach, expectEqual, fail, pass}
-import test_process.{boundedVerb, expectSpawnFails, medakaBin, medakaRoot}
+import test_process.{
+  boundedVerb,
+  boundedVerbSeconds,
+  expectSpawnFails,
+  medakaBin,
+  medakaRoot,
+  scratchDir,
+}
 
 corpus : <IO> String
 corpus = "\{medakaRoot}/test/error_quality_fixtures/eval"
@@ -152,7 +162,13 @@ trapSiteRows = [
     "4:6",
     "[E-INT-OVERFLOW]: 3 * 4611686018427387903 overflows Int",
   ),
+  (
+    "overflow_in_recursive_product",
+    "2:31",
+    "[E-INT-OVERFLOW]: 21 * 2432902008176640000 overflows Int",
+  ),
   ("div_zero_divisor_from_callee", "3:16", "[E-DIV-ZERO]: division by zero"),
+  ("div_zero_parameter_divisor", "2:6", "[E-DIV-ZERO]: division by zero"),
   ("mod_zero_divisor_from_callee", "3:16", "[E-MOD-ZERO]: modulo by zero"),
   ("panic_message_from_another_line", "4:6", "[E-PANIC]: boom"),
   ("index_inside_callee", "2:7", "[E-INDEX-OOB]: index 9 out of bounds"),
@@ -231,3 +247,51 @@ test "trap_site: `medaka run` names the start of the trapping expression" =
   expectEach
     (map trapSiteRow trapSiteRows
       ++ map trapSiteImportedRow trapSiteImportedRows)
+
+-- The rows whose trap the native backend locates.  Clause and guard
+-- fall-through, `panic` and `xs[i]` still print an unlocated line natively.
+nativeLocatedStems : List String
+nativeLocatedStems = [
+  "overflow_operand_on_another_line",
+  "overflow_inner_operand_of_a_sum",
+  "overflow_in_recursive_product",
+  "div_zero_divisor_from_callee",
+  "div_zero_parameter_divisor",
+  "mod_zero_divisor_from_callee",
+  "match_falls_through_arms",
+  "let_pattern_refuted",
+  "let_in_pattern_refuted",
+  "do_let_pattern_refuted",
+]
+
+-- `medaka build` of the fixture, run once: its (exit code, stdout, stderr)
+-- must be `medaka run`'s exit code and stdout, and the run row's line.
+nativeTrapSiteRow : String ->
+  (String, String, String) ->
+  <Exec, IO> (String, Expectation)
+nativeTrapSiteRow scratch (name, site, rest) =
+  let entry = "\{trapSites}/\{name}.mdk"
+  let bin = "\{scratch}/\{name}"
+  let line = "\{entry}:\{site}: runtime error \{rest}\n"
+  match boundedVerb medakaBin ["run", entry]
+    Err e => (name, fail "could not run `medaka run`: \{e}")
+    Ok (runCode, runOut, _) =>
+      match boundedVerbSeconds 120 medakaBin ["build", entry, "-o", bin]
+        Err e => (name, fail "could not run `medaka build`: \{e}")
+        Ok (0, _, _) => match boundedVerb bin []
+          Err e => (name, fail "could not run the built binary: \{e}")
+          Ok got => (name, expectEqual (runCode, runOut, line) got)
+        Ok (code, out, err) =>
+          (name, fail "`medaka build` exited \{intToString code}: \{out}\{err}")
+
+test "trap_site: a built binary reports the trap where `medaka run` does" =
+  match scratchDir
+    Err e => fail "could not make a scratch directory: \{e}"
+    Ok scratch =>
+      let rows = filter ((n, _, _) => elem n nativeLocatedStems) trapSiteRows
+      let graded = expectEach (map (nativeTrapSiteRow scratch) rows)
+      let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+      if length rows == length nativeLocatedStems then
+        graded
+      else
+        fail "nativeLocatedStems names a fixture with no trapSiteRows row"

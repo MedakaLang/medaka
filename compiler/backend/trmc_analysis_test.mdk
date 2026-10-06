@@ -2,7 +2,7 @@
 -- analysis and LLVM closure capture.
 
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
-import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..)}
+import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..), noDeclLoc}
 import ir.core_ir.{CBind(..), CClause(..), CExpr(..)}
 import backend.trmc_analysis.{SelfRef(..), freeVars, trmcEligible}
 
@@ -61,7 +61,8 @@ trmcBody innerBody =
       "::"
       (CLit (LInt 1))
       (CApp (CVar "loop" AGlobal) (CVar "xs" AGlobal))
-      "")
+      ""
+      noDeclLoc)
 
 trmcEligibleWith : CExpr -> Bool
 trmcEligibleWith innerBody =

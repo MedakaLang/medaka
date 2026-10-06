@@ -1051,6 +1051,71 @@ noreturn void mdk_let_refute(void) {
   fputs("runtime error [E-LET-REFUTE]: let pattern match failed\n", stderr);
   exit(1);
 }
+
+/* LOCATED TRAPS.  Each abort above has an `_at` twin taking one more argument,
+   the trap's source site packed as (file + 1) << 44 | line << 20 | col (16, 24
+   and 20 bits; col 0-based), which prints `file:line:col: ` ahead of the same
+   line, as `medaka run` does.  `file` indexes the NULL-terminated path table a
+   program that has located traps defines strongly as `mdk_site_files`; this
+   weak null stands in for every program that defines none (the cold seed
+   bootstrap among them), the same weak-default scheme as the build stamps
+   below.  A site of 0, a file number past the table, or no table prints the
+   unlocated line.  The plain entries keep their signatures: the seed calls
+   them. */
+__attribute__((weak)) const char *const *const mdk_site_files = 0;
+
+static void mdk_put_site(unsigned long long site) {
+  unsigned long long file = site >> 44;
+  const char *const *table = mdk_site_files;
+  if (file == 0 || table == 0) return;
+  for (unsigned long long i = 0; i + 1 < file; i++)
+    if (table[i] == 0) return;
+  if (table[file - 1] == 0) return;
+  fprintf(stderr, "%s:%llu:%llu: ", table[file - 1], (site >> 20) & 0xFFFFFF,
+          site & 0xFFFFF);
+}
+
+noreturn void mdk_div_zero_at(unsigned long long site) {
+  mdk_flush_run_stdout_on_abort();
+  mdk_put_site(site);
+  fputs("runtime error [E-DIV-ZERO]: division by zero\n", stderr);
+  exit(1);
+}
+noreturn void mdk_mod_zero_at(unsigned long long site) {
+  mdk_flush_run_stdout_on_abort();
+  mdk_put_site(site);
+  fputs("runtime error [E-MOD-ZERO]: modulo by zero\n", stderr);
+  exit(1);
+}
+noreturn void mdk_int_overflow_at(long long op, long long a, long long b,
+                                  unsigned long long site) {
+  static const char ops[] = "+-*/";
+  mdk_flush_run_stdout_on_abort();
+  mdk_put_site(site);
+  fputs("runtime error [E-INT-OVERFLOW]: ", stderr);
+  if (op == 4) {
+    fputc('-', stderr);
+    mdk_put_operand(a);
+  } else {
+    mdk_put_operand(a);
+    fprintf(stderr, " %c ", ops[op & 3]);
+    mdk_put_operand(b);
+  }
+  fputs(" overflows Int\n", stderr);
+  exit(1);
+}
+noreturn void mdk_nonexhaustive_match_at(unsigned long long site) {
+  mdk_flush_run_stdout_on_abort();
+  mdk_put_site(site);
+  fputs("runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match\n", stderr);
+  exit(1);
+}
+noreturn void mdk_let_refute_at(unsigned long long site) {
+  mdk_flush_run_stdout_on_abort();
+  mdk_put_site(site);
+  fputs("runtime error [E-LET-REFUTE]: let pattern match failed\n", stderr);
+  exit(1);
+}
 /* User `exit n`. Unlike the other abort paths above this carries no diagnostic
    -- it is a silent, coded-free process termination -- but it still needs the
    SAME mdk_flush_run_stdout_on_abort() call they all make: under `medaka run`

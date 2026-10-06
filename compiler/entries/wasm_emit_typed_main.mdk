@@ -25,7 +25,15 @@
 -- resolves every route, and the lowered program pulls in NOTHING but scalar/ADT/
 -- dispatch nodes the emitter can lower.
 
-import frontend.ast.{Decl, Lit(..), Loc(..), Pat(..), Addr(..), Route(..)}
+import frontend.ast.{
+  Decl,
+  Lit(..),
+  Loc(..),
+  Pat(..),
+  Addr(..),
+  Route(..),
+  noDeclLoc,
+}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{elaborateModules}
@@ -305,12 +313,12 @@ trmcStateProgram : String -> Int -> CProgram
 trmcStateProgram name marker =
   let n = CVar "n" (ALocal 0 0)
   let recursive =
-    CApp (CVar name AGlobal) (CBinPrim "-" n (CLit (LInt 1)) "Int")
+    CApp (CVar name AGlobal) (CBinPrim "-" n (CLit (LInt 1)) "Int" noDeclLoc)
   let body =
     CIf
-      (CBinPrim "==" n (CLit (LInt 0)) "Int")
+      (CBinPrim "==" n (CLit (LInt 0)) "Int" noDeclLoc)
       (CList [])
-      (CBinPrim "::" (CLit (LInt marker)) recursive "")
+      (CBinPrim "::" (CLit (LInt marker)) recursive "" noDeclLoc)
   CProgram
     [
       CBind name [CClause [PVar "n" trmcStateLoc] body],
@@ -336,15 +344,26 @@ trmcStateCensusProgram =
         CClause
           [PVar "n" trmcStateLoc]
           (CIf
-            (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0)) "Int")
+            (CBinPrim
+              "=="
+              (CVar "n" (ALocal 0 0))
+              (CLit (LInt 0))
+              "Int"
+              noDeclLoc)
             (CList [])
             (CBinPrim
               "::"
               (CLit (LInt 17))
               (CApp
                 (CVar "pTrmc" AGlobal)
-                (CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)) "Int"))
-              "")),
+                (CBinPrim
+                  "-"
+                  (CVar "n" (ALocal 0 0))
+                  (CLit (LInt 1))
+                  "Int"
+                  noDeclLoc))
+              ""
+              noDeclLoc)),
       ],
       CBind "trmcIntentionalGap" [
         CClause [] (CVar "missingTrmcCensus" AGlobal),
@@ -519,12 +538,12 @@ featureStateBinds = [
   CBind "featureDiv" [
     CClause
       [featureStateArg]
-      (CBinPrim "/" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int"),
+      (CBinPrim "/" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int" noDeclLoc),
   ],
   CBind "featureMod" [
     CClause
       [featureStateArg]
-      (CBinPrim "%" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int"),
+      (CBinPrim "%" (CVar "x" (ALocal 0 0)) (CLit (LInt 1)) "Int" noDeclLoc),
   ],
   CBind "featureRecordUpdate" [
     CClause
@@ -918,7 +937,8 @@ leafValueCmpP = leafRuntimeProgram [
         "=="
         (CLit (LString "value-cmp"))
         (CLit (LString "value-cmp"))
-        "String"),
+        "String"
+        noDeclLoc),
   ],
   CBind "leafValueCmpLt" [
     CClause
@@ -927,7 +947,8 @@ leafValueCmpP = leafRuntimeProgram [
         "<"
         (CLit (LString "value-cmp-a"))
         (CLit (LString "value-cmp-b"))
-        "String"),
+        "String"
+        noDeclLoc),
   ],
 ]
 
@@ -1065,7 +1086,12 @@ featureFloatDivProgram =
       CBind "featureFloatDiv" [
         CClause
           [featureStateArg]
-          (CBinPrim "/" (CLit (LFloat 1.0)) (CLit (LFloat 2.0)) "Float"),
+          (CBinPrim
+            "/"
+            (CLit (LFloat 1.0))
+            (CLit (LFloat 2.0))
+            "Float"
+            noDeclLoc),
       ],
       CBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -1114,7 +1140,7 @@ trapStateProgram =
       CBind "trapRoute" [
         CClause
           [PVar "n" lambdaStateLoc]
-          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
       CBind "main" [CClause [] (CLit (LInt 17))],
     ]
@@ -1133,7 +1159,7 @@ trapStateCensusProgram =
       CBind "trapCensusRoute" [
         CClause
           [PVar "n" lambdaStateLoc]
-          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
       CBind "trapIntentionalGap" [CClause [] (CVar "missingTrapCensus" AGlobal)],
     ]
@@ -1146,7 +1172,9 @@ trapStateAbortProgram =
   CProgram
     [
       CBind "main" [
-        CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+        CClause
+          []
+          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
     ]
     []
@@ -1179,7 +1207,7 @@ refTrapStateProgram =
       CBind "refTrapRoute" [
         CClause
           [PVar "n" lambdaStateLoc]
-          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
       CBind "main" [CClause [] (CLit (LInt 17))],
     ]
@@ -1200,7 +1228,9 @@ refTrapStateAbortProgram =
   CProgram
     [
       CBind "main" [
-        CClause [] (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int"),
+        CClause
+          []
+          (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
     ]
     refTrapCtorArities
@@ -1220,9 +1250,12 @@ implSelfProgram tag base depth =
   let recurse =
     CApp
       (CApp (CMethod "walk" "" 2 (RKey tag [] []) [] []) self)
-      (CBinPrim "-" n (CLit (LInt 1)) "Int")
+      (CBinPrim "-" n (CLit (LInt 1)) "Int" noDeclLoc)
   let body =
-    CIf (CBinPrim "==" n (CLit (LInt 0)) "Int") (CLit (LInt base)) recurse
+    CIf
+      (CBinPrim "==" n (CLit (LInt 0)) "Int" noDeclLoc)
+      (CLit (LInt base))
+      recurse
   CProgram
     [CBind "main" [CClause [] (CLit (LInt depth))]]
     [(tag, 0)]

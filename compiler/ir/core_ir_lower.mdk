@@ -13,6 +13,7 @@
 import frontend.ast.{
   Lit(..),
   Loc(..),
+  noDeclLoc,
   Pat(..),
   RecPatField(..),
   Expr(..),
@@ -57,6 +58,7 @@ import ir.core_ir.{
   CTree(..),
   CTBranch(..),
   CHead(..),
+  FailSite(..),
 }
 import types.disposition.{
   DispositionTable,
@@ -72,6 +74,7 @@ import eval.eval.{
   lookupPositions,
   tyvarsInArgs,
   headTyconHead,
+  exprStartLoc,
 }
 import list.{replicate, take, drop, range}
 import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey, omLookup}
@@ -122,9 +125,11 @@ lower (EVarId x _) = CVar x AGlobal
 lower (EVarAt x addr) = CVar x addr
 lower (EApp f x) = CApp (lower f) (lower x)
 lower (ELam pats body) = CLam pats (lower body)
+lower (ELet _ False pat e1 e2)
+  | patMayFail pat = letDecision noDeclLoc pat (lower e1) (lower e2)
 lower (ELet _ recFlag pat e1 e2) = CLet recFlag pat (lower e1) (lower e2)
 lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
-lower (EMatch scrut arms) = lowerMatch (lower scrut) arms
+lower (EMatch scrut arms) = lowerMatch noDeclLoc (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
 lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute !route)
 lower (EInfix op l r) = CApp (CApp (CVar op AGlobal) (lower l)) (lower r)
@@ -161,7 +166,7 @@ lower (ERecordUpdate base fields r) =
   CRecordUpdate !r (lower base) (map lowerField fields)
 lower (EVariantUpdate con base fields) =
   CVariantUpdate con (lower base) (map lowerField fields)
-lower (EBlock stmts) = CBlock (map lowerStmt stmts)
+lower (EBlock stmts) = CBlock (lowerStmts stmts)
 -- SHARED-FLOAT-RESIDUAL §3(C): dictPass wraps a scalar-tagged binop (arithmetic
 -- "Float" or comparison "Int") in `EAnnot (EBinOp …) (TyCon tag)` (the ref-cell
 -- route does not survive to here, a node does).  Read the tag into CBinPrim's
@@ -180,9 +185,13 @@ lower (EHeadAnnot e _) = lower e
 -- same seam `EDictAt` crosses on the next line.
 lower (EMethodAt name _ ev) = cmethodOf name (evMethodRoutes ev)
 lower (EDictAt name ev) = CDict name (evDictRoutes ev)
--- ELoc is STRIPPED here: no source-location wrapper reaches the Core IR, so the
--- emitted IR for any program is byte-identical to the un-wrapped tree.  This is
--- the fixpoint guarantee (the transparent strip that keeps the C3 IR stable).
+-- A located `match` or `let` keeps its keyword's span as the trap site of the
+-- decision it lowers to, the span the interpreter reports (`eval`'s
+-- `ELoc l (EMatch …)` and `ELoc l (ELet …)` arms).  Every other ELoc is stripped:
+-- no location wrapper reaches the Core IR, and only the trap fields carry one.
+lower (ELoc l (EMatch scrut arms)) = lowerMatch l (lower scrut) arms
+lower (ELoc l (ELet _ False pat e1 e2))
+  | patMayFail pat = letDecision l pat (lower e1) (lower e2)
 lower (ELoc _ e) = lower e
 lower (EDoOrigin _ e) = lower e
 lower other = panic ("core_ir lower: unsupported node " ++ nodeTag other)
@@ -203,7 +212,7 @@ lowerBinop "||" l r _ = CIf (lower l) (CLit (LBool True)) (lower r)
 lowerBinop "|>" l r _ = CApp (lower r) (lower l)
 lowerBinop ">>" l r _ = composeLam (lower l) (lower r)
 lowerBinop "<<" l r _ = composeLam (lower r) (lower l)
-lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag
+lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag (exprStartLoc l)
 
 -- (f >> g) ≡ \x -> g (f x).  composeLam first second ≡ \x -> second (first x).
 composeLam : CExpr -> CExpr -> CExpr
@@ -225,11 +234,43 @@ lowerGuard (GBind p e) = CGBind p (lower e)
 -- The fall-back keeps the proven ordered path for record/range patterns the
 -- tree compiler doesn't model — correctness first, the tree captures the win on
 -- the constructor/list/tuple/literal matches that dominate the lexer + parser.
-lowerMatch : CExpr -> List Arm -> CExpr
-lowerMatch cscrut arms
+-- [site] is the `match` keyword's span, which a miss reports.
+lowerMatch : Loc -> CExpr -> List Arm -> CExpr
+lowerMatch site cscrut arms
   | allList armTreeable arms =
-    CDecision cscrut (map lowerArm arms) (compileArms arms)
+    CDecision cscrut (map lowerArm arms) (compileArms (NoArm site) arms)
   | otherwise = CMatch cscrut (map lowerArm arms)
+
+-- A non-recursive `let` whose pattern can miss lowers to a one-arm decision whose
+-- miss is E-LET-REFUTE at [site], so a backend tests the whole pattern, nested
+-- fields included, through the match machinery.  `refoldLets` turns it back into
+-- the plain `CLet` for every lowering that does not use that check.
+letDecision : Loc -> Pat -> CExpr -> CExpr -> CExpr
+letDecision site pat scrut body =
+  let arms = [CArm pat [] body]
+  CDecision scrut arms (compileArmsC (LetRefuted site) arms)
+
+-- Whether a `let` pattern can fail to match, judged by its shape alone: any
+-- constructor, list or literal (other than `()`) in it.  A tuple of variables
+-- cannot, and keeps the plain `CLet`.
+patMayFail : Pat -> Bool
+patMayFail PWild = False
+patMayFail (PVar _ _) = False
+patMayFail (PLit LUnit) = False
+patMayFail (PAs _ _ p) = patMayFail p
+patMayFail (PTuple ps) = anyList patMayFail ps
+patMayFail _ = True
+
+-- A block's statements.  A refutable `let` takes the rest of the block as its
+-- decision's body, so the block ends with that decision; a refutable `let` that
+-- ends the block gets the empty block as its body, the Unit a last `let` yields
+-- (`refoldLets` reads both back).
+lowerStmts : List DoStmt -> List CStmt
+lowerStmts [] = []
+lowerStmts ((DoLet _ False pat e site) :: rest)
+  | patMayFail pat =
+    [CSExpr (letDecision site pat (lower e) (CBlock (lowerStmts rest)))]
+lowerStmts (s :: rest) = lowerStmt s :: lowerStmts rest
 
 armTreeable : Arm -> Bool
 armTreeable (Arm pat _ _) = treeablePat pat
@@ -252,8 +293,9 @@ treeablePat (PAs _ _ p) = treeablePat p
 treeablePat (PRng _ _ _) = True
 treeablePat (PRec _ _ _) = True
 
-compileArms : List Arm -> CTree
-compileArms arms = compileTree (map armHasGuard arms) (initialRows arms 0)
+compileArms : FailSite -> List Arm -> CTree
+compileArms site arms =
+  compileTree site (map armHasGuard arms) (initialRows arms 0)
 
 -- an arm whose pattern (recursively) contains PRng or PRec may not match the
 -- scrutinee at the leaf even though the matrix treated it as a wildcard — the
@@ -292,9 +334,45 @@ initialRows ((Arm pat _ _) :: rest) i =
 -- (`nthBool`; the second half of #408, see `guardSet`).  The exported entry
 -- keeps the caller-facing `List Bool` and converts it ONCE, at the top, into the
 -- membership set the recursion actually threads.
+-- [site] is what every miss leaf of the tree raises.
 export
-compileTree : List Bool -> List (List Pat, Int) -> CTree
-compileTree guards rows = compileTreeG (guardSet 0 guards omEmpty) rows
+compileTree : FailSite -> List Bool -> List (List Pat, Int) -> CTree
+compileTree site guards rows =
+  withFailSite site (compileTreeG (guardSet 0 guards omEmpty) rows)
+
+-- [t] with every miss leaf raising [site].
+withFailSite : FailSite -> CTree -> CTree
+withFailSite site (CTFail _) = CTFail site
+withFailSite _ (CTLeaf i) = CTLeaf i
+withFailSite site (CTGuard i t) = CTGuard i (withFailSite site t)
+withFailSite site (CTSwitch bs d) =
+  CTSwitch (map (failSiteBranch site) bs) (withFailSite site d)
+withFailSite site (CTDrop t) = CTDrop (withFailSite site t)
+
+failSiteBranch : FailSite -> CTBranch -> CTBranch
+failSiteBranch site (CTBranch h t) = CTBranch h (withFailSite site t)
+
+-- The site [t]'s misses raise (every miss leaf of one tree carries the same one);
+-- an unlocated `NoArm` when it has none.
+treeFailSite : CTree -> FailSite
+treeFailSite t = match treeFailSiteOpt t
+  Some s => s
+  None => NoArm noDeclLoc
+
+treeFailSiteOpt : CTree -> Option FailSite
+treeFailSiteOpt (CTFail s) = Some s
+treeFailSiteOpt (CTLeaf _) = None
+treeFailSiteOpt (CTGuard _ t) = treeFailSiteOpt t
+treeFailSiteOpt (CTSwitch bs d) = match firstBranchFailSite bs
+  Some s => Some s
+  None => treeFailSiteOpt d
+treeFailSiteOpt (CTDrop t) = treeFailSiteOpt t
+
+firstBranchFailSite : List CTBranch -> Option FailSite
+firstBranchFailSite [] = None
+firstBranchFailSite ((CTBranch _ t) :: rest) = match treeFailSiteOpt t
+  Some s => Some s
+  None => firstBranchFailSite rest
 
 -- Guarded ARM INDICES as an `OrdMap Unit` membership set: O(log N) per leaf
 -- lookup where the `List Bool` walk was O(arm index).  Built once per
@@ -308,7 +386,7 @@ guardSet i (True :: rest) acc =
 guardSet i (False :: rest) acc = guardSet (i + 1) rest acc
 
 compileTreeG : OrdMap Unit -> List (List Pat, Int) -> CTree
-compileTreeG _ [] = CTFail
+compileTreeG _ [] = CTFail (NoArm noDeclLoc)
 compileTreeG guards (row :: rest) = compileRows guards row rest (row :: rest)
 
 compileRows : OrdMap Unit ->
@@ -676,27 +754,203 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- driver that typechecks lowers through `lowerTypedProgram`.
 export
 lowerProgram : List Decl -> CProgram
-lowerProgram prog = lowerProgramWith None prog
+lowerProgram prog = refoldProgram noLetCheck (lowerProgramWith None prog)
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
 export
 lowerTypedProgram : List Decl -> CProgram
-lowerTypedProgram prog = lowerProgramWith (Some (installedDispositions ())) prog
+lowerTypedProgram prog =
+  refoldProgram
+    noLetCheck
+    (lowerProgramWith (Some (installedDispositions ())) prog)
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
--- probe; see `lowerProgram`).
+-- probe; see `lowerProgram`).  Refutable lets are still one-arm decisions here
+-- (`letDecision`); each public lowering decides which of them to keep.
 lowerProgramWith : Option DispositionTable -> List Decl -> CProgram
 lowerProgramWith dispositions prog =
   CProgram
-    (lowerGroups prog)
+    (lowerGroupsRaw prog)
     (ctorArities prog)
     (buildCtorToType prog)
-    (lowerImplsWith
+    (lowerImplsRaw
       (installDispatchTables prog)
       (instanceReqCounts prog)
       dispositions
       prog)
+
+-- ── which refutable lets keep their decision (see `letDecision`) ─────────────
+-- Only the native backend tests a refutable `let` through its decision; every
+-- other consumer gets the plain `CLet`/`CSLet` back, unchanged.  Native keeps the
+-- decision only where the pattern can really miss, by the program's constructor
+-- table, so a `let` on a single-constructor type keeps its unchecked destructure.
+
+-- A `let` pattern the decision is kept for; `noLetCheck` keeps none.
+noLetCheck : Pat -> Bool
+noLetCheck _ = False
+
+-- [p] can miss a value of its type: a constructor with a sibling (or one the table
+-- does not know), a list, or a literal other than `()`, anywhere in it.  A record
+-- pattern still unresolved after `rewriteProgramRecPats` keeps the plain `let`.
+patCanMiss : OrdMap Bool -> Pat -> Bool
+patCanMiss _ PWild = False
+patCanMiss _ (PVar _ _) = False
+patCanMiss _ (PLit LUnit) = False
+patCanMiss _ (PLit _) = True
+patCanMiss sib (PAs _ _ p) = patCanMiss sib p
+patCanMiss sib (PTuple ps) = anyList (patCanMiss sib) ps
+patCanMiss sib (PCon c ps) = ctorHasSibling sib c || anyList (patCanMiss sib) ps
+patCanMiss _ (PRec _ _ _) = False
+patCanMiss _ _ = True
+
+ctorHasSibling : OrdMap Bool -> String -> Bool
+ctorHasSibling sib c = match omLookup c sib
+  Some b => b
+  None => True
+
+-- constructor → whether its type declares another constructor, from a CProgram's
+-- (ctor, type) table; the first row for a constructor name wins, as the emitter's
+-- `ctorTypeOf` reads it.
+siblingTable : List (String, String) -> OrdMap Bool
+siblingTable t =
+  let counts = typeCtorCounts t omEmpty
+  siblingRows counts t omEmpty
+
+typeCtorCounts : List (String, String) -> OrdMap Int -> OrdMap Int
+typeCtorCounts [] acc = acc
+typeCtorCounts ((_, ty) :: rest) acc =
+  let n = match omLookup ty acc
+    Some k => k + 1
+    None => 1
+  typeCtorCounts rest (omInsert ty n acc)
+
+siblingRows : OrdMap Int -> List (String, String) -> OrdMap Bool -> OrdMap Bool
+siblingRows _ [] acc = acc
+siblingRows counts ((c, ty) :: rest) acc
+  | omHasKey c acc = siblingRows counts rest acc
+  | otherwise =
+    let many = match omLookup ty counts
+      Some k => k > 1
+      None => True
+    siblingRows counts rest (omInsert c many acc)
+
+-- the let-refute site of a one-arm decision `letDecision` built, else None.
+letDecisionSite : CTree -> Option Loc
+letDecisionSite t = match treeFailSiteOpt t
+  Some (LetRefuted l) => Some l
+  _ => None
+
+refoldProgram : (Pat -> Bool) -> CProgram -> CProgram
+refoldProgram keep (CProgram groups ctorArs ctorTypes implEntries) =
+  CProgram
+    (map (refoldBind keep) groups)
+    ctorArs
+    ctorTypes
+    (map (refoldImpl keep) implEntries)
+
+refoldBind : (Pat -> Bool) -> CBind -> CBind
+refoldBind keep (CBind n clauses) = CBind n (map (refoldClause keep) clauses)
+
+refoldClause : (Pat -> Bool) -> CClause -> CClause
+refoldClause keep (CClause pats body) = CClause pats (refoldExpr keep body)
+
+refoldImpl : (Pat -> Bool) -> CImplEntry -> CImplEntry
+refoldImpl keep (CImplEntry n s (CImplTagged tag key iface ps pats body)) =
+  CImplEntry n s (CImplTagged tag key iface ps pats (refoldExpr keep body))
+refoldImpl keep (CImplEntry n s (CImplDefault ifaceId tag key ps pats body)) =
+  CImplEntry n s (CImplDefault ifaceId tag key ps pats (refoldExpr keep body))
+
+refoldExpr : (Pat -> Bool) -> CExpr -> CExpr
+refoldExpr keep (CDecision scrut [CArm pat [] body] tree)
+  | isSomeLoc (letDecisionSite tree) && not (keep pat) =
+    CLet False pat (refoldExpr keep scrut) (refoldExpr keep body)
+refoldExpr keep (CDecision scrut arms tree) =
+  CDecision (refoldExpr keep scrut) (map (refoldArm keep) arms) tree
+refoldExpr _ (CLit l) = CLit l
+refoldExpr _ (CVar x addr) = CVar x addr
+refoldExpr keep (CApp f x) = CApp (refoldExpr keep f) (refoldExpr keep x)
+refoldExpr keep (CLam pats body) = CLam pats (refoldExpr keep body)
+refoldExpr keep (CLet r pat e1 e2) =
+  CLet r pat (refoldExpr keep e1) (refoldExpr keep e2)
+refoldExpr keep (CLetGroup binds body) =
+  CLetGroup (map (refoldBind keep) binds) (refoldExpr keep body)
+refoldExpr keep (CMatch scrut arms) =
+  CMatch (refoldExpr keep scrut) (map (refoldArm keep) arms)
+refoldExpr keep (CIf c t e) =
+  CIf (refoldExpr keep c) (refoldExpr keep t) (refoldExpr keep e)
+refoldExpr keep (CBinPrim op l r tag site) =
+  CBinPrim op (refoldExpr keep l) (refoldExpr keep r) tag site
+refoldExpr keep (CUnOp op x) = CUnOp op (refoldExpr keep x)
+refoldExpr keep (CTuple es) = CTuple (map (refoldExpr keep) es)
+refoldExpr keep (CList es) = CList (map (refoldExpr keep) es)
+refoldExpr keep (CRecord name fields) =
+  CRecord name (map (refoldField keep) fields)
+refoldExpr keep (CFieldAccess ex f n) = CFieldAccess (refoldExpr keep ex) f n
+refoldExpr keep (CRecordUpdate name base fields) =
+  CRecordUpdate name (refoldExpr keep base) (map (refoldField keep) fields)
+refoldExpr keep (CVariantUpdate con base fields) =
+  CVariantUpdate con (refoldExpr keep base) (map (refoldField keep) fields)
+refoldExpr keep (CArray es) = CArray (map (refoldExpr keep) es)
+refoldExpr keep (CRangeList lo hi incl) =
+  CRangeList (refoldExpr keep lo) (refoldExpr keep hi) incl
+refoldExpr keep (CRangeArray lo hi incl) =
+  CRangeArray (refoldExpr keep lo) (refoldExpr keep hi) incl
+refoldExpr keep (CIndex a i) = CIndex (refoldExpr keep a) (refoldExpr keep i)
+refoldExpr keep (CSlice a lo hi incl) =
+  CSlice (refoldExpr keep a) (refoldExpr keep lo) (refoldExpr keep hi) incl
+refoldExpr keep (CStringIndex a i) =
+  CStringIndex (refoldExpr keep a) (refoldExpr keep i)
+refoldExpr keep (CStringSlice a lo hi incl) =
+  CStringSlice
+    (refoldExpr keep a)
+    (refoldExpr keep lo)
+    (refoldExpr keep hi)
+    incl
+refoldExpr keep (CListIndex a i) =
+  CListIndex (refoldExpr keep a) (refoldExpr keep i)
+refoldExpr keep (CListSlice a lo hi incl) =
+  CListSlice (refoldExpr keep a) (refoldExpr keep lo) (refoldExpr keep hi) incl
+refoldExpr keep (CBlock stmts) = CBlock (refoldStmts keep stmts)
+refoldExpr _ (CMethod name iface arity r ir mr) =
+  CMethod name iface arity r ir mr
+refoldExpr _ (CDict name rs) = CDict name rs
+
+-- A block that ends with a `lowerStmts` let decision gets its `let` statement
+-- back, followed by the statements the decision took as its body.  A kept decision
+-- that ended the block takes Unit as its body in place of the empty block.
+refoldStmts : (Pat -> Bool) -> List CStmt -> List CStmt
+refoldStmts _ [] = []
+refoldStmts keep [CSExpr (CDecision scrut [CArm pat [] (CBlock rest)] tree)]
+  | isSomeLoc (letDecisionSite tree) =
+    let scrut2 = refoldExpr keep scrut
+    if keep pat then
+      let body =
+        if isEmptyL rest then CLit LUnit else CBlock (refoldStmts keep rest)
+      [CSExpr (CDecision scrut2 [CArm pat [] body] tree)]
+    else
+      CSLet False pat scrut2 :: refoldStmts keep rest
+refoldStmts keep (s :: rest) = refoldStmt keep s :: refoldStmts keep rest
+
+refoldStmt : (Pat -> Bool) -> CStmt -> CStmt
+refoldStmt keep (CSExpr e) = CSExpr (refoldExpr keep e)
+refoldStmt keep (CSLet r pat e) = CSLet r pat (refoldExpr keep e)
+refoldStmt keep (CSAssign x e) = CSAssign x (refoldExpr keep e)
+
+refoldArm : (Pat -> Bool) -> CArm -> CArm
+refoldArm keep (CArm pat guards body) =
+  CArm pat (map (refoldGuard keep) guards) (refoldExpr keep body)
+
+refoldGuard : (Pat -> Bool) -> CGuard -> CGuard
+refoldGuard keep (CGBool e) = CGBool (refoldExpr keep e)
+refoldGuard keep (CGBind p e) = CGBind p (refoldExpr keep e)
+
+refoldField : (Pat -> Bool) -> CField -> CField
+refoldField keep (CField k e) = CField k (refoldExpr keep e)
+
+isSomeLoc : Option Loc -> Bool
+isSomeLoc (Some _) = True
+isSomeLoc None = False
 
 -- #1970: which backend(s) a `lowerProgramEmit` caller is about to feed the result
 -- to — the discriminator `dictWitnessTagGuard` needs to narrow its wasm 30-bit
@@ -741,10 +995,21 @@ lowerProgramEmit target prog =
   -- either backend's tag width the caller's `target` cannot rule out.  Same seam,
   -- same reason.
   let _ = dictWitnessTagGuard target prog
+  let raw = lowerProgramWith (installedDispositionsOpt ()) prog
+  let fo = declaredRecordFieldOrders prog
   hoistNullaryMemo
-    (rewriteProgramRecPats
-      (declaredRecordFieldOrders prog)
-      (lowerProgramWith (installedDispositionsOpt ()) prog))
+    (match target
+      -- the let decisions are refolded after the record-pattern rewrite, which
+      -- resolves the record patterns `patCanMiss` reads
+      TargetNative =>
+        let rewritten = rewriteProgramRecPats fo raw
+        refoldProgram
+          (patCanMiss (siblingTable (cprogramCtorTypes raw)))
+          rewritten
+      _ => rewriteProgramRecPats fo (refoldProgram noLetCheck raw))
+
+cprogramCtorTypes : CProgram -> List (String, String)
+cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
 
 -- ── the ONE authority on a record's field order (#1513) ──────────────────────
 -- ctor name → [field label in declared order], from every DData named-field
@@ -878,13 +1143,16 @@ rewriteExprRP fo (CLetGroup binds body) =
   CLetGroup (map (rewriteBindRP fo) binds) (rewriteExprRP fo body)
 rewriteExprRP fo (CMatch scrut arms) =
   CMatch (rewriteExprRP fo scrut) (map (rewriteArmRP fo) arms)
-rewriteExprRP fo (CDecision scrut arms _) =
+rewriteExprRP fo (CDecision scrut arms tree) =
   let arms2 = map (rewriteArmRP fo) arms
-  CDecision (rewriteExprRP fo scrut) arms2 (compileArmsC arms2)
+  CDecision
+    (rewriteExprRP fo scrut)
+    arms2
+    (compileArmsC (treeFailSite tree) arms2)
 rewriteExprRP fo (CIf c t e) =
   CIf (rewriteExprRP fo c) (rewriteExprRP fo t) (rewriteExprRP fo e)
-rewriteExprRP fo (CBinPrim op l r tag) =
-  CBinPrim op (rewriteExprRP fo l) (rewriteExprRP fo r) tag
+rewriteExprRP fo (CBinPrim op l r tag site) =
+  CBinPrim op (rewriteExprRP fo l) (rewriteExprRP fo r) tag site
 rewriteExprRP fo (CUnOp op x) = CUnOp op (rewriteExprRP fo x)
 rewriteExprRP fo (CTuple es) = CTuple (map (rewriteExprRP fo) es)
 rewriteExprRP fo (CList es) = CList (map (rewriteExprRP fo) es)
@@ -1316,8 +1584,8 @@ hoistExpr st (CDecision scrut arms tree) =
   CDecision (hoistExpr st scrut) (map (hoistArm st) arms) tree
 hoistExpr st (CIf c t e) =
   CIf (hoistExpr st c) (hoistExpr st t) (hoistExpr st e)
-hoistExpr st (CBinPrim op l r tag) =
-  CBinPrim op (hoistExpr st l) (hoistExpr st r) tag
+hoistExpr st (CBinPrim op l r tag site) =
+  CBinPrim op (hoistExpr st l) (hoistExpr st r) tag site
 hoistExpr st (CUnOp op x) = CUnOp op (hoistExpr st x)
 hoistExpr st (CTuple es) = CTuple (map (hoistExpr st) es)
 hoistExpr st (CList es) = CList (map (hoistExpr st) es)
@@ -1361,8 +1629,9 @@ hoistField : LowerState -> CField -> CField
 hoistField st (CField k e) = CField k (hoistExpr st e)
 
 -- recompile a CDecision's tree from rewritten arms (same call lowerMatch makes).
-compileArmsC : List CArm -> CTree
-compileArmsC arms = compileTree (map carmHasGuard arms) (cInitialRows arms 0)
+compileArmsC : FailSite -> List CArm -> CTree
+compileArmsC site arms =
+  compileTree site (map carmHasGuard arms) (cInitialRows arms 0)
 
 carmHasGuard : CArm -> Bool
 carmHasGuard (CArm pat gs _) = isNonEmptyL gs || patNeedsGuard pat
@@ -1377,7 +1646,10 @@ cInitialRows ((CArm pat _ _) :: rest) i =
 -- (per-module local frames) rather than as one flat program.
 export
 lowerGroups : List Decl -> List CBind
-lowerGroups prog = lgGroup (funClausesOf prog)
+lowerGroups prog = map (refoldBind noLetCheck) (lowerGroupsRaw prog)
+
+lowerGroupsRaw : List Decl -> List CBind
+lowerGroupsRaw prog = lgGroup (funClausesOf prog)
 
 -- O(n log n) group-by-name, IDENTICAL output to
 -- `map (n => CBind n (clausesFor n clauses)) (groupNames clauses [])`: preserves
@@ -1856,6 +2128,14 @@ lowerImplsWith : List ((String, String, String), List Int) ->
   List Decl ->
   List CImplEntry
 lowerImplsWith disp reqCounts dispositions prog =
+  map (refoldImpl noLetCheck) (lowerImplsRaw disp reqCounts dispositions prog)
+
+lowerImplsRaw : List ((String, String, String), List Int) ->
+  OrdMap Int ->
+  Option DispositionTable ->
+  List Decl ->
+  List CImplEntry
+lowerImplsRaw disp reqCounts dispositions prog =
   flatMap (lowerDeclImpl disp reqCounts dispositions) prog
 
 lowerDeclImpl : List ((String, String, String), List Int) ->
@@ -2026,8 +2306,8 @@ specializeRow row (CDecision scrut arms tree) =
   CDecision (specializeRow row scrut) (map (specializeArm row) arms) tree
 specializeRow row (CIf c t e) =
   CIf (specializeRow row c) (specializeRow row t) (specializeRow row e)
-specializeRow row (CBinPrim op l r tag) =
-  CBinPrim op (specializeRow row l) (specializeRow row r) tag
+specializeRow row (CBinPrim op l r tag site) =
+  CBinPrim op (specializeRow row l) (specializeRow row r) tag site
 specializeRow row (CUnOp op x) = CUnOp op (specializeRow row x)
 specializeRow row (CTuple es) = CTuple (map (specializeRow row) es)
 specializeRow row (CList es) = CList (map (specializeRow row) es)
