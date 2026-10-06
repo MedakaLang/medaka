@@ -1,0 +1,178 @@
+-- Command-layer grading for the typed known-red ledger. Engine runners return
+-- raw outcomes; this module attaches a verdict without changing those outcomes.
+
+import tools.doctest.{ExResult(..)}
+import tools.prop_runner.{
+  PropResult,
+  PropStatus(..),
+  PropFailureKind(..),
+  propResultStatus,
+  propResultFailureKind,
+  propResultDetail,
+  propResultEngine,
+  propResultName,
+  propResultPassed,
+}
+import tools.test_pins.{
+  PinIndex,
+  PinKind(..),
+  PinObservation(..),
+  PinVerdict(..),
+  pinFromIndex,
+  classifyPin,
+  pinVerdictPassed,
+  pinVerdictDetail,
+}
+
+public export data GradedProp = GradedProp PropResult (Option PinVerdict)
+
+public export data GradedTest =
+  | GradedTest String String Int ExResult (Option PinVerdict)
+
+export
+gradeProps : PinIndex -> String -> List PropResult -> List GradedProp
+gradeProps index file rows = map (gradeProp index file) rows
+
+gradeProp : PinIndex -> String -> PropResult -> GradedProp
+gradeProp index file raw =
+  let verdict =
+    map
+      (pin => classifyPin pin (propObservation raw))
+      (pinFromIndex
+        index
+        file
+        PropPin
+        (propResultName raw)
+        (propResultEngine raw))
+  GradedProp raw verdict
+
+propObservation : PropResult -> PinObservation
+propObservation raw = match propResultStatus raw
+  PropPassedResult => PinPassed
+  PropFailedResult => match propResultFailureKind raw
+    Some PropLawFalse => PinLawFailure
+    _ => PinRuntimeError (propResultDetail raw)
+  PropErroredResult => PinRuntimeError (propResultDetail raw)
+
+export
+gradeTests : PinIndex ->
+  String ->
+  List (String, String, Int, ExResult) ->
+  List GradedTest
+gradeTests index file rows = map (gradeTest index file) rows
+
+gradeTest : PinIndex -> String -> (String, String, Int, ExResult) -> GradedTest
+gradeTest index file (engine, name, line, raw) =
+  let verdict =
+    map
+      (pin => classifyPin pin (testObservation raw))
+      (pinFromIndex index file TestPin name engine)
+  GradedTest engine name line raw verdict
+
+testObservation : ExResult -> PinObservation
+testObservation (Pass _ _) = PinPassed
+testObservation (Fail detail _ _) = PinAssertionFailure detail
+testObservation (Errored detail) = PinRuntimeError detail
+
+export
+gradedPropRaw : GradedProp -> PropResult
+gradedPropRaw (GradedProp raw _) = raw
+
+export
+gradedPropVerdict : GradedProp -> Option PinVerdict
+gradedPropVerdict (GradedProp _ verdict) = verdict
+
+export
+gradedPropPassed : GradedProp -> Bool
+gradedPropPassed (GradedProp raw None) = propResultPassed raw
+gradedPropPassed (GradedProp _ (Some verdict)) = pinVerdictPassed verdict
+
+export
+gradedPropStatus : GradedProp -> String
+gradedPropStatus (GradedProp _ (Some (PinHeld _))) = "known-red"
+gradedPropStatus (GradedProp raw _) = rawPropStatus raw
+
+-- Grading is an overlay: JSON consumers need the engine outcome as well as
+-- the ledger verdict, especially when a native error pin is deliberately held.
+export
+gradedPropRawStatus : GradedProp -> String
+gradedPropRawStatus (GradedProp raw _) = rawPropStatus raw
+
+rawPropStatus : PropResult -> String
+rawPropStatus raw = match propResultStatus raw
+  PropPassedResult => "pass"
+  PropFailedResult => "fail"
+  PropErroredResult => "error"
+
+export
+gradedPropIssue : GradedProp -> Option Int
+gradedPropIssue (GradedProp _ verdict) = verdictIssue verdict
+
+export
+gradedPropPinDetail : GradedProp -> Option String
+gradedPropPinDetail (GradedProp _ None) = None
+gradedPropPinDetail (GradedProp _ (Some verdict)) =
+  Some (pinVerdictDetail verdict)
+
+export
+gradedTestRaw : GradedTest -> (String, String, Int, ExResult)
+gradedTestRaw (GradedTest engine name line raw _) = (engine, name, line, raw)
+
+export
+gradedTestVerdict : GradedTest -> Option PinVerdict
+gradedTestVerdict (GradedTest _ _ _ _ verdict) = verdict
+
+export
+gradedTestPassed : GradedTest -> Bool
+gradedTestPassed (GradedTest _ _ _ raw verdict) = match verdict
+  Some value => pinVerdictPassed value
+  None => rawTestPassed raw
+
+rawTestPassed : ExResult -> Bool
+rawTestPassed (Pass _ _) = True
+rawTestPassed _ = False
+
+export
+gradedTestStatus : GradedTest -> String
+gradedTestStatus (GradedTest _ _ _ raw verdict) = match verdict
+  Some (PinHeld _) => "known-red"
+  _ => rawTestStatus raw
+
+export
+gradedTestRawStatus : GradedTest -> String
+gradedTestRawStatus (GradedTest _ _ _ raw _) = rawTestStatus raw
+
+rawTestStatus : ExResult -> String
+rawTestStatus (Pass _ _) = "pass"
+rawTestStatus (Fail _ _ _) = "fail"
+rawTestStatus (Errored _) = "error"
+
+export
+gradedTestIssue : GradedTest -> Option Int
+gradedTestIssue (GradedTest _ _ _ _ verdict) = verdictIssue verdict
+
+export
+gradedTestPinDetail : GradedTest -> Option String
+gradedTestPinDetail (GradedTest _ _ _ _ None) = None
+gradedTestPinDetail (GradedTest _ _ _ _ (Some verdict)) =
+  Some (pinVerdictDetail verdict)
+
+verdictIssue : Option PinVerdict -> Option Int
+verdictIssue None = None
+verdictIssue (Some (PinHeld issue)) = Some issue
+verdictIssue (Some (PinDrained issue)) = Some issue
+verdictIssue (Some (PinChanged issue _)) = Some issue
+
+export
+knownRedCountProps : List GradedProp -> Int
+knownRedCountProps [] = 0
+knownRedCountProps ((GradedProp _ (Some (PinHeld _))) :: rest) =
+  1 + knownRedCountProps rest
+knownRedCountProps (_ :: rest) = knownRedCountProps rest
+
+export
+knownRedCountTests : List GradedTest -> Int
+knownRedCountTests [] = 0
+knownRedCountTests ((GradedTest _ _ _ _ (Some (PinHeld _))) :: rest) =
+  1 + knownRedCountTests rest
+knownRedCountTests (_ :: rest) = knownRedCountTests rest

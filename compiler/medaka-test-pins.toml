@@ -1,0 +1,10 @@
+version = 1
+
+[[pin]]
+file = "tools/test_pins_report_test.mdk"
+kind = "test"
+name = "unit pins require their exact assertion message"
+engine = "native"
+issue = 3857
+detail_lines = ["native test run ended (probe exit 1) — runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running"]
+failure = "error"

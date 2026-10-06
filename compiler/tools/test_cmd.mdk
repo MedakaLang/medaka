@@ -108,14 +108,15 @@ import tools.doctest.{
 }
 import tools.native_doctest.{runNativeDoctests}
 import tools.native_test_decls.{runNativeTests}
-import tools.native_props.{runNativeProps}
+import tools.native_props.{runNativePlannedPropRequests}
+import tools.prop_plan.{PlanModule(..)}
 import tools.prop_runner.{
-  runAllProps,
   hasProps,
-  runAllPropsResults,
+  runAllPlannedPropRequestsResults,
   PropResult,
   PropStatus(..),
   PropFailureKind(..),
+  PropRequest(..),
   filterProps,
   filterPropsByName,
   propResultName,
@@ -126,7 +127,41 @@ import tools.prop_runner.{
   propResultSeed,
   propResultCases,
   propResultFailureKind,
+  propSeedValue,
 }
+import tools.test_pins.{
+  PinIndex,
+  PinKind(..),
+  TestExpectedFailure(..),
+  TestPin,
+  buildPinIndex,
+  pinFromIndex,
+  validatePinNames,
+}
+import tools.test_pins_io.{loadPinContext}
+import tools.test_pins_report.{
+  GradedProp,
+  GradedTest,
+  gradeProps,
+  gradeTests,
+  gradedPropPassed,
+  gradedTestPassed,
+  gradedPropRaw,
+  gradedTestRaw,
+  gradedPropVerdict,
+  gradedTestVerdict,
+  knownRedCountProps,
+  knownRedCountTests,
+  gradedPropStatus,
+  gradedPropRawStatus,
+  gradedPropIssue,
+  gradedPropPinDetail,
+  gradedTestStatus,
+  gradedTestRawStatus,
+  gradedTestIssue,
+  gradedTestPinDetail,
+}
+import support.ordmap.{omEmpty}
 import tools.test_runner.{
   collectTests, exprLine, runOneTest, hasTests, uncapableExterns
 }
@@ -228,22 +263,45 @@ runTest engines runtimeP coreP target roots cases filterOpt =
             let userDecls = desugar (parse tsrc)
             let exempt = typecheckExempt target userDecls tsrc
             let _ = exemptNotice exempt target userDecls
-            -- S-1/#2234 (F-converge): the prelude halves go through the
-            -- content-keyed `desugaredPrelude` memo; only the USER source is
-            -- parsed+desugared fresh here.
-            driveAll
-              engines
-              (desugaredPrelude rsrc)
-              (desugaredPrelude csrc)
-              rsrc
-              csrc
-              target
-              tsrc
-              roots
-              cases
-              filterOpt
-              userDecls
-              exempt
+            match pinIndexForTarget target userDecls
+              Err err =>
+                let _ = ePutStrLn err
+                False
+              Ok (file, index) =>
+                -- S-1/#2234 (F-converge): the prelude halves go through the
+                -- content-keyed `desugaredPrelude` memo; only the USER source is
+                -- parsed+desugared fresh here.
+                driveAll
+                  engines
+                  (desugaredPrelude rsrc)
+                  (desugaredPrelude csrc)
+                  rsrc
+                  csrc
+                  target
+                  tsrc
+                  roots
+                  cases
+                  filterOpt
+                  userDecls
+                  exempt
+                  file
+                  index
+
+pinIndexForTarget : String -> List Decl -> <IO> Result String (String, PinIndex)
+pinIndexForTarget target userDecls = do
+  context <- loadPinContext target
+  let names =
+    validatePinNames
+      context.contextPins
+      context.contextFile
+      (propNamesOf userDecls)
+      (testNamesOf userDecls)
+  match names
+    Err err => Err err
+    Ok () =>
+      map
+        (index => (context.contextFile, index))
+        (buildPinIndex context.contextPins)
 
 -- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
 -- `medaka test` must not GREEN-LIGHT a module whose DOCTESTS `medaka check`
@@ -573,11 +631,13 @@ filterMatchedNothing (Some sub) tsrc userDecls =
 -- root module, so sharing the injected trees with them is inert; the injection
 -- is empty for a module with no doctests.
 --
---   TestPair core mods  the elaborated, ctor-mangled pair every phase evaluates
+--   TestPair rawCore core raw mods  loaded source declarations paired with the
+--                                   elaborated, ctor-mangled graph every phase
+--                                   evaluates
 --   TestPairErr msg     a loader failure standing in for it, so each phase
 --                       reports it exactly as it always has
 data TestPair =
-  | TestPair (List Decl) (List (String, List Decl))
+  | TestPair (List Decl) (List Decl) (List (String, List Decl)) (List (String, List Decl))
   | TestPairErr String
 
 -- What the DOCTEST phase's interpreter arm evaluates.  The two shapes are NOT
@@ -669,10 +729,15 @@ elaborateFor : String ->
 elaborateFor rsrc csrc _target _roots mods exempt False _ =
   let runtimeDecls = desugaredPrelude rsrc
   let coreDecls = desugaredPrelude csrc
-  match elaborateModules runtimeDecls coreDecls (desugaredModPairs mods)
+  let rawModules = desugaredModPairs mods
+  match elaborateModules runtimeDecls coreDecls rawModules
     (coreE, modulesE, perModule, _, _, _) => (
       gateOfPerModule exempt runtimeDecls coreDecls mods perModule,
-      PreparedPair (uncurryPair (mangleCtorCollisionsPair (coreE, modulesE))),
+      PreparedPair
+        (uncurryPair
+          coreDecls
+          rawModules
+          (mangleCtorCollisionsPair (coreE, modulesE))),
     )
 elaborateFor rsrc csrc target roots mods exempt True synthDecls = (
   gateOfCheck exempt rsrc csrc target roots mods,
@@ -691,7 +756,10 @@ forcePrepared rsrc csrc (PreparedInject mods synthDecls) =
     (desugaredPrelude csrc)
     injected)
     (coreE, modulesE, _, _, _, _) =>
-      uncurryPair (mangleCtorCollisionsPair (coreE, modulesE))
+      uncurryPair
+        (desugaredPrelude csrc)
+        injected
+        (mangleCtorCollisionsPair (coreE, modulesE))
 
 -- The doctest-bearing gate: `analyzeProject`'s verdict over the graph this
 -- invocation already loaded, keyed into the same prelude and module-chain memos
@@ -716,8 +784,12 @@ gateOfCheck False rsrc csrc target roots mods =
       (chainKeyOf target roots)
       mods)
 
-uncurryPair : (List Decl, List (String, List Decl)) -> TestPair
-uncurryPair (core, mods) = TestPair core mods
+uncurryPair : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl)) ->
+  TestPair
+uncurryPair rawCore rawModules (core, mods) =
+  TestPair rawCore core rawModules mods
 
 -- The single-file prop/`test "…"` arm's elaboration: the degenerate 1-module
 -- list over the shadow-dropped prelude (`programIsCore` ⇒ [], so `medaka test
@@ -738,6 +810,8 @@ prepareSingle runtimeDecls coreDecls target roots userDecls =
   let rootId = singleRootId roots target
   modulePathMap := [(rootId, target)]
   uncurryPair
+    livePrelude
+    [(rootId, userDecls)]
     (elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)])
 
 driveAll : List Engine ->
@@ -752,8 +826,10 @@ driveAll : List Engine ->
   Option String ->
   List Decl ->
   Bool ->
+  String ->
+  PinIndex ->
   <IO> Bool
-driveAll engines runtimeDecls coreDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt
+driveAll engines runtimeDecls coreDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt file index
   | hasUseDecls userDecls =
     driveMulti
       engines
@@ -767,6 +843,8 @@ driveAll engines runtimeDecls coreDecls rsrc csrc target tsrc roots cases filter
       filterOpt
       userDecls
       exempt
+      file
+      index
   | otherwise =
     match if exempt then None else singleFileTypeErrors target tsrc rsrc csrc
       Some errText =>
@@ -783,6 +861,8 @@ driveAll engines runtimeDecls coreDecls rsrc csrc target tsrc roots cases filter
           cases
           filterOpt
           userDecls
+          file
+          index
 
 driveMulti : List Engine ->
   List Decl ->
@@ -795,8 +875,10 @@ driveMulti : List Engine ->
   Option String ->
   List Decl ->
   Bool ->
+  String ->
+  PinIndex ->
   <IO> Bool
-driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt =
+driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt file index =
   currentEvalFile := target
   let allExamples = extractExamples (collectComments tsrc)
   let examples = filterExamplesByName filterOpt allExamples
@@ -831,9 +913,27 @@ driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt user
             examples
             synthResults
         let propsOk =
-          runProps engines pair target tsrc userDecls cases filterOpt
+          runPropsPinned
+            engines
+            pair
+            target
+            tsrc
+            userDecls
+            cases
+            filterOpt
+            file
+            index
         let testsOk =
-          runTestDecls engines pair runtimeDecls target tsrc userDecls filterOpt
+          runTestDeclsPinned
+            engines
+            pair
+            runtimeDecls
+            target
+            tsrc
+            userDecls
+            filterOpt
+            file
+            index
         doctestsOk && propsOk && testsOk
 
 -- The prelude-only arm.  Its doctest phase evaluates a flat `elaborateOne` tree
@@ -849,8 +949,10 @@ driveSingle : List Engine ->
   Int ->
   Option String ->
   List Decl ->
+  String ->
+  PinIndex ->
   <IO> Bool
-driveSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt userDecls =
+driveSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt userDecls file index =
   currentEvalFile := target
   let examples =
     filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
@@ -869,9 +971,28 @@ driveSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt use
         (buildSynthResults userDecls examples)
     if hasProps userDecls || hasTests userDecls then
       let pair = prepareSingle runtimeDecls coreDecls target roots userDecls
-      let propsOk = runProps engines pair target tsrc userDecls cases filterOpt
+      let propsOk =
+        runPropsPinned
+          engines
+          pair
+          target
+          tsrc
+          userDecls
+          cases
+          filterOpt
+          file
+          index
       let testsOk =
-        runTestDecls engines pair runtimeDecls target tsrc userDecls filterOpt
+        runTestDeclsPinned
+          engines
+          pair
+          runtimeDecls
+          target
+          tsrc
+          userDecls
+          filterOpt
+          file
+          index
       doctestsOk && propsOk && testsOk
     else
       doctestsOk
@@ -987,7 +1108,7 @@ runChosen : DoctestTrees ->
   <IO> RunResult
 runChosen (DtPair (TestPairErr e)) examples synthResults =
   buildDetailsFrom (Err e) synthResults examples
-runChosen (DtPair (TestPair coreM modsM)) examples synthResults =
+runChosen (DtPair (TestPair _rawCoreM coreM _rawM modsM)) examples synthResults =
   -- Root-FULL env (locals ∪ imports ∪ globals), not `evalModulesWith`'s
   -- locals-only `rootLocals`: `firstUnresolvedDottedRef` below needs the
   -- import frame visible to find (or fail to find) an alias-qualified name
@@ -1209,73 +1330,53 @@ elaborateModulesMangled runtimeDecls coreDecls modules =
 -- `fromList`/`wellFormed`) get their leading dict argument — raw bodies would
 -- under-apply the now-dict-passed call and `force` a partial closure, so every
 -- prop would "fail".
-runProps : List Engine ->
+runPropsPinned : List Engine ->
   TestPair ->
   String ->
   String ->
   List Decl ->
   Int ->
   Option String ->
+  String ->
+  PinIndex ->
   <IO> Bool
-runProps engines pair target tsrc userDecls cases filterOpt
+runPropsPinned engines pair target tsrc userDecls cases filterOpt file index
   | not (hasProps userDecls) = True
   | otherwise = match pair
-    TestPairErr e =>
-      let _ = ePutStrLn e
+    TestPairErr err =>
+      let _ = ePutStrLn err
       False
-    TestPair _ _ =>
-      propsHuman engines pair target tsrc userDecls cases filterOpt
+    TestPair rawCoreM coreM rawM modsM =>
+      printGradedPropRows
+        (gradeProps
+          index
+          file
+          (propsReportEngines
+            engines
+            rawCoreM
+            coreM
+            rawM
+            modsM
+            target
+            tsrc
+            userDecls
+            cases
+            filterOpt
+            file
+            index))
 
-propsHuman : List Engine ->
-  TestPair ->
-  String ->
-  String ->
-  List Decl ->
-  Int ->
-  Option String ->
-  <IO> Bool
-propsHuman [] _ _ _ _ _ _ = True
-propsHuman (EngInterp :: rest) (TestPair coreM modsM) target tsrc userDecls cases filterOpt =
-  let env = evalModulesRootEnvWith (testCapableExterns ()) coreM modsM
-  let ok =
-    runAllProps
-      cases
-      filterOpt
-      target
-      (propLineTests tsrc)
-      env
-      (elaboratedRootProps modsM userDecls)
-      (coreM ++ flatMap snd modsM)
-  ok
-    && propsHuman
-      rest
-      (TestPair coreM modsM)
-      target
-      tsrc
-      userDecls
-      cases
-      filterOpt
-propsHuman (EngNative :: rest) (TestPair coreM modsM) target tsrc userDecls cases filterOpt =
-  let rows = runNativeProps target tsrc modsM cases filterOpt
-  let ok = printNativePropRows rows
-  ok
-    && propsHuman
-      rest
-      (TestPair coreM modsM)
-      target
-      tsrc
-      userDecls
-      cases
-      filterOpt
-propsHuman _ _ _ _ _ _ _ = False
-
-printNativePropRows : List PropResult -> <IO> Bool
-printNativePropRows [] = True
-printNativePropRows (p :: rest) =
+printGradedPropRows : List GradedProp -> <IO> Bool
+printGradedPropRows [] = True
+printGradedPropRows (row :: rest) =
+  let raw = gradedPropRaw row
+  let detail = match gradedPropPinDetail row
+    Some pin => "\{propResultDetail raw}; \{pin}"
+    None => propResultDetail raw
   let _ =
     putStrLn
-      "Testing \"\{propResultName p}\" [native] ... \{if propResultPassed p then "OK" else "FAILED"} (\{propResultDetail p})"
-  propResultPassed p && printNativePropRows rest
+      "Testing \"\{propResultName raw}\" [\{propResultEngine raw}] ... \{if gradedPropPassed row then "OK" else "FAILED"} (\{detail})"
+  let restPassed = printGradedPropRows rest
+  gradedPropPassed row && restPassed
 
 -- The root module's elaborated decls — the prop and `test "…"` bodies both come
 -- from here.  The root module is the LAST in the list (the loader returns
@@ -1304,74 +1405,61 @@ lastModule (_ :: rest) = lastModule rest
 
 -- `engines` selects the execution engine(s) the same way the doctest phase's
 -- does, and each engine's block is labelled when there is more than one.
-runTestDecls : List Engine ->
+runTestDeclsPinned : List Engine ->
   TestPair ->
   List Decl ->
   String ->
   String ->
   List Decl ->
   Option String ->
+  String ->
+  PinIndex ->
   <IO> Bool
-runTestDecls engines pair runtimeDecls target tsrc userDecls filterOpt
+runTestDeclsPinned engines pair runtimeDecls target tsrc userDecls filterOpt file index
   | not (hasTests userDecls) = True
   | otherwise =
-    runTestEngines engines pair runtimeDecls target tsrc userDecls filterOpt
+    printGradedTestRows
+      target
+      (gradeTests
+        index
+        file
+        (testRowsForPins
+          (testDeclsReportPinned
+            engines
+            pair
+            runtimeDecls
+            target
+            tsrc
+            userDecls
+            filterOpt
+            file
+            index)))
 
-runTestEngines : List Engine ->
-  TestPair ->
-  List Decl ->
-  String ->
-  String ->
-  List Decl ->
-  Option String ->
-  <IO> Bool
-runTestEngines [e] pair runtimeDecls target tsrc userDecls filterOpt =
-  runTestsOn e pair runtimeDecls target tsrc userDecls filterOpt
-runTestEngines engines pair runtimeDecls target tsrc userDecls filterOpt =
-  runTestEnginesTagged engines pair runtimeDecls target tsrc userDecls filterOpt
+printGradedTestRows : String -> List GradedTest -> <IO> Bool
+printGradedTestRows _ [] = True
+printGradedTestRows target (row :: rest) =
+  let (engine, name, line, raw) = gradedTestRaw row
+  let label = "\{name} [\{engine}]"
+  let _ = printTestRunning target line label
+  let _ =
+    if gradedTestStatus row == "known-red" then
+      putStrLn
+        "  known-red \{target}:\{intToString line}: \{label} (\{gradedTestPinDetailText row})"
+    else
+      printTestVerdict target line label raw
+  let restPassed = printGradedTestRows target rest
+  gradedTestPassed row && restPassed
 
-runTestEnginesTagged : List Engine ->
-  TestPair ->
-  List Decl ->
-  String ->
-  String ->
-  List Decl ->
-  Option String ->
-  <IO> Bool
-runTestEnginesTagged [] _ _ _ _ _ _ = True
-runTestEnginesTagged (e :: rest) pair runtimeDecls target tsrc userDecls filterOpt =
-  let _ = putStrLn ""
-  let _ = putStrLn "-- \{engineName e} --"
-  let ok = runTestsOn e pair runtimeDecls target tsrc userDecls filterOpt
-  let restOk =
-    runTestEnginesTagged rest pair runtimeDecls target tsrc userDecls filterOpt
-  ok && restOk
+gradedTestPinDetailText : GradedTest -> String
+gradedTestPinDetailText row = match gradedTestPinDetail row
+  Some detail => detail
+  None => ""
 
--- The SINGLE call site that picks an execution engine for the `test "…"`
--- phase.  `EngInterp` evaluates each elaborated body through the interpreter;
--- `EngNative` compiles ONE probe binary per file (tools.native_test_decls) and
--- reads the `Expectation`s it prints.  The two arms genuinely differ in how
--- they reach a body — an elaborated `Expr` versus a re-rendered binding — which
--- is why that module is `native_doctest.mdk`'s template rather than its caller.
-runTestsOn : Engine ->
-  TestPair ->
-  List Decl ->
-  String ->
-  String ->
-  List Decl ->
-  Option String ->
-  <IO> Bool
-runTestsOn EngInterp (TestPairErr e) _runtimeDecls _target _tsrc _userDecls _filterOpt =
-  let _ = ePutStrLn e
-  False
-runTestsOn EngInterp (TestPair coreM modsM) runtimeDecls target tsrc userDecls filterOpt =
-  gatedReportTests
-    target
-    (runtimeDecls ++ coreM ++ flatMap snd modsM)
-    (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
-    (rootTestsOf filterOpt tsrc modsM userDecls)
-runTestsOn EngNative _pair _runtimeDecls target tsrc _userDecls filterOpt =
-  runTestDeclsNative target tsrc filterOpt
+testRowsForPins : List (Engine, String, Int, ExResult) ->
+  List (String, String, Int, ExResult)
+testRowsForPins [] = []
+testRowsForPins ((engine, name, line, result) :: rest) =
+  (engineName engine, name, line, result) :: testRowsForPins rest
 
 -- The `test "…"` decls to evaluate: the elaborated root module's, with each
 -- body's source line recovered from a position-preserving reparse.
@@ -1394,37 +1482,8 @@ rootTestsOf filterOpt tsrc modsM userDecls =
 -- needs the opposite — the elaborated bodies, whose `expectEqual` call sites
 -- already carry their dictionary argument.  Both lists come from the same
 -- source through the same `--filter`, so index `i` names the same test in each.
-runTestDeclsNative : String -> String -> Option String -> <IO> Bool
-runTestDeclsNative target tsrc filterOpt =
-  let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
-  let _ = putStrLn ("running tests in " ++ target)
-  reportNativeTests target tests (runNativeTests target tsrc tests)
-
 nativeRawTests : String -> List (String, Int, Expr)
 nativeRawTests tsrc = collectTests (parseLocated tsrc)
-
-reportNativeTests : String ->
-  List (String, Int, Expr) ->
-  List ExResult ->
-  <IO> Bool
-reportNativeTests target tests results =
-  let (passed, failed, errors) = nativeTestLoop target tests results 0 0 0
-  reportTestSummary target passed failed errors
-
-nativeTestLoop : String ->
-  List (String, Int, Expr) ->
-  List ExResult ->
-  Int ->
-  Int ->
-  Int ->
-  <IO> (Int, Int, Int)
-nativeTestLoop _ [] _ passed failed errors = (passed, failed, errors)
-nativeTestLoop _ (_ :: _) [] passed failed errors = (passed, failed, errors)
-nativeTestLoop target ((name, line, _) :: rest) (r :: rRest) passed failed errors =
-  let _ = printTestRunning target line name
-  let _ = printTestVerdict target line name r
-  let (p, f, e) = tallyTest r passed failed errors
-  nativeTestLoop target rest rRest p f e
 
 -- Line map keyed by test name, from a POSITION-populating reparse of the source
 -- (the bare `parse` used elsewhere leaves placeholder line-1 locs).
@@ -1480,18 +1539,6 @@ attachRawLines ((_, l, _) :: rawRest) ((name, _, body) :: rest) =
 -- have run are not the point when the file as written cannot be run as asked.
 -- `--native` compiles a real binary and so has no such policy, which is what
 -- the diagnostic points at.
-gatedReportTests : String ->
-  List Decl ->
-  List (String, Value e) ->
-  List (String, Int, Expr) ->
-  <IO | e> Bool
-gatedReportTests target corpus env tests =
-  match uncapableExterns corpus env tests
-    [] => reportTests target env tests
-    names =>
-      let _ = ePutStrLn (uncapableExternsMsg target names)
-      False
-
 uncapableExternsMsg : String -> List String -> String
 uncapableExternsMsg target names =
   "\{target}: `test \"…\"` declarations here reach \{externWord names} \{joinCommas names}, which `medaka test` does not provide under the interpreter — its capability policy covers the clock, allocation counts and stderr only, so no filesystem, environment, stdin, network or subprocess extern is bound. No test was run. Run these tests natively instead: `medaka test --native \{target}`."
@@ -1510,26 +1557,6 @@ joinCommas (n :: rest) = "`\{n}`, " ++ joinCommas rest
 -- prop phase, each result is printed AS its body is evaluated (not batched), so a
 -- body that aborts the run still leaves the tests that already passed on screen.
 -- Returns True iff every test passed.
-reportTests : String ->
-  List (String, Value e) ->
-  List (String, Int, Expr) ->
-  <IO | e> Bool
-reportTests target env tests =
-  let _ = putStrLn ("running tests in " ++ target)
-  let (passed, failed, errors) = runTestLoop target env tests 0 0 0
-  reportTestSummary target passed failed errors
-
--- The per-file summary line + exit signal, shared by both engines so their
--- reports can be compared line for line.
-reportTestSummary : String -> Int -> Int -> Int -> <IO> Bool
-reportTestSummary target passed failed errors =
-  let total = passed + failed + errors
-  let _ =
-    putStr "\n\{target}: \{intToString passed}/\{intToString total} passed"
-  let _ = putStr (testFailSuffix failed errors)
-  let _ = putStr "\n"
-  failed == 0 && errors == 0
-
 -- #2293: name the test BEFORE its outcome is known. Panics are uncatchable by
 -- design (settled: isolation only, never catchability), so under the
 -- interpreter this print is the runner's only chance to attribute a mid-run
@@ -1557,32 +1584,6 @@ printTestVerdict target line name result =
     Errored msg =>
       let _ = putStrLn "  FAIL \{loc}: \{name}"
       putStrLn (indentVerdictMsg msg)
-
-tallyTest : ExResult -> Int -> Int -> Int -> (Int, Int, Int)
-tallyTest (Pass _ _) passed failed errors = (passed + 1, failed, errors)
-tallyTest (Fail _ _ _) passed failed errors = (passed, failed + 1, errors)
-tallyTest (Errored _) passed failed errors = (passed, failed, errors + 1)
-
-runTestLoop : String ->
-  List (String, Value e) ->
-  List (String, Int, Expr) ->
-  Int ->
-  Int ->
-  Int ->
-  <IO | e> (Int, Int, Int)
-runTestLoop _ _ [] passed failed errors = (passed, failed, errors)
-runTestLoop target env ((name, line, body) :: rest) passed failed errors =
-  let _ = printTestRunning target line name
-  let result = runOneTest env body
-  let _ = printTestVerdict target line name result
-  let (p, f, e) = tallyTest result passed failed errors
-  runTestLoop target env rest p f e
-
-testFailSuffix : Int -> Int -> String
-testFailSuffix failed errors
-  | failed > 0 || errors > 0 =
-    " (\{intToString failed} failed, \{intToString errors} errors)"
-  | otherwise = ""
 
 -- ── structured (non-printing) report — for `medaka mcp`'s medaka_test (#252) ──
 -- Returns the doctest RunResult (per-example ExResult details) plus a PropResult
@@ -1637,6 +1638,32 @@ runTestReport : List Engine ->
   Bool ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
 runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt includeTestDecls =
+  runTestReportPinned
+    engines
+    runtimeSrc
+    coreSrc
+    target
+    tsrc
+    stdlibDir
+    cases
+    filterOpt
+    includeTestDecls
+    ""
+    omEmpty
+
+runTestReportPinned : List Engine ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Option String ->
+  Bool ->
+  String ->
+  PinIndex ->
+  <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
+runTestReportPinned engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt includeTestDecls file index =
   -- S-1/#2234 (F-converge): content-keyed prelude memo (see `runTest` above).
   let runtimeDecls = desugaredPrelude runtimeSrc
   let coreDecls = desugaredPrelude coreSrc
@@ -1657,6 +1684,8 @@ runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt i
       includeTestDecls
       userDecls
       exempt
+      file
+      index
   else match (if exempt then
     None
   else
@@ -1675,6 +1704,69 @@ runTestReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt i
         includeTestDecls
         userDecls
         exempt
+        file
+        index
+
+-- The ledger is loaded exactly once for the selected target. Declaration names
+-- are checked before any name filter applies, so a stale/ambiguous pin cannot
+-- disappear behind `--filter`. The returned wrappers retain every raw result;
+-- callers choose their status and summaries from the attached verdict only.
+export
+runTestGradedReport : List Engine ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Option String ->
+  Bool ->
+  <IO> (Option String, List (Engine, RunResult), List GradedProp, List GradedTest, Bool)
+runTestGradedReport engines runtimeSrc coreSrc target tsrc stdlibDir cases filterOpt includeTestDecls =
+  do
+    let userDecls = desugar (parse tsrc)
+    match loadPinContext target
+      Err err => (Some err, [], [], [], False)
+      Ok context =>
+        match (validatePinNames
+          context.contextPins
+          context.contextFile
+          (propNamesOf userDecls)
+          (testNamesOf userDecls))
+          Err err => (Some err, [], [], [], False)
+          Ok () => match buildPinIndex context.contextPins
+            Err err => (Some err, [], [], [], False)
+            Ok index =>
+              let (reportError, runs, props, tests, skipped) =
+                runTestReportPinned
+                  engines
+                  runtimeSrc
+                  coreSrc
+                  target
+                  tsrc
+                  stdlibDir
+                  cases
+                  filterOpt
+                  includeTestDecls
+                  context.contextFile
+                  index
+              (
+                reportError,
+                runs,
+                gradeProps index context.contextFile props,
+                gradeTests index context.contextFile (testRowsForPins tests),
+                skipped,
+              )
+
+propNamesOf : List Decl -> List String
+propNamesOf [] = []
+propNamesOf ((DProp _ name _ _) :: rest) = name :: propNamesOf rest
+propNamesOf (_ :: rest) = propNamesOf rest
+
+testNamesOf : List Decl -> List String
+testNamesOf [] = []
+testNamesOf ((DTest _ name _) :: rest) = name :: testNamesOf rest
+testNamesOf (_ :: rest) = testNamesOf rest
 
 -- The import-bearing arm of `runTestReport`: the SAME one load + one
 -- elaboration + one gate `medaka test`'s printing arm uses (`driveMulti`), so
@@ -1691,8 +1783,10 @@ reportMulti : List Engine ->
   Bool ->
   List Decl ->
   Bool ->
+  String ->
+  PinIndex ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
-reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt includeTestDecls userDecls exempt =
+reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
   let allExamples = extractExamples (collectComments tsrc)
   let examples = filterExamplesByName filterOpt allExamples
   let synthResults = buildSynthResults userDecls examples
@@ -1719,7 +1813,16 @@ reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt inc
           userDecls
           examples
           synthResults,
-        propsReport engines pair target tsrc userDecls cases filterOpt,
+        propsReportPinned
+          engines
+          pair
+          target
+          tsrc
+          userDecls
+          cases
+          filterOpt
+          file
+          index,
         reportTestDecls
           includeTestDecls
           engines
@@ -1728,7 +1831,9 @@ reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt inc
           target
           tsrc
           userDecls
-          filterOpt,
+          filterOpt
+          file
+          index,
         exempt,
       )
 
@@ -1746,8 +1851,10 @@ reportSingle : List Engine ->
   Bool ->
   List Decl ->
   Bool ->
+  String ->
+  PinIndex ->
   <IO> (Option String, List (Engine, RunResult), List PropResult, List (Engine, String, Int, ExResult), Bool)
-reportSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt includeTestDecls userDecls exempt =
+reportSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt includeTestDecls userDecls exempt file index =
   let examples =
     filterExamplesByName filterOpt (extractExamples (collectComments tsrc))
   let doctestRuns =
@@ -1764,7 +1871,16 @@ reportSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt in
     (
       None,
       doctestRuns,
-      propsReport engines pair target tsrc userDecls cases filterOpt,
+      propsReportPinned
+        engines
+        pair
+        target
+        tsrc
+        userDecls
+        cases
+        filterOpt
+        file
+        index,
       reportTestDecls
         includeTestDecls
         engines
@@ -1773,7 +1889,9 @@ reportSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt in
         target
         tsrc
         userDecls
-        filterOpt,
+        filterOpt
+        file
+        index,
       exempt,
     )
   else
@@ -1790,10 +1908,21 @@ reportTestDecls : Bool ->
   String ->
   List Decl ->
   Option String ->
+  String ->
+  PinIndex ->
   <IO> List (Engine, String, Int, ExResult)
-reportTestDecls False _ _ _ _ _ _ _ = []
-reportTestDecls True engines pair runtimeDecls target tsrc userDecls filterOpt =
-  testDeclsReport engines pair runtimeDecls target tsrc userDecls filterOpt
+reportTestDecls False _ _ _ _ _ _ _ _ _ = []
+reportTestDecls True engines pair runtimeDecls target tsrc userDecls filterOpt file index =
+  testDeclsReportPinned
+    engines
+    pair
+    runtimeDecls
+    target
+    tsrc
+    userDecls
+    filterOpt
+    file
+    index
 
 -- Doctest phase as pure data: extraction + runChosenOn per requested engine,
 -- minus reportDoctests' printing.  A file with zero doctests yields the empty
@@ -1833,56 +1962,165 @@ doctestReportGo (e :: rest) trees target tsrc userDecls examples synthResults =
   (e, runChosenOn e trees target tsrc userDecls examples synthResults)
     :: doctestReportGo rest trees target tsrc userDecls examples synthResults
 
--- Prop phase as pure data: same single-file/multi-module split as runProps, but
--- calling runAllPropsResults (silent) instead of runAllProps (printing).
+-- Prop phase as pure data: same single-file/multi-module split as the human
+-- path, with raw engine outcomes graded only after both engines complete.
 -- `cases`/`filterOpt` mirror `runProps`' own parameters (F1: `medaka test
 -- --json --cases`/`--filter` were silently ignored) — MCP's medaka_test still
 -- passes `(100, None)` (unchanged behavior, #2295 is scoped to the CLI).
-propsReport : List Engine ->
+-- The raw runner stays ledger-agnostic. A command report builds this index once
+-- for its selected file, derives per-engine requests (including a pin's replay
+-- seed/case count), then grades the raw rows separately.
+propsReportPinned : List Engine ->
   TestPair ->
   String ->
   String ->
   List Decl ->
   Int ->
   Option String ->
+  String ->
+  PinIndex ->
   <IO> List PropResult
-propsReport engines pair target tsrc userDecls cases filterOpt
+propsReportPinned engines pair target tsrc userDecls cases filterOpt file index
   | not (hasProps userDecls) = []
   | otherwise = match pair
     TestPairErr _ => []
-    TestPair coreM modsM =>
+    TestPair rawCoreM coreM rawM modsM =>
       propsReportEngines
         engines
+        rawCoreM
         coreM
+        rawM
         modsM
         target
         tsrc
         userDecls
         cases
         filterOpt
+        file
+        index
 
 propsReportEngines : List Engine ->
   List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
   List (String, List Decl) ->
   String ->
   String ->
   List Decl ->
   Int ->
   Option String ->
+  String ->
+  PinIndex ->
   <IO> List PropResult
-propsReportEngines [] _ _ _ _ _ _ _ = []
-propsReportEngines (EngInterp :: rest) coreM modsM target tsrc userDecls cases filterOpt =
-  runAllPropsResults
-      cases
-      filterOpt
+propsReportEngines [] _ _ _ _ _ _ _ _ _ _ _ = []
+propsReportEngines (EngInterp :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  runAllPlannedPropRequestsResults
+      (rootPlanModuleId rawM target)
+      (planModules rawCoreM coreM rawM modsM)
+      (propRequestsFor index file "eval" userDecls cases filterOpt)
       (propLineTests tsrc)
       (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
       (elaboratedRootProps modsM userDecls)
-      (coreM ++ flatMap snd modsM)
-    ++ propsReportEngines rest coreM modsM target tsrc userDecls cases filterOpt
-propsReportEngines (EngNative :: rest) coreM modsM target tsrc userDecls cases filterOpt =
-  runNativeProps target tsrc modsM cases filterOpt
-    ++ propsReportEngines rest coreM modsM target tsrc userDecls cases filterOpt
+    ++ propsReportEngines
+      rest
+      rawCoreM
+      coreM
+      rawM
+      modsM
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+      file
+      index
+propsReportEngines (EngNative :: rest) rawCoreM coreM rawM modsM target tsrc userDecls cases filterOpt file index =
+  runNativePlannedPropRequests
+      target
+      tsrc
+      (planModules rawCoreM coreM rawM modsM)
+      (propRequestsFor index file "native" userDecls cases filterOpt)
+    ++ propsReportEngines
+      rest
+      rawCoreM
+      coreM
+      rawM
+      modsM
+      target
+      tsrc
+      userDecls
+      cases
+      filterOpt
+      file
+      index
+
+-- The loader and elaborator produce these graphs in the same dependency-first
+-- order. Keep the source declarations beside their elaborated counterparts so
+-- native property planning retains spelling while it keys semantics by the
+-- resolved declarations; do not reconstruct names from mangled runtime tags.
+planModules : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, List Decl) ->
+  List PlanModule
+planModules rawCore coreM rawModules runtimeModules =
+  PlanModule "core" rawCore coreM :: planModulesGo rawModules runtimeModules
+
+planModulesGo : List (String, List Decl) ->
+  List (String, List Decl) ->
+  List PlanModule
+planModulesGo [] [] = []
+planModulesGo ((_rawId, rawDecls) :: rawRest) ((runtimeId, runtimeDecls) :: runtimeRest) =
+  PlanModule runtimeId rawDecls runtimeDecls
+    :: planModulesGo rawRest runtimeRest
+planModulesGo _ _ = []
+
+rootPlanModuleId : List (String, List Decl) -> String -> String
+rootPlanModuleId [] fallback = fallback
+rootPlanModuleId [(moduleId, _)] _ = moduleId
+rootPlanModuleId (_ :: rest) fallback = rootPlanModuleId rest fallback
+
+propRequestsFor : PinIndex ->
+  String ->
+  String ->
+  List Decl ->
+  Int ->
+  Option String ->
+  List PropRequest
+propRequestsFor index file engine userDecls cases filterOpt =
+  propRequestsForGo
+    index
+    file
+    engine
+    (propSeedValue ())
+    cases
+    (filterPropsByName filterOpt (filterProps userDecls))
+
+propRequestsForGo : PinIndex ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  List Decl ->
+  List PropRequest
+propRequestsForGo _ _ _ _ _ [] = []
+propRequestsForGo index file engine seed cases ((DProp _ name _ _) :: rest) =
+  let request = match pinFromIndex index file PropPin name engine
+    Some pin => PropRequest name (pinSeedOr seed pin) (pinCasesOr cases pin)
+    None => PropRequest name seed cases
+  request :: propRequestsForGo index file engine seed cases rest
+propRequestsForGo index file engine seed cases (_ :: rest) =
+  propRequestsForGo index file engine seed cases rest
+
+pinSeedOr : Int -> TestPin -> Int
+pinSeedOr fallback pin = match pin.pinSeed
+  Some seed => seed
+  None => fallback
+
+pinCasesOr : Int -> TestPin -> Int
+pinCasesOr fallback pin = match pin.pinCases
+  Some cases => cases
+  None => fallback
 
 -- ── test-decl phase as pure data (#2295 (d)) ────────────────────────────────
 -- Symmetric with `propsReport` above: the same single-file/multi-module split
@@ -1899,15 +2137,17 @@ propsReportEngines (EngNative :: rest) coreM modsM target tsrc userDecls cases f
 -- it.  Under `--engines eval,native` a file's tests appear once per engine —
 -- the same test judged twice is two results, not one, because that is exactly
 -- the disagreement a second engine exists to expose.
-testDeclsReport : List Engine ->
+testDeclsReportPinned : List Engine ->
   TestPair ->
   List Decl ->
   String ->
   String ->
   List Decl ->
   Option String ->
+  String ->
+  PinIndex ->
   <IO> List (Engine, String, Int, ExResult)
-testDeclsReport engines pair runtimeDecls target tsrc userDecls filterOpt
+testDeclsReportPinned engines pair runtimeDecls target tsrc userDecls filterOpt file index
   | not (hasTests userDecls) = []
   | otherwise =
     testDeclsReportEngines
@@ -1918,6 +2158,8 @@ testDeclsReport engines pair runtimeDecls target tsrc userDecls filterOpt
       tsrc
       userDecls
       filterOpt
+      file
+      index
 
 testDeclsReportEngines : List Engine ->
   TestPair ->
@@ -1926,12 +2168,23 @@ testDeclsReportEngines : List Engine ->
   String ->
   List Decl ->
   Option String ->
+  String ->
+  PinIndex ->
   <IO> List (Engine, String, Int, ExResult)
-testDeclsReportEngines [] _ _ _ _ _ _ = []
-testDeclsReportEngines (e :: rest) pair runtimeDecls target tsrc userDecls filterOpt =
+testDeclsReportEngines [] _ _ _ _ _ _ _ _ = []
+testDeclsReportEngines (e :: rest) pair runtimeDecls target tsrc userDecls filterOpt file index =
   map
       (t => tagWithEngine e t)
-      (testDeclsReportOn e pair runtimeDecls target tsrc userDecls filterOpt)
+      (testDeclsReportOn
+        e
+        pair
+        runtimeDecls
+        target
+        tsrc
+        userDecls
+        filterOpt
+        file
+        index)
     ++ testDeclsReportEngines
       rest
       pair
@@ -1940,6 +2193,8 @@ testDeclsReportEngines (e :: rest) pair runtimeDecls target tsrc userDecls filte
       tsrc
       userDecls
       filterOpt
+      file
+      index
 
 tagWithEngine : Engine ->
   (String, Int, ExResult) ->
@@ -1953,26 +2208,69 @@ testDeclsReportOn : Engine ->
   String ->
   List Decl ->
   Option String ->
+  String ->
+  PinIndex ->
   <IO> List (String, Int, ExResult)
-testDeclsReportOn EngInterp (TestPairErr _) _runtimeDecls _target _tsrc _userDecls _filterOpt =
+testDeclsReportOn EngInterp (TestPairErr _) _runtimeDecls _target _tsrc _userDecls _filterOpt _file _index =
   []
-testDeclsReportOn EngInterp (TestPair coreM modsM) runtimeDecls target tsrc userDecls filterOpt =
+testDeclsReportOn EngInterp (TestPair _rawCoreM coreM _rawM modsM) runtimeDecls target tsrc userDecls filterOpt _file _index =
   gatedTestsCollect
     target
     (runtimeDecls ++ coreM ++ flatMap snd modsM)
     (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)
     (rootTestsOf filterOpt tsrc modsM userDecls)
-testDeclsReportOn EngNative _pair _runtimeDecls target tsrc _userDecls filterOpt =
+testDeclsReportOn EngNative _pair _runtimeDecls target tsrc _userDecls filterOpt file index =
   let tests = filterTestsByName filterOpt (nativeRawTests tsrc)
-  zipTestResults tests (runNativeTests target tsrc tests)
+  let ordinary = filterList (notExpectedNativeError index file) tests
+  nativeTestsWithPinnedErrors
+    target
+    tsrc
+    index
+    file
+    tests
+    (runNativeTests target tsrc ordinary)
 
-zipTestResults : List (String, Int, Expr) ->
+notExpectedNativeError : PinIndex -> String -> (String, Int, Expr) -> Bool
+notExpectedNativeError index file (name, _, _) =
+  not (isExpectedNativeError index file name)
+
+isExpectedNativeError : PinIndex -> String -> String -> Bool
+isExpectedNativeError index file name =
+  match pinFromIndex index file TestPin name "native"
+    Some pin => match pin.pinExpected
+      Some (ExpectError _) => True
+      _ => False
+    None => False
+
+-- An expected native abort receives its own probe, while all ordinary tests
+-- remain one compiled batch. Recombine by source tuple so later ordinary tests
+-- cannot vanish behind the known abort and duplicate unpinned names stay ordered.
+nativeTestsWithPinnedErrors : String ->
+  String ->
+  PinIndex ->
+  String ->
+  List (String, Int, Expr) ->
   List ExResult ->
-  List (String, Int, ExResult)
-zipTestResults [] _ = []
-zipTestResults (_ :: _) [] = []
-zipTestResults ((name, line, _) :: rest) (r :: rRest) =
-  (name, line, r) :: zipTestResults rest rRest
+  <IO> List (String, Int, ExResult)
+nativeTestsWithPinnedErrors _ _ _ _ [] _ = []
+nativeTestsWithPinnedErrors target tsrc index file ((selected@(name, line, _)) :: rest) ordinary =
+  if isExpectedNativeError
+    index
+    file
+    name then match runNativeTests target tsrc [selected]
+    [result] =>
+      (name, line, result)
+        :: nativeTestsWithPinnedErrors target tsrc index file rest ordinary
+    _ =>
+      (name, line, Errored "native test runner returned no selected result")
+        :: nativeTestsWithPinnedErrors target tsrc index file rest ordinary
+  else match ordinary
+    [] =>
+      (name, line, Errored "native test runner returned no selected result")
+        :: nativeTestsWithPinnedErrors target tsrc index file rest []
+    result :: ordinaryRest =>
+      (name, line, result)
+        :: nativeTestsWithPinnedErrors target tsrc index file rest ordinaryRest
 
 -- The `--json` twin of `gatedReportTests`: the capability refusal reaches this
 -- surface as one `Errored` per test carrying the same message, so a machine
@@ -2359,6 +2657,149 @@ cliTestReportJson path typeError engines runs props tests typecheckSkipped =
                   + cliCountFailTests tests),
             ),
             ("ok", JBool (cliTestReportOk typeError runs props tests)),
+          ],
+        ),
+      ])
+
+-- Ledger-aware JSON keeps raw operands/detail and only changes the reported
+-- status for a held pin. Drained and changed pins remain failures with their
+-- raw outcome visible; `issue` and `pin` explain why the command is red.
+export
+cliGradedTestReportOk : Option String ->
+  List (Engine, RunResult) ->
+  List GradedProp ->
+  List GradedTest ->
+  Bool
+cliGradedTestReportOk reportError runs props tests =
+  isNone reportError
+    && cliAllDoctestRunsOk runs
+    && allGradedPropsPass props
+    && allGradedTestsPass tests
+
+allGradedPropsPass : List GradedProp -> Bool
+allGradedPropsPass [] = True
+allGradedPropsPass (row :: rest) =
+  gradedPropPassed row && allGradedPropsPass rest
+
+allGradedTestsPass : List GradedTest -> Bool
+allGradedTestsPass [] = True
+allGradedTestsPass (row :: rest) =
+  gradedTestPassed row && allGradedTestsPass rest
+
+cliGradedPropJson : GradedProp -> Json
+cliGradedPropJson row =
+  let raw = gradedPropRaw row
+  jObject
+    ([
+        ("engine", JString (propResultEngine raw)),
+        ("name", JString (propResultName raw)),
+        ("status", JString (gradedPropStatus row)),
+        ("rawStatus", JString (gradedPropRawStatus row)),
+        ("detail", JString (propResultDetail raw)),
+        ("failureKind", propFailureKindJson (propResultFailureKind raw)),
+        ("seed", JInt (propResultSeed raw)),
+        ("cases", JInt (propResultCases raw)),
+      ]
+      ++ cliIssueField (gradedPropIssue row)
+      ++ cliPinField (gradedPropPinDetail row))
+
+cliGradedTestJson : GradedTest -> Json
+cliGradedTestJson row =
+  let (engine, name, line, raw) = gradedTestRaw row
+  jObject
+    ([
+        ("name", JString name),
+        ("line", JInt line),
+        ("engine", JString engine),
+        ("status", JString (gradedTestStatus row)),
+        ("rawStatus", JString (gradedTestRawStatus row)),
+      ]
+      ++ cliRawTestOperands raw
+      ++ cliIssueField (gradedTestIssue row)
+      ++ cliPinField (gradedTestPinDetail row))
+
+cliRawTestOperands : ExResult -> List (String, Json)
+cliRawTestOperands (Pass expected actual) = [
+  ("expected", JString expected),
+  ("actual", JString actual),
+]
+cliRawTestOperands (Fail detail expected actual) =
+  [("expected", JString expected), ("actual", JString actual)]
+    ++ (if detail == "" then [] else [("detail", JString detail)])
+cliRawTestOperands (Errored detail) = [("detail", JString detail)]
+
+cliIssueField : Option Int -> List (String, Json)
+cliIssueField None = []
+cliIssueField (Some issue) = [("issue", JInt issue)]
+
+cliPinField : Option String -> List (String, Json)
+cliPinField None = []
+cliPinField (Some detail) = [("pin", JString detail)]
+
+cliCountPassedGradedProps : List GradedProp -> Int
+cliCountPassedGradedProps [] = 0
+cliCountPassedGradedProps (row :: rest) =
+  (if gradedPropPassed row then 1 else 0) + cliCountPassedGradedProps rest
+
+cliCountFailedGradedProps : List GradedProp -> Int
+cliCountFailedGradedProps [] = 0
+cliCountFailedGradedProps (row :: rest) =
+  (if gradedPropPassed row then 0 else 1) + cliCountFailedGradedProps rest
+
+cliCountPassedGradedTests : List GradedTest -> Int
+cliCountPassedGradedTests [] = 0
+cliCountPassedGradedTests (row :: rest) =
+  (if gradedTestPassed row then 1 else 0) + cliCountPassedGradedTests rest
+
+cliCountFailedGradedTests : List GradedTest -> Int
+cliCountFailedGradedTests [] = 0
+cliCountFailedGradedTests (row :: rest) =
+  (if gradedTestPassed row then 0 else 1) + cliCountFailedGradedTests rest
+
+export
+cliGradedTestReportJson : String ->
+  Option String ->
+  List Engine ->
+  List (Engine, RunResult) ->
+  List GradedProp ->
+  List GradedTest ->
+  Bool ->
+  Json
+cliGradedTestReportJson path reportError engines runs props tests typecheckSkipped =
+  let runEngines =
+    if isNone reportError then cliDoctestRunEngineNames runs else engines
+  let known = knownRedCountProps props + knownRedCountTests tests
+  jObject
+    ([
+        ("file", JString path),
+        ("engine", JString (cliPrimaryEngineName runEngines)),
+      ]
+      ++ cliTypeErrorField reportError
+      ++ cliTypecheckSkippedField typecheckSkipped
+      ++ [
+        ("doctests", cliDoctestsJson (cliPrimaryDoctestRun runs)),
+        ("properties", jArray (map cliGradedPropJson props)),
+        ("tests", jArray (map cliGradedTestJson tests)),
+        (
+          "summary",
+          jObject [
+            (
+              "passed",
+              JInt
+                (runPassed (cliPrimaryDoctestRun runs)
+                  + cliCountPassedGradedProps props
+                  + cliCountPassedGradedTests tests),
+            ),
+            (
+              "failed",
+              JInt
+                (runFailed (cliPrimaryDoctestRun runs)
+                  + runErrors (cliPrimaryDoctestRun runs)
+                  + cliCountFailedGradedProps props
+                  + cliCountFailedGradedTests tests),
+            ),
+            ("knownRed", JInt known),
+            ("ok", JBool (cliGradedTestReportOk reportError runs props tests)),
           ],
         ),
       ])

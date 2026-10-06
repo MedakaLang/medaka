@@ -222,6 +222,7 @@ import eval.eval.{
 import tools.test_cmd.{
   runTest,
   runTestReport,
+  runTestGradedReport,
   filterMatchedNothing,
   testHelpText,
   testArgSpec,
@@ -231,6 +232,8 @@ import tools.test_cmd.{
   runTestOne,
   cliTestReportOk,
   cliTestReportJson,
+  cliGradedTestReportOk,
+  cliGradedTestReportJson,
   checkTestMdkRoster,
   testFilesGo,
 }
@@ -3286,7 +3289,7 @@ runTestJsonCmd engines cases filterOpt target =
         "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
     else
       let (typeError, runs, props, tests, typecheckSkipped) =
-        runTestReport
+        runTestGradedReport
           engines
           rsrc
           csrc
@@ -3299,7 +3302,7 @@ runTestJsonCmd engines cases filterOpt target =
       let _ =
         putStrLn
           (stringify
-            (cliTestReportJson
+            (cliGradedTestReportJson
               target
               typeError
               engines
@@ -3307,7 +3310,7 @@ runTestJsonCmd engines cases filterOpt target =
               props
               tests
               typecheckSkipped))
-      Ok (cliTestReportOk typeError runs props tests)
+      Ok (cliGradedTestReportOk typeError runs props tests)
   match r
     Err e => dieMsg e
     Ok ok => if ok then () else exit 1
