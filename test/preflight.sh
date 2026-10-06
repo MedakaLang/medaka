@@ -1011,6 +1011,30 @@ while IFS= read -r f; do
     # diff_compiler_eval reads and then not run diff_compiler_eval.
     compiler/entries/*)            mark_full 'compiler/entries' ;;
 
+    # ── the compiler's own build inputs that are not .mdk source ──
+    # `compiler/medaka.toml` declares the compiler's internal-extern privilege
+    # (diff_compiler_internal_extern grades it) and its `site-root`, which names
+    # the trap-site files in every native build of the compiler, so it moves the
+    # emitted compiler and the seed. The seed is what the fixpoint and the cold
+    # bootstrap build from, and wasm/diff_gzip inflates it as a corpus input.
+    # test/refresh_seed.sh is the tool that mints it (ledgered in
+    # test/CI-COVERAGE-TOOLS.txt, so no gate runs it); the fixpoint is the gate
+    # whose cold path rebuilds what it writes. Left unmapped, each of these
+    # widens the PR run to the full suite ([W-THIRD-CONSUMER]).
+    compiler/medaka.toml)          add 'diff_compiler_internal_extern'
+                                   need_fixpoint=1 ;;
+    compiler/seed/emitter.ll.gz)   add 'wasm/diff_gzip'
+                                   need_fixpoint=1 ;;
+    test/refresh_seed.sh)          need_fixpoint=1 ;;
+
+    # ── a compiler-internal `*_test.mdk` sibling under frontend/ ──
+    # frontend/ has per-file arms and no catch-all, so a sibling test matched
+    # none of them. Its runner is the Makefile's `test:` recipe, which the
+    # in-language step below derives on its own; the gates that read it are the
+    # two tree-wide scans over every tracked .mdk.
+    compiler/frontend/*_test.mdk)  add 'check_removed_constructs'
+                                   add 'diff_compiler_source_bytes' ;;
+
     # ── stdlib / runtime: BLAST RADIUS. This arm used to be the narrowest in the file. ──
     #
     # It derived FIVE gates for `stdlib/core.mdk` — the IMPLICIT PRELUDE, prepended to
@@ -1066,6 +1090,22 @@ while IFS= read -r f; do
       else
         echo "preflight: note — gate '${_p%.sh}' is DELETED in this diff; nothing to run for it."
       fi ;;
+    # The WasmGC gate scripts self-run the same way; their registry names are
+    # `wasm/<stem>`, which is the path minus `test/` and `.sh`.
+    test/wasm/diff_*.sh)
+      _p="${f#test/}"
+      if [ -f "$ROOT/$f" ]; then
+        add "${_p%.sh}"
+      else
+        echo "preflight: note — gate '${_p%.sh}' is DELETED in this diff; nothing to run for it."
+      fi ;;
+    # The extern domain-verdict ledger: a loose file under test/ that
+    # `_fixture_dir_for` cannot see, read by the capability matrix only.
+    test/EXTERN-DOMAIN-LEDGER.txt) add 'diff_compiler_capability_matrix' ;;
+    # This script itself: a tool (test/CI-COVERAGE-TOOLS.txt), run by the two
+    # gates that grade its derivation, base-ref handling and project arm.
+    test/preflight.sh)             add 'diff_compiler_preflight_base'
+                                   add 'diff_compiler_project_enrolment' ;;
 
     # (the `kind = "native"` self-run arm for a changed `test/*_test.mdk` lives
     # AFTER the fixture/golden arm below — see the note there for why order here

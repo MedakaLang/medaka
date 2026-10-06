@@ -1,0 +1,25 @@
+-- #3694 — THE ARRAY `toChars` RETURNS IS USABLE THROUGH THE PRELUDE ALONE.
+--
+-- `string.toChars` answers an `Array Char`, and this program imports no
+-- `array`: `length`, `toList`, `map` and `++` on it resolve only through the
+-- Foldable, Mappable and Semigroup impls for Array in `stdlib/core.mdk`. With
+-- those impls back in `stdlib/array.mdk`, all three verbs reject it with
+-- `No impl of Foldable for Array` (and the same for Mappable).
+--
+-- Ground truth, derived from the source, NOT captured: "héllo" is five
+-- characters (the é is one character, two bytes, so a byte count would say 6);
+-- `shout` uppercases only 'l', so the mapped text is "héLLo"; "ab" ++ "cd" as
+-- character arrays is four characters reading "abcd".
+--
+-- Verdict: ACCEPT.
+import string.{fromChars, toChars}
+
+shout : Char -> Char
+shout c = if c == 'l' then 'L' else c
+
+main =
+  let cs = toChars "héllo"
+  let both = toChars "ab" ++ toChars "cd"
+  let _ = println "length \{intToString (length cs)}"
+  let _ = println "map \{fromChars (toList (map shout cs))}"
+  println "append \{intToString (length both)} \{fromChars (toList both)}"

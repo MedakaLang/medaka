@@ -3,5 +3,5 @@
 -- ADT/closure/string, so useRef == False): the i64 never boxes, so this pins the
 -- check at the arith op itself ($mdk_int_mul), not at the box seam.  The i64
 -- product fits here; arith_int63_mul_i64_overflow_scalar covers one that does not.
--- expect-stderr: runtime error [E-INT-OVERFLOW]: 4611686018427387903 * 2 overflows Int
+-- expect-stderr: <fixture>:7:7: runtime error [E-INT-OVERFLOW]: 4611686018427387903 * 2 overflows Int
 main = 4611686018427387903 * 2

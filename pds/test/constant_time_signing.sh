@@ -6,6 +6,23 @@ set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
+
+# Every `--keep-ir` build goes through here: the kept module is rewritten by
+# pds/test/ct_ir_canonical.awk, so a located array read audits as the plain
+# Index impl call (its site literal stripped), and a site that is anything
+# but a literal on the trap path fails the build.
+ct_build_ir() {
+  "$MEDAKA" "$@" || return
+  ct_out=
+  ct_prev=
+  for ct_arg in "$@"; do
+    [ "$ct_prev" = -o ] && ct_out=$ct_arg
+    ct_prev=$ct_arg
+  done
+  [ -n "$ct_out" ] && [ -s "$ct_out.ll" ] || { echo "ct_build_ir: no kept IR for -o '$ct_out'" >&2; return 1; }
+  awk -f "$ROOT/pds/test/ct_ir_canonical.awk" "$ct_out.ll" > "$ct_out.ll.canon" || return 1
+  mv "$ct_out.ll.canon" "$ct_out.ll"
+}
 INTERNAL_SOURCE="$ROOT/pds/test/constant_time_signing_main.mdk"
 PUBLIC_SOURCE="$ROOT/pds/test/constant_time_signing_public_main.mdk"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-ct-signing.XXXXXX")
@@ -619,7 +636,7 @@ cmp "$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt" "$WORK/pds/te
 cmp "$ROOT/pds/tools/gen_signing_corpus.sh" "$WORK/pds/tools/gen_signing_corpus.sh" >/dev/null
 pass 'all contract mutations restored task-owned blobs byte-exactly'
 
-MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$INTERNAL_SOURCE" -o "$WORK/signing-internal" --keep-ir > "$WORK/internal-build.log" 2>&1 || {
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 ct_build_ir build "$INTERNAL_SOURCE" -o "$WORK/signing-internal" --keep-ir > "$WORK/internal-build.log" 2>&1 || {
   cat "$WORK/internal-build.log" >&2
   fail 'native internal signing evidence probe builds'
 }
@@ -926,7 +943,7 @@ check_bit_witness() {
     'applyWitness (f :: rest) acc b = applyWitness rest (f acc b) b' \
     '' \
     'main = println (applyWitness [ctBitWitness] 12345 678)' > "$src"
-  MEDAKA_STRICT=1 "$MEDAKA" build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
+  MEDAKA_STRICT=1 ct_build_ir build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
     cat "$WORK/bit-witness-build.log" >&2
     fail 'bit-helper witness builds'
   }
@@ -973,7 +990,7 @@ check_bit_witness() {
 check_bit_witness 'bitXor (bitAnd a b) (bitOr (shiftRight a (bitAnd b 7)) (shiftLeft (bitNot b) 5))' \
   mdk_bit_and mdk_bit_or mdk_bit_xor mdk_bit_not mdk_shift_left mdk_shift_right
 
-MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$PUBLIC_SOURCE" -o "$WORK/signing-public" --keep-ir > "$WORK/public-build.log" 2>&1 || {
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 ct_build_ir build "$PUBLIC_SOURCE" -o "$WORK/signing-public" --keep-ir > "$WORK/public-build.log" 2>&1 || {
   cat "$WORK/public-build.log" >&2
   fail 'native public signing consumer builds'
 }

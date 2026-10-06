@@ -39,7 +39,7 @@ public export data Lit =
 -- to the un-wrapped tree.  The one thing it changes is where a runtime error
 -- reports itself: the Core IR lowering copies the span of an arithmetic
 -- operand, a `match` or a refutable `let` onto that node's trap site, and the
--- native emitter prints it.
+-- native and WasmGC emitters print it.
 public export data Loc = Loc String Int Int Int Int
 
 -- The site a synthesized `DFunDef`, `DoLet` or `ELet` carries: the zero-width
