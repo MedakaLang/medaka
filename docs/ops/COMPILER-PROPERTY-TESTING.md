@@ -39,6 +39,14 @@ together; an unsatisfied prerequisite produces a capability result for its
 dependent laws while independent laws still execute. Both engines preserve
 abstract module boundaries when displaying counterexamples.
 
+Evaluator properties and ordinary tests execute in the original module cells,
+so global references remain identical to the references captured by functions.
+Each property gets its requested seed and budget while mutations remain visible
+to later cases and laws. Custom shrinkers also run inside structural containers,
+tuples and nominal constructor fields. Constructor privacy is checked relative
+to the owning module: abstract exports and newtypes can generate structurally
+there, while importers need an eligible custom generator.
+
 ## Initial algorithm coverage
 
 The first added siblings keep test-only models out of compiler source

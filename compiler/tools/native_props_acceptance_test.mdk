@@ -5,7 +5,7 @@ import test.{
   expectTextContainsAll, labelFail, fail
 }
 import json.{Json, parse, stringify, get, asArray, asString, asInt}
-import string.{contains, lines}
+import string.{contains, lines, replaceAll}
 
 writeFixtures : String -> List (String, String) -> <IO> Result String Unit
 writeFixtures _ [] = Ok ()
@@ -1305,7 +1305,7 @@ test "custom shrinking traverses nominal fields, list elements, and tuple compon
           (all
             (row => match field "detail" row
               Some detail =>
-                (contains "Box 1" detail || contains "Box (1)" detail)
+                contains "Box(1)" (replaceAll " " "" detail)
                   && not (contains "500000" detail)
               None => False)
             (propertyReports report)),
