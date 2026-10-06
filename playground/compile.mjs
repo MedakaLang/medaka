@@ -3,6 +3,11 @@
 // compiler/entries/playground_main.mdk) and its callers (the Node dev driver now,
 // the browser Web Worker in Stage 3).
 //
+// Served with Cross-Origin-Embedder-Policy (playground/_headers): WebKit refuses a
+// module worker's import without it.  The edge keeps the headers it cached for an
+// unchanged body, so a header-rule change for this file only takes effect when its
+// bytes change too.
+//
 // It instantiates playground.wasm with the host IO ABI (a port of test/wasm/run.js)
 // over an IN-MEMORY vfs (stdlib runtime.mdk/core.mdk + the user source), runs the
 // guest — on ONE instance kept alive across calls, re-entered through the
