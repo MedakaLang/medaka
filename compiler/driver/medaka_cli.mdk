@@ -1578,7 +1578,7 @@ topLevelNames : List Decl -> List String
 topLevelNames [] = []
 topLevelNames ((DAttrib _ d) :: rest) = topLevelNames [d] ++ topLevelNames rest
 topLevelNames ((DFunDef _ n _ _) :: rest) = n :: topLevelNames rest
-topLevelNames ((DTypeSig _ n _) :: rest) = n :: topLevelNames rest
+topLevelNames ((DTypeSig _ n _ _) :: rest) = n :: topLevelNames rest
 topLevelNames ((DExtern _ n _) :: rest) = n :: topLevelNames rest
 topLevelNames ((DLetGroup _ binds) :: rest) =
   map letBindName binds ++ topLevelNames rest

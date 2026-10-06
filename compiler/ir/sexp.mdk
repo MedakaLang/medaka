@@ -276,7 +276,7 @@ variantSexp : Variant -> String
 variantSexp (Variant n pl) = node "variant" [escStr n, payloadSexp pl]
 
 declSexp : Decl -> String
-declSexp (DTypeSig p n t) = node "DTypeSig" [boolStr p, escStr n, tySexp t]
+declSexp (DTypeSig p n t _) = node "DTypeSig" [boolStr p, escStr n, tySexp t]
 declSexp (DExtern p n t) = node "DExtern" [boolStr p, escStr n, tySexp t]
 declSexp (DFunDef p n ps b) =
   node "DFunDef" [boolStr p, escStr n, slist (map patSexp ps), exprSexp b]

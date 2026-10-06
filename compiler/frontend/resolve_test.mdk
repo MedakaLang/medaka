@@ -21,9 +21,16 @@
 -- engine and succeeds under `medaka test --native`.
 
 import test.{expectEach, expectEqual, expectTrue}
-import frontend.parser.{parse}
-import frontend.resolve.{ppResError, resErrorCode, resolveProgram}
-import frontend.ast.{Decl(..), Variant(..), ConPayload(..), Field(..)}
+import frontend.parser.{parse, parseLocated}
+import frontend.resolve.{
+  ResError,
+  ppResError,
+  resErrorCode,
+  resErrorDidYouMean,
+  resErrorLoc,
+  resolveProgram,
+}
+import frontend.ast.{Decl(..), Variant(..), ConPayload(..), Field(..), Loc(..)}
 import support.util.{contains, filterList}
 import string.{stripPrefix}
 
@@ -163,3 +170,64 @@ test "a signature whose name is bound is never an orphan" = expectEach [
   ),
   ("extern", expectEqual [] (orphanMessages "extern panic : String -> a\n")),
 ]
+
+-- #3869: both signature errors sit on the signature's name token, so a type
+-- built only from type variables still has a location.  Each span is (line,
+-- start column, end column), columns 0-based.
+sigErrorSpans : String -> String -> List (Int, Int, Int)
+sigErrorSpans code src =
+  let errs = resolveProgram [] [] (parseLocated src)
+  flatMap errorSpan (filterList (e => resErrorCode e == code) errs)
+
+errorSpan : ResError -> List (Int, Int, Int)
+errorSpan e = match resErrorLoc e
+  Some (Loc _ line col _ endCol) => [(line, col, endCol)]
+  None => []
+
+test "an orphan signature is located at its name" = expectEach [
+  (
+    "type variables only",
+    expectEqual
+      [(1, 0, 4)]
+      (sigErrorSpans "R-ORPHAN-SIGNATURE" "orph : a -> a\nmain = 1\n"),
+  ),
+  (
+    "the issue's repro: one bare, one misspelled",
+    expectEqual
+      [(1, 0, 4), (3, 0, 5)]
+      (sigErrorSpans
+        "R-ORPHAN-SIGNATURE"
+        "orph : a -> a\n\ntotal : List Int -> Int\ntotl xs = 0\n"),
+  ),
+  (
+    "attribute",
+    expectEqual
+      [(2, 0, 4)]
+      (sigErrorSpans "R-ORPHAN-SIGNATURE" "@inline\norph : a -> a\nmain = 1\n"),
+  ),
+  (
+    "exported",
+    expectEqual
+      [(1, 7, 11)]
+      (sigErrorSpans "R-ORPHAN-SIGNATURE" "export orph : a\nmain = 1\n"),
+  ),
+]
+
+test "an orphan signature's misspelling is its did-you-mean" =
+  expectEqual
+    [Some ("total", "totl")]
+    (map
+      resErrorDidYouMean
+      (filterList
+        (e => resErrorCode e == "R-ORPHAN-SIGNATURE")
+        (resolveProgram
+          []
+          []
+          (parseLocated "total : List Int -> Int\ntotl xs = 0\n"))))
+
+test "a second signature for one name is located at its name" =
+  expectEqual
+    [(3, 0, 1)]
+    (sigErrorSpans
+      "R-DUPLICATE-SIGNATURE"
+      "f : a -> a\nf x = x\nf : b -> b\nmain = 1\n")

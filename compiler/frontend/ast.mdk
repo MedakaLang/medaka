@@ -1091,8 +1091,7 @@ orElseLoc None fallback = fallback
 -- carries none.  Only `TyCon` and `TyRow` carry a span of their own; `TyVar`
 -- has none (that residual gap is why a fully-parametric `impl Foo a` head
 -- still falls back to the file-start caret), so a type built only from type
--- variables yields `None`.  A `DTypeSig` has no `Loc` of its own — only its
--- `Ty` payload does — so this is how a signature-level diagnostic is located.
+-- variables yields `None`.
 export
 firstTyLoc : Ty -> Option Loc
 firstTyLoc (TyCon { tyConLoc = loc }) = loc
@@ -1735,7 +1734,10 @@ deriveRefName : DeriveRef -> String
 deriveRefName (DeriveRef n _) = n
 
 public export data Decl =
-  | DTypeSig Bool String Ty
+  -- pub? name type site.  The site is the name token, where a signature with
+  -- no binding or a second signature for one name is reported.  No printer or
+  -- dump renders it.
+  | DTypeSig Bool String Ty Loc
   | DExtern Bool String Ty
   | DFunDef Bool String (List Pat) Expr
   -- ── the four TYPE-DECLARATION forms carry module identity (#1110) ────────
@@ -2181,9 +2183,9 @@ mapConstraintsB f ((c@(Constraint { constraintArgs = tys })) :: rest) =
 -- about them separately).
 export
 mapTyInDecl : (Ty -> (Ty, Bool)) -> Decl -> (Decl, Bool)
-mapTyInDecl f (DTypeSig pub n t) =
+mapTyInDecl f (DTypeSig pub n t site) =
   let (t2, c) = mapTyFull f t
-  (DTypeSig pub n t2, c)
+  (DTypeSig pub n t2 site, c)
 mapTyInDecl f (DExtern pub n t) =
   let (t2, c) = mapTyFull f t
   (DExtern pub n t2, c)
