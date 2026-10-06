@@ -743,7 +743,7 @@ putNoFile : String -> Bool -> OrdMap Bool -> OrdMap Bool
 putNoFile n proof m = omInsert n (proof && optionOr True (omLookup n m)) m
 
 signatureNoFile : OrdMap Unit -> Bool -> OrdMap Bool -> Decl -> OrdMap Bool
-signatureNoFile aliases write m (DTypeSig _ n ty) =
+signatureNoFile aliases write m (DTypeSig _ n ty _) =
   putNoFile n (tyNoFile aliases write ty) m
 signatureNoFile aliases write m (DAttrib _ d) =
   signatureNoFile aliases write m d
@@ -1144,7 +1144,7 @@ leftLoc e =
 (DTypeSig false "putNoFile" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyApp (TyCon "OrdMap") (TyCon "Bool"))))))
 (DFunDef false "putNoFile" ((PVar "n") (PVar "proof") (PVar "m")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EBinOp "&&" (EVar "proof") (EApp (EApp (EVar "optionOr") (EVar "True")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))) (EVar "m")))
 (DTypeSig false "signatureNoFile" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "Decl") (TyApp (TyCon "OrdMap") (TyCon "Bool")))))))
-(DFunDef false "signatureNoFile" ((PVar "aliases") (PVar "write") (PVar "m") (PCon "DTypeSig" PWild (PVar "n") (PVar "ty"))) (EApp (EApp (EApp (EVar "putNoFile") (EVar "n")) (EApp (EApp (EApp (EVar "tyNoFile") (EVar "aliases")) (EVar "write")) (EVar "ty"))) (EVar "m")))
+(DFunDef false "signatureNoFile" ((PVar "aliases") (PVar "write") (PVar "m") (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild)) (EApp (EApp (EApp (EVar "putNoFile") (EVar "n")) (EApp (EApp (EApp (EVar "tyNoFile") (EVar "aliases")) (EVar "write")) (EVar "ty"))) (EVar "m")))
 (DFunDef false "signatureNoFile" ((PVar "aliases") (PVar "write") (PVar "m") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "signatureNoFile") (EVar "aliases")) (EVar "write")) (EVar "m")) (EVar "d")))
 (DFunDef false "signatureNoFile" (PWild PWild (PVar "m") PWild) (EVar "m"))
 (DTypeSig false "methodNoFile" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "Decl") (TyApp (TyCon "OrdMap") (TyCon "Bool")))))))
@@ -1390,7 +1390,7 @@ leftLoc e =
 (DTypeSig false "putNoFile" (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyApp (TyCon "OrdMap") (TyCon "Bool"))))))
 (DFunDef false "putNoFile" ((PVar "n") (PVar "proof") (PVar "m")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EBinOp "&&" (EVar "proof") (EApp (EApp (EVar "optionOr") (EVar "True")) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "m"))))) (EVar "m")))
 (DTypeSig false "signatureNoFile" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "Decl") (TyApp (TyCon "OrdMap") (TyCon "Bool")))))))
-(DFunDef false "signatureNoFile" ((PVar "aliases") (PVar "write") (PVar "m") (PCon "DTypeSig" PWild (PVar "n") (PVar "ty"))) (EApp (EApp (EApp (EVar "putNoFile") (EVar "n")) (EApp (EApp (EApp (EVar "tyNoFile") (EVar "aliases")) (EVar "write")) (EVar "ty"))) (EVar "m")))
+(DFunDef false "signatureNoFile" ((PVar "aliases") (PVar "write") (PVar "m") (PCon "DTypeSig" PWild (PVar "n") (PVar "ty") PWild)) (EApp (EApp (EApp (EVar "putNoFile") (EVar "n")) (EApp (EApp (EApp (EVar "tyNoFile") (EVar "aliases")) (EVar "write")) (EVar "ty"))) (EVar "m")))
 (DFunDef false "signatureNoFile" ((PVar "aliases") (PVar "write") (PVar "m") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "signatureNoFile") (EVar "aliases")) (EVar "write")) (EVar "m")) (EVar "d")))
 (DFunDef false "signatureNoFile" (PWild PWild (PVar "m") PWild) (EVar "m"))
 (DTypeSig false "methodNoFile" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Bool")) (TyFun (TyCon "Decl") (TyApp (TyCon "OrdMap") (TyCon "Bool")))))))

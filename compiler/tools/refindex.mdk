@@ -804,7 +804,7 @@ collectExportedValues ctx decls =
 
 collectExpValGo : Ctx -> HashMap String Unit -> List Decl -> Unit
 collectExpValGo _ _ [] = ()
-collectExpValGo ctx s ((DTypeSig True n _) :: rest) =
+collectExpValGo ctx s ((DTypeSig True n _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
 collectExpValGo ctx s ((DFunDef True n _ _ _) :: rest) =
@@ -862,7 +862,7 @@ defsOfDecl ctx expSet mid uri (DExtern pub n _) loc _ = [
     uri
     (DefEntry nsVal n (mkKey mid nsVal n) loc (valuePub ctx expSet pub n)),
 ]
-defsOfDecl _ _ _ _ (DTypeSig _ _ _) _ _ = []
+defsOfDecl _ _ _ _ (DTypeSig _ _ _ _) _ _ = []
 defsOfDecl ctx expSet mid uri (DLetGroup pub binds) loc _ =
   map (letGroupDef ctx expSet mid uri loc pub) binds
 defsOfDecl ctx _ mid uri (DData { dataVis = vis, dataName = n, dataCtors = variants }) loc _ =
@@ -999,7 +999,7 @@ walkDecls w ((d, p) :: rest) =
 -- the SAME key as the binding's clause heads (#1025): rename must rewrite it,
 -- or the orphaned signature silently stops constraining the renamed binding.
 recordSigName : W -> Decl -> Loc -> Unit
-recordSigName (W ctx mid uri _ _) (DTypeSig _ n _) loc =
+recordSigName (W ctx mid uri _ _) (DTypeSig _ n _ _) loc =
   recordDef ctx (mkKey mid nsVal n) uri loc
 recordSigName w (DAttrib _ inner) loc = recordSigName w inner loc
 recordSigName _ _ _ = ()
@@ -1101,7 +1101,7 @@ walkDeclBody : W -> Decl -> Loc -> Unit
 walkDeclBody w (DFunDef _ _ pats body _) loc =
   let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
   walkExpr w [frame] loc body
-walkDeclBody w (DTypeSig _ _ ty) loc = walkTy w loc ty
+walkDeclBody w (DTypeSig _ _ ty _) loc = walkTy w loc ty
 walkDeclBody w (DExtern _ _ ty) loc = walkTy w loc ty
 walkDeclBody w (DData { dataCtors = variants }) loc =
   walkVariants w loc variants

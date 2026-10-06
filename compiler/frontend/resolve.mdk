@@ -196,10 +196,10 @@ public export data ResError =
   | DuplicateSignature String (Option Loc) (Option Loc)
   -- A top-level type signature whose name no declaration in the same module
   -- binds (`total : List Int -> Int` beside `totl xs = …`).  Fields: the
-  -- signature's name, the signature's loc (`firstTyLoc` of its type, since a
-  -- `DTypeSig` carries no span of its own), and the nearest same-module
+  -- signature's name, the span of that name, and the nearest same-module
   -- binding that has no signature of its own, when one is close enough to be
-  -- the other half of a misspelling.
+  -- the other half of a misspelling.  That binding is the did-you-mean, whose
+  -- fix renames the signature.
   | OrphanSignature String (Option Loc) (Option String)
   -- a variable bound more than once among binders introduced TOGETHER: a
   -- non-linear pattern (`(x, x)`, `Pair x x`) or a repeated parameter (`f x x`,
@@ -287,6 +287,7 @@ resErrorDidYouMean (UnboundVariable n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (PrivateNameAccess n _ _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownConstructor n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean (UnknownType n _ (Some sug)) = Some (n, sug)
+resErrorDidYouMean (OrphanSignature n _ (Some sug)) = Some (n, sug)
 resErrorDidYouMean _ = None
 
 -- True for a PrivateNameAccess, the one did-you-mean error whose location can
@@ -1843,7 +1844,7 @@ checkDecl env (DLetGroup _ binds) =
   -- top-level where-group: all group names are in scope for every clause body
   -- (mutual recursion).
   flatMap (checkLetBind None env (mkScope (map letBindName binds))) binds
-checkDecl env (DTypeSig _ _ t) = checkType None env t
+checkDecl env (DTypeSig _ _ t _) = checkType None env t
 checkDecl env (DExtern _ _ t) = checkType None env t
 checkDecl env (DData { dataParams = ps, dataParamKinds = ks, dataCtors = vs, dataCtorBinders = bs }) =
   checkKindLabels env ks
@@ -2086,7 +2087,7 @@ interfaceList (_ :: rest) = interfaceList rest
 preludeValueNames : List Decl -> List String
 preludeValueNames [] = []
 preludeValueNames ((DFunDef _ n _ _ _) :: rest) = n :: preludeValueNames rest
-preludeValueNames ((DTypeSig _ n _) :: rest) = n :: preludeValueNames rest
+preludeValueNames ((DTypeSig _ n _ _) :: rest) = n :: preludeValueNames rest
 preludeValueNames ((DImpl { methods, ... }) :: rest) =
   map implMethodNm methods ++ preludeValueNames rest
 preludeValueNames ((DInterface { methods, ... }) :: rest) =
@@ -2098,7 +2099,7 @@ preludeValueNames (_ :: rest) = preludeValueNames rest
 userValueNames : List Decl -> List String
 userValueNames [] = []
 userValueNames ((DFunDef _ n _ _ _) :: rest) = n :: userValueNames rest
-userValueNames ((DTypeSig _ n _) :: rest) = n :: userValueNames rest
+userValueNames ((DTypeSig _ n _ _) :: rest) = n :: userValueNames rest
 userValueNames ((DExtern _ n _) :: rest) = n :: userValueNames rest
 userValueNames ((DLetGroup _ bs) :: rest) =
   map letBindName bs ++ userValueNames rest
@@ -2380,7 +2381,7 @@ dupSigGo (d :: rest) seen = match dupSigOf d
 -- (name, loc) for a top-level DTypeSig; None for any other decl.
 dupSigOf : Decl -> Option (String, Option Loc)
 dupSigOf (DAttrib _ d) = dupSigOf d
-dupSigOf (DTypeSig _ n ty) = Some (n, firstTyLoc ty)
+dupSigOf (DTypeSig _ n _ site) = Some (n, Some site)
 dupSigOf _ = None
 
 -- A top-level signature must name a value the same module binds: a clause run,
@@ -2471,7 +2472,7 @@ declBindNames _ = []
 -- a transparent decl (DTypeSig) is skipped entirely by the contiguity walk
 isTransparentDecl : Decl -> Bool
 isTransparentDecl (DAttrib _ d) = isTransparentDecl d
-isTransparentDecl (DTypeSig _ _ _) = True
+isTransparentDecl (DTypeSig _ _ _ _) = True
 isTransparentDecl _ = False
 
 contiguityErrors : List Decl -> List ResError
@@ -4531,7 +4532,7 @@ nsValues = ExpNs {
   nsGet = exp => exp.expValues,
   nsDirectOf =
     d => match d
-      DTypeSig True n _ => [n]
+      DTypeSig True n _ _ => [n]
       DExtern True n _ => [n]
       DFunDef True n _ _ _ => [n]
       _ => [],

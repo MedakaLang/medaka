@@ -462,7 +462,7 @@ symbolPartsOfDecl : Decl ->
   List (Option Loc) ->
   Option (String, Int, Bool, List Json)
 symbolPartsOfDecl d range childLocs = match innerDecl d
-  DTypeSig _ name _ => Some (name, 13, True, [])
+  DTypeSig _ name _ _ => Some (name, 13, True, [])
   DExtern _ name _ => Some (name, 12, False, [])
   DFunDef _ name _ _ _ => Some (name, 12, True, [])
   DLetGroup _ binds => match binds
@@ -593,7 +593,7 @@ renderSymbol (SymRow name kind sl el _ kids nameLoc) =
 -- it is always False here.
 declOwnNameMatches : Decl -> String -> Bool
 declOwnNameMatches d name = match innerDecl d
-  DTypeSig _ n _ => n == name
+  DTypeSig _ n _ _ => n == name
   DExtern _ n _ => n == name
   DFunDef _ n _ _ _ => n == name
   DLetGroup _ binds => anyName (map letBindName binds) name
@@ -1149,7 +1149,7 @@ declBindingName d = match innerDecl d
 hasExplicitSig : List Decl -> String -> Bool
 hasExplicitSig [] _ = False
 hasExplicitSig (d :: rest) name = match innerDecl d
-  DTypeSig _ n _ => n == name || hasExplicitSig rest name
+  DTypeSig _ n _ _ => n == name || hasExplicitSig rest name
   _ => hasExplicitSig rest name
 
 -- Column right after the name on the decl's start line (0-based `line`).  Scan

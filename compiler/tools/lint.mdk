@@ -993,7 +993,7 @@ stampModule modName pairs = map (p => (modName, fst p, snd p)) pairs
 -- bare (prelude-global, not `export`-marked), so that arm matches nothing yet;
 -- it is here so the index does not silently need a second edit if that changes.
 exportedSigPair : Decl -> List (String, Ty)
-exportedSigPair (DTypeSig True name ty) = [(name, ty)]
+exportedSigPair (DTypeSig True name ty _) = [(name, ty)]
 exportedSigPair (DExtern True name ty) = [(name, ty)]
 exportedSigPair (DAttrib _ d) = exportedSigPair d
 exportedSigPair _ = []
@@ -2468,7 +2468,7 @@ sigTyInto ((n, t) :: rest) m =
   sigTyInto rest m
 
 topSigPairL : Decl -> List (String, Ty)
-topSigPairL (DTypeSig _ name ty) = [(name, ty)]
+topSigPairL (DTypeSig _ name ty _) = [(name, ty)]
 topSigPairL (DAttrib _ d) = topSigPairL d
 topSigPairL _ = []
 
@@ -2614,7 +2614,7 @@ ruleMissingSignature _ _ _ pos prog =
       (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog))))
 
 topSigNameL : Decl -> List String
-topSigNameL (DTypeSig _ name _) = [name]
+topSigNameL (DTypeSig _ name _ _) = [name]
 topSigNameL (DAttrib _ d) = topSigNameL d
 topSigNameL _ = []
 
@@ -5818,7 +5818,7 @@ exportedNames prog = flatMap exportedNameL prog
 
 exportedNameL : Decl -> List String
 exportedNameL (DFunDef True name _ _ _) = [name]
-exportedNameL (DTypeSig True name _) = [name]
+exportedNameL (DTypeSig True name _ _) = [name]
 exportedNameL (DAttrib _ d) = exportedNameL d
 exportedNameL _ = []
 
@@ -5832,7 +5832,7 @@ exportedNameL _ = []
 nonDefRefL : Decl -> List String
 nonDefRefL (DAttrib _ dd) = nonDefRefL dd
 nonDefRefL (DFunDef _ _ _ _ _) = []
-nonDefRefL (DTypeSig _ _ _) = []
+nonDefRefL (DTypeSig _ _ _ _) = []
 nonDefRefL (DExtern _ _ _) = []
 nonDefRefL (DData { dataOrigin = _ }) = []
 nonDefRefL (DUse _ _ _) = []
@@ -6779,7 +6779,7 @@ declZipContainsLine line (_, dp) =
   declPosLine dp <= line && declPosEndLine dp >= line
 
 declBridgeName : Decl -> Option String
-declBridgeName (DTypeSig _ n _) = Some n
+declBridgeName (DTypeSig _ n _ _) = Some n
 declBridgeName (DFunDef _ n _ _ _) = Some n
 declBridgeName _ = None
 

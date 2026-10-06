@@ -2927,7 +2927,7 @@ declSigTypeNames : List Decl -> List (String, (List String, String))
 declSigTypeNames prog = flatMap declSigTypeEntries prog
 
 declSigTypeEntries : Decl -> List (String, (List String, String))
-declSigTypeEntries (DTypeSig _ name ty) =
+declSigTypeEntries (DTypeSig _ name ty _) =
   [(name, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))]
 declSigTypeEntries (DExtern _ name ty) =
   [(name, (map tyHeadName (methodArgTys ty), tyHeadName (methodRetTy ty)))]

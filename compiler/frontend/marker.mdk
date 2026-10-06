@@ -64,7 +64,7 @@ ifaceMethodName (IfaceMethod n _ _ _) = n
 -- Names of functions whose declared signature carries a constraint (`Foo a =>`).
 constrainedFnNames : List Decl -> List String
 constrainedFnNames [] = []
-constrainedFnNames ((DTypeSig _ name ty) :: rest) =
+constrainedFnNames ((DTypeSig _ name ty _) :: rest) =
   constrainedAdd name ty (constrainedFnNames rest)
 constrainedFnNames (_ :: rest) = constrainedFnNames rest
 
@@ -163,7 +163,8 @@ applyRenames renames prog = map (renameDecl renames) prog
 renameDecl : List String -> Decl -> Decl
 renameDecl renames (DFunDef pub n ps body site) =
   DFunDef pub (subName renames n) ps (mapExpr (renameVar renames) body) site
-renameDecl renames (DTypeSig pub n t) = DTypeSig pub (subName renames n) t
+renameDecl renames (DTypeSig pub n t site) =
+  DTypeSig pub (subName renames n) t site
 renameDecl renames d = mapDecl (renameVar renames) d
 
 renameVar : List String -> Expr -> Expr

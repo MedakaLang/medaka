@@ -432,7 +432,7 @@ ppIfaceMethod (IfaceMethod mname mty _ _) = "  \{mname} : \{ppTyDoc mty}"
 -- per-module exception (keyed on the derived module name) and not a global
 -- "ignore `pub`" relaxation.
 renderSig : Bool -> Decl -> List (String, Scheme) -> Option (String, String)
-renderSig _ (DTypeSig True name ty) schemes =
+renderSig _ (DTypeSig True name ty _) schemes =
   Some (name, valueSig name schemes (Some ty))
 renderSig _ (DFunDef True name _ _ _) schemes =
   Some (name, valueSig name schemes None)

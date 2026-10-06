@@ -160,10 +160,18 @@ fi
 #     receiver (S2's rule now, S9's dicts): located `No impl of Num for Box`.
 #   s1_constrained_shadow_domain_mismatch — S9's reject direction, `size "hi"`:
 #     located `No impl of Num for String`.
-# Both goldens live beside the other check_json goldens, under the fixture's
+# The same reasoning pins where the two signature errors land (#3869): at the
+# signature's name token, with the did-you-mean in `help`/`fix`.
+#   reject_3848_*              — R-ORPHAN-SIGNATURE: bare with a type of only
+#     type variables, misspelled (help/fix), under `@inline`, exported.
+#   s2_dup_top_level_signature — R-DUPLICATE-SIGNATURE on the second `greet`.
+# Each golden lives beside the other check_json goldens, under the fixture's
 # own name.  Regenerate:  CAPTURE=1 sh test/diff_compiler_check_json.sh
-for extname in s1_constrained_shadow_dispatch s1_constrained_shadow_domain_mismatch; do
-  name="s9/$extname"
+for extname in s1_constrained_shadow_dispatch s1_constrained_shadow_domain_mismatch \
+  reject_3848_orphan_signature reject_3848_signature_typo \
+  reject_3848_attributed_orphan_signature reject_3848_exported_orphan_signature \
+  s2_dup_top_level_signature; do
+  name="agreement/$extname"
   mdk="$ROOT/test/run_check_agreement_fixtures/$extname.mdk"
   golden="$FIXDIR/$extname.check_json.golden"
   if [ ! -f "$mdk" ]; then

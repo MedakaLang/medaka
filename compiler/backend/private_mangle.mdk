@@ -1258,7 +1258,7 @@ letBindName (LetBind n _ _) = n
 -- clauses, which parse private, still count as exported function symbols).
 pubSigNames : List Decl -> List String
 pubSigNames [] = []
-pubSigNames ((DTypeSig True n _) :: rest) = n :: pubSigNames rest
+pubSigNames ((DTypeSig True n _ _) :: rest) = n :: pubSigNames rest
 pubSigNames ((DExtern True n _) :: rest) = n :: pubSigNames rest
 pubSigNames ((DAttrib _ d) :: rest) = pubSigNames [d] ++ pubSigNames rest
 pubSigNames (_ :: rest) = pubSigNames rest
@@ -1448,7 +1448,8 @@ renameDecl rm (DFunDef pub n ps e site) =
 -- MUST be renamed in lockstep with its DFunDef so the typechecker keys f's scheme
 -- under the SAME mangled name the call sites + def now use (else dictPass /
 -- publicValNames see `clampU` while the def is `<mid>__clampU` → unbound).
-renameDecl rm (DTypeSig pub n ty) = DTypeSig pub (renameDefName rm n) ty
+renameDecl rm (DTypeSig pub n ty site) =
+  DTypeSig pub (renameDefName rm n) ty site
 renameDecl rm (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (renameIfaceMethod rm) methods }
 renameDecl rm (d@(DImpl { methods, ... })) =
