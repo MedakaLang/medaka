@@ -1,5 +1,5 @@
 # META
-source_lines=959
+source_lines=961
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -542,6 +542,7 @@ extern bitAnd : Int -> Int -> Int
 extern bitOr : Int -> Int -> Int
 
 -- | Bitwise exclusive or.
+export
 extern bitXor : Int -> Int -> Int
 
 -- | The first argument shifted left by the second, in bits. The bits shifted
@@ -552,6 +553,7 @@ extern shiftLeft : Int -> Int -> Int
 -- | The first argument shifted right by the second, in bits, each vacated bit
 -- a copy of the sign. An amount of 63 or more gives `0`, or `-1` for a
 -- negative value. A negative amount panics.
+export
 extern shiftRight : Int -> Int -> Int
 
 -- | Bitwise complement.
@@ -1061,9 +1063,9 @@ extern stringToLower : String -> String
 (DExtern false "floatRem" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DExtern false "bitAnd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "bitOr" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DExtern false "bitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern true "bitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "shiftLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DExtern false "shiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern true "shiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "bitNot" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "sqrt" (TyFun (TyCon "Float") (TyCon "Float")))
 (DExtern false "cbrt" (TyFun (TyCon "Float") (TyCon "Float")))
@@ -1260,9 +1262,9 @@ extern stringToLower : String -> String
 (DExtern false "floatRem" (TyFun (TyCon "Float") (TyFun (TyCon "Float") (TyCon "Float"))))
 (DExtern false "bitAnd" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "bitOr" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DExtern false "bitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern true "bitXor" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "shiftLeft" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
-(DExtern false "shiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DExtern true "shiftRight" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DExtern false "bitNot" (TyFun (TyCon "Int") (TyCon "Int")))
 (DExtern false "sqrt" (TyFun (TyCon "Float") (TyCon "Float")))
 (DExtern false "cbrt" (TyFun (TyCon "Float") (TyCon "Float")))

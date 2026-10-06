@@ -1,5 +1,5 @@
 # META
-source_lines=1500
+source_lines=1530
 stages=DESUGAR,MARK
 # SOURCE
 -- The engine-neutral property planning layer.
@@ -20,7 +20,6 @@ import frontend.ast.{
   sameTyConHead,
 }
 import types.route_key.{typeTagOf, implRouteKeyWord}
-import u32 as U32
 import support.ordmap.{
   OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup, omSize
 }
@@ -29,7 +28,10 @@ import support.util.{lookupAssoc, zipL}
 -- Structural property generation has one engine-neutral stream. Its 31-bit
 -- state advances without overflowing Int; every consumer draws one fmix32 word
 -- and reduces it only after mixing. Native probes render the same constants
--- with the canonical stdlib u32 module.
+-- with public runtime bit operations and overflow-safe arithmetic. The
+-- generated probe must not import the higher-level u32 module: that module
+-- pulls ordinary stdlib instances into a scratch project that has already
+-- copied the target graph.
 export
 structuralRngModulus : Int
 structuralRngModulus = 2147483648
@@ -51,6 +53,14 @@ structuralRngMixMultiplier2 : Int
 structuralRngMixMultiplier2 = 3266489909
 
 export
+structuralRngWordModulus : Int
+structuralRngWordModulus = 4294967296
+
+export
+structuralRngWordHalf : Int
+structuralRngWordHalf = 65536
+
+export
 structuralRngSeed : Int -> Int
 structuralRngSeed n =
   (n % structuralRngModulus + structuralRngModulus) % structuralRngModulus
@@ -61,15 +71,35 @@ structuralRngAdvance state =
   (state * structuralRngMultiplier + structuralRngIncrement)
     % structuralRngModulus
 
+structuralRngWord : Int -> Int
+structuralRngWord n =
+  (n % structuralRngWordModulus + structuralRngWordModulus)
+    % structuralRngWordModulus
+
+-- Multiply two words modulo 2^32 without asking the `Int` multiplier to hold
+-- a 64-bit product. Each half product and the assembled low word fit in Int.
+structuralRngMulWord : Int -> Int -> Int
+structuralRngMulWord left right =
+  let x = structuralRngWord left
+  let y = structuralRngWord right
+  let xLow = x % structuralRngWordHalf
+  let xHigh = x / structuralRngWordHalf
+  let yLow = y % structuralRngWordHalf
+  let yHigh = y / structuralRngWordHalf
+  let low = xLow * yLow
+  let cross = xLow * yHigh + xHigh * yLow
+  structuralRngWord
+    (low + cross % structuralRngWordHalf * structuralRngWordHalf)
+
 export
 structuralRngMix : Int -> Int
 structuralRngMix state =
-  let word = U32.truncate state
-  let h1 = U32.bitXor word (U32.shiftRight word 16)
-  let h2 = h1 * U32.truncate structuralRngMixMultiplier1
-  let h3 = U32.bitXor h2 (U32.shiftRight h2 13)
-  let h4 = h3 * U32.truncate structuralRngMixMultiplier2
-  U32.toInt (U32.bitXor h4 (U32.shiftRight h4 16))
+  let word = structuralRngWord state
+  let h1 = structuralRngWord (bitXor word (shiftRight word 16))
+  let h2 = structuralRngMulWord h1 structuralRngMixMultiplier1
+  let h3 = structuralRngWord (bitXor h2 (shiftRight h2 13))
+  let h4 = structuralRngMulWord h3 structuralRngMixMultiplier2
+  structuralRngWord (bitXor h4 (shiftRight h4 16))
 
 export
 structuralRngRange : Int -> Int -> Int -> Int
@@ -1505,7 +1535,6 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "DataVis" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true) (mem "ImplMethod" true) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false))))
-(DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "zipL" false))))
 (DTypeSig true "structuralRngModulus" (TyCon "Int"))
@@ -1518,12 +1547,20 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "structuralRngMixMultiplier1" () (ELit (LInt 2246822507)))
 (DTypeSig true "structuralRngMixMultiplier2" (TyCon "Int"))
 (DFunDef false "structuralRngMixMultiplier2" () (ELit (LInt 3266489909)))
+(DTypeSig true "structuralRngWordModulus" (TyCon "Int"))
+(DFunDef false "structuralRngWordModulus" () (ELit (LInt 4294967296)))
+(DTypeSig true "structuralRngWordHalf" (TyCon "Int"))
+(DFunDef false "structuralRngWordHalf" () (ELit (LInt 65536)))
 (DTypeSig true "structuralRngSeed" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "structuralRngSeed" ((PVar "n")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "structuralRngModulus")) (EVar "structuralRngModulus")) (EVar "structuralRngModulus")))
 (DTypeSig true "structuralRngAdvance" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "structuralRngAdvance" ((PVar "state")) (EBinOp "%" (EBinOp "+" (EBinOp "*" (EVar "state") (EVar "structuralRngMultiplier")) (EVar "structuralRngIncrement")) (EVar "structuralRngModulus")))
+(DTypeSig false "structuralRngWord" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "structuralRngWord" ((PVar "n")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "structuralRngWordModulus")) (EVar "structuralRngWordModulus")) (EVar "structuralRngWordModulus")))
+(DTypeSig false "structuralRngMulWord" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "structuralRngMulWord" ((PVar "left") (PVar "right")) (EBlock (DoLet false false (PVar "x") (EApp (EVar "structuralRngWord") (EVar "left"))) (DoLet false false (PVar "y") (EApp (EVar "structuralRngWord") (EVar "right"))) (DoLet false false (PVar "xLow") (EBinOp "%" (EVar "x") (EVar "structuralRngWordHalf"))) (DoLet false false (PVar "xHigh") (EBinOp "/" (EVar "x") (EVar "structuralRngWordHalf"))) (DoLet false false (PVar "yLow") (EBinOp "%" (EVar "y") (EVar "structuralRngWordHalf"))) (DoLet false false (PVar "yHigh") (EBinOp "/" (EVar "y") (EVar "structuralRngWordHalf"))) (DoLet false false (PVar "low") (EBinOp "*" (EVar "xLow") (EVar "yLow"))) (DoLet false false (PVar "cross") (EBinOp "+" (EBinOp "*" (EVar "xLow") (EVar "yHigh")) (EBinOp "*" (EVar "xHigh") (EVar "yLow")))) (DoExpr (EApp (EVar "structuralRngWord") (EBinOp "+" (EVar "low") (EBinOp "*" (EBinOp "%" (EVar "cross") (EVar "structuralRngWordHalf")) (EVar "structuralRngWordHalf")))))))
 (DTypeSig true "structuralRngMix" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "structuralRngMix" ((PVar "state")) (EBlock (DoLet false false (PVar "word") (EApp (EVar "U32.truncate") (EVar "state"))) (DoLet false false (PVar "h1") (EApp (EApp (EVar "U32.bitXor") (EVar "word")) (EApp (EApp (EVar "U32.shiftRight") (EVar "word")) (ELit (LInt 16))))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (EApp (EVar "U32.truncate") (EVar "structuralRngMixMultiplier1")))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (EApp (EVar "U32.truncate") (EVar "structuralRngMixMultiplier2")))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
+(DFunDef false "structuralRngMix" ((PVar "state")) (EBlock (DoLet false false (PVar "word") (EApp (EVar "structuralRngWord") (EVar "state"))) (DoLet false false (PVar "h1") (EApp (EVar "structuralRngWord") (EApp (EApp (EVar "bitXor") (EVar "word")) (EApp (EApp (EVar "shiftRight") (EVar "word")) (ELit (LInt 16)))))) (DoLet false false (PVar "h2") (EApp (EApp (EVar "structuralRngMulWord") (EVar "h1")) (EVar "structuralRngMixMultiplier1"))) (DoLet false false (PVar "h3") (EApp (EVar "structuralRngWord") (EApp (EApp (EVar "bitXor") (EVar "h2")) (EApp (EApp (EVar "shiftRight") (EVar "h2")) (ELit (LInt 13)))))) (DoLet false false (PVar "h4") (EApp (EApp (EVar "structuralRngMulWord") (EVar "h3")) (EVar "structuralRngMixMultiplier2"))) (DoExpr (EApp (EVar "structuralRngWord") (EApp (EApp (EVar "bitXor") (EVar "h4")) (EApp (EApp (EVar "shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
 (DTypeSig true "structuralRngRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "structuralRngRange" ((PVar "word") (PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "width") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "width") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EVar "word") (EVar "width")))))))
 (DTypeSig true "structuralRngChoose" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -2077,7 +2114,6 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "TyConOrigin" true) (mem "DataVis" true) (mem "Variant" true) (mem "Field" true) (mem "ConPayload" true) (mem "ImplMethod" true) (mem "sameTyConHead" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false))))
-(DUse false (UseAlias ("u32") "U32"))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "lookupAssoc" false) (mem "zipL" false))))
 (DTypeSig true "structuralRngModulus" (TyCon "Int"))
@@ -2090,12 +2126,20 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "structuralRngMixMultiplier1" () (ELit (LInt 2246822507)))
 (DTypeSig true "structuralRngMixMultiplier2" (TyCon "Int"))
 (DFunDef false "structuralRngMixMultiplier2" () (ELit (LInt 3266489909)))
+(DTypeSig true "structuralRngWordModulus" (TyCon "Int"))
+(DFunDef false "structuralRngWordModulus" () (ELit (LInt 4294967296)))
+(DTypeSig true "structuralRngWordHalf" (TyCon "Int"))
+(DFunDef false "structuralRngWordHalf" () (ELit (LInt 65536)))
 (DTypeSig true "structuralRngSeed" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "structuralRngSeed" ((PVar "n")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "structuralRngModulus")) (EVar "structuralRngModulus")) (EVar "structuralRngModulus")))
 (DTypeSig true "structuralRngAdvance" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "structuralRngAdvance" ((PVar "state")) (EBinOp "%" (EBinOp "+" (EBinOp "*" (EVar "state") (EVar "structuralRngMultiplier")) (EVar "structuralRngIncrement")) (EVar "structuralRngModulus")))
+(DTypeSig false "structuralRngWord" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "structuralRngWord" ((PVar "n")) (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "n") (EVar "structuralRngWordModulus")) (EVar "structuralRngWordModulus")) (EVar "structuralRngWordModulus")))
+(DTypeSig false "structuralRngMulWord" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
+(DFunDef false "structuralRngMulWord" ((PVar "left") (PVar "right")) (EBlock (DoLet false false (PVar "x") (EApp (EVar "structuralRngWord") (EVar "left"))) (DoLet false false (PVar "y") (EApp (EVar "structuralRngWord") (EVar "right"))) (DoLet false false (PVar "xLow") (EBinOp "%" (EVar "x") (EVar "structuralRngWordHalf"))) (DoLet false false (PVar "xHigh") (EBinOp "/" (EVar "x") (EVar "structuralRngWordHalf"))) (DoLet false false (PVar "yLow") (EBinOp "%" (EVar "y") (EVar "structuralRngWordHalf"))) (DoLet false false (PVar "yHigh") (EBinOp "/" (EVar "y") (EVar "structuralRngWordHalf"))) (DoLet false false (PVar "low") (EBinOp "*" (EVar "xLow") (EVar "yLow"))) (DoLet false false (PVar "cross") (EBinOp "+" (EBinOp "*" (EVar "xLow") (EVar "yHigh")) (EBinOp "*" (EVar "xHigh") (EVar "yLow")))) (DoExpr (EApp (EVar "structuralRngWord") (EBinOp "+" (EVar "low") (EBinOp "*" (EBinOp "%" (EVar "cross") (EVar "structuralRngWordHalf")) (EVar "structuralRngWordHalf")))))))
 (DTypeSig true "structuralRngMix" (TyFun (TyCon "Int") (TyCon "Int")))
-(DFunDef false "structuralRngMix" ((PVar "state")) (EBlock (DoLet false false (PVar "word") (EApp (EVar "U32.truncate") (EVar "state"))) (DoLet false false (PVar "h1") (EApp (EApp (EVar "U32.bitXor") (EVar "word")) (EApp (EApp (EVar "U32.shiftRight") (EVar "word")) (ELit (LInt 16))))) (DoLet false false (PVar "h2") (EBinOp "*" (EVar "h1") (EApp (EVar "U32.truncate") (EVar "structuralRngMixMultiplier1")))) (DoLet false false (PVar "h3") (EApp (EApp (EVar "U32.bitXor") (EVar "h2")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h2")) (ELit (LInt 13))))) (DoLet false false (PVar "h4") (EBinOp "*" (EVar "h3") (EApp (EVar "U32.truncate") (EVar "structuralRngMixMultiplier2")))) (DoExpr (EApp (EVar "U32.toInt") (EApp (EApp (EVar "U32.bitXor") (EVar "h4")) (EApp (EApp (EVar "U32.shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
+(DFunDef false "structuralRngMix" ((PVar "state")) (EBlock (DoLet false false (PVar "word") (EApp (EVar "structuralRngWord") (EVar "state"))) (DoLet false false (PVar "h1") (EApp (EVar "structuralRngWord") (EApp (EApp (EVar "bitXor") (EVar "word")) (EApp (EApp (EVar "shiftRight") (EVar "word")) (ELit (LInt 16)))))) (DoLet false false (PVar "h2") (EApp (EApp (EVar "structuralRngMulWord") (EVar "h1")) (EVar "structuralRngMixMultiplier1"))) (DoLet false false (PVar "h3") (EApp (EVar "structuralRngWord") (EApp (EApp (EVar "bitXor") (EVar "h2")) (EApp (EApp (EVar "shiftRight") (EVar "h2")) (ELit (LInt 13)))))) (DoLet false false (PVar "h4") (EApp (EApp (EVar "structuralRngMulWord") (EVar "h3")) (EVar "structuralRngMixMultiplier2"))) (DoExpr (EApp (EVar "structuralRngWord") (EApp (EApp (EVar "bitXor") (EVar "h4")) (EApp (EApp (EVar "shiftRight") (EVar "h4")) (ELit (LInt 16))))))))
 (DTypeSig true "structuralRngRange" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "structuralRngRange" ((PVar "word") (PVar "lo") (PVar "hi")) (EBlock (DoLet false false (PVar "width") (EBinOp "+" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<=" (EVar "width") (ELit (LInt 0))) (EVar "lo") (EBinOp "+" (EVar "lo") (EBinOp "%" (EVar "word") (EVar "width")))))))
 (DTypeSig true "structuralRngChoose" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
