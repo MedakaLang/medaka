@@ -769,3 +769,20 @@ test "recursive plans inside containers terminate and reach recursive constructo
           ("native", "recursive branch reached", "fail"),
         ]
         (runReport ["--engines", "eval,native", "--cases", "100"] target))
+
+test "changing recursive type arguments can produce finite generated values" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Loop = Again Loop\ndata Rotate a b c = RotateNext (Rotate b c (List a)) | RotateEnd a\nprop \"finite changing arguments\" (value : Rotate Loop Loop Loop) = True\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "finite changing arguments", "pass"),
+          ("native", "finite changing arguments", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))

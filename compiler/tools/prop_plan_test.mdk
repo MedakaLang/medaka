@@ -167,3 +167,28 @@ mutualBoundWeights =
 
 test "mutually recursive bound choices use the minimum finite witness" =
   expectEqual (Ok [1, 0]) mutualBoundWeights
+
+appliedBoundWeights : Result String (List Int)
+appliedBoundWeights =
+  let raw = parse "public export data Box a = Box a\n"
+  let box = TyCon {
+    tyConName = "Box",
+    tyConOrigin = OriginModule "numbers",
+    tyConLoc = None,
+  }
+  let intTy = TyCon {
+    tyConName = "Int",
+    tyConOrigin = OriginBuiltin,
+    tyConLoc = None,
+  }
+  let nested = TyApp box (TyApp box (TyApp box intTy))
+  match (buildPlanEnvModules "numbers" [
+    PlanModule "numbers" raw (map (runtimeDecl "numbers") raw),
+  ])
+    Err e => Err (planErrorText e)
+    Ok env => match planFor env "nested applications" "value" nested
+      Err e => Err (planErrorText e)
+      Ok p => Ok (ctorWeights env p maxGenDepth)
+
+test "finite witnesses distinguish repeated applied nominal carriers" =
+  expectEqual (Ok [1]) appliedBoundWeights
