@@ -131,7 +131,7 @@ test "custom shrinking runs on both property engines" =
     [
       (
         "main.mdk",
-        "data Wrap = Wrap Int deriving (Eq, Debug)\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 500\n  shrink (Wrap 0) = []\n  shrink (Wrap _) = [Wrap 0]\nprop \"custom shrink\" (w : Wrap) = False\n",
+        "data Wrap = Wrap Int\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 500\n  shrink (Wrap 0) = []\n  shrink (Wrap _) = [Wrap 0]\nprop \"custom shrink\" (w : Wrap) = False\n",
       ),
     ]
     (target =>
@@ -383,12 +383,15 @@ test "same-spelled imported ADTs retain their declaring identities" =
     [
       (
         "numbers.mdk",
-        "public export data Box = Box Int deriving (Eq, Debug)\n",
+        "public export data Box = NumberBox Int deriving (Eq, Debug)\n",
       ),
-      ("flags.mdk", "public export data Box = Box Bool deriving (Eq, Debug)\n"),
+      (
+        "flags.mdk",
+        "public export data Box = FlagBox Bool deriving (Eq, Debug)\n",
+      ),
       (
         "main.mdk",
-        "import numbers as N\nimport flags as F\nprop \"nominal boxes\" (number : N.Box) (flag : F.Box) = match number\n  N.Box n => match flag\n    F.Box b => n == n && b == b\n",
+        "import numbers as N\nimport flags as F\nprop \"nominal boxes\" (number : N.Box) (flag : F.Box) = match number\n  N.NumberBox n => match flag\n    F.FlagBox b => n == n && b == b\n",
       ),
     ]
     (target =>
@@ -402,15 +405,15 @@ test "same-spelled imported types select their own custom generators" =
     [
       (
         "numbers.mdk",
-        "public export data Box = Box Int deriving (Eq, Debug)\nexport impl Arbitrary Box where\n  arbitrary () = Box 500\n  shrink _ = []\n",
+        "public export data Box = NumberBox Int deriving (Eq, Debug)\nexport impl Arbitrary Box where\n  arbitrary () = NumberBox 500\n  shrink _ = []\n",
       ),
       (
         "flags.mdk",
-        "public export data Box = Box Int deriving (Eq, Debug)\nexport impl Arbitrary Box where\n  arbitrary () = Box 900\n  shrink _ = []\n",
+        "public export data Box = FlagBox Int deriving (Eq, Debug)\nexport impl Arbitrary Box where\n  arbitrary () = FlagBox 900\n  shrink _ = []\n",
       ),
       (
         "main.mdk",
-        "import numbers as N\nimport flags as F\nprop \"custom nominal boxes\" (number : N.Box) (flag : F.Box) = match number\n  N.Box n => match flag\n    F.Box f => n == 500 && f == 900\n",
+        "import numbers as N\nimport flags as F\nprop \"custom nominal boxes\" (number : N.Box) (flag : F.Box) = match number\n  N.NumberBox n => match flag\n    F.FlagBox f => n == 500 && f == 900\n",
       ),
     ]
     (target =>
@@ -570,7 +573,7 @@ test "custom Arbitrary takes priority over structural construction" =
     [
       (
         "main.mdk",
-        "data Wrap = Wrap Int deriving (Eq, Debug)\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 500\n  shrink (Wrap _) = [Wrap 0]\nprop \"custom generator priority\" (w : Wrap) = match w\n  Wrap n => n == 500\n",
+        "data Wrap = Wrap Int\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 500\n  shrink (Wrap _) = [Wrap 0]\nprop \"custom generator priority\" (w : Wrap) = match w\n  Wrap n => n == 500\n",
       ),
     ]
     (target =>
@@ -587,7 +590,7 @@ test "both engines shrink later candidates and every parameter repeatedly" =
     [
       (
         "main.mdk",
-        "data Wrap = Wrap Int deriving (Eq, Debug)\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 100\n  shrink (Wrap 100) = [Wrap 0, Wrap 50]\n  shrink (Wrap 50) = [Wrap 0, Wrap 25]\n  shrink (Wrap 25) = [Wrap 0, Wrap 5]\n  shrink (Wrap _) = [Wrap 0, Wrap 1]\nprop \"two shrinking parameters\" (left : Wrap) (right : Wrap) = match (left, right)\n  (Wrap a, Wrap b) => a < 5 || b < 5\n",
+        "data Wrap = Wrap Int\nimpl Arbitrary Wrap where\n  arbitrary () = Wrap 100\n  shrink (Wrap 100) = [Wrap 0, Wrap 50]\n  shrink (Wrap 50) = [Wrap 0, Wrap 25]\n  shrink (Wrap 25) = [Wrap 0, Wrap 5]\n  shrink (Wrap _) = [Wrap 0, Wrap 1]\nprop \"two shrinking parameters\" (left : Wrap) (right : Wrap) = match (left, right)\n  (Wrap a, Wrap b) => a < 5 || b < 5\n",
       ),
     ]
     (target =>
@@ -747,3 +750,22 @@ test "named nominal fields shrink and display without a Debug instance" =
         "minimum record"
         ["sampleCount = 5", "sampleFlag = False"]
         (runReport ["--engines", "eval,native"] target))
+
+test "recursive plans inside containers terminate and reach recursive constructors" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "data Tree a = Leaf a | Fork (List (Tree a)) deriving Eq\nleafOnly : Tree a -> Bool\nleafOnly (Leaf _) = True\nleafOnly (Fork _) = False\nprop \"nested recursion\" (trees : List (Tree Int)) = trees == trees\nprop \"recursive branch reached\" (trees : List (Tree Int)) = all leafOnly trees\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        1
+        [
+          ("eval", "nested recursion", "pass"),
+          ("eval", "recursive branch reached", "fail"),
+          ("native", "nested recursion", "pass"),
+          ("native", "recursive branch reached", "fail"),
+        ]
+        (runReport ["--engines", "eval,native", "--cases", "100"] target))

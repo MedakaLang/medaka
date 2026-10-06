@@ -15,21 +15,25 @@ import tools.prop_plan.{
   planFor,
   instantiateCtor,
   planErrorText,
+  ctorWeights,
+  maxGenDepth,
 }
 import test.{expectAll, expectEqual, expectNotEqual}
 
-builtinTypes : Ty -> (Ty, Bool)
-builtinTypes (t@(TyCon { tyConName = n }))
+runtimeTypes : String -> Ty -> (Ty, Bool)
+runtimeTypes _ (t@(TyCon { tyConName = n }))
   | n == "Int" || n == "Bool" =
     (TyCon { t | tyConOrigin = OriginBuiltin }, True)
-builtinTypes t = (t, False)
+runtimeTypes owner (t@(TyCon {  })) =
+  (TyCon { t | tyConOrigin = OriginModule owner }, True)
+runtimeTypes _ t = (t, False)
 
 runtimeDecl : String -> Decl -> Decl
 runtimeDecl owner (DAttrib a d) = DAttrib a (runtimeDecl owner d)
-runtimeDecl owner (d@(DData { dataCtors })) =
-  let (typed, _) = mapTyInDecl builtinTypes d
+runtimeDecl owner (d@(DData {  })) =
+  let (typed, _) = mapTyInDecl (runtimeTypes owner) d
   match typed
-    typedData@(DData {  }) => DData { typedData |
+    typedData@(DData { dataCtors }) => DData { typedData |
       dataOrigin = OriginModule owner,
       dataCtors = map (renameCtor owner) dataCtors,
     }
@@ -38,10 +42,7 @@ runtimeDecl _ d = d
 
 renameCtor : String -> Variant -> Variant
 renameCtor owner (Variant name payload) =
-  let fields = match payload
-    ConPos ts => ConPos (map (t => fst (builtinTypes t)) ts)
-    named => named
-  Variant "\{owner}_runtime_\{name}" fields
+  Variant "\{owner}_runtime_\{name}" payload
 
 rawNumbers : List Decl
 rawNumbers =
@@ -146,3 +147,23 @@ test "nominal pairing rejects constructor count and field identity changes" = ex
           (runtimeDecl "numbers")
           (parse "public export data Box = Box { right : Int }\n"))),
   ]
+
+mutualBoundWeights : Result String (List Int)
+mutualBoundWeights =
+  let raw =
+    parse
+      "public export data A = AB B | AL Int\npublic export data B = BA A | BC C\npublic export data C = Next D\npublic export data D = End Int\n"
+  match (buildPlanEnvModules "numbers" [
+    PlanModule "numbers" raw (map (runtimeDecl "numbers") raw),
+  ])
+    Err e => Err (planErrorText e)
+    Ok env => match planFor env "finite bound" "value" TyCon {
+      tyConName = "B",
+      tyConOrigin = OriginModule "numbers",
+      tyConLoc = None,
+    }
+      Err e => Err (planErrorText e)
+      Ok p => Ok (ctorWeights env p maxGenDepth)
+
+test "mutually recursive bound choices use the minimum finite witness" =
+  expectEqual (Ok [1, 0]) mutualBoundWeights
