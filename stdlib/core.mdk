@@ -1951,14 +1951,14 @@ apply f a = f a
    to none.
 
    `medaka test` draws each `prop` parameter from its declared type. A
-   user-defined type with no type arguments is drawn through its `Arbitrary`
-   instance when one is in scope, and built from its constructors otherwise,
-   whether it is the parameter's own type or a field of another. An instance
-   the runner cannot draw through, because it is constrained with `requires`
-   or stands at an applied head, is reported rather than ignored. `Int`,
-   `Bool`, `Float`, `Char`, `String`, `Unit`, `List`, `Array`, `Option`,
-   `Result`, tuples, and any applied type are built by the runner itself, so
-   an instance at one of those is not consulted.
+   user-defined type is drawn through its `Arbitrary` instance when one is
+   in scope, and built from its constructors otherwise, whether it is the
+   parameter's own type or a field of another. Applied and generic custom
+   instances are checked at the complete carrier type; unsatisfied `requires`
+   obligations reject the dependent property. `Int`, `Bool`, `Float`, `Char`,
+   `String`, `Unit`, `List`, `Array`, `Option`, `Result`, and tuples use
+   structural generation. Their instances remain available to custom
+   generators that call `arbitrary` themselves.
 
    Both property engines call an eligible instance's `shrink`. Custom
    random draws use the requested property seed and preserve the program's
@@ -2004,8 +2004,8 @@ arbitraryList gen maxLen = go (randomInt 0 maxLen) []
 
 {- | A random list of up to ten elements drawn from the element's instance. -}
 -- `medaka test` draws a `prop` parameter at `List a` from its declared type
--- rather than from this instance, which is dict-passed and so out of the
--- runner's reach; this instance is for hand-written generators that call
+-- rather than from this instance; the instance supplies element dictionaries
+-- to hand-written custom generators that call
 -- `arbitrary` at `List a`.  `arbitraryList` stays as the explicit-generator
 -- escape hatch for a different generator or a longer list.
 export impl Arbitrary (List a) requires Arbitrary a where

@@ -17,7 +17,7 @@ Backend output also requires the existing eval/native/Wasm differential infrastr
 | --- | --- | --- |
 | Lists, tuples, primitive operation descriptions | Structural generation | Generate scripts, then construct the structure inside the law. |
 | Constrained graphs, balanced trees, shared mutable cells | Describe with primitive scripts or an eligible custom generator | Preserve validity by construction; compare against a simpler independent model. |
-| Custom generators | Argument-free nominal types can use an in-scope `Arbitrary` instance | Built-in types use structural draws. Applied types without a selected custom instance use structural draws; an unsupported selected instance reports a capability error. Check imported type identity and eligibility. |
+| Custom generators | Nominal carriers, including applied and generic carriers, can use an in-scope `Arbitrary` instance | Built-in types use structural draws. Resolve custom instances at the complete carrier type through ordinary typechecking, including `requires` obligations. Check imported type identity and reject only laws that depend on an unusable instance. |
 | Custom shrinking | Eligible `Arbitrary.shrink` instances run in both engines; structural shrinking covers containers and ADTs | Keep the input domain valid under shrinking and preserve the original failing law. |
 | Large structures and boundary values | Default primitive draws are small | Add deterministic sizes, extreme integers, Unicode and delimiter-bearing names explicitly. |
 | Reproducible draws | `--seed` controls property draws and is forwarded to directory/multi-target child runs | Record the seed, case budget, source revision and selected engine. |
@@ -31,6 +31,13 @@ Its regression compares direct-file and directory reports at two seeds without
 pinning an RNG draw, shrink result or case count. A test-infrastructure gap
 blocks this campaign until its capability is built; do not preserve a workaround
 in the algorithm suites.
+
+Custom evaluator helpers carry concrete type signatures and use the compiler's
+ordinary dictionary elaboration. The runner does not reconstruct method-table
+ordinals or dictionaries. Helper validation runs over the requested carriers
+together; an unsatisfied prerequisite produces a capability result for its
+dependent laws while independent laws still execute. Both engines preserve
+abstract module boundaries when displaying counterexamples.
 
 ## Initial algorithm coverage
 
@@ -48,6 +55,14 @@ only for bounded tests; production code must still follow
 | Identity registries and lexical scopes | Existing `compiler/types` siblings | Scripted independent models and identity/visibility laws; retain specific unit regressions. |
 | Atomic effect rows and shared row DAGs | [effect_rows_property_test.mdk](../../compiler/types/effect_rows_property_test.mdk) | Finite-map normalization; grade-join algebra; independent unsolved tails; effects survive later solving after a warm normalization. |
 | Concrete authority domains | [effect_domain_property_test.mdk](../../compiler/types/effect_domain_property_test.mdk) | Prefix/Set/Product inclusion and least upper bounds against finite models; antichain admission preservation; constant-authority order; empty Set boundaries. |
+
+The utility deduplication model exposed a native code-generation defect:
+a lifted patterned lambda inherited its enclosing function's tail-recursion
+destination and emitted a branch to an undefined label. A definition scope now
+saves, clears and restores that context. The fixed
+[engine fixture](../../test/engine_fixtures/trmc_patterned_lambda_scope.mdk)
+has an independently chosen `True` value pin and agrees across eval, native and
+Wasm.
 
 ## Semantics specifications as executable laws
 

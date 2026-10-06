@@ -1416,14 +1416,14 @@ candidates, tried in order when shrinking a failing example; it defaults
 to none.
 
 `medaka test` draws each `prop` parameter from its declared type. A
-user-defined type with no type arguments is drawn through its `Arbitrary`
-instance when one is in scope, and built from its constructors otherwise,
-whether it is the parameter's own type or a field of another. An instance
-the runner cannot draw through, because it is constrained with `requires`
-or stands at an applied head, is reported rather than ignored. `Int`,
-`Bool`, `Float`, `Char`, `String`, `Unit`, `List`, `Array`, `Option`,
-`Result`, tuples, and any applied type are built by the runner itself, so
-an instance at one of those is not consulted.
+user-defined type is drawn through its `Arbitrary` instance when one is
+in scope, and built from its constructors otherwise, whether it is the
+parameter's own type or a field of another. Applied and generic custom
+instances are checked at the complete carrier type; unsatisfied `requires`
+obligations reject the dependent property. `Int`, `Bool`, `Float`, `Char`,
+`String`, `Unit`, `List`, `Array`, `Option`, `Result`, and tuples use
+structural generation. Their instances remain available to custom
+generators that call `arbitrary` themselves.
 
 Both property engines call an eligible instance's `shrink`. Custom
 random draws use the requested property seed and preserve the program's
