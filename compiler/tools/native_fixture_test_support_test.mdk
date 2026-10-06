@@ -1,0 +1,9 @@
+-- Shared fixture writer for native tool acceptance siblings. Its callers own
+-- the temporary directory lifetime and runner-specific assertions.
+
+export
+writeFixtureFiles : String -> List (String, String) -> <IO> Result String Unit
+writeFixtureFiles _ [] = Ok ()
+writeFixtureFiles dir ((name, source) :: rest) = do
+  _ <- writeFile "\{dir}/\{name}" source
+  writeFixtureFiles dir rest

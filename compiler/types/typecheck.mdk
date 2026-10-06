@@ -10150,6 +10150,7 @@ stickyTypeErrorDiagsSince before =
     tcDiagGoalKey
     (reverseL (takeFirst (listLen now - listLen before) now))
 
+export
 tcDiagGoalKey : (String, TcDiag) -> String
 tcDiagGoalKey (mid, TcDiag code _ loc msg _ _) =
   "\{mid}|\{code}|\{locGoalKey loc}|\{msg}"
@@ -36020,7 +36021,7 @@ inferPropBodiesGo env ((DProp _ name params body) :: rest) =
   let oblMark = wMark perRun.value.implObls
   let callMark = wMark perRun.value.obls
   let dictMark = goalsMark ()
-  let _ = infer local body
+  let _ = unify (infer local body) (tconBuiltin "Bool")
   let _ = exitLevel ()
   let _ = defaultClosedBodyNum oblMark callMark dictMark
   let _ = closeScope ()

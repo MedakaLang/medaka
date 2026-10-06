@@ -1,0 +1,21 @@
+import u64
+
+captureThrough : (Unit -> <Rand> U64) -> <Rand> U64
+captureThrough capture = capture ()
+
+restoreThrough : (U64 -> <Rand> Unit) -> U64 -> <Rand> Unit
+restoreThrough restore state = restore state
+
+observe : Unit -> <Rand> (Int, Bool, Float, Char)
+observe _ =
+  (randomInt (-1000000) 1000000, randomBool (), randomFloat (), randomChar ())
+
+main =
+  let fullState = 18446744073709551615 : U64
+  let _ = restoreThrough restoreRandomState fullState
+  let snapshot = captureThrough randomState
+  let first = observe ()
+  let advanced = randomState ()
+  let _ = restoreThrough restoreRandomState snapshot
+  let repeated = observe ()
+  snapshot == fullState && snapshot /= advanced && first == repeated

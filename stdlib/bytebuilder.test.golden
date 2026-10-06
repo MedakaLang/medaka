@@ -75,11 +75,9 @@ running doctests in stdlib/bytebuilder.mdk
   ok   stdlib/bytebuilder.mdk:468: runByteParser (leUint 4) (build1 (emitLeUint 4 4294967295))
 
 stdlib/bytebuilder.mdk: 74/74 passed
-stdlib/bytebuilder.mdk:480: Testing "emitU16LE/leU16 round-trip" ... OK (100 tests)
-stdlib/bytebuilder.mdk:487: Testing "emitU32LE/leU32 round-trip" ... OK (100 tests)
-stdlib/bytebuilder.mdk:495: Testing "emitU64LE/leU64 round-trip" ... OK (100 tests)
-stdlib/bytebuilder.mdk:501: Testing "emitU64BE/beU64 round-trip" ... OK (100 tests)
-stdlib/bytebuilder.mdk:509: Testing "emitLeSint 2/leSint 2 round-trip" ... OK (100 tests)
-stdlib/bytebuilder.mdk:518: Testing "emitU16BE reversed bytes, leU16 agrees with beU16" ... OK (100 tests)
-
-6 passed, 0 failed
+Testing "emitU16LE/leU16 round-trip" [eval] ... OK (100 tests passed)
+Testing "emitU32LE/leU32 round-trip" [eval] ... OK (100 tests passed)
+Testing "emitU64LE/leU64 round-trip" [eval] ... OK (100 tests passed)
+Testing "emitU64BE/beU64 round-trip" [eval] ... OK (100 tests passed)
+Testing "emitLeSint 2/leSint 2 round-trip" [eval] ... OK (100 tests passed)
+Testing "emitU16BE reversed bytes, leU16 agrees with beU16" [eval] ... OK (100 tests passed)

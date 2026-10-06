@@ -198,6 +198,8 @@ preambleLines = [
   "declare i64 @mdk_net_send_bytes_from(i64, i64, i64, i64)",
   "declare i64 @mdk_net_try_send_bytes_from(i64, i64, i64, i64)",
   "declare void @mdk_set_seed(i64)",
+  "declare i64 @mdk_random_state(i64)",
+  "declare void @mdk_restore_random_state(i64)",
   "declare i64 @mdk_random_int(i64, i64)",
   "declare i64 @mdk_random_bool(i64)",
   "declare i64 @mdk_random_float(i64)",

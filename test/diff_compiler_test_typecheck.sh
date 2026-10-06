@@ -441,14 +441,19 @@ run_case 'd doctest failing' "$TMP/d_doctest_wrong_expectation.mdk" 1 \
 
 # The exemption cells assert the test/prop actually RAN AND PASSED, not merely exit 0:
 # a gate that fired and swallowed its own diagnostic would also exit 0, and `1/1 passed`
-# / `OK (100 tests)` are the only output a spuriously-gated run could not produce.
+# / an engine-labelled passing property are the output a spuriously-gated run
+# could not produce. Exemption controls select eval explicitly; native probe
+# compilation still rejects an ill-typed target.
 ENGINE_ARGS='--engines eval'
 run_case 'e exemption preserved (hasTests)' "$TMP/e_exempt_via_testdecl.mdk" 0 \
   '  ok   ' 'sum of two' '1/1 passed'
-ENGINE_ARGS=''
 
 run_case 'h exemption preserved (hasProps)' "$TMP/h_exempt_via_prop.mdk" 0 \
-  'OK (100 tests)' '1 passed, 0 failed'
+  'Testing "addition commutes" [eval] ... OK (100 tests passed)'
+ENGINE_ARGS=''
+
+run_case 'h native property compilation checks the exempt target' "$TMP/h_exempt_via_prop.mdk" 1 \
+  '[native] ... FAILED' 'could not build' 'Unbound variable: nosuchvariable'
 
 # ── issue #1680: the exemption ANNOUNCES itself ──────────────────────────────
 # Cells e/h above pin that the exempted module still RUNS. These pin that it also
@@ -470,11 +475,11 @@ ENGINE_ARGS='--engines eval'
 run_case 'i announcement on the hasTests exemption' "$TMP/e_exempt_via_testdecl.mdk" 0 \
   'note: typechecking was skipped for' '`test "…"` decls' 'to type-check it: medaka check' \
   '1/1 passed'
-ENGINE_ARGS=''
 
 run_case 'k announcement on the hasProps exemption' "$TMP/h_exempt_via_prop.mdk" 0 \
   'note: typechecking was skipped for' '`prop "…"` decls' 'to type-check it: medaka check' \
-  'OK (100 tests)'
+  '[eval] ... OK (100 tests passed)'
+ENGINE_ARGS=''
 
 # #1680's headline symptom is the UNEXPLAINED panic, so this cell asserts both halves
 # are present in one run: the panic still happens (the exemption is intact) and the

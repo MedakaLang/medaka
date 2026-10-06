@@ -7,8 +7,10 @@ history they are; §§4–7 are historical (§4.4 and §4.6 shipped, §4.3/§4.7
 new document's §3 and §10 carry their successors). ⚠️ §4.2's "the same assertions run on
 all three engines" is still FALSE for `test`/`prop`, and the reason has changed. The native
 arm exists — #2588 shipped `medaka test --native` and `--engines eval,native`, whose exit
-code is the AND — and native is now the DEFAULT, but a bare run is still ONE engine, and
-`prop` always runs in the interpreter. Measured at `ed8859d99`: `--engines` appears in no
+code is the AND — and native is now the DEFAULT, but a bare run is still ONE engine.
+Properties now follow the selected engine too; see
+[Compiler property testing](COMPILER-PROPERTY-TESTING.md) for shared generation,
+shrinking and issue-linked pins. Measured at `ed8859d99`: `--engines` appears in no
 `Makefile` recipe and in no `.github/workflows/ci.yml` step, so the `make test` suite itself
 runs one engine (#3207).
 Exactly one gate asks for both, `test/diff_compiler_test_native.sh`, over three named
@@ -501,7 +503,7 @@ but it is **never the only thing standing between a miscompile and a green run**
 
 ⚠️ **The compensator named here is not the one that holds.** This paragraph originally
 read "because the same assertions run on all three engines (§4.4)". They do not: `test`
-and `prop` run on the engine you ask for (`prop` only ever in the interpreter), and the
+and `prop` run on the engine you ask for, and the
 default is the native backend alone.
 `medaka test --engines eval,native` (#2588) runs two and ANDs the exit codes, but nothing
 in `Makefile` or `ci.yml` passes it (#3207), and wasm is deferred by decision. What

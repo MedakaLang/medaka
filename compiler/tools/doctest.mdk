@@ -314,11 +314,18 @@ synthName i = "__dt_" ++ intToString i ++ "__"
 -- Build the synthetic source line for example i.
 export
 synthSrc : Int -> Example -> String
-synthSrc i ex =
+synthSrc i ex = synthSrcNamed (synthName i) ex
+
+-- Native probes give synthesized bindings a per-run name so target source
+-- cannot capture them. The evaluator keeps `synthName` as its stable lookup
+-- convention through the adapter above.
+export
+synthSrcNamed : String -> Example -> String
+synthSrcNamed name ex =
   let rhs = match exampleExpected ex
     Some _ => "debug (" ++ exampleInput ex ++ ")"
     None => exampleInput ex
-  "\{synthName i} = \{rhs}"
+  "\{name} = \{rhs}"
 
 -- Per-example synth outcome (issue #55): the compiler's panicking `parse`
 -- would abort every doctest in the file the moment ONE example is malformed

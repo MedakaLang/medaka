@@ -7,8 +7,9 @@
    tail-call optimisation, and a compiled binary either exhausts its 256 MB
    worker stack or faults on a wild self-reference. Every such death is now a
    clean, coded, nonzero-exit diagnostic. The discriminating signal is the
-   `runtime error [E-…]` line on stderr, not the exit code: a raw signal
-   death is nonzero too.
+   `runtime error [E-…]` line, not the exit code: a raw signal death is
+   nonzero too. Test blocks and doctests emit it on stderr; a supervised
+   property reports its typed runtime row on stdout.
 
    Two mechanisms are exercised. `E-STACK-OVERFLOW` is the interpreter's
    depth guard under `run` and the native signal backstop under `build`, and
@@ -71,16 +72,24 @@ namesFile name =
   let fixture = "\{medakaRoot}/test/stack_overflow_test_fixtures/\{name}.mdk"
   match boundedVerbSeconds 60 medakaBin ["test", "--engines", "eval", fixture]
     Err e => fail "medaka test: \{e}"
-    Ok (code, _, re) =>
+    Ok (code, out, re) =>
       if code == 0 then
         fail "medaka test exited 0 despite a stack overflow"
-      else match filter (contains "[E-STACK-OVERFLOW]") (lines re)
-        [] => fail "no E-STACK-OVERFLOW line on stderr: \{debug re}"
+      else match (filter
+        (contains "[E-STACK-OVERFLOW]")
+        (stackOverflowLines name out re))
+        [] => fail "no E-STACK-OVERFLOW line in the test report"
         ls =>
           if all (contains "\{name}.mdk:") ls then
             pass
           else
             fail "diagnostic does not name the file: \{debug ls}"
+
+-- Properties run in the supervised interpreter worker, which returns its
+-- error row through stdout. Ordinary unit and doctest paths retain stderr.
+stackOverflowLines : String -> String -> String -> List String
+stackOverflowLines "deep_in_prop" out _ = lines out
+stackOverflowLines _ _ err = lines err
 
 test "medaka test under the interpreter names the file at a stack overflow" =
   namesFile "deep_in_test_block"

@@ -1,0 +1,1530 @@
+-- The engine-neutral property planning layer.
+--
+-- This module deliberately contains no evaluator Value and no emitted source.
+-- It decides what a parameter type means, which declarations own its
+-- constructors, and the shared order of structural shrink candidates.
+
+import frontend.ast.{
+  Decl(..),
+  Ty(..),
+  TyConOrigin(..),
+  DataVis(..),
+  Variant(..),
+  Field(..),
+  ConPayload(..),
+  ImplMethod(..),
+  sameTyConHead,
+}
+import types.route_key.{typeTagOf, implRouteKeyWord}
+import support.ordmap.{
+  OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup, omSize
+}
+import support.util.{lookupAssoc, zipL}
+
+-- Structural property generation has one engine-neutral stream. Its 31-bit
+-- state advances without overflowing Int; every consumer draws one fmix32 word
+-- and reduces it only after mixing. Native probes render the same constants
+-- with public runtime bit operations and overflow-safe arithmetic. The
+-- generated probe must not import the higher-level u32 module: that module
+-- pulls ordinary stdlib instances into a scratch project that has already
+-- copied the target graph.
+export
+structuralRngModulus : Int
+structuralRngModulus = 2147483648
+
+export
+structuralRngMultiplier : Int
+structuralRngMultiplier = 1103515245
+
+export
+structuralRngIncrement : Int
+structuralRngIncrement = 12345
+
+export
+structuralRngMixMultiplier1 : Int
+structuralRngMixMultiplier1 = 2246822507
+
+export
+structuralRngMixMultiplier2 : Int
+structuralRngMixMultiplier2 = 3266489909
+
+export
+structuralRngWordModulus : Int
+structuralRngWordModulus = 4294967296
+
+export
+structuralRngWordHalf : Int
+structuralRngWordHalf = 65536
+
+export
+structuralRngSeed : Int -> Int
+structuralRngSeed n =
+  (n % structuralRngModulus + structuralRngModulus) % structuralRngModulus
+
+export
+structuralRngAdvance : Int -> Int
+structuralRngAdvance state =
+  (state * structuralRngMultiplier + structuralRngIncrement)
+    % structuralRngModulus
+
+structuralRngWord : Int -> Int
+structuralRngWord n =
+  (n % structuralRngWordModulus + structuralRngWordModulus)
+    % structuralRngWordModulus
+
+-- Multiply two words modulo 2^32 without asking the `Int` multiplier to hold
+-- a 64-bit product. Each half product and the assembled low word fit in Int.
+structuralRngMulWord : Int -> Int -> Int
+structuralRngMulWord left right =
+  let x = structuralRngWord left
+  let y = structuralRngWord right
+  let xLow = x % structuralRngWordHalf
+  let xHigh = x / structuralRngWordHalf
+  let yLow = y % structuralRngWordHalf
+  let yHigh = y / structuralRngWordHalf
+  let low = xLow * yLow
+  let cross = xLow * yHigh + xHigh * yLow
+  structuralRngWord
+    (low + cross % structuralRngWordHalf * structuralRngWordHalf)
+
+export
+structuralRngMix : Int -> Int
+structuralRngMix state =
+  let word = structuralRngWord state
+  let h1 = structuralRngWord (bitXor word (shiftRight word 16))
+  let h2 = structuralRngMulWord h1 structuralRngMixMultiplier1
+  let h3 = structuralRngWord (bitXor h2 (shiftRight h2 13))
+  let h4 = structuralRngMulWord h3 structuralRngMixMultiplier2
+  structuralRngWord (bitXor h4 (shiftRight h4 16))
+
+export
+structuralRngRange : Int -> Int -> Int -> Int
+structuralRngRange word lo hi =
+  let width = hi - lo + 1
+  if width <= 0 then lo else lo + word % width
+
+export
+structuralRngChoose : Int -> Int -> Int
+structuralRngChoose word width = if width <= 0 then 0 else word % width
+
+-- Container candidate order is policy, not an implementation detail of an
+-- engine: deletion left-to-right precedes recursive element shrinking.
+export
+deleteEach : List a -> List (List a)
+deleteEach [] = []
+deleteEach (x :: xs) = xs :: map (prepend x) (deleteEach xs)
+
+export
+prepend : a -> List a -> List a
+prepend x xs = x :: xs
+
+export
+replaceEach : (a -> List a) -> List a -> List (List a)
+replaceEach _ [] = []
+replaceEach smaller (x :: xs) =
+  map (prependBefore xs) (smaller x) ++ map (prepend x) (replaceEach smaller xs)
+
+export
+prependBefore : List a -> a -> List a
+prependBefore xs x = x :: xs
+
+-- A spelling is never an identity.  TypeKey is carried through plans and the
+-- registry is indexed by the canonical type word, so left.Box and right.Box
+-- cannot select each other's constructors or Arbitrary instance.
+public export data TypeKey = TypeKey String TyConOrigin
+
+export
+typeKeyWord : TypeKey -> String
+typeKeyWord (TypeKey n o) = typeTagOf o n
+
+sameTypeKey : TypeKey -> TypeKey -> Bool
+sameTypeKey (TypeKey n o) (TypeKey n2 o2) = sameTyConHead n o n2 o2
+
+public export data PlanVisibility = PlanLocal | PlanPublicCtors | PlanAbstract
+
+public export data PlanField = PlanField (Option String) Ty
+
+-- planCtorSource is what native source needs, while planCtorRuntime is the
+-- collision-mangled tag an evaluator value carries.  The current one-graph
+-- builder sets both equal; paired raw/elaborated callers can preserve both.
+public export data PlanCtor = PlanCtor String String (List PlanField)
+
+public export data PlanDef =
+  | PlanDef TypeKey String (List String) PlanVisibility (List PlanCtor)
+
+public export data CustomPlan = CustomPlan TypeKey Ty String
+
+public export data GenPlan =
+  | GInt
+  | GBool
+  | GFloat
+  | GChar
+  | GString
+  | GUnit
+  | GList GenPlan
+  | GArray GenPlan
+  | GOption GenPlan
+  | GResult GenPlan GenPlan
+  | GTuple (List GenPlan)
+  | GNominal TypeKey (List GenPlan)
+  | GCustom CustomPlan
+
+public export data PlanErrorReason =
+  | PEUnboundTyVar
+  | PETypeAlias
+  | PEFunction
+  | PEUnsupportedType
+  | PEOpaqueNominal
+  | PEAmbiguousNominal
+  | PENoFiniteValue
+  | PEUnusableArbitrary
+  | PEInaccessibleConstructors
+
+-- Keep the property and the parameter separate: request runners must turn a
+-- planning failure into a per-law capability result, never an evaluator panic.
+public export data PlanError = PlanError String String Ty PlanErrorReason String
+
+export
+planErrorText : PlanError -> String
+planErrorText (PlanError propName name _ reason detail) =
+  "property '\{propName}', parameter '\{name}' cannot be generated: \{reasonText reason}\{if detail == "" then "" else " (" ++ detail ++ ")"}"
+
+reasonText : PlanErrorReason -> String
+reasonText PEUnboundTyVar = "unbound type variable"
+reasonText PETypeAlias = "unexpanded type alias"
+reasonText PEFunction = "function values have no built-in generator"
+reasonText PEUnsupportedType = "unsupported parameter type"
+reasonText PEOpaqueNominal = "opaque nominal type"
+reasonText PEAmbiguousNominal = "ambiguous unresolved nominal type"
+reasonText PENoFiniteValue = "recursive type has no finite constructor"
+reasonText PEUnusableArbitrary =
+  "Arbitrary instance cannot be selected for this carrier"
+reasonText PEInaccessibleConstructors =
+  "constructors are not visible to this property"
+
+-- One row per nominal declaration and one per Arbitrary decision.  The maps are
+-- built once for the whole loaded graph, then queried by identity rather than
+-- rescanning declarations for every generated value.
+public export data ArbPlan = ArbPlan Ty String
+public export data PlanEnv =
+  | PlanEnv String (OrdMap (List PlanDef)) (OrdMap (List ArbPlan)) (OrdMap Unit) (OrdMap Unit)
+
+-- A source module is carried beside its elaborated/mangled counterpart.  The
+-- former supplies a constructor spelling which can be imported into a native
+-- probe; the latter supplies resolved TypeKey identities and the evaluator's
+-- runtime constructor tag.  Reversing a private mangle is unsound, so this
+-- pair is the only supported bridge.
+public export data PlanModule = PlanModule String (List Decl) (List Decl)
+
+emptyPlanEnv : PlanEnv
+emptyPlanEnv = PlanEnv "" omEmpty omEmpty omEmpty omEmpty
+
+export
+buildPlanEnv : List Decl -> PlanEnv
+buildPlanEnv decls = buildPlanEnvGo decls emptyPlanEnv
+
+-- Preferred entry point for multi-module tests. It collects every resolved
+-- declaration (including Arbitrary instances), then replaces nominal rows
+-- with source/runtime constructor pairs.
+export
+buildPlanEnvModules : String -> List PlanModule -> Result PlanError PlanEnv
+buildPlanEnvModules root modules =
+  pairModules modules (PlanEnv root omEmpty omEmpty omEmpty omEmpty)
+
+pairModules : List PlanModule -> PlanEnv -> Result PlanError PlanEnv
+pairModules [] env = Ok env
+pairModules ((PlanModule mid raw runtime) :: rest) env =
+  match pairModuleDecls mid raw runtime env
+    Ok env2 => pairModules rest env2
+    Err e => Err e
+
+pairModuleDecls : String ->
+  List Decl ->
+  List Decl ->
+  PlanEnv ->
+  Result PlanError PlanEnv
+pairModuleDecls mid raw runtime env =
+  if rawNominalsPresent raw runtime then
+    pairRuntimeDecls mid (rawNominalMap raw omEmpty) runtime env
+  else
+    Err (pairError "raw nominal declaration has no runtime counterpart")
+
+rawNominalsPresent : List Decl -> List Decl -> Bool
+rawNominalsPresent [] _ = True
+rawNominalsPresent ((DAttrib _ d) :: rest) runtime =
+  rawNominalsPresent (d :: rest) runtime
+rawNominalsPresent ((DData { dataName = name }) :: rest) runtime =
+  runtimeHasNominal name runtime && rawNominalsPresent rest runtime
+rawNominalsPresent ((DNewtype { newtypeName = name }) :: rest) runtime =
+  runtimeHasNominal name runtime && rawNominalsPresent rest runtime
+rawNominalsPresent (_ :: rest) runtime = rawNominalsPresent rest runtime
+
+runtimeHasNominal : String -> List Decl -> Bool
+runtimeHasNominal _ [] = False
+runtimeHasNominal name ((DAttrib _ d) :: rest) =
+  runtimeHasNominal name (d :: rest)
+runtimeHasNominal name ((DData { dataName = actual }) :: rest) =
+  name == actual || runtimeHasNominal name rest
+runtimeHasNominal name ((DNewtype { newtypeName = actual }) :: rest) =
+  name == actual || runtimeHasNominal name rest
+runtimeHasNominal name (_ :: rest) = runtimeHasNominal name rest
+
+-- Elaboration may insert derives and other declarations, so the two streams
+-- cannot be zipped. Index only raw nominal declarations by source type name,
+-- then join each resolved nominal inside its module. Variant positions are
+-- paired only after that declaration identity has matched.
+rawNominalMap : List Decl -> OrdMap Decl -> OrdMap Decl
+rawNominalMap [] acc = acc
+rawNominalMap ((DAttrib _ d) :: rest) acc = rawNominalMap (d :: rest) acc
+rawNominalMap ((d@(DData { dataName = name })) :: rest) acc =
+  rawNominalMap rest (omInsert name d acc)
+rawNominalMap ((d@(DNewtype { newtypeName = name })) :: rest) acc =
+  rawNominalMap rest (omInsert name d acc)
+rawNominalMap (_ :: rest) acc = rawNominalMap rest acc
+
+pairRuntimeDecls : String ->
+  OrdMap Decl ->
+  List Decl ->
+  PlanEnv ->
+  Result PlanError PlanEnv
+pairRuntimeDecls _ _ [] env = Ok env
+pairRuntimeDecls mid rawMap (runtime :: rest) env =
+  match pairRuntimeDecl mid rawMap runtime env
+    Ok env2 => pairRuntimeDecls mid rawMap rest env2
+    Err e => Err e
+
+pairRuntimeDecl : String ->
+  OrdMap Decl ->
+  Decl ->
+  PlanEnv ->
+  Result PlanError PlanEnv
+pairRuntimeDecl mid rawMap (DAttrib _ d) env = pairRuntimeDecl mid rawMap d env
+pairRuntimeDecl mid rawMap (runtime@(DData { dataName = name })) env =
+  match omLookup name rawMap
+    Some raw => pairPlanDecl mid raw runtime env
+    None =>
+      Err (pairError ("runtime data '" ++ name ++ "' has no raw declaration"))
+pairRuntimeDecl mid rawMap (runtime@(DNewtype { newtypeName = name })) env =
+  match omLookup name rawMap
+    Some raw => pairPlanDecl mid raw runtime env
+    None =>
+      Err
+        (pairError ("runtime newtype '" ++ name ++ "' has no raw declaration"))
+pairRuntimeDecl _ _ runtime env = Ok (addPlanDeclRuntimeOnly runtime env)
+
+addPlanDeclRuntimeOnly : Decl -> PlanEnv -> PlanEnv
+addPlanDeclRuntimeOnly runtime env = addPlanDecl runtime env
+
+pairError : String -> PlanError
+pairError detail = PlanError "" "" (TyVar "") PEUnsupportedType detail
+
+pairPlanDecl : String -> Decl -> Decl -> PlanEnv -> Result PlanError PlanEnv
+pairPlanDecl mid (DAttrib _ raw) (DAttrib _ runtime) env =
+  pairPlanDecl mid raw runtime env
+pairPlanDecl mid (DData { dataName = rawName, dataCtors = rawCtors }) (DData { dataName = runtimeName, dataParams = ps, dataCtors = runtimeCtors, dataVis = vis, dataOrigin = o }) env
+  | rawName == runtimeName =
+    let key = TypeKey runtimeName o
+    map
+      (ctors =>
+        insertDef (PlanDef key (ownerOf o) ps (visibilityOf vis) ctors) env)
+      (pairCtors rawCtors runtimeCtors)
+pairPlanDecl mid (DNewtype { newtypeName = rawName, newtypeCtor = rawCtor }) (DNewtype { newtypeName = runtimeName, newtypeParams = ps, newtypeCtor = runtimeCtor, newtypeFieldTy = fieldTy, newtypePub = pub, newtypeOrigin = o }) env
+  | rawName == runtimeName =
+    let key = TypeKey runtimeName o
+    let def = PlanDef key (ownerOf o) ps (newtypeVisibility pub) [
+      PlanCtor rawCtor runtimeCtor [PlanField None fieldTy],
+    ]
+    Ok (insertDef def env)
+pairPlanDecl _ _ _ _ =
+  Err (pairError "raw and runtime nominal declarations disagree")
+
+pairCtors : List Variant -> List Variant -> Result PlanError (List PlanCtor)
+pairCtors [] [] = Ok []
+pairCtors [] _ = Err (pairError "raw/runtime constructor counts disagree")
+pairCtors _ [] = Err (pairError "raw/runtime constructor counts disagree")
+pairCtors ((Variant rawName rawPayload) :: raws) ((Variant runtimeName runtimePayload) :: runtimes) =
+  match (pairFields rawPayload runtimePayload, pairCtors raws runtimes)
+    (Ok fields, Ok rest) => Ok (PlanCtor rawName runtimeName fields :: rest)
+    (Err e, _) => Err e
+    (_, Err e) => Err e
+
+pairFields : ConPayload -> ConPayload -> Result PlanError (List PlanField)
+pairFields (ConPos rawTys) (ConPos runtimeTys)
+  | listLength rawTys == listLength runtimeTys =
+    Ok (map (t => PlanField None t) runtimeTys)
+pairFields (ConNamed rawFields _) (ConNamed runtimeFields _) =
+  pairNamedFields rawFields runtimeFields
+pairFields _ _ = Err (pairError "raw/runtime constructor payloads disagree")
+
+pairNamedFields : List Field -> List Field -> Result PlanError (List PlanField)
+pairNamedFields [] [] = Ok []
+pairNamedFields [] _ = Err (pairError "raw/runtime named field counts disagree")
+pairNamedFields _ [] = Err (pairError "raw/runtime named field counts disagree")
+pairNamedFields ((Field rawName _) :: raws) ((Field runtimeName runtimeTy) :: runtimes)
+  | rawName == runtimeName =
+    map
+      (PlanField (Some rawName) runtimeTy :: _)
+      (pairNamedFields raws runtimes)
+pairNamedFields _ _ = Err (pairError "raw/runtime named field names disagree")
+
+listLength : List a -> Int
+listLength [] = 0
+listLength (_ :: xs) = 1 + listLength xs
+
+buildPlanEnvGo : List Decl -> PlanEnv -> PlanEnv
+buildPlanEnvGo [] env = env
+buildPlanEnvGo (d :: rest) env = buildPlanEnvGo rest (addPlanDecl d env)
+
+addPlanDecl : Decl -> PlanEnv -> PlanEnv
+addPlanDecl (DAttrib _ d) env = addPlanDecl d env
+addPlanDecl (DData { dataName = n, dataParams = ps, dataCtors = cs, dataVis = vis, dataOrigin = o }) env =
+  let key = TypeKey n o
+  let def = PlanDef key (ownerOf o) ps (visibilityOf vis) (map ctorOfVariant cs)
+  insertDef def env
+addPlanDecl (DNewtype { newtypeName = n, newtypeParams = ps, newtypeCtor = c, newtypeFieldTy = t, newtypePub = pub, newtypeOrigin = o }) env =
+  let key = TypeKey n o
+  let def = PlanDef key (ownerOf o) ps (newtypeVisibility pub) [
+    PlanCtor c c [PlanField None t],
+  ]
+  insertDef def env
+addPlanDecl (DTypeAlias { tyAliasName = n, tyAliasOrigin = o }) (PlanEnv root defs arbs bad aliases) =
+  PlanEnv root defs arbs bad (omInsert (typeTagOf o n) () aliases)
+addPlanDecl d env = addArbitrary d env
+
+visibilityOf : DataVis -> PlanVisibility
+visibilityOf VisPrivate = PlanLocal
+visibilityOf VisPublic = PlanPublicCtors
+visibilityOf VisAbstract = PlanAbstract
+
+newtypeVisibility : Bool -> PlanVisibility
+newtypeVisibility _ = PlanLocal
+
+ownerOf : TyConOrigin -> String
+ownerOf (OriginModule m) = m
+ownerOf _ = ""
+
+ctorOfVariant : Variant -> PlanCtor
+ctorOfVariant (Variant c (ConPos ts)) =
+  PlanCtor c c (map (t => PlanField None t) ts)
+ctorOfVariant (Variant c (ConNamed fs _)) = PlanCtor c c (map namedField fs)
+
+namedField : Field -> PlanField
+namedField (Field n t) = PlanField (Some n) t
+
+addArbitrary : Decl -> PlanEnv -> PlanEnv
+addArbitrary (DAttrib _ d) env = addArbitrary d env
+addArbitrary (DImpl { iface = "Arbitrary", implOrigin = (OriginModule "core"), tys = [carrier] }) env =
+  insertArb (ArbPlan carrier (arbCarrierWord carrier)) env
+addArbitrary _ env = env
+
+arbCarrierWord : Ty -> String
+arbCarrierWord ty = implRouteKeyWord (OriginModule "core") "Arbitrary" [ty] None
+
+insertDef : PlanDef -> PlanEnv -> PlanEnv
+insertDef (def@(PlanDef key _ _ _ _)) (PlanEnv root defs arbs bad aliases) =
+  let word = typeKeyWord key
+  let prior = optionList (omLookup word defs)
+  PlanEnv root (omInsert word (def :: prior) defs) arbs bad aliases
+
+insertArb : ArbPlan -> PlanEnv -> PlanEnv
+insertArb (arb@(ArbPlan carrier _)) (PlanEnv root defs arbs bad aliases) =
+  match headKey carrier
+    Some key =>
+      let word = typeKeyWord key
+      let prior = optionList (omLookup word arbs)
+      PlanEnv root defs (omInsert word (arb :: prior) arbs) bad aliases
+    None => PlanEnv root defs arbs bad aliases
+
+optionList : Option (List a) -> List a
+optionList None = []
+optionList (Some xs) = xs
+
+-- A type is built from references, never recursively expanded.  That keeps
+-- mutually recursive declarations finite in the plan itself.
+planForGo : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
+planForGo _ propName param (ty@(TyVar _)) =
+  Err (PlanError propName param ty PEUnboundTyVar "")
+planForGo _ _ _ (TyCon { tyConName = "Int", tyConOrigin = OriginBuiltin }) =
+  Ok GInt
+planForGo _ _ _ (TyCon { tyConName = "Bool", tyConOrigin = OriginBuiltin }) =
+  Ok GBool
+planForGo _ _ _ (TyCon { tyConName = "Float", tyConOrigin = OriginBuiltin }) =
+  Ok GFloat
+planForGo _ _ _ (TyCon { tyConName = "Char", tyConOrigin = OriginBuiltin }) =
+  Ok GChar
+planForGo _ _ _ (TyCon { tyConName = "String", tyConOrigin = OriginBuiltin }) =
+  Ok GString
+planForGo _ _ _ (TyCon { tyConName = "Unit", tyConOrigin = OriginBuiltin }) =
+  Ok GUnit
+planForGo env propName param (TyApp (TyCon { tyConName = "List", tyConOrigin = o }) t)
+  | builtinOrigin o = map GList (planForGo env propName param t)
+planForGo env propName param (TyApp (TyCon { tyConName = "Array", tyConOrigin = o }) t)
+  | builtinOrigin o = map GArray (planForGo env propName param t)
+planForGo env propName param (TyApp (TyCon { tyConName = "Option", tyConOrigin = o }) t)
+  | builtinOrigin o = map GOption (planForGo env propName param t)
+planForGo env propName param (TyApp (TyApp (TyCon { tyConName = "Result", tyConOrigin = o }) e) a)
+  | builtinOrigin o =
+    map2
+      GResult
+      (planForGo env propName param e)
+      (planForGo env propName param a)
+planForGo env propName param ty
+  | builtinTupleSpine ty =
+    map GTuple (planMany env propName param (planArgs ty))
+planForGo env propName param (TyTuple ts) =
+  map GTuple (planMany env propName param ts)
+planForGo _ propName param (ty@(TyFun _ _)) =
+  Err (PlanError propName param ty PEFunction "")
+planForGo env propName param (TyNamed _ t _) = planForGo env propName param t
+planForGo env propName param (TyQual t _ _) = planForGo env propName param t
+planForGo env propName param (TyConstrained _ t) =
+  planForGo env propName param t
+planForGo env propName param ty = match headKey ty
+  None => Err (PlanError propName param ty PEUnsupportedType "")
+  Some key => planNominal env propName param key (planArgs ty)
+
+builtinOrigin : TyConOrigin -> Bool
+builtinOrigin OriginBuiltin = True
+builtinOrigin (OriginModule "core") = True
+builtinOrigin _ = False
+
+-- Resolved tuples are saturated `__tupleN__` application spines, while a few
+-- raw AST callers still use `TyTuple`. The built-in origin and exact arity
+-- keep a user spelling of the synthetic name from becoming a tuple.
+builtinTupleSpine : Ty -> Bool
+builtinTupleSpine ty = match headKey ty
+  Some (TypeKey "__tuple2__" OriginBuiltin) => listLength (planArgs ty) == 2
+  Some (TypeKey "__tuple3__" OriginBuiltin) => listLength (planArgs ty) == 3
+  Some (TypeKey "__tuple4__" OriginBuiltin) => listLength (planArgs ty) == 4
+  Some (TypeKey "__tuple5__" OriginBuiltin) => listLength (planArgs ty) == 5
+  _ => False
+
+headKey : Ty -> Option TypeKey
+headKey (TyCon { tyConName = n, tyConOrigin = o }) = Some (TypeKey n o)
+headKey (TyApp f _) = headKey f
+headKey _ = None
+
+planArgs : Ty -> List Ty
+planArgs t = planArgsGo [] t
+
+planArgsGo : List Ty -> Ty -> List Ty
+planArgsGo acc (TyApp f a) = planArgsGo (a :: acc) f
+planArgsGo acc _ = acc
+
+planNominal : PlanEnv ->
+  String ->
+  String ->
+  TypeKey ->
+  List Ty ->
+  Result PlanError GenPlan
+planNominal (PlanEnv root defs arbs bad aliases) propName param key args =
+  let carrier = rebuildTy key args
+  match (selectedCustom
+    key
+    carrier
+    (optionList (omLookup (typeKeyWord key) arbs)))
+    Err detail =>
+      Err (PlanError propName param carrier PEUnusableArbitrary detail)
+    Ok (Some custom) => Ok (GCustom custom)
+    Ok None =>
+      match matchingDef key (optionList (omLookup (typeKeyWord key) defs))
+        None if isSome (omLookup (typeKeyWord key) aliases) =>
+          Err (PlanError propName param (rebuildTy key args) PETypeAlias "")
+        None if hasAmbiguousUnresolved
+          key
+          (optionList (omLookup (typeKeyWord key) defs)) =>
+          Err
+            (PlanError
+              propName
+              param
+              (rebuildTy key args)
+              PEAmbiguousNominal
+              "")
+        None =>
+          Err
+            (PlanError
+              propName
+              param
+              (rebuildTy key args)
+              PEOpaqueNominal
+              "no visible data declaration")
+        Some (PlanDef _ owner _ PlanAbstract _) if owner /= root =>
+          Err (PlanError propName param (rebuildTy key args) PEOpaqueNominal "")
+        Some (PlanDef _ owner _ PlanLocal _) if owner /= root =>
+          Err
+            (PlanError
+              propName
+              param
+              (rebuildTy key args)
+              PEInaccessibleConstructors
+              "")
+        Some (PlanDef _ _ _ _ []) =>
+          Err
+            (PlanError
+              propName
+              param
+              (rebuildTy key args)
+              PENoFiniteValue
+              "no constructors")
+        Some (PlanDef _ _ _ _ _) =>
+          map
+            (GNominal key)
+            (planMany (PlanEnv root defs arbs bad aliases) propName param args)
+
+-- A concrete carrier must win over a generic one.  Generic rows are only a
+-- selection hint here: the typed helper binding performs ordinary instance
+-- resolution (including required dictionaries) before the evaluator runs it.
+-- That keeps planner matching identity-aware without duplicating typeclass
+-- entailment or choosing a method by declaration order.
+selectedCustom : TypeKey ->
+  Ty ->
+  List ArbPlan ->
+  Result String (Option CustomPlan)
+selectedCustom key carrier candidates = match exactArbs carrier candidates
+  [] => match matchingArbs carrier candidates
+    [] => Ok None
+    _ => Ok (Some (CustomPlan key carrier (arbCarrierWord carrier)))
+  [_] => Ok (Some (CustomPlan key carrier (arbCarrierWord carrier)))
+  _ => Err "multiple exact Arbitrary instances select this carrier"
+
+exactArbs : Ty -> List ArbPlan -> List ArbPlan
+exactArbs _ [] = []
+exactArbs carrier ((arb@(ArbPlan pattern _)) :: rest)
+  | arbCarrierWord pattern == arbCarrierWord carrier =
+    arb :: exactArbs carrier rest
+  | otherwise = exactArbs carrier rest
+
+matchingArbs : Ty -> List ArbPlan -> List ArbPlan
+matchingArbs _ [] = []
+matchingArbs carrier ((arb@(ArbPlan pattern _)) :: rest) =
+  match matchArbCarrier pattern carrier omEmpty
+    Some _ => arb :: matchingArbs carrier rest
+    None => matchingArbs carrier rest
+
+-- Bind each pattern variable once and compare every concrete head through the
+-- compiler's canonical route word.  This accepts `Tree a` for `Tree Int` and
+-- rejects `Pair a a` for `Pair Int Bool`; it never confuses same-spelled
+-- nominal heads from separate modules.
+matchArbCarrier : Ty -> Ty -> OrdMap Ty -> Option (OrdMap Ty)
+matchArbCarrier (TyVar name) actual bindings = match omLookup name bindings
+  Some bound =>
+    if arbCarrierWord bound == arbCarrierWord actual then
+      Some bindings
+    else
+      None
+  None => Some (omInsert name actual bindings)
+matchArbCarrier (TyApp pf pa) (TyApp af aa) bindings =
+  match matchArbCarrier pf af bindings
+    Some next => matchArbCarrier pa aa next
+    None => None
+matchArbCarrier (TyTuple ps) (TyTuple actuals) bindings =
+  matchArbCarriers ps actuals bindings
+matchArbCarrier pattern actual bindings =
+  if arbCarrierWord pattern == arbCarrierWord actual then
+    Some bindings
+  else
+    None
+
+matchArbCarriers : List Ty -> List Ty -> OrdMap Ty -> Option (OrdMap Ty)
+matchArbCarriers [] [] bindings = Some bindings
+matchArbCarriers (p :: ps) (a :: restActuals) bindings =
+  match matchArbCarrier p a bindings
+    Some next => matchArbCarriers ps restActuals next
+    None => None
+matchArbCarriers _ _ _ = None
+
+matchingDef : TypeKey -> List PlanDef -> Option PlanDef
+matchingDef _ [] = None
+matchingDef key ((d@(PlanDef actual _ _ _ _)) :: rest) =
+  if sameTypeKey key actual then Some d else matchingDef key rest
+
+hasAmbiguousUnresolved : TypeKey -> List PlanDef -> Bool
+hasAmbiguousUnresolved (TypeKey n OriginUnresolved) defs = listLength defs > 1
+hasAmbiguousUnresolved _ _ = False
+
+rebuildTy : TypeKey -> List Ty -> Ty
+rebuildTy (TypeKey n o) args =
+  foldTy TyCon { tyConName = n, tyConLoc = None, tyConOrigin = o } args
+
+foldTy : Ty -> List Ty -> Ty
+foldTy t [] = t
+foldTy t (a :: rest) = foldTy (TyApp t a) rest
+
+planMany : PlanEnv ->
+  String ->
+  String ->
+  List Ty ->
+  Result PlanError (List GenPlan)
+planMany _ _ _ [] = Ok []
+planMany env propName param (t :: rest) = match (
+  planForGo env propName param t,
+  planMany env propName param rest,
+)
+  (Ok p, Ok ps) => Ok (p :: ps)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+export
+planDef : PlanEnv -> TypeKey -> Result PlanError PlanDef
+planDef (PlanEnv _ defs _ _ _) key =
+  match matchingDef key (optionList (omLookup (typeKeyWord key) defs))
+    Some d => Ok d
+    None => Err (PlanError "" "" (rebuildTy key []) PEAmbiguousNominal "")
+
+-- Instantiate a selected constructor's fields with a nominal plan's arguments.
+-- Field names remain attached, so record and positional constructors are not
+-- conflated by a renderer.
+export
+instantiateCtor : PlanEnv ->
+  GenPlan ->
+  PlanCtor ->
+  Result PlanError (List (Option String, GenPlan))
+instantiateCtor env (GNominal key args) (PlanCtor _ _ fields) =
+  match planDef env key
+    Ok (PlanDef _ _ params _ _) => instantiateFields env params args fields
+    Err e => Err e
+instantiateCtor _ p _ =
+  Err
+    (PlanError
+      ""
+      ""
+      (TyVar "")
+      PEUnsupportedType
+      ("not nominal: " ++ planKind p))
+
+-- A property can reach a custom carrier through fields of a structural nominal
+-- plan.  Walk those instantiated fields as well as explicit parameter plans,
+-- stopping at the full carrier identity so recursive declarations remain
+-- finite.  The identity includes every applied argument and nominal origin;
+-- it is the same route word used for the typed helper registry.
+export
+customPlansReachable : PlanEnv -> List GenPlan -> List CustomPlan
+customPlansReachable env plans =
+  reverseCustomPlans (customPlansGo env plans omEmpty [])
+
+reverseCustomPlans : List CustomPlan -> List CustomPlan
+reverseCustomPlans plans = reverseCustomPlansGo plans []
+
+reverseCustomPlansGo : List CustomPlan -> List CustomPlan -> List CustomPlan
+reverseCustomPlansGo [] acc = acc
+reverseCustomPlansGo (plan :: rest) acc =
+  reverseCustomPlansGo rest (plan :: acc)
+
+customPlansGo : PlanEnv ->
+  List GenPlan ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  List CustomPlan
+customPlansGo _ [] _ found = found
+customPlansGo env (plan :: rest) seen found =
+  let (seen2, found2) = customPlansIn env 0 plan seen found
+  customPlansGo env rest seen2 found2
+
+customPlansIn : PlanEnv ->
+  Int ->
+  GenPlan ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  (OrdMap Unit, List CustomPlan)
+customPlansIn env depth plan seen found =
+  let word = arbCarrierWord (planTy plan)
+  if omHasKey word seen then
+    (seen, found)
+  else
+    let visited = omInsert word () seen
+    match plan
+      GCustom custom => (visited, custom :: found)
+      GList item => customPlansIn env depth item visited found
+      GArray item => customPlansIn env depth item visited found
+      GOption item => customPlansIn env depth item visited found
+      GResult err ok =>
+        let (afterErr, foundErr) = customPlansIn env depth err visited found
+        customPlansIn env depth ok afterErr foundErr
+      GTuple items => customPlansState env depth items visited found
+      nominal@(GNominal key _) => match planDef env key
+        Ok (PlanDef _ _ _ _ ctors) =>
+          customPlansCtors
+            env
+            (depth + 1)
+            nominal
+            ctors
+            (ctorWeights env nominal depth)
+            visited
+            found
+        Err _ => (visited, found)
+      _ => (visited, found)
+
+customPlansState : PlanEnv ->
+  Int ->
+  List GenPlan ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  (OrdMap Unit, List CustomPlan)
+customPlansState _ _ [] seen found = (seen, found)
+customPlansState env depth (plan :: rest) seen found =
+  let (seen2, found2) = customPlansIn env depth plan seen found
+  customPlansState env depth rest seen2 found2
+
+customPlansCtors : PlanEnv ->
+  Int ->
+  GenPlan ->
+  List PlanCtor ->
+  List Int ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  (OrdMap Unit, List CustomPlan)
+customPlansCtors _ _ _ [] _ seen found = (seen, found)
+customPlansCtors _ _ _ _ [] seen found = (seen, found)
+customPlansCtors env depth nominal (ctor :: rest) (weight :: weights) seen found =
+  if weight <= 0 then
+    customPlansCtors env depth nominal rest weights seen found
+  else match instantiateCtor env nominal ctor
+    Ok fields =>
+      let (seen2, found2) = customPlansFields env depth fields seen found
+      customPlansCtors env depth nominal rest weights seen2 found2
+    Err _ => customPlansCtors env depth nominal rest weights seen found
+
+customPlansFields : PlanEnv ->
+  Int ->
+  List (Option String, GenPlan) ->
+  OrdMap Unit ->
+  List CustomPlan ->
+  (OrdMap Unit, List CustomPlan)
+customPlansFields _ _ [] seen found = (seen, found)
+customPlansFields env depth ((_, plan) :: rest) seen found =
+  let (seen2, found2) = customPlansIn env depth plan seen found
+  customPlansFields env depth rest seen2 found2
+
+planKind : GenPlan -> String
+planKind GInt = "Int"
+planKind GBool = "Bool"
+planKind GFloat = "Float"
+planKind GChar = "Char"
+planKind GString = "String"
+planKind GUnit = "Unit"
+planKind _ = "compound"
+
+instantiateFields : PlanEnv ->
+  List String ->
+  List GenPlan ->
+  List PlanField ->
+  Result PlanError (List (Option String, GenPlan))
+instantiateFields _ _ _ [] = Ok []
+instantiateFields env params args ((PlanField name ty) :: rest) = match (
+  planTyWithPlans env "" (zipL params args) ty,
+  instantiateFields env params args rest,
+)
+  (Ok p, Ok ps) => Ok ((name, p) :: ps)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+planTyWithPlans : PlanEnv ->
+  String ->
+  List (String, GenPlan) ->
+  Ty ->
+  Result PlanError GenPlan
+planTyWithPlans _ param subst (TyVar n) = match lookupAssoc n subst
+  Some p => Ok p
+  None => Err (PlanError "" param (TyVar n) PEUnboundTyVar "")
+planTyWithPlans env param subst (TyApp a b) =
+  planForGo env "" param (substTy subst (TyApp a b))
+planTyWithPlans env param subst (TyTuple ts) =
+  map GTuple (planManySubst env param subst ts)
+planTyWithPlans env param subst t = planForGo env "" param (substTy subst t)
+
+planManySubst : PlanEnv ->
+  String ->
+  List (String, GenPlan) ->
+  List Ty ->
+  Result PlanError (List GenPlan)
+planManySubst _ _ _ [] = Ok []
+planManySubst env param subst (t :: rest) = match (
+  planTyWithPlans env param subst t,
+  planManySubst env param subst rest,
+)
+  (Ok p, Ok ps) => Ok (p :: ps)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+substTy : List (String, GenPlan) -> Ty -> Ty
+substTy subst t = substTyRaw (map planSubstPair subst) t
+
+planSubstPair : (String, GenPlan) -> (String, Ty)
+planSubstPair (n, p) = (n, planTy p)
+
+-- This is also the evaluator adapter's plain type substitution.  Keeping it
+-- here prevents a second, almost-identical recursive implementation from
+-- silently missing a new Ty constructor.
+export
+substTyRaw : List (String, Ty) -> Ty -> Ty
+substTyRaw subst (TyVar n) = match lookupAssoc n subst
+  Some t => t
+  None => TyVar n
+substTyRaw subst (TyApp a b) = TyApp (substTyRaw subst a) (substTyRaw subst b)
+substTyRaw subst (TyTuple ts) = TyTuple (map (substTyRaw subst) ts)
+substTyRaw subst (TyFun a b) = TyFun (substTyRaw subst a) (substTyRaw subst b)
+substTyRaw subst (TyEffect es tail t) = TyEffect es tail (substTyRaw subst t)
+substTyRaw subst (TyNamed n t dom) = TyNamed n (substTyRaw subst t) dom
+substTyRaw subst (TyQual t qs loc) = TyQual (substTyRaw subst t) qs loc
+substTyRaw subst (TyConstrained cs t) = TyConstrained cs (substTyRaw subst t)
+substTyRaw _ t = t
+
+export
+planTy : GenPlan -> Ty
+planTy GInt = builtinTy "Int"
+planTy GBool = builtinTy "Bool"
+planTy GFloat = builtinTy "Float"
+planTy GChar = builtinTy "Char"
+planTy GString = builtinTy "String"
+planTy GUnit = builtinTy "Unit"
+planTy (GList p) = TyApp (builtinTy "List") (planTy p)
+planTy (GArray p) = TyApp (builtinTy "Array") (planTy p)
+planTy (GOption p) = TyApp (builtinTy "Option") (planTy p)
+planTy (GResult e a) = TyApp (TyApp (builtinTy "Result") (planTy e)) (planTy a)
+planTy (GTuple ps) = TyTuple (map planTy ps)
+planTy (GNominal (TypeKey n o) ps) =
+  foldTy
+    TyCon { tyConName = n, tyConLoc = None, tyConOrigin = o }
+    (map planTy ps)
+planTy (GCustom (CustomPlan _ carrier _)) = carrier
+
+builtinTy : String -> Ty
+builtinTy n =
+  TyCon { tyConName = n, tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+-- Shared generation policy constants.  Renderers consume these values, not a
+-- private smaller domain.
+export
+intMin : Int
+intMin = -1000
+export
+intMax : Int
+intMax = 1000
+export
+charMin : Int
+charMin = 32
+export
+charMax : Int
+charMax = 126
+export
+stringMaxLength : Int
+stringMaxLength = 10
+export
+listLenMax : Int
+listLenMax = 7
+export
+recWeight0 : Int
+recWeight0 = 6
+export
+maxGenDepth : Int
+maxGenDepth = 24
+
+-- The adapters receive these decisions as data.  A plan is already instantiated
+-- here, so generic arguments and mutually-recursive declarations cannot drift
+-- between the evaluator and native renderers.
+export
+ctorWeights : PlanEnv -> GenPlan -> Int -> List Int
+ctorWeights env (nominal@(GNominal _ _)) depth = match nominalCtors env nominal
+  Ok (PlanDef _ _ _ _ ctors) =>
+    if depth >= maxGenDepth then
+      map (boundCtorWeight env nominal) ctors
+    else
+      map (softCtorWeight env nominal depth) ctors
+  Err _ => []
+ctorWeights _ _ _ = []
+
+nominalCtors : PlanEnv -> GenPlan -> Result PlanError PlanDef
+nominalCtors env (GNominal key _) = planDef env key
+nominalCtors _ plan =
+  Err (PlanError "" "" (planTy plan) PEUnsupportedType "not a nominal plan")
+
+softCtorWeight : PlanEnv -> GenPlan -> Int -> PlanCtor -> Int
+softCtorWeight env nominal depth ctor =
+  if not (ctorHasFiniteFields env nominal ctor) then
+    0
+  else if ctorCanDiverge env nominal ctor then
+    max 1 (recWeight0 - depth)
+  else
+    recWeight0
+
+ctorHasFiniteFields : PlanEnv -> GenPlan -> PlanCtor -> Bool
+ctorHasFiniteFields env nominal ctor = match instantiateCtor env nominal ctor
+  Ok fields => allPlansFinite env (fieldPlansOnly fields)
+  Err _ => False
+
+ctorCanDiverge : PlanEnv -> GenPlan -> PlanCtor -> Bool
+ctorCanDiverge env nominal ctor = match instantiateCtor env nominal ctor
+  Ok fields => anyPlanDiverges env (fieldPlansOnly fields)
+  Err _ => False
+
+-- At the bound every chosen nominal constructor must lower its finite-height
+-- witness. Container plans contribute their empty/none witness, and their own
+-- branch weights below prevent that witness from being bypassed at runtime.
+boundCtorWeight : PlanEnv -> GenPlan -> PlanCtor -> Int
+boundCtorWeight env nominal ctor =
+  if ctorLowersFiniteHeight env nominal ctor then 1 else 0
+
+ctorLowersFiniteHeight : PlanEnv -> GenPlan -> PlanCtor -> Bool
+ctorLowersFiniteHeight env nominal ctor = match (
+  planFiniteHeight env nominal [],
+  instantiateCtor env nominal ctor,
+)
+  (Some height, Ok fields) => allPlansBelow env height (fieldPlansOnly fields)
+  _ => False
+
+planHasFiniteValue : PlanEnv -> GenPlan -> Bool
+planHasFiniteValue env plan = abstractFinite env (finiteTruth env plan) plan
+
+-- Finite search is bounded by the reachable abstract carrier space. A nominal
+-- carrier consists of its declaration identity and one finite/non-finite bit
+-- per instantiated argument. A shortest finite constructor path cannot repeat
+-- one of those states. Concrete argument heights are added separately, so
+-- `Box (Box (Box Int))` keeps its three real wrapper layers while `Rotate`
+-- may change parameter positions until a container supplies an empty value.
+planFiniteHeight : PlanEnv -> GenPlan -> List TypeKey -> Option Int
+planFiniteHeight env plan _ =
+  let truth = finiteTruth env plan
+  if abstractFinite env truth plan then
+    findFiniteHeight env plan 0 (finiteHeightLimit env truth plan)
+  else
+    None
+
+finiteHeightLimit : PlanEnv -> OrdMap Unit -> GenPlan -> Int
+finiteHeightLimit env truth (nominal@(GNominal _ args)) =
+  max
+    1
+    (omSize (reachableStates env truth nominal) + greatestWitnessBound env args)
+finiteHeightLimit _ _ GInt = 0
+finiteHeightLimit _ _ GBool = 0
+finiteHeightLimit _ _ GFloat = 0
+finiteHeightLimit _ _ GChar = 0
+finiteHeightLimit _ _ GString = 0
+finiteHeightLimit _ _ GUnit = 0
+finiteHeightLimit _ _ (GList _) = 0
+finiteHeightLimit _ _ (GArray _) = 0
+finiteHeightLimit _ _ (GOption _) = 0
+finiteHeightLimit env _ (GResult err ok) =
+  max (witnessBound env err) (witnessBound env ok)
+finiteHeightLimit env _ (GTuple plans) = greatestWitnessBound env plans
+finiteHeightLimit _ _ (GCustom _) = 0
+
+-- A truth map holds the least fixed point of nominal finite inhabitants. A
+-- state key contains a nominal identity and the already-classified bits of its
+-- arguments. Classifying a nominal only looks up that key; it never unfolds a
+-- declaration, so mutually applied empty cycles stay at bottom.
+finiteTruth : PlanEnv -> GenPlan -> OrdMap Unit
+finiteTruth env root = finiteTruthLoop env root omEmpty
+
+finiteTruthLoop : PlanEnv -> GenPlan -> OrdMap Unit -> OrdMap Unit
+finiteTruthLoop env root truth =
+  let states = reachableStates env truth root
+  let next = addFiniteStates env truth states truth
+  if omSize next == omSize truth then next else finiteTruthLoop env root next
+
+addFiniteStates : PlanEnv ->
+  OrdMap Unit ->
+  OrdMap GenPlan ->
+  OrdMap Unit ->
+  OrdMap Unit
+addFiniteStates env truth states result =
+  addFiniteWords env truth (omKeys states) states result
+
+addFiniteWords : PlanEnv ->
+  OrdMap Unit ->
+  List String ->
+  OrdMap GenPlan ->
+  OrdMap Unit ->
+  OrdMap Unit
+addFiniteWords _ _ [] _ result = result
+addFiniteWords env truth (word :: rest) states result =
+  let next = match omLookup word states
+    Some state =>
+      if stateFiniteUnder env truth state then
+        omInsert word () result
+      else
+        result
+    None => result
+  addFiniteWords env truth rest states next
+
+stateFiniteUnder : PlanEnv -> OrdMap Unit -> GenPlan -> Bool
+stateFiniteUnder env truth (nominal@(GNominal key _)) = match planDef env key
+  Ok (PlanDef _ _ _ _ ctors) => anyCtorFiniteUnder env truth nominal ctors
+  Err _ => False
+stateFiniteUnder _ _ _ = False
+
+anyCtorFiniteUnder : PlanEnv -> OrdMap Unit -> GenPlan -> List PlanCtor -> Bool
+anyCtorFiniteUnder _ _ _ [] = False
+anyCtorFiniteUnder env truth nominal (ctor :: rest) =
+  match instantiateCtor env nominal ctor
+    Ok fields =>
+      allFiniteUnder env truth (fieldPlansOnly fields)
+        || anyCtorFiniteUnder env truth nominal rest
+    Err _ => anyCtorFiniteUnder env truth nominal rest
+
+allFiniteUnder : PlanEnv -> OrdMap Unit -> List GenPlan -> Bool
+allFiniteUnder _ _ [] = True
+allFiniteUnder env truth (plan :: rest) =
+  abstractFinite env truth plan && allFiniteUnder env truth rest
+
+abstractFinite : PlanEnv -> OrdMap Unit -> GenPlan -> Bool
+abstractFinite _ _ GInt = True
+abstractFinite _ _ GBool = True
+abstractFinite _ _ GFloat = True
+abstractFinite _ _ GChar = True
+abstractFinite _ _ GString = True
+abstractFinite _ _ GUnit = True
+abstractFinite _ _ (GList _) = True
+abstractFinite _ _ (GArray _) = True
+abstractFinite _ _ (GOption _) = True
+abstractFinite env truth (GResult err ok) =
+  abstractFinite env truth err || abstractFinite env truth ok
+abstractFinite env truth (GTuple plans) = allFiniteUnder env truth plans
+abstractFinite _ _ (GCustom _) = True
+abstractFinite env truth (GNominal key args) =
+  omHasKey (stateWord env truth key args) truth
+
+reachableStates : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap GenPlan
+reachableStates env truth root =
+  discoverStates env truth [root] (seedArgumentStates env truth root omEmpty)
+
+seedArgumentStates : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  OrdMap GenPlan ->
+  OrdMap GenPlan
+seedArgumentStates env truth (GNominal _ args) states =
+  seedPlans env truth args states
+seedArgumentStates _ _ _ states = states
+
+seedPlans : PlanEnv ->
+  OrdMap Unit ->
+  List GenPlan ->
+  OrdMap GenPlan ->
+  OrdMap GenPlan
+seedPlans _ _ [] states = states
+seedPlans env truth (plan :: rest) states =
+  seedPlans env truth rest (seedPlan env truth plan states)
+
+seedPlan : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap GenPlan -> OrdMap GenPlan
+seedPlan env truth (GList plan) states = seedPlan env truth plan states
+seedPlan env truth (GArray plan) states = seedPlan env truth plan states
+seedPlan env truth (GOption plan) states = seedPlan env truth plan states
+seedPlan env truth (GResult err ok) states =
+  seedPlan env truth ok (seedPlan env truth err states)
+seedPlan env truth (GTuple plans) states = seedPlans env truth plans states
+seedPlan env truth (nominal@(GNominal key args)) states =
+  seedPlans
+    env
+    truth
+    args
+    (omInsert (stateWord env truth key args) nominal states)
+seedPlan _ _ _ states = states
+
+discoverStates : PlanEnv ->
+  OrdMap Unit ->
+  List GenPlan ->
+  OrdMap GenPlan ->
+  OrdMap GenPlan
+discoverStates _ _ [] states = states
+discoverStates env truth (plan :: rest) states = match plan
+  GList child => discoverStates env truth (child :: rest) states
+  GArray child => discoverStates env truth (child :: rest) states
+  GOption child => discoverStates env truth (child :: rest) states
+  GResult err ok =>
+    discoverStates env truth rest (discoverStates env truth [err, ok] states)
+  GTuple plans =>
+    discoverStates env truth rest (discoverStates env truth plans states)
+  nominal@(GNominal key args) =>
+    let word = stateWord env truth key args
+    if omHasKey word states then
+      discoverStates env truth rest (seedPlans env truth args states)
+    else match planDef env key
+      Ok (PlanDef _ _ _ _ ctors) =>
+        discoverStates
+          env
+          truth
+          rest
+          (discoverCtorFields
+            env
+            truth
+            nominal
+            ctors
+            (omInsert word nominal states))
+      Err _ => discoverStates env truth rest (omInsert word nominal states)
+  _ => discoverStates env truth rest states
+
+discoverCtorFields : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  List PlanCtor ->
+  OrdMap GenPlan ->
+  OrdMap GenPlan
+discoverCtorFields _ _ _ [] states = states
+discoverCtorFields env truth nominal (ctor :: rest) states =
+  let afterCtor = match instantiateCtor env nominal ctor
+    Ok fields => discoverStates env truth (fieldPlansOnly fields) states
+    Err _ => states
+  discoverCtorFields env truth nominal rest afterCtor
+
+stateWord : PlanEnv -> OrdMap Unit -> TypeKey -> List GenPlan -> String
+stateWord env truth key args = "\{typeKeyWord key}#\{stateBits env truth args}"
+
+stateBits : PlanEnv -> OrdMap Unit -> List GenPlan -> String
+stateBits _ _ [] = ""
+stateBits env truth (plan :: rest) =
+  (if abstractFinite env truth plan then "1" else "0")
+    ++ stateBits env truth rest
+
+greatestWitnessBound : PlanEnv -> List GenPlan -> Int
+greatestWitnessBound _ [] = 0
+greatestWitnessBound env (plan :: rest) =
+  max (witnessBound env plan) (greatestWitnessBound env rest)
+
+witnessBound : PlanEnv -> GenPlan -> Int
+witnessBound _ GInt = 0
+witnessBound _ GBool = 0
+witnessBound _ GFloat = 0
+witnessBound _ GChar = 0
+witnessBound _ GString = 0
+witnessBound _ GUnit = 0
+witnessBound _ (GList _) = 0
+witnessBound _ (GArray _) = 0
+witnessBound _ (GOption _) = 0
+witnessBound env (GResult err ok) =
+  max (witnessBound env err) (witnessBound env ok)
+witnessBound env (GTuple plans) = greatestWitnessBound env plans
+witnessBound env (nominal@(GNominal _ args)) =
+  omSize (reachableStates env (finiteTruth env nominal) nominal)
+    + greatestWitnessBound env args
+witnessBound _ (GCustom _) = 0
+
+findFiniteHeight : PlanEnv -> GenPlan -> Int -> Int -> Option Int
+findFiniteHeight _ _ height limit
+  | height > limit = None
+findFiniteHeight env plan height limit =
+  if planFitsHeight env plan height then
+    Some height
+  else
+    findFiniteHeight env plan (height + 1) limit
+
+planFitsHeight : PlanEnv -> GenPlan -> Int -> Bool
+planFitsHeight _ _ height
+  | height < 0 = False
+planFitsHeight _ GInt _ = True
+planFitsHeight _ GBool _ = True
+planFitsHeight _ GFloat _ = True
+planFitsHeight _ GChar _ = True
+planFitsHeight _ GString _ = True
+planFitsHeight _ GUnit _ = True
+planFitsHeight _ (GList _) _ = True
+planFitsHeight _ (GArray _) _ = True
+planFitsHeight _ (GOption _) _ = True
+planFitsHeight env (GResult err ok) height =
+  planFitsHeight env err height || planFitsHeight env ok height
+planFitsHeight env (GTuple plans) height = allPlansFitHeight env plans height
+planFitsHeight _ (GCustom _) _ = True
+planFitsHeight env (nominal@(GNominal key _)) height =
+  if height <= 0 then
+    False
+  else match planDef env key
+    Ok (PlanDef _ _ _ _ ctors) =>
+      anyCtorFitsHeight env nominal ctors (height - 1)
+    Err _ => False
+
+anyCtorFitsHeight : PlanEnv -> GenPlan -> List PlanCtor -> Int -> Bool
+anyCtorFitsHeight _ _ [] _ = False
+anyCtorFitsHeight env nominal (ctor :: rest) height =
+  match instantiateCtor env nominal ctor
+    Ok fields =>
+      allPlansFitHeight env (fieldPlansOnly fields) height
+        || anyCtorFitsHeight env nominal rest height
+    Err _ => anyCtorFitsHeight env nominal rest height
+
+allPlansFitHeight : PlanEnv -> List GenPlan -> Int -> Bool
+allPlansFitHeight _ [] _ = True
+allPlansFitHeight env (plan :: rest) height =
+  planFitsHeight env plan height && allPlansFitHeight env rest height
+
+allPlansFinite : PlanEnv -> List GenPlan -> Bool
+allPlansFinite _ [] = True
+allPlansFinite env (plan :: rest) =
+  planHasFiniteValue env plan && allPlansFinite env rest
+
+fieldPlansOnly : List (Option String, GenPlan) -> List GenPlan
+fieldPlansOnly [] = []
+fieldPlansOnly ((_, plan) :: rest) = plan :: fieldPlansOnly rest
+
+allPlansBelow : PlanEnv -> Int -> List GenPlan -> Bool
+allPlansBelow _ _ [] = True
+allPlansBelow env height (plan :: rest) = match planFiniteHeight env plan []
+  Some planHeight => planHeight < height && allPlansBelow env height rest
+  None => False
+
+export
+planFor : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
+planFor env propName param ty = match planForGo env propName param ty
+  Ok plan =>
+    match validateReachableFields env (finiteTruth env plan) plan omEmpty
+      Err (PlanError _ _ badTy reason detail) =>
+        Err (PlanError propName param badTy reason detail)
+      Ok _ =>
+        if planHasFiniteValue env plan then
+          Ok plan
+        else
+          Err
+            (PlanError
+              propName
+              param
+              ty
+              PENoFiniteValue
+              "no constructor path reaches finite values")
+  Err e => Err e
+
+-- A property may have one finite constructor while another reachable
+-- constructor contains a function or another unsupported field. The selected
+-- constructor must never turn that planning failure into an engine panic, so
+-- check every reachable structural field before handing the plan to a runner.
+-- The carrier uses finite/non-finite argument states; it terminates for
+-- nonregular recursion while retaining the instantiated generic distinction.
+validateReachableFields : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  OrdMap Unit ->
+  Result PlanError Unit
+validateReachableFields _ _ GInt _ = Ok ()
+validateReachableFields _ _ GBool _ = Ok ()
+validateReachableFields _ _ GFloat _ = Ok ()
+validateReachableFields _ _ GChar _ = Ok ()
+validateReachableFields _ _ GString _ = Ok ()
+validateReachableFields _ _ GUnit _ = Ok ()
+validateReachableFields env truth (GList plan) seen =
+  validateReachableFields env truth plan seen
+validateReachableFields env truth (GArray plan) seen =
+  validateReachableFields env truth plan seen
+validateReachableFields env truth (GOption plan) seen =
+  validateReachableFields env truth plan seen
+validateReachableFields env truth (GResult err ok) seen = match (
+  validateReachableFields env truth err seen,
+  validateReachableFields env truth ok seen,
+)
+  (Ok _, Ok _) => Ok ()
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+validateReachableFields env truth (GTuple plans) seen =
+  validateReachablePlans env truth plans seen
+validateReachableFields _ _ (GCustom _) _ = Ok ()
+validateReachableFields env truth (nominal@(GNominal key args)) seen =
+  let word = stateWord env truth key args
+  if omHasKey word seen then
+    Ok ()
+  else match planDef env key
+    Ok (PlanDef _ _ _ _ ctors) =>
+      validateReachableCtors env truth nominal ctors (omInsert word () seen)
+    Err e => Err e
+
+validateReachablePlans : PlanEnv ->
+  OrdMap Unit ->
+  List GenPlan ->
+  OrdMap Unit ->
+  Result PlanError Unit
+validateReachablePlans _ _ [] _ = Ok ()
+validateReachablePlans env truth (plan :: rest) seen = match (
+  validateReachableFields env truth plan seen,
+  validateReachablePlans env truth rest seen,
+)
+  (Ok _, Ok _) => Ok ()
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+validateReachableCtors : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  List PlanCtor ->
+  OrdMap Unit ->
+  Result PlanError Unit
+validateReachableCtors _ _ _ [] _ = Ok ()
+validateReachableCtors env truth nominal (ctor :: rest) seen = match (
+  instantiateCtor env nominal ctor,
+  validateReachableCtors env truth nominal rest seen,
+)
+  (Ok fields, Ok _) =>
+    validateReachablePlans env truth (fieldPlansOnly fields) seen
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+export
+listLengthBound : PlanEnv -> Int -> GenPlan -> Int
+listLengthBound env depth plan =
+  if not (planHasFiniteValue env plan) then
+    0
+  else if depth >= maxGenDepth && planCanDiverge env plan then
+    0
+  else
+    listLenMax
+
+-- The empty/none alternatives are part of the same depth policy. A container
+-- may still expose a non-recursive payload at the bound, but it cannot enter a
+-- recursive plan through its non-empty branch.
+export
+optionWeights : PlanEnv -> Int -> GenPlan -> List Int
+optionWeights env depth plan =
+  if not (planHasFiniteValue env plan) then
+    [1, 0]
+  else if depth >= maxGenDepth && planCanDiverge env plan then
+    [1, 0]
+  else
+    [1, 1]
+
+export
+resultWeights : PlanEnv -> Int -> GenPlan -> GenPlan -> List Int
+resultWeights env depth err ok =
+  if depth >= maxGenDepth then
+    [boundPlanWeight env err, boundPlanWeight env ok]
+  else
+    [finitePlanWeight env err, finitePlanWeight env ok]
+
+finitePlanWeight : PlanEnv -> GenPlan -> Int
+finitePlanWeight env plan = if planHasFiniteValue env plan then 1 else 0
+
+boundPlanWeight : PlanEnv -> GenPlan -> Int
+boundPlanWeight env plan = if planCanFinishAtBound env plan then 1 else 0
+
+planCanFinishAtBound : PlanEnv -> GenPlan -> Bool
+planCanFinishAtBound _ GInt = True
+planCanFinishAtBound _ GBool = True
+planCanFinishAtBound _ GFloat = True
+planCanFinishAtBound _ GChar = True
+planCanFinishAtBound _ GString = True
+planCanFinishAtBound _ GUnit = True
+planCanFinishAtBound _ (GList _) = True
+planCanFinishAtBound _ (GArray _) = True
+planCanFinishAtBound _ (GOption _) = True
+planCanFinishAtBound env (GResult err ok) =
+  planCanFinishAtBound env err || planCanFinishAtBound env ok
+planCanFinishAtBound env (GTuple plans) = allPlansFinishAtBound env plans
+planCanFinishAtBound _ (GCustom _) = True
+planCanFinishAtBound env (nominal@(GNominal key _)) = match planDef env key
+  Ok (PlanDef _ _ _ _ ctors) => anyBoundCtor env nominal ctors
+  Err _ => False
+
+anyBoundCtor : PlanEnv -> GenPlan -> List PlanCtor -> Bool
+anyBoundCtor _ _ [] = False
+anyBoundCtor env nominal (ctor :: rest) =
+  ctorLowersFiniteHeight env nominal ctor || anyBoundCtor env nominal rest
+
+allPlansFinishAtBound : PlanEnv -> List GenPlan -> Bool
+allPlansFinishAtBound _ [] = True
+allPlansFinishAtBound env (plan :: rest) =
+  planCanFinishAtBound env plan && allPlansFinishAtBound env rest
+
+export
+planCanDiverge : PlanEnv -> GenPlan -> Bool
+planCanDiverge _ GInt = False
+planCanDiverge _ GBool = False
+planCanDiverge _ GFloat = False
+planCanDiverge _ GChar = False
+planCanDiverge _ GString = False
+planCanDiverge _ GUnit = False
+planCanDiverge env (GList p) = planCanDiverge env p
+planCanDiverge env (GArray p) = planCanDiverge env p
+planCanDiverge env (GOption p) = planCanDiverge env p
+planCanDiverge env (GResult a b) = planCanDiverge env a || planCanDiverge env b
+planCanDiverge env (GTuple ps) = anyPlanDiverges env ps
+planCanDiverge env (nominal@(GNominal _ _)) =
+  planCanDivergeNominal env (finiteTruth env nominal) nominal omEmpty
+planCanDiverge _ (GCustom _) = False
+
+anyPlanDiverges : PlanEnv -> List GenPlan -> Bool
+anyPlanDiverges _ [] = False
+anyPlanDiverges env (p :: ps) = planCanDiverge env p || anyPlanDiverges env ps
+
+planCanDivergeNominal : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap Unit -> Bool
+planCanDivergeNominal env truth (nominal@(GNominal key args)) seen =
+  let word = stateWord env truth key args
+  if omHasKey word seen then
+    True
+  else match planDef env key
+    Ok (PlanDef _ _ _ _ ctors) =>
+      anyCtorPlanDiverges env truth nominal ctors (omInsert word () seen)
+    Err _ => False
+planCanDivergeNominal _ _ _ _ = False
+
+anyCtorPlanDiverges : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  List PlanCtor ->
+  OrdMap Unit ->
+  Bool
+anyCtorPlanDiverges _ _ _ [] _ = False
+anyCtorPlanDiverges env truth nominal (ctor :: rest) seen =
+  ctorPlanDiverges env truth nominal ctor seen
+    || anyCtorPlanDiverges env truth nominal rest seen
+
+ctorPlanDiverges : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  PlanCtor ->
+  OrdMap Unit ->
+  Bool
+ctorPlanDiverges env truth nominal ctor seen =
+  match instantiateCtor env nominal ctor
+    Ok fields => anyPlansDivergeSeen env truth (fieldPlansOnly fields) seen
+    Err _ => False
+
+anyPlansDivergeSeen : PlanEnv ->
+  OrdMap Unit ->
+  List GenPlan ->
+  OrdMap Unit ->
+  Bool
+anyPlansDivergeSeen _ _ [] _ = False
+anyPlansDivergeSeen env truth (plan :: rest) seen =
+  planDivergesSeen env truth plan seen
+    || anyPlansDivergeSeen env truth rest seen
+
+planDivergesSeen : PlanEnv -> OrdMap Unit -> GenPlan -> OrdMap Unit -> Bool
+planDivergesSeen _ _ GInt _ = False
+planDivergesSeen _ _ GBool _ = False
+planDivergesSeen _ _ GFloat _ = False
+planDivergesSeen _ _ GChar _ = False
+planDivergesSeen _ _ GString _ = False
+planDivergesSeen _ _ GUnit _ = False
+planDivergesSeen env truth (GList plan) seen =
+  planDivergesSeen env truth plan seen
+planDivergesSeen env truth (GArray plan) seen =
+  planDivergesSeen env truth plan seen
+planDivergesSeen env truth (GOption plan) seen =
+  planDivergesSeen env truth plan seen
+planDivergesSeen env truth (GResult err ok) seen =
+  planDivergesSeen env truth err seen || planDivergesSeen env truth ok seen
+planDivergesSeen env truth (GTuple plans) seen =
+  anyPlansDivergeSeen env truth plans seen
+planDivergesSeen env truth (nominal@(GNominal _ _)) seen =
+  planCanDivergeNominal env truth nominal seen
+planDivergesSeen _ _ (GCustom _) _ = False
+
+-- Structural shrink action ordering is shared as data. Both adapters consume
+-- these actions in order; value representation and emitted syntax never pick
+-- an independent candidate family.
+public export data ShrinkAction =
+  | DeleteElements
+  | ShrinkChildren
+  | ReplaceEarlierNullary
+
+export
+shrinkActions : GenPlan -> List ShrinkAction
+shrinkActions (GList _) = [DeleteElements, ShrinkChildren]
+shrinkActions (GArray _) = [DeleteElements, ShrinkChildren]
+shrinkActions (GTuple _) = [ShrinkChildren]
+shrinkActions (GOption _) = [ReplaceEarlierNullary, ShrinkChildren]
+shrinkActions (GResult _ _) = [ShrinkChildren]
+shrinkActions (GNominal _ _) = [ReplaceEarlierNullary, ShrinkChildren]
+shrinkActions _ = []
+
+-- Integer candidates need source-level rendering natively, so their order is
+-- a separate shared policy.  The adapters map the same three steps to their
+-- own representation; toward-zero is deliberately last, after zero and half.
+public export data IntShrinkStep = IntToZero | IntHalf | IntTowardZero
+
+export
+intShrinkSteps : List IntShrinkStep
+intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]

@@ -6,34 +6,61 @@
 -- max_tests draws.  On the first failing draw, greedily shrink the
 -- counterexample and report it.
 --
--- Generation draws from this module's own private LCG (`rngNextLocal`), seeded
--- by `--seed`/`seedPropRng` and isolated from the program under test — it does
+-- Generation draws from the shared structural RNG policy, seeded by
+-- `--seed`/`seedPropRng` and isolated from the program under test — it does
 -- NOT go through eval.mdk's `randomInt`/`randomBool` externs, which use a
 -- separate SplitMix64 generator for the program's own `random*` calls.  A
--- PASSING prop's output (`OK (100 tests)`) is RNG-independent, so it matches
--- `medaka test`.  A FAILING prop's shrunk counterexample is RNG-dependent and
--- diverges across all three runners — see the report in
--- test/diff_compiler_fmt_test.mdk's `testGoldenFailure`.
+-- Structural draws and structural shrink candidates use the same policy as the
+-- native property probe. Custom Arbitrary methods remain program code and may
+-- consume their own program RNG state.
 
 import frontend.ast.{
   Decl(..),
   Expr,
   PropParam,
-  ImplMethod(..),
   Ty(..),
-  TyConOrigin(..),
-  sameTyConHead,
-  Variant(..),
-  Field(..),
-  ConPayload(..),
 }
-import types.route_key.{implRouteKeyWord}
-import u32 as U32
 import eval.eval.{
-  Value(..), EvalEnv(..), apply, eval, extendEnv, force, hasKey, ppValue
+  Value(..), EvalEnv(..), apply, eval, extendEnv, force, lookupEnv,
+  lookupRuntimeBinding, ppValue
 }
-import support.util.{
-  listLen, lookupAssoc, reverseL, isEmptyL, filterList, zipL, contains, anyList
+import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
+import tools.prop_plan.{
+  deleteEach,
+  prepend,
+  prependBefore,
+  PlanEnv(..),
+  PlanError,
+  PlanModule,
+  TypeKey(..),
+  GenPlan(..),
+  CustomPlan(..),
+  PlanDef(..),
+  PlanCtor(..),
+  PlanVisibility(..),
+  planFor,
+  planErrorText,
+  planDef,
+  instantiateCtor,
+  buildPlanEnv,
+  buildPlanEnvModules,
+  listLengthBound,
+  ctorWeights,
+  optionWeights,
+  resultWeights,
+  intMin,
+  intMax,
+  structuralRngSeed,
+  structuralRngAdvance,
+  structuralRngMix,
+  structuralRngRange,
+  structuralRngChoose,
+  customPlansReachable,
+  ShrinkAction(..),
+  shrinkActions,
+  IntShrinkStep(..),
+  intShrinkSteps,
 }
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
@@ -61,346 +88,90 @@ substringMatch needle haystack = isSome (stringIndexOf needle haystack)
 propRngStateRef : Ref Int
 propRngStateRef = Ref 123456789
 
+propSeedRef : Ref Int
+propSeedRef = Ref 123456789
+
+-- Custom Arbitrary implementations run program code and may call random*. Keep
+-- their full SplitMix64 state separate from both the law body and this runner's
+-- structural LCG. A `(hi, lo)` pair is the evaluator representation of U64.
+customRngStateRef : Ref (Int, Int)
+customRngStateRef = Ref (0, 0)
+
+customRngReadyRef : Ref Bool
+customRngReadyRef = Ref False
+
+customSeedRef : Ref Int
+customSeedRef = Ref 123456789
+
 -- `--seed <n>`: reseed the prop runner's own RNG before running. Never touches
--- `rngStateRef`.  The seed is reduced into the state's range, `0 .. 2^31 - 1`,
--- so any `Int` seeds it and `rngNextLocal`'s multiply cannot overflow; a seed
--- already in that range is used as given.
+-- `rngStateRef`. The shared policy reduces the draw state into its safe
+-- 31-bit range; replay metadata retains the original integer seed.
 export
 seedPropRng : Int -> Unit
-seedPropRng n = propRngStateRef := (n % 2147483648 + 2147483648) % 2147483648
+seedPropRng n =
+  let normalized = structuralRngSeed n
+  propRngStateRef := normalized
+  propSeedRef := n
+  customSeedRef := normalized
+  customRngReadyRef := False
+
+beginCustomPropStream : Int -> Unit
+beginCustomPropStream seed =
+  customSeedRef := seed
+  customRngReadyRef := False
+
+export
+propSeedValue : Unit -> Int
+propSeedValue _ = !propSeedRef
 
 rngNextLocal : Unit -> Int
--- Odd multiplier and odd increment make bit `i` of consecutive `s` values
--- have period <= 2^(i+1) (Knuth), so ANY contiguous bit-window read straight
--- off `s` — including a shifted/truncated one — inherits a short period at
--- its own low end. A caller drawing many values (an 8-parameter prop can
--- draw hundreds) can exhaust a short-period window's whole range and still
--- silently miss most of the assignment space.
---
--- Run the raw state through a Murmur3-style `fmix32` finalizer instead: two
--- multiply/xor-shift rounds so every output bit depends nonlinearly on many
--- state bits (full avalanche), leaving no short-period window for a caller
--- to extract. The finalizer's words are `U32`, so each multiply wraps
--- modulo 2^32 as `fmix32` requires. The state stays an `Int` below 2^31, so
--- its advancement cannot overflow and `--seed` reproducibility is unaffected.
 rngNextLocal _ =
-  let s = (!propRngStateRef * 1103515245 + 12345) % 2147483648
+  let s = structuralRngAdvance !propRngStateRef
   propRngStateRef := s
-  let h1 = fromInt (bitXor s (shiftRight s 16)) : U32
-  let h2 = h1 * 2246822507
-  let h3 = U32.bitXor h2 (U32.shiftRight h2 13)
-  let h4 = h3 * 3266489909
-  U32.toInt (U32.bitXor h4 (U32.shiftRight h4 16))
+  structuralRngMix s
 
 randIntRange : Int -> Int -> Int
-randIntRange lo hi =
-  let range = hi - lo + 1
-  if range <= 0 then lo else lo + rngNextLocal () % range
+randIntRange lo hi = structuralRngRange (rngNextLocal ()) lo hi
 
 -- Exported so a distribution regression test can seed the runner's private
 -- RNG (`seedPropRng`) and draw a raw sequence directly, without going through
 -- a `prop`'s randomized-length `List Bool` generation.
 export
 randBoolL : Unit -> Bool
-randBoolL _ = rngNextLocal () % 2 == 1
-
--- ── tydef registry (built from the program's data/record decls) ─────────────
-
-public export data TyDef = TDData (List String) (List Variant)
-
-buildTyDefs : List Decl -> List (String, TyDef)
-buildTyDefs [] = []
-buildTyDefs (d :: rest) = match d
-  DData { dataName = name, dataParams = params, dataCtors = variants } =>
-    (name, TDData params variants) :: buildTyDefs rest
-  DNewtype { newtypeName = name, newtypeParams = params, newtypeCtor = con, newtypeFieldTy = fty } =>
-    (name, TDData params [Variant con (ConPos [fty])]) :: buildTyDefs rest
-  _ => buildTyDefs rest
+randBoolL _ = structuralRngChoose (rngNextLocal ()) 2 == 1
 
 -- ── what a draw may consult ─────────────────────────────────────────────────
--- `GenEnv` is the whole generation environment threaded down through EVERY
--- draw, `genParam`'s and every recursive one beneath it: the ROOT module's data
--- declarations (the structural draw's registry), the program's argument-free
--- `Arbitrary` instances, the identities of the `Arbitrary` instances the runner
--- cannot draw through, and the program's type-alias names.  All but the first
--- are collected across EVERY loaded module, not just the root, because an
--- instance may live in the type's own module and an alias may be imported.
-public export data GenEnv =
-  | GenEnv (List (String, TyDef)) (List ArbImpl) (List (String, TyConOrigin)) (List String)
-
--- Where a chosen declaration's runtime `arbitrary` value is to be found: the
--- canonical impl route word its methods are tagged with at install time, this
--- declaration's position among the same-worded declarations, and how many of
--- those there are.
---
--- The word alone is not an address.  `implRouteKeyWord` renders each type
--- argument by its type word (`route_key.typeTagOf`), so two modules' `impl
--- Arbitrary Color` mint two words; declarations that still share one word are
--- told apart by position: eval installs impl methods by walking the
--- same `prelude ++ modules` decl list this module walks (`evalModulesWith`'s
--- `allDecls` and `implEntries` are built from it in that order), and
--- `coalesceImpls`' score sort is stable and scores same-worded impls equally
--- (one word means one type-argument spelling, hence one tyvar count) — so the
--- Nth same-worded declaration is the Nth same-worded candidate.  The total is
--- what makes that correspondence CHECKED rather than assumed: see
--- `drawArbitrary`.
-public export data ArbRoute = ArbRoute String Int Int
-
--- An argument-free `Arbitrary` instance, recorded as the IDENTITY of the type
--- it is declared at (`sameTyConHead`'s pair: head name + declaring module) plus
--- the route to its runtime value.
---
--- The identity is why this type exists.  A bare head SPELLING is not a type:
--- two modules may each declare a `Color`, and picking an instance by spelling
--- hands one module's value to a prop declared over the other's.  So the
--- spelling-blind half of the decision is made HERE, on the declaration, and the
--- route is used only to reach the matching runtime candidate once a declaration
--- has been chosen.
-public export data ArbImpl = ArbImpl String TyConOrigin ArbRoute
-
--- [rootDecls] is the root module's, [allDecls] every loaded module's (prelude
--- included).
+-- The shared PlanEnv makes every structural and capability decision. GenEnv
+-- maps a selected custom carrier to compiler-typed helper bindings.
+public export data PropHelper = PropHelper String String String
+public export data GenEnv = GenEnv PlanEnv (OrdMap PropHelper)
 export
 buildGenEnv : List Decl -> List Decl -> GenEnv
-buildGenEnv rootDecls allDecls =
-  GenEnv
-    (buildTyDefs rootDecls)
-    (arbImplsOf allDecls)
-    (unusableArbsOf allDecls)
-    (aliasNamesOf allDecls)
+buildGenEnv _ allDecls = GenEnv (buildPlanEnv allDecls) omEmpty
 
-arbImplsOf : List Decl -> List ArbImpl
-arbImplsOf decls = arbImplsGo decls [] (filterMap arbCandidateWord decls)
+buildGenEnvWithPlan : List Decl -> PlanEnv -> GenEnv
+buildGenEnvWithPlan _ planEnv = GenEnv planEnv omEmpty
 
--- [before] is every candidate-minting route word already walked and [words]
--- every one in the whole decl list, which between them give each eligible
--- declaration its position and its word's total.  A declaration that mints a
--- candidate without being eligible itself (constrained, or at an applied head)
--- still advances the position: eval installs ITS candidate under the same word,
--- so the runtime list counts it too.
-arbImplsGo : List Decl -> List String -> List String -> List ArbImpl
-arbImplsGo [] _ _ = []
-arbImplsGo (d :: rest) before words = match arbCandidateWord d
-  None => arbImplsGo rest before words
-  Some w => match arbImplOf d
-    None => arbImplsGo rest (w :: before) words
-    Some (n, to) =>
-      let route = ArbRoute w (count (== w) before) (count (== w) words)
-      ArbImpl n to route :: arbImplsGo rest (w :: before) words
+export
+buildGenEnvWithHelpers : List Decl -> PlanEnv -> List PropHelper -> GenEnv
+buildGenEnvWithHelpers _ planEnv helpers =
+  GenEnv planEnv (helperMap helpers omEmpty)
 
--- The route word of the `arbitrary` candidate this declaration installs, if it
--- installs one.  Every `impl` spelling a method `arbitrary` does, eligible for
--- the draw or not and whatever interface it belongs to — the word carries the
--- interface's identity, so another interface's `arbitrary` mints a different
--- word and never shares a candidate list with this one.  An impl that spells no
--- `arbitrary` leans on the interface default, which installs untagged and so is
--- never in a candidate list either.
-arbCandidateWord : Decl -> Option String
-arbCandidateWord (DAttrib _ d) = arbCandidateWord d
-arbCandidateWord (DImpl { iface = ifaceName, tys = tys, implOrigin = o, methods }) =
-  if anyList isArbitraryMethod methods then
-    Some (implRouteKeyWord o ifaceName tys None)
-  else
-    None
-arbCandidateWord _ = None
-
-isArbitraryMethod : ImplMethod -> Bool
-isArbitraryMethod (ImplMethod n _ _) = n == "arbitrary"
-
--- Only an instance at a BARE head with no `requires` is eligible: a constrained
--- instance is dict-passed, so `apply c VUnit` would feed VUnit where the leading
--- dictionary belongs (see `userArbitrary`).
-arbImplOf : Decl -> Option (String, TyConOrigin)
-arbImplOf (DAttrib _ d) = arbImplOf d
-arbImplOf (DImpl { iface = ifaceName, tys = tys, reqs = reqs }) = match (
-  ifaceName,
-  tys,
-  reqs,
-)
-  ("Arbitrary", [TyCon { tyConName = n, tyConOrigin = to }], []) => Some (n, to)
-  _ => None
-arbImplOf _ = None
-
--- The identities `arbImplOf` turned away: an `Arbitrary` instance that is
--- constrained, or stands at an applied head, or both.  Drawing through one
--- needs a leading dictionary the runner cannot build, so the draw cannot honor
--- it — but it must not silently ignore it either, so the identity is carried
--- here and the structural draw reports at it (`unusableArbAt`).
-unusableArbsOf : List Decl -> List (String, TyConOrigin)
-unusableArbsOf decls = filterMap unusableArbOf decls
-
-unusableArbOf : Decl -> Option (String, TyConOrigin)
-unusableArbOf (DAttrib _ d) = unusableArbOf d
-unusableArbOf (DImpl { iface = ifaceName, tys = tys, reqs = reqs }) = match (
-  ifaceName,
-  tys,
-  reqs,
-)
-  ("Arbitrary", [TyCon { tyConName = _ }], []) => None
-  ("Arbitrary", [t], _) => tyHeadIdentity t
-  _ => None
-unusableArbOf _ = None
-
-tyHeadIdentity : Ty -> Option (String, TyConOrigin)
-tyHeadIdentity (TyCon { tyConName = n, tyConOrigin = o }) = Some (n, o)
-tyHeadIdentity (TyApp f _) = tyHeadIdentity f
-tyHeadIdentity _ = None
-
-aliasNamesOf : List Decl -> List String
-aliasNamesOf decls = filterMap aliasNameOf decls
-
-aliasNameOf : Decl -> Option String
-aliasNameOf (DAttrib _ d) = aliasNameOf d
-aliasNameOf (DTypeAlias { tyAliasName = n }) = Some n
-aliasNameOf _ = None
-
--- ── type substitution + spine peeling ─────────────────────────────────────
-
-substTy : List (String, Ty) -> Ty -> Ty
-substTy subst (TyVar v) = match lookupAssoc v subst
-  Some t => t
-  None => TyVar v
-substTy subst (TyApp a b) = TyApp (substTy subst a) (substTy subst b)
-substTy subst (TyTuple ts) = TyTuple (map (substTy subst) ts)
-substTy subst (TyFun a b) = TyFun (substTy subst a) (substTy subst b)
-substTy _ t = t
-
--- Peel a TyApp spine: `Pair a b` → Some ("Pair", [a, b]); `Int` → Some ("Int", []).
-tySpine : Ty -> Option (String, List Ty)
-tySpine t = tySpineGo [] t
-
-tySpineGo : List Ty -> Ty -> Option (String, List Ty)
-tySpineGo acc (TyApp f a) = tySpineGo (a :: acc) f
-tySpineGo acc (TyCon { tyConName = n }) = Some (n, acc)
-tySpineGo _ _ = None
-
--- ── value generation ─────────────────────────────────────────────────────────
-
--- `depth` is the USER-ADT NESTING depth of the value being generated: it is
--- incremented only when descending into a user constructor's payload
--- (`genVariant`), never by `List`/`Array`/tuple/`Option`/`Result`.  Two arms
--- read it: `genUser`'s constructor choice (`pickVariant`) and the `List`/
--- `Array` LENGTH draw (`listLenBound`).  Every other arm ignores it, and both
--- readers take a fast path that reproduces the pre-#2294 draw exactly whenever
--- no recursion is in play, so the draw sequence for a type with no user ADT in
--- it is unchanged.
-genForType : GenEnv ->
-  List (String, Value e) ->
-  List (String, Ty) ->
-  Int ->
-  Ty ->
-  <e> Value e
-genForType ge env subst depth (TyVar v) = match lookupAssoc v subst
-  Some t => genForType ge env subst depth t
-  None =>
-    panic
-      ("prop_runner: cannot generate values for unbound type variable '"
-        ++ v
-        ++ "'")
-genForType ge env subst depth (TyCon { tyConName = "Int" }) =
-  VInt (randIntRange (-1000) 1000)
-genForType ge env subst depth (TyCon { tyConName = "Bool" }) =
-  VBool (randBoolL ())
-genForType ge env subst depth (TyCon { tyConName = "Float" }) = genFloat ()
-genForType ge env subst depth (TyCon { tyConName = "Char" }) =
-  VChar (genCharStr ())
-genForType ge env subst depth (TyCon { tyConName = "String" }) =
-  VString (genString ())
-genForType ge env subst depth (TyCon { tyConName = "Unit" }) = VUnit
-genForType ge env subst depth (TyApp (TyCon { tyConName = "List" }) t) =
-  VList
-    (genList
-      ge
-      env
-      subst
-      depth
-      t
-      (randIntRange 0 (listLenBound (genEnvTyDefs ge) depth t)))
-genForType ge env subst depth (TyApp (TyCon { tyConName = "Array" }) t) =
-  VArray
-    (arrayFromList
-      (genList
-        ge
-        env
-        subst
-        depth
-        t
-        (randIntRange 0 (listLenBound (genEnvTyDefs ge) depth t))))
-genForType ge env subst depth (TyApp (TyCon { tyConName = "Option", tyConOrigin = o }) t)
-  | not (programModuleOrigin o) =
-    if randBoolL () then
-      VCon "None" []
-    else
-      VCon "Some" [genForType ge env subst depth t]
-genForType ge env subst depth (TyApp (TyApp (TyCon { tyConName = "Result", tyConOrigin = o }) e) a)
-  | not (programModuleOrigin o) =
-    if randBoolL () then
-      VCon "Ok" [genForType ge env subst depth a]
-    else
-      VCon "Err" [genForType ge env subst depth e]
-genForType ge env subst depth (TyTuple ts) =
-  VTuple (genTuple ge env subst depth ts)
-genForType ge env subst depth ty = match userArbitrary ge env ty
-  Some v => v
-  None => match unusableArbAt ge ty
-    Some n =>
-      panic
-        "prop_runner: the 'Arbitrary' instance for '\{n}' cannot be drawn from. The runner draws through an argument-free instance at a bare head only; a constrained instance ('requires …') or one at an applied head needs a dictionary the runner has no constraint entailment to build. Give '\{n}' an argument-free instance, or draw it with an explicit generator."
-    None => genUserOrFail ge env subst depth ty
-
-genEnvTyDefs : GenEnv -> List (String, TyDef)
-genEnvTyDefs (GenEnv tydefs _ _ _) = tydefs
-
--- The structural draw is about to ignore a declared `Arbitrary` instance it
--- cannot use.  `builtinGenHeads` is excluded for the same reason `userArbitrary`
--- excludes it: those heads are the runner's own draw by design, and `List`'s
--- and `Option`'s constrained prelude instances are not a user's mistake.
-unusableArbAt : GenEnv -> Ty -> Option String
-unusableArbAt (GenEnv _ _ unusable _) ty = match tyHeadIdentity ty
-  Some (n, o) =>
-    if builtinGenHead n o
-      || isEmptyL (filterList (sameHeadAs n o) unusable) then
-      None
-    else
-      Some n
-  None => None
-
-sameHeadAs : String -> TyConOrigin -> (String, TyConOrigin) -> Bool
-sameHeadAs n o (n2, o2) = sameTyConHead n o n2 o2
-
-genTuple : GenEnv ->
-  List (String, Value e) ->
-  List (String, Ty) ->
-  Int ->
-  List Ty ->
-  <e> List (Value e)
-genTuple ge env subst depth ts = map (genForType ge env subst depth) ts
-
-genList : GenEnv ->
-  List (String, Value e) ->
-  List (String, Ty) ->
-  Int ->
-  Ty ->
-  Int ->
-  <e> List (Value e)
-genList _ _ _ _ _ 0 = []
-genList ge env subst depth t n =
-  genForType ge env subst depth t :: genList ge env subst depth t (n - 1)
+helperMap : List PropHelper -> OrdMap PropHelper -> OrdMap PropHelper
+helperMap [] acc = acc
+helperMap ((helper@(PropHelper word _ _)) :: rest) acc =
+  helperMap rest (omInsert word helper acc)
 
 genFloat : Unit -> <e> Value e
 genFloat _ =
-  let r = rngNextLocal () % 2000001
+  let r = structuralRngChoose (rngNextLocal ()) 2000001
   VFloat (intToFloat r * (1.0 / 1000000.0) - 1.0)
 
 genCharStr : Unit -> String
-genCharStr _ = charToStr (charFromCodeU (32 + rngNextLocal () % 95))
-
-charFromCodeU : Int -> Char
--- Intentional cross-file duplicate of the same helper in eval.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-charFromCodeU n = match charFromCode n
-  Some c => c
-  None => ' '
+genCharStr _ =
+  match charFromCode (32 + structuralRngChoose (rngNextLocal ()) 95)
+    Some c => charToStr c
+    None => " "
 
 -- random String of printable ASCII, length 0..10
 genString : Unit -> String
@@ -410,346 +181,22 @@ genStringGo : Int -> List String
 genStringGo 0 = []
 genStringGo n = genCharStr () :: genStringGo (n - 1)
 
-genUserOrFail : GenEnv ->
-  List (String, Value e) ->
-  List (String, Ty) ->
-  Int ->
-  Ty ->
-  <e> Value e
-genUserOrFail ge env subst depth ty = match tySpine ty
-  Some (name, args) => match lookupAssoc name (genEnvTyDefs ge)
-    Some tydef => genUser ge env subst depth name tydef args
-    None =>
-      panic
-        "prop_runner: no generator for type '\{name}'. Give it a data declaration the runner can see, an argument-free 'Arbitrary' instance, or an explicit generator (there is no 'Arbitrary' deriver)."
-  None => panic "prop_runner: cannot generate values for type"
-
-genUser : GenEnv ->
-  List (String, Value e) ->
-  List (String, Ty) ->
-  Int ->
-  String ->
-  TyDef ->
-  List Ty ->
-  <e> Value e
-genUser ge env subst depth name tydef args =
-  let args2 = map (substTy subst) args
-  match tydef
-    TDData params variants =>
-      let subst2 =
-        if listLen params == listLen args2 then zipL params args2 else []
-      let v = pickVariant (genEnvTyDefs ge) name depth variants
-      genVariant ge env subst2 depth v
-
-genVariant : GenEnv ->
-  List (String, Value e) ->
-  List (String, Ty) ->
-  Int ->
-  Variant ->
-  <e> Value e
-genVariant ge env subst depth (Variant cname payload) = match payload
-  ConPos tys => VCon cname (map (genForType ge env subst (depth + 1)) tys)
-  ConNamed fields _ =>
-    VRecord cname (map (genField ge env subst (depth + 1)) fields)
-
-genField : GenEnv ->
-  List (String, Value e) ->
-  List (String, Ty) ->
-  Int ->
-  Field ->
-  <e> (String, Value e)
-genField ge env subst depth (Field fname fty) =
-  (fname, genForType ge env subst depth fty)
-
--- ── size-aware constructor choice (#2294) ───────────────────────────────────
--- Before this, `genUser` picked a constructor uniformly at random with no size
--- parameter.  For any ADT whose expected count of self-referential fields per
--- uniformly-chosen constructor exceeds 1 — `data T = Leaf | Node T T T`, mean
--- (0 + 3)/2 = 1.5 — that is a SUPERCRITICAL branching process: generation
--- diverges with positive probability on every draw, and the runner dies with
--- `E-STACK-OVERFLOW` rather than reporting anything.  (`End | One R | Two R R`
--- is mean 1.0 — critical: finite almost surely but with infinite expected
--- size, so it degrades rather than aborts.)
---
--- The fix biases the choice toward constructors that cannot recurse, more
--- strongly the deeper we already are, which drives the process subcritical
--- (mean < 1) and so back to finite expected size:
---
---   weight(v, depth) = if v can recurse then max 1 (recWeight0 - depth)
---                      else recWeight0
---
--- 🚨 At depth 0 — and at ANY depth for an ADT none of whose constructors can
--- reach the ADT ITSELF — every weight is `recWeight0`, i.e. the choice is
--- still UNIFORM.  That is the property that keeps this from silently narrowing
--- the value space every existing prop samples: such an ADT takes the
--- `allEqualInts` fast path below and draws the SAME `randIntRange 0 (n - 1)`
--- it always did, so its value stream is byte-identical.  Only a genuinely
--- recursive ADT, at depth ≥ 1, sees a different distribution — and it still
--- reaches every shape at the shallow depths, just not depth 1000.
---
--- ⚠️ "Can reach the ADT itself" is a REACHABILITY question over the type
--- graph, not a one-hop "mentions some user ADT" question.  Asking the latter
--- instead flags `F1` in
---
---   data Leaf = L0 | L1 ; data Fin = F0 | F1 Leaf
---
--- as recursive purely because `Leaf` is user-declared, even though `Leaf` can
--- never lead back to `Fin`.  Nested inside five non-recursive wrappers that
--- put `Fin` at depth 5, that drives P(F1) from the correct 0.5 down to 1/7 —
--- exactly the silent distribution narrowing this comment claims not to
--- happen.  `variantRecursive` therefore takes the OWNING ADT's name and asks
--- `adtReaches`, which walks the whole mention graph.
-recWeight0 : Int
-recWeight0 = 6
-
--- Hard floor under the soft weighting: past this much user-ADT nesting, drop
--- recursive constructors entirely IF a non-recursive one exists.  Deliberately
--- far beyond anything the weighting above realistically reaches (at depth ≥ 5
--- a `Node T T T` is picked with probability 1/7, so the expected child count
--- is 3/7 < 1 and the tail decays geometrically) — it exists so the bound is a
--- guarantee rather than a probability, not to shape the distribution.
-maxGenDepth : Int
-maxGenDepth = 24
-
--- ── recursion detection: reachability over the ADT mention graph ────────────
--- Edges: ADT `X` → ADT `Y` whenever some constructor of `X` has a payload type
--- mentioning `Y`.  `adtReaches tydefs seen src target` is "src IS target, or
--- src reaches target along ≥ 1 edge"; `adtStepReaches` is the strict ≥ 1 edge
--- form (used for the on-a-cycle test).  `seen` is the DFS visited set, so a
--- cyclic graph terminates.
---
--- `TyVar` is treated as mentioning nothing rather than resolved through
--- `subst`: a parameter bound to its own name (`Tree a` generated with `a`
--- free) would make resolution loop, and a recursive occurrence always shows up
--- as the ADT's own `TyCon` head anyway.
-adtReaches : List (String, TyDef) -> List String -> String -> String -> Bool
-adtReaches tydefs seen src target =
-  src == target || adtStepReaches tydefs seen src target
-
-adtStepReaches : List (String, TyDef) -> List String -> String -> String -> Bool
-adtStepReaches tydefs seen src target =
-  if contains src seen then
-    False
-  else match lookupAssoc src tydefs
-    None => False
-    Some (TDData _ variants) =>
-      anyVariantReaches tydefs (src :: seen) variants target
-
-anyVariantReaches : List (String, TyDef) ->
-  List String ->
-  List Variant ->
-  String ->
-  Bool
-anyVariantReaches _ _ [] _ = False
-anyVariantReaches tydefs seen (v :: rest) target =
-  variantReaches tydefs seen v target
-    || anyVariantReaches tydefs seen rest target
-
-variantReaches : List (String, TyDef) ->
-  List String ->
-  Variant ->
-  String ->
-  Bool
-variantReaches tydefs seen (Variant _ payload) target = match payload
-  ConPos tys => anyTyReaches tydefs seen tys target
-  ConNamed fields _ => anyFieldReaches tydefs seen fields target
-
-tyReaches : List (String, TyDef) -> List String -> Ty -> String -> Bool
-tyReaches tydefs seen (TyCon { tyConName = n }) target =
-  isSome (lookupAssoc n tydefs) && adtReaches tydefs seen n target
-tyReaches tydefs seen (TyApp a b) target =
-  tyReaches tydefs seen a target || tyReaches tydefs seen b target
-tyReaches tydefs seen (TyFun a b) target =
-  tyReaches tydefs seen a target || tyReaches tydefs seen b target
-tyReaches tydefs seen (TyTuple ts) target = anyTyReaches tydefs seen ts target
-tyReaches tydefs seen (TyEffect _ _ t) target = tyReaches tydefs seen t target
-tyReaches tydefs seen (TyNamed _ t _) target = tyReaches tydefs seen t target
-tyReaches tydefs seen (TyQual t _ _) target = tyReaches tydefs seen t target
-tyReaches tydefs seen (TyConstrained _ t) target =
-  tyReaches tydefs seen t target
-tyReaches _ _ _ _ = False
-
-anyTyReaches : List (String, TyDef) -> List String -> List Ty -> String -> Bool
-anyTyReaches _ _ [] _ = False
-anyTyReaches tydefs seen (t :: rest) target =
-  tyReaches tydefs seen t target || anyTyReaches tydefs seen rest target
-
-anyFieldReaches : List (String, TyDef) ->
-  List String ->
-  List Field ->
-  String ->
-  Bool
-anyFieldReaches _ _ [] _ = False
-anyFieldReaches tydefs seen ((Field _ fty) :: rest) target =
-  tyReaches tydefs seen fty target || anyFieldReaches tydefs seen rest target
-
--- Can generating this constructor's payload re-enter `self`, the ADT the
--- constructor belongs to?  Directly (`data T = Leaf | Node T T T`) or
--- transitively through other ADTs, which covers MUTUAL recursion
--- (`data A = A0 | A1 B` / `data B = B1 A`).  A payload that merely mentions
--- some OTHER user ADT with no path back (`data Fin = F0 | F1 Leaf`) is NOT
--- recursive and keeps its uniform weight.
-variantRecursive : List (String, TyDef) -> String -> Variant -> Bool
-variantRecursive tydefs self v = variantReaches tydefs [] v self
-
--- Can generating a value of this type diverge — i.e. does it mention an ADT
--- that lies on a cycle of the mention graph?  This is the element-type test
--- behind `listLenBound`, where there is no "owning ADT" to ask about.
-tyCanDiverge : List (String, TyDef) -> Ty -> Bool
-tyCanDiverge tydefs (TyCon { tyConName = n }) =
-  isSome (lookupAssoc n tydefs) && adtStepReaches tydefs [] n n
-tyCanDiverge tydefs (TyApp a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
-tyCanDiverge tydefs (TyFun a b) = tyCanDiverge tydefs a || tyCanDiverge tydefs b
-tyCanDiverge tydefs (TyTuple ts) = anyTyCanDiverge tydefs ts
-tyCanDiverge tydefs (TyEffect _ _ t) = tyCanDiverge tydefs t
-tyCanDiverge tydefs (TyNamed _ t _) = tyCanDiverge tydefs t
-tyCanDiverge tydefs (TyQual t _ _) = tyCanDiverge tydefs t
-tyCanDiverge tydefs (TyConstrained _ t) = tyCanDiverge tydefs t
-tyCanDiverge _ _ = False
-
-anyTyCanDiverge : List (String, TyDef) -> List Ty -> Bool
-anyTyCanDiverge _ [] = False
-anyTyCanDiverge tydefs (t :: rest) =
-  tyCanDiverge tydefs t || anyTyCanDiverge tydefs rest
-
--- ── size-aware LIST/ARRAY length (#2294 follow-up) ──────────────────────────
--- `pickVariant`'s weighting cannot help a SINGLE-constructor recursive ADT —
--- `data Rose = Rose Int (List Rose)` has one weight, so `allEqualInts` is
--- trivially true and the uniform fast path always fires.  `Rose`'s divergence
--- never came from constructor choice at all: it came from this length draw.
--- `randIntRange 0 7` has mean 3.5, so every `Rose` averages 3.5 recursive
--- children — wildly supercritical, and the runner dies with `E-STACK-OVERFLOW`.
---
--- So the length bound shrinks with depth, the same shape `pickVariant` uses:
---
---   bound(depth, t) = listLenMax                       -- depth 0, or t cannot diverge
---                     0                                -- depth >= maxGenDepth
---                     max 1 (listLenMax - 2 * depth)   -- otherwise
---
--- Expected recursive-child count per node, for `List`-mediated self-recursion
--- (a node generated at depth d draws its list at depth d + 1, mean bound/2):
---
---   depth 1 → bound 5 → mean 2.5     depth 3 → bound 1 → mean 0.5
---   depth 2 → bound 3 → mean 1.5     depth ≥ 3 → bound 1 → mean 0.5
---
--- i.e. SUBCRITICAL (mean < 1) from depth 3 on, so the process dies out almost
--- surely with finite expected size (≈ 1 + 2.5 + 3.75 + 1.875 + … ≈ 11 nodes),
--- while depths 1–2 stay wide enough to reach the shapes props care about.  The
--- `maxGenDepth` arm is the same backstop `variantWeights` uses — a guarantee
--- rather than a probability — not the mechanism.
---
--- 🚨 At depth 0, and at ANY depth for an element type that cannot diverge
--- (`List Int`, `List Bool`, `List Leaf`), the draw is `randIntRange 0
--- listLenMax` — the exact pre-existing `randIntRange 0 7`, same range, same
--- single RNG step.  This is the uniform fast path `pickVariant` has, expressed
--- for lengths.
-listLenMax : Int
-listLenMax = 7
-
-listLenBound : List (String, TyDef) -> Int -> Ty -> Int
-listLenBound tydefs depth t =
-  if depth <= 0 || not (tyCanDiverge tydefs t) then
-    listLenMax
-  else if depth >= maxGenDepth then
-    0
-  else
-    max 1 (listLenMax - 2 * depth)
-
-variantWeights : List (String, TyDef) ->
-  String ->
-  Int ->
-  List Variant ->
-  List Int
-variantWeights _ _ _ [] = []
-variantWeights tydefs self depth (v :: rest) =
-  let w =
-    if variantRecursive tydefs self v then
-      if depth >= maxGenDepth then 0 else max 1 (recWeight0 - depth)
-    else
-      recWeight0
-  w :: variantWeights tydefs self depth rest
-
-sumL : List Int -> Int
-sumL [] = 0
-sumL (x :: rest) = x + sumL rest
-
-allEqualInts : List Int -> Bool
-allEqualInts [] = True
-allEqualInts (x :: rest) = allEqualGo x rest
-
-allEqualGo : Int -> List Int -> Bool
-allEqualGo _ [] = True
-allEqualGo x (y :: rest) = x == y && allEqualGo x rest
-
--- Walk the cumulative weights: `r` is a draw in `[0, total)`.
-pickWeighted : List Variant -> List Int -> Int -> Variant
-pickWeighted (v :: rest) (w :: ws) r =
-  if r < w then v else pickWeighted rest ws (r - w)
-pickWeighted (v :: _) [] _ = v
-pickWeighted [] _ _ = panic "prop_runner: data type with no constructors"
-
-pickVariant : List (String, TyDef) ->
-  String ->
-  Int ->
-  List Variant ->
-  <e> Variant
-pickVariant tydefs self depth variants =
-  let ws = variantWeights tydefs self depth variants
-  -- Uniform fast path — depth 0, or an ADT no constructor of which can reach
-  -- the ADT itself.
-  -- Draws exactly the value the pre-#2294 runner drew, from the same range.
-  if allEqualInts ws then
-    nthList variants (randIntRange 0 (listLen variants - 1))
-  else
-    let total = sumL ws
-    if total <= 0 then
-      -- Every constructor recurses (`data S = S S`): there is no finite value
-      -- to generate, so fall back to the uniform pick and let the existing
-      -- overflow report the fact rather than inventing a different failure.
-      nthList variants (randIntRange 0 (listLen variants - 1))
-    else
-      pickWeighted variants ws (randIntRange 0 (total - 1))
-
-nthList : List a -> Int -> a
-nthList (x :: _) 0 = x
-nthList (_ :: xs) n = nthList xs (n - 1)
-nthList [] _ = panic "nthList: index out of range"
-
--- ── shrinking (native) ──────────────────────────────────────────────────────
--- The runner's own shrink strategy, keyed on shape — unrelated to the
--- `Arbitrary` interface's `shrink` method (stdlib/core.mdk), which the
--- runner never calls for any type. A tag with no arm here (a user ADT,
--- `VCon` in the wildcard) gets no shrinking at all; that user's own `shrink`
--- impl, if any, is not consulted.
-
-shrinkValue : Ty -> Value e -> List (Value e)
-shrinkValue ty v = match (ty, v)
-  (TyCon { tyConName = "Int" }, VInt n) => shrinkInt n
-  (TyCon { tyConName = "Bool" }, VBool True) => [VBool False]
-  (TyCon { tyConName = "Bool" }, VBool False) => []
-  (TyCon { tyConName = "Float" }, VFloat x) =>
-    if x == 0.0 then [] else [VFloat 0.0, VFloat (x / 2.0)]
-  (TyCon { tyConName = "String" }, VString s) =>
-    if s == "" then [] else [VString (stringSlice 0 (stringLength s / 2) s)]
-  (TyApp (TyCon { tyConName = "List" }) _, VList []) => []
-  (TyApp (TyCon { tyConName = "List" }) _, VList (_ :: rest)) => [VList rest]
-  (TyApp (TyCon { tyConName = "Option" }) _, VCon "None" []) => []
-  (TyApp (TyCon { tyConName = "Option" }) _, VCon "Some" _) => [VCon "None" []]
-  _ => []
-
 shrinkInt : Int -> List (Value e)
 shrinkInt 0 = []
-shrinkInt n =
-  let cands = [0, n / 2, n + (if n > 0 then -1 else 1)]
-  map VInt (filterList (/= n) cands)
+shrinkInt n = map (step => VInt (intShrinkCandidate n step)) intShrinkSteps
+
+intShrinkCandidate : Int -> IntShrinkStep -> Int
+intShrinkCandidate _ IntToZero = 0
+intShrinkCandidate n IntHalf = n / 2
+intShrinkCandidate n IntTowardZero = n + (if n > 0 then -1 else 1)
 
 -- ── prop evaluation ──────────────────────────────────────────────────────────
 -- evalEnv is the program's binding environment (List (String, Value)); each
 -- prop body is evaluated in a frame extending it with the generated inputs.
 
-checkProp : List (String, Value e) -> Expr -> List (String, Value e) -> <e> Bool
-checkProp evalEnv body inputs =
-  let env = extendEnv (EvalEnv [[]]) (inputs ++ evalEnv)
+checkProp : EvalEnv (Value e) -> Expr -> List (String, Value e) -> <e> Bool
+checkProp rootEnv body inputs =
+  let env = extendEnv rootEnv inputs
   match force (eval env body)
     VBool b => b
     _ => False
@@ -797,28 +244,39 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
   -- value via `--seed` reproduces this prop's draws byte-for-byte regardless
   -- of what ran before it, so it is the number to print on failure.
   let seedAtStart = !propRngStateRef
-  match findFailure genEnv evalEnv params body maxTests 1
-    PropPassed =>
-      let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
-      True
-    PropFailed run shrunk fuelExhausted =>
-      let _ =
-        putStrLn
-          "FAILED after \{intToString run}\{if run == 1 then " test" else " tests"}"
-      let _ =
-        if fuelExhausted then
-          putStrLn
-            "  WARNING: shrink fuel exhausted after \{intToString shrinkFuel} steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307)."
-      let _ =
-        putStrLn
-          "  Seed: \{intToString seedAtStart} (rerun with: medaka test --seed \{intToString seedAtStart} --filter \{escStrLocal name} <file>)"
-      let _ = putStrLn "  Counterexample:"
-      let _ = printCounterexample shrunk
+  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
+  match planPropParams (genEnvPlan genEnv) name params
+    Err e =>
+      let _ = putStrLn ("ERROR: " ++ planErrorText e)
       False
+    Ok plans => match helperFailure genEnv rootEnv plans
+      Some detail =>
+        let _ = putStrLn ("ERROR: " ++ detail)
+        False
+      None =>
+        let _ = beginCustomPropStream seedAtStart
+        match findFailure genEnv rootEnv params body maxTests 1
+          PropPassed =>
+            let _ = putStrLn ("OK (" ++ intToString maxTests ++ " tests)")
+            True
+          PropFailed run shrunk fuelExhausted =>
+            let _ =
+              putStrLn
+                "FAILED after \{intToString run}\{if run == 1 then " test" else " tests"}"
+            let _ =
+              if fuelExhausted then
+                putStrLn
+                  "  WARNING: shrink fuel exhausted after \{intToString shrinkFuel} steps; the counterexample below may not be minimal, and a shrink arm is probably cycling (see #1307)."
+            let _ =
+              putStrLn
+                "  Seed: \{intToString seedAtStart} (rerun with: medaka test --seed \{intToString seedAtStart} --filter \{escStrLocal name} <file>)"
+            let _ = putStrLn "  Counterexample:"
+            let _ = printCounterexample shrunk
+            False
 runProp _genEnv _evalEnv _decl _maxTests _target _propLines = True
 
 findFailure : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   Int ->
@@ -838,8 +296,26 @@ findFailure genEnv evalEnv params body maxTests run
       inputs
       (checkProp evalEnv body inputs)
 
+findFailurePlanned : GenEnv ->
+  EvalEnv (Value e) ->
+  List PropParam ->
+  List GenPlan ->
+  Expr ->
+  Int ->
+  Int ->
+  <e> PropOutcome (Value e)
+findFailurePlanned genEnv evalEnv params plans body maxTests run
+  | run > maxTests = PropPassed
+  | otherwise =
+    let inputs = genInputsPlanned genEnv evalEnv params plans
+    if checkProp evalEnv body inputs then
+      findFailurePlanned genEnv evalEnv params plans body maxTests (run + 1)
+    else
+      let (shrunk, fuelExhausted) = shrinkLoop genEnv evalEnv params body inputs
+      PropFailed run shrunk fuelExhausted
+
 findFailureStep : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   Int ->
@@ -849,136 +325,566 @@ findFailureStep : GenEnv ->
   <e> PropOutcome (Value e)
 findFailureStep genEnv evalEnv params body maxTests run _ True =
   findFailure genEnv evalEnv params body maxTests (run + 1)
-findFailureStep _ evalEnv params body _ run inputs False =
-  let (shrunk, fuelExhausted) = shrinkLoop evalEnv params body inputs
+findFailureStep genEnv evalEnv params body _ run inputs False =
+  let (shrunk, fuelExhausted) = shrinkLoop genEnv evalEnv params body inputs
   PropFailed run shrunk fuelExhausted
 
 genInputs : GenEnv ->
-  List (String, Value e) ->
+  EvalEnv (Value e) ->
   List PropParam ->
   <e> List (String, Value e)
 genInputs _ _ [] = []
 genInputs genEnv evalEnv ((PropParam x _ ty) :: rest) =
   (x, genParam genEnv evalEnv ty) :: genInputs genEnv evalEnv rest
 
-genParam : GenEnv -> List (String, Value e) -> Ty -> <e> Value e
-genParam (ge@(GenEnv tydefs _ _ aliases)) evalEnv ty =
-  match userArbitrary ge evalEnv ty
-    Some v => v
-    None => match unexpandedAlias tydefs aliases ty
-      Some n =>
-        panic
-          "prop_runner: no generator for type alias '\{n}'. The runner draws from the parameter's declared type without expanding aliases, and an alias cannot carry an 'Arbitrary' instance — write the underlying type as the parameter's type instead."
-      None => genForType ge evalEnv [] 0 ty
+genInputsPlanned : GenEnv ->
+  EvalEnv (Value e) ->
+  List PropParam ->
+  List GenPlan ->
+  <e> List (String, Value e)
+genInputsPlanned _ _ [] [] = []
+genInputsPlanned genEnv evalEnv ((PropParam x _ _) :: rest) (plan :: plans) =
+  (x, genFromPlan genEnv evalEnv 0 plan)
+    :: genInputsPlanned genEnv evalEnv rest plans
+genInputsPlanned _ _ _ _ =
+  panic "property runner: prepared parameter plan mismatch"
 
--- The head is a type alias the structural draw has no registry entry for, so
--- `genUserOrFail`'s advice ("give it a data declaration, an argument-free
--- 'Arbitrary' instance, or an explicit generator") would name two things an
--- alias cannot have.  Guarded on the registry so a data declaration sharing an
--- imported alias's spelling still draws instead of reporting.
-unexpandedAlias : List (String, TyDef) -> List String -> Ty -> Option String
-unexpandedAlias tydefs aliases ty = match tySpine ty
-  Some (n, _) =>
-    if contains n aliases && isNone (lookupAssoc n tydefs) then Some n else None
-  None => None
+genParam : GenEnv -> EvalEnv (Value e) -> Ty -> <e> Value e
+genParam (ge@(GenEnv planEnv _)) evalEnv ty =
+  match planFor planEnv "" "property parameter" ty
+    Ok plan => genFromPlan ge evalEnv 0 plan
+    Err e => panic (planErrorText e)
 
--- The head tycons `genForType` draws itself.  Redirecting one of these onto its
--- `Arbitrary` instance would move the draw off `propRngStateRef` and onto the
--- `randomInt`/`randomBool` externs, which draw from the SAME ref the program
--- under test does: that both perturbs the program's own stream and makes
--- `--seed` describe nothing, since `seedPropRng` reseeds the private ref alone.
--- A head the runner draws itself: one of [builtinGenHeads], and not a
--- program's own type that shares the name (a program may declare its own
--- `Option` or `Result`, #3465; it is drawn structurally, like any user type).
-builtinGenHead : String -> TyConOrigin -> Bool
-builtinGenHead n o = contains n builtinGenHeads && not (programModuleOrigin o)
+-- Interpret the same finite plan the native runner renders. Imported nominals
+-- resolve through PlanEnv by TypeKey, never through a spelling-only registry.
+genFromPlan : GenEnv -> EvalEnv (Value e) -> Int -> GenPlan -> <e> Value e
+genFromPlan _ _ _ GInt = VInt (randIntRange intMin intMax)
+genFromPlan _ _ _ GBool = VBool (randBoolL ())
+genFromPlan _ _ _ GFloat = genFloat ()
+genFromPlan _ _ _ GChar = VChar (genCharStr ())
+genFromPlan _ _ _ GString = VString (genString ())
+genFromPlan _ _ _ GUnit = VUnit
+genFromPlan ge env depth (GList plan) =
+  VList
+    (genPlanList
+      ge
+      env
+      depth
+      plan
+      (randIntRange 0 (listLengthBound (genEnvPlan ge) depth plan)))
+genFromPlan ge env depth (GArray plan) =
+  VArray
+    (arrayFromList
+      (genPlanList
+        ge
+        env
+        depth
+        plan
+        (randIntRange 0 (listLengthBound (genEnvPlan ge) depth plan))))
+genFromPlan ge env depth (GOption plan) =
+  chooseOption ge env depth plan (optionWeights (genEnvPlan ge) depth plan)
+genFromPlan ge env depth (GResult err ok) =
+  chooseResult ge env depth err ok (resultWeights (genEnvPlan ge) depth err ok)
+genFromPlan ge env depth (GTuple plans) =
+  VTuple (map (genFromPlan ge env depth) plans)
+genFromPlan ge env depth (nominal@(GNominal key _)) =
+  match planDef (genEnvPlan ge) key
+    Ok (PlanDef _ _ _ _ ctors) =>
+      genPlannedCtor
+        ge
+        env
+        depth
+        nominal
+        (choosePlanCtor ctors (ctorWeights (genEnvPlan ge) nominal depth))
+    Err e => panic (planErrorText e)
+genFromPlan ge env _ (custom@(GCustom _)) = drawCustomArbitrary ge env custom
 
-programModuleOrigin : TyConOrigin -> Bool
-programModuleOrigin (OriginModule m) = m /= "core"
-programModuleOrigin _ = False
+genEnvPlan : GenEnv -> PlanEnv
+genEnvPlan (GenEnv planEnv _) = planEnv
 
-builtinGenHeads : List String
-builtinGenHeads = [
-  "Int",
-  "Bool",
-  "Float",
-  "Char",
-  "String",
-  "Unit",
-  "List",
-  "Array",
-  "Option",
-  "Result",
-]
+-- Swap the evaluated program's complete U64 RNG state around one custom draw.
+-- `randomState`/`restoreRandomState` are invoked through the same evaluator
+-- environment as the property, so this keeps all three engines' public RNG
+-- contract rather than reaching into an interpreter-global ref.
+drawCustomArbitrary : GenEnv -> EvalEnv (Value e) -> GenPlan -> <e> Value e
+drawCustomArbitrary ge env custom =
+  let programState = readRandomState env
+  let _ = ensureCustomRandomState env
+  let (hi, lo) = !customRngStateRef
+  let _ = restoreRandomStateValue env (VU64 hi lo)
+  let value = match customHelper ge custom
+    Some (PropHelper _ genName _) =>
+      force (apply (force (lookupEnv env genName)) VUnit)
+    None => panic "property runner: missing selected typed custom helper"
+  let customState = readRandomState env
+  customRngStateRef := u64Pair customState
+  let _ = restoreRandomStateValue env programState
+  value
 
--- A type `genForType` would hand to `genUserOrFail` is drawn through an
--- in-scope `Arbitrary` instance at its head instead, when exactly one DECLARED
--- instance stands at that type's identity.  This is asked at EVERY draw, the
--- prop parameter's own and every field beneath it, so a type's instance is what
--- produces it wherever it appears (#2813 case 2).  Only an
--- ARGUMENT-FREE head is eligible: a constrained instance (`impl Arbitrary
--- (List a) requires Arbitrary a`) is dict-passed, so `apply c VUnit` would feed
--- VUnit where the leading dictionary belongs, and building that dictionary
--- needs constraint entailment the runner has no access to.  Only `arbitrary` is
--- honored; shrinking stays the runner's own.
---
--- The decision is made on the DECLARATION, not on the candidate set.  A
--- filter over the runtime candidates can only see a head SPELLING, and one
--- matching candidate is not evidence that it is the right one: with two modules
--- each declaring a `Color` and only one of them carrying an instance, the
--- spelling filter yields exactly one candidate and it belongs to the other type.
--- `arbImplKeyFor` therefore asks `sameTyConHead` — name AND declaring module —
--- of the DECLARED instances first, and only then looks for the runtime value
--- the chosen declaration's `ArbRoute` addresses: its route word, and its
--- position among the declarations sharing that word when the word alone leaves
--- more than one candidate.
-userArbitrary : GenEnv -> List (String, Value e) -> Ty -> <e> Option (Value e)
-userArbitrary (GenEnv _ arbs _ _) evalEnv (TyCon { tyConName = n, tyConOrigin = o }) =
-  if builtinGenHead n o then
+customHelper : GenEnv -> GenPlan -> Option PropHelper
+customHelper (GenEnv _ helpers) (GCustom (CustomPlan _ _ word)) =
+  omLookup word helpers
+customHelper _ _ = None
+
+-- Before a property starts, validate every helper the selected plans can call.
+-- A caller may therefore return a normal protocol/runtime result rather than
+-- entering generation and tripping an evaluator panic for an absent helper.
+helperFailure : GenEnv -> EvalEnv (Value e) -> List GenPlan -> Option String
+helperFailure ge env plans =
+  helperFailureCustoms
+    ge
+    (envBindingNames env)
+    (customPlansReachable (genEnvPlan ge) plans)
+
+helperFailureCustoms : GenEnv -> OrdMap Unit -> List CustomPlan -> Option String
+helperFailureCustoms _ _ [] = None
+helperFailureCustoms ge names (custom :: rest) =
+  match customHelper ge (GCustom custom)
+    Some (PropHelper _ genName shrinkName) => match (
+      omHasKey genName names,
+      omHasKey shrinkName names,
+    )
+      (True, True) => helperFailureCustoms ge names rest
+      _ => Some "selected typed custom helper binding is unavailable"
+    None => Some "selected typed custom helper is unavailable"
+
+-- This deliberately records names only: validating helpers must observe the
+-- caller's original cells without forcing or rebuilding its root environment.
+envBindingNames : EvalEnv (Value e) -> OrdMap Unit
+envBindingNames (EvalEnv frames) = bindingNamesFrames frames omEmpty
+
+bindingNamesFrames : List (List (String, Ref (Value e))) ->
+  OrdMap Unit ->
+  OrdMap Unit
+bindingNamesFrames [] names = names
+bindingNamesFrames (frame :: rest) names =
+  bindingNamesFrames rest (bindingNamesFrame frame names)
+
+bindingNamesFrame : List (String, Ref (Value e)) -> OrdMap Unit -> OrdMap Unit
+bindingNamesFrame [] names = names
+bindingNamesFrame ((name, _) :: rest) names =
+  bindingNamesFrame rest (omInsert name () names)
+
+ensureCustomRandomState : EvalEnv (Value e) -> <e> Unit
+ensureCustomRandomState env =
+  if !customRngReadyRef then
+    ()
+  else
+    let programState = readRandomState env
+    let _ = callRandomSetSeed env !customSeedRef
+    let seeded = readRandomState env
+    customRngStateRef := u64Pair seeded
+    let _ = restoreRandomStateValue env programState
+    customRngReadyRef := True
+
+readRandomState : EvalEnv (Value e) -> <e> Value e
+readRandomState env =
+  force (apply (force (lookupRuntimeBinding env "randomState")) VUnit)
+
+restoreRandomStateValue : EvalEnv (Value e) -> Value e -> <e> Unit
+restoreRandomStateValue env state =
+  match (force
+    (apply (force (lookupRuntimeBinding env "restoreRandomState")) state))
+    VUnit => ()
+    _ => panic "property runner: restoreRandomState returned a non-Unit value"
+
+callRandomSetSeed : EvalEnv (Value e) -> Int -> <e> Unit
+callRandomSetSeed env seed =
+  match force (apply (force (lookupRuntimeBinding env "setSeed")) (VInt seed))
+    VUnit => ()
+    _ => panic "property runner: setSeed returned a non-Unit value"
+
+u64Pair : Value e -> (Int, Int)
+u64Pair (VU64 hi lo) = (hi, lo)
+u64Pair _ = panic "property runner: randomState returned a non-U64 value"
+
+genPlanList : GenEnv ->
+  EvalEnv (Value e) ->
+  Int ->
+  GenPlan ->
+  Int ->
+  <e> List (Value e)
+genPlanList _ _ _ _ 0 = []
+genPlanList ge env depth plan n =
+  genFromPlan ge env depth plan :: genPlanList ge env depth plan (n - 1)
+
+chooseOption : GenEnv ->
+  EvalEnv (Value e) ->
+  Int ->
+  GenPlan ->
+  List Int ->
+  <e> Value e
+chooseOption ge env depth plan weights =
+  if chooseWeight weights then
+    VCon "None" []
+  else
+    VCon "Some" [genFromPlan ge env depth plan]
+
+chooseResult : GenEnv ->
+  EvalEnv (Value e) ->
+  Int ->
+  GenPlan ->
+  GenPlan ->
+  List Int ->
+  <e> Value e
+chooseResult ge env depth err ok weights =
+  if chooseWeight weights then
+    VCon "Err" [genFromPlan ge env depth err]
+  else
+    VCon "Ok" [genFromPlan ge env depth ok]
+
+-- All branch and constructor weights originate in prop_plan. A zero total is
+-- an internal invariant breach: planFor has already established a finite path.
+chooseWeight : List Int -> Bool
+chooseWeight (first :: second :: _) =
+  let total = first + second
+  if total <= 0 then
+    panic "property runner: planner produced no finite branch"
+  else
+    randIntRange 0 (total - 1) < first
+chooseWeight _ =
+  panic "property runner: planner returned malformed branch weights"
+
+choosePlanCtor : List PlanCtor -> List Int -> PlanCtor
+choosePlanCtor [] _ = panic "property runner: nominal type has no constructors"
+choosePlanCtor ctors weights =
+  let total = sumWeights weights
+  if total <= 0 then
+    panic "property runner: planner produced no finite constructor"
+  else
+    choosePlanCtorAt ctors weights (randIntRange 0 (total - 1))
+
+choosePlanCtorAt : List PlanCtor -> List Int -> Int -> PlanCtor
+choosePlanCtorAt (ctor :: _) [] _ = ctor
+choosePlanCtorAt (ctor :: _) (weight :: _) n
+  | n < weight = ctor
+choosePlanCtorAt (_ :: ctors) (weight :: weights) n =
+  choosePlanCtorAt ctors weights (n - weight)
+choosePlanCtorAt [] _ _ =
+  panic "property runner: constructor weights were empty"
+
+sumWeights : List Int -> Int
+sumWeights [] = 0
+sumWeights (n :: rest) = n + sumWeights rest
+
+nthList : List a -> Int -> a
+nthList (x :: _) 0 = x
+nthList (_ :: rest) n = nthList rest (n - 1)
+nthList [] _ = panic "property runner: index out of range"
+
+genPlannedCtor : GenEnv ->
+  EvalEnv (Value e) ->
+  Int ->
+  GenPlan ->
+  PlanCtor ->
+  <e> Value e
+genPlannedCtor ge env depth nominal (ctor@(PlanCtor _ runtime _)) =
+  match instantiateCtor (genEnvPlan ge) nominal ctor
+    Ok fields =>
+      plannedCtorValue runtime (genPlannedFields ge env (depth + 1) fields)
+    Err e => panic (planErrorText e)
+
+genPlannedFields : GenEnv ->
+  EvalEnv (Value e) ->
+  Int ->
+  List (Option String, GenPlan) ->
+  <e> List (Option String, Value e)
+genPlannedFields _ _ _ [] = []
+genPlannedFields ge env depth ((name, plan) :: rest) =
+  (name, genFromPlan ge env depth plan) :: genPlannedFields ge env depth rest
+
+plannedCtorValue : String -> List (Option String, Value e) -> Value e
+plannedCtorValue runtime [] = VCon runtime []
+plannedCtorValue runtime ((Some name, value) :: rest) =
+  VRecord runtime ((name, value) :: namedPlanFields rest)
+plannedCtorValue runtime ((None, value) :: rest) =
+  VCon runtime (value :: positionalPlanFields rest)
+
+namedPlanFields : List (Option String, Value e) -> List (String, Value e)
+namedPlanFields [] = []
+namedPlanFields ((Some name, value) :: rest) =
+  (name, value) :: namedPlanFields rest
+namedPlanFields ((None, _) :: _) =
+  panic "property runner: mixed positional and named constructor fields"
+
+positionalPlanFields : List (Option String, Value e) -> List (Value e)
+positionalPlanFields [] = []
+positionalPlanFields ((None, value) :: rest) =
+  value :: positionalPlanFields rest
+positionalPlanFields ((Some _, _) :: _) =
+  panic "property runner: mixed positional and named constructor fields"
+
+shrinkForParam : GenEnv ->
+  EvalEnv (Value e) ->
+  Ty ->
+  Value e ->
+  <e> List (Value e)
+shrinkForParam ge env ty value =
+  match planFor (genEnvPlan ge) "" "property parameter" ty
+    Ok (custom@(GCustom _)) => match customHelper ge custom
+      Some (PropHelper _ _ shrinkName) =>
+        match force (apply (force (lookupEnv env shrinkName)) value)
+          VList smaller => smaller
+          _ =>
+            panic
+              "property runner: typed custom shrink returned a non-List value"
+      None => panic "property runner: missing selected typed custom helper"
+    Ok plan => structuralShrink ge env plan value
+    Err e => panic (planErrorText e)
+
+shrinkCustom : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  Value e ->
+  <e> List (Value e)
+shrinkCustom ge env custom value = match customHelper ge custom
+  Some (PropHelper _ _ shrinkName) =>
+    match force (apply (force (lookupEnv env shrinkName)) value)
+      VList smaller => smaller
+      _ =>
+        panic "property runner: typed custom shrink returned a non-List value"
+  None => panic "property runner: missing selected typed custom helper"
+
+-- Interpret the planner's structural order for evaluator values.  The action
+-- algebra supplies deletion/child ordering; constructor replacement is kept
+-- ahead of fields, so native and eval take the same greedy path.
+structuralShrink : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  Value e ->
+  <e> List (Value e)
+structuralShrink _ _ GInt (VInt n) = shrinkInt n
+structuralShrink _ _ GBool (VBool True) = [VBool False]
+structuralShrink _ _ GBool _ = []
+structuralShrink _ _ GFloat (VFloat x) =
+  if x == 0.0 then [] else [VFloat 0.0, VFloat (x / 2.0)]
+structuralShrink _ _ GString (VString s) =
+  if s == "" then [] else [VString (stringSlice 0 (stringLength s / 2) s)]
+structuralShrink _ _ GChar (VChar _) = []
+structuralShrink _ _ GUnit _ = []
+structuralShrink ge env (GList plan) (VList values) =
+  shrinkListByActions ge env plan values (shrinkActions (GList plan))
+structuralShrink ge env (GArray plan) (VArray values) =
+  shrinkArrayByActions ge env plan (toList values) (shrinkActions (GArray plan))
+structuralShrink ge env (GOption plan) (VCon "Some" [value]) =
+  shrinkOptionByActions ge env plan value (shrinkActions (GOption plan))
+structuralShrink _ _ (GOption _) _ = []
+structuralShrink ge env (result@(GResult err _)) (VCon "Err" [value]) =
+  shrinkResultByActions ge env err "Err" value (shrinkActions result)
+structuralShrink ge env (result@(GResult _ ok)) (VCon "Ok" [value]) =
+  shrinkResultByActions ge env ok "Ok" value (shrinkActions result)
+structuralShrink _ _ (GResult _ _) _ = []
+structuralShrink ge env (GTuple plans) (VTuple values) =
+  shrinkTupleByActions ge env plans values (shrinkActions (GTuple plans))
+structuralShrink ge env (nominal@(GNominal key _)) value =
+  shrinkNominal ge env nominal key value
+structuralShrink ge env (custom@(GCustom _)) value =
+  shrinkCustom ge env custom value
+structuralShrink _ _ _ _ = []
+
+shrinkListByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List (Value e) ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkListByActions _ _ _ _ [] = []
+shrinkListByActions ge env plan values (DeleteElements :: actions) =
+  map VList (deleteEach values)
+    ++ shrinkListByActions ge env plan values actions
+shrinkListByActions ge env plan values (ShrinkChildren :: actions) =
+  map VList (shrinkElements ge env plan values)
+    ++ shrinkListByActions ge env plan values actions
+shrinkListByActions ge env plan values (_ :: actions) =
+  shrinkListByActions ge env plan values actions
+
+shrinkArrayByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List (Value e) ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkArrayByActions _ _ _ _ [] = []
+shrinkArrayByActions ge env plan values (DeleteElements :: actions) =
+  map (xs => VArray (arrayFromList xs)) (deleteEach values)
+    ++ shrinkArrayByActions ge env plan values actions
+shrinkArrayByActions ge env plan values (ShrinkChildren :: actions) =
+  map (xs => VArray (arrayFromList xs)) (shrinkElements ge env plan values)
+    ++ shrinkArrayByActions ge env plan values actions
+shrinkArrayByActions ge env plan values (_ :: actions) =
+  shrinkArrayByActions ge env plan values actions
+
+shrinkOptionByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  Value e ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkOptionByActions _ _ _ _ [] = []
+shrinkOptionByActions ge env plan value (ReplaceEarlierNullary :: actions) =
+  VCon "None" [] :: shrinkOptionByActions ge env plan value actions
+shrinkOptionByActions ge env plan value (ShrinkChildren :: actions) =
+  map (v => VCon "Some" [v]) (structuralShrink ge env plan value)
+    ++ shrinkOptionByActions ge env plan value actions
+shrinkOptionByActions ge env plan value (_ :: actions) =
+  shrinkOptionByActions ge env plan value actions
+
+shrinkResultByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  String ->
+  Value e ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkResultByActions _ _ _ _ _ [] = []
+shrinkResultByActions ge env plan tag value (ShrinkChildren :: actions) =
+  map (v => VCon tag [v]) (structuralShrink ge env plan value)
+    ++ shrinkResultByActions ge env plan tag value actions
+shrinkResultByActions ge env plan tag value (_ :: actions) =
+  shrinkResultByActions ge env plan tag value actions
+
+shrinkTupleByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  List GenPlan ->
+  List (Value e) ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkTupleByActions _ _ _ _ [] = []
+shrinkTupleByActions ge env plans values (ShrinkChildren :: actions) =
+  map VTuple (shrinkPlanValues ge env plans values)
+    ++ shrinkTupleByActions ge env plans values actions
+shrinkTupleByActions ge env plans values (_ :: actions) =
+  shrinkTupleByActions ge env plans values actions
+
+shrinkElements : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List (Value e) ->
+  <e> List (List (Value e))
+shrinkElements _ _ _ [] = []
+shrinkElements ge env plan (value :: values) =
+  let here = map (prependBefore values) (structuralShrink ge env plan value)
+  here ++ map (prepend value) (shrinkElements ge env plan values)
+
+shrinkPlanValues : GenEnv ->
+  EvalEnv (Value e) ->
+  List GenPlan ->
+  List (Value e) ->
+  <e> List (List (Value e))
+shrinkPlanValues _ _ [] _ = []
+shrinkPlanValues _ _ _ [] = []
+shrinkPlanValues ge env (plan :: plans) (value :: values) =
+  map (prependBefore values) (structuralShrink ge env plan value)
+    ++ map (prepend value) (shrinkPlanValues ge env plans values)
+
+shrinkNominal : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  TypeKey ->
+  Value e ->
+  <e> List (Value e)
+shrinkNominal ge env nominal key value = match planDef (genEnvPlan ge) key
+  Ok (PlanDef _ _ _ _ ctors) =>
+    shrinkNominalByActions ge env nominal ctors value (shrinkActions nominal)
+  Err _ => []
+
+shrinkNominalByActions : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List PlanCtor ->
+  Value e ->
+  List ShrinkAction ->
+  <e> List (Value e)
+shrinkNominalByActions _ _ _ _ _ [] = []
+shrinkNominalByActions ge env nominal ctors value (ReplaceEarlierNullary :: actions) =
+  earlierNullaryCtorValue ctors value
+    ++ shrinkNominalByActions ge env nominal ctors value actions
+shrinkNominalByActions ge env nominal ctors value (ShrinkChildren :: actions) =
+  shrinkNominalFields ge env nominal ctors value
+    ++ shrinkNominalByActions ge env nominal ctors value actions
+shrinkNominalByActions ge env nominal ctors value (_ :: actions) =
+  shrinkNominalByActions ge env nominal ctors value actions
+
+earlierNullaryCtorValue : List PlanCtor -> Value e -> List (Value e)
+earlierNullaryCtorValue ctors value = match nominalRuntime value
+  None => []
+  Some runtime => match earlierNullaryCtor ctors runtime None
+    None => []
+    Some (PlanCtor _ earlierRuntime []) => [VCon earlierRuntime []]
+    Some _ => []
+
+nominalRuntime : Value e -> Option String
+nominalRuntime (VCon runtime _) = Some runtime
+nominalRuntime (VRecord runtime _) = Some runtime
+nominalRuntime _ = None
+
+-- The first nullary constructor before the current constructor gives every
+-- replacement a smaller declaration-order rank.  Never offering the current
+-- constructor prevents the old nullary self-cycle from spending shrink fuel.
+earlierNullaryCtor : List PlanCtor ->
+  String ->
+  Option PlanCtor ->
+  Option PlanCtor
+earlierNullaryCtor [] _ earlier = earlier
+earlierNullaryCtor ((ctor@(PlanCtor _ runtime [])) :: rest) current None =
+  if runtime == current then
     None
-  else match arbImplKeyFor arbs n o
-    Some route => match lookupAssoc "arbitrary" evalEnv
-      Some m => userArbitraryAt route (force m)
-      None => None
-    None => None
-userArbitrary _ _ _ = None
+  else
+    earlierNullaryCtor rest current (Some ctor)
+earlierNullaryCtor ((PlanCtor _ runtime _) :: rest) current earlier =
+  if runtime == current then
+    earlier
+  else
+    earlierNullaryCtor rest current earlier
 
--- Two instances answering to one identity is not a choice the runner may make,
--- so it declines and lets the structural draw (and its report) happen.
-arbImplKeyFor : List ArbImpl -> String -> TyConOrigin -> Option ArbRoute
-arbImplKeyFor arbs n o = match filterList (arbImplAt n o) arbs
-  [ArbImpl _ _ route] => Some route
-  _ => None
+shrinkNominalFields : GenEnv ->
+  EvalEnv (Value e) ->
+  GenPlan ->
+  List PlanCtor ->
+  Value e ->
+  <e> List (Value e)
+shrinkNominalFields ge env nominal ctors (VCon runtime values) =
+  match planCtorRuntime runtime ctors
+    Some ctor => match instantiateCtor (genEnvPlan ge) nominal ctor
+      Ok fields =>
+        map
+          (vs => VCon runtime vs)
+          (shrinkPlanValues ge env (fieldPlans fields) values)
+      Err _ => []
+    None => []
+shrinkNominalFields ge env nominal ctors (VRecord runtime fields) =
+  match planCtorRuntime runtime ctors
+    Some ctor => match instantiateCtor (genEnvPlan ge) nominal ctor
+      Ok plans =>
+        map
+          (vs => VRecord runtime (zipNames (fieldNames fields) vs))
+          (shrinkPlanValues ge env (fieldPlans plans) (fieldValues fields))
+      Err _ => []
+    None => []
+shrinkNominalFields _ _ _ _ _ = []
 
-arbImplAt : String -> TyConOrigin -> ArbImpl -> Bool
-arbImplAt n o (ArbImpl n2 o2 _) = sameTyConHead n o n2 o2
+planCtorRuntime : String -> List PlanCtor -> Option PlanCtor
+planCtorRuntime _ [] = None
+planCtorRuntime runtime ((ctor@(PlanCtor _ actual _)) :: rest) =
+  if runtime == actual then Some ctor else planCtorRuntime runtime rest
 
--- The route's word is an impl's canonical key, matched exactly (`hasKey`).
-userArbitraryAt : ArbRoute -> Value e -> <e> Option (Value e)
-userArbitraryAt (route@(ArbRoute key _ _)) (VMulti vs) =
-  drawArbitrary route (filterList (hasKey key) vs)
-userArbitraryAt (route@(ArbRoute key _ _)) v =
-  drawArbitrary route (filterList (hasKey key) [v])
+fieldPlans : List (Option String, GenPlan) -> List GenPlan
+fieldPlans [] = []
+fieldPlans ((_, plan) :: rest) = plan :: fieldPlans rest
 
--- Two same-spelled types that BOTH carry an instance produce two candidates
--- under one route word, so the word is not enough to choose between them; the
--- position the declaration walk assigned is (#2820, `ArbRoute`).  The total
--- guards it: a candidate list of a different length is one the decl walk did
--- not describe, so the correspondence the position rests on does not hold and
--- the runner reports rather than guesses — the same answer it gives for a type
--- it has no instance for at all.
-drawArbitrary : ArbRoute -> List (Value e) -> <e> Option (Value e)
-drawArbitrary (ArbRoute _ i total) cands
-  | listLen cands /= total = None
-  | otherwise = map (c => force (apply c VUnit)) (candAt i cands)
+fieldNames : List (String, Value e) -> List String
+fieldNames [] = []
+fieldNames ((name, _) :: rest) = name :: fieldNames rest
 
--- The [i]th element; the stdlib has no `nth` (`take`/`drop`/`indexed`/
--- `elemIndex` are its nearest neighbors).
-candAt : Int -> List (Value e) -> Option (Value e)
-candAt _ [] = None
-candAt i (v :: rest)
-  | i <= 0 = Some v
-  | otherwise = candAt (i - 1) rest
+fieldValues : List (String, Value e) -> List (Value e)
+fieldValues [] = []
+fieldValues ((_, value) :: rest) = value :: fieldValues rest
+
+zipNames : List String -> List (Value e) -> List (String, Value e)
+zipNames [] _ = []
+zipNames _ [] = []
+zipNames (name :: names) (value :: values) =
+  (name, value) :: zipNames names values
 
 printCounterexample : List (String, Value e) -> <IO> Unit
 printCounterexample [] = ()
@@ -1009,45 +915,48 @@ shrinkFuel = 10000
 -- confirmed: `test_main` failed to typecheck with "declared with <> but
 -- also performs <IO>" when tried). The exhaustion flag is instead reported
 -- by the caller, `runProp`, which is unconditionally <IO> already.
-shrinkLoop : List (String, Value e) ->
+shrinkLoop : GenEnv ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   List (String, Value e) ->
   <e> (List (String, Value e), Bool)
-shrinkLoop evalEnv params body candidate =
-  shrinkLoopFuel evalEnv params body candidate shrinkFuel
+shrinkLoop genEnv evalEnv params body candidate =
+  shrinkLoopFuel genEnv evalEnv params body candidate shrinkFuel
 
-shrinkLoopFuel : List (String, Value e) ->
+shrinkLoopFuel : GenEnv ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   List (String, Value e) ->
   Int ->
   <e> (List (String, Value e), Bool)
-shrinkLoopFuel _ _ _ candidate 0 = (candidate, True)
-shrinkLoopFuel evalEnv params body candidate fuel =
-  match tryShrinkOne evalEnv params body candidate 0
-    Some better => shrinkLoopFuel evalEnv params body better (fuel - 1)
+shrinkLoopFuel _ _ _ _ candidate 0 = (candidate, True)
+shrinkLoopFuel genEnv evalEnv params body candidate fuel =
+  match tryShrinkOne genEnv evalEnv params body candidate 0
+    Some better => shrinkLoopFuel genEnv evalEnv params body better (fuel - 1)
     None => (candidate, False)
 
 -- Try each param in order; return the first candidate where some smaller value
 -- still fails the prop.
-tryShrinkOne : List (String, Value e) ->
+tryShrinkOne : GenEnv ->
+  EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   List (String, Value e) ->
   Int ->
   <e> Option (List (String, Value e))
-tryShrinkOne evalEnv params body candidate i
+tryShrinkOne genEnv evalEnv params body candidate i
   | i >= listLen params = None
   | otherwise =
     let (PropParam x _ ty) = nthList params i
     let currentV = assocVal x candidate
-    let smaller = shrinkValue ty currentV
+    let smaller = shrinkForParam genEnv evalEnv ty currentV
     match findSmaller evalEnv params body candidate x smaller
       Some better => Some better
-      None => tryShrinkOne evalEnv params body candidate (i + 1)
+      None => tryShrinkOne genEnv evalEnv params body candidate (i + 1)
 
-findSmaller : List (String, Value e) ->
+findSmaller : EvalEnv (Value e) ->
   List PropParam ->
   Expr ->
   List (String, Value e) ->
@@ -1159,20 +1068,76 @@ countTrue (False :: rest) = countTrue rest
 -- shrunk counterexample is RNG-dependent and diverges across the three runners
 -- (see the module header), so a consumer must treat the counterexample text as
 -- non-portable — do not bake a failing-prop counterexample into a golden.
-public export data PropResult = PropResult String Bool String
+-- The engine is data rather than an ambient CLI label: the JSON/MCP consumers
+-- must not silently present an interpreter result as a native result when a
+-- caller asks for both engines.
+public export data PropStatus =
+  | PropPassedResult
+  | PropFailedResult
+  | PropErroredResult
+
+public export data PropFailureKind =
+  | PropLawFalse
+  | PropCapabilityError
+  | PropBuildError
+  | PropRuntimeError
+  | PropProtocolError
+  | PropTypeError
+
+public export data PropRequest = PropRequest String Int Int
+
+export
+propRequestName : PropRequest -> String
+propRequestName (PropRequest name _ _) = name
+
+export
+propRequestSeed : PropRequest -> Int
+propRequestSeed (PropRequest _ seed _) = seed
+
+export
+propRequestCases : PropRequest -> Int
+propRequestCases (PropRequest _ _ cases) = cases
+
+public export data PropResult =
+  | PropResult String String PropStatus (Option PropFailureKind) String Int Int
 --                                          name   ok   detail
+
+public export data PreparedPropRequest =
+  | PreparedRun PropRequest Decl (List GenPlan)
+  | PreparedResult PropResult
 
 export
 propResultName : PropResult -> String
-propResultName (PropResult n _ _) = n
+propResultName (PropResult _ n _ _ _ _ _) = n
+
+export
+propResultEngine : PropResult -> String
+propResultEngine (PropResult e _ _ _ _ _ _) = e
 
 export
 propResultPassed : PropResult -> Bool
-propResultPassed (PropResult _ p _) = p
+propResultPassed (PropResult _ _ PropPassedResult _ _ _ _) = True
+propResultPassed _ = False
 
 export
 propResultDetail : PropResult -> String
-propResultDetail (PropResult _ _ d) = d
+propResultDetail (PropResult _ _ _ _ d _ _) = d
+
+export
+propResultStatus : PropResult -> PropStatus
+propResultStatus (PropResult _ _ s _ _ _ _) = s
+
+export
+propResultFailureKind : PropResult -> Option PropFailureKind
+propResultFailureKind (PropResult _ _ _ kind _ _ _) = kind
+
+export
+propResultSeed : PropResult -> Int
+propResultSeed (PropResult _ _ _ _ _ seed _) = seed
+
+export
+propResultCases : PropResult -> Int
+propResultCases (PropResult _ _ _ _ _ _ cases) = cases
 
 -- Run every prop and return one PropResult each, in source order.  No output.
 -- Same `cases`/`filterOpt` knobs as `runAllProps` (F-3: both hardcoded-100
@@ -1193,35 +1158,395 @@ runAllPropsResults : Int ->
   <e> List PropResult
 runAllPropsResults cases filterOpt propLines evalEnv program allDecls =
   let props = filterPropsByName filterOpt (filterProps program)
+  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
   if isEmptyL props then
     []
   else
-    runEachResult cases propLines (buildGenEnv program allDecls) evalEnv props
+    runEachResult
+      cases
+      propLines
+      (buildGenEnv program allDecls)
+      evalEnv
+      rootEnv
+      props
 
-runEachResult : Int ->
+-- Request-driven structured execution is the command layer's raw contract.  A
+-- pin may supply its own replay seed and case budget, so deriving these from a
+-- process-global default would make a known-red witness non-reproducible.  The
+-- request list is therefore authoritative and its order (including duplicates)
+-- is preserved.  A declaration name is NOT an identity: duplicate root names
+-- are a protocol error for every matching request, never "first one wins".
+export
+runAllPropRequestsResults : List PropRequest ->
+  List (String, Int) ->
+  List (String, Value e) ->
+  List Decl ->
+  List Decl ->
+  <e> List PropResult
+runAllPropRequestsResults requests propLines evalEnv program allDecls =
+  runPropRequests
+    requests
+    propLines
+    (buildGenEnv program allDecls)
+    evalEnv
+    (filterProps program)
+
+-- The command path supplies the paired raw/elaborated graph retained by its
+-- loader.  Keep the historical entry above for direct callers, while making
+-- identity/visibility decisions from the graph rather than a spelling scan.
+export
+runAllPlannedPropRequestsResults : String ->
+  List PlanModule ->
+  List PropRequest ->
+  List (String, Int) ->
+  EvalEnv (Value e) ->
+  List Decl ->
+  <e> List PropResult
+runAllPlannedPropRequestsResults root modules requests propLines evalEnv program =
+  match buildPlanEnvModules root modules
+    Ok planEnv =>
+      runPropRequestsInEnv
+        requests
+        propLines
+        (buildGenEnvWithPlan (runtimeModuleDecls modules) planEnv)
+        evalEnv
+        (filterProps program)
+    Err err => map (requestPlanError err) requests
+
+export
+preparePlannedPropRequests : String ->
+  List PlanModule ->
+  List PropRequest ->
+  List Decl ->
+  Result PlanError (PlanEnv, List PreparedPropRequest)
+preparePlannedPropRequests root modules requests rootProps =
+  map
+    (env =>
+      (env, prepareRequests env requests requests (filterProps rootProps)))
+    (buildPlanEnvModules root modules)
+
+prepareRequests : PlanEnv ->
+  List PropRequest ->
+  List PropRequest ->
+  List Decl ->
+  List PreparedPropRequest
+prepareRequests _ _ [] _ = []
+prepareRequests env all ((request@(PropRequest name seed cases)) :: rest) props =
+  let row =
+    if requestNameRepeated name all then
+      PreparedResult (duplicateRequest name seed cases)
+    else if cases <= 0 then
+      PreparedResult
+        (PropResult
+          "eval"
+          name
+          PropErroredResult
+          (Some PropProtocolError)
+          "property request has a non-positive case count"
+          seed
+          cases)
+    else match propsNamed name props
+      [decl@(DProp _ _ params _)] => match planPropParams env name params
+        Ok plans => PreparedRun request decl plans
+        Err e => PreparedResult (capabilityResult name seed cases e)
+      [] => PreparedResult (missingRequest request)
+      _ =>
+        PreparedResult
+          (PropResult
+            "eval"
+            name
+            PropErroredResult
+            (Some PropProtocolError)
+            "property request is ambiguous: the root module declares '{name}' more than once"
+            seed
+            cases)
+  row :: prepareRequests env all rest props
+
+export
+runPreparedPropRequestsResults : PlanEnv ->
+  List PropHelper ->
+  List PreparedPropRequest ->
+  List (String, Int) ->
+  EvalEnv (Value e) ->
+  List Decl ->
+  <e> List PropResult
+runPreparedPropRequestsResults planEnv helpers rows propLines evalEnv runtimeDecls =
+  runPreparedRows
+    (buildGenEnvWithHelpers runtimeDecls planEnv helpers)
+    rows
+    propLines
+    evalEnv
+
+runPreparedRows : GenEnv ->
+  List PreparedPropRequest ->
+  List (String, Int) ->
+  EvalEnv (Value e) ->
+  <e> List PropResult
+runPreparedRows _ [] _ _ = []
+runPreparedRows genEnv ((PreparedResult result) :: rest) propLines evalEnv =
+  result :: runPreparedRows genEnv rest propLines evalEnv
+runPreparedRows genEnv ((PreparedRun (PropRequest name seed cases) (DProp _ _ params body) plans) :: rest) propLines evalEnv =
+  let _ = seedPropRng seed
+  (match helperFailure genEnv evalEnv plans
+      Some detail => runtimeResult name seed cases detail
+      None =>
+        let _ = beginCustomPropStream seed
+        propResultOf
+          (genEnvPlan genEnv)
+          plans
+          cases
+          seed
+          (lineOfPropName name propLines)
+          name
+          (findFailurePlanned genEnv evalEnv params plans body cases 1))
+    :: runPreparedRows genEnv rest propLines evalEnv
+runPreparedRows genEnv (_ :: rest) propLines evalEnv =
+  runPreparedRows genEnv rest propLines evalEnv
+
+export
+runAllPlannedPropRequestsWithHelpersResults : String ->
+  List PlanModule ->
+  List PropHelper ->
+  List PropRequest ->
+  List (String, Int) ->
+  EvalEnv (Value e) ->
+  List Decl ->
+  <e> List PropResult
+runAllPlannedPropRequestsWithHelpersResults root modules helpers requests propLines evalEnv program =
+  match buildPlanEnvModules root modules
+    Ok planEnv =>
+      runPropRequestsInEnv
+        requests
+        propLines
+        (buildGenEnvWithHelpers (runtimeModuleDecls modules) planEnv helpers)
+        evalEnv
+        (filterProps program)
+    Err err => map (requestPlanError err) requests
+
+runtimeModuleDecls : List PlanModule -> List Decl
+runtimeModuleDecls [] = []
+runtimeModuleDecls ((PlanModule _ _ runtime) :: rest) =
+  runtime ++ runtimeModuleDecls rest
+
+requestPlanError : PlanError -> PropRequest -> PropResult
+requestPlanError err (PropRequest name seed cases) =
+  capabilityResult name seed cases err
+
+runPropRequests : List PropRequest ->
   List (String, Int) ->
   GenEnv ->
   List (String, Value e) ->
   List Decl ->
   <e> List PropResult
-runEachResult _ _ _ _ [] = []
-runEachResult cases propLines genEnv evalEnv ((DProp _ name params body) :: rest) =
-  propResultOf
-      cases
-      (lineOfPropName name propLines)
-      name
-      (findFailure genEnv evalEnv params body cases 1)
-    :: runEachResult cases propLines genEnv evalEnv rest
-runEachResult cases propLines genEnv evalEnv (_ :: rest) =
-  runEachResult cases propLines genEnv evalEnv rest
+runPropRequests requests propLines genEnv evalEnv props =
+  let rootEnv = extendEnv (EvalEnv [[]]) evalEnv
+  runPropRequestsChecked
+    requests
+    requests
+    propLines
+    genEnv
+    evalEnv
+    rootEnv
+    props
 
-propResultOf : Int -> Int -> String -> PropOutcome (Value e) -> PropResult
-propResultOf cases _line name PropPassed =
-  PropResult name True "\{intToString cases} tests passed"
-propResultOf _cases line name (PropFailed run shrunk fuelExhausted) =
+runPropRequestsInEnv : List PropRequest ->
+  List (String, Int) ->
+  GenEnv ->
+  EvalEnv (Value e) ->
+  List Decl ->
+  <e> List PropResult
+runPropRequestsInEnv requests propLines genEnv rootEnv props =
+  runPropRequestsChecked requests requests propLines genEnv [] rootEnv props
+
+runPropRequestsChecked : List PropRequest ->
+  List PropRequest ->
+  List (String, Int) ->
+  GenEnv ->
+  List (String, Value e) ->
+  EvalEnv (Value e) ->
+  List Decl ->
+  <e> List PropResult
+runPropRequestsChecked _ [] _ _ _ _ _ = []
+runPropRequestsChecked all ((request@(PropRequest name seed cases)) :: rest) propLines genEnv evalEnv rootEnv props =
+  let result =
+    if requestNameRepeated name all then
+      duplicateRequest name seed cases
+    else
+      runPropRequest request propLines genEnv evalEnv rootEnv props
+  result
+    :: runPropRequestsChecked all rest propLines genEnv evalEnv rootEnv props
+
+requestNameRepeated : String -> List PropRequest -> Bool
+requestNameRepeated name requests = requestNameCount name requests > 1
+
+requestNameCount : String -> List PropRequest -> Int
+requestNameCount _ [] = 0
+requestNameCount name ((PropRequest actual _ _) :: rest) =
+  (if name == actual then 1 else 0) + requestNameCount name rest
+
+duplicateRequest : String -> Int -> Int -> PropResult
+duplicateRequest name seed cases =
   PropResult
+    "eval"
     name
-    False
+    PropErroredResult
+    (Some PropProtocolError)
+    "property request names '{name}' more than once"
+    seed
+    cases
+
+runPropRequest : PropRequest ->
+  List (String, Int) ->
+  GenEnv ->
+  List (String, Value e) ->
+  EvalEnv (Value e) ->
+  List Decl ->
+  <e> PropResult
+runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv rootEnv props =
+  let matches = propsNamed name props
+  if cases <= 0 then
+    PropResult
+      "eval"
+      name
+      PropErroredResult
+      (Some PropProtocolError)
+      "property request has a non-positive case count"
+      seed
+      cases
+  else if listLen matches == 1 then
+    let _ = seedPropRng seed
+    match matches
+      [DProp _ _ params body] =>
+        match planPropParams (genEnvPlan genEnv) name params
+          Err e => capabilityResult name seed cases e
+          Ok plans => match helperFailure genEnv rootEnv plans
+            Some detail => runtimeResult name seed cases detail
+            None =>
+              let _ = beginCustomPropStream seed
+              propResultOf
+                (genEnvPlan genEnv)
+                plans
+                cases
+                seed
+                (lineOfPropName name propLines)
+                name
+                (findFailure genEnv rootEnv params body cases 1)
+      _ => missingRequest request
+  else if listLen matches == 0 then
+    missingRequest request
+  else
+    PropResult
+      "eval"
+      name
+      PropErroredResult
+      (Some PropProtocolError)
+      "property request is ambiguous: the root module declares '\{name}' more than once"
+      seed
+      cases
+
+propsNamed : String -> List Decl -> List Decl
+propsNamed _ [] = []
+propsNamed wanted ((d@(DProp _ name _ _)) :: rest)
+  | wanted == name = d :: propsNamed wanted rest
+  | otherwise = propsNamed wanted rest
+propsNamed wanted (_ :: rest) = propsNamed wanted rest
+
+missingRequest : PropRequest -> PropResult
+missingRequest (PropRequest name seed cases) =
+  PropResult
+    "eval"
+    name
+    PropErroredResult
+    (Some PropProtocolError)
+    "property request names no root declaration '\{name}'"
+    seed
+    cases
+
+runEachResult : Int ->
+  List (String, Int) ->
+  GenEnv ->
+  List (String, Value e) ->
+  EvalEnv (Value e) ->
+  List Decl ->
+  <e> List PropResult
+runEachResult _ _ _ _ _ [] = []
+runEachResult cases propLines genEnv evalEnv rootEnv ((DProp _ name params body) :: rest) =
+  let seedAtStart = !propRngStateRef
+  (match planPropParams (genEnvPlan genEnv) name params
+      Err e => capabilityResult name seedAtStart cases e
+      Ok plans => match helperFailure genEnv rootEnv plans
+        Some detail => runtimeResult name seedAtStart cases detail
+        None =>
+          let _ = beginCustomPropStream seedAtStart
+          propResultOf
+            (genEnvPlan genEnv)
+            plans
+            cases
+            seedAtStart
+            (lineOfPropName name propLines)
+            name
+            (findFailure genEnv rootEnv params body cases 1))
+    :: runEachResult cases propLines genEnv evalEnv rootEnv rest
+runEachResult cases propLines genEnv evalEnv rootEnv (_ :: rest) =
+  runEachResult cases propLines genEnv evalEnv rootEnv rest
+
+planPropParams : PlanEnv ->
+  String ->
+  List PropParam ->
+  Result PlanError (List GenPlan)
+planPropParams _ _ [] = Ok []
+planPropParams planEnv propName ((PropParam param _ ty) :: rest) = match (
+  planFor planEnv propName param ty,
+  planPropParams planEnv propName rest,
+)
+  (Ok plan, Ok plans) => Ok (plan :: plans)
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+capabilityResult : String -> Int -> Int -> PlanError -> PropResult
+capabilityResult name seed cases err =
+  PropResult
+    "eval"
+    name
+    PropErroredResult
+    (Some PropCapabilityError)
+    (planErrorText err)
+    seed
+    cases
+
+runtimeResult : String -> Int -> Int -> String -> PropResult
+runtimeResult name seed cases detail =
+  PropResult
+    "eval"
+    name
+    PropErroredResult
+    (Some PropRuntimeError)
+    detail
+    seed
+    cases
+propResultOf : PlanEnv ->
+  List GenPlan ->
+  Int ->
+  Int ->
+  Int ->
+  String ->
+  PropOutcome (Value e) ->
+  PropResult
+propResultOf _ _ cases seed _line name PropPassed =
+  PropResult
+    "eval"
+    name
+    PropPassedResult
+    None
+    "\{intToString cases} tests passed"
+    seed
+    cases
+propResultOf planEnv plans cases seed line name (PropFailed run shrunk fuelExhausted) =
+  PropResult
+    "eval"
+    name
+    PropFailedResult
+    (Some PropLawFalse)
     (stringConcat [
       lineDetailPrefix line,
       "failed after ",
@@ -1230,22 +1555,196 @@ propResultOf _cases line name (PropFailed run shrunk fuelExhausted) =
         " test; counterexample: "
       else
         " tests; counterexample: ",
-      renderCounterexample shrunk,
+      renderCounterexample planEnv plans shrunk,
       if fuelExhausted then
         " (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)"
       else
         "",
     ])
+    seed
+    cases
 
 lineDetailPrefix : Int -> String
 lineDetailPrefix 0 = ""
 lineDetailPrefix line = "line \{intToString line}: "
 
-renderCounterexample : List (String, Value e) -> String
-renderCounterexample [] = ""
-renderCounterexample [(x, v)] = stringConcat [x, " = ", ppValue v]
-renderCounterexample ((x, v) :: rest) =
-  stringConcat [x, " = ", ppValue v, ", ", renderCounterexample rest]
+renderCounterexample : PlanEnv ->
+  List GenPlan ->
+  List (String, Value e) ->
+  String
+renderCounterexample _ _ [] = ""
+renderCounterexample env (plan :: plans) [(name, value)] =
+  "\{name} = \{renderPlanValue env plan value}"
+renderCounterexample env (plan :: plans) ((name, value) :: rest) = stringConcat
+  [
+    name,
+    " = ",
+    renderPlanValue env plan value,
+    ", ",
+    renderCounterexample env plans rest,
+  ]
+renderCounterexample _ _ [(name, _)] = name ++ " = <unplanned>"
+renderCounterexample env [] ((name, _) :: rest) =
+  "\{name} = <unplanned>, \{renderCounterexample env [] rest}"
+
+renderPlanValue : PlanEnv -> GenPlan -> Value e -> String
+renderPlanValue _ GInt value = ppValue value
+renderPlanValue _ GBool (VBool True) = "True"
+renderPlanValue _ GBool (VBool False) = "False"
+renderPlanValue _ GBool value = ppValue value
+renderPlanValue _ GFloat value = ppValue value
+renderPlanValue _ GChar value = ppValue value
+renderPlanValue _ GString value = ppValue value
+renderPlanValue _ GUnit value = ppValue value
+renderPlanValue env (GList plan) (VList values) =
+  "[" ++ renderPlanValues env plan values ++ "]"
+renderPlanValue env (GArray plan) (VArray values) =
+  "[" ++ renderPlanValues env plan (arrayValues values) ++ "]"
+renderPlanValue _ (GOption _) (VCon "None" []) = "None"
+renderPlanValue env (GOption plan) (VCon "Some" [value]) =
+  "Some(" ++ renderPlanValue env plan value ++ ")"
+renderPlanValue env (GResult err _) (VCon "Err" [value]) =
+  "Err(" ++ renderPlanValue env err value ++ ")"
+renderPlanValue env (GResult _ ok) (VCon "Ok" [value]) =
+  "Ok(" ++ renderPlanValue env ok value ++ ")"
+renderPlanValue env (GTuple plans) (VTuple values) =
+  "(" ++ renderPlanValuePairs env plans values ++ ")"
+renderPlanValue env (nominal@(GNominal key _)) value =
+  renderNominalValue env nominal key value
+renderPlanValue env (GCustom (CustomPlan key carrier _)) value =
+  match displayCarrierPlans env (carrierArgs carrier)
+    Some args => renderNominalValue env (GNominal key args) key value
+    None => hiddenType key
+renderPlanValue _ _ _ = "<value>"
+
+renderPlanValues : PlanEnv -> GenPlan -> List (Value e) -> String
+renderPlanValues _ _ [] = ""
+renderPlanValues env plan [value] = renderPlanValue env plan value
+renderPlanValues env plan (value :: rest) =
+  "\{renderPlanValue env plan value}, \{renderPlanValues env plan rest}"
+
+arrayValues : Array a -> List a
+arrayValues values = arrayValuesGo values 0 (arrayLength values)
+
+arrayValuesGo : Array a -> Int -> Int -> List a
+arrayValuesGo _ index size
+  | index >= size = []
+arrayValuesGo values index size =
+  arrayGetUnsafe index values :: arrayValuesGo values (index + 1) size
+
+renderPlanValuePairs : PlanEnv -> List GenPlan -> List (Value e) -> String
+renderPlanValuePairs _ [] [] = ""
+renderPlanValuePairs env (plan :: plans) (value :: values) =
+  let rendered = renderPlanValue env plan value
+  if isEmptyL plans || isEmptyL values then
+    rendered
+  else
+    "\{rendered}, \{renderPlanValuePairs env plans values}"
+renderPlanValuePairs _ _ _ = "<value>"
+
+renderNominalValue : PlanEnv -> GenPlan -> TypeKey -> Value e -> String
+renderNominalValue env nominal key value = match planDef env key
+  Ok (PlanDef _ owner _ visibility ctors) =>
+    if nominalVisible env owner visibility then
+      renderVisibleNominal env nominal key ctors value
+    else
+      hiddenType key
+  Err _ => hiddenType key
+
+nominalVisible : PlanEnv -> String -> PlanVisibility -> Bool
+nominalVisible _ _ PlanPublicCtors = True
+nominalVisible (PlanEnv root _ _ _ _) owner PlanLocal = owner == root
+nominalVisible (PlanEnv root _ _ _ _) owner PlanAbstract = owner == root
+
+hiddenType : TypeKey -> String
+hiddenType (TypeKey name _) = "<" ++ name ++ ">"
+
+renderVisibleNominal : PlanEnv ->
+  GenPlan ->
+  TypeKey ->
+  List PlanCtor ->
+  Value e ->
+  String
+renderVisibleNominal env nominal key ctors (VCon runtime values) =
+  match runtimeCtor runtime ctors
+    Some ctor => match instantiateCtor env nominal ctor
+      Ok fields => renderPositionalCtor env ctor fields values
+      Err _ => hiddenType key
+    None => hiddenType key
+renderVisibleNominal env nominal key ctors (VRecord runtime values) =
+  match runtimeCtor runtime ctors
+    Some ctor => match instantiateCtor env nominal ctor
+      Ok fields => renderNamedCtor env ctor fields values
+      Err _ => hiddenType key
+    None => hiddenType key
+renderVisibleNominal _ _ key _ _ = hiddenType key
+
+runtimeCtor : String -> List PlanCtor -> Option PlanCtor
+runtimeCtor _ [] = None
+runtimeCtor runtime ((ctor@(PlanCtor _ actual _)) :: rest)
+  | runtime == actual = Some ctor
+  | otherwise = runtimeCtor runtime rest
+
+renderPositionalCtor : PlanEnv ->
+  PlanCtor ->
+  List (Option String, GenPlan) ->
+  List (Value e) ->
+  String
+renderPositionalCtor env (PlanCtor source _ _) fields values =
+  "\{source}(\{renderFields env fields values})"
+
+renderNamedCtor : PlanEnv ->
+  PlanCtor ->
+  List (Option String, GenPlan) ->
+  List (String, Value e) ->
+  String
+renderNamedCtor env (PlanCtor source _ _) fields values =
+  "\{source} { \{renderNamedFields env fields values} }"
+
+renderFields : PlanEnv ->
+  List (Option String, GenPlan) ->
+  List (Value e) ->
+  String
+renderFields _ [] [] = ""
+renderFields env ((_, plan) :: plans) (value :: values) =
+  let rendered = renderPlanValue env plan value
+  if isEmptyL plans || isEmptyL values then
+    rendered
+  else
+    "\{rendered}, \{renderFields env plans values}"
+renderFields _ _ _ = "<value>"
+
+renderNamedFields : PlanEnv ->
+  List (Option String, GenPlan) ->
+  List (String, Value e) ->
+  String
+renderNamedFields _ [] _ = ""
+renderNamedFields env ((Some name, plan) :: rest) values =
+  match lookupAssoc name values
+    Some value =>
+      let rendered = "\{name} = \{renderPlanValue env plan value}"
+      if isEmptyL rest then
+        rendered
+      else
+        "\{rendered}, \{renderNamedFields env rest values}"
+    None => name ++ " = <value>"
+renderNamedFields _ ((None, _) :: _) _ = "<value>"
+
+carrierArgs : Ty -> List Ty
+carrierArgs carrier = carrierArgsGo [] carrier
+
+carrierArgsGo : List Ty -> Ty -> List Ty
+carrierArgsGo acc (TyApp head arg) = carrierArgsGo (arg :: acc) head
+carrierArgsGo acc _ = acc
+
+displayCarrierPlans : PlanEnv -> List Ty -> Option (List GenPlan)
+displayCarrierPlans _ [] = Some []
+displayCarrierPlans env (ty :: rest) = match (
+  planFor env "" "display" ty,
+  displayCarrierPlans env rest,
+)
+  (Ok plan, Some plans) => Some (plan :: plans)
+  _ => None
 
 export
 hasProps : List Decl -> Bool

@@ -1,0 +1,229 @@
+-- The command report preserves the engine's raw result and grades a matching
+-- known-red pin separately. These tests exercise that boundary directly.
+
+import test.{expectEach, expectEqual, expectFalse, expectTrue}
+import tools.doctest.{Engine(..), ExResult(..)}
+import tools.test_cmd.{cliGradedTestReportJson}
+import json.{Json, asInt, get}
+import tools.prop_runner.{PropFailureKind(..), PropResult(..), PropStatus(..)}
+import tools.test_pins.{
+  PinIndex,
+  PinKind(..),
+  TestExpectedFailure(..),
+  TestPin(..),
+  buildPinIndex,
+}
+import tools.test_pins_report.{
+  GradedProp,
+  GradedTest,
+  gradeProps,
+  gradeTests,
+  gradedPropPassed,
+  gradedPropPinDetail,
+  gradedPropStatus,
+  gradedTestPassed,
+  gradedTestPinDetail,
+  gradedTestRawStatus,
+  gradedTestStatus,
+  knownRedCountTests,
+}
+import support.ordmap.{omEmpty}
+
+pin : PinKind -> String -> String -> Option String -> TestPin
+pin kind name engine detail = Pin {
+  pinFile = "main.mdk",
+  pinKind = kind,
+  pinName = name,
+  pinEngine = engine,
+  pinIssue = 73,
+  pinSeed = Some (0 - 9),
+  pinCases = Some 8,
+  pinDetail = detail,
+  pinExpected = expected kind detail,
+}
+
+expected : PinKind -> Option String -> Option TestExpectedFailure
+expected PropPin _ = None
+expected TestPin None = None
+expected TestPin (Some detail) = Some (ExpectAssertion detail)
+
+errorPin : TestPin
+errorPin = Pin {
+  pinFile = "main.mdk",
+  pinKind = TestPin,
+  pinName = "native error",
+  pinEngine = "native",
+  pinIssue = 74,
+  pinSeed = None,
+  pinCases = None,
+  pinDetail = Some "native detail",
+  pinExpected = Some (ExpectError "native detail"),
+}
+
+index : PinIndex
+index = match buildPinIndex [
+  pin PropPin "law" "native" None,
+  pin TestPin "assertion" "eval" (Some "expected detail"),
+  errorPin,
+]
+  Ok value => value
+  Err _ => omEmpty
+
+test "a law false is held while an XPASS and engine error remain failures" =
+  let held = gradeProps index "main.mdk" [
+    PropResult
+      "native"
+      "law"
+      PropFailedResult
+      (Some PropLawFalse)
+      "false"
+      (0 - 9)
+      8,
+  ]
+  let drained = gradeProps index "main.mdk" [
+    PropResult "native" "law" PropPassedResult None "8 tests" (0 - 9) 8,
+  ]
+  let errored = gradeProps index "main.mdk" [
+    PropResult
+      "native"
+      "law"
+      PropErroredResult
+      (Some PropRuntimeError)
+      "panic"
+      (0 - 9)
+      8,
+  ]
+  expectEach [
+    ("the exact law failure holds", expectTrue (onlyPropPassed held)),
+    (
+      "a held pin has its own status",
+      expectEqual "known-red" (onlyPropStatus held),
+    ),
+    (
+      "the raw result remains visible with its replay values",
+      expectEqual (Some "known-red issue #73 still holds") (onlyPropDetail held),
+    ),
+    ("an XPASS drains the pin", expectFalse (onlyPropPassed drained)),
+    (
+      "a runtime error cannot hold a false-law pin",
+      expectFalse (onlyPropPassed errored),
+    ),
+    (
+      "a held raw failure is counted as known-red rather than a pass",
+      expectEqual
+        (Some 0)
+        (summaryInt
+          "passed"
+          (cliGradedTestReportJson
+            "main.mdk"
+            None
+            [EngNative]
+            []
+            held
+            []
+            False)),
+    ),
+    (
+      "the known-red count is separate from raw pass counts",
+      expectEqual
+        (Some 1)
+        (summaryInt
+          "knownRed"
+          (cliGradedTestReportJson
+            "main.mdk"
+            None
+            [EngNative]
+            []
+            held
+            []
+            False)),
+    ),
+  ]
+
+test "unit pins require their exact assertion message" =
+  let held = gradeTests index "main.mdk" [
+    ("eval", "assertion", 4, Fail "expected detail" "left" "right"),
+  ]
+  let changed = gradeTests index "main.mdk" [
+    ("eval", "assertion", 4, Fail "different detail" "left" "right"),
+  ]
+  expectEach [
+    ("the exact assertion pin holds", expectTrue (onlyTestPassed held)),
+    ("a changed assertion fails the run", expectFalse (onlyTestPassed changed)),
+  ]
+
+test "held drained and changed unit pins retain their human details" =
+  let held = gradeTests index "main.mdk" [
+    ("eval", "assertion", 4, Fail "expected detail" "left" "right"),
+  ]
+  let drained =
+    gradeTests index "main.mdk" [("eval", "assertion", 4, Pass "left" "right")]
+  let changed = gradeTests index "main.mdk" [
+    ("eval", "assertion", 4, Fail "different detail" "left" "right"),
+  ]
+  expectEach [
+    (
+      "a held pin has its own human status",
+      expectEqual "known-red" (onlyTestStatus held),
+    ),
+    (
+      "a drained pin explains its unexpected pass",
+      expectEqual
+        (Some "known-red issue #73 unexpected pass; remove its pin")
+        (onlyTestPinDetail drained),
+    ),
+    (
+      "a changed pin explains the different assertion",
+      expectEqual
+        (Some "known-red issue #73 changed: assertion failure detail changed")
+        (onlyTestPinDetail changed),
+    ),
+  ]
+
+test "an exact native error pin retains the raw error outcome" =
+  let held = gradeTests index "main.mdk" [
+    ("native", "native error", 7, Errored "native detail"),
+  ]
+  expectEach [
+    ("the exact error pin holds", expectTrue (onlyTestPassed held)),
+    (
+      "grading retains the engine error status",
+      expectEqual "error" (onlyTestRawStatus held),
+    ),
+    (
+      "a held raw error has a separate known-red count",
+      expectEqual 1 (knownRedCountTests held),
+    ),
+  ]
+
+onlyPropPassed : List GradedProp -> Bool
+onlyPropPassed [row] = gradedPropPassed row
+onlyPropPassed _ = False
+
+onlyPropStatus : List GradedProp -> String
+onlyPropStatus [row] = gradedPropStatus row
+onlyPropStatus _ = ""
+
+onlyPropDetail : List GradedProp -> Option String
+onlyPropDetail [row] = gradedPropPinDetail row
+onlyPropDetail _ = None
+
+onlyTestPassed : List GradedTest -> Bool
+onlyTestPassed [row] = gradedTestPassed row
+onlyTestPassed _ = False
+
+onlyTestRawStatus : List GradedTest -> String
+onlyTestRawStatus [row] = gradedTestRawStatus row
+onlyTestRawStatus _ = ""
+
+onlyTestStatus : List GradedTest -> String
+onlyTestStatus [row] = gradedTestStatus row
+onlyTestStatus _ = ""
+
+onlyTestPinDetail : List GradedTest -> Option String
+onlyTestPinDetail [row] = gradedTestPinDetail row
+onlyTestPinDetail _ = None
+
+summaryInt : String -> Json -> Option Int
+summaryInt field report =
+  flatMap (summary => flatMap asInt (get field summary)) (get "summary" report)

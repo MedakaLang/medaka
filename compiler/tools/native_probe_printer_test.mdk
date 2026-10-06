@@ -1,0 +1,122 @@
+-- Native probe regressions: the fixture shadows every historical bare
+-- transcript primitive and probe identifier. A passing transcript proves the
+-- generated ordinary-test and doctest programs used their private aliases.
+
+import driver.build_cmd.{cleanupTempDir, makeTempDir, scratchProbeManifest}
+import tools.native_fixture_test_support_test.{writeFixtureFiles}
+import test.{
+  Expectation,
+  expectAll,
+  expectEqual,
+  expectErrContains,
+  expectOkThen,
+  expectTextContainsAll,
+  fail,
+}
+import test_process.{boundedVerbSeconds, medakaBin}
+
+defaultFixtureManifest : String
+defaultFixtureManifest = "[package]\nname = \"native_probe_printer\"\n"
+
+withFixtures : List (String, String) ->
+  (String -> <Exec, IO> Expectation) ->
+  <Exec, IO> Expectation
+withFixtures files inspect =
+  withProjectFixtures defaultFixtureManifest files inspect
+
+withProjectFixtures : String ->
+  List (String, String) ->
+  (String -> <Exec, IO> Expectation) ->
+  <Exec, IO> Expectation
+withProjectFixtures manifest files inspect = match makeTempDir ()
+  Err message => fail message
+  Ok dir =>
+    let result =
+      match writeFixtureFiles dir (("medaka.toml", manifest) :: files)
+        Err message => fail message
+        Ok _ => inspect "\{dir}/main.mdk"
+    let _ = cleanupTempDir dir
+    result
+
+runNative : String -> <Exec, IO> Result String (Int, String, String)
+runNative target = boundedVerbSeconds 120 medakaBin ["test", "--native", target]
+
+shadowSource : String
+shadowSource =
+  "import test.{expectEqual}\nimport fake as MdkProbeTest__\n\nputStrLn : String -> Unit\nputStrLn _ = ()\n\ndebugStringLit : String -> String\ndebugStringLit _ = \"shadowed\"\n\n__ts_0__ = 0\n__tse_0__ = 0\n__tsv_0__ = 0\n__dt_0__ = 0\n\ntest \"native test transcript survives shadows\" = expectEqual 1 1\n\n-- > 1 + 1\n-- 2\n"
+
+test "native probes preserve canonical printers and fresh generated names" =
+  withFixtures
+    [("fake.mdk", "export\nvalue = 0\n"), ("main.mdk", shadowSource)]
+    (target => match runNative target
+      Err message => fail message
+      Ok (code, out, err) => expectAll [
+        expectEqual 0 code,
+        expectEqual "" err,
+        expectTextContainsAll
+          [
+            "native test transcript survives shadows [native]",
+            "ok   ",
+            "1/1 passed",
+          ]
+          out,
+      ])
+
+siblingRuntimeSource : String
+siblingRuntimeSource = "export\nmarker = 41\n"
+
+siblingRuntimeMain : String
+siblingRuntimeMain =
+  "import runtime as R\nimport test.{expectEqual}\n\ntest \"sibling runtime ordinary test\" = expectEqual 41 R.marker\n\n-- > R.marker + 1\n-- 42\n\nprop \"sibling runtime property\" (n : Int) = R.marker == 41 && n == n\n"
+
+-- The generated runtime import must bypass this ordinary sibling while the
+-- target's own import still resolves it. One native test run covers all three
+-- probe engines: declarations, doctests, and properties.
+test "native probes isolate their runtime catalog from a sibling runtime module" =
+  withFixtures
+    [("runtime.mdk", siblingRuntimeSource), ("main.mdk", siblingRuntimeMain)]
+    (target => match runNative target
+      Err message => fail message
+      Ok (code, out, err) => expectAll [
+        expectEqual 0 code,
+        expectEqual "" err,
+        expectTextContainsAll
+          [
+            "sibling runtime ordinary test [native]",
+            "R.marker + 1",
+            "Testing \"sibling runtime property\" [native] ... OK (100 tests passed)",
+            "1/1 passed",
+          ]
+          out,
+      ])
+
+collisionManifest : String
+collisionManifest =
+  "[package]\nname = \"native_probe_manifest\"\n\n[dependencies]\nnp_runtime_dep_fixture = \".\"\n"
+
+test "native probe manifests refuse a runtime dependency collision" =
+  withProjectFixtures
+    collisionManifest
+    [("main.mdk", "main = 1\n")]
+    (target =>
+      let collision =
+        scratchProbeManifest
+          "native_probe_collision"
+          target
+          "np_runtime_dep_fixture"
+      let noncolliding =
+        scratchProbeManifest
+          "native_probe_collision"
+          target
+          "np_runtime_extra_fixture"
+      expectAll [
+        expectErrContains
+          "np_runtime_dep_fixture is already declared"
+          collision,
+        expectOkThen
+          (manifest =>
+            expectTextContainsAll
+              ["np_runtime_dep_fixture", "np_runtime_extra_fixture"]
+              manifest)
+          noncolliding,
+      ])

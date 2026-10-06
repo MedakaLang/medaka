@@ -70,6 +70,7 @@ import support.timer.{
   flushPerfSinkProse,
 }
 import list.{sortOn}
+import string.{toInt}
 -- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
 -- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
 -- rejection sentences and what it actually parses are three renderings of one
@@ -191,6 +192,8 @@ import json.{
   jObject,
   jArray,
   stringify,
+  parse as parseJson,
+  asString,
 }
 import types.typecheck.{
   elaborateModules,
@@ -222,6 +225,7 @@ import eval.eval.{
 import tools.test_cmd.{
   runTest,
   runTestReport,
+  runTestGradedReport,
   filterMatchedNothing,
   testHelpText,
   testArgSpec,
@@ -231,10 +235,13 @@ import tools.test_cmd.{
   runTestOne,
   cliTestReportOk,
   cliTestReportJson,
+  cliGradedTestReportOk,
+  cliGradedTestReportJson,
   checkTestMdkRoster,
   testFilesGo,
+  runEvalPropsWorker,
 }
-import tools.prop_runner.{seedPropRng}
+import tools.prop_runner.{seedPropRng, PropRequest(..)}
 import tools.doctest.{Engine}
 import tools.repl.{initSession, replLoop}
 import tools.lsp.{runServer}
@@ -3181,7 +3188,9 @@ runTestCmd argv0 =
   -- the two spellings C1 requires every value flag to take).  #2316's own
   -- check and that normalisation are both `args.mdk`'s job now.
   let a = requireArgs testArgSpec argv0
-  match parseTestEngines a
+  if flag "--props-worker" a then
+    runPropsWorkerCmd a
+  else match parseTestEngines a
     Err msg => dieMsg "medaka test: \{msg}"
     Ok engines => match parseTestCasesFlag a
       Err msg => dieMsg "medaka test: \{msg}"
@@ -3204,7 +3213,7 @@ runTestCmd argv0 =
                     "medaka test --json: needs a single file.mdk target; with no target, medaka test runs the whole enclosing project, and --json reports on one file only"
                 exit 1
               else
-                runTestProjectCmd engines cases filterOpt
+                runTestProjectCmd engines cases filterOpt seedOpt
             [target] => match listDir target
               Err _ =>
                 if jsonMode then
@@ -3218,7 +3227,7 @@ runTestCmd argv0 =
                       "medaka test --json: directory targets are not supported; pass a single file.mdk target"
                   exit 1
                 else
-                  runTestManyTargets engines cases filterOpt [target]
+                  runTestManyTargets engines cases filterOpt seedOpt [target]
             targets =>
               if jsonMode then
                 let _ =
@@ -3226,7 +3235,50 @@ runTestCmd argv0 =
                     "medaka test --json: exactly one file.mdk target is supported"
                 exit 1
               else
-                runTestManyTargets engines cases filterOpt targets
+                runTestManyTargets engines cases filterOpt seedOpt targets
+
+-- The supervisor sends a target followed by JSON-string encoded exact `(name,
+-- seed, cases)` triples. These are internal replay requests, so they do not share
+-- normal test's target expansion or user-facing defaulting rules.
+runPropsWorkerCmd : Args -> <IO> Unit
+runPropsWorkerCmd a = match parsePropsWorkerPositionals a.positionals
+  Err message => dieMsg "medaka test --props-worker: \{message}"
+  Ok (target, requests) => runEvalPropsWorker target requests
+
+parsePropsWorkerPositionals : List String ->
+  Result String (String, List PropRequest)
+parsePropsWorkerPositionals [] =
+  Err "expected a target and zero or more property request triples"
+parsePropsWorkerPositionals (target :: fields) =
+  map (requests => (target, requests)) (parsePropsWorkerRequests fields)
+
+parsePropsWorkerRequests : List String -> Result String (List PropRequest)
+parsePropsWorkerRequests [] = Ok []
+parsePropsWorkerRequests (nameText :: seedText :: casesText :: rest) = do
+  name <- parseWorkerField "name" nameText
+  seed <- parseWorkerInt "seed" seedText
+  cases <- parseWorkerInt "cases" casesText
+  if cases <= 0 then
+    Err "property request \{debug name} has a non-positive case budget"
+  else do
+    requests <- parsePropsWorkerRequests rest
+    Ok (PropRequest name seed cases :: requests)
+parsePropsWorkerRequests _ =
+  Err "property requests must be name, seed, cases triples"
+
+parseWorkerInt : String -> String -> Result String Int
+parseWorkerInt role text = do
+  field <- parseWorkerField role text
+  match toInt field
+    Some value => Ok value
+    None => Err "property request \{role} is not an integer: \{debug field}"
+
+parseWorkerField : String -> String -> Result String String
+parseWorkerField role text = match parseJson text
+  Ok json => match asString json
+    Some field => Ok field
+    None => Err "property request \{role} is not a JSON string"
+  Err _ => Err "property request \{role} is not a JSON string"
 
 -- `medaka test` with no target (#3443): test the project enclosing the current
 -- directory exactly as `medaka test <root>` would. The root is the NEAREST
@@ -3237,8 +3289,12 @@ runTestCmd argv0 =
 -- to stderr, because a run started in a subdirectory tests more than that
 -- subdirectory. With no manifest anywhere above, it refuses; it never falls back
 -- to testing the cwd.
-runTestProjectCmd : List Engine -> Int -> Option String -> <IO> Unit
-runTestProjectCmd engines cases filterOpt =
+runTestProjectCmd : List Engine ->
+  Int ->
+  Option String ->
+  Option Int ->
+  <IO> Unit
+runTestProjectCmd engines cases filterOpt seedOpt =
   let cwd = canonicalizePath "."
   match findProjectRoot cwd
     None =>
@@ -3247,7 +3303,7 @@ runTestProjectCmd engines cases filterOpt =
     Some root =>
       let _ =
         ePutStrLn "medaka test: no target given; testing the project at \{root}"
-      runTestManyTargets engines cases filterOpt [root]
+      runTestManyTargets engines cases filterOpt seedOpt [root]
 
 -- ── test --json (#2295 (d)) ──────────────────────────────────────────────────
 -- `medaka test --json <file.mdk>`: structured counterpart of the human
@@ -3282,7 +3338,7 @@ runTestJsonCmd engines cases filterOpt target =
         "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
     else
       let (typeError, runs, props, tests, typecheckSkipped) =
-        runTestReport
+        runTestGradedReport
           engines
           rsrc
           csrc
@@ -3295,7 +3351,7 @@ runTestJsonCmd engines cases filterOpt target =
       let _ =
         putStrLn
           (stringify
-            (cliTestReportJson
+            (cliGradedTestReportJson
               target
               typeError
               engines
@@ -3303,7 +3359,7 @@ runTestJsonCmd engines cases filterOpt target =
               props
               tests
               typecheckSkipped))
-      Ok (cliTestReportOk typeError runs props tests)
+      Ok (cliGradedTestReportOk typeError runs props tests)
   match r
     Err e => dieMsg e
     Ok ok => if ok then () else exit 1
@@ -3320,9 +3376,10 @@ runTestJsonCmd engines cases filterOpt target =
 runTestManyTargets : List Engine ->
   Int ->
   Option String ->
+  Option Int ->
   List String ->
   <IO> Unit
-runTestManyTargets engines cases filterOpt targets =
+runTestManyTargets engines cases filterOpt seedOpt targets =
   let files = flatMap expandLintTarget targets
   match files
     [] => dieMsg "medaka test: no .mdk files found"
@@ -3340,6 +3397,7 @@ runTestManyTargets engines cases filterOpt targets =
           stdlibDir
           cases
           filterOpt
+          seedOpt
           files
           False
       if anyFailed || not rosterOk then exit 1

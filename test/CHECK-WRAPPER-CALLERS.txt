@@ -20,4 +20,5 @@ compiler/tools/repl.mdk : checkOneDiags,checkOneScheme
 compiler/tools/snapshot.mdk : checkOneToLinesWithRuntime
 compiler/types/effect_bindings_test.mdk : checkOneDiags,checkOneSchemeFullK
 compiler/types/effect_authority_test.mdk : checkOneDiags,checkOneSchemeFullK
+compiler/types/prop_contract_test.mdk : checkOneDiags
 compiler/types/typecheck_test.mdk : checkOneDiags,checkOneSchemeFullK

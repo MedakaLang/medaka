@@ -1,0 +1,201 @@
+-- DCE tests use a separate slow graph walk rather than dce.mdk's HashMap
+-- closure.  The contract comes from EMITTER-SEMANTICS R1/R4: removing a
+-- reachable top-level body would change an accepted program's observation.
+-- dce.mdk narrows that rule operationally: only DFunDef declarations may drop;
+-- main and emitting non-function declarations seed reachability.
+
+import test.{expectAll, expectEqual, expectTrue}
+import frontend.ast.{
+  Attr(..),
+  Decl(..),
+  Expr(..),
+  FunClause(..),
+  IfaceMethod(..),
+  ImplMethod(..),
+  LetBind(..),
+  Lit(..),
+  Loc(..),
+  MethodDefault(..),
+  Ty(..),
+  dImplUnresolved,
+  dInterfaceUnresolved,
+}
+import ir.dce.{dceFilter}
+import support.util.{contains}
+
+names : List String
+names = ["main", "a", "b", "c", "d"]
+
+slot : Int -> Int
+slot n = (n % 5 + 5) % 5
+
+nameAt : Int -> String
+nameAt n = nameAtFrom (slot n) names
+
+nameAtFrom : Int -> List String -> String
+nameAtFrom 0 (name :: _) = name
+nameAtFrom n (_ :: rest) = nameAtFrom (n - 1) rest
+nameAtFrom _ [] = "main"
+
+edgePairs : List (Int, Int) -> List (String, String)
+edgePairs [] = []
+edgePairs ((from, to) :: rest) = (nameAt from, nameAt to) :: edgePairs rest
+
+targetsOf : String -> List (String, String) -> List String
+targetsOf _ [] = []
+targetsOf from ((edgeFrom, edgeTo) :: rest)
+  | from == edgeFrom = edgeTo :: targetsOf from rest
+  | otherwise = targetsOf from rest
+
+refsExpr : List String -> Expr
+refsExpr [] = ELit LUnit
+refsExpr (ref :: rest) = EApp (EVar ref) (refsExpr rest)
+
+funDecl : String -> List String -> Decl
+funDecl name refs = DFunDef False name [] (refsExpr refs)
+
+graphDecls : List (String, String) -> List Decl
+graphDecls edges = map (name => funDecl name (targetsOf name edges)) names
+
+-- Deliberately simple DFS with a List seen set: the bounded oracle is distinct
+-- from DCE's HashMap worklist and treats duplicate edges/cycles as no-ops.
+reachable : List (String, String) -> String -> Bool
+reachable edges wanted = walk edges wanted ["main"] []
+
+walk : List (String, String) -> String -> List String -> List String -> Bool
+walk _ _ [] _ = False
+walk edges wanted (here :: todo) seen
+  | here == wanted = True
+  | contains here seen = walk edges wanted todo seen
+  | otherwise = walk edges wanted (targetsOf here edges ++ todo) (here :: seen)
+
+expectedFunctionNames : List (String, String) -> List String
+expectedFunctionNames edges = filter (reachable edges) names
+
+functionNames : List Decl -> List String
+functionNames [] = []
+functionNames ((DFunDef _ name _ _) :: rest) = name :: functionNames rest
+functionNames ((DAttrib _ (DFunDef _ name _ _)) :: rest) =
+  name :: functionNames rest
+functionNames (_ :: rest) = functionNames rest
+
+isPlainFunction : Decl -> Bool
+isPlainFunction (DFunDef _ _ _ _) = True
+isPlainFunction (DAttrib _ (DFunDef _ _ _ _)) = True
+isPlainFunction _ = False
+
+nonFunctionCount : List Decl -> Int
+nonFunctionCount [] = 0
+nonFunctionCount (decl :: rest) =
+  (if isPlainFunction decl then 0 else 1) + nonFunctionCount rest
+
+dceGraphLaw : List (Int, Int) -> Bool
+dceGraphLaw rawEdges =
+  let edges = edgePairs rawEdges
+  functionNames (dceFilter (graphDecls edges)) == expectedFunctionNames edges
+
+powerOfTwo : Int -> Int
+powerOfTwo 0 = 1
+powerOfTwo place = 2 * powerOfTwo (place - 1)
+
+matrixBitSet : Int -> Int -> Bool
+matrixBitSet bits place = bits / powerOfTwo place % 2 == 1
+
+threeNodeMatrixEdges : Int -> List (Int, Int)
+threeNodeMatrixEdges bits = threeNodeMatrixRows 0 0 bits
+
+threeNodeMatrixRows : Int -> Int -> Int -> List (Int, Int)
+threeNodeMatrixRows 3 _ _ = []
+threeNodeMatrixRows from to bits
+  | to == 3 = threeNodeMatrixRows (from + 1) 0 bits
+  | matrixBitSet bits (from * 3 + to) =
+    (from, to) :: threeNodeMatrixRows from (to + 1) bits
+  | otherwise = threeNodeMatrixRows from (to + 1) bits
+
+allThreeNodeGraphsSatisfy : Int -> Bool
+allThreeNodeGraphsSatisfy 512 = True
+allThreeNodeGraphsSatisfy bits =
+  dceGraphLaw (threeNodeMatrixEdges bits)
+    && allThreeNodeGraphsSatisfy (bits + 1)
+
+prop "DCE keeps exactly main-reachable functions in generated primitive call graphs" (rawEdges : List (Int, Int)) =
+  dceGraphLaw rawEdges
+
+prop "DCE's generated primitive graph result is idempotent" (rawEdges : List (Int, Int)) =
+  let decls = graphDecls (edgePairs rawEdges)
+  functionNames (dceFilter (dceFilter decls)) == functionNames (dceFilter decls)
+
+test "DCE retains a reachable cycle and removes a disconnected cycle" =
+  let decls = [
+    funDecl "main" ["liveA"],
+    funDecl "deadA" ["deadB"],
+    funDecl "liveA" ["liveB"],
+    funDecl "deadB" ["deadA"],
+    funDecl "liveB" ["liveA"],
+  ]
+  expectEqual ["main", "liveA", "liveB"] (functionNames (dceFilter decls))
+
+-- Every directed adjacency matrix on main/a/b, while c/d stay disconnected.
+-- This is an exhaustive fixed corpus, not a second random native sampler.
+test "DCE agrees with the independent oracle on every three-node call graph" =
+  expectTrue (allThreeNodeGraphsSatisfy 0)
+
+test "DCE preserves unrelated declarations but does not root prop or test bodies" =
+  let decls = [
+    DTypeSig False "declared" (TyVar "a") (Loc "<dce-test>" 1 1 1 1),
+    DExtern False "foreign" (TyVar "a"),
+    funDecl "main" [],
+    funDecl "propOnly" [],
+    funDecl "testOnly" [],
+    DProp False "property" [] (EVar "propOnly"),
+    DTest False "test" (EVar "testOnly"),
+  ]
+  let kept = dceFilter decls
+  expectAll [
+    expectEqual ["main"] (functionNames kept),
+    expectEqual 4 (nonFunctionCount kept),
+  ]
+
+test "DCE roots helpers referenced by an emitting top-level let group" =
+  let group =
+    DLetGroup False [LetBind "global" [FunClause [] (EVar "groupHelper")]]
+  let decls = [
+    funDecl "main" [],
+    group,
+    funDecl "groupHelper" [],
+    funDecl "unrelated" [],
+  ]
+  expectEqual ["main", "groupHelper"] (functionNames (dceFilter decls))
+
+test "DCE roots helpers in impl methods and interface defaults" =
+  let implDecl =
+    dImplUnresolved False "I" [] [] [ImplMethod "method" [] (EVar "implHelper")]
+  let iface = dInterfaceUnresolved False False "J" [] [] [] [
+    IfaceMethod
+      "default"
+      (TyVar "a")
+      (Some (MethodDefault [] (EVar "ifaceHelper")))
+      None,
+  ]
+  let decls = [
+    funDecl "main" [],
+    funDecl "implHelper" [],
+    implDecl,
+    funDecl "ifaceHelper" [],
+    iface,
+    funDecl "unrelated" [],
+  ]
+  expectEqual
+    ["main", "implHelper", "ifaceHelper"]
+    (functionNames (dceFilter decls))
+
+test "DCE follows attributed function bodies and retains their wrapper" =
+  let root = DAttrib [AttrInline] (funDecl "root" ["helper"])
+  let decls =
+    [funDecl "main" ["root"], root, funDecl "helper" [], funDecl "dead" []]
+  expectEqual ["main", "root", "helper"] (functionNames (dceFilter decls))
+
+test "DCE resolves a bare synthesized prelude reference to its core-mangled definition" =
+  let decls =
+    [funDecl "main" ["not"], funDecl "core__not" [], funDecl "dead" []]
+  expectEqual ["main", "core__not"] (functionNames (dceFilter decls))
