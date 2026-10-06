@@ -5,14 +5,15 @@ import frontend.desugar.{desugar}
 import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), mapTyInDecl}
 import string.{contains}
 import tools.native_props.{
-  runNativePlannedPropRequests, renderNativePlannedProbe
+  runNativePlannedPropRequests, renderNativePlannedProbe,
+  classifyNativeTranscript
 }
 import tools.prop_plan.{PlanModule(..)}
-import tools.probe_transcript.{freshProbeNonce}
+import tools.probe_transcript.{freshProbeNonce, Chunk(..)}
 import tools.prop_runner.{
   PropRequest(..), propResultName, propResultSeed, propResultCases,
   propResultDetail, propResultPassed, propResultStatus, propResultFailureKind,
-  PropStatus(..), PropFailureKind(..)
+  PropResult, PropStatus(..), PropFailureKind(..)
 }
 
 test "probe namespaces avoid occupied bindings and aliases without rewriting source" = expectAll
@@ -105,6 +106,51 @@ nonPositiveBudget target =
 
 test "native requests reject a non-positive case budget" =
   withTarget nonPositiveBudget
+
+classified : List Chunk -> PropResult
+classified chunks =
+  classifyNativeTranscript
+    chunks
+    "probe stopped"
+    (PropRequest "shape" (0 - 91) 23)
+    0
+    "shape"
+    (0 - 91)
+    23
+
+goodTranscript : List Chunk
+goodTranscript = [
+  Chunk "0.seed" ["\"-91\""] True,
+  Chunk "0.bool" ["\"True\""] True,
+  Chunk "0.detail" ["\"ok\""] True,
+]
+
+hasKind : PropFailureKind -> PropResult -> Bool
+hasKind kind row = match propResultFailureKind row
+  Some actual => actual == kind
+  None => False
+
+test "completed malformed transcript fields are protocol errors before truncation" =
+  let malformedSeed =
+    classified (Chunk "0.seed" ["unterminated"] True :: goodTranscript)
+  let malformedDetail = classified [
+    Chunk "0.seed" ["\"-91\""] True,
+    Chunk "0.bool" ["\"True\""] True,
+    Chunk "0.detail" ["unterminated"] True,
+  ]
+  let incomplete = classified [
+    Chunk "0.seed" ["\"-91\""] True,
+    Chunk "0.bool" ["\"True\""] True,
+    Chunk "0.detail" [] False,
+  ]
+  expectAll [
+    expectTrue (hasKind PropProtocolError malformedSeed),
+    expectTrue (hasKind PropProtocolError malformedDetail),
+    expectTrue (hasKind PropRuntimeError incomplete),
+    expectEqual
+      (0 - 91, 23)
+      (propResultSeed malformedDetail, propResultCases malformedDetail),
+  ]
 
 test "native runtime failures retain the requested replay seed and budget" = withTarget
   (target =>
