@@ -71,7 +71,7 @@ function runWasm(bytes) {
   } };
 
   return WebAssembly.instantiate(bytes, imports)
-    .then(() => dec.decode(new Uint8Array(acc)))
+    .then(({ instance }) => { instance.exports.mdk_main(); return dec.decode(new Uint8Array(acc)); })
     .catch((e) => {
       if (e instanceof ExitSignal) return dec.decode(new Uint8Array(acc));
       throw e;

@@ -1,0 +1,25 @@
+-- A direct `ioPoll` whose three arguments print as they are evaluated.  Built
+-- for wasm, the arguments run left to right, as native runs them, and then the
+-- call stops with the coded line: no wasm host binds descriptor readiness.
+-- Wasm arm only: natively the result depends on which descriptors are open.
+import array.{fromList}
+
+fdsOf : Unit -> <Stdout> Array Int
+fdsOf u =
+  putStrLn "fds"
+  fromList [9]
+
+interestsOf : Unit -> <Stdout> Array Int
+interestsOf u =
+  putStrLn "interests"
+  fromList [1]
+
+timeoutOf : Unit -> <Stdout> Int
+timeoutOf u =
+  putStrLn "timeout"
+  0
+
+main : <Clock, Stdout> Unit
+main = match ioPoll (fdsOf ()) (interestsOf ()) (timeoutOf ())
+  Ok _ => putStrLn "polled"
+  Err e => putStrLn "poll error: \{e}"

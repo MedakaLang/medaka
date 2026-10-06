@@ -283,6 +283,21 @@ import surface part of the semantics, with laws:
   `test/diff_compiler_wasm_shim_parity.sh` DERIVES, not a remembered pair; #543
   shipped because "both" was believed of a set of three — and (c) a
   `test/CAPABILITY-EXCEPTIONS.txt` disposition if any engine withholds it.
+  The entry is closed the same way: an emitted module's `(start $__init)` runs
+  only the eager value-global initializers, and the program runs when the host
+  calls the `mdk_main` export. Every host calls `exports.mdk_main()` after
+  `instantiate`, inside the same exit and trap handling as the instantiation,
+  so a value init that panics still fails at instantiate time, before any
+  `main` output. A module instantiated without that call runs no program code
+  (pinned by the ENTRY-ASSERT block of `test/wasm/diff_wasm.sh`). Every
+  emitted module also exports the marker `mdk_entry_split` (an empty function).
+  A module that exports `mdk_main` without it comes from an emitter whose
+  `start` still calls `main`, and calling `mdk_main` would run the program a
+  second time, so `run.js`, `worker.js` and `compile.mjs` read the exports
+  before instantiating and refuse it with a named "built by an older compiler"
+  error: `run.js` exits 1 with no program output (also pinned by
+  ENTRY-ASSERT). A module with neither export (the hand-written
+  `test/wasm/w1_add.wat`) is only instantiated.
 - **WH2 — The C runtime is the behavioral oracle.** Where a host import
   reimplements something `medaka_rt.c` implements natively, the JS copy must
   be **byte-identical on the observable surface**: `mdk_float_fmt` ≡
@@ -345,8 +360,20 @@ import surface part of the semantics, with laws:
 | `mdk_args_count` / `mdk_arg_len` / `mdk_arg_byte` | ~1111–1113 | IO group | real (`MDK_ARGS`) | capability stub | real (guest argv = the `compile`/`hover`/`complete` call) | argv marshaling | capability |
 | `mdk_result_len` / `mdk_result_byte` | ~1114–1115 | IO group | real | capability stub | real | read cached result | — |
 | `mdk_exit` | ~1116 | IO group | real, **drops buffered stderr** | capability stub (clean `exit 0` reports an error — deliberate, UX-noteworthy) | real (`ExitSignal` unwind) | flush + exit | T1/WH4 ✗ |
+| `mdk_wall_time_sec` / `mdk_monotonic_sec` / `mdk_sleep_ms` | clock group in `wasm_preamble.mdk` (`clockHostImportLines`) | `wallTimeSec` / `monotonicSec` / `sleepMs` use | real (the host's wall clock, its monotonic clock, a blocking wait on a shared cell) | wall and monotonic reads real; sleep real only when the page is cross-origin isolated, else a named capability error | real (same keys; never sleeps, present to avoid a LinkError) | f64 seconds; f64 seconds; sleep `i64` ms, non-positive returns at once | — |
 | `mdk_write_file_reset` / `_push` / `_commit` | ~1223–1225 | `writeFileBytes` use | real | **MISSING → LinkError** | **missing** — same #375 hole as worker.js | streamed file write | **WH3 ✗ CONFIRMED** |
 | `mdk_write_int` / `mdk_write_bool` | ~53–54 | **never** (dead W2 scaffold; verified unreferenced) | absent | absent | n/a (never emitted in ref mode) | legacy | — |
+
+**Not an import: `ioPoll`.** No host binds descriptor readiness, and `ioPoll`
+declares no `env.*` import. The emitter lowers it inline (`emitLeafExternRef`
+in `compiler/backend/wasm_emit.mdk`): the three arguments are evaluated left
+to right, as native evaluates them, and the call then stops with
+`runtime error [E-WASM-NO-BINDING]: ioPoll: descriptor readiness has no wasm
+binding …` and exit 1 on every host (the `Net` and `Stdin` bindings are #3666).
+The stop is at run time, not at build time, because the async scheduler names
+`ioPoll` and a clock-only async program must still build. Pinned by the
+`wasm_poll_order` and `wasm_poll_stdin` fixtures of `test/diff_async_test.mdk`;
+ledgered as the wasm `ioPoll` row of `test/CAPABILITY-EXCEPTIONS.txt`.
 
 ---
 
@@ -400,7 +427,7 @@ import surface part of the semantics, with laws:
 | D2/D3 — fixpoint + seed | n/a / ⚠ | wasm has no seed and no self-compile fixpoint; the wasm **self-host** (playground.wasm = the compiler on WasmGC) is linkage-gated (`assemble_check_main.sh`: parse+validate+zero undefined wrappers) but has **no fixpoint-analog behavior gate** — open D2-style assurance gap, noted in #384 |
 | D4 — own-source competence | ⚠ | the D4-analog closure is "what the playground compiler emits for itself"; unaudited beyond the linkage gate |
 | Perf posture | ⚠ | **#381 FIXED** by #401 (`5d82fa48`): `ctorOrdinal`'s per-(slot,branch) whole-table rescan was **CUBIC** — O(N ctors × B branches × C table), measured 7.91×/8.35× per doubling at N=400/800 on the DCE-running probe — now memoized to **1.90× (linear)**, a 53× win at N=400, proven by byte-identical WAT across 200 fixtures. ⚠ It was **never "wasm-specific"**: `llvm_emit`'s `ctorOrdinal` has the **same** scan and a **quadratic** twin (3.71/3.73 at N=1000→4000, **#408**); only the slot×branch nesting was wasm's. `indent` (**#381**'s own second finding — NOT #382) is fixed for the re-copying (8.1×) but **cannot reach linear** — the if/else chain nests arm *k* at depth *k*, so the output is inherently O(arms²) **bytes**. Residual: the #349–#352 sibling census (**#382**); enforcement — the **native** emit stage shipped (#396), and **the wasm arm is now shipped too — #359 FIXED** (2026-07-16: `diff_compiler_perf_scaling` grades the wasm emit stage, closing the O(n²) detector's own wasm gap), grading **TIME** (pure scans allocate nothing) |
-| WH1 — enumerated imports | ✅ | §3 inventory (grep-complete; dead W2 scaffold imports verified never-emitted) |
+| WH1 — enumerated imports | ✅ | §3 inventory (grep-complete; dead W2 scaffold imports verified never-emitted); `ioPoll` lowers inline to the coded `E-WASM-NO-BINDING` trap, no import (§3 note); the entry is `mdk_main` plus the `mdk_entry_split` marker, and an old-shape module is refused (ENTRY-ASSERT in `test/wasm/diff_wasm.sh`) |
 | WH2 — C-runtime oracle | ✅ **HELD** | `mdk_str_to_float` was JS `Number()`, not strtod (`""`→`Some 0.0`, `"1.5 "`→`Some 1.5`, `"nan"`/`"inf"`→`None`, `"0x1p4"`→`None`) — **#370 FIXED**: every shim now implements the strtod acceptance set (⚠️ as
 landed, #370 reached only TWO of the three — `playground/compile.mjs` was left on raw
 `Number()` AND missing the new `mdk_str_to_float_ok` import, LinkError-ing the playground

@@ -1,5 +1,5 @@
 # META
-source_lines=306
+source_lines=298
 stages=DESUGAR,MARK
 # SOURCE
 {- | Floating-point math and a few integer helpers.
@@ -11,15 +11,7 @@ stages=DESUGAR,MARK
    interpolation, and exact integer division, `gcd`, `lcm`, and `powInt`.
 
    `abs`, `signum`, `min`, `max`, and `clamp` come from the prelude and
-   work on floats already.
-
-   The float functions run on the native backend only. On the WebAssembly
-   backend they trap. -}
-
--- Wasm currently ports only five float externs; every other float extern
--- (including this batch and the pre-existing `floatRem`) routes to a trap on
--- the WasmGC backend.  The transcendentals need a host-import seam or a
--- polyfill and are deferred.
+   work on floats already. -}
 
 -- # Angles
 

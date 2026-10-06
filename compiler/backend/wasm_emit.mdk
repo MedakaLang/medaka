@@ -323,6 +323,7 @@ import backend.wasm_preamble.{
   charFromCodeRuntimeLines,
   charClassRuntimeLines,
   ioHostImportLines,
+  clockHostImportLines,
   ioHostRuntimeLines,
   ioArgsRuntimeLines,
   fileBytesHostImportLines,
@@ -416,6 +417,7 @@ data WasmEmit = WasmEmit {
   useValueMod : Ref Bool,
   useValueCmpNum : Ref Bool,
   useIO : Ref Bool,
+  useClock : Ref Bool,
   tupleArities : Ref (List Int),
   floatGlobals : Ref (List String),
   wDispGroups : Ref (List DispGroup),
@@ -482,6 +484,7 @@ freshWasmEmit mode = WasmEmit {
   useValueMod = Ref False,
   useValueCmpNum = Ref False,
   useIO = Ref False,
+  useClock = Ref False,
   tupleArities = Ref [],
   floatGlobals = Ref [],
   wDispGroups = Ref [],
@@ -1458,6 +1461,7 @@ emitProgramCore emit input (CProgram groups ctorArs ctorTypes impls) =
       || !emit.useStrSearch
       || !emit.useCharClass
       || !emit.useIO
+      || !emit.useClock
   let typeNames = distinctTypeNames ctorTypes
   let prog = Prog index typeNames valNames useClos impls input emit
   if useRef then
@@ -1790,6 +1794,10 @@ isLeafExternW name = contains
     "args",
     "getEnv",
     "exit",
+    "wallTimeSec",
+    "monotonicSec",
+    "sleepMs",
+    "ioPoll",
     -- canonicalizePath : String -> String — realpath(3) natively; the browser wasm vfs
     -- has no realpath, so it lowers to IDENTITY (matches the extern's "input unchanged on
     -- failure" contract).  Reachable in the wasm playground because the loader's
@@ -1972,7 +1980,6 @@ isNetExternW name = contains name [
   "listenSocketFd",
   "netSetNonblockListener",
   "netSetTimeout",
-  "ioPoll",
   "pdsSignalStart",
   "pdsSignalRequested",
   "netSetNonblock",
@@ -2041,6 +2048,9 @@ externArityW name =
       "getEnv",
       "exit",
       "args",
+      "wallTimeSec",
+      "monotonicSec",
+      "sleepMs",
       "bitNot",
       "intBitNot",
       "intBitsToFloat",
@@ -2155,6 +2165,7 @@ externArityW name =
       "arraySetUnsafe",
       "byteBlockSetUnsafe",
       "writeFileBytes",
+      "ioPoll",
     ] then
     -- writeFileBytes: its path, its bytes and the path's grant
     3
@@ -2669,6 +2680,12 @@ noteW8Extern emit name =
       let _ = setRef emit.useIO True in
         let _ = setRef emit.useArray True in
           let _ = setRef emit.useStr True in setRef emit.useFileBytes True
+  let _ =
+    if contains name ["wallTimeSec", "monotonicSec", "sleepMs"] then
+      setRef emit.useClock True
+  let _ =
+    if contains name ["wallTimeSec", "monotonicSec"] then
+      setRef emit.useFloat True
   if contains name ["ePutStr", "ePutStrLn"] then setRef emit.useEPut True
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
 -- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
@@ -3193,15 +3210,21 @@ emitScalarInit emit fnNames valNames groups =
   let mainLocals = match findMain emit groups
     Some body => collectExprLocals body
     None => []
-  let locals = dedupKeep (valLocals ++ mainLocals)
-  let localDecls = map (l => "  " ++ localDeclI32 l) locals
+  let declsOf = ls => map (l => "  " ++ localDeclI32 l) (dedupKeep ls)
   -- B5: scalar divisor-guard scratch (a `/`/`%` in a value-binding or `main` body).
   let dv = if !emit.useDivGuard then ["    (local $__sdivr i64)"] else []
-  ["  (func $__init"]
+  -- Same entry shape as ref mode (emitRefInit): `start` runs the value inits,
+  -- the host calls the exported `mdk_main`.
+  ["  (func $__main"]
     ++ dv
-    ++ localDecls
-    ++ valInit
+    ++ declsOf mainLocals
     ++ mainLines
+    ++ ["  )"]
+    ++ entryExports
+    ++ ["  (func $__init"]
+    ++ dv
+    ++ declsOf valLocals
+    ++ valInit
     ++ ["  )", "  (start $__init)"]
 
 emitScalarValInit : WasmEmit ->
@@ -3656,6 +3679,8 @@ emitRefProgram prog groups =
       ++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])
       -- W12: the IO host surface (readFile/fileExists/args/getEnv/exit) host imports.
       ++ (if (progEmit prog).useIO.value then ioHostImportLines else [])
+      -- the clock externs (wallTimeSec/monotonicSec/sleepMs) are three host imports.
+      ++ (if (progEmit prog).useClock.value then clockHostImportLines else [])
       -- stage-D: writeFileBytes's write host imports (reset/push/commit).
       ++ (if (progEmit prog).useFileBytes.value then
         fileBytesHostImportLines
@@ -4191,6 +4216,17 @@ topoValVisitDeps rm bm (d :: rest) done acc visiting = match omLookup d bm
 oneGlobalState : String -> String
 oneGlobalState n = "  (global $gs_" ++ gname n ++ " (mut i32) (i32.const 0))"
 
+-- The program entry, shared by both init shapes.  `mdk_entry_split` marks a
+-- module whose `start` does not run `main`: a host that finds `mdk_main` without
+-- it holds a module whose `start` already runs `main`, and calling `mdk_main`
+-- would run the program twice, so the hosts refuse such a module.
+entryExports : List String
+entryExports = [
+  "  (export \"mdk_main\" (func $__main))",
+  "  (func $__entry_split)",
+  "  (export \"mdk_entry_split\" (func $__entry_split))",
+]
+
 emitRefInit : Prog -> List CBind -> List String
 emitRefInit prog groups =
   -- #561 PR-B: only SAFE (statically-orderable) value globals are eager-initialised in
@@ -4225,21 +4261,23 @@ emitRefInit prog groups =
   let w7DeclsAt = d => map ("  " ++ _) (w7LocalDecls (progEmit prog) d)
   let initW7Decls = w7DeclsAt valDepth
   let mainW7Decls = w7DeclsAt mainDepth
-  -- `main` lives in its own function, exported as `mdk_main`, so a host can
-  -- re-enter it on the same instance after `start` has run the eager
-  -- initializers once (playground/compile.mjs keeps one compiler instance
-  -- alive across analyze calls; the top-level memo Refs then persist).
-  -- `$__init` = eager value inits, then one call of $__main — the same order
-  -- and the same single run of `main` at instantiation as before.
+  -- `start` runs only the eager value inits; `main` is the exported
+  -- `mdk_main`, which every host calls after instantiation.  A module
+  -- instantiated without that call runs no program code.  A suspending
+  -- import (JSPI) cannot be reached from `start`, and a host may re-enter
+  -- `mdk_main` on one instance (playground/compile.mjs keeps the compiler's
+  -- top-level memo Refs alive across analyze calls that way).
   ["  (func $__main"]
     ++ mainLocalDecls
     ++ mainW7Decls
     ++ mainLines
-    ++ ["  )", "  (export \"mdk_main\" (func $__main))", "  (func $__init"]
+    ++ ["  )"]
+    ++ entryExports
+    ++ ["  (func $__init"]
     ++ initLocalDecls
     ++ initW7Decls
     ++ valInit
-    ++ ["    call $__main", "  )", "  (start $__init)"]
+    ++ ["  )", "  (start $__init)"]
 
 bindBodies : CBind -> List CExpr
 bindBodies (CBind _ clauses) = flatMap clauseBody clauses
@@ -8041,6 +8079,42 @@ emitLeafExternRef prog env d "exit" [code] =
     ++ ["ref.cast (ref i31)", "i31.get_s", "call $mdk_exit", "unreachable"]
 emitLeafExternRef prog env d "exit" _ =
   gapLP prog "wasm W12: exit takes exactly one argument"
+-- The clock externs: the two reads box the host's f64 seconds; sleepMs unboxes its
+-- Int to the i64 the import takes (a non-positive count returns at once, host-side,
+-- as medaka_rt.c's mdk_sleep_ms does).
+emitLeafExternRef prog env d "wallTimeSec" [u] =
+  emitRefExpr prog env d u
+    ++ ["drop", "call $mdk_wall_time_sec", "struct.new $float"]
+emitLeafExternRef prog env d "wallTimeSec" _ =
+  gapLP prog "wasm: wallTimeSec takes exactly one (Unit) argument"
+emitLeafExternRef prog env d "monotonicSec" [u] =
+  emitRefExpr prog env d u
+    ++ ["drop", "call $mdk_monotonic_sec", "struct.new $float"]
+emitLeafExternRef prog env d "monotonicSec" _ =
+  gapLP prog "wasm: monotonicSec takes exactly one (Unit) argument"
+emitLeafExternRef prog env d "sleepMs" [n] =
+  emitRefExpr prog env d n
+    ++ ["call $mdk_unbox_int", "call $mdk_sleep_ms", "i32.const 0", "ref.i31"]
+emitLeafExternRef prog env d "sleepMs" _ =
+  gapLP prog "wasm: sleepMs takes exactly one argument"
+-- ioPoll: no wasm host binds descriptor readiness, so a call stops with a coded
+-- runtime error.  It traps at run time, not at build time, because the async
+-- scheduler (`systemPoller`) names ioPoll and calls it only when a task waits on
+-- a descriptor; a clock-only async program must still build.  The arguments are
+-- evaluated left to right first, as native evaluates them.
+emitLeafExternRef prog env d "ioPoll" [fds, interests, timeout] =
+  emitRefExpr prog env d fds
+    ++ ["drop"]
+    ++ emitRefExpr prog env d interests
+    ++ ["drop"]
+    ++ emitRefExpr prog env d timeout
+    ++ ["drop"]
+    ++ wasmTrap
+      (progEmit prog)
+      "E-WASM-NO-BINDING"
+      "ioPoll: descriptor readiness has no wasm binding (Net and Stdin bindings: #3666); build for a native target"
+emitLeafExternRef prog env d "ioPoll" _ =
+  gapLP prog "wasm: ioPoll takes exactly three arguments"
 -- stage-D: byte-clean file I/O.  readFileBytes returns a Result String (Array Int);
 -- writeFileBytes takes (path, Array Int) and returns Result String Unit.  Both route
 -- into the fileBytes host seam ($mdk_read_file_bytes_io / $mdk_write_file_bytes_io).

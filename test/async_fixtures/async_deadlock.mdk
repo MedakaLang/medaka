@@ -1,0 +1,15 @@
+-- Every remaining task waits on a flag nothing sets, so the scheduler must
+-- report a deadlock instead of hanging.  Compute-only (no Clock, no Net), so
+-- it builds on every target; the gate pins the coded stderr line and the
+-- exit status, which stdout comparison cannot.
+import async.{Async, awaitAny, runAsync, waitFlag}
+
+stuck : Async <Stdout> Unit
+stuck = defer
+  let flag = Ref False
+  awaitAny [waitFlag flag]
+
+main : <Stdout> Unit
+main =
+  putStrLn "start"
+  runAsync stuck

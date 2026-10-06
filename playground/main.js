@@ -302,15 +302,15 @@ function applyDiagnostics(files) {
   setSquiggles(view, files || []);
 }
 
-// Pure / wasm-safe stdlib modules bundled into the vfs so `import <mod>` works
-// in the browser.  EXCLUDED (native-only externs that trap/LinkError on wasm):
-// math, fs, net, time, io, test.  Keep in sync with EXTRA_MODULES in
-// build_playground_wasm.sh (these are fetched from dist/<id>.mdk).
+// Stdlib modules bundled into the vfs so `import <mod>` works in the browser.
+// EXCLUDED (native-only externs that trap/LinkError on wasm): fs, net, io, test.
+// Keep in sync with EXTRA_MODULES in build_playground_wasm.sh (these are fetched
+// from dist/<id>.mdk).
 const EXTRA_MODULES = [
   'args', 'array', 'async', 'base64', 'bytebuilder', 'byteparser', 'bytes',
-  'hash_map', 'hash_set', 'hex', 'i32', 'i64', 'json', 'list', 'map', 'nonempty',
-  'path', 'set', 'string', 'toml', 'u16', 'u32', 'u64', 'u8', 'validation',
-  'vector',
+  'hash_map', 'hash_set', 'hex', 'i32', 'i64', 'json', 'list', 'map', 'math',
+  'nonempty', 'path', 'regex', 'set', 'string', 'time', 'toml', 'u16', 'u32',
+  'u64', 'u8', 'validation', 'vector',
 ];
 
 // ── Asset loader ──────────────────────────────────────────────────────────────
@@ -532,7 +532,7 @@ async function runProgram() {
     setStatus('runner error', 'error');
   };
 
-  runner.postMessage({ wasm: result.wasm }, [result.wasm]);
+  runner.postMessage({ wasm: result.wasm, isolated: crossOriginIsolated }, [result.wasm]);
 }
 
 runBtn.addEventListener('click', runProgram);

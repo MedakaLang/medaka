@@ -17,7 +17,7 @@ import { dirname, join, resolve } from 'node:path';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLAYGROUND_ROOT = join(HERE, '..', '..'); // playground/e2e/lib -> playground/
 
-export async function startServer(port, serveRoot = PLAYGROUND_ROOT) {
+export async function startServer(port, serveRoot = PLAYGROUND_ROOT, extraEnv = {}) {
   const root = resolve(serveRoot);
   // Fail loud. A missing site/ must never degrade into "serve the dev tree
   // instead" — that would report PASS for a site that was never built.
@@ -30,7 +30,7 @@ export async function startServer(port, serveRoot = PLAYGROUND_ROOT) {
   }
   const child = spawn(process.execPath, [join(PLAYGROUND_ROOT, 'server.js')], {
     cwd: PLAYGROUND_ROOT,
-    env: { ...process.env, PORT: String(port), SERVE_ROOT: root },
+    env: { ...process.env, PORT: String(port), SERVE_ROOT: root, ...extraEnv },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 

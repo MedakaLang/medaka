@@ -177,9 +177,9 @@ function shippedModulesArg(stdlib) {
 }
 
 // ── persistent guest session ─────────────────────────────────────────────────
-// The guest module's `(start $__init)` runs the eager top-level initializers and
-// then `main`, and ALSO exports that `main` as `mdk_main` (compiler/backend/
-// wasm_emit.mdk, emitRefInit) so a host can call it again on the SAME instance.
+// The guest module's `(start $__init)` runs only the eager top-level
+// initializers; `main` is the `mdk_main` export (compiler/backend/
+// wasm_emit.mdk, emitRefInit), called once per run on the SAME instance.
 // Re-entering keeps every top-level `Ref` the compiler uses as a process-wide
 // memo alive across calls — above all the content-keyed prelude parse/desugar
 // caches (frontend/parse_cache.mdk, frontend/desugar_cache.mdk).  A fresh
@@ -205,6 +205,7 @@ function makeHost() {
     acc: [], eacc: [],
     floatFmtBuf: [], pathBuf: [], resultBuf: new Uint8Array(0),
     strToFloatOk: 0,   // #370: latched by mdk_str_to_float, read by mdk_str_to_float_ok
+    waitCell: null,    // Atomics.wait cell for mdk_sleep_ms, made on first sleep
     exited: false,
     resolve: null,
     imports: null,
@@ -256,6 +257,18 @@ function makeHost() {
     mdk_arg_byte: (i, j) => enc(host.argv[i])[j] & 0xff,
     mdk_result_len: () => host.resultBuf.length,
     mdk_result_byte: (i) => host.resultBuf[i] & 0xff,
+    // Clock host surface (design WA-1): reads in seconds, sleep in milliseconds.  A
+    // non-positive sleep returns at once, as medaka_rt.c's mdk_sleep_ms does.  The wait
+    // cell is made on first sleep so a page without SharedArrayBuffer still loads.
+    mdk_wall_time_sec: () => Date.now() / 1000,
+    mdk_monotonic_sec: () => performance.now() / 1000,
+    mdk_sleep_ms: (ms) => {
+      ms = Number(ms);
+      if (ms > 0) {
+        host.waitCell = host.waitCell || new Int32Array(new SharedArrayBuffer(4));
+        Atomics.wait(host.waitCell, 0, 0, ms);
+      }
+    },
     mdk_exit: (code) => { host.finish(code); throw new ExitSignal(); },
   } };
   return host;
@@ -266,8 +279,8 @@ export function resetGuestSession() { _session = null; }
 
 // Run the compiler guest once over an in-memory vfs.  `vfsMap` = Map<path, Uint8Array>.
 // `argv` = string[].  Returns { out, err, exit } (out/err as strings).
-// First call: instantiate (the module's start function runs `main`).  Later
-// calls: re-enter the SAME instance through its `mdk_main` export (see above).
+// First call: instantiate, then call `mdk_main`.  Later calls: re-enter the
+// SAME instance through `mdk_main` (see above).
 function runGuest(wasmModuleOrBytes, vfsMap, argv) {
   return new Promise((resolve, reject) => {
     if (_session) {
@@ -286,18 +299,22 @@ function runGuest(wasmModuleOrBytes, vfsMap, argv) {
     const host = makeHost();
     host.reset(vfsMap, argv, resolve);
     compiledModuleFor(wasmModuleOrBytes)
-      .then((module) => WebAssembly.instantiate(module, host.imports))
+      .then((module) => {
+        // A compiler module with mdk_main but no mdk_entry_split marker runs main in
+        // its start function, so calling mdk_main would run it twice.
+        const names = WebAssembly.Module.exports(module).map((e) => e.name);
+        if (names.includes('mdk_main') && !names.includes('mdk_entry_split'))
+          throw new Error('playground.wasm was built by an older compiler: its start function runs main itself; rebuild it / reload the page');
+        return WebAssembly.instantiate(module, host.imports);
+      })
       .then((instance) => {
-        // A module without the export (an older emitter) simply never persists.
-        if (instance && typeof instance.exports.mdk_main === 'function') {
-          _session = { instance, host };
-        }
+        _session = { instance, host };
+        instance.exports.mdk_main();
         host.finish(0);
       })
       .catch((e) => {
-        // A guest that ended through mdk_exit inside `start` never yields its
-        // instance, so it cannot be cached either — the next call instantiates.
         if (e instanceof ExitSignal || host.exited) { host.finish(0); return; }
+        _session = null;
         reject(withGuestStderr(e, host));
       });
   });
@@ -323,12 +340,11 @@ const NATIVE_ONLY_EXTERNS = new Set([
   'fileExists', 'fileMode', 'canonicalizePath', 'listDir', 'makeDir', 'removeFile',
   'rename', 'fsync', 'removeDir', 'statFile',
   'args', 'getEnv', 'executablePath', 'runCommand',
-  'wallTimeSec', 'monotonicSec', 'sleepMs',
   'netResolve', 'netTcpConnect', 'netTcpListen', 'netListenPort', 'netTcpAccept',
   'netSend', 'netSendFrom', 'netRecv', 'netShutdown', 'netClose', 'netCloseListener',
   'netSetTimeout', 'netSetNonblock', 'netTryAccept', 'netTryRecv', 'netTrySend',
 ]);
-const NATIVE_ONLY_MODULES = new Set(['time', 'fs', 'net', 'io', 'math']);
+const NATIVE_ONLY_MODULES = new Set(['fs', 'net', 'io']);
 
 function nativeOnlyMessage(text) {
   const ext = /unbound variable '([A-Za-z0-9_]+)'/.exec(text);
@@ -341,8 +357,7 @@ function nativeOnlyMessage(text) {
 function nativeOnlyModuleMessage(message) {
   const m = /^unknown module: ([A-Za-z0-9_.]+)$/.exec(message);
   if (m && NATIVE_ONLY_MODULES.has(m[1]))
-    return 'module `' + m[1] + '` is native-only and not available in the browser playground'
-      + (m[1] === 'time' ? ' (the `async` module depends on it)' : '');
+    return 'module `' + m[1] + '` is native-only and not available in the browser playground';
   return null;
 }
 
