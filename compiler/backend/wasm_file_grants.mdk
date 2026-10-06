@@ -738,7 +738,7 @@ putNoFile : String -> Bool -> OrdMap Bool -> OrdMap Bool
 putNoFile n proof m = omInsert n (proof && optionOr True (omLookup n m)) m
 
 signatureNoFile : OrdMap Unit -> Bool -> OrdMap Bool -> Decl -> OrdMap Bool
-signatureNoFile aliases write m (DTypeSig _ n ty) =
+signatureNoFile aliases write m (DTypeSig _ n ty _) =
   putNoFile n (tyNoFile aliases write ty) m
 signatureNoFile aliases write m (DAttrib _ d) =
   signatureNoFile aliases write m d

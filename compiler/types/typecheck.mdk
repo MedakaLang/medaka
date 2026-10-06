@@ -1840,7 +1840,7 @@ checkEffectParams (d :: rest) =
   checkEffectParams rest
 
 checkEffectParamsDecl : Decl -> Unit
-checkEffectParamsDecl (DTypeSig _ _ t) = checkEffectParamsTy t
+checkEffectParamsDecl (DTypeSig _ _ t _) = checkEffectParamsTy t
 checkEffectParamsDecl (DExtern _ _ t) = checkEffectParamsTy t
 checkEffectParamsDecl (DAttrib _ d) = checkEffectParamsDecl d
 checkEffectParamsDecl (DData { dataCtors = ctors }) =
@@ -1965,7 +1965,7 @@ checkUndeterminedRetEffVarsDecl (DInterface { name, typarams, typaramKinds, meth
 -- ⚠️ Deliberately NOT widened alongside it: `undeterminedRetEffVars` (#784's
 -- RETURN-only rule) stays interface-scoped — a top-level return-only effect var
 -- is #797's separate territory, and the comment above says so.
-checkUndeterminedRetEffVarsDecl (DTypeSig _ n t) =
+checkUndeterminedRetEffVarsDecl (DTypeSig _ n t _) =
   checkArgEffVarCoverage None [] n t
 checkUndeterminedRetEffVarsDecl (DAttrib _ d) =
   checkUndeterminedRetEffVarsDecl d
@@ -26795,7 +26795,7 @@ constrainedSigNames : List Decl -> List String
 constrainedSigNames prog = flatMap constrainedSigName prog
 
 constrainedSigName : Decl -> List String
-constrainedSigName (DTypeSig _ n ty)
+constrainedSigName (DTypeSig _ n ty _)
   | isConstrainedTy ty = [n]
   | otherwise = []
 constrainedSigName _ = []
@@ -42552,7 +42552,7 @@ constraintSlotId typarams tvs c = match constraintNonParamVars typarams c
 
 sigsOf : List Decl -> List (String, Ty)
 sigsOf [] = []
-sigsOf ((DTypeSig _ n ty) :: rest) = (n, ty) :: sigsOf rest
+sigsOf ((DTypeSig _ n ty _) :: rest) = (n, ty) :: sigsOf rest
 sigsOf (_ :: rest) = sigsOf rest
 
 -- every variable reference in an expr, bound ones included (an over-approximation
@@ -47440,7 +47440,7 @@ publicValNames [] = []
 publicValNames ((DAttrib _ d) :: rest) =
   publicValNames [d] ++ publicValNames rest
 publicValNames ((DFunDef True n _ _) :: rest) = n :: publicValNames rest
-publicValNames ((DTypeSig True n _) :: rest) = n :: publicValNames rest
+publicValNames ((DTypeSig True n _ _) :: rest) = n :: publicValNames rest
 publicValNames ((DExtern True n _) :: rest) = n :: publicValNames rest
 publicValNames ((DInterface { pub = True, methods, ... }) :: rest) =
   ifaceMethodNames methods ++ publicValNames rest
@@ -48012,7 +48012,7 @@ standaloneSigOf _ [] = None
 standaloneSigOf n ((DAttrib _ d) :: rest) = match standaloneSigOf n [d]
   Some t => Some t
   None => standaloneSigOf n rest
-standaloneSigOf n ((DTypeSig _ m ty) :: rest)
+standaloneSigOf n ((DTypeSig _ m ty _) :: rest)
   | m == n = Some ty
   | otherwise = standaloneSigOf n rest
 standaloneSigOf n (_ :: rest) = standaloneSigOf n rest
@@ -50784,7 +50784,7 @@ publicStandaloneNames ((DAttrib _ d) :: rest) =
   publicStandaloneNames [d] ++ publicStandaloneNames rest
 publicStandaloneNames ((DFunDef True n _ _) :: rest) =
   n :: publicStandaloneNames rest
-publicStandaloneNames ((DTypeSig True n _) :: rest) =
+publicStandaloneNames ((DTypeSig True n _ _) :: rest) =
   n :: publicStandaloneNames rest
 publicStandaloneNames (_ :: rest) = publicStandaloneNames rest
 
@@ -53507,7 +53507,7 @@ moduleDictNames bodyVars rpNames modules =
 -- set); guarded by the `medaka test stdlib/core.mdk` canary.
 
 constrainedSigPredicateSlots : Decl -> List (String, List PredicateSlot)
-constrainedSigPredicateSlots (DTypeSig _ n ty)
+constrainedSigPredicateSlots (DTypeSig _ n ty _)
   | isConstrainedTy ty = [(n, map sigPredicateSlot (sigConstraints ty))]
   | otherwise = []
 constrainedSigPredicateSlots _ = []
