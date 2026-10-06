@@ -13,19 +13,39 @@
 -- `List Bool` generation.
 
 import test.{expectEach, expectEqual, expectNotEqual, expectTrue}
-import tools.prop_runner.{seedPropRng, randBoolL}
+import tools.prop_runner.{
+  seedPropRng,
+  randBoolL,
+  PropHelper(..),
+  PropRequest(..),
+  PropResult(..),
+  PropStatus(..),
+  PropFailureKind(..),
+  PreparedPropRequest(..),
+  runPreparedPropRequestsResults,
+}
+import eval.eval.{EvalEnv(..)}
 import list.{nub}
-import frontend.ast.{Decl(..), Require(..), Ty(..), TyConOrigin(..)}
+import frontend.ast.{
+  Decl(..),
+  mapTyInDecl,
+  Require(..),
+  Ty(..),
+  TyConOrigin(..),
+}
 import frontend.parser.{parse}
 import tools.prop_plan.{
   CustomPlan(..),
   GenPlan(..),
   PlanError,
+  PlanModule(..),
   TypeKey(..),
   buildPlanEnv,
+  buildPlanEnvModules,
   customPlansReachable,
   ctorWeights,
   planFor,
+  planErrorText,
 }
 
 drawBools : Int -> List Bool
@@ -300,7 +320,96 @@ test "custom helper discovery follows instantiated nominal fields" =
       _ => False)
     Err _ => expectTrue False
 
-test "exported newtypes stay opaque to structural property generation" = expectTrue
-  (match planned "export newtype Wrapped = Wrapped Int\n" (namedTy "Wrapped")
-    Ok _ => False
-    Err _ => True)
+missingHelperProp : Decl
+missingHelperProp =
+  match parse "prop \"helper availability\" (value : Box) = True\n"
+    [decl] => decl
+    _ => panic "test fixture property did not parse"
+
+missingHelperPlan : Result PlanError GenPlan
+missingHelperPlan =
+  planFor
+    (buildPlanEnv (parse "data Box = Box Int\n" ++ [boxArbitrary]))
+    "policy"
+    "value"
+    (namedTy "Box")
+
+missingHelperResults : CustomPlan -> List PropResult
+missingHelperResults (CustomPlan key carrier word) =
+  let env = buildPlanEnv (parse "data Box = Box Int\n" ++ [boxArbitrary])
+  let rows = [
+    PreparedRun (PropRequest "helper availability" 17 1) missingHelperProp [
+      GCustom (CustomPlan key carrier word),
+    ],
+  ]
+  runPreparedPropRequestsResults
+    env
+    [PropHelper word "__missing_prop_generator" "__missing_prop_shrinker"]
+    rows
+    []
+    (EvalEnv [[]])
+    []
+
+missingHelperIsRuntimeResult : Bool
+missingHelperIsRuntimeResult = match missingHelperPlan
+  Ok (GCustom custom) => match missingHelperResults custom
+    [PropResult _ _ PropErroredResult (Some PropRuntimeError) detail _ _] =>
+      detail == "selected typed custom helper binding is unavailable"
+    _ => False
+  _ => False
+
+test "a missing selected helper binding is a runtime result" =
+  expectTrue missingHelperIsRuntimeResult
+
+wrappedTy : Ty
+wrappedTy = TyCon {
+  tyConName = "Wrapped",
+  tyConLoc = None,
+  tyConOrigin = OriginModule "owner",
+}
+
+runtimeTy : String -> Ty -> (Ty, Bool)
+runtimeTy _ (t@(TyCon { tyConName = "Int" })) =
+  (TyCon { t | tyConOrigin = OriginBuiltin }, True)
+runtimeTy owner (t@(TyCon {  })) =
+  (TyCon { t | tyConOrigin = OriginModule owner }, True)
+runtimeTy _ t = (t, False)
+
+runtimeNewtype : String -> Decl -> Decl
+runtimeNewtype owner (DAttrib attrs decl) =
+  DAttrib attrs (runtimeNewtype owner decl)
+runtimeNewtype owner (d@(DNewtype {  })) =
+  let (typed, _) = mapTyInDecl (runtimeTy owner) d
+  match typed
+    typedNewtype@(DNewtype {  }) =>
+      DNewtype { typedNewtype | newtypeOrigin = OriginModule owner }
+    _ => typed
+runtimeNewtype _ decl = decl
+
+wrappedPlan : String -> Result PlanError GenPlan
+wrappedPlan root =
+  let raw = parse "export newtype Wrapped = Wrapped Int\n"
+  match (buildPlanEnvModules root [
+    PlanModule "owner" raw (map (runtimeNewtype "owner") raw),
+  ])
+    Ok env => planFor env "policy" "value" wrappedTy
+    Err e => Err e
+
+wrappedDetail : String -> String
+wrappedDetail root = match wrappedPlan root
+  Ok _ => "ok"
+  Err e => planErrorText e
+
+test "newtype constructors are available only to their owner module" = expectEach
+  [
+    (
+      "owner can plan Wrapped",
+      expectEqual "ok" (wrappedDetail "owner"),
+    ),
+    (
+      "consumer cannot plan Wrapped",
+      expectTrue (match wrappedPlan "consumer"
+        Ok _ => False
+        Err _ => True),
+    ),
+  ]

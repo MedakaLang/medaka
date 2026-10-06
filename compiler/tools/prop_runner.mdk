@@ -26,7 +26,7 @@ import eval.eval.{
   Value(..), EvalEnv(..), apply, eval, extendEnv, force, lookupEnv, ppValue
 }
 import support.util.{listLen, lookupAssoc, isEmptyL, filterList, anyList}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omLookup}
 import tools.prop_plan.{
   deleteEach,
   prepend,
@@ -257,7 +257,7 @@ runProp genEnv evalEnv (DProp _ name params body) maxTests target propLines =
     Err e =>
       let _ = putStrLn ("ERROR: " ++ planErrorText e)
       False
-    Ok plans => match helperFailure genEnv plans
+    Ok plans => match helperFailure genEnv rootEnv plans
       Some detail =>
         let _ = putStrLn ("ERROR: " ++ detail)
         False
@@ -437,16 +437,41 @@ customHelper _ _ = None
 -- Before a property starts, validate every helper the selected plans can call.
 -- A caller may therefore return a normal protocol/runtime result rather than
 -- entering generation and tripping an evaluator panic for an absent helper.
-helperFailure : GenEnv -> List GenPlan -> Option String
-helperFailure ge plans =
-  helperFailureCustoms ge (customPlansReachable (genEnvPlan ge) plans)
+helperFailure : GenEnv -> EvalEnv (Value e) -> List GenPlan -> Option String
+helperFailure ge env plans =
+  helperFailureCustoms
+    ge
+    (envBindingNames env)
+    (customPlansReachable (genEnvPlan ge) plans)
 
-helperFailureCustoms : GenEnv -> List CustomPlan -> Option String
-helperFailureCustoms _ [] = None
-helperFailureCustoms ge (custom :: rest) =
+helperFailureCustoms : GenEnv -> OrdMap Unit -> List CustomPlan -> Option String
+helperFailureCustoms _ _ [] = None
+helperFailureCustoms ge names (custom :: rest) =
   match customHelper ge (GCustom custom)
-    Some _ => helperFailureCustoms ge rest
+    Some (PropHelper _ genName shrinkName) => match (
+      omHasKey genName names,
+      omHasKey shrinkName names,
+    )
+      (True, True) => helperFailureCustoms ge names rest
+      _ => Some "selected typed custom helper binding is unavailable"
     None => Some "selected typed custom helper is unavailable"
+
+-- This deliberately records names only: validating helpers must observe the
+-- caller's original cells without forcing or rebuilding its root environment.
+envBindingNames : EvalEnv (Value e) -> OrdMap Unit
+envBindingNames (EvalEnv frames) = bindingNamesFrames frames omEmpty
+
+bindingNamesFrames : List (List (String, Ref (Value e))) ->
+  OrdMap Unit ->
+  OrdMap Unit
+bindingNamesFrames [] names = names
+bindingNamesFrames (frame :: rest) names =
+  bindingNamesFrames rest (bindingNamesFrame frame names)
+
+bindingNamesFrame : List (String, Ref (Value e)) -> OrdMap Unit -> OrdMap Unit
+bindingNamesFrame [] names = names
+bindingNamesFrame ((name, _) :: rest) names =
+  bindingNamesFrame rest (omInsert name () names)
 
 ensureCustomRandomState : EvalEnv (Value e) -> <e> Unit
 ensureCustomRandomState env =
@@ -1154,7 +1179,7 @@ runPreparedRows genEnv ((PreparedResult result) :: rest) propLines evalEnv =
   result :: runPreparedRows genEnv rest propLines evalEnv
 runPreparedRows genEnv ((PreparedRun (PropRequest name seed cases) (DProp _ _ params body) plans) :: rest) propLines evalEnv =
   let _ = seedPropRng seed
-  (match helperFailure genEnv plans
+  (match helperFailure genEnv evalEnv plans
       Some detail => runtimeResult name seed cases detail
       None =>
         let _ = beginCustomPropStream seed
@@ -1286,7 +1311,7 @@ runPropRequest (request@(PropRequest name seed cases)) propLines genEnv evalEnv 
       [DProp _ _ params body] =>
         match planPropParams (genEnvPlan genEnv) name params
           Err e => capabilityResult name seed cases e
-          Ok plans => match helperFailure genEnv plans
+          Ok plans => match helperFailure genEnv rootEnv plans
             Some detail => runtimeResult name seed cases detail
             None =>
               let _ = beginCustomPropStream seed
@@ -1341,7 +1366,7 @@ runEachResult cases propLines genEnv evalEnv rootEnv ((DProp _ name params body)
   let seedAtStart = !propRngStateRef
   (match planPropParams (genEnvPlan genEnv) name params
       Err e => capabilityResult name seedAtStart cases e
-      Ok plans => match helperFailure genEnv plans
+      Ok plans => match helperFailure genEnv rootEnv plans
         Some detail => runtimeResult name seedAtStart cases detail
         None =>
           let _ = beginCustomPropStream seedAtStart
