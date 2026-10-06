@@ -17,7 +17,7 @@ Backend output also requires the existing eval/native/Wasm differential infrastr
 | --- | --- | --- |
 | Lists, tuples, primitive operation descriptions | Structural generation | Generate scripts, then construct the structure inside the law. |
 | Constrained graphs, balanced trees, shared mutable cells | Describe with primitive scripts or an eligible custom generator | Preserve validity by construction; compare against a simpler independent model. |
-| Custom generators | Argument-free nominal types can use an in-scope `Arbitrary` instance | Built-in types and applied heads use structural draws. Check imported type identity and eligibility. |
+| Custom generators | Argument-free nominal types can use an in-scope `Arbitrary` instance | Built-in types use structural draws. Applied types without a selected custom instance use structural draws; an unsupported selected instance reports a capability error. Check imported type identity and eligibility. |
 | Custom shrinking | Eligible `Arbitrary.shrink` instances run in both engines; structural shrinking covers containers and ADTs | Keep the input domain valid under shrinking and preserve the original failing law. |
 | Large structures and boundary values | Default primitive draws are small | Add deterministic sizes, extreme integers, Unicode and delimiter-bearing names explicitly. |
 | Reproducible draws | `--seed` controls property draws and is forwarded to directory/multi-target child runs | Record the seed, case budget, source revision and selected engine. |

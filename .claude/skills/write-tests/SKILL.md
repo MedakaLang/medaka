@@ -197,8 +197,10 @@ measured, per-corpus decisions, not defaults.
   `medaka test` can still be rejected by `medaka check`; run both.
 - **Custom prop generators have a restricted domain.** The runner consults
   an in-scope `Arbitrary` instance for an argument-free nominal type. Built-in
-  types and applied heads use structural draws; constrained instances and
-  aliases cannot supply a draw. There is no automatic `Arbitrary` deriver,
+  types use structural draws, as do applied heads without a selected custom
+  instance. A selected instance requiring type arguments or dictionaries
+  produces a capability error; it cannot silently fall back to structural
+  generation. Aliases cannot supply a draw. There is no automatic `Arbitrary` deriver,
   recursive structural generation is depth-capped. Eligible custom
   generators and shrinkers run in both engines. Custom random draws use
   the requested seed while preserving the program's random stream. See

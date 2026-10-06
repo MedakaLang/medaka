@@ -222,10 +222,11 @@ pinLedger : String
 pinLedger = "version = 1\n\{pinEntry "eval"}\{pinEntry "native"}"
 
 knownRedCount : Json -> Option Int
-knownRedCount report =
-  flatMap
-    (summary => flatMap asInt (get "knownRed" summary))
-    (get "summary" report)
+knownRedCount report = summaryCount "knownRed" report
+
+summaryCount : String -> Json -> Option Int
+summaryCount name report =
+  flatMap (summary => flatMap asInt (get name summary)) (get "summary" report)
 
 test "known-red property pins execute fixed witnesses and report separate counts" =
   withFixtures
@@ -239,6 +240,8 @@ test "known-red property pins execute fixed witnesses and report separate counts
         Err _ => False
         Ok (_, report) =>
           knownRedCount report == Some 2
+            && summaryCount "passed" report == Some 0
+            && summaryCount "failed" report == Some 0
             && all
               (row =>
                 flatMap asInt (get "issue" row) == Some 1
@@ -327,6 +330,8 @@ test "known-red unit pins retain the exact assertion in both engines" =
       Ok (code, report) => expectAll [
         expectEqual 0 code,
         expectEqual (Some 2) (knownRedCount report),
+        expectEqual (Some 0) (summaryCount "passed" report),
+        expectEqual (Some 0) (summaryCount "failed" report),
         expectEqual
           [
             (Some "eval", Some "known-red", Some "fail", Some 1),
@@ -786,3 +791,53 @@ test "changing recursive type arguments can produce finite generated values" =
           ("native", "finite changing arguments", "pass"),
         ]
         (runReport ["--engines", "eval,native"] target))
+
+test "an expected native abort pin preserves later ordinary test execution" =
+  withFixtures
+    [
+      (
+        "verdict.mdk",
+        "public export data Verdict = Pass String String | Fail String String String\nexport\nisFailure : Verdict -> Bool\nisFailure (Fail _ _ _) = True\nisFailure (Pass _ _) = False\n",
+      ),
+      (
+        "main.mdk",
+        "import test as TestAlias\nimport verdict.{Verdict(..), isFailure}\ntest \"known native abort\" = TestAlias.expectTrue (isFailure (Fail \"detail\" \"left\" \"right\"))\ntest \"later ordinary test\" = TestAlias.expectEqual 1 1\n",
+      ),
+      (
+        "medaka-test-pins.toml",
+        "version = 1\n[[pin]]\nfile = \"main.mdk\"\nkind = \"test\"\nname = \"known native abort\"\nengine = \"native\"\nissue = 3857\nfailure = \"error\"\ndetail_lines = [\"native test run ended (probe exit 1) — runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running\"]\n",
+      ),
+    ]
+    (target => match runReport ["--engines", "eval,native"] target
+      Err message => fail message
+      Ok (code, report) => expectAll [
+        expectEqual 0 code,
+        expectEqual (Some 1) (knownRedCount report),
+        expectEqual (Some 3) (summaryCount "passed" report),
+        expectEqual (Some 0) (summaryCount "failed" report),
+        expectEqual
+          [
+            (Some "eval", Some "known native abort", Some "pass", Some "pass"),
+            (Some "eval", Some "later ordinary test", Some "pass", Some "pass"),
+            (
+              Some "native",
+              Some "known native abort",
+              Some "known-red",
+              Some "error",
+            ),
+            (
+              Some "native",
+              Some "later ordinary test",
+              Some "pass",
+              Some "pass",
+            ),
+          ]
+          (map
+            (row => (
+              field "engine" row,
+              field "name" row,
+              field "status" row,
+              field "rawStatus" row,
+            ))
+            (unitReportRows report)),
+      ])

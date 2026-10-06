@@ -182,7 +182,7 @@ buildAndRun : String ->
   <IO> Result String (List ExResult)
 buildAndRun target entryPath outPath tmpDir tests nonce =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-  let medaka = envOr "MEDAKA" "medaka"
+  let medaka = envOr "MEDAKA" (joinPath root "medaka")
   let emitter = envOr "MEDAKA_EMITTER" (joinPath root "medaka_emitter")
   let cc = envOr "CC" "clang"
   -- The scratch entry sits in a `mktemp -d`, so its own search roots resolve
