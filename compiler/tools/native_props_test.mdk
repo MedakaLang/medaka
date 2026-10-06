@@ -154,8 +154,32 @@ test "native source closes every recursive plan behind parameter-scoped helpers"
       _ =>
         expectTrue
           (contains "import core as NpCore_" probe
-            && contains "__np_gen_0_0_node_" probe
-            && contains "__np_gen_0_1_node_" probe
-            && contains "__np_gen_0_0_shrink_" probe
-            && contains "__np_gen_0_1_display_" probe
+            && contains "__np_source_check_gen_0_0_node_" probe
+            && contains "__np_source_check_gen_0_1_node_" probe
+            && contains "__np_source_check_gen_0_0_shrink_" probe
+            && contains "__np_source_check_gen_0_1_display_" probe
             && not (contains "__np_missing_plan" probe))
+
+test "native source salts helper globals without rewriting user globals" =
+  let text =
+    "__np_state : Int\n__np_state = 77\nprop \"shape\" (n : Int) = __np_state == 77 && n == n\n"
+  match rendered text
+    Err message => fail message
+    Ok probe => match parse probe
+      [] => fail "rendered probe with a user helper-shaped global did not parse"
+      _ =>
+        expectTrue
+          (contains "__np_state = 77" probe
+            && contains "__np_source_check_state : Ref Int" probe)
+
+test "native source renders named fields as one string expression" =
+  let text =
+    "data Sample = Sample { __np_field : Int, ready : Bool }\nprop \"shape\" (__np_value : Sample) = __np_value == __np_value\n"
+  match rendered text
+    Err message => fail message
+    Ok probe => match parse probe
+      [] => fail "rendered probe with named fields did not parse"
+      _ =>
+        expectTrue
+          (contains "\"__np_field = \"" probe
+            && contains "\"__np_value = \"" probe)

@@ -18,6 +18,7 @@ import support.ordmap.{OrdMap, omEmpty, omHasKey, omInsert, omKeys, omLookup}
 import support.util.{
   joinNl, joinWith, splitNl, filterList, lookupAssoc, listLen, zipL, reverseL
 }
+import string.{replaceAll}
 import string.{toInt}
 import tools.probe_transcript.{
   Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, lookupChunk,
@@ -472,9 +473,8 @@ plannedProbeSource : String ->
 plannedProbeSource nonce target tsrc modules env jobs =
   joinNl
     (plannedImports nonce modules jobs env
-      ++ [
-        probeTargetSource target tsrc,
-        "",
+      ++ [probeTargetSource target tsrc, ""]
+      ++ saltGenerated nonce [
         "__np_state : Ref Int",
         "__np_state = Ref 0",
         "",
@@ -505,15 +505,53 @@ plannedProbeSource nonce target tsrc modules env jobs =
         "__np_replace_each f (x :: xs) = map (ys => ys :: xs) (f x) ++ map (ys => x :: ys) (__np_replace_each f xs)",
         "",
       ]
-      ++ plannedPropLines modules env (coreAlias nonce) jobs 0
+      ++ plannedPropLines nonce modules env (coreAlias nonce) jobs 0
       ++ ["main ="]
-      ++ plannedMainLines nonce jobs 0
+      ++ saltGenerated nonce (plannedMainLines nonce jobs 0)
       ++ ["  putStrLn \"\{sentinelFor nonce endTag}\"", ""])
 
 -- Each imported module gets a probe-local alias. Constructor selection is by
 -- the TypeKey owner, never by a bare source spelling.
 coreAlias : String -> String
-coreAlias nonce = "NpCore_\{nonce}"
+coreAlias nonce = "NpCore_\{probeNameNonce nonce}"
+
+probeNameNonce : String -> String
+probeNameNonce nonce = replaceAll "-" "_" nonce
+
+saltGenerated : String -> List String -> List String
+saltGenerated nonce lines = saltGeneratedLines nonce lines
+
+saltGeneratedLines : String -> List String -> List String
+saltGeneratedLines _ [] = []
+saltGeneratedLines nonce (line :: rest) =
+  saltGeneratedLine nonce line :: saltGeneratedLines nonce rest
+
+saltGeneratedLine : String -> String -> String
+saltGeneratedLine nonce line =
+  let prefix = "__np_\{probeNameNonce nonce}_"
+  let salted = replaceAll "__np_state" "\{prefix}state" line
+  let salted = replaceAll "__np_custom_state" "\{prefix}custom_state" salted
+  let salted = replaceAll "__np_next" "\{prefix}next" salted
+  let salted = replaceAll "__np_int" "\{prefix}int" salted
+  let salted = replaceAll "__np_bool" "\{prefix}bool" salted
+  let salted = replaceAll "__np_choose" "\{prefix}choose" salted
+  let salted = replaceAll "__np_char" "\{prefix}char" salted
+  let salted = replaceAll "__np_string" "\{prefix}string" salted
+  let salted = replaceAll "__np_join_strings" "\{prefix}join_strings" salted
+  let salted = replaceAll "__np_array_to_list" "\{prefix}array_to_list" salted
+  let salted = replaceAll "__np_delete_each" "\{prefix}delete_each" salted
+  let salted = replaceAll "__np_replace_each" "\{prefix}replace_each" salted
+  let salted = replaceAll "__np_prop_" "\{prefix}prop_" salted
+  let salted = replaceAll "__np_gen_" "\{prefix}gen_" salted
+  let salted = replaceAll "__np_run_" "\{prefix}run_" salted
+  let salted = replaceAll "__np_shrink_" "\{prefix}shrink_" salted
+  let salted = replaceAll "__np_try_" "\{prefix}try_" salted
+  let salted = replaceAll "__np_arg_" "\{prefix}arg_" salted
+  let salted = replaceAll "__np_cases" "\{prefix}cases" salted
+  let salted = replaceAll "__np_fuel" "\{prefix}fuel" salted
+  let salted = replaceAll "__np_candidates" "\{prefix}candidates" salted
+  let salted = replaceAll "__np_candidate" "\{prefix}candidate" salted
+  replaceAll "__np_rest" "\{prefix}rest" salted
 
 plannedImports : String ->
   List PlanModule ->
@@ -617,6 +655,9 @@ planSourceTy modules (GNominal key plans) = nominalSourceTy modules key plans
 planSourceTy modules (GCustom (CustomPlan _ carrier _)) =
   carrierSourceTy modules carrier
 
+effectfulPlanSourceTy : List PlanModule -> GenPlan -> String
+effectfulPlanSourceTy modules plan = "<Rand> \{planSourceTy modules plan}"
+
 carrierSourceTy : List PlanModule -> Ty -> String
 carrierSourceTy modules carrier =
   ppTy (fst (mapTyFull (qualifyCarrierTy modules) carrier))
@@ -644,21 +685,24 @@ nominalSourceTy modules (TypeKey name _) plans =
 typeKeyName : TypeKey -> String
 typeKeyName (TypeKey name _) = name
 
-plannedPropLines : List PlanModule ->
+plannedPropLines : String ->
+  List PlanModule ->
   PlanEnv ->
   String ->
   List NativePlanOutcome ->
   Int ->
   List String
-plannedPropLines _ _ _ [] _ = []
-plannedPropLines modules env core ((NativeRunnable (DProp _ _ params body) r plans) :: rest) i =
-  fnLines i params body
-    ++ plannedGenLines modules env core i 0 params plans
-    ++ plannedRunLines modules env i params plans (propRequestCases r)
-    ++ plannedShrinkLines modules env i params plans
-    ++ plannedPropLines modules env core rest (i + 1)
-plannedPropLines modules env core (_ :: rest) i =
-  plannedPropLines modules env core rest i
+plannedPropLines _ _ _ _ [] _ = []
+plannedPropLines nonce modules env core ((NativeRunnable (DProp _ _ params body) r plans) :: rest) i =
+  fnLines nonce i params body
+    ++ saltGenerated
+      nonce
+      (plannedGenLines modules env core i 0 params plans
+        ++ plannedRunLines modules env i params plans (propRequestCases r)
+        ++ plannedShrinkLines modules env i params plans)
+    ++ plannedPropLines nonce modules env core rest (i + 1)
+plannedPropLines nonce modules env core (_ :: rest) i =
+  plannedPropLines nonce modules env core rest i
 
 plannedGenLines : List PlanModule ->
   PlanEnv ->
@@ -669,11 +713,15 @@ plannedGenLines : List PlanModule ->
   List GenPlan ->
   List String
 plannedGenLines _ _ _ _ _ [] [] = []
-plannedGenLines modules env core i j ((PropParam _ _ ty) :: rest) (p :: plans) =
+plannedGenLines modules env core i j ((PropParam _ _ _) :: rest) (p :: plans) =
   let graph = buildGraph env p
   let prefix = genNodePrefix i j
   let root = graphRef graph prefix p "depth"
-  ["\{genName i j} : Int -> \{ppTy ty}", "\{genName i j} depth = \{root}", ""]
+  [
+      "\{genName i j} : Int -> \{effectfulPlanSourceTy modules p}",
+      "\{genName i j} depth = \{root}",
+      "",
+    ]
     ++ graphLines modules env core prefix graph
     ++ graphAuxLines modules env core prefix graph
     ++ plannedGenLines modules env core i (j + 1) rest plans
@@ -875,7 +923,7 @@ graphLinesGo modules env core prefix nodes (word :: rest) =
     None => graphLinesGo modules env core prefix nodes rest
     Some (GraphNode ident plan _) =>
       [
-          "\{graphNodeName prefix ident} : Int -> \{planSourceTy modules plan}",
+          "\{graphNodeName prefix ident} : Int -> \{effectfulPlanSourceTy modules plan}",
           "\{graphNodeName prefix ident} depth = \{graphNodeBody modules env core (NativeGraph nodes [] 0) prefix plan}",
           "",
         ]
@@ -1371,7 +1419,7 @@ graphNamedDisplays : NativeGraph ->
   String
 graphNamedDisplays _ _ [] _ = ""
 graphNamedDisplays graph prefix ((Some field, plan) :: rest) (value :: values) =
-  "\{field} = \" ++ \{graphDisplayRef graph prefix plan value}\{graphNamedDisplaysTail graph prefix rest values}"
+  "\"\{field} = \" ++ \{graphDisplayRef graph prefix plan value}\{graphNamedDisplaysTail graph prefix rest values}"
 graphNamedDisplays _ _ _ _ = ""
 
 graphNamedDisplaysTail : NativeGraph ->
@@ -1613,9 +1661,14 @@ genName i j = "__np_gen_\{intToString i}_\{intToString j}"
 runName : Int -> String
 runName i = "__np_run_\{intToString i}"
 
-fnLines : Int -> List PropParam -> Expr -> List String
-fnLines i ps body =
-  ["\{fnName i} \{joinWith " " (map paramName ps)} = \{exprToString body}", ""]
+fnLines : String -> Int -> List PropParam -> Expr -> List String
+fnLines nonce i ps body = [
+  "\{saltName nonce (fnName i)} \{joinWith " " (map paramName ps)} = \{exprToString body}",
+  "",
+]
+
+saltName : String -> String -> String
+saltName nonce = replaceAll "__np_" "__np_\{probeNameNonce nonce}_"
 
 paramName : PropParam -> String
 paramName (PropParam n _ _) = n
