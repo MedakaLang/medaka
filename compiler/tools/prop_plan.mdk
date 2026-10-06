@@ -16,7 +16,7 @@ import frontend.ast.{
   sameTyConHead,
 }
 import types.route_key.{typeTagOf, implRouteKeyWord}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omSize}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omKeys, omLookup}
 import support.util.{lookupAssoc, zipL}
 
 -- Container candidate order is policy, not an implementation detail of an
@@ -395,6 +395,9 @@ planForGo env propName param (TyApp (TyApp (TyCon { tyConName = "Result", tyConO
       GResult
       (planForGo env propName param e)
       (planForGo env propName param a)
+planForGo env propName param ty
+  | builtinTupleSpine ty =
+    map GTuple (planMany env propName param (planArgs ty))
 planForGo env propName param (TyTuple ts) =
   map GTuple (planMany env propName param ts)
 planForGo _ propName param (ty@(TyFun _ _)) =
@@ -411,6 +414,17 @@ builtinOrigin : TyConOrigin -> Bool
 builtinOrigin OriginBuiltin = True
 builtinOrigin (OriginModule "core") = True
 builtinOrigin _ = False
+
+-- Resolved tuples are saturated `__tupleN__` application spines, while a few
+-- raw AST callers still use `TyTuple`. The built-in origin and exact arity
+-- keep a user spelling of the synthetic name from becoming a tuple.
+builtinTupleSpine : Ty -> Bool
+builtinTupleSpine ty = match headKey ty
+  Some (TypeKey "__tuple2__" OriginBuiltin) => listLength (planArgs ty) == 2
+  Some (TypeKey "__tuple3__" OriginBuiltin) => listLength (planArgs ty) == 3
+  Some (TypeKey "__tuple4__" OriginBuiltin) => listLength (planArgs ty) == 4
+  Some (TypeKey "__tuple5__" OriginBuiltin) => listLength (planArgs ty) == 5
+  _ => False
 
 headKey : Ty -> Option TypeKey
 headKey (TyCon { tyConName = n, tyConOrigin = o }) = Some (TypeKey n o)
@@ -686,10 +700,17 @@ nominalCtors _ plan =
 
 softCtorWeight : PlanEnv -> GenPlan -> Int -> PlanCtor -> Int
 softCtorWeight env nominal depth ctor =
-  if ctorCanDiverge env nominal ctor then
+  if not (ctorHasFiniteFields env nominal ctor) then
+    0
+  else if ctorCanDiverge env nominal ctor then
     max 1 (recWeight0 - depth)
   else
     recWeight0
+
+ctorHasFiniteFields : PlanEnv -> GenPlan -> PlanCtor -> Bool
+ctorHasFiniteFields env nominal ctor = match instantiateCtor env nominal ctor
+  Ok fields => allPlansFinite env (fieldPlansOnly fields)
+  Err _ => False
 
 ctorCanDiverge : PlanEnv -> GenPlan -> PlanCtor -> Bool
 ctorCanDiverge env nominal ctor = match instantiateCtor env nominal ctor
@@ -714,15 +735,61 @@ ctorLowersFiniteHeight env nominal ctor = match (
 planHasFiniteValue : PlanEnv -> GenPlan -> Bool
 planHasFiniteValue env plan = isSome (planFiniteHeight env plan [])
 
--- A finite constructor path never needs to revisit a nominal declaration: on a
--- revisit it can take the same exit at the earlier occurrence. The number of
--- nominal rows is therefore a complete bound for the minimum witness search.
+-- Finite search is bounded by the reachable abstract carrier space. A nominal
+-- carrier consists of its declaration identity and one finite/non-finite bit
+-- per instantiated argument. A shortest finite constructor path cannot repeat
+-- one of those states. Concrete argument heights are added separately, so
+-- `Box (Box (Box Int))` keeps its three real wrapper layers while `Rotate`
+-- may change parameter positions until a container supplies an empty value.
 planFiniteHeight : PlanEnv -> GenPlan -> List TypeKey -> Option Int
 planFiniteHeight env plan _ =
-  findFiniteHeight env plan 0 (finiteHeightLimit env)
+  findFiniteHeight env plan 0 (finiteHeightLimit env plan)
 
-finiteHeightLimit : PlanEnv -> Int
-finiteHeightLimit (PlanEnv _ defs _ _ _) = max 1 (omSize defs)
+finiteHeightLimit : PlanEnv -> GenPlan -> Int
+finiteHeightLimit env (GNominal _ args) =
+  max 1 (abstractCarrierCount env + greatestArgumentHeight env args)
+finiteHeightLimit _ GInt = 0
+finiteHeightLimit _ GBool = 0
+finiteHeightLimit _ GFloat = 0
+finiteHeightLimit _ GChar = 0
+finiteHeightLimit _ GString = 0
+finiteHeightLimit _ GUnit = 0
+finiteHeightLimit _ (GList _) = 0
+finiteHeightLimit _ (GArray _) = 0
+finiteHeightLimit _ (GOption _) = 0
+finiteHeightLimit env (GResult err ok) =
+  max (argumentHeight env err) (argumentHeight env ok)
+finiteHeightLimit env (GTuple plans) = greatestArgumentHeight env plans
+finiteHeightLimit _ (GCustom _) = 0
+
+abstractCarrierCount : PlanEnv -> Int
+abstractCarrierCount (PlanEnv _ defs _ _ _) =
+  countCarrierBuckets (omKeys defs) defs
+
+countCarrierBuckets : List String -> OrdMap (List PlanDef) -> Int
+countCarrierBuckets [] _ = 0
+countCarrierBuckets (word :: rest) defs =
+  countCarrierDefs (optionList (omLookup word defs))
+    + countCarrierBuckets rest defs
+
+countCarrierDefs : List PlanDef -> Int
+countCarrierDefs [] = 0
+countCarrierDefs ((PlanDef _ _ params _ _) :: rest) =
+  boolVectorCount params + countCarrierDefs rest
+
+boolVectorCount : List a -> Int
+boolVectorCount [] = 1
+boolVectorCount (_ :: rest) = 2 * boolVectorCount rest
+
+greatestArgumentHeight : PlanEnv -> List GenPlan -> Int
+greatestArgumentHeight _ [] = 0
+greatestArgumentHeight env (plan :: rest) =
+  max (argumentHeight env plan) (greatestArgumentHeight env rest)
+
+argumentHeight : PlanEnv -> GenPlan -> Int
+argumentHeight env plan = match planFiniteHeight env plan []
+  Some height => height
+  None => 0
 
 findFiniteHeight : PlanEnv -> GenPlan -> Int -> Int -> Option Int
 findFiniteHeight _ _ height limit
@@ -771,6 +838,11 @@ allPlansFitHeight _ [] _ = True
 allPlansFitHeight env (plan :: rest) height =
   planFitsHeight env plan height && allPlansFitHeight env rest height
 
+allPlansFinite : PlanEnv -> List GenPlan -> Bool
+allPlansFinite _ [] = True
+allPlansFinite env (plan :: rest) =
+  planHasFiniteValue env plan && allPlansFinite env rest
+
 fieldPlansOnly : List (Option String, GenPlan) -> List GenPlan
 fieldPlansOnly [] = []
 fieldPlansOnly ((_, plan) :: rest) = plan :: fieldPlansOnly rest
@@ -784,27 +856,112 @@ allPlansBelow env height (plan :: rest) = match planFiniteHeight env plan []
 export
 planFor : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
 planFor env propName param ty = match planForGo env propName param ty
-  Ok plan =>
-    if planHasFiniteValue env plan then
-      Ok plan
-    else
-      Err
-        (PlanError
-          propName
-          param
-          ty
-          PENoFiniteValue
-          "no constructor path reaches finite values")
+  Ok plan => match validateReachableFields env plan []
+    Err (PlanError _ _ badTy reason detail) =>
+      Err (PlanError propName param badTy reason detail)
+    Ok _ =>
+      if planHasFiniteValue env plan then
+        Ok plan
+      else
+        Err
+          (PlanError
+            propName
+            param
+            ty
+            PENoFiniteValue
+            "no constructor path reaches finite values")
   Err e => Err e
 
-keyIn : TypeKey -> List TypeKey -> Bool
-keyIn _ [] = False
-keyIn key (x :: xs) = sameTypeKey key x || keyIn key xs
+-- A property may have one finite constructor while another reachable
+-- constructor contains a function or another unsupported field. The selected
+-- constructor must never turn that planning failure into an engine panic, so
+-- check every reachable structural field before handing the plan to a runner.
+-- The carrier uses finite/non-finite argument states; it terminates for
+-- nonregular recursion while retaining the instantiated generic distinction.
+data PlanCarrier = PlanCarrier TypeKey (List Bool)
+
+validateReachableFields : PlanEnv ->
+  GenPlan ->
+  List PlanCarrier ->
+  Result PlanError Unit
+validateReachableFields _ GInt _ = Ok ()
+validateReachableFields _ GBool _ = Ok ()
+validateReachableFields _ GFloat _ = Ok ()
+validateReachableFields _ GChar _ = Ok ()
+validateReachableFields _ GString _ = Ok ()
+validateReachableFields _ GUnit _ = Ok ()
+validateReachableFields env (GList plan) seen =
+  validateReachableFields env plan seen
+validateReachableFields env (GArray plan) seen =
+  validateReachableFields env plan seen
+validateReachableFields env (GOption plan) seen =
+  validateReachableFields env plan seen
+validateReachableFields env (GResult err ok) seen = match (
+  validateReachableFields env err seen,
+  validateReachableFields env ok seen,
+)
+  (Ok _, Ok _) => Ok ()
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+validateReachableFields env (GTuple plans) seen =
+  validateReachablePlans env plans seen
+validateReachableFields _ (GCustom _) _ = Ok ()
+validateReachableFields env (nominal@(GNominal key args)) seen =
+  let carrier = PlanCarrier key (map (planHasFiniteValue env) args)
+  if carrierIn carrier seen then
+    Ok ()
+  else match planDef env key
+    Ok (PlanDef _ _ _ _ ctors) =>
+      validateReachableCtors env nominal ctors (carrier :: seen)
+    Err e => Err e
+
+validateReachablePlans : PlanEnv ->
+  List GenPlan ->
+  List PlanCarrier ->
+  Result PlanError Unit
+validateReachablePlans _ [] _ = Ok ()
+validateReachablePlans env (plan :: rest) seen = match (
+  validateReachableFields env plan seen,
+  validateReachablePlans env rest seen,
+)
+  (Ok _, Ok _) => Ok ()
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+validateReachableCtors : PlanEnv ->
+  GenPlan ->
+  List PlanCtor ->
+  List PlanCarrier ->
+  Result PlanError Unit
+validateReachableCtors _ _ [] _ = Ok ()
+validateReachableCtors env nominal (ctor :: rest) seen = match (
+  instantiateCtor env nominal ctor,
+  validateReachableCtors env nominal rest seen,
+)
+  (Ok fields, Ok _) => validateReachablePlans env (fieldPlansOnly fields) seen
+  (Err e, _) => Err e
+  (_, Err e) => Err e
+
+carrierIn : PlanCarrier -> List PlanCarrier -> Bool
+carrierIn _ [] = False
+carrierIn (PlanCarrier key states) ((PlanCarrier otherKey otherStates) :: rest) =
+  sameTypeKey key otherKey && sameBoolPlans states otherStates
+    || carrierIn (PlanCarrier key states) rest
+
+sameBoolPlans : List Bool -> List Bool -> Bool
+sameBoolPlans [] [] = True
+sameBoolPlans (a :: restA) (b :: restB) = a == b && sameBoolPlans restA restB
+sameBoolPlans _ _ = False
 
 export
 listLengthBound : PlanEnv -> Int -> GenPlan -> Int
 listLengthBound env depth plan =
-  if depth >= maxGenDepth && planCanDiverge env plan then 0 else listLenMax
+  if not (planHasFiniteValue env plan) then
+    0
+  else if depth >= maxGenDepth && planCanDiverge env plan then
+    0
+  else
+    listLenMax
 
 -- The empty/none alternatives are part of the same depth policy. A container
 -- may still expose a non-recursive payload at the bound, but it cannot enter a
@@ -812,7 +969,12 @@ listLengthBound env depth plan =
 export
 optionWeights : PlanEnv -> Int -> GenPlan -> List Int
 optionWeights env depth plan =
-  if depth >= maxGenDepth && planCanDiverge env plan then [1, 0] else [1, 1]
+  if not (planHasFiniteValue env plan) then
+    [1, 0]
+  else if depth >= maxGenDepth && planCanDiverge env plan then
+    [1, 0]
+  else
+    [1, 1]
 
 export
 resultWeights : PlanEnv -> Int -> GenPlan -> GenPlan -> List Int
@@ -820,7 +982,10 @@ resultWeights env depth err ok =
   if depth >= maxGenDepth then
     [boundPlanWeight env err, boundPlanWeight env ok]
   else
-    [1, 1]
+    [finitePlanWeight env err, finitePlanWeight env ok]
+
+finitePlanWeight : PlanEnv -> GenPlan -> Int
+finitePlanWeight env plan = if planHasFiniteValue env plan then 1 else 0
 
 boundPlanWeight : PlanEnv -> GenPlan -> Int
 boundPlanWeight env plan = if planCanFinishAtBound env plan then 1 else 0
@@ -874,37 +1039,38 @@ anyPlanDiverges : PlanEnv -> List GenPlan -> Bool
 anyPlanDiverges _ [] = False
 anyPlanDiverges env (p :: ps) = planCanDiverge env p || anyPlanDiverges env ps
 
-planCanDivergeNominal : PlanEnv -> GenPlan -> List TypeKey -> Bool
-planCanDivergeNominal _ (GNominal key _) seen
-  | keyIn key seen = True
-planCanDivergeNominal env (nominal@(GNominal key _)) seen =
-  match planDef env key
+planCanDivergeNominal : PlanEnv -> GenPlan -> List PlanCarrier -> Bool
+planCanDivergeNominal env (nominal@(GNominal key args)) seen =
+  let carrier = PlanCarrier key (map (planHasFiniteValue env) args)
+  if carrierIn carrier seen then
+    True
+  else match planDef env key
     Ok (PlanDef _ _ _ _ ctors) =>
-      anyCtorPlanDiverges env nominal ctors (key :: seen)
+      anyCtorPlanDiverges env nominal ctors (carrier :: seen)
     Err _ => False
 planCanDivergeNominal _ _ _ = False
 
 anyCtorPlanDiverges : PlanEnv ->
   GenPlan ->
   List PlanCtor ->
-  List TypeKey ->
+  List PlanCarrier ->
   Bool
 anyCtorPlanDiverges _ _ [] _ = False
 anyCtorPlanDiverges env nominal (ctor :: rest) seen =
   ctorPlanDiverges env nominal ctor seen
     || anyCtorPlanDiverges env nominal rest seen
 
-ctorPlanDiverges : PlanEnv -> GenPlan -> PlanCtor -> List TypeKey -> Bool
+ctorPlanDiverges : PlanEnv -> GenPlan -> PlanCtor -> List PlanCarrier -> Bool
 ctorPlanDiverges env nominal ctor seen = match instantiateCtor env nominal ctor
   Ok fields => anyPlansDivergeSeen env (fieldPlansOnly fields) seen
   Err _ => False
 
-anyPlansDivergeSeen : PlanEnv -> List GenPlan -> List TypeKey -> Bool
+anyPlansDivergeSeen : PlanEnv -> List GenPlan -> List PlanCarrier -> Bool
 anyPlansDivergeSeen _ [] _ = False
 anyPlansDivergeSeen env (plan :: rest) seen =
   planDivergesSeen env plan seen || anyPlansDivergeSeen env rest seen
 
-planDivergesSeen : PlanEnv -> GenPlan -> List TypeKey -> Bool
+planDivergesSeen : PlanEnv -> GenPlan -> List PlanCarrier -> Bool
 planDivergesSeen _ GInt _ = False
 planDivergesSeen _ GBool _ = False
 planDivergesSeen _ GFloat _ = False
@@ -917,8 +1083,8 @@ planDivergesSeen env (GOption plan) seen = planDivergesSeen env plan seen
 planDivergesSeen env (GResult err ok) seen =
   planDivergesSeen env err seen || planDivergesSeen env ok seen
 planDivergesSeen env (GTuple plans) seen = anyPlansDivergeSeen env plans seen
-planDivergesSeen env (nominal@(GNominal key _)) seen =
-  if keyIn key seen then True else planCanDivergeNominal env nominal seen
+planDivergesSeen env (nominal@(GNominal _ _)) seen =
+  planCanDivergeNominal env nominal seen
 planDivergesSeen _ (GCustom _) _ = False
 
 -- Structural shrink action ordering is shared as data.  Adapters map these to

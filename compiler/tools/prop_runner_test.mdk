@@ -80,6 +80,34 @@ namedTy : String -> Ty
 namedTy name =
   TyCon { tyConName = name, tyConLoc = None, tyConOrigin = OriginUnresolved }
 
+intTy : Ty
+intTy =
+  TyCon { tyConName = "Int", tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+boolTy : Ty
+boolTy =
+  TyCon { tyConName = "Bool", tyConLoc = None, tyConOrigin = OriginBuiltin }
+
+tupleHead : Ty
+tupleHead = TyCon {
+  tyConName = "__tuple2__",
+  tyConLoc = None,
+  tyConOrigin = OriginBuiltin,
+}
+
+tupleIntBool : Ty
+tupleIntBool = TyApp (TyApp tupleHead intTy) boolTy
+
+boxThreeInt : Ty
+boxThreeInt =
+  TyApp (namedTy "Box") (TyApp (namedTy "Box") (TyApp (namedTy "Box") intTy))
+
+rotateLoop : Ty
+rotateLoop =
+  TyApp
+    (TyApp (TyApp (namedTy "Rotate") (namedTy "Loop")) (namedTy "Loop"))
+    (namedTy "Loop")
+
 planned : String -> Ty -> Result PlanError GenPlan
 planned source ty = planFor (buildPlanEnv (parse source)) "policy" "value" ty
 
@@ -143,6 +171,16 @@ test "finite planning uses instantiated generic arguments and rejects empty recu
           Err _ => True),
     ),
     (
+      "nested generic carriers keep their finite argument route",
+      expectEqual (weightsAt 24 "data Box a = Box a\n" boxThreeInt) [1],
+    ),
+    (
+      "a resolved tuple spine plans each component",
+      expectTrue (match planned "" tupleIntBool
+        Ok (GTuple [GInt, GBool]) => True
+        _ => False),
+    ),
+    (
       "mutual recursion chooses the shortest finite bound route",
       expectEqual (weightsAt
         24
@@ -150,5 +188,23 @@ test "finite planning uses instantiated generic arguments and rejects empty recu
         (namedTy "B")) [
         1, 0
       ],
+    ),
+    (
+      "nonregular recursion reaches a container's empty witness",
+      expectTrue
+        (match (planned
+          "data Loop = Again Loop\ndata Empty a = Empty\ndata Rotate a b c = RotateNext (Rotate b c (Empty a)) | RotateEnd a\n"
+          rotateLoop)
+          Ok _ => True
+          Err _ => False),
+    ),
+    (
+      "a reachable unsupported constructor is a planning error",
+      expectTrue
+        (match (planned
+          "data Choice = Number Int | Function (Int -> Int)\n"
+          (namedTy "Choice"))
+          Ok _ => False
+          Err _ => True),
     ),
   ]

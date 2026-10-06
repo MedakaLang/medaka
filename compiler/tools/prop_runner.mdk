@@ -631,8 +631,8 @@ positionalPlanFields ((Some _, _) :: _) =
 -- ARGUMENT-FREE head is eligible: a constrained instance (`impl Arbitrary
 -- (List a) requires Arbitrary a`) is dict-passed, so `apply c VUnit` would feed
 -- VUnit where the leading dictionary belongs, and building that dictionary
--- needs constraint entailment the runner has no access to.  Only `arbitrary` is
--- honored; shrinking stays the runner's own.
+-- needs constraint entailment the runner has no access to. An explicitly
+-- selected `shrink` method follows the same route in `shrinkForParam`.
 --
 -- The decision is made on the DECLARATION, not on the candidate set.  A
 -- filter over the runtime candidates can only see a head SPELLING, and one
@@ -653,8 +653,9 @@ userArbitrary (GenEnv arbs _) evalEnv (TyCon { tyConName = n, tyConOrigin = o })
     None => None
 userArbitrary _ _ _ = None
 
--- Two instances answering to one identity is not a choice the runner may make,
--- so it declines and lets the structural draw (and its report) happen.
+-- Two instances answering to one identity do not describe a route the runner
+-- may invent. A selected custom plan therefore fails rather than falling back
+-- to structural generation.
 arbImplKeyFor : List ArbImpl -> String -> TyConOrigin -> Option ArbRoute
 arbImplKeyFor arbs n o = match filterList (arbImplAt n o) arbs
   [ArbImpl _ _ route] => Some route
@@ -675,8 +676,7 @@ userArbitraryAt (route@(ArbRoute key _ _)) v =
 -- position the declaration walk assigned is (#2820, `ArbRoute`).  The total
 -- guards it: a candidate list of a different length is one the decl walk did
 -- not describe, so the correspondence the position rests on does not hold and
--- the runner reports rather than guesses — the same answer it gives for a type
--- it has no instance for at all.
+-- the caller reports the unavailable selected route rather than guessing.
 drawArbitrary : ArbRoute -> List (Value e) -> <e> Option (Value e)
 drawArbitrary (ArbRoute _ i total) cands
   | listLen cands /= total = None
