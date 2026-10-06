@@ -1,15 +1,15 @@
-# RE-MINT the checked-in IR seed (compiler/seed/emitter.ll.gz) — OCaml-FREE.
+# RE-MINT the checked-in IR seed (compiler/seed/emitter.ll.gz).
 #
 # The seed is the textual LLVM IR of the BUILD driver
 # (compiler/entries/llvm_emit_modules_main.mdk) emitting its OWN module graph.  It is the
 # COLD-START bootstrap entry point: test/bootstrap_from_seed.sh rebuilds a native
-# emitter from it WITHOUT OCaml.  Because the native emitter reproduces this IR
+# emitter from it.  Because the native emitter reproduces this IR
 # byte-for-byte (the C3b fixpoint property), the seed can be minted by the NATIVE
-# emitter — no `medaka run` / OCaml interpreter needed.
+# emitter, with no `medaka run` needed.
 #
 # Flow:
 #   1. Ensure ./medaka_emitter is CURRENT: warm-rebuild it from source via
-#      build_native_medaka.sh (OCaml-free; cold-bootstraps from the existing seed if
+#      build_native_medaka.sh (cold-bootstraps from the existing seed if
 #      there is no emitter yet).  This is what makes the mint reflect current source.
 #   2. ./medaka_emitter <runtime> <core> <build-driver> <compiler> <stdlib>  ->  IR
 #      (the native emitter emitting the build driver's own graph; trim trailing ()).
@@ -28,10 +28,10 @@ SELFHOST="$ROOT/compiler"
 STDLIB="$ROOT/stdlib"
 SEED_GZ="$ROOT/compiler/seed/emitter.ll.gz"
 
-# 1. Make the native emitter current from CURRENT source (OCaml-free; cold-bootstraps
+# 1. Make the native emitter current from CURRENT source (cold-bootstraps
 #    from the existing seed if no emitter binary exists yet).  Build to a scratch
 #    `medaka` we discard — we only need the up-to-date $EMITTER side effect.
-echo "ensuring native emitter is current from source (OCaml-free) ..."
+echo "ensuring native emitter is current from source ..."
 FORCE_EMITTER_REBUILD=1 sh "$ROOT/test/build_native_medaka.sh" "$(mktemp)" >/dev/null
 [ -x "$EMITTER" ] || { echo "FAIL: no $EMITTER after warm rebuild"; exit 1; }
 
