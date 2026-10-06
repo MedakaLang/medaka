@@ -15,8 +15,8 @@ import frontend.ast.{
   ImplMethod(..),
   sameTyConHead,
 }
-import types.route_key.{typeTagOf}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
+import types.route_key.{typeTagOf, implRouteKeyWord}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup, omSize}
 import support.util.{lookupAssoc, zipL}
 
 -- Container candidate order is policy, not an implementation detail of an
@@ -344,9 +344,11 @@ hasMethod wanted ((ImplMethod n _ _) :: rest) =
   n == wanted || hasMethod wanted rest
 
 markUnusable : Ty -> PlanEnv -> PlanEnv
-markUnusable ty (PlanEnv root defs arbs bad aliases) = match headKey ty
-  Some key => PlanEnv root defs arbs (omInsert (typeKeyWord key) () bad) aliases
-  None => PlanEnv root defs arbs bad aliases
+markUnusable ty (PlanEnv root defs arbs bad aliases) =
+  PlanEnv root defs arbs (omInsert (arbCarrierWord ty) () bad) aliases
+
+arbCarrierWord : Ty -> String
+arbCarrierWord ty = implRouteKeyWord (OriginModule "core") "Arbitrary" [ty] None
 
 insertDef : PlanDef -> PlanEnv -> PlanEnv
 insertDef (def@(PlanDef key _ _ _ _)) (PlanEnv root defs arbs bad aliases) =
@@ -366,22 +368,6 @@ optionList (Some xs) = xs
 
 -- A type is built from references, never recursively expanded.  That keeps
 -- mutually recursive declarations finite in the plan itself.
-export
-planFor : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
-planFor env propName param ty = match planForGo env propName param ty
-  Ok plan =>
-    if planHasFiniteValue env plan then
-      Ok plan
-    else
-      Err
-        (PlanError
-          propName
-          param
-          ty
-          PENoFiniteValue
-          "no constructor path reaches finite values")
-  Err e => Err e
-
 planForGo : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
 planForGo _ propName param (ty@(TyVar _)) =
   Err (PlanError propName param ty PEUnboundTyVar "")
@@ -449,6 +435,8 @@ planNominal (PlanEnv root defs arbs bad aliases) propName param key args =
     Some (ArbPlan actual usable explicitShrink) if sameTypeKey key actual
       && usable => Ok (GCustom (CustomPlan key explicitShrink))
     Some (ArbPlan actual _ _) if sameTypeKey key actual =>
+      Err (PlanError propName param (rebuildTy key args) PEUnusableArbitrary "")
+    _ if isSome (omLookup (arbCarrierWord (rebuildTy key args)) bad) =>
       Err (PlanError propName param (rebuildTy key args) PEUnusableArbitrary "")
     _ => match matchingDef key (optionList (omLookup (typeKeyWord key) defs))
       None if isSome (omLookup (typeKeyWord key) aliases) =>
@@ -726,52 +714,62 @@ ctorLowersFiniteHeight env nominal ctor = match (
 planHasFiniteValue : PlanEnv -> GenPlan -> Bool
 planHasFiniteValue env plan = isSome (planFiniteHeight env plan [])
 
+-- A finite constructor path never needs to revisit a nominal declaration: on a
+-- revisit it can take the same exit at the earlier occurrence. The number of
+-- nominal rows is therefore a complete bound for the minimum witness search.
 planFiniteHeight : PlanEnv -> GenPlan -> List TypeKey -> Option Int
-planFiniteHeight _ GInt _ = Some 0
-planFiniteHeight _ GBool _ = Some 0
-planFiniteHeight _ GFloat _ = Some 0
-planFiniteHeight _ GChar _ = Some 0
-planFiniteHeight _ GString _ = Some 0
-planFiniteHeight _ GUnit _ = Some 0
-planFiniteHeight _ (GList _) _ = Some 0
-planFiniteHeight _ (GArray _) _ = Some 0
-planFiniteHeight _ (GOption _) _ = Some 0
-planFiniteHeight env (GResult err ok) seen = match planFiniteHeight env err seen
-  Some height => Some height
-  None => planFiniteHeight env ok seen
-planFiniteHeight env (GTuple plans) seen = plansFiniteHeight env plans seen
-planFiniteHeight _ (GCustom _) _ = Some 0
-planFiniteHeight env (nominal@(GNominal key _)) seen
-  | keyIn key seen = None
-planFiniteHeight env (nominal@(GNominal key _)) seen = match planDef env key
-  Ok (PlanDef _ _ _ _ ctors) =>
-    ctorsFiniteHeight env nominal ctors (key :: seen)
-  Err _ => None
+planFiniteHeight env plan _ =
+  findFiniteHeight env plan 0 (finiteHeightLimit env)
 
-plansFiniteHeight : PlanEnv -> List GenPlan -> List TypeKey -> Option Int
-plansFiniteHeight _ [] _ = Some 0
-plansFiniteHeight env (plan :: rest) seen = match (
-  planFiniteHeight env plan seen,
-  plansFiniteHeight env rest seen,
-)
-  (Some h, Some restHeight) => Some (max h restHeight)
-  _ => None
+finiteHeightLimit : PlanEnv -> Int
+finiteHeightLimit (PlanEnv _ defs _ _ _) = max 1 (omSize defs)
 
-ctorsFiniteHeight : PlanEnv ->
-  GenPlan ->
-  List PlanCtor ->
-  List TypeKey ->
-  Option Int
-ctorsFiniteHeight _ _ [] _ = None
-ctorsFiniteHeight env nominal (ctor :: rest) seen =
-  match ctorFiniteHeight env nominal ctor seen
-    Some height => Some height
-    None => ctorsFiniteHeight env nominal rest seen
+findFiniteHeight : PlanEnv -> GenPlan -> Int -> Int -> Option Int
+findFiniteHeight _ _ height limit
+  | height > limit = None
+findFiniteHeight env plan height limit =
+  if planFitsHeight env plan height then
+    Some height
+  else
+    findFiniteHeight env plan (height + 1) limit
 
-ctorFiniteHeight : PlanEnv -> GenPlan -> PlanCtor -> List TypeKey -> Option Int
-ctorFiniteHeight env nominal ctor seen = match instantiateCtor env nominal ctor
-  Ok fields => map (+ 1) (plansFiniteHeight env (fieldPlansOnly fields) seen)
-  Err _ => None
+planFitsHeight : PlanEnv -> GenPlan -> Int -> Bool
+planFitsHeight _ _ height
+  | height < 0 = False
+planFitsHeight _ GInt _ = True
+planFitsHeight _ GBool _ = True
+planFitsHeight _ GFloat _ = True
+planFitsHeight _ GChar _ = True
+planFitsHeight _ GString _ = True
+planFitsHeight _ GUnit _ = True
+planFitsHeight _ (GList _) _ = True
+planFitsHeight _ (GArray _) _ = True
+planFitsHeight _ (GOption _) _ = True
+planFitsHeight env (GResult err ok) height =
+  planFitsHeight env err height || planFitsHeight env ok height
+planFitsHeight env (GTuple plans) height = allPlansFitHeight env plans height
+planFitsHeight _ (GCustom _) _ = True
+planFitsHeight env (nominal@(GNominal key _)) height =
+  if height <= 0 then
+    False
+  else match planDef env key
+    Ok (PlanDef _ _ _ _ ctors) =>
+      anyCtorFitsHeight env nominal ctors (height - 1)
+    Err _ => False
+
+anyCtorFitsHeight : PlanEnv -> GenPlan -> List PlanCtor -> Int -> Bool
+anyCtorFitsHeight _ _ [] _ = False
+anyCtorFitsHeight env nominal (ctor :: rest) height =
+  match instantiateCtor env nominal ctor
+    Ok fields =>
+      allPlansFitHeight env (fieldPlansOnly fields) height
+        || anyCtorFitsHeight env nominal rest height
+    Err _ => anyCtorFitsHeight env nominal rest height
+
+allPlansFitHeight : PlanEnv -> List GenPlan -> Int -> Bool
+allPlansFitHeight _ [] _ = True
+allPlansFitHeight env (plan :: rest) height =
+  planFitsHeight env plan height && allPlansFitHeight env rest height
 
 fieldPlansOnly : List (Option String, GenPlan) -> List GenPlan
 fieldPlansOnly [] = []
@@ -780,8 +778,24 @@ fieldPlansOnly ((_, plan) :: rest) = plan :: fieldPlansOnly rest
 allPlansBelow : PlanEnv -> Int -> List GenPlan -> Bool
 allPlansBelow _ _ [] = True
 allPlansBelow env height (plan :: rest) = match planFiniteHeight env plan []
-  Some h => h < height && allPlansBelow env height rest
+  Some planHeight => planHeight < height && allPlansBelow env height rest
   None => False
+
+export
+planFor : PlanEnv -> String -> String -> Ty -> Result PlanError GenPlan
+planFor env propName param ty = match planForGo env propName param ty
+  Ok plan =>
+    if planHasFiniteValue env plan then
+      Ok plan
+    else
+      Err
+        (PlanError
+          propName
+          param
+          ty
+          PENoFiniteValue
+          "no constructor path reaches finite values")
+  Err e => Err e
 
 keyIn : TypeKey -> List TypeKey -> Bool
 keyIn _ [] = False

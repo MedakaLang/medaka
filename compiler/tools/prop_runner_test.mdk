@@ -83,11 +83,11 @@ namedTy name =
 planned : String -> Ty -> Result PlanError GenPlan
 planned source ty = planFor (buildPlanEnv (parse source)) "policy" "value" ty
 
-weightsAtBound : String -> Ty -> List Int
-weightsAtBound source ty =
+weightsAt : Int -> String -> Ty -> List Int
+weightsAt depth source ty =
   let env = buildPlanEnv (parse source)
   match planFor env "policy" "value" ty
-    Ok plan => ctorWeights env plan 24
+    Ok plan => ctorWeights env plan depth
     Err _ => []
 
 test "recursive plans retain Fork before the bound and select Leaf at it" = expectEach
@@ -101,7 +101,8 @@ test "recursive plans retain Fork before the bound and select Leaf at it" = expe
     ),
     (
       "Fork remains reachable below the bound",
-      expectNotEqual (weightsAtBound
+      expectNotEqual (weightsAt
+        0
         "data Tree = Leaf | Fork Tree Tree\n"
         (namedTy "Tree")) [
         1, 0
@@ -109,7 +110,8 @@ test "recursive plans retain Fork before the bound and select Leaf at it" = expe
     ),
     (
       "only Leaf is selected at the bound",
-      expectEqual (weightsAtBound
+      expectEqual (weightsAt
+        24
         "data Tree = Leaf | Fork Tree Tree\n"
         (namedTy "Tree")) [
         1, 0
@@ -139,5 +141,14 @@ test "finite planning uses instantiated generic arguments and rejects empty recu
           (namedTy "Bad"))
           Ok _ => False
           Err _ => True),
+    ),
+    (
+      "mutual recursion chooses the shortest finite bound route",
+      expectEqual (weightsAt
+        24
+        "data A = AB B | AL\ndata B = BA A | BC C\ndata C = Next D\ndata D = End\n"
+        (namedTy "B")) [
+        1, 0
+      ],
     ),
   ]
