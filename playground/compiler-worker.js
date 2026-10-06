@@ -1,5 +1,10 @@
 // compiler-worker.js — Module Web Worker: compiles Medaka source to wasm bytes.
 //
+// Served with Cross-Origin-Embedder-Policy (playground/_headers): a COEP page
+// refuses a worker script without it.  The edge keeps the headers it cached for an
+// unchanged body, so a header-rule change for this file only takes effect when its
+// bytes change too.
+//
 // This runs in a Worker context (type:'module') so it can import ES modules.
 // It uses compile.mjs (the environment-agnostic seam) + vendor/wat2wasm/wat2wasm.js
 // (the browser WAT assembler) — no network calls after initial asset load.

@@ -3,6 +3,11 @@
 // compiler-worker.js: that worker is busy during a Run (instantiate + wat2wasm
 // assemble); this one stays warm for debounced analyze on every keystroke.
 //
+// Served with Cross-Origin-Embedder-Policy (playground/_headers): a COEP page
+// refuses a worker script without it.  The edge keeps the headers it cached for an
+// unchanged body, so a header-rule change for this file only takes effect when its
+// bytes change too.
+//
 // It imports the same compile.mjs seam, through its `analyze` mode: the guest
 // runs the IDENTICAL diagnostic-producing front end `compile` runs (same route,
 // same main-shape guard, same underivedMainDiags) and then stops before wasm
