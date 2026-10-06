@@ -8,11 +8,34 @@ import tools.native_props.{
   runNativePlannedPropRequests, renderNativePlannedProbe
 }
 import tools.prop_plan.{PlanModule(..)}
+import tools.probe_transcript.{freshProbeNonce}
 import tools.prop_runner.{
   PropRequest(..), propResultName, propResultSeed, propResultCases,
   propResultDetail, propResultPassed, propResultStatus, propResultFailureKind,
   PropStatus(..), PropFailureKind(..)
 }
+
+test "probe namespaces avoid occupied bindings and aliases without rewriting source" = expectAll
+  [
+    expectEqual
+      "123_3"
+      (freshProbeNonce
+        "123"
+        ["__np_", "NpCore_"]
+        "__np_123_state = 0\nimport core as NpCore_123_1\n__np_123_2_state = 0\n"),
+    expectEqual
+      "123"
+      (freshProbeNonce
+        "123"
+        ["__np_", "NpCore_"]
+        "-- __np_123_state\nmessage = \"NpCore_123\"\n__np_1234_state = 0\n"),
+    expectEqual
+      "123_1"
+      (freshProbeNonce
+        "123"
+        ["__np_"]
+        "__np_123_9999999999999999999999999999999_state = 0\n"),
+  ]
 
 source : String
 source =

@@ -1027,6 +1027,23 @@ test "user prelude names preserve their meaning without capturing native helpers
         ]
         (runReport ["--engines", "eval,native"] target))
 
+test "user bindings cannot capture the former deterministic probe namespace" =
+  withFixtures
+    [
+      (
+        "main.mdk",
+        "__np_558607535494355700_state : Bool\n__np_558607535494355700_state = True\nprop \"former nonce collision\" (n : Int) = n == n && __np_558607535494355700_state\n",
+      ),
+    ]
+    (target =>
+      gradeReport
+        0
+        [
+          ("eval", "former nonce collision", "pass"),
+          ("native", "former nonce collision", "pass"),
+        ]
+        (runReport ["--engines", "eval,native"] target))
+
 test "custom property RNG guards use canonical primitives under user shadows" =
   withFixtures
     [

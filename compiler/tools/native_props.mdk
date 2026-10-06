@@ -22,8 +22,8 @@ import string.{replaceAll}
 import string.{toInt}
 import tools.probe_transcript.{
   Chunk(..), chunksOf, decodeValue, endTag, firstNonEmptyLine, lookupChunk,
-  mintNonce, noncedPrefix, renameUserMain, sentinelLine, tagsInOrder,
-  valuePrintExprWith
+  mintNonce, freshProbeNonce, noncedPrefix, renameUserMain, sentinelLine,
+  tagsInOrder, valuePrintExprWith
 }
 import tools.printer.{exprToString, ppTy}
 import tools.prop_plan.{
@@ -120,7 +120,9 @@ renderNativePlannedProbe target tsrc modules requests =
           if listLen jobs == 0 then
             Err "native property runner: no selected property could be rendered"
           else
-            Ok (plannedProbeSource "source-check" target tsrc modules env jobs)
+            let nonce =
+              freshProbeNonce "source_check" probeNamespacePrefixes tsrc
+            Ok (plannedProbeSource nonce target tsrc modules env jobs)
 
 plannedRoot : List PlanModule -> String
 plannedRoot [] = ""
@@ -322,7 +324,7 @@ nativeRenderedPlanned target tsrc modules env jobs = match makeTempDir ()
   Err e =>
     Err "native property runner: could not create a scratch directory: \{e}"
   Ok tmp =>
-    let nonce = mintNonce ()
+    let nonce = freshProbeNonce (mintNonce ()) probeNamespacePrefixes tsrc
     let rendered = runInTmpPlanned target tsrc modules env jobs tmp nonce
     let _ = cleanupTempDir tmp
     rendered
@@ -471,6 +473,9 @@ renderReportedOutcome chunks note request i name seed cases = match (
       cases
 
 -- Probe source ---------------------------------------------------------------
+
+probeNamespacePrefixes : List String
+probeNamespacePrefixes = ["__np_", "NpCore_", "NpRuntime_", "NpModule_"]
 
 plannedProbeSource : String ->
   String ->

@@ -6,6 +6,7 @@
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{Decl(..), Expr(..), Pat(..), Variant(..)}
 import frontend.parser.{parse}
+import frontend.desugar.{desugar}
 import backend.private_mangle.{
   isReservedCtor,
   mangleCtorCollisions,
@@ -16,7 +17,7 @@ import backend.private_mangle.{
 
 -- (module id, source) units in dependency order; the last one is the entry.
 parseUnits : List (String, String) -> List (String, List Decl)
-parseUnits units = map (u => (fst u, parse (snd u))) units
+parseUnits units = map (u => (fst u, desugar (parse (snd u)))) units
 
 mangled : List (String, String) -> List (String, List Decl)
 mangled units = snd (mangleUnits [] (parseUnits units))
