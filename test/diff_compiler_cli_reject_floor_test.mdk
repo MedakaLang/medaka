@@ -11,13 +11,12 @@
    Runs under `medaka test --native`: it spawns the binary once per probe and reads
    compiler/ sources, neither of which the interpreter binds. -}
 
-import test_process.{medakaBin, medakaRoot, boundedVerb}
+import test_process.{medakaBin, medakaRoot, boundedVerb, withScratchDir}
 import test.{Expectation, expectAll, expectAtLeast, fail, pass}
 import string as S
 import regex as R
 import list.{reverse, take}
 import fs.{fixtureFiles}
-import compiler_cli_test_support.{inScratchDir}
 
 -- ── constants ────────────────────────────────────────────────────────────────
 
@@ -206,13 +205,11 @@ verdictOf : List String -> Expectation
 verdictOf [] = pass
 verdictOf fs = fail (S.join "\n" fs)
 
--- A block's own scratch subdirectory holding ok.mdk, removed again (and graded)
--- by inScratchDir. The name keeps each block's workspace distinct.
-withWork : String ->
-  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+-- A block's own fresh scratch directory holding ok.mdk, removed again (and
+-- graded) by withScratchDir.
+withWork : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
   <Exec, IO, FileRead, FileWrite> Expectation
-withWork name k = inScratchDir
-  name
+withWork k = withScratchDir
   (dir => match writeFile "\{dir}/ok.mdk" "main = println 1\n"
     Err e => fail "could not write ok.mdk: \{e}"
     Ok _ => k dir)
@@ -345,34 +342,29 @@ sFails verbs srcVerbs = fold (acc v => acc ++ sOne verbs v) [] srcVerbs
 -- ── tests ────────────────────────────────────────────────────────────────────
 
 test "cli reject floor D: every requireArgs spec resolves to a verb" = withWork
-  "d"
   (dir => withFiles (files => expectAll [
     verdictOf (dFails (coveredSpecs files) (sourceVerbs files)),
   ]))
 
 test "cli reject floor R: every non-exempt verb rejects an unknown flag with rc 1" = withWork
-  "r"
   (dir => expectAll [
     expectAtLeast 16 (length (verbsOf dir)),
     verdictOf (rFails dir (verbsOf dir)),
   ])
 
 test "cli reject floor R': declared exemptions are still necessary" = withWork
-  "rprime"
   (dir => expectAll [
     expectAtLeast 16 (length (verbsOf dir)),
     verdictOf (rPrimeFails dir (verbsOf dir)),
   ])
 
 test "cli reject floor K: every requireArgs verb prints a (known: …) roster" = withWork
-  "k"
   (dir => withFiles (files => expectAll [
     expectAtLeast 16 (length (verbsOf dir)),
     verdictOf (kFails dir (sourceVerbs files)),
   ]))
 
 test "cli reject floor S: every covered verb appears in the usage block" = withWork
-  "s"
   (dir => withFiles (files => expectAll [
     expectAtLeast 16 (length (verbsOf dir)),
     verdictOf (sFails (verbsOf dir) (sourceVerbs files)),

@@ -22,7 +22,7 @@
    streams on stdin and writes temp projects, neither of which the interpreter
    binds. -}
 
-import test_process.{medakaBin, medakaRoot, boundedVerbSeconds, scratchDir}
+import test_process.{medakaBin, medakaRoot, boundedVerbSeconds, withScratchDir}
 import test.{
   Expectation, expectAll, expectAtLeast, expectEach, expectEqual, expectGolden,
   expectTextContainsAll, fail, pass
@@ -150,9 +150,7 @@ loggingRun logfile = match mcpRun 30 "\{corpus}/logging.jsonl" logfile []
       ]
 
 test "mcp logging: MEDAKA_MCP_LOG leaves stdout golden-identical and writes 4 well-formed records" =
-  match scratchDir
-    Err e => fail "scratch dir: \{e}"
-    Ok dir => loggingRun "\{dir}/mcp_call.log"
+  withScratchDir (dir => loggingRun "\{dir}/mcp_call.log")
 
 -- mainSchemeRef across a module-chain memo HIT: two medaka_check calls on the
 -- same project in ONE process must both report (or both stay silent on) the
@@ -199,20 +197,18 @@ memoCase dir src want label = match writeOk "\{dir}/main.mdk" src
         fail
           "memo-hit main-shape (\{label}): want \{intToString want} missing-Display errors over two calls, got \{intToString (countDisplay out)}"
 
-test "mcp memo-hit: two medaka_check calls on one project keep the terminal main's Display verdict" =
-  match scratchDir
-    Err e => fail "scratch dir: \{e}"
-    Ok dir => match memoSetup dir
-      Err e => fail "memo setup: \{e}"
-      Ok _ => expectAll [
-        memoCase
-          dir
-          "import lib_a.{double}\nimport lib_b.{quad}\n\ndata H = H Int\n\nmain = H (quad (double 3))\n"
-          2
-          "undisplayable value main",
-        memoCase
-          dir
-          "import lib_a.{double}\nimport lib_b.{quad}\n\nmain = println (quad (double 3))\n"
-          0
-          "Unit main",
-      ]
+test "mcp memo-hit: two medaka_check calls on one project keep the terminal main's Display verdict" = withScratchDir
+  (dir => match memoSetup dir
+    Err e => fail "memo setup: \{e}"
+    Ok _ => expectAll [
+      memoCase
+        dir
+        "import lib_a.{double}\nimport lib_b.{quad}\n\ndata H = H Int\n\nmain = H (quad (double 3))\n"
+        2
+        "undisplayable value main",
+      memoCase
+        dir
+        "import lib_a.{double}\nimport lib_b.{quad}\n\nmain = println (quad (double 3))\n"
+        0
+        "Unit main",
+    ])

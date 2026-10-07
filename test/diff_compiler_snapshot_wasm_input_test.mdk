@@ -9,7 +9,7 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads
    fixtures, neither of which the interpreter binds. -}
 
-import test_process.{medakaBin, medakaRoot, boundedVerb, scratchDir}
+import test_process.{medakaBin, medakaRoot, boundedVerb, withScratchDir}
 import test.{Expectation, expectAll, expectEqualText, fail, pass}
 import fs.{mkdirAll}
 import string.{startsWith, contains, lines, stripPrefix, split, join, drop}
@@ -149,24 +149,25 @@ scoreFuncLine : String
 scoreFuncLine = "(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_U_score (param"
 
 wasmCheck : <Exec, IO, FileRead, FileWrite> Expectation
-wasmCheck = match scratchDir
-  Err e => fail "could not create scratch dir: \{e}"
-  Ok work => match prepare work
-    Err e => fail e
-    Ok _ => match renderBoth work
-      Err e => fail "FAIL: snapshot did not produce both outputs: \{e}"
-      Ok (only, combined) =>
-        let onlyWat = wasmSection (lines only)
-        let combinedWat = wasmSection (lines combined)
-        expectAll [
-          expectEqualText (join "\n" onlyWat) (join "\n" combinedWat),
-          check
-            (any isScoreImpl onlyWat)
-            "FAIL: snapshot WAT did not emit Score implementations",
-          check
-            (any (l => contains scoreFuncLine l) onlyWat)
-            "FAIL: snapshot WAT did not eta-expand Score to its declared receiver arity",
-        ]
+wasmCheck = withScratchDir (work => wasmCheckIn work)
+
+wasmCheckIn : String -> <Exec, IO, FileRead, FileWrite> Expectation
+wasmCheckIn work = match prepare work
+  Err e => fail e
+  Ok _ => match renderBoth work
+    Err e => fail "FAIL: snapshot did not produce both outputs: \{e}"
+    Ok (only, combined) =>
+      let onlyWat = wasmSection (lines only)
+      let combinedWat = wasmSection (lines combined)
+      expectAll [
+        expectEqualText (join "\n" onlyWat) (join "\n" combinedWat),
+        check
+          (any isScoreImpl onlyWat)
+          "FAIL: snapshot WAT did not emit Score implementations",
+        check
+          (any (l => contains scoreFuncLine l) onlyWat)
+          "FAIL: snapshot WAT did not eta-expand Score to its declared receiver arity",
+      ]
 
 prepare : String -> <FileWrite, Exec> Result String String
 prepare work = do

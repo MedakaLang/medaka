@@ -7,8 +7,9 @@
    which the interpreter does not bind. -}
 
 import string.{contains, lines, unlines, words}
-import test_process.{medakaBin, medakaRoot, underRoot, boundedVerbSeconds}
-import compiler_cli_test_support.{inScratchDir}
+import test_process.{
+  medakaBin, medakaRoot, underRoot, boundedVerbSeconds, withScratchDir
+}
 import test.{
   Expectation, expectAll, expectEach, expectTextContainsAll, fail, pass
 }
@@ -107,7 +108,7 @@ doctestChecks dir = match prebuild dir
 
 -- Checks 1-3: each module's doctests pass under both engines with the pinned count.
 test "stdlib doctests agree under eval and native (checks 1-3)" =
-  inScratchDir "doctests" doctestChecks
+  withScratchDir doctestChecks
 
 preludeRow : String -> List String -> <Exec, IO, FileRead> Expectation
 preludeRow label flags =
@@ -295,7 +296,7 @@ strictProbes dir = match writeFile "\{dir}/defaulted.mdk" defaultedSrc
     ]
 
 test "strict native probe: defaulted body passes, ill-typed body fails by name, eval keeps the exemption (checks 8-10)" =
-  inScratchDir "strict" strictProbes
+  withScratchDir strictProbes
 
 -- ── check 11: native_test_abort.mdk (tests 2-4 are errors, never dropped) ─────
 

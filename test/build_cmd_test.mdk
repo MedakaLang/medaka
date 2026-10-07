@@ -9,7 +9,7 @@
    Runs under `medaka test --native`: it spawns `medaka build`, runs the
    produced binaries, and writes fixture-scratch files. -}
 
-import test_process.{medakaBin, underRoot, boundedVerb, scratchDir}
+import test_process.{medakaBin, underRoot, boundedVerb, withScratchDir}
 import compiler_cli_test_support.{boundedInTree, fixtureStems}
 import test.{
   Expectation, expectAll, expectAtLeast, expectEach, expectEqualText, fail, pass
@@ -120,25 +120,19 @@ sweepNew work = "/tmp/medaka_build_sweepnew_\{replaceAll "/" "_" work}"
 sweepBin : String -> String
 sweepBin work = "\{work}/tempdir_sweep.bin"
 
-test "build_cmd: each top-level fixture builds natively and matches its golden" =
-  match scratchDir
-    Err e => fail "no scratch dir: \{e}"
-    Ok work => match fixtureStems fixtures
-      Err e => fail "could not list fixtures: \{e}"
-      Ok stems => expectAll [
-        expectAtLeast 12 (length stems),
-        expectEach (map (s => (s, row work s s)) stems),
-      ]
+test "build_cmd: each top-level fixture builds natively and matches its golden" = withScratchDir
+  (work => match fixtureStems fixtures
+    Err e => fail "could not list fixtures: \{e}"
+    Ok stems => expectAll [
+      expectAtLeast 12 (length stems),
+      expectEach (map (s => (s, row work s s)) stems),
+    ])
 
-test "build_cmd: multimodule and standalone-vs-method builds match their goldens" =
-  match scratchDir
-    Err e => fail "no scratch dir: \{e}"
-    Ok work => expectEach [
-      ("multimodule", row work "multimodule" "mm/entry"),
-      ("standalone_vs_method", row work "standalone_vs_method" "svm/entry"),
-    ]
+test "build_cmd: multimodule and standalone-vs-method builds match their goldens" = withScratchDir
+  (work => expectEach [
+    ("multimodule", row work "multimodule" "mm/entry"),
+    ("standalone_vs_method", row work "standalone_vs_method" "svm/entry"),
+  ])
 
 test "build_cmd: a real build sweeps stale /tmp build dirs and keeps recent ones" =
-  match scratchDir
-    Err e => fail "no scratch dir: \{e}"
-    Ok work => sweep work
+  withScratchDir (work => sweep work)

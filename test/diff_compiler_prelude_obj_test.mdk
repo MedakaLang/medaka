@@ -12,7 +12,7 @@
 import string.{startsWith, lines}
 import path.{stem}
 import regex.{Regex, mustCompile, isMatch}
-import test_process.{medakaBin, underRoot, boundedVerb, scratchDir}
+import test_process.{medakaBin, underRoot, boundedVerb, withScratchDir}
 import compiler_cli_test_support.{fixtureStems, boundedInTree}
 import test.{Expectation, expectAll, expectEach, expectAtLeast, fail, pass}
 
@@ -84,12 +84,6 @@ sampleSrcs = [
   underRoot "test/prelude_obj_fixtures/default_sole_direct/main_iz_first.mdk",
 ]
 
-withScratch : (String -> <Exec, IO, FileRead> Expectation) ->
-  <Exec, IO, FileRead> Expectation
-withScratch k = match scratchDir
-  Err e => fail "could not make a scratch dir: \{e}"
-  Ok w => k w
-
 -- Selected-interface ABI: the unconstrained IA.szK impl takes exactly its receiver,
 -- both as a define and at its dispatch-arm call.
 implDefine : Regex
@@ -99,7 +93,7 @@ implDefine =
 implCall : Regex
 implCall = mustCompile "call i64 @mdk_impl_zZmodels_2e_Cat_szK\\(i64 [^,()]+\\)"
 
-abiRow : String -> <Exec, IO, FileRead> Expectation
+abiRow : String -> <Exec, IO, FileRead, FileWrite> Expectation
 abiRow w =
   let src =
     underRoot
@@ -159,7 +153,7 @@ sampleRow : String ->
   String ->
   String ->
   String ->
-  <Exec, IO, FileRead> Expectation
+  <Exec, IO, FileRead, FileWrite> Expectation
 sampleRow w opt pobj src =
   let label = stem src
   let inline = "\{w}/\{label}\{opt}.inline"
@@ -206,7 +200,7 @@ sampleRow w opt pobj src =
                 else
                   pass
 
-optRow : String -> String -> <Exec, IO, FileRead> Expectation
+optRow : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
 optRow w opt =
   let pobj = "\{w}/prelude\{opt}.o"
   match buildExit [
@@ -231,10 +225,10 @@ optRow w opt =
               (map (src => (stem src, sampleRow w opt pobj src)) sampleSrcs)
 
 test "prelude_obj: unconstrained IA.szK impl ABI carries no foreign dictionary prefix" =
-  withScratch abiRow
+  withScratchDir abiRow
 
 test "prelude_obj: dynamic-arity probes typecheck and evaluate to their pins" =
   dynTest
 
 test "prelude_obj: inline and prebuilt-prelude links agree on every sample program" =
-  withScratch (w => expectAll [optRow w "-O0", optRow w "-O2"])
+  withScratchDir (w => expectAll [optRow w "-O0", optRow w "-O2"])

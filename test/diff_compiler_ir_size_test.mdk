@@ -14,7 +14,7 @@
 import compiler_cli_test_support.{boundedInTree}
 import string.{lines, unlines}
 import test.{Expectation, fail, pass}
-import test_process.{medakaBin, scratchDir}
+import test_process.{medakaBin, withScratchDir}
 
 -- Arm A: the tiny program's IR is 11,480 lines; 15,000 is about 30% headroom.
 -- A legitimate prelude change that lifts it should re-measure and raise this
@@ -116,11 +116,7 @@ scalingCase dir = match scaling dir
   Ok (l1, l2, l3) => gradeScaling l1 l2 l3
 
 test "diff_compiler_ir_size: tiny program IR is under the ceiling (arm A)" =
-  match scratchDir
-    Err e => fail "scratch dir: \{e}"
-    Ok dir => ceilingCase dir
+  withScratchDir (dir => ceilingCase dir)
 
 test "diff_compiler_ir_size: emitted IR scales linearly with live size (arm B)" =
-  match scratchDir
-    Err e => fail "scratch dir: \{e}"
-    Ok dir => scalingCase dir
+  withScratchDir (dir => scalingCase dir)

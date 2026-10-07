@@ -1087,6 +1087,7 @@ Assertions for a test that runs a program.
 - [`boundedVerb`](test_process.md#boundedverb)
 - [`boundedVerbSeconds`](test_process.md#boundedverbseconds)
 - [`scratchDir`](test_process.md#scratchdir)
+- [`withScratchDir`](test_process.md#withscratchdir)
 - [`expectSpawnOk`](test_process.md#expectspawnok)
 - [`expectSpawnFails`](test_process.md#expectspawnfails)
 - [`expectSpawnFailsAll`](test_process.md#expectspawnfailsall)

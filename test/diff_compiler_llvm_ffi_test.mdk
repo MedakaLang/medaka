@@ -5,8 +5,10 @@
    Runs under `medaka test --native`: it spawns `medaka build`, clang, ar and ld,
    and runs the binaries it links. -}
 
-import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb}
-import compiler_cli_test_support.{inScratchDir, boundedInTree}
+import test_process.{
+  medakaBin, medakaRoot, underRoot, boundedVerb, withScratchDir
+}
+import compiler_cli_test_support.{boundedInTree}
 import fs.{mkdirAll, fixtureFiles}
 import string.{contains, endsWith, lines, trimRight}
 import list.{filter}
@@ -204,8 +206,7 @@ absentDiagnostic code log =
       expectFalse (contains "library not found for" log),
     ]
 
-test "diff_compiler_llvm_ffi cells 1-4: crossable shapes, builtin-name exemption, manifest linkage, absent library" = inScratchDir
-  "llvm_ffi_cells_1_to_4"
+test "diff_compiler_llvm_ffi cells 1-4: crossable shapes, builtin-name exemption, manifest linkage, absent library" = withScratchDir
   (w => graded (buildCombined w) (combined => expectEach [
     ("cell 1 ffi_abi_probe", cell1 w combined),
     ("cell 2 builtin_name_exemption", cell2 w combined),
@@ -374,8 +375,7 @@ cell8 w combined = graded (ffiBuildRun
   combined) (got =>
   expectEqualText "if:A\nmatch:A\nA" (trimRight got))
 
-test "diff_compiler_llvm_ffi cells 5-8: one C symbol one signature, identical sharing, inbound Bool and Char" = inScratchDir
-  "llvm_ffi_cells_5_to_8"
+test "diff_compiler_llvm_ffi cells 5-8: one C symbol one signature, identical sharing, inbound Bool and Char" = withScratchDir
   (w => graded (buildCombined w) (combined => expectEach [
     ("cell 5 ffi_extern_collision", cell5 w combined),
     ("cell 6 ffi_extern_shared", cell6 w combined),
@@ -541,8 +541,7 @@ catalogCheck w combined = graded (writeFile
   "\{w}/catalog.bin.ll") (ir =>
   catalogIrExpect (trimRight got) ir))))
 
-test "diff_compiler_llvm_ffi cells 9-12: inbound Char out of range traps, array copy-back, alias heads, builtin catalog authority" = inScratchDir
-  "llvm_ffi_cells_9_to_12"
+test "diff_compiler_llvm_ffi cells 9-12: inbound Char out of range traps, array copy-back, alias heads, builtin catalog authority" = withScratchDir
   (w => graded (buildCombined w) (combined => expectEach [
     (
       "cell 9 ffi_inbound_char_oob cCharBig",
@@ -656,8 +655,7 @@ cell14 w combined = graded (ffiBuildBin
   (boundedVerb bin [])) (got =>
   expectEqualText fixedWidthExpect (trimRight got)))
 
-test "diff_compiler_llvm_ffi cells 13-14: inbound String valid and malformed UTF-8, fixed-width C twins" = inScratchDir
-  "llvm_ffi_cells_13_to_14"
+test "diff_compiler_llvm_ffi cells 13-14: inbound String valid and malformed UTF-8, fixed-width C twins" = withScratchDir
   (w => graded (buildCombined w) (combined => expectEach [
     ("cell 13 ffi_inbound_string", cell13Valid w combined),
     (
@@ -751,8 +749,7 @@ cell16 w combined = graded (ffiBuildBin
   Err e => fail "could not spawn array_range.bin: \{e}"
   Ok (code, out, err) => arrayRangeExpect code out err)
 
-test "diff_compiler_llvm_ffi cells 15-16: int64 outside 63 bits traps, Array Int copy-back range traps" = inScratchDir
-  "llvm_ffi_cells_15_to_16"
+test "diff_compiler_llvm_ffi cells 15-16: int64 outside 63 bits traps, Array Int copy-back range traps" = withScratchDir
   (w => graded (buildCombined w) (combined => expectEach [
     ("cell 15 ffi_inbound_int_range", cell15 w combined),
     ("cell 16 ffi_array_int_range", cell16 w combined),

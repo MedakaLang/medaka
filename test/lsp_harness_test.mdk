@@ -8,7 +8,7 @@
    fixtures, neither of which the interpreter binds. -}
 
 import test_process.{
-  medakaBin, medakaRoot, underRoot, boundedVerbSeconds, scratchDir
+  medakaBin, medakaRoot, underRoot, boundedVerbSeconds, withScratchDir
 }
 import fs.{fixtureFiles}
 import test.{Expectation, expectAll, expectAtLeast, fail, pass}
@@ -67,6 +67,5 @@ corpusFloor = match fixtureFiles corpus
   Err e => fail "could not list \{corpus}: \{e}"
   Ok paths => expectAtLeast 11 (length paths)
 
-test "lsp_harness: native LSP harness reports 0 failures" = match scratchDir
-  Err e => fail "could not create scratch dir: \{e}"
-  Ok dir => expectAll [corpusFloor, harnessRun dir]
+test "lsp_harness: native LSP harness reports 0 failures" =
+  withScratchDir (dir => expectAll [corpusFloor, harnessRun dir])

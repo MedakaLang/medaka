@@ -16,7 +16,7 @@ import string.{
   words, toUpper
 }
 import test_process.{
-  medakaBin, medakaRoot, underRoot, boundedVerbSeconds, scratchDir
+  medakaBin, medakaRoot, underRoot, boundedVerbSeconds, withScratchDir
 }
 import test.{Expectation, expectEach, expectGolden, fail, pass}
 
@@ -454,13 +454,11 @@ generatedEntries : String ->
 generatedEntries scratch ids =
   fileEntries scratch (namesOf ids) ++ visibilityEntries scratch ids
 
-docReference : <Exec, IO, FileRead> Expectation
-docReference = match scratchDir
-  Err e => fail "could not create a scratch directory: \{e}"
-  Ok scratch => match stdlibRels
-    Err e => fail "could not list stdlib/: \{e}"
-    Ok [] => fail "no stdlib modules found, refusing to pass on 0 checked"
-    Ok rels => generated scratch rels
+docReference : String -> <Exec, IO, FileRead> Expectation
+docReference scratch = match stdlibRels
+  Err e => fail "could not list stdlib/: \{e}"
+  Ok [] => fail "no stdlib modules found, refusing to pass on 0 checked"
+  Ok rels => generated scratch rels
 
 test "diff_compiler_doc_stdlib_reference: regenerated stdlib pages match docs/stdlib and every prose name is visible" =
-  docReference
+  withScratchDir docReference

@@ -9,7 +9,7 @@
    build) and writes scratch .mdk fixtures, neither of which the interpreter binds. -}
 
 import fs.{mkdirAll}
-import test_process.{medakaBin, medakaRoot, scratchDir, boundedVerb}
+import test_process.{medakaBin, medakaRoot, withScratchDir, boundedVerb}
 import test.{Expectation, expectEach, expectTextContainsAll, fail, pass}
 import string.{contains, startsWith}
 
@@ -23,7 +23,8 @@ runWith cmd args =
 spawn : List String -> <Exec, IO, FileRead> Result String (Int, String)
 spawn args = runWith medakaBin args
 
--- The scratch tree is a bare `mktemp -d`; nothing removes it (the script had a trap).
+-- Each test block's scratch tree comes from withScratchDir, which makes a fresh
+-- directory and removes it afterwards, also when a check fails.
 setup : String -> <FileWrite> Result String Unit
 setup tmp = do
   writeFile
@@ -38,11 +39,14 @@ setup tmp = do
 
 withFixtures : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
   <Exec, IO, FileRead, FileWrite> Expectation
-withFixtures body = match scratchDir
-  Err e => fail "mktemp failed: \{e}"
-  Ok tmp => match setup tmp
-    Err e => fail "could not write fixtures: \{e}"
-    Ok _ => body tmp
+withFixtures body = withScratchDir (tmp => fixturesThen tmp body)
+
+fixturesThen : String ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+fixturesThen tmp body = match setup tmp
+  Err e => fail "could not write fixtures: \{e}"
+  Ok _ => body tmp
 
 -- 1. check-reject: no flag, InternalExternAccess, exit 1.
 checkReject : String -> <Exec, IO, FileRead> Expectation
@@ -215,18 +219,14 @@ setupProject tmp = do
 
 withProject : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
   <Exec, IO, FileRead, FileWrite> Expectation
-withProject body = match scratchDir
-  Err e => fail "mktemp failed: \{e}"
-  Ok tmp => match setupProject tmp
-    Err e => fail "could not write project: \{e}"
-    Ok _ => body tmp
+withProject body = withScratchDir (tmp => projectThen tmp body)
 
--- A bare scratch dir for checks that write one file (or none).
-withScratch : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+projectThen : String ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
   <Exec, IO, FileRead, FileWrite> Expectation
-withScratch body = match scratchDir
-  Err e => fail "mktemp failed: \{e}"
-  Ok tmp => body tmp
+projectThen tmp body = match setupProject tmp
+  Err e => fail "could not write project: \{e}"
+  Ok _ => body tmp
 
 -- 11. project-reject: a multi-module project, plain manifest, no flag: rejected.
 projectReject : String -> <Exec, IO, FileRead> Expectation
@@ -445,11 +445,14 @@ setupNested tmp = do
 
 withNested : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
   <Exec, IO, FileRead, FileWrite> Expectation
-withNested body = match scratchDir
-  Err e => fail "mktemp failed: \{e}"
-  Ok tmp => match setupNested tmp
-    Err e => fail "could not build nested root: \{e}"
-    Ok _ => body tmp
+withNested body = withScratchDir (tmp => nestedThen tmp body)
+
+nestedThen : String ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+nestedThen tmp body = match setupNested tmp
+  Err e => fail "could not build nested root: \{e}"
+  Ok _ => body tmp
 
 -- 25. nested-stdlib-entry: a stdlib subdirectory module that calls a kernel is clean.
 nestedEntry : String -> <Exec, IO, FileRead> Expectation
@@ -490,7 +493,7 @@ test "internal-extern 11-12: a manifest alone grants nothing; the flag works on 
 test "internal-extern 13-21: the manifest opt-in matrix" =
   withProject (tmp => manifestMatrix tmp)
 
-test "internal-extern 22-24: test and doc are exempt; the compiler self-check is clean" = withScratch
+test "internal-extern 22-24: test and doc are exempt; the compiler self-check is clean" = withScratchDir
   (tmp => expectEach [
     ("22 test-exemption", testExemption),
     ("23 doc-exemption", docExemption tmp),

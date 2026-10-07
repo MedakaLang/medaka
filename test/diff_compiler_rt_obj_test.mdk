@@ -6,7 +6,9 @@
    Runs under `medaka test --native`: it spawns `medaka build` and clang,
    which the interpreter does not bind. -}
 
-import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb, scratchDir}
+import test_process.{
+  medakaBin, medakaRoot, underRoot, boundedVerb, withScratchDir
+}
 import test.{Expectation, expectAll, expectEach, expectAtLeast, fail, pass}
 import fs.{fixtureFiles, mkdirAll}
 import path.{stem}
@@ -201,17 +203,11 @@ repairArm w =
     victimThen w rdir src,
   ]
 
-withScratch : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
-  <Exec, IO, FileRead, FileWrite> Expectation
-withScratch body = match scratchDir
-  Err e => fail "could not create a scratch dir: \{e}"
-  Ok w => body w
-
 test "rt_obj -O0: inline, prebuilt and cached builds are byte-identical" =
-  withScratch (w => optArm w "-O0")
+  withScratchDir (w => optArm w "-O0")
 
 test "rt_obj -O2: inline, prebuilt and cached builds are byte-identical" =
-  withScratch (w => optArm w "-O2")
+  withScratchDir (w => optArm w "-O2")
 
 test "rt_obj self-repair: a corrupt cache entry is rejected and recompiled" =
-  withScratch repairArm
+  withScratchDir repairArm

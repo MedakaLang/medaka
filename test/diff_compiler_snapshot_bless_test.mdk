@@ -6,11 +6,10 @@
    Runs under `medaka test --native`: it spawns the compiler and the write tool,
    and reads and writes files, none of which the interpreter binds. -}
 
-import test_process.{medakaBin, medakaRoot, boundedVerb}
+import test_process.{medakaBin, medakaRoot, boundedVerb, withScratchDir}
 import test.{Expectation, expectAll, expectTextContainsAll, fail, pass}
 import string.{lines, startsWith}
 import fs.{mkdirAll}
-import compiler_cli_test_support.{inScratchDir}
 
 writeTool : <IO> String
 writeTool = "\{medakaRoot}/test/snapshot_bless.sh"
@@ -25,12 +24,11 @@ seedWorkspace w = do
   _ <- writeFile "\{w}/fx/bad.mdk" "f x = = 1\n"
   Ok w
 
--- Each test block gets its own directory, named `name`, seeded with its own
--- fixtures (inScratchDir removes it afterwards); a failure to seed one is red.
-inWorkspace : String ->
-  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+-- Each test block gets its own directory, seeded with its own fixtures
+-- (withScratchDir removes it afterwards); a failure to seed one is red.
+inWorkspace : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
   <Exec, IO, FileRead, FileWrite> Expectation
-inWorkspace name k = inScratchDir name (dir => match seedWorkspace dir
+inWorkspace k = withScratchDir (dir => match seedWorkspace dir
   Err e => fail "could not create workspace: \{e}"
   Ok w => k w)
 
@@ -139,7 +137,6 @@ escapeHatch w = match removeFile "\{w}/snap/bad.md"
 
 -- LOCK 1: scoped. Bare --bless is refused at the CLI and at the write tool.
 test "snapshot-bless lock 1: bare --bless is refused (medaka and write tool)" = inWorkspace
-  "lock1"
   (w => expectAll [
     refused
       "lock 1: bare --bless is refused (medaka)"
@@ -160,7 +157,6 @@ test "snapshot-bless lock 1: bare --bless is refused (medaka and write tool)" = 
 
 -- LOCK 2: non-creating, and the mode is mandatory and exclusive.
 test "snapshot-bless lock 2: --bless never creates; mode is mandatory and exclusive" = inWorkspace
-  "lock2"
   (w => expectAll [
     snapRefused
       "lock 2: --bless refuses to CREATE a missing snapshot"
@@ -194,7 +190,6 @@ test "snapshot-bless lock 2: --bless never creates; mode is mandatory and exclus
 
 -- The happy path: no-op bless, stale check, re-cut, green after.
 test "snapshot-bless happy path: no-op bless, stale check, re-cut, green after" = inWorkspace
-  "happy"
   (w => expectAll [
     snapRun
       "--new (happy path)"
@@ -233,7 +228,6 @@ test "snapshot-bless happy path: no-op bless, stale check, re-cut, green after" 
 
 -- LOCK 3: a diagnostic section is never blessable; rm + --new is the deliberate door.
 test "snapshot-bless lock 3: diagnostics are never blessable; rm + --new re-cuts" = inWorkspace
-  "lock3"
   (w => expectAll [
     snapRun
       "--new on the parse-error fixture"

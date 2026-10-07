@@ -11,7 +11,7 @@
    Runs under `medaka test --native`: it spawns the built binary and writes
    fixtures, neither of which the interpreter binds. -}
 
-import test_process.{medakaBin, boundedVerb, scratchDir}
+import test_process.{medakaBin, boundedVerb, withScratchDir}
 import test.{
   Expectation, expectAll, expectEach, expectTextContainsAll, fail, pass
 }
@@ -102,19 +102,14 @@ writeFixtures dir ((name, text) :: rest) =
       Err e => Err e
       Ok _ => writeFixtures dir rest
 
--- A fresh scratch directory holding every (relative name, text) pair. A failed
--- write leaves its partial directory behind; the cells never run in that case.
-treeDir : List (String, String) -> <Exec, IO, FileWrite> Result String String
-treeDir files = match scratchDir
-  Err e => Err e
-  Ok dir => map (_ => dir) (writeFixtures dir files)
-
--- Removes a scratch directory. A failed removal is a red cell, not a silent leak.
-cleanup : String -> <Exec> Expectation
-cleanup dir = match boundedVerb "rm" ["-rf", dir]
-  Err e => fail "could not spawn rm on \{dir}: \{e}"
-  Ok (code, _, _) =>
-    if code /= 0 then fail "rm -rf \{dir}: exited \{intToString code}" else pass
+-- Runs `k` in a fresh scratch directory holding every (relative name, text) pair,
+-- removed afterwards by withScratchDir (graded).
+inTree : List (String, String) ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+inTree files k = withScratchDir (dir => match writeFixtures dir files
+  Err e => fail "could not write fixtures: \{e}"
+  Ok _ => k dir)
 
 -- The spawned argv: cwd "" keeps the caller's directory; otherwise the binary runs
 -- inside cwd, which is how the relative-target cell reaches its fixture.
@@ -208,9 +203,9 @@ control dir = match boundedVerb medakaBin ["check", "\{dir}/a_nodoc_broken.mdk"]
     else
       pass
 
-test "medaka test type-checks its target: cells a-h" = match treeDir fixtures
-  Err e => fail "could not write fixtures: \{e}"
-  Ok dir => expectAll [
+test "medaka test type-checks its target: cells a-h" = inTree
+  fixtures
+  (dir => expectAll [
     expectEach [
       (
         "a zero-doctest ill-typed",
@@ -257,192 +252,178 @@ test "medaka test type-checks its target: cells a-h" = match treeDir fixtures
         ],
       ),
     ],
-    cleanup dir,
-  ]
+  ])
 
-test "medaka test announces the exemption (issue #1680): cells i, k, l" =
-  match treeDir fixtures
-    Err e => fail "could not write fixtures: \{e}"
-    Ok dir => expectAll [
-      expectEach [
-        (
-          "i announcement on the hasTests exemption",
-          runCase
-            "\{dir}/e_exempt_via_testdecl.mdk"
-            ["--engines", "eval"]
-            0
-            [
-              "note: typechecking was skipped for", "`test \"…\"` decls",
-              "to type-check it, run `medaka check", "1/1 passed"
-            ],
-        ),
-        (
-          "k announcement on the hasProps exemption",
-          runCase
-            "\{dir}/h_exempt_via_prop.mdk"
-            ["--engines", "eval"]
-            0
-            [
-              "note: typechecking was skipped for", "`prop \"…\"` decls",
-              "to type-check it, run `medaka check",
-              "[eval] ... OK (100 tests passed)"
-            ],
-        ),
-        (
-          "l 1680 repro: the panic is explained",
-          runCase
-            "\{dir}/i_1680_repro.mdk"
-            ["--engines", "eval"]
-            1
-            [
-              "note: typechecking was skipped for",
-              "may be an uncaught type error",
-              "runtime error [E-PANIC]: unknown op '+'"
-            ],
-        ),
-      ],
-      cleanup dir,
-    ]
+test "medaka test announces the exemption (issue #1680): cells i, k, l" = inTree
+  fixtures
+  (dir => expectAll [
+    expectEach [
+      (
+        "i announcement on the hasTests exemption",
+        runCase
+          "\{dir}/e_exempt_via_testdecl.mdk"
+          ["--engines", "eval"]
+          0
+          [
+            "note: typechecking was skipped for", "`test \"…\"` decls",
+            "to type-check it, run `medaka check", "1/1 passed"
+          ],
+      ),
+      (
+        "k announcement on the hasProps exemption",
+        runCase
+          "\{dir}/h_exempt_via_prop.mdk"
+          ["--engines", "eval"]
+          0
+          [
+            "note: typechecking was skipped for", "`prop \"…\"` decls",
+            "to type-check it, run `medaka check",
+            "[eval] ... OK (100 tests passed)"
+          ],
+      ),
+      (
+        "l 1680 repro: the panic is explained",
+        runCase
+          "\{dir}/i_1680_repro.mdk"
+          ["--engines", "eval"]
+          1
+          [
+            "note: typechecking was skipped for",
+            "may be an uncaught type error",
+            "runtime error [E-PANIC]: unknown op '+'"
+          ],
+      ),
+    ],
+  ])
 
-test "medaka test narrows the exemption to compiler/stdlib vehicles: cells n, o, p, q" =
-  match treeDir scenarioFixtures
-    Err e => fail "could not write fixtures: \{e}"
-    Ok dir => expectAll [
-      expectEach [
-        (
-          "n narrowing: compiler-prefix vehicle no longer exempt",
-          runCase
-            "\{dir}/compiler/types/n_narrow_compiler_vehicle_test.mdk"
-            []
-            1
-            [
-              "requires it to `medaka check` first",
-              "type mismatch: Int vs String"
-            ],
-        ),
-        (
-          "o narrowing: stdlib-prefix vehicle no longer exempt",
-          runCase "\{dir}/stdlib/o_narrow_stdlib_vehicle_test.mdk" [] 1 [
+test "medaka test narrows the exemption to compiler/stdlib vehicles: cells n, o, p, q" = inTree
+  scenarioFixtures
+  (dir => expectAll [
+    expectEach [
+      (
+        "n narrowing: compiler-prefix vehicle no longer exempt",
+        runCase
+          "\{dir}/compiler/types/n_narrow_compiler_vehicle_test.mdk"
+          []
+          1
+          [
             "requires it to `medaka check` first",
             "type mismatch: Int vs String"
           ],
-        ),
-        (
-          "p suffix alone insufficient: stays exempt",
-          runCase
-            "\{dir}/p_suffix_only_stays_exempt_test.mdk"
-            ["--engines", "eval"]
-            1
-            [
-              "note: typechecking was skipped for",
-              "runtime error [E-PANIC]: unknown op '+'"
-            ],
-        ),
-        (
-          "q narrowing survives a relative invocation form",
-          runCaseIn
-            "\{dir}/compiler/types"
-            "n_narrow_compiler_vehicle_test.mdk"
-            []
-            1
-            [
-              "requires it to `medaka check` first",
-              "type mismatch: Int vs String"
-            ],
-        ),
-      ],
-      cleanup dir,
-    ]
-
-test "medaka test narrows the exemption by path component: cells u, v, r, s" =
-  match treeDir scenarioFixtures
-    Err e => fail "could not write fixtures: \{e}"
-    Ok dir => expectAll [
-      expectEach [
-        (
-          "u narrowing: this repo own test dir no longer exempt",
-          runCase "\{dir}/repo/test/u_repo_test_dir_test.mdk" [] 1 [
+      ),
+      (
+        "o narrowing: stdlib-prefix vehicle no longer exempt",
+        runCase "\{dir}/stdlib/o_narrow_stdlib_vehicle_test.mdk" [] 1 [
+          "requires it to `medaka check` first", "type mismatch: Int vs String"
+        ],
+      ),
+      (
+        "p suffix alone insufficient: stays exempt",
+        runCase
+          "\{dir}/p_suffix_only_stays_exempt_test.mdk"
+          ["--engines", "eval"]
+          1
+          [
+            "note: typechecking was skipped for",
+            "runtime error [E-PANIC]: unknown op '+'"
+          ],
+      ),
+      (
+        "q narrowing survives a relative invocation form",
+        runCaseIn
+          "\{dir}/compiler/types"
+          "n_narrow_compiler_vehicle_test.mdk"
+          []
+          1
+          [
             "requires it to `medaka check` first",
             "type mismatch: Int vs String"
           ],
-        ),
-        (
-          "v test dir without a compiler sibling: stays exempt",
-          runCase
-            "\{dir}/norepo/test/v_no_compiler_sibling_stays_exempt_test.mdk"
-            ["--engines", "eval"]
-            1
-            [
-              "note: typechecking was skipped for",
-              "runtime error [E-PANIC]: unknown op '+'"
-            ],
-        ),
-        (
-          "r substring is not a component (mycompiler): stays exempt",
-          runCase
-            "\{dir}/mycompiler/sqlite/test/r_substring_not_component_test.mdk"
-            ["--engines", "eval"]
-            1
-            [
-              "note: typechecking was skipped for",
-              "runtime error [E-PANIC]: unknown op '+'"
-            ],
-        ),
-        (
-          "s substring is not a component (newstdlib): stays exempt",
-          runCase
-            "\{dir}/newstdlib/s_substring_not_component_test.mdk"
-            ["--engines", "eval"]
-            1
-            [
-              "note: typechecking was skipped for",
-              "runtime error [E-PANIC]: unknown op '+'"
-            ],
-        ),
-      ],
-      cleanup dir,
-    ]
+      ),
+    ],
+  ])
 
-test "medaka test announces the skip only when it skips: cells j, m, f, g" =
-  match treeDir scenarioFixtures
-    Err e => fail "could not write fixtures: \{e}"
-    Ok dir => expectAll [
-      expectEach [
-        (
-          "j doctest wins: no skip announced",
-          refuteCase "\{dir}/j_doctest_beats_testdecl.mdk" 0 [
-            "typechecking was skipped",
+test "medaka test narrows the exemption by path component: cells u, v, r, s" = inTree
+  scenarioFixtures
+  (dir => expectAll [
+    expectEach [
+      (
+        "u narrowing: this repo own test dir no longer exempt",
+        runCase "\{dir}/repo/test/u_repo_test_dir_test.mdk" [] 1 [
+          "requires it to `medaka check` first", "type mismatch: Int vs String"
+        ],
+      ),
+      (
+        "v test dir without a compiler sibling: stays exempt",
+        runCase
+          "\{dir}/norepo/test/v_no_compiler_sibling_stays_exempt_test.mdk"
+          ["--engines", "eval"]
+          1
+          [
+            "note: typechecking was skipped for",
+            "runtime error [E-PANIC]: unknown op '+'"
           ],
-        ),
-        (
-          "m gated clean module: no skip announced",
-          refuteCase "\{dir}/b_nodoc_clean.mdk" 0 ["typechecking was skipped"],
-        ),
-        (
-          "f directory with ill-typed member",
-          runCase "\{dir}/dir" [] 1 ["requires it to `medaka check` first"],
-        ),
-        (
-          "g import-bearing, zero doctests, ill-typed",
-          runCase "\{dir}/proj/main.mdk" [] 1 [
-            "requires it to `medaka check` first",
-            "type mismatch: Int vs String"
+      ),
+      (
+        "r substring is not a component (mycompiler): stays exempt",
+        runCase
+          "\{dir}/mycompiler/sqlite/test/r_substring_not_component_test.mdk"
+          ["--engines", "eval"]
+          1
+          [
+            "note: typechecking was skipped for",
+            "runtime error [E-PANIC]: unknown op '+'"
           ],
-        ),
-      ],
-      cleanup dir,
-    ]
+      ),
+      (
+        "s substring is not a component (newstdlib): stays exempt",
+        runCase
+          "\{dir}/newstdlib/s_substring_not_component_test.mdk"
+          ["--engines", "eval"]
+          1
+          [
+            "note: typechecking was skipped for",
+            "runtime error [E-PANIC]: unknown op '+'"
+          ],
+      ),
+    ],
+  ])
 
-test "medaka test agrees with medaka check on an import-bearing module: cell t, control" =
-  match treeDir scenarioFixtures
-    Err e => fail "could not write fixtures: \{e}"
-    Ok dir => expectAll [
-      expectEach [
-        (
-          "t import-bearing, module-own impl: test agrees with check",
-          agreeCase "\{dir}/agree/main.mdk",
-        ),
-        ("control: medaka check rejects the cell a fixture", control dir),
-      ],
-      cleanup dir,
-    ]
+test "medaka test announces the skip only when it skips: cells j, m, f, g" = inTree
+  scenarioFixtures
+  (dir => expectAll [
+    expectEach [
+      (
+        "j doctest wins: no skip announced",
+        refuteCase "\{dir}/j_doctest_beats_testdecl.mdk" 0 [
+          "typechecking was skipped",
+        ],
+      ),
+      (
+        "m gated clean module: no skip announced",
+        refuteCase "\{dir}/b_nodoc_clean.mdk" 0 ["typechecking was skipped"],
+      ),
+      (
+        "f directory with ill-typed member",
+        runCase "\{dir}/dir" [] 1 ["requires it to `medaka check` first"],
+      ),
+      (
+        "g import-bearing, zero doctests, ill-typed",
+        runCase "\{dir}/proj/main.mdk" [] 1 [
+          "requires it to `medaka check` first", "type mismatch: Int vs String"
+        ],
+      ),
+    ],
+  ])
+
+test "medaka test agrees with medaka check on an import-bearing module: cell t, control" = inTree
+  scenarioFixtures
+  (dir => expectAll [
+    expectEach [
+      (
+        "t import-bearing, module-own impl: test agrees with check",
+        agreeCase "\{dir}/agree/main.mdk",
+      ),
+      ("control: medaka check rejects the cell a fixture", control dir),
+    ],
+  ])
