@@ -90,7 +90,7 @@ Makefile, docs, or any file outside your assignment.
   native test must too.
 - **Normalise paths** the way the script did (`sed s|$ROOT/|ROOT/|`): replace
   both `medakaRoot ++ "/"` and, when `medakaRoot` is relative, `$PWD ++ "/"`,
-  using `string.replaceAll`.
+  using `replaceAll` from the `string` module.
 - `CAPTURE=1` re-capture modes have no native equivalent; do not invent one,
   report that the script had it.
 
