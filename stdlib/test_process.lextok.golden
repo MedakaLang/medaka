@@ -55,6 +55,8 @@ UPPER "Expectation"
 LPAREN
 DOTDOT
 RPAREN
+COMMA
+IDENT "expectAll"
 RBRACE
 NEWLINE
 EXPORT
@@ -266,6 +268,222 @@ IDENT "code"
 INTERP_MID ": "
 IDENT "err"
 INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "withScratchDir"
+COLON
+LPAREN
+UPPER "String"
+ARROW
+LT
+UPPER "Exec"
+COMMA
+UPPER "IO"
+COMMA
+UPPER "FileRead"
+COMMA
+UPPER "FileWrite"
+GT
+UPPER "Expectation"
+RPAREN
+ARROW
+LT
+UPPER "Exec"
+COMMA
+UPPER "IO"
+COMMA
+UPPER "FileRead"
+COMMA
+UPPER "FileWrite"
+GT
+UPPER "Expectation"
+NEWLINE
+IDENT "withScratchDir"
+IDENT "body"
+EQUAL
+MATCH
+IDENT "runVerb"
+STRING "mktemp"
+LBRACKET
+STRING "-d"
+RBRACKET
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Fail"
+INTERP_OPEN "could not make a scratch directory: "
+IDENT "e"
+INTERP_END ""
+STRING "a directory"
+STRING "none"
+NEWLINE
+UPPER "Ok"
+LPAREN
+INT 0
+COMMA
+IDENT "out"
+COMMA
+UNDERSCORE
+RPAREN
+FAT_ARROW
+INDENT
+LET
+IDENT "dir"
+EQUAL
+IDENT "trim"
+IDENT "out"
+NEWLINE
+LET
+IDENT "result"
+EQUAL
+IDENT "body"
+IDENT "dir"
+NEWLINE
+IDENT "expectAll"
+LBRACKET
+IDENT "result"
+COMMA
+IDENT "removeScratch"
+IDENT "dir"
+RBRACKET
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "code"
+COMMA
+UNDERSCORE
+COMMA
+IDENT "err"
+RPAREN
+FAT_ARROW
+INDENT
+UPPER "Fail"
+INTERP_OPEN "mktemp -d exited "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID ": "
+IDENT "err"
+INTERP_END ""
+STRING "a directory"
+INTERP_OPEN "exit "
+IDENT "intToString"
+IDENT "code"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "removeScratch"
+COLON
+UPPER "String"
+ARROW
+LT
+UPPER "Exec"
+GT
+UPPER "Expectation"
+NEWLINE
+IDENT "removeScratch"
+IDENT "dir"
+EQUAL
+INDENT
+IF
+IDENT "dir"
+EQ_EQ
+STRING ""
+OR
+IDENT "dir"
+EQ_EQ
+STRING "/"
+OR
+IDENT "not"
+LPAREN
+IDENT "startsWith"
+STRING "/"
+IDENT "dir"
+RPAREN
+THEN
+INDENT
+UPPER "Fail"
+INTERP_OPEN "refusing to remove "
+IDENT "debug"
+IDENT "dir"
+INTERP_END ""
+STRING "an absolute scratch path"
+IDENT "dir"
+NEWLINE
+DEDENT
+ELSE
+MATCH
+IDENT "boundedVerb"
+STRING "rm"
+LBRACKET
+STRING "-rf"
+COMMA
+IDENT "dir"
+RBRACKET
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Fail"
+INTERP_OPEN "could not remove "
+IDENT "dir"
+INTERP_MID ": "
+IDENT "e"
+INTERP_END ""
+STRING "exit 0"
+STRING "no spawn"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "code"
+COMMA
+UNDERSCORE
+COMMA
+IDENT "err"
+RPAREN
+FAT_ARROW
+INDENT
+IF
+IDENT "code"
+EQ_EQ
+INT 0
+THEN
+INDENT
+UPPER "Pass"
+STRING "removed"
+STRING "removed"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Fail"
+INTERP_OPEN "removing "
+IDENT "dir"
+INTERP_MID " exited "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID ": "
+IDENT "err"
+INTERP_END ""
+STRING "exit 0"
+INTERP_OPEN "exit "
+IDENT "intToString"
+IDENT "code"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
