@@ -79,6 +79,9 @@ wasmReject scratch =
             if code == 0 then
               fail
                 "wasm-reject: build --target wasm succeeded, expected failure"
+            else if code == 126 || code == 127 then
+              fail
+                "wasm-reject: the build did not run (exit \{intToString code}); a failure to launch is not a rejection"
             else
               pass
 

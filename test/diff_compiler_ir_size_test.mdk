@@ -72,11 +72,10 @@ buildIr dir stem source = do
     Err "could not build \{stem} (exit \{intToString code}):\n\{out}\{err}"
   else do
     text <- readFile "\{dir}/\{stem}.ll"
-    n <- pure (length (lines text))
-    if n == 0 then
+    if text == "" then
       Err "no IR kept for \{stem}: harness bug or --keep-ir regressed"
     else
-      pure n
+      pure (length (lines text))
 
 ceilingCase : String -> <Exec, FileRead, FileWrite, IO> Expectation
 ceilingCase dir = match buildIr dir "tiny" tinySource

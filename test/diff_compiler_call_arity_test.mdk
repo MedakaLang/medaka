@@ -1,8 +1,10 @@
 {- | Gate for call/define arity skew in emitted LLVM text IR, over
-   test/build_diff_fixtures. Replaces diff_compiler_call_arity.sh, in two parts.
-   This file is part 1: the shared helpers, the corpus census, and the
-   #1101 and #1648 regression arms. The constrained-function (CDict) arms,
-   the #2078 report-only row, and the compiler self-IR census are in part 2.
+   test/build_diff_fixtures. Replaces diff_compiler_call_arity.sh: the corpus
+   census, the #1101 and #1648 regression arms, and the constrained-function
+   (CDict) arms, with a positive control that the skew scanner can fire. The
+   script's two report-only rows (the open #2078 eta-short wrapper and a census
+   of the compiler's own IR) printed counts and graded nothing; they are not
+   carried, since a native test has no report channel.
 
    The census scans each emitted `.ll` line by line. A call whose argument
    count differs from the local `define` of the same name is a skew.
@@ -246,7 +248,7 @@ test "diff_compiler_call_arity: corpus census, #1101 and #1648 regression fixtur
         expectEach (map (s => (s, censusRow work s)) stems),
       ]
 
--- Constrained-function (CDict) call shapes, script lines 209-407.
+-- Constrained-function (CDict) call shapes.
 dictStem : String
 dictStem = "dict_call_arity_conformance"
 
@@ -255,25 +257,6 @@ dictPrefix = "mdk_dict_call_arity_conformance__"
 
 adderCall : String
 adderCall = "call i64 @\{dictPrefix}adder3("
-
--- Build one source file with its kept IR, and return the IR text.
-buildAt : String ->
-  String ->
-  String ->
-  <Exec, IO, FileRead> Result String String
-buildAt work src stem = match boundedInTree 600 medakaBin [
-  "build",
-  src,
-  "-o",
-  "\{work}/\{stem}.bin",
-  "--keep-ir",
-]
-  Err e => Err "could not spawn build: \{e}"
-  Ok (code, _, _) =>
-    if code /= 0 then
-      Err "build exited \{intToString code}"
-    else
-      readFile "\{work}/\{stem}.bin.ll"
 
 -- The body lines of the first `define i64 @sym(` header, up to its closing "}".
 bodyLines : String -> List String -> Option String
@@ -408,47 +391,6 @@ test "diff_compiler_call_arity (16): the CDict fixture builds and produces kept 
     Ok work => match buildIR work dictStem
       Err e => fail "\{dictStem}: did not build or produce kept IR: \{e}"
       Ok _ => pass
-
--- The #2078 eta-short wrapper. Report-only, as in the script: OPEN, deliberately
--- unfixed, so the build is exercised but no verdict is graded.
-known2078 : String
-known2078 = S.join "\n" [
-  "add : Int -> Int -> Int",
-  "add a b = a + b",
-  "",
-  "mk : Int -> Int -> Int",
-  "mk n = add n",
-  "",
-  "apply1 : (Int -> Int) -> Int -> Int",
-  "apply1 f x = f x",
-  "",
-  "main = println (apply1 (mk 1) 2)",
-  "",
-]
-
-test "diff_compiler_call_arity (17): the #2078 eta-short wrapper builds (report-only)" =
-  match scratchDir
-    Err e => fail "no scratch dir: \{e}"
-    Ok work =>
-      match writeFile "\{work}/known_2078_eta_short_wrapper.mdk" known2078
-        Err e => fail "could not write the #2078 source: \{e}"
-        Ok _ =>
-          match (buildAt
-            work
-            "\{work}/known_2078_eta_short_wrapper.mdk"
-            "known-2078")
-            _ => pass
-
--- The compiler's own emitted IR. Report-only, as in the script: built, not graded.
-test "diff_compiler_call_arity (18): the compiler's own emitted IR builds (report-only)" =
-  match scratchDir
-    Err e => fail "no scratch dir: \{e}"
-    Ok work =>
-      match (buildAt
-        work
-        "\{medakaRoot}/compiler/driver/medaka_cli.mdk"
-        "compiler-self")
-        _ => pass
 
 -- The skew scanner must be able to fire: a define of arity 2 called with 1 arg.
 synthetic : String

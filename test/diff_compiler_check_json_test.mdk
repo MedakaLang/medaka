@@ -11,10 +11,9 @@
    neither of which the interpreter binds. -}
 
 import string as S
-import fs.{fixtureFiles}
-import path.{dirname, stem}
-import compiler_cli_test_support.{fixtureStems}
-import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb, scratchDir}
+import fs.{fixtureDirs, isFile}
+import compiler_cli_test_support.{fixtureStems, inScratchDir}
+import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb}
 import test.{
   Expectation,
   fail,
@@ -76,29 +75,31 @@ test "check --json: every top-level fixture matches its golden" =
 projectRow : String -> <Exec, IO, FileRead> Expectation
 projectRow dir =
   let rel = S.replaceAll (projectsCorpus ++ "/") "" dir
-  runGolden
-    "check --json project/\{rel}"
-    ["check", "--json", "\{dir}/main.mdk"]
-    (text =>
-      placeholder
-        "test/check_json_fixtures/projects/\{rel}/"
-        "<proj>/"
-        (placeholder "\{dir}/" "<proj>/" text))
-    "\{dir}/check_json.golden"
+  match isFile "\{dir}/main.mdk"
+    Ok True =>
+      runGolden
+        "check --json project/\{rel}"
+        ["check", "--json", "\{dir}/main.mdk"]
+        (text =>
+          placeholder
+            "test/check_json_fixtures/projects/\{rel}/"
+            "<proj>/"
+            (placeholder "\{dir}/" "<proj>/" text))
+        "\{dir}/check_json.golden"
+    _ => fail "project/\{rel}: no main.mdk entry"
 
+-- Every top-level directory of the projects corpus is a project, whether or
+-- not it holds a `main.mdk`: a directory without one is red, not skipped.
 test "check --json: every project fixture matches its golden (#159)" =
-  match fixtureFiles projectsCorpus
+  match fixtureDirs projectsCorpus
     Err e => fail "could not list \{projectsCorpus}: \{e}"
-    Ok files =>
-      let mains = filter (f => stem f == "main") files
-      let dirs = map dirname mains
-      expectAll [
-        expectAtLeast 11 (length dirs),
-        expectEach
-          (map
-            (d => (S.replaceAll (projectsCorpus ++ "/") "" d, projectRow d))
-            dirs),
-      ]
+    Ok dirs => expectAll [
+      expectAtLeast 11 (length dirs),
+      expectEach
+        (map
+          (d => (S.replaceAll (projectsCorpus ++ "/") "" d, projectRow d))
+          dirs),
+    ]
 
 -- S9's two reject answers and the #3848/#3869/#3889 signature pins. Read where
 -- they live; the golden sits beside the other check_json goldens.
@@ -154,41 +155,36 @@ test "1078/build-json-agrees-with-check-json: type_mismatch matches check's gold
 
 -- #1078: a clean program reaches the emitter: exit 0, a real executable, and
 -- the empty-diagnostics envelope on the JSON channel.
-test "1078/build-json-clean-emits-and-succeeds: exit 0, binary, empty diagnostics" =
-  match scratchDir
-    Err e => fail "could not make a scratch dir: \{e}"
-    Ok dir =>
-      let bin = "\{dir}/clean.bin"
-      let work = match boundedVerb medakaBin [
-        "build",
-        "--json",
-        "\{corpus}/clean.mdk",
-        "-o",
-        bin,
-      ]
-        Err e => fail "could not spawn medaka build --json: \{e}"
-        Ok (code, out, err) =>
-          if code /= 0 then
+-- The emitted binary goes into the block's own scratch directory, which
+-- `inScratchDir` removes after the body (graded).
+cleanBuild : String -> <Exec, IO, FileRead, FileWrite> Expectation
+cleanBuild dir =
+  let bin = "\{dir}/clean.bin"
+  match boundedVerb medakaBin [
+    "build",
+    "--json",
+    "\{corpus}/clean.mdk",
+    "-o",
+    bin,
+  ]
+    Err e => fail "could not spawn medaka build --json: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        fail
+          "1078/build-json-clean: expected exit 0, got \{intToString code}: \{out ++ err}"
+      else match boundedVerb "sh" ["-c", "test -x \"$1\"", "sh", bin]
+        Err e => fail "could not spawn test -x: \{e}"
+        Ok (c2, _, _) =>
+          if c2 /= 0 then
+            fail "1078/build-json-clean: no executable emitted at \{bin}"
+          else if not (S.contains "\"diagnostics\":[]" (out ++ err)) then
             fail
-              "1078/build-json-clean: expected exit 0, got \{intToString code}: \{out ++ err}"
-          else match boundedVerb "sh" ["-c", "test -x \"$1\"", "sh", bin]
-            Err e => fail "could not spawn test -x: \{e}"
-            Ok (c2, _, _) =>
-              if c2 /= 0 then
-                fail "1078/build-json-clean: no executable emitted at \{bin}"
-              else if not (S.contains "\"diagnostics\":[]" (out ++ err)) then
-                fail
-                  "1078/build-json-clean: expected empty-diagnostics envelope: \{out ++ err}"
-              else
-                pass
-      let cleanup = match boundedVerb "rm" ["-rf", dir]
-        Err e => fail "could not spawn rm: \{e}"
-        Ok (c3, _, _) =>
-          if c3 /= 0 then
-            fail "rm -rf \{dir} exited \{intToString c3}"
+              "1078/build-json-clean: expected empty-diagnostics envelope: \{out ++ err}"
           else
             pass
-      expectAll [work, cleanup]
+
+test "1078/build-json-clean-emits-and-succeeds: exit 0, binary, empty diagnostics" =
+  inScratchDir "build-json-clean" cleanBuild
 
 -- #1078: `--json` is a flag, not a second positional input. A bare
 -- `build --json` reports through the R-BUILD-FAILED envelope.

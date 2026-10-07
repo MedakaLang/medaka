@@ -2,7 +2,7 @@
 # depend on the order in which two `interface` declarations were written, each naming
 # the OPEN issue that owns it.
 #
-# Read by test/diff_compiler_iface_order.sh (the gate) and, for the half a gate cannot
+# Read by test/diff_compiler_iface_order_test.mdk (the gate) and, for the half a gate cannot
 # check, by test/must_fail_census.sh (nightly, has the GitHub API).
 #
 # ══════════════════════════════════════════════════════════════════════════════
@@ -38,7 +38,7 @@
 # which has no import table at all, so nothing in the fix can see two interfaces that
 # meet only through an `import`. That axis is where these issues now live, and THIS
 # CORPUS CANNOT EXPRESS IT — the gate permutes only the ENTRY module's declarations
-# (see its "SCOPE LIMITS" header), so a cross-module case cannot be written here at all.
+# (see the "Scope limits" paragraph of its header), so a cross-module case cannot be written here at all.
 #
 # ⇒ DO NOT INFER A DRAIN FROM THE ABSENCE OF A ROW. The rows are gone because the
 #   INSTRUMENT stopped being able to see the bug, not because the bug stopped existing.
@@ -156,8 +156,8 @@
 #   test/diff_compiler_dict_semantics_permute.sh                            (impl blocks)
 #   test/diff_compiler_import_order.sh                                      (import clauses)
 #
-# See test/diff_compiler_iface_order.sh's header, FOUR-STATE TABLE, for the full
-# reading — including the one state (a name-scoped fix) in which this gate stays
+# See the header of test/diff_compiler_iface_order_test.mdk, its four-state table, for
+# the full reading — including the one state (a name-scoped fix) in which this gate stays
 # GREEN while the defect is still live, and what backstops it.
 #
 # 🚨 AND THE BOUND ON ALL OF IT: every case in this corpus is single-file with
@@ -165,8 +165,8 @@
 # on a MODULE-QUALIFIED IDENTITY are INDISTINGUISHABLE here — same signatures, same
 # drain, same state. A drain in this ledger is therefore NOT evidence that Phase 4
 # keyed by identity. That question needs a cross-module probe (#1258 is the shape).
-# The gate header's section "THE TABLE ABOVE CANNOT TELL YOU *WHICH KIND* OF KEYING
-# LANDED" gives the full reading and why the shape is inexpressible in this corpus.
+# The section "What the table cannot tell you" in the gate's header gives the full
+# reading and why the shape is inexpressible in this corpus.
 #
 # ── WHAT A REVIEWER MUST DEMAND BEFORE ACCEPTING A **NEW** ROW ────────────────
 #
@@ -218,7 +218,8 @@
 #   check=<exit>;codes=<sorted,comma>;schemes=<scheme dump>;run=<exit>:<stdout>;build=<exit>/<exec-exit>:<stdout>
 #
 # ⚠️ Do not hand-derive that shape from this line either — the gate is the authority
-# on it and this comment can rot. `grep -n "printf 'check=" test/diff_compiler_iface_order.sh`
+# on it and this comment can rot. The signature is built by `sigFor` in
+# test/diff_compiler_iface_order_test.mdk: `grep -n "check=" test/diff_compiler_iface_order_test.mdk`
 #
 # Program output is escaped so a signature is always exactly one line and never
 # collides with the separators: `\` -> `\\`, `|` -> `\p`, `;` -> `\s`, newline ->

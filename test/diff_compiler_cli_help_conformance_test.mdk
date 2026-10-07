@@ -10,7 +10,45 @@
 
    Every verb, flag and subcommand is derived from the binary's own output; none
    is listed here. Runs under `medaka test --native`: it spawns the binary once
-   per probe. -}
+   per probe.
+
+   Why agreement, not text: every drift this gate was built from was true prose on
+   the day it was written. `medaka run --help` described `--release` as kept for
+   symmetry with `build --release`, which has no such arm; `medaka snapshot`
+   parsed `--root` and `--worker` while its help mentioned neither; the top-level
+   usage advertised `medaka check [--json]` while checkHelpText advertised three
+   flags. Each is a disagreement between two places, so the gate asserts agreement.
+
+   A and B are execution-derived: the verb is run with the flag and the answer is
+   read. C cannot be, because nothing you can run enumerates the flags nobody
+   thought to try. C reads the roster each verb prints in its own unknown-flag
+   rejection, which is the binary's answer rather than a source grep, since source
+   cannot attribute a flag to a verb (the parse arms live in per-verb helpers).
+
+   ## What this gate does not cover
+
+   Stated here rather than hidden.
+
+   * A and B answer "is this flag rejected as unknown", not "is this flag
+     honoured". A value-taking flag is probed with the dummy value `Z`. A flag
+     that validates its value reads as VALUE-REJECTED, which is evidence the arm
+     exists. An accepted-but-ignored flag reads as PARSED, because from outside
+     the process it is. `medaka gate run --jobs` is accepted and ignored, as its own
+     help documents, so it is conforming dead surface and must not be flagged.
+   * C covers only verbs that print a roster. A verb with no roster fails C unless
+     it is exempt, and the exemption is `checkCEmpty`'s `codemod` arm: codemod's
+     flag vocabulary is a runtime table, so its roster cannot be printed. A
+     genuinely flagless verb, one printing `(known: none)`, is covered vacuously
+     and correctly.
+   * A verb whose `--help` yields no text fails A, and its name is in the message.
+     Before that check existed, a nonzero exit from `--help` read as an empty text,
+     so A passed vacuously for that verb while C went red for it.
+   * The shell gate reported coverage per verb and per property on every run, and
+     had a NO_BUILD switch that skipped the slow `build` probes and said so. This
+     test has neither: it prints no coverage report, and its `build` probes always
+     run. Failures are the only output, so a verb that is silently not probed
+     cannot be seen here.
+   -}
 
 import test_process.{medakaBin, scratchDir, boundedVerb}
 import test.{Expectation, expectAll, expectAtLeast, fail, pass}
@@ -282,12 +320,24 @@ verdictOver : String ->
   String ->
   List String ->
   <Exec, IO, FileRead, FileWrite> (String, String)
-verdictOver dir verb flag [] = ("NOT-PARSED", "")
-verdictOver dir verb flag (s :: rest) =
-  judge
-    flag
-    (msgOf (probe dir (argvFor verb s ++ [flag, "Z", "ok.mdk"])))
-    (verdictOver dir verb flag rest)
+verdictOver dir verb flag subs = verdictAfter dir verb flag "" subs
+
+-- `lastFirst` is the first line of the most recent probe's output. When every
+-- subcommand rejects the flag as unknown, that last rejection is the evidence.
+verdictAfter : String ->
+  String ->
+  String ->
+  String ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> (String, String)
+verdictAfter _ _ _ lastFirst [] = ("NOT-PARSED", noProbeWords lastFirst)
+verdictAfter dir verb flag _ (s :: rest) =
+  let msg = msgOf (probe dir (argvFor verb s ++ [flag, "Z", "ok.mdk"]))
+  judge flag msg (verdictAfter dir verb flag (firstLine msg) rest)
+
+noProbeWords : String -> String
+noProbeWords "" = "no subcommand was probed, so there is no rejection to quote"
+noProbeWords ev = ev
 
 judge : String -> String -> (String, String) -> (String, String)
 judge flag msg next =
@@ -308,23 +358,37 @@ checkAVerb : Bool ->
   String ->
   <Exec, IO, FileRead, FileWrite> List String
 checkAVerb True _ _ = []
-checkAVerb False dir verb =
-  fold
-    (acc f => acc ++ aFail dir verb f)
-    []
-    (helpFlags (outOf dir [verb, "--help"]))
+checkAVerb False dir verb = match helpTextOf dir verb
+  Err why => [
+    "A \{verb} --help yields no text (\{why}), so none of its advertised flags were checked",
+  ]
+  Ok text => fold (acc f => acc ++ aFail dir verb f) [] (helpFlags text)
+
+-- The verb's `--help` on stdout. A nonzero exit or an empty stdout is an Err, so
+-- a verb with no help text fails property A instead of passing it vacuously.
+helpTextOf : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+helpTextOf dir verb = match probe dir [verb, "--help"]
+  (code, out, err) =>
+    if code /= 0 then
+      Err "exited \{intToString code}: \{firstLine (err ++ out)}"
+    else if out == "" then
+      Err "printed nothing on stdout"
+    else
+      Ok out
 
 aFail : String ->
   String ->
   String ->
   <Exec, IO, FileRead, FileWrite> List String
-aFail dir verb f = aFailOf f (verdictOver dir verb f (subsOf dir verb))
+aFail dir verb f = aFailOf verb f (verdictOver dir verb f (subsOf dir verb))
 
-aFailOf : String -> (String, String) -> List String
-aFailOf f (v, ev) =
+aFailOf : String -> String -> (String, String) -> List String
+aFailOf verb f (v, ev) =
   if v == "NOT-PARSED" then
     [
-      "A \{f} advertised by a verb's --help is rejected as an unknown flag: \{ev}",
+      "A \{verb} --help advertises \{f}, but medaka \{verb} \{f} rejects it: \{ev}",
     ]
   else
     []

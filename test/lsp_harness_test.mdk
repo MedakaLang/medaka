@@ -65,7 +65,7 @@ corpus = underRoot "test/lsp_fixtures"
 corpusFloor : <IO, FileRead> Expectation
 corpusFloor = match fixtureFiles corpus
   Err e => fail "could not list \{corpus}: \{e}"
-  Ok paths => expectAtLeast 10 (length paths)
+  Ok paths => expectAtLeast 11 (length paths)
 
 test "lsp_harness: native LSP harness reports 0 failures" = match scratchDir
   Err e => fail "could not create scratch dir: \{e}"

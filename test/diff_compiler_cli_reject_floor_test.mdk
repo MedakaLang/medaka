@@ -1,9 +1,9 @@
 {- | Gate for the unknown-flag rejection floor (convention C2, #2354): every verb the
    binary's usage block lists rejects `--<bogus>` with exit 1; every verb whose
    source hands its spec to `requireArgs` prints a `(known: …)` roster; every such
-   verb is visible to the floor. Replaces diff_compiler_cli_reject_floor.sh, sections
-   D, R, R', K and S. Section U (source scan for unrouted flag literals) is still in
-   the script and is converted by a follow-up.
+   verb is visible to the floor. Replaces diff_compiler_cli_reject_floor.sh: sections
+   D, R, R', K and S, and section U (source scan for unrouted flag literals) with
+   its U' check that every declared exemption is still needed.
 
    Every verb and covered spec is derived from the binary's usage block and from
    the compiler/ sources; none is listed here except the exemption `help`.

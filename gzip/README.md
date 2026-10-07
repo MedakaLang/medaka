@@ -30,7 +30,7 @@ loop, and property testing against an external oracle.
 | `lib/inflate.mdk` | The DEFLATE block loop — stored (`BTYPE=00`), fixed-Huffman (`BTYPE=01`), and dynamic-Huffman (`BTYPE=10`) blocks all decode — plus the gzip member decoder (`gunzipMember`) wrapping it |
 | `lib/deflate.mdk` | Phase 4: LZ77 hash-chain match finder (with lazy matching) + fixed-Huffman block encoding (`BTYPE=01`) + stored-block fallback (`BTYPE=00`) + the gzip member compressor (`gzipCompress`) wrapping it. Dynamic-Huffman encoding (`BTYPE=10`) is Phase 5, not yet implemented |
 | `main.mdk` | The cross-module integration probe (see below) |
-| `inflate_demo.mdk` | CLI: `inflate_demo <input.gz> <output>` — the actual decompressor, used by `gzip/test/inflate_oracle.sh` |
+| `inflate_demo.mdk` | CLI: `inflate_demo <input.gz> <output>` — the actual decompressor, used by `gzip/test/inflate_oracle_test.mdk` |
 | `deflate_demo.mdk` | CLI: `deflate_demo <input> <output.gz>` — the actual compressor, used by `gzip/test/deflate_oracle_test.mdk` |
 
 ## Running it
@@ -41,7 +41,7 @@ medaka run  gzip/main.mdk
 medaka build gzip/main.mdk -o gzip_probe && ./gzip_probe
 medaka build gzip/inflate_demo.mdk -o inflate_demo && ./inflate_demo some.gz out.bin
 medaka build gzip/deflate_demo.mdk -o deflate_demo && ./deflate_demo some_file out.gz
-sh gzip/test/inflate_oracle.sh   # differential oracle against the system gzip/gunzip (decompress direction)
+medaka test gzip/test/inflate_oracle_test.mdk   # differential oracle against the system gzip/gunzip (decompress direction)
 medaka test gzip/test/deflate_oracle_test.mdk   # differential oracle against the system gzip/gunzip (compress direction)
 ```
 

@@ -1,7 +1,22 @@
 {- | Gate for `medaka mcp` (#253): a golden JSON-RPC transcript per fixture, the
    `--help`/bogus-flag argv contract (#299), the MEDAKA_MCP_LOG call-log format,
    and the mainSchemeRef memo-hit property across two medaka_check calls.
-   Replaces test/diff_compiler_mcp.sh.
+   Replaces test/diff_compiler_mcp.sh. Each fixture is a pair: <name>.jsonl, the
+   request stream (one JSON-RPC message per line; notifications have no id and
+   produce no response line), and <name>.golden, the exact expected stdout. A new
+   tool gets a new pair; no edit to this file is needed. The shell gate's CAPTURE=1
+   re-capture mode has no native equivalent, so goldens are written by hand.
+
+   Paths. The fixture loop compares each golden byte for byte, with no
+   normalisation. The server runs with its working directory set to the repository
+   root (mcpScript cds there), so a fixture that names a file should use a
+   repo-relative path, which keeps the response independent of where the gate was
+   invoked from. A golden must never contain the worktree's absolute path. This test
+   does no sed substitution. A fixture whose result must embed a path needs the
+   runner extended to replace that path with a placeholder before the comparison,
+   the way the shell gate's sed did for check --json. The two checks that touch temp
+   paths (the logging record and the memo projects) assert on counts and escaped
+   content only, never on path text.
 
    Runs under `medaka test --native`: it spawns ./medaka mcp with fixture request
    streams on stdin and writes temp projects, neither of which the interpreter

@@ -11,9 +11,9 @@
 
 import list as L
 import fs.{walkDir, mkdirAll}
-import compiler_cli_test_support.{fixtureStems}
+import compiler_cli_test_support.{fixtureStems, inScratchDir}
 import string.{lines, startsWith, endsWith, replaceAll, split, join}
-import test_process.{medakaBin, underRoot, boundedVerb, scratchDir}
+import test_process.{medakaBin, underRoot, boundedVerb}
 import test.{
   Expectation, expectAll, expectEach, expectGolden, expectAtLeast, fail, pass
 }
@@ -100,10 +100,10 @@ test "medaka doc: every single-file fixture matches its golden" =
 mdkPaths : <IO, FileRead> Result String (List String)
 mdkPaths = map (ps => L.filter (endsWith ".mdk") ps) (walkDir libFix)
 
--- Writes the library pages into a fresh scratch dir; fails on a non-zero exit.
-libPages : <Exec, IO, FileRead> Result String String
-libPages = do
-  tmp <- scratchDir
+-- Writes the library pages into `tmp`, which the caller owns (inScratchDir);
+-- fails on a non-zero exit.
+libPages : String -> <Exec, IO, FileRead> Result String String
+libPages tmp = do
   mdks <- mdkPaths
   res <- boundedVerb medakaBin (["doc", "--out", tmp] ++ mdks)
   libExit tmp res
@@ -159,8 +159,8 @@ privateOwner tmp = match readFile "\{tmp}/owner.md"
         fail
           "library-mode impl rebucketing (Countish Gadget misfiled off owner.md)"
 
-libChecks : <Exec, IO, FileRead> Expectation
-libChecks = match libPages
+libChecks : String -> <Exec, IO, FileRead> Expectation
+libChecks dir = match libPages dir
   Err e => fail e
   Ok tmp => expectAll [allPages tmp, implFiling tmp, privateOwner tmp]
 
@@ -174,8 +174,9 @@ libTreeRow tmp rel = match readFile "\{tmp}/\{rel}"
   Err e => fail "library-mode tree: missing \{rel}: \{e}"
   Ok text => expectGolden "\{libGolden}/\{rel}" text
 
-test "medaka doc: library-mode output tree matches the golden tree" =
-  match libPages
+test "medaka doc: library-mode output tree matches the golden tree" = inScratchDir
+  "doc-tree"
+  (dir => match libPages dir
     Err e => fail e
     Ok tmp => match treeRels libGolden
       Err e => fail "could not list library golden tree: \{e}"
@@ -185,15 +186,15 @@ test "medaka doc: library-mode output tree matches the golden tree" =
           if join "\n" goldRels /= join "\n" outRels then
             fail "library-mode tree differs from golden:\n\{join "\n" outRels}"
           else
-            expectEach (map (rel => (rel, libTreeRow tmp rel)) goldRels)
+            expectEach (map (rel => (rel, libTreeRow tmp rel)) goldRels))
 
 test "medaka doc: library mode writes every target and files impls correctly" =
-  libChecks
+  inScratchDir "doc-library" libChecks
 
 -- Duplicate module basenames must be refused before any output is written.
-dupRun : <Exec, IO, FileRead> Result String (String, (Int, String, String))
-dupRun = do
-  base <- scratchDir
+-- `base` is the caller's own directory (inScratchDir); nothing here is shared.
+dupRun : String -> <Exec, IO, FileRead> Result String (Int, String, String)
+dupRun base = do
   a <- readFile "\{libFix}/alpha.mdk"
   b <- readFile "\{libFix}/beta.mdk"
   _ <- mkdirAll "\{base}/a"
@@ -208,12 +209,13 @@ dupRun = do
     "\{base}/a/samename.mdk",
     "\{base}/b/samename.mdk",
   ]
-  Ok (base, res)
+  Ok res
 
-test "medaka doc: library mode refuses a duplicate module basename" =
-  match dupRun
+test "medaka doc: library mode refuses a duplicate module basename" = inScratchDir
+  "doc-dup-basename"
+  (base => match dupRun base
     Err e => fail "could not stage duplicate-basename probe: \{e}"
-    Ok (base, (code, out, err)) =>
+    Ok (code, out, err) =>
       if code == 0 then
         fail "duplicate module basename was accepted (exit 0)"
       else if not
@@ -222,7 +224,7 @@ test "medaka doc: library mode refuses a duplicate module basename" =
           "duplicate basename refusal lacks the expected message:\n\{out}\{err}"
       else match readFile "\{base}/out/samename.md"
         Ok _ => fail "duplicate basename wrote samename.md before refusing"
-        Err _ => pass
+        Err _ => pass)
 
 -- ── rendered examples and layout (direct property checks) ──────────────────
 

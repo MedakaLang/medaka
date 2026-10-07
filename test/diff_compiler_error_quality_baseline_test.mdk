@@ -73,7 +73,9 @@ row p =
         [] => ""
         _ => unlines diag
       let body = normalise root (stripNewlines (err ++ diagPart))
-      let actual = stripNewlines "cmd: medaka \{sub}\nexit: \{intToString code}\n---\n\{body}"
+      let actual =
+        stripNewlines
+          "cmd: medaka \{sub}\nexit: \{intToString code}\n---\n\{body}"
       match readFile golden
         Err e => fail "\{rel}: no golden \{golden}: \{e}"
         Ok text => expectEqualText (stripNewlines text) actual

@@ -486,7 +486,7 @@ Four ways past TLS, recorded so the survey is not redone:
 3. A C shim over libcurl reached through `[foreign-libraries]`. `String ->
    String` is in the FFI v1 crossable set, but function pointers and structs
    are not, so libcurl cannot be bound directly, `mdk_` names are reserved, and
-   `test/diff_compiler_llvm_ffi.sh` is the only gate that links C.
+   `test/diff_compiler_llvm_ffi_test.mdk` is the only gate that links C.
 4. TLS 1.3 in Medaka. The primitives are not the hard part; X.509 chain
    validation is, and no gate here can prove it correct.
 

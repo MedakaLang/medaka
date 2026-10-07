@@ -453,19 +453,18 @@ withNested body = match scratchDir
 
 -- 25. nested-stdlib-entry: a stdlib subdirectory module that calls a kernel is clean.
 nestedEntry : String -> <Exec, IO, FileRead> Expectation
-nestedEntry tmp =
-  match (spawnIn "\{tmp}/nested-root" [
-    "check",
-    "\{tmp}/nested-root/stdlib/nest/probe.mdk",
-  ])
-    Err e => fail "could not spawn nested entry check: \{e}"
-    Ok (code, out) =>
-      if contains "internal-only primitive" out then
-        fail "false positive on stdlib/nest/probe.mdk: [\{out}]"
-      else if code /= 0 then
-        fail "nested entry check exited \{intToString code}: [\{out}]"
-      else
-        pass
+nestedEntry tmp = match spawnIn "\{tmp}/nested-root" [
+  "check",
+  "\{tmp}/nested-root/stdlib/nest/probe.mdk",
+]
+  Err e => fail "could not spawn nested entry check: \{e}"
+  Ok (code, out) =>
+    if contains "internal-only primitive" out then
+      fail "false positive on stdlib/nest/probe.mdk: [\{out}]"
+    else if code /= 0 then
+      fail "nested entry check exited \{intToString code}: [\{out}]"
+    else
+      pass
 
 -- 26. nested-stdlib-import: an importer of that module runs and prints 7.
 nestedImport : String -> <Exec, IO, FileRead> Expectation

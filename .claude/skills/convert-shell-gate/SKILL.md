@@ -58,6 +58,20 @@ Makefile, docs, or any file outside your assignment.
   tracked `.sh` or `_test.mdk`; a compiled program that reads it internally is
   invisible once the script is gone. Add a `expectAtLeast <n> (length files)`
   floor on it.
+- **`string.contains NEEDLE HAYSTACK` takes the needle FIRST**, and so do
+  `startsWith PREFIX s`, `endsWith SUFFIX s`. A reversed call turns a "must NOT
+  contain" check into one that can never fire. Every absence check needs its own
+  red proof: make the absent text present and watch the test fail.
+- **`length (lines "")` is 1, not 0.** Test emptiness with `text == ""`.
+- **A spawn that fails to launch must not satisfy a "must fail" check.** `env`
+  exits 126/127 when the command is missing; treat those as errors, not rejections.
+- **A floor equals today's corpus size**, not 1: `expectAtLeast <count> (length
+  stems)`; otherwise most of a corpus can vanish and the test stays green.
+- **If the script rejected a fixture directory with no entry file**, keep that:
+  enumerate the DIRECTORIES and require the file, do not enumerate entry files.
+- **Carry design rationale across.** If the script's header explains what each
+  state or message means (a table, a rule that fixtures must be path-stable, what
+  the gate does NOT cover), port it into the test's header; live files cite it.
 - **Grade every spawn's exit code in the file that spawns**, including cleanup
   `rm` calls; a `refuse` row is `if code /= 1 then fail …`, not stderr text alone.
 - **No working-directory parameter exists.** For a cwd-relative run use
@@ -68,8 +82,12 @@ Makefile, docs, or any file outside your assignment.
   `compiler_cli_test_support.inScratchDir "<block>" (dir => <Expectation>)`: it
   gives the block its own subdirectory and removes it after (graded). (`gzip/`
   cannot import that module: keep ONE `test` block per file there, or `mkdirAll`
-  your tree at the start of every block.) Never `rm -rf` the bare `scratchDir`.
-  If the script removed its temp tree with a `trap`, the native test must too.
+  your tree at the start of every block.) In a file with MORE THAN ONE `test`
+  block, never `rm -rf` the bare `scratchDir` and never keep per-block state in
+  it. Prove independence: run every block alone with `medaka test --filter
+  "<name substring>" <file>` AND with two blocks swapped; a file that is green only
+  in source order is wrong. If the script removed its temp tree with a `trap`, the
+  native test must too.
 - **Normalise paths** the way the script did (`sed s|$ROOT/|ROOT/|`): replace
   both `medakaRoot ++ "/"` and, when `medakaRoot` is relative, `$PWD ++ "/"`,
   using `string.replaceAll`.
@@ -114,8 +132,13 @@ test "<script name>: <what it checks>" = expectEach [("<label>", row "<name>")]
   `boundedInTree secs cmd args` (passes MEDAKA_ROOT/EMITTER), `fixtureIn
   corpus name`, `fixtureStems dir : Result String (List String)`,
   `expectCheckAccept path`, `expectCheckReject path needles`.
-- `test`: `expectGolden path actual`, `expectEqualText exp act` (line diff;
-  tolerates a trailing `()`), `expectTextContainsAll needles text`,
+- `test`: `expectGolden path actual` and `expectEqualText exp act` both strip a
+  trailing `()` suffix, or else a whole last line `0`, from BOTH sides before
+  comparing (a driver artefact normaliser, `stdlib/test.mdk` `normalizeTrailingUnit`),
+  so they are LOOSER than the shell `diff`/`cmp`/`[ "$a" = "$b" ]` they replace.
+  `expectEqualLines exp act` is exact. Use it (reading the golden yourself) where
+  the output is not an auto-printed program value, or where a trailing `()`/`0`
+  line could be real data. `expectTextContainsAll needles text`,
   `expectLineContainsAll`, `expectAll [e…]`, `expectEach [(label, e)…]`,
   `expectAtLeast n m` (a corpus floor: "0 checked" must be red), `expectTrue`,
   `expectFalse`, `expectEqual`, `fail msg`, `pass`.

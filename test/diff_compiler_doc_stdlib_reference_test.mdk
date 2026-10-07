@@ -420,7 +420,10 @@ keepModules (p :: ps) =
   if isModule p then p :: keepModules ps else keepModules ps
 
 stdlibRels : <IO, FileRead> Result String (List String)
-stdlibRels = map (paths => L.sort (keepModules (map relToStdlib paths))) (walkDir (underRoot "stdlib"))
+stdlibRels =
+  map
+    (paths => L.sort (keepModules (map relToStdlib paths)))
+    (walkDir (underRoot "stdlib"))
 
 stdlibArg : String -> String
 stdlibArg rel = "stdlib/\{rel}"

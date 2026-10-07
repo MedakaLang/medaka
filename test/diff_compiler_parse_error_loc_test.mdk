@@ -83,6 +83,6 @@ test "parse_error_loc: every body-level parse error is located at its golden L:C
   match fixtureStems corpus
     Err e => fail "could not list \{corpus}: \{e}"
     Ok stems => expectAll [
-      expectAtLeast 1 (length stems),
+      expectAtLeast 20 (length stems),
       expectEach (map (s => (s, fixtureRow s)) stems),
     ]

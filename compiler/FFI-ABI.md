@@ -10,7 +10,7 @@ time.
 ⚠️ **The lowering exists as of 2026-08-27** (`ffi-lower-and-link`, S-ffi-lowering,
 #2074): `emitFfiCall` and friends in `compiler/backend/llvm_emit.mdk` implement §2
 below, and `ffiCrossableTy` (`compiler/types/typecheck.mdk`) rejects everything
-outside §1 at check time. Gated by `test/diff_compiler_llvm_ffi.sh`. One thing
+outside §1 at check time. Gated by `test/diff_compiler_llvm_ffi_test.mdk`. One thing
 this doc specifies is still NOT done, deliberately:
 
 * **`Array Int` in RETURN position is refused.** §2.4 says "a C-side `int64_t*`
@@ -251,7 +251,7 @@ still: tagged as if valid, it printed replacement garbage at exit 0.
   status code), exactly as §4 already directs for every other kind of C-side
   failure.
 
-Gated by cells 7–9 of `test/diff_compiler_llvm_ffi.sh`, against the `cTruthy`/
+Gated by cells 7–9 of `test/diff_compiler_llvm_ffi_test.mdk`, against the `cTruthy`/
 `cFalsy`/`cOne`/`cCharA`/`cCharBig`/`cCharNeg`/`cCharSurrogate` functions in
 `test/ffi_fixtures/ffi_abi_probe.c`; implemented by `ffiNormalizeBool` /
 `ffiNormalizeChar` in `compiler/backend/llvm_emit.mdk`.
@@ -278,7 +278,7 @@ side and nothing to free.
 
 `Array Int` stays the crossable sequence type; an array of a fixed-width type does
 not cross. The WasmGC backend refuses every user foreign declaration, these
-included. Gated by the fixed-width cells of `test/diff_compiler_llvm_ffi.sh`,
+included. Gated by the fixed-width cells of `test/diff_compiler_llvm_ffi_test.mdk`,
 whose C half prints what it received at each type's edge values.
 
 ### 2.2 `Float`

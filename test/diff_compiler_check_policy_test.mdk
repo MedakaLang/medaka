@@ -50,23 +50,22 @@ paramCase : String ->
   Int ->
   String ->
   <Exec, IO> Expectation
-paramCase label file allow want sub =
-  match (boundedVerb medakaBin [
-    "check-policy",
-    underRoot file,
-    "--allow",
-    allow,
-    "--fn",
-    "transform",
-  ])
-    Err e => fail "\{label}: could not spawn: \{e}"
-    Ok (code, out, err) =>
-      if code /= want then
-        fail "\{label}: rc \{intToString code}, want \{intToString want}"
-      else if not (contains sub (out ++ err)) then
-        fail "\{label}: output lacks <\{sub}>"
-      else
-        pass
+paramCase label file allow want sub = match boundedVerb medakaBin [
+  "check-policy",
+  underRoot file,
+  "--allow",
+  allow,
+  "--fn",
+  "transform",
+]
+  Err e => fail "\{label}: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    if code /= want then
+      fail "\{label}: rc \{intToString code}, want \{intToString want}"
+    else if not (contains sub (out ++ err)) then
+      fail "\{label}: output lacks <\{sub}>"
+    else
+      pass
 
 -- Fail-closed case: nonzero exit, no accepted verdict, both needles present.
 refuseCase : String ->
@@ -76,23 +75,22 @@ refuseCase : String ->
   String ->
   String ->
   <Exec, IO> Expectation
-refuseCase label file allow fn sub sub2 =
-  match (boundedVerb medakaBin [
-    "check-policy",
-    underRoot file,
-    "--allow",
-    allow,
-    "--fn",
-    fn,
-  ])
-    Err e => fail "\{label}: could not spawn: \{e}"
-    Ok (code, out, err) =>
-      if code == 0 then
-        fail "\{label}: exited 0, want nonzero"
-      else if contains "accepted." (out ++ err) then
-        fail "\{label}: printed an accepted verdict"
-      else
-        expectTextContainsAll [sub, sub2] (out ++ err)
+refuseCase label file allow fn sub sub2 = match boundedVerb medakaBin [
+  "check-policy",
+  underRoot file,
+  "--allow",
+  allow,
+  "--fn",
+  fn,
+]
+  Err e => fail "\{label}: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    if code == 0 then
+      fail "\{label}: exited 0, want nonzero"
+    else if contains "accepted." (out ++ err) then
+      fail "\{label}: printed an accepted verdict"
+    else
+      expectTextContainsAll [sub, sub2] (out ++ err)
 
 test "diff_compiler_check_policy: golden verdicts" = expectEach [
   (
@@ -369,14 +367,14 @@ test "diff_compiler_check_policy: fail-closed analysis and entry" = expectEach [
 -- Verdict first: the accepted line is printed before the sample run, so a
 -- panicking sample leaves `accepted.` on stdout, then panics, exit 1.
 test "diff_compiler_check_policy: evaluation panic keeps the verdict" =
-  match (boundedVerb medakaBin [
+  match boundedVerb medakaBin [
     "check-policy",
     underRoot "test/check_policy_fixtures/panic_plugin.mdk",
     "--allow",
     "Panic",
     "--fn",
     "transform",
-  ])
+  ]
     Err e => fail "evaluation-panic: could not spawn: \{e}"
     Ok (code, out, err) =>
       if code /= 1 then
@@ -389,14 +387,14 @@ test "diff_compiler_check_policy: evaluation panic keeps the verdict" =
 
 -- The #2047 control flips only entry presence and must still accept.
 test "diff_compiler_check_policy: missing-entry control accepts" =
-  match (boundedVerb medakaBin [
+  match boundedVerb medakaBin [
     "check-policy",
     underRoot "test/check_policy_fixtures/missing_entry_plugin.mdk",
     "--allow",
     "Cache,Log",
     "--fn",
     "rewriteHeader",
-  ])
+  ]
     Err e => fail "missing-entry-2047-control: could not spawn: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then

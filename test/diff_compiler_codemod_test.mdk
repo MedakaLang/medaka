@@ -11,7 +11,9 @@
 
 import compiler_cli_test_support.{fixtureStems}
 import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb}
-import test.{Expectation, expectEach, expectGolden, fail, pass}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEach, expectGolden, fail, pass
+}
 
 codemodFixtures : <IO> String
 codemodFixtures = underRoot "test/codemod_fixtures"
@@ -68,8 +70,10 @@ legsOf (name :: rest) =
 codemodGate : <Exec, IO> Expectation
 codemodGate = match fixtureStems codemodFixtures
   Err e => fail "could not list codemod fixtures: \{e}"
-  Ok [] => fail "no codemod fixtures found"
-  Ok names => expectEach (legsOf names)
+  Ok names => expectAll [
+    expectAtLeast 10 (length names),
+    expectEach (legsOf names),
+  ]
 
 test "diff_compiler_codemod: effect-labels goldens, idempotence and dry-run exits" =
   codemodGate

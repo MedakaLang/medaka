@@ -1603,7 +1603,7 @@ run = "test/diff_compiler_doc_test.mdk"
 oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/doc_fixtures", "test/doc_goldens"]
-toolchain = []
+toolchain = ["clang"]
 
 [[gate]]
 name = "diff_compiler_doc_stdlib_reference"
@@ -1691,7 +1691,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_error_quality_baseline_test.mdk"
 oracles = []
-sources = ["compiler/frontend/*", "compiler/types/*", "compiler/eval/*", "compiler/backend/*", "compiler/driver/diagnostics.mdk", "test/error_quality_fixtures/capture.sh"]
+sources = ["compiler/frontend/*", "compiler/types/*", "compiler/eval/*", "compiler/backend/*", "compiler/driver/diagnostics.mdk", "test/error_quality_fixtures/capture.sh", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/error_quality_fixtures"]
 toolchain = ["clang"]
 
@@ -1946,7 +1946,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_lint_multi_test.mdk"
 oracles = []
-sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk"]
+sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/lint_multi_fixtures", "test/lint_multi_dir_fixtures", "test/lint_crossfile_fixtures"]
 toolchain = []
 
@@ -2228,7 +2228,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_prelude_obj_test.mdk"
 oracles = []
-sources = []
+sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/construct_fixtures", "test/engine_fixtures", "test/llvm_fixtures", "test/prelude_obj_fixtures", "test/wasm/fixtures"]
 toolchain = ["clang"]
 
@@ -2620,7 +2620,7 @@ run = "test/diff_net_test.mdk"
 oracles = []
 sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/net_fixtures"]
-toolchain = ["wasm-tools", "node>=24"]
+toolchain = ["clang", "wasm-tools", "node>=24"]
 
 [[gate]]
 name = "diff_async"

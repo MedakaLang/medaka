@@ -1,10 +1,162 @@
 {- | Gate for the interface-declaration permutation invariant over
-   test/iface_order_fixtures. Replaces diff_compiler_iface_order.sh up to and
-   including its per-case loop. The ledger rot check, the build-witness tally
-   and the final exit are the continuation (see the CONTINUE line at the end).
+   test/iface_order_fixtures. Replaces diff_compiler_iface_order.sh: the
+   per-case loop, the ledger rot check, the build-witness tally and the final
+   verdict.
 
    Runs under `medaka test --native`: it spawns `medaka check/run/build` and the
-   built executables, and reads fixtures, neither of which the interpreter binds. -}
+   built executables, and reads fixtures, neither of which the interpreter binds.
+
+   A verification instrument, not a fix. Every ordering of a case's entry-module
+   `interface` declarations is compiled and run, and reduced to a one-line
+   signature. The signature must be invariant across orderings. A case whose
+   signatures diverge is a live order dependence: a soundness bug, unless the
+   case is ledgered in test/IFACE-ORDER-LEDGER.txt.
+
+   The axis is new. test/diff_compiler_import_order.sh permutes import clauses,
+   test/diff_compiler_dict_semantics_permute.sh permutes impl blocks, and
+   test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/ spends
+   its control slot on impl-block order. None of them moves interface declarations.
+   This gate moves only interface declarations, among their own slots; impls,
+   imports and data declarations stay where they are.
+
+   Why it was built: the identity re-keying of impl selection can be done two
+   ways. A fix keyed on the interface NAME drains #1182's pin, because the
+   impl-order dependence goes away, while moving the dependence onto the
+   interface-declaration order. The existing pins cannot tell those outcomes
+   apart. This gate can; see the four-state table below.
+
+   ## The signature
+
+     check=<exit>;codes=<sorted,comma>;schemes=<check stdout>;run=<exit>:<stdout>;build=<exit>/<exec-exit>:<stdout>
+
+   check     The exit code of `medaka check --json`: the verdict cell. On this
+             axis accept versus reject is the strongest reading a permutation
+             can give.
+   codes     Every "code" in the `check --json` output, sorted as a multiset.
+             Diagnostics come out in source order and permutation moves source
+             lines, so the sort is what keeps the cell invariant. Read it by code
+             prefix, not by emptiness (see the four-state table).
+   schemes   The plain `medaka check` scheme dump, selected by format (a
+             `<name> : <type>` line at column 0), not by stream. Diagnostics are not
+             reliably on one stream: resolve-stage ones land on stderr and
+             type-stage ones on stdout, so a whole-stdout capture would embed the
+             harness's temp path. A binding inferred at a different type while its
+             printed value coincides shows up here.
+   run       `medaka run` exit code and stdout (the interpreter).
+   build     `medaka build` exit code, then the built binary's exit code and stdout
+             ("-" if no binary was produced). This is not redundant with run: a
+             case can build, segfault the binary at exit 139, and still have the
+             interpreter panic. The exec-exit cell is the only place that is
+             recorded.
+
+   Output is escaped so a signature is always one line: backslash becomes two
+   backslashes, `|` becomes `\p`, `;` becomes `\s`, tab becomes `\t` and newline
+   becomes `\n`. `sigFor` builds the signature and `escapeOut` escapes its parts.
+
+   Deliberately not compared: diagnostic message text (it may enumerate
+   declarations in source order on purpose); diagnostic ranges (moving
+   declarations of unequal line count shifts every line below them, so a location
+   diff is an artifact); stderr of run and build (panic text is not uniformly
+   location-free, and build's log embeds the source path); the order of
+   diagnostics; and the emitted IR (the selected impl is observed through
+   behaviour).
+
+   ## Orderings and scope
+
+   Every ordering is tried when there are at most four interface declarations.
+   Above that the set is identity, reversal and every adjacent transposition. The
+   shell gate printed PARTIAL on the row in that case; this test prints no such
+   marker, so a reader who needs to know whether a case was graded on the full set
+   must count its interface declarations.
+
+   Scope limits. Only the entry module's interface declarations are permuted. An
+   order dependence decided by an imported module's interface order is not covered,
+   and nothing else covers it either. Interfaces move only among their own slots,
+   so none crosses an impl or a data declaration. A dependence that needs such a
+   crossing is out of scope by construction: that move can change whether the
+   program parses at all, which is not the cosmetic reordering this gate is about.
+   Every case is single-file today. The case-directory-plus-case.txt unit is kept
+   anyway: it is what the ledger's issue-number naming lock hangs off, and it
+   leaves room for a multi-module case later.
+
+   ## The four-state table
+
+   The gate's deliverable is that each future reads differently. A probe that
+   said only same or different would collapse states 2 and 3, which is the
+   confusion the identity fix is at risk of.
+
+   State 1, today: order-dependent on both axes. #1182's must-fail pin reproduces
+   and is green. A ledgered row reports KNOWN-BAD, still diverging, as pinned.
+
+   State 2, a name-scoped fix (the trap): #1182's impl-order pin drains, and a
+   reader who has only that pin concludes #1182 is fixed. This gate: a ledgered
+   row still diverges. If the signatures are unchanged the row stays KNOWN-BAD;
+   if the divergence moved at all the row goes red with "the divergence MOVED". This
+   is the one state in which this gate does not go red by itself. Its backstop is
+   test/must_fail_census.sh HALF 1, which is directory-driven: it fires on a closed
+   issue whose must-fail fixture carries an issue line, and it never reads this
+   gate's verdict. Do not remove that coupling. The rows that named #1182 and #1620
+   were removed after Q1 landed (see test/IFACE-ORDER-LEDGER.txt), so that census
+   half is now the only backstop for those two issues.
+
+   State 3, Q1 (resolve rejects the ambiguous occurrence): the case converges to one
+   signature, with check=1 and an R-* code in every ordering. This gate: a ledgered
+   row goes red as DRAINED and prints the converged signature.
+
+   State 4, identity-keyed selection with no resolve rejection: also converges to one
+   signature and also goes red as DRAINED, but the code is not R-*. Two shapes count:
+   check=0 with codes empty and a stable run or build value, where the selected impl
+   typechecks and the program runs; or check=1 with a T-* code, where selection was
+   deterministic and the impl it chose then failed typecheck. The worked example is
+   an obligation case that declares only one impl: a fix that binds the method to
+   the other interface converges on check=1;codes=T-NO-IMPL in every ordering. That
+   is a type error, not an ambiguity rejection, and must not be read as state 3.
+
+   The discriminator is the code prefix: R-* means state 3, T-* or empty means
+   state 4. Neither the exit code nor "codes is non-empty" tells them apart.
+
+   ## What the table cannot tell you
+
+   Which kind of keying landed. Two single-file cases with distinctly named
+   interfaces behave identically under a name-keyed fix and an identity-keyed one,
+   so a drain here is not evidence that the key is module-qualified. Two interfaces
+   of the same name in one file are rejected by resolve (`Duplicate interface`), so
+   that shape cannot be written in this corpus. Two of the same name in different
+   modules are legal, but this gate permutes only the entry module, so the entry
+   holds one of them and the permuter stops with "need >=2 top-level interface
+   declarations, found 1". Answering the keying question needs a cross-module probe;
+   #1258 is that shape.
+
+   ## Messages
+
+   DRAINED: the case converged to one signature while a ledger row pins a
+   divergence. Read the converged signature against the four states before closing
+   anything. Then close the issue, delete the row and keep the fixture; without a
+   row it is graded as invariant and becomes the regression guard.
+
+   KNOWN-BAD, the divergence MOVED: the observed signatures differ from the pinned
+   ones. Re-derive the right answer before re-pinning. Still divergent is not fixed.
+
+   "N ordering(s) produced M DISTINCT signatures": an unledgered case diverges.
+   Either fix it, or, if it is a known open bug, add a ledger row. A control must
+   never be ledgered; if one diverges, the finding is larger than any row claims,
+   so file it.
+
+   The rest are structural. A ledger row must name an open issue and a directory
+   named `<issue>-...`, must pin at least two signatures, and must name a case
+   directory that exists. A case directory must hold case.txt. Zero orderings or
+   zero cases is a failure, never a pass. The build arm must produce at least one
+   executable somewhere in the corpus, or it graded nothing.
+
+   ## The ledger
+
+   test/IFACE-ORDER-LEDGER.txt pins, per case, the distinct signatures the case must
+   keep producing. A row asserts a divergence, which is a live soundness bug shipping
+   on main, and names the open issue that owns it. The gate stays green while rows
+   exist, because a gate that lands red teaches people to ignore it; the rows are
+   what keep the green honest. Each row drains itself: when its divergence collapses
+   the row goes red. Whether an issue is open cannot be checked offline; a reviewer
+   checks it with `gh issue view <n> --json state`. -}
 
 import test_process.{medakaBin, underRoot, boundedVerbSeconds}
 import compiler_cli_test_support.{inScratchDir}

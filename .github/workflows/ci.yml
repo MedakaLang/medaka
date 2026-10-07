@@ -381,10 +381,10 @@ jobs:
             #   diff_wasm_typed.sh    -> test/llvm_fixtures/env_args_empty.mdk
             #   all seven + their oracle builder -> test/wasm/* (fixtures, run.js,
             #                            build_wasm_oracle.sh, the gate scripts)
-            #   build_wasm_cmd.sh     -> test/build_cmd.sh, test/build_wasm_cmd.sh
+            #   build_wasm_cmd.sh     -> test/build_cmd_test.mdk, test/build_wasm_cmd.sh
             case "$f" in
               sqlite/*|gzip/*|playground/*) wasm_corpora=true ;;
-              test/wasm/*|test/build_wasm_cmd.sh|test/build_cmd.sh) wasm_corpora=true ;;
+              test/wasm/*|test/build_wasm_cmd.sh|test/build_cmd_test.mdk) wasm_corpora=true ;;
               test/engine_fixtures/*|test/engine_value_pins/*|test/llvm_fixtures/*)
                 wasm_corpora=true ;;
             esac
