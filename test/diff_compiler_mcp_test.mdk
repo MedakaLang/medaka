@@ -1,0 +1,203 @@
+{- | Gate for `medaka mcp` (#253): a golden JSON-RPC transcript per fixture, the
+   `--help`/bogus-flag argv contract (#299), the MEDAKA_MCP_LOG call-log format,
+   and the mainSchemeRef memo-hit property across two medaka_check calls.
+   Replaces test/diff_compiler_mcp.sh.
+
+   Runs under `medaka test --native`: it spawns ./medaka mcp with fixture request
+   streams on stdin and writes temp projects, neither of which the interpreter
+   binds. -}
+
+import test_process.{medakaBin, medakaRoot, boundedVerbSeconds, scratchDir}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEach, expectEqual, expectGolden,
+  expectTextContainsAll, fail, pass
+}
+import fs.{fixtureFiles}
+import path.{stem}
+import string.{split, endsWith}
+import list.{reverse}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/mcp_fixtures"
+
+-- Positional args: $1 repo root (cwd and MEDAKA_ROOT), $2 binary, $3 stdin
+-- source, $4 MEDAKA_MCP_LOG path ("" = unset); the rest are argv for `mcp`.
+mcpScript : String
+mcpScript =
+  "export MEDAKA_ROOT=\"$1\"; cd \"$1\" || exit 1; bin=\"$2\"; input=\"$3\"; log=\"$4\"; shift 4; if [ -n \"$log\" ]; then MEDAKA_MCP_LOG=\"$log\"; export MEDAKA_MCP_LOG; else unset MEDAKA_MCP_LOG; fi; exec \"$bin\" mcp \"$@\" < \"$input\""
+
+mcpRun : Int ->
+  String ->
+  String ->
+  List String ->
+  <Exec, IO, FileRead> Result String (Int, String, String)
+mcpRun secs input logPath args =
+  boundedVerbSeconds
+    secs
+    "sh"
+    (["-c", mcpScript, "sh", medakaRoot, medakaBin, input, logPath] ++ args)
+
+-- #299: --help/-h print usage on stdout and exit 0 without reading the loop.
+usageRow : String -> List String -> <Exec, IO, FileRead> Expectation
+usageRow label args = match mcpRun 5 "/dev/zero" "" args
+  Err e => fail "mcp-arg(\{label}): could not spawn: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail "mcp-arg(\{label}): exited \{intToString code} (hung or failed)"
+    else
+      expectTextContainsAll ["medaka mcp"] out
+
+-- #299: a bogus flag is rejected on stderr with a nonzero exit.
+rejectRow : String -> <Exec, IO, FileRead> Expectation
+rejectRow flag = match mcpRun 5 "/dev/zero" "" [flag]
+  Err e => fail "mcp-arg(\{flag}): could not spawn: \{e}"
+  Ok (code, _, err) =>
+    if code /= 0 then
+      expectTextContainsAll ["unrecognized flag '\{flag}' (known: none)"] err
+    else
+      fail "mcp-arg(\{flag}): exited 0, want nonzero"
+
+test "mcp argv: --help/-h print usage and exit 0; bogus flags rejected on stderr" = expectEach
+  [
+    ("--help", usageRow "--help" ["--help"]),
+    ("-h", usageRow "-h" ["-h"]),
+    ("bogusarg", rejectRow "bogusarg"),
+    ("--zzz", rejectRow "--zzz"),
+  ]
+
+fixtureStems : <Exec, IO, FileRead> Result String (List String)
+fixtureStems =
+  map
+    (paths => map stem (filter (endsWith ".jsonl") paths))
+    (fixtureFiles corpus)
+
+fixtureRow : String -> <Exec, IO, FileRead> Expectation
+fixtureRow name = match mcpRun 30 "\{corpus}/\{name}.jsonl" "" []
+  Err e => fail "\{name}: could not spawn: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail "\{name}: medaka mcp exited \{intToString code}"
+    else
+      expectGolden "\{corpus}/\{name}.golden" out
+
+test "mcp fixtures: each request stream exits 0 and its stdout equals its golden" =
+  match fixtureStems
+    Err e => fail "list fixtures: \{e}"
+    Ok names => expectAll [
+      expectAtLeast 32 (length names),
+      expectEach (map (n => (n, fixtureRow n)) names),
+    ]
+
+-- Log-record checks over the `logging` fixture: each record is one physical
+-- line with exactly 4 tab-separated fields, exactly one tools/call record,
+-- and that record carries the escaped name and the stringified arguments.
+dropLastEmpty : List String -> List String
+dropLastEmpty xs = match reverse xs
+  "" :: rest => reverse rest
+  _ => xs
+
+secondField : String -> String
+secondField r = match split "\t" r
+  _ :: f :: _ => f
+  _ => ""
+
+isCall : String -> Bool
+isCall r = secondField r == "\"tools/call\""
+
+callContent : List String -> Expectation
+callContent [r] =
+  expectTextContainsAll ["\"weird\\nname\\ttab\"", "\"probe\":true"] r
+callContent _ = fail "tools/call record: expected exactly one record"
+
+expectLogRecords : List String -> Expectation
+expectLogRecords rs = expectAll [
+  expectEqual 4 (length rs),
+  expectEqual 0 (length (filter (r => length (split "\t" r) /= 4) rs)),
+  expectEqual 1 (length (filter isCall rs)),
+  callContent (filter isCall rs),
+]
+
+logRecordsCheck : String -> <Exec, IO, FileRead> Expectation
+logRecordsCheck logfile = match readFile logfile
+  Err e => fail "logging-on(log-file): \{logfile} unreadable: \{e}"
+  Ok text => expectLogRecords (dropLastEmpty (split "\n" text))
+
+loggingRun : String -> <Exec, IO, FileRead> Expectation
+loggingRun logfile = match mcpRun 30 "\{corpus}/logging.jsonl" logfile []
+  Err e => fail "logging-on(stdout): could not spawn: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail "logging-on(stdout): medaka mcp exited \{intToString code}"
+    else
+      expectAll [
+        expectGolden "\{corpus}/logging.golden" out,
+        logRecordsCheck logfile,
+      ]
+
+test "mcp logging: MEDAKA_MCP_LOG leaves stdout golden-identical and writes 4 well-formed records" =
+  match scratchDir
+    Err e => fail "scratch dir: \{e}"
+    Ok dir => loggingRun "\{dir}/mcp_call.log"
+
+-- mainSchemeRef across a module-chain memo HIT: two medaka_check calls on the
+-- same project in ONE process must both report (or both stay silent on) the
+-- missing-Display error for the terminal module's `main`.
+writeOk : String -> String -> <Exec, IO, FileRead> Result String String
+writeOk path text = map (_ => path) (writeFile path text)
+
+memoCall : String -> String -> String
+memoCall dir id =
+  "{\"jsonrpc\":\"2.0\",\"id\":\{id},\"method\":\"tools/call\",\"params\":{\"name\":\"medaka_check\",\"arguments\":{\"file\":\"\{dir}/main.mdk\"}}}"
+
+memoRequest : String -> String
+memoRequest dir =
+  "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{}}\n\{memoCall dir "2"}\n\{memoCall dir "3"}\n{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"shutdown\",\"params\":{}}\n"
+
+memoSetup : String -> <Exec, IO, FileRead> Result String String
+memoSetup dir =
+  match (writeOk
+    "\{dir}/lib_a.mdk"
+    "export double : Int -> Int\ndouble x = x + x\n")
+    Err e => Err e
+    Ok _ =>
+      match (writeOk
+        "\{dir}/lib_b.mdk"
+        "import lib_a.{double}\n\nexport quad : Int -> Int\nquad x = double (double x)\n")
+        Err e => Err e
+        Ok _ => writeOk "\{dir}/memo.jsonl" (memoRequest dir)
+
+countDisplay : String -> Int
+countDisplay out = length (split "no impl of Display for H" out) - 1
+
+memoCase : String -> String -> Int -> String -> <Exec, IO, FileRead> Expectation
+memoCase dir src want label = match writeOk "\{dir}/main.mdk" src
+  Err e => fail "memo-hit main-shape (\{label}): write main: \{e}"
+  Ok _ => match mcpRun 60 "\{dir}/memo.jsonl" "" []
+    Err e => fail "memo-hit main-shape (\{label}): could not spawn: \{e}"
+    Ok (code, out, _) =>
+      if code /= 0 then
+        fail
+          "memo-hit main-shape (\{label}): medaka mcp exited \{intToString code}"
+      else if countDisplay out == want then
+        pass
+      else
+        fail
+          "memo-hit main-shape (\{label}): want \{intToString want} missing-Display errors over two calls, got \{intToString (countDisplay out)}"
+
+test "mcp memo-hit: two medaka_check calls on one project keep the terminal main's Display verdict" =
+  match scratchDir
+    Err e => fail "scratch dir: \{e}"
+    Ok dir => match memoSetup dir
+      Err e => fail "memo setup: \{e}"
+      Ok _ => expectAll [
+        memoCase
+          dir
+          "import lib_a.{double}\nimport lib_b.{quad}\n\ndata H = H Int\n\nmain = H (quad (double 3))\n"
+          2
+          "undisplayable value main",
+        memoCase
+          dir
+          "import lib_a.{double}\nimport lib_b.{quad}\n\nmain = println (quad (double 3))\n"
+          0
+          "Unit main",
+      ]

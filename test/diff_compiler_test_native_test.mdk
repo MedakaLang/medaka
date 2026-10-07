@@ -1,0 +1,482 @@
+{- | Gate for native doctest execution honesty, over stdlib/string, list and map,
+   the prelude's named native skip, the exceptions ledger, and the native
+   probe's strictness, abort, exec, main and sentinel rules. Replaces
+   test/diff_compiler_test_native.sh (checks 1-18).
+
+   Runs under `medaka test --native`: it spawns the medaka binary and clang,
+   which the interpreter does not bind. -}
+
+import string.{contains, lines, unlines, words}
+import test_process.{medakaBin, medakaRoot, underRoot, boundedVerbSeconds}
+import compiler_cli_test_support.{inScratchDir}
+import test.{
+  Expectation, expectAll, expectEach, expectTextContainsAll, fail, pass
+}
+import regex as R
+
+-- Best-effort prebuild of the runtime and prelude objects (cost control only;
+-- a failed build just falls back to inline compilation, as the script did).
+prebuildScript : String
+prebuildScript =
+  "export MEDAKA_ROOT=\"$3\"; \"$1\" build --emit-rt-obj \"$2/medaka_rt.o\" >/dev/null 2>&1; \"$1\" build --emit-prelude-obj \"$2/prelude.o\" >/dev/null 2>&1"
+
+-- Runs a verb with the prebuilt objects exported when they exist.
+-- argv: bin dir root args...
+fastRunScript : String
+fastRunScript =
+  "bin=\"$1\"; d=\"$2\"; export MEDAKA_ROOT=\"$3\"; shift 3; if [ -f \"$d/medaka_rt.o\" ]; then export MEDAKA_RT_OBJ=\"$d/medaka_rt.o\"; fi; if [ -f \"$d/prelude.o\" ]; then export MEDAKA_PRELUDE_OBJ=\"$d/prelude.o\"; fi; export MEDAKA_CLANG_OPT=\"${MEDAKA_CLANG_OPT:--O1}\"; exec \"$bin\" \"$@\""
+
+-- Runs a verb with MEDAKA_ROOT only. argv: root bin args...
+plainRunScript : String
+plainRunScript =
+  "export MEDAKA_ROOT=\"$1\"; export MEDAKA_CLANG_OPT=\"${MEDAKA_CLANG_OPT:--O1}\"; shift; exec \"$@\""
+
+-- Runs a verb with MEDAKA (the binary, for the exec fixture's env rule),
+-- MEDAKA_TEST_SUBJECT and MEDAKA_ROOT. argv: bin subject root args...
+envRunScript : String
+envRunScript =
+  "export MEDAKA=\"$1\"; export MEDAKA_TEST_SUBJECT=\"$2\"; export MEDAKA_ROOT=\"$3\"; export MEDAKA_CLANG_OPT=\"${MEDAKA_CLANG_OPT:--O1}\"; shift 3; exec \"$@\""
+
+-- Runs medaka with MEDAKA_ROOT set, capped at `secs`.
+runVerb : Int ->
+  List String ->
+  <Exec, IO, FileRead> Result String (Int, String, String)
+runVerb secs args =
+  boundedVerbSeconds
+    secs
+    "sh"
+    (["-c", plainRunScript, "medaka", medakaRoot, medakaBin] ++ args)
+
+prebuild : String -> <Exec, IO, FileRead> Result String String
+prebuild dir =
+  match (boundedVerbSeconds 300 "sh" [
+    "-c", prebuildScript, "medaka", medakaBin, dir, medakaRoot
+  ])
+    Err e => Err "prebuild spawn: \{e}"
+    Ok (code, _, err) =>
+      if code /= 0 then
+        Err
+          "prebuild of the rt and prelude objects exited \{intToString code}: \{err}"
+      else
+        Ok dir
+
+-- Matches the hand-written "<target>: P/T passed" summary line for one module.
+countRe : String -> R.Regex
+countRe target = R.mustCompile "\{R.escape target}: ([0-9]+)/([0-9]+) passed"
+
+hitCheck : String -> String -> String -> R.Match -> Expectation
+hitCheck mod eng expected m = match m.groups
+  [Some p, Some q] =>
+    if p.text == expected && q.text == expected then
+      pass
+    else
+      fail
+        "\{mod} (\{eng}): got \{p.text}/\{q.text} passed, expected \{expected}/\{expected}"
+  _ => fail "\{mod} (\{eng}): missing capture groups"
+
+checkHits : String -> String -> List R.Match -> Expectation
+checkHits mod expected [a, b] =
+  expectAll [hitCheck mod "eval" expected a, hitCheck mod "native" expected b]
+checkHits mod expected hits =
+  fail
+    "\{mod}: expected exactly 2 '<target>: P/T passed' lines (eval + native), found \{intToString (length hits)}"
+
+doctestRow : String -> String -> String -> <Exec, IO, FileRead> Expectation
+doctestRow dir mod expected =
+  let target = "\{medakaRoot}/\{mod}"
+  match (boundedVerbSeconds 120 "sh" [
+    "-c", fastRunScript, "medaka", medakaBin, dir, medakaRoot, "test",
+    "--engines", "eval,native", target
+  ])
+    Err e => fail "\{mod}: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        fail
+          "\{mod}: 'medaka test --engines eval,native' exited \{intToString code} (expected 0)"
+      else
+        checkHits mod expected (R.findAll (countRe target) (out ++ err))
+
+doctestChecks : String -> <Exec, IO, FileRead> Expectation
+doctestChecks dir = match prebuild dir
+  Err e => fail "prebuild failed: \{e}"
+  Ok _ => expectEach [
+    ("string", doctestRow dir "stdlib/string.mdk" "77"),
+    ("list", doctestRow dir "stdlib/list.mdk" "143"),
+    ("map", doctestRow dir "stdlib/map.mdk" "54"),
+  ]
+
+-- Checks 1-3: each module's doctests pass under both engines with the pinned count.
+test "stdlib doctests agree under eval and native (checks 1-3)" =
+  inScratchDir "doctests" doctestChecks
+
+preludeRow : String -> List String -> <Exec, IO, FileRead> Expectation
+preludeRow label flags =
+  match (boundedVerbSeconds
+    120
+    "sh"
+    (["-c", plainRunScript, "medaka", medakaRoot, medakaBin]
+      ++ flags
+      ++ ["\{medakaRoot}/stdlib/core.mdk"]))
+    Err e => fail "\{label}: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        expectTextContainsAll
+          ["SKIPPED \{medakaRoot}/stdlib/core.mdk", "#1334"]
+          (out ++ err)
+      else
+        fail
+          "\{label}: exited 0; the prelude native skip must be loud (non-zero exit), never a silent pass"
+
+-- Checks 4-5: the prelude's named native skip under --native and --engines.
+test "prelude native skip is loud (checks 4-5)" = expectEach [
+  ("--native", preludeRow "stdlib/core.mdk --native" ["test", "--native"]),
+  (
+    "--engines eval,native",
+    preludeRow "stdlib/core.mdk --engines" ["test", "--engines", "eval,native"],
+  ),
+]
+
+-- ── small expectation helpers ─────────────────────────────────────────────────
+
+requireText : String -> String -> String -> Expectation
+requireText label text needle =
+  if contains needle text then
+    pass
+  else
+    fail "\{label}: expected '\{needle}' in the output"
+
+forbidText : String -> String -> String -> Expectation
+forbidText label text needle =
+  if contains needle text then
+    fail "\{label}: found forbidden '\{needle}'"
+  else
+    pass
+
+countLines : String -> String -> Int
+countLines needle text = length (filter (l => contains needle l) (lines text))
+
+fixture : String -> <IO> String
+fixture name = underRoot "test/compiler_test_fixtures/\{name}"
+
+-- ── check 6-7: the exceptions ledger self-drains ──────────────────────────────
+
+ledgerPath : <IO> String
+ledgerPath = underRoot "test/NATIVE-DOCTEST-EXCEPTIONS.txt"
+
+-- A row header is exactly two leading spaces then an uppercase/hyphen tag; the
+-- prose continuation lines are indented six spaces and never match.
+headerRe : R.Regex
+headerRe = R.mustCompile "^  [A-Z][A-Z-]*  "
+
+headerRows : String -> List String
+headerRows text = filter (l => R.isMatch headerRe l) (lines text)
+
+tagOf : String -> String
+tagOf row = match words row
+  t :: _ => t
+  [] => ""
+
+-- Check 7: every row's tag must be one this gate can re-check.
+unknownTagCheck : String -> Expectation
+unknownTagCheck text = match map tagOf (headerRows text)
+  [] =>
+    fail
+      "no exception rows found in the ledger (format changed, or every shape got fixed)"
+  tags =>
+    expectAll
+      (map
+        (t =>
+          if t == "PRELUDE-TARGET" then
+            pass
+          else
+            fail
+              "unrecognized ledger tag '\{t}': this gate only re-checks PRELUDE-TARGET")
+        tags)
+
+-- Check 6: the PRELUDE-TARGET row still reproduces its named skip, non-zero exit.
+preludeTargetCheck : String -> <Exec, IO, FileRead> Expectation
+preludeTargetCheck text =
+  match filter (l => contains "  PRELUDE-TARGET  " l) (lines text)
+    [row] => match words row
+      [_, scope, issue] => drainCheck scope issue
+      _ => fail "PRELUDE-TARGET row has no scope and issue"
+    _ => fail "expected exactly one PRELUDE-TARGET row in the ledger"
+
+drainCheck : String -> String -> <Exec, IO, FileRead> Expectation
+drainCheck scope issue =
+  match runVerb 120 ["test", "--native", "\{medakaRoot}/\{scope}"]
+    Err e => fail "ledger row PRELUDE-TARGET \{scope}: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        expectAll [
+          requireText
+            "ledger row PRELUDE-TARGET \{scope}"
+            (out ++ err)
+            "SKIPPED \{medakaRoot}/\{scope}",
+          requireText "ledger row PRELUDE-TARGET \{scope}" (out ++ err) issue,
+        ]
+      else
+        fail
+          "ledger row PRELUDE-TARGET \{scope} \{issue} no longer reproduces: 'medaka test --native \{scope}' now exits 0. The row's DRAINS WHEN condition appears met — remove the arm in native_doctest.mdk's nativeSkipReason AND this row from test/NATIVE-DOCTEST-EXCEPTIONS.txt, and close \{issue}."
+
+test "ledger self-drain: row tags are known and PRELUDE-TARGET still reproduces (checks 6-7)" =
+  match readFile ledgerPath
+    Err e => fail "could not read the ledger: \{e}"
+    Ok text => expectEach [
+      ("PRELUDE-TARGET", preludeTargetCheck text),
+      ("unknown tags", unknownTagCheck text),
+    ]
+
+-- ── checks 8-10: the native probe build is strict; eval keeps the exemption ───
+
+defaultedSrc : String
+defaultedSrc =
+  unlines ["import test.{expectEqual}", "", "test \"t\" = expectEqual 1 1", ""]
+
+illtypedSrc : String
+illtypedSrc = unlines [
+  "import test.{expectEqual}",
+  "",
+  "bad : Bool",
+  "bad = (1 : Int)",
+  "",
+  "test \"t\" = expectEqual 1 1",
+  "",
+]
+
+-- Closed test-body literals default to Int: the valid control must still pass.
+defaultedRow : String -> <Exec, IO, FileRead> Expectation
+defaultedRow dir =
+  match runVerb 120 ["test", "--native", "\{dir}/defaulted.mdk"]
+    Err e => fail "defaulted.mdk: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        fail
+          "defaulted.mdk: 'medaka test --native' exited \{intToString code} (expected 0)"
+      else
+        requireText "defaulted.mdk" (out ++ err) "1/1 passed"
+
+-- The explicit Bool/Int mismatch must fail the probe build and name the error.
+illtypedNativeRow : String -> <Exec, IO, FileRead> Expectation
+illtypedNativeRow dir =
+  match runVerb 120 ["test", "--native", "\{dir}/exempt_illtyped.mdk"]
+    Err e => fail "exempt_illtyped.mdk: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        requireText
+          "exempt_illtyped.mdk"
+          (out ++ err)
+          "type mismatch: Bool vs Int"
+      else
+        fail
+          "exempt_illtyped.mdk: 'medaka test --native' exited 0 — the explicit Bool/Int mismatch must fail the probe build (#2679)"
+
+-- The same file under eval still runs: the fix is scoped to the probe build.
+illtypedEvalRow : String -> <Exec, IO, FileRead> Expectation
+illtypedEvalRow dir =
+  match runVerb 120 ["test", "--engines", "eval", "\{dir}/exempt_illtyped.mdk"]
+    Err e => fail "exempt_illtyped.mdk (eval): could not spawn: \{e}"
+    Ok (code, _, _) =>
+      if code /= 0 then
+        fail
+          "exempt_illtyped.mdk: 'medaka test --engines eval' exited \{intToString code} — the #2679 fix must not narrow the eval-engine exemption"
+      else
+        pass
+
+strictProbes : String -> <Exec, IO, FileRead, FileWrite> Expectation
+strictProbes dir = match writeFile "\{dir}/defaulted.mdk" defaultedSrc
+  Err e => fail "could not write defaulted.mdk: \{e}"
+  Ok _ => match writeFile "\{dir}/exempt_illtyped.mdk" illtypedSrc
+    Err e => fail "could not write exempt_illtyped.mdk: \{e}"
+    Ok _ => expectEach [
+      ("defaulted.mdk strict native", defaultedRow dir),
+      ("exempt_illtyped.mdk strict probe", illtypedNativeRow dir),
+      ("exempt_illtyped.mdk eval exempt", illtypedEvalRow dir),
+    ]
+
+test "strict native probe: defaulted body passes, ill-typed body fails by name, eval keeps the exemption (checks 8-10)" =
+  inScratchDir "strict" strictProbes
+
+-- ── check 11: native_test_abort.mdk (tests 2-4 are errors, never dropped) ─────
+
+abortRow : String -> <Exec, IO, FileRead> Expectation
+abortRow ab = match runVerb 120 ["test", "--native", ab]
+  Err e => fail "native_test_abort.mdk: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      expectAll [
+        requireText
+          "native_test_abort.mdk"
+          (out ++ err)
+          "ok   \{ab}:13: runs before the abort",
+        forbidText "native_test_abort.mdk" (out ++ err) "  ok   \{ab}:15:",
+        forbidText "native_test_abort.mdk" (out ++ err) "  ok   \{ab}:17:",
+        forbidText "native_test_abort.mdk" (out ++ err) "  ok   \{ab}:19:",
+        requireText
+          "native_test_abort.mdk"
+          (out ++ err)
+          "\{ab}: 1/4 passed (0 failed, 3 errors, 0 known-red)",
+      ]
+    else
+      fail
+        "native_test_abort.mdk: 'medaka test --native' exited 0 — an aborting probe must never report a clean pass"
+
+test "native_test_abort: test 1 runs, tests 2-4 are errors, never dropped (check 11)" =
+  abortRow (fixture "native_test_abort.mdk")
+
+-- ── check 12: native_test_subject.mdk stays a valid `medaka check` target ─────
+
+subjectRow : String -> <Exec, IO, FileRead> Expectation
+subjectRow subj = match runVerb 120 ["check", subj]
+  Err e => fail "native_test_subject.mdk: could not spawn: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      fail
+        "native_test_subject.mdk: 'medaka check' exited \{intToString code} (expected 0)"
+    else
+      pass
+
+test "native_test_subject: medaka check accepts it cleanly (check 12)" =
+  subjectRow (fixture "native_test_subject.mdk")
+
+-- ── checks 13-15: native_test_exec.mdk, capability-gated exec rule ────────────
+
+execRun : String ->
+  List String ->
+  <Exec, IO, FileRead> Result String (Int, String, String)
+execRun subj args =
+  boundedVerbSeconds
+    120
+    "sh"
+    (["-c", envRunScript, "medaka", medakaBin, subj, medakaRoot, medakaBin]
+      ++ args)
+
+execPassRow : String ->
+  String ->
+  String ->
+  List String ->
+  <Exec, IO, FileRead> Expectation
+execPassRow label ex subj args = match execRun subj args
+  Err e => fail "\{label}: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      fail "\{label}: exited \{intToString code} (expected 0)"
+    else
+      requireText label (out ++ err) "\{ex}: 1/1 passed"
+
+-- Under --engines eval the capability policy must refuse the file BY NAME.
+execEvalRow : String -> <Exec, IO, FileRead> Expectation
+execEvalRow ex = match runVerb 120 ["test", "--engines", "eval", ex]
+  Err e => fail "native_test_exec.mdk (eval): could not spawn: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      requireText
+        "native_test_exec.mdk --engines eval"
+        (out ++ err)
+        "runCommand"
+    else
+      fail
+        "native_test_exec.mdk: 'medaka test --engines eval' exited 0 — the capability gate must refuse this file, not run it"
+
+test "native_test_exec: runs under --native and bare test with MEDAKA via env, eval refuses by name (checks 13-15)" =
+  let ex = fixture "native_test_exec.mdk"
+  let subj = fixture "native_test_subject.mdk"
+  expectEach [
+    (
+      "--native",
+      execPassRow "native_test_exec.mdk --native" ex subj [
+        "test", "--native", ex
+      ],
+    ),
+    (
+      "bare test",
+      execPassRow "native_test_exec.mdk bare test" ex subj ["test", ex],
+    ),
+    ("--engines eval refusal", execEvalRow ex),
+  ]
+
+-- ── check 16: native_owns_main.mdk (a target's own `main` is renamed, not run) ─
+
+ownsMainRow : String -> <Exec, IO, FileRead> Expectation
+ownsMainRow om = match runVerb 120 ["test", om]
+  Err e => fail "native_owns_main.mdk: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      fail
+        "native_owns_main.mdk: bare 'medaka test' exited \{intToString code} (expected 0): a target's own 'main' must not stop the native runners"
+    else
+      expectAll [
+        countLinesIs "native_owns_main.mdk" "\{om}: 2/2 passed" 1 (out ++ err),
+        countLinesIs "native_owns_main.mdk" "\{om}: 3/3 passed" 1 (out ++ err),
+      ]
+
+countLinesIs : String -> String -> Int -> String -> Expectation
+countLinesIs label needle n text =
+  if countLines needle text == n then
+    pass
+  else
+    fail
+      "\{label}: expected \{intToString n} line(s) containing '\{needle}', found \{intToString (countLines needle text)}"
+
+test "native_owns_main: a target defining main runs its doctests and tests natively (check 16)" =
+  ownsMainRow (fixture "native_owns_main.mdk")
+
+-- ── check 17: native_test_forged_sentinel.mdk (forged sentinels never decide) ──
+
+forgedRow : String -> <Exec, IO, FileRead> Expectation
+forgedRow fs = match runVerb 120 ["test", "--native", fs]
+  Err e => fail "native_test_forged_sentinel.mdk: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      expectAll [
+        requireText
+          "native_test_forged_sentinel.mdk"
+          (out ++ err)
+          "ok   \{fs}:23: an operand spelling the transcript's own sentinel lines",
+        forbidText
+          "native_test_forged_sentinel.mdk"
+          (out ++ err)
+          "  ok   \{fs}:26:",
+        forbidText
+          "native_test_forged_sentinel.mdk"
+          (out ++ err)
+          "  ok   \{fs}:49:",
+        requireText
+          "native_test_forged_sentinel.mdk"
+          (out ++ err)
+          "\{fs}: 5/7 passed (2 failed, 0 errors, 0 known-red)",
+      ]
+    else
+      fail
+        "native_test_forged_sentinel.mdk: 'medaka test --native' exited 0 — tests 2 and 7 are genuine failures and must not be swallowed"
+
+test "native_test_forged_sentinel: forged sentinel lines never decide the verdict (check 17)" =
+  forgedRow (fixture "native_test_forged_sentinel.mdk")
+
+-- ── check 18: native_test_forge_then_abort.mdk (S0: forged transcript after abort) ──
+
+forgeThenAbortRow : String -> <Exec, IO, FileRead> Expectation
+forgeThenAbortRow ft = match runVerb 120 ["test", "--native", ft]
+  Err e => fail "native_test_forge_then_abort.mdk: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      expectAll [
+        requireText
+          "native_test_forge_then_abort.mdk"
+          (out ++ err)
+          "ok   \{ft}:53: test 0 runs for real and passes",
+        forbidText
+          "native_test_forge_then_abort.mdk"
+          (out ++ err)
+          "  ok   \{ft}:56:",
+        requireText
+          "native_test_forge_then_abort.mdk"
+          (out ++ err)
+          "\{ft}: 1/2 passed (0 failed, 1 errors, 0 known-red)",
+      ]
+    else
+      fail
+        "native_test_forge_then_abort.mdk: 'medaka test --native' exited 0 — a forge-then-abort probe must never report a clean pass"
+
+test "native_test_forge_then_abort: forge-then-abort is an error, never a pass (check 18)" =
+  forgeThenAbortRow (fixture "native_test_forge_then_abort.mdk")

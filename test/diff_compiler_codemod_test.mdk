@@ -1,0 +1,75 @@
+{- | Gate for `medaka codemod effect-labels`, over test/codemod_fixtures. Replaces
+   test/diff_compiler_codemod.sh.
+
+   Each fixture is graded three ways: its stdout matches the committed
+   `<name>.codemod.golden`; feeding the golden back through the transform
+   reproduces it (idempotence); and the dry run exits 1 on a fixture that
+   changes and 0 on the `noop` fixture. Every spawn's exit code is graded.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads goldens,
+   neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{fixtureStems}
+import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb}
+import test.{Expectation, expectEach, expectGolden, fail, pass}
+
+codemodFixtures : <IO> String
+codemodFixtures = underRoot "test/codemod_fixtures"
+
+flagsFor : String -> List String
+flagsFor name =
+  if name == "rename_panic_exit" then
+    ["--rename", "Panic=Exit"]
+  else
+    ["--strip", "Mut,Panic"]
+
+wantDryRun : String -> Int
+wantDryRun name = if name == "noop" then 0 else 1
+
+fixtureSrc : String -> <IO> String
+fixtureSrc name = "\{codemodFixtures}/\{name}.mdk"
+
+goldenPath : String -> <IO> String
+goldenPath name = "\{medakaRoot}/test/codemod_fixtures/\{name}.codemod.golden"
+
+runCodemod : List String -> <Exec, IO> Result String (Int, String, String)
+runCodemod args = boundedVerb medakaBin (["codemod", "effect-labels"] ++ args)
+
+-- Stdout of `codemod effect-labels <flags> --stdout <src>`, graded against the
+-- golden for `name`. Leg 1 passes the fixture as `src`; leg 2 passes the golden.
+stdoutLeg : String -> String -> String -> <Exec, IO> Expectation
+stdoutLeg label name src = match runCodemod (flagsFor name ++ ["--stdout", src])
+  Err e => fail "\{label}: could not spawn codemod on \{name}: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail "\{label}: \{name}: --stdout exited \{intToString code}"
+    else
+      expectGolden (goldenPath name) out
+
+-- Leg 3: dry run (no --write or --stdout) exit code.
+dryRunLeg : String -> <Exec, IO> Expectation
+dryRunLeg name = match runCodemod (flagsFor name ++ [fixtureSrc name])
+  Err e => fail "dry-run: could not spawn codemod on \{name}: \{e}"
+  Ok (code, _, _) =>
+    if code /= wantDryRun name then
+      fail
+        "\{name}: dry-run exited \{intToString code}, want \{intToString (wantDryRun name)}"
+    else
+      pass
+
+legsOf : List String -> <Exec, IO> List (String, Expectation)
+legsOf [] = []
+legsOf (name :: rest) =
+  (name ++ " golden", stdoutLeg "golden" name (fixtureSrc name))
+    :: (name ++ " idempotent", stdoutLeg "idempotent" name (goldenPath name))
+    :: (name ++ " dry-run", dryRunLeg name)
+    :: legsOf rest
+
+codemodGate : <Exec, IO> Expectation
+codemodGate = match fixtureStems codemodFixtures
+  Err e => fail "could not list codemod fixtures: \{e}"
+  Ok [] => fail "no codemod fixtures found"
+  Ok names => expectEach (legsOf names)
+
+test "diff_compiler_codemod: effect-labels goldens, idempotence and dry-run exits" =
+  codemodGate

@@ -1,0 +1,615 @@
+{- | Gate for the gzip inflater against the SYSTEM gzip, over real gzip output.
+   Replaces gzip/test/inflate_oracle.sh.
+
+   The proof: the system `gzip` compresses, and our `gzip/inflate_demo.mdk`
+   must reproduce the original bytes exactly. Every case asserts the BTYPE gzip
+   actually chose, so a change in gzip's block-type heuristic fails loudly
+   instead of silently testing nothing.
+
+   Needs the binary: it builds gzip/inflate_demo.mdk and spawns it, plus gzip,
+   gunzip and python3, so it runs natively under `medaka test`. The script's
+   /dev/urandom inputs are replaced by a deterministic generator of the same
+   incompressible shape, so the bytes are reproducible. -}
+
+import array as A
+import list.{replicate}
+import string.{contains, join, take}
+import test.{Expectation, expectAll, expectEach, fail, pass}
+import test_process.{medakaBin, medakaRoot, scratchDir, boundedVerbSeconds}
+
+scrambleStep : Int -> Int
+scrambleStep x = (x * x + x * 7919 + 104729) % 2147483629
+
+-- Deterministic, incompressible-looking bytes, standing in for /dev/urandom.
+scramble : Int -> Int
+scramble i =
+  scrambleStep (scrambleStep (i * 2654435761 % 2147483629)) / 65536 % 256
+
+-- Builds gzip/<name>.mdk into dir; Ok binary path, or Err.
+build : String -> String -> <Exec, IO> Result String String
+build dir name = match boundedVerbSeconds 600 "sh" [
+  "-c",
+  "MEDAKA_EMITTER=\"$1\" MEDAKA_ROOT=\"$2\" exec \"$3\" build \"$4\" -o \"$5\"",
+  "sh",
+  "\{medakaRoot}/medaka_emitter",
+  medakaRoot,
+  medakaBin,
+  "\{medakaRoot}/gzip/\{name}.mdk",
+  "\{dir}/\{name}",
+]
+  Err e => Err "could not run medaka build on gzip/\{name}.mdk: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      Err
+        "could not build gzip/\{name}.mdk (medaka build exited \{intToString code})"
+    else
+      Ok "\{dir}/\{name}"
+
+gzipPresent : <Exec> Expectation
+gzipPresent = match boundedVerbSeconds 10 "gzip" ["--version"]
+  Err _ => fail "gzip not found (this gate's oracle)"
+  Ok (code, _, _) =>
+    if code /= 0 then fail "gzip --version exited \{intToString code}" else pass
+
+pythonPresent : <Exec> Expectation
+pythonPresent = match boundedVerbSeconds 10 "python3" ["--version"]
+  Err _ => fail "python3 not found (needed for the BTYPE probe)"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      fail "python3 --version exited \{intToString code}"
+    else
+      pass
+
+-- Shared failure shape for a spawn: a spawn error, a nonzero exit, or the
+-- success continuation.
+spawnStep : String ->
+  Result String (Int, String, String) ->
+  (Int -> <e> Expectation) ->
+  <e> Expectation
+spawnStep what (Err e) _ = fail "\{what} could not run: \{e}"
+spawnStep what (Ok (code, _, _)) next =
+  if code /= 0 then fail "\{what} exited \{intToString code}" else next code
+
+withFixture : Result String String ->
+  (String -> <e> Expectation) ->
+  <e> Expectation
+withFixture (Err e) _ = fail e
+withFixture (Ok path) k = k path
+
+-- Writes n bytes, byte i = f i, to dir/slug.bin; Ok the path.
+bytesFixture : String ->
+  String ->
+  Int ->
+  (Int -> Int) ->
+  <FileWrite> Result String String
+bytesFixture dir slug n f =
+  match writeFileBytes "\{dir}/\{slug}.bin" (A.makeWith n f)
+    Err e => Err "could not write \{slug}.bin: \{e}"
+    Ok _ => Ok "\{dir}/\{slug}.bin"
+
+-- Writes text to dir/slug.bin; Ok the path.
+textFixture : String -> String -> String -> <FileWrite> Result String String
+textFixture dir slug text = match writeFile "\{dir}/\{slug}.bin" text
+  Err e => Err "could not write \{slug}.bin: \{e}"
+  Ok _ => Ok "\{dir}/\{slug}.bin"
+
+-- Harness guard: a fixture must be exactly n bytes before it is used.
+fixtureSize : String -> Int -> String -> <FileRead> Expectation
+fixtureSize path n desc = match readFileBytes path
+  Err e => fail "\{desc}: could not read \{path}: \{e}"
+  Ok bytes =>
+    if length bytes /= n then
+      fail
+        "harness bug: \{desc} is \{intToString (length bytes)} bytes, not \{intToString n}"
+    else
+      pass
+
+sameBytes : String -> String -> String -> <FileRead> Expectation
+sameBytes desc a b = match readFileBytes a
+  Err e => fail "\{desc}: could not read \{a}: \{e}"
+  Ok x => match readFileBytes b
+    Err e => fail "\{desc}: could not read \{b}: \{e}"
+    Ok y => if x /= y then fail "\{desc} — bytes DIFFER" else pass
+
+-- Robust gzip-header parser (FEXTRA/FNAME/FCOMMENT/FHCRC), then the first
+-- DEFLATE block's BTYPE, printed. Real `.gz` files may carry those fields
+-- (the seed does), so a fixed byte-10 offset is not safe in general.
+btypeProbe : String
+btypeProbe =
+  "import sys\ndata = open(sys.argv[1], 'rb').read()\nassert data[0] == 31 and data[1] == 139, 'not a gzip file'\nflg = data[3]\noff = 10\nif flg & 4:\n    off += 2 + (data[off] | (data[off + 1] << 8))\nif flg & 8:\n    while data[off] != 0:\n        off += 1\n    off += 1\nif flg & 16:\n    while data[off] != 0:\n        off += 1\n    off += 1\nif flg & 2:\n    off += 2\nsys.stdout.write(str((data[off] >> 1) & 3))\n"
+
+-- The BTYPE of the first DEFLATE block must be `want` ("0" stored, "1" fixed,
+-- "2" dynamic). `next` runs only once the BTYPE matches.
+btypeThen : String -> String -> String -> Expectation -> <Exec> Expectation
+btypeThen desc gz want next = match boundedVerbSeconds 30 "python3" [
+  "-I",
+  "-c",
+  btypeProbe,
+  gz,
+]
+  Err e => fail "\{desc}: BTYPE probe could not run: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail
+        "\{desc}: BTYPE probe exited \{intToString code} (not a gzip stream?)"
+    else if out /= want then
+      fail
+        "\{desc} — oracle produced BTYPE=\{out}, not \{want}; this gate tested nothing"
+    else
+      next
+
+-- Our inflate_demo must neither hang nor fail on a valid stream, and must
+-- reproduce src byte for byte.
+inflateRoundTrip : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, FileRead> Expectation
+inflateRoundTrip desc inflateBin src gz out =
+  match boundedVerbSeconds 60 inflateBin [gz, out]
+    Err e => fail "\{desc}: inflate_demo could not run: \{e}"
+    Ok (code, _, _) =>
+      if code == 142 then
+        fail "\{desc} — HUNG on a VALID stream"
+      else if code /= 0 then
+        fail
+          "\{desc} — inflate_demo exited \{intToString code} on a valid stream"
+      else
+        sameBytes desc src out
+
+-- One real `gzip -<level> -n` stream of src (the shell redirect keeps the
+-- binary bytes out of a String), its BTYPE, then our inflater on it.
+roundTrip : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  <Exec, IO, FileRead> Expectation
+roundTrip dir inflateBin slug desc src level want = spawnStep
+  "\{desc} — system gzip -\{intToString level}"
+  (boundedVerbSeconds 60 "sh" [
+    "-c",
+    "gzip -\"$1\" -n -c \"$2\" > \"$3\"",
+    "sh",
+    intToString level,
+    src,
+    "\{dir}/\{slug}.gz",
+  ])
+  (_ =>
+    btypeThen
+      desc
+      "\{dir}/\{slug}.gz"
+      want
+      (inflateRoundTrip
+        desc
+        inflateBin
+        src
+        "\{dir}/\{slug}.gz"
+        "\{dir}/\{slug}.out"))
+
+-- The scratch tree can hold large fixtures, so it is removed; a directory
+-- that cannot be removed is red rather than silently left behind.
+cleanup : String -> <Exec> Expectation
+cleanup dir = match boundedVerbSeconds 60 "rm" ["-rf", dir]
+  Err e => fail "cleanup of \{dir}: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      fail "cleanup of \{dir} exited \{intToString code}"
+    else
+      pass
+
+-- Stored blocks (BTYPE=00). Inputs are incompressible, so gzip -1 keeps them
+-- stored; the BTYPE assertion guards that.
+storedGroup : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+storedGroup dir inflateBin = expectAll [
+  withFixture (bytesFixture dir "stored_200" 200 scramble) (src =>
+    roundTrip
+      dir
+      inflateBin
+      "stored_200"
+      "small stored block (200 bytes)"
+      src
+      1
+      "0"),
+  withFixture (bytesFixture dir "stored_4000" 4000 scramble) (src =>
+    roundTrip
+      dir
+      inflateBin
+      "stored_4000"
+      "single stored block (4000 bytes)"
+      src
+      1
+      "0"),
+  withFixture (bytesFixture dir "stored_200k" 200000 scramble) (src =>
+    roundTrip
+      dir
+      inflateBin
+      "stored_200k"
+      "multi-block stored stream (200000 bytes)"
+      src
+      1
+      "0"),
+]
+
+-- Fixed Huffman (BTYPE=01) and the small cases the script pins to it, plus
+-- the two empty-fixture guards (checks 19-20).
+fixedGroup : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+fixedGroup dir inflateBin = expectAll [
+  withFixture (textFixture
+    dir
+    "hw"
+    "hello world hello world hello world") (src =>
+    expectEach
+      (map
+        (lvl => (
+          "gzip -\{intToString lvl} small compressible text",
+          roundTrip
+            dir
+            inflateBin
+            "hw_\{intToString lvl}"
+            "gzip -\{intToString lvl} small compressible text"
+            src
+            lvl
+            "1",
+        ))
+        [1..=9])),
+  withFixture (textFixture dir "hello" "hello") (src =>
+    roundTrip
+      dir
+      inflateBin
+      "hello"
+      "gzip -n hello (documented BFINAL=1 BTYPE=1 shape)"
+      src
+      6
+      "1"),
+  withFixture (bytesFixture dir "rle" 2000 (i => 97)) (src =>
+    roundTrip
+      dir
+      inflateBin
+      "rle"
+      "gzip 2000 bytes of one repeated byte (distance=1 RLE)"
+      src
+      1
+      "1"),
+  withFixture (textFixture
+    dir
+    "phrase"
+    (take
+      2000
+      (join "" (replicate 200 "the quick brown fox ")))) (src => expectAll [
+    roundTrip
+      dir
+      inflateBin
+      "phrase_l1"
+      "gzip 2000 bytes of a repeated phrase (long back-references), level 1"
+      src
+      1
+      "1",
+    roundTrip
+      dir
+      inflateBin
+      "phrase_l9"
+      "gzip 2000 bytes of a repeated phrase (long back-references), level 9"
+      src
+      9
+      "1",
+  ]),
+  withFixture (textFixture dir "empty" "") (src => expectAll [
+    fixtureSize src 0 "empty file",
+    roundTrip
+      dir
+      inflateBin
+      "empty"
+      "gzip empty file (zero-length stream)"
+      src
+      1
+      "1",
+  ]),
+  withFixture (textFixture dir "onebyte" "x") (src => expectAll [
+    fixtureSize src 1 "one-byte file",
+    roundTrip
+      dir
+      inflateBin
+      "onebyte"
+      "gzip one-byte file (degenerate Huffman alphabet)"
+      src
+      1
+      "1",
+  ]),
+]
+
+-- Runs `gzip -<level> -n -c src` into dir/slug.gz; Ok the path.
+gzipOf : String -> Int -> String -> String -> <Exec> Result String String
+gzipOf dir level src slug = match boundedVerbSeconds 60 "sh" [
+  "-c",
+  "gzip -\"$1\" -n -c \"$2\" > \"$3\"",
+  "sh",
+  intToString level,
+  src,
+  "\{dir}/\{slug}.gz",
+]
+  Err e => Err "could not gzip \{slug}: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      Err "gzip -\{intToString level} \{slug} exited \{intToString code}"
+    else
+      Ok "\{dir}/\{slug}.gz"
+
+-- Runs python3 -c prog into dir/slug.bin (the generator's own random seed
+-- keeps it reproducible); Ok the path.
+pyFixture : String -> String -> String -> <Exec> Result String String
+pyFixture dir slug prog = match boundedVerbSeconds 60 "sh" [
+  "-c",
+  "python3 -c \"$1\" > \"$2\"",
+  "sh",
+  prog,
+  "\{dir}/\{slug}.bin",
+]
+  Err e => Err "could not run python3 for \{slug}.bin: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      Err "python3 for \{slug}.bin exited \{intToString code}"
+    else
+      Ok "\{dir}/\{slug}.bin"
+
+-- Writes an Array of bytes to dir/slug.bin; Ok the path.
+writeBytesFixture : String ->
+  String ->
+  Array Int ->
+  <FileWrite> Result String String
+writeBytesFixture dir slug arr = match writeFileBytes "\{dir}/\{slug}.bin" arr
+  Err e => Err "could not write \{slug}.bin: \{e}"
+  Ok _ => Ok "\{dir}/\{slug}.bin"
+
+byteAt : Array Int -> Int -> Int
+byteAt arr i = match A.get i arr
+  Some b => b
+  None => 0
+
+-- The four bytes of 0xDEADBEEF, written over a trailer field.
+magicByte : Int -> Int
+magicByte 0 = 222
+magicByte 1 = 173
+magicByte 2 = 190
+magicByte _ = 239
+
+-- The first keepOf(len) bytes of src (a head -c).
+truncFixture : String ->
+  String ->
+  String ->
+  (Int -> Int) ->
+  <FileRead, FileWrite> Result String String
+truncFixture dir slug src keepOf = match readFileBytes src
+  Err e => Err "could not read \{src}: \{e}"
+  Ok bytes => writeBytesFixture dir slug (A.take (keepOf (length bytes)) bytes)
+
+-- src with 0xDEADBEEF over the 4 bytes at offOf(len); same length.
+patchFixture : String ->
+  String ->
+  String ->
+  (Int -> Int) ->
+  <FileRead, FileWrite> Result String String
+patchFixture dir slug src offOf = match readFileBytes src
+  Err e => Err "could not read \{src}: \{e}"
+  Ok bytes =>
+    let n = length bytes
+    let off = offOf n
+    writeBytesFixture
+      dir
+      slug
+      (A.makeWith n (i =>
+        if i >= off && i < off + 4 then
+          magicByte (i - off)
+        else
+          byteAt bytes i))
+
+-- Error path: inflate_demo must fail cleanly, never hang, and name the reason.
+expectFail : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec> Expectation
+expectFail dir inflateBin desc file want =
+  match boundedVerbSeconds 30 inflateBin [file, "\{dir}/never.bin"]
+    Err e => fail "\{desc}: inflate_demo could not run: \{e}"
+    Ok (code, out, err) =>
+      if code == 142 then
+        fail
+          "\{desc} — HUNG (timed out); a decompressor must not loop on bad input"
+      else if code == 0 then
+        fail "\{desc} — exited 0; expected a non-zero exit and an error"
+      else if contains want "\{out}\{err}" then
+        pass
+      else
+        fail
+          "\{desc} — failed as expected but the message did not mention '\{want}': \{out}\{err}"
+
+-- The committed seed: ~1.7 MB of real dynamic-Huffman data, decoded with OUR
+-- inflater and checked against the SYSTEM gunzip's output of the same bytes.
+seedGroup : String ->
+  String ->
+  String ->
+  <Exec, FileRead, FileWrite> Expectation
+seedGroup dir inflateBin seed = match boundedVerbSeconds 60 "sh" [
+  "-c",
+  "gunzip -c \"$1\" > \"$2\"",
+  "sh",
+  seed,
+  "\{dir}/seed_expected.bin",
+]
+  Err e => fail "could not gunzip \{seed}: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      fail "gunzip \{seed} exited \{intToString code}"
+    else
+      btypeThen
+        "compiler/seed/emitter.ll.gz (self-referential, real-world corpus)"
+        seed
+        "2"
+        (inflateRoundTrip
+          "compiler/seed/emitter.ll.gz (self-referential, real-world corpus)"
+          inflateBin
+          "\{dir}/seed_expected.bin"
+          seed
+          "\{dir}/seed.out")
+
+allbytesProg : String
+allbytesProg =
+  "import sys, random\nrandom.seed(7)\nwords = ['the', 'quick', 'brown', 'fox', 'jumps', 'over', 'lazy', 'dog', 'medaka', 'gzip', 'deflate', 'huffman', 'dynamic', 'static', 'compress']\nlines = []\nfor i in range(400):\n    random.shuffle(words)\n    lines.append(' '.join(words))\ntext = ('\\n'.join(lines)).encode()\ndata = text + bytes(range(256)) * 3\nsys.stdout.buffer.write(data)\n"
+
+-- Dynamic Huffman with ZERO used distance codes: the fixture is hand-built by
+-- gzip/test/gen_zerodist_fixture.py, which verifies its own construction.
+zeroDistGroup : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+zeroDistGroup dir inflateBin =
+  let gz = "\{dir}/zerodist.gz"
+  let expected = "\{dir}/zerodist.expected"
+  let desc =
+    "dynamic Huffman with zero used distance codes (numUsed==0, all-literal block)"
+  match boundedVerbSeconds 60 "python3" [
+    "\{medakaRoot}/gzip/test/gen_zerodist_fixture.py",
+    gz,
+    expected,
+  ]
+    Err e => fail "zero-distance-code fixture generator could not run: \{e}"
+    Ok (code, _, _) =>
+      if code /= 0 then
+        fail "zero-distance-code fixture generator exited \{intToString code}"
+      else
+        btypeThen
+          desc
+          gz
+          "2"
+          (inflateRoundTrip desc inflateBin expected gz "\{dir}/zerodist.out")
+
+-- The dynamic-Huffman round trips (checks 21-26), each asserting BTYPE=2.
+dynamicGroup : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+dynamicGroup dir inflateBin = expectAll [
+  withFixture (textFixture
+    dir
+    "big_repeat"
+    (join
+      ""
+      (replicate 2260 "the quick brown fox jumps over the lazy dog. "))) (src =>
+    roundTrip
+      dir
+      inflateBin
+      "big_repeat"
+      "100 KB repeated string, multiple dynamic blocks"
+      src
+      6
+      "2"),
+  roundTrip
+    dir
+    inflateBin
+    "parser"
+    "real .mdk source file"
+    "\{medakaRoot}/compiler/frontend/parser.mdk"
+    6
+    "2",
+  withFixture (pyFixture dir "allbytes" allbytesProg) (src =>
+    roundTrip
+      dir
+      inflateBin
+      "allbytes"
+      "every byte value 0..255 present, mixed with diverse text"
+      src
+      6
+      "2"),
+  zeroDistGroup dir inflateBin,
+  withFixture (textFixture
+    dir
+    "window_boundary"
+    (take 32800 (join "" (replicate 2000 "window boundary probe, ")))) (src =>
+    roundTrip
+      dir
+      inflateBin
+      "window_boundary"
+      "just over the 32768-byte window boundary"
+      src
+      6
+      "2"),
+  seedGroup dir inflateBin "\{medakaRoot}/compiler/seed/emitter.ll.gz",
+]
+
+-- The error paths (checks 27-34): truncation, bad magic, trailer CRC and ISIZE
+-- corruption on stored and dynamic streams.
+errorGroup : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+errorGroup dir inflateBin = expectAll [
+  withFixture (bytesFixture
+    dir
+    "big"
+    200000
+    scramble) (src => withFixture (gzipOf dir 1 src "big") (bigGz => expectAll [
+    withFixture (truncFixture dir "trunc" bigGz (_ => 5000)) (p =>
+      expectFail dir inflateBin "truncated stream" p "end of input"),
+    withFixture (truncFixture dir "trunc2" bigGz (_ => 100)) (p =>
+      expectFail dir inflateBin "severely truncated stream" p "end of input"),
+  ])),
+  withFixture (textFixture
+    dir
+    "notgz"
+    "not a gzip file at all, just text") (p =>
+    expectFail dir inflateBin "not a gzip stream" p "magic"),
+  withFixture (bytesFixture dir "crc" 200 scramble) (src => withFixture (gzipOf
+    dir
+    1
+    src
+    "crc") (crcGz => expectAll [
+    withFixture (patchFixture dir "crcbad" crcGz (n => n - 8)) (p =>
+      expectFail dir inflateBin "corrupted trailer CRC-32 is rejected" p "CRC"),
+    withFixture (patchFixture dir "isizebad" crcGz (n => n - 4)) (p =>
+      expectFail dir inflateBin "corrupted trailer ISIZE is rejected" p "ISIZE"),
+  ])),
+  withFixture (gzipOf
+    dir
+    6
+    "\{medakaRoot}/compiler/frontend/parser.mdk"
+    "dyn") (dynGz =>
+    btypeThen
+      "dynamic Huffman error-path setup"
+      dynGz
+      "2"
+      (expectAll [
+        withFixture (truncFixture dir "dyn_trunc_mid" dynGz (/ 2)) (p =>
+          expectFail
+            dir
+            inflateBin
+            "dynamic Huffman: truncated mid-stream (half the file)"
+            p
+            "end of input"),
+        withFixture (truncFixture dir "dyn_trunc_header" dynGz (_ => 15)) (p =>
+          expectFail
+            dir
+            inflateBin
+            "dynamic Huffman: truncated inside the HLIT/HDIST/HCLEN header"
+            p
+            "end of input"),
+        withFixture (patchFixture dir "dyn_crcbad" dynGz (n => n - 8)) (p =>
+          expectFail
+            dir
+            inflateBin
+            "dynamic Huffman: corrupted trailer CRC-32 is rejected"
+            p
+            "CRC"),
+      ])),
+]
+
+test "inflate_oracle: stored, fixed, dynamic round trips and error paths (checks 1-34)" =
+  match scratchDir
+    Err e => fail "could not make a scratch dir: \{e}"
+    Ok dir => match build dir "inflate_demo"
+      Err e => fail e
+      Ok inflateBin =>
+        let result = expectAll [
+          gzipPresent,
+          pythonPresent,
+          storedGroup dir inflateBin,
+          fixedGroup dir inflateBin,
+          dynamicGroup dir inflateBin,
+          errorGroup dir inflateBin,
+        ]
+        expectAll [result, cleanup dir]

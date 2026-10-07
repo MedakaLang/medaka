@@ -1,0 +1,759 @@
+{- | Gate for the #2074/#2075 FFI lowering: a user `extern` becomes a real C-ABI
+   call whose values cross correctly, asserted as exact printed bytes against
+   hand-computed expectations. Replaces test/diff_compiler_llvm_ffi.sh, cells 1-16.
+
+   Runs under `medaka test --native`: it spawns `medaka build`, clang, ar and ld,
+   and runs the binaries it links. -}
+
+import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb}
+import compiler_cli_test_support.{inScratchDir, boundedInTree}
+import fs.{mkdirAll, fixtureFiles}
+import string.{contains, endsWith, lines, trimRight}
+import list.{filter}
+import test.{
+  Expectation, expectAll, expectEach, expectEqualText, expectTextContainsAll,
+  expectAtLeast, expectFalse, fail, pass
+}
+
+-- # Shared helpers (the continuation sections reuse these)
+
+fixDir : <IO> String
+fixDir = underRoot "test/ffi_fixtures"
+
+-- The stdout of ffi_abi_probe, hand-computed from its C source (see the
+-- fixture's header). Not captured from a run.
+expectProbe : String
+expectProbe = "42\nFalse\nb\n6.0\n6\nround-trip!\n10\n7\n5.5"
+
+-- Medaka with MEDAKA_ROOT and MEDAKA_EMITTER set, plus `envs` in its environment.
+medakaEnv : List String ->
+  List String ->
+  <Exec, IO> Result String (Int, String, String)
+medakaEnv envs args =
+  match boundedInTree 600 "env" (envs ++ [medakaBin] ++ args)
+    Err e => Err e
+    Ok (code, out, err) =>
+      if code == 127 then
+        Err
+          "`env` could not run \{medakaBin} (exit 127): a missing binary would read as a failed build\n\{err}"
+      else
+        Ok (code, out, err)
+
+-- A spawn that must exit 0; its stdout and stderr joined on success.
+okOutput : String -> Result String (Int, String, String) -> Result String String
+okOutput what (Err e) = Err "\{what}: could not spawn: \{e}"
+okOutput what (Ok (code, out, err)) =
+  if code /= 0 then
+    Err "\{what}: exited \{intToString code}\n\{err}"
+  else
+    Ok (out ++ err)
+
+-- An error is a red row; a success is handed on.
+graded : Result String a ->
+  (a -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+graded (Err e) _ = fail e
+graded (Ok v) k = k v
+
+-- The linkable runtime+fixture object: the runtime built with the plain link
+-- (MEDAKA_NO_LTO, since `ld -r` cannot merge ThinLTO bitcode), the probe's C half,
+-- merged by `ld -r`.
+buildCombined : String -> <Exec, IO, FileRead, FileWrite> Result String String
+buildCombined w = do
+  _ <- okOutput
+    "--emit-rt-obj"
+    (medakaEnv ["MEDAKA_NO_LTO=1"] ["build", "--emit-rt-obj", "\{w}/rt.o"])
+  _ <- okOutput
+    "compile ffi_abi_probe.c"
+    (boundedVerb "clang" [
+      "-O2",
+      "-c",
+      "\{fixDir}/ffi_abi_probe.c",
+      "-o",
+      "\{w}/probe.o",
+    ])
+  _ <- okOutput
+    "ld -r"
+    (boundedVerb "ld" [
+      "-r",
+      "\{w}/rt.o",
+      "\{w}/probe.o",
+      "-o",
+      "\{w}/combined.o",
+    ])
+  Ok "\{w}/combined.o"
+
+-- # Cell 1: every crossable shape, values asserted
+
+cell1 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell1 w combined = graded (okOutput
+  "build ffi_abi_probe.mdk"
+  (medakaEnv
+    ["MEDAKA_RT_OBJ=\{combined}"]
+    [
+      "build",
+      "\{fixDir}/ffi_abi_probe.mdk",
+      "-o",
+      "\{w}/probe.bin",
+    ])) (_ => graded (okOutput
+  "run probe.bin"
+  (boundedVerb "\{w}/probe.bin" [])) (got =>
+  expectEqualText expectProbe (trimRight got)))
+
+-- # Cell 2: the builtin-name exemption (a local redeclaration of `bitAnd` keeps
+-- the builtin's codegen: 255 & 240 = 240)
+
+cell2 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell2 w combined = graded (writeFile
+  "\{w}/builtin_name.mdk"
+  builtinNameSrc) (_ => graded (okOutput
+  "build builtin_name.mdk"
+  (medakaEnv
+    ["MEDAKA_RT_OBJ=\{combined}"]
+    [
+      "build",
+      "\{w}/builtin_name.mdk",
+      "-o",
+      "\{w}/builtin.bin",
+    ])) (_ => graded (okOutput
+  "run builtin.bin"
+  (boundedVerb "\{w}/builtin.bin" [])) (got =>
+  expectEqualText "240" (trimRight got))))
+
+builtinNameSrc : String
+builtinNameSrc =
+  "extern bitAnd : Int -> Int -> <> Int\n\nmain : <IO, FFI> Unit\nmain = println (bitAnd 255 240)\n"
+
+-- # Cell 3: real library linkage via medaka.toml [foreign-libraries]. The
+-- library is a genuine static archive named only by the manifest; the search
+-- directory is relative to the project root; comment and blank lines are inert.
+
+manifestWithLibrary : String
+manifestWithLibrary =
+  "[package]\nname = \"ffi_link_probe\"\n\n[foreign-libraries]\n\n# nonexistent_ffi_commented_out = \"missing\"\n  # another_commented_out = \"\"\nffiprobe = \"vendor\"\n"
+
+linkProject : String -> <Exec, IO, FileRead, FileWrite> Result String String
+linkProject p = do
+  _ <- mkdirAll "\{p}/vendor"
+  src <- readFile "\{fixDir}/ffi_abi_probe.mdk"
+  _ <- writeFile "\{p}/main.mdk" src
+  _ <- writeFile "\{p}/medaka.toml" manifestWithLibrary
+  Ok "\{p}/main.mdk"
+
+cell3 : String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell3 w = graded (linkProject "\{w}/proj") (mainPath => graded (okOutput
+  "compile probe_lib"
+  (boundedVerb "clang" [
+    "-O2",
+    "-c",
+    "\{fixDir}/ffi_abi_probe.c",
+    "-o",
+    "\{w}/probe_lib.o",
+  ])) (_ => graded (okOutput
+  "ar rcs libffiprobe.a"
+  (boundedVerb "ar" [
+    "rcs",
+    "\{w}/proj/vendor/libffiprobe.a",
+    "\{w}/probe_lib.o",
+  ])) (_ => graded (okOutput
+  "build declared-library project"
+  (medakaEnv [] [
+    "build",
+    mainPath,
+    "-o",
+    "\{w}/link.bin",
+  ])) (_ => graded (okOutput
+  "run link.bin"
+  (boundedVerb "\{w}/link.bin" [])) (got =>
+  expectEqualText expectProbe (trimRight got))))))
+
+-- # Cell 4: a declared-but-absent library is a Medaka diagnostic naming the
+-- library, its manifest key and the medaka.toml, not clang's `library not found`.
+
+absentManifest : String
+absentManifest =
+  "[package]\nname = \"ffi_absent_lib\"\n\n[foreign-libraries]\nnonexistent_ffi_test_lib_xyz = \"\"\n"
+
+absentProject : String -> <Exec, IO, FileRead, FileWrite> Result String String
+absentProject b = do
+  _ <- mkdirAll b
+  src <- readFile "\{fixDir}/ffi_abi_probe.mdk"
+  _ <- writeFile "\{b}/main.mdk" src
+  _ <- writeFile "\{b}/medaka.toml" absentManifest
+  Ok "\{b}/main.mdk"
+
+cell4 : String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell4 w = graded (absentProject
+  "\{w}/badproj") (mainPath =>
+  match medakaEnv [] ["build", mainPath, "-o", "\{w}/bad.bin"]
+    Err e => fail "could not spawn build on the absent library: \{e}"
+    Ok (code, out, err) => absentDiagnostic code (out ++ err))
+
+absentDiagnostic : Int -> String -> Expectation
+absentDiagnostic code log =
+  if code == 0 then
+    fail "build succeeded despite an undeclarable library"
+  else
+    expectAll [
+      expectTextContainsAll
+        [
+          "B-FFI-LIB-NOT-FOUND", "nonexistent_ffi_test_lib_xyz",
+          "[foreign-libraries]", "medaka.toml"
+        ]
+        log,
+      expectFalse (contains "library not found for" log),
+    ]
+
+test "diff_compiler_llvm_ffi cells 1-4: crossable shapes, builtin-name exemption, manifest linkage, absent library" = inScratchDir
+  "llvm_ffi_cells_1_to_4"
+  (w => graded (buildCombined w) (combined => expectEach [
+    ("cell 1 ffi_abi_probe", cell1 w combined),
+    ("cell 2 builtin_name_exemption", cell2 w combined),
+    ("cell 3 ffi_manifest_linkage", cell3 w),
+    ("cell 4 ffi_absent_library", cell4 w),
+  ]))
+
+test "diff_compiler_llvm_ffi fixture corpus: the ffi_fixtures directory is still enumerated" =
+  match fixtureFiles fixDir
+    Err e => fail "could not list the fixture directory: \{e}"
+    Ok files => expectAtLeast 1 (length (filter (endsWith ".mdk") files))
+
+-- # Cell 5: ONE C SYMBOL, ONE SIGNATURE. Two modules declaring `cDouble` with
+-- different signatures must be refused at build time, naming the symbol and both
+-- declarations. Refusal happens before link, so no C object is needed for it.
+
+ffiWriteAll : String ->
+  List (String, String) ->
+  <Exec, IO, FileRead, FileWrite> Result String Unit
+ffiWriteAll _ [] = Ok ()
+ffiWriteAll dir ((name, text) :: rest) = do
+  _ <- writeFile "\{dir}/\{name}" text
+  ffiWriteAll dir rest
+
+ffiWriteProject : String ->
+  List (String, String) ->
+  <Exec, IO, FileRead, FileWrite> Result String Unit
+ffiWriteProject dir files = do
+  _ <- mkdirAll dir
+  ffiWriteAll dir files
+
+ffiHasLine : String -> String -> Bool
+ffiHasLine text want = length (filter (== want) (lines text)) > 0
+
+ffiLineExpect : String -> String -> Expectation
+ffiLineExpect text want =
+  if ffiHasLine text want then pass else fail "missing line: \{want}"
+
+ffiCollisionDiagnostic : Int -> String -> Expectation
+ffiCollisionDiagnostic code log =
+  if code == 0 then
+    fail "built despite two contradictory declarations of one C symbol"
+  else
+    expectAll [
+      expectTextContainsAll ["foreign declaration collision"] log,
+      ffiLineExpect log "colliding symbol: cDouble",
+      ffiLineExpect log "declaration 1: Int -> Int",
+      ffiLineExpect log "declaration 2: Float -> Int",
+    ]
+
+dupFiles : List (String, String)
+dupFiles = [
+  ("medaka.toml", "[package]\nname = \"ffi_dup_extern\"\n"),
+  (
+    "libx.mdk",
+    "export\nextern cDouble : Int -> <FFI> Int\nexport\nuseX : Int -> <FFI> Int\nuseX x = cDouble x\n",
+  ),
+  (
+    "liby.mdk",
+    "export\nextern cDouble : Float -> <FFI> Int\nexport\nuseY : Float -> <FFI> Int\nuseY x = cDouble x\n",
+  ),
+  (
+    "main.mdk",
+    "import libx.{useX}\nimport liby.{useY}\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (useX 21)\n  println (useY 4.0)\n",
+  ),
+]
+
+dupBuild : String -> String -> <Exec, IO> Result String (Int, String, String)
+dupBuild w combined =
+  medakaEnv
+    ["MEDAKA_RT_OBJ=\{combined}"]
+    ["build", "\{w}/dupproj/main.mdk", "-o", "\{w}/dup.bin"]
+
+dupExpect : Result String (Int, String, String) -> Expectation
+dupExpect (Err e) =
+  fail "could not spawn build on the colliding declarations: \{e}"
+dupExpect (Ok (code, out, err)) = ffiCollisionDiagnostic code (out ++ err)
+
+cell5 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell5 w combined = graded (ffiWriteProject "\{w}/dupproj" dupFiles) (_ =>
+  dupExpect (dupBuild w combined))
+
+-- # Cell 6: the CONTROL for cell 5. Identical signatures in two modules still
+-- share one symbol, so the program builds and prints 22 then 6.
+
+shareFiles : List (String, String)
+shareFiles = [
+  ("medaka.toml", "[package]\nname = \"ffi_share_extern\"\n"),
+  (
+    "libp.mdk",
+    "export\nextern ffiCharNext : Int -> <FFI> Int\nexport\nuseP : Int -> <FFI> Int\nuseP x = ffiCharNext x\n",
+  ),
+  (
+    "libq.mdk",
+    "export\nextern ffiCharNext : Int -> <FFI> Int\nexport\nuseQ : Int -> <FFI> Int\nuseQ x = ffiCharNext x\n",
+  ),
+  (
+    "main.mdk",
+    "import libp.{useP}\nimport libq.{useQ}\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (useP 21)\n  println (useQ 5)\n",
+  ),
+]
+
+cell6 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell6 w combined = graded (ffiWriteProject
+  "\{w}/shareproj"
+  shareFiles) (_ => graded (okOutput
+  "build shareproj"
+  (medakaEnv
+    ["MEDAKA_RT_OBJ=\{combined}"]
+    [
+      "build",
+      "\{w}/shareproj/main.mdk",
+      "-o",
+      "\{w}/share.bin",
+    ])) (_ => graded (okOutput
+  "run share.bin"
+  (boundedVerb "\{w}/share.bin" [])) (got =>
+  expectEqualText "22\n6" (trimRight got))))
+
+-- # Cells 7 and 8 share one shape: write a program, build it against the
+-- combined object, run it, and compare the printed bytes.
+
+ffiBuildRun : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+ffiBuildRun dir name src combined = do
+  _ <- writeFile "\{dir}/\{name}.mdk" src
+  _ <- okOutput
+    "build \{name}"
+    (medakaEnv
+      ["MEDAKA_RT_OBJ=\{combined}"]
+      ["build", "\{dir}/\{name}.mdk", "-o", "\{dir}/\{name}.bin"])
+  okOutput "run \{name}.bin" (boundedVerb "\{dir}/\{name}.bin" [])
+
+-- # Cell 7: INBOUND Bool. `if` and `match` must agree on an out-of-range C bool
+-- (42 -> True). The in-range lines (0 -> False, 1 -> True) are the regression floor.
+
+boolInSrc : String
+boolInSrc =
+  "extern cTruthy : Unit -> <FFI> Bool\nextern cFalsy : Unit -> <FFI> Bool\nextern cOne : Unit -> <FFI> Bool\n\nviaMatch : Bool -> String\nviaMatch b = match b\n  True => \"match:True\"\n  False => \"match:False\"\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (if cTruthy () then \"if:True\" else \"if:False\")\n  let _ = println (viaMatch (cTruthy ()))\n  let _ = println (cTruthy ())\n  let _ = println (if cFalsy () then \"if:True\" else \"if:False\")\n  let _ = println (viaMatch (cFalsy ()))\n  let _ = println (if cOne () then \"if:True\" else \"if:False\")\n  println (viaMatch (cOne ()))\n"
+
+cell7 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell7 w combined = graded (ffiBuildRun
+  w
+  "ffi_bool_in"
+  boolInSrc
+  combined) (got =>
+  expectEqualText
+    "if:True\nmatch:True\nTrue\nif:False\nmatch:False\nif:True\nmatch:True"
+    (trimRight got))
+
+-- # Cell 8: INBOUND Char in range. 65 is a valid codepoint, so the range check
+-- must be transparent: 'A' through `==`, a literal match arm, and Show.
+
+charInSrc : String
+charInSrc =
+  "extern cCharA : Unit -> <FFI> Char\n\nviaMatch : Char -> String\nviaMatch c = match c\n  'A' => \"match:A\"\n  _ => \"match:other\"\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (if cCharA () == 'A' then \"if:A\" else \"if:other\")\n  let _ = println (viaMatch (cCharA ()))\n  println (cCharA ())\n"
+
+cell8 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell8 w combined = graded (ffiBuildRun
+  w
+  "ffi_char_in"
+  charInSrc
+  combined) (got =>
+  expectEqualText "if:A\nmatch:A\nA" (trimRight got))
+
+test "diff_compiler_llvm_ffi cells 5-8: one C symbol one signature, identical sharing, inbound Bool and Char" = inScratchDir
+  "llvm_ffi_cells_5_to_8"
+  (w => graded (buildCombined w) (combined => expectEach [
+    ("cell 5 ffi_extern_collision", cell5 w combined),
+    ("cell 6 ffi_extern_shared", cell6 w combined),
+    ("cell 7 ffi_inbound_bool", cell7 w combined),
+    ("cell 8 ffi_inbound_char", cell8 w combined),
+  ]))
+
+-- # Cell 9: INBOUND Char out of range traps loudly, never replacement garbage.
+-- FFI-ABI.md 2.1 pins an out-of-range codepoint as a trap, since no honest value
+-- exists to substitute. The three values fail for three different reasons: above
+-- charMaxBound, negative (a huge unsigned word, so the bound check must be
+-- unsigned), and a UTF-16 surrogate inside the bounds, which only a validity
+-- check catches. Asserted on a nonzero exit AND the message text, because a
+-- segfault also exits nonzero.
+
+charOobSrc : String -> String
+charOobSrc cfn =
+  "extern \{cfn} : Unit -> <FFI> Char\n\nmain : <IO, FFI> Unit\nmain = println (\{cfn} ())\n"
+
+charOobExpect : String -> Int -> String -> String -> Expectation
+charOobExpect cfn code out err =
+  if code == 0 then
+    fail "\{cfn}: exited 0 with stdout: \{out}"
+  else if out /= "" then
+    fail "\{cfn}: printed to stdout before trapping: \{out}"
+  else
+    expectTextContainsAll
+      [
+        "runtime error", "not a valid Char",
+        "0..1114111 excluding the UTF-16 surrogates 55296..57343", cfn
+      ]
+      err
+
+charOobRun : String -> String -> <Exec, IO> Expectation
+charOobRun w cfn = match boundedVerb "\{w}/oob_\{cfn}.bin" []
+  Err e => fail "could not spawn oob_\{cfn}.bin: \{e}"
+  Ok (code, out, err) => charOobExpect cfn code out err
+
+charOobCheck : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+charOobCheck w combined cfn = graded (writeFile
+  "\{w}/ffi_char_oob_\{cfn}.mdk"
+  (charOobSrc cfn)) (_ => graded (okOutput
+  "build \{cfn}"
+  (medakaEnv
+    ["MEDAKA_RT_OBJ=\{combined}"]
+    [
+      "build",
+      "\{w}/ffi_char_oob_\{cfn}.mdk",
+      "-o",
+      "\{w}/oob_\{cfn}.bin",
+    ])) (_ =>
+  charOobRun w cfn))
+
+-- # Cell 10: COPY-BACK. A C function that FILLS a caller's array must be visible
+-- in Medaka (#2164). Lines 1, 3 are the regression floor for read-only calls;
+-- lines 2, 4 read the live cell through pure Medaka `get`, not an FFI call.
+-- Expected values are hand-computed from ffiFill99 (writes 99): 6, 1, 6, 99, 297.
+
+copybackSrc : String
+copybackSrc =
+  "import array.{get}\n\nextern ffiFill99 : Array Int -> Int -> <FFI> Unit\nextern ffiSumInts : Array Int -> Int -> <FFI> Int\n\nshow0 : Array Int -> String\nshow0 a = match get 0 a\n  Some v => intToString v\n  None => \"none\"\n\nmain : <IO, FFI> Unit\nmain =\n  let a = [|1, 2, 3|]\n  let _ = println (ffiSumInts a 3)\n  let _ = println (show0 a)\n  let _ = println (ffiSumInts a 3)\n  let _ = ffiFill99 a 3\n  let _ = println (show0 a)\n  println (ffiSumInts a 3)\n"
+
+copybackExpect : String
+copybackExpect = "6\n1\n6\n99\n297"
+
+copybackCheck : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+copybackCheck w combined = graded (writeFile
+  "\{w}/ffi_array_copyback.mdk"
+  copybackSrc) (_ => graded (okOutput
+  "build ffi_array_copyback"
+  (medakaEnv
+    ["MEDAKA_RT_OBJ=\{combined}"]
+    [
+      "build",
+      "\{w}/ffi_array_copyback.mdk",
+      "-o",
+      "\{w}/copyback.bin",
+    ])) (_ => graded (okOutput
+  "run copyback.bin"
+  (boundedVerb "\{w}/copyback.bin" [])) (got =>
+  expectEqualText copybackExpect (trimRight got))))
+
+-- # Cell 11: accepted alias heads are the heads the emitter marshals (#2174).
+-- Each spelling (parameter alias, return alias, alias around the whole arrow)
+-- must build AND run; `b` is hand-derived from ffiCharNext('a') in the C probe.
+
+aliasParamSrc : String
+aliasParamSrc =
+  "type FfiCharArg = Char\n\nextern ffiCharNext : FfiCharArg -> <FFI> Char\n\nmain : <IO, FFI> Unit\nmain = println (ffiCharNext 'a')\n"
+
+aliasReturnSrc : String
+aliasReturnSrc =
+  "type FfiCharRet = Char\n\nextern ffiCharNext : Char -> <FFI> FfiCharRet\n\nmain : <IO, FFI> Unit\nmain = println (ffiCharNext 'a')\n"
+
+aliasWholeSrc : String
+aliasWholeSrc =
+  "type FfiCharCall = Char -> <FFI> Char\n\nextern ffiCharNext : FfiCharCall\n\nmain : <IO, FFI> Unit\nmain = println (ffiCharNext 'a')\n"
+
+aliasCase : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+aliasCase w combined kind src = graded (writeFile
+  "\{w}/ffi_alias_\{kind}.mdk"
+  src) (_ => graded (okOutput
+  "build ffi_alias_\{kind}"
+  (medakaEnv
+    ["MEDAKA_RT_OBJ=\{combined}"]
+    [
+      "build",
+      "\{w}/ffi_alias_\{kind}.mdk",
+      "-o",
+      "\{w}/alias_\{kind}.bin",
+    ])) (_ => graded (okOutput
+  "run alias_\{kind}.bin"
+  (boundedVerb "\{w}/alias_\{kind}.bin" [])) (got =>
+  expectEqualText "b" (trimRight got))))
+
+-- # Cell 12: builtin subtraction reads the typecheck catalog authority (#2135).
+-- A builtin redeclaration must run the real builtin AND leave no user-FFI
+-- `declare` of its symbol in the emitted IR (the `--keep-ir` text). Value 240 alone
+-- would still pass if an unused declaration leaked into the module.
+
+catalogSrc : String
+catalogSrc =
+  "type FfiWord = Int\n\nextern bitAnd : FfiWord -> FfiWord -> <> FfiWord\n\nmain : <IO, FFI> Unit\nmain = println (bitAnd 255 240)\n"
+
+ffiDeclares : String -> String -> Bool
+ffiDeclares ir sym =
+  length
+      (filter (l => contains "declare " l && contains "@\{sym}(" l) (lines ir))
+    > 0
+
+catalogIrExpect : String -> String -> Expectation
+catalogIrExpect got ir =
+  if got /= "240" then
+    fail "expected builtin value 240, got: \{got}"
+  else if ffiDeclares ir "bitAnd" then
+    fail "builtin leaked into the user-FFI declaration index"
+  else
+    pass
+
+catalogCheck : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+catalogCheck w combined = graded (writeFile
+  "\{w}/ffi_catalog_authority.mdk"
+  catalogSrc) (_ => graded (okOutput
+  "build --keep-ir ffi_catalog_authority"
+  (medakaEnv
+    ["MEDAKA_RT_OBJ=\{combined}"]
+    [
+      "build",
+      "--keep-ir",
+      "\{w}/ffi_catalog_authority.mdk",
+      "-o",
+      "\{w}/catalog.bin",
+    ])) (_ => graded (okOutput
+  "run catalog.bin"
+  (boundedVerb "\{w}/catalog.bin" [])) (got => graded (readFile
+  "\{w}/catalog.bin.ll") (ir =>
+  catalogIrExpect (trimRight got) ir))))
+
+test "diff_compiler_llvm_ffi cells 9-12: inbound Char out of range traps, array copy-back, alias heads, builtin catalog authority" = inScratchDir
+  "llvm_ffi_cells_9_to_12"
+  (w => graded (buildCombined w) (combined => expectEach [
+    (
+      "cell 9 ffi_inbound_char_oob cCharBig",
+      charOobCheck w combined "cCharBig",
+    ),
+    (
+      "cell 9 ffi_inbound_char_oob cCharNeg",
+      charOobCheck w combined "cCharNeg",
+    ),
+    (
+      "cell 9 ffi_inbound_char_oob cCharSurrogate",
+      charOobCheck w combined "cCharSurrogate",
+    ),
+    ("cell 10 ffi_array_copyback", copybackCheck w combined),
+    ("cell 11 ffi_alias_param", aliasCase w combined "param" aliasParamSrc),
+    ("cell 11 ffi_alias_return", aliasCase w combined "return" aliasReturnSrc),
+    ("cell 11 ffi_alias_whole", aliasCase w combined "whole" aliasWholeSrc),
+    ("cell 12 ffi_catalog_authority", catalogCheck w combined),
+  ]))
+
+-- # Shared by cells 13-16: write a program, build it against the combined object,
+-- and hand back the binary path. The build must exit 0; each cell grades the run.
+
+ffiBuildBin : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+ffiBuildBin w combined name src = do
+  _ <- writeFile "\{w}/\{name}.mdk" src
+  _ <- okOutput
+    "build \{name}"
+    (medakaEnv
+      ["MEDAKA_RT_OBJ=\{combined}"]
+      ["build", "\{w}/\{name}.mdk", "-o", "\{w}/\{name}.bin"])
+  Ok "\{w}/\{name}.bin"
+
+-- # Cell 13: INBOUND String is valid Unicode-scalar UTF-8 (#2175). The valid half
+-- is an exact round-trip of the C arrays, including NULL-as-empty. The hostile
+-- half has one row per rejection rule; each must trap with nothing on stdout.
+
+stringValidSrc : String
+stringValidSrc =
+  "extern ffiStringNull : Unit -> <FFI> String\nextern ffiStringAscii : Unit -> <FFI> String\nextern ffiStringTwo : Unit -> <FFI> String\nextern ffiStringThree : Unit -> <FFI> String\nextern ffiStringFour : Unit -> <FFI> String\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (\"null:\" ++ ffiStringNull ())\n  let _ = println (ffiStringAscii ())\n  let _ = println (ffiStringTwo ())\n  let _ = println (ffiStringThree ())\n  println (ffiStringFour ())\n"
+
+stringValidExpect : String
+stringValidExpect = "null:\nASCII\n¢\n€\n😀"
+
+cell13Valid : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell13Valid w combined = graded (ffiBuildBin
+  w
+  combined
+  "ffi_string_valid"
+  stringValidSrc) (bin => graded (okOutput
+  "run string_valid.bin"
+  (boundedVerb bin [])) (got =>
+  expectEqualText stringValidExpect (trimRight got)))
+
+stringBadSrc : String -> String
+stringBadSrc sfn =
+  "extern \{sfn} : Unit -> <FFI> String\n\nmain : <IO, FFI> Unit\nmain = println (\{sfn} ())\n"
+
+stringBadNeedles : List String
+stringBadNeedles = [
+  "runtime error",
+  "String that is not valid UTF-8",
+  "Unicode scalar values",
+  "FFI-ABI.md section 2.3",
+]
+
+stringBadExpect : String -> Int -> String -> String -> Expectation
+stringBadExpect sfn code out err =
+  if code == 0 then
+    fail "\{sfn}: malformed UTF-8 exited 0"
+  else if out /= "" then
+    fail "\{sfn}: printed to stdout before trapping: \{out}"
+  else
+    expectTextContainsAll stringBadNeedles err
+
+cell13Bad : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+cell13Bad w combined sfn = graded (ffiBuildBin
+  w
+  combined
+  "ffi_string_bad_\{sfn}"
+  (stringBadSrc sfn)) (bin => match boundedVerb bin []
+  Err e => fail "could not spawn \{sfn}: \{e}"
+  Ok (code, out, err) => stringBadExpect sfn code out err)
+
+-- # Cell 14: the fixed-width C twins, both directions (FFI-ABI.md 2.1b). Each
+-- argument at a type's edge arrives as itself, and each result is one step on in
+-- that type's wrap.
+
+fixedWidthSrc : String
+fixedWidthSrc =
+  "import u8\nimport u16\nimport u32\nimport u64\nimport i32\nimport i64\n\nextern ffiFwU8 : U8 -> <FFI> U8\nextern ffiFwU16 : U16 -> <FFI> U16\nextern ffiFwU32 : U32 -> <FFI> U32\nextern ffiFwI32 : I32 -> <FFI> I32\nextern ffiFwU64 : U64 -> <FFI> U64\nextern ffiFwI64 : I64 -> <FFI> I64\nextern ffiFwU32Max : Unit -> <FFI> U32\nextern ffiFwI32Min : Unit -> <FFI> I32\nextern ffiFwU64Max : Unit -> <FFI> U64\nextern ffiFwI64Min : Unit -> <FFI> I64\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (ffiFwU8 255)\n  let _ = println (ffiFwU16 65535)\n  let _ = println (ffiFwU32 4294967295)\n  let _ = println (ffiFwI32 (-2147483648))\n  let _ = println (ffiFwI32 2147483647)\n  let _ = println (ffiFwI32 (-1))\n  let _ = println (ffiFwU64 18446744073709551615)\n  let _ = println (ffiFwI64 (-9223372036854775808))\n  let _ = println (ffiFwI64 9223372036854775807)\n  let _ = println (ffiFwU32Max ())\n  let _ = println (ffiFwI32Min ())\n  let _ = println (ffiFwU64Max ())\n  let _ = println (ffiFwI64Min ())\n  println (ffiFwI64Min () < 0)\n"
+
+fixedWidthExpect : String
+fixedWidthExpect =
+  "C u8 255\n0\nC u16 65535\n0\nC u32 4294967295\n0\nC i32 -2147483648\n-2147483647\nC i32 2147483647\n-2147483648\nC i32 -1\n0\nC u64 18446744073709551615\n0\nC i64 -9223372036854775808\n-9223372036854775807\nC i64 9223372036854775807\n-9223372036854775808\n4294967295\n-2147483648\n18446744073709551615\n-9223372036854775808\nTrue"
+
+cell14 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell14 w combined = graded (ffiBuildBin
+  w
+  combined
+  "ffi_fixed_width"
+  fixedWidthSrc) (bin => graded (okOutput
+  "run fixed_width.bin"
+  (boundedVerb bin [])) (got =>
+  expectEqualText fixedWidthExpect (trimRight got)))
+
+test "diff_compiler_llvm_ffi cells 13-14: inbound String valid and malformed UTF-8, fixed-width C twins" = inScratchDir
+  "llvm_ffi_cells_13_to_14"
+  (w => graded (buildCombined w) (combined => expectEach [
+    ("cell 13 ffi_inbound_string", cell13Valid w combined),
+    (
+      "cell 13 ffi_inbound_string_bad ffiStringStray",
+      cell13Bad w combined "ffiStringStray",
+    ),
+    (
+      "cell 13 ffi_inbound_string_bad ffiStringBadCont",
+      cell13Bad w combined "ffiStringBadCont",
+    ),
+    (
+      "cell 13 ffi_inbound_string_bad ffiStringTruncated",
+      cell13Bad w combined "ffiStringTruncated",
+    ),
+    (
+      "cell 13 ffi_inbound_string_bad ffiStringOverlong",
+      cell13Bad w combined "ffiStringOverlong",
+    ),
+    (
+      "cell 13 ffi_inbound_string_bad ffiStringSurrogate",
+      cell13Bad w combined "ffiStringSurrogate",
+    ),
+    (
+      "cell 13 ffi_inbound_string_bad ffiStringTooHigh",
+      cell13Bad w combined "ffiStringTooHigh",
+    ),
+    ("cell 14 ffi_fixed_width", cell14 w combined),
+  ]))
+
+-- # Cell 15: an int64_t into Int outside 63 bits TRAPS (#3477). The in-range
+-- lowest value must arrive unchanged before the trap.
+
+intRangeSrc : String
+intRangeSrc =
+  "extern ffiIntLowest : Unit -> <FFI> Int\nextern ffiIntTooBig : Unit -> <FFI> Int\n\nmain : <IO, FFI> Unit\nmain =\n  let _ = println (ffiIntLowest ())\n  println (ffiIntTooBig ())\n"
+
+intRangeNeedles : List String
+intRangeNeedles = [
+  "runtime error",
+  "ffiIntTooBig' returned an int64_t outside Int's range",
+  "declare the result I64",
+]
+
+intRangeExpect : Int -> String -> String -> Expectation
+intRangeExpect code out err =
+  if code == 0 then
+    fail "ffiIntTooBig: exited 0 with stdout: \{out}"
+  else if trimRight out /= "-4611686018427387904" then
+    fail "in-range value not printed before the trap: \{out}"
+  else
+    expectTextContainsAll intRangeNeedles err
+
+cell15 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell15 w combined = graded (ffiBuildBin
+  w
+  combined
+  "ffi_int_range"
+  intRangeSrc) (bin => match boundedVerb bin []
+  Err e => fail "could not spawn int_range.bin: \{e}"
+  Ok (code, out, err) => intRangeExpect code out err)
+
+-- # Cell 16: an Array Int copy-back word outside 63 bits TRAPS. The array half of
+-- cell 15: C writing INT64_MAX into an `Array Int` argument.
+
+arrayRangeSrc : String
+arrayRangeSrc =
+  "extern ffiFillBig : Array Int -> Int -> <FFI> Unit\n\nmain : <IO, FFI> Unit\nmain =\n  let xs = [|1, 2, 3|]\n  let _ = ffiFillBig xs 3\n  println xs\n"
+
+arrayRangeNeedles : List String
+arrayRangeNeedles = [
+  "runtime error",
+  "outside Int's range",
+  "Array Int argument",
+]
+
+arrayRangeExpect : Int -> String -> String -> Expectation
+arrayRangeExpect code out err =
+  if code == 0 then
+    fail "copy-back: exited 0 with stdout: \{out}"
+  else if out /= "" then
+    fail "copy-back: printed to stdout before trapping: \{out}"
+  else
+    expectTextContainsAll arrayRangeNeedles err
+
+cell16 : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+cell16 w combined = graded (ffiBuildBin
+  w
+  combined
+  "ffi_array_range"
+  arrayRangeSrc) (bin => match boundedVerb bin []
+  Err e => fail "could not spawn array_range.bin: \{e}"
+  Ok (code, out, err) => arrayRangeExpect code out err)
+
+test "diff_compiler_llvm_ffi cells 15-16: int64 outside 63 bits traps, Array Int copy-back range traps" = inScratchDir
+  "llvm_ffi_cells_15_to_16"
+  (w => graded (buildCombined w) (combined => expectEach [
+    ("cell 15 ffi_inbound_int_range", cell15 w combined),
+    ("cell 16 ffi_array_int_range", cell16 w combined),
+  ]))

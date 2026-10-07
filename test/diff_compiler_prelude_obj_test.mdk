@@ -1,0 +1,240 @@
+{- | Gate for the MEDAKA_PRELUDE_OBJ build fast path. Replaces
+   diff_compiler_prelude_obj.sh.
+
+   The inline link and the prebuilt-prelude link of each impl-heavy sample program
+   must agree on exit status and output, and each pinned fixture must produce its
+   value. The impl ABI of the selected interface must not carry a foreign
+   method-dictionary prefix.
+
+   Runs under `medaka test --native`: it spawns clang-backed builds and runs the
+   produced binaries, which the interpreter does not bind. -}
+
+import string.{startsWith, lines}
+import path.{stem}
+import regex.{Regex, mustCompile, isMatch}
+import test_process.{medakaBin, underRoot, boundedVerb, scratchDir}
+import compiler_cli_test_support.{fixtureStems, boundedInTree}
+import test.{Expectation, expectAll, expectEach, expectAtLeast, fail, pass}
+
+-- Each spawn is graded on its exit code before its output is compared.
+buildExit : List String -> <Exec, IO> Result String Int
+buildExit args = map ((code, _, _) => code) (boundedInTree 900 "env" args)
+
+runExit : String -> <Exec, IO> Result String (Int, String)
+runExit bin =
+  map
+    ((code, out, _) => (code, out))
+    (boundedVerb "sh" ["-c", "exec \"$0\" 2>&1", bin])
+
+-- Expected stdout+stderr of each pinned fixture, with its trailing newline.
+-- Fixtures absent here have no value pin; the inline and prebuilt links must still
+-- agree on them.
+pinOf : String -> String
+pinOf "arity_static" = "123\n"
+pinOf "arity_dynamic_direct" = "123\n"
+pinOf "arity_dynamic_dispatch_first" = "1\n42\n1\n2\n53\n2\n3\n64\n"
+pinOf "arity_dynamic_value" = "123\n"
+pinOf "arity_dynamic_three_args" = "6\n"
+pinOf "arity_dynamic_partial" = "42\n"
+pinOf "arity_dynamic_strict_prefix" = "1\n1\n"
+pinOf "main_mixed_ia_only" = "111\n101\n"
+pinOf "main_distinct" = "101203\n"
+pinOf "main_distinct_reverse" = "101203\n"
+pinOf "main_box" = "101203\n"
+pinOf "main_box_reverse" = "101203\n"
+pinOf "main_empty_constraint" = "111\n101\n"
+pinOf "main_ia_first" = "111\n101\n"
+pinOf "main_iz_first" = "111\n101\n"
+pinOf _ = ""
+
+-- The impl-heavy sample: each fixture defines impls of prelude interfaces and routes
+-- them through prelude generics, the only shape a stale prelude.o gets wrong.
+sampleSrcs : <IO> List String
+sampleSrcs = [
+  underRoot "test/construct_fixtures/interface_impl.mdk",
+  underRoot "test/construct_fixtures/superclass.mdk",
+  underRoot "test/construct_fixtures/nested_requires_dict.mdk",
+  underRoot "test/construct_fixtures/default_impl_override.mdk",
+  underRoot "test/construct_fixtures/deriving_eq.mdk",
+  underRoot "test/construct_fixtures/deriving_debug.mdk",
+  underRoot "test/construct_fixtures/operator_eq_user_impl.mdk",
+  underRoot "test/construct_fixtures/maximum_minimum_adt.mdk",
+  underRoot "test/construct_fixtures/multi_param_iface.mdk",
+  underRoot "test/construct_fixtures/tuple_neq.mdk",
+  underRoot "test/llvm_fixtures/guard_refut_clause_chain.mdk",
+  underRoot "test/wasm/fixtures/adt_enum_nullary.mdk",
+  underRoot "test/engine_fixtures/numop_predicate.mdk",
+  underRoot "test/engine_fixtures/numop_predicate_import_reverse.mdk",
+  underRoot "test/engine_fixtures/numop_predicate_primitive_collision.mdk",
+  underRoot "test/prelude_obj_fixtures/arity_static.mdk",
+  underRoot "test/prelude_obj_fixtures/arity_dynamic_direct.mdk",
+  underRoot "test/prelude_obj_fixtures/arity_dynamic_dispatch_first.mdk",
+  underRoot "test/prelude_obj_fixtures/arity_dynamic_value.mdk",
+  underRoot "test/prelude_obj_fixtures/arity_dynamic_three_args.mdk",
+  underRoot "test/prelude_obj_fixtures/arity_dynamic_partial.mdk",
+  underRoot "test/prelude_obj_fixtures/arity_dynamic_strict_prefix.mdk",
+  underRoot "test/prelude_obj_fixtures/default_arity/main_mixed_ia_only.mdk",
+  underRoot "test/prelude_obj_fixtures/default_arity/main_distinct.mdk",
+  underRoot "test/prelude_obj_fixtures/default_arity/main_distinct_reverse.mdk",
+  underRoot "test/prelude_obj_fixtures/default_arity/main_box.mdk",
+  underRoot "test/prelude_obj_fixtures/default_arity/main_box_reverse.mdk",
+  underRoot
+    "test/prelude_obj_fixtures/default_empty_constraint/main_empty_constraint.mdk",
+  underRoot "test/prelude_obj_fixtures/default_sole_direct/main_ia_first.mdk",
+  underRoot "test/prelude_obj_fixtures/default_sole_direct/main_iz_first.mdk",
+]
+
+withScratch : (String -> <Exec, IO, FileRead> Expectation) ->
+  <Exec, IO, FileRead> Expectation
+withScratch k = match scratchDir
+  Err e => fail "could not make a scratch dir: \{e}"
+  Ok w => k w
+
+-- Selected-interface ABI: the unconstrained IA.szK impl takes exactly its receiver,
+-- both as a define and at its dispatch-arm call.
+implDefine : Regex
+implDefine =
+  mustCompile "^define i64 @mdk_impl_zZmodels_2e_Cat_szK\\(i64 [^,()]+\\) \\{"
+
+implCall : Regex
+implCall = mustCompile "call i64 @mdk_impl_zZmodels_2e_Cat_szK\\(i64 [^,()]+\\)"
+
+abiRow : String -> <Exec, IO, FileRead> Expectation
+abiRow w =
+  let src =
+    underRoot
+      "test/prelude_obj_fixtures/default_empty_constraint/main_empty_constraint.mdk"
+  let abi = "\{w}/default_empty_constraint.abi"
+  match (boundedInTree 900 "env" [
+    "MEDAKA_STRICT=1", medakaBin, "build", "--allow-internal", "--keep-ir", src,
+    "-o", abi
+  ])
+    Err e => fail "could not inspect selected-interface impl ABI: \{e}"
+    Ok (code, _, _) =>
+      if code /= 0 then
+        fail
+          "could not inspect selected-interface impl ABI: build exited \{intToString code}"
+      else match readFile "\{abi}.ll"
+        Err e => fail "could not read \{abi}.ll: \{e}"
+        Ok ll =>
+          if any (isMatch implDefine) (lines ll)
+            && any (isMatch implCall) (lines ll) then
+            pass
+          else
+            fail
+              "unconstrained IA.szK impl retained a foreign method-dictionary prefix"
+
+-- Dynamic-arity fixtures: each must typecheck, and its run must print its pin.
+dynRow : String -> <Exec, IO, FileRead> Expectation
+dynRow src = match boundedInTree 900 medakaBin ["check", src]
+  Err e => fail "\{stem src}: check could not run: \{e}"
+  Ok (checkCode, _, _) =>
+    if checkCode /= 0 then
+      fail "\{stem src}: dynamic-arity semantic probe did not typecheck"
+    else match boundedInTree 900 medakaBin ["run", src]
+      Err e => fail "\{stem src}: run could not run: \{e}"
+      Ok (runCode, out, _) =>
+        if runCode /= 0 then
+          fail
+            "\{stem src}: dynamic-arity eval oracle exited \{intToString runCode}"
+        else if out /= pinOf (stem src) then
+          fail
+            "\{stem src}: dynamic-arity eval oracle expected \{pinOf (stem src)}, got \{out}"
+        else
+          pass
+
+dynTest : <Exec, IO, FileRead> Expectation
+dynTest = match fixtureStems (underRoot "test/prelude_obj_fixtures")
+  Err e => fail "could not list prelude_obj_fixtures: \{e}"
+  Ok stems =>
+    let dyn = filter (startsWith "arity_dynamic_") stems
+    let dir = underRoot "test/prelude_obj_fixtures"
+    expectAll [
+      expectAtLeast 6 (length dyn),
+      expectEach (map (s => (s, dynRow "\{dir}/\{s}.mdk")) dyn),
+    ]
+
+-- One sample program at one opt level: inline link vs prebuilt-prelude link.
+sampleRow : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead> Expectation
+sampleRow w opt pobj src =
+  let label = stem src
+  let inline = "\{w}/\{label}\{opt}.inline"
+  let prebuilt = "\{w}/\{label}\{opt}.prebuilt"
+  match buildExit [
+    "MEDAKA_CLANG_OPT=\{opt}",
+    medakaBin,
+    "build",
+    "--allow-internal",
+    src,
+    "-o",
+    inline,
+  ]
+    Err e => fail "\{label} \{opt}: inline build did not run: \{e}"
+    Ok ci =>
+      if ci /= 0 then
+        fail "\{label} \{opt}: inline build failed (exit \{intToString ci})"
+      else match buildExit [
+        "MEDAKA_PRELUDE_OBJ=\{pobj}",
+        "MEDAKA_CLANG_OPT=\{opt}",
+        medakaBin,
+        "build",
+        "--allow-internal",
+        src,
+        "-o",
+        prebuilt,
+      ]
+        Err e => fail "\{label} \{opt}: prebuilt build did not run: \{e}"
+        Ok cp =>
+          if cp /= 0 then
+            fail
+              "\{label} \{opt}: prebuilt build failed (exit \{intToString cp})"
+          else match runExit inline
+            Err e => fail "\{label} \{opt}: inline run did not run: \{e}"
+            Ok (inlineCode, oi) => match runExit prebuilt
+              Err e => fail "\{label} \{opt}: prebuilt run did not run: \{e}"
+              Ok (prebuiltCode, op) =>
+                if inlineCode /= prebuiltCode || oi /= op then
+                  fail
+                    "\{label} \{opt}: inline(exit \{intToString inlineCode}) vs prebuilt(exit \{intToString prebuiltCode}) diverged"
+                else if pinOf label /= ""
+                  && (inlineCode /= 0 || oi /= pinOf label) then
+                  fail "\{label} \{opt}: missed its value pin"
+                else
+                  pass
+
+optRow : String -> String -> <Exec, IO, FileRead> Expectation
+optRow w opt =
+  let pobj = "\{w}/prelude\{opt}.o"
+  match buildExit [
+    "MEDAKA_CLANG_OPT=\{opt}",
+    medakaBin,
+    "build",
+    "--emit-prelude-obj",
+    pobj,
+  ]
+    Err e => fail "could not --emit-prelude-obj at \{opt}: \{e}"
+    Ok code =>
+      if code /= 0 then
+        fail
+          "could not --emit-prelude-obj at \{opt}: exited \{intToString code}"
+      else match boundedVerb "test" ["-f", pobj]
+        Err e => fail "could not stat \{pobj}: \{e}"
+        Ok (c, _, _) =>
+          if c /= 0 then
+            fail "--emit-prelude-obj at \{opt} wrote no \{pobj}"
+          else
+            expectEach
+              (map (src => (stem src, sampleRow w opt pobj src)) sampleSrcs)
+
+test "prelude_obj: unconstrained IA.szK impl ABI carries no foreign dictionary prefix" =
+  withScratch abiRow
+
+test "prelude_obj: dynamic-arity probes typecheck and evaluate to their pins" =
+  dynTest
+
+test "prelude_obj: inline and prebuilt-prelude links agree on every sample program" =
+  withScratch (w => expectAll [optRow w "-O0", optRow w "-O2"])

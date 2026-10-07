@@ -1,0 +1,467 @@
+{- | Gate for call/define arity skew in emitted LLVM text IR, over
+   test/build_diff_fixtures. Replaces diff_compiler_call_arity.sh, in two parts.
+   This file is part 1: the shared helpers, the corpus census, and the
+   #1101 and #1648 regression arms. The constrained-function (CDict) arms,
+   the #2078 report-only row, and the compiler self-IR census are in part 2.
+
+   The census scans each emitted `.ll` line by line. A call whose argument
+   count differs from the local `define` of the same name is a skew.
+
+   Runs under `medaka test --native`: it spawns `medaka build --keep-ir` on
+   each fixture and reads the kept IR, neither of which the interpreter binds. -}
+
+import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb, scratchDir}
+import compiler_cli_test_support.{boundedInTree, fixtureStems}
+import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
+import string as S
+import list as L
+
+fixtures : <IO> String
+fixtures = underRoot "test/build_diff_fixtures"
+
+reg1101 : String
+reg1101 = "tail_over_application_arity_conformance"
+
+reg1648 : String
+reg1648 = "impl_requires_dict_arity_conformance"
+
+isRegression : String -> Bool
+isRegression stem = stem == reg1101 || stem == reg1648
+
+-- Characters of an LLVM identifier, as the scanner's [A-Za-z0-9_.$] class.
+nameAlpha : String
+nameAlpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.$"
+
+-- The scanner's call-prefix class [a-zA-Z0-9_() ,%*\[\]].
+callAlpha : String
+callAlpha =
+  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_() ,%*[]"
+
+-- A regex word character (\b).
+wordAlpha : String
+wordAlpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_"
+
+-- True when every character of s is in alpha.
+allIn : String -> String -> Bool
+allIn alpha s =
+  if s == "" then
+    True
+  else
+    S.contains (S.take 1 s) alpha && allIn alpha (S.drop 1 s)
+
+-- The leading run of identifier characters of s.
+nameRun : String -> String
+nameRun s =
+  if s == "" || not (S.contains (S.take 1 s) nameAlpha) then
+    ""
+  else
+    S.take 1 s ++ nameRun (S.drop 1 s)
+
+-- Top-level comma-separated parts of an argument list, given the text
+-- after its opening "(" and up to the matching ")".
+topArgs : Int -> String -> String -> List String -> List String
+topArgs depth s cur acc =
+  if s == "" then
+    L.reverse (cur :: acc)
+  else
+    argStep depth (S.take 1 s) (S.drop 1 s) cur acc
+
+argStep : Int -> String -> String -> String -> List String -> List String
+argStep depth c rest cur acc =
+  if depth == 0 && c == ")" then
+    L.reverse (cur :: acc)
+  else if depth == 0 && c == "," then
+    topArgs 0 rest "" (cur :: acc)
+  else if c == "(" || c == "[" || c == "{" then
+    topArgs (depth + 1) rest (cur ++ c) acc
+  else if c == ")" || c == "]" || c == "}" then
+    topArgs (depth - 1) rest (cur ++ c) acc
+  else
+    topArgs depth rest (cur ++ c) acc
+
+nonBlank : String -> Bool
+nonBlank p = S.trim p /= ""
+
+-- Argument count of the paren group whose "(" was just consumed.
+argCount : String -> Int
+argCount body = length (L.filter nonBlank (topArgs 0 body "" []))
+
+-- (name, arity) when the line is a `define` header.
+defineOf : String -> Option (String, Int)
+defineOf line =
+  if not (S.startsWith "define " line) then
+    None
+  else match S.indexOf "@" line
+    None => None
+    Some i => defineHead (S.drop (i + 1) line)
+
+-- Name and parameter count, when the name is non-empty and "(" follows.
+defineHead : String -> Option (String, Int)
+defineHead after = callName after
+
+-- Name after an "@", then optional spaces and "(" (the scanner's \s*\().
+callName : String -> Option (String, Int)
+callName after =
+  parenAfter
+    (nameRun after)
+    (S.trimLeft (S.drop (S.length (nameRun after)) after))
+
+parenAfter : String -> String -> Option (String, Int)
+parenAfter name rest =
+  if name /= "" && S.startsWith "(" rest then
+    Some (name, argCount (S.drop 1 rest))
+  else
+    None
+
+collectDefs : List (Option (String, Int)) -> List (String, Int)
+collectDefs [] = []
+collectDefs (None :: r) = collectDefs r
+collectDefs ((Some d) :: r) = d :: collectDefs r
+
+defsOf : List String -> List (String, Int)
+defsOf ls = collectDefs (map defineOf ls)
+
+-- First recorded arity for name, matching the scanner's setdefault.
+arityOf : String -> List (String, Int) -> Option Int
+arityOf name [] = None
+arityOf name ((n, a) :: r) = if n == name then Some a else arityOf name r
+
+-- The call's name and argument count, when text after "call" matches the
+-- scanner's pattern: at least one space, then a call-prefix run, "@", a name,
+-- optional spaces, and "(".
+callBody : String -> Option (String, Int)
+callBody s = if not (S.startsWith " " s) then None else callTail (S.trimLeft s)
+
+callTail : String -> Option (String, Int)
+callTail s = match S.indexOf "@" s
+  None => None
+  Some j =>
+    if allIn callAlpha (S.take j s) then callName (S.drop (j + 1) s) else None
+
+-- Every direct call on a line, as (name, argument count), in order.
+callsFrom : String -> Int -> List (String, Int)
+callsFrom full pos = match S.indexOf "call" (S.drop pos full)
+  None => []
+  Some j => callAt full (pos + j)
+
+callAt : String -> Int -> List (String, Int)
+callAt full k = callHit (boundaryOk full k) full k
+
+boundaryOk : String -> Int -> Bool
+boundaryOk full k =
+  k == 0 || not (S.contains (S.sliceClamped (k - 1) k full) wordAlpha)
+
+callHit : Bool -> String -> Int -> List (String, Int)
+callHit ok full k =
+  if not ok then
+    callsFrom full (k + 4)
+  else match callBody (S.drop (k + 4) full)
+    None => callsFrom full (k + 4)
+    Some hit => hit :: callsFrom full (k + 4)
+
+-- Skews on one line, given the define table and the line number.
+lineSkews : List (String, Int) -> Int -> String -> List String
+lineSkews defs n line = skewCalls defs n line (callsFrom line 0)
+
+skewCalls : List (String, Int) ->
+  Int ->
+  String ->
+  List (String, Int) ->
+  List String
+skewCalls defs n line [] = []
+skewCalls defs n line ((name, c) :: more) =
+  skewHit defs n line name c (arityOf name defs) more
+
+skewHit : List (String, Int) ->
+  Int ->
+  String ->
+  String ->
+  Int ->
+  Option Int ->
+  List (String, Int) ->
+  List String
+skewHit defs n line name c None more = skewCalls defs n line more
+skewHit defs n line name c (Some d) more =
+  if d == c then
+    skewCalls defs n line more
+  else
+    "\{name} define=\{intToString d} call=\{intToString c} line=\{intToString n}: \{S.trim line}"
+      :: skewCalls defs n line more
+
+skewLines : List (String, Int) -> List String -> Int -> List String
+skewLines defs [] n = []
+skewLines defs (l :: r) n = lineSkews defs n l ++ skewLines defs r (n + 1)
+
+-- Every skew in one emitted IR text, in order.
+irSkews : String -> List String
+irSkews ir = skewLines (defsOf (S.lines ir)) (S.lines ir) 1
+
+-- Build one fixture with its kept IR, and return the IR text.
+buildIR : String -> String -> <Exec, IO, FileRead> Result String String
+buildIR work stem = match boundedInTree 600 medakaBin [
+  "build",
+  "\{fixtures}/\{stem}.mdk",
+  "-o",
+  "\{work}/\{stem}.bin",
+  "--keep-ir",
+]
+  Err e => Err "could not spawn build: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      Err "build exited \{intToString code}"
+    else
+      readFile "\{work}/\{stem}.bin.ll"
+
+-- One corpus row. Only the two regression fixtures are graded; the other
+-- rows are built and scanned so the census is complete, as the script was.
+censusRow : String -> String -> <Exec, IO, FileRead> Expectation
+censusRow work stem = match buildIR work stem
+  Err e =>
+    if isRegression stem then
+      fail "\{stem}: failed to build or read IR: \{e}"
+    else
+      pass
+  Ok ir =>
+    if not (isRegression stem) then
+      pass
+    else match irSkews ir
+      [] => pass
+      skews => fail "\{stem}: call/define arity skew: \{S.join "; " skews}"
+
+test "diff_compiler_call_arity: corpus census, #1101 and #1648 regression fixtures stay clean" =
+  match scratchDir
+    Err e => fail "no scratch dir: \{e}"
+    Ok work => match fixtureStems fixtures
+      Err e => fail "could not list fixtures: \{e}"
+      Ok stems => expectAll [
+        expectAtLeast 86 (length stems),
+        if any (s => s == reg1101) stems then
+          pass
+        else
+          fail "the #1101 regression fixture is MISSING from the corpus",
+        if any (s => s == reg1648) stems then
+          pass
+        else
+          fail "the #1648 regression fixture is MISSING from the corpus",
+        expectEach (map (s => (s, censusRow work s)) stems),
+      ]
+
+-- Constrained-function (CDict) call shapes, script lines 209-407.
+dictStem : String
+dictStem = "dict_call_arity_conformance"
+
+dictPrefix : String
+dictPrefix = "mdk_dict_call_arity_conformance__"
+
+adderCall : String
+adderCall = "call i64 @\{dictPrefix}adder3("
+
+-- Build one source file with its kept IR, and return the IR text.
+buildAt : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead> Result String String
+buildAt work src stem = match boundedInTree 600 medakaBin [
+  "build",
+  src,
+  "-o",
+  "\{work}/\{stem}.bin",
+  "--keep-ir",
+]
+  Err e => Err "could not spawn build: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      Err "build exited \{intToString code}"
+    else
+      readFile "\{work}/\{stem}.bin.ll"
+
+-- The body lines of the first `define i64 @sym(` header, up to its closing "}".
+bodyLines : String -> List String -> Option String
+bodyLines sym [] = None
+bodyLines sym (l :: r) =
+  if S.startsWith "define i64 @\{sym}(" l && S.endsWith ") {" l then
+    Some (S.join "\n" (untilClose r))
+  else
+    bodyLines sym r
+
+untilClose : List String -> List String
+untilClose [] = []
+untilClose (l :: r) = if l == "}" then [] else l :: untilClose r
+
+bodyOf : String -> String -> Result String String
+bodyOf name ir = match bodyLines "\{dictPrefix}\{name}" (S.lines ir)
+  None => Err "missing define @\{dictPrefix}\{name}"
+  Some b => Ok b
+
+shapeRow : String -> String -> (String -> Bool) -> String -> Expectation
+shapeRow name ir ok msg = match bodyOf name ir
+  Err e => fail e
+  Ok b => if ok b then pass else fail msg
+
+exactOk : String -> Bool
+exactOk b = S.contains adderCall b && not (S.contains "@__mdk_apply" b)
+
+underOk : String -> Bool
+underOk b =
+  S.contains "@mdk_pap_\{dictPrefix}adder3" b && not (S.contains adderCall b)
+
+overOk : String -> Bool
+overOk b = S.contains adderCall b && S.contains "call i64 @__mdk_apply" b
+
+noMusttail : String -> Bool
+noMusttail b = not (S.contains "musttail call" b)
+
+nonTailOk : String -> Bool
+nonTailOk b =
+  S.contains "call i64 @\{dictPrefix}nonTail(" b
+    && not (S.contains "musttail call i64 @\{dictPrefix}nonTail(" b)
+
+tailOk : String -> Bool
+tailOk b = S.contains "musttail call i64 @\{dictPrefix}tail(" b
+
+test "diff_compiler_call_arity (8): the CDict fixture has no call/define arity skew" =
+  match scratchDir
+    Err e => fail "no scratch dir: \{e}"
+    Ok work => match buildIR work dictStem
+      Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
+      Ok ir => match irSkews ir
+        [] => pass
+        skews =>
+          fail "\{dictStem}: call/define arity skew: \{S.join "; " skews}"
+
+test "diff_compiler_call_arity (9): the CDict fixture is present in the corpus" =
+  match fixtureStems fixtures
+    Err e => fail "could not list fixtures: \{e}"
+    Ok stems =>
+      if any (s => s == dictStem) stems then
+        pass
+      else
+        fail "the CDict fixture is MISSING from the corpus"
+
+test "diff_compiler_call_arity (10)-(15): CDict call shapes reach their intended lowering" =
+  match scratchDir
+    Err e => fail "no scratch dir: \{e}"
+    Ok work => match buildIR work dictStem
+      Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
+      Ok ir => expectEach [
+        (
+          "(10) exactPrefix is one direct adder3 call, no __mdk_apply",
+          shapeRow
+            "exactPrefix"
+            ir
+            exactOk
+            "exact prefix is not one direct constrained call",
+        ),
+        (
+          "(11) underPrefix builds a constrained PAP, no direct adder3 call",
+          shapeRow
+            "underPrefix"
+            ir
+            underOk
+            "under-application did not build a constrained PAP, or emitted a direct constrained call",
+        ),
+        (
+          "(12) cross has a direct prefix call plus __mdk_apply",
+          shapeRow
+            "cross"
+            ir
+            overOk
+            "over-application lacks direct prefix call plus closure apply",
+        ),
+        (
+          "(13) no musttail for a non-self call in exactPrefix",
+          shapeRow
+            "exactPrefix"
+            ir
+            noMusttail
+            "non-self constrained tail call was marked musttail",
+        ),
+        (
+          "(13) no musttail for a non-self call in cross",
+          shapeRow
+            "cross"
+            ir
+            noMusttail
+            "non-self constrained tail call was marked musttail",
+        ),
+        (
+          "(14) nonTail is an ordinary self call, not musttail",
+          shapeRow
+            "nonTail"
+            ir
+            nonTailOk
+            "non-tail constrained recursion is not an ordinary call",
+        ),
+        (
+          "(15) tail has an exact musttail self call",
+          shapeRow
+            "tail"
+            ir
+            tailOk
+            "exact constrained self-tail call is not musttail",
+        ),
+      ]
+
+test "diff_compiler_call_arity (16): the CDict fixture builds and produces kept IR" =
+  match scratchDir
+    Err e => fail "no scratch dir: \{e}"
+    Ok work => match buildIR work dictStem
+      Err e => fail "\{dictStem}: did not build or produce kept IR: \{e}"
+      Ok _ => pass
+
+-- The #2078 eta-short wrapper. Report-only, as in the script: OPEN, deliberately
+-- unfixed, so the build is exercised but no verdict is graded.
+known2078 : String
+known2078 = S.join "\n" [
+  "add : Int -> Int -> Int",
+  "add a b = a + b",
+  "",
+  "mk : Int -> Int -> Int",
+  "mk n = add n",
+  "",
+  "apply1 : (Int -> Int) -> Int -> Int",
+  "apply1 f x = f x",
+  "",
+  "main = println (apply1 (mk 1) 2)",
+  "",
+]
+
+test "diff_compiler_call_arity (17): the #2078 eta-short wrapper builds (report-only)" =
+  match scratchDir
+    Err e => fail "no scratch dir: \{e}"
+    Ok work =>
+      match writeFile "\{work}/known_2078_eta_short_wrapper.mdk" known2078
+        Err e => fail "could not write the #2078 source: \{e}"
+        Ok _ =>
+          match (buildAt
+            work
+            "\{work}/known_2078_eta_short_wrapper.mdk"
+            "known-2078")
+            _ => pass
+
+-- The compiler's own emitted IR. Report-only, as in the script: built, not graded.
+test "diff_compiler_call_arity (18): the compiler's own emitted IR builds (report-only)" =
+  match scratchDir
+    Err e => fail "no scratch dir: \{e}"
+    Ok work =>
+      match (buildAt
+        work
+        "\{medakaRoot}/compiler/driver/medaka_cli.mdk"
+        "compiler-self")
+        _ => pass
+
+-- The skew scanner must be able to fire: a define of arity 2 called with 1 arg.
+synthetic : String
+synthetic =
+  "define i64 @f(i64 %a, i64 %b) {\n  %r = call i64 @f(i64 1)\n  ret i64 %r\n}\n"
+
+test "diff_compiler_call_arity: the skew scanner flags a define=2 call=1 text (positive control)" =
+  match irSkews synthetic
+    [] =>
+      fail
+        "the skew scanner flagged nothing on a define=2 call=1 text: it can never fire"
+    skews =>
+      if any (s => S.contains "f define=2 call=1" s) skews then
+        pass
+      else
+        fail "the skew scanner flagged the wrong thing: \{S.join "; " skews}"

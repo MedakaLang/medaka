@@ -130,7 +130,7 @@ into every caller.
 **67 s → 43 s**. Compound: **`medaka build` 1.06 s → 0.343 s (3.1×).**
 
 - ⚠️ **Dispatch is OUTLINED, not inlined at the site.** Debugging a dispatch miscompile? **The arm you want is in
-  `@mdk_disp_*`, not at the call site.** `test/diff_compiler_dispatch_shape.sh` pins this — and pins that prelude
+  `@mdk_disp_*`, not at the call site.** `test/diff_compiler_dispatch_shape_test.mdk` pins this — and pins that prelude
   bodies stay **program-independent**, the precondition for `prelude.o`.
 - ⚠️ **`soleImplDirect` is a live silent-miscompile hazard for anything CACHED.** A site may shortcut to a direct
   call when a method has exactly **one** impl — true of the prelude alone, **FALSE the moment a user program adds

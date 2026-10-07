@@ -198,7 +198,7 @@ and *no in-tree consumer branches on it* — derived, not assumed: every `-eq 2`
 comparison under `test/`, `scripts/` and `.githooks/` is a gate script testing its **own**
 skip code or another *script's* exit status, never a `medaka` verb's. Note in particular that
 `fmt` already exits **1**, not 2, for its main finding ("unformatted files present",
-`test/diff_compiler_fmt_write_safety.sh:53`), so converging 2→1 leaves that gate untouched.
+`test/diff_compiler_fmt_write_safety_test.mdk:60`), so converging 2→1 leaves that gate untouched.
 
 **Rationale, part two — why "found nothing" is a failure.** The three verbs that accept a
 directory disagree on the empty case in all three dimensions at once:

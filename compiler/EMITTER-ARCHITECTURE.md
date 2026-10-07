@@ -314,7 +314,7 @@ and capability failures are therefore part of the Wasm backend's trusted base.
 | `test/diff_compiler_llvm*.sh` | native emitted output and typed-IR shapes |
 | `test/wasm/diff_wasm*.sh` | WAT assembly, validation, and behavior |
 | `test/diff_compiler_tmc_parity.sh` | shared TMC population parity |
-| `test/diff_compiler_dispatch_shape.sh` | outlined dispatch and prelude independence |
+| `test/diff_compiler_dispatch_shape_test.mdk` | outlined dispatch and prelude independence |
 | `test/diff_compiler_capability_matrix.sh` | extern existence/disposition and pure-domain ledger |
 | `test/diff_compiler_wasm_shim_parity.sh` | every marker block declared by reference host `run.js` is present and byte-identical across marker-discovered hosts (WH3); not symmetric key-set completeness |
 | `test/diff_compiler_perf_scaling.sh` | selected allocation/time growth classes |

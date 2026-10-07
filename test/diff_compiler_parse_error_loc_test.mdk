@@ -1,0 +1,88 @@
+{- | Gate for body-level parse-error locations over `test/parse_error_loc_fixtures`.
+   Replaces diff_compiler_parse_error_loc.sh.
+
+   Each fixture is a program whose syntax error sits on a body line, not the
+   declaration head. `medaka check --json <fixture>` must reject it, and the
+   start of its first diagnostic must equal the 1-based `L:C` committed in
+   `<name>.expected`. That location must also not be `1:0`, the decl-head
+   collapse that backtracking used to produce.
+
+   The `--capture` mode of the shell gate has no native equivalent here: the
+   goldens are re-derived by hand from a reviewed `check --json` run.
+
+   Runs under `medaka test --native`: it spawns `medaka` and reads the corpus,
+   neither of which the interpreter binds. -}
+
+import string as S
+import compiler_cli_test_support.{fixtureStems}
+import test_process.{medakaBin, underRoot, boundedVerb}
+import test.{
+  Expectation,
+  fail,
+  expectGolden,
+  expectAll,
+  expectAtLeast,
+  expectEach,
+}
+
+corpus : <IO> String
+corpus = underRoot "test/parse_error_loc_fixtures"
+
+-- The JSON `check --json` writes for a diagnostic range's start.
+startKey : String
+startKey = "\"start\":{\"character\":"
+
+lineKey : String
+lineKey = ",\"line\":"
+
+-- The 1-based (line, character) of the first diagnostic start in `out`.
+firstLC : String -> Option (Int, Int)
+firstLC out = match S.indexOf startKey out
+  None => None
+  Some i => lineAfter (S.drop (i + S.length startKey) out)
+
+lineAfter : String -> Option (Int, Int)
+lineAfter rest = match S.indexOf lineKey rest
+  None => None
+  Some j => charLine (S.take j rest) (S.drop (j + S.length lineKey) rest)
+
+charLine : String -> String -> Option (Int, Int)
+charLine chStr rest = match S.indexOf "}" rest
+  None => None
+  Some k => match (S.toInt chStr, S.toInt (S.take k rest))
+    (Some c, Some l) => Some (l, c)
+    _ => None
+
+-- One fixture: rejected, located, and not at the decl head.
+fixtureRow : String -> <Exec, IO, FileRead> Expectation
+fixtureRow name =
+  match boundedVerb medakaBin ["check", "--json", "\{corpus}/\{name}.mdk"]
+    Err e => fail "could not spawn medaka check on \{name}: \{e}"
+    Ok (code, out, err) => gradeRejected name code (out ++ err)
+
+gradeRejected : String -> Int -> String -> <IO, FileRead> Expectation
+gradeRejected name code text =
+  if code == 0 then
+    fail "\{name}: `medaka check` exited 0; the fixture must be rejected"
+  else
+    gradeLC name (firstLC text)
+
+gradeLC : String -> Option (Int, Int) -> <IO, FileRead> Expectation
+gradeLC name None = fail "\{name}: no diagnostic start in `check --json` output"
+gradeLC name (Some (l, c)) =
+  gradeAt name "\{intToString (l + 1)}:\{intToString c}"
+
+gradeAt : String -> String -> <IO, FileRead> Expectation
+gradeAt name lc =
+  if lc == "1:0" then
+    fail "\{name}: located at decl head 1:0 (decl-head collapse)"
+  else
+    expectGolden "\{corpus}/\{name}.expected" "\{lc}\n"
+
+test "parse_error_loc: every body-level parse error is located at its golden L:C, not 1:0" =
+  match fixtureStems corpus
+    Err e => fail "could not list \{corpus}: \{e}"
+    Ok stems => expectAll [
+      expectAtLeast 1 (length stems),
+      expectEach (map (s => (s, fixtureRow s)) stems),
+    ]

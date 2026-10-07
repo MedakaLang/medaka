@@ -1,0 +1,87 @@
+{- | Gate for the error-quality baseline: every top-level fixture under
+   test/error_quality_fixtures/<stage>/ must still produce its committed `.out`
+   record (command, exit code, normalised diagnostics). Replaces
+   diff_compiler_error_quality_baseline.sh, which ran capture.sh in CHECK=1.
+
+   Runs under `medaka test --native`: it spawns the binary once per fixture from
+   the repo root, and reads the goldens beside each fixture. -}
+
+import compiler_cli_test_support.{chompNewlines}
+import fs.{fixtureFiles}
+import list.{sort}
+import path.{basename, dirname, stem}
+import string.{endsWith, lines, replaceAll, startsWith, toLower, unlines}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEach, expectEqualText, fail
+}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot, underRoot}
+
+corpus : <IO> String
+corpus = underRoot "test/error_quality_fixtures"
+
+{- Top-level `.mdk` fixtures: one level under the corpus root, never the
+   multi-module subdirectories (`eval/xmod*/`), which the baseline never graded. -}
+fixtures : <IO, FileRead> Result String (List String)
+fixtures = match fixtureFiles corpus
+  Err e => Err e
+  Ok paths =>
+    let own = p => endsWith ".mdk" p && dirname (dirname p) == corpus
+    match sort (filter own paths)
+      [] => Err "no top-level error-quality fixtures"
+      found => Ok found
+
+subcommandFor : String -> String
+subcommandFor stage =
+  if stage == "eval" then
+    "run"
+  else if stage == "build" then
+    "build"
+  else
+    "check"
+
+{- The baseline kept only diagnostic lines from stdout (`warning:`/`error:`,
+   case-insensitive), where the exhaustiveness warnings are printed. -}
+isDiagLine : String -> Bool
+isDiagLine l =
+  let t = toLower l
+  startsWith "warning:" t || startsWith "error:" t
+
+stripNewlines : String -> String
+stripNewlines s =
+  let t = chompNewlines s
+  if t == s then s else stripNewlines t
+
+{- Path stability: the absolute repo root becomes `ROOT/`. -}
+normalise : String -> String -> String
+normalise root s = replaceAll "\{root}/" "ROOT/" s
+
+row : String -> <Exec, IO, FileRead> Expectation
+row p =
+  let stage = basename (dirname p)
+  let sub = subcommandFor stage
+  let rel = "test/error_quality_fixtures/\{stage}/\{basename p}"
+  let golden = "\{dirname p}/\{stem p}.out"
+  let root = medakaRoot
+  match (boundedVerbSeconds 60 "sh" [
+    "-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", medakaRoot, medakaBin,
+    sub, rel
+  ])
+    Err e => fail "\{rel}: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      let diag = filter isDiagLine (lines out)
+      let diagPart = match diag
+        [] => ""
+        _ => unlines diag
+      let body = normalise root (stripNewlines (err ++ diagPart))
+      let actual = stripNewlines "cmd: medaka \{sub}\nexit: \{intToString code}\n---\n\{body}"
+      match readFile golden
+        Err e => fail "\{rel}: no golden \{golden}: \{e}"
+        Ok text => expectEqualText (stripNewlines text) actual
+
+test "error-quality baseline: every fixture matches its committed .out record" =
+  match fixtures
+    Err e => fail "error-quality corpus unreadable: \{e}"
+    Ok paths => expectAll [
+      expectAtLeast 102 (length paths),
+      expectEach (map (p => (p, row p)) paths),
+    ]

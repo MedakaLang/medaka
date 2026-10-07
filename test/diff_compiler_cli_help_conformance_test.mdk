@@ -1,0 +1,445 @@
+{- | Gate for CLI help truthfulness (#2354): every help text must describe the CLI
+   the built ./medaka actually has. Replaces diff_compiler_cli_help_conformance.sh.
+
+   A  advertised ⊆ parsed: each `--flag` a verb's `--help` names is not rejected
+      as unknown by that verb.
+   B  cross-references resolve: each `medaka <verb> --flag` phrase in any help
+      text names a flag that verb parses.
+   C  parsed ⊆ advertised: each flag in a verb's `(known: …)` roster appears in
+      that verb's `--help`.
+
+   Every verb, flag and subcommand is derived from the binary's own output; none
+   is listed here. Runs under `medaka test --native`: it spawns the binary once
+   per probe. -}
+
+import test_process.{medakaBin, scratchDir, boundedVerb}
+import test.{Expectation, expectAll, expectAtLeast, fail, pass}
+import string as S
+import list.{reverse}
+
+-- ── spawning ─────────────────────────────────────────────────────────────────
+
+-- Runs the binary from `dir` with MEDAKA_STRICT=1 and stdin closed, so the
+-- stdio servers (repl/lsp/mcp) terminate instead of blocking.
+probe : String ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> (Int, String, String)
+probe dir argv =
+  match (boundedVerb
+    "sh"
+    ([
+        "-c",
+        "cd \"$1\" && shift && export MEDAKA_STRICT=1 && exec \"$@\" </dev/null",
+        "medaka", dir, medakaBin
+      ]
+      ++ argv))
+    Err e => (-1, "", "spawn failed: \{e}")
+    Ok r => r
+
+outOf : String -> List String -> <Exec, IO, FileRead, FileWrite> String
+outOf dir argv = match probe dir argv
+  (code, out, _) => if code /= 0 then "" else out
+
+-- stderr then stdout, as the probe's `cat "$CLI_ERR" "$CLI_OUT"` reads it.
+msgOf : (Int, String, String) -> String
+msgOf (_, out, err) = err ++ out
+
+-- ── list and string helpers ──────────────────────────────────────────────────
+
+firstOf : List String -> String
+firstOf [] = ""
+firstOf (x :: _) = x
+
+dropFirst : List a -> List a
+dropFirst [] = []
+dropFirst (_ :: xs) = xs
+
+uniq : Eq a => List a -> List a
+uniq xs = fold (acc x => if elem x acc then acc else acc ++ [x]) [] xs
+
+nonEmpty : List String -> List String
+nonEmpty xs = filter (/= "") xs
+
+-- Returns the text when its first character is lowercase, else "".
+isLowerStart : String -> String
+isLowerStart t = if t /= "" && isLowerChar (S.take 1 t) then t else ""
+
+isLowerChar : String -> Bool
+isLowerChar c = c /= "" && S.contains c "abcdefghijklmnopqrstuvwxyz"
+
+isDigitChar : String -> Bool
+isDigitChar c = c /= "" && S.contains c "0123456789"
+
+isWordChar : String -> Bool
+isWordChar c = isLowerChar c || c == "-"
+
+isNameChar : String -> Bool
+isNameChar c = isLowerChar c || isDigitChar c || c == "-"
+
+-- The longest prefix of `s` whose characters all satisfy `p`.
+prefixWhile : (String -> Bool) -> String -> String
+prefixWhile p s =
+  if s == "" then
+    ""
+  else if p (S.take 1 s) then
+    S.take 1 s ++ prefixWhile p (S.drop 1 s)
+  else
+    ""
+
+withDashes : String -> String
+withDashes w = if w == "" then "" else "--" ++ w
+
+-- `rest` is the text after a `--`: a lowercase letter, then word characters.
+flagNamed : String -> String
+flagNamed rest = withDashes (isLowerStart (prefixWhile isWordChar rest))
+
+isFlagToken : String -> Bool
+isFlagToken tok = S.startsWith "--" tok && isLowerStart (S.drop 2 tok) /= ""
+
+-- ── the binary's own surface ─────────────────────────────────────────────────
+
+-- `  medaka <verb> …` in the usage block.
+verbOfLine : String -> String
+verbOfLine line =
+  if S.startsWith "  medaka " line then
+    isLowerStart (prefixWhile isWordChar (S.drop 9 line))
+  else
+    ""
+
+verbsOf : String -> <Exec, IO, FileRead, FileWrite> List String
+verbsOf dir = uniq (nonEmpty (map verbOfLine (S.lines (outOf dir ["help"]))))
+
+-- `--`-shaped tokens at the start of an indented help line.
+flagOfLine : String -> String
+flagOfLine line =
+  if S.startsWith "--" (S.trim line) then
+    flagNamed (S.drop 2 (S.trim line))
+  else
+    ""
+
+helpFlags : String -> List String
+helpFlags text =
+  uniq (filter (/= "--help") (nonEmpty (map flagOfLine (S.lines text))))
+
+-- `medaka <verb> --flag` pairs in the parts of a line split on "medaka ".
+pairsInParts : List String -> List (String, String)
+pairsInParts [] = []
+pairsInParts (p :: ps) =
+  pairOfPart
+    (isLowerStart (prefixWhile isWordChar p))
+    (S.drop (S.length (isLowerStart (prefixWhile isWordChar p))) p)
+    ps
+
+pairOfPart : String -> String -> List String -> List (String, String)
+pairOfPart "" _ ps = pairsInParts ps
+pairOfPart v rest ps =
+  if S.startsWith " --" rest && flagNamed (S.drop 3 rest) /= "" then
+    (v, flagNamed (S.drop 3 rest)) :: pairsInParts ps
+  else
+    pairsInParts ps
+
+-- The rightmost `medaka <verb> --flag` on a line, as the greedy sed it replaces.
+lastPairOf : String -> List (String, String)
+lastPairOf line =
+  match reverse (pairsInParts (dropFirst (S.split "medaka " line)))
+    [] => []
+    x :: _ => [x]
+
+-- Sub-command names from a sub-taking verb's `(expected: a, b, …)` rejection.
+expectedNames : String -> List String
+expectedNames msg =
+  expectedIn (filter (l => S.contains "(expected: " l) (S.lines msg))
+
+expectedIn : List String -> List String
+expectedIn [] = []
+expectedIn (l :: _) = namesOf (S.split "(expected: " l)
+
+namesOf : List String -> List String
+namesOf (_ :: rest :: _) =
+  nonEmpty (map S.trim (S.split "," (firstOf (S.split ")" rest))))
+namesOf _ = []
+
+-- Sub-names from the no-argument usage block: `  name — …`.
+subLine : String -> String
+subLine line = subLineAfter (S.startsWith "  " line) line
+
+subLineAfter : Bool -> String -> String
+subLineAfter False _ = ""
+subLineAfter True line =
+  subNameAt
+    (isLowerStart (prefixWhile isNameChar (S.drop 2 line)))
+    (S.drop 2 line)
+
+subNameAt : String -> String -> String
+subNameAt "" _ = ""
+subNameAt tok afterTok =
+  if S.startsWith "—" (S.trim (S.drop (S.length tok) afterTok)) then tok else ""
+
+fallbackSubs : String -> String -> <Exec, IO, FileRead, FileWrite> List String
+fallbackSubs dir verb = match probe dir [verb]
+  (_, out, err) => nonEmpty (map subLine (S.lines out ++ S.lines err))
+
+subsFromMsg : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> List String
+subsFromMsg dir verb msg =
+  subsWhen
+    (S.contains "unknown subcommand" msg || S.contains "unknown codemod" msg)
+    dir
+    verb
+    msg
+
+subsWhen : Bool ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> List String
+subsWhen False _ _ _ = []
+subsWhen True dir verb msg = match expectedNames msg
+  [] => fallbackSubs dir verb
+  ns => ns
+
+-- Sub-command names of a verb, or [""] for a flat verb.
+subsOf : String -> String -> <Exec, IO, FileRead, FileWrite> List String
+subsOf dir verb =
+  noneIfEmpty
+    (subsFromMsg
+      dir
+      verb
+      (msgOf (probe dir [verb, "--zzz-not-a-flag", "ok.mdk"])))
+
+noneIfEmpty : List String -> List String
+noneIfEmpty [] = [""]
+noneIfEmpty xs = xs
+
+argvFor : String -> String -> List String
+argvFor verb sub = if sub == "" then [verb] else [verb, sub]
+
+-- ── the roster a verb prints in its own rejection ────────────────────────────
+
+-- The text between `(known: ` and its `)`, cut at the first `;`.
+knownInner : String -> String
+knownInner msg =
+  knownAfter (firstOf (filter (l => S.contains "(known: " l) (S.lines msg)))
+
+knownAfter : String -> String
+knownAfter line =
+  firstOf
+    (S.split
+      ";"
+      (firstOf (S.split ")" (firstOf (dropFirst (S.split "(known: " line))))))
+
+knownTokens : String -> List String
+knownTokens msg =
+  filter isFlagToken (S.split " " (S.replaceAll "," "" (knownInner msg)))
+
+-- The flags a verb's own rejection roster names, and whether any roster was
+-- printed at all (`(known: none)` counts as a roster of zero flags).
+knownFlagsOf : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> (List String, Bool)
+knownFlagsOf dir verb =
+  knownFrom
+    (map
+      (s =>
+        msgOf (probe dir (argvFor verb s ++ ["--zzz-not-a-flag", "ok.mdk"])))
+      (subsOf dir verb))
+
+knownFrom : List String -> (List String, Bool)
+knownFrom msgs = (
+  uniq (fold (acc m => acc ++ knownTokens m) [] msgs),
+  any (m => S.contains "(known: " m) msgs,
+)
+
+-- ── rejection classification ─────────────────────────────────────────────────
+
+rejectsUnknown : String -> String -> Bool
+rejectsUnknown msg flag =
+  any
+    (pat => S.contains pat (S.toLower msg))
+    (rejectionPatterns (S.toLower flag))
+
+rejectionPatterns : String -> List String
+rejectionPatterns f = [
+  "unknown flag: " ++ f,
+  "unrecognized flag '" ++ f ++ "'",
+  "unknown option '" ++ f ++ "'",
+  "unknown argument '" ++ f ++ "'",
+  "unknown codemod `" ++ f ++ "`",
+  "unknown codemod '" ++ f ++ "'",
+  "unknown subcommand `" ++ f ++ "`",
+  "unknown subcommand '" ++ f ++ "'",
+]
+
+firstLine : String -> String
+firstLine msg = S.take 70 (firstOf (S.lines msg))
+
+-- PARSED / VALUE-REJECTED / NOT-PARSED over every subcommand the verb has; a
+-- flag is parsed if any subcommand takes it.
+verdictOver : String ->
+  String ->
+  String ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> (String, String)
+verdictOver dir verb flag [] = ("NOT-PARSED", "")
+verdictOver dir verb flag (s :: rest) =
+  judge
+    flag
+    (msgOf (probe dir (argvFor verb s ++ [flag, "Z", "ok.mdk"])))
+    (verdictOver dir verb flag rest)
+
+judge : String -> String -> (String, String) -> (String, String)
+judge flag msg next =
+  judgeAs (rejectsUnknown msg flag) (S.contains flag msg) msg next
+
+judgeAs : Bool -> Bool -> String -> (String, String) -> (String, String)
+judgeAs True _ _ next = next
+judgeAs False True msg _ = ("VALUE-REJECTED", firstLine msg)
+judgeAs False False msg _ = ("PARSED", firstLine msg)
+
+-- ── the three properties ─────────────────────────────────────────────────────
+
+checkA : String -> String -> <Exec, IO, FileRead, FileWrite> List String
+checkA dir verb = checkAVerb (verb == "help" || verb == "version") dir verb
+
+checkAVerb : Bool ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> List String
+checkAVerb True _ _ = []
+checkAVerb False dir verb =
+  fold
+    (acc f => acc ++ aFail dir verb f)
+    []
+    (helpFlags (outOf dir [verb, "--help"]))
+
+aFail : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> List String
+aFail dir verb f = aFailOf f (verdictOver dir verb f (subsOf dir verb))
+
+aFailOf : String -> (String, String) -> List String
+aFailOf f (v, ev) =
+  if v == "NOT-PARSED" then
+    [
+      "A \{f} advertised by a verb's --help is rejected as an unknown flag: \{ev}",
+    ]
+  else
+    []
+
+lastPairsOf : String -> <Exec, IO, FileRead, FileWrite> List (String, String)
+lastPairsOf text = fold (acc l => acc ++ lastPairOf l) [] (S.lines text)
+
+checkB : String ->
+  List (String, String) ->
+  <Exec, IO, FileRead, FileWrite> List String
+checkB dir pairs = fold (acc p => acc ++ bFail dir p) [] pairs
+
+bFail : String ->
+  (String, String) ->
+  <Exec, IO, FileRead, FileWrite> List String
+bFail dir (cv, cf) =
+  bSkipOr (cv == "help" || cv == "version" || cf == "--help") dir cv cf
+
+bSkipOr : Bool ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> List String
+bSkipOr True _ _ _ = []
+bSkipOr False dir cv cf =
+  bClassify cf cv (msgOf (probe dir [cv, cf, "Z", "ok.mdk"]))
+
+bClassify : String -> String -> String -> List String
+bClassify cf cv msg =
+  bVerdict
+    (rejectsUnknown msg cf)
+    (S.contains "takes exactly one input file" msg)
+    cv
+    cf
+    msg
+
+bVerdict : Bool -> Bool -> String -> String -> String -> List String
+bVerdict True _ cv cf msg = [
+  "B a help text cites `medaka \{cv} \{cf}`, but \{cv} rejects it: \{firstLine msg}",
+]
+bVerdict False True cv cf msg = [
+  "B a help text cites `medaka \{cv} \{cf}`, but \{cv} takes it as a POSITIONAL: \{firstLine msg}",
+]
+bVerdict False False _ _ _ = []
+
+checkC : String -> String -> <Exec, IO, FileRead, FileWrite> List String
+checkC dir verb = checkCVerb (verb == "help" || verb == "version") dir verb
+
+checkCVerb : Bool ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> List String
+checkCVerb True _ _ = []
+checkCVerb False dir verb =
+  checkCRoster verb (knownFlagsOf dir verb) (outOf dir [verb, "--help"])
+
+checkCRoster : String -> (List String, Bool) -> String -> List String
+checkCRoster verb ([], had) _ = checkCEmpty verb had
+checkCRoster verb (known, _) helptext =
+  fold (acc f => acc ++ checkCFlag verb helptext f) [] known
+
+checkCEmpty : String -> Bool -> List String
+checkCEmpty _ True = []
+checkCEmpty "codemod" False = []
+checkCEmpty verb False = [
+  "C `medaka \{verb} --zzz-not-a-flag` prints no `(known: …)` roster and \{verb} is not in CLI_ROSTER_EXEMPT",
+]
+
+checkCFlag : String -> String -> String -> List String
+checkCFlag verb helptext f =
+  if S.contains f helptext then
+    []
+  else
+    [
+      "C `medaka \{verb}` parses \{f}, but `medaka \{verb} --help` never mentions it",
+    ]
+
+-- ── scratch workspace and expectations ───────────────────────────────────────
+
+withWork : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withWork k = match scratchDir
+  Err e => fail "could not create a scratch dir: \{e}"
+  Ok dir => match writeFile "\{dir}/ok.mdk" "main = println 1\n"
+    Err e => fail "could not write ok.mdk: \{e}"
+    Ok _ => k dir
+
+verdictOf : List String -> Expectation
+verdictOf [] = pass
+verdictOf fs = fail (S.join "\n" fs)
+
+-- ── tests ────────────────────────────────────────────────────────────────────
+
+test "cli help conformance A: every advertised flag parses" = withWork
+  (dir => expectAll [
+    expectAtLeast 16 (length (verbsOf dir)),
+    verdictOf (fold (acc v => acc ++ checkA dir v) [] (verbsOf dir)),
+  ])
+
+test "cli help conformance B: every help cross-reference resolves" = withWork
+  (dir => expectAll [
+    expectAtLeast 1 (length (bPairs dir)),
+    verdictOf (checkB dir (bPairs dir)),
+  ])
+
+bPairs : String -> <Exec, IO, FileRead, FileWrite> List (String, String)
+bPairs dir =
+  uniq
+    (fold
+      (acc v => acc ++ lastPairsOf (outOf dir [v, "--help"]))
+      (lastPairsOf (outOf dir ["help"]))
+      (verbsOf dir))
+
+test "cli help conformance C: every parsed flag is advertised" = withWork
+  (dir => expectAll [
+    expectAtLeast 16 (length (verbsOf dir)),
+    verdictOf (fold (acc v => acc ++ checkC dir v) [] (verbsOf dir)),
+  ])

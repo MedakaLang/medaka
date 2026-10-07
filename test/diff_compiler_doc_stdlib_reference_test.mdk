@@ -1,0 +1,463 @@
+{- | Freshness gate for the generated stdlib reference tree (docs/stdlib, #2249).
+   Replaces diff_compiler_doc_stdlib_reference.sh.
+
+   It regenerates the reference with `medaka doc` into a scratch directory,
+   checks that each generated page is byte-identical to its committed file,
+   and checks that every backticked prose name on a page is visible on that
+   page (the awk pass of the shell gate, ported line for line).
+
+   Runs under `medaka test --native`: it spawns the generator and reads files. -}
+
+import list as L
+import set as S
+import fs.{walkDir}
+import string.{
+  take, drop, split, lines, join, replaceAll, startsWith, endsWith, stripSuffix,
+  words, toUpper
+}
+import test_process.{
+  medakaBin, medakaRoot, underRoot, boundedVerbSeconds, scratchDir
+}
+import test.{Expectation, expectEach, expectGolden, fail, pass}
+
+-- Per-file awk state, plus the sets the pass builds up across files.
+data Walk = Walk {
+  infence : Bool,
+  lang : String,
+  entry : String,
+  allow : S.Set String,
+  vis : S.Set String,
+  bad : List String,
+}
+
+-- The script's KEYWORDS and BUILTINS.
+keywords : List String
+keywords = [
+  "match", "if", "then", "else", "let", "in", "data", "type", "impl",
+  "interface", "import", "export", "public", "deriving", "where", "do", "defer",
+  "extern", "prop", "test", "newtype", "True", "False", "not", "otherwise",
+  "main", "Int", "Float", "String", "Bool", "Char", "Unit", "List", "Array",
+  "Ref", "Option", "Result", "Effect", "Type"
+]
+
+isIdChar : String -> Bool
+isIdChar c =
+  c >= "a" && c <= "z"
+    || c >= "A" && c <= "Z"
+    || c >= "0" && c <= "9"
+    || c == "_"
+    || c == "'"
+
+isIdStart : String -> Bool
+isIdStart c = c >= "a" && c <= "z" || c >= "A" && c <= "Z" || c == "_"
+
+isLowerStart : String -> Bool
+isLowerStart c = c >= "a" && c <= "z"
+
+isUpperStartTok : String -> Bool
+isUpperStartTok t = take 1 t >= "A" && take 1 t <= "Z"
+
+headOr : a -> List a -> a
+headOr d [] = d
+headOr _ (x :: _) = x
+
+-- The runs of identifier characters on a line: awk's split on [^A-Za-z0-9_'].
+idTokens : String -> List String
+idTokens s = scanTok "" s []
+
+scanTok : String -> String -> List String -> List String
+scanTok cur rest acc =
+  if rest == "" then
+    L.reverse (flushTok cur acc)
+  else if isIdChar (take 1 rest) then
+    scanTok (cur ++ take 1 rest) (drop 1 rest) acc
+  else
+    scanTok "" (drop 1 rest) (flushTok cur acc)
+
+flushTok : String -> List String -> List String
+flushTok cur acc = if cur == "" then acc else cur :: acc
+
+isIdent : String -> Bool
+isIdent s = s /= "" && isIdStart (take 1 s) && idTokens s == [s]
+
+-- awk: `^[A-Za-z_][A-Za-z0-9_']*(\.[A-Za-z_][A-Za-z0-9_']*)+$`
+isDotted : String -> Bool
+isDotted s = partsOk (split "." s)
+
+partsOk : List String -> Bool
+partsOk [] = False
+partsOk [_] = False
+partsOk ps = identParts ps
+
+identParts : List String -> Bool
+identParts [] = True
+identParts (p :: ps) = isIdent p && identParts ps
+
+hasLower : String -> Bool
+hasLower s = toUpper s /= s
+
+hashCount : String -> Int
+hashCount s = if startsWith "#" s then 1 + hashCount (drop 1 s) else 0
+
+-- awk: /^##+ `/ . Gives the first word of the name span and the whole span.
+headingSpan : String -> Option (String, String)
+headingSpan l =
+  if hashCount l >= 2 && startsWith " `" (drop (hashCount l) l) then
+    Some (headingWord (drop (hashCount l) l))
+  else
+    None
+
+headingWord : String -> (String, String)
+headingWord rest = headingWordOf (headOr "" (split "`" (drop 2 rest)))
+
+headingWordOf : String -> (String, String)
+headingWordOf s = (headOr "" (words s), s)
+
+-- awk: a signature line `  name : type` inside a plain fence.
+sigName : String -> Option String
+sigName l = if startsWith "  " l then sigNameOf (drop 2 l) else None
+
+sigNameOf : String -> Option String
+sigNameOf rest =
+  if isLowerStart (take 1 rest)
+    && startsWith (headOr "" (idTokens rest) ++ " : ") rest then
+    Some (headOr "" (idTokens rest))
+  else
+    None
+
+sigList : String -> List String
+sigList l = match sigName l
+  Some n => [n]
+  None => []
+
+addAll : List String -> S.Set String -> S.Set String
+addAll [] s = s
+addAll (x :: xs) s = addAll xs (S.insert x s)
+
+fenceLine : Int -> Walk -> String -> Walk
+fenceLine phase st l =
+  if st.lang /= "" || phase == 4 then
+    st
+  else if phase == 3 then
+    { st | vis = addAll (idTokens l) st.vis }
+  else
+    { st |
+      allow =
+        addAll (L.filter isUpperStartTok (idTokens l) ++ sigList l) st.allow,
+    }
+
+headingLine : Int -> Walk -> String -> String -> Walk
+headingLine phase st hw s =
+  if phase <= 2 then
+    { st | allow = S.insert hw st.allow }
+  else if phase == 3 then
+    { st | vis = S.insert hw st.vis }
+  else
+    { st | entry = s }
+
+toggleFence : Walk -> String -> Walk
+toggleFence st l =
+  if st.infence then
+    { st | infence = False }
+  else
+    { st | infence = True, lang = drop 3 l }
+
+-- awk: the spans of `...` in a line; an unclosed backtick opens nothing.
+spans : String -> List String
+spans l = spansOut (split "`" l)
+
+spansOut : List String -> List String
+spansOut [] = []
+spansOut [_] = []
+spansOut (_ :: rest) = spansIn rest
+
+spansIn : List String -> List String
+spansIn [] = []
+spansIn [_] = []
+spansIn (sp :: rest) = if sp == "" then spansOut rest else sp :: spansOut rest
+
+knownHere : S.Set String -> Walk -> String -> Bool
+knownHere exc st n = S.has n st.vis || S.has n st.allow || S.has n exc
+
+identFinding : String -> S.Set String -> Walk -> String -> Option String
+identFinding modName exc st sp =
+  if knownHere exc st sp then
+    None
+  else
+    Some
+      "FAIL \{modName}.md: `\{sp}` under `\{st.entry}` names nothing visible on the page"
+
+qualFinding : String -> S.Set String -> Walk -> String -> Option String
+qualFinding modName exc st sp =
+  if S.has sp exc
+    || S.has (headOr "" (split "." sp)) st.allow
+    || S.has (headOr "" (split "." sp)) st.vis then
+    None
+  else
+    Some
+      "FAIL \{modName}.md: `\{sp}` under `\{st.entry}` qualifies with `\{headOr "" (split "." sp)}`, which is neither a stdlib module nor visible on the page"
+
+checkSpan : String -> S.Set String -> Walk -> String -> Option String
+checkSpan modName exc st sp =
+  if isIdent sp && hasLower sp then
+    identFinding modName exc st sp
+  else if isDotted sp then
+    qualFinding modName exc st sp
+  else
+    None
+
+checkProse : String -> S.Set String -> Walk -> String -> Walk
+checkProse modName exc st l =
+  { st | bad = st.bad ++ L.somes (map (checkSpan modName exc st) (spans l)) }
+
+stepPlain : Int -> String -> S.Set String -> Walk -> String -> Walk
+stepPlain phase modName exc st l = match headingSpan l
+  Some (hw, s) => headingLine phase st hw s
+  None =>
+    if startsWith "#" l then
+      st
+    else if phase == 4 then
+      checkProse modName exc st l
+    else
+      st
+
+stepLine : Int -> String -> S.Set String -> Walk -> String -> Walk
+stepLine phase modName exc st l =
+  if startsWith "```" l then
+    toggleFence st l
+  else if st.infence then
+    fenceLine phase st l
+  else
+    stepPlain phase modName exc st l
+
+walkLines : Int -> String -> S.Set String -> Walk -> List String -> Walk
+walkLines _ _ _ st [] = st
+walkLines phase modName exc st (l :: ls) =
+  walkLines phase modName exc (stepLine phase modName exc st l) ls
+
+walkFile : Int -> String -> S.Set String -> Walk -> List String -> Walk
+walkFile phase modName exc st ls =
+  walkLines
+    phase
+    modName
+    exc
+    { st | infence = False, lang = "", entry = "(module)" }
+    ls
+
+emptySet : S.Set String
+emptySet = S.fromList []
+
+emptyWalk : S.Set String -> Walk
+emptyWalk allow = Walk {
+  infence = False,
+  lang = "",
+  entry = "(module)",
+  allow = allow,
+  vis = emptySet,
+  bad = [],
+}
+
+-- The allow set shared by every page: core.md and runtime.md (phases 1 and 2),
+-- seeded with the keywords, module ids and namespace directories.
+preludeWalk : S.Set String -> List String -> List String -> Walk
+preludeWalk seed coreLs rtLs =
+  walkFile 2 "" emptySet (walkFile 1 "" emptySet (emptyWalk seed) coreLs) rtLs
+
+allowOf : Walk -> S.Set String
+allowOf w = w.allow
+
+finalBad : Walk -> List String
+finalBad w = w.bad
+
+excNames : String -> List (String, String) -> List String
+excNames _ [] = []
+excNames modName ((m, n) :: rest) =
+  if m == modName then n :: excNames modName rest else excNames modName rest
+
+excFor : String -> List (String, String) -> S.Set String
+excFor modName rows = S.fromList (excNames modName rows)
+
+-- The page's findings: phase 3 collects what the page shows, phase 4 checks prose.
+pageFindings : String ->
+  S.Set String ->
+  List (String, String) ->
+  List String ->
+  List String
+pageFindings modName allow excRows ls =
+  finalBad
+    (walkFile
+      4
+      modName
+      (excFor modName excRows)
+      (walkFile 3 modName (excFor modName excRows) (emptyWalk allow) ls)
+      ls)
+
+parseExc : List String -> List (String, String)
+parseExc [] = []
+parseExc (l :: ls) =
+  if startsWith "#" l || l == "" then
+    parseExc ls
+  else
+    excRow (split "\t" l) :: parseExc ls
+
+excRow : List String -> (String, String)
+excRow (m :: n :: _) = (m, n)
+excRow [m] = (m, "")
+excRow [] = ("", "")
+
+excRowsFrom : Result String (List String) -> List (String, String)
+excRowsFrom (Err _) = []
+excRowsFrom (Ok ls) = parseExc ls
+
+readLinesOf : String -> <FileRead> Result String (List String)
+readLinesOf p = map lines (readFile p)
+
+pageVerdict : List String -> Expectation
+pageVerdict [] = pass
+pageVerdict msgs = fail (join "\n" msgs)
+
+pageRow : String ->
+  S.Set String ->
+  List (String, String) ->
+  String ->
+  <FileRead> Expectation
+pageRow scratch allow excRows modName =
+  match readLinesOf "\{scratch}/\{modName}.md"
+    Err e => fail "could not read \{modName}.md: \{e}"
+    Ok ls => pageVerdict (pageFindings modName allow excRows ls)
+
+pageEntries : String ->
+  S.Set String ->
+  List (String, String) ->
+  List String ->
+  <FileRead> List (String, Expectation)
+pageEntries _ _ _ [] = []
+pageEntries scratch allow excRows (m :: ms) =
+  (m ++ ".md", pageRow scratch allow excRows m)
+    :: pageEntries scratch allow excRows ms
+
+namespaceOf : String -> List String
+namespaceOf id = match split "." id
+  [d, _] => [d]
+  _ => []
+
+namespaceDirs : List String -> List String
+namespaceDirs [] = []
+namespaceDirs (i :: is) = namespaceOf i ++ namespaceDirs is
+
+preludeSeed : List String -> S.Set String
+preludeSeed ids = S.fromList (keywords ++ ids ++ namespaceDirs ids)
+
+visibilityEntries : String ->
+  List String ->
+  <FileRead, IO> List (String, Expectation)
+visibilityEntries scratch ids = match readLinesOf "\{scratch}/core.md"
+  Err e => [
+    ("name visibility", fail "no core.md to derive the prelude set from: \{e}"),
+  ]
+  Ok coreLs => match readLinesOf "\{scratch}/runtime.md"
+    Err e => [
+      (
+        "name visibility",
+        fail "no runtime.md to derive the prelude set from: \{e}",
+      ),
+    ]
+    Ok rtLs =>
+      pageEntries
+        scratch
+        (allowOf (preludeWalk (preludeSeed ids) coreLs rtLs))
+        (excRowsFrom
+          (readLinesOf (underRoot "test/STDLIB-DOC-NAME-EXCEPTIONS.txt")))
+        ids
+
+-- The per-file freshness rows: each expected file must be generated and committed, and byte-identical.
+fileRow : String -> String -> <FileRead, IO> Expectation
+fileRow scratch name =
+  if not (fileExists "\{scratch}/\{name}") then
+    fail
+      "\{name} (expected but generator did not produce it, partial/crashed run)"
+  else if not (fileExists (underRoot "docs/stdlib/\{name}")) then
+    fail "\{name} (freshly generated, but docs/stdlib/\{name} is not committed)"
+  else match readFile "\{scratch}/\{name}"
+    Err e => fail "could not read fresh \{name}: \{e}"
+    Ok text => expectGolden (underRoot "docs/stdlib/\{name}") text
+
+fileEntries : String -> List String -> <FileRead, IO> List (String, Expectation)
+fileEntries _ [] = []
+fileEntries scratch (n :: ns) = (n, fileRow scratch n) :: fileEntries scratch ns
+
+mdName : String -> String
+mdName id = id ++ ".md"
+
+-- One expected file per module, plus the index and the inventory.
+namesOf : List String -> List String
+namesOf ids = map mdName ids ++ ["index.md", "inventory.json"]
+
+dropMdk : String -> String
+dropMdk s = match stripSuffix ".mdk" s
+  Some x => x
+  None => s
+
+moduleIdOf : String -> String
+moduleIdOf rel = replaceAll "/" "." (dropMdk rel)
+
+-- The path under stdlib/ of a walked file, whatever prefix the walk gave it.
+relToStdlib : String -> String
+relToStdlib p = headOr p (L.reverse (split "stdlib/" p))
+
+isShallow : String -> Bool
+isShallow p = match split "/" p
+  [_] => True
+  [_, _] => True
+  _ => False
+
+isModule : String -> Bool
+isModule p = endsWith ".mdk" p && not (endsWith "_test.mdk" p) && isShallow p
+
+keepModules : List String -> List String
+keepModules [] = []
+keepModules (p :: ps) =
+  if isModule p then p :: keepModules ps else keepModules ps
+
+stdlibRels : <IO, FileRead> Result String (List String)
+stdlibRels = map (paths => L.sort (keepModules (map relToStdlib paths))) (walkDir (underRoot "stdlib"))
+
+stdlibArg : String -> String
+stdlibArg rel = "stdlib/\{rel}"
+
+-- The script's `cd "$ROOT" && "$MEDAKA" doc --out ... stdlib/*.mdk stdlib/*/*.mdk`.
+shellArgs : String -> List String -> <IO> List String
+shellArgs scratch rels =
+  [
+      "-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", medakaRoot,
+      medakaBin, "doc", "--out", scratch
+    ]
+    ++ map stdlibArg rels
+
+generated : String -> List String -> <Exec, IO, FileRead> Expectation
+generated scratch rels =
+  match boundedVerbSeconds 600 "sh" (shellArgs scratch rels)
+    Err e => fail "could not run the generator: \{e}"
+    Ok (code, _, _) =>
+      if code /= 0 then
+        fail
+          "generator exited \{intToString code}, refusing to check a partial/crashed run"
+      else
+        expectEach (generatedEntries scratch (map moduleIdOf rels))
+
+generatedEntries : String ->
+  List String ->
+  <FileRead, IO> List (String, Expectation)
+generatedEntries scratch ids =
+  fileEntries scratch (namesOf ids) ++ visibilityEntries scratch ids
+
+docReference : <Exec, IO, FileRead> Expectation
+docReference = match scratchDir
+  Err e => fail "could not create a scratch directory: \{e}"
+  Ok scratch => match stdlibRels
+    Err e => fail "could not list stdlib/: \{e}"
+    Ok [] => fail "no stdlib modules found, refusing to pass on 0 checked"
+    Ok rels => generated scratch rels
+
+test "diff_compiler_doc_stdlib_reference: regenerated stdlib pages match docs/stdlib and every prose name is visible" =
+  docReference

@@ -1,0 +1,165 @@
+{- | Gate for the `medaka lint` directory and cross-file contracts. Spawns the
+   `medaka` binary under test over three fixture trees and grades what it
+   prints:
+
+   - `lint_multi_fixtures`: one directory target, against `multi.expected`;
+   - `lint_multi_dir_fixtures`: two directory targets, against
+     `multi_dir.expected`, plus the flag and target parsing that must fail
+     loudly or be honoured rather than silently dropped;
+   - `lint_crossfile_fixtures`: the recursive walk and the cross-file
+     `rule-duplicate-body` tier, on the text channel and in the `--json`
+     envelope.
+
+   Stdout is graded against goldens with the tree root normalised to `ROOT/`.
+   Exit codes and the combined stdout and stderr are graded where the
+   contract is about a diagnostic.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads goldens,
+   neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{boundedInTree}
+import regex.{mustCompile, isMatch}
+import string.{contains, lines, replaceAll, unwords}
+import io.{getEnvOr}
+import test_process.{medakaBin, medakaRoot, underRoot}
+import test.{
+  Expectation,
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectEqualText,
+  expectFalse,
+  expectGolden,
+  expectTextContainsAll,
+  fail,
+}
+
+multiFixtures : <IO> String
+multiFixtures = underRoot "test/lint_multi_fixtures"
+
+multiDirFixtures : <IO> String
+multiDirFixtures = underRoot "test/lint_multi_dir_fixtures"
+
+crossfileFixtures : <IO> String
+crossfileFixtures = underRoot "test/lint_crossfile_fixtures"
+
+-- The binary prints absolute paths even when `medakaRoot` is relative, so the
+-- working directory's absolute path is normalised too. Both become `ROOT/`, so
+-- goldens are machine-portable.
+rootNorm : String -> <IO> String
+rootNorm s = normRoot (getEnvOr "PWD" medakaRoot) s
+
+normRoot : String -> String -> <IO> String
+normRoot cwd s =
+  replaceAll "\{medakaRoot}/" "ROOT/" (replaceAll (cwd ++ "/") "ROOT/" s)
+
+-- Stdout of `medaka <args>`, graded against a golden file.
+lintGolden : List String -> String -> <Exec, IO> Expectation
+lintGolden args golden = match boundedInTree 120 medakaBin args
+  Err e => fail "could not run `medaka lint`: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail "`medaka \{unwords args}` exited \{intToString code}"
+    else
+      expectGolden golden (rootNorm out)
+
+-- Exit code and combined stdout and stderr of `medaka <args>`.
+lintBoth : List String -> <Exec, IO> Result String (Int, String)
+lintBoth args =
+  map
+    ((code, out, err) => (code, out ++ err))
+    (boundedInTree 120 medakaBin args)
+
+test "diff_compiler_lint_multi: directory target matches its golden" =
+  lintGolden ["lint", multiFixtures] "\{multiFixtures}/multi.expected"
+
+-- #1173: a missing path must exit 1 and say so.
+nonexistentPath : <Exec, IO> Expectation
+nonexistentPath = match lintBoth [
+  "lint",
+  "--json",
+  "\{multiDirFixtures}/does-not-exist-1173.mdk",
+]
+  Err e => fail "could not run `medaka lint`: \{e}"
+  Ok (code, both) =>
+    if code /= 1 then
+      fail "expected exit 1 for a missing path, got \{intToString code}"
+    else
+      expectTextContainsAll ["do not exist"] both
+
+-- C1: `--deny=<rule>` and `--deny <rule>` must promote identically, exit 1.
+denySpellingsAgree : <Exec, IO> Expectation
+denySpellingsAgree = match lintBoth ["lint", "--deny=rule-dead-code", dirAProbe]
+  Err e => fail "could not run `medaka lint --deny=`: \{e}"
+  Ok (eqCode, eqBoth) =>
+    match lintBoth ["lint", "--deny", "rule-dead-code", dirAProbe]
+      Err e => fail "could not run `medaka lint --deny`: \{e}"
+      Ok (spCode, spBoth) => expectAll [
+        expectEqual 1 eqCode,
+        expectEqual 1 spCode,
+        expectEqualText eqBoth spBoth,
+      ]
+
+-- C1: the rule name after `--only` is a flag value, never a target path.
+onlySpaceFormNotTarget : <Exec, IO> Expectation
+onlySpaceFormNotTarget =
+  match lintBoth ["lint", "--only", "rule-dead-code", dirAProbe]
+    Err e => fail "could not run `medaka lint --only`: \{e}"
+    Ok (code, both) => expectAll [
+      expectEqual 0 code,
+      expectFalse (contains "do not exist" both),
+      expectTextContainsAll ["rule-dead-code"] both,
+    ]
+
+-- #1173: `--deny=<rule>` is accepted, and the rule name is not read as a path.
+denyEqualsStillWorks : <Exec, IO> Expectation
+denyEqualsStillWorks =
+  match lintBoth ["lint", "--json", "--deny=rule-match-on-param", dirAProbe]
+    Err e => fail "could not run `medaka lint --deny=`: \{e}"
+    Ok (code, both) =>
+      if code /= 0 && code /= 1 then
+        fail "unexpected exit \{intToString code} for --deny=: \{both}"
+      else
+        expectAll [
+          expectFalse (contains "require a value" both),
+          expectFalse
+            (any
+              (l => isMatch (mustCompile "rule-match-on-param.*diagnostics") l)
+              (lines both)),
+        ]
+
+dirAProbe : <IO> String
+dirAProbe = "\{multiDirFixtures}/dirA"
+
+dirBProbe : <IO> String
+dirBProbe = "\{multiDirFixtures}/dirB"
+
+test "diff_compiler_lint_multi_dir: two directory targets and the #1173 flag regressions" = expectEach
+  [
+    (
+      "multi-directory-target golden",
+      lintGolden
+        ["lint", dirAProbe, dirBProbe]
+        "\{multiDirFixtures}/multi_dir.expected",
+    ),
+    ("1173/nonexistent-path", nonexistentPath),
+    ("C1/deny-space-form-honoured", denySpellingsAgree),
+    ("C1/only-space-form-not-a-target", onlySpaceFormNotTarget),
+    ("1173/deny-equals-form-still-works", denyEqualsStillWorks),
+  ]
+
+test "diff_compiler_lint_crossfile: recursive walk and cross-file duplicate-body, text and --json" = expectEach
+  [
+    (
+      "cross-file text golden",
+      lintGolden
+        ["lint", crossfileFixtures]
+        "\{crossfileFixtures}/crossfile.expected",
+    ),
+    (
+      "cross-file --json golden",
+      lintGolden
+        ["lint", "--json", "--only=rule-duplicate-body", crossfileFixtures]
+        "\{crossfileFixtures}/crossfile.json.expected",
+    ),
+  ]

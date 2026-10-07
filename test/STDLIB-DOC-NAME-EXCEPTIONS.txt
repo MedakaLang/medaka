@@ -1,7 +1,7 @@
 # test/STDLIB-DOC-NAME-EXCEPTIONS.txt — names the stdlib reference may
 # backtick in prose although they are not visible on the page.
 #
-# Read by test/diff_compiler_doc_stdlib_reference.sh's name-visibility check.
+# Read by test/diff_compiler_doc_stdlib_reference_test.mdk's name-visibility check.
 # One row per (module, name), tab-separated, then the reason. A row is for a
 # backticked token that is NOT an identifier claim — a literal of some other
 # language the prose is quoting (a regex atom, a TOML keyword, an HTTP field

@@ -1,0 +1,227 @@
+{- | Gate for `medaka manifest` capability emission and its round trip through
+   `medaka check-policy`, over test/check_policy_fixtures/. Replaces
+   manifest_emit.sh.
+   Needs the binary: every check spawns `medaka manifest` or `medaka check-policy`.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads
+   fixtures, neither of which the interpreter binds. -}
+
+import test_process.{medakaBin, underRoot}
+import compiler_cli_test_support.{boundedInTree}
+import regex.{Regex, mustCompile, isMatch}
+import string as S
+import string.{join, split, trim, lines}
+import test.{
+  Expectation, expectAll, expectEach, expectEqualText, expectTextContainsAll,
+  fail, pass
+}
+
+fixture : String -> <IO> String
+fixture rel = underRoot "test/check_policy_fixtures/\{rel}"
+
+-- Both streams joined, as the script's `2>&1` saw them.
+spawnBoth : List String -> <Exec, IO> Result String (Int, String)
+spawnBoth args =
+  map ((code, out, err) => (code, out ++ err)) (boundedInTree 90 medakaBin args)
+
+manifestArgs : String -> String -> List String
+manifestArgs target fn =
+  if fn == "" then ["manifest", target] else ["manifest", "--fn", fn, target]
+
+-- The manifest is exact: stdout (trimmed) must equal the golden text.
+golden : String -> String -> String -> <Exec, IO> Expectation
+golden rel fn want = match spawnBoth ["manifest", fixture rel, "--fn", fn]
+  Err e => fail "could not spawn manifest on \{rel}: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "manifest \{rel} --fn \{fn}: exited \{intToString code}: \{out}"
+    else
+      expectEqualText want (trim out)
+
+containsLabel : String -> String -> String -> <Exec, IO> Expectation
+containsLabel rel fn needle =
+  match spawnBoth ["manifest", fixture rel, "--fn", fn]
+    Err e => fail "could not spawn manifest on \{rel}: \{e}"
+    Ok (code, out) =>
+      if code /= 0 then
+        fail "manifest \{rel} --fn \{fn}: exited \{intToString code}: \{out}"
+      else
+        expectTextContainsAll [needle] out
+
+acceptsAllow : String -> String -> String -> <Exec, IO> Expectation
+acceptsAllow rel fn allow =
+  match spawnBoth ["check-policy", fixture rel, "--allow", allow, "--fn", fn]
+    Err e => fail "could not spawn check-policy on \{rel}: \{e}"
+    Ok (code, out) =>
+      if code /= 0 then
+        fail "--allow '\{allow}' on \{rel}: exited \{intToString code}: \{out}"
+      else
+        expectTextContainsAll ["accepted. \{fn}"] out
+
+rejects : String -> String -> String -> <Exec, IO> Expectation
+rejects rel allow fn =
+  match spawnBoth ["check-policy", fixture rel, "--allow", allow, "--fn", fn]
+    Err e => fail "could not spawn check-policy on \{rel}: \{e}"
+    Ok (code, out) =>
+      if code /= 1 then
+        fail
+          "--allow '\{allow}' on \{rel}: exited \{intToString code}, want 1: \{out}"
+      else
+        expectTextContainsAll ["rejected"] out
+
+-- One manifest-derived --allow token per row: `Label = true` becomes `Label`,
+-- `Label = "v"` becomes `Label=v`. Any other shape is None, so an unspellable
+-- manifest reds the case instead of passing it.
+allowToken : String -> Option String
+allowToken row =
+  if isMatch trueRowRe row then
+    map (i => S.take i row) (S.indexOf " = " row)
+  else if isMatch valueRowRe row then
+    map
+      (i => valueToken (S.take i row) (S.drop (i + 3) row))
+      (S.indexOf " = " row)
+  else
+    None
+
+-- `Label` and the quoted value, quotes dropped: `Label=v`.
+valueToken : String -> String -> String
+valueToken label quoted =
+  "\{label}=\{S.take (S.length quoted - 2) (S.drop 1 quoted)}"
+
+trueRowRe : Regex
+trueRowRe = mustCompile "^[A-Za-z_][A-Za-z0-9_]* = true$"
+
+valueRowRe : Regex
+valueRowRe = mustCompile "^[A-Za-z_][A-Za-z0-9_]* = \"[^\"]*\"$"
+
+allowTokens : List String -> Option (List String)
+allowTokens [] = Some []
+allowTokens (row :: rest) = match allowToken row
+  None => None
+  Some tok => map (tok :: _) (allowTokens rest)
+
+manifestToAllow : String -> Option String
+manifestToAllow text = match lines text
+  header :: rows =>
+    if header /= "[package.capabilities]" then
+      None
+    else
+      map (join ",") (allowTokens rows)
+  [] => None
+
+-- The manifest's own output, respelled as --allow, must be exactly `want`
+-- (pins the derived policy so an emptied manifest cannot pass), and then
+-- check-policy must accept it.
+roundTrip : String -> String -> String -> <Exec, IO> Expectation
+roundTrip rel fn want = match spawnBoth ["manifest", fixture rel, "--fn", fn]
+  Err e => fail "could not spawn manifest on \{rel}: \{e}"
+  Ok (code, man) =>
+    if code /= 0 then
+      fail "\{rel}: manifest exited \{intToString code}: \{man}"
+    else match manifestToAllow (trim man)
+      None => fail "cannot spell the manifest as --allow: \{man}"
+      Some allow =>
+        if allow /= want then
+          fail "manifest spelled --allow '\{allow}', want '\{want}'"
+        else
+          acceptsAllow rel fn allow
+
+-- Refused target: exit 1, empty stdout, diagnostics on stderr.
+refuse : String -> String -> <Exec, IO> Expectation
+refuse rel fn = match boundedInTree 90 medakaBin (manifestArgs (fixture rel) fn)
+  Err e => fail "could not spawn manifest on \{rel}: \{e}"
+  Ok (code, out, err) =>
+    if code /= 1 then
+      fail "\{rel}: manifest exited \{intToString code}, want 1"
+    else if out /= "" then
+      fail "\{rel}: stdout not empty: \{out}"
+    else if err == "" then
+      fail "\{rel}: no stderr diagnostics"
+    else
+      pass
+
+-- An ill-typed import is located in the import's own file, not the entry's.
+importLocated : String -> <Exec, IO> Expectation
+importLocated rel =
+  match boundedInTree 90 medakaBin (manifestArgs (fixture rel) "transform")
+    Err e => fail "could not spawn manifest on \{rel}: \{e}"
+    Ok (code, _, err) =>
+      if code /= 1 then
+        fail "\{rel}: manifest exited \{intToString code}, want 1"
+      else
+        expectTextContainsAll
+          ["policy_xmod_bad_helper.mdk:4:10: no impl of Num for String"]
+          err
+
+test "manifest_emit: golden TOML renderings" = expectEach [
+  (
+    "net-golden (Prefix param renders as string)",
+    golden
+      "net_param_plugin.mdk"
+      "transform"
+      "[package.capabilities]\nFFI = true\nNet = \"idp.example.com/api\"",
+  ),
+  (
+    "mixed-golden (multi-label row, sorted ascending)",
+    golden
+      "manifest_mixed.mdk"
+      "entry"
+      "[package.capabilities]\nClock = true\nStdout = true",
+  ),
+  ("clock-present", containsLabel "manifest_mixed.mdk" "entry" "Clock"),
+  ("stdout-present", containsLabel "manifest_mixed.mdk" "entry" "Stdout"),
+  (
+    "xmod-golden (sibling-import target resolves, imported effect reaches the manifest)",
+    golden
+      "manifest_xmod_main.mdk"
+      "entry"
+      "[package.capabilities]\nClock = true",
+  ),
+  (
+    "hole-golden (surviving inferred-hole atom renders as true)",
+    golden
+      "manifest_hole_plugin.mdk"
+      "entry"
+      "[package.capabilities]\nFFI = true\nNet = true",
+  ),
+]
+
+test "manifest_emit: manifest round trip through check-policy" = expectEach [
+  (
+    "round-trip-accept",
+    roundTrip "net_param_plugin.mdk" "transform" "FFI,Net=idp.example.com/api",
+  ),
+  (
+    "round-trip-xmod-helper-effect",
+    roundTrip "manifest_xmod_main.mdk" "entry" "Clock",
+  ),
+  (
+    "round-trip-xmod-sample-run",
+    roundTrip "policy_xmod_main.mdk" "transform" "Stdout",
+  ),
+  (
+    "round-trip-exact-file (manifest FileRead = \"notes.txt\" -> --allow)",
+    expectAll [
+      golden
+        "manifest_exact_file.mdk"
+        "reader"
+        "[package.capabilities]\nFileRead = \"notes.txt\"",
+      acceptsAllow "manifest_exact_file.mdk" "reader" "FileRead=notes.txt",
+    ],
+  ),
+]
+
+test "manifest_emit: narrowed policy is rejected" = expectEach [
+  (
+    "tightened-reject (narrowed param -> check-policy rc=1)",
+    rejects "net_param_plugin.mdk" "FFI,Net=other.com/api" "transform",
+  ),
+]
+
+test "manifest_emit: manifest refuses what check refuses" = expectEach [
+  ("manifest-illtyped", refuse "type_error_plugin.mdk" "transform"),
+  ("manifest-unresolvable", refuse "manifest_unresolvable_plugin.mdk" ""),
+  ("manifest-fn-nosuch", refuse "missing_entry_plugin.mdk" "nosuch"),
+  ("manifest-import-illtyped", refuse "policy_xmod_bad_main.mdk" "transform"),
+  ("manifest-import-illtyped-located", importLocated "policy_xmod_bad_main.mdk"),
+]

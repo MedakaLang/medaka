@@ -1,0 +1,257 @@
+{- | Gate for the three locks on `medaka snapshot --bless`, over mktemp fixtures.
+   Replaces diff_compiler_snapshot_bless.sh.
+   Hermetic: its own scratch fixtures and its own --out dir; it never touches
+   test/snapshots/.
+
+   Runs under `medaka test --native`: it spawns the compiler and the write tool,
+   and reads and writes files, none of which the interpreter binds. -}
+
+import test_process.{medakaBin, medakaRoot, boundedVerb, scratchDir}
+import test.{Expectation, expectAll, expectTextContainsAll, fail, pass}
+import string.{lines, startsWith}
+import fs.{mkdirAll}
+
+writeTool : <IO> String
+writeTool = "\{medakaRoot}/test/snapshot_bless.sh"
+
+-- Run a fresh scratch workspace: fx/ holds the two fixtures, snap/ is --out.
+workspace : <Exec, IO, FileRead, FileWrite> Result String String
+workspace = do
+  w <- scratchDir
+  _ <- mkdirAll "\{w}/fx"
+  _ <- mkdirAll "\{w}/snap"
+  _ <- writeFile "\{w}/fx/ok.mdk" "f x = x + 1\n"
+  _ <- writeFile "\{w}/fx/bad.mdk" "f x = = 1\n"
+  Ok w
+
+-- Each test block gets its own workspace; a failure to build one is itself red.
+inWorkspace : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+inWorkspace k = match workspace
+  Err e => fail "could not create workspace: \{e}"
+  Ok w => k w
+
+-- Spawn result must be a real exit, then hand stdout and stderr to the checker.
+graded : String ->
+  Result String (Int, String, String) ->
+  (String -> String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+graded name (Err e) _ = fail "\{name}: could not spawn: \{e}"
+graded name (Ok (code, out, err)) k =
+  if code /= 0 then fail "\{name}: exited \{intToString code}" else k out err
+
+-- A refusal: the command must exit non-zero AND say why.
+refused : String -> String -> Result String (Int, String, String) -> Expectation
+refused name want (Err e) = fail "\{name}: could not spawn: \{e}"
+refused name want (Ok (code, out, err)) =
+  if code == 0 then
+    fail "\{name} — expected a refusal, got exit 0"
+  else
+    expectTextContainsAll [want] (out ++ err)
+
+-- Run `medaka snapshot --root ROOT --out W/snap ARGS`, grade the exit, then continue.
+snapRun : String ->
+  String ->
+  List String ->
+  (String -> String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+snapRun name w args k =
+  graded
+    name
+    (boundedVerb
+      medakaBin
+      (["snapshot", "--root", medakaRoot, "--out", "\{w}/snap"] ++ args))
+    k
+
+-- Run `medaka snapshot --root ROOT --out W/snap ARGS`, which must refuse with WANT.
+snapRefused : String ->
+  String ->
+  String ->
+  List String ->
+  <Exec, IO> Expectation
+snapRefused name want w args =
+  refused
+    name
+    want
+    (boundedVerb
+      medakaBin
+      (["snapshot", "--root", medakaRoot, "--out", "\{w}/snap"] ++ args))
+
+-- Run `medaka snapshot --check FIXTURE` against a stale snapshot; it must not pass.
+snapStaleCheck : String -> String -> <Exec, IO> Expectation
+snapStaleCheck w fixture =
+  stale
+    "--check catches the stale snapshot"
+    (boundedVerb medakaBin [
+      "snapshot",
+      "--root",
+      medakaRoot,
+      "--out",
+      "\{w}/snap",
+      "--check",
+      fixture,
+    ])
+
+-- A file that must not exist.
+absent : String -> String -> <FileRead> Expectation
+absent name path = if fileExists path then fail "\{name}" else pass
+
+-- Read a file, or fail with the reason.
+readOr : String ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+readOr path k = match readFile path
+  Err e => fail "could not read \{path}: \{e}"
+  Ok text => k text
+
+-- Write a file, or fail with the reason.
+writeOr : String ->
+  String ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+writeOr path text next = match writeFile path text
+  Err e => fail "could not write \{path}: \{e}"
+  Ok _ => next text
+
+-- A stale snapshot: --check must exit non-zero, anything else is red.
+stale : String -> Result String (Int, String, String) -> Expectation
+stale name (Err e) = fail "\{name}: could not spawn: \{e}"
+stale name (Ok (code, _, _)) = if code == 0 then fail "\{name}" else pass
+
+-- The documented escape hatch: rm + --new re-cuts the diagnostic snapshot.
+escapeHatch : String -> <Exec, IO, FileRead, FileWrite> Expectation
+escapeHatch w = match removeFile "\{w}/snap/bad.md"
+  Err e => fail "could not remove bad.md: \{e}"
+  Ok _ =>
+    snapRun
+      "rm + --new re-cuts the diagnostic"
+      w
+      ["--new", "--stages", "PARSE", "\{w}/fx/bad.mdk"]
+      (_o =>
+        _e => readOr "\{w}/snap/bad.md" (text =>
+          if any (l => startsWith "parse error at 3:6" l) (lines text) then
+            pass
+          else
+            fail "rm + --new did not re-cut the diagnostic snapshot"))
+
+-- LOCK 1: scoped. Bare --bless is refused at the CLI and at the write tool.
+test "snapshot-bless lock 1: bare --bless is refused (medaka and write tool)" = inWorkspace
+  (w => expectAll [
+    refused
+      "lock 1: bare --bless is refused (medaka)"
+      "requires explicit targets"
+      (boundedVerb medakaBin [
+        "snapshot",
+        "--bless",
+        "--root",
+        medakaRoot,
+        "--out",
+        "\{w}/snap",
+      ]),
+    refused
+      "lock 1: bare --bless is refused (write tool)"
+      "no whole-suite bless"
+      (boundedVerb "sh" [writeTool, "--bless"]),
+  ])
+
+-- LOCK 2: non-creating, and the mode is mandatory and exclusive.
+test "snapshot-bless lock 2: --bless never creates; mode is mandatory and exclusive" = inWorkspace
+  (w => expectAll [
+    snapRefused
+      "lock 2: --bless refuses to CREATE a missing snapshot"
+      "never creates one"
+      w
+      ["--bless", "--stages", "PARSE", "\{w}/fx/ok.mdk"],
+    absent
+      "lock 2: the refused --bless wrote a snapshot anyway"
+      "\{w}/snap/ok.md",
+    snapRefused "a mode is mandatory (no default action)" "pass --check" w [
+      "--stages",
+      "PARSE",
+      "\{w}/fx/ok.mdk",
+    ],
+    snapRefused
+      "two modes at once is an error, not a precedence rule"
+      "mutually exclusive"
+      w
+      ["--check", "--bless", "--stages", "PARSE", "\{w}/fx/ok.mdk"],
+    snapRun
+      "--new creates it"
+      w
+      ["--new", "--stages", "PARSE", "\{w}/fx/ok.mdk"]
+      (_out =>
+        _err =>
+          if fileExists "\{w}/snap/ok.md" then
+            pass
+          else
+            fail "--new failed to create ok.md"),
+  ])
+
+-- The happy path: no-op bless, stale check, re-cut, green after.
+test "snapshot-bless happy path: no-op bless, stale check, re-cut, green after" = inWorkspace
+  (w => expectAll [
+    snapRun
+      "--new (happy path)"
+      w
+      ["--new", "--stages", "PARSE", "\{w}/fx/ok.mdk"]
+      (_o => _e => pass),
+    snapRun
+      "--check passes on a fresh snapshot"
+      w
+      ["--check", "\{w}/fx/ok.mdk"]
+      (_o => _e => pass),
+    readOr "\{w}/snap/ok.md" (before =>
+      snapRun
+        "--bless with no diff"
+        w
+        ["--bless", "\{w}/fx/ok.mdk"]
+        (_o =>
+          _e => readOr "\{w}/snap/ok.md" (after =>
+            if before == after then
+              pass
+            else
+              fail "--bless rewrote a snapshot that already matched"))),
+    writeOr "\{w}/fx/ok.mdk" "f x = x + 2\n" (_u =>
+      snapStaleCheck w "\{w}/fx/ok.mdk"),
+    snapRun
+      "--bless re-cuts an existing snapshot"
+      w
+      ["--bless", "\{w}/fx/ok.mdk"]
+      (out => err => expectTextContainsAll ["BLESS "] (out ++ err)),
+    snapRun
+      "gate is green after the bless"
+      w
+      ["--check", "\{w}/fx/ok.mdk"]
+      (_o => _e => pass),
+  ])
+
+-- LOCK 3: a diagnostic section is never blessable; rm + --new is the deliberate door.
+test "snapshot-bless lock 3: diagnostics are never blessable; rm + --new re-cuts" = inWorkspace
+  (w => expectAll [
+    snapRun
+      "--new on the parse-error fixture"
+      w
+      ["--new", "--stages", "PARSE", "\{w}/fx/bad.mdk"]
+      (_o =>
+        _e => readOr "\{w}/snap/bad.md" (text =>
+          if any (l => l == "diagnostics=PARSE") (lines text) then
+            pass
+          else
+            fail "lock 3: # META does not record the diagnostic section")),
+    writeOr
+      "\{w}/fx/bad.mdk"
+      "\n\nf x = = 1\n"
+      (_u => readOr "\{w}/snap/bad.md" (snapbefore => expectAll [
+        snapRefused
+          "lock 3: --bless REFUSES a differing diagnostic section"
+          "refusing to bless diagnostic section(s) PARSE"
+          w
+          ["--bless", "\{w}/fx/bad.mdk"],
+        readOr "\{w}/snap/bad.md" (after =>
+          if snapbefore == after then
+            pass
+          else
+            fail "lock 3: the refused --bless rewrote the snapshot anyway"),
+      ])),
+    escapeHatch w,
+  ])

@@ -1,0 +1,505 @@
+{- | Gate for the internal-extern access wall, checks 1-26 of
+   test/diff_compiler_internal_extern.sh: a user module may not reference the
+   internal-only array kernels without --allow-internal; the stdlib is trusted;
+   a manifest grants the privilege only by a canonical `allow-internal = true`;
+   test and doc are exempt; the compiler and nested stdlib modules check clean.
+   Replaces test/diff_compiler_internal_extern.sh.
+
+   Runs under `medaka test --native`: it spawns the `medaka` binary (check, run,
+   build) and writes scratch .mdk fixtures, neither of which the interpreter binds. -}
+
+import fs.{mkdirAll}
+import test_process.{medakaBin, medakaRoot, scratchDir, boundedVerb}
+import test.{Expectation, expectEach, expectTextContainsAll, fail, pass}
+import string.{contains, startsWith}
+
+-- Run a command; stdout then stderr, as the script's `2>&1` read them.
+runWith : String ->
+  List String ->
+  <Exec, IO, FileRead> Result String (Int, String)
+runWith cmd args =
+  map ((code, out, err) => (code, out ++ err)) (boundedVerb cmd args)
+
+spawn : List String -> <Exec, IO, FileRead> Result String (Int, String)
+spawn args = runWith medakaBin args
+
+-- The scratch tree is a bare `mktemp -d`; nothing removes it (the script had a trap).
+setup : String -> <FileWrite> Result String Unit
+setup tmp = do
+  writeFile
+    "\{tmp}/u.mdk"
+    "main = println (arrayGetUnsafe 0 (arrayFromList [1, 2, 3]))\n"
+  writeFile
+    "\{tmp}/usearr.mdk"
+    "import array\n\nmain = println (arrayLength (arrayFromList [1, 2, 3]))\n"
+  writeFile
+    "\{tmp}/guard.mdk"
+    "classify : Int -> String\nclassify n\n  | n > 0 = \"pos\"\n  | n < 0 = \"neg\"\n  | otherwise = \"zero\"\n\nmain = println (classify 5)\n"
+
+withFixtures : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withFixtures body = match scratchDir
+  Err e => fail "mktemp failed: \{e}"
+  Ok tmp => match setup tmp
+    Err e => fail "could not write fixtures: \{e}"
+    Ok _ => body tmp
+
+-- 1. check-reject: no flag, InternalExternAccess, exit 1.
+checkReject : String -> <Exec, IO, FileRead> Expectation
+checkReject tmp = match spawn ["check", "\{tmp}/u.mdk"]
+  Err e => fail "could not spawn check: \{e}"
+  Ok (code, out) =>
+    if code /= 1 then
+      fail "check without flag exited \{intToString code}, want 1: [\{out}]"
+    else
+      expectTextContainsAll ["internal-only primitive"] out
+
+-- 2. check-allow: --allow-internal, clean, exit 0.
+checkAllow : String -> <Exec, IO, FileRead> Expectation
+checkAllow tmp = match spawn ["check", "--allow-internal", "\{tmp}/u.mdk"]
+  Err e => fail "could not spawn check --allow-internal: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "check --allow-internal exited \{intToString code}: [\{out}]"
+    else if contains "internal-only primitive" out then
+      fail "still flagged with --allow-internal: [\{out}]"
+    else
+      pass
+
+-- 3. run-allow: --allow-internal evaluates it and prints 1.
+runAllow : String -> <Exec, IO, FileRead> Expectation
+runAllow tmp = match spawn ["run", "--allow-internal", "\{tmp}/u.mdk"]
+  Err e => fail "could not spawn run --allow-internal: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "run --allow-internal exited \{intToString code}: [\{out}]"
+    else if startsWith "1" out then
+      pass
+    else
+      fail "run --allow-internal printed [\{out}], want 1"
+
+-- 4. run-reject: no flag, InternalExternAccess, exit 1.
+runReject : String -> <Exec, IO, FileRead> Expectation
+runReject tmp = match spawn ["run", "\{tmp}/u.mdk"]
+  Err e => fail "could not spawn run: \{e}"
+  Ok (code, out) =>
+    if code /= 1 then
+      fail "run without flag exited \{intToString code}, want 1: [\{out}]"
+    else
+      expectTextContainsAll ["internal-only primitive"] out
+
+-- 5. build-reject: no flag, rejected, no binary emitted.
+buildReject : String -> <Exec, IO, FileRead> Expectation
+buildReject tmp = match spawn ["build", "\{tmp}/u.mdk", "-o", "\{tmp}/u.out"]
+  Err e => fail "could not spawn build: \{e}"
+  Ok (code, _) =>
+    if code == 0 then
+      fail "build without flag exited 0"
+    else match runWith "sh" ["-c", "test -x \"$1\"", "sh", "\{tmp}/u.out"]
+      Err e => fail "could not probe for binary: \{e}"
+      Ok (present, _) =>
+        if present == 0 then
+          fail "build emitted a binary despite rejection"
+        else
+          pass
+
+-- 6. build-allow: --allow-internal builds, and the binary prints 1.
+buildAllow : String -> <Exec, IO, FileRead> Expectation
+buildAllow tmp = match spawn [
+  "build",
+  "--allow-internal",
+  "\{tmp}/u.mdk",
+  "-o",
+  "\{tmp}/u2.out",
+]
+  Err e => fail "could not spawn build --allow-internal: \{e}"
+  Ok (code, _) =>
+    if code /= 0 then
+      fail "build --allow-internal exited \{intToString code}"
+    else match runWith "\{tmp}/u2.out" []
+      Err e => fail "could not run built binary: \{e}"
+      Ok (rc, rout) =>
+        if rc /= 0 then
+          fail "built binary exited \{intToString rc}"
+        else if startsWith "1" rout then
+          pass
+        else
+          fail "built binary printed [\{rout}], want 1"
+
+-- 7. stdlib-trust: importing array (its body uses the kernels) is clean with no flag.
+stdlibTrust : String -> <Exec, IO, FileRead> Expectation
+stdlibTrust tmp = match spawn ["run", "\{tmp}/usearr.mdk"]
+  Err e => fail "could not spawn run on usearr: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "array import run exited \{intToString code}: [\{out}]"
+    else if contains "internal-only primitive" out then
+      fail "false positive on array.mdk: [\{out}]"
+    else if startsWith "3" out then
+      pass
+    else
+      fail "array import printed [\{out}], want 3"
+
+-- 8. fallthrough-ok: guard fallthrough (`__fallthrough__`) is not flagged.
+fallthroughOk : String -> <Exec, IO, FileRead> Expectation
+fallthroughOk tmp = match spawn ["run", "\{tmp}/guard.mdk"]
+  Err e => fail "could not spawn run on guard: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "guard run exited \{intToString code}: [\{out}]"
+    else if contains "internal-only primitive" out then
+      fail "false positive on __fallthrough__: [\{out}]"
+    else if startsWith "pos" out then
+      pass
+    else
+      fail "guard run printed [\{out}], want pos"
+
+-- 9. self-check-rel: `medaka check stdlib/array.mdk` run from the repo root, no flag.
+selfCheckRel : <Exec, IO, FileRead> Expectation
+selfCheckRel =
+  match (runWith "sh" [
+    "-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", medakaRoot, medakaBin,
+    "check", "stdlib/array.mdk"
+  ])
+    Err e => fail "could not spawn relative self-check: \{e}"
+    Ok (code, out) =>
+      if code /= 0 then
+        fail "relative self-check exited \{intToString code}: [\{out}]"
+      else if contains "internal-only primitive" out then
+        fail "false positive on stdlib/array.mdk: [\{out}]"
+      else
+        pass
+
+-- 10. self-check-abs: the same file by absolute path, no flag.
+selfCheckAbs : <Exec, IO, FileRead> Expectation
+selfCheckAbs = match spawn ["check", "\{medakaRoot}/stdlib/array.mdk"]
+  Err e => fail "could not spawn absolute self-check: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "absolute self-check exited \{intToString code}: [\{out}]"
+    else if contains "internal-only primitive" out then
+      fail "false positive on stdlib/array.mdk: [\{out}]"
+    else
+      pass
+
+test "internal-extern 1-10: the wall, the opt-in, stdlib trust, self-check" = withFixtures
+  (tmp => expectEach [
+    ("1 check-reject", checkReject tmp),
+    ("2 check-allow", checkAllow tmp),
+    ("3 run-allow", runAllow tmp),
+    ("4 run-reject", runReject tmp),
+    ("5 build-reject", buildReject tmp),
+    ("6 build-allow", buildAllow tmp),
+    ("7 stdlib-trust", stdlibTrust tmp),
+    ("8 fallthrough-ok", fallthroughOk tmp),
+    ("9 self-check-rel", selfCheckRel),
+    ("10 self-check-abs", selfCheckAbs),
+  ])
+
+-- ── #1713: a `medaka.toml` is not itself a grant of privilege ────────────────
+-- The rule: stdlib always, plus an entry project whose manifest SAYS
+-- `allow-internal = true` (canonical, unquoted).  Check 13 is load-bearing:
+-- without it, check 11 could pass for any reason at all.
+
+-- Scratch project: a helper that calls the kernel, and a main that imports it.
+setupProject : String -> <FileWrite> Result String Unit
+setupProject tmp = do
+  mkdirAll "\{tmp}/proj"
+  writeFile
+    "\{tmp}/proj/helper.mdk"
+    "import array.*\n\nexport\npeek : String -> String\npeek s = charToStr (arrayGetUnsafe 0 (stringToChars s))\n"
+  writeFile
+    "\{tmp}/proj/main.mdk"
+    "import helper.{peek}\n\nmain = println (peek \"hi\")\n"
+  writeFile "\{tmp}/proj/medaka.toml" "name = \"probe\"\nversion = \"0.0.1\"\n"
+
+withProject : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withProject body = match scratchDir
+  Err e => fail "mktemp failed: \{e}"
+  Ok tmp => match setupProject tmp
+    Err e => fail "could not write project: \{e}"
+    Ok _ => body tmp
+
+-- A bare scratch dir for checks that write one file (or none).
+withScratch : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withScratch body = match scratchDir
+  Err e => fail "mktemp failed: \{e}"
+  Ok tmp => body tmp
+
+-- 11. project-reject: a multi-module project, plain manifest, no flag: rejected.
+projectReject : String -> <Exec, IO, FileRead> Expectation
+projectReject tmp = match spawn ["check", "\{tmp}/proj/main.mdk"]
+  Err e => fail "could not spawn project check: \{e}"
+  Ok (code, out) =>
+    if not (contains "internal-only primitive" out) then
+      fail
+        "project not flagged (manifest alone granted the privilege): [\{out}]"
+    else if code /= 1 then
+      fail "project flagged but exit \{intToString code}, want 1"
+    else
+      pass
+
+-- 12. project-allow-flag: the same project with --allow-internal: accepted.
+projectAllow : String -> <Exec, IO, FileRead> Expectation
+projectAllow tmp =
+  match spawn ["check", "--allow-internal", "\{tmp}/proj/main.mdk"]
+    Err e => fail "could not spawn project check --allow-internal: \{e}"
+    Ok (code, out) =>
+      if contains "internal-only primitive" out then
+        fail "project still flagged with --allow-internal: [\{out}]"
+      else if code /= 0 then
+        fail
+          "project check --allow-internal exited \{intToString code}: [\{out}]"
+      else
+        pass
+
+-- Verdict for one manifest row: `allow` rows must be accepted, the rest must be
+-- flagged with exit 1 (granted nothing), or at least not accepted.
+manifestVerdict : String -> Bool -> Int -> String -> Expectation
+manifestVerdict name allow code out =
+  if allow && contains "internal-only primitive" out then
+    fail "\{name}: opt-in ignored: [\{out}]"
+  else if allow && code /= 0 then
+    fail "\{name}: exit \{intToString code}: [\{out}]"
+  else if allow then
+    pass
+  else if not (contains "internal-only primitive" out) then
+    fail "\{name}: unexpectedly accepted: exit \{intToString code} [\{out}]"
+  else if code /= 1 then
+    fail "\{name}: flagged but exit \{intToString code}, want 1"
+  else
+    pass
+
+-- Rewrite the project manifest, then check the same main.mdk against it.
+manifestCase : String ->
+  String ->
+  Bool ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+manifestCase tmp name allow src = match writeFile "\{tmp}/proj/medaka.toml" src
+  Err e => fail "could not write manifest for \{name}: \{e}"
+  Ok _ => match spawn ["check", "\{tmp}/proj/main.mdk"]
+    Err e => fail "could not spawn check for \{name}: \{e}"
+    Ok (code, out) => manifestVerdict name allow code out
+
+-- 13-21. Manifest trust matrix.
+manifestMatrix : String -> <Exec, IO, FileRead, FileWrite> Expectation
+manifestMatrix tmp = expectEach [
+  (
+    "13 project-optin",
+    manifestCase
+      tmp
+      "project-optin"
+      True
+      "[project]\nname = \"probe\"\nallow-internal = true\n",
+  ),
+  (
+    "14 package-optin",
+    manifestCase
+      tmp
+      "package-optin"
+      True
+      "[package]\nname = \"probe\"\nallow-internal = true\n",
+  ),
+  (
+    "15 trailing-comment-optin",
+    manifestCase
+      tmp
+      "trailing-comment-optin"
+      True
+      "[package]\nname = \"probe\"\nallow-internal = true # trusted test project\n",
+  ),
+  (
+    "16 quoted-true-reject",
+    manifestCase
+      tmp
+      "quoted-true-reject"
+      False
+      "[package]\nname = \"probe\"\nallow-internal = \"true\"\n",
+  ),
+  (
+    "17 false-reject",
+    manifestCase
+      tmp
+      "false-reject"
+      False
+      "[package]\nname = \"probe\"\nallow-internal = false\n",
+  ),
+  (
+    "18 malformed-reject",
+    manifestCase
+      tmp
+      "malformed-reject"
+      False
+      "[package]\nname = \"probe\"\nallow-internal = true-ish\n",
+  ),
+  (
+    "19 dep-name-not-optin",
+    manifestCase
+      tmp
+      "dep-name-not-optin"
+      False
+      "[package]\nname = \"probe\"\n\n[dependencies]\nallow-internal = true\n",
+  ),
+  (
+    "20 dep-header-comment",
+    manifestCase
+      tmp
+      "dep-header-comment"
+      False
+      "[package]\nname = \"probe\"\n\n[dependencies] # dependency table\nallow-internal = true\n",
+  ),
+  (
+    "21 comment-not-optin",
+    manifestCase
+      tmp
+      "comment-not-optin"
+      False
+      "[package]\nname = \"probe\"\n# allow-internal = true\n",
+  ),
+]
+
+-- 22. test-exemption: `medaka test` runs the internal-primitive corpus, no flag.
+testExemption : <Exec, IO, FileRead> Expectation
+testExemption = match spawn [
+  "test",
+  "\{medakaRoot}/test/ported/test_eval_internal_prims_ported.mdk",
+]
+  Err e => fail "could not spawn medaka test: \{e}"
+  Ok (code, out) =>
+    if not (contains "10/10 passed" out) then
+      fail "test-exemption did not report 10/10 passed: [\{out}]"
+    else if code /= 0 then
+      fail "test-exemption passed but exit \{intToString code}"
+    else
+      pass
+
+-- 23. doc-exemption: `medaka doc` extracts the scheme, no internal-only wall.
+docExemption : String -> <Exec, IO, FileRead, FileWrite> Expectation
+docSource : String
+docSource =
+  "-- | Read the first cell without bounds checking.\nexport\npeek : Array Int -> Int\npeek xs = arrayGetUnsafe 0 xs\n"
+
+docExemption tmp = match writeFile "\{tmp}/doc_internal.mdk" docSource
+  Err e => fail "could not write doc fixture: \{e}"
+  Ok _ => match spawn ["doc", "\{tmp}/doc_internal.mdk"]
+    Err e => fail "could not spawn doc: \{e}"
+    Ok (code, out) =>
+      if contains "internal-only primitive" out then
+        fail "doc spuriously enforced: [\{out}]"
+      else if not (contains "peek : Array Int -> Int" out) then
+        fail "doc did not extract the scheme: [\{out}]"
+      else if code /= 0 then
+        fail "doc exited \{intToString code}: [\{out}]"
+      else
+        pass
+
+-- 24. compiler-self-check: compiler/support/util.mdk calls the kernels; clean with no flag.
+compilerSelfCheck : <Exec, IO, FileRead> Expectation
+compilerSelfCheck =
+  match spawn ["check", "\{medakaRoot}/compiler/support/util.mdk"]
+    Err e => fail "could not spawn compiler self-check: \{e}"
+    Ok (code, out) =>
+      if contains "internal-only primitive" out then
+        fail "#42 regression, compiler/support/util.mdk flagged: [\{out}]"
+      else if code /= 0 then
+        fail "compiler self-check exited \{intToString code}: [\{out}]"
+      else
+        pass
+
+-- Run `medaka` with MEDAKA_ROOT pointed at a scratch root.
+spawnIn : String ->
+  List String ->
+  <Exec, IO, FileRead> Result String (Int, String)
+spawnIn root args = runWith "env" (["MEDAKA_ROOT=\{root}", medakaBin] ++ args)
+
+-- Scratch root = the real stdlib (each file symlinked) plus `nest/`, and the
+-- real compiler/ tree, so its fingerprint never matches and the stale warning fires.
+linkRoot : String -> String -> <Exec, IO, FileRead> Result String Unit
+linkRoot root nr = match runWith "sh" [
+  "-c",
+  "ln -s \"$1/compiler\" \"$2/compiler\" && for f in \"$1\"/stdlib/*.mdk; do ln -s \"$f\" \"$2/stdlib/\" || exit 1; done",
+  "sh",
+  root,
+  nr,
+]
+  Err e => Err e
+  Ok (code, out) =>
+    if code /= 0 then
+      Err "symlink failed (exit \{intToString code}): \{out}"
+    else
+      Ok ()
+
+setupNested : String -> <Exec, IO, FileRead, FileWrite> Result String Unit
+setupNested tmp = do
+  mkdirAll "\{tmp}/nested-root/stdlib/nest"
+  linkRoot medakaRoot "\{tmp}/nested-root"
+  writeFile
+    "\{tmp}/nested-root/stdlib/nest/probe.mdk"
+    "export\nprobeGet : Array Int -> Int\nprobeGet a = arrayGetUnsafe 0 a\n"
+  writeFile
+    "\{tmp}/nested_user.mdk"
+    "import nest.probe.{probeGet}\n\nmain = println (probeGet [|7|])\n"
+
+withNested : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withNested body = match scratchDir
+  Err e => fail "mktemp failed: \{e}"
+  Ok tmp => match setupNested tmp
+    Err e => fail "could not build nested root: \{e}"
+    Ok _ => body tmp
+
+-- 25. nested-stdlib-entry: a stdlib subdirectory module that calls a kernel is clean.
+nestedEntry : String -> <Exec, IO, FileRead> Expectation
+nestedEntry tmp =
+  match (spawnIn "\{tmp}/nested-root" [
+    "check",
+    "\{tmp}/nested-root/stdlib/nest/probe.mdk",
+  ])
+    Err e => fail "could not spawn nested entry check: \{e}"
+    Ok (code, out) =>
+      if contains "internal-only primitive" out then
+        fail "false positive on stdlib/nest/probe.mdk: [\{out}]"
+      else if code /= 0 then
+        fail "nested entry check exited \{intToString code}: [\{out}]"
+      else
+        pass
+
+-- 26. nested-stdlib-import: an importer of that module runs and prints 7.
+nestedImport : String -> <Exec, IO, FileRead> Expectation
+nestedImport tmp =
+  match spawnIn "\{tmp}/nested-root" ["run", "\{tmp}/nested_user.mdk"]
+    Err e => fail "could not spawn nested import run: \{e}"
+    Ok (code, out) =>
+      if contains "internal-only primitive" out then
+        fail "false positive on nested import: [\{out}]"
+      else if code /= 0 then
+        fail "nested import exited \{intToString code}: [\{out}]"
+      else if startsWith "7\n" out then
+        pass
+      else
+        fail "nested import printed [\{out}], want 7"
+
+test "internal-extern 11-12: a manifest alone grants nothing; the flag works on a project" = withProject
+  (tmp => expectEach [
+    ("11 project-reject", projectReject tmp),
+    ("12 project-allow-flag", projectAllow tmp),
+  ])
+
+test "internal-extern 13-21: the manifest opt-in matrix" =
+  withProject (tmp => manifestMatrix tmp)
+
+test "internal-extern 22-24: test and doc are exempt; the compiler self-check is clean" = withScratch
+  (tmp => expectEach [
+    ("22 test-exemption", testExemption),
+    ("23 doc-exemption", docExemption tmp),
+    ("24 compiler-self-check", compilerSelfCheck),
+  ])
+
+test "internal-extern 25-26: a nested stdlib module is trusted by its file, not its root" = withNested
+  (tmp => expectEach [
+    ("25 nested-stdlib-entry", nestedEntry tmp),
+    ("26 nested-stdlib-import", nestedImport tmp),
+  ])

@@ -1,0 +1,217 @@
+{- | Gate for the MEDAKA_RT_OBJ build fast path: the C runtime linked inline,
+   from a prebuilt object, and from the auto object cache must give
+   byte-identical binaries, and a corrupt cache entry must self-repair.
+   Replaces diff_compiler_rt_obj.sh.
+
+   Runs under `medaka test --native`: it spawns `medaka build` and clang,
+   which the interpreter does not bind. -}
+
+import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb, scratchDir}
+import test.{Expectation, expectAll, expectEach, expectAtLeast, fail, pass}
+import fs.{fixtureFiles, mkdirAll}
+import path.{stem}
+import string.{lines}
+import list.{filter}
+import regex.{Regex, mustCompile, isMatch}
+
+samples : <IO> List String
+samples = [
+  underRoot "test/llvm_fixtures/guard_match_ctor.mdk",
+  underRoot "test/llvm_fixtures/guard_refut_clause.mdk",
+  underRoot "test/llvm_fixtures/guard_refut_clause_chain.mdk",
+  underRoot "test/construct_fixtures/tuple_neq.mdk",
+  underRoot "test/construct_fixtures/type_alias.mdk",
+]
+
+rtObjRe : Regex
+rtObjRe = mustCompile "/rt-[^/]*[.]o$"
+
+mainRe : Regex
+mainRe = mustCompile " T _?main$"
+
+rtObjPath : String -> String -> String
+rtObjPath w opt = "\{w}/medaka_rt\{opt}.o"
+
+cachePath : String -> String -> String
+cachePath w opt = "\{w}/objcache\{opt}"
+
+-- Env assignments per arm. "K=" sets K to the empty string, which
+-- build_cmd.mdk treats as unset, so an ambient value cannot leak in.
+base : <IO> List String
+base =
+  ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter"]
+
+optEnv : String -> <IO> List String
+optEnv opt = base ++ ["MEDAKA_CLANG_OPT=\{opt}"]
+
+inlineEnv : String -> <IO> List String
+inlineEnv opt = optEnv opt ++ ["MEDAKA_RT_OBJ=", "MEDAKA_NO_OBJ_CACHE=1"]
+
+prebuiltEnv : String -> String -> <IO> List String
+prebuiltEnv opt rtobj =
+  optEnv opt ++ ["MEDAKA_RT_OBJ=\{rtobj}", "MEDAKA_NO_OBJ_CACHE="]
+
+cachedEnv : String -> String -> <IO> List String
+cachedEnv opt cdir =
+  optEnv opt
+    ++ ["MEDAKA_RT_OBJ=", "MEDAKA_NO_OBJ_CACHE=", "MEDAKA_CACHE_DIR=\{cdir}"]
+
+repairEnv : String -> <IO> List String
+repairEnv rdir =
+  base ++ ["MEDAKA_RT_OBJ=", "MEDAKA_NO_OBJ_CACHE=", "MEDAKA_CACHE_DIR=\{rdir}"]
+
+spawn : List String ->
+  List String ->
+  <Exec, IO, FileRead> Result String (Int, String, String)
+spawn env args = boundedVerb "env" (env ++ [medakaBin] ++ args)
+
+buildArgs : String -> String -> List String
+buildArgs src out = ["build", "--allow-internal", src, "-o", out]
+
+gradeExit : String -> Result String (Int, String, String) -> Expectation
+gradeExit what (Err e) = fail "\{what}: could not spawn: \{e}"
+gradeExit what (Ok (code, _, _)) =
+  if code /= 0 then fail "\{what}: exited \{intToString code}" else pass
+
+gradeWrite : String -> Result String a -> Expectation
+gradeWrite what (Err e) = fail "\{what}: \{e}"
+gradeWrite what (Ok _) = pass
+
+sameBytes : String -> String -> <Exec, IO, FileRead> Expectation
+sameBytes a b = match boundedVerb "cmp" ["-s", a, b]
+  Err e => fail "cmp could not run on \{b}: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      fail "\{b} differs from \{a} (cmp exit \{intToString code})"
+    else
+      pass
+
+fileExists : String -> <Exec, IO, FileRead> Expectation
+fileExists p = match boundedVerb "test" ["-f", p]
+  Err e => fail "test -f could not run on \{p}: \{e}"
+  Ok (code, _, _) => if code /= 0 then fail "\{p} was not written" else pass
+
+sampleRow : String -> String -> String -> <Exec, IO, FileRead> Expectation
+sampleRow w opt src =
+  let name = stem src
+  let inl = "\{w}/\{name}\{opt}.inline"
+  let pre = "\{w}/\{name}\{opt}.prebuilt"
+  let cac = "\{w}/\{name}\{opt}.cached"
+  expectAll [
+    gradeExit
+      "\{name} \{opt} inline build"
+      (spawn (inlineEnv opt) (buildArgs src inl)),
+    gradeExit
+      "\{name} \{opt} prebuilt build"
+      (spawn (prebuiltEnv opt (rtObjPath w opt)) (buildArgs src pre)),
+    sameBytes inl pre,
+    gradeExit
+      "\{name} \{opt} cached build"
+      (spawn (cachedEnv opt (cachePath w opt)) (buildArgs src cac)),
+    sameBytes inl cac,
+  ]
+
+cacheFilled : String -> String -> <IO, FileRead> Expectation
+cacheFilled opt cdir = match fixtureFiles cdir
+  Err e => fail "cache arm \{opt}: could not list \{cdir}: \{e}"
+  Ok paths => expectAtLeast 1 (length (filter (isMatch rtObjRe) paths))
+
+optArm : String -> String -> <Exec, IO, FileRead> Expectation
+optArm w opt =
+  let rtobj = rtObjPath w opt
+  let srcs = samples
+  expectAll [
+    gradeExit
+      "emit-rt-obj \{opt}"
+      (spawn (optEnv opt) ["build", "--emit-rt-obj", rtobj]),
+    fileExists rtobj,
+    expectAtLeast 5 (length srcs),
+    expectEach (map (src => (stem src, sampleRow w opt src)) srcs),
+    cacheFilled opt (cachePath w opt),
+  ]
+
+-- nm on the object: Ok True when it defines `main`.
+definesMain : String -> <Exec, IO, FileRead> Result String Bool
+definesMain victim = match boundedVerb "nm" [victim]
+  Err e => Err "nm could not run on \{victim}: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      Err "nm exited \{intToString code} on \{victim}"
+    else
+      Ok (length (filter (isMatch mainRe) (lines out)) > 0)
+
+noMainCheck : String -> <Exec, IO, FileRead> Expectation
+noMainCheck victim = match definesMain victim
+  Err e => fail "self-repair: \{e}"
+  Ok True =>
+    fail
+      "self-repair arm's corrupt object still defines main, so it is not corrupt"
+  Ok False => pass
+
+repaired : String -> <Exec, IO, FileRead> Expectation
+repaired victim = match definesMain victim
+  Err e => fail "self-repair: \{e}"
+  Ok True => pass
+  Ok False =>
+    fail
+      "build succeeded but the cache entry was NOT repaired (it fell open instead of recompiling the entry)"
+
+corruptAndRebuild : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+corruptAndRebuild w rdir victim src =
+  let nomainC = "\{w}/nomain.c"
+  expectAll [
+    gradeWrite
+      "write no-main C source"
+      (writeFile nomainC "int mdk_not_main(void) { return 0; }\n"),
+    gradeExit
+      "build no-main object"
+      (boundedVerb "clang" ["-c", nomainC, "-o", victim]),
+    noMainCheck victim,
+    gradeExit
+      "rebuild over corrupt cache entry (rtObjUsable, #2233)"
+      (spawn (repairEnv rdir) (buildArgs src "\{w}/repair_out")),
+    repaired victim,
+  ]
+
+victimThen : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+victimThen w rdir src = match fixtureFiles rdir
+  Err e => fail "self-repair: could not list \{rdir}: \{e}"
+  Ok paths => match filter (isMatch rtObjRe) paths
+    [] =>
+      fail
+        "self-repair arm found no cached object to corrupt: the cache failed open, so the arm is vacuous"
+    victim :: _ => corruptAndRebuild w rdir victim src
+
+repairArm : String -> <Exec, IO, FileRead, FileWrite> Expectation
+repairArm w =
+  let rdir = "\{w}/objcache_repair"
+  let src = underRoot "test/construct_fixtures/tuple_neq.mdk"
+  expectAll [
+    gradeWrite "self-repair: mkdir cache dir" (mkdirAll rdir),
+    gradeExit
+      "self-repair seed build"
+      (spawn (repairEnv rdir) (buildArgs src "\{w}/repair_seed")),
+    victimThen w rdir src,
+  ]
+
+withScratch : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withScratch body = match scratchDir
+  Err e => fail "could not create a scratch dir: \{e}"
+  Ok w => body w
+
+test "rt_obj -O0: inline, prebuilt and cached builds are byte-identical" =
+  withScratch (w => optArm w "-O0")
+
+test "rt_obj -O2: inline, prebuilt and cached builds are byte-identical" =
+  withScratch (w => optArm w "-O2")
+
+test "rt_obj self-repair: a corrupt cache entry is rejected and recompiled" =
+  withScratch repairArm

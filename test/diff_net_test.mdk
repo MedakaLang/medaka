@@ -1,0 +1,94 @@
+{- | Regression gate for the `net` feature (networking staging bite 3), over
+   `test/net_fixtures`. Replaces `test/diff_net.sh`.
+
+   Net externs are deliberately UNBOUND under the interpreter, so each fixture
+   is built to a native binary with `medaka build`, executed once, and its
+   stdout compared against the committed `<name>.expected` golden. A second
+   check asserts the wasm-side guard: `medaka build --target wasm` on a
+   net-importing program must fail rather than miscompile. That leg is skipped
+   (passes) when `wasm-tools` or the wasm emitter oracle is absent, as the
+   shell gate did.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads
+   fixtures, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{boundedInTree, fixtureStems, inScratchDir}
+import test_process.{boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEach, expectGolden, fail, pass
+}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/net_fixtures"
+
+emitter : <IO> String
+emitter = "\{medakaRoot}/medaka_emitter"
+
+wasmEmitter : <IO> String
+wasmEmitter = "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+
+-- Builds fixture `name` into `scratch`, runs it once, and compares its stdout
+-- with `<name>.expected`. The run's exit code is graded too: the shell gate
+-- compared stdout alone, so this is strictly stricter.
+fixtureCheck : String -> String -> <Exec, IO> Expectation
+fixtureCheck scratch name =
+  let src = "\{corpus}/\{name}.mdk"
+  let bin = "\{scratch}/\{name}.bin"
+  match boundedInTree 120 medakaBin ["build", src, "-o", bin]
+    Err e => fail "\{name}: build spawn: \{e}"
+    Ok (buildCode, bo, be) =>
+      if buildCode /= 0 then
+        fail
+          "\{name}: build exited \{intToString buildCode}: \{debug (bo ++ be)}"
+      else match boundedVerb bin []
+        Err e => fail "\{name}: run spawn: \{e}"
+        Ok (runCode, ro, _) =>
+          if runCode /= 0 then
+            fail "\{name}: run exited \{intToString runCode}"
+          else
+            expectGolden "\{corpus}/\{name}.expected" ro
+
+-- `medaka build --target wasm` with the native emitter and the wasm emitter
+-- oracle pinned through `env`, so the build sees the same tree the gate reads.
+wasmBuild : String -> <Exec, IO> Result String (Int, String, String)
+wasmBuild scratch = boundedVerbSeconds 120 "env" [
+  "MEDAKA_ROOT=\{medakaRoot}",
+  "MEDAKA_EMITTER=\{emitter}",
+  "MEDAKA_WASM_EMITTER=\{wasmEmitter}",
+  medakaBin,
+  "build",
+  "--target",
+  "wasm",
+  "\{corpus}/net_loopback.mdk",
+  "-o",
+  "\{scratch}/net_loopback_wasm",
+]
+
+wasmReject : String -> <Exec, IO> Expectation
+wasmReject scratch =
+  match boundedVerb "sh" ["-c", "command -v wasm-tools >/dev/null 2>&1"]
+    Err e => fail "wasm-tools probe: \{e}"
+    Ok (tc, _, _) => match boundedVerb "test" ["-x", wasmEmitter]
+      Err e => fail "wasm emitter probe: \{e}"
+      Ok (ec, _, _) =>
+        if tc /= 0 || ec /= 0 then
+          pass
+        else match wasmBuild scratch
+          Err e => fail "medaka build --target wasm: \{e}"
+          Ok (code, _, _) =>
+            if code == 0 then
+              fail
+                "wasm-reject: build --target wasm succeeded, expected failure"
+            else
+              pass
+
+test "net: every fixture builds, runs, and matches its .expected" =
+  match fixtureStems corpus
+    Err e => fail "\{corpus}: \{e}"
+    Ok stems => inScratchDir "fixtures" (scratch => expectAll [
+      expectAtLeast 3 (length stems),
+      expectEach (map (n => (n, fixtureCheck scratch n)) stems),
+    ])
+
+test "net: --target wasm rejects a net-importing program (not a miscompile)" =
+  inScratchDir "wasm" wasmReject

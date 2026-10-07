@@ -1,0 +1,405 @@
+{- | Gate for `medaka check-policy` verdicts, over the capability demo plugins and
+   test/check_policy_fixtures/. Replaces diff_compiler_check_policy.sh.
+   Each case spawns the native binary and compares its output with a committed
+   golden, a pinned substring, or an exact exit code, so it needs the binary.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads
+   fixtures, neither of which the interpreter binds. -}
+
+import test_process.{medakaBin, underRoot, boundedVerb}
+import test.{
+  Expectation, expectAll, expectEach, expectGolden, expectEqualText,
+  expectTextContainsAll, fail, pass
+}
+import string.{contains, replaceAll, trim}
+
+goldenDir : String
+goldenDir = underRoot "test/check_policy_fixtures"
+
+-- Golden case: byte-identical stdout+stderr (plugin path replaced) and the
+-- recorded exit code (accept=0, reject=1).
+policyCase : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead> Expectation
+policyCase label file allow fn stem =
+  let mdk = underRoot file
+  match (boundedVerb medakaBin [
+    "check-policy", mdk, "--allow", allow, "--fn", fn
+  ])
+    Err e => fail "\{label}: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      let rcPath = "\{goldenDir}/\{stem}.rc"
+      match readFile rcPath
+        Err e => fail "\{label}: missing rc \{rcPath}: \{e}"
+        Ok rcRaw =>
+          let rcText = trim rcRaw
+          if intToString code /= rcText then
+            fail "\{label}: rc \{intToString code}, golden rc \{rcText}"
+          else
+            expectGolden
+              "\{goldenDir}/\{stem}.golden"
+              (replaceAll mdk "<plugin>" (out ++ err))
+
+-- WS-1b / WS-2 parameter-level case: exit code, plus a substring of the output.
+paramCase : String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  <Exec, IO> Expectation
+paramCase label file allow want sub =
+  match (boundedVerb medakaBin [
+    "check-policy",
+    underRoot file,
+    "--allow",
+    allow,
+    "--fn",
+    "transform",
+  ])
+    Err e => fail "\{label}: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      if code /= want then
+        fail "\{label}: rc \{intToString code}, want \{intToString want}"
+      else if not (contains sub (out ++ err)) then
+        fail "\{label}: output lacks <\{sub}>"
+      else
+        pass
+
+-- Fail-closed case: nonzero exit, no accepted verdict, both needles present.
+refuseCase : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO> Expectation
+refuseCase label file allow fn sub sub2 =
+  match (boundedVerb medakaBin [
+    "check-policy",
+    underRoot file,
+    "--allow",
+    allow,
+    "--fn",
+    fn,
+  ])
+    Err e => fail "\{label}: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      if code == 0 then
+        fail "\{label}: exited 0, want nonzero"
+      else if contains "accepted." (out ++ err) then
+        fail "\{label}: printed an accepted verdict"
+      else
+        expectTextContainsAll [sub, sub2] (out ++ err)
+
+test "diff_compiler_check_policy: golden verdicts" = expectEach [
+  (
+    "good-accept",
+    policyCase
+      "good-accept"
+      "demo/plugin_good.mdk"
+      "Cache,Log,FFI"
+      "transform"
+      "ws1a_good_accept",
+  ),
+  (
+    "good-reject",
+    policyCase
+      "good-reject"
+      "demo/plugin_good.mdk"
+      "Cache"
+      "transform"
+      "ws1a_good_reject",
+  ),
+  (
+    "malicious-reject",
+    policyCase
+      "malicious-reject"
+      "demo/plugin_malicious.mdk"
+      "Cache,Log"
+      "transform"
+      "ws1a_malicious_reject",
+  ),
+  (
+    "midgraph-reject",
+    policyCase
+      "midgraph-reject"
+      "demo/plugin_malicious.mdk"
+      "Cache,Log"
+      "tagVisit"
+      "ws1a_midgraph_reject",
+  ),
+  (
+    "defaults-accept",
+    policyCase
+      "defaults-accept"
+      "test/check_policy_fixtures/defaults_plugin.mdk"
+      "Log,FFI"
+      "transform"
+      "defaults_accept",
+  ),
+  (
+    "int-entry-accept",
+    policyCase
+      "int-entry-accept"
+      "test/check_policy_fixtures/int_entry_plugin.mdk"
+      "Audit"
+      "transfer"
+      "int_entry_accept",
+  ),
+  (
+    "named-entry-sample",
+    policyCase
+      "named-entry-sample"
+      "test/check_policy_fixtures/named_entry_plugin.mdk"
+      "FileRead"
+      "transform"
+      "named_entry_accept",
+  ),
+  (
+    "io-join-accept",
+    policyCase
+      "io-join-accept"
+      "test/check_policy_fixtures/io_join_plugin.mdk"
+      "Clock,Env,Exec,FileRead,FileWrite,Net,Rand,Signal,Stderr,Stdin,Stdout"
+      "transform"
+      "io_join_accept",
+  ),
+  (
+    "renamed-entry-sample",
+    policyCase
+      "renamed-entry-sample"
+      "test/check_policy_fixtures/renamed_entry_plugin.mdk"
+      "Audit"
+      "rewrite"
+      "renamed_entry_accept",
+  ),
+  (
+    "build-stamp-sample",
+    policyCase
+      "build-stamp-sample"
+      "test/check_policy_fixtures/build_stamp_plugin.mdk"
+      "Audit"
+      "stamp"
+      "build_stamp_accept",
+  ),
+  (
+    "thunk-entry-accept",
+    policyCase
+      "thunk-entry-accept"
+      "test/check_policy_fixtures/thunk_entry_plugin.mdk"
+      "Audit"
+      "tick"
+      "thunk_entry_accept",
+  ),
+  (
+    "xmod-accept",
+    policyCase
+      "xmod-accept"
+      "test/check_policy_fixtures/policy_xmod_main.mdk"
+      "Stdout"
+      "transform"
+      "xmod_accept",
+  ),
+  (
+    "xmod-reject",
+    policyCase
+      "xmod-reject"
+      "test/check_policy_fixtures/policy_xmod_main.mdk"
+      "Cache"
+      "transform"
+      "xmod_reject",
+  ),
+  (
+    "stdlib-import-accept",
+    policyCase
+      "stdlib-import-accept"
+      "test/check_policy_fixtures/policy_stdlib_import.mdk"
+      "Stdout"
+      "shout"
+      "stdlib_import_accept",
+  ),
+]
+
+test "diff_compiler_check_policy: parameter-level compare (WS-1b)" = expectEach
+  [
+    (
+      "param-prefix-accept",
+      paramCase
+        "param-prefix-accept"
+        "test/check_policy_fixtures/net_param_plugin.mdk"
+        "Net=idp.example.com/*,FFI"
+        0
+        "accepted",
+    ),
+    (
+      "param-prefix-reject",
+      paramCase
+        "param-prefix-reject"
+        "test/check_policy_fixtures/net_param_plugin.mdk"
+        "Net=other.com/*"
+        1
+        "rejected",
+    ),
+    (
+      "param-bare-accept",
+      paramCase
+        "param-bare-accept"
+        "test/check_policy_fixtures/net_param_plugin.mdk"
+        "Net,FFI"
+        0
+        "accepted",
+    ),
+  ]
+
+test "diff_compiler_check_policy: alpha scope-seeding (WS-2)" = expectEach [
+  (
+    "ws2-outer-accept",
+    paramCase
+      "ws2-outer-accept"
+      "test/check_policy_fixtures/net_param_outer_let.mdk"
+      "Net=idp.example.com/*,FFI"
+      0
+      "accepted",
+  ),
+  (
+    "ws2-outer-reject",
+    paramCase
+      "ws2-outer-reject"
+      "test/check_policy_fixtures/net_param_outer_let.mdk"
+      "Net=other.com/*"
+      1
+      "idp.example.com/api",
+  ),
+  (
+    "ws2-computed-reject",
+    paramCase
+      "ws2-computed-reject"
+      "test/check_policy_fixtures/net_param_computed.mdk"
+      "Net=idp.example.com/*"
+      1
+      "rejected",
+  ),
+  (
+    "ws2-helper-reject",
+    paramCase
+      "ws2-helper-reject"
+      "test/check_policy_fixtures/net_param_helper.mdk"
+      "Net=idp.example.com/*"
+      1
+      "rejected",
+  ),
+]
+
+test "diff_compiler_check_policy: fail-closed analysis and entry" = expectEach [
+  (
+    "analysis-type-error",
+    refuseCase
+      "analysis-type-error"
+      "test/check_policy_fixtures/type_error_plugin.mdk"
+      "Panic"
+      "transform"
+      "rejected. compiler analysis failed"
+      "type_error_plugin.mdk:5:14: no impl of Num for String",
+  ),
+  (
+    "analysis-unlabelled-ffi",
+    refuseCase
+      "analysis-unlabelled-ffi"
+      "test/check_policy_fixtures/ffi_unlabelled_plugin.mdk"
+      "FFI,Net"
+      "transform"
+      "rejected. compiler analysis failed"
+      "rejected. compiler analysis failed",
+  ),
+  (
+    "analysis-import-type-error",
+    refuseCase
+      "analysis-import-type-error"
+      "test/check_policy_fixtures/policy_xmod_bad_main.mdk"
+      "Stdout"
+      "transform"
+      "rejected. compiler analysis failed"
+      "policy_xmod_bad_helper.mdk:4:10: no impl of Num for String",
+  ),
+  (
+    "analysis-unresolvable",
+    refuseCase
+      "analysis-unresolvable"
+      "test/check_policy_fixtures/manifest_unresolvable_plugin.mdk"
+      "Stdout"
+      "transform"
+      "rejected. compiler analysis failed"
+      "has no export `noSuchExport`",
+  ),
+  (
+    "missing-entry-2047",
+    refuseCase
+      "missing-entry-2047"
+      "test/check_policy_fixtures/missing_entry_plugin.mdk"
+      "Cache,Log"
+      "transform"
+      "rejected. no 'transform' entry found"
+      "rejected. no 'transform' entry found",
+  ),
+  (
+    "io-join-without-net",
+    refuseCase
+      "io-join-without-net"
+      "test/check_policy_fixtures/io_join_plugin.mdk"
+      "Clock,Env,Exec,FileRead,FileWrite,Rand,Signal,Stderr,Stdin,Stdout"
+      "transform"
+      "rejected. transform requires <IO>"
+      "rejected. transform requires <IO>",
+  ),
+  (
+    "io-join-without-signal",
+    refuseCase
+      "io-join-without-signal"
+      "test/check_policy_fixtures/io_join_plugin.mdk"
+      "Clock,Env,Exec,FileRead,FileWrite,Net,Rand,Stderr,Stdin,Stdout"
+      "transform"
+      "rejected. transform requires <IO>"
+      "rejected. transform requires <IO>",
+  ),
+]
+
+-- Verdict first: the accepted line is printed before the sample run, so a
+-- panicking sample leaves `accepted.` on stdout, then panics, exit 1.
+test "diff_compiler_check_policy: evaluation panic keeps the verdict" =
+  match (boundedVerb medakaBin [
+    "check-policy",
+    underRoot "test/check_policy_fixtures/panic_plugin.mdk",
+    "--allow",
+    "Panic",
+    "--fn",
+    "transform",
+  ])
+    Err e => fail "evaluation-panic: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      if code /= 1 then
+        fail "evaluation-panic: exited \{intToString code}, want 1"
+      else
+        expectAll [
+          expectEqualText "accepted. transform requires only pure" (trim out),
+          expectTextContainsAll ["policy evaluation boom"] err,
+        ]
+
+-- The #2047 control flips only entry presence and must still accept.
+test "diff_compiler_check_policy: missing-entry control accepts" =
+  match (boundedVerb medakaBin [
+    "check-policy",
+    underRoot "test/check_policy_fixtures/missing_entry_plugin.mdk",
+    "--allow",
+    "Cache,Log",
+    "--fn",
+    "rewriteHeader",
+  ])
+    Err e => fail "missing-entry-2047-control: could not spawn: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        fail "missing-entry-2047-control: exited \{intToString code}, want 0"
+      else
+        expectTextContainsAll ["accepted. rewriteHeader"] (out ++ err)

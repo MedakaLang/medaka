@@ -1,0 +1,188 @@
+{- | Gate for the snapshot Wasm arm's explicit input: a WASM-only render must equal
+   the WASM section of a combined LLVM,WASM render, the Score impl must be
+   eta-expanded to its receiver arity, and the WasmEmitInput API must be exported
+   with no legacy semantic hooks left behind. Replaces
+   diff_compiler_snapshot_wasm_input.sh.
+
+   Needs the binary: it runs `medaka snapshot` twice.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads
+   fixtures, neither of which the interpreter binds. -}
+
+import test_process.{medakaBin, medakaRoot, boundedVerb, scratchDir}
+import test.{Expectation, expectAll, expectEqualText, fail, pass}
+import fs.{mkdirAll}
+import string.{startsWith, contains, lines, stripPrefix, split, join, drop}
+
+wasmEmitPath : <IO> String
+wasmEmitPath = "\{medakaRoot}/compiler/backend/wasm_emit.mdk"
+
+emitSupportPath : <IO> String
+emitSupportPath = "\{medakaRoot}/compiler/backend/emit_support.mdk"
+
+legacyNames : List String
+legacyNames = [
+  "installMethodIface", "installDeclRetTypes", "installCtorFloatFields",
+  "installMainIsFloatHint", "installRecFieldOrders", "methodIfaceTableRef",
+  "methodIfaceIndexRef", "setMethodIfaceTable", "methodIfaceOf",
+  "methodArityOf", "mainIsFloatHintRef", "declRetTypesRef", "declRetTypesMapW",
+  "ctorFloatFieldsRef", "declRecFieldsRef", "recFieldTableW"
+]
+
+check : Bool -> String -> Expectation
+check ok msg = if ok then pass else fail msg
+
+-- A declaration body (export keyword already removed) starts with `name` followed
+-- by one of the separators, or is exactly `name`.
+startsName : List String -> String -> String -> Bool
+startsName seps name body =
+  body == name || any (sep => startsWith (name ++ sep) body) seps
+
+-- Candidate declaration lines: a line after `export` (split form, #1804), or the
+-- remainder of a collapsed `export <decl>` line.
+exportCandidates : List String -> List String
+exportCandidates [] = []
+exportCandidates (l :: rest) = candidateAt l rest
+
+candidateAt : String -> List String -> List String
+candidateAt l rest =
+  if l == "export" then
+    nextLineAfter rest
+  else match stripPrefix "export " l
+    Some s => s :: exportCandidates rest
+    None => exportCandidates rest
+
+nextLineAfter : List String -> List String
+nextLineAfter [] = []
+nextLineAfter (n :: rest) = n :: exportCandidates rest
+
+exportDeclPresent : String -> String -> List String -> Bool
+exportDeclPresent name sig ls =
+  any
+    (cand =>
+      startsName [" ", ":", "("] name cand && (sig == "" || contains sig cand))
+    (exportCandidates ls)
+
+-- Legacy hook: a top-level line `[export ]NAME` followed by space, colon, or end.
+legacyHit : List String -> String -> Bool
+legacyHit ls name = any (l => startsName [" ", ":"] name (dropExport l)) ls
+
+dropExport : String -> String
+dropExport l = match stripPrefix "export " l
+  Some s => s
+  None => l
+
+legacyHits : List String -> List String -> List String
+legacyHits wasmLines supportLines =
+  filter
+    (name => legacyHit wasmLines name || legacyHit supportLines name)
+    legacyNames
+
+apiCheck : <IO, FileRead> Expectation
+apiCheck = match readFile wasmEmitPath
+  Err e =>
+    fail "FAIL: WasmEmitInput API is incomplete (cannot read wasm_emit: \{e})"
+  Ok text =>
+    let ls = lines text
+    check
+      (exportDeclPresent "makeWasmEmitInput" "" ls
+        && exportDeclPresent
+          "emitProgram"
+          "emitProgram : WasmEmitInput -> CProgram -> String"
+          ls
+        && exportDeclPresent
+          "emitProgramGaps"
+          "emitProgramGaps : WasmEmitInput -> CProgram -> List String"
+          ls)
+      "FAIL: WasmEmitInput API is incomplete"
+
+legacyCheck : <IO, FileRead> Expectation
+legacyCheck = match readFile wasmEmitPath
+  Err e => fail "could not read wasm_emit: \{e}"
+  Ok wasmText => match readFile emitSupportPath
+    Err e => fail "could not read emit_support: \{e}"
+    Ok supportText => match legacyHits (lines wasmText) (lines supportText)
+      [] => pass
+      hits => fail "FAIL: legacy Wasm semantic hook remains: \{join ", " hits}"
+
+-- The source the script printf'd: method arity 1 on a zero-clause impl body.
+wasmSource : String
+wasmSource =
+  join "\n" [
+      "interface Score a where", "  score : a -> Int", "data P = P",
+      "data U = U", "impl Score P where", "  score = x => 7",
+      "impl Score U where", "  score = x => 11", "main = score U"
+    ]
+    ++ "\n"
+
+-- Runs `medaka snapshot` and grades its exit code.
+snapshotRun : String -> String -> String -> <Exec, IO> Result String String
+snapshotRun out stages src =
+  match (boundedVerb medakaBin [
+    "snapshot", "--new", "--root", medakaRoot, "--out", out, "--stages", stages,
+    src
+  ])
+    Err e => Err "could not spawn snapshot --stages \{stages}: \{e}"
+    Ok (code, _, _) =>
+      if code /= 0 then
+        Err "snapshot --stages \{stages} exited \{intToString code}"
+      else
+        Ok out
+
+-- Extract the WAT payload: lines after `# WASM` until the next `# ` header.
+wasmSection : List String -> List String
+wasmSection [] = []
+wasmSection (l :: rest) =
+  if l == "# WASM" then takeWasm rest else wasmSection rest
+
+takeWasm : List String -> List String
+takeWasm [] = []
+takeWasm (l :: rest) = if startsWith "# " l then [] else l :: takeWasm rest
+
+-- grep -q 'mdk_impl_.*_score'
+isScoreImpl : String -> Bool
+isScoreImpl l = match split "mdk_impl_" l
+  [] => False
+  _ :: parts => any (part => contains "_score" part) parts
+
+scoreFuncLine : String
+scoreFuncLine = "(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_U_score (param"
+
+wasmCheck : <Exec, IO, FileRead, FileWrite> Expectation
+wasmCheck = match scratchDir
+  Err e => fail "could not create scratch dir: \{e}"
+  Ok work => match prepare work
+    Err e => fail e
+    Ok _ => match renderBoth work
+      Err e => fail "FAIL: snapshot did not produce both outputs: \{e}"
+      Ok (only, combined) =>
+        let onlyWat = wasmSection (lines only)
+        let combinedWat = wasmSection (lines combined)
+        expectAll [
+          expectEqualText (join "\n" onlyWat) (join "\n" combinedWat),
+          check
+            (any isScoreImpl onlyWat)
+            "FAIL: snapshot WAT did not emit Score implementations",
+          check
+            (any (l => contains scoreFuncLine l) onlyWat)
+            "FAIL: snapshot WAT did not eta-expand Score to its declared receiver arity",
+        ]
+
+prepare : String -> <FileWrite, Exec> Result String String
+prepare work = do
+  _ <- mkdirAll "\{work}/wasm-only"
+  _ <- mkdirAll "\{work}/combined"
+  writeFile "\{work}/wasm_snapshot_input.mdk" wasmSource
+  Ok work
+
+renderBoth : String -> <Exec, IO, FileRead> Result String (String, String)
+renderBoth work = do
+  let src = "\{work}/wasm_snapshot_input.mdk"
+  _ <- snapshotRun "\{work}/wasm-only" "WASM" src
+  _ <- snapshotRun "\{work}/combined" "LLVM,WASM" src
+  only <- readFile "\{work}/wasm-only/wasm_snapshot_input.md"
+  combined <- readFile "\{work}/combined/wasm_snapshot_input.md"
+  Ok (only, combined)
+
+test "snapshot_wasm_input: WASM-only equals combined; Score receiver arity explicit; WasmEmitInput API and no legacy hooks" =
+  expectAll [apiCheck, legacyCheck, wasmCheck]

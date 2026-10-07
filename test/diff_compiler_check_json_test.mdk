@@ -1,0 +1,210 @@
+{- | Gate for `medaka check --json` and `medaka build --json`, over
+   `test/check_json_fixtures` and `test/run_check_agreement_fixtures`.
+   Replaces diff_compiler_check_json.sh.
+
+   Each fixture's output is compared byte-for-byte with its committed golden,
+   after the absolute fixture path is replaced by `<fixture>` (or the project
+   directory by `<proj>/`). The CAPTURE=1 re-capture mode of the shell gate has
+   no native equivalent: goldens are re-derived by hand from a reviewed run.
+
+   Runs under `medaka test --native`: it spawns `medaka` and reads the corpus,
+   neither of which the interpreter binds. -}
+
+import string as S
+import fs.{fixtureFiles}
+import path.{dirname, stem}
+import compiler_cli_test_support.{fixtureStems}
+import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb, scratchDir}
+import test.{
+  Expectation,
+  fail,
+  pass,
+  expectGolden,
+  expectAll,
+  expectAtLeast,
+  expectEach,
+}
+
+corpus : <IO> String
+corpus = underRoot "test/check_json_fixtures"
+
+agreementCorpus : <IO> String
+agreementCorpus = underRoot "test/run_check_agreement_fixtures"
+
+projectsCorpus : <IO> String
+projectsCorpus = underRoot "test/check_json_fixtures/projects"
+
+-- A file path (or project directory) replaced by its stable placeholder.
+placeholder : String -> String -> String -> String
+placeholder full token text = S.replaceAll full token text
+
+-- Run `medaka <args>`, grade the exit (0 or 1 are the verdicts; anything else
+-- is a crash), and compare stdout+stderr with the golden after `place`.
+runGolden : String ->
+  List String ->
+  (String -> String) ->
+  String ->
+  <Exec, IO, FileRead> Expectation
+runGolden label args place golden = match boundedVerb medakaBin args
+  Err e => fail "could not spawn \{label}: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 && code /= 1 then
+      fail "\{label}: exited \{intToString code}"
+    else
+      expectGolden golden (place (out ++ err))
+
+-- One top-level fixture: `check --json` against its own golden.
+singleRow : String -> <Exec, IO, FileRead> Expectation
+singleRow name =
+  let file = "\{corpus}/\{name}.mdk"
+  runGolden
+    "check --json \{name}"
+    ["check", "--json", file]
+    (text => placeholder file "<fixture>" text)
+    "\{corpus}/\{name}.check_json.golden"
+
+test "check --json: every top-level fixture matches its golden" =
+  match fixtureStems corpus
+    Err e => fail "could not list \{corpus}: \{e}"
+    Ok stems => expectAll [
+      expectAtLeast 95 (length stems),
+      expectEach (map (s => (s, singleRow s)) stems),
+    ]
+
+-- Multi-module projects (#159 lock): the imported module's `help`/`fix` must
+-- survive into `--json`. Each project is a directory with a `main.mdk` entry.
+projectRow : String -> <Exec, IO, FileRead> Expectation
+projectRow dir =
+  let rel = S.replaceAll (projectsCorpus ++ "/") "" dir
+  runGolden
+    "check --json project/\{rel}"
+    ["check", "--json", "\{dir}/main.mdk"]
+    (text =>
+      placeholder
+        "test/check_json_fixtures/projects/\{rel}/"
+        "<proj>/"
+        (placeholder "\{dir}/" "<proj>/" text))
+    "\{dir}/check_json.golden"
+
+test "check --json: every project fixture matches its golden (#159)" =
+  match fixtureFiles projectsCorpus
+    Err e => fail "could not list \{projectsCorpus}: \{e}"
+    Ok files =>
+      let mains = filter (f => stem f == "main") files
+      let dirs = map dirname mains
+      expectAll [
+        expectAtLeast 11 (length dirs),
+        expectEach
+          (map
+            (d => (S.replaceAll (projectsCorpus ++ "/") "" d, projectRow d))
+            dirs),
+      ]
+
+-- S9's two reject answers and the #3848/#3869/#3889 signature pins. Read where
+-- they live; the golden sits beside the other check_json goldens.
+agreementRow : String -> <Exec, IO, FileRead> Expectation
+agreementRow extname =
+  let file = "\{agreementCorpus}/\{extname}.mdk"
+  let rel = "test/run_check_agreement_fixtures/\{extname}.mdk"
+  runGolden
+    "check --json agreement/\{extname}"
+    ["check", "--json", file]
+    (text => placeholder rel "<fixture>" (placeholder file "<fixture>" text))
+    "\{corpus}/\{extname}.check_json.golden"
+
+test "check --json: agreement-corpus reject fixtures pin their code and range" =
+  expectEach
+    (map
+      (n => (n, agreementRow n))
+      [
+        "s1_constrained_shadow_dispatch",
+        "s1_constrained_shadow_domain_mismatch",
+        "reject_3848_orphan_signature",
+        "reject_3848_signature_typo",
+        "reject_3848_attributed_orphan_signature",
+        "reject_3848_exported_orphan_signature",
+        "s2_dup_top_level_signature",
+      ])
+
+-- #333: a nonexistent path reports file-not-found, not R-MODULE-LOAD.
+test "333/nonexistent-path: reports R-FILE-NOT-FOUND with exit 1, not R-MODULE-LOAD" =
+  let missing = "\{medakaRoot}/no-such-file-here-333.mdk"
+  match boundedVerb medakaBin ["check", "--json", missing]
+    Err e => fail "could not spawn medaka check --json: \{e}"
+    Ok (code, out, err) =>
+      let text = out ++ err
+      if code /= 1 then
+        fail "333/nonexistent-path: expected exit 1, got \{intToString code}"
+      else if not (S.contains "R-FILE-NOT-FOUND" text) then
+        fail "333/nonexistent-path: expected R-FILE-NOT-FOUND, got: \{text}"
+      else if S.contains "R-MODULE-LOAD" text then
+        fail "333/nonexistent-path: regressed to R-MODULE-LOAD: \{text}"
+      else
+        pass
+
+-- #1078: `build --json` on a program that never reaches the emitter must be
+-- byte-identical to `check --json` on the same fixture.
+test "1078/build-json-agrees-with-check-json: type_mismatch matches check's golden" =
+  let file = "\{corpus}/type_mismatch.mdk"
+  runGolden
+    "build --json type_mismatch"
+    ["build", "--json", file]
+    (text => placeholder file "<fixture>" text)
+    "\{corpus}/type_mismatch.check_json.golden"
+
+-- #1078: a clean program reaches the emitter: exit 0, a real executable, and
+-- the empty-diagnostics envelope on the JSON channel.
+test "1078/build-json-clean-emits-and-succeeds: exit 0, binary, empty diagnostics" =
+  match scratchDir
+    Err e => fail "could not make a scratch dir: \{e}"
+    Ok dir =>
+      let bin = "\{dir}/clean.bin"
+      let work = match boundedVerb medakaBin [
+        "build",
+        "--json",
+        "\{corpus}/clean.mdk",
+        "-o",
+        bin,
+      ]
+        Err e => fail "could not spawn medaka build --json: \{e}"
+        Ok (code, out, err) =>
+          if code /= 0 then
+            fail
+              "1078/build-json-clean: expected exit 0, got \{intToString code}: \{out ++ err}"
+          else match boundedVerb "sh" ["-c", "test -x \"$1\"", "sh", bin]
+            Err e => fail "could not spawn test -x: \{e}"
+            Ok (c2, _, _) =>
+              if c2 /= 0 then
+                fail "1078/build-json-clean: no executable emitted at \{bin}"
+              else if not (S.contains "\"diagnostics\":[]" (out ++ err)) then
+                fail
+                  "1078/build-json-clean: expected empty-diagnostics envelope: \{out ++ err}"
+              else
+                pass
+      let cleanup = match boundedVerb "rm" ["-rf", dir]
+        Err e => fail "could not spawn rm: \{e}"
+        Ok (c3, _, _) =>
+          if c3 /= 0 then
+            fail "rm -rf \{dir} exited \{intToString c3}"
+          else
+            pass
+      expectAll [work, cleanup]
+
+-- #1078: `--json` is a flag, not a second positional input. A bare
+-- `build --json` reports through the R-BUILD-FAILED envelope.
+test "1078/build-json-flag-not-consumed-as-input: bare build --json reports R-BUILD-FAILED" =
+  match boundedVerb medakaBin ["build", "--json"]
+    Err e => fail "could not spawn medaka build --json: \{e}"
+    Ok (code, out, err) =>
+      let text = out ++ err
+      if code /= 1 then
+        fail
+          "1078/build-json-flag-not-consumed: expected exit 1, got \{intToString code}"
+      else if not (S.contains "R-BUILD-FAILED" text) then
+        fail
+          "1078/build-json-flag-not-consumed: expected R-BUILD-FAILED, got: \{text}"
+      else if S.contains "takes exactly one input file" text then
+        fail
+          "1078/build-json-flag-not-consumed: regressed, --json read as a second positional: \{text}"
+      else
+        pass

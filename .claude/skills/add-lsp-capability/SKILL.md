@@ -81,7 +81,7 @@ New LSP output almost always **moves an LSP golden**. Re-mint it by NAME
 `main` goes red. Read the diff first: six of the ten goldens are dumps of the
 server under test, so a capture is not evidence that the new answer is right.
 
-For an end-to-end stdio check, use `test/lsp_harness.sh`. The harness drives
+For an end-to-end stdio check, use `test/lsp_harness_test.mdk`. The harness drives
 the **compiled** `medaka lsp` binary over JSON-RPC — run `make medaka` first.
 If your feature depends on new language syntax, see the `add-language-feature`
 skill first.
