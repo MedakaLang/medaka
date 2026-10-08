@@ -1,37 +1,37 @@
--- #1617/#1618 ACCEPTANCE PIN — the half of the bystander property that no
--- BUILD-executing corpus can carry.
+-- #1617/#1618 BYSTANDER PIN for arrow- and effect-headed impls: unrelated code
+-- must still behave when such an impl is present and never dispatched to.
+-- `medaka check` reports exactly ONE diagnostic here, and the golden pins which.
+-- The golden is not empty, so the fixture cannot pass vacuously: a cascade at
+-- `println` would add a second entry and a lost diagnostic would empty it.
 --
--- The arrow/effect impl-head tags are a ROUTING fix, but the projection they
--- moved is also read by things that decide ACCEPTANCE. This file poses BOTH of
--- those readers and asserts the ONE thing that must not change: `medaka check`
--- reports NOTHING. The golden is an empty diagnostics array, which is why this
--- fixture cannot pass vacuously — a narrowing emits `T-AMBIGUOUS-INSTANCE` and
--- the byte-compare fails.
+--   * `szc []` fixes nothing, so `Sz ?a` is an undetermined goal.  Its
+--     candidates are the `Sz` instances whose heads unify with it: `Bool` and
+--     `Int -> Int`.  The effect-carrying head `<Stdout> Float` is no third
+--     type: it elaborates to `Float`, which unifies with `?a` as well, so it is
+--     a candidate too.  Two or more candidates with no stable minimum is
+--     `T-AMBIGUOUS-INSTANCE` (DICT-SEMANTICS section 3 Reject, section 6.2 T4),
+--     located at the `szc` occurrence.  It is the shape of #2028.  Before the
+--     candidate set was computed by unification this goal counted one census
+--     tag (`Bool`) and was accepted, with `build` dying on an unstamped route.
 --
---   * `szc []` fixes nothing, so the `Sz` constraint is UNDETERMINED.
---     `checkUndeterminedObligation`'s RULE 3 rejects when the interface has
---     `implCountForIfaceU >= 2`, counted over the `ImplUniverse` iface->head-tag
---     SET. `Bool` is the only head that set may contain: an arrow head and an
---     effect-carrying head are not head type constructors, exactly as the
---     headless impls they used to be filed beside. Count 1, no error.
---   * `conv 1` needs determination to find the UNIQUE `Conv` impl at
---     head tag `Int`. The effect-headed sibling must not be a second match, or
---     `b` stays undetermined and a `Display` cascade rejects at `println`.
+--   * `conv 1` needs determination to find the UNIQUE `Conv` instance at head
+--     `Int`.  The effect-headed sibling must not be a second match, or `b`
+--     stays undetermined and a `Display` cascade adds a second diagnostic at
+--     `println`.  A qualified head does not count against a concrete first
+--     position (the bystander property of
+--     `test/engine_fixtures/fun_head_impl_bystander.mdk`, which must build and
+--     so carries only this `Conv` half).
 --
--- Neither the arrow impl nor either effect impl is ever dispatched to. That is
--- the point: this is "unrelated code still behaves", posed at the two readers
--- the change perturbs.
+-- Neither the arrow impl nor either effect impl is ever dispatched to.
 --
--- MEASURED on three cold-built arms — base `aaa43716` check 0, branch
--- `a8a226cb` check 1 (`Ambiguous instance for Sz`), amended branch check 0.
+-- Check-only: the `szc []` ambiguity is rejected, so `build` has nothing to
+-- build.
 --
--- ⚠️ CHECK-ONLY ON PURPOSE. `medaka build` REJECTS this file on every arm
--- including base: an undetermined constraint leaves the site's route unstamped
--- and the emitter E-PANICs `no impl of method 'szc' for type 'List'`. That is a
--- separate, pre-existing defect — a single-impl `Sz` with no arrow and no
--- effect anywhere in the program reproduces it on base `aaa43716` — and it is
--- why the sibling fixture `test/engine_fixtures/fun_head_impl_bystander.mdk`,
--- which must build, carries only the `Conv` half.
+-- The expected entry is the single `T-AMBIGUOUS-INSTANCE` for `Sz`.  The golden
+-- pins `file:LINE:COL` (the `szc` occurrence, line 63), so an edit to this
+-- header must keep the file's line count, and there is no CAPTURE mode: re-derive
+-- the golden from a reviewed `medaka check --json` run.
+
 interface Sz a where
   sz : a -> Int
   szc : List a -> Int
