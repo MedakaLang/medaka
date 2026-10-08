@@ -140,6 +140,7 @@ declare i64 @mdk_fsync(i64, i64)
 declare i64 @mdk_stat_file(i64, i64)
 declare i64 @mdk_file_mode(i64, i64)
 declare i64 @mdk_run_command(i64, i64)
+declare i64 @mdk_run_command_batch(i64, i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
@@ -285,9 +286,8 @@ apslow28:
   br label %apend28
 apend28:
   %t39 = load i64, ptr %t29
-  %t40 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Bag_fold(i64 %arg0, i64 %t39, i64 %t24)
-  store i64 %t40, ptr %t0
-  br label %decend1
+  %t40 = musttail call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_Bag_fold(i64 %arg0, i64 %t39, i64 %t24)
+  ret i64 %t40
 connext12:
   call void @mdk_nonexhaustive_match()
   unreachable
