@@ -4594,6 +4594,14 @@ fi
 # baseline, and 51950/90050/166250 post-fix against a 13721 one — the baseline itself
 # moves slightly because the prelude's own bodies pay the same scan.)
 #
+# The ~127 counted ops per reference were the llvm emitter's extern-family predicate
+# scans (`contains name [...]`, counted), run once per reference. Extern selection is now
+# a keyed catalog probe (`compiler/backend/extern_catalog.mdk`, uncounted), so the net
+# is a flat ~2 at every N. With nothing left to ratio the row asserts the drained state
+# the way the resolve row above does: all three nets under OP_FLOOR with the prelude
+# baseline over it (the emit counter is alive). A reintroduced per-reference counted scan
+# in emit lifts the net over the floor, and the ratio arm then grades it as before.
+#
 # Cost: two extra profiler runs (the 4N size and the baseline); N/2N are the runs the
 # resolve row above already made.
 scn3=$((SCOPEREFS_N * 4))
@@ -4618,7 +4626,11 @@ if [ "$sce_bad" = "1" ]; then
 else
   sce_verdict="$(awk -v b="$sceb" -v o1="$sce1" -v o2="$sce2" -v o3="$sce3" -v th="$THRESH" -v fl="$OP_FLOOR" 'BEGIN{
     d1=o1-b; d2=o2-b; d3=o3-b
-    if (d1 < fl) { printf "%d %d %d - - TOOSMALL", d1, d2, d3; exit }
+    if (d1 < fl) {
+      # Drained: every size under the floor AND the prelude baseline over it (the emit
+      # counter is alive), so there is no residual per-reference counted work to ratio.
+      if (d2 < fl && d3 < fl && b >= fl) { printf "%d %d %d - - DRAINED", d1, d2, d3; exit }
+      printf "%d %d %d - - TOOSMALL", d1, d2, d3; exit }
     r1=d2/d1; r2=d3/d2
     # r2 alone — the deterministic-arm rule (#2173); see grade_op_stage.
     printf "%d %d %d %.2f %.2f %s", d1, d2, d3, r1, r2, ((r2 > th) ? "QUADRATIC" : "ok") }')"
@@ -4630,7 +4642,11 @@ else
   scer1="$(printf '%s' "$sce_verdict" | cut -d' ' -f4)"
   scer2="$(printf '%s' "$sce_verdict" | cut -d' ' -f5)"
   sceword="$(printf '%s' "$sce_verdict" | cut -d' ' -f6)"
-  if [ "$sceword" = "TOOSMALL" ]; then
+  if [ "$sceword" = "DRAINED" ]; then
+    pass=$((pass+1))
+    printf '%-12s %8s  emit-ops net %s -> %s -> %s  (drained; < OP_FLOOR %s — extern selection is an uncounted catalog probe and the emit scope set is held; band N=%s->%s->%s)\n' \
+      scoperefs "$scn1" "$scd1n" "$scd2n" "$scd3n" "$OP_FLOOR" "$scn1" "$scn2" "$scn3"
+  elif [ "$sceword" = "TOOSMALL" ]; then
     fail=$((fail+1))
     printf '%-12s %8s  ** N TOO SMALL — raise PERF_SCOPEREFS_N (net emit-op %s < OP_FLOOR %s) **\n' \
       scoperefs "$scn1" "$scd1n" "$OP_FLOOR"
