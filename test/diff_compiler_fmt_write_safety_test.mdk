@@ -6,7 +6,7 @@
    Runs under `medaka test --native`: it spawns the ./medaka binary and writes
    temp files, neither of which the interpreter binds. -}
 
-import test_process.{medakaBin, boundedVerb, scratchDir}
+import test_process.{medakaBin, boundedVerb, withScratchDir}
 import test.{
   Expectation, expectAll, expectEach, expectEqual, expectTextContainsAll, fail,
   pass
@@ -217,19 +217,13 @@ dirSecondWrite dir formatted = match fmtRun ["--write", dir]
         ]
 
 test "fmt write safety: bare fmt never mutates (checks 1a-1c)" =
-  match scratchDir
-    Err e => fail "scratch dir: \{e}"
-    Ok dir => bareNeverMutates dir
+  withScratchDir (dir => bareNeverMutates dir)
 
 test "fmt write safety: bare fmt on formatted input is silent (checks 2a-2d)" =
-  match scratchDir
-    Err e => fail "scratch dir: \{e}"
-    Ok dir => bareFormattedSilent dir
+  withScratchDir (dir => bareFormattedSilent dir)
 
 test "fmt write safety: --write mutates, summarises, and is idempotent (checks 3a-4b)" =
-  match scratchDir
-    Err e => fail "scratch dir: \{e}"
-    Ok dir => writeMutatesAndIdempotent dir
+  withScratchDir (dir => writeMutatesAndIdempotent dir)
 
 test "fmt write safety: <sub> --help and -h exit 0 and name the subcommand (check 5)" = expectEach
   [
@@ -251,11 +245,7 @@ test "fmt write safety: <sub> --help and -h exit 0 and name the subcommand (chec
   ]
 
 test "fmt write safety: --stdout and --check are read-only (checks 6a-6b)" =
-  match scratchDir
-    Err e => fail "scratch dir: \{e}"
-    Ok dir => readOnlyModes dir
+  withScratchDir (dir => readOnlyModes dir)
 
 test "fmt write safety: directory arm matches the file arm (checks 7a-7e)" =
-  match scratchDir
-    Err e => fail "scratch dir: \{e}"
-    Ok dir => dirArm dir
+  withScratchDir (dir => dirArm dir)

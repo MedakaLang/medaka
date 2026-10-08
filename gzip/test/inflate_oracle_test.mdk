@@ -15,7 +15,7 @@ import array as A
 import list.{replicate}
 import string.{contains, join, take}
 import test.{Expectation, expectAll, expectEach, fail, pass}
-import test_process.{medakaBin, medakaRoot, scratchDir, boundedVerbSeconds}
+import test_process.{medakaBin, medakaRoot, withScratchDir, boundedVerbSeconds}
 
 scrambleStep : Int -> Int
 scrambleStep x = (x * x + x * 7919 + 104729) % 2147483629
@@ -189,17 +189,6 @@ roundTrip dir inflateBin slug desc src level want = spawnStep
         src
         "\{dir}/\{slug}.gz"
         "\{dir}/\{slug}.out"))
-
--- The scratch tree can hold large fixtures, so it is removed; a directory
--- that cannot be removed is red rather than silently left behind.
-cleanup : String -> <Exec> Expectation
-cleanup dir = match boundedVerbSeconds 60 "rm" ["-rf", dir]
-  Err e => fail "cleanup of \{dir}: \{e}"
-  Ok (code, _, _) =>
-    if code /= 0 then
-      fail "cleanup of \{dir} exited \{intToString code}"
-    else
-      pass
 
 -- Stored blocks (BTYPE=00). Inputs are incompressible, so gzip -1 keeps them
 -- stored; the BTYPE assertion guards that.
@@ -598,18 +587,14 @@ errorGroup dir inflateBin = expectAll [
       ])),
 ]
 
-test "inflate_oracle: stored, fixed, dynamic round trips and error paths (checks 1-34)" =
-  match scratchDir
-    Err e => fail "could not make a scratch dir: \{e}"
-    Ok dir => match build dir "inflate_demo"
-      Err e => fail e
-      Ok inflateBin =>
-        let result = expectAll [
-          gzipPresent,
-          pythonPresent,
-          storedGroup dir inflateBin,
-          fixedGroup dir inflateBin,
-          dynamicGroup dir inflateBin,
-          errorGroup dir inflateBin,
-        ]
-        expectAll [result, cleanup dir]
+test "inflate_oracle: stored, fixed, dynamic round trips and error paths (checks 1-34)" = withScratchDir
+  (dir => match build dir "inflate_demo"
+    Err e => fail e
+    Ok inflateBin => expectAll [
+      gzipPresent,
+      pythonPresent,
+      storedGroup dir inflateBin,
+      fixedGroup dir inflateBin,
+      dynamicGroup dir inflateBin,
+      errorGroup dir inflateBin,
+    ])

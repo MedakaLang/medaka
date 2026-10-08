@@ -76,18 +76,15 @@ Makefile, docs, or any file outside your assignment.
   `rm` calls; a `refuse` row is `if code /= 1 then fail …`, not stderr text alone.
 - **No working-directory parameter exists.** For a cwd-relative run use
   `boundedVerb "sh" ["-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", dir, medakaBin, …args]`.
-- **`scratchDir` is evaluated ONCE per process**: every `test` block of your file
-  gets the SAME directory. A block that removes it breaks the next block; a block
-  that leaves files behind leaks them into the next. Use
-  `compiler_cli_test_support.inScratchDir "<block>" (dir => <Expectation>)`: it
-  gives the block its own subdirectory and removes it after (graded). (`gzip/`
-  cannot import that module: keep ONE `test` block per file there, or `mkdirAll`
-  your tree at the start of every block.) In a file with MORE THAN ONE `test`
-  block, never `rm -rf` the bare `scratchDir` and never keep per-block state in
-  it. Prove independence: run every block alone with `medaka test --filter
+- **Use `test_process.withScratchDir (dir => <Expectation>)` for every scratch
+  directory.** It makes a fresh directory per call, runs the body, and removes the
+  directory afterwards (graded, and also when the body fails). Do NOT use the bare
+  `scratchDir`: it is a value, evaluated ONCE per process, so every `test` block
+  of a file shares one directory and one block's files or `rm -rf` break the next.
+  Prove independence: run every block alone with `medaka test --filter
   "<name substring>" <file>` AND with two blocks swapped; a file that is green only
   in source order is wrong. If the script removed its temp tree with a `trap`, the
-  native test must too.
+  native test gets this for free from `withScratchDir`.
 - **Normalise paths** the way the script did (`sed s|$ROOT/|ROOT/|`): replace
   both `medakaRoot ++ "/"` and, when `medakaRoot` is relative, `$PWD ++ "/"`,
   using `replaceAll` from the `string` module.
@@ -125,7 +122,8 @@ test "<script name>: <what it checks>" = expectEach [("<label>", row "<name>")]
 
 - `test_process`: `medakaRoot : <IO> String`, `medakaBin`, `underRoot rel`,
   `boundedVerb cmd args : <Exec> Result String (Int, stdout, stderr)`,
-  `boundedVerbSeconds secs cmd args`, `scratchDir : <Exec> Result String String`,
+  `boundedVerbSeconds secs cmd args`,
+  `withScratchDir : (String -> <Exec, IO, FileRead, FileWrite> Expectation) -> <Exec, IO, FileRead, FileWrite> Expectation`,
   `expectSpawnOk cmd args`, `expectSpawnOkLine cmd args wholeLine`,
   `expectSpawnFails` / `expectSpawnFailsAll` (nonzero exit AND a diagnostic).
 - `compiler_cli_test_support`: `runMedaka args : Result String (Int, out++err)`,

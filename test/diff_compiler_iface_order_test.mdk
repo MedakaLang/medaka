@@ -158,8 +158,7 @@
    the row goes red. Whether an issue is open cannot be checked offline; a reviewer
    checks it with `gh issue view <n> --json state`. -}
 
-import test_process.{medakaBin, underRoot, boundedVerbSeconds}
-import compiler_cli_test_support.{inScratchDir}
+import test_process.{medakaBin, underRoot, boundedVerbSeconds, withScratchDir}
 import test.{
   Expectation, expectAll, expectEach, expectAtLeast, expectSatisfies, fail, pass
 }
@@ -672,4 +671,4 @@ iterBody base = match readFile ledgerPath
         ]
 
 test "iface_order: every case is invariant or ledgered-and-still-diverging" =
-  inScratchDir "iface_order" iterBody
+  withScratchDir iterBody

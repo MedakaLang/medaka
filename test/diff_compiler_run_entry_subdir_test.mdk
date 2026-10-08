@@ -22,13 +22,12 @@ import fs.{mkdirAll}
 import string.{unlines}
 import test.{Expectation, expectAll, expectTextContainsAll, fail}
 import test_process.{
-  boundedVerb, expectSpawnOk, expectSpawnOkLine, medakaBin, scratchDir
+  boundedVerb, expectSpawnOk, expectSpawnOkLine, medakaBin, withScratchDir
 }
 
--- The fixture tree, rooted at `t`. Every test rewrites the whole tree into the
--- process's shared scratch directory (`scratchDir` is evaluated once per
--- process), so the tests do not depend on run order, only on each other not
--- deleting the directory.
+-- The fixture tree, rooted at `t`. Each test gets its own directory from
+-- `withScratchDir`, writes the whole tree into it, and the directory is removed
+-- afterwards, so no test sees another test's files.
 
 fixtureDirs : String -> List String
 fixtureDirs t = [
@@ -100,19 +99,17 @@ writeAll ((p, s) :: rest) = match writeFile p s
   Err e => Err e
   Ok _ => writeAll rest
 
-fixtures : Unit -> <Exec, FileWrite, IO> Result String String
-fixtures () = do
-  t <- scratchDir
-  makeAll (fixtureDirs t)
-  writeAll (fixtureFiles t)
-  pure t
+fixtures : String -> <FileWrite, IO> Result String Unit
+fixtures t = match makeAll (fixtureDirs t)
+  Err e => Err e
+  Ok _ => writeAll (fixtureFiles t)
 
--- Build the fixture tree, then hand its root to `body`.
+-- Build the fixture tree in a fresh directory, then hand its root to `body`.
 onFixtures : (String -> <Exec, IO> Expectation) ->
-  <Exec, FileWrite, IO> Expectation
-onFixtures body = match fixtures ()
+  <Exec, FileRead, FileWrite, IO> Expectation
+onFixtures body = withScratchDir (t => match fixtures t
   Err e => fail "fixture setup: \{e}"
-  Ok t => body t
+  Ok _ => body t)
 
 -- `medaka <args>` run with its working directory set to `dir`.
 inDirArgs : String -> List String -> <IO> List String

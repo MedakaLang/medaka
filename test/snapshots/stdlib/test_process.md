@@ -1,5 +1,5 @@
 # META
-source_lines=535
+source_lines=581
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -8,8 +8,8 @@ stages=DESUGAR,MARK
    binary) spawns it and grades what came back. `expectSpawnOk`,
    `expectSpawnFails` and `expectSpawnOkLine` grade a spawn. `medakaRoot`,
    `underRoot` and `medakaBin` locate the tree and the binary under test.
-   `boundedVerb` puts a time limit on one spawn, and `scratchDir` hands out
-   a directory to write in.
+   `boundedVerb` puts a time limit on one spawn, and `withScratchDir` runs a
+   test body in a directory of its own and removes it afterwards.
 
    A test that grades a directory of `medaka test` suites reads their
    assertion counts with `testAssertionCount` and checks its roster against
@@ -36,7 +36,7 @@ import string.{
   trim,
   unwords,
 }
-import test.{Expectation(..)}
+import test.{Expectation(..), expectAll}
 
 -- # Locating the tree
 
@@ -110,9 +110,13 @@ boundedVerbSeconds secs cmd args =
 
 {- | A fresh, empty directory for a test that has to write files.
 
-   Each call returns a directory nothing else holds, so concurrent runs of
-   the same test do not collide. The caller owns the directory and removes
-   it.
+   `scratchDir` is a value, so it is evaluated once per process: every use in
+   one test file, and so every `test` block of that file, is handed the SAME
+   directory. A block that removes it takes the next block's workspace with
+   it, and a block that leaves files behind leaks them into the next. Two
+   concurrent runs of the same test do not collide, because each process makes
+   its own. The caller owns the directory and removes it. Prefer
+   `withScratchDir`, which gives each call its own directory and removes it.
 
    > map (startsWith "/") scratchDir
    Ok True -}
@@ -122,6 +126,48 @@ scratchDir = match runVerb "mktemp" ["-d"]
   Err e => Err e
   Ok (0, out, _) => Ok (trim out)
   Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
+
+{- | Runs `body` with a fresh, empty directory of its own, then removes it.
+
+   Unlike `scratchDir`, each call makes a new directory, so the `test` blocks
+   of one file cannot see each other's files and none can delete another's
+   workspace. Removal is graded: a directory that cannot be removed fails the
+   test rather than being left behind, and a failing `body` still has its
+   directory removed.
+
+   > withScratchDir (dir => if startsWith "/" dir then Pass "abs" "abs" else Fail "relative" "abs" dir)
+   Pass "" ""
+   > withScratchDir (dir => expectSpawnOk "ls" [dir])
+   Pass "" "" -}
+export
+withScratchDir : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withScratchDir body = match runVerb "mktemp" ["-d"]
+  Err e => Fail "could not make a scratch directory: \{e}" "a directory" "none"
+  Ok (0, out, _) =>
+    let dir = trim out
+    let result = body dir
+    expectAll [result, removeScratch dir]
+  Ok (code, _, err) =>
+    Fail
+      "mktemp -d exited \{intToString code}: \{err}"
+      "a directory"
+      "exit \{intToString code}"
+
+removeScratch : String -> <Exec> Expectation
+removeScratch dir =
+  if dir == "" || dir == "/" || not (startsWith "/" dir) then
+    Fail "refusing to remove \{debug dir}" "an absolute scratch path" dir
+  else match boundedVerb "rm" ["-rf", dir]
+    Err e => Fail "could not remove \{dir}: \{e}" "exit 0" "no spawn"
+    Ok (code, _, err) =>
+      if code == 0 then
+        Pass "removed" "removed"
+      else
+        Fail
+          "removing \{dir} exited \{intToString code}: \{err}"
+          "exit 0"
+          "exit \{intToString code}"
 
 -- # Grading a spawn
 
@@ -542,7 +588,7 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DUse false (UseGroup ("json") ((mem "asInt" false) (mem "get" false) (mem "parse" false))))
 (DUse false (UseGroup ("list") ((mem "somes" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "trim" false) (mem "unwords" false))))
-(DUse false (UseGroup ("test") ((mem "Expectation" true))))
+(DUse false (UseGroup ("test") ((mem "Expectation" true) (mem "expectAll" false))))
 (DTypeSig true "medakaRoot" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "medakaRoot" () (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA_ROOT"))) (ELit (LString "."))))
 (DTypeSig true "underRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
@@ -557,6 +603,10 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
 (DTypeSig true "scratchDir" (TyEffect ((atom "Exec" "mktemp*")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "scratchDir" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))))
+(DTypeSig true "withScratchDir" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))
+(DFunDef false "withScratchDir" ((PVar "body")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "could not make a scratch directory: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString "a directory"))) (ELit (LString "none")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "trim") (EVar "out"))) (DoLet false false (PVar "result") (EApp (EVar "body") (EVar "dir"))) (DoExpr (EApp (EVar "expectAll") (EListLit (EVar "result") (EApp (EVar "removeScratch") (EVar "dir"))))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))) (ELit (LString "a directory"))) (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString "")))))))
+(DTypeSig false "removeScratch" (TyFun (TyCon "String") (TyEffect ("Exec") None (TyCon "Expectation"))))
+(DFunDef false "removeScratch" ((PVar "dir")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EBinOp "==" (EVar "dir") (ELit (LString "/")))) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "dir")))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "refusing to remove ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "dir")))) (ELit (LString "")))) (ELit (LString "an absolute scratch path"))) (EVar "dir")) (EMatch (EApp (EApp (EVar "boundedVerb") (ELit (LString "rm"))) (EListLit (ELit (LString "-rf")) (EVar "dir"))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not remove ")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString "exit 0"))) (ELit (LString "no spawn")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "Pass") (ELit (LString "removed"))) (ELit (LString "removed"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "removing ")) (EApp (EVar "display") (EVar "dir"))) (ELit (LString " exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))) (ELit (LString "exit 0"))) (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString "")))))))))
 (DTypeSig true "expectSpawnOk" (TyFun (TyNamed "cmd" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "cmd"))) None (TyCon "Expectation")))))
 (DFunDef false "expectSpawnOk" ((PVar "cmd") (PVar "args")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "cmd") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EVar "runVerb") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString "exit 0"))) (ELit (LString "no spawn")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PVar "a") (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "Pass") (ELit (LString "exit 0"))) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EApp (EVar "debug") (EBinOp "++" (EVar "out") (EVar "err"))))) (ELit (LString "")))) (ELit (LString "exit 0"))) (EVar "a"))))))))))
 (DTypeSig true "expectSpawnFails" (TyFun (TyNamed "cmd" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "Exec" (name "cmd"))) None (TyCon "Expectation"))))))
@@ -616,7 +666,7 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DUse false (UseGroup ("json") ((mem "asInt" false) (mem "get" false) (mem "parse" false))))
 (DUse false (UseGroup ("list") ((mem "somes" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "trim" false) (mem "unwords" false))))
-(DUse false (UseGroup ("test") ((mem "Expectation" true))))
+(DUse false (UseGroup ("test") ((mem "Expectation" true) (mem "expectAll" false))))
 (DTypeSig true "medakaRoot" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "medakaRoot" () (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA_ROOT"))) (ELit (LString "."))))
 (DTypeSig true "underRoot" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
@@ -631,6 +681,10 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
 (DTypeSig true "scratchDir" (TyEffect ((atom "Exec" "mktemp*")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "scratchDir" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))))
+(DTypeSig true "withScratchDir" (TyFun (TyFun (TyCon "String") (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))) (TyEffect ("Exec" "IO" "FileRead" "FileWrite") None (TyCon "Expectation"))))
+(DFunDef false "withScratchDir" ((PVar "body")) (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "could not make a scratch directory: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString "a directory"))) (ELit (LString "none")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "trim") (EVar "out"))) (DoLet false false (PVar "result") (EApp (EVar "body") (EVar "dir"))) (DoExpr (EApp (EVar "expectAll") (EListLit (EVar "result") (EApp (EVar "removeScratch") (EVar "dir"))))))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))) (ELit (LString "a directory"))) (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString "")))))))
+(DTypeSig false "removeScratch" (TyFun (TyCon "String") (TyEffect ("Exec") None (TyCon "Expectation"))))
+(DFunDef false "removeScratch" ((PVar "dir")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "dir") (ELit (LString ""))) (EBinOp "==" (EVar "dir") (ELit (LString "/")))) (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (ELit (LString "/"))) (EVar "dir")))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "refusing to remove ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "dir")))) (ELit (LString "")))) (ELit (LString "an absolute scratch path"))) (EVar "dir")) (EMatch (EApp (EApp (EVar "boundedVerb") (ELit (LString "rm"))) (EListLit (ELit (LString "-rf")) (EVar "dir"))) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not remove ")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString "exit 0"))) (ELit (LString "no spawn")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "Pass") (ELit (LString "removed"))) (ELit (LString "removed"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "removing ")) (EApp (EMethodRef "display") (EVar "dir"))) (ELit (LString " exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))) (ELit (LString "exit 0"))) (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString "")))))))))
 (DTypeSig true "expectSpawnOk" (TyFun (TyNamed "cmd" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "cmd"))) None (TyCon "Expectation")))))
 (DFunDef false "expectSpawnOk" ((PVar "cmd") (PVar "args")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "cmd") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EVar "runVerb") (EVar "cmd")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (ELit (LString "exit 0"))) (ELit (LString "no spawn")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false (PVar "a") (EBinOp "++" (EBinOp "++" (ELit (LString "exit ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EApp (EApp (EVar "Pass") (ELit (LString "exit 0"))) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EBinOp "++" (EVar "out") (EVar "err"))))) (ELit (LString "")))) (ELit (LString "exit 0"))) (EVar "a"))))))))))
 (DTypeSig true "expectSpawnFails" (TyFun (TyNamed "cmd" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ((atom "Exec" (name "cmd"))) None (TyCon "Expectation"))))))

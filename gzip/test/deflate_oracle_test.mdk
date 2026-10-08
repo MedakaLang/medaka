@@ -16,7 +16,7 @@ import array as A
 import list.{replicate}
 import string.{join, take}
 import test.{Expectation, expectAll, expectEach, expectAtLeast, fail, pass}
-import test_process.{medakaBin, medakaRoot, scratchDir, boundedVerbSeconds}
+import test_process.{medakaBin, medakaRoot, withScratchDir, boundedVerbSeconds}
 
 -- How a case's input is produced. `ByteIn n f` is `n` bytes, byte i = f i.
 data Input = TextIn String | ByteIn Int (Int -> Int) | RealIn String | SeedGz
@@ -313,17 +313,6 @@ runCase deflateBin inflateBin dir (Case slug desc input bound selfToo) = (
     ],
 )
 
--- The scratch tree holds the 16 MB decompressed seed, so it is removed; a
--- directory that cannot be removed is red rather than silently left behind.
-cleanup : String -> <Exec> Expectation
-cleanup dir = match boundedVerbSeconds 60 "rm" ["-rf", dir]
-  Err e => fail "cleanup of \{dir}: \{e}"
-  Ok (code, _, _) =>
-    if code /= 0 then
-      fail "cleanup of \{dir} exited \{intToString code}"
-    else
-      pass
-
 -- System gzip must exist: this gate's oracle.
 gzipPresent : <Exec> Expectation
 gzipPresent = match boundedVerbSeconds 10 "gzip" ["--version"]
@@ -331,17 +320,13 @@ gzipPresent = match boundedVerbSeconds 10 "gzip" ["--version"]
   Ok (code, _, _) =>
     if code /= 0 then fail "gzip --version exited \{intToString code}" else pass
 
-test "deflate_oracle: demos build, system gzip exists, every corpus case gunzip-accepted and byte-identical" =
-  match scratchDir
-    Err e => fail "could not make a scratch dir: \{e}"
-    Ok dir => match build dir "deflate_demo"
+test "deflate_oracle: demos build, system gzip exists, every corpus case gunzip-accepted and byte-identical" = withScratchDir
+  (dir => match build dir "deflate_demo"
+    Err e => fail e
+    Ok deflateBin => match build dir "inflate_demo"
       Err e => fail e
-      Ok deflateBin => match build dir "inflate_demo"
-        Err e => fail e
-        Ok inflateBin =>
-          let result = expectAll [
-            gzipPresent,
-            expectAtLeast 10 (length corpus),
-            expectEach (map (c => runCase deflateBin inflateBin dir c) corpus),
-          ]
-          expectAll [result, cleanup dir]
+      Ok inflateBin => expectAll [
+        gzipPresent,
+        expectAtLeast 10 (length corpus),
+        expectEach (map (c => runCase deflateBin inflateBin dir c) corpus),
+      ])

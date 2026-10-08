@@ -11,9 +11,9 @@
 
 import list as L
 import fs.{walkDir, mkdirAll}
-import compiler_cli_test_support.{fixtureStems, inScratchDir}
+import compiler_cli_test_support.{fixtureStems}
 import string.{lines, startsWith, endsWith, replaceAll, split, join}
-import test_process.{medakaBin, underRoot, boundedVerb}
+import test_process.{medakaBin, underRoot, boundedVerb, withScratchDir}
 import test.{
   Expectation, expectAll, expectEach, expectGolden, expectAtLeast, fail, pass
 }
@@ -100,7 +100,7 @@ test "medaka doc: every single-file fixture matches its golden" =
 mdkPaths : <IO, FileRead> Result String (List String)
 mdkPaths = map (ps => L.filter (endsWith ".mdk") ps) (walkDir libFix)
 
--- Writes the library pages into `tmp`, which the caller owns (inScratchDir);
+-- Writes the library pages into `tmp`, which the caller owns (withScratchDir);
 -- fails on a non-zero exit.
 libPages : String -> <Exec, IO, FileRead> Result String String
 libPages tmp = do
@@ -174,8 +174,7 @@ libTreeRow tmp rel = match readFile "\{tmp}/\{rel}"
   Err e => fail "library-mode tree: missing \{rel}: \{e}"
   Ok text => expectGolden "\{libGolden}/\{rel}" text
 
-test "medaka doc: library-mode output tree matches the golden tree" = inScratchDir
-  "doc-tree"
+test "medaka doc: library-mode output tree matches the golden tree" = withScratchDir
   (dir => match libPages dir
     Err e => fail e
     Ok tmp => match treeRels libGolden
@@ -189,10 +188,10 @@ test "medaka doc: library-mode output tree matches the golden tree" = inScratchD
             expectEach (map (rel => (rel, libTreeRow tmp rel)) goldRels))
 
 test "medaka doc: library mode writes every target and files impls correctly" =
-  inScratchDir "doc-library" libChecks
+  withScratchDir libChecks
 
 -- Duplicate module basenames must be refused before any output is written.
--- `base` is the caller's own directory (inScratchDir); nothing here is shared.
+-- `base` is the caller's own directory (withScratchDir); nothing here is shared.
 dupRun : String -> <Exec, IO, FileRead> Result String (Int, String, String)
 dupRun base = do
   a <- readFile "\{libFix}/alpha.mdk"
@@ -211,8 +210,7 @@ dupRun base = do
   ]
   Ok res
 
-test "medaka doc: library mode refuses a duplicate module basename" = inScratchDir
-  "doc-dup-basename"
+test "medaka doc: library mode refuses a duplicate module basename" = withScratchDir
   (base => match dupRun base
     Err e => fail "could not stage duplicate-basename probe: \{e}"
     Ok (code, out, err) =>

@@ -6,8 +6,8 @@ A test whose subject is a whole program (a compiler verb, a script, any
 binary) spawns it and grades what came back. `expectSpawnOk`,
 `expectSpawnFails` and `expectSpawnOkLine` grade a spawn. `medakaRoot`,
 `underRoot` and `medakaBin` locate the tree and the binary under test.
-`boundedVerb` puts a time limit on one spawn, and `scratchDir` hands out
-a directory to write in.
+`boundedVerb` puts a time limit on one spawn, and `withScratchDir` runs a
+test body in a directory of its own and removes it afterwards.
 
 A test that grades a directory of `medaka test` suites reads their
 assertion counts with `testAssertionCount` and checks its roster against
@@ -114,13 +114,39 @@ scratchDir : <Exec "mktemp*"> Result String String
 
 A fresh, empty directory for a test that has to write files.
 
-Each call returns a directory nothing else holds, so concurrent runs of
-the same test do not collide. The caller owns the directory and removes
-it.
+`scratchDir` is a value, so it is evaluated once per process: every use in
+one test file, and so every `test` block of that file, is handed the SAME
+directory. A block that removes it takes the next block's workspace with
+it, and a block that leaves files behind leaks them into the next. Two
+concurrent runs of the same test do not collide, because each process makes
+its own. The caller owns the directory and removes it. Prefer
+`withScratchDir`, which gives each call its own directory and removes it.
 
 ```medaka
 > map (startsWith "/") scratchDir
 Ok True
+```
+
+### `withScratchDir`
+
+```
+withScratchDir : (String -> <Exec, IO, FileRead, FileWrite> Expectation) -> <Exec, IO, FileRead, FileWrite> Expectation
+withScratchDir body
+```
+
+Runs `body` with a fresh, empty directory of its own, then removes it.
+
+Unlike `scratchDir`, each call makes a new directory, so the `test` blocks
+of one file cannot see each other's files and none can delete another's
+workspace. Removal is graded: a directory that cannot be removed fails the
+test rather than being left behind, and a failing `body` still has its
+directory removed.
+
+```medaka
+> withScratchDir (dir => if startsWith "/" dir then Pass "abs" "abs" else Fail "relative" "abs" dir)
+Pass "" ""
+> withScratchDir (dir => expectSpawnOk "ls" [dir])
+Pass "" ""
 ```
 
 ## Grading a spawn

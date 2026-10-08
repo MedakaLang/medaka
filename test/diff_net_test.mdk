@@ -12,8 +12,10 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads
    fixtures, neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{boundedInTree, fixtureStems, inScratchDir}
-import test_process.{boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot}
+import compiler_cli_test_support.{boundedInTree, fixtureStems}
+import test_process.{
+  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, withScratchDir
+}
 import test.{
   Expectation, expectAll, expectAtLeast, expectEach, expectGolden, fail, pass
 }
@@ -88,10 +90,10 @@ wasmReject scratch =
 test "net: every fixture builds, runs, and matches its .expected" =
   match fixtureStems corpus
     Err e => fail "\{corpus}: \{e}"
-    Ok stems => inScratchDir "fixtures" (scratch => expectAll [
+    Ok stems => withScratchDir (scratch => expectAll [
       expectAtLeast 3 (length stems),
       expectEach (map (n => (n, fixtureCheck scratch n)) stems),
     ])
 
 test "net: --target wasm rejects a net-importing program (not a miscompile)" =
-  inScratchDir "wasm" wasmReject
+  withScratchDir wasmReject

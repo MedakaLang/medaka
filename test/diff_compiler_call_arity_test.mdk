@@ -12,7 +12,9 @@
    Runs under `medaka test --native`: it spawns `medaka build --keep-ir` on
    each fixture and reads the kept IR, neither of which the interpreter binds. -}
 
-import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb, scratchDir}
+import test_process.{
+  medakaBin, medakaRoot, underRoot, boundedVerb, withScratchDir
+}
 import compiler_cli_test_support.{boundedInTree, fixtureStems}
 import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
 import string as S
@@ -230,23 +232,24 @@ censusRow work stem = match buildIR work stem
       [] => pass
       skews => fail "\{stem}: call/define arity skew: \{S.join "; " skews}"
 
+census : String -> <Exec, IO, FileRead, FileWrite> Expectation
+census work = match fixtureStems fixtures
+  Err e => fail "could not list fixtures: \{e}"
+  Ok stems => expectAll [
+    expectAtLeast 86 (length stems),
+    if any (== reg1101) stems then
+      pass
+    else
+      fail "the #1101 regression fixture is MISSING from the corpus",
+    if any (== reg1648) stems then
+      pass
+    else
+      fail "the #1648 regression fixture is MISSING from the corpus",
+    expectEach (map (s => (s, censusRow work s)) stems),
+  ]
+
 test "diff_compiler_call_arity: corpus census, #1101 and #1648 regression fixtures stay clean" =
-  match scratchDir
-    Err e => fail "no scratch dir: \{e}"
-    Ok work => match fixtureStems fixtures
-      Err e => fail "could not list fixtures: \{e}"
-      Ok stems => expectAll [
-        expectAtLeast 86 (length stems),
-        if any (s => s == reg1101) stems then
-          pass
-        else
-          fail "the #1101 regression fixture is MISSING from the corpus",
-        if any (s => s == reg1648) stems then
-          pass
-        else
-          fail "the #1648 regression fixture is MISSING from the corpus",
-        expectEach (map (s => (s, censusRow work s)) stems),
-      ]
+  withScratchDir census
 
 -- Constrained-function (CDict) call shapes.
 dictStem : String
@@ -302,15 +305,15 @@ nonTailOk b =
 tailOk : String -> Bool
 tailOk b = S.contains "musttail call i64 @\{dictPrefix}tail(" b
 
+skewCDict : String -> <Exec, IO, FileRead, FileWrite> Expectation
+skewCDict work = match buildIR work dictStem
+  Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
+  Ok ir => match irSkews ir
+    [] => pass
+    skews => fail "\{dictStem}: call/define arity skew: \{S.join "; " skews}"
+
 test "diff_compiler_call_arity (8): the CDict fixture has no call/define arity skew" =
-  match scratchDir
-    Err e => fail "no scratch dir: \{e}"
-    Ok work => match buildIR work dictStem
-      Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
-      Ok ir => match irSkews ir
-        [] => pass
-        skews =>
-          fail "\{dictStem}: call/define arity skew: \{S.join "; " skews}"
+  withScratchDir skewCDict
 
 test "diff_compiler_call_arity (9): the CDict fixture is present in the corpus" =
   match fixtureStems fixtures
@@ -321,76 +324,78 @@ test "diff_compiler_call_arity (9): the CDict fixture is present in the corpus" 
       else
         fail "the CDict fixture is MISSING from the corpus"
 
+shapesCDict : String -> <Exec, IO, FileRead, FileWrite> Expectation
+shapesCDict work = match buildIR work dictStem
+  Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
+  Ok ir => expectEach [
+    (
+      "(10) exactPrefix is one direct adder3 call, no __mdk_apply",
+      shapeRow
+        "exactPrefix"
+        ir
+        exactOk
+        "exact prefix is not one direct constrained call",
+    ),
+    (
+      "(11) underPrefix builds a constrained PAP, no direct adder3 call",
+      shapeRow
+        "underPrefix"
+        ir
+        underOk
+        "under-application did not build a constrained PAP, or emitted a direct constrained call",
+    ),
+    (
+      "(12) cross has a direct prefix call plus __mdk_apply",
+      shapeRow
+        "cross"
+        ir
+        overOk
+        "over-application lacks direct prefix call plus closure apply",
+    ),
+    (
+      "(13) no musttail for a non-self call in exactPrefix",
+      shapeRow
+        "exactPrefix"
+        ir
+        noMusttail
+        "non-self constrained tail call was marked musttail",
+    ),
+    (
+      "(13) no musttail for a non-self call in cross",
+      shapeRow
+        "cross"
+        ir
+        noMusttail
+        "non-self constrained tail call was marked musttail",
+    ),
+    (
+      "(14) nonTail is an ordinary self call, not musttail",
+      shapeRow
+        "nonTail"
+        ir
+        nonTailOk
+        "non-tail constrained recursion is not an ordinary call",
+    ),
+    (
+      "(15) tail has an exact musttail self call",
+      shapeRow
+        "tail"
+        ir
+        tailOk
+        "exact constrained self-tail call is not musttail",
+    ),
+  ]
+
 test "diff_compiler_call_arity (10)-(15): CDict call shapes reach their intended lowering" =
-  match scratchDir
-    Err e => fail "no scratch dir: \{e}"
-    Ok work => match buildIR work dictStem
-      Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
-      Ok ir => expectEach [
-        (
-          "(10) exactPrefix is one direct adder3 call, no __mdk_apply",
-          shapeRow
-            "exactPrefix"
-            ir
-            exactOk
-            "exact prefix is not one direct constrained call",
-        ),
-        (
-          "(11) underPrefix builds a constrained PAP, no direct adder3 call",
-          shapeRow
-            "underPrefix"
-            ir
-            underOk
-            "under-application did not build a constrained PAP, or emitted a direct constrained call",
-        ),
-        (
-          "(12) cross has a direct prefix call plus __mdk_apply",
-          shapeRow
-            "cross"
-            ir
-            overOk
-            "over-application lacks direct prefix call plus closure apply",
-        ),
-        (
-          "(13) no musttail for a non-self call in exactPrefix",
-          shapeRow
-            "exactPrefix"
-            ir
-            noMusttail
-            "non-self constrained tail call was marked musttail",
-        ),
-        (
-          "(13) no musttail for a non-self call in cross",
-          shapeRow
-            "cross"
-            ir
-            noMusttail
-            "non-self constrained tail call was marked musttail",
-        ),
-        (
-          "(14) nonTail is an ordinary self call, not musttail",
-          shapeRow
-            "nonTail"
-            ir
-            nonTailOk
-            "non-tail constrained recursion is not an ordinary call",
-        ),
-        (
-          "(15) tail has an exact musttail self call",
-          shapeRow
-            "tail"
-            ir
-            tailOk
-            "exact constrained self-tail call is not musttail",
-        ),
-      ]
+  withScratchDir shapesCDict
+
+buildCDict : String -> <Exec, IO, FileRead, FileWrite> Expectation
+buildCDict work = match buildIR work dictStem
+  Err e => fail "\{dictStem}: did not build or produce kept IR: \{e}"
+  Ok _ => pass
 
 test "diff_compiler_call_arity (16): the CDict fixture builds and produces kept IR" =
-  match scratchDir
-    Err e => fail "no scratch dir: \{e}"
-    Ok work => match buildIR work dictStem
-      Err e => fail "\{dictStem}: did not build or produce kept IR: \{e}"
-      Ok _ => pass
+  withScratchDir buildCDict
 
 -- The skew scanner must be able to fire: a define of arity 2 called with 1 arg.
 synthetic : String

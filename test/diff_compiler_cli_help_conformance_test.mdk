@@ -50,7 +50,7 @@
      cannot be seen here.
    -}
 
-import test_process.{medakaBin, scratchDir, boundedVerb}
+import test_process.{medakaBin, withScratchDir, boundedVerb}
 import test.{Expectation, expectAll, expectAtLeast, fail, pass}
 import string as S
 import list.{reverse}
@@ -470,11 +470,14 @@ checkCFlag verb helptext f =
 
 withWork : (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
   <Exec, IO, FileRead, FileWrite> Expectation
-withWork k = match scratchDir
-  Err e => fail "could not create a scratch dir: \{e}"
-  Ok dir => match writeFile "\{dir}/ok.mdk" "main = println 1\n"
-    Err e => fail "could not write ok.mdk: \{e}"
-    Ok _ => k dir
+withWork k = withScratchDir (dir => withOk dir k)
+
+withOk : String ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withOk dir k = match writeFile "\{dir}/ok.mdk" "main = println 1\n"
+  Err e => fail "could not write ok.mdk: \{e}"
+  Ok _ => k dir
 
 verdictOf : List String -> Expectation
 verdictOf [] = pass

@@ -14,14 +14,14 @@
       vacuously.
 
    The probes are written into a scratch directory, not a fixture corpus. The
-   scratch tree is a bare `mktemp -d` and is not removed afterwards (the shell
-   script removed its tree with a trap).
+   directory comes from `withScratchDir`, which makes it fresh for this test and
+   removes it afterwards (the shell script removed its tree with a trap).
 
    Runs under `medaka test --native`: it spawns `medaka build` and reads the
    emitted IR, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{boundedInTree}
-import test_process.{medakaBin, scratchDir}
+import test_process.{medakaBin, withScratchDir}
 import test.{
   Expectation,
   fail,
@@ -218,11 +218,12 @@ irOf dir name = match writeFile "\{dir}/\{name}.mdk" (probeText name)
         Err e => Err "no IR kept for \{name}: \{e}"
         Ok ir => if ir == "" then Err "no IR kept for \{name}" else Ok ir
 
+shapeIn : String -> <Exec, IO, FileRead, FileWrite> Expectation
+shapeIn dir = match irOf dir "p1"
+  Err e => fail e
+  Ok ir1 => match irOf dir "p2"
+    Err e => fail e
+    Ok ir2 => shapeChecks ir1 ir2
+
 test "dispatch shape: impl chain outlined, dispatchers shared, prelude program-independent" =
-  match scratchDir
-    Err e => fail "could not make a scratch directory: \{e}"
-    Ok dir => match irOf dir "p1"
-      Err e => fail e
-      Ok ir1 => match irOf dir "p2"
-        Err e => fail e
-        Ok ir2 => shapeChecks ir1 ir2
+  withScratchDir shapeIn

@@ -12,8 +12,10 @@
 
 import string as S
 import fs.{fixtureDirs, isFile}
-import compiler_cli_test_support.{fixtureStems, inScratchDir}
-import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb}
+import compiler_cli_test_support.{fixtureStems}
+import test_process.{
+  medakaBin, medakaRoot, underRoot, boundedVerb, withScratchDir
+}
 import test.{
   Expectation,
   fail,
@@ -156,7 +158,7 @@ test "1078/build-json-agrees-with-check-json: type_mismatch matches check's gold
 -- #1078: a clean program reaches the emitter: exit 0, a real executable, and
 -- the empty-diagnostics envelope on the JSON channel.
 -- The emitted binary goes into the block's own scratch directory, which
--- `inScratchDir` removes after the body (graded).
+-- `withScratchDir` removes after the body (graded).
 cleanBuild : String -> <Exec, IO, FileRead, FileWrite> Expectation
 cleanBuild dir =
   let bin = "\{dir}/clean.bin"
@@ -184,7 +186,7 @@ cleanBuild dir =
             pass
 
 test "1078/build-json-clean-emits-and-succeeds: exit 0, binary, empty diagnostics" =
-  inScratchDir "build-json-clean" cleanBuild
+  withScratchDir cleanBuild
 
 -- #1078: `--json` is a flag, not a second positional input. A bare
 -- `build --json` reports through the R-BUILD-FAILED envelope.
