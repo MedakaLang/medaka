@@ -208,7 +208,7 @@ measured its own **2.2× win as a 2.5× SLOWDOWN** and nearly abandoned it.
   be EXPLAINED, not waved through.**
 - **Typeclass dispatch is OUTLINED, not inlined at the site.** An `RDict` site emits a *call*
   to `@mdk_disp_<method>_<nMeth>_<nArgs>`. **Debugging a dispatch miscompile? The arm you want
-  is in the dispatcher, not at the call site.** `test/diff_compiler_dispatch_shape.sh` pins
+  is in the dispatcher, not at the call site.** `test/diff_compiler_dispatch_shape_test.mdk` pins
   this — and pins that prelude bodies stay **program-independent**, which is the precondition
   for `prelude.o`.
 

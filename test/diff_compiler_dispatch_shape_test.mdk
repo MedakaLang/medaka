@@ -1,0 +1,228 @@
+{- | Shape gate for typeclass dispatch codegen (issue #118). Replaces
+   test/diff_compiler_dispatch_shape.sh.
+
+   Behaviour gates cannot see this property: an inlined impl if-chain computes
+   the same answer as an outlined one. So the gate reads the emitted IR of two
+   probe programs and checks three assertions:
+
+   A. outlined: no dispatch-chain arm (`dispyes*` / `ddispyes*` label) appears
+      outside a `@mdk_disp_*` define.
+   B. shared: dispatcher call sites outnumber dispatcher defines at least 4x.
+   C. program-independent: among the defines common to both probes, the only
+      bodies allowed to differ are `@mdk_disp_*` and `mdk_program_main`. The
+      common set must hold at least 100 defines, so the check cannot pass
+      vacuously.
+
+   The probes are written into a scratch directory, not a fixture corpus. The
+   scratch tree is a bare `mktemp -d` and is not removed afterwards (the shell
+   script removed its tree with a trap).
+
+   Runs under `medaka test --native`: it spawns `medaka build` and reads the
+   emitted IR, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{boundedInTree}
+import test_process.{medakaBin, scratchDir}
+import test.{
+  Expectation,
+  fail,
+  expectAtLeast,
+  expectEach,
+  expectEqual,
+  expectTrue,
+}
+import string.{join, contains, startsWith, indexOf, take, drop, lines}
+import list.{filter, span}
+import map as M
+
+-- ── the two probes ──────────────────────────────────────────────────────────
+-- P1 and P2 differ only in how many `deriving (Eq, Ord, Debug)` types they
+-- declare. Under inline-chain codegen every dispatching prelude define would
+-- then differ between them, which assertion C forbids.
+
+colorLine : String
+colorLine = "data Color = Red | Green | Blue deriving (Eq, Ord, Debug)\n"
+
+mainText : String
+mainText =
+  "\nmain =\n  let xs = [1, 2, 3]\n  let ys = [1, 2, 3]\n  println (xs == ys)\n"
+
+dataDecl : Int -> String
+dataDecl i = "data D\{i} = A\{i} | B\{i} deriving (Eq, Ord, Debug)\n"
+
+p1Text : String
+p1Text = colorLine ++ mainText
+
+p2Text : String
+p2Text = colorLine ++ join "" (map dataDecl [1..=12]) ++ mainText
+
+probeText : String -> String
+probeText "p1" = p1Text
+probeText _ = p2Text
+
+-- ── IR scanning ─────────────────────────────────────────────────────────────
+
+identSet : String
+identSet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.$"
+
+digitSet : String
+digitSet = "0123456789"
+
+-- Length of the longest prefix of s whose every character satisfies ok.
+leadLen : (String -> Bool) -> String -> Int
+leadLen ok s = leadGo ok s 0
+
+leadGo : (String -> Bool) -> String -> Int -> Int
+leadGo ok s i =
+  if i < stringLength s && ok (stringSlice i (i + 1) s) then
+    leadGo ok s (i + 1)
+  else
+    i
+
+isDispDefine : String -> Bool
+isDispDefine l = startsWith "define " l && contains "@mdk_disp_" l
+
+isDispCall : String -> Bool
+isDispCall l = contains "call i64 @mdk_disp_" l
+
+-- `^d?dispyes[0-9]+:`
+isArmLabel : String -> Bool
+isArmLabel l =
+  if startsWith "ddispyes" l then
+    digitsColon (drop 8 l)
+  else if startsWith "dispyes" l then
+    digitsColon (drop 7 l)
+  else
+    False
+
+digitsColon : String -> Bool
+digitsColon t =
+  let d = leadLen (c => contains c digitSet) t
+  d > 0 && startsWith ":" (drop d t)
+
+-- Arms outside a define whose header names @mdk_disp_*. Mirrors the awk walk:
+-- a `define` line resets the enclosing define, other lines leave it unchanged.
+strayArms : List String -> Int
+strayArms ls = strayGo False 0 ls
+
+strayGo : Bool -> Int -> List String -> Int
+strayGo _ n [] = n
+strayGo inDisp n (l :: rest) =
+  if startsWith "define " l then
+    strayGo (contains "@mdk_disp_" l) n rest
+  else if isArmLabel l && not inDisp then
+    strayGo inDisp (n + 1) rest
+  else
+    strayGo inDisp n rest
+
+-- The `@name` token of a define header.
+defineName : String -> String
+defineName l = match indexOf "@" l
+  None => ""
+  Some i =>
+    let name = drop (i + 1) l
+    take (leadLen (c => contains c identSet) name) name
+
+-- A define's lines through its closing `}`, and the lines after it.
+defBody : List String -> (List String, List String)
+defBody ls = match span (/= "}") ls
+  (before, []) => (before, [])
+  (before, _ :: after) => (before ++ ["}"], after)
+
+-- Every define as (name, full text), in file order.
+defines : List String -> List (String, String)
+defines [] = []
+defines (l :: rest) =
+  if startsWith "define " l then match defBody rest
+    (body, after) => (defineName l, join "\n" (l :: body)) :: defines after
+  else
+    defines rest
+
+-- Defines present in both programs, as (name, body1, body2).
+joinCommon : List (String, String) ->
+  M.Map String String ->
+  List (String, String, String)
+joinCommon [] _ = []
+joinCommon ((n, b1) :: rest) d2 = match M.get n d2
+  None => joinCommon rest d2
+  Some b2 => (n, b1, b2) :: joinCommon rest d2
+
+differs : (String, String, String) -> Bool
+differs (_, b1, b2) = b1 /= b2
+
+-- A differing define that is not allowed to differ.
+disallowed : (String, String, String) -> Bool
+disallowed (n, _, _) = not (startsWith "mdk_disp_" n) && n /= "mdk_program_main"
+
+nameOf : (String, String, String) -> String
+nameOf (n, _, _) = n
+
+-- ── the assertions ──────────────────────────────────────────────────────────
+
+shapeChecks : String -> String -> Expectation
+shapeChecks ir1 ir2 = shapeOf (lines ir1) (lines ir2)
+
+shapeOf : List String -> List String -> Expectation
+shapeOf ls1 ls2 = expectEach [
+  (
+    "A outlined: no dispatch arm outside a @mdk_disp_* define",
+    expectEqual 0 (strayArms ls2),
+  ),
+  (
+    "B shared: dispatcher defines exist",
+    expectTrue (length (filter isDispDefine ls2) > 0),
+  ),
+  (
+    "B shared: call sites >= 4x dispatcher defines",
+    expectTrue
+      (length (filter isDispCall ls2) >= 4 * length (filter isDispDefine ls2)),
+  ),
+  (
+    "C floor: >= 100 defines common to both probes",
+    expectAtLeast
+      100
+      (length (joinCommon (defines ls1) (M.fromList (defines ls2)))),
+  ),
+  (
+    "C program-independent: no disallowed define differs",
+    expectEqual
+      []
+      (map
+        nameOf
+        (filter
+          disallowed
+          (filter
+            differs
+            (joinCommon (defines ls1) (M.fromList (defines ls2)))))),
+  ),
+]
+
+-- ── IO ──────────────────────────────────────────────────────────────────────
+
+-- Build one probe in dir and return the IR kept beside its binary.
+irOf : String -> String -> <Exec, IO, FileRead, FileWrite> Result String String
+irOf dir name = match writeFile "\{dir}/\{name}.mdk" (probeText name)
+  Err e => Err "could not write the \{name} probe: \{e}"
+  Ok _ => match boundedInTree 300 medakaBin [
+    "build",
+    "--keep-ir",
+    "\{dir}/\{name}.mdk",
+    "-o",
+    "\{dir}/\{name}",
+  ]
+    Err e => Err "could not spawn medaka build on \{name}: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err
+          "could not build the \{name} probe (exit \{intToString code}): \{err}\{out}"
+      else match readFile "\{dir}/\{name}.ll"
+        Err e => Err "no IR kept for \{name}: \{e}"
+        Ok ir => if ir == "" then Err "no IR kept for \{name}" else Ok ir
+
+test "dispatch shape: impl chain outlined, dispatchers shared, prelude program-independent" =
+  match scratchDir
+    Err e => fail "could not make a scratch directory: \{e}"
+    Ok dir => match irOf dir "p1"
+      Err e => fail e
+      Ok ir1 => match irOf dir "p2"
+        Err e => fail e
+        Ok ir2 => shapeChecks ir1 ir2

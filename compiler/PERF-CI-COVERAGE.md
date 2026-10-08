@@ -149,7 +149,7 @@ N-statement `do` blocks. Parser op-chains are provably linear — `chainl1` is a
 
 14. **No IR-size / prelude-independence bound.** (#885) CI's real bottleneck is **clang**, and the
     "9-line program → 32,896 lines of IR (271/272 fns prelude)" bloat class is guarded only by
-    `test/diff_compiler_dispatch_shape.sh` (a *shape* pin), not a *size* bound. IR line count is
+    `test/diff_compiler_dispatch_shape_test.mdk` (a *shape* pin), not a *size* bound. IR line count is
     deterministic ⇒ gateable as an absolute ceiling + a linear-in-live-program-size assertion.
 
 14b. **~~No deterministic metric can grade a BUILD-PATH stage.~~ CLOSED** by

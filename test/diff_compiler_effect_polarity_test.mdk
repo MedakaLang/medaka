@@ -1,0 +1,97 @@
+{- | Gate for effect-row parameter polarity, over test/effect_polarity_fixtures.
+   Replaces diff_compiler_effect_polarity.sh.
+   Each fixture is one `medaka check` run: launder rows must REJECT with the
+   polarity diagnostic, control rows must ACCEPT. A fixture with no verdict in
+   this table fails, so a new fixture cannot pass silently.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads
+   fixtures, neither of which the interpreter binds. -}
+
+import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb}
+import test.{
+  Expectation, expectAll, expectEach, expectAtLeast, expectTextContainsAll,
+  fail, pass
+}
+import fs.{fixtureFiles}
+import path.{dirname, basename}
+import list.{nub, sort}
+
+corpus : <IO> String
+corpus = underRoot "test/effect_polarity_fixtures"
+
+polarityMsg : String
+polarityMsg = "non-covariant type argument"
+
+-- Launder rows: widening through a non-covariant parameter must be REJECTED.
+rejects : List String
+rejects = [
+  "contra-2deep", "contra-direct", "contra-newtype", "contra-opaque-export",
+  "contra-record-field", "write-2deep", "write-direct", "write-newtype",
+  "write-opaque-export", "write-record-field", "hkt-direct", "alias-direct",
+  "private-wrapper", "private-wrapper-public", "write-launder-reject",
+  "flip-cycle-export"
+]
+
+-- Controls: ordinary covariant programs must stay ACCEPTED.
+accepts : List String
+accepts = [
+  "control-direct-function", "control-list-shape", "write-workaround-accept",
+  "control-double-flip"
+]
+
+verdictOf : String -> String
+verdictOf name =
+  if elem name rejects then
+    "reject"
+  else if elem name accepts then
+    "accept"
+  else
+    "unknown"
+
+grade : String -> Int -> String -> Expectation
+grade name code text = match verdictOf name
+  "accept" =>
+    if code /= 0 then
+      fail "\{name}: expected ACCEPT (exit 0), got exit \{intToString code}"
+    else
+      pass
+  "reject" =>
+    if code == 0 then
+      fail
+        "\{name}: expected REJECT (exit 1), got exit 0 (effect row laundered)"
+    else
+      expectTextContainsAll [polarityMsg] text
+  _ =>
+    fail
+      "\{name}: no expected verdict in this gate's table; decide it from docs/spec/EFFECTS-SEMANTICS.md §5/§9 first"
+
+checkArgv : String -> <IO> List String
+checkArgv name = [
+  "-c",
+  "export MEDAKA_ROOT=\"$1\"; export MEDAKA_STRICT=1; exec \"$2\" check \"$3\"",
+  "medaka",
+  medakaRoot,
+  medakaBin,
+  "\{corpus}/\{name}/main.mdk",
+]
+
+row : String -> <Exec, IO, FileRead> Expectation
+row name = match boundedVerb "sh" (checkArgv name)
+  Err e => fail "could not spawn check on \{name}: \{e}"
+  Ok (code, out, err) => grade name code (out ++ err)
+
+test "effect polarity: every fixture matches its spec verdict" =
+  match fixtureFiles corpus
+    Err e => fail "could not list \{corpus}: \{e}"
+    Ok paths =>
+      let root = corpus
+      let names =
+        nub
+          (sort
+            (map
+              (p => basename (dirname p))
+              (filter (p => dirname (dirname p) == root) paths)))
+      expectAll [
+        expectAtLeast 20 (length names),
+        expectEach (map (n => (n, row n)) names),
+      ]

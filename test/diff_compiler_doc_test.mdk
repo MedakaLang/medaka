@@ -1,0 +1,287 @@
+{- | Gate for `medaka doc` (compiler/tools/doc.mdk via the native CLI), over
+   test/doc_fixtures. Replaces diff_compiler_doc.sh.
+
+   Every single-file fixture is pinned to a committed golden. Library mode
+   (`doc --out DIR`) is checked by property (every target gets a page, impls
+   are filed on the right page, duplicate basenames are refused) and as a whole
+   tree against test/doc_goldens/library.
+
+   Runs under `medaka test --native`: it spawns ./medaka and reads fixtures and
+   goldens, neither of which the interpreter binds. -}
+
+import list as L
+import fs.{walkDir, mkdirAll}
+import compiler_cli_test_support.{fixtureStems, inScratchDir}
+import string.{lines, startsWith, endsWith, replaceAll, split, join}
+import test_process.{medakaBin, underRoot, boundedVerb}
+import test.{
+  Expectation, expectAll, expectEach, expectGolden, expectAtLeast, fail, pass
+}
+
+fixDir : <IO> String
+fixDir = underRoot "test/doc_fixtures"
+
+goldenDir : <IO> String
+goldenDir = underRoot "test/doc_goldens"
+
+libFix : <IO> String
+libFix = underRoot "test/doc_fixtures/library"
+
+libGolden : <IO> String
+libGolden = underRoot "test/doc_goldens/library"
+
+-- ── helpers ────────────────────────────────────────────────────────────────
+
+hasLine : String -> String -> Bool
+hasLine text want = any (== want) (lines text)
+
+-- A documented impl renders as a `###`-style entry with the head wrapped in
+-- backticks; the page's own prose may name the impl, so only entry headers count.
+hasHeader : String -> String -> Bool
+hasHeader text name =
+  any
+    (l =>
+      any
+        (h => l == "\{h} `\{name}`")
+        ["#", "##", "###", "####", "#####", "######"])
+    (lines text)
+
+hasSubstr : String -> String -> Bool
+hasSubstr needle hay = length (split needle hay) > 1
+
+-- Pure function: the head line `name a b _` of a value entry is `name` followed
+-- by a space and something other than `:` (the type line is `name : ...`).
+headLineOn : String -> String -> Bool
+headLineOn pm p =
+  any
+    (l =>
+      startsWith (p ++ " ") l
+        && l /= p ++ " "
+        && not (startsWith (p ++ " :") l))
+    (lines pm)
+
+present : Result String String -> Bool
+present (Ok _) = True
+present (Err _) = False
+
+-- `doc` on one file: a non-zero exit is a failure, not a silent empty page.
+withDoc : String ->
+  (String -> <Exec, IO, FileRead> Expectation) ->
+  <Exec, IO, FileRead> Expectation
+withDoc path k = match boundedVerb medakaBin ["doc", path]
+  Err e => fail "could not spawn medaka doc on \{path}: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail "medaka doc exited \{intToString code} on \{path}"
+    else
+      k out
+
+-- ── single-file goldens ────────────────────────────────────────────────────
+
+singleRow : String -> <Exec, IO, FileRead> Expectation
+singleRow name = match boundedVerb medakaBin ["doc", "\{fixDir}/\{name}.mdk"]
+  Err e => fail "could not spawn medaka doc on \{name}: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail "\{name}: medaka doc exited \{intToString code}"
+    else
+      expectGolden "\{goldenDir}/\{name}.doc.golden" out
+
+test "medaka doc: every single-file fixture matches its golden" =
+  match fixtureStems fixDir
+    Err e => fail "could not list doc fixtures: \{e}"
+    Ok stems => expectAll [
+      expectAtLeast 24 (length stems),
+      expectEach (map (n => (n, singleRow n)) stems),
+    ]
+
+-- ── library mode ───────────────────────────────────────────────────────────
+
+mdkPaths : <IO, FileRead> Result String (List String)
+mdkPaths = map (ps => L.filter (endsWith ".mdk") ps) (walkDir libFix)
+
+-- Writes the library pages into `tmp`, which the caller owns (inScratchDir);
+-- fails on a non-zero exit.
+libPages : String -> <Exec, IO, FileRead> Result String String
+libPages tmp = do
+  mdks <- mdkPaths
+  res <- boundedVerb medakaBin (["doc", "--out", tmp] ++ mdks)
+  libExit tmp res
+
+libExit : String -> (Int, String, String) -> Result String String
+libExit tmp (code, out, err) =
+  if code /= 0 then
+    Err "library-mode doc exited \{intToString code}: \{err}"
+  else
+    Ok tmp
+
+pageOf : String -> String -> <FileRead> Result String String
+pageOf tmp name = readFile "\{tmp}/\{name}"
+
+-- Every target gets a page, including async.mdk: a name-keyed drop is caught.
+allPages : String -> <Exec, IO, FileRead> Expectation
+allPages tmp =
+  if present (pageOf tmp "async.md")
+    && present (pageOf tmp "alpha.md")
+    && present (pageOf tmp "beta.md")
+    && present (pageOf tmp "gamma.md") then
+    pass
+  else
+    fail "library-mode every-target-documented (a target produced no page)"
+
+-- Impl rebucketing: a builtin-type impl is filed on the page named for the type,
+-- and the declaring module keeps an impl on a type it declares.
+implFiling : String -> <FileRead> Expectation
+implFiling tmp = match readFile "\{tmp}/array.md"
+  Err _ => fail "library-mode impl rebucketing: array.md missing"
+  Ok arr => match readFile "\{tmp}/gamma.md"
+    Err _ => fail "library-mode impl rebucketing: gamma.md missing"
+    Ok gam =>
+      if hasHeader arr "Sizeish (Array Int)"
+        && not (hasHeader gam "Sizeish (Array Int)")
+        && hasHeader gam "Sizeish Widget" then
+        pass
+      else
+        fail
+          "library-mode impl rebucketing (Sizeish (Array Int) or Sizeish Widget misfiled)"
+
+-- A PRIVATE `data` declaration is still ownership evidence (both halves asserted).
+privateOwner : String -> <FileRead> Expectation
+privateOwner tmp = match readFile "\{tmp}/owner.md"
+  Err _ => fail "library-mode owner: owner.md missing"
+  Ok own => match readFile "\{tmp}/gadget.md"
+    Err _ => fail "library-mode owner: gadget.md missing"
+    Ok gad =>
+      if hasHeader own "Countish Gadget"
+        && not (hasHeader gad "Countish Gadget") then
+        pass
+      else
+        fail
+          "library-mode impl rebucketing (Countish Gadget misfiled off owner.md)"
+
+libChecks : String -> <Exec, IO, FileRead> Expectation
+libChecks dir = match libPages dir
+  Err e => fail e
+  Ok tmp => expectAll [allPages tmp, implFiling tmp, privateOwner tmp]
+
+-- The whole output tree, names and bytes, against the committed golden tree.
+treeRels : String -> <IO, FileRead> Result String (List String)
+treeRels root =
+  map (ps => L.sort (map (p => replaceAll "\{root}/" "" p) ps)) (walkDir root)
+
+libTreeRow : String -> String -> <FileRead, IO> Expectation
+libTreeRow tmp rel = match readFile "\{tmp}/\{rel}"
+  Err e => fail "library-mode tree: missing \{rel}: \{e}"
+  Ok text => expectGolden "\{libGolden}/\{rel}" text
+
+test "medaka doc: library-mode output tree matches the golden tree" = inScratchDir
+  "doc-tree"
+  (dir => match libPages dir
+    Err e => fail e
+    Ok tmp => match treeRels libGolden
+      Err e => fail "could not list library golden tree: \{e}"
+      Ok goldRels => match treeRels tmp
+        Err e => fail "could not list library output tree: \{e}"
+        Ok outRels =>
+          if join "\n" goldRels /= join "\n" outRels then
+            fail "library-mode tree differs from golden:\n\{join "\n" outRels}"
+          else
+            expectEach (map (rel => (rel, libTreeRow tmp rel)) goldRels))
+
+test "medaka doc: library mode writes every target and files impls correctly" =
+  inScratchDir "doc-library" libChecks
+
+-- Duplicate module basenames must be refused before any output is written.
+-- `base` is the caller's own directory (inScratchDir); nothing here is shared.
+dupRun : String -> <Exec, IO, FileRead> Result String (Int, String, String)
+dupRun base = do
+  a <- readFile "\{libFix}/alpha.mdk"
+  b <- readFile "\{libFix}/beta.mdk"
+  _ <- mkdirAll "\{base}/a"
+  _ <- mkdirAll "\{base}/b"
+  _ <- mkdirAll "\{base}/out"
+  _ <- writeFile "\{base}/a/samename.mdk" a
+  _ <- writeFile "\{base}/b/samename.mdk" b
+  res <- boundedVerb medakaBin [
+    "doc",
+    "--out",
+    "\{base}/out",
+    "\{base}/a/samename.mdk",
+    "\{base}/b/samename.mdk",
+  ]
+  Ok res
+
+test "medaka doc: library mode refuses a duplicate module basename" = inScratchDir
+  "doc-dup-basename"
+  (base => match dupRun base
+    Err e => fail "could not stage duplicate-basename probe: \{e}"
+    Ok (code, out, err) =>
+      if code == 0 then
+        fail "duplicate module basename was accepted (exit 0)"
+      else if not
+        (hasSubstr "share the module name `samename`" (out ++ err)) then
+        fail
+          "duplicate basename refusal lacks the expected message:\n\{out}\{err}"
+      else match readFile "\{base}/out/samename.md"
+        Ok _ => fail "duplicate basename wrote samename.md before refusing"
+        Err _ => pass)
+
+-- ── rendered examples and layout (direct property checks) ──────────────────
+
+-- Fence count must agree with medaka test's doctest count (one each).
+doctestAgree : <Exec, IO, FileRead> Expectation
+doctestAgree = withDoc
+  "\{fixDir}/doctest_marker.mdk"
+  (out => match boundedVerb medakaBin ["test", "\{fixDir}/doctest_marker.mdk"]
+    Err e => fail "could not spawn medaka test on doctest_marker: \{e}"
+    Ok (code, testOut, _) =>
+      if code /= 0 then
+        fail "medaka test exited \{intToString code} on doctest_marker"
+      else
+        let fences = length (L.filter (== "```medaka") (lines out))
+        let ran = length (L.filter (l => startsWith "  ok  " l) (lines testOut))
+        if fences == 1 && ran == 1 then
+          pass
+        else
+          fail
+            "rendered examples disagree with medaka test (\{intToString fences} fenced example(s), \{intToString ran} doctest(s) actually run)")
+
+test "medaka doc: rendered examples agree with medaka test and escape the decoy" = expectAll
+  [
+    doctestAgree,
+    withDoc "\{fixDir}/doctest_marker.mdk" (out =>
+      if hasLine out "\\> fakeExample 1" then
+        pass
+      else
+        fail "`-->` line did not render as escaped prose"),
+  ]
+
+test "medaka doc: pipe marker stripped once per block, table rows survive" = withDoc
+  "\{fixDir}/pipe_prose.mdk"
+  (pp =>
+    if hasLine pp "Parse an expression."
+      && hasLine pp "| expr | term |"
+      && hasLine pp "|------|------|"
+      && hasLine pp "| still | a | table |" then
+      pass
+    else
+      fail
+        "pipe-prose handling (marker not stripped, or a `|`-led user line was eaten)")
+
+test "medaka doc: head line names clause parameters, absent on destructuring entries" = withDoc
+  "\{fixDir}/params.mdk"
+  (pm => expectAll [
+    if hasLine pm "take n _"
+      && hasLine pm "clampTo hi v"
+      && hasLine pm "boxed b" then
+      pass
+    else
+      fail
+        "head line missing or wrong (expected `take n _`, `clampTo hi v`, `boxed b`)",
+    if any
+      (p => headLineOn pm p)
+      ["unbox", "unboxTwo", "origin", "inc", "ext"] then
+      fail "a head line appeared on an entry that binds no name"
+    else
+      pass,
+  ])

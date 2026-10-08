@@ -1,0 +1,144 @@
+{- | Gate for the native `medaka build` path, over test/build_cmd_fixtures.
+   Replaces build_cmd.sh.
+
+   Each fixture is built to a native binary, the binary is run, and its
+   stdout is pinned to the committed `<fixture>.build.golden`. A stale
+   `/tmp/medaka_build_*` scratch dir must be swept by a real build, and a
+   recent one must survive it.
+
+   Runs under `medaka test --native`: it spawns `medaka build`, runs the
+   produced binaries, and writes fixture-scratch files. -}
+
+import test_process.{medakaBin, underRoot, boundedVerb, scratchDir}
+import compiler_cli_test_support.{boundedInTree, fixtureStems}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEach, expectEqualText, fail, pass
+}
+import fs.{mkdirAll}
+import string.{replaceAll, trimRight}
+
+fixtures : <IO> String
+fixtures = underRoot "test/build_cmd_fixtures"
+
+-- Build one fixture natively, run it, and pin its stdout to the golden.
+row : String -> String -> String -> <Exec, IO, FileRead> Expectation
+row work label stem = match boundedInTree 600 medakaBin [
+  "build",
+  fixtureSrc stem,
+  "-o",
+  binOf work stem,
+]
+  Err e => fail "\{label}: could not spawn build: \{e}"
+  Ok (bcode, _, _) =>
+    if bcode /= 0 then
+      fail "\{label}: native build exited \{intToString bcode}"
+    else match boundedVerb (binOf work stem) []
+      Err e => fail "\{label}: could not run binary: \{e}"
+      Ok (code, out, _) =>
+        if code /= 0 then
+          fail "\{label}: binary exited \{intToString code}"
+        else match readFile (goldenOf stem)
+          Err e => fail "\{label}: no .build.golden: \{e}"
+          Ok golden => expectEqualText (trimRight golden) (trimRight out)
+
+fixtureSrc : String -> <IO> String
+fixtureSrc stem = "\{fixtures}/\{stem}.mdk"
+
+goldenOf : String -> <IO> String
+goldenOf stem = "\{fixtures}/\{stem}.build.golden"
+
+binOf : String -> String -> String
+binOf work stem = "\{work}/\{replaceAll "/" "_" stem}.bin"
+
+-- Stale (old mtime) and recent /tmp scratch dirs around one real build.
+probe : String -> String -> <Exec> Result String Bool
+probe flag p = map ((code, _, _) => code == 0) (boundedVerb "test" [flag, p])
+
+setup : String -> String -> <Exec, IO, FileWrite> Result String Unit
+setup old new = do
+  _ <- boundedVerb "rm" ["-rf", old, new]
+  _ <- mkdirAll old
+  _ <- writeFile "\{old}/program.ll" "x\n"
+  _ <- boundedVerb "touch" ["-t", "202001010000", old]
+  _ <- mkdirAll new
+  writeFile "\{new}/program.ll" "x\n"
+
+-- The two /tmp scratch dirs the sweep test plants outlive the test unless it
+-- removes them (the build removes only the stale one).
+removeSweep : String -> <Exec, IO> Expectation
+removeSweep work = match boundedVerb "rm" ["-rf", sweepOld work, sweepNew work]
+  Err e => fail "tempdir_sweep: could not remove the sweep dirs: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      fail "tempdir_sweep: removing the sweep dirs exited \{intToString code}"
+    else
+      pass
+
+sweep : String -> <Exec, IO, FileWrite> Expectation
+sweep work = expectAll [sweepBody work, removeSweep work]
+
+sweepBody : String -> <Exec, IO, FileWrite> Expectation
+sweepBody work = match setup (sweepOld work) (sweepNew work)
+  Err e => fail "tempdir_sweep: setup failed: \{e}"
+  Ok _ => match boundedInTree 600 medakaBin [
+    "build",
+    fixtureSrc "arith",
+    "-o",
+    sweepBin work,
+  ]
+    Err e => fail "tempdir_sweep: could not spawn build: \{e}"
+    Ok (bcode, _, _) =>
+      if bcode /= 0 then
+        fail "tempdir_sweep: build did not succeed (exit \{intToString bcode})"
+      else match probe "-e" (sweepOld work)
+        Err e => fail "tempdir_sweep: probe failed: \{e}"
+        Ok oldLeft => match probe "-e" (sweepNew work)
+          Err e => fail "tempdir_sweep: probe failed: \{e}"
+          Ok newLeft => match probe "-x" (sweepBin work)
+            Err e => fail "tempdir_sweep: probe failed: \{e}"
+            Ok built => expectAll [
+              if oldLeft then
+                fail "tempdir_sweep: stale dir NOT swept"
+              else
+                pass,
+              if built then
+                pass
+              else
+                fail "tempdir_sweep: build produced no binary",
+              if newLeft then
+                pass
+              else
+                fail "tempdir_sweep: RECENT dir wrongly swept",
+            ]
+
+sweepOld : String -> String
+sweepOld work = "/tmp/medaka_build_sweepold_\{replaceAll "/" "_" work}"
+
+sweepNew : String -> String
+sweepNew work = "/tmp/medaka_build_sweepnew_\{replaceAll "/" "_" work}"
+
+sweepBin : String -> String
+sweepBin work = "\{work}/tempdir_sweep.bin"
+
+test "build_cmd: each top-level fixture builds natively and matches its golden" =
+  match scratchDir
+    Err e => fail "no scratch dir: \{e}"
+    Ok work => match fixtureStems fixtures
+      Err e => fail "could not list fixtures: \{e}"
+      Ok stems => expectAll [
+        expectAtLeast 12 (length stems),
+        expectEach (map (s => (s, row work s s)) stems),
+      ]
+
+test "build_cmd: multimodule and standalone-vs-method builds match their goldens" =
+  match scratchDir
+    Err e => fail "no scratch dir: \{e}"
+    Ok work => expectEach [
+      ("multimodule", row work "multimodule" "mm/entry"),
+      ("standalone_vs_method", row work "standalone_vs_method" "svm/entry"),
+    ]
+
+test "build_cmd: a real build sweeps stale /tmp build dirs and keeps recent ones" =
+  match scratchDir
+    Err e => fail "no scratch dir: \{e}"
+    Ok work => sweep work

@@ -4,7 +4,7 @@
    contracts, and match diagnostics without tying those mechanics to one test
    corpus. -}
 
-import fs.{expectUnitCount, fixtureFiles}
+import fs.{expectUnitCount, fixtureFiles, mkdirAll}
 import io.{getEnvOr, runVerb}
 import list.{dropWhile, reverse, somes, sort, takeWhile}
 import path.{dirname, stem}
@@ -24,6 +24,7 @@ import test_process.{
 }
 import test.{
   Expectation,
+  expectAll,
   expectLineContainsAll,
   expectTextContainsAll,
   expectTextStartsWithAndContains,
@@ -39,6 +40,35 @@ export
 runMedaka : List String -> <Exec, IO> Result String (Int, String)
 runMedaka args =
   map ((code, out, err) => (code, out ++ err)) (runVerb medakaBin args)
+
+{- | Runs `body` with its own empty subdirectory `name` of the process's scratch
+   directory, then removes that subdirectory.
+
+   `scratchDir` is evaluated once per process, so every test block of a file is
+   handed the SAME directory: a block that removes it takes the next block's
+   workspace with it, and a block that leaves files behind leaks them into the
+   next. Each block takes a subdirectory here instead. A removal that fails is
+   red rather than silently leaving the tree behind. -}
+export
+inScratchDir : String ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+inScratchDir name body = match scratchDir
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok root =>
+    let dir = "\{root}/\{name}"
+    match mkdirAll dir
+      Err e => fail "could not make \{dir}: \{e}"
+      Ok _ => expectAll [body dir, removeScratch dir]
+
+removeScratch : String -> <Exec, IO> Expectation
+removeScratch dir = match boundedVerb "rm" ["-rf", dir]
+  Err e => fail "could not remove \{dir}: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      fail "removing \{dir} exited \{intToString code}"
+    else
+      pass
 
 -- # Spawning inside the tree under test
 

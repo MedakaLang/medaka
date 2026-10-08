@@ -1,0 +1,63 @@
+{- | Gate for the `medaka_references` MCP tool: each fixture's canned JSON-RPC
+   request stream, fed to `medaka mcp` on stdin, must reproduce its golden
+   transcript byte for byte. Replaces diff_compiler_references_tool.sh.
+   Every `.jsonl` under test/references_fixtures/query/ is a fixture.
+
+   Runs under `medaka test --native`: it spawns `medaka mcp` and reads
+   fixtures, neither of which the interpreter binds. -}
+
+import test_process.{medakaBin, medakaRoot, underRoot}
+import compiler_cli_test_support.{boundedInTree}
+import fs.{fixtureFiles}
+import list.{sort}
+import path.{stem}
+import string.{endsWith}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEach, expectGolden, fail
+}
+
+queryDir : <IO> String
+queryDir = underRoot "test/references_fixtures/query"
+
+-- The script ran with cwd at the repo root, so fixture `file` arguments
+-- (repo-relative) resolve the same way. stdin comes from the .jsonl request
+-- stream; stderr is discarded, as the script did.
+transcript : String -> <Exec, IO, FileRead> Result String (Int, String)
+transcript name =
+  let script = "cd \"$1\" && exec \"$2\" mcp < \"$3\" 2>/dev/null"
+  let stream = "\{queryDir}/\{name}.jsonl"
+  map
+    ((code, out, _) => (code, out))
+    (boundedInTree 30 "sh" [
+      "-c", script, "medaka", medakaRoot, medakaBin, stream
+    ])
+
+row : String -> <Exec, IO, FileRead> Expectation
+row name = match transcript name
+  Err e => fail "\{name}: could not spawn medaka mcp: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "\{name}: medaka mcp exited \{intToString code}"
+    else
+      expectGolden "\{queryDir}/\{name}.golden" out
+
+-- The request streams on disk, by stem. The other `.mdk` files in the
+-- directory are modules the streams query, not fixtures.
+requestStems : <FileRead, IO> Result String (List String)
+requestStems =
+  map
+    (paths => sort (map stem (filter (endsWith ".jsonl") paths)))
+    (fixtureFiles queryDir)
+
+-- The corpus has six fixtures today; a corpus that silently shrank is red.
+-- Growing it is expected: add the pair and raise this.
+declaredFixtureFloor : Int
+declaredFixtureFloor = 6
+
+test "references tool: golden MCP transcripts for every query fixture" =
+  match requestStems
+    Err e => fail "could not list \{queryDir}: \{e}"
+    Ok stems => expectAll [
+      expectAtLeast declaredFixtureFloor (length stems),
+      expectEach (map (s => (s, row s)) stems),
+    ]

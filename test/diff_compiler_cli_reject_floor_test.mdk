@@ -1,0 +1,559 @@
+{- | Gate for the unknown-flag rejection floor (convention C2, #2354): every verb the
+   binary's usage block lists rejects `--<bogus>` with exit 1; every verb whose
+   source hands its spec to `requireArgs` prints a `(known: …)` roster; every such
+   verb is visible to the floor. Replaces diff_compiler_cli_reject_floor.sh: sections
+   D, R, R', K and S, and section U (source scan for unrouted flag literals) with
+   its U' check that every declared exemption is still needed.
+
+   Every verb and covered spec is derived from the binary's usage block and from
+   the compiler/ sources; none is listed here except the exemption `help`.
+
+   Runs under `medaka test --native`: it spawns the binary once per probe and reads
+   compiler/ sources, neither of which the interpreter binds. -}
+
+import test_process.{medakaBin, medakaRoot, boundedVerb}
+import test.{Expectation, expectAll, expectAtLeast, fail, pass}
+import string as S
+import regex as R
+import list.{reverse, take}
+import fs.{fixtureFiles}
+import compiler_cli_test_support.{inScratchDir}
+
+-- ── constants ────────────────────────────────────────────────────────────────
+
+-- The unknown token. Long and self-describing: it appears verbatim in every
+-- failure message, and no verb can plausibly grow an arm for it.
+bogus : String
+bogus = "--this-flag-does-not-exist-zz"
+
+okFile : String
+okFile = "ok.mdk"
+
+-- Verbs exempt from R. Inverted: an exempt verb that starts rejecting is a FAIL
+-- (R'). `help` is the usage printer and has no flag position at all.
+exempt : List String
+exempt = ["help"]
+
+-- The source-derivation patterns, in the same shape the script's sed used.
+specRe : R.Regex
+specRe = R.mustCompile ".*requireArgs ([a-zA-Z][a-zA-Z0-9_]*ArgSpec).*"
+
+verbRe : R.Regex
+verbRe = R.mustCompile ".*\"([a-z][a-z0-9-]*)\".*"
+
+usageRe : R.Regex
+usageRe = R.mustCompile "^  medaka ([a-z][a-z-]*).*"
+
+-- ── spawning ─────────────────────────────────────────────────────────────────
+
+-- Runs the binary from `dir` (which holds ok.mdk) with MEDAKA_STRICT=1 and stdin
+-- closed, so the stdio servers terminate instead of blocking.
+probe : String ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> (Int, String, String)
+probe dir argv = match boundedVerb "sh" (shArgs dir ++ argv)
+  Err e => (-1, "", "spawn failed: \{e}")
+  Ok r => r
+
+shArgs : String -> <IO> List String
+shArgs dir = [
+  "-c",
+  "cd \"$1\" && shift && export MEDAKA_STRICT=1 && exec \"$@\" </dev/null",
+  "medaka", dir, medakaBin
+]
+
+-- stdout of `medaka help`; a failing `help` yields no text, so the verb-count
+-- floors below are red rather than judging an error message as a usage block.
+helpOut : String -> <Exec, IO, FileRead, FileWrite> String
+helpOut dir = match probe dir ["help"]
+  (code, out, _) => if code /= 0 then "" else out
+
+-- ── list, string and regex helpers ───────────────────────────────────────────
+
+firstOf : List String -> String
+firstOf [] = ""
+firstOf (x :: _) = x
+
+firstNonEmpty : List String -> String
+firstNonEmpty [] = ""
+firstNonEmpty (x :: xs) = if x /= "" then x else firstNonEmpty xs
+
+uniq : Eq a => List a -> List a
+uniq xs = fold (acc x => if elem x acc then acc else acc ++ [x]) [] xs
+
+-- The first capture group of `re` on `line`, or "" when it does not match.
+-- sed's `s/PAT/\1/p` in one call: the `p` is the isMatch test.
+capture : R.Regex -> String -> String
+capture re line = if R.isMatch re line then R.replace re "$1" line else ""
+
+-- The first line of a message, cut to 90 columns (`head -n 1 | cut -c1-90`).
+firstLine90 : String -> String
+firstLine90 full = S.take 90 (firstOf (S.lines full))
+
+-- ── classification ───────────────────────────────────────────────────────────
+
+-- The ONE set of rejection wordings, as the script's cli_rejects_as_unknown has
+-- them, case-insensitive and anchored on the exact token.
+rejectPattern : String -> String
+rejectPattern flag = rejectAlternation (R.escape flag)
+
+rejectAlternation : String -> String
+rejectAlternation f =
+  "(?i)(unknown flag: \{f}|unrecognized flag '\{f}'|unknown option '\{f}'|unknown argument '\{f}'|unknown codemod [`']\{f}[`']|unknown subcommand [`']\{f}[`'])"
+
+rejects : String -> String -> Bool
+rejects msg flag = R.isMatch (R.mustCompile (rejectPattern flag)) msg
+
+verdictFor : Int -> String -> String
+verdictFor code full =
+  if rejects full bogus then
+    "REJECTS"
+  else if code == 0 then
+    "ACCEPTED"
+  else
+    "OTHER-ERR"
+
+-- One probe of `medaka <verb> <bogus>` in one argv shape, as
+-- (shape, verdict, rc, full message).
+shapeArgv : String -> String -> List String
+shapeArgv v "bare" = [v, bogus]
+shapeArgv v _ = [v, bogus, okFile]
+
+shapeProbe : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> (String, String, Int, String)
+shapeProbe dir v shape = shapeResult shape (probe dir (shapeArgv v shape))
+
+shapeResult : String -> (Int, String, String) -> (String, String, Int, String)
+shapeResult shape (code, out, err) = shapeOf shape code (err ++ out)
+
+shapeOf : String -> Int -> String -> (String, String, Int, String)
+shapeOf shape code full = (shape, verdictFor code full, code, full)
+
+isRejects : (String, String, Int, String) -> Bool
+isRejects (_, verdict, _, _) = verdict == "REJECTS"
+
+rejectsRc1 : (String, String, Int, String) -> Bool
+rejectsRc1 (_, verdict, rc, _) = verdict == "REJECTS" && rc == 1
+
+shapeMsg : (String, String, Int, String) -> String
+shapeMsg (_, _, _, full) = firstLine90 full
+
+lastMsg : List (String, String, Int, String) -> String
+lastMsg shapes = match reverse shapes
+  [] => ""
+  s :: _ => shapeMsg s
+
+-- ── the verb list and the covered set, both derived ──────────────────────────
+
+verbsOf : String -> <Exec, IO, FileRead, FileWrite> List String
+verbsOf dir =
+  uniq (filter (/= "") (map (l => capture usageRe l) (S.lines (helpOut dir))))
+
+-- Every file under compiler/, as its lines. Unreadable files contribute nothing.
+linesOfFile : String -> <Exec, IO, FileRead, FileWrite> List String
+linesOfFile path = match readFile path
+  Err _ => []
+  Ok text => S.lines text
+
+compilerFiles : String ->
+  <Exec, IO, FileRead, FileWrite> Result String (List (List String))
+compilerFiles root = map (map linesOfFile) (fixtureFiles root)
+
+-- Step 1: the `…ArgSpec` names handed to `requireArgs`.
+specsIn : List String -> List String
+specsIn ls =
+  filter
+    (/= "")
+    (map (l => capture specRe l) (filter (l => S.contains "requireArgs " l) ls))
+
+coveredSpecs : List (List String) -> List String
+coveredSpecs files = uniq (fold (acc ls => acc ++ specsIn ls) [] files)
+
+-- Step 2: the `<name> = spec "<verb>"` head. A window of the start line and the
+-- four after it, because the formatter may break the spec across lines. The
+-- start line is `S = spec`/`S = withStrictDash (spec`, or `S =` alone.
+specStartRe : String -> R.Regex
+specStartRe s = R.mustCompile "^\{s} = (withStrictDash \\()?spec|^\{s} =( *)$"
+
+windowsOf : R.Regex -> List String -> List (List String)
+windowsOf _ [] = []
+windowsOf re (l :: rest) =
+  if R.isMatch re l then
+    take 5 (l :: rest) :: windowsOf re rest
+  else
+    windowsOf re rest
+
+windowVerb : List String -> String
+windowVerb w = firstNonEmpty (map (l => capture verbRe l) w)
+
+verbFromWindows : R.Regex -> List (List String) -> String
+verbFromWindows re files =
+  firstNonEmpty
+    (map windowVerb (fold (acc ls => acc ++ windowsOf re ls) [] files))
+
+verbForSpec : List (List String) -> String -> String
+verbForSpec files s = verbFromWindows (specStartRe s) files
+
+sourceVerbs : List (List String) -> List String
+sourceVerbs files =
+  uniq (filter (/= "") (map (s => verbForSpec files s) (coveredSpecs files)))
+
+-- ── scratch workspace and expectations ───────────────────────────────────────
+
+verdictOf : List String -> Expectation
+verdictOf [] = pass
+verdictOf fs = fail (S.join "\n" fs)
+
+-- A block's own scratch subdirectory holding ok.mdk, removed again (and graded)
+-- by inScratchDir. The name keeps each block's workspace distinct.
+withWork : String ->
+  (String -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withWork name k = inScratchDir
+  name
+  (dir => match writeFile "\{dir}/ok.mdk" "main = println 1\n"
+    Err e => fail "could not write ok.mdk: \{e}"
+    Ok _ => k dir)
+
+withFiles : (List (List String) -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withFiles k = match compilerFiles "\{medakaRoot}/compiler"
+  Err e => fail "could not list compiler/ sources: \{e}"
+  Ok files => k files
+
+-- ── the sections ─────────────────────────────────────────────────────────────
+
+-- D: every spec handed to requireArgs resolved to a verb name.
+dFails : List String -> List String -> List String
+dFails specs verbs =
+  if length specs == 0 then
+    [
+      "D no `requireArgs <name>ArgSpec` call found anywhere under compiler/ — the shared parse helper has been removed or renamed. Update this gate's step-1 pattern in the same commit if that was deliberate.",
+    ]
+  else if length specs /= length verbs then
+    [
+      "D step 1 found \{intToString (length specs)} spec(s) [\{S.join " " specs}] but step 2 resolved only \{intToString (length verbs)} verb name(s) [\{S.join " " verbs}] — the `<name> = spec \"<verb>\"` window pattern missed one, so K and S are silently narrowed. Fix the pattern, do not adjust the counts.",
+    ]
+  else
+    []
+
+-- R: every non-exempt verb rejects, exit code exactly 1.
+rShapeFail : String -> (String, String, Int, String) -> String
+rShapeFail v (shape, verdict, rc, full) =
+  rShapeFailOf v shape verdict rc (firstLine90 full)
+
+rShapeFailOf : String -> String -> String -> Int -> String -> String
+rShapeFailOf v shape "ACCEPTED" _ msg =
+  "R `medaka \{v} \{bogus}` (\{shape}) exits 0 — the unknown flag was SWALLOWED: \{if msg == "" then "<silent>" else msg}"
+rShapeFailOf v shape "REJECTS" rc msg =
+  if rc /= 1 then
+    "R `medaka \{v} \{bogus}` (\{shape}) rejects but exits \{intToString rc}, not 1 (C2 fixes rc 1): \{msg}"
+  else
+    ""
+rShapeFailOf _ _ _ _ _ = ""
+
+rVerbOf : String ->
+  List (String, String, Int, String) ->
+  List String ->
+  List String
+rVerbOf _ shapes [] =
+  if any rejectsRc1 shapes then
+    []
+  else
+    [
+      "R a verb never rejects the unknown token as unknown, in either argv shape: \{lastMsg shapes}",
+    ]
+rVerbOf _ _ fails = fails
+
+rVerbFails : String -> List (String, String, Int, String) -> List String
+rVerbFails v shapes =
+  rVerbOf v shapes (filter (/= "") (map (rShapeFail v) shapes))
+
+rFailsFor : String -> String -> <Exec, IO, FileRead, FileWrite> List String
+rFailsFor dir v =
+  rVerbFails v [shapeProbe dir v "bare", shapeProbe dir v "withfile"]
+
+rFails : String -> List String -> <Exec, IO, FileRead, FileWrite> List String
+rFails dir verbs =
+  fold (acc v => if elem v exempt then acc else acc ++ rFailsFor dir v) [] verbs
+
+-- R': the declared exemptions are still needed.
+rPrimeOne : String ->
+  List String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> List String
+rPrimeOne dir verbs v =
+  rPrimeIn
+    v
+    (elem v verbs)
+    (any isRejects [shapeProbe dir v "bare", shapeProbe dir v "withfile"])
+
+rPrimeIn : String -> Bool -> Bool -> List String
+rPrimeIn v False _ = [
+  "R' `\{v}` is exempt from R but is not a verb the binary lists — delete the stale exemption.",
+]
+rPrimeIn v True True = [
+  "R' `medaka \{v}` now REJECTS unknown flags — good news, and this gate's exemption is stale. Remove `\{v}` from EXEMPT so R floors it.",
+]
+rPrimeIn _ True False = []
+
+rPrimeFails : String ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> List String
+rPrimeFails dir verbs = fold (acc v => acc ++ rPrimeOne dir verbs v) [] exempt
+
+-- K: every source-covered verb prints a `(known: …)` roster on a bare rejection.
+kOne : String -> String -> <Exec, IO, FileRead, FileWrite> List String
+kOne dir v = kOneOf v (shapeProbe dir v "bare")
+
+kOneOf : String -> (String, String, Int, String) -> List String
+kOneOf v (_, verdict, rc, full) =
+  if S.contains "(known: " full then
+    []
+  else
+    [
+      "K source hands `\{v}`'s spec to `requireArgs`, but `medaka \{v} \{bogus}` prints no `(known: …)` roster [\{verdict} rc\{intToString rc}]: \{firstLine90 full}",
+    ]
+
+kFails : String -> List String -> <Exec, IO, FileRead, FileWrite> List String
+kFails _ [] = [
+  "K no `requireArgs <verb>ArgSpec` call resolving to a `spec \"<verb>\"` head found anywhere under compiler/ — the shared rejection helper has been removed or renamed. That is the regression this gate exists to catch, not a derivation bug: if the helper was deliberately renamed, update this gate's two-step pattern in the same commit.",
+]
+kFails dir srcVerbs = fold (acc v => acc ++ kOne dir v) [] srcVerbs
+
+-- S: every source-covered verb is in the usage block, and none is exempt.
+sOne : List String -> String -> List String
+sOne verbs v = sVisible v (elem v verbs) ++ sExempt v (elem v exempt)
+
+sVisible : String -> Bool -> List String
+sVisible _ True = []
+sVisible v False = [
+  "S source hands `\{v}`'s spec to `requireArgs`, but `medaka help` never lists `\{v}` — R cannot see it, so its rejection is unfloored.",
+]
+
+sExempt : String -> Bool -> List String
+sExempt _ False = []
+sExempt v True = [
+  "S `\{v}` has a `requireArgs` call AND sits in this gate's EXEMPT list — a covered verb must never be exempt.",
+]
+
+sFails : List String -> List String -> List String
+sFails verbs srcVerbs = fold (acc v => acc ++ sOne verbs v) [] srcVerbs
+
+-- ── tests ────────────────────────────────────────────────────────────────────
+
+test "cli reject floor D: every requireArgs spec resolves to a verb" = withWork
+  "d"
+  (dir => withFiles (files => expectAll [
+    verdictOf (dFails (coveredSpecs files) (sourceVerbs files)),
+  ]))
+
+test "cli reject floor R: every non-exempt verb rejects an unknown flag with rc 1" = withWork
+  "r"
+  (dir => expectAll [
+    expectAtLeast 16 (length (verbsOf dir)),
+    verdictOf (rFails dir (verbsOf dir)),
+  ])
+
+test "cli reject floor R': declared exemptions are still necessary" = withWork
+  "rprime"
+  (dir => expectAll [
+    expectAtLeast 16 (length (verbsOf dir)),
+    verdictOf (rPrimeFails dir (verbsOf dir)),
+  ])
+
+test "cli reject floor K: every requireArgs verb prints a (known: …) roster" = withWork
+  "k"
+  (dir => withFiles (files => expectAll [
+    expectAtLeast 16 (length (verbsOf dir)),
+    verdictOf (kFails dir (sourceVerbs files)),
+  ]))
+
+test "cli reject floor S: every covered verb appears in the usage block" = withWork
+  "s"
+  (dir => withFiles (files => expectAll [
+    expectAtLeast 16 (length (verbsOf dir)),
+    verdictOf (sFails (verbsOf dir) (sourceVerbs files)),
+  ]))
+
+-- ── U: every flag-literal argv arm outside stdlib/args.mdk is routed or exempt ─
+--
+-- R/K/S floor the verbs' behaviour; U is the source-level property: a function
+-- clause (outside compiler/entries/) whose pattern is a List-cons on a `-`/`--`
+-- literal must be in exemptArms, and each compiler/entries/ file with such an
+-- arm must be in exemptEntries. A `=>` dispatch-table arm is excluded by shape.
+-- entries/ files are standalone harness programs run by build/test scripts,
+-- outside the sixteen-verb CLI scope; U' checks none is wired into medaka_cli.
+
+-- A flag literal consed in front of a rest pattern.
+flagArmRe : R.Regex
+flagArmRe = R.mustCompile "\"-{1,2}[a-zA-Z][a-zA-Z0-9_-]*\" ?::"
+
+-- The leading identifier of a source line (the script's sed), or "" if none.
+leadIdentRe : R.Regex
+leadIdentRe = R.mustCompile "^\\s*([A-Za-z_][A-Za-z0-9_]*).*"
+
+commentLineRe : R.Regex
+commentLineRe = R.mustCompile "^\\s*--"
+
+-- Function-clause sites exempt from U, as `<path>:<function>`. Reasons:
+--   dispatchSub    the shared --help/-h interceptor; not a rejection arm.
+--   runReplCmd/runLspCmd/runMcpCmd  zero-flag verbs; their rejection goes
+--                  through an <verb>ArgSpec value because they enter a loop first.
+--   runArgvFilter  run's own known-flag filter, deliberately not routed (program
+--                  passthrough args follow the target file).
+--   splitCodemodArgv/parseEffectArgs  codemod's per-codemod vocabulary (§4).
+--   parseCiArgs/parseBalArgs  undocumented maintainer subcommands of gate.
+exemptArms : List String
+exemptArms = [
+  "compiler/driver/medaka_cli.mdk:dispatchSub",
+  "compiler/driver/medaka_cli.mdk:runReplCmd",
+  "compiler/driver/medaka_cli.mdk:runLspCmd",
+  "compiler/driver/medaka_cli.mdk:runMcpCmd",
+  "compiler/driver/medaka_cli.mdk:runArgvFilter",
+  "compiler/driver/medaka_cli.mdk:splitCodemodArgv",
+  "compiler/tools/codemod.mdk:parseEffectArgs",
+  "compiler/tools/gate_cmd.mdk:parseCiArgs",
+  "compiler/tools/gate_cmd.mdk:parseBalArgs",
+]
+
+-- compiler/entries/ harness programs, exempt by file. Each is a standalone
+-- entry point, not a `medaka <verb>`. Known gap, kept on purpose: this pattern
+-- does not reach exact list-literal arms (`["--isolation", ...] =>`).
+exemptEntries : List String
+exemptEntries = [
+  "compiler/entries/build_main.mdk",
+  "compiler/entries/core_ir_modules_main.mdk",
+  "compiler/entries/fuzz_gen_main.mdk",
+  "compiler/entries/refindex_main.mdk",
+  "compiler/entries/wasm_emit_typed_main.mdk",
+]
+
+-- Every .mdk file under compiler/ as (absolute path, lines), with the compiler
+-- root handed to the block so paths can be made repo-relative.
+withMdk : (String -> List (String, List String) -> <Exec, IO, FileRead, FileWrite> Expectation) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+withMdk k =
+  let root = medakaRoot
+  match fixtureFiles "\{root}/compiler"
+    Err e => fail "could not list compiler/ sources: \{e}"
+    Ok paths => k root (pairsOf (filter (p => S.endsWith ".mdk" p) paths))
+
+pairsOf : List String ->
+  <Exec, IO, FileRead, FileWrite> List (String, List String)
+pairsOf paths = map (p => (p, linesOfFile p)) paths
+
+relTo : String -> String -> String
+relTo root p = S.replaceAll "\{root}/" "" p
+
+isArm : String -> Bool
+isArm l = R.isMatch flagArmRe l && not (S.contains "=>" l)
+
+-- `<rel>:<leading identifier>`, as the script's sed produced. A line with no
+-- leading identifier yields its trimmed text, which is never exempt.
+armSite : String -> String -> String -> String
+armSite root p l =
+  let ident = capture leadIdentRe l
+  if ident == "" then
+    "\{relTo root p}:\{S.trim l}"
+  else
+    "\{relTo root p}:\{ident}"
+
+-- The non-entries sites: deduped, outside compiler/entries/.
+fileSites : String -> (String, List String) -> List String
+fileSites root (p, ls) =
+  if S.contains "/compiler/entries/" p then
+    []
+  else
+    map (armSite root p) (filter isArm ls)
+
+uSites : String -> List (String, List String) -> List String
+uSites root files = uniq (fold (acc f => acc ++ fileSites root f) [] files)
+
+-- The entries files with any flag-literal cons arm (no `=>` filter there).
+entryHits : String -> (String, List String) -> List String
+entryHits root (p, ls) =
+  if S.contains "/compiler/entries/" p
+    && any (l => R.isMatch flagArmRe l) ls then
+    [relTo root p]
+  else
+    []
+
+entriesOf : String -> List (String, List String) -> List String
+entriesOf root files = fold (acc f => acc ++ entryHits root f) [] files
+
+uArmMsg : String -> String
+uArmMsg s =
+  "U `\{s}` has an unrouted flag-literal argv arm (a List-cons pattern on a `-`/`--` literal) that calls neither `requireArgs` nor `parseArgs` and is not in this gate's declared exemption list — either route it through stdlib/args.mdk or add it to exemptArms with a one-line reason."
+
+uEntryMsg : String -> String
+uEntryMsg f =
+  "U `\{f}` (compiler/entries/) has an unrouted flag-literal argv arm and is not in exemptEntries — confirm whether it is CLI-reachable and either route it or exempt it with a one-line reason."
+
+uArmFails : List String -> List String
+uArmFails sites =
+  fold (acc s => if elem s exemptArms then acc else acc ++ [uArmMsg s]) [] sites
+
+uEntryFails : List String -> List String
+uEntryFails hits =
+  fold
+    (acc f => if elem f exemptEntries then acc else acc ++ [uEntryMsg f])
+    []
+    hits
+
+-- U': each declared exemption still matches a real arm, and no entries file
+-- exempted as non-CLI is referenced from medaka_cli.mdk outside a comment.
+uPrimeArms : List String -> List String
+uPrimeArms sites =
+  fold
+    (acc e => if elem e sites then acc else acc ++ [uPrimeArmMsg e])
+    []
+    exemptArms
+
+uPrimeArmMsg : String -> String
+uPrimeArmMsg e =
+  "U' `\{e}` is declared exempt from U but no longer matches any unrouted flag-literal arm — delete the stale exemption (it may now be routed, or the arm may be gone)."
+
+uPrimeEntry : List String -> List String -> String -> List String
+uPrimeEntry cli hits e =
+  let base = S.replaceAll ".mdk" "" (firstOf (reverse (S.split "/" e)))
+  let missing =
+    if elem e hits then
+      []
+    else
+      [
+        "U' `\{e}` is declared exempt from U (entries) but no longer matches any unrouted flag-literal arm — delete the stale exemption.",
+      ]
+  let wired =
+    if any (l => S.contains base l && not (R.isMatch commentLineRe l)) cli then
+      [
+        "U' `\{e}` is exempted as a non-CLI-reachable harness entry point, but compiler/driver/medaka_cli.mdk now references `\{base}` outside a comment — it may have been wired into the CLI dispatch; verify and update the exemption.",
+      ]
+    else
+      []
+  missing ++ wired
+
+uPrimeFails : String ->
+  List (String, List String) ->
+  <Exec, IO, FileRead, FileWrite> List String
+uPrimeFails root files =
+  let sites = uSites root files
+  let cli = linesOfFile "\{root}/compiler/driver/medaka_cli.mdk"
+  let hits = entriesOf root files
+  uPrimeArms sites
+    ++ fold (acc e => acc ++ uPrimeEntry cli hits e) [] exemptEntries
+
+test "cli reject floor U: every flag-literal argv arm is routed or exempt" = withMdk
+  (root files => expectAll [
+    expectAtLeast 200 (length files),
+    verdictOf (uArmFails (uSites root files)),
+    verdictOf (uEntryFails (entriesOf root files)),
+  ])
+
+test "cli reject floor U': declared U exemptions are still necessary" = withMdk
+  (root files => expectAll [
+    expectAtLeast 200 (length files),
+    verdictOf (uPrimeFails root files),
+  ])

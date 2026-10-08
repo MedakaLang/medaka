@@ -31,7 +31,7 @@
 #
 # ONE EXTENSION beyond preflight, found empirically while building this gate:
 # preflight's one-hop only follows into another *.sh helper. That missed a real
-# consumer — test/lsp_harness.sh builds and runs compiler/entries/lsp_harness_main.mdk
+# consumer — a gate that built and ran compiler/entries/lsp_harness_main.mdk
 # via `"$MEDAKA" build … lsp_harness_main.mdk`, and THAT Medaka source is what
 # contains the literal `test/lsp_fixtures` path (compiler/entries/lsp_harness_main.mdk:382).
 # A fixture corpus can therefore be consumed by a compiled Medaka entry point, not

@@ -141,6 +141,10 @@ Debug` to that type is usually a larger change than the conversion was worth.
 `expectOkThen` is the way through when you need the payload anyway: it asks for
 `Debug`/`Display` on the ERROR only.
 
+**Converting an existing shell gate** (a `migration = "native-wrap"` row)? Load
+the `convert-shell-gate` skill: it carries the recipe, a verified skeleton and
+the helper cheat sheet, so the vocabulary above is not needed to do it.
+
 ## Negative space — NOT a doctest
 
 A candidate doctest is unit-test-shaped, not documentary, if any of:

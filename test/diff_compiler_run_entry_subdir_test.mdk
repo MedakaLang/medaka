@@ -1,0 +1,191 @@
+{- | P0-13 regression gate: module resolution for an entry file that lives in a
+   subdirectory of a project with a `medaka.toml` at its root.
+
+   Before the fix, module resolution used a single `findProjectRoot` root, so a
+   bare sibling import next to the entry file (`import helper.{greet}` with
+   `helper.mdk` beside `src/main.mdk`) failed with "unknown module: helper" when
+   the verb was invoked from the project root, by absolute path, or from any
+   cwd other than `src/`. The fix resolves against [entryDir, projectRoot].
+   This module locks that across `run`, `check`, `build` and `test`, from three
+   cwd/path shapes. The dotted-entry cases (#1159) pin that an interior dot in
+   an entry file name is not read as a module path.
+
+   The verbs are spawned through `sh -c 'cd … && exec …'` because
+   `test_process`'s spawn helpers take no working directory and the subject is
+   cwd-relative by design. The `sh` wrapper only changes directory; the grading
+   is on the `medaka` process it execs.
+
+   Runs under `medaka test --native`: it spawns subprocesses and writes its
+   fixture tree into a scratch directory. -}
+
+import fs.{mkdirAll}
+import string.{unlines}
+import test.{Expectation, expectAll, expectTextContainsAll, fail}
+import test_process.{
+  boundedVerb, expectSpawnOk, expectSpawnOkLine, medakaBin, scratchDir
+}
+
+-- The fixture tree, rooted at `t`. Every test rewrites the whole tree into the
+-- process's shared scratch directory (`scratchDir` is evaluated once per
+-- process), so the tests do not depend on run order, only on each other not
+-- deleting the directory.
+
+fixtureDirs : String -> List String
+fixtureDirs t = [
+  "\{t}/proj/src",
+  "\{t}/dotted",
+  "\{t}/coll/probe",
+  "\{t}/imp/probe",
+]
+
+fixtureFiles : String -> List (String, String)
+fixtureFiles t = [
+  (
+    "\{t}/proj/medaka.toml",
+    unlines [
+      "[project]",
+      "name = \"p0-13-subdir\"",
+      "entry = \"src/main.mdk\"",
+    ],
+  ),
+  (
+    "\{t}/proj/src/helper.mdk",
+    unlines [
+      "export greet : String",
+      "greet = \"hello from helper\"",
+    ],
+  ),
+  (
+    "\{t}/proj/src/main.mdk",
+    unlines
+      [
+        "import helper.{greet}",
+        "main = println greet",
+      ],
+  ),
+  -- #1159: an entry with an interior dot is a file, not the module `probe/perm`.
+  (
+    "\{t}/dotted/probe.perm.mdk",
+    unlines ["main = println \"hello from dotted\""],
+  ),
+  -- A dotted entry beside a real nested module of the same id: the file the
+  -- user typed wins, and `import probe.perm` still means probe/perm.mdk.
+  ("\{t}/coll/probe.perm.mdk", unlines ["main = println \"dotted-FILE\""]),
+  ("\{t}/coll/probe/perm.mdk", unlines ["main = println realdirUnbound"]),
+  (
+    "\{t}/imp/probe/perm.mdk",
+    unlines [
+      "export x : Int",
+      "x = 42",
+    ],
+  ),
+  (
+    "\{t}/imp/main.mdk",
+    unlines [
+      "import probe.perm.{x}",
+      "main = println x",
+    ],
+  ),
+]
+
+makeAll : List String -> <FileWrite, IO> Result String Unit
+makeAll [] = Ok ()
+makeAll (d :: rest) = match mkdirAll d
+  Err e => Err e
+  Ok _ => makeAll rest
+
+writeAll : List (String, String) -> <FileWrite, IO> Result String Unit
+writeAll [] = Ok ()
+writeAll ((p, s) :: rest) = match writeFile p s
+  Err e => Err e
+  Ok _ => writeAll rest
+
+fixtures : Unit -> <Exec, FileWrite, IO> Result String String
+fixtures () = do
+  t <- scratchDir
+  makeAll (fixtureDirs t)
+  writeAll (fixtureFiles t)
+  pure t
+
+-- Build the fixture tree, then hand its root to `body`.
+onFixtures : (String -> <Exec, IO> Expectation) ->
+  <Exec, FileWrite, IO> Expectation
+onFixtures body = match fixtures ()
+  Err e => fail "fixture setup: \{e}"
+  Ok t => body t
+
+-- `medaka <args>` run with its working directory set to `dir`.
+inDirArgs : String -> List String -> <IO> List String
+inDirArgs dir args =
+  ["-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", dir, medakaBin] ++ args
+
+-- Exit 0, and the output (stdout and stderr together) contains `needle`. For a
+-- verb whose success text is not a whole line of its own.
+expectOkContains : String -> List String -> String -> <Exec, IO> Expectation
+expectOkContains cmd args needle = match boundedVerb cmd args
+  Err e => fail "could not run `\{cmd}`: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      fail "`\{cmd}` exited \{intToString code}: \{out}\{err}"
+    else
+      expectTextContainsAll [needle] (out ++ err)
+
+-- `medaka run <entry>` from `dir`, expecting `line` as a whole output line.
+runFrom : String -> String -> String -> <Exec, IO> Expectation
+runFrom dir entry line =
+  expectSpawnOkLine "sh" (inDirArgs dir ["run", entry]) line
+
+test "run from the project root resolves a sibling import (run/root)" =
+  onFixtures (t => runFrom "\{t}/proj" "src/main.mdk" "hello from helper")
+
+test "run from inside src/ resolves a sibling import (run/insidesrc)" =
+  onFixtures (t => runFrom "\{t}/proj/src" "main.mdk" "hello from helper")
+
+test "run by absolute path from an unrelated cwd resolves a sibling import (run/abspath)" = onFixtures
+  (t =>
+    expectSpawnOkLine
+      "sh"
+      (inDirArgs t ["run", "\{t}/proj/src/main.mdk"])
+      "hello from helper")
+
+test "check from the project root resolves a sibling import (check/root)" = onFixtures
+  (t => expectSpawnOk "sh" (inDirArgs "\{t}/proj" ["check", "src/main.mdk"]))
+
+test "build from the project root, then the binary prints the helper line (build/root)" = onFixtures
+  (t => expectAll [
+    expectSpawnOk
+      "sh"
+      (inDirArgs "\{t}/proj" ["build", "src/main.mdk", "-o", "\{t}/p0_13_out"]),
+    expectSpawnOkLine "\{t}/p0_13_out" [] "hello from helper",
+  ])
+
+test "test from the project root does not fail on the import (test/root)" = onFixtures
+  (t => expectSpawnOk "sh" (inDirArgs "\{t}/proj" ["test", "src/main.mdk"]))
+
+test "run a dotted entry by relative path (run/dotted-rel)" =
+  onFixtures (t => runFrom "\{t}/dotted" "probe.perm.mdk" "hello from dotted")
+
+test "run a dotted entry by absolute path (run/dotted-abs)" = onFixtures (t =>
+  expectSpawnOkLine
+    "sh"
+    (inDirArgs "\{t}/dotted" ["run", "\{t}/dotted/probe.perm.mdk"])
+    "hello from dotted")
+
+test "check a dotted entry reports 0 errors (check/dotted)" = onFixtures (t =>
+  expectOkContains
+    "sh"
+    (inDirArgs "\{t}/dotted" ["check", "probe.perm.mdk"])
+    "0 errors")
+
+test "a dotted entry wins over a same-named nested module on run (run/dotted-vs-dir)" =
+  onFixtures (t => runFrom "\{t}/coll" "probe.perm.mdk" "dotted-FILE")
+
+test "a dotted entry wins over a same-named nested module on check (check/dotted-vs-dir)" = onFixtures
+  (t =>
+    expectOkContains
+      "sh"
+      (inDirArgs "\{t}/coll" ["check", "probe.perm.mdk"])
+      "probe.perm.mdk: ok")
+
+test "import probe.perm.{x} still means the nested probe/perm.mdk (run/import-dotted-is-dir)" =
+  onFixtures (t => runFrom "\{t}/imp" "main.mdk" "42")

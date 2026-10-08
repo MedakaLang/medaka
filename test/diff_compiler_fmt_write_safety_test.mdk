@@ -1,0 +1,261 @@
+{- | Gate for `medaka fmt` write-safety (#1348): bare fmt is read-only, `--write`
+   is the only mutating mode and reports a summary, every `<sub> --help`/`-h`
+   prints its own name, and the directory arm matches the single-file arm.
+   Replaces test/diff_compiler_fmt_write_safety.sh.
+
+   Runs under `medaka test --native`: it spawns the ./medaka binary and writes
+   temp files, neither of which the interpreter binds. -}
+
+import test_process.{medakaBin, boundedVerb, scratchDir}
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectTextContainsAll, fail,
+  pass
+}
+
+-- Full text comparison replaces the script's md5sum checksum helper; it is
+-- strictly stronger than a checksum for "byte-identical" and needs no shim.
+readText : String -> <Exec> Result String String
+readText path = match boundedVerb "cat" [path]
+  Err e => Err e
+  Ok (code, out, _) =>
+    if code /= 0 then Err "cat \{path} exited \{intToString code}" else Ok out
+
+readAll : List String -> <Exec> Result String (List String)
+readAll [] = Ok []
+readAll (p :: rest) = match readText p
+  Err e => Err e
+  Ok t => map (t :: _) (readAll rest)
+
+writeText : String -> String -> <Exec> Result String String
+writeText path text =
+  match boundedVerb "sh" ["-c", "printf '%s' \"$2\" > \"$1\"", "sh", path, text]
+    Err e => Err e
+    Ok (code, _, _) =>
+      if code /= 0 then
+        Err "write \{path} exited \{intToString code}"
+      else
+        Ok path
+
+fmtRun : List String -> <Exec, IO, FileRead> Result String (Int, String, String)
+fmtRun args = boundedVerb medakaBin (["fmt"] ++ args)
+
+bothChanged : List String -> List String -> Bool
+bothChanged [b1, b2] [a1, a2] = b1 /= a1 && b2 /= a2
+bothChanged _ _ = False
+
+unformatted : String
+unformatted = "main    =\n  println   1\n"
+
+-- 1a-1c: bare `fmt <file>` on unformatted input never mutates, exits 1, reports on stderr.
+bareNeverMutates : String -> <Exec, IO, FileRead> Expectation
+bareNeverMutates dir = match writeText "\{dir}/unfmt.mdk" unformatted
+  Err e => fail "setup: \{e}"
+  Ok path => match readText path
+    Err e => fail "read before: \{e}"
+    Ok before => match fmtRun [path]
+      Err e => fail "could not spawn bare fmt: \{e}"
+      Ok (code, _, err) => match readText path
+        Err e => fail "read after: \{e}"
+        Ok after =>
+          if code /= 1 then
+            fail "bare fmt exited \{intToString code}, want 1"
+          else
+            expectAll [
+              expectEqual before after,
+              expectTextContainsAll ["not formatted"] err,
+            ]
+
+-- 2a-2d: bare `fmt <file>` on already-formatted input is silent, exit 0, never mutates.
+bareFormattedSilent : String -> <Exec, IO, FileRead> Expectation
+bareFormattedSilent dir = match writeText "\{dir}/fmtd.mdk" "main = println 1\n"
+  Err e => fail "setup: \{e}"
+  Ok path => match readText path
+    Err e => fail "read before: \{e}"
+    Ok before => match fmtRun [path]
+      Err e => fail "could not spawn bare fmt: \{e}"
+      Ok (code, out, err) => match readText path
+        Err e => fail "read after: \{e}"
+        Ok after =>
+          if code /= 0 then
+            fail "bare fmt (formatted) exited \{intToString code}, want 0"
+          else
+            expectAll [
+              expectEqual before after,
+              expectEqual "" out,
+              expectEqual "" err,
+            ]
+
+-- 3a-3c, 4a-4b: `--write` mutates and prints "formatted 1 file"; a second run is a
+-- byte-identical no-op that prints "already formatted".
+writeMutatesAndIdempotent : String -> <Exec, IO, FileRead> Expectation
+writeMutatesAndIdempotent dir = match writeText "\{dir}/write.mdk" unformatted
+  Err e => fail "setup: \{e}"
+  Ok path => match readText path
+    Err e => fail "read before: \{e}"
+    Ok before => match fmtRun ["--write", path]
+      Err e => fail "could not spawn --write: \{e}"
+      Ok (code, out, _) => match readText path
+        Err e => fail "read after: \{e}"
+        Ok after =>
+          if code /= 0 then
+            fail "--write exited \{intToString code}, want 0"
+          else if before == after then
+            fail "--write did not rewrite the file"
+          else
+            expectAll [
+              expectTextContainsAll ["formatted 1 file"] out,
+              secondWrite path after,
+            ]
+
+secondWrite : String -> String -> <Exec, IO, FileRead> Expectation
+secondWrite path formatted = match fmtRun ["--write", path]
+  Err e => fail "could not spawn second --write: \{e}"
+  Ok (code, out, _) => match readText path
+    Err e => fail "read after second write: \{e}"
+    Ok again =>
+      if code /= 0 then
+        fail "second --write exited \{intToString code}, want 0"
+      else
+        expectAll [
+          expectEqual formatted again,
+          expectTextContainsAll ["already formatted"] out,
+        ]
+
+-- 5: `<sub> --help` and `<sub> -h` exit 0 and mention their own subcommand name.
+helpCheck : String -> <Exec, IO, FileRead> Expectation
+helpCheck sub = match boundedVerb medakaBin [sub, "--help"]
+  Err e => fail "\{sub} --help: could not spawn: \{e}"
+  Ok (code, out, _) => match boundedVerb medakaBin [sub, "-h"]
+    Err e => fail "\{sub} -h: could not spawn: \{e}"
+    Ok (code2, out2, _) =>
+      if code /= 0 then
+        fail "\{sub} --help exited \{intToString code}"
+      else if code2 /= 0 then
+        fail "\{sub} -h exited \{intToString code2}"
+      else
+        expectAll [
+          expectTextContainsAll [sub] out,
+          expectTextContainsAll [sub] out2,
+        ]
+
+-- 6a-6b: `--stdout` and `--check` leave the file byte-identical.
+readOnlyModes : String -> <Exec, IO, FileRead> Expectation
+readOnlyModes dir = match writeText "\{dir}/std.mdk" unformatted
+  Err e => fail "setup: \{e}"
+  Ok path => match readText path
+    Err e => fail "read before: \{e}"
+    Ok before => match fmtRun ["--stdout", path]
+      Err e => fail "could not spawn --stdout: \{e}"
+      Ok (code, _, _) => match readText path
+        Err e => fail "read after --stdout: \{e}"
+        Ok afterStdout =>
+          if code /= 0 then
+            fail "--stdout exited \{intToString code}"
+          else match fmtRun ["--check", path]
+            Err e => fail "could not spawn --check: \{e}"
+            Ok (code2, _, _) => match readText path
+              Err e => fail "read after --check: \{e}"
+              Ok afterCheck =>
+                if code2 /= 1 then
+                  fail "--check exited \{intToString code2}, want 1"
+                else
+                  expectAll [
+                    expectEqual before afterStdout,
+                    expectEqual before afterCheck,
+                  ]
+
+-- 7a-7e: the directory arm. Bare `fmt <dir>` is read-only over every file and exits 1;
+-- `--write <dir>` rewrites both, prints "formatted 2 files", and is idempotent.
+dirArm : String -> <Exec, IO, FileRead> Expectation
+dirArm scratch = dirArmIn "\{scratch}/dir_target"
+
+dirArmIn : String -> <Exec, IO, FileRead> Expectation
+dirArmIn dir = match boundedVerb "mkdir" ["-p", dir]
+  Err e => fail "mkdir: \{e}"
+  Ok _ => match writeText "\{dir}/a.mdk" "main    =\n  println   1\n"
+    Err e => fail "setup a: \{e}"
+    Ok a => match writeText "\{dir}/b.mdk" "main    =\n  println   2\n"
+      Err e => fail "setup b: \{e}"
+      Ok b => match readAll [a, b]
+        Err e => fail "read before: \{e}"
+        Ok before => match fmtRun [dir]
+          Err e => fail "could not spawn bare fmt <dir>: \{e}"
+          Ok (code, _, _) => match readAll [a, b]
+            Err e => fail "read after bare: \{e}"
+            Ok afterBare =>
+              if code /= 1 then
+                fail "bare fmt <dir> exited \{intToString code}, want 1"
+              else match fmtRun ["--write", dir]
+                Err e => fail "could not spawn --write <dir>: \{e}"
+                Ok (code2, out2, _) => match readAll [a, b]
+                  Err e => fail "read after --write: \{e}"
+                  Ok afterWrite =>
+                    if code2 /= 0 then
+                      fail "--write <dir> exited \{intToString code2}, want 0"
+                    else if before /= afterBare then
+                      fail "bare fmt <dir> mutated a file"
+                    else if not (bothChanged before afterWrite) then
+                      fail "--write <dir> did not rewrite both files"
+                    else
+                      expectAll [
+                        expectTextContainsAll ["formatted 2 files"] out2,
+                        dirSecondWrite dir afterWrite,
+                      ]
+
+dirSecondWrite : String -> List String -> <Exec, IO, FileRead> Expectation
+dirSecondWrite dir formatted = match fmtRun ["--write", dir]
+  Err e => fail "could not spawn second --write <dir>: \{e}"
+  Ok (code, out, _) => match readAll ["\{dir}/a.mdk", "\{dir}/b.mdk"]
+    Err e => fail "read after second --write <dir>: \{e}"
+    Ok again =>
+      if code /= 0 then
+        fail "second --write <dir> exited \{intToString code}, want 0"
+      else
+        expectAll [
+          expectEqual formatted again,
+          expectTextContainsAll ["already formatted"] out,
+        ]
+
+test "fmt write safety: bare fmt never mutates (checks 1a-1c)" =
+  match scratchDir
+    Err e => fail "scratch dir: \{e}"
+    Ok dir => bareNeverMutates dir
+
+test "fmt write safety: bare fmt on formatted input is silent (checks 2a-2d)" =
+  match scratchDir
+    Err e => fail "scratch dir: \{e}"
+    Ok dir => bareFormattedSilent dir
+
+test "fmt write safety: --write mutates, summarises, and is idempotent (checks 3a-4b)" =
+  match scratchDir
+    Err e => fail "scratch dir: \{e}"
+    Ok dir => writeMutatesAndIdempotent dir
+
+test "fmt write safety: <sub> --help and -h exit 0 and name the subcommand (check 5)" = expectEach
+  [
+    ("check", helpCheck "check"),
+    ("fmt", helpCheck "fmt"),
+    ("new", helpCheck "new"),
+    ("build", helpCheck "build"),
+    ("run", helpCheck "run"),
+    ("test", helpCheck "test"),
+    ("doc", helpCheck "doc"),
+    ("lint", helpCheck "lint"),
+    ("codemod", helpCheck "codemod"),
+    ("snapshot", helpCheck "snapshot"),
+    ("check-policy", helpCheck "check-policy"),
+    ("manifest", helpCheck "manifest"),
+    ("repl", helpCheck "repl"),
+    ("lsp", helpCheck "lsp"),
+    ("mcp", helpCheck "mcp"),
+  ]
+
+test "fmt write safety: --stdout and --check are read-only (checks 6a-6b)" =
+  match scratchDir
+    Err e => fail "scratch dir: \{e}"
+    Ok dir => readOnlyModes dir
+
+test "fmt write safety: directory arm matches the file arm (checks 7a-7e)" =
+  match scratchDir
+    Err e => fail "scratch dir: \{e}"
+    Ok dir => dirArm dir

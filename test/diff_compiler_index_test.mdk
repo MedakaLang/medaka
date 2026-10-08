@@ -1,0 +1,58 @@
+{- | Gate for the `Index` interface's prelude-vs-user-file dispatch regression
+   corpus `test/index_fixtures` (#16a/#16c, tracked in #72).
+
+   Each fixture is run as `medaka run --allow-internal <fixture>` and its
+   stdout must match the committed golden
+   `test/index_goldens/<name>.index.golden` byte for byte. The output is
+   deterministic (plain `println` of Strings and Chars through a container
+   `Index` impl, with no timestamps or paths), so a literal compare is sound.
+   `--allow-internal` is passed because the fixture's documented invocation
+   uses it; the current binary accepts the fixture with or without the flag,
+   and the flag keeps the gate honest if the internal-extern trust guard is
+   tightened.
+
+   Only stdout is graded, as the shell gate this module replaces did. An empty
+   corpus is red: a gate that iterates no fixtures proves nothing.
+
+   Runs under `medaka test --native`: it spawns `medaka` and reads the corpus,
+   neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{fixtureStems}
+import test_process.{medakaRoot, medakaBin, boundedVerb}
+import test.{
+  Expectation,
+  fail,
+  expectGolden,
+  expectAll,
+  expectAtLeast,
+  expectEach,
+}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/index_fixtures"
+
+goldenFor : String -> <IO> String
+goldenFor name = "\{medakaRoot}/test/index_goldens/\{name}.index.golden"
+
+-- The stdout of `medaka run --allow-internal` on one fixture, graded against
+-- its golden. A missing golden is a failure, reported by `expectGolden`.
+indexRow : String -> <Exec, IO, FileRead> Expectation
+indexRow name = match boundedVerb medakaBin [
+  "run",
+  "--allow-internal",
+  "\{corpus}/\{name}.mdk",
+]
+  Err e => fail "could not spawn medaka run on \{name}: \{e}"
+  Ok (code, out, _) =>
+    if code /= 0 then
+      fail "\{name}: `medaka run` exited \{intToString code}"
+    else
+      expectGolden (goldenFor name) out
+
+test "every index fixture matches its golden under medaka run --allow-internal" =
+  match fixtureStems corpus
+    Err e => fail "could not list \{corpus}: \{e}"
+    Ok stems => expectAll [
+      expectAtLeast 1 (length stems),
+      expectEach (map (s => (s, indexRow s)) stems),
+    ]

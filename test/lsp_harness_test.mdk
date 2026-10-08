@@ -1,0 +1,72 @@
+{- | Gate for the native LSP harness: builds compiler/entries/lsp_harness_main.mdk,
+   runs it against the built `medaka lsp` over JSON-RPC, and requires every
+   fixture to pass. Replaces test/lsp_harness.sh.
+   Fixtures: test/lsp_fixtures/ (frame integrity, multi-module clean, type-error
+   surfaces, unparseable no-crash, semantic tokens).
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads
+   fixtures, neither of which the interpreter binds. -}
+
+import test_process.{
+  medakaBin, medakaRoot, underRoot, boundedVerbSeconds, scratchDir
+}
+import fs.{fixtureFiles}
+import test.{Expectation, expectAll, expectAtLeast, fail, pass}
+import string.{lines, startsWith, endsWith}
+
+-- Verdict over the harness output: no `FAIL ` line, and a `HARNESS: ... 0 failed` summary.
+verdict : String -> Expectation
+verdict text =
+  let ls = lines text
+  let fails = filter (startsWith "FAIL ") ls
+  let summaries =
+    filter (l => startsWith "HARNESS: " l && endsWith " 0 failed" l) ls
+  if length fails > 0 then
+    fail "LSP harness reported \{intToString (length fails)} FAIL line(s)"
+  else if length summaries == 0 then
+    fail "LSP harness printed no `HARNESS: ... 0 failed` summary line"
+  else
+    pass
+
+harnessRun : String -> <Exec, IO, FileRead> Expectation
+harnessRun dir =
+  let bin = "\{dir}/lsp_harness"
+  let src = underRoot "compiler/entries/lsp_harness_main.mdk"
+  let buildArgs = [
+    "MEDAKA_ROOT=\{medakaRoot}",
+    "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
+    medakaBin,
+    "build",
+    "--allow-internal",
+    src,
+    "-o",
+    bin,
+  ]
+  let runArgs = ["MEDAKA=\{medakaBin}", "MEDAKA_ROOT=\{medakaRoot}", bin]
+  match boundedVerbSeconds 600 "env" buildArgs
+    Err e => fail "could not spawn the harness build: \{e}"
+    Ok (bcode, _, _) =>
+      if bcode /= 0 then
+        fail
+          "could not build the LSP harness: build exited \{intToString bcode}"
+      else match boundedVerbSeconds 600 "env" runArgs
+        Err e => fail "could not spawn the LSP harness: \{e}"
+        Ok (code, out, err) =>
+          if code /= 0 then
+            fail "LSP harness exited \{intToString code}"
+          else
+            verdict "\{out}\n\{err}"
+
+corpus : <IO> String
+corpus = underRoot "test/lsp_fixtures"
+
+-- The harness reads the corpus itself, so a corpus that emptied would still
+-- print a clean summary; the floor is what makes that red.
+corpusFloor : <IO, FileRead> Expectation
+corpusFloor = match fixtureFiles corpus
+  Err e => fail "could not list \{corpus}: \{e}"
+  Ok paths => expectAtLeast 11 (length paths)
+
+test "lsp_harness: native LSP harness reports 0 failures" = match scratchDir
+  Err e => fail "could not create scratch dir: \{e}"
+  Ok dir => expectAll [corpusFloor, harnessRun dir]

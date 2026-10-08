@@ -1,0 +1,675 @@
+{- | Gate for the interface-declaration permutation invariant over
+   test/iface_order_fixtures. Replaces diff_compiler_iface_order.sh: the
+   per-case loop, the ledger rot check, the build-witness tally and the final
+   verdict.
+
+   Runs under `medaka test --native`: it spawns `medaka check/run/build` and the
+   built executables, and reads fixtures, neither of which the interpreter binds.
+
+   A verification instrument, not a fix. Every ordering of a case's entry-module
+   `interface` declarations is compiled and run, and reduced to a one-line
+   signature. The signature must be invariant across orderings. A case whose
+   signatures diverge is a live order dependence: a soundness bug, unless the
+   case is ledgered in test/IFACE-ORDER-LEDGER.txt.
+
+   The axis is new. test/diff_compiler_import_order.sh permutes import clauses,
+   test/diff_compiler_dict_semantics_permute.sh permutes impl blocks, and
+   test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/ spends
+   its control slot on impl-block order. None of them moves interface declarations.
+   This gate moves only interface declarations, among their own slots; impls,
+   imports and data declarations stay where they are.
+
+   Why it was built: the identity re-keying of impl selection can be done two
+   ways. A fix keyed on the interface NAME drains #1182's pin, because the
+   impl-order dependence goes away, while moving the dependence onto the
+   interface-declaration order. The existing pins cannot tell those outcomes
+   apart. This gate can; see the four-state table below.
+
+   ## The signature
+
+     check=<exit>;codes=<sorted,comma>;schemes=<check stdout>;run=<exit>:<stdout>;build=<exit>/<exec-exit>:<stdout>
+
+   check     The exit code of `medaka check --json`: the verdict cell. On this
+             axis accept versus reject is the strongest reading a permutation
+             can give.
+   codes     Every "code" in the `check --json` output, sorted as a multiset.
+             Diagnostics come out in source order and permutation moves source
+             lines, so the sort is what keeps the cell invariant. Read it by code
+             prefix, not by emptiness (see the four-state table).
+   schemes   The plain `medaka check` scheme dump, selected by format (a
+             `<name> : <type>` line at column 0), not by stream. Diagnostics are not
+             reliably on one stream: resolve-stage ones land on stderr and
+             type-stage ones on stdout, so a whole-stdout capture would embed the
+             harness's temp path. A binding inferred at a different type while its
+             printed value coincides shows up here.
+   run       `medaka run` exit code and stdout (the interpreter).
+   build     `medaka build` exit code, then the built binary's exit code and stdout
+             ("-" if no binary was produced). This is not redundant with run: a
+             case can build, segfault the binary at exit 139, and still have the
+             interpreter panic. The exec-exit cell is the only place that is
+             recorded.
+
+   Output is escaped so a signature is always one line: backslash becomes two
+   backslashes, `|` becomes `\p`, `;` becomes `\s`, tab becomes `\t` and newline
+   becomes `\n`. `sigFor` builds the signature and `escapeOut` escapes its parts.
+
+   Deliberately not compared: diagnostic message text (it may enumerate
+   declarations in source order on purpose); diagnostic ranges (moving
+   declarations of unequal line count shifts every line below them, so a location
+   diff is an artifact); stderr of run and build (panic text is not uniformly
+   location-free, and build's log embeds the source path); the order of
+   diagnostics; and the emitted IR (the selected impl is observed through
+   behaviour).
+
+   ## Orderings and scope
+
+   Every ordering is tried when there are at most four interface declarations.
+   Above that the set is identity, reversal and every adjacent transposition. The
+   shell gate printed PARTIAL on the row in that case; this test prints no such
+   marker, so a reader who needs to know whether a case was graded on the full set
+   must count its interface declarations.
+
+   Scope limits. Only the entry module's interface declarations are permuted. An
+   order dependence decided by an imported module's interface order is not covered,
+   and nothing else covers it either. Interfaces move only among their own slots,
+   so none crosses an impl or a data declaration. A dependence that needs such a
+   crossing is out of scope by construction: that move can change whether the
+   program parses at all, which is not the cosmetic reordering this gate is about.
+   Every case is single-file today. The case-directory-plus-case.txt unit is kept
+   anyway: it is what the ledger's issue-number naming lock hangs off, and it
+   leaves room for a multi-module case later.
+
+   ## The four-state table
+
+   The gate's deliverable is that each future reads differently. A probe that
+   said only same or different would collapse states 2 and 3, which is the
+   confusion the identity fix is at risk of.
+
+   State 1, today: order-dependent on both axes. #1182's must-fail pin reproduces
+   and is green. A ledgered row reports KNOWN-BAD, still diverging, as pinned.
+
+   State 2, a name-scoped fix (the trap): #1182's impl-order pin drains, and a
+   reader who has only that pin concludes #1182 is fixed. This gate: a ledgered
+   row still diverges. If the signatures are unchanged the row stays KNOWN-BAD;
+   if the divergence moved at all the row goes red with "the divergence MOVED". This
+   is the one state in which this gate does not go red by itself. Its backstop is
+   test/must_fail_census.sh HALF 1, which is directory-driven: it fires on a closed
+   issue whose must-fail fixture carries an issue line, and it never reads this
+   gate's verdict. Do not remove that coupling. The rows that named #1182 and #1620
+   were removed after Q1 landed (see test/IFACE-ORDER-LEDGER.txt), so that census
+   half is now the only backstop for those two issues.
+
+   State 3, Q1 (resolve rejects the ambiguous occurrence): the case converges to one
+   signature, with check=1 and an R-* code in every ordering. This gate: a ledgered
+   row goes red as DRAINED and prints the converged signature.
+
+   State 4, identity-keyed selection with no resolve rejection: also converges to one
+   signature and also goes red as DRAINED, but the code is not R-*. Two shapes count:
+   check=0 with codes empty and a stable run or build value, where the selected impl
+   typechecks and the program runs; or check=1 with a T-* code, where selection was
+   deterministic and the impl it chose then failed typecheck. The worked example is
+   an obligation case that declares only one impl: a fix that binds the method to
+   the other interface converges on check=1;codes=T-NO-IMPL in every ordering. That
+   is a type error, not an ambiguity rejection, and must not be read as state 3.
+
+   The discriminator is the code prefix: R-* means state 3, T-* or empty means
+   state 4. Neither the exit code nor "codes is non-empty" tells them apart.
+
+   ## What the table cannot tell you
+
+   Which kind of keying landed. Two single-file cases with distinctly named
+   interfaces behave identically under a name-keyed fix and an identity-keyed one,
+   so a drain here is not evidence that the key is module-qualified. Two interfaces
+   of the same name in one file are rejected by resolve (`Duplicate interface`), so
+   that shape cannot be written in this corpus. Two of the same name in different
+   modules are legal, but this gate permutes only the entry module, so the entry
+   holds one of them and the permuter stops with "need >=2 top-level interface
+   declarations, found 1". Answering the keying question needs a cross-module probe;
+   #1258 is that shape.
+
+   ## Messages
+
+   DRAINED: the case converged to one signature while a ledger row pins a
+   divergence. Read the converged signature against the four states before closing
+   anything. Then close the issue, delete the row and keep the fixture; without a
+   row it is graded as invariant and becomes the regression guard.
+
+   KNOWN-BAD, the divergence MOVED: the observed signatures differ from the pinned
+   ones. Re-derive the right answer before re-pinning. Still divergent is not fixed.
+
+   "N ordering(s) produced M DISTINCT signatures": an unledgered case diverges.
+   Either fix it, or, if it is a known open bug, add a ledger row. A control must
+   never be ledgered; if one diverges, the finding is larger than any row claims,
+   so file it.
+
+   The rest are structural. A ledger row must name an open issue and a directory
+   named `<issue>-...`, must pin at least two signatures, and must name a case
+   directory that exists. A case directory must hold case.txt. Zero orderings or
+   zero cases is a failure, never a pass. The build arm must produce at least one
+   executable somewhere in the corpus, or it graded nothing.
+
+   ## The ledger
+
+   test/IFACE-ORDER-LEDGER.txt pins, per case, the distinct signatures the case must
+   keep producing. A row asserts a divergence, which is a live soundness bug shipping
+   on main, and names the open issue that owns it. The gate stays green while rows
+   exist, because a gate that lands red teaches people to ignore it; the rows are
+   what keep the green honest. Each row drains itself: when its divergence collapses
+   the row goes red. Whether an issue is open cannot be checked offline; a reviewer
+   checks it with `gh issue view <n> --json state`. -}
+
+import test_process.{medakaBin, underRoot, boundedVerbSeconds}
+import compiler_cli_test_support.{inScratchDir}
+import test.{
+  Expectation, expectAll, expectEach, expectAtLeast, expectSatisfies, fail, pass
+}
+import fs.{fixtureFiles, fixtureDirs, isDir, isFile, mkdirAll}
+import regex.{Regex, isMatch, mustCompile}
+import string as S
+import list.{head, sort, take, drop, reverse, removeAt}
+
+corpus : <IO> String
+corpus = underRoot "test/iface_order_fixtures"
+
+ledgerPath : <IO> String
+ledgerPath = underRoot "test/IFACE-ORDER-LEDGER.txt"
+
+ifaceRe : Regex
+ifaceRe = mustCompile "^(public[ \t]+)?(export[ \t]+)?interface[ \t]"
+
+schemeRe : Regex
+schemeRe = mustCompile "^[A-Za-z_][A-Za-z0-9_']* : "
+
+issueRe : Regex
+issueRe = mustCompile "^#[0-9]"
+
+-- ── small helpers ─────────────────────────────────────────────────────────
+
+nthOf : Int -> List a -> a
+nthOf i xs = match head (drop i xs)
+  Some x => x
+  None => panic "nthOf: index out of range"
+
+lastOf : List a -> a
+lastOf xs = match head (reverse xs)
+  Some x => x
+  None => panic "lastOf: empty list"
+
+firstOr : a -> List a -> a
+firstOr d xs = match head xs
+  Some x => x
+  None => d
+
+upto : Int -> List Int
+upto n = if n <= 0 then [] else upto (n - 1) ++ [n - 1]
+
+-- Sorted, duplicates removed: the script's `sort -u`.
+sortUnique : List String -> List String
+sortUnique xs =
+  fold (acc x => if any (== x) acc then acc else acc ++ [x]) [] (sort xs)
+
+-- The text of `key` on the first line that starts with it, trimmed; "" if none.
+fieldOf : String -> String -> String
+fieldOf key text = match filter (l => S.startsWith key l) (S.lines text)
+  [] => ""
+  l :: _ => S.trim (S.drop (S.length key) l)
+
+indentJoin : List String -> String
+indentJoin xs = S.join "\n       " xs
+
+-- ── the ledger (test/IFACE-ORDER-LEDGER.txt) ──────────────────────────────
+-- A row is `case | issue | sig | sig ...`. The awk reader's rules: comments and
+-- blank lines are skipped, a row needs at least three `|` fields, and the pinned
+-- signatures are fields 3.. trimmed, non-empty, sorted and unique.
+
+data LedgerRow = LedgerRow String String (List String)
+
+isBlankOrComment : String -> Bool
+isBlankOrComment line =
+  let t = S.trim line
+  t == "" || S.startsWith "#" t
+
+parseRow : String -> Option LedgerRow
+parseRow line =
+  if isBlankOrComment line || length (S.split "|" line) < 3 then
+    None
+  else
+    parseFields (S.split "|" line)
+
+parseFields : List String -> Option LedgerRow
+parseFields parts =
+  let pinned = sortUnique (filter (/= "") (map S.trim (drop 2 parts)))
+  Some (LedgerRow (S.trim (nthOf 0 parts)) (S.trim (nthOf 1 parts)) pinned)
+
+keepSome : List (Option a) -> List a
+keepSome [] = []
+keepSome (None :: rest) = keepSome rest
+keepSome ((Some x) :: rest) = x :: keepSome rest
+
+ledgerRowsOf : String -> List LedgerRow
+ledgerRowsOf text = keepSome (map parseRow (S.lines text))
+
+rowCase : LedgerRow -> String
+rowCase (LedgerRow c _ _) = c
+
+-- The first row naming this case, as the script's `head -1` picks it.
+rowFor : String -> List LedgerRow -> Option LedgerRow
+rowFor _ [] = None
+rowFor name (r :: rest) = if rowCase r == name then Some r else rowFor name rest
+
+-- ── the permuter ──────────────────────────────────────────────────────────
+-- Operates on TOP-LEVEL CHUNKS, as the script's embedded perl does: a chunk starts
+-- at a line whose first character is not whitespace and runs to the next such
+-- line, so an indented body or a blank line attaches to the chunk above it.
+-- Interface chunks are permuted across their own slots; every other chunk stays.
+
+isWs : String -> Bool
+isWs c = c == " " || c == "\t" || c == "\r"
+
+isTop : String -> Bool
+isTop l = l /= "" && not (isWs (S.take 1 l))
+
+isIfaceChunk : List String -> Bool
+isIfaceChunk [] = False
+isIfaceChunk (h :: _) = isMatch ifaceRe h
+
+prependLine : String -> (List String, List String) -> (List String, List String)
+prependLine l (body, after) = (l :: body, after)
+
+-- Lines up to the next top-level line, and the rest.
+spanBody : List String -> (List String, List String)
+spanBody [] = ([], [])
+spanBody (l :: rest) =
+  if isTop l then ([], l :: rest) else prependLine l (spanBody rest)
+
+attachBody : String -> (List String, List String) -> List (List String)
+attachBody h (body, after) = (h :: body) :: groupChunks after
+
+groupChunks : List String -> List (List String)
+groupChunks [] = []
+groupChunks (h :: rest) = attachBody h (spanBody rest)
+
+-- Replace the interface chunks, in order, with `repl`; every other chunk stays.
+rebuild : List (List String) -> List (List String) -> List (List String)
+rebuild [] _ = []
+rebuild (c :: cs) repl =
+  if isIfaceChunk c then
+    nthOf 0 repl :: rebuild cs (drop 1 repl)
+  else
+    c :: rebuild cs repl
+
+-- Ordering `o` puts original interface chunk o[k] in slot k.
+permute : List (List String) -> List Int -> List (List String)
+permute chunks o =
+  rebuild chunks (map (i => nthOf i (filter isIfaceChunk chunks)) o)
+
+renderChunks : List (List String) -> String
+renderChunks chunks = S.concat (map (c => S.concat (map (++ "\n") c)) chunks)
+
+flatLists : List (List a) -> List a
+flatLists xss = fold (++) [] xss
+
+-- All permutations of xs, in the script's perl order.
+permsOf : List Int -> List (List Int)
+permsOf xs =
+  if length xs == 0 then
+    [[]]
+  else
+    flatLists
+      (map
+        (i => map (nthOf i xs :: _) (permsOf (removeAt i xs)))
+        (upto (length xs)))
+
+swapAt : Int -> List Int -> List Int
+swapAt i xs = take i xs ++ [nthOf (i + 1) xs, nthOf i xs] ++ drop (i + 2) xs
+
+-- Every permutation when n <= 4; otherwise identity, reversal and every adjacent
+-- transposition (the script's PARTIAL set, which it marks on the row).
+orderSet : Int -> List (List Int)
+orderSet n =
+  if n <= 4 then
+    permsOf (upto n)
+  else
+    [upto n, reverse (upto n)] ++ map (i => swapAt i (upto n)) (upto (n - 1))
+
+-- ── signature ─────────────────────────────────────────────────────────────
+-- Escaping of the observed output, applied in the script's esc() order. This
+-- encodes the signature's own separators (`\`, `|`, `;`, tab, newline), which
+-- is not `regex.escape` (regex metacharacters); the lint rule matches on the
+-- `String -> String` signature alone.
+escapeOut : String -> String
+-- lint-disable-next-line rule-stdlib-reimpl
+escapeOut s =
+  S.replaceAll
+    "\n"
+    "\\n"
+    (S.replaceAll
+      "\t"
+      "\\t"
+      (S.replaceAll
+        ";"
+        "\\s"
+        (S.replaceAll "|" "\\p" (S.replaceAll "\\" "\\\\" s))))
+
+-- Every "code" in `check --json` output, sorted, comma-joined.
+codesOf : String -> String
+codesOf text =
+  S.join
+    ","
+    (sort
+      (map
+        (p => firstOr "" (S.split "\"" p))
+        (drop 1 (S.split "\"code\":\"" text))))
+
+-- Scheme lines (`<name> : <type>` at column 0), selected by format, not stream.
+schemesOf : String -> String
+schemesOf text =
+  S.concat (map (++ "\n") (filter (l => isMatch schemeRe l) (S.lines text)))
+
+data OrdSig = OrdSig String String Bool
+
+sigOf : OrdSig -> String
+sigOf (OrdSig _ s _) = s
+
+builtOf : OrdSig -> Bool
+builtOf (OrdSig _ _ b) = b
+
+execOf : String -> <Exec> Result String (String, String)
+execOf bin = match boundedVerbSeconds 120 bin []
+  Err e => Err "could not run the built binary: \{e}"
+  Ok (x, xo, _) => Ok (intToString x, xo)
+
+-- One signature for the case whose files are in `work`, as the script's sig_for() formats it.
+sigFor : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String (String, Bool)
+sigFor work entry = do
+  let file = "\{work}/\{entry}"
+  let bin = "\{work}/.bin"
+  (checkCode, co, ce) <- boundedVerbSeconds 120 medakaBin [
+    "check", "--json", file
+  ]
+  (_, plain, _) <- boundedVerbSeconds 120 medakaBin ["check", file]
+  (runCode, ro, _) <- boundedVerbSeconds 120 medakaBin ["run", file]
+  (buildCode, _, _) <- boundedVerbSeconds 120 medakaBin [
+    "build", file, "-o", bin
+  ]
+  (execCode, xo) <- if buildCode == 0 then execOf bin else Ok ("-", "")
+  let sig =
+    "check=\{intToString checkCode};codes=\{codesOf (co ++ ce)};schemes=\{escapeOut (schemesOf plain)};run=\{intToString runCode}:\{escapeOut ro};build=\{intToString buildCode}/\{execCode}:\{escapeOut xo}"
+  Ok (sig, buildCode == 0)
+
+-- ── one case ──────────────────────────────────────────────────────────────
+
+copyAll : String -> List String -> <IO, FileRead, FileWrite> Result String Bool
+copyAll _ [] = Ok True
+copyAll work (f :: rest) = do
+  text <- readFile f
+  _ <- writeFile "\{work}/\{lastOf (S.split "/" f)}" text
+  copyAll work rest
+
+-- Each ordering gets a fresh work directory: the case's files, then the permuted entry.
+runOrders : String ->
+  String ->
+  String ->
+  List (List String) ->
+  List (List Int) ->
+  Int ->
+  <Exec, IO, FileRead, FileWrite> Result String (List OrdSig)
+runOrders _ _ _ _ [] _ = Ok []
+runOrders cdir base entry chunks (o :: rest) k = do
+  let work = "\{base}/p\{intToString k}"
+  _ <- mkdirAll work
+  files <- fixtureFiles cdir
+  _ <- copyAll work files
+  _ <- writeFile "\{work}/\{entry}" (renderChunks (permute chunks o))
+  (sig, built) <- sigFor work entry
+  more <- runOrders cdir base entry chunks rest (k + 1)
+  Ok (OrdSig (S.join "," (map intToString o)) sig built :: more)
+
+-- The verdict for a case with at least one ordering. Returns the built count too.
+judge : List LedgerRow -> String -> String -> List OrdSig -> (Int, Expectation)
+judge rows name what xs =
+  if length xs == 0 then
+    (0, fail "\{name}: produced ZERO orderings — the permuter ran nothing")
+  else
+    judgeOrdered
+      rows
+      name
+      what
+      xs
+      (length (filter builtOf xs))
+      (sortUnique (map sigOf xs))
+
+judgeOrdered : List LedgerRow ->
+  String ->
+  String ->
+  List OrdSig ->
+  Int ->
+  List String ->
+  (Int, Expectation)
+judgeOrdered rows name what xs built distinct = match rowFor name rows
+  None => (built, unledgered name what (length xs) distinct)
+  Some (LedgerRow _ issue pinned) =>
+    (built, ledgered name issue pinned distinct)
+
+unledgered : String -> String -> Int -> List String -> Expectation
+unledgered name what nord distinct =
+  if length distinct == 1 then
+    pass
+  else
+    fail
+      "\{name}: \{intToString nord} ordering(s) produced \{intToString (length distinct)} DISTINCT signatures — the answer depends on interface-declaration order\n       \{indentJoin distinct}\n  \{name}: \{what}\n     Either FIX it, or, if it is a known OPEN bug, add a row to test/IFACE-ORDER-LEDGER.txt.\n     A row is a statement that a soundness bug is shipping, not a way to make this green.\n     If this case is a CONTROL, do NOT ledger it."
+
+ledgered : String -> String -> List String -> List String -> Expectation
+ledgered name issue pinned distinct =
+  if not (isMatch issueRe issue) then
+    fail
+      "\{name}: ledger row's issue field is \"\{issue}\" — it must be #<number> of an OPEN issue"
+  else
+    ledgeredNamed name issue pinned distinct
+
+ledgeredNamed : String -> String -> List String -> List String -> Expectation
+ledgeredNamed name issue pinned distinct =
+  if not (S.startsWith (S.drop 1 issue ++ "-") name) then
+    fail
+      "\{name}: ledgered against \{issue} but the directory is not named \"\{S.drop 1 issue}-...\""
+  else if length pinned < 2 then
+    fail
+      "\{name}: ledger row pins \{intToString (length pinned)} signature(s); a row asserts a DIVERGENCE, so it needs >=2"
+  else if length distinct == 1 then
+    fail
+      "\{name}: DRAINED — \{issue} no longer diverges under interface-declaration permutation\n       observed signature: \{indentJoin distinct}\n     READ THE CONVERGED SIGNATURE: check=1 with an R-* code means the ambiguity is now\n     REJECTED at resolve (state 3); check=0 with codes= empty, or check=1 with a T-* code,\n     means selection is now deterministic (state 4). Convergence does not mean fully fixed:\n     check the sibling axes, then close the issue, delete the row, and keep the fixture."
+  else if distinct == pinned then
+    pass
+  else
+    fail
+      "\{name}: KNOWN-BAD \{issue}: the divergence MOVED. pinned and observed signatures differ.\n       pinned:   \{indentJoin pinned}\n       observed: \{indentJoin distinct}\n     Re-derive the right answer before re-pinning. STILL DIVERGENT IS NOT FIXED."
+
+-- Runs every ordering of one case under `base`, the test's own scratch tree.
+caseOrders : List LedgerRow ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List (List String) ->
+  List (List Int) ->
+  <Exec, IO, FileRead, FileWrite> (Int, Expectation)
+caseOrders rows base name cdir entry what chunks ords =
+  match runOrders cdir "\{base}/\{name}" entry chunks ords 1
+    Err e => (0, fail "\{name}: PERMUTER could not write an ordering: \{e}")
+    Ok xs => judge rows name what xs
+
+caseChunks : List LedgerRow ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  List (List String) ->
+  <Exec, IO, FileRead, FileWrite> (Int, Expectation)
+caseChunks rows base name cdir entry what chunks =
+  if length (filter isIfaceChunk chunks) < 2 then
+    (
+      0,
+      fail
+        "\{name}: PERMUTER: need >=2 top-level interface declarations, found \{intToString (length (filter isIfaceChunk chunks))}",
+    )
+  else
+    caseOrders
+      rows
+      base
+      name
+      cdir
+      entry
+      what
+      chunks
+      (orderSet (length (filter isIfaceChunk chunks)))
+
+caseEntry : List LedgerRow ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> (Int, Expectation)
+caseEntry rows base name cdir entry what = match readFile "\{cdir}/\{entry}"
+  Err _ => (
+    0,
+    fail "\{name}: case.txt names entry \"\{entry}\", which is not a file here",
+  )
+  Ok text =>
+    caseChunks rows base name cdir entry what (groupChunks (S.lines text))
+
+caseSpec : List LedgerRow ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> (Int, Expectation)
+caseSpec rows base name cdir = match readFile (cdir ++ "/case.txt")
+  Err _ =>
+    (0, fail "\{name}: no case.txt (a case directory must declare its entry)")
+  Ok spec =>
+    caseEntry rows base name cdir (fieldOf "entry:" spec) (fieldOf "what:" spec)
+
+-- (built count, verdict) for one case directory name under the corpus.
+caseRun : List LedgerRow ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> (Int, Expectation)
+caseRun rows base name = caseSpec rows base name "\{corpus}/\{name}"
+
+-- Case directories, derived from the fixture file listing: the first path segment
+-- under the corpus root, for every file that sits at least one directory down.
+inCase : String -> String -> Bool
+inCase prefix f =
+  S.startsWith prefix f && length (S.split "/" (S.drop (S.length prefix) f)) > 1
+
+caseOf : String -> String -> String
+caseOf prefix f = firstOr "" (S.split "/" (S.drop (S.length prefix) f))
+
+caseNames : String -> List String -> List String
+caseNames prefix files =
+  sortUnique (map (f => caseOf prefix f) (filter (f => inCase prefix f) files))
+
+resOf : (String, (Int, Expectation)) -> (String, Expectation)
+resOf (nm, (_, e)) = (nm, e)
+
+-- The orderings of this case whose `build` exited 0.
+buildsOfRes : (String, (Int, Expectation)) -> Int
+buildsOfRes (_, (b, _)) = b
+
+-- A ledger row must name a case directory that exists. The raw line is tested for
+-- blank or `#` (no trim first), as the script's `case` did.
+isRawSkip : String -> Bool
+isRawSkip line = line == "" || S.startsWith "#" line
+
+rawCaseOf : String -> String
+rawCaseOf line = S.trim (firstOr "" (S.split "|" line))
+
+rotCase : String -> <IO, FileRead> Expectation
+rotCase c = match isDir "\{corpus}/\{c}"
+  Err e => fail "could not stat ledger case \"\{c}\": \{e}"
+  Ok True => pass
+  Ok False =>
+    fail
+      "ledger names case \"\{c}\", which does not exist under test/iface_order_fixtures/"
+
+rotCheck : String -> <IO, FileRead> Expectation
+rotCheck ledgerText =
+  expectAll
+    (map
+      rotCase
+      (filter
+        (/= "")
+        (map rawCaseOf (filter (l => not (isRawSkip l)) (S.lines ledgerText)))))
+
+-- Every subdirectory of the corpus is a case, so each must declare one. fixtureFiles
+-- cannot see an empty directory; fixtureDirs lists it.
+specCheck : String -> <IO, FileRead> Expectation
+specCheck dir = match isFile "\{dir}/case.txt"
+  Err e => fail "could not stat \{dir}/case.txt: \{e}"
+  Ok True => pass
+  Ok False =>
+    fail "\{dir}: a case directory has no case.txt (it must declare its entry)"
+
+zeroCheck : List String -> Expectation
+zeroCheck names =
+  if length names == 0 then
+    fail
+      "graded ZERO cases — the corpus derivation found nothing. This is not a pass."
+  else
+    pass
+
+-- The BUILD arm must have produced at least one executable somewhere in the corpus.
+buildWitness : Int -> Expectation
+buildWitness builds =
+  if builds == 0 then
+    fail
+      "the BUILD arm produced no executable anywhere in the corpus — it graded nothing, and an arm that graded nothing must not report green."
+  else
+    pass
+
+rowLine : LedgerRow -> String
+rowLine (LedgerRow c issue _) = "  \{c}  \{issue}"
+
+rowLines : List LedgerRow -> String
+rowLines rows = S.join "\n" (map rowLine rows)
+
+-- A ledgered row is a soundness bug shipping on main. The banner is the pass label
+-- of an always-true check, so it is named on every run.
+ledgerBanner : List LedgerRow -> Expectation
+ledgerBanner rows =
+  if length rows == 0 then
+    pass
+  else
+    expectSatisfies
+      "LEDGERED — interface-declaration-order bugs shipping on main right now:\n\{rowLines rows}\n  (each drains itself: when the divergence collapses, its row goes RED here)"
+      (b => b)
+      True
+
+iterBody : String -> <Exec, IO, FileRead, FileWrite> Expectation
+iterBody base = match readFile ledgerPath
+  Err e => fail "could not read the ledger: \{e}"
+  Ok ledgerText => match fixtureFiles corpus
+    Err e => fail "could not list the corpus: \{e}"
+    Ok files => match fixtureDirs corpus
+      Err e => fail "could not list the corpus directories: \{e}"
+      Ok dirs =>
+        let rows = ledgerRowsOf ledgerText
+        let names = caseNames (corpus ++ "/") files
+        let results = map (nm => (nm, caseRun rows base nm)) names
+        let builds = fold (acc r => acc + buildsOfRes r) 0 results
+        expectAll [
+          expectAtLeast 5 (length names),
+          zeroCheck names,
+          expectEach (map resOf results),
+          rotCheck ledgerText,
+          expectAll (map specCheck dirs),
+          buildWitness builds,
+          ledgerBanner rows,
+        ]
+
+test "iface_order: every case is invariant or ledgered-and-still-diverging" =
+  inScratchDir "iface_order" iterBody

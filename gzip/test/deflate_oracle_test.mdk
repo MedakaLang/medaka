@@ -1,0 +1,347 @@
+{- | Gate for the gzip deflater's RFC conformance, over a fixed corpus.
+   Replaces gzip/test/deflate_oracle.sh.
+
+   The proof: our `deflate_demo` compresses, the SYSTEM `gunzip` must accept
+   the stream (`gunzip -t`) and reproduce the input byte for byte. Our own
+   `inflate_demo` round trip is a SELF-CONSISTENCY check only, never a
+   conformance proof. No golden is captured from our own encoder's output.
+
+   Needs the binary: it builds gzip/deflate_demo.mdk and gzip/inflate_demo.mdk
+   and spawns them plus the system gzip, so it runs natively under
+   `medaka test`. The script's /dev/urandom inputs are replaced by a
+   deterministic generator of the same incompressible shape, so the bytes
+   are reproducible. -}
+
+import array as A
+import list.{replicate}
+import string.{join, take}
+import test.{Expectation, expectAll, expectEach, expectAtLeast, fail, pass}
+import test_process.{medakaBin, medakaRoot, scratchDir, boundedVerbSeconds}
+
+-- How a case's input is produced. `ByteIn n f` is `n` bytes, byte i = f i.
+data Input = TextIn String | ByteIn Int (Int -> Int) | RealIn String | SeedGz
+
+-- slug (file stem), description, input, bound, and whether the internal
+-- self round trip runs too (the seed case never had one).
+data Case = Case String String Input (Option Int) Bool
+
+budgetFor : Int -> Int
+budgetFor n = 30 + n / 100000
+
+-- Deterministic, incompressible-looking bytes (bits of a quadratic
+-- hash), standing in for /dev/urandom.
+scrambleStep : Int -> Int
+scrambleStep x = (x * x + x * 7919 + 104729) % 2147483629
+
+scramble : Int -> Int
+scramble i =
+  scrambleStep (scrambleStep (i * 2654435761 % 2147483629)) / 65536 % 256
+
+windowText : String
+windowText = take 32800 (join "" (replicate 2000 "window boundary probe, "))
+
+corpus : List Case
+corpus = [
+  Case "empty" "empty file" (TextIn "") (Some 25) True,
+  Case "one" "one byte" (TextIn "A") (Some 25) True,
+  Case
+    "rle"
+    "100 KB of one repeated byte (distance=1 RLE)"
+    (ByteIn 100000 (i => 122))
+    None
+    True,
+  Case
+    "rand50k"
+    "50000 bytes of /dev/urandom (incompressible, must not grow)"
+    (ByteIn 50000 scramble)
+    (Some 23)
+    True,
+  Case
+    "rand200k"
+    "200000 bytes of /dev/urandom (incompressible, multi-chunk stored, must not grow)"
+    (ByteIn 200000 scramble)
+    (Some 38)
+    True,
+  Case
+    "parser"
+    "real .mdk source file (compiler/frontend/parser.mdk)"
+    (RealIn "compiler/frontend/parser.mdk")
+    None
+    True,
+  Case
+    "typecheck"
+    "real .mdk source file (compiler/types/typecheck.mdk)"
+    (RealIn "compiler/types/typecheck.mdk")
+    None
+    True,
+  Case
+    "allbytes"
+    "every byte value 0-255 present (x8)"
+    (ByteIn 2048 (i => i % 256))
+    None
+    True,
+  Case
+    "window"
+    "just over the 32768-byte window boundary"
+    (TextIn windowText)
+    None
+    True,
+  Case
+    "seed"
+    "compiler/seed/emitter.ll.gz's decompressed bytes (self-referential, real-world corpus)"
+    SeedGz
+    None
+    False,
+]
+
+-- Builds gzip/<name>.mdk into the scratch dir; Ok binary path, or Err.
+build : String -> String -> <Exec, IO> Result String String
+build dir name = match boundedVerbSeconds 600 "sh" [
+  "-c",
+  "MEDAKA_EMITTER=\"$1\" MEDAKA_ROOT=\"$2\" exec \"$3\" build \"$4\" -o \"$5\"",
+  "sh",
+  "\{medakaRoot}/medaka_emitter",
+  medakaRoot,
+  medakaBin,
+  "\{medakaRoot}/gzip/\{name}.mdk",
+  "\{dir}/\{name}",
+]
+  Err e => Err "could not run medaka build on gzip/\{name}.mdk: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      Err
+        "could not build gzip/\{name}.mdk (medaka build exited \{intToString code})"
+    else
+      Ok "\{dir}/\{name}"
+
+-- The system gunzip's output for the committed seed, via a shell redirect so
+-- the binary bytes never pass through a String.
+seedPlain : String -> <Exec, IO> Result String String
+seedPlain dir = match boundedVerbSeconds 120 "sh" [
+  "-c",
+  "gunzip -c \"$1\" > \"$2\"",
+  "sh",
+  "\{medakaRoot}/compiler/seed/emitter.ll.gz",
+  "\{dir}/seed_plain.bin",
+]
+  Err e => Err "could not gunzip the seed: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      Err "gunzip of the seed exited \{intToString code}"
+    else
+      Ok "\{dir}/seed_plain.bin"
+
+thenPath : Result String Unit -> String -> Result String String
+thenPath r path = map (_ => path) r
+
+realize : String ->
+  String ->
+  Input ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+realize dir slug (TextIn s) =
+  thenPath (writeFile "\{dir}/\{slug}.bin" s) "\{dir}/\{slug}.bin"
+realize dir slug (ByteIn n f) =
+  thenPath
+    (writeFileBytes "\{dir}/\{slug}.bin" (A.makeWith n f))
+    "\{dir}/\{slug}.bin"
+realize dir slug (RealIn rel) = Ok "\{medakaRoot}/\{rel}"
+realize dir slug SeedGz = seedPlain dir
+
+-- Shared failure shape for a spawn: a spawn error, a nonzero exit, or the
+-- success continuation.
+spawnStep : String ->
+  Result String (Int, String, String) ->
+  (Int -> <e> Expectation) ->
+  <e> Expectation
+spawnStep what (Err e) _ = fail "\{what} could not run: \{e}"
+spawnStep what (Ok (code, _, _)) next =
+  if code /= 0 then fail "\{what} exited \{intToString code}" else next code
+
+sameBytes : String -> String -> String -> <FileRead> Expectation
+sameBytes desc a b = match readFileBytes a
+  Err e => fail "\{desc}: could not read \{a}: \{e}"
+  Ok x => match readFileBytes b
+    Err e => fail "\{desc}: could not read \{b}: \{e}"
+    Ok y => if x /= y then fail "\{desc} — bytes DIFFER" else pass
+
+-- Stage: the size bound (only where the case states one).
+sizeStage : String -> String -> Int -> Option Int -> <FileRead> Expectation
+sizeStage desc gz insz bound = match readFileBytes gz
+  Err e => fail "\{desc}: could not read \{gz}: \{e}"
+  Ok out => match bound
+    None => pass
+    Some m =>
+      if length out > insz + m then
+        fail
+          "\{desc} — output GREW beyond the stored-fallback bound: \{intToString (length out)} bytes for \{intToString insz} input (limit \{intToString (insz + m)})"
+      else
+        pass
+
+-- Stage: the system gunzip decodes our stream to the original bytes.
+decodeStage : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Option Int ->
+  Int ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+decodeStage dir slug desc gz src bound insz = spawnStep
+  "\{desc} — system gunzip -c"
+  (boundedVerbSeconds 60 "sh" [
+    "-c",
+    "gunzip -c \"$1\" > \"$2\"",
+    "sh",
+    gz,
+    "\{dir}/\{slug}.roundtrip",
+  ])
+  (_ =>
+    sameThen desc src "\{dir}/\{slug}.roundtrip" (sizeStage desc gz insz bound))
+
+sameThen : String -> String -> String -> Expectation -> <FileRead> Expectation
+sameThen desc a b next = match readFileBytes a
+  Err e => fail "\{desc}: could not read \{a}: \{e}"
+  Ok x => match readFileBytes b
+    Err e => fail "\{desc}: could not read \{b}: \{e}"
+    Ok y =>
+      if x /= y then
+        fail
+          "\{desc} — system gunzip decoded our output but bytes DIFFER from the original"
+      else
+        next
+
+-- Stage: the system `gunzip -t` accepts our stream.
+gunzipStage : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Option Int ->
+  Int ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+gunzipStage dir slug desc gz src bound insz =
+  match boundedVerbSeconds 60 "gunzip" ["-t", gz]
+    Err e => fail "\{desc} — system gunzip -t could not run: \{e}"
+    Ok (code, _, _) =>
+      if code == 142 then
+        fail "\{desc} — system gunzip -t exceeded its 60s budget on our output"
+      else if code /= 0 then
+        fail
+          "\{desc} — system gunzip -t REJECTED our output (rc=\{intToString code}); not RFC-conformant"
+      else
+        decodeStage dir slug desc gz src bound insz
+
+-- Stage: our deflate_demo compresses within its time budget.
+deflateStage : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Option Int ->
+  Int ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+deflateStage deflateBin dir slug desc src bound insz =
+  match boundedVerbSeconds (budgetFor insz) deflateBin [
+    src,
+    "\{dir}/\{slug}.gz",
+  ]
+    Err e => fail "\{desc} — deflate_demo could not run: \{e}"
+    Ok (code, _, _) =>
+      if code == 142 then
+        fail
+          "\{desc} — deflate_demo exceeded its \{intToString (budgetFor insz)}s budget for \{intToString insz} bytes (see budgetFor; NOT necessarily a hang — a slow runner reads the same)"
+      else if code /= 0 then
+        fail "\{desc} — deflate_demo exited \{intToString code}"
+      else
+        gunzipStage dir slug desc "\{dir}/\{slug}.gz" src bound insz
+
+-- The proof: our deflate, the system gunzip.
+gunzipCheck : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Option Int ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+gunzipCheck deflateBin dir slug desc src bound = match readFileBytes src
+  Err e => fail "\{desc}: could not read the input: \{e}"
+  Ok bytes => deflateStage deflateBin dir slug desc src bound (length bytes)
+
+-- Self-consistency only: our inflate_demo on our deflate_demo's output.
+selfCheck : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+selfCheck deflateBin inflateBin dir slug desc src = match readFileBytes src
+  Err e => fail "\{desc} (self round-trip): could not read the input: \{e}"
+  Ok bytes => spawnStep
+    "\{desc} (self round-trip) — deflate_demo"
+    (boundedVerbSeconds (budgetFor (length bytes)) deflateBin [
+      src,
+      "\{dir}/\{slug}.self.gz",
+    ])
+    (_ => spawnStep
+      "\{desc} (self round-trip, SELF-CONSISTENCY ONLY) — our OWN inflate_demo on our OWN output"
+      (boundedVerbSeconds (budgetFor (length bytes)) inflateBin [
+        "\{dir}/\{slug}.self.gz",
+        "\{dir}/\{slug}.self.out",
+      ])
+      (_ =>
+        sameBytes
+          "\{desc} (self round-trip, SELF-CONSISTENCY ONLY)"
+          src
+          "\{dir}/\{slug}.self.out"))
+
+runCase : String ->
+  String ->
+  String ->
+  Case ->
+  <Exec, IO, FileRead, FileWrite> (String, Expectation)
+runCase deflateBin inflateBin dir (Case slug desc input bound selfToo) = (
+  desc,
+  match realize dir slug input
+    Err e => fail "\{desc}: could not make the input: \{e}"
+    Ok src => expectAll [
+      gunzipCheck deflateBin dir slug desc src bound,
+      if selfToo then
+        selfCheck deflateBin inflateBin dir slug desc src
+      else
+        pass,
+    ],
+)
+
+-- The scratch tree holds the 16 MB decompressed seed, so it is removed; a
+-- directory that cannot be removed is red rather than silently left behind.
+cleanup : String -> <Exec> Expectation
+cleanup dir = match boundedVerbSeconds 60 "rm" ["-rf", dir]
+  Err e => fail "cleanup of \{dir}: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      fail "cleanup of \{dir} exited \{intToString code}"
+    else
+      pass
+
+-- System gzip must exist: this gate's oracle.
+gzipPresent : <Exec> Expectation
+gzipPresent = match boundedVerbSeconds 10 "gzip" ["--version"]
+  Err _ => fail "gzip not found (this gate's oracle)"
+  Ok (code, _, _) =>
+    if code /= 0 then fail "gzip --version exited \{intToString code}" else pass
+
+test "deflate_oracle: demos build, system gzip exists, every corpus case gunzip-accepted and byte-identical" =
+  match scratchDir
+    Err e => fail "could not make a scratch dir: \{e}"
+    Ok dir => match build dir "deflate_demo"
+      Err e => fail e
+      Ok deflateBin => match build dir "inflate_demo"
+        Err e => fail e
+        Ok inflateBin =>
+          let result = expectAll [
+            gzipPresent,
+            expectAtLeast 10 (length corpus),
+            expectEach (map (c => runCase deflateBin inflateBin dir c) corpus),
+          ]
+          expectAll [result, cleanup dir]
