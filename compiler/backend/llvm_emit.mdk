@@ -991,6 +991,11 @@ data Emit = Emit {
   directFn : Ref (List (String, (String, Int))),
   trmcCtx : Ref TrmcCtx,
   gDispCtx : Ref GDispCtx,
+  -- The define whose match leaves are in function tail position (a clause chain,
+  -- or a body-level match `emitFnBody` reached): a leaf that is a saturated call
+  -- of it returns as `musttail call` + `ret` (`emitArmBody`).  Saved and cleared
+  -- at the same places as `trmcCtx`, and read after it and `gDispCtx`.
+  selfTailCtx : Ref (Option String),
   gDispGroups : Ref (List DispGroup),
   gDispBinds : Ref (List CBind),
   gDispBindMap : Ref (OrdMap CBind),
@@ -1186,7 +1191,7 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 --
 -- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx
+  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option String)
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -1206,6 +1211,7 @@ beginDefine e =
       !e.directFn
       !e.trmcCtx
       !e.gDispCtx
+      !e.selfTailCtx
   let _ = markScope e
   e.defineCounter := 0
   e.closureArity := []
@@ -1213,18 +1219,20 @@ beginDefine e =
   e.directFn := []
   e.trmcCtx := TrmcOff
   e.gDispCtx := GDispOff
+  e.selfTailCtx := None
   saved
 
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
-endDefine e (DefScope n ar rt df trmc gd) =
+endDefine e (DefScope n ar rt df trmc gd st) =
   e.defineCounter := n
   e.closureArity := ar
   e.closureRetTy := rt
   e.directFn := df
   e.trmcCtx := trmc
   e.gDispCtx := gd
+  e.selfTailCtx := st
 
 emit : Emit -> String -> Unit
 emit e line = let buf = e.buf in buf := line :: !buf
@@ -4417,8 +4425,8 @@ emitU32Inlined e env pats body args =
 
 -- Emit an inlined callee's body.  The enclosing define's impl context
 -- (`curImplTag`/`curSelfFnParams`, keyed by the caller's parameter names) and
--- its TRMC and dispatch-group tail contexts describe the caller, so they are
--- cleared for the body and restored after.  Each outermost inlining site may
+-- its TRMC, dispatch-group and self-tail contexts describe the caller, so they
+-- are cleared for the body and restored after.  Each outermost inlining site may
 -- open at most `inlineSiteBudget` inlinings in all, so a chain of small
 -- functions that each call the next several times cannot grow the emitted
 -- code exponentially.
@@ -4428,9 +4436,11 @@ withInlineScope e act =
   let fns = !e.curSelfFnParams
   let trmc = !e.trmcCtx
   let gd = !e.gDispCtx
+  let st = !e.selfTailCtx
   let _ = clearCurImplSelfFns e
   e.trmcCtx := TrmcOff
   e.gDispCtx := GDispOff
+  e.selfTailCtx := None
   if !e.inlineOpen == 0 then e.inlineSpent := 0
   e.inlineSpent := !e.inlineSpent + 1
   e.inlineOpen := !e.inlineOpen + 1
@@ -4439,6 +4449,7 @@ withInlineScope e act =
   let _ = setCurImplSelfFns e tag fns
   e.trmcCtx := trmc
   e.gDispCtx := gd
+  e.selfTailCtx := st
   r
 
 -- may another inlining open here?
@@ -9584,20 +9595,20 @@ emitGroupBody e fname tag positions arity (clauses@[(pats, body)]) =
     let env = paramEnvByPos pats tyList 0
     emitFnBody e env fname body
   else
-    emitClauseTree
+    emitTailClauseTree
       e
       (implParamEnvByPos tag positions arity 0)
+      fname
       arity
       clauses
-      ""
       noDeclLoc
 emitGroupBody e fname tag positions arity clauses =
-  emitClauseTree
+  emitTailClauseTree
     e
     (implParamEnvByPos tag positions arity 0)
+    fname
     arity
     clauses
-    ""
     noDeclLoc
 
 -- build a LTy list of length n, typed as tagToLTy tag at positions ∈ positions,
@@ -10954,6 +10965,8 @@ emitDecision e env scrut arms tree =
   e.trmcCtx := TrmcOff
   let savedGDisp = !e.gDispCtx
   e.gDispCtx := GDispOff
+  let savedSelfTail = !e.selfTailCtx
+  e.selfTailCtx := None
   -- "" = a miss in an expression-position match is a genuine non-exhaustive abort,
   -- NOT the enclosing clause chain's fallthrough (the clause's pattern already
   -- matched to get here).  Passing it as an argument replaces the old
@@ -10961,6 +10974,7 @@ emitDecision e env scrut arms tree =
   let _ = emitTree e env [sv] arms [sv] slot endL "" rty tree
   e.trmcCtx := savedTrmc
   e.gDispCtx := savedGDisp
+  e.selfTailCtx := savedSelfTail
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
@@ -11077,11 +11091,7 @@ emitLeaf e env roots arms i slot endL rty = match nthArm arms i
       GDispOn _ _ _ _ _ => emitGDispBody e env2 body
       GDispOff => match !e.trmcCtx
         TrmcOn _ _ _ _ _ _ => emitTrmcBody e env2 body
-        TrmcOff =>
-          let (bv, bty) = emitExpr e env2 body
-          rty := bty
-          let _ = emit e "  store i64 \{bv}, ptr \{slot}"
-          emit e ("  br label %" ++ endL)
+        TrmcOff => emitArmBody e env2 body slot endL rty
   None => gapU e "decision arm index out of range"
 -- TRMC (TRMC-DESIGN.md): when a destination-passing loop is active (multi-clause
 -- eligible fn — emitClauseTree's clause-selection tree), the clause body is a
@@ -11126,13 +11136,67 @@ emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty =
     GDispOn _ _ _ _ _ => emitGDispBody e env3 body
     GDispOff => match !e.trmcCtx
       TrmcOn _ _ _ _ _ _ => emitTrmcBody e env3 body
-      TrmcOff =>
-        let (bv, bty) = emitExpr e env3 body
-        rty := bty
-        let _ = emit e "  store i64 \{bv}, ptr \{slot}"
-        emit e ("  br label %" ++ endL)
+      TrmcOff => emitArmBody e env3 body slot endL rty
   let _ = emit e (failL ++ ":")
   emitTree e env roots arms occs slot endL ftL rty fail
+
+-- A matched arm's body.  It normally computes its value into the match's result
+-- `slot` and joins at `endL`.  When the match is in the tail position of the
+-- define named by `e.selfTailCtx`, the body is descended instead: a saturated
+-- call of that define is emitted as `musttail call` + `ret` straight from the
+-- leaf, so the recursion does not grow the stack even where clang does not turn
+-- the call into a jump (-O0).  Every other leaf still stores and joins.
+emitArmBody : Emit ->
+  OrdMap (String, LTy) ->
+  CExpr ->
+  String ->
+  String ->
+  Ref LTy ->
+  Unit
+emitArmBody e env body slot endL rty = match !e.selfTailCtx
+  Some self => emitSelfTailArm e env self body slot endL rty
+  None => emitArmValue e env body slot endL rty
+
+emitArmValue : Emit ->
+  OrdMap (String, LTy) ->
+  CExpr ->
+  String ->
+  String ->
+  Ref LTy ->
+  Unit
+emitArmValue e env body slot endL rty =
+  let (bv, bty) = emitExpr e env body
+  rty := bty
+  let _ = emit e "  store i64 \{bv}, ptr \{slot}"
+  emit e ("  br label %" ++ endL)
+
+-- An arm body in the tail position of the define `self`.  `if` and a nested
+-- match pass tail position on (the nested match's arms join at the same `endL`,
+-- `e.selfTailCtx` left live as `emitTrmcBody` leaves `trmcCtx`); a saturated call
+-- of `self` is returned with `musttail`, the calling-convention proof
+-- `emitFnBody` relies on; anything else stores into `slot` and joins.
+emitSelfTailArm : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  String ->
+  String ->
+  Ref LTy ->
+  Unit
+emitSelfTailArm e env self (CIf c t f) slot endL rty =
+  let (thenL, elseL) = emitTailIfHead e env c
+  let _ = emit e (thenL ++ ":")
+  let _ = emitSelfTailArm e env self t slot endL rty
+  let _ = emit e (elseL ++ ":")
+  emitSelfTailArm e env self f slot endL rty
+emitSelfTailArm e env _ (CDecision scrut arms tree) slot endL rty =
+  let (sv, _) = emitExpr e env scrut
+  emitTree e env [sv] arms [sv] slot endL "" rty tree
+emitSelfTailArm e env self body slot endL rty =
+  if directTailCallee e body == Some self then
+    emitTailCallRet e env self body
+  else
+    emitArmValue e env body slot endL rty
 
 -- emit the guard tests left-to-right: a `CGBool` tests a Bool (`True` = the word
 -- 3) and branches to `failL` on failure, falling through on success; a
@@ -12291,7 +12355,7 @@ emitMultiClauseFn e name clauses site =
   let _ = beginDefine e
   let _ = emit e "define i64 @mdk_\{name}(\{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
-  let _ = emitClauseTree e env arity clauses "" site
+  let _ = emitTailClauseTree e env name arity clauses site
   let _ = emit e "}"
   emit e ""
 
@@ -13774,10 +13838,26 @@ tailCallSaturated e fname n = match defArityOf e fname
 
 -- emit a function body in TAIL position: every control path ends in a `ret`.
 -- An `if` recurses into both arms (each arm is itself in tail position and rets);
--- a SATURATED tail call to a known function emits `[musttail] call` + `ret`;
--- anything else is computed as a value and returned.
+-- a `match` puts its arms in tail position (`emitTailDecision`); a SATURATED tail
+-- call to a known function emits `[musttail] call` + `ret`; anything else is
+-- computed as a value and returned.
 emitFnBody : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
 emitFnBody e env self (CIf c t f) =
+  let (thenL, elseL) = emitTailIfHead e env c
+  let _ = emit e (thenL ++ ":")
+  let _ = emitFnBody e env self t
+  let _ = emit e (elseL ++ ":")
+  emitFnBody e env self f
+emitFnBody e env self (CDecision scrut arms tree) =
+  emitTailDecision e env self scrut arms tree
+emitFnBody e env self other = match directTailCallee e other
+  Some _ => emitTailCallRet e env self other
+  None => emitValueRet e env other
+
+-- test a tail `if`'s condition and branch on it; returns the (then, else) block
+-- labels, which the caller opens.
+emitTailIfHead : Emit -> OrdMap (String, LTy) -> CExpr -> (String, String)
+emitTailIfHead e env c =
   let (cv, _) = emitExpr e env c
   let ci = untagInt e cv
   let cb = freshReg e
@@ -13786,58 +13866,105 @@ emitFnBody e env self (CIf c t f) =
   let thenL = "then" ++ n
   let elseL = "else" ++ n
   let _ = emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
-  let _ = emit e (thenL ++ ":")
-  let _ = emitFnBody e env self t
-  let _ = emit e (elseL ++ ":")
-  emitFnBody e env self f
-emitFnBody e env self other =
-  let (hd, args) = flattenApp other []
+  (thenL, elseL)
+
+-- a `match` in the tail position of the define `self`: `emitDecision`'s shape
+-- (result slot, join block, load + `ret`), with the arms descended under
+-- `e.selfTailCtx` so a saturated self call returns from its own leaf.
+emitTailDecision : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  List CArm ->
+  CTree ->
+  Unit
+emitTailDecision e env self scrut arms tree =
+  let (sv, _) = emitExpr e env scrut
+  let slot = freshReg e
+  let _ = emit e ("  " ++ slot ++ " = alloca i64")
+  let endL = "decend" ++ intToString (freshLocal e)
+  let rty = Ref LTInt
+  let saved = !e.selfTailCtx
+  e.selfTailCtx := Some self
+  let _ = emitTree e env [sv] arms [sv] slot endL "" rty tree
+  e.selfTailCtx := saved
+  let _ = emit e (endL ++ ":")
+  let r = freshReg e
+  let _ = emit e "  \{r} = load i64, ptr \{slot}"
+  emit e ("  ret i64 " ++ r)
+
+-- `emitClauseTree` for a define whose clause bodies are its tail position: the
+-- leaves are descended under `e.selfTailCtx` (see `emitArmBody`).
+emitTailClauseTree : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  Int ->
+  List (List Pat, CExpr) ->
+  Loc ->
+  Unit
+emitTailClauseTree e env self arity clauses site =
+  let saved = !e.selfTailCtx
+  e.selfTailCtx := Some self
+  let _ = emitClauseTree e env arity clauses "" site
+  e.selfTailCtx := saved
+
+-- The emitted symbol of `ex`'s callee when `ex` is a SATURATED call of a known
+-- function that a tail position lowers to a direct `call` + `ret`
+-- (`emitTailCallRet`), else None.  Emits nothing.
+--
+-- #1101: an UNSATURATED (over- or under-applied) tail call must not be emitted as
+-- a direct call — passing every flattened argument to a define with fewer params
+-- silently dropped the surplus and never invoked the returned closure.  Such a
+-- call returns None, so it is emitted as a value through `emitApp` ->
+-- `emitKnownFnSat` -> `emitOverApp`/`emitPapClosure`, the same correct shape an
+-- application in `main`'s own body already gets.  `emitArgs` is 1:1 with `args`,
+-- so `lengthS args` is the arg-word count.  A `u64` kernel wrapper
+-- (`u64KernelAlias`) goes through `emitApp`, which emits the kernel inline.
+--
+-- A constrained call carries its leading dictionary words in the CDict head,
+-- outside `args`.  Both lists count against the actual emitted define arity;
+-- mismatched calls keep the normal PAP/over-application path through
+-- emitDictApp.
+directTailCallee : Emit -> CExpr -> Option String
+directTailCallee e ex =
+  let (hd, args) = flattenApp ex []
   match hd
     CVar fname0 _ =>
       let fname = canonFnName e fname0
-      -- #1101: an UNSATURATED (over- or under-applied) tail call must not be
-      -- emitted as a direct call — passing every flattened argument to a define
-      -- with fewer params silently dropped the surplus and never invoked the
-      -- returned closure.  Falling through to `emitValueRet` routes the node
-      -- through `emitApp` -> `emitKnownFnSat` -> `emitOverApp`/`emitPapClosure`,
-      -- the same correct shape an application in `main`'s own body already gets.
-      -- `emitArgs` is 1:1 with `args`, so `lengthS args` is the arg-word count
-      -- without emitting anything (the guard must not emit args it may discard).
-      -- A `u64` kernel wrapper (`u64KernelAlias`) goes through `emitApp`, which
-      -- emits the kernel inline.
       if isKnownFn e fname
         && hasArgs args
         && tailCallSaturated e fname (lengthS args)
         && isNone (u64KernelAlias e fname0 args)
         && isNone (rawWorkerCall e fname (lengthS args)) then
-        let argOps = emitArgs e env args
-        let r = freshReg e
-        let kw = if fname == self then "musttail call" else "call"
-        let _ = emit e "  \{r} = \{kw} i64 @mdk_\{fname}(\{argDecls argOps})"
-        emit e ("  ret i64 " ++ r)
+        Some fname
       else
-        emitValueRet e env other
+        None
     CDict fname routes =>
-      -- A constrained self-call carries its leading dictionary words in the
-      -- CDict head, outside `args`.  Count both lists against the actual emitted
-      -- define arity before selecting musttail; mismatched calls keep the normal
-      -- PAP/over-application path through emitDictApp.
       let nwords = listLen routes + lengthS args
       if isKnownFn e fname
         && nwords > 0
         && tailCallSaturated e fname nwords then
-        let dictWords = dictWordsOf e env routes
-        let argOps = emitArgs e env args
-        let r = freshReg e
-        let kw = if fname == self then "musttail call" else "call"
-        let _ =
-          emit
-            e
-            "  \{r} = \{kw} i64 @mdk_\{fname}(\{argDecls (dictWords ++ argOps)})"
-        emit e ("  ret i64 " ++ r)
+        Some fname
       else
-        emitValueRet e env other
-    _ => emitValueRet e env other
+        None
+    _ => None
+
+-- emit a call `directTailCallee` accepted, then `ret` its result; a call of the
+-- enclosing define `self` is a `musttail call` (self recursion means the caller
+-- and callee prototypes match, which musttail requires).
+emitTailCallRet : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
+emitTailCallRet e env self ex =
+  let (hd, args) = flattenApp ex []
+  let (fname, ops) = match hd
+    CDict f routes =>
+      let dictWords = dictWordsOf e env routes
+      (f, dictWords ++ emitArgs e env args)
+    CVar f0 _ => (canonFnName e f0, emitArgs e env args)
+    _ => panic "llvm: emitTailCallRet on a call directTailCallee rejected"
+  let r = freshReg e
+  let kw = if fname == self then "musttail call" else "call"
+  let _ = emit e "  \{r} = \{kw} i64 @mdk_\{fname}(\{argDecls ops})"
+  emit e ("  ret i64 " ++ r)
 
 emitValueRet : Emit -> OrdMap (String, LTy) -> CExpr -> Unit
 emitValueRet e env ex =
@@ -15735,6 +15862,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     directFn = Ref [],
     trmcCtx = Ref TrmcOff,
     gDispCtx = Ref GDispOff,
+    selfTailCtx = Ref None,
     gDispGroups = Ref [],
     gDispBinds = Ref [],
     gDispBindMap = Ref omEmpty,
