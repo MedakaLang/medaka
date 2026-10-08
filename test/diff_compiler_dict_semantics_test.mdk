@@ -3975,6 +3975,28 @@ table = [
     codes = [Absent "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
+    entry = "determine-prerequisite-not-committed.mdk",
+    label =
+      "§3 determination never commits through a prerequisite: `Eq2 ?n` is left open rather than committed to `MyList ?m`, whose `Num (MyList ?m)` no instance meets; `?n` defaults to `Int`, and the closed `Eq2 Int` is T-NO-IMPL. Committing `MyList ?m` reported a literal-vs-`MyList Int` mismatch and gave the prelude-free emit oracles a wrong dictionary",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL", Absent "T-TYPE-MISMATCH"],
+  },
+  Row {
+    entry = "determine-prerequisite-refutes-every-candidate.mdk",
+    label =
+      "§3: `S ?s`'s candidates are each refuted by the prerequisite `C ?s`; a goal every candidate of which a sibling refutes is counted by its candidates alone, so it is T-AMBIGUOUS-INSTANCE. Committing `Box ?m` for `C ?s` reported T-NO-IMPL for `Box (Box a)`, a type the program never had; counting only unrefuted candidates accepted it and printed 11",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-NO-IMPL"],
+  },
+  Row {
     entry = "undetermined-sole-headless-determined.mdk",
     label =
       "§3 determination at any arity: the one instance `impl Sz a` reaches `Sz ?a`, and every verb dispatches through it (#3714). Hand-derived: 14. The build stamped the method's result head and panicked",
@@ -4304,7 +4326,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 378
+tableRows = 380
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4922,7 +4944,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 28
+spanRows = 30
 
 spanTable : List SpanRow
 spanTable = [
@@ -4949,6 +4971,17 @@ spanTable = [
     label =
       "§6.2 T4: the deeper nesting reports once, at the same `def` occurrence",
     want = "11:22",
+  },
+  SpanRow {
+    entry = "determine-prerequisite-not-committed.mdk",
+    label =
+      "§3: the one diagnostic is the closed `Eq2 Int`'s, at the `eq2` call, not a mismatch at the second literal (22:39)",
+    want = "22:16",
+  },
+  SpanRow {
+    entry = "determine-prerequisite-refutes-every-candidate.mdk",
+    label = "§3: the one diagnostic is `S ?s`'s, at the `s` occurrence",
+    want = "25:23",
   },
   SpanRow {
     entry = "s6-c1-rigid-goal-no-call-discriminator.mdk",

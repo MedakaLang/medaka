@@ -695,8 +695,18 @@ second type `π` could have. Against a `π` whose first position is a variable,
 binding that variable to the qualified head peels nothing, and the instance
 counts. A candidate is kept only if its commit leaves every sibling goal on a
 variable it binds satisfiable: a sibling goal the commit closes must have an
-instance in `IE` (joint consistency). If exactly one candidate remains, `π` is
-unified with a fresh instance of its head, the fresh variables minted at the
+instance in `IE` (joint consistency; `siblingStaysSatisfiable`). A sibling the
+commit leaves open refutes nothing, so the goals determined are the ones the
+group posed, never the prerequisites of the instances they select: through a
+prerequisite, a closed sibling refuting the right type would leave a structural
+instance whose own open sibling no instance meets as the sole survivor. Under
+`impl Eq2 Bool` and `impl Eq2 (MyList a) requires Eq2 a`, the prerequisite
+`Eq2 ?n` of `eq2 (Cons 1 Nil) …` is not committed to `MyList ?m` beside the
+literal's `Num ?n`; `?n` defaults to `Int`, and the closed `Eq2 Int` has no
+instance (`test/dict_fixtures/determine-prerequisite-not-committed.mdk`).
+A prerequisite left open is judged at the boundary (**Reject**, below). If
+exactly one candidate remains, `π` is unified with a fresh instance of its
+head, the fresh variables minted at the
 group's own level so that a goal variable unified with one still generalizes.
 Otherwise nothing is committed. A goal with fewer positions than its
 interface's heads (a per-slot projection of a wider goal) is not determined: the
@@ -754,7 +764,14 @@ the call with `T-AMBIGUOUS-INSTANCE`
 `test/dict_fixtures/undetermined-constrained-head-counts.mdk`), unless one of
 them matches the goal as it stands and is ⊑ every other: min⊑ selects it, and no
 binding of the goal's variables can make another instance more specific
-(`test/dict_fixtures/undetermined-comparable-overlap-min.mdk`). The call poses
+(`test/dict_fixtures/undetermined-comparable-overlap-min.mdk`). The candidates
+counted are those joint consistency keeps; when a sibling refutes every one, the
+goals have no type that satisfies them together, and the goal is counted by its
+candidates alone (`verdictCandidates`). `c (Box s)`, with `S` answered only at
+`Bool` and `String` and `C` at `Int` and `Box a` (requiring `C a`), is
+`T-AMBIGUOUS-INSTANCE` for `S ?s`, whose two candidates the prerequisite `C ?s`
+both refutes (`test/dict_fixtures/determine-prerequisite-refutes-every-candidate.mdk`).
+The call poses
 its goal whether or not the callee's body reads the dictionary: a declared
 constraint whose variable the callee's type does not mention is instantiated at
 a fresh variable (`test/dict_fixtures/undetermined-dict-unused-ambiguous.mdk`,

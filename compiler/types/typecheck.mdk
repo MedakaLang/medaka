@@ -11825,6 +11825,7 @@ data PerRun = PerRun {
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
+  determinedRowsRef : Ref (Map Int (List (ImplRow, List Mono))),  -- the instance each determination commit chose, with the committed goal's arguments, filed under the variable heading the goal (`fileDeterminedRow`)
   declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` holds rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
@@ -11934,6 +11935,7 @@ freshPerRun _ = PerRun {
   implObls = wNew (),
   poisonedVars = Ref [],
   deferrableVarIds = Ref [],
+  determinedRowsRef = Ref Tip,
   declaredSigVarIds = Ref omEmpty,
   tupleCallCandidates = Ref [],
   numlitVarLocs = Ref [],
@@ -17654,7 +17656,8 @@ inferDictAtFound name ev inst =
   if isEmptyL declaredIds && hasImportDefiner name then
     fst inst
   else if known
-    && (anyIdPinned declaredIds (snd inst) || calleeIsGeneralized name q) then
+    && (anyIdPinned declaredIds (snd inst)
+      || calleeIsGeneralized name q (snd inst)) then
     inferDeclaredDictAt ev dc (fst inst, pinUnboundIds declaredIds (snd inst))
   else
     pushRecDictAppGoal
@@ -17705,9 +17708,15 @@ inferDeclaredDictAt ev dc inst =
 -- (`bindingDeclaredAt`), never here, and an imported one is never in the group.
 -- So a declared constraint id its instantiation does not bind is a variable its
 -- type does not mention (`plain : Sz a => Int -> Int`), not a recursive call.
-calleeIsGeneralized : String -> Option (List CSlot) -> Bool
-calleeIsGeneralized name q =
-  isSome q || omHasKey name driverState.value.sigTyMapRef.value
+-- Unless the value restriction kept the signed binding monomorphic: then its
+-- signature's type mentions a variable that its scheme [subst] does not quantify,
+-- and its constraints are on its own variables, posed in its own group.
+calleeIsGeneralized : String -> Option (List CSlot) -> List (Int, Mono) -> Bool
+calleeIsGeneralized name q subst
+  | isSome q = True
+  | otherwise = match omLookup name driverState.value.sigTyMapRef.value
+    Some ty => isNonEmptyL subst || isEmptyL (tyVarNames ty)
+    None => False
 
 -- [subst] with a fresh variable for each of [ids] it does not bind.  A declared
 -- constraint whose variable the callee's type does not mention is instantiated at
@@ -32975,33 +32984,27 @@ selectReturnRow : ImplEnv -> String -> List Mono -> Option ImplRow
 selectReturnRow env name goals = match ieSelectRowByMethod env name goals
   Some row => Some row
   None => match methodIfaceHere name
-    Some iface => undeterminedGoalInstance iface goals
+    Some iface => determinedGoalInstance iface goals
     None => None
 
--- `ieSelectRowByIface`, or else the instance an undetermined goal was determined to.
-selectGoalRow : ImplEnv -> IfaceRef -> List Mono -> Option ImplRow
-selectGoalRow env iface goals = match ieSelectRowByIface env iface goals
-  Some row => Some row
-  None => undeterminedGoalInstance iface goals
-
--- The instance an undetermined goal of [iface] was determined to.  Selection by
--- head constructor names nothing for a goal whose first position is a variable;
--- the undetermined-goal verdict accepts such a goal only when one instance reaches
--- it, so that instance is the evidence.
-undeterminedGoalInstance : IfaceRef -> List Mono -> Option ImplRow
-undeterminedGoalInstance iface goals
-  | not (goalFirstIsVariable goals) = None
-  | otherwise =
-    let rows = goalRows iface goals
-    if goalIsProjection goals rows then
-      None
-    else
-      let unifying =
-        goalCandidates perRun.value.declaredSigVarIds.value goals rows
-      let counted = determinationCandidates (goalWindowOf []) goals unifying
-      match goalReach goals counted
-        ReachOne row => Some row
-        _ => None
+-- The instance a boundary's determination committed [iface]'s goal [goals] to
+-- (`fileDeterminedRow`).  Selection by head constructor names nothing for a goal
+-- whose first position is still a variable, such as one committed to a headless
+-- instance; the commit is that goal's evidence.  The route reads the boundary's
+-- decision rather than deciding again.
+determinedGoalInstance : IfaceRef -> List Mono -> Option ImplRow
+determinedGoalInstance _ [] = None
+determinedGoalInstance iface (first :: rest) = match normalize first
+  TVar cell =>
+    let goals = first :: rest
+    let filed =
+      optionOr
+        []
+        (IdMap.get (tyvarId cell) perRun.value.determinedRowsRef.value)
+    match filterList (entry => determinedEntryAnswers iface goals entry) filed
+      (row, _) :: _ => Some row
+      [] => None
+  _ => None
 
 -- inst: a concrete head [tag].  EKReturn → canonical full-type key + split element routes
 -- (implRef-bound); EKNestedTop → the min⊑ winner's canonical key (bare head only when the
@@ -36973,7 +36976,11 @@ solveExactReturnInstance request wanted [] = MethodReturnResolution {
 solveExactReturnInstance request wanted args =
   let env = perRun.value.bodyImplEnvRef.value
   let iface = wanted.predicate.predicateInterface
-  match selectGoalRow env iface args
+  let selected =
+    orElseOpt
+      (ieSelectRowByIface env iface args)
+      (determinedGoalInstance iface args)
+  match selected
     Some (row@(ImplRow _ inst selectedIface _ _ _)) =>
       let prerequisites = methodReturnPrerequisites args row
       MethodReturnResolution {
@@ -37548,10 +37555,30 @@ determineGoal rigidIds window o args
         let heads = freshRowHeads row
         let _ = exitLevel ()
         let _ = commitImprovement rigidIds (zipL args heads)
+        let _ = fileDeterminedRow row args
         let _ = refileGoals window oldIds
         monoSizes args /= sizeBefore
           || listLen (dedupI (flatMap monoUnboundIds args)) /= listLen oldIds
       _ => False
+
+determinedEntryAnswers : IfaceRef -> List Mono -> (ImplRow, List Mono) -> Bool
+determinedEntryAnswers iface goals (row, committed) =
+  ieRowOfIface iface row
+    && listLen committed == listLen goals
+    && allList (pair => cohEqMono (fst pair) (snd pair)) (zipL committed goals)
+
+-- Files a commit's instance under the variable heading the committed goal, the
+-- one `determinedGoalInstance` reads when selection by head finds nothing.
+fileDeterminedRow : ImplRow -> List Mono -> Unit
+fileDeterminedRow _ [] = ()
+fileDeterminedRow row (first :: rest) = match normalize first
+  TVar cell =>
+    let table = perRun.value.determinedRowsRef.value
+    let filed = optionOr [] (IdMap.get (tyvarId cell) table)
+    let entry = (row, map normalize (first :: rest))
+    perRun.value.determinedRowsRef :=
+      IdMap.set (tyvarId cell) (entry :: filed) table
+  _ => ()
 
 -- Every variable of the goal is one the boundary holds rigid, so a commit could
 -- bind none of them.
@@ -37641,6 +37668,19 @@ determinationCandidates window args unifying =
       rowCountsFor args (fst cand) && siblingsStaySatisfiable window (snd cand))
     unifying
 
+-- The candidates an undetermined goal's verdict counts: `determinationCandidates`,
+-- or, when a sibling refutes every one of them, every candidate `rowCountsFor`
+-- keeps.  Such a goal has no type that satisfies the boundary's goals together,
+-- and its verdict is the one its candidates alone give.
+verdictCandidates : GoalWindow ->
+  List Mono ->
+  List (ImplRow, List (Int, Mono)) ->
+  List (ImplRow, List (Int, Mono))
+verdictCandidates window args unifying =
+  match determinationCandidates window args unifying
+    [] => filterList (cand => rowCountsFor args (fst cand)) unifying
+    counted => counted
+
 -- What an undetermined goal's counted candidates decide (DICT-SEMANTICS §3, §4.2
 -- OD3).  None leaves the goal no instance.  One is the instance.  So is one that
 -- matches the goal as it stands and is ⊑ every other candidate: min⊑ selects it,
@@ -37693,14 +37733,13 @@ reportUndeterminedGoal : OrdMap Unit ->
 reportUndeterminedGoal rigidIds window iface args loc =
   match goalCandidates rigidIds args (goalRows iface args)
     [] => reportUndeterminedNoImpl iface args loc
-    unifying =>
-      match goalReach args (determinationCandidates window args unifying)
-        ReachMany =>
-          pushTypeErrorOnceAt
-            "T-AMBIGUOUS-INSTANCE"
-            loc
-            (ambiguousImplMsg iface.irName)
-        _ => ()
+    unifying => match goalReach args (verdictCandidates window args unifying)
+      ReachMany =>
+        pushTypeErrorOnceAt
+          "T-AMBIGUOUS-INSTANCE"
+          loc
+          (ambiguousImplMsg iface.irName)
+      _ => ()
 
 -- DIAGNOSTIC-CODES-DESIGN `T-NO-IMPL` for an undetermined goal.  A one-position
 -- goal names its interface by its declaring module, so the diagnostic says which
@@ -37761,7 +37800,7 @@ reportMixedGoalAmbiguity : GoalWindow ->
   Unit
 reportMixedGoalAmbiguity window iface args loc =
   let unifying = goalCandidates omEmpty args (goalRows iface args)
-  match goalReach args (determinationCandidates window args unifying)
+  match goalReach args (verdictCandidates window args unifying)
     ReachMany =>
       pushTypeErrorOnceAt
         "T-AMBIGUOUS-INSTANCE"
@@ -37789,8 +37828,11 @@ liveMemberIds monos =
 
 -- The prerequisites of the instances [obls]' goals select, as goals of the same
 -- boundary at their parents' sites (DICT-SEMANTICS §3).  An instance answers a goal
--- only once its `requires` is answered too, so a prerequisite left open is
--- determined and judged like a goal the boundary posed itself.  A goal a given
+-- only once its `requires` is answered too, so a prerequisite left open is judged
+-- like a goal the boundary posed itself.  It is not determined: an open sibling
+-- refutes no candidate, so a commit through a prerequisite could choose a
+-- structural instance whose open sibling no instance meets (`Num (MyList ?m)`).
+-- A goal a given
 -- answers whole selects no instance; a goal every variable of which is held rigid
 -- leaves its prerequisites to the enclosing scope; a closed goal's are closed, and
 -- the obligation gate's.  Only a prerequisite smaller than its parent is followed
@@ -37866,14 +37908,6 @@ requireGoalAt o parentIds (iface, args)
     },
   ]
 
--- Determination over [obls] and the prerequisites their selected instances pose.
-determineWithNestedGoals : OrdMap Unit -> List UObligation -> Unit
-determineWithNestedGoals rigidIds obls =
-  let _ = determineByUniqueInstance rigidIds obls
-  match nestedRequireGoals rigidIds obls
-    [] => ()
-    nested => determineByUniqueInstance rigidIds (obls ++ nested)
-
 -- The verdict on the goals on a variable D3 clause 3 withheld, once the second
 -- determination has run.  The boundary owns that variable and nothing after it
 -- can choose it, so a goal on it that two or more candidates still unify with is
@@ -37906,7 +37940,7 @@ withheldVectorVerdict rigidIds window o =
   let iface = o.pred.iface
   if not (undeterminedGoalExempt iface args o.uoScope) then
     let unifying = goalCandidates rigidIds args (goalRows iface args)
-    match goalReach args (determinationCandidates window args unifying)
+    match goalReach args (verdictCandidates window args unifying)
       ReachMany =>
         pushTypeErrorOnceAt
           "T-AMBIGUOUS-INSTANCE"
@@ -39168,7 +39202,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
     monoRootIdSet (headMonos ++ [inst.mbiExpected] ++ map snd inst.mbiNamedVars)
   let bodyObls = addedObls ++ callUOblsWindow callN0
   let _ = improveByUniqueImpl bodyRigidIds bodyObls
-  let _ = determineWithNestedGoals bodyRigidIds bodyObls
+  let _ = determineByUniqueInstance bodyRigidIds bodyObls
   let _ =
     checkMethodRigidityCore
       subject
@@ -39269,7 +39303,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
   let _ = improveByUniqueImpl bodyRigidIds bodyObls
-  let _ = determineWithNestedGoals bodyRigidIds bodyObls
+  let _ = determineByUniqueInstance bodyRigidIds bodyObls
   let _ =
     rejectUndeterminedVectors
       bodyRigidIds
@@ -43607,7 +43641,7 @@ processSCC env sigs grouped0 members =
       protectedSigIds
   let _ = improveByUniqueImpl protectedSigIds addedObls
   let _ = improveByUniqueImpl protectedSigIds (callUOblsWindow callN0)
-  let _ = determineWithNestedGoals unownedIds groupObls
+  let _ = determineByUniqueInstance unownedIds groupObls
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
   -- not pendingImplObligations).  See numCallObls/numDictObls.  The synthetic entries
@@ -43631,7 +43665,7 @@ processSCC env sigs grouped0 members =
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
   let _ = improveByUniqueImpl protectedSigIds groupObls
-  let _ = determineWithNestedGoals unownedIds groupObls
+  let _ = determineByUniqueInstance unownedIds groupObls
   let _ = checkSigVarGoals protectedSigIds sigTvMaps groupObls
   let schemes =
     sccSchemes

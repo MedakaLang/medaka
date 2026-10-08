@@ -1,0 +1,22 @@
+-- §3 determination never commits through a prerequisite.  `eq2 (Cons 1 Nil) …`
+-- poses `Eq2 (MyList ?n)` beside the literals' `Num ?n`; the one instance it
+-- selects poses the prerequisite `Eq2 ?n`, with candidates `Bool` (refuted: the
+-- closed `Num Bool` has no instance) and `MyList ?m`, whose `Num (MyList ?m)` no
+-- instance meets either.  The prerequisite is not determined, so `MyList ?m` is
+-- not chosen; D3 defaults `?n` to `Int`, and the closed `Eq2 Int` has no instance.
+-- Hand-derived: REJECT on all three verbs with one T-NO-IMPL at the `eq2` call
+-- (22:16), and no literal-versus-`MyList Int` mismatch.
+interface Eq2 a where
+  eq2 : a -> a -> Bool
+
+impl Eq2 Bool where
+  eq2 a b = a == b
+
+data MyList a = Nil | Cons a (MyList a)
+
+impl Eq2 (MyList a) requires Eq2 a where
+  eq2 Nil Nil = True
+  eq2 (Cons x xs) (Cons y ys) = if eq2 x y then eq2 xs ys else False
+  eq2 _ _ = False
+
+main = println (eq2 (Cons 1 Nil) (Cons 1 Nil))
