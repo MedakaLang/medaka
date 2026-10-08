@@ -1,13 +1,14 @@
 -- Sibling test module for `compiler/backend/extern_catalog.mdk` ([P-TEST-SIBLING]).
 --
 -- Each test compares the catalog with a source the catalog must agree with,
--- in both directions, and names every extern on the wrong side:
+-- in both directions, and names every extern on the wrong side, or checks a
+-- fact the wasm emitter relies on the data for:
 --   (a) the `extern` declarations of `stdlib/runtime.mdk`, parsed with the
 --       compiler's own frontend;
---   (b) the extern predicates the wasm emitter dispatches through, plus the
---       externs it handles by exact name (the llvm emitter selects by the
---       catalog itself, so there is nothing to compare it with);
---   (c) the interpreter's extern tables.
+--   (b) the wasm column's families and runtime demands (`wasmUses`), as data;
+--   (c) the interpreter's extern tables;
+--   (d) the WAT `wasm_emit.mdk` emits for a program reaching one extern: each
+--       runtime demand the catalog lists for it is emitted.
 --
 -- `compiler/backend/extern_catalog_gate_test.mdk` is the gate over the table's
 -- own grading.
@@ -15,13 +16,32 @@
 -- `--native` (the default): reading the live files needs `readFile`, which
 -- the interpreter's test capability list excludes.
 
-import test.{Expectation, expectAll, expectAtLeast, expectEqual, labelFail}
+import test.{
+  Expectation,
+  expectAll,
+  expectAtLeast,
+  expectEach,
+  expectEqual,
+  expectTextContainsAll,
+  expectTrue,
+  labelFail,
+}
 import frontend.parser.{parse}
+import frontend.desugar.{desugar}
 import frontend.ast.{Decl(..)}
+import types.annotate.{annotateProgram}
+import types.typecheck.{grantWholeDomain}
+import ir.core_ir_lower.{
+  EmitTarget(..),
+  ctorFieldTypeNames,
+  declSigTypeNames,
+  declaredRecordFieldOrders,
+  lowerProgramEmit,
+}
 import backend.extern_catalog.{
-  Disposition(..),
   ExternRow,
   WasmFamily(..),
+  WasmUse(..),
   catalogRow,
   catalogRows,
   dispositionFamily,
@@ -29,14 +49,10 @@ import backend.extern_catalog.{
   rowEval,
   rowName,
   rowWasm,
+  wasmUseRows,
+  wasmUses,
 }
-import backend.wasm_emit.{
-  isArrayExternW,
-  isByteBlockExternW,
-  isLeafExternW,
-  isNetExternW,
-  isStrExternW,
-}
+import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
 import eval.eval.{externBindings, ioExternBindings}
 import set as S
 
@@ -66,62 +82,54 @@ externDeclNames (_ :: rest) = externDeclNames rest
 catalogNames : List String
 catalogNames = map rowName catalogRows
 
--- The names whose disposition in the projected column has a family, which is
--- exactly the names that backend selects an emitter for.
-selected : (ExternRow -> Disposition f) -> List String
-selected column =
-  map rowName (filter (r => isSome (dispositionFamily (column r))) catalogRows)
-
 isCatalogName : String -> Bool
 isCatalogName n = isSome (catalogRow n)
 
--- The externs the wasm emitter handles by exact name rather than through a
--- family predicate: the `Ref` cell (`emitAppRef`), the constants written in
--- place (`emitVarRefPlain`), and the guard fallthrough sentinel.
-exactNameExterns : List String
-exactNameExterns = [
-  "Ref",
-  "setRef",
-  "pi",
-  "e",
-  "intMinBound",
-  "intMaxBound",
-  "charMinBound",
-  "charMaxBound",
-  "__fallthrough__",
-]
+isWasmBound : String -> Bool
+isWasmBound n = match catalogRow n
+  Some r => isBound (rowWasm r)
+  None => False
 
-isExactName : String -> Bool
-isExactName n = S.has n exactNameSet
+-- The catalog rows whose wasm column lowers through `family`.
+wasmFamilyMembers : WasmFamily -> List String
+wasmFamilyMembers family =
+  map
+    rowName
+    (filter
+      (r => sameFamily family (dispositionFamily (rowWasm r)))
+      catalogRows)
 
-exactNameSet : S.Set String
-exactNameSet = S.fromList exactNameExterns
+sameFamily : WasmFamily -> Option WasmFamily -> Bool
+sameFamily WasmStr (Some WasmStr) = True
+sameFamily WasmLeaf (Some WasmLeaf) = True
+sameFamily WasmArray (Some WasmArray) = True
+sameFamily WasmByteBlock (Some WasmByteBlock) = True
+sameFamily _ _ = False
 
-wasmDispatched : String -> Bool
-wasmDispatched n =
-  isStrExternW n || isLeafExternW n || isArrayExternW n || isByteBlockExternW n
+hasUse : WasmUse -> String -> Bool
+hasUse u n = any (== u) (wasmUses n)
 
--- The family `wasm_emit.mdk`'s own predicates put a dispatched extern in.
-wasmPredicateFamily : String -> Option WasmFamily
-wasmPredicateFamily n =
-  if isStrExternW n then
-    Some WasmStr
-  else if isLeafExternW n then
-    Some WasmLeaf
-  else if isArrayExternW n then
-    Some WasmArray
-  else if isByteBlockExternW n then
-    Some WasmByteBlock
-  else
-    None
+-- The externs whose wasm lowering demands `u`.
+demanders : WasmUse -> List String
+demanders u = filter (hasUse u) (map fst wasmUseRows)
 
-wasmFamilyName : Option WasmFamily -> String
-wasmFamilyName (Some WasmStr) = "str"
-wasmFamilyName (Some WasmLeaf) = "leaf"
-wasmFamilyName (Some WasmArray) = "array"
-wasmFamilyName (Some WasmByteBlock) = "byteBlock"
-wasmFamilyName (Some _) = "exact-name"
-wasmFamilyName None = "none"
+-- Every extern demanding `u` demands each of `implied` too, named on failure.
+implies : WasmUse -> List WasmUse -> Expectation
+implies u implied =
+  labelFail
+    "demands \{debug u} without all of \{debug implied}"
+    (expectEqual
+      []
+      (filter (n => not (all (v => hasUse v n) implied)) (demanders u)))
+
+-- Exactly `expected` demand `u`.
+demandedBy : WasmUse -> List String -> Expectation
+demandedBy u expected =
+  sameNames
+    "demands \{debug u}, not expected to"
+    "expected to demand \{debug u}, does not"
+    (demanders u)
+    expected
 
 test "(a) the catalog has exactly one row per stdlib/runtime.mdk extern" =
   match readFile runtimePath
@@ -142,35 +150,127 @@ test "(a) the catalog has exactly one row per stdlib/runtime.mdk extern" =
           (expectEqual (length catalogNames) (S.size (S.fromList catalogNames))),
       ]
 
-test "(b) wasm: the catalog selects exactly the dispatching predicates plus the exact-name externs" =
-  sameNames
-    "wasm family in the catalog, not dispatched by wasm_emit"
-    "dispatched by wasm_emit, no wasm family in the catalog"
-    (selected rowWasm)
-    (filter (n => wasmDispatched n || isExactName n) catalogNames)
+test "(b) wasm: every family an application dispatches through has members" = expectEach
+  [
+    ("WasmStr", expectAtLeast 1 (length (wasmFamilyMembers WasmStr))),
+    ("WasmLeaf", expectAtLeast 1 (length (wasmFamilyMembers WasmLeaf))),
+    ("WasmArray", expectAtLeast 1 (length (wasmFamilyMembers WasmArray))),
+    (
+      "WasmByteBlock",
+      expectAtLeast 1 (length (wasmFamilyMembers WasmByteBlock)),
+    ),
+  ]
 
-test "(b) wasm: each dispatched extern's family is the predicate that dispatches it" =
-  let rendered = r => wasmFamilyName (dispositionFamily (rowWasm r))
-  let disagree =
-    filter
-      (r =>
-        wasmDispatched (rowName r)
-          && rendered r /= wasmFamilyName (wasmPredicateFamily (rowName r)))
-      catalogRows
-  labelFail
-    "wasm family differs from wasm_emit's predicate"
-    (expectEqual [] (map rowName disagree))
+test "(b) wasm: a runtime demand is listed only for a wasm-bound extern, once" =
+  let names = map fst wasmUseRows
+  expectAll [
+    labelFail
+      "demands listed for a name with no wasm binding"
+      (expectEqual [] (filter (n => not (isWasmBound n)) names)),
+    labelFail
+      "names listed twice"
+      (expectEqual (length names) (S.size (S.fromList names))),
+  ]
 
-test "(b) wasm: every extern isNetExternW rejects is NotProvided" =
-  labelFail
-    "rejected by isNetExternW but bound in the catalog"
-    (expectEqual
-      []
-      (map
-        rowName
-        (filter
-          (r => isNetExternW (rowName r) && isBound (rowWasm r))
-          catalogRows)))
+-- Each row pins which externs produce a demand, or which demands one implies
+-- because its runtime calls the other's.
+test "(b) wasm: each demand has exactly its producers and implies its cofactors" = expectEach
+  [
+    (
+      "EPut: the abort externs and the stderr writers",
+      demandedBy UseEPut [
+        "ePutStr", "ePutStrLn", "panic", "indexError", "panicAt"
+      ],
+    ),
+    (
+      "Rng: the RNG externs",
+      demandedBy UseRng [
+        "randomInt",
+        "randomBool",
+        "randomFloat",
+        "randomChar",
+        "setSeed",
+        "randomState",
+        "restoreRandomState",
+      ],
+    ),
+    ("FloatRng: randomFloat", demandedBy UseFloatRng ["randomFloat"]),
+    ("FloatRng draws through the RNG", implies UseFloatRng [UseRng, UseFloat]),
+    ("FloatHash: hashFloat", demandedBy UseFloatHash ["hashFloat"]),
+    (
+      "FloatHash mixes through the hash runtime",
+      implies UseFloatHash [UseHash, UseFloat],
+    ),
+    (
+      "FileBytes: the byte-clean file externs",
+      demandedBy UseFileBytes ["readFileBytes", "writeFileBytes"],
+    ),
+    (
+      "FileBytes uses the IO path channel, $arr and $str",
+      implies UseFileBytes [UseIO, UseArray, UseStr],
+    ),
+    ("Args: args", demandedBy UseArgs ["args"]),
+    ("Args builds a list of $str", implies UseArgs [UseStr, UseList, UseIO]),
+    ("FloatStr: stringToFloat", demandedBy UseFloatStr ["stringToFloat"]),
+    (
+      "FloatStr parses through the IO path channel",
+      implies UseFloatStr [UseFloat, UseStr, UseIO],
+    ),
+    (
+      "CharClass: the char classification externs",
+      demandedBy UseCharClass [
+        "charIsAlpha",
+        "charIsSpace",
+        "charIsUpper",
+        "charIsLower",
+        "charIsPunct",
+        "charToUpper",
+        "charToLower",
+      ],
+    ),
+    ("CharFromCode: charFromCode", demandedBy UseCharFromCode ["charFromCode"]),
+    (
+      "StrCodec: the UTF-8 codecs",
+      demandedBy UseStrCodec [
+        "stringToChars", "stringFromChars", "stringToUtf8Bytes",
+        "stringFromUtf8Bytes"
+      ],
+    ),
+    ("StrCodec converts $str and $arr", implies UseStrCodec [UseStr, UseArray]),
+    (
+      "the Char codec encodes through the strLeaf runtime",
+      labelFail
+        "Char codec without StrLeaf"
+        (expectEqual
+          []
+          (filter
+            (n => not (hasUse UseStrLeaf n))
+            ["stringToChars", "stringFromChars"])),
+    ),
+    (
+      "Math: the libm externs lowered to a host import",
+      demandedBy UseMath [
+        "cbrt",
+        "exp",
+        "log",
+        "log2",
+        "log10",
+        "sin",
+        "cos",
+        "tan",
+        "asin",
+        "acos",
+        "atan",
+        "sinh",
+        "cosh",
+        "tanh",
+        "pow",
+        "atan2",
+        "hypot",
+      ],
+    ),
+    ("Math boxes a $float", implies UseMath [UseFloat]),
+  ]
 
 test "(c) eval: the catalog binds exactly the externs the interpreter's tables bind" =
   let tableKeys = map fst (externBindings ()) ++ map fst (ioExternBindings ())
@@ -179,3 +279,143 @@ test "(c) eval: the catalog binds exactly the externs the interpreter's tables b
     "in an interpreter table, not Interpreted in the catalog"
     (map rowName (filter (r => isBound (rowEval r)) catalogRows))
     (filter isCatalogName tableKeys)
+
+-- The WAT of a prelude-free program, through the pipeline of
+-- `compiler/entries/wasm_emit_main.mdk`, with the emitter's gap log.
+emitWat : String -> (String, List String)
+emitWat src =
+  let decls = grantWholeDomain (desugar (parse src))
+  let input =
+    makeWasmEmitInputFull
+      []
+      (declSigTypeNames decls)
+      (ctorFieldTypeNames decls)
+      False
+      False
+      (declaredRecordFieldOrders decls)
+      []
+  emitProgramRecord input (lowerProgramEmit TargetWasm (annotateProgram decls))
+
+-- A program whose one source of `use` is the call to extern `name` emits `marker`,
+-- a definition the demand's runtime group, type or host import block carries.
+-- Each program avoids every other trigger of its demand (a literal, a list
+-- pattern, another extern), so the row fails when the catalog drops the
+-- demand from `name`, and fails first on the missing group.
+demandRow : WasmUse -> String -> String -> String -> (String, Expectation)
+demandRow use name src marker =
+  let (wat, gaps) = emitWat src
+  (
+    "\{debug use} via \{name}",
+    expectAll [
+      labelFail "runtime group emitted" (expectTextContainsAll [marker] wat),
+      labelFail "emitted with no gap" (expectEqual [] gaps),
+      labelFail "the catalog lists the demand" (expectTrue (hasUse use name)),
+    ],
+  )
+
+test "(d) wasm: a program reaching an extern gets each runtime group it demands" = expectEach
+  [
+    demandRow
+      UseStr
+      "args"
+      "main = match args ()\n  [] => 0\n  _ => 1"
+      "(type $str",
+    demandRow
+      UseStrLeaf
+      "charToStr"
+      "main = charToStr 'a'"
+      "(func $mdk_cp_count",
+    demandRow UseRng "randomInt" "main = randomInt 0 10" "(func $mdk_next_u64",
+    demandRow UseHash "hashInt" "main = hashInt 5" "(func $mdk_hash_mix64",
+    demandRow
+      UseFloat
+      "intToFloat"
+      "main = floatToInt (intToFloat 3)"
+      "(func $mdk_int_to_float",
+    demandRow
+      UseU64
+      "u64Truncate"
+      "main = u64TruncateToInt (u64Truncate 5)"
+      "(type $u64",
+    demandRow
+      UseI64
+      "i64FromBits"
+      "main = u64TruncateToInt (i64ToBits (i64FromBits (u64Truncate 5)))"
+      "(type $i64",
+    demandRow
+      UseMath
+      "sin"
+      "main = floatToInt (sin (intToFloat 0))"
+      "(func $mdk_sin",
+    demandRow
+      UseFloatStr
+      "stringToFloat"
+      "main = match stringToFloat \"1.5\"\n  Some f => floatToInt f\n  None => 0"
+      "(func $mdk_string_to_float",
+    demandRow
+      UseFloatHash
+      "hashFloat"
+      "main = hashFloat (intToFloat 2)"
+      "(func $mdk_hash_float",
+    demandRow
+      UseFloatRng
+      "randomFloat"
+      "main = floatToInt (randomFloat ())"
+      "(func $mdk_random_float",
+    demandRow
+      UseStrSearch
+      "stringIndexOf"
+      "main = match stringIndexOf \"ab\" \"b\"\n  Some i => i\n  None => 0"
+      "(func $mdk_str_index_of",
+    demandRow
+      UseStrCodec
+      "stringToChars"
+      "main = arrayLength (stringToChars \"ab\")"
+      "(func $mdk_str_to_chars",
+    demandRow
+      UseArray
+      "arrayMake"
+      "main = arrayLength (arrayMake 3 0)"
+      "(type $arr",
+    demandRow
+      UseList
+      "arrayFromList"
+      "count xs = arrayLength (arrayFromList xs)\nmain = 0"
+      "(type $C_Cons",
+    demandRow
+      UseCharFromCode
+      "charFromCode"
+      "main = match charFromCode 65\n  Some c => charCode c\n  None => 0"
+      "(func $mdk_char_from_code",
+    demandRow
+      UseCharClass
+      "charIsAlpha"
+      "main = charIsAlpha 'a'"
+      "(func $mdk_char_is_alpha",
+    demandRow
+      UseEPut
+      "ePutStrLn"
+      "main = ePutStrLn \"x\""
+      "(func $mdk_eprint_str",
+    demandRow
+      UseByteBlock
+      "byteBlockMake"
+      "main = byteBlockLength (byteBlockMake 4)"
+      "(func $mdk_bb_copy",
+    demandRow
+      UseIO
+      "exit"
+      "main =\n  let _ = putStrLn \"bye\"\n  exit 0"
+      "(func $mdk_push_path",
+    demandRow
+      UseArgs
+      "args"
+      "main = match args ()\n  [] => 0\n  _ => 1"
+      "(func $mdk_args_io",
+    demandRow
+      UseFileBytes
+      "readFileBytes"
+      "main = match readFileBytes \"x\"\n  Ok _ => 0\n  Err _ => 1"
+      "(func $mdk_read_file_bytes_io",
+    demandRow UseClock "sleepMs" "main = sleepMs 0" "(func $mdk_sleep_ms",
+  ]
