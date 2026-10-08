@@ -1,5 +1,5 @@
 # META
-source_lines=13267
+source_lines=13268
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -156,11 +156,12 @@ stages=DESUGAR,MARK
 --     now; see ~line 1005 / 2143 / 2216.
 --   * The IO/WASI surface (readFile/args/getEnv/fileExists/exit) — CLOSED (W12): real
 --     host imports (`ioHostImportLines`/`ioHostRuntimeLines`), ~line 1029/1443.
---     ⚠️ NOT everything file-shaped is closed, though: `runCommand` (explicitly named in
---     this bullet's original scope) and the write/dir side (writeFile/listDir/makeDir/
---     removeFile/removeDir/statFile) remain real gaps — see their `WASM-GAP` rows in
---     test/CAPABILITY-EXCEPTIONS.txt, which is the ledger the capability-matrix gate
---     actually checks. Don't infer "IO is done" from this comment; check that file.
+--     Not everything file-shaped is closed, though: the write/dir side (writeFile/
+--     listDir/makeDir/removeFile/removeDir/statFile) remains a real gap, and
+--     `runCommand` (explicitly named in this bullet's original scope) has no wasm
+--     equivalent at all (no wasm profile grants Exec). Their rows in
+--     `backend.extern_catalog` are the source of truth, `WASM-GAP` and `PERMANENT`
+--     respectively; don't infer "IO is done" from this comment.
 --   * self-host-on-WasmGC — CLOSED (layers 12/16): `wasm_emit_modules_main` compiles
 --     Medaka programs to working WasmGC modules end-to-end; the in-browser playground
 --     (`playground/dist/playground.wasm`) is live. Detail: `WASM-SELFHOST-ROADMAP.md`.
@@ -2313,11 +2314,11 @@ isArrayExternW name = contains
 export
 isByteBlockExternW : String -> Bool
 -- Deliberately a per-backend copy of llvm_emit.mdk's `isByteBlockExtern`, not a
--- shared list.  test/diff_compiler_capability_matrix.sh derives each engine's
--- implemented-extern column by extracting the family binding's own quoted names
--- out of that engine's own file, so hoisting the names into a module both
--- backends import would leave the gate reading neither engine as implementing
--- them -- the duplication is what keeps the two columns independently derivable.
+-- shared list.  compiler/backend/extern_catalog_test.mdk compares each backend's
+-- own predicate with the catalog's column for that backend, so hoisting the
+-- names into a module both backends import would make that comparison read one
+-- list twice -- the duplication is what keeps the two columns independently
+-- checkable.
 -- lint-disable-next-line rule-duplicate-body
 isByteBlockExternW name = contains name [
   "byteBlockMake",

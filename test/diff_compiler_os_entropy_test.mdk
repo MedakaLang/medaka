@@ -8,11 +8,12 @@
    fixture that sampled twice inside one process could pass by calling the
    same in-process RNG state twice without ever exercising a fresh OS call.
    `negative.mdk`/`too_large.mdk` must be rejected, by name, on both
-   engines. Six structural checks below protect the security contract that
+   engines. Five structural checks below protect the security contract that
    the executable checks alone cannot see: the exact effect annotation, that
-   the extern never leaks into a deterministic dispatch table, that the C
-   helper never falls back to the runtime's seeded SplitMix generator, and
-   that the WASM gap is a declared decision rather than a silent omission.
+   the extern never leaks into a deterministic dispatch table, and that the C
+   helper never falls back to the runtime's seeded SplitMix generator. That
+   the WASM gap is a declared decision rather than a silent omission is a
+   catalog row, pinned in `compiler/backend/extern_catalog_gate_test.mdk`.
 
    Runs under `medaka test --native`: it spawns subprocesses and reads
    source files, neither of which the interpreter binds. -}
@@ -268,26 +269,16 @@ test "os_entropy: the C runtime helper has no deterministic SplitMix fallback" =
           else
             pass
 
-test "os_entropy: the WASM-GAP capability exception is declared" =
-  let path = "\{medakaRoot}/test/CAPABILITY-EXCEPTIONS.txt"
-  match readFile path
-    Err e => fail "\{path}: \{e}"
-    Ok src =>
-      if any (startsWith "osEntropyBytes\twasm\tWASM-GAP\t") (lines src) then
-        pass
-      else
-        fail "\{path}: explicit WASM-GAP row missing"
-
 -- A shrinking count here is the same silent-wrongness signal
 -- `rosterAgreement`'s doc comment names for a fixture roster: written down
 -- so a corpus that lost a check reads red instead of a quieter suite.
-test "os_entropy: exactly 11 `os_entropy:` checks are declared" =
+test "os_entropy: exactly 10 `os_entropy:` checks are declared" =
   let path = "\{medakaRoot}/test/diff_compiler_os_entropy_test.mdk"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
       let n = length (filter (startsWith "test \"os_entropy:") (lines src))
-      if n == 11 then
+      if n == 10 then
         pass
       else
-        fail "\{path}: expected 11 `os_entropy:` checks, found \{intToString n}"
+        fail "\{path}: expected 10 `os_entropy:` checks, found \{intToString n}"

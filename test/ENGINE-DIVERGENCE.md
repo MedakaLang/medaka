@@ -371,8 +371,8 @@ These are ledgered, never silently skipped, and each carries its specific reason
 > `flushStdout` (a no-op by construction while `run` buffers stdout — fix it with
 > the "run drops stdout on panic" bug). Also: only `medaka run` installs the I/O
 > table; `medaka test`/`repl`/`check-policy` still drive the pure one, so a
-> *doctest* still sees the frozen clock and has its stderr dropped. See
-> `test/CAPABILITY-EXCEPTIONS.txt`.
+> *doctest* still sees the frozen clock and has its stderr dropped. See the interpreter's
+> `NotProvided` rows in `compiler/backend/extern_catalog.mdk`.
 >
 > Everything below this line is the ORIGINAL census text, kept for the diagnosis.
 

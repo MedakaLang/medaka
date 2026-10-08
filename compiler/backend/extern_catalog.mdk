@@ -12,9 +12,14 @@
 
 import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup}
 
--- Why a backend does not lower an extern.  Each kind is one category of the
--- capability ledger: `GapBug` BUG, `GapDead` DEAD, `GapTodo` TODO,
--- `GapPermanent` PERMANENT, `GapUnported` WASM-GAP.
+-- Why a backend does not lower an extern.  Each kind carries its category name
+-- (`gapKindName`):
+--   `GapBug` (BUG): another backend lowers it, so this backend's absence is a
+--     regression to fix.
+--   `GapDead` (DEAD): declared, but no current stdlib path calls it.
+--   `GapTodo` (TODO): lowered by no backend yet.
+--   `GapPermanent` (PERMANENT): structurally unavailable on this backend.
+--   `GapUnported` (WASM-GAP): a wasm lowering is possible and not yet written.
 public export data GapKind =
   | GapBug
   | GapDead
@@ -129,8 +134,8 @@ isBound : Disposition f -> Bool
 isBound (NotProvided _ _) = False
 isBound _ = True
 
--- The capability ledger's (category, reason) for a disposition that is a gap or a
--- caveat, or `None` for a binding that is the extern's meaning.
+-- The (category, reason) of a disposition that is a gap or a caveat, or `None`
+-- for a binding that is the extern's meaning.
 export
 ledgerEntry : Disposition f -> Option (String, String)
 ledgerEntry (NotProvided k why) = Some (gapKindName k, why)
@@ -336,8 +341,8 @@ catalogRows = [
     "runCommand"
     (CSymbol LlvmFile "mdk_run_command")
     (NotProvided
-      GapUnported
-      "ported in llvm (isFileExtern family, <Exec>), not yet in wasm — a subprocess-exec seam has no obvious browser equivalent either, but it isn't documented PERMANENT anywhere in wasm_emit.mdk the way net is, so filed WASM-GAP not PERMANENT")
+      GapPermanent
+      "a subprocess has no WasmGC host equivalent: Exec is granted on native and run only, and no wasm profile grants it")
     (NotProvided
       GapBug
       "implemented by llvm (isFileExtern family), missing from interp — BUG(T7). DEFERRED ON PURPOSE (2026-07-13): --allow-exec security posture first"),
@@ -484,7 +489,7 @@ catalogRows = [
       "POSIX SIGTERM self-pipe and fd readiness are native-only; wasm_emit rejects the net family")
     (NotProvided
       GapBug
-      "native-only opt-in POSIX signal/pipe, interpreter has no signal host binding or --allow-net"),
+      "the interpreter has no signal host binding yet, though the run profile grants Signal (TARGETS-DESIGN §8.1)"),
   ExternRow
     "pdsSignalRequested"
     (CSymbol LlvmNet "mdk_pds_signal_requested")
@@ -493,11 +498,11 @@ catalogRows = [
       "POSIX SIGTERM state is native-only; wasm_emit rejects the net family")
     (NotProvided
       GapBug
-      "native-only opt-in POSIX signal flag, interpreter has no signal host binding or --allow-net"),
+      "the interpreter has no signal host binding yet, though the run profile grants Signal (TARGETS-DESIGN §8.1)"),
   ExternRow
     "ioPoll"
     (CSymbol LlvmNet "mdk_io_poll")
-    (FrozenConstant
+    (TrapStub
       WasmLeaf
       "bound to a coded runtime trap, not a value: E-WASM-NO-BINDING after evaluating its arguments; the Net/Stdin readiness bindings are #3666")
     (NotProvided GapBug interpLlvmOnly),

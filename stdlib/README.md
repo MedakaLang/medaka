@@ -125,7 +125,7 @@ read from disk at compiler startup (no embed/generation step).
 The canonical, step-by-step procedure — declaring the signature in
 `runtime.mdk`, implementing it in `compiler/eval/eval.mdk`, and (if the
 primitive must also work under `medaka build`/the WasmGC playground) wiring
-it into the LLVM and/or WasmGC backends, plus the `test/diff_compiler_capability_matrix.sh`
+it into the LLVM and/or WasmGC backends, plus the `compiler/backend/extern_catalog_gate_test.mdk`
 gate that checks all three engines agree — is documented in
 [`.claude/skills/add-primitive/SKILL.md`](../.claude/skills/add-primitive/SKILL.md).
 Follow that; this file does not duplicate it.

@@ -425,7 +425,7 @@ TIME_HEAP="${PERF_TIME_HEAP:-2147483648}"
 #
 # A shape listed here is ALREADY superlinear — a real, filed bug. It is recorded
 # rather than skipped, following the same model as diff_compiler_engines.sh's
-# ledger, CAPABILITY-EXCEPTIONS.txt, and rustc's tests/crashes. Each entry asserts
+# ledger, the extern catalog's NotProvided rows, and rustc's tests/crashes. Each entry asserts
 # the CURRENT, WRONG behavior, so that:
 #
 #   (a) the bug cannot get any worse silently — a listed shape still FAILS if it

@@ -1367,12 +1367,12 @@ shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_capability_matrix.sh"
+kind = "native"
+migration = "done"
+run = "compiler/backend/extern_catalog_gate_test.mdk"
 oracles = []
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_capability_matrix.sh"]
-corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "stdlib/runtime.mdk", "test/EXTERN-DOMAIN-LEDGER.txt"]
+corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed", "test/engine_value_pins"]
 toolchain = []
 
 
@@ -2130,7 +2130,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_os_entropy_test.mdk"
 oracles = []
-sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c", "test/CAPABILITY-EXCEPTIONS.txt"]
+sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c"]
 corpus = ["test/os_entropy_fixtures"]
 toolchain = ["clang"]
 

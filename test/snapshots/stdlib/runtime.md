@@ -574,8 +574,8 @@ extern bitNot : Int -> Int
 
 -- One-arg and two-arg transcendental / root / rounding functions, each a
 -- direct call into the C runtime's math.h shim (mirrors floatRem/fmod).  All
--- pure.  wasm does not port these (they trap on wasm, like every non-ported
--- float extern); native/LLVM is the only backend.
+-- pure.  On wasm they are `env` host imports (`sqrt` is an inline instruction);
+-- the wasm column of `compiler/backend/extern_catalog.mdk` names each one.
 
 -- | The square root.
 extern sqrt : Float -> Float

@@ -1,5 +1,5 @@
 # META
-source_lines=16150
+source_lines=16151
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -866,8 +866,8 @@ data EmitInputData = EmitInputData {
   -- subtracted at the mint, `ir.core_ir_lower.ffiExternTypeNames`), keyed name →
   -- (declared param type-head names, declared return type-head name).  This is
   -- the ONLY table that answers "is this name a foreign call?"; `declSigIndex`
-  -- cannot, because it mixes the 138 builtins and every annotated function into
-  -- one flat keyspace.
+  -- cannot, because it mixes the `stdlib/runtime.mdk` builtins and every annotated
+  -- function into one flat keyspace.
   ffiExternIndex : OrdMap (List String, String),
   recordFieldOrders : List (String, List String),
   mainIsUnit : Bool,
@@ -2840,11 +2840,11 @@ emitArrLeafExtern e _ name _ = gapE e ("unsupported array leaf extern " ++ name)
 -- Project to scalar via byteBlockGetUnsafe / byteBlockLength in every fixture.
 isByteBlockExtern : String -> Bool
 -- Deliberately a per-backend copy of wasm_emit.mdk's `isByteBlockExternW`, not a
--- shared list.  test/diff_compiler_capability_matrix.sh derives each engine's
--- implemented-extern column by extracting the family binding's own quoted names
--- out of that engine's own file, so hoisting the names into a module both
--- backends import would leave the gate reading neither engine as implementing
--- them -- the duplication is what keeps the two columns independently derivable.
+-- shared list.  compiler/backend/extern_catalog_test.mdk compares each backend's
+-- own predicate with the catalog's column for that backend, so hoisting the
+-- names into a module both backends import would make that comparison read one
+-- list twice -- the duplication is what keeps the two columns independently
+-- checkable.
 -- lint-disable-next-line rule-duplicate-body
 isByteBlockExtern name = contains name [
   "byteBlockMake", "byteBlockLength", "byteBlockGetUnsafe",
@@ -3804,8 +3804,9 @@ emitFixedWidthToInt e env args = match emitArgs e env args
 -- than a branch; the amount is masked first, so the `shl`/`lshr` itself never sees
 -- an out-of-range count.
 -- Each backend names the kernels it implements itself, and
--- test/diff_compiler_capability_matrix.sh reads the list from each backend's own
--- source, so the list is duplicated in wasm_emit.mdk's `isU64ExternW` on purpose.
+-- compiler/backend/extern_catalog_test.mdk checks each backend's own predicate
+-- against the catalog, so the list is duplicated in wasm_emit.mdk's
+-- `isU64ExternW` on purpose.
 -- `i64FromBits` and `i64ToBits` keep the payload and change only the header, so
 -- they are kernels of this family too: on payloads they are the identity.
 isU64Extern : String -> Bool
@@ -5041,8 +5042,8 @@ emitExternApplied e env fname args =
 
 -- ── #2074: user-declared FFI externs — the C-ABI lowering ────────────────────
 --
--- A USER `extern` is a different kind of thing from the 138 `stdlib/runtime.mdk`
--- builtins above.  A builtin is an INTERNAL name whose codegen this file owns
+-- A USER `extern` is a different kind of thing from the `stdlib/runtime.mdk`
+-- builtins above (one row each in `backend.extern_catalog`).  A builtin is an INTERNAL name whose codegen this file owns
 -- (`externCatalog`), often an intrinsic with no C symbol at all.  A user extern
 -- names a FOREIGN symbol this compiler has never seen: the declared name is the
 -- C symbol VERBATIM (`call @<name>`, NOT `@mdk_<name>`), and the only contract

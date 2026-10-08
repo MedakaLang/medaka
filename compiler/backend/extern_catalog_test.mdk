@@ -6,8 +6,10 @@
 --       compiler's own frontend;
 --   (b) the extern predicates each emitter dispatches through, plus the
 --       externs each emitter handles by exact name;
---   (c) the interpreter's extern tables;
---   (d) `test/CAPABILITY-EXCEPTIONS.txt`, row for row.
+--   (c) the interpreter's extern tables.
+--
+-- `compiler/backend/extern_catalog_gate_test.mdk` is the gate over the table's
+-- own grading.
 --
 -- `--native` (the default): reading the live files needs `readFile`, which
 -- the interpreter's test capability list excludes.
@@ -23,7 +25,6 @@ import backend.extern_catalog.{
   catalogRows,
   dispositionFamily,
   isBound,
-  ledgerEntry,
   rowEval,
   rowLlvm,
   rowName,
@@ -38,16 +39,13 @@ import backend.wasm_emit.{
   isStrExternW,
 }
 import eval.eval.{externBindings, ioExternBindings}
-import string.{split, startsWith, trim}
 import set as S
 
 runtimePath : String
 runtimePath = "stdlib/runtime.mdk"
 
-ledgerPath : String
-ledgerPath = "test/CAPABILITY-EXCEPTIONS.txt"
-
 -- `xs` minus `ys`, sorted.
+export
 minus : List String -> List String -> List String
 minus xs ys = toList (S.difference (S.fromList xs) (S.fromList ys))
 
@@ -59,6 +57,7 @@ sameNames leftOnly rightOnly left right = expectAll [
   labelFail rightOnly (expectEqual [] (minus right left)),
 ]
 
+export
 externDeclNames : List Decl -> List String
 externDeclNames [] = []
 externDeclNames ((DExtern _ n _) :: rest) = n :: externDeclNames rest
@@ -189,56 +188,3 @@ test "(c) eval: the catalog binds exactly the externs the interpreter's tables b
     "in an interpreter table, not Interpreted in the catalog"
     (map rowName (filter (r => isBound (rowEval r)) catalogRows))
     (filter isCatalogName tableKeys)
-
--- A ledger row as one comparable line: extern, engine, category, reason.
-ledgerLine : String -> String -> String -> String -> String
-ledgerLine ext engine category why = "\{ext}\t\{engine}\t\{category}\t\{why}"
-
-ledgerRowLine : String -> Option String
-ledgerRowLine line =
-  if trim line == "" || startsWith "#" (trim line) then
-    None
-  else match split "\t" line
-    ext :: engine :: category :: why :: _ =>
-      Some (ledgerLine ext engine category why)
-    _ => Some line
-
-catalogLedgerLines : ExternRow -> List String
-catalogLedgerLines r =
-  catalogLedgerLine (rowName r) "interp" (rowEval r)
-    ++ catalogLedgerLine (rowName r) "llvm" (rowLlvm r)
-    ++ catalogLedgerLine (rowName r) "wasm" (rowWasm r)
-
-catalogLedgerLine : String -> String -> Disposition f -> List String
-catalogLedgerLine ext engine d = match ledgerEntry d
-  Some (category, why) => [ledgerLine ext engine category why]
-  None => []
-
-frozenNotBound : ExternRow -> List String
-frozenNotBound r =
-  frozenUnbound (rowName r) "interp" (rowEval r)
-    ++ frozenUnbound (rowName r) "llvm" (rowLlvm r)
-    ++ frozenUnbound (rowName r) "wasm" (rowWasm r)
-
-frozenUnbound : String -> String -> Disposition f -> List String
-frozenUnbound ext engine d = match ledgerEntry d
-  Some ("FROZEN-CONSTANT", _) => if isBound d then [] else ["\{ext} \{engine}"]
-  _ => []
-
-test "(d) every ledger row is a catalog gap with the same extern, engine, kind and reason, and back" =
-  match readFile ledgerPath
-    Err e => expectEqual "read \{ledgerPath}" "failed: \{e}"
-    Ok src =>
-      let ledger = filterMap ledgerRowLine (split "\n" src)
-      let table = flatMap catalogLedgerLines catalogRows
-      expectAll [
-        labelFail "ledger rows parsed" (expectAtLeast 1 (length ledger)),
-        sameNames
-          "in the ledger, not a catalog gap"
-          "a catalog gap or caveat with no ledger row"
-          ledger
-          table,
-        labelFail
-          "FROZEN-CONSTANT rows not bound"
-          (expectEqual [] (flatMap frozenNotBound catalogRows)),
-      ]

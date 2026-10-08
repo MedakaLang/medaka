@@ -55,21 +55,24 @@ When you write **Medaka** code (e.g. wrappers in `core.mdk`/`list.mdk`), use
    evaluator immediately.
 
 4. **Wire up the compiled backends, or record the gap.**
-   `test/diff_compiler_capability_matrix.sh` checks that every extern in
-   `runtime.mdk` is either implemented by each of the three engines
-   (interpreter/LLVM/wasm) or has an explicit row in
-   `test/CAPABILITY-EXCEPTIONS.txt` explaining why not (read
-   `test/CAPABILITY-MATRIX.md` and the header of the gate script for the
-   category vocabulary — `BUG`/`TODO`/`PERMANENT`/`WASM-GAP`/etc). If the
-   primitive only needs to work under `medaka run`, add an exceptions row for
+   `compiler/backend/extern_catalog_gate_test.mdk` checks that every extern in
+   `runtime.mdk` has a row in `compiler/backend/extern_catalog.mdk`, which
+   names how each of the three engines (interpreter/LLVM/wasm) handles it; an
+   engine that does not lower it gets a `NotProvided` disposition with a kind
+   and a reason (read `test/CAPABILITY-MATRIX.md` for the kind vocabulary —
+   `BUG`/`TODO`/`PERMANENT`/`WASM-GAP`/etc). If the
+   primitive only needs to work under `medaka run`, file `NotProvided` for
    `llvm`/`wasm` with an honest reason instead of implementing it there. If it
    must also work under `medaka build` or the wasm playground, add dispatch
    for it in `compiler/backend/llvm_emit.mdk` (`isAnyExtern`/
    `emitExternApplied`, one of the `isXxxExtern` family predicates) and/or
    `compiler/backend/wasm_emit.mdk` (`isStrExternW`/`isLeafExternW`/
-   `isArrayExternW`, `emitAppRef`) respectively. Run the gate:
+   `isArrayExternW`, `emitAppRef`) respectively. Run the gate and the
+   catalog's sibling test, which compares each column with the backend's own
+   predicate:
    ```sh
-   sh test/diff_compiler_capability_matrix.sh -v
+   MEDAKA_STRICT=1 ./medaka test compiler/backend/extern_catalog_gate_test.mdk
+   MEDAKA_STRICT=1 ./medaka test compiler/backend/extern_catalog_test.mdk
    ```
 
 ## Verify
@@ -91,5 +94,5 @@ capability matrix if you touched more than the interpreter:
 ```sh
 bash test/diff_compiler_eval.sh
 bash test/diff_compiler_check_test.mdk
-sh test/diff_compiler_capability_matrix.sh
+./medaka test compiler/backend/extern_catalog_gate_test.mdk
 ```
