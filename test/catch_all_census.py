@@ -10,7 +10,7 @@ absorbs any constructor added to the sum later ([T-GLOBAL-TABLE]).
 Not a lint rule: `medaka lint` has no type environment, so "the parameter is
 `Expr`-typed" is not expressible there.  This script derives the constructor
 sets from `compiler/frontend/ast.mdk` and the clause heads from the source
-text; the gate around it (`test/diff_compiler_catch_all_census.sh`) compares
+text; the gate around it (`test/diff_compiler_catch_all_census_test.mdk`) compares
 the site list against the committed ledger.
 
 Output: one line per site, `<function>\t<sum>\t<named>/<total>`, sorted.  A
@@ -24,7 +24,7 @@ DECL_RUNNERS below.  The constructor SET is machine-derived (`ctor_set`); the
 RUNNER a constructor maps to is not derivable from source and is hand-authored
 in DECL_RUNNERS.  A constructor absent from DECL_RUNNERS emits the literal
 placeholder `TODO` instead of failing outright, so the ledger still lists
-every constructor — but `test/diff_compiler_catch_all_census.sh` refuses to
+every constructor — but `test/diff_compiler_catch_all_census_test.mdk` refuses to
 pass while any row holds that placeholder, so `--update` can never launder a
 newly added constructor to green on its own.
 """

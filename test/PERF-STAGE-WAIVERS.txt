@@ -1,6 +1,6 @@
 # PERF-STAGE-WAIVERS.txt — the pass-coverage census's waiver ledger (#886, epic #880).
 #
-# The census (test/diff_compiler_perf_stage_census.sh) DERIVES the authoritative list of
+# The census (test/diff_compiler_perf_stage_census_test.mdk) DERIVES the authoritative list of
 # pipeline stages by parsing the `emitPhaseAO … "<stage>"` labels out of
 #   compiler/entries/profile_main.mdk
 #   compiler/entries/profile_modules_main.mdk

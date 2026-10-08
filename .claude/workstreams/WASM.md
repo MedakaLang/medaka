@@ -5,7 +5,7 @@ gates, **and the three JS host shims** (`test/wasm/run.js`, `playground/worker.j
 `playground/compile.mjs`) — ⚠️ this line said **two** until 2026-07-16 and the omitted
 third is exactly where #543 landed: `compile.mjs` is the seam that runs the COMPILER
 (playground.wasm), it holds its own copy of both shared blocks, and because neither this
-line nor `diff_compiler_wasm_shim_parity.sh` counted it, #370's fix updated the two
+line nor `diff_compiler_wasm_shim_parity_test.mdk` counted it, #370's fix updated the two
 "known" copies and left it on raw `Number()` + missing `mdk_str_to_float_ok` → LinkError,
 playground dead. **Derive the set, never trust the count:**
 `grep -rln 'BEGIN SHARED SHIM' test/ playground/` — the
@@ -359,7 +359,7 @@ test, every candidate through native build AND wasm build AND `medaka run`). The
   formatter *in code* (`toExponential(11)`, i.e. 12 significant digits) — so "only the
   comments are stale" was false of the copy nobody looked at, and the playground's emitted
   float literals were truncated. Found + fixed 2026-07-16 (#543); all three are now byte-
-  identical and `diff_compiler_wasm_shim_parity.sh` covers the full set.
+  identical and `diff_compiler_wasm_shim_parity_test.mdk` covers the full set.
   **A disproof inherits the scope of its probe.** This entry read as a probe-run fact (the
   ledger's own bar) and was — for a SUBSET it never named. *"VERIFY THE SET, NOT A SAMPLE"*
   failing inside the ledger that teaches it.

@@ -250,7 +250,7 @@ fi
 rt3="$WORK/rt3"
 mkdir -p "$rt3"
 cat > "$rt3/reach.txt" <<'EOF'
-  GATE      test/diff_compiler_source_bytes.sh
+  GATE      test/diff_compiler_source_bytes_test.mdk
 EOF
 # The real body always calls preflight itself and overwrites reach.txt, so
 # to exercise the parsing/empty-check half specifically, split the body at

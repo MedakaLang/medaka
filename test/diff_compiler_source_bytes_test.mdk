@@ -1,0 +1,125 @@
+{- | No tracked first-party source file may contain a raw C0 control byte.
+   Replaces diff_compiler_source_bytes.sh.
+
+   Why: a literal NUL in compiler source makes the file BINARY to grep, so
+   `grep -c` silently prints nothing. The formatter once wrote one back out
+   of a "\0" escape. This gate is the ratchet: it refuses a control byte in
+   tracked source however it got there.
+
+   Checks: every tracked file (from `git ls-files`) whose extension is one of
+   the source extensions, outside the excluded trees, is read as raw bytes.
+   Allowed bytes are tab (0x09) and newline (0x0a). Every other byte below
+   0x20 is a failure, including CR (0x0d). The floor guards against an
+   empty or broken scan passing with zero files.
+
+   Does NOT prove: that the excluded trees are clean (fixtures, snapshots,
+   goldens and playground/vendor are excluded on purpose); that a control
+   byte is absent from non-source files; and it reports the first bad byte
+   per file only. Git's `ls-files` runs with core.quotePath=false, so
+   non-ASCII names arrive raw and are read. A tracked source path with a
+   quote, backslash or control character in its name still arrives
+   C-quoted and cannot be read. Such a path is a finding, not a skip: the
+   gate fails and names it under its own label. Files that fail to read
+   are skipped, as the old script did. -}
+
+import test_process.{medakaRoot, boundedVerb}
+import test.{Expectation, expectAll, expectAtLeast, expectNoFindings, fail}
+import string.{lines, contains, endsWith, startsWith, stripPrefix, stripSuffix}
+import array as A
+
+-- Extensions held to the bar. compiler/seed/emitter.ll.gz is gzip, so it is
+-- not in the list.
+sourceExts : List String
+sourceExts = [
+  ".mdk", ".sh", ".md", ".toml", ".yml", ".yaml", ".c", ".h", ".py", ".mjs",
+  ".js"
+]
+
+-- Vendored, fixture and snapshot/golden trees are excluded on purpose.
+excluded : String -> Bool
+excluded f =
+  startsWith "playground/vendor/" f
+    || startsWith "test/snapshots/" f
+    || contains "_fixtures/" f
+    || contains "_goldens/" f
+
+isSource : String -> Bool
+isSource f = not (excluded f) && any (e => endsWith e f) sourceExts
+
+-- Tab and newline are allowed. Every other byte below 0x20 is not.
+isBad : Int -> Bool
+isBad b = b < 32 && b /= 9 && b /= 10
+
+-- The first bad byte of a file, as (1-based line, byte value).
+firstBad : Array Int -> Option (Int, Int)
+firstBad bs = match A.findIndex isBad bs
+  None => None
+  Some i =>
+    map (b => (1 + length (filter (== 10) (A.take i bs)), b)) (A.get i bs)
+
+-- Prepend a report line for one file when it holds a bad byte.
+addBad : String -> Array Int -> List String -> List String
+addBad f bs bad = match firstBad bs
+  None => bad
+  Some (line, b) => "\{f}:\{intToString line}: byte \{intToString b}" :: bad
+
+-- Walk the files. Returns how many were read and the bad-byte report lines.
+-- An unreadable file is skipped, as the old script's OSError branch did.
+scanAll : String ->
+  List String ->
+  Int ->
+  List String ->
+  <FileRead> (Int, List String)
+scanAll _ [] n bad = (n, bad)
+scanAll root (f :: rest) n bad = match readFileBytes "\{root}/\{f}"
+  Err _ => scanAll root rest n bad
+  Ok bs => scanAll root rest (n + 1) (addBad f bs bad)
+
+-- A C-quoted listing line ("docs/x.md" with the quotes) is a path git could
+-- not print raw. Its inner text, for the extension test, is the line minus
+-- its surrounding quotes. Plain lines give None.
+quotedInner : String -> Option String
+quotedInner l = match stripPrefix "\"" l
+  Some rest => stripSuffix "\"" rest
+  None => None
+
+-- A quoted source path becomes a finding: its bytes were never read.
+addQuoted : String -> List String -> List String
+addQuoted l found = match quotedInner l
+  None => found
+  Some inner => if isSource inner then l :: found else found
+
+-- Fold the quoted source paths into their own finding list.
+quotedScan : List String -> List String -> List String
+quotedScan [] found = found
+quotedScan (l :: rest) found = quotedScan rest (addQuoted l found)
+
+check : <Exec, IO, FileRead> Expectation
+check =
+  match (boundedVerb "git" [
+    "-C", medakaRoot, "-c", "core.quotePath=false", "ls-files"
+  ])
+    Err e => fail "could not spawn git ls-files: \{e}"
+    Ok (code, out, _) =>
+      if code /= 0 then
+        fail "git ls-files exited \{intToString code}"
+      else
+        let entries = filter (/= "") (lines out)
+        let files = filter isSource entries
+        scanCheck (scanAll medakaRoot files 0 []) (quotedScan entries [])
+
+-- Grade the scan: a floor on the file count, then no bad bytes, then no
+-- quoted source path. The floor (about 80% of the 1909 files scanned on
+-- 2026-10-08) only catches a broken listing or filter; the count falls
+-- legitimately as shell gates are deleted.
+scanCheck : (Int, List String) -> List String -> Expectation
+scanCheck (n, bad) quoted = expectAll [
+  expectAtLeast 1500 n,
+  expectNoFindings
+    "raw control byte in tracked source (use the \\0 or \\u{XX} escape)"
+    (Ok bad),
+  expectNoFindings "path git had to quote; cannot be scanned" (Ok quoted),
+]
+
+test "diff_compiler_source_bytes: no tracked source file has a raw control byte" =
+  check

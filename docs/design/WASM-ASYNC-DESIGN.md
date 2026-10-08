@@ -396,7 +396,7 @@ to stay green with a passing ledgered row, **read**:
 
 Each new import lands with a `docs/spec/WASM-SEMANTICS.md` §3 row and an
 implementation in **every** host the shim-parity gate derives
-(`test/diff_compiler_wasm_shim_parity.sh`; today `run.js`, `worker.js`,
+(`test/diff_compiler_wasm_shim_parity_test.mdk`; today `run.js`, `worker.js`,
 `compile.mjs`), or, after T3 (#3668), as a `clock` slice of the one host
 module. Until T3 the three copies drift by construction; the parity gate
 covers only the marked blocks (#449), so the import-key-set half is checked by
