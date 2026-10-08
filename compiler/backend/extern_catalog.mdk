@@ -355,17 +355,17 @@ wasmUseRows = [
 ]
 
 interpLlvmOnly : String
-interpLlvmOnly = "implemented by llvm, missing from interp — BUG(T7)"
+interpLlvmOnly = "implemented by llvm, missing from the interpreter"
 
 wasmNoSockets : String
 wasmNoSockets =
   "the `net` module is native-only: raw BSD sockets have no WasmGC equivalent — build for a native target instead"
 
 wasmNoHostFs : String
-wasmNoHostFs = "ported in llvm (isFileExtern), not yet in wasm's host-fs seam"
+wasmNoHostFs = "ported in llvm, not yet in wasm's host-fs seam"
 
 wasmNoStdin : String
-wasmNoStdin = "ported in llvm (isFileExtern, stdin family), not yet in wasm"
+wasmNoStdin = "ported in llvm (the stdin family), not yet in wasm"
 
 -- In `stdlib/runtime.mdk` declaration order.
 export
@@ -429,7 +429,7 @@ catalogRows = [
     (CSymbol LlvmFile "mdk_write_file")
     (NotProvided
       GapUnported
-      "ported in llvm (isFileExtern); wasm has writeFileBytes but not the text-mode writeFile")
+      "ported in llvm; wasm has writeFileBytes but not the text-mode writeFile")
     Interpreted,
   ExternRow
     "writeFileBytes"
@@ -441,7 +441,7 @@ catalogRows = [
     (CSymbol LlvmFile "mdk_write_file_mode")
     (NotProvided
       GapUnported
-      "ported in llvm (isFileExtern), not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to set")
+      "ported in llvm, not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to set")
     Interpreted,
   ExternRow
     "appendFile"
@@ -458,7 +458,7 @@ catalogRows = [
     (CSymbol LlvmFile "mdk_file_mode")
     (NotProvided
       GapUnported
-      "ported in llvm (isFileExtern), not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to report")
+      "ported in llvm, not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to report")
     Interpreted,
   ExternRow
     "canonicalizePath"
@@ -509,28 +509,28 @@ catalogRows = [
   ExternRow
     "executablePath"
     (CSymbol LlvmFile "mdk_executable_path")
-    (NotProvided GapUnported "ported in llvm (isEnvExtern), not yet in wasm")
+    (NotProvided GapUnported "ported in llvm, not yet in wasm")
     Interpreted,
   ExternRow
     "buildFingerprint"
     (CSymbol LlvmFile "mdk_build_fingerprint")
     (NotProvided
       GapPermanent
-      "build-provenance (issue #89 staleness guard) is meaningless in the WasmGC playground — there is no build-provenance object linked in and no host filesystem to re-hash compiler/ against; the compiler is only ever built via the LLVM backend, never wasm")
+      "build-provenance (the staleness guard) is meaningless in the WasmGC playground — there is no build-provenance object linked in and no host filesystem to re-hash compiler/ against; the compiler is only ever built via the LLVM backend, never wasm")
     Interpreted,
   ExternRow
     "buildCommit"
     (CSymbol LlvmFile "mdk_build_commit")
     (NotProvided
       GapPermanent
-      "same rationale as buildFingerprint (issue #74 W8 sibling stamp) — no build-provenance object linked in and no host git checkout in the WasmGC playground")
+      "same rationale as buildFingerprint (a sibling provenance stamp) — no build-provenance object linked in and no host git checkout in the WasmGC playground")
     Interpreted,
   ExternRow
     "buildDate"
     (CSymbol LlvmFile "mdk_build_date")
     (NotProvided
       GapPermanent
-      "same rationale as buildFingerprint (issue #74 W8 sibling stamp) — no build-provenance object linked in in the WasmGC playground")
+      "same rationale as buildFingerprint (a sibling provenance stamp) — no build-provenance object linked into the WasmGC playground")
     Interpreted,
   ExternRow
     "runCommand"
@@ -540,7 +540,7 @@ catalogRows = [
       "a subprocess has no WasmGC host equivalent: Exec is granted on native and run only, and no wasm profile grants it")
     (NotProvided
       GapBug
-      "implemented by llvm (isFileExtern family), missing from interp — BUG(T7). DEFERRED ON PURPOSE (2026-07-13): --allow-exec security posture first"),
+      "implemented by llvm, missing from the interpreter on purpose: the interpreter waits on a decision about the --allow-exec security posture"),
   ExternRow
     "exit"
     (CSymbol LlvmAbort "mdk_exit")
@@ -605,7 +605,7 @@ catalogRows = [
       "unimplemented in all 3 engines, no stdlib caller — forward-declared snapshot-testing primitive, not an asymmetric regression")
     (NotProvided
       GapBug
-      "unimplemented in all 3 engines (see llvm/wasm TODO rows); no stdlib caller yet — a forward-declared snapshot-testing primitive (TESTING-DESIGN.md §4.7 \"medaka test --promote\"); filed BUG(T7) here per the 37-count framing even though it isn't an asymmetric regression against another engine"),
+      "unimplemented in all 3 engines (see llvm/wasm TODO rows); no stdlib caller yet — a forward-declared snapshot-testing primitive (TESTING-DESIGN.md §4.7 \"medaka test --promote\"); recorded as a bug row for the interpreter although it is not an asymmetric regression against another engine"),
   ExternRow
     "netResolve"
     (CSymbol LlvmNet "mdk_net_resolve")
@@ -776,7 +776,7 @@ catalogRows = [
     (CSymbol LlvmPerf "mdk_alloc_bytes")
     (NotProvided
       GapUnported
-      "real GC-byte-counter FFI in llvm (isPerfExtern), no wasm host-import wired")
+      "real GC-byte-counter FFI in llvm, no wasm host-import wired")
     Interpreted,
   ExternRow
     "randomInt"

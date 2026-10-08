@@ -873,6 +873,10 @@ while IFS= read -r f; do
       # compiler/backend/llvm_emit.mdk (and trmc_analysis.mdk/ir/dce.mdk) — same
       # backend-arm-gap reasoning as diff_compiler_check_ir_floor above.
       add 'diff_compiler_emitted_code_floor'
+      # wasm/diff_wasm_typed runs wasm_emit.mdk over the typed corpus, and
+      # wasm/diff_wasm_ffi_wall grades core_validate.mdk's refusal of a NotProvided
+      # row; gates.toml lists these files as their sources.
+      add 'wasm/diff_wasm_typed'; add 'wasm/diff_wasm_ffi_wall'
       need_fixpoint=1 ;;
 
     # #1131: driver/loader.mdk is a cited DICT-SEMANTICS site.

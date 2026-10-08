@@ -139,8 +139,9 @@ test: medaka
 	## #3306: private_mangle.mdk's ctor-export table (incl. the #1359 re-export
 	## definer) is private; its sibling drives the exported mangleUnits.
 	./medaka test compiler/backend/private_mangle_test.mdk
-	## The extern catalog has no importer yet; its sibling checks every row
-	## against runtime.mdk, both emitters and the interpreter.  The registry gate
+	## Both emitters and core_validate import the extern catalog, but no entry
+	## imports its sibling, which checks every row against runtime.mdk, the wasm
+	## emitter's output and the interpreter.  The registry gate
 	## diff_compiler_capability_matrix runs extern_catalog_gate_test.mdk.
 	./medaka test compiler/backend/extern_catalog_test.mdk
 	## No entry imports a `_test.mdk` sibling, so the extern check's own tests
