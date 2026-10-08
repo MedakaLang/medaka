@@ -140,6 +140,7 @@ declare i64 @mdk_fsync(i64, i64)
 declare i64 @mdk_stat_file(i64, i64)
 declare i64 @mdk_file_mode(i64, i64)
 declare i64 @mdk_run_command(i64, i64)
+declare i64 @mdk_run_command_batch(i64, i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
@@ -276,25 +277,19 @@ conyes12:
   %t25 = call i64 @mdk_impl_Int_eq(i64 %arg1, i64 %t21)
   %t26 = ashr i64 %t25, 1
   %t27 = icmp ne i64 %t26, 0
-  %t29 = alloca i64
   br i1 %t27, label %then28, label %else28
 then28:
-  store i64 3, ptr %t29
-  br label %end28
-else28:
-  %t30 = call i64 @mdk___user____elem(i64 %arg0, i64 %arg1, i64 %t24)
-  store i64 %t30, ptr %t29
-  br label %end28
-end28:
-  %t31 = load i64, ptr %t29
-  store i64 %t31, ptr %t0
+  store i64 3, ptr %t0
   br label %decend1
+else28:
+  %t29 = musttail call i64 @mdk___user____elem(i64 %arg0, i64 %arg1, i64 %t24)
+  ret i64 %t29
 connext12:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t32 = load i64, ptr %t0
-  ret i64 %t32
+  %t30 = load i64, ptr %t0
+  ret i64 %t30
 }
 
 ; mdk-module impl:Int_eq

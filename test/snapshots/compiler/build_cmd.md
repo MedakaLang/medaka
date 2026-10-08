@@ -1133,7 +1133,7 @@ public export data BuildProfile = BuildNormal | BuildProbe
 -- mapping is unit-testable.  A probe with MEDAKA_TEST_CLANG_OPT unset or empty is
 -- -O0 with no LTO, the only pairing that is cheap: -O0 with LTO and -O1 without
 -- it each cost several times as much.  A probe with it set takes that level and
--- today's normal LTO detection, so `-O2` reproduces the pre-profile probe build.
+-- the normal LTO detection, so `-O2` gives the same link as `BuildNormal`.
 export
 profileClang : BuildProfile -> String -> String -> (String, Bool)
 profileClang BuildNormal normalOpt _ = (normalOpt, True)
