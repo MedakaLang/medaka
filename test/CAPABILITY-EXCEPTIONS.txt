@@ -144,6 +144,7 @@ netTrySendBytesFrom	interp	BUG	implemented by llvm, missing from interp — BUG(
 
 # --- singles ---
 runCommand	interp	BUG	implemented by llvm (isFileExtern family), missing from interp — BUG(T7). DEFERRED ON PURPOSE (2026-07-13): --allow-exec security posture first
+runCommandBatch	interp	BUG	implemented by llvm (isFileExtern family), missing from interp — BUG(T7). Unbound on purpose, the same --allow-exec posture as runCommand (#3899)
 
 # --- assertSnapshot (1) — unimplemented in ALL THREE engines, but the task
 #     spec explicitly bundles it into "the 37" so it is filed as interp BUG
@@ -300,6 +301,7 @@ removeDir	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs
 removeFile	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs seam
 rename	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs seam
 runCommand	wasm	WASM-GAP	ported in llvm (isFileExtern family, <Exec>), not yet in wasm — a subprocess-exec seam has no obvious browser equivalent either, but it isn't documented PERMANENT anywhere in wasm_emit.mdk the way net is, so filed WASM-GAP not PERMANENT
+runCommandBatch	wasm	WASM-GAP	ported in llvm (isFileExtern family, <Exec>), not yet in wasm; the same subprocess-exec seam as runCommand
 statFile	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs seam
 fileMode	wasm	WASM-GAP	ported in llvm (isFileExtern), not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to report
 writeFile	wasm	WASM-GAP	ported in llvm (isFileExtern); wasm has writeFileBytes but not the text-mode writeFile

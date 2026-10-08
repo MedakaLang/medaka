@@ -3165,6 +3165,7 @@ isFileExtern name = contains name [
   "fsync",
   "statFile",
   "runCommand",
+  "runCommandBatch",
   "executablePath",
   "buildFingerprint",
   "buildCommit",
@@ -3318,6 +3319,15 @@ emitFileExtern e env "runCommand" args = match emitArgs e env args
       emit e "  \{r} = call i64 @mdk_run_command(i64 \{prog}, i64 \{argv})"
     (r, LTCon)
   _ => panic "llvm: runCommand takes two arguments"
+emitFileExtern e env "runCommandBatch" args = match emitArgs e env args
+  [prog, jobs, argvs] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_run_command_batch(i64 \{prog}, i64 \{jobs}, i64 \{argvs})"
+    (r, LTCon)
+  _ => panic "llvm: runCommandBatch takes three arguments"
 emitFileExtern e env "executablePath" args = match emitArgs e env args
   [u] =>
     let r = freshReg e
