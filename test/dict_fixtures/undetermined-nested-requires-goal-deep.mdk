@@ -1,0 +1,13 @@
+-- The same verdict one level deeper: `Option (Option ?a)` poses `Def (Option ?a)`,
+-- which poses `Def ?a`.  The open goal is the innermost one, so the program has one
+-- diagnostic at the `def` occurrence, not one per level.  Hand-derived: REJECT on
+-- all three verbs.
+interface Def a where
+  def : a
+impl Def Int where
+  def = 7
+impl Def (Option a) requires Def a where
+  def = Some def
+main = println (match def
+  Some (Some _) => "some"
+  _ => "none")

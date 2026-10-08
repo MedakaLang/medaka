@@ -1,0 +1,15 @@
+-- §6.2 T4 at a nested `requires` goal (#3757): `def : Option ?a` is determined by
+-- `impl Def (Option a) requires Def a`, and committing it poses `Def ?a`.  Nothing
+-- fixes `?a`, and both `impl Def Int` and `impl Def (Option a)` reach it with no
+-- stable minimum.  Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at
+-- the `def` occurrence.  Was accepted by check, printed `some` under run, and the
+-- built binary segfaulted on the unconstrained dictionary.
+interface Def a where
+  def : a
+impl Def Int where
+  def = 7
+impl Def (Option a) requires Def a where
+  def = Some def
+main = println (match def
+  Some _ => "some"
+  None => "none")
