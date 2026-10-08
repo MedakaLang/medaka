@@ -1,5 +1,5 @@
 # META
-source_lines=4092
+source_lines=4093
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -844,6 +844,7 @@ phaseTrees engines userDecls rsrc csrc prepared =
 -- Only the prop planner (`planModules`) and the interpreter arms read the
 -- elaborated trees.  The native doctest and `test "…"` arms compile the
 -- target's source in a child process and ignore them.
+export
 treesUnread : List Engine -> List Decl -> Bool
 treesUnread engines userDecls =
   not (hasInterpEngine engines) && not (hasProps userDecls)
@@ -4190,7 +4191,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DFunDef false "gateOfCheck" ((PCon "False") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoaded") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods"))))
 (DTypeSig false "phaseTrees" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))))
 (DFunDef false "phaseTrees" ((PVar "engines") (PVar "userDecls") (PVar "rsrc") (PVar "csrc") (PVar "prepared")) (EIf (EApp (EApp (EVar "treesUnread") (EVar "engines")) (EVar "userDecls")) (EVar "unreadTrees") (EApp (EApp (EApp (EVar "forcePrepared") (EVar "rsrc")) (EVar "csrc")) (EVar "prepared"))))
-(DTypeSig false "treesUnread" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
+(DTypeSig true "treesUnread" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "treesUnread" ((PVar "engines") (PVar "userDecls")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "hasInterpEngine") (EVar "engines"))) (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls")))))
 (DTypeSig false "hasInterpEngine" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "Bool")))
 (DFunDef false "hasInterpEngine" ((PList)) (EVar "False"))
@@ -4787,7 +4788,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DFunDef false "gateOfCheck" ((PCon "False") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "roots") (PVar "mods")) (EApp (EVar "renderGate") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "projectDiagsLoaded") (EVar "noStdlibExports")) (EVar "True")) (EListLit)) (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (EApp (EApp (EVar "chainKeyOf") (EVar "target")) (EVar "roots"))) (EVar "mods"))))
 (DTypeSig false "phaseTrees" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Prepared") (TyEffect ("IO") None (TyCon "TestPair"))))))))
 (DFunDef false "phaseTrees" ((PVar "engines") (PVar "userDecls") (PVar "rsrc") (PVar "csrc") (PVar "prepared")) (EIf (EApp (EApp (EVar "treesUnread") (EVar "engines")) (EVar "userDecls")) (EVar "unreadTrees") (EApp (EApp (EApp (EVar "forcePrepared") (EVar "rsrc")) (EVar "csrc")) (EVar "prepared"))))
-(DTypeSig false "treesUnread" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
+(DTypeSig true "treesUnread" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool"))))
 (DFunDef false "treesUnread" ((PVar "engines") (PVar "userDecls")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "hasInterpEngine") (EVar "engines"))) (EApp (EVar "not") (EApp (EVar "hasProps") (EVar "userDecls")))))
 (DTypeSig false "hasInterpEngine" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyCon "Bool")))
 (DFunDef false "hasInterpEngine" ((PList)) (EVar "False"))

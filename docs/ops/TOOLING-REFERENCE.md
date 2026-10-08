@@ -46,6 +46,19 @@ object produced by `--emit-rt-obj` follows the same switch, so `MEDAKA_RT_OBJ`
 must be paired with the matching link mode: set `MEDAKA_NO_LTO` for both the
 build that emits the object and the build that links it, or for neither.
 
+`medaka test --native` compiles each test file into a throwaway probe binary,
+which takes its own settings:
+
+- `MEDAKA_TEST_CLANG_OPT=<level>` sets the probe's clang level. Probes default
+  to `-O0` with no LTO, and `MEDAKA_CLANG_OPT` does not reach them. An explicit
+  `-O0` is that same default. Any other level, such as `-O2`, links with the
+  normal LTO detection. A no-LTO probe build ignores `MEDAKA_RT_OBJ`, because
+  that object is ThinLTO bitcode. At `-O0` some tail-recursive shapes overflow
+  the stack; `compiler/AGENTS.md` lists the ceilings.
+- `MEDAKA_TEST_JOBS=<n>` caps how many `medaka test` runs
+  `testAssertionCounts` (`stdlib/test_process.mdk`) starts at once. It defaults
+  to the number of online processors, or 4 when that cannot be read.
+
 ## Projects and `medaka.toml`
 
 `medaka new myproj` creates `myproj/` containing `medaka.toml`, `main.mdk`,

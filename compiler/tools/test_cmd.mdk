@@ -840,6 +840,7 @@ phaseTrees engines userDecls rsrc csrc prepared =
 -- Only the prop planner (`planModules`) and the interpreter arms read the
 -- elaborated trees.  The native doctest and `test "…"` arms compile the
 -- target's source in a child process and ignore them.
+export
 treesUnread : List Engine -> List Decl -> Bool
 treesUnread engines userDecls =
   not (hasInterpEngine engines) && not (hasProps userDecls)

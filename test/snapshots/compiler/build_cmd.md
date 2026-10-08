@@ -1,5 +1,5 @@
 # META
-source_lines=1952
+source_lines=1957
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -1130,15 +1130,20 @@ public export data BuildProfile = BuildNormal | BuildProbe
 
 -- (opt flag, whether ThinLTO detection runs) for a profile, given the values of
 -- MEDAKA_CLANG_OPT (already defaulted) and MEDAKA_TEST_CLANG_OPT.  Pure so the
--- mapping is unit-testable.  A probe with MEDAKA_TEST_CLANG_OPT unset or empty is
--- -O0 with no LTO, the only pairing that is cheap: -O0 with LTO and -O1 without
--- it each cost several times as much.  A probe with it set takes that level and
--- the normal LTO detection, so `-O2` gives the same link as `BuildNormal`.
+-- mapping is unit-testable.  A probe at -O0, whether MEDAKA_TEST_CLANG_OPT is
+-- unset, empty or `-O0`, links with no LTO, the only pairing that is cheap: -O0
+-- with LTO and -O1 without it each cost several times as much.  A no-LTO link
+-- ignores MEDAKA_RT_OBJ, which is ThinLTO bitcode.  A probe at any other level
+-- takes it with the normal LTO detection, so `-O2` gives the same link as
+-- `BuildNormal`.
 export
 profileClang : BuildProfile -> String -> String -> (String, Bool)
 profileClang BuildNormal normalOpt _ = (normalOpt, True)
 profileClang BuildProbe _ probeOpt =
-  if probeOpt == "" then ("-O0", False) else (probeOpt, True)
+  if probeOpt == "" || probeOpt == "-O0" then
+    ("-O0", False)
+  else
+    (probeOpt, True)
 
 resolveProfile : BuildProfile -> <IO> (String, Bool)
 resolveProfile profile =
@@ -2081,7 +2086,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DData Public "BuildProfile" () ((variant "BuildNormal" (ConPos)) (variant "BuildProbe" (ConPos))) ())
 (DTypeSig true "profileClang" (TyFun (TyCon "BuildProfile") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "profileClang" ((PCon "BuildNormal") (PVar "normalOpt") PWild) (ETuple (EVar "normalOpt") (EVar "True")))
-(DFunDef false "profileClang" ((PCon "BuildProbe") PWild (PVar "probeOpt")) (EIf (EBinOp "==" (EVar "probeOpt") (ELit (LString ""))) (ETuple (ELit (LString "-O0")) (EVar "False")) (ETuple (EVar "probeOpt") (EVar "True"))))
+(DFunDef false "profileClang" ((PCon "BuildProbe") PWild (PVar "probeOpt")) (EIf (EBinOp "||" (EBinOp "==" (EVar "probeOpt") (ELit (LString ""))) (EBinOp "==" (EVar "probeOpt") (ELit (LString "-O0")))) (ETuple (ELit (LString "-O0")) (EVar "False")) (ETuple (EVar "probeOpt") (EVar "True"))))
 (DTypeSig false "resolveProfile" (TyFun (TyCon "BuildProfile") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "resolveProfile" ((PVar "profile")) (EApp (EApp (EApp (EVar "profileClang") (EVar "profile")) (EVar "clangOptFlag")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_TEST_CLANG_OPT"))) (ELit (LString "")))))
 (DTypeSig false "clangLink" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Bool") (TyFun (TyCon "BuildProfile") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))))))))
@@ -2269,7 +2274,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DData Public "BuildProfile" () ((variant "BuildNormal" (ConPos)) (variant "BuildProbe" (ConPos))) ())
 (DTypeSig true "profileClang" (TyFun (TyCon "BuildProfile") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "profileClang" ((PCon "BuildNormal") (PVar "normalOpt") PWild) (ETuple (EVar "normalOpt") (EVar "True")))
-(DFunDef false "profileClang" ((PCon "BuildProbe") PWild (PVar "probeOpt")) (EIf (EBinOp "==" (EVar "probeOpt") (ELit (LString ""))) (ETuple (ELit (LString "-O0")) (EVar "False")) (ETuple (EVar "probeOpt") (EVar "True"))))
+(DFunDef false "profileClang" ((PCon "BuildProbe") PWild (PVar "probeOpt")) (EIf (EBinOp "||" (EBinOp "==" (EVar "probeOpt") (ELit (LString ""))) (EBinOp "==" (EVar "probeOpt") (ELit (LString "-O0")))) (ETuple (ELit (LString "-O0")) (EVar "False")) (ETuple (EVar "probeOpt") (EVar "True"))))
 (DTypeSig false "resolveProfile" (TyFun (TyCon "BuildProfile") (TyEffect ("IO") None (TyTuple (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "resolveProfile" ((PVar "profile")) (EApp (EApp (EApp (EVar "profileClang") (EVar "profile")) (EVar "clangOptFlag")) (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_TEST_CLANG_OPT"))) (ELit (LString "")))))
 (DTypeSig false "clangLink" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Bool") (TyFun (TyCon "BuildProfile") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))))))))))))

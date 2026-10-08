@@ -17,7 +17,7 @@
    fails this gate rather than going uncounted. -}
 
 import io.{readLines}
-import list.{drop, lookup, somes, take, zipWith}
+import list.{lookup, somes, zipWith}
 import test.{Expectation(..)}
 import test_process.{
   disagreeingFloorBlocks,
@@ -365,7 +365,7 @@ libKeyOf dir name = "\{dir}/\{name}"
 -- engine, shared by every assertion below — memoized the same way `results`
 -- is, and spawned in the same batch.
 libResults : <Exec, IO> List (String, (Int, Result String Int))
-libResults = drop (length suiteSpawns) allResults
+libResults = resultsOfKind LibRow
 
 -- Grades one `pds/lib/`/`pds/shell/` module's floor, same shape as
 -- `floorExpectation`.
@@ -493,18 +493,28 @@ libSpawns =
    went wrong. Shared by every assertion below: top-level nullary bindings
    are memoized, so a spawn placed here and read from two `test` decls
    executes once, not twice. -}
-allResults : <Exec, IO> List (String, (Int, Result String Int))
+allResults : <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
 allResults =
-  let rows = suiteSpawns ++ libSpawns
+  let rows =
+    map (s => (SuiteRow, s)) suiteSpawns ++ map (s => (LibRow, s)) libSpawns
   zipWith
-    ((key, floor, _, _, label) counted =>
-      (key, (floor, mapErr (e => "\{label}: \{e}") counted)))
+    ((kind, (key, floor, _, _, label)) counted =>
+      (kind, (key, (floor, mapErr (e => "\{label}: \{e}") counted))))
     rows
-    (testAssertionCounts (map ((_, _, path, args, _) => (path, args)) rows))
+    (testAssertionCounts
+      (map ((_, (_, _, path, args, _)) => (path, args)) rows))
+
+-- Which roster a spawn row came from, so its result is regrouped by that
+-- tag rather than by its position in the batch.
+data RowKind = SuiteRow | LibRow deriving (Eq)
+
+-- The `allResults` rows of one roster, in roster order.
+resultsOfKind : RowKind -> <Exec, IO> List (String, (Int, Result String Int))
+resultsOfKind kind = map snd (filter ((k, _) => k == kind) allResults)
 
 -- Every non-excluded suite's floor and count.
 results : <Exec, IO> List (String, (Int, Result String Int))
-results = take (length suiteSpawns) allResults
+results = resultsOfKind SuiteRow
 
 {- | Grades one suite's floor. The message names the file and both numbers
    on a miss; a run that failed outright reports the spawn's own text

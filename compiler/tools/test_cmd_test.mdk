@@ -1,0 +1,27 @@
+-- Unit tests for test_cmd.mdk's `treesUnread`: whether a `medaka test` run
+-- may skip elaborating the trees that only the prop planner and the
+-- interpreter arms read.
+
+import frontend.ast.{Decl}
+import frontend.parser.{parse}
+import tools.doctest.{Engine(..)}
+import tools.test_cmd.{treesUnread}
+import test.{expectAll, expectFalse, expectTrue}
+
+noProps : List Decl
+noProps = parse "f : Int -> Int\nf x = x + 1\n\ntest \"t\" = f 1 == 2\n"
+
+withProp : List Decl
+withProp = parse "prop \"p\" (x : Int) = x == x\n"
+
+test "a native-only run with no props leaves the trees unread" =
+  expectTrue (treesUnread [EngNative] noProps)
+
+test "any interpreter engine reads the trees" = expectAll [
+  expectFalse (treesUnread [EngInterp] noProps),
+  expectFalse (treesUnread [EngInterp, EngNative] noProps),
+  expectFalse (treesUnread [EngNative, EngInterp] noProps),
+]
+
+test "a target with props reads the trees, even native-only" =
+  expectFalse (treesUnread [EngNative] withProp)
