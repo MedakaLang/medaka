@@ -1,5 +1,5 @@
 # META
-source_lines=2996
+source_lines=2993
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -75,8 +75,6 @@ import types.typecheck.{
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
   -- typechecker because S1's `nameable in M` operand does; see its own comment.
   importedStandaloneShadows,
-  -- #3027 / D3: T4's own warning code, defined beside `reportOverlapForIface`.
-  openGoalCommitWarnCode
 }
 -- #2738: the two colliding signatures are SURFACE types, and this is the one
 -- surface-type renderer in the tree (`tools/doc.mdk`'s `ppTyP` is private to the
@@ -2465,7 +2463,7 @@ export
 coherenceWarnCode : String
 coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 
--- These four warning codes are on the allowlist because they satisfy three
+-- These three warning codes are on the allowlist because they satisfy three
 -- measurements: (1) oracle properties and false-positive rates are bounded,
 -- (2) occurrence frequency is bounded (not graph-wide), and (3) render cost
 -- is bounded by collision/site count, not module-graph size. This list is
@@ -2481,7 +2479,6 @@ runBuildWarnCodes = [
   coherenceWarnCode,
   "W-PRELUDE-METHOD-SHADOW",
   "W-IMPORT-METHOD-SHADOW",
-  openGoalCommitWarnCode,
 ]
 
 export
@@ -3010,7 +3007,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false) (mem "openGoalCommitWarnCode" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
@@ -3324,7 +3321,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "coherenceWarnCode" (TyCon "String"))
 (DFunDef false "coherenceWarnCode" () (ELit (LString "W-INCOMPARABLE-IMPLS")))
 (DTypeSig true "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW")) (EVar "openGoalCommitWarnCode")))
+(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW"))))
 (DTypeSig true "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
 (DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PVar "c") PWild PWild PWild PWild)) (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runBuildWarnCodes")))
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
@@ -3417,7 +3414,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false) (mem "openGoalCommitWarnCode" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "importedStandaloneShadows" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false) (mem "availableModuleIds" false) (mem "fileOfModuleId" false) (mem "importModId" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
@@ -3731,7 +3728,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "coherenceWarnCode" (TyCon "String"))
 (DFunDef false "coherenceWarnCode" () (ELit (LString "W-INCOMPARABLE-IMPLS")))
 (DTypeSig true "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW")) (EVar "openGoalCommitWarnCode")))
+(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW"))))
 (DTypeSig true "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
 (DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PVar "c") PWild PWild PWild PWild)) (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runBuildWarnCodes")))
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))

@@ -1,0 +1,33 @@
+-- The quiescence drain's remaining `DrainDiags` member (`compiler/types/typecheck.mdk`).
+--
+-- `relay`'s inferred scheme quantifies `a` and carries both `Tweak a Int` and
+-- `Tweak a Bool`.  The diagnostics-arm drain replays the call `value n x` with that
+-- goal PROJECTED to its first argument and `a` reading `Float`, so the selector sees
+-- `Tweak Float`, which both instances match with no stable minimum, and reports
+-- `T-AMBIGUOUS-INSTANCE`.  Not the #3031 shape: the goal reaches the drain ground, so
+-- no closedness test can defer it.  `DrainRollback` discards it on `check`; the
+-- trees-arm drain of `run` and `build` does not produce it.
+--
+-- SPEC ANSWER, hand-derived: `relay`'s goals belong to its callers; `main` calls it at
+-- `Float`, where `Tweak Float Int` and `Tweak Float Bool` are each the unique match.
+-- `relay 1 2.5` = `value 1 2.5` = `tweak True (tweak 1 (relay 0 2.5))` = 2.5, since
+-- both impls return their second argument.  ACCEPT on every verb, printing `2.5`.
+--
+-- WHAT THIS ROW PINS: `check` must not report `T-AMBIGUOUS-INSTANCE`.  Today that holds
+-- only because `DrainRollback` hides the drain's diagnostics; it is the witness that
+-- must stay green when `DrainDiags` is deleted.
+interface Tweak a b where
+  tweak : b -> a -> a
+
+impl Tweak Float Int where
+  tweak _ x = x
+
+impl Tweak Float Bool where
+  tweak _ x = x
+
+value : (Tweak a Int, Tweak a Bool) => Int -> a -> a
+value n x = if n == 0 then x else tweak True (tweak 1 (relay (n - 1) x))
+
+relay n x = value n x
+
+main = println (relay 1 (2.5 : Float))

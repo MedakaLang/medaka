@@ -4,8 +4,8 @@
 -- Two ⊑-incomparable user impls (`Q Int y z` vs `Q x Bool z`). Since F-3d
 -- (#614/#311) coherence condition (a) only WARNS about that pair
 -- (`W-INCOMPARABLE-IMPLS` at the second declaration), so the goal-site reject below
--- is the whole of this file's verdict -- and its sibling, whose goal is not closed,
--- ACCEPTS. Before F-3d (a) rejected at the declaration too; that did not end the
+-- is the whole of this file's verdict; its sibling, whose goal is not closed, now
+-- REJECTS too (R-SC3). Before F-3d (a) rejected at the declaration too; that did not end the
 -- compile either, because errors ACCUMULATE (AGENTS.md: "phases push into
 -- diagnostics.mdk rather than raising on the first error"), so both impls were
 -- registered in KeyBuckets and the goal reached the min⊑ selector regardless.

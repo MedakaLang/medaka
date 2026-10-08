@@ -1,0 +1,22 @@
+-- §6.2 T4 at a method occurrence in a SIGNED top-level body: the top-level twin of
+-- #3535's default-body face.  `roundT x _ = back (conv x)` poses `Conv a ?c` and
+-- `Conv2 a ?c`, `a` the signature's and `?c` the body's own, and nothing fixes
+-- `?c`.  Both `Conv Int W` and `Conv Int String` reach it at `a = Int`, with no
+-- stable minimum.  Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at
+-- the `conv` occurrence.
+interface Conv a b where
+  conv : a -> b
+interface Conv2 a b requires Conv a b where
+  back : b -> a
+data W = W Int
+impl Conv Int String where
+  conv n = "s" ++ intToString n
+impl Conv Int W where
+  conv n = W (n * 2)
+impl Conv2 Int W where
+  back (W n) = n + 1
+impl Conv2 Int String where
+  back s = stringLength s
+roundT : Conv2 a b => a -> b -> a
+roundT x _ = back (conv x)
+main = println (debug (roundT (5 : Int) (W 0)))

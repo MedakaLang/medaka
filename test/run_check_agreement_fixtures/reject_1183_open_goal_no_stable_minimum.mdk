@@ -1,0 +1,16 @@
+-- §6.2 T4 at an open goal with no stable minimum (#1183).  `sh (Q 1 True [])`
+-- poses `Sh (Q Int Bool (List ?e))`; both ⊑-incomparable impls match it and keep
+-- matching under every binding of `?e`.  Hand-derived: REJECT on all three verbs,
+-- T-AMBIGUOUS-INSTANCE at the `sh` occurrence, never a declaration-order commit.
+data Q a b c = Q a b c
+
+interface Sh a where
+  sh : a -> Int
+
+impl Sh (Q Int y z) where
+  sh _ = 1
+
+impl Sh (Q x Bool z) where
+  sh _ = 2
+
+main = println (sh (Q 1 True []))
