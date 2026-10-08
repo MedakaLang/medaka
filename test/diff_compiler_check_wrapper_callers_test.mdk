@@ -1,0 +1,205 @@
+{- | Pins the CALLER SET of the live `checkOne*` typecheck-entry wrapper family
+   (E-1 #1115, epic #1122). Replaces diff_compiler_check_wrapper_callers.sh.
+
+   WHY THIS GATE EXISTS. The migration audit found the wrapper family's own
+   consumer census had already drifted UNFLAGGED once
+   (`entries/origin_agreement_main.mdk` was added as a caller 2026-08-02, four
+   days after the issue's original enumeration, with nothing noticing). The
+   migration slices that followed moved the remaining callers onto one-module
+   projections of the graph driver. A caller set that can silently gain a new
+   member is still a caller set nobody can trust an audit of.
+
+   WHAT IT DOES (pure text analysis over repo files; no compiler build, no oracle):
+   1. DERIVES the current caller set: for every `.mdk` file under `compiler/`
+      (other than `compiler/types/typecheck.mdk`, the family's home), parse its
+      `import types.typecheck.{ ... }` block (which may span multiple lines) and
+      record which of the 9 live wrapper-family names it imports. A name
+      mentioned only in a comment (not imported) is NOT a caller: this gate is
+      keyed on the import.
+   2. Compares that DERIVED set against the checked-in ledger
+      (test/CHECK-WRAPPER-CALLERS.txt, `file : comma,separated,names`, one line
+      per caller file). A file/name pair present in one set but not the other is
+      a FAIL, naming the file and whether it is a NEW caller (ledger update
+      needed) or a STALE ledger row (caller removed, drop the row).
+   3. Floors the number of caller files checked at 16. A coverage check that
+      measured nothing must never report green.
+
+   Does NOT prove: that the wrapper calls themselves are correct, or that a
+   caller imports a name it then uses in a non-wrapper way. -}
+
+import test_process.{medakaRoot, underRoot}
+import test.{Expectation, expectAll, expectAtLeast, expectNoFindings, fail}
+import fs.{walkDir}
+import string.{
+  lines, split, trim, contains, startsWith, endsWith, replaceAll, unlines
+}
+import list.{nub, sort, lookup, filter}
+import regex.{Regex, Match, mustCompile, isMatch, findAll}
+
+-- The 9 live wrapper-family names. `checkOneSchemeFull` joined 2026-08-27
+-- (S-full-env-scheme-entry, #1116); the keyed siblings `checkOneDiagsK` and
+-- `checkOneSchemeFullK` came with PR #2494 (`checkCoreMemoized` prelude key);
+-- `checkOneMatchToLines` joined 2026-09-19 (S-match-lines-module-arm, #1116).
+-- Without a row, a migrated caller would census as a ZERO-wrapper caller.
+wrapNames : List String
+wrapNames = [
+  "checkOneScheme", "checkOneDiags", "checkOneSchemeFull", "checkOneDiagsK",
+  "checkOneSchemeFullK", "checkOneToLines", "checkOneToLinesWithRuntime",
+  "checkOneErrorsWithRuntime", "checkOneMatchToLines"
+]
+
+importRe : Regex
+importRe = mustCompile "import\\s+types\\.typecheck\\."
+
+tokenRe : Regex
+tokenRe = mustCompile "[A-Za-z0-9_]+"
+
+homeRel : String
+homeRel = "compiler/types/typecheck.mdk"
+
+-- Wrapper names appearing as whole words in a piece of text.
+namesIn : String -> List String
+namesIn text =
+  filter
+    (t => elem t wrapNames)
+    (map (m => (m : Match).text) (findAll tokenRe text))
+
+-- The import block starting at the first line: lines up to and including the
+-- first line holding a `}` (or the rest of the file when there is none).
+takeBlock : List String -> List String
+takeBlock [] = []
+takeBlock (l :: rest) = if contains "}" l then [l] else l :: takeBlock rest
+
+-- The lines after that block.
+afterBlock : List String -> List String
+afterBlock [] = []
+afterBlock (l :: rest) = if contains "}" l then rest else afterBlock rest
+
+-- Wrapper names imported by every `import types.typecheck.{...}` block in a file.
+importedNames : List String -> List String
+importedNames [] = []
+importedNames (l :: rest) =
+  if isMatch importRe l then
+    namesIn (unlines (takeBlock (l :: rest)))
+      ++ importedNames (afterBlock (l :: rest))
+  else
+    importedNames rest
+
+-- Ledger rows: `file : name,name,...`. Blank lines and `#` comments are skipped.
+ledgerRows : List String -> Result String (List (String, List String))
+ledgerRows [] = Ok []
+ledgerRows (raw :: rest) =
+  let line = trim raw
+  if line == "" || startsWith "#" line then
+    ledgerRows rest
+  else if not (contains " : " line) then
+    Err "malformed row (expected 'file : name,name,...'): \{raw}"
+  else match split " : " line
+    f :: names :: extra =>
+      if extra /= [] then
+        Err "malformed row (more than one ' : '): \{raw}"
+      else do
+        more <- ledgerRows rest
+        Ok ((trim f, filter (/= "") (split "," (trim names))) :: more)
+    _ => Err "malformed row: \{raw}"
+
+-- Ledger files that carry more than one row (the script's dict kept only one).
+dupFiles : List String -> List String
+dupFiles fs = filter (f => length (filter (== f) fs) > 1) (nub fs)
+
+-- Repo-relative path of a file under the repo root.
+relPath : String -> <IO> String
+relPath path = replaceAll (medakaRoot ++ "/") "" path
+
+-- A caller file: its relative path and the wrapper names it imports.
+scanOne : String -> <IO, FileRead> Result String (String, List String)
+scanOne path = match readFile path
+  Err e => Err "could not read \{path}: \{e}"
+  Ok text => Ok (relPath path, nub (sort (importedNames (lines text))))
+
+scanAll : List String ->
+  <IO, FileRead> Result String (List (String, List String))
+scanAll [] = Ok []
+scanAll (p :: rest) = do
+  v <- scanOne p
+  vs <- scanAll rest
+  Ok (v :: vs)
+
+namesOf : String -> List (String, List String) -> Option (List String)
+namesOf f table = lookup f table
+
+-- Problems for one file: derived names against ledger names.
+fileProblems : List (String, List String) ->
+  List (String, List String) ->
+  String ->
+  List String
+fileProblems derived ledger f =
+  let d = match namesOf f derived
+    Some ns => ns
+    None => []
+  let l = match namesOf f ledger
+    Some ns => ns
+    None => []
+  let added = filter (n => not (elem n l)) d
+  let removed = filter (n => not (elem n d)) l
+  if d == l then
+    []
+  else match namesOf f ledger
+    None => [
+      "FAIL: NEW caller not in ledger: \{f} : \{joinComma d}  -> add this row to test/CHECK-WRAPPER-CALLERS.txt",
+    ]
+    Some _ => match namesOf f derived
+      None => [
+        "FAIL: STALE ledger row (no longer a caller): \{f} : \{joinComma l}  -> remove this row from test/CHECK-WRAPPER-CALLERS.txt",
+      ]
+      Some _ =>
+        (if added == [] then
+            []
+          else
+            [
+              "FAIL: \{f}: gained wrapper name(s) not in ledger: \{joinComma added}",
+            ])
+          ++ (if removed == [] then
+            []
+          else
+            [
+              "FAIL: \{f}: ledger names no longer imported: \{joinComma removed}",
+            ])
+
+joinComma : List String -> String
+joinComma [] = ""
+joinComma [x] = x
+joinComma (x :: rest) = "\{x},\{joinComma rest}"
+
+check : <IO, FileRead> Expectation
+check = match walkDir (underRoot "compiler")
+  Err e => fail "could not walk compiler/: \{e}"
+  Ok paths =>
+    let mdk = filter (p => endsWith ".mdk" p && relPath p /= homeRel) paths
+    match scanAll mdk
+      Err e => fail e
+      Ok scanned =>
+        let derived = filter (e => snd e /= []) scanned
+        match readFile (underRoot "test/CHECK-WRAPPER-CALLERS.txt")
+          Err e =>
+            fail
+              "missing test/CHECK-WRAPPER-CALLERS.txt — cannot run the caller-set census: \{e}"
+          Ok ledgerText => match ledgerRows (lines ledgerText)
+            Err e => fail "ledger: \{e}"
+            Ok ledger =>
+              let files = nub (sort (map fst derived ++ map fst ledger))
+              let problems = flatMap (f => fileProblems derived ledger f) files
+              expectAll
+                [
+                  -- floor catches a broken parse; the ledger shrinks by design (today: 16 files)
+                  expectAtLeast 8 (length files),
+                  expectNoFindings
+                    "ledger has more than one row for a file (one row per caller file)"
+                    (Ok (dupFiles (map fst ledger))),
+                  expectNoFindings
+                    "wrapper-family caller set drifted from test/CHECK-WRAPPER-CALLERS.txt"
+                    (Ok problems),
+                ]
+
+test "diff_compiler_check_wrapper_callers: derived caller set matches the ledger exactly" =
+  check

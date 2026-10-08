@@ -178,6 +178,10 @@ cp "$ROOT/test/gates.toml" "$WORK/test/gates.toml" ||
   fail "could not copy gate registry for deleted-helper fixture"
 cp "$ROOT"/test/*.sh "$WORK/test/" ||
   fail "could not copy shell gates for deleted-helper fixture"
+# Native rows resolve only when their run file exists, and preflight always adds
+# the tree-wide diff_compiler_source_bytes, which is a native gate-test.
+cp "$ROOT"/test/*_test.mdk "$WORK/test/" ||
+  fail "could not copy native gate-tests for deleted-helper fixture"
 cat >> "$WORK/test/gates.toml" <<'EOF'
 [[gate]]
 name = "native_consumer"
