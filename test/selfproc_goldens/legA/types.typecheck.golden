@@ -101,6 +101,7 @@ ambiguousShadowHelp : String
 andList : List String -> String
 annotTooGeneralMsg : Ty -> String
 annotateImportedMethodRows : TcEnv -> List String -> Map String Unit -> Map String Unit -> Registry MethodSchemeRow -> TcEnv
+answeredOnlyByBindingHead : Map String Unit -> IfaceRef -> List Mono -> Bool
 anyArgMentions : List String -> List Ty -> Bool
 anyClaimRow : List Int -> List (String, List PredicateSlot) -> Bool
 anyClauseEagerlyRefsGroup : List String -> List FunClause -> Bool
@@ -1500,6 +1501,7 @@ implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
 implDictNames : String -> Int -> Int -> List String
 implDictPassMethods : TyConOrigin -> Int -> List ImplMethod -> List ImplMethod
 implDictRoutesForRow : String -> ScopeId -> List Mono -> ImplRow -> List Route
+implGoalFixesHeadMsg : String -> String -> List String -> String
 implGoalResiduals : Int -> Map String Unit -> List PredicateSlot -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 implHeadGround : Decl -> Bool
 implHeadIndexMsg : String -> String -> String

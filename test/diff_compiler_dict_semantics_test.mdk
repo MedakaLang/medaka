@@ -3054,6 +3054,61 @@ table = [
     codes = [],
   },
   Row {
+    entry = "impl-head-goal-only-by-binding.mdk",
+    label =
+      "§3 W3-inst: the body's `Conv a String` is answered by `impl Conv Int String` only if the head's `a` is Int, so it is an undeclared prerequisite (#3817). Was accepted on every verb, and `show2 (Box True)` printed \"i\" from an instance at Int",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-goal-only-by-binding-closed-head-control.mdk",
+    label =
+      "control for the #3817 row: under the closed head `impl Show2 (Box Int)` the goal is `Conv Int String`, which the one instance answers. Hand-derived: \"i\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "i\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-goal-only-by-binding-requires-control.mdk",
+    label =
+      "control for the #3817 row: `requires Conv a String` gives the body's goal, and `show2 (Box 1)` discharges it at `Conv Int String`. Hand-derived: \"i\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "i\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-mixed-residual.mdk",
+    label =
+      "§3 W3-inst on a mixed residual: the body's `Get (Box (List t)) b` is answered by `impl Get (Box a) a` only if the head's `b` is `List t`, so the impl is refused at the body (#3798). Drained from the must-fail pin 3798-implhead-mixed-residual-accepted: `check` accepted, `run` died with E-PANIC and the build found no `get`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-mixed-residual-control.mdk",
+    label =
+      "control for the mixed-residual row: `Get (Box b) b` at the head variable alone, which the impl matches with `b` rigid. Hand-derived: 41 + 1 = 42",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
     entry = "ground-no-sig-var-mismatch-rejected.mdk",
     label =
       "§3 the signature-variable guard on module-end grounding applies only when a signature variable occurs: `Conv (Wrap String) t`, with `t` free in `main`, has no instance (the one head-tycon candidate is `impl Conv (Wrap Int) Bool`), so it is rejected. With the guard applied to every goal, grounding skipped the failing unify and `check` accepted the program",
@@ -4073,7 +4128,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 357
+tableRows = 362
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

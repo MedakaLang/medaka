@@ -1,0 +1,19 @@
+-- §3 W3-inst: the head variable `a` is rigid in the instance matcher. The body's
+-- goal `Conv a String` is answered by `impl Conv Int String` only if `a` is Int,
+-- so it is a prerequisite the impl does not declare. `show2 (Box True)` would
+-- otherwise answer `Conv Bool String` from the `Int` instance and print "i".
+data Box a = Box a
+
+interface Conv a b where
+  conv : a -> b
+
+impl Conv Int String where
+  conv _ = "i"
+
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 (Box a) where
+  show2 (Box x) = conv x
+
+main = println (show2 (Box True))

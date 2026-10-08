@@ -1,0 +1,18 @@
+-- Control: the same body with `requires Conv a String` declared, which gives the
+-- body's goal. `show2 (Box 1)` discharges it at `Conv Int String`. Hand-derived:
+-- `conv` returns "i" for every Int.
+data Box a = Box a
+
+interface Conv a b where
+  conv : a -> b
+
+impl Conv Int String where
+  conv _ = "i"
+
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 (Box a) requires Conv a String where
+  show2 (Box x) = conv x
+
+main = println (show2 (Box 1))

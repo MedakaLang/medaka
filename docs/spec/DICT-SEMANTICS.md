@@ -577,10 +577,14 @@ One rule, two rejections:
   check such a residual was deferred forever: the impl obligation channel defers a
   non-ground predicate, and nothing grounds an instance's own variable.
 
-A goal no instance matches is not checked here. A residual that mixes a variable
-of `c̄` with another variable (`Get (Box (List t)) b` for a head variable `b`) is
-not rejected here, and no other check rejects it either (#3798). Enforced in
-`inferMethodBody` by `checkImplHeadRigidity` and `checkImplHeadPrerequisites`
+A goal that an instance answers only by fixing a variable of `c̄` is rejected the
+same way, whatever other variables it mentions: some instance head unifies with it
+while `c̄` is free, and none does while `c̄` is rigid. `Conv c String` against the
+only instance `impl Conv Int String` (#3817), and `Get (Box (List t)) b` for a head
+variable `b` against `impl Get (Box a) a` (#3798), are each `T-IMPL-MISSING-REQUIRES`
+at the goal's site, never a commitment to that instance. A goal no instance
+answers even with `c̄` free is not checked here. Enforced in `inferMethodBody` by
+`checkImplHeadRigidity` and `checkImplHeadPrerequisites`
 (`compiler/types/typecheck.mdk`).
 
 ### Improvement by the one matching instance
@@ -627,14 +631,13 @@ against `impl Get (Box a) a`) is rejected at its site in the definition with
 `T-MISSING-CONSTRAINT`, unless the declared context gives it
 (`test/dict_fixtures/sig-var-rigid-free-var-goal.mdk`,
 `test/dict_fixtures/sig-var-rigid-repeated-head-var.mdk`). An impl head's
-variables are held the same way in its bodies, for a residual over head
-variables alone (W3-inst above). No other declared variable is held rigid yet,
+variables are held the same way in its bodies (W3-inst above,
+`test/dict_fixtures/impl-head-goal-only-by-binding.mdk`,
+`test/dict_fixtures/impl-head-mixed-residual.mdk`). No other declared variable is held rigid yet,
 and a matcher can still bind it: a goal abstracted by a generalized local inside
 a signed function (#3796), an interface method signature's own variable (#3797;
 improvement and determination at the body's close hold it rigid, the matcher
-that accepts the goal does not), and a variable written in an expression annotation (#3799). An impl-body
-residual that mixes a head variable with another variable is not rejected
-(#3798).
+that accepts the goal does not), and a variable written in an expression annotation (#3799).
 
 Uniqueness is counted over unifying heads, not matching ones, because a
 one-sided match undercounts. At `Pick (List t) (List n) (List Int)`, with `n` a
@@ -2878,7 +2881,7 @@ not this paragraph.
 | §3 **W1** (superclass acyclic) | `ifaceDfsCycle:11076-11101`, invoked at `:11062` pushing `T-CYCLIC-SUPERINTERFACE` (`compiler/types/typecheck.mdk`) | rejects a cyclic `requires` chain | DFS keyed on **bare interface name** (`String`), not module-qualified — not independently re-verified for a same-named-interface cross-module collision here |
 | §3 **W2** (instance-context termination / Paterson coverage) | `routeOfD:12863` (`compiler/types/typecheck.mdk`), the depth-carrying core of `routeOf:12852`, threaded through `argImplRequiresRoutes:13054` → `argImplReqRoutes:13144` → `argReqRoute` → back to `routeOfD` — the #217 "WS-4b fuse" | ⚠️ **NOT the spec's W2.** W2 is a *static, declaration-time* condition (reject an instance whose context isn't structurally smaller than the goal). What exists is a **dynamic, resolution-time cutoff** inside `argImplRequiresRoutes`, which since **#1576** is a *shrinking test* rather than a flat depth counter: a `requires` sub-goal whose whole argument vector is structurally SMALLER (`monoSizes`) than the goal that spawned it costs nothing, and only a NON-shrinking step spends one unit of `requiresNonShrinkingFuel` (32). So a non-shrinking context (`impl C (T a) requires C (T (T a))`) still *terminates* by silently returning no further requires-routes — it grows its goal every step, so it exhausts the fuel almost immediately — rather than being *rejected* at declaration. The program is accepted either way; only route resolution stops recursing | 🟢 **the flat `if depth >= 32 then []` this row used to describe was itself an S0** (#1576/#1836): it truncated the dict witness of a perfectly valid GROUND chain (`impl Tag (Wrap a) requires Tag a` at `Wrap^34 Int`) one level early, and the built binary read the missing cell and segfaulted at exit 0 from `check` and `build`. The old text's "a legitimately-deep-but-terminating context presumably degrades identically to a genuinely non-terminating one at depth 33" was exactly right about the hazard and exactly wrong about it being harmless. The shrinking test separates the two populations: a shrinking chain now compiles at ANY depth its type needs (measured to `Wrap^202`), and the fuel bounds only the divergent shape it was written for. Still no *diagnostic* on the fuse arm — a `pushTypeErrorOnceAt` from the `resolve*` stamp passes is discarded on `check`, `run` and `build` alike (**#1910**), which is what a loud reject here is blocked on |
 | §3 **W3** (method-scheme fidelity / rigidity) | `checkMethodRigidityCore`, `checkMethodEffVarRigidity`, `checkImplEffVarRigidity` (all `compiler/types/typecheck.mdk`) | an impl/default body may not pin a non-head quantified variable (type *or* effect) to a concrete shape | run by the one method-body driver `inferMethodBody` for both kinds (`MethodBodyKind`); a default body's rigidity reads the same instantiation as its body |
-| §3 **W3-inst** (instance-head rigidity) | `checkImplHeadRigidity`, `checkImplHeadPrerequisites` (`compiler/types/typecheck.mdk`) | an impl body may not pin or identify a head variable, and every predicate it leaves on one is entailed by the impl's `requires` (with superinterfaces), the method's `=>` context or the head itself | impl bodies only, at the same boundary as W3, before body-local defaulting; a pin is reported by the body that introduced it; a residual mixing a head variable with another variable is not checked (#3798) |
+| §3 **W3-inst** (instance-head rigidity) | `checkImplHeadRigidity`, `checkImplHeadPrerequisites` (`compiler/types/typecheck.mdk`) | an impl body may not pin or identify a head variable, and every predicate it leaves on one is entailed by the impl's `requires` (with superinterfaces), the method's `=>` context or the head itself | impl bodies only, at the same boundary as W3, before body-local defaulting; a pin is reported by the body that introduced it; a goal an instance answers only by fixing a head variable is reported whatever other variables it mentions (#3798, #3817) |
 | §4 `var` | `instantiate:3630`; per-residual entailment via `entail:11892`; obligation discharge `checkCallObligationsU:13793`/`checkOneCallObligation:13814` | instantiation + per-predicate entailment at each use | — |
 | §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates |
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |
