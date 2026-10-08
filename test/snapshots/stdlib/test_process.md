@@ -1,5 +1,5 @@
 # META
-source_lines=581
+source_lines=640
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -12,7 +12,8 @@ stages=DESUGAR,MARK
    test body in a directory of its own and removes it afterwards.
 
    A test that grades a directory of `medaka test` suites reads their
-   assertion counts with `testAssertionCount` and checks its roster against
+   assertion counts with `testAssertionCount`, or with `testAssertionCounts`
+   to run the suites side by side, and checks its roster against
    the directory with `testFileStem`, `unrosteredTestFiles` and
    `missingTestFiles`. `expectFloor` grades one count against its committed
    floor, and `mdkModuleStem` names the modules of a directory that is not
@@ -23,7 +24,7 @@ stages=DESUGAR,MARK
 
 import io.{getEnvOr, runVerb}
 import json.{asInt, get, parse}
-import list.{somes}
+import list.{somes, zipWith3}
 import string.{
   contains,
   drop,
@@ -33,6 +34,7 @@ import string.{
   startsWith,
   stripPrefix,
   stripSuffix,
+  toInt,
   trim,
   unwords,
 }
@@ -399,9 +401,66 @@ outputTail text = outputTailOf failureOutputTailChars text
 export
 testAssertionCount : String -> List String -> <Exec, IO> Result String Int
 testAssertionCount path extraArgs =
-  let args = ["test"] ++ extraArgs ++ [path, "--json"]
-  let line = unwords (medakaBin :: args)
-  match runVerb medakaBin args
+  let bin = medakaBin
+  let args = assertionCountArgs path extraArgs
+  gradeAssertionCount bin path args (runVerb bin args)
+
+{- | `testAssertionCount` for every `(path, extraArgs)` row, with the suites
+   run side by side.
+
+   Each element is what `testAssertionCount` returns for that row, in the
+   same order, with the same error text. At most `testJobs` suites run at
+   once.
+
+   > testAssertionCounts [("no-such-suite.mdk", [])] == [testAssertionCount "no-such-suite.mdk" []]
+   True -}
+export
+testAssertionCounts : List (String, List String) ->
+  <Exec, IO> List (Result String Int)
+testAssertionCounts rows =
+  let bin = medakaBin
+  let argvs = map ((path, extraArgs) => assertionCountArgs path extraArgs) rows
+  let spawned = runCommandBatch bin testJobs argvs
+  zipWith3
+    ((path, _) args run =>
+      gradeAssertionCount bin path args (mapErr (e => "\{bin}: \{e}") run))
+    rows
+    argvs
+    spawned
+
+{- | How many `medaka test` runs `testAssertionCounts` starts at once:
+   `MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
+   online processors.
+
+   > testJobs > 0
+   True -}
+testJobs : <Exec, IO> Int
+testJobs = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
+  Some n if n > 0 => n
+  _ => onlineProcessors
+
+-- The number of online processors, or 4 when it cannot be read.
+onlineProcessors : <Exec> Int
+onlineProcessors = match runVerb "getconf" ["_NPROCESSORS_ONLN"]
+  Ok (0, out, _) => match toInt (trim out)
+    Some n if n > 0 => n
+    _ => 4
+  _ => 4
+
+-- The `medaka test` arguments that report the suite at `path` as JSON.
+assertionCountArgs : String -> List String -> List String
+assertionCountArgs path extraArgs = ["test"] ++ extraArgs ++ [path, "--json"]
+
+-- Grades one `medaka test --json` run of the suite at `path`, made by
+-- running `bin` with `args`, as `testAssertionCount` reports it.
+gradeAssertionCount : String ->
+  String ->
+  List String ->
+  Result String (Int, String, String) ->
+  Result String Int
+gradeAssertionCount bin path args spawned =
+  let line = unwords (bin :: args)
+  match spawned
     Err e => Err "could not run `\{line}`: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then
@@ -586,8 +645,8 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 # DESUGAR
 (DUse false (UseGroup ("io") ((mem "getEnvOr" false) (mem "runVerb" false))))
 (DUse false (UseGroup ("json") ((mem "asInt" false) (mem "get" false) (mem "parse" false))))
-(DUse false (UseGroup ("list") ((mem "somes" false))))
-(DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "trim" false) (mem "unwords" false))))
+(DUse false (UseGroup ("list") ((mem "somes" false) (mem "zipWith3" false))))
+(DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "toInt" false) (mem "trim" false) (mem "unwords" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" true) (mem "expectAll" false))))
 (DTypeSig true "medakaRoot" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "medakaRoot" () (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA_ROOT"))) (ELit (LString "."))))
@@ -628,7 +687,17 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig false "outputTail" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "outputTail" ((PVar "text")) (EApp (EApp (EVar "outputTailOf") (EVar "failureOutputTailChars")) (EVar "text")))
 (DTypeSig true "testAssertionCount" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec" "IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "args") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test"))) (EVar "extraArgs")) (EListLit (EVar "path") (ELit (LString "--json"))))) (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "medakaBin") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EVar "runVerb") (EVar "medakaBin")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString " — an assertion failed, or the file did not run: "))) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "outputTail") (EBinOp "++" (EVar "out") (EVar "err")))))) (ELit (LString "")))) (EMatch (EApp (EVar "parse") (EVar "out")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": --json output did not parse: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "summary"))) (EVar "j")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": no \"summary\" in --json output"))))) (arm (PCon "Some" (PVar "summary")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "passed"))) (EVar "summary")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": no \"summary.passed\" in --json output"))))) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "asInt") (EVar "p")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": \"summary.passed\" is not an integer"))))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))))))))))))))))
+(DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "args") (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "runVerb") (EVar "bin")) (EVar "args"))))))
+(DTypeSig true "testAssertionCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyEffect ("Exec" "IO") None (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DFunDef false "testAssertionCounts" ((PVar "rows")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "argvs") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "path") (PVar "extraArgs"))) (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs")))) (EVar "rows"))) (DoLet false false (PVar "spawned") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "bin")) (EVar "testJobs")) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "zipWith3") (ELam ((PTuple (PVar "path") PWild) (PVar "args") (PVar "run")) (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "mapErr") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "bin"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (EVar "run"))))) (EVar "rows")) (EVar "argvs")) (EVar "spawned")))))
+(DTypeSig false "testJobs" (TyEffect ("Exec" "IO") None (TyCon "Int")))
+(DFunDef false "testJobs" () (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EVar "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EVar "onlineProcessors"))))
+(DTypeSig false "onlineProcessors" (TyEffect ("Exec") None (TyCon "Int")))
+(DFunDef false "onlineProcessors" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "getconf"))) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (ELit (LInt 4))))) (arm PWild () (ELit (LInt 4)))))
+(DTypeSig false "assertionCountArgs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "assertionCountArgs" ((PVar "path") (PVar "extraArgs")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test"))) (EVar "extraArgs")) (EListLit (EVar "path") (ELit (LString "--json")))))
+(DTypeSig false "gradeAssertionCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
+(DFunDef false "gradeAssertionCount" ((PVar "bin") (PVar "path") (PVar "args") (PVar "spawned")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "bin") (EVar "args")))) (DoExpr (EMatch (EVar "spawned") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString " — an assertion failed, or the file did not run: "))) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "outputTail") (EBinOp "++" (EVar "out") (EVar "err")))))) (ELit (LString "")))) (EMatch (EApp (EVar "parse") (EVar "out")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": --json output did not parse: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "summary"))) (EVar "j")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": no \"summary\" in --json output"))))) (arm (PCon "Some" (PVar "summary")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "passed"))) (EVar "summary")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": no \"summary.passed\" in --json output"))))) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "asInt") (EVar "p")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": \"summary.passed\" is not an integer"))))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))))))))))))))))
 (DTypeSig true "unrosteredUnits" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "unrosteredUnits" ((PVar "namer") (PVar "known") (PVar "entries")) (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EVar "elem") (EVar "n")) (EVar "known"))))) (EApp (EVar "somes") (EApp (EApp (EVar "map") (EVar "namer")) (EVar "entries")))))
 (DTypeSig true "missingUnits" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
@@ -664,8 +733,8 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 # MARK
 (DUse false (UseGroup ("io") ((mem "getEnvOr" false) (mem "runVerb" false))))
 (DUse false (UseGroup ("json") ((mem "asInt" false) (mem "get" false) (mem "parse" false))))
-(DUse false (UseGroup ("list") ((mem "somes" false))))
-(DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "trim" false) (mem "unwords" false))))
+(DUse false (UseGroup ("list") ((mem "somes" false) (mem "zipWith3" false))))
+(DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "toInt" false) (mem "trim" false) (mem "unwords" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" true) (mem "expectAll" false))))
 (DTypeSig true "medakaRoot" (TyEffect ("IO") None (TyCon "String")))
 (DFunDef false "medakaRoot" () (EApp (EApp (EVar "getEnvOr") (ELit (LString "MEDAKA_ROOT"))) (ELit (LString "."))))
@@ -706,7 +775,17 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig false "outputTail" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "outputTail" ((PVar "text")) (EApp (EApp (EVar "outputTailOf") (EVar "failureOutputTailChars")) (EVar "text")))
 (DTypeSig true "testAssertionCount" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec" "IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
-(DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "args") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test"))) (EVar "extraArgs")) (EListLit (EVar "path") (ELit (LString "--json"))))) (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "medakaBin") (EVar "args")))) (DoExpr (EMatch (EApp (EApp (EVar "runVerb") (EVar "medakaBin")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString " — an assertion failed, or the file did not run: "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "outputTail") (EBinOp "++" (EVar "out") (EVar "err")))))) (ELit (LString "")))) (EMatch (EApp (EVar "parse") (EVar "out")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": --json output did not parse: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "summary"))) (EVar "j")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": no \"summary\" in --json output"))))) (arm (PCon "Some" (PVar "summary")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "passed"))) (EVar "summary")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": no \"summary.passed\" in --json output"))))) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "asInt") (EVar "p")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": \"summary.passed\" is not an integer"))))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))))))))))))))))
+(DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "args") (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "runVerb") (EVar "bin")) (EVar "args"))))))
+(DTypeSig true "testAssertionCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyEffect ("Exec" "IO") None (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DFunDef false "testAssertionCounts" ((PVar "rows")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "argvs") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "path") (PVar "extraArgs"))) (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs")))) (EVar "rows"))) (DoLet false false (PVar "spawned") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "bin")) (EVar "testJobs")) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "zipWith3") (ELam ((PTuple (PVar "path") PWild) (PVar "args") (PVar "run")) (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "mapErr") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "bin"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (EVar "run"))))) (EVar "rows")) (EVar "argvs")) (EVar "spawned")))))
+(DTypeSig false "testJobs" (TyEffect ("Exec" "IO") None (TyCon "Int")))
+(DFunDef false "testJobs" () (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EDictApp "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EVar "onlineProcessors"))))
+(DTypeSig false "onlineProcessors" (TyEffect ("Exec") None (TyCon "Int")))
+(DFunDef false "onlineProcessors" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "getconf"))) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (ELit (LInt 4))))) (arm PWild () (ELit (LInt 4)))))
+(DTypeSig false "assertionCountArgs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "assertionCountArgs" ((PVar "path") (PVar "extraArgs")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test"))) (EVar "extraArgs")) (EListLit (EVar "path") (ELit (LString "--json")))))
+(DTypeSig false "gradeAssertionCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
+(DFunDef false "gradeAssertionCount" ((PVar "bin") (PVar "path") (PVar "args") (PVar "spawned")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "unwords") (EBinOp "::" (EVar "bin") (EVar "args")))) (DoExpr (EMatch (EVar "spawned") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "could not run `")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EIf (EBinOp "/=" (EVar "code") (ELit (LInt 0))) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "line"))) (ELit (LString "` exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString " — an assertion failed, or the file did not run: "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "outputTail") (EBinOp "++" (EVar "out") (EVar "err")))))) (ELit (LString "")))) (EMatch (EApp (EVar "parse") (EVar "out")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": --json output did not parse: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "j")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "summary"))) (EVar "j")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": no \"summary\" in --json output"))))) (arm (PCon "Some" (PVar "summary")) () (EMatch (EApp (EApp (EVar "get") (ELit (LString "passed"))) (EVar "summary")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": no \"summary.passed\" in --json output"))))) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "asInt") (EVar "p")) (arm (PCon "None") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": \"summary.passed\" is not an integer"))))) (arm (PCon "Some" (PVar "n")) () (EApp (EVar "Ok") (EVar "n"))))))))))))))))
 (DTypeSig true "unrosteredUnits" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "unrosteredUnits" ((PVar "namer") (PVar "known") (PVar "entries")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "not") (EApp (EApp (EDictApp "elem") (EVar "n")) (EVar "known"))))) (EApp (EVar "somes") (EApp (EApp (EMethodRef "map") (EVar "namer")) (EVar "entries")))))
 (DTypeSig true "missingUnits" (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
