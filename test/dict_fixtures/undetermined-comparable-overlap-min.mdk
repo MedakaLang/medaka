@@ -1,0 +1,17 @@
+-- §3 min⊑ at an open goal: `sh (Q 1 True [])` poses `Sh (Q Int Bool (List ?e))`.
+-- Both instances match it as it stands, since `?e` sits where neither head
+-- constrains, and `impl Sh (Q Int Bool z)` is ⊑ `impl Sh (Q Int y z)`, so no
+-- binding of `?e` can overturn the choice.  Hand-derived: ACCEPT on all three
+-- verbs, `2`.  The ⊑-incomparable twin is `s6-2-t4-open-goal-deferred.mdk`.
+data Q a b c = Q a b c
+
+interface Sh a where
+  sh : a -> Int
+
+impl Sh (Q Int y z) where
+  sh _ = 1
+
+impl Sh (Q Int Bool z) where
+  sh _ = 2
+
+main = println (sh (Q (1 : Int) True []))

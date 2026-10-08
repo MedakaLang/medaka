@@ -1,0 +1,23 @@
+-- §3 an undetermined goal's candidates are the instances whose heads unify with
+-- it, whatever their shape.  `szTag (szNew n)` poses `Sz ?a` with `?a` in no
+-- member's type, and both `impl Sz (Int -> Int)` and `impl Sz a` unify with it.
+-- Two candidates and neither is ⊑ the other at an open goal, so no type chooses
+-- the dictionary (§6.2 T4).  Hand-derived: REJECT on all three verbs,
+-- T-AMBIGUOUS-INSTANCE, as with a data-headed impl in place of the arrow-headed
+-- one (#2028).
+interface Sz a where
+  szNew : Int -> a
+  szTag : a -> Int
+
+impl Sz (Int -> Int) where
+  szNew n = m => n + m
+  szTag _ = 5
+
+impl Sz a where
+  szNew _ = panic "general"
+  szTag _ = 7
+
+roundtrip : Sz a => Int -> Int
+roundtrip n = szTag (szNew n)
+
+main = println (roundtrip 14)

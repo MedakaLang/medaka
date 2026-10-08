@@ -283,9 +283,9 @@ compiler rejects its own prelude (`No impl of Eq for Int`), `make check-self` FA
 and **owes a correction**; it reasoned from a gate-shaped sibling while describing a payload-shaped
 table.
 
-⚠️ The two can nest: `checkUndeterminedObligation`'s RULE 3 is guarded on `implCountForIfaceU >= 2`
-with `| otherwise = ()`, so a missed count reads 0 and `T-AMBIGUOUS-INSTANCE` stops emitting — a
-genuine gate-shaped sub-case **inside** the payload table, which is presumably how they got conflated.
+⚠️ The two can nest. A verdict that reads a COUNT off a payload table is gate-shaped: a missed
+lookup reads 0 and the reject stops emitting. The undetermined-goal verdict was such a sub-case
+while it counted census tags; it now counts `goalCandidates`, which unifies instance heads.
 
 **Before asserting a key change will be caught (or missed), classify the table.** And note the effect
 can **partition by origin supply**: origin-carrying impls are written `TkIdent`, read `TkBare`, and
