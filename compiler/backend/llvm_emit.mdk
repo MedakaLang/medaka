@@ -5006,6 +5006,7 @@ findExternFamily name ((pred, fn) :: rest)
 -- saturated CApp head path (emitExternApplied) and the value-position eta-wrap
 -- (emitVar → emitExternEtaClosure); keeping the membership in ONE place means
 -- the two paths can never disagree about what counts as an extern.
+export
 isAnyExtern : String -> Bool
 isAnyExtern name =
   name == "arrayMakeWith" || anyList ((pred, _) => pred name) externCatalog

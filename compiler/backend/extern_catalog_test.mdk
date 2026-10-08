@@ -1,0 +1,244 @@
+-- Sibling test module for `compiler/backend/extern_catalog.mdk` ([P-TEST-SIBLING]).
+--
+-- Each test compares the catalog with a source the catalog must agree with,
+-- in both directions, and names every extern on the wrong side:
+--   (a) the `extern` declarations of `stdlib/runtime.mdk`, parsed with the
+--       compiler's own frontend;
+--   (b) the extern predicates each emitter dispatches through, plus the
+--       externs each emitter handles by exact name;
+--   (c) the interpreter's extern tables;
+--   (d) `test/CAPABILITY-EXCEPTIONS.txt`, row for row.
+--
+-- `--native` (the default): reading the live files needs `readFile`, which
+-- the interpreter's test capability list excludes.
+
+import test.{Expectation, expectAll, expectAtLeast, expectEqual, labelFail}
+import frontend.parser.{parse}
+import frontend.ast.{Decl(..)}
+import backend.extern_catalog.{
+  Disposition(..),
+  ExternRow,
+  WasmFamily(..),
+  catalogRow,
+  catalogRows,
+  dispositionFamily,
+  isBound,
+  ledgerEntry,
+  rowEval,
+  rowLlvm,
+  rowName,
+  rowWasm,
+}
+import backend.llvm_emit.{isAnyExtern}
+import backend.wasm_emit.{
+  isArrayExternW,
+  isByteBlockExternW,
+  isLeafExternW,
+  isNetExternW,
+  isStrExternW,
+}
+import eval.eval.{externBindings, ioExternBindings}
+import string.{split, startsWith, trim}
+import set as S
+
+runtimePath : String
+runtimePath = "stdlib/runtime.mdk"
+
+ledgerPath : String
+ledgerPath = "test/CAPABILITY-EXCEPTIONS.txt"
+
+-- `xs` minus `ys`, sorted.
+minus : List String -> List String -> List String
+minus xs ys = toList (S.difference (S.fromList xs) (S.fromList ys))
+
+-- Both directions of a set comparison, each labelled with what its leftover
+-- names are.
+sameNames : String -> String -> List String -> List String -> Expectation
+sameNames leftOnly rightOnly left right = expectAll [
+  labelFail leftOnly (expectEqual [] (minus left right)),
+  labelFail rightOnly (expectEqual [] (minus right left)),
+]
+
+externDeclNames : List Decl -> List String
+externDeclNames [] = []
+externDeclNames ((DExtern _ n _) :: rest) = n :: externDeclNames rest
+externDeclNames ((DAttrib _ d) :: rest) = externDeclNames (d :: rest)
+externDeclNames (_ :: rest) = externDeclNames rest
+
+catalogNames : List String
+catalogNames = map rowName catalogRows
+
+-- The names whose disposition in the projected column has a family, which is
+-- exactly the names that backend selects an emitter for.
+selected : (ExternRow -> Disposition f) -> List String
+selected column =
+  map rowName (filter (r => isSome (dispositionFamily (column r))) catalogRows)
+
+isCatalogName : String -> Bool
+isCatalogName n = isSome (catalogRow n)
+
+-- The externs both emitters handle by exact name rather than through a family
+-- predicate: the `Ref` cell (`emitApp` / `emitAppRef`), the constants written
+-- in place (`emitVar` / `emitVarRefPlain`), and the guard fallthrough sentinel.
+-- `arrayMakeWith` is not here on the llvm side: `isAnyExtern` names it itself.
+exactNameExterns : List String
+exactNameExterns = [
+  "Ref",
+  "setRef",
+  "pi",
+  "e",
+  "intMinBound",
+  "intMaxBound",
+  "charMinBound",
+  "charMaxBound",
+  "__fallthrough__",
+]
+
+isExactName : String -> Bool
+isExactName n = S.has n exactNameSet
+
+exactNameSet : S.Set String
+exactNameSet = S.fromList exactNameExterns
+
+wasmDispatched : String -> Bool
+wasmDispatched n =
+  isStrExternW n || isLeafExternW n || isArrayExternW n || isByteBlockExternW n
+
+-- The family `wasm_emit.mdk`'s own predicates put a dispatched extern in.
+wasmPredicateFamily : String -> Option WasmFamily
+wasmPredicateFamily n =
+  if isStrExternW n then
+    Some WasmStr
+  else if isLeafExternW n then
+    Some WasmLeaf
+  else if isArrayExternW n then
+    Some WasmArray
+  else if isByteBlockExternW n then
+    Some WasmByteBlock
+  else
+    None
+
+wasmFamilyName : Option WasmFamily -> String
+wasmFamilyName (Some WasmStr) = "str"
+wasmFamilyName (Some WasmLeaf) = "leaf"
+wasmFamilyName (Some WasmArray) = "array"
+wasmFamilyName (Some WasmByteBlock) = "byteBlock"
+wasmFamilyName (Some _) = "exact-name"
+wasmFamilyName None = "none"
+
+test "(a) the catalog has exactly one row per stdlib/runtime.mdk extern" =
+  match readFile runtimePath
+    Err e => expectEqual "read \{runtimePath}" "failed: \{e}"
+    Ok src =>
+      let declared = externDeclNames (parse src)
+      expectAll [
+        labelFail
+          "runtime.mdk externs parsed"
+          (expectAtLeast 100 (length declared)),
+        sameNames
+          "declared in runtime.mdk with no catalog row"
+          "catalog rows naming no runtime.mdk extern"
+          declared
+          catalogNames,
+        labelFail
+          "catalog rows sharing a name"
+          (expectEqual (length catalogNames) (S.size (S.fromList catalogNames))),
+      ]
+
+test "(b) llvm: the catalog selects exactly isAnyExtern plus the exact-name externs" =
+  sameNames
+    "llvm family in the catalog, not dispatched by llvm_emit"
+    "dispatched by llvm_emit, no llvm family in the catalog"
+    (selected rowLlvm)
+    (filter (n => isAnyExtern n || isExactName n) catalogNames)
+
+test "(b) wasm: the catalog selects exactly the dispatching predicates plus the exact-name externs" =
+  sameNames
+    "wasm family in the catalog, not dispatched by wasm_emit"
+    "dispatched by wasm_emit, no wasm family in the catalog"
+    (selected rowWasm)
+    (filter (n => wasmDispatched n || isExactName n) catalogNames)
+
+test "(b) wasm: each dispatched extern's family is the predicate that dispatches it" =
+  let rendered = r => wasmFamilyName (dispositionFamily (rowWasm r))
+  let disagree =
+    filter
+      (r =>
+        wasmDispatched (rowName r)
+          && rendered r /= wasmFamilyName (wasmPredicateFamily (rowName r)))
+      catalogRows
+  labelFail
+    "wasm family differs from wasm_emit's predicate"
+    (expectEqual [] (map rowName disagree))
+
+test "(b) wasm: every extern isNetExternW rejects is NotProvided" =
+  labelFail
+    "rejected by isNetExternW but bound in the catalog"
+    (expectEqual
+      []
+      (map
+        rowName
+        (filter
+          (r => isNetExternW (rowName r) && isBound (rowWasm r))
+          catalogRows)))
+
+test "(c) eval: the catalog binds exactly the externs the interpreter's tables bind" =
+  let tableKeys = map fst (externBindings ()) ++ map fst (ioExternBindings ())
+  sameNames
+    "Interpreted in the catalog, in no interpreter table"
+    "in an interpreter table, not Interpreted in the catalog"
+    (map rowName (filter (r => isBound (rowEval r)) catalogRows))
+    (filter isCatalogName tableKeys)
+
+-- A ledger row as one comparable line: extern, engine, category, reason.
+ledgerLine : String -> String -> String -> String -> String
+ledgerLine ext engine category why = "\{ext}\t\{engine}\t\{category}\t\{why}"
+
+ledgerRowLine : String -> Option String
+ledgerRowLine line =
+  if trim line == "" || startsWith "#" (trim line) then
+    None
+  else match split "\t" line
+    ext :: engine :: category :: why :: _ =>
+      Some (ledgerLine ext engine category why)
+    _ => Some line
+
+catalogLedgerLines : ExternRow -> List String
+catalogLedgerLines r =
+  catalogLedgerLine (rowName r) "interp" (rowEval r)
+    ++ catalogLedgerLine (rowName r) "llvm" (rowLlvm r)
+    ++ catalogLedgerLine (rowName r) "wasm" (rowWasm r)
+
+catalogLedgerLine : String -> String -> Disposition f -> List String
+catalogLedgerLine ext engine d = match ledgerEntry d
+  Some (category, why) => [ledgerLine ext engine category why]
+  None => []
+
+frozenNotBound : ExternRow -> List String
+frozenNotBound r =
+  frozenUnbound (rowName r) "interp" (rowEval r)
+    ++ frozenUnbound (rowName r) "llvm" (rowLlvm r)
+    ++ frozenUnbound (rowName r) "wasm" (rowWasm r)
+
+frozenUnbound : String -> String -> Disposition f -> List String
+frozenUnbound ext engine d = match ledgerEntry d
+  Some ("FROZEN-CONSTANT", _) => if isBound d then [] else ["\{ext} \{engine}"]
+  _ => []
+
+test "(d) every ledger row is a catalog gap with the same extern, engine, kind and reason, and back" =
+  match readFile ledgerPath
+    Err e => expectEqual "read \{ledgerPath}" "failed: \{e}"
+    Ok src =>
+      let ledger = filterMap ledgerRowLine (split "\n" src)
+      let table = flatMap catalogLedgerLines catalogRows
+      expectAll [
+        labelFail "ledger rows parsed" (expectAtLeast 1 (length ledger)),
+        sameNames
+          "in the ledger, not a catalog gap"
+          "a catalog gap or caveat with no ledger row"
+          ledger
+          table,
+        labelFail
+          "FROZEN-CONSTANT rows not bound"
+          (expectEqual [] (flatMap frozenNotBound catalogRows)),
+      ]

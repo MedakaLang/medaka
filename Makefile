@@ -139,6 +139,9 @@ test: medaka
 	## #3306: private_mangle.mdk's ctor-export table (incl. the #1359 re-export
 	## definer) is private; its sibling drives the exported mangleUnits.
 	./medaka test compiler/backend/private_mangle_test.mdk
+	## The extern catalog has no importer yet; its sibling checks every row
+	## against runtime.mdk, both emitters, the interpreter and the ledger.
+	./medaka test compiler/backend/extern_catalog_test.mdk
 	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 	## else runs this file's doctests — no gate script invokes `medaka test` on

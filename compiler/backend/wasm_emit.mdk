@@ -1711,6 +1711,7 @@ anyBind p (b :: rest) = if p b then True else anyBind p rest
 -- True if any body contains a String/Char literal, or applies a String/IO extern
 -- (intToString/putStrLn/stringConcat/…).  Any of these forces the §3.3 $str rep +
 -- the byte-write runtime + ref-mode.  Detected structurally over every clause body.
+export
 isStrExternW : String -> Bool
 isStrExternW name = contains
   name
@@ -1757,6 +1758,7 @@ isStrExternW name = contains
 -- string externs, do NOT pull in the `$str` rep (hashString is the exception and is
 -- listed under isStrExternW since it reads a $str).  Detected so emitProgram can
 -- force `useRef` and gate the RNG / hash preamble.
+export
 isLeafExternW : String -> Bool
 isLeafExternW name = contains
   name
@@ -1967,6 +1969,7 @@ isFloatMathExternW name =
 -- with a clear message rather than fall through to emitIndirectApp (which would only
 -- report a generic "unbound variable").  This single-set guard is wired into both
 -- application dispatch ladders (emitAppRef, emitTailAppRef).
+export
 isNetExternW : String -> Bool
 -- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
@@ -2275,6 +2278,7 @@ stringLitsW _ _ = None
 -- for arrayMakeWith's per-index closure call).  Detected so emitProgram forces the
 -- $arr rep (via noteW8Extern) and the dispatch routes here.  NOTE the per-extern arg
 -- orders (some take the index/size FIRST) — see stdlib/runtime.mdk:92-104.
+export
 isArrayExternW : String -> Bool
 isArrayExternW name = contains
   name
@@ -2302,6 +2306,7 @@ isArrayExternW name = contains
 -- (which the two Array-crossing prims name) — see noteW8Extern below.
 -- NOTE the arg orders, which follow stdlib/runtime.mdk, not the receiver-last
 -- reading: the index/size comes FIRST, the block LAST, exactly as for $arr.
+export
 isByteBlockExternW : String -> Bool
 -- Deliberately a per-backend copy of llvm_emit.mdk's `isByteBlockExtern`, not a
 -- shared list.  test/diff_compiler_capability_matrix.sh derives each engine's
