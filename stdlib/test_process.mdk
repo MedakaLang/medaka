@@ -8,7 +8,8 @@
    test body in a directory of its own and removes it afterwards.
 
    A test that grades a directory of `medaka test` suites reads their
-   assertion counts with `testAssertionCount` and checks its roster against
+   assertion counts with `testAssertionCount`, or with `testAssertionCounts`
+   to run the suites side by side, and checks its roster against
    the directory with `testFileStem`, `unrosteredTestFiles` and
    `missingTestFiles`. `expectFloor` grades one count against its committed
    floor, and `mdkModuleStem` names the modules of a directory that is not
@@ -19,7 +20,7 @@
 
 import io.{getEnvOr, runVerb}
 import json.{asInt, get, parse}
-import list.{somes}
+import list.{somes, zipWith3}
 import string.{
   contains,
   drop,
@@ -29,6 +30,7 @@ import string.{
   startsWith,
   stripPrefix,
   stripSuffix,
+  toInt,
   trim,
   unwords,
 }
@@ -395,9 +397,66 @@ outputTail text = outputTailOf failureOutputTailChars text
 export
 testAssertionCount : String -> List String -> <Exec, IO> Result String Int
 testAssertionCount path extraArgs =
-  let args = ["test"] ++ extraArgs ++ [path, "--json"]
-  let line = unwords (medakaBin :: args)
-  match runVerb medakaBin args
+  let bin = medakaBin
+  let args = assertionCountArgs path extraArgs
+  gradeAssertionCount bin path args (runVerb bin args)
+
+{- | `testAssertionCount` for every `(path, extraArgs)` row, with the suites
+   run side by side.
+
+   Each element is what `testAssertionCount` returns for that row, in the
+   same order, with the same error text. At most `testJobs` suites run at
+   once.
+
+   > testAssertionCounts [("no-such-suite.mdk", [])] == [testAssertionCount "no-such-suite.mdk" []]
+   True -}
+export
+testAssertionCounts : List (String, List String) ->
+  <Exec, IO> List (Result String Int)
+testAssertionCounts rows =
+  let bin = medakaBin
+  let argvs = map ((path, extraArgs) => assertionCountArgs path extraArgs) rows
+  let spawned = runCommandBatch bin testJobs argvs
+  zipWith3
+    ((path, _) args run =>
+      gradeAssertionCount bin path args (mapErr (e => "\{bin}: \{e}") run))
+    rows
+    argvs
+    spawned
+
+{- | How many `medaka test` runs `testAssertionCounts` starts at once:
+   `MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
+   online processors.
+
+   > testJobs > 0
+   True -}
+testJobs : <Exec, IO> Int
+testJobs = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
+  Some n if n > 0 => n
+  _ => onlineProcessors
+
+-- The number of online processors, or 4 when it cannot be read.
+onlineProcessors : <Exec> Int
+onlineProcessors = match runVerb "getconf" ["_NPROCESSORS_ONLN"]
+  Ok (0, out, _) => match toInt (trim out)
+    Some n if n > 0 => n
+    _ => 4
+  _ => 4
+
+-- The `medaka test` arguments that report the suite at `path` as JSON.
+assertionCountArgs : String -> List String -> List String
+assertionCountArgs path extraArgs = ["test"] ++ extraArgs ++ [path, "--json"]
+
+-- Grades one `medaka test --json` run of the suite at `path`, made by
+-- running `bin` with `args`, as `testAssertionCount` reports it.
+gradeAssertionCount : String ->
+  String ->
+  List String ->
+  Result String (Int, String, String) ->
+  Result String Int
+gradeAssertionCount bin path args spawned =
+  let line = unwords (bin :: args)
+  match spawned
     Err e => Err "could not run `\{line}`: \{e}"
     Ok (code, out, err) =>
       if code /= 0 then

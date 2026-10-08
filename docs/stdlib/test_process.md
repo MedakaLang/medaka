@@ -10,7 +10,8 @@ binary) spawns it and grades what came back. `expectSpawnOk`,
 test body in a directory of its own and removes it afterwards.
 
 A test that grades a directory of `medaka test` suites reads their
-assertion counts with `testAssertionCount` and checks its roster against
+assertion counts with `testAssertionCount`, or with `testAssertionCounts`
+to run the suites side by side, and checks its roster against
 the directory with `testFileStem`, `unrosteredTestFiles` and
 `missingTestFiles`. `expectFloor` grades one count against its committed
 floor, and `mdkModuleStem` names the modules of a directory that is not
@@ -314,6 +315,25 @@ suite at `path`, or `Err` naming what went wrong.
 needs the compiled engine is spawned with `["--native"]`. A suite that
 exits nonzero is an `Err`, never a smaller count. The `Err` for a
 failing run carries the tail of its output.
+
+### `testAssertionCounts`
+
+```
+testAssertionCounts : List (String, List String) -> <Exec, IO> List (Result String Int)
+testAssertionCounts rows
+```
+
+`testAssertionCount` for every `(path, extraArgs)` row, with the suites
+run side by side.
+
+Each element is what `testAssertionCount` returns for that row, in the
+same order, with the same error text. At most `testJobs` suites run at
+once.
+
+```medaka
+> testAssertionCounts [("no-such-suite.mdk", [])] == [testAssertionCount "no-such-suite.mdk" []]
+True
+```
 
 ### `unrosteredUnits`
 

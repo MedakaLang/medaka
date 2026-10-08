@@ -40,14 +40,14 @@
    than through a `test/gates.toml` row. -}
 
 import io.{readLines}
-import list.{lookup}
+import list.{drop, lookup, splitAt, zipWith}
 import test.{Expectation(..)}
 import test_process.{
   disagreeingFloorBlocks,
   expectFloor,
   mdkModuleStem,
   missingUnits,
-  testAssertionCount,
+  testAssertionCounts,
   underRoot,
   ungradedRosterRows,
   unrosteredUnits,
@@ -87,7 +87,7 @@ data Engine = Eval | NativeCapability | NativeSpeed | EvalAndNative
 -- The extra `medaka test` arguments a module is spawned with.
 --
 -- `EvalAndNative` is two spawns and so has no single argument list;
--- `runModule` matches it before it can reach here, and the arm below
+-- `engineArms` matches it before it can reach here, and the arm below
 -- exists only because this function must be total.
 engineArgs : Engine -> List String
 engineArgs Eval = ["--engines", "eval"]
@@ -125,11 +125,12 @@ engineLabel EvalAndNative = "eval+native"
    what typechecks the generated file, and it is the only arm that can say
    so.
 
-   `NativeCapability` (five rows): the eval arm refuses the module outright
+   `NativeCapability` (six rows): the eval arm refuses the module outright
    with `E-PANIC: unbound identifier` on `listDir`, `readFile` or
    `runCommand` — host primitives `medaka test`'s interpreter capability
    policy does not bind — so this is a capability question, not a timing
-   one.
+   one. `runtime` is refused the same way over the `runCommandBatch`
+   examples on its own extern declaration.
 
    `core` is `Eval` and must stay `Eval`: `medaka test --native
    stdlib/core.mdk` skips its DOCTESTS with a loud named skip citing #1334,
@@ -207,12 +208,13 @@ suites = [
   ("path", (34, EvalAndNative)),
   ("random_state_test", (3, EvalAndNative)),
   ("regex", (94, EvalAndNative)),
+  ("runtime", (4, NativeCapability)),
   ("set", (64, EvalAndNative)),
   -- The assertion library every `*_test.mdk` in the tree imports, whose own
   -- doctests and props importing it never runs. Neither of the two vehicles
   -- named in the header reaches this module either.
   ("test", (72, NativeCapability)),
-  ("test_process", (27, NativeCapability)),
+  ("test_process", (31, NativeCapability)),
   ("time", (36, EvalAndNative)),
   ("toml", (56, EvalAndNative)),
   -- The fixed-width types' wrapping, conversions and bit operations. Native
@@ -243,7 +245,6 @@ zeroAssertionModules : List (String, Engine)
 zeroAssertionModules = [
   ("crypto/sha256", Eval),
   ("net_async", Eval),
-  ("runtime", Eval),
 ]
 
 zeroAssertionNames : List String
@@ -284,41 +285,57 @@ exempt =
 exemptNames : List String
 exemptNames = map fst exempt
 
-{- | Runs one module under its engine and returns its executed-assertion
-   count, or an error naming the engine and what went wrong.
+-- The path of the module `name`.
+modulePath : String -> <IO> String
+modulePath name = underRoot "stdlib/\{name}.mdk"
+
+{- | The extra `medaka test` arguments of each spawn a module takes under
+   `engine`, one list per arm.
 
    Every constructor is named explicitly and none of the clauses is a bare
-   variable. `EvalAndNative` is the one engine that is two spawns, so it
-   must reach `runBothEngines` rather than `runOneSpawn`, and a catch-all
-   clause makes that dependent on clause ORDER: with the two clauses
-   swapped, the variable pattern matches `EvalAndNative` too, every row
+   variable. `EvalAndNative` is the one engine that is two spawns, and a
+   catch-all clause makes that dependent on clause ORDER: with the clauses
+   reordered, the variable pattern matches `EvalAndNative` too, every row
    silently runs its eval arm alone, and the file still exits 0 reporting
    every floor met. Exhaustive arms make the same mistake a missing-arm
-   compile error instead. -}
-runModule : String -> Engine -> <Exec, IO> Result String Int
-runModule name EvalAndNative = runBothEngines (underRoot "stdlib/\{name}.mdk")
-runModule name Eval = runOneSpawn name Eval
-runModule name NativeCapability = runOneSpawn name NativeCapability
-runModule name NativeSpeed = runOneSpawn name NativeSpeed
+   compile error instead.
 
-{- | One `medaka test` spawn of `name` under `engine`.
+   Two spawns rather than one `--engines eval,native` spawn because that
+   form emits only the first engine's object under `--json`, which is the
+   only output `testAssertionCount` can grade. -}
+engineArms : Engine -> List (List String)
+engineArms EvalAndNative = [["--engines", "eval"], ["--native"]]
+engineArms Eval = [engineArgs Eval]
+engineArms NativeCapability = [engineArgs NativeCapability]
+engineArms NativeSpeed = [engineArgs NativeSpeed]
+
+-- One `testAssertionCounts` row per arm of the module `name` under `engine`.
+moduleSpawns : (String, Engine) -> <IO> List (String, List String)
+moduleSpawns (name, engine) =
+  map (args => (modulePath name, args)) (engineArms engine)
+
+{- | Grades the counts of the module at `path`, one per arm of `engine` in
+   `engineArms` order, as the count it ran or an error naming the engine
+   and what went wrong.
 
    The engine is named in the error because the arms fail differently: a
    capability refusal from the eval arm and a genuine assertion failure both
    surface as a nonzero exit, and only the label says which arm was asked. -}
-runOneSpawn : String -> Engine -> <Exec, IO> Result String Int
-runOneSpawn name engine =
-  let path = underRoot "stdlib/\{name}.mdk"
-  match testAssertionCount path (engineArgs engine)
-    Err e => Err "\{path} (\{engineLabel engine}): \{e}"
-    Ok n => Ok n
+gradeArms : String -> Engine -> List (Result String Int) -> Result String Int
+gradeArms path EvalAndNative [evalCounted, nativeCounted] =
+  agreeingArms path evalCounted nativeCounted
+gradeArms path Eval [counted] = oneArm path Eval counted
+gradeArms path NativeCapability [counted] = oneArm path NativeCapability counted
+gradeArms path NativeSpeed [counted] = oneArm path NativeSpeed counted
+gradeArms path engine counted =
+  Err
+    "\{path} (\{engineLabel engine}): \{intToString (length counted)} spawn results for \{intToString (length (engineArms engine))} arms"
 
-{- | Runs one module twice, once under each engine, and returns the count
-   the two arms agree on.
+oneArm : String -> Engine -> Result String Int -> Result String Int
+oneArm path engine counted =
+  mapErr (e => "\{path} (\{engineLabel engine}): \{e}") counted
 
-   Two spawns rather than one `--engines eval,native` spawn because that
-   form emits only the first engine's object under `--json`, which is the
-   only output `testAssertionCount` can grade.
+{- | The count the eval and native arms of the module at `path` agree on.
 
    The two counts must be equal, not merely both at or above the floor.
    Reducing them to the lower one would pass a module whose native arm has
@@ -329,24 +346,51 @@ runOneSpawn name engine =
    which one, since the two fail for unrelated reasons (the interpreter
    over an unbound extern, the native backend over a doctest that does not
    typecheck). -}
-runBothEngines : String -> <Exec, IO> Result String Int
-runBothEngines path = match testAssertionCount path ["--engines", "eval"]
-  Err e => Err "\{path} (eval arm of \{engineLabel EvalAndNative}): \{e}"
-  Ok evalRan => match testAssertionCount path ["--native"]
-    Err e => Err "\{path} (native arm of \{engineLabel EvalAndNative}): \{e}"
-    Ok nativeRan =>
-      if evalRan == nativeRan then
-        Ok evalRan
-      else
-        Err
-          "\{path} (\{engineLabel EvalAndNative}): the eval arm ran \{intToString evalRan} assertions and the native arm ran \{intToString nativeRan} — the arms must run the same assertions, so one of them has stopped discovering some"
+agreeingArms : String ->
+  Result String Int ->
+  Result String Int ->
+  Result String Int
+agreeingArms path (Err e) _ =
+  Err "\{path} (eval arm of \{engineLabel EvalAndNative}): \{e}"
+agreeingArms path (Ok _) (Err e) =
+  Err "\{path} (native arm of \{engineLabel EvalAndNative}): \{e}"
+agreeingArms path (Ok evalRan) (Ok nativeRan) =
+  if evalRan == nativeRan then
+    Ok evalRan
+  else
+    Err
+      "\{path} (\{engineLabel EvalAndNative}): the eval arm ran \{intToString evalRan} assertions and the native arm ran \{intToString nativeRan} — the arms must run the same assertions, so one of them has stopped discovering some"
 
-{- | Every rostered module run exactly once, shared by every assertion below
-   — top-level nullary bindings are memoized, so a spawn placed here and
-   read from two `test` decls executes once, not twice. -}
+-- Pairs each `(name, engine)` row with its graded count, reading each row's
+-- arms off `counts` in order.
+gradeRows : List (String, Engine) ->
+  List (Result String Int) ->
+  <IO> List (String, Result String Int)
+gradeRows [] _ = []
+gradeRows ((name, engine) :: rest) counts =
+  let (mine, later) = splitAt (length (engineArms engine)) counts
+  (name, gradeArms (modulePath name) engine mine) :: gradeRows rest later
+
+-- Every `suites` row followed by every `zeroAssertionModules` row.
+moduleRows : List (String, Engine)
+moduleRows =
+  map ((name, (_, engine)) => (name, engine)) suites ++ zeroAssertionModules
+
+{- | Every module run exactly once, all of them in one batch of spawns,
+   shared by every assertion below — top-level nullary bindings are
+   memoized, so a spawn placed here and read from two `test` decls executes
+   once, not twice. -}
+graded : <Exec, IO> List (String, Result String Int)
+graded =
+  gradeRows moduleRows (testAssertionCounts (flatMap moduleSpawns moduleRows))
+
+-- Every rostered module's floor and graded count.
 results : <Exec, IO> List (String, (Int, Result String Int))
 results =
-  map ((name, (floor, engine)) => (name, (floor, runModule name engine))) suites
+  zipWith
+    ((name, (floor, _)) (_, counted) => (name, (floor, counted)))
+    suites
+    graded
 
 {- | Grades one module's floor. The message names the module and both
    numbers on a miss; a run that failed outright reports the spawn's own
@@ -424,11 +468,13 @@ test "stdlib/random_state_test.mdk executed >= 3 assertions" =
 
 test "stdlib/regex.mdk executed >= 94 assertions" = floorExpectation "regex"
 
+test "stdlib/runtime.mdk executed >= 4 assertions" = floorExpectation "runtime"
+
 test "stdlib/set.mdk executed >= 64 assertions" = floorExpectation "set"
 
 test "stdlib/test.mdk executed >= 72 assertions" = floorExpectation "test"
 
-test "stdlib/test_process.mdk executed >= 27 assertions" =
+test "stdlib/test_process.mdk executed >= 31 assertions" =
   floorExpectation "test_process"
 
 test "stdlib/time.mdk executed >= 36 assertions" = floorExpectation "time"
@@ -451,8 +497,7 @@ test "stdlib/vector.mdk executed >= 32 assertions" = floorExpectation "vector"
 -- # The zero-assertion pins
 
 zeroResults : <Exec, IO> List (String, Result String Int)
-zeroResults =
-  map ((name, engine) => (name, runModule name engine)) zeroAssertionModules
+zeroResults = drop (length suites) graded
 
 {- | Grades one exempt-because-empty module: its count must be exactly 0,
    never merely at least 0. A module that has grown an assertion fails here
@@ -474,8 +519,6 @@ test "stdlib/crypto/sha256.mdk runs 0 assertions" =
   zeroExpectation "crypto/sha256"
 
 test "stdlib/net_async.mdk runs 0 assertions" = zeroExpectation "net_async"
-
-test "stdlib/runtime.mdk runs 0 assertions" = zeroExpectation "runtime"
 
 -- # Non-vacuity
 

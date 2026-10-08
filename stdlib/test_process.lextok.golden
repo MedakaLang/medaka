@@ -21,6 +21,8 @@ IMPORT
 IDENT "list"
 DOT_LBRACE
 IDENT "somes"
+COMMA
+IDENT "zipWith3"
 RBRACE
 NEWLINE
 IMPORT
@@ -41,6 +43,8 @@ COMMA
 IDENT "stripPrefix"
 COMMA
 IDENT "stripSuffix"
+COMMA
+IDENT "toInt"
 COMMA
 IDENT "trim"
 COMMA
@@ -1271,7 +1275,223 @@ IDENT "extraArgs"
 EQUAL
 INDENT
 LET
+IDENT "bin"
+EQUAL
+IDENT "medakaBin"
+NEWLINE
+LET
 IDENT "args"
+EQUAL
+IDENT "assertionCountArgs"
+IDENT "path"
+IDENT "extraArgs"
+NEWLINE
+IDENT "gradeAssertionCount"
+IDENT "bin"
+IDENT "path"
+IDENT "args"
+LPAREN
+IDENT "runVerb"
+IDENT "bin"
+IDENT "args"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "testAssertionCounts"
+COLON
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "List"
+UPPER "String"
+RPAREN
+ARROW
+LT
+UPPER "Exec"
+COMMA
+UPPER "IO"
+GT
+UPPER "List"
+LPAREN
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "testAssertionCounts"
+IDENT "rows"
+EQUAL
+INDENT
+LET
+IDENT "bin"
+EQUAL
+IDENT "medakaBin"
+NEWLINE
+LET
+IDENT "argvs"
+EQUAL
+IDENT "map"
+LPAREN
+LPAREN
+IDENT "path"
+COMMA
+IDENT "extraArgs"
+RPAREN
+FAT_ARROW
+IDENT "assertionCountArgs"
+IDENT "path"
+IDENT "extraArgs"
+RPAREN
+IDENT "rows"
+NEWLINE
+LET
+IDENT "spawned"
+EQUAL
+IDENT "runCommandBatch"
+IDENT "bin"
+IDENT "testJobs"
+IDENT "argvs"
+NEWLINE
+IDENT "zipWith3"
+LPAREN
+LPAREN
+IDENT "path"
+COMMA
+UNDERSCORE
+RPAREN
+IDENT "args"
+IDENT "run"
+FAT_ARROW
+INDENT
+IDENT "gradeAssertionCount"
+IDENT "bin"
+IDENT "path"
+IDENT "args"
+LPAREN
+IDENT "mapErr"
+LPAREN
+IDENT "e"
+FAT_ARROW
+INTERP_OPEN ""
+IDENT "bin"
+INTERP_MID ": "
+IDENT "e"
+INTERP_END ""
+RPAREN
+IDENT "run"
+RPAREN
+NEWLINE
+DEDENT
+RPAREN
+IDENT "rows"
+IDENT "argvs"
+IDENT "spawned"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "testJobs"
+COLON
+LT
+UPPER "Exec"
+COMMA
+UPPER "IO"
+GT
+UPPER "Int"
+NEWLINE
+IDENT "testJobs"
+EQUAL
+MATCH
+IDENT "getEnv"
+STRING "MEDAKA_TEST_JOBS"
+PIPE_RIGHT
+IDENT "flatMap"
+IDENT "toInt"
+INDENT
+UPPER "Some"
+IDENT "n"
+IF
+IDENT "n"
+GT
+INT 0
+FAT_ARROW
+IDENT "n"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+IDENT "onlineProcessors"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "onlineProcessors"
+COLON
+LT
+UPPER "Exec"
+GT
+UPPER "Int"
+NEWLINE
+IDENT "onlineProcessors"
+EQUAL
+MATCH
+IDENT "runVerb"
+STRING "getconf"
+LBRACKET
+STRING "_NPROCESSORS_ONLN"
+RBRACKET
+INDENT
+UPPER "Ok"
+LPAREN
+INT 0
+COMMA
+IDENT "out"
+COMMA
+UNDERSCORE
+RPAREN
+FAT_ARROW
+MATCH
+IDENT "toInt"
+LPAREN
+IDENT "trim"
+IDENT "out"
+RPAREN
+INDENT
+UPPER "Some"
+IDENT "n"
+IF
+IDENT "n"
+GT
+INT 0
+FAT_ARROW
+IDENT "n"
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+INT 4
+NEWLINE
+DEDENT
+NEWLINE
+UNDERSCORE
+FAT_ARROW
+INT 4
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "assertionCountArgs"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "assertionCountArgs"
+IDENT "path"
+IDENT "extraArgs"
 EQUAL
 LBRACKET
 STRING "test"
@@ -1285,20 +1505,54 @@ COMMA
 STRING "--json"
 RBRACKET
 NEWLINE
+IDENT "gradeAssertionCount"
+COLON
+UPPER "String"
+ARROW
+INDENT
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "String"
+COMMA
+UPPER "String"
+RPAREN
+ARROW
+NEWLINE
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "gradeAssertionCount"
+IDENT "bin"
+IDENT "path"
+IDENT "args"
+IDENT "spawned"
+EQUAL
+INDENT
 LET
 IDENT "line"
 EQUAL
 IDENT "unwords"
 LPAREN
-IDENT "medakaBin"
+IDENT "bin"
 CONS
 IDENT "args"
 RPAREN
 NEWLINE
 MATCH
-IDENT "runVerb"
-IDENT "medakaBin"
-IDENT "args"
+IDENT "spawned"
 INDENT
 UPPER "Err"
 IDENT "e"
