@@ -1168,7 +1168,7 @@ plan reduced cost.
 | Physical abstraction leaks into AP | field ownership table in every stage issue; reject LLVM/Wasm types in V/A/AP |
 | Loud path becomes silent during fallback removal | preserve severity; could-not-pass-before fixtures for new values |
 | Native fixpoint moves unexpectedly | two-rebuild/seed discipline and C3 receipts |
-| Wasm host set drifts | derive host/import keys from `ReachableExternRequirements`, keep `CapabilityManifest` unchanged, no encoded count; preserve `diff_compiler_wasm_shim_parity.sh` until superseded by generated construction |
+| Wasm host set drifts | derive host/import keys from `ReachableExternRequirements`, keep `CapabilityManifest` unchanged, no encoded count; preserve `diff_compiler_wasm_shim_parity_test.mdk` until superseded by generated construction |
 | Migration leaves two permanent authorities | X-X exit criterion and structural ratchets |
 
 ## 15. Tracker relationship

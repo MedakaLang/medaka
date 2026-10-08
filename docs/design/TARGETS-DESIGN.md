@@ -512,7 +512,7 @@ and a WIT `world` is what a profile would lower to there.
 | `test/CAPABILITY-EXCEPTIONS.txt`, hand-kept | derived from the catalog's `NotProvided` rows, or retired (T1) |
 | `test/diff_compiler_capability_matrix.sh` scrapes emitter source | reads the catalog table (T1) |
 | `wasm:emitter-gap` rows in `test/engine_divergence.txt` quoting `unbound variable` | drained; the program is refused at `check` (T2) |
-| `test/diff_compiler_wasm_shim_parity.sh` byte-diffs marked blocks | retired; import key set ⊆ profile slices, derived (T3) |
+| `test/diff_compiler_wasm_shim_parity_test.mdk` byte-diffs marked blocks | retired; import key set ⊆ profile slices, derived (T3) |
 | `playground/main.js` hand list of shipped stdlib modules | generated from the catalog (T3) |
 | `compiler/backend/wasm_file_grants.mdk` refuses pattern grants | deleted; the host enforces the grant (T3) |
 | `test/wasm/diff_wasm_ffi_wall.sh`, one direction | both directions, check-time (T4) |

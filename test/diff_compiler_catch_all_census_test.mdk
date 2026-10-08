@@ -1,0 +1,711 @@
+{- | Catch-all clause ratchet over compiler/types/typecheck.mdk and
+   compiler/types/repr.mdk (#2551). Replaces diff_compiler_catch_all_census.sh
+   and the check mode of test/catch_all_census.py (the .py stays as the
+   ledger writer; the ledgers are not touched here).
+
+   PROVES: the list of top-level multi-clause functions in those two files that
+   dispatch on an Expr or Decl constructor at some parameter position, whose
+   FINAL clause is a catch-all (`_` or a bare variable) there, and whose named
+   constructors do not cover the whole sum, equals test/catch_all_census.ledger
+   row for row (a NEW or a VANISHED site fails). Every Decl constructor declared
+   in compiler/frontend/ast.mdk has a runner row in test/decl_runner.ledger, and
+   no runner row is an unfilled TODO.
+
+   DOES NOT PROVE: that a listed site is justified (the ledger records a human
+   decision); that the clause-shape text census finds every catch-all (it is not
+   a type checker); that a DECL_RUNNERS entry names the consumer that really
+   executes the constructor. Regenerate after a deliberate change with
+   `python3 test/catch_all_census.py . > test/catch_all_census.ledger` and
+   `python3 test/catch_all_census.py . --decl-runners > test/decl_runner.ledger`
+   (a drift failure prints the same command).
+   The DECL_RUNNERS table below mirrors test/catch_all_census.py; keep the two in
+   step while that script exists. Needs no built medaka binary; reads sources only.
+-}
+
+import test_process.{underRoot}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEqualLines, expectNoFindings,
+  fail, pass
+}
+import string.{
+  lines, split, join, trim, trimLeft, drop, startsWith, endsWith, contains,
+  toChars, fromChars, isSpace, isUpper, isLower, isAlphaNum, toInt
+}
+import list.{nub, sort, sortBy, takeWhile, dropWhile}
+
+-- Read every subject file once. Result is (ast, typecheck+repr, site ledger, decl ledger).
+loadAll : <IO, FileRead> Result String (String, String, String, String)
+loadAll = do
+  astText <- readFile (underRoot "compiler/frontend/ast.mdk")
+  tc <- readFile (underRoot "compiler/types/typecheck.mdk")
+  rp <- readFile (underRoot "compiler/types/repr.mdk")
+  siteLedger <- readFile (underRoot "test/catch_all_census.ledger")
+  declLedger <- readFile (underRoot "test/decl_runner.ledger")
+  Ok (astText, "\{tc}\n\{rp}", siteLedger, declLedger)
+
+siteCheck : <IO, FileRead> Expectation
+siteCheck = match loadAll
+  Err e => fail "catch_all_census: could not read the census subject: \{e}"
+  Ok (astText, srcText, siteLedger, _) => siteExpect astText srcText siteLedger
+
+declCheck : <IO, FileRead> Expectation
+declCheck = match loadAll
+  Err e => fail "catch_all_census: could not read the decl-runner subject: \{e}"
+  Ok (astText, _, _, declLedger) => declExpect astText declLedger
+
+siteExpect : String -> String -> String -> Expectation
+siteExpect astText srcText siteLedger =
+  let rows = censusRows astText srcText
+  expectAll
+    [
+      expectAtLeast 2 (length (ctorSet "Expr" astText)),
+      expectAtLeast 2 (length (ctorSet "Decl" astText)),
+      -- floor catches a broken parse; the ledger shrinks by design
+      expectAtLeast 54 (length rows),
+      ledgerBytes "test/catch_all_census.ledger" siteLedger,
+      driftCheck
+        "test/catch_all_census.ledger"
+        "python3 test/catch_all_census.py . > test/catch_all_census.ledger"
+        (dropFinalEmpty (lines siteLedger))
+        rows,
+    ]
+
+-- Ledger bytes: LF-only and newline-terminated, as the script's byte-exact diff required.
+ledgerBytes : String -> String -> Expectation
+ledgerBytes path text =
+  if contains "\r" text then
+    fail "\{path} contains a carriage return; ledgers are LF-only"
+  else if endsWith "\n" text then
+    pass
+  else
+    fail "\{path} has no final newline"
+
+-- Row-for-row equality; a red names the first difference and the regeneration command.
+driftCheck : String -> String -> List String -> List String -> Expectation
+driftCheck path regen want got =
+  if want == got then
+    pass
+  else
+    fail
+      "\{path} drifted from the census (first difference: \{firstDiff want got}); regenerate with: \{regen}"
+
+firstDiff : List String -> List String -> String
+firstDiff [] [] = "none"
+firstDiff [] (g :: _) = "extra row \{g}"
+firstDiff (w :: _) [] = "missing row \{w}"
+firstDiff (w :: ws) (g :: gs) =
+  if w == g then firstDiff ws gs else "expected \{w} but got \{g}"
+
+-- The ledger's lines, without the empty element `lines` yields after the final newline.
+dropFinalEmpty : List String -> List String
+dropFinalEmpty [] = []
+dropFinalEmpty [x] = if x == "" then [] else [x]
+dropFinalEmpty (x :: rest) = x :: dropFinalEmpty rest
+
+declExpect : String -> String -> Expectation
+declExpect astText declLedger =
+  let ledgerRows = dropFinalEmpty (lines declLedger)
+  let rows = declRows astText
+  expectAll
+    [
+      -- floor catches a broken parse; the ledger shrinks by design
+      expectAtLeast 7 (length rows),
+      ledgerBytes "test/decl_runner.ledger" declLedger,
+      driftCheck
+        "test/decl_runner.ledger"
+        "python3 test/catch_all_census.py . --decl-runners > test/decl_runner.ledger"
+        ledgerRows
+        rows,
+      expectNoFindings
+        "decl_runner.ledger has an unfilled TODO runner"
+        (Ok (filter (r => endsWith "TODO" r) ledgerRows)),
+    ]
+
+test "catch_all_census: typechecker catch-all sites over Expr/Decl match the ledger" =
+  siteCheck
+
+test "catch_all_census: every Decl constructor has a named runner row, no TODO" =
+  declCheck
+
+-- ---------------------------------------------------------------------------
+-- Constructor sets, from `public export data <Sum> =` in ast.mdk.
+
+ctorSet : String -> String -> List String
+ctorSet sumName astText =
+  nub
+    (ctorsFrom
+      (sumBody ("public export data " ++ sumName ++ " =") (lines astText)))
+
+-- The body of the first matching header: every following line that is empty or
+-- starts with whitespace (the census regex stops at the first non-space line).
+sumBody : String -> List String -> List String
+sumBody _ [] = []
+sumBody header (l :: rest) =
+  if l == header then takeWhile isBodyLine rest else sumBody header rest
+
+isBodyLine : String -> Bool
+isBodyLine l = l == "" || startsWith " " l || startsWith "\t" l
+
+ctorsFrom : List String -> List String
+ctorsFrom [] = []
+ctorsFrom (l :: rest) = keepCtor (ctorOfLine l) (ctorsFrom rest)
+
+keepCtor : Option String -> List String -> List String
+keepCtor (Some c) rest = c :: rest
+keepCtor None rest = rest
+
+-- `\s*\|\s*([A-Z][A-Za-z0-9_]*)` at the start of a body line.
+ctorOfLine : String -> Option String
+ctorOfLine l = barCtor (trimLeft l)
+
+barCtor : String -> Option String
+barCtor t = if startsWith "|" t then upperName (trimLeft (drop 1 t)) else None
+
+-- ---------------------------------------------------------------------------
+-- Character helpers, mirroring the census regexes.
+
+isNameChar : Char -> Bool
+isNameChar c = isAlphaNum c || c == '_' || c == '\''
+
+isIdentChar : Char -> Bool
+isIdentChar c = isAlphaNum c || c == '_'
+
+headIs : Char -> List Char -> Bool
+headIs _ [] = False
+headIs c (x :: _) = x == c
+
+startsLower : List Char -> Bool
+startsLower [] = False
+startsLower (x :: _) = isLower x || x == '_'
+
+startsSpace : List Char -> Bool
+startsSpace [] = False
+startsSpace (x :: _) = isSpace x
+
+upperName : String -> Option String
+upperName p = upperFrom (toList (toChars p))
+
+-- `[A-Z][A-Za-z0-9_]*` matched at the start.
+upperFrom : List Char -> Option String
+upperFrom [] = None
+upperFrom (cs@(x :: _)) =
+  if isUpper x then Some (fromChars (takeWhile isIdentChar cs)) else None
+
+-- ---------------------------------------------------------------------------
+-- Clause heads: one `name <params> =` line at column 0.
+
+data Item = IReset | IClause String (List String)
+
+-- Each source line -> Some item, or None when the census skips it.
+lineItem : String -> Option Item
+lineItem l =
+  if l == "" || startsWith " " l || startsWith "\t" l || startsWith "--" l then
+    None
+  else
+    lineItemCs l (toList (toChars l))
+
+lineItemCs : String -> List Char -> Option Item
+lineItemCs l cs =
+  if not (startsLower cs) then
+    None
+  else if isSigLine cs then
+    Some IReset
+  else
+    clauseItem l (fromChars (takeWhile isNameChar cs)) (dropWhile isNameChar cs)
+
+-- `name\s*:` at the start: a signature, which resets the clause run.
+isSigLine : List Char -> Bool
+isSigLine cs =
+  startsLower cs && headIs ':' (dropWhile isSpace (dropWhile isNameChar cs))
+
+clauseItem : String -> String -> List Char -> Option Item
+clauseItem l name r = groupItem l name (clauseGroup r)
+
+groupItem : String -> String -> Option (List Char) -> Option Item
+groupItem _ _ None = None
+groupItem l name (Some grp) = clauseFrom l name (trim (fromChars grp))
+
+-- A ` : `-typed binding before the first `=` is skipped unless its parameter
+-- text starts with `(`, exactly as the census does.
+clauseFrom : String -> String -> String -> Option Item
+clauseFrom l name g =
+  if contains " : " (beforeEq l) && not (startsWith "(" g) then
+    None
+  else
+    Some (IClause name (paramsOf g))
+
+beforeEq : String -> String
+beforeEq l = match split "=" l
+  p :: _ => p
+  [] => l
+
+paramsOf : String -> List String
+paramsOf g = if g == "" then [] else splitTop g
+
+-- Group 2 of `^([a-z_][A-Za-z0-9_']*)((?:\s+\S.*?)?)\s*(?:=(?!=)|$)`, given the
+-- text after the name. Group present: lazy up to the first tail that matches;
+-- otherwise the group is empty and the tail must match at once.
+clauseGroup : List Char -> Option (List Char)
+clauseGroup r =
+  if hasGap r then Some (groupPrefix r) else if tailOk r then Some [] else None
+
+hasGap : List Char -> Bool
+hasGap r = startsSpace r && length (dropWhile isSpace r) > 0
+
+groupPrefix : List Char -> List Char
+groupPrefix r = takeWhile isSpace r ++ firstThen (dropWhile isSpace r)
+
+firstThen : List Char -> List Char
+firstThen [] = []
+firstThen (x :: rest) = x :: spanTail rest
+
+-- `\s*(?:=(?!=)|$)` matches at the front of this suffix.
+tailOk : List Char -> Bool
+tailOk s = match dropWhile isSpace s
+  [] => True
+  x :: rest => x == '=' && not (headIs '=' rest)
+
+spanTail : List Char -> List Char
+spanTail s = if tailOk s then [] else spanStep s
+
+spanStep : List Char -> List Char
+spanStep [] = []
+spanStep (x :: rest) = x :: spanTail rest
+
+-- ---------------------------------------------------------------------------
+-- split_top / split_tuple / head_of, over a clause's parameter text.
+
+bracketDelta : Char -> Int
+bracketDelta c =
+  if c == '(' || c == '[' || c == '{' then
+    1
+  else if c == ')' || c == ']' || c == '}' then
+    0 - 1
+  else
+    0
+
+-- Split on whitespace at bracket depth 0.
+splitTop : String -> List String
+splitTop s = topParts 0 [] [] (toList (toChars s))
+
+topParts : Int -> List Char -> List String -> List Char -> List String
+topParts depth cur acc [] = flushTop cur acc
+topParts depth cur acc (c :: rest) =
+  if isSpace c && depth == 0 then
+    topParts (depth + bracketDelta c) [] (flushTop cur acc) rest
+  else
+    topParts (depth + bracketDelta c) (cur ++ [c]) acc rest
+
+flushTop : List Char -> List String -> List String
+flushTop cur acc = if length cur == 0 then acc else acc ++ [fromChars cur]
+
+-- split_tuple: a parenthesised, top-level comma split with more than one part.
+tupleParts : String -> Option (List String)
+tupleParts s =
+  if startsWith "(" s && endsWith ")" s then
+    keepTuple (commaParts (innerChars s))
+  else
+    None
+
+keepTuple : List String -> Option (List String)
+keepTuple ps = if length ps > 1 then Some ps else None
+
+commaParts : List Char -> List String
+commaParts cs = commaGo 0 [] [] cs
+
+commaGo : Int -> List Char -> List String -> List Char -> List String
+commaGo depth cur acc [] = acc ++ [trim (fromChars cur)]
+commaGo depth cur acc (c :: rest) =
+  if c == ',' && depth == 0 then
+    commaGo depth [] (acc ++ [trim (fromChars cur)]) rest
+  else
+    commaGo (depth + bracketDelta c) (cur ++ [c]) acc rest
+
+innerChars : String -> List Char
+innerChars s = initChars (tailChars (toList (toChars s)))
+
+tailChars : List Char -> List Char
+tailChars [] = []
+tailChars (_ :: rest) = rest
+
+initChars : List Char -> List Char
+initChars [] = []
+initChars [x] = []
+initChars (x :: rest) = x :: initChars rest
+
+-- head_of: the constructor head, "_" for a wildcard/variable, None otherwise.
+headOf : String -> Option String
+headOf pat = classifyHead (unwrapParens (afterAt (trim pat)))
+
+afterAt : String -> String
+afterAt p =
+  if contains "@" p && not (startsWith "(" p) then afterFirst "@" p else p
+
+afterFirst : String -> String -> String
+afterFirst sep p = match split sep p
+  _ :: rest => join sep rest
+  [] => ""
+
+unwrapParens : String -> String
+unwrapParens p =
+  if startsWith "(" p && endsWith ")" p && isNone (tupleParts p) then
+    unwrapParens (trim (fromChars (innerChars p)))
+  else
+    p
+
+classifyHead : String -> Option String
+classifyHead p = if p == "_" || isVarName p then Some "_" else upperName p
+
+isVarName : String -> Bool
+isVarName p =
+  startsLower (toList (toChars p))
+    && length (dropWhile isNameChar (toList (toChars p))) == 0
+
+-- Positions: (param index, tuple index or -1, head). Tuple params expand per component.
+positionsOf : List String -> List (Int, Int, Option String)
+positionsOf params = posGo 0 params
+
+posGo : Int -> List String -> List (Int, Int, Option String)
+posGo _ [] = []
+posGo i (p :: rest) = paramPos i p (tupleParts p) ++ posGo (i + 1) rest
+
+paramPos : Int ->
+  String ->
+  Option (List String) ->
+  List (Int, Int, Option String)
+paramPos i p None = [(i, 0 - 1, headOf p)]
+paramPos i p (Some comps) = compPos i 0 comps
+
+compPos : Int -> Int -> List String -> List (Int, Int, Option String)
+compPos _ _ [] = []
+compPos i j (c :: rest) = (i, j, headOf c) :: compPos i (j + 1) rest
+
+-- ---------------------------------------------------------------------------
+-- Clause runs: a run of consecutive clause lines with the same name (sig lines
+-- and skipped lines in between are handled as the census does).
+
+occurrences : List Item -> List (String, List (List String))
+occurrences items = collect None items []
+
+collect : Option String ->
+  List Item ->
+  List (String, List (List String)) ->
+  List (String, List (List String))
+collect _ [] acc = acc
+collect prev (IReset :: rest) acc = collect None rest acc
+collect prev ((IClause n ps) :: rest) acc =
+  if isPrev prev n then
+    collect (Some n) rest (addClause acc ps)
+  else
+    collect (Some n) rest ((n, [ps]) :: acc)
+
+isPrev : Option String -> String -> Bool
+isPrev None _ = False
+isPrev (Some m) n = m == n
+
+addClause : List (String, List (List String)) ->
+  List String ->
+  List (String, List (List String))
+addClause [] _ = []
+addClause ((n, cls) :: rest) ps = (n, cls ++ [ps]) :: rest
+
+itemsOf : List String -> List Item
+itemsOf [] = []
+itemsOf (l :: rest) = keepItem (lineItem l) (itemsOf rest)
+
+keepItem : Option Item -> List Item -> List Item
+keepItem None rest = rest
+keepItem (Some it) rest = it :: rest
+
+-- ---------------------------------------------------------------------------
+-- The census itself: one row per qualifying function occurrence.
+
+censusRows : String -> String -> List String
+censusRows astText srcText =
+  let exprs = ctorSet "Expr" astText
+  let decls = ctorSet "Decl" astText
+  nub (sortRows (rowsOf exprs decls (occurrences (itemsOf (lines srcText)))))
+
+-- Python sorts the rows as (name, sum, k, n): name and sum as strings, k and n
+-- as numbers. A plain string sort puts "10/42" before "2/42".
+sortRows : List String -> List String
+sortRows rows = sortBy rowCmp rows
+
+rowCmp : String -> String -> Ordering
+rowCmp a b = keyCmp (rowKey a) (rowKey b)
+
+rowKey : String -> (String, String, Int, Int)
+rowKey r = match split "\t" r
+  name :: sum :: frac :: _ => fracKey name sum (split "/" frac)
+  _ => (r, "", 0, 0)
+
+fracKey : String -> String -> List String -> (String, String, Int, Int)
+fracKey name sum (k :: n :: _) = (name, sum, numOr k, numOr n)
+fracKey name sum _ = (name, sum, 0, 0)
+
+numOr : String -> Int
+numOr s = match toInt s
+  Some n => n
+  None => 0 - 1
+
+keyCmp : (String, String, Int, Int) -> (String, String, Int, Int) -> Ordering
+keyCmp (n1, s1, k1, m1) (n2, s2, k2, m2) =
+  chainOrd
+    (stringCompare n1 n2)
+    (chainOrd (stringCompare s1 s2) (chainOrd (intCmp k1 k2) (intCmp m1 m2)))
+
+intCmp : Int -> Int -> Ordering
+intCmp a b = if a < b then Lt else if a == b then Eq else Gt
+
+chainOrd : Ordering -> Ordering -> Ordering
+chainOrd Eq next = next
+chainOrd o _ = o
+
+test "catch_all_census: rows sort as python does (k and n numerically)" =
+  expectEqualLines
+    (join
+      "\n"
+      (sortRows ["zz\tExpr\t10/42", "zz\tExpr\t2/42", "aa\tDecl\t1/3"]))
+    (join "\n" ["aa\tDecl\t1/3", "zz\tExpr\t2/42", "zz\tExpr\t10/42"])
+
+rowsOf : List String ->
+  List String ->
+  List (String, List (List String)) ->
+  List String
+rowsOf _ _ [] = []
+rowsOf exprs decls ((name, clauses) :: rest) =
+  keepRow (multiRow exprs decls name clauses) (rowsOf exprs decls rest)
+
+multiRow : List String ->
+  List String ->
+  String ->
+  List (List String) ->
+  Option String
+multiRow exprs decls name clauses =
+  if length clauses < 2 then None else occRow exprs decls name clauses
+
+keepRow : Option String -> List String -> List String
+keepRow None rest = rest
+keepRow (Some r) rest = r :: rest
+
+occRow : List String ->
+  List String ->
+  String ->
+  List (List String) ->
+  Option String
+occRow exprs decls name clauses =
+  let triples = clauseTriples 0 clauses
+  firstSite name (length clauses - 1) exprs decls triples (keysOf triples)
+
+clauseTriples : Int -> List (List String) -> List (Int, Int, Int, Option String)
+clauseTriples _ [] = []
+clauseTriples ci (ps :: rest) =
+  tagClause ci (positionsOf ps) ++ clauseTriples (ci + 1) rest
+
+tagClause : Int ->
+  List (Int, Int, Option String) ->
+  List (Int, Int, Int, Option String)
+tagClause _ [] = []
+tagClause ci ((i, j, h) :: rest) = (i, j, ci, h) :: tagClause ci rest
+
+keysOf : List (Int, Int, Int, Option String) -> List (Int, Int)
+keysOf ts = nub (map keyOfT ts)
+
+keyOfT : (Int, Int, Int, Option String) -> (Int, Int)
+keyOfT (i, j, _, _) = (i, j)
+
+headsAt : (Int, Int) ->
+  List (Int, Int, Int, Option String) ->
+  List (Int, Option String)
+headsAt _ [] = []
+headsAt (ki, kj) ((i, j, ci, h) :: rest) =
+  if i == ki && j == kj then
+    (ci, h) :: headsAt (ki, kj) rest
+  else
+    headsAt (ki, kj) rest
+
+-- The first position (in first-seen order) that yields a site ends the function's row.
+firstSite : String ->
+  Int ->
+  List String ->
+  List String ->
+  List (Int, Int, Int, Option String) ->
+  List (Int, Int) ->
+  Option String
+firstSite _ _ _ _ _ [] = None
+firstSite name lastIdx exprs decls triples (k :: rest) =
+  orElse
+    (keySite name lastIdx exprs decls (headsAt k triples))
+    (firstSite name lastIdx exprs decls triples rest)
+
+orElse : Option String -> Option String -> Option String
+orElse None alt = alt
+orElse (Some x) _ = Some x
+
+keySite : String ->
+  Int ->
+  List String ->
+  List String ->
+  List (Int, Option String) ->
+  Option String
+keySite name lastIdx exprs decls hs =
+  let named = namedHeads hs
+  siteFor name lastIdx hs named (ownersOf exprs decls named) exprs decls
+
+siteFor : String ->
+  Int ->
+  List (Int, Option String) ->
+  List String ->
+  List String ->
+  List String ->
+  List String ->
+  Option String
+siteFor _ _ _ _ [] _ _ = None
+siteFor name lastIdx hs named (s :: more) exprs decls =
+  if length more == 0 then
+    sumSite name lastIdx hs named s (sumCtors s exprs decls)
+  else
+    None
+
+sumSite : String ->
+  Int ->
+  List (Int, Option String) ->
+  List String ->
+  String ->
+  List String ->
+  Option String
+sumSite name lastIdx hs named s total =
+  sitePick name s lastIdx hs (filter (c => elem c total) named) total
+
+sitePick : String ->
+  String ->
+  Int ->
+  List (Int, Option String) ->
+  List String ->
+  List String ->
+  Option String
+sitePick name s lastIdx hs namedIn total =
+  if length namedIn == 0 then
+    None
+  else if not (lastWild lastIdx hs) then
+    None
+  else if length namedIn == length total then
+    None
+  else
+    Some
+      "\{name}\t\{s}\t\{intToString (length namedIn)}/\{intToString (length total)}"
+
+-- The final clause must be a catch-all at this position.
+lastWild : Int -> List (Int, Option String) -> Bool
+lastWild _ [] = False
+lastWild lastIdx ((ci, h) :: rest) =
+  if ci == lastIdx && isWildHead h then True else lastWild lastIdx rest
+
+isWildHead : Option String -> Bool
+isWildHead None = False
+isWildHead (Some s) = s == "_"
+
+-- Named constructor heads at a position: not None, not "_".
+namedHeads : List (Int, Option String) -> List String
+namedHeads hs = nub (catHeads hs)
+
+catHeads : List (Int, Option String) -> List String
+catHeads [] = []
+catHeads ((_, h) :: rest) = keepHead h (catHeads rest)
+
+keepHead : Option String -> List String -> List String
+keepHead None rest = rest
+keepHead (Some s) rest = if s == "_" then rest else s :: rest
+
+-- The sum(s) the named heads belong to. Decl overrides Expr, as in the census.
+ownersOf : List String -> List String -> List String -> List String
+ownersOf exprs decls named = nub (ownerList exprs decls named)
+
+ownerList : List String -> List String -> List String -> List String
+ownerList _ _ [] = []
+ownerList exprs decls (c :: rest) =
+  keepOwner (ownerOf exprs decls c) (ownerList exprs decls rest)
+
+keepOwner : Option String -> List String -> List String
+keepOwner None rest = rest
+keepOwner (Some s) rest = s :: rest
+
+ownerOf : List String -> List String -> String -> Option String
+ownerOf exprs decls c =
+  if elem c decls then
+    Some "Decl"
+  else if elem c exprs then
+    Some "Expr"
+  else
+    None
+
+sumCtors : String -> List String -> List String -> List String
+sumCtors s exprs decls = if s == "Decl" then decls else exprs
+
+-- ---------------------------------------------------------------------------
+-- Decl constructor -> runner, from DECL_RUNNERS in test/catch_all_census.py.
+
+declRows : String -> List String
+declRows astText =
+  map (c => "\{c}\t\{runnerOf c}") (sort (ctorSet "Decl" astText))
+
+runnerOf : String -> String
+runnerOf c = runnerFrom c declRunners
+
+runnerFrom : String -> List (String, String) -> String
+runnerFrom _ [] = "TODO"
+runnerFrom c ((k, v) :: rest) = if k == c then v else runnerFrom c rest
+
+declRunners : List (String, String)
+declRunners = [
+  ("DTypeSig", "compile-time-only: signature consumed by typecheck, no body"),
+  (
+    "DExtern",
+    "medaka run / medaka build: binds a name to a primitive with no Medaka body of its own — the interpreter supplies it from eval.mdk's extern table, the native backend from runtime/medaka_rt.c",
+  ),
+  (
+    "DFunDef",
+    "medaka run / medaka build: eval.mdk installGroups evaluates the body; llvm_emit.mdk emits it",
+  ),
+  (
+    "DData",
+    "compile-time-only: registers a type + constructors for typecheck/eval, no body of its own",
+  ),
+  (
+    "DUse",
+    "compile-time-only: import resolved by driver/loader.mdk and frontend/resolve.mdk",
+  ),
+  (
+    "DEffect",
+    "compile-time-only: registers an effect domain for typecheck (typecheck.mdk populateGo)",
+  ),
+  ("DProp", "medaka test: compiler/tools/prop_runner.mdk"),
+  (
+    "DTest",
+    "medaka test: compiler/tools/test_runner.mdk via tools/test_cmd.mdk",
+  ),
+  (
+    "DInterface",
+    "medaka run / medaka build: a default method body IS code. eval.mdk declImplEntries installs it as a dispatch entry and core_ir_lower.mdk lowerDefault lowers it to CImplDefault. desugar.mdk fillImplDefaults specializes same-module impls only, so the cross-module fallback runs this body directly",
+  ),
+  (
+    "DImpl",
+    "medaka run / medaka build: eval.mdk installs impl methods into dispatch; llvm_emit.mdk emits them",
+  ),
+  (
+    "DTypeAlias",
+    "compile-time-only: type-level alias consumed by typecheck, erased before eval/backend",
+  ),
+  (
+    "DNewtype",
+    "compile-time-only: registers a wrapper type + constructor for typecheck/eval, no body of its own",
+  ),
+  (
+    "DLetGroup",
+    "medaka run / medaka build: eval.mdk installGroups evaluates each binding, same as DFunDef",
+  ),
+  (
+    "DAttrib",
+    "compile-time-only in itself: a wrapper carrying no body. Consumers that dispatch on it unwrap to the inner decl and use ITS runner; the sibling catch-all census is what keeps that unwrapping honest",
+  ),
+]

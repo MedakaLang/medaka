@@ -18,7 +18,7 @@ section** (ratified #2306) — the 7 rules on partial/total peer names, generic
 vs. specialized re-exports, data-last exceptions, extern/typed-peer pairing,
 hash-container parity, `toml`'s deferred renderer, and `isEmpty` ownership.
 `docs/stdlib/inventory.json` is the machine-readable surface those rules are
-checked against (`test/diff_compiler_stdlib_conventions.sh`).
+checked against (`test/diff_compiler_stdlib_conventions_test.mdk`).
 
 ## Conventions (match existing code)
 

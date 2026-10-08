@@ -1,4 +1,4 @@
-# CHECK-WRAPPER-CALLERS.txt — ledger for test/diff_compiler_check_wrapper_callers.sh
+# CHECK-WRAPPER-CALLERS.txt — ledger for test/diff_compiler_check_wrapper_callers_test.mdk
 #
 # One row per external (non-typecheck.mdk) caller of the checkProgram*/checkOne*
 # typecheck-entry wrapper family, `file : comma,separated,imported,wrapper,names`
