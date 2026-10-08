@@ -1,6 +1,6 @@
--- main.mdk with the body's goal at the head variable alone: `mk2 v = Wr (get
--- (Box v))` poses `Get (Box b) b`, which `impl Get (Box a) a` matches with `b`
--- rigid.  Must print 42.
+-- Control for the mixed-residual row: `mk2 (Wr v) = Wr (get (Box v))` poses
+-- `Get (Box b) b` at the head variable alone, which `impl Get (Box a) a` matches
+-- with `b` rigid. Hand-derived: `get` unwraps 41, and 41 + 1 = 42.
 data Box a = Box a
 
 interface Get c e where

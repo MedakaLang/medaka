@@ -40038,9 +40038,9 @@ narrowsImplHeadMsg subject narrowed head =
 -- before `inst`), and a residual over head variables alone that no given answers is
 -- reported at the goal's site.  The givens are the impl's own head, its `requires`
 -- with their superinterfaces, and the method signature's own `=>` context.
--- A goal no instance matches is not reported here.  A residual that mixes a head
--- variable with another variable is not reported here either, and no other check
--- rejects it (#3798).
+-- A residual that an instance answers only by binding a head variable is reported
+-- too, whatever other variables it mentions.  A goal no instance can answer even
+-- with the head variables free is not reported here.
 checkImplHeadPrerequisites : String ->
   IfaceRef ->
   ImplBodySite ->
@@ -40100,7 +40100,12 @@ implGoalResiduals fuel headIds givens iface args
     let cells = sigCellsOf headIds (flatMap monoVarCells args)
     let toRigid = sigRigidBindings headIds cells
     match findMatchingImplReqsU univ iface (map (substMono toRigid [] []) args)
-      None => if implMatchesU univ iface args then [(iface, args)] else []
+      None =>
+        if implMatchesU univ iface args
+          || answeredOnlyByBindingHead headIds iface args then
+          [(iface, args)]
+        else
+          []
       Some (subst, reqs) =>
         flatMap
           (r =>
@@ -40111,6 +40116,17 @@ implGoalResiduals fuel headIds givens iface args
               (fst r)
               (map (unrigidSig cells) (snd r)))
           (map (reqToObligation subst) reqs)
+
+-- An instance answers the goal only by fixing a head variable: some instance head
+-- unifies with it while the head variables are free, and none does while they are
+-- held rigid.  Unification rather than matching, because the instance may need the
+-- goal's other variables bound as well (`Conv a String` against
+-- `impl Conv Int String`, `Get (Box (List t)) b` against `impl Get (Box a) a`).
+answeredOnlyByBindingHead : OrdMap Unit -> IfaceRef -> List Mono -> Bool
+answeredOnlyByBindingHead headIds iface args =
+  let rows = filterList (ieRowOfIface iface) (improvementPool args)
+  anyList (rowHeadUnifies args) rows
+    && not (anyList (row => isSome (rowHeadSubstRigid headIds args row)) rows)
 
 givenAnswers : IfaceRef -> List Mono -> PredicateSlot -> Bool
 givenAnswers iface args slot =
@@ -40152,6 +40168,9 @@ knownPredicateSlot iface args = PredicateSlot {
   psBoundIds = dedupI (flatMap monoTyvarIds args),
 }
 
+-- A residual over head variables alone names the `requires` to add.  One that also
+-- mentions a variable of the body's own has no `requires` to name, so it is
+-- reported only when an instance answers it by fixing a head variable.
 reportImplHeadResidual : String ->
   List (String, Int) ->
   Option Loc ->
@@ -40160,19 +40179,27 @@ reportImplHeadResidual : String ->
 reportImplHeadResidual subject roots loc (iface, args) =
   let ids = flatMap monoUnboundIds args
   let headIds = map snd roots
-  if isEmptyL ids || not (allList (i => containsI i headIds) ids) then
+  let named = map (p => (snd p, fst p)) roots
+  let rendered = ppEach (Ref named) (Ref 0) 3 args
+  let pred = "\{iface.irName} \{joinWith " " rendered}"
+  if isEmptyL ids || not (anyList (i => containsI i headIds) ids) then
     ()
-  else
-    let named = map (p => (snd p, fst p)) roots
-    let rendered = ppEach (Ref named) (Ref 0) 3 args
+  else if allList (i => containsI i headIds) ids then
     let msg = match (map normalize args, rendered)
       ([TVar _], [vname]) =>
         undeclaredImplPrerequisiteMsg subject iface.irName vname
-      _ =>
-        undeclaredImplPredicateMsg
-          subject
-          "\{iface.irName} \{joinWith " " rendered}"
+      _ => undeclaredImplPredicateMsg subject pred
     pushTypeErrorOnceAt "T-IMPL-MISSING-REQUIRES" loc msg
+  else if answeredOnlyByBindingHead
+    (omFromNames (map (r => intToString (snd r)) roots) omEmpty)
+    iface
+    args then
+    let fixed =
+      dedup (flatMap (r => if containsI (snd r) ids then [fst r] else []) roots)
+    pushTypeErrorOnceAt
+      "T-IMPL-MISSING-REQUIRES"
+      loc
+      (implGoalFixesHeadMsg subject pred fixed)
 
 -- the CALL-obligation half of the constraint axis: recordCallObligations pushes
 -- (iface, [constraint-var mono], loc) for each dict slot a constrained CALLEE
@@ -40596,6 +40623,10 @@ undeclaredConstraintMsg subject mty oiface vname =
 undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeclaredImplPrerequisiteMsg subject oiface vname =
   "\{subject} requires `\{oiface}` on the instance-head type variable `\{vname}`, which the impl does not declare; add `requires \{oiface} \{vname}` to the impl"
+
+implGoalFixesHeadMsg : String -> String -> List String -> String
+implGoalFixesHeadMsg subject pred fixed =
+  "\{subject} requires `\{pred}`, which only a specific instance-head type \{tyVarNoun fixed} \{quotedNames fixed} satisfies, but the impl is declared for every type in their place; make the body parametric in \{quotedNames fixed}, or narrow the head"
 
 undeclaredImplPredicateMsg : String -> String -> String
 undeclaredImplPredicateMsg subject pred =
