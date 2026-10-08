@@ -25,18 +25,17 @@ prebuildScript =
 -- argv: bin dir root args...
 fastRunScript : String
 fastRunScript =
-  "bin=\"$1\"; d=\"$2\"; export MEDAKA_ROOT=\"$3\"; shift 3; if [ -f \"$d/medaka_rt.o\" ]; then export MEDAKA_RT_OBJ=\"$d/medaka_rt.o\"; fi; if [ -f \"$d/prelude.o\" ]; then export MEDAKA_PRELUDE_OBJ=\"$d/prelude.o\"; fi; export MEDAKA_CLANG_OPT=\"${MEDAKA_CLANG_OPT:--O1}\"; exec \"$bin\" \"$@\""
+  "bin=\"$1\"; d=\"$2\"; export MEDAKA_ROOT=\"$3\"; shift 3; if [ -f \"$d/medaka_rt.o\" ]; then export MEDAKA_RT_OBJ=\"$d/medaka_rt.o\"; fi; if [ -f \"$d/prelude.o\" ]; then export MEDAKA_PRELUDE_OBJ=\"$d/prelude.o\"; fi; exec \"$bin\" \"$@\""
 
 -- Runs a verb with MEDAKA_ROOT only. argv: root bin args...
 plainRunScript : String
-plainRunScript =
-  "export MEDAKA_ROOT=\"$1\"; export MEDAKA_CLANG_OPT=\"${MEDAKA_CLANG_OPT:--O1}\"; shift; exec \"$@\""
+plainRunScript = "export MEDAKA_ROOT=\"$1\"; shift; exec \"$@\""
 
 -- Runs a verb with MEDAKA (the binary, for the exec fixture's env rule),
 -- MEDAKA_TEST_SUBJECT and MEDAKA_ROOT. argv: bin subject root args...
 envRunScript : String
 envRunScript =
-  "export MEDAKA=\"$1\"; export MEDAKA_TEST_SUBJECT=\"$2\"; export MEDAKA_ROOT=\"$3\"; export MEDAKA_CLANG_OPT=\"${MEDAKA_CLANG_OPT:--O1}\"; shift 3; exec \"$@\""
+  "export MEDAKA=\"$1\"; export MEDAKA_TEST_SUBJECT=\"$2\"; export MEDAKA_ROOT=\"$3\"; shift 3; exec \"$@\""
 
 -- Runs medaka with MEDAKA_ROOT set, capped at `secs`.
 runVerb : Int ->

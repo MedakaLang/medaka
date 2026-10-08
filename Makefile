@@ -159,6 +159,8 @@ test: medaka
 	./medaka test compiler/tools/check_policy_test.mdk
 	./medaka test compiler/tools/doctest_test.mdk
 	./medaka test compiler/tools/native_probe_printer_test.mdk
+	./medaka test compiler/tools/native_probe_tco_test.mdk
+	./medaka test compiler/driver/build_cmd_test.mdk
 	./medaka test compiler/tools/native_props_acceptance_test.mdk
 	./medaka test compiler/tools/native_props_policy_test.mdk
 	./medaka test compiler/tools/native_props_test.mdk

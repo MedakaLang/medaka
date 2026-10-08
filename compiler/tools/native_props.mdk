@@ -10,7 +10,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import driver.build_cmd.{
   ppBuildReport, makeTempDir, scratchProbeManifest, cleanupTempDir,
-  runBuildNativeRoots, envOr, defaultMedakaRoot
+  runBuildNativeRoots, BuildProfile(..), envOr, defaultMedakaRoot
 }
 import driver.loader.{entrySearchRoots}
 import support.path.{joinPath, baseOf, dirOf}
@@ -408,7 +408,8 @@ buildAndRunPlanned target entry out tmp jobs nonce =
     (entrySearchRoots (dirOf target))
     True
     False
-    False)
+    False
+    BuildProbe)
     Err rep =>
       Err
         (NativeBuildFailure
