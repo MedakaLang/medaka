@@ -3024,6 +3024,7 @@ ffiRowShapeKey : (List String, String) -> String
 ffiRowShapeKey (args, ret) = "\{joinWith "," args} -> \{ret}"
 
 -- the `DExtern` names of a decl list, in order.
+export
 externDeclNamesOf : List Decl -> List String
 externDeclNamesOf [] = []
 externDeclNamesOf ((DExtern _ n _) :: rest) = n :: externDeclNamesOf rest

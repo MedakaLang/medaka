@@ -2990,7 +2990,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm_ffi_wall.sh"
 oracles = []
-sources = []
+sources = ["compiler/backend/core_validate.mdk", "compiler/backend/extern_catalog.mdk", "compiler/backend/wasm_emit.mdk"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
@@ -3020,7 +3020,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm_typed.sh"
 oracles = []
-sources = []
+sources = ["compiler/backend/wasm_emit.mdk"]
 corpus = ["test/llvm_fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 

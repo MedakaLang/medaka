@@ -3253,7 +3253,7 @@ emitFileExtern e env "buildDate" args = match emitArgs e env args
 emitFileExtern e _ name _ = gapE e ("unsupported file extern " ++ name)
 
 -- Net externs (NET-DESIGN.md).  A SEPARATE family from `LlvmFile` — deliberately,
--- so the wasm backend can reject the whole net set in one guard.  All return a
+-- so the catalog can give the whole net set one wasm refusal.  All return a
 -- Result (LTCon) traffic'ing raw tagged-Int fds; blocking BSD-socket shims in
 -- runtime/medaka_rt.c.
 emitNetExtern : Emit ->

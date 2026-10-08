@@ -19,9 +19,9 @@ testing against the (now-deleted, 2026-06-26) OCaml reference compiler — it
 only ever needed to compute `main`'s value, so effectful/IO externs
 (`readFile`, `exit`, …) were legitimately out of scope. When OCaml was
 removed, `eval.mdk` was silently promoted to be the production `medaka run`
-engine and its contract was never re-litigated. The result: **37 externs
-type-check GREEN and then panic at runtime** with `unbound identifier: X`
-under `medaka run` — including a *pure* extern with no effect row at all
+engine and its contract was never re-litigated. The result: **a block of
+externs type-checked GREEN and then panicked at runtime** with `unbound
+identifier: X` under `medaka run` — including a *pure* extern with no effect row at all
 (`arraySortBy`). Nothing in `test/` or `scripts/` ever compared the three
 engines' extern coverage against each other, so this drifted silently for
 weeks.
@@ -58,11 +58,17 @@ it is silent instead of a loud panic).
   row has a reason; and every pure extern (no capability in its signature) has
   one verdict in `test/EXTERN-DOMAIN-LEDGER.txt`. Each check names the extern
   it fails on.
-- `compiler/backend/extern_catalog_test.mdk`: the catalog's llvm and wasm
-  columns equal what `llvm_emit.mdk` and `wasm_emit.mdk` dispatch (it imports
-  their exported predicates), and its eval column equals the interpreter's
-  binding tables. A silent omission, or a gap that was fixed without updating
-  its row, reds there.
+- `compiler/backend/extern_catalog_test.mdk`: the catalog has exactly the
+  externs `stdlib/runtime.mdk` declares; every wasm family an application
+  dispatches through has members; a wasm runtime demand (`wasmUses`) is listed
+  only for a wasm-bound extern; each demand has exactly its producers; its eval
+  column equals the interpreter's binding tables; and the WAT `wasm_emit.mdk`
+  emits for a program reaching an extern contains each runtime group the row
+  demands.
+- `compiler/backend/core_validate.mdk`: a `NotProvided` llvm or wasm column is
+  refused before emission, at every reference to that extern, with the row's
+  kind and reason. Tests: `compiler/backend/core_validate_test.mdk`,
+  `test/wasm/diff_wasm_ffi_wall.sh`.
 
 ## How to add a new primitive without breaking an engine
 
@@ -76,14 +82,16 @@ Follow `.claude/skills/add-primitive` (or the manual version below).
 3. **Interpreter**: implement it in `compiler/eval/eval.mdk` and add the
    `("myThing", ...)` entry to the binding table. The row's eval column is
    `Interpreted`.
-4. **LLVM** and **WasmGC**: add it to the family predicate in
-   `llvm_emit.mdk` / `wasm_emit.mdk` that dispatches it and write the emitter
-   arm; the row names that family. `extern_catalog_test.mdk` reds if the row
-   and the predicate disagree.
+4. **LLVM** and **WasmGC**: the row's llvm / wasm family selects the emitter
+   arm, so give the row an `LlvmFamily` / `WasmFamily`, write the arm in
+   `llvm_emit.mdk` / `wasm_emit.mdk`, and list the runtime groups the wasm
+   lowering needs in `wasmUseRows`. `extern_catalog_test.mdk` reds if a listed
+   demand is not emitted in the WAT.
 5. If the extern is pure, give it a verdict in `test/EXTERN-DOMAIN-LEDGER.txt`.
 
 If you deliberately do not support a primitive on one engine (e.g. it has no
 meaning there, like `net*` on wasm), file it `PERMANENT` with a real reason
-instead of skipping the gate — see `isNetExternW`'s rejection message in
-`compiler/backend/wasm_emit.mdk` for the model of what a good reason looks
-like.
+instead of skipping the gate. The reason is printed verbatim in the refusal
+`compiler/backend/core_validate.mdk` raises, so write it for the user who
+reads it; the `net*` rows' reason (`wasmNoSockets` in
+`compiler/backend/extern_catalog.mdk`) is the model.

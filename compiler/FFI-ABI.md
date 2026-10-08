@@ -63,7 +63,7 @@ builtin codegen, so `extern log : String -> <FFI "mylog"> Unit` compiled to `cal
 double @mdk_log(double <String cell pointer>)` at exit 0 and the author's own C
 `log` was never called. Such a declaration is now a located type error: the
 emitter routes a catalog name to the builtin regardless of typecheck's verdict
-(`ffiExternRows` subtracts the catalog outright; `emitApp` tests `isAnyExtern`
+(`ffiExternRows` subtracts every `stdlib/runtime.mdk` extern name outright; `emitApp` tests `isAnyExtern`
 before the FFI arm), so a shape-incompatible redeclaration is a claim no lowering
 can honour in either reading. Comparison is at **type-head granularity** —
 argument heads plus return head, effect rows and constraint prefixes walked

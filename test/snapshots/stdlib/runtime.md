@@ -1,5 +1,5 @@
 # META
-source_lines=972
+source_lines=973
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -574,8 +574,9 @@ extern bitNot : Int -> Int
 
 -- One-arg and two-arg transcendental / root / rounding functions, each a
 -- direct call into the C runtime's math.h shim (mirrors floatRem/fmod).  All
--- pure.  On wasm they are `env` host imports (`sqrt` is an inline instruction);
--- the wasm column of `compiler/backend/extern_catalog.mdk` names each one.
+-- pure.  On wasm, `sqrt`, `floor`, `ceil`, `round` and `trunc` are inline
+-- instructions and the transcendental ones are `env` host imports; the wasm
+-- column of `compiler/backend/extern_catalog.mdk` names each one.
 
 -- | The square root.
 extern sqrt : Float -> Float
