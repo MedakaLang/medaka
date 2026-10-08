@@ -331,7 +331,7 @@ callOblsWindow : Int -> List (IfaceRef, List Mono, Option Loc)
 callPredOf : (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, List Mono, Option Loc)
 callUOblsWindow : Int -> List UObligation
 calleeArrow : Mono -> (Mono, EffRow, Mono)
-calleeIsGeneralized : String -> Option (List CSlot) -> Bool
+calleeIsGeneralized : String -> Option (List CSlot) -> List (Int, Mono) -> Bool
 calleeNumObls : Int -> Int -> List UObligation
 calleeTakesGrants : GrantCallee -> Bool
 candsOneIface : List KeyEntry -> Option String
@@ -870,7 +870,8 @@ determineByUniqueInstance : Map String Unit -> List UObligation -> Unit
 determineByUniqueInstanceGo : Map String Unit -> GoalWindow -> Bool -> List (Int, UObligation) -> Bool
 determineGoal : Map String Unit -> GoalWindow -> UObligation -> List Mono -> Bool
 determineSweeps : Map String Unit -> GoalWindow -> Int -> Unit
-determineWithNestedGoals : Map String Unit -> List UObligation -> Unit
+determinedEntryAnswers : IfaceRef -> List Mono -> (ImplRow, List Mono) -> Bool
+determinedGoalInstance : IfaceRef -> List Mono -> Option ImplRow
 dictAppEntry : Obligation -> List PendingDictApp
 dictAppsIn : List Obligation -> List PendingDictApp
 dictAppsSince : Int -> List PendingDictApp
@@ -1145,6 +1146,7 @@ fileBoundExpr : List GrantBinder -> EffRow -> Expr -> Expr
 fileBoundKey : Loc -> String
 fileBoundSite : String -> Loc -> String
 fileBoundValue : List GrantBinder -> Mono -> Expr -> Expr
+fileDeterminedRow : ImplRow -> List Mono -> Unit
 fileGoal : Int -> UObligation -> Map Int (List Int) -> Map Int (List Int)
 fileGrantExterns : Map String (Int, Int)
 fileValueKey : String -> Expr -> Option String
@@ -2872,7 +2874,6 @@ seedCheckRun : List Decl -> Unit
 seedEffectDomains : Unit -> Unit
 seedNumLitFromIntAnchor : List MethodSchemeRow -> Unit
 seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
-selectGoalRow : ImplEnv -> IfaceRef -> List Mono -> Option ImplRow
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectReqImpl : IfaceRef -> List Mono -> Option (Ty, List Ty, List Require)
 selectReturnRow : ImplEnv -> String -> List Mono -> Option ImplRow
@@ -3123,7 +3124,6 @@ undeclaredConstraintMsg : String -> Ty -> String -> String -> String
 undeclaredImplPredicateMsg : String -> String -> String
 undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeterminedGoalExempt : IfaceRef -> List Mono -> ScopeId -> Bool
-undeterminedGoalInstance : IfaceRef -> List Mono -> Option ImplRow
 undeterminedNoImplMsg : String -> List Mono -> String
 undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
 undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
@@ -3209,6 +3209,7 @@ vecOblOfNode : SuperNode (List Int, List Mono) -> VecObl
 vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
 vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
+verdictCandidates : GoalWindow -> List Mono -> List (ImplRow, List (Int, Mono)) -> List (ImplRow, List (Int, Mono))
 visibleDictsFor : Int -> ScopeId -> List (Int, EvidenceBinderId) -> List EvidenceBinderId
 visibleFieldDecls : String -> List String -> List (String, RecordInfo)
 wAll : Windowed a -> List a
