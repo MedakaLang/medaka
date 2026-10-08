@@ -2959,7 +2959,7 @@ declSigTypeEntries _ = []
 -- name never enters the FFI index at all and no foreign call can be minted for
 -- it.  (`emitApp` checks `isAnyExtern` BEFORE the FFI arm as well, so the
 -- exemption holds on both sides of the seam; this filter is what keeps it true
--- for a runtime extern name that no `externCatalog` family predicate claims.)
+-- for a runtime extern name whose catalog row gives llvm no family.)
 export
 ffiExternTypeNames : List Decl ->
   List Decl ->

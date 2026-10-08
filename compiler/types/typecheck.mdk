@@ -41479,7 +41479,7 @@ ffiCheckExternsGo (_ :: rest) = ffiCheckExternsGo rest
 -- A local `extern` whose name matches a `stdlib/runtime.mdk` catalog name is
 -- NEVER lowered as a new foreign call.  `isAnyExtern`
 -- (`compiler/backend/llvm_emit.mdk`), which feeds `emitApp`'s CVar-head ladder,
--- dispatches purely by NAME against the fixed `externCatalog` — it has no
+-- dispatches purely by NAME against the fixed extern catalog — it has no
 -- awareness of which `DExtern` declared the name or what that declaration
 -- claims.  So the redeclared name is emitted through the BUILTIN's existing
 -- codegen regardless of the local signature.  MEASURED, twice:

@@ -1,5 +1,5 @@
 # META
-source_lines=13268
+source_lines=12767
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -86,12 +86,12 @@ stages=DESUGAR,MARK
 -- ── W6b RESIDUAL GAPS AS OF THIS SLICE (#383: verify against CURRENT source, not
 --    this snapshot — every one of these except the pattern-guard row has since
 --    closed; grep the extern name to see its real implementation) ─────────────
---   * charToStr (needs a codepoint→$str runtime) — CLOSED, `isStrExternW`.
---     stringConcat (`List String` → W7 list support) — CLOSED, `isStrExternW` +
+--   * charToStr (needs a codepoint→$str runtime) — CLOSED, the `WasmStr` family.
+--     stringConcat (`List String` → W7 list support) — CLOSED, the `WasmStr` family +
 --     `strConcatRuntimeLines`.  `++` String concat — CLOSED (`op == "++"`).
 --     floatToString (Float → W6b) — CLOSED, W8b (below).  The remaining string
 --     externs (stringSlice/stringIndexOf/stringCompare/toUpper/…) — CLOSED,
---     `isStrExternW`.  ePutStr/ePutStrLn (stderr byte-write import) — CLOSED
+--     the `WasmStr` family.  ePutStr/ePutStrLn (stderr byte-write import) — CLOSED
 --     (`WasmEmit.useEPut`).  RNG + remaining externs → W8, CLOSED there.
 --   * Refutable pattern guards (`p <- e`) in a match arm — STILL a gap (both
 --     tail and non-tail arms `gapL`, ~line 6494/7310/7318; ledgered live as
@@ -152,8 +152,8 @@ stages=DESUGAR,MARK
 -- current summary; this comment is the historical W8b-era snapshot, kept for the
 -- narrative, not a live status):
 --   * stringToFloat — CLOSED (layer-6): a real host import (`mdk_str_to_float`, the
---     host's strtod), not a trap stub — `isDeferredFloatExternW _ = False` unconditionally
---     now; see ~line 1005 / 2143 / 2216.
+--     host's strtod), not a trap stub — no deferred-Float trap path
+--     remains; see ~line 1005 / 2143 / 2216.
 --   * The IO/WASI surface (readFile/args/getEnv/fileExists/exit) — CLOSED (W12): real
 --     host imports (`ioHostImportLines`/`ioHostRuntimeLines`), ~line 1029/1443.
 --     Not everything file-shaped is closed, though: the write/dir side (writeFile/
@@ -218,6 +218,13 @@ import ir.core_ir.{
   siteSentinelName,
 }
 import list.{replicate, take, drop}
+import backend.extern_catalog.{
+  WasmFamily(..),
+  WasmUse(..),
+  isWasmExternFamily,
+  wasmFamily,
+  wasmUses,
+}
 import support.ordmap.{
   OrdMap,
   omInsert,
@@ -1712,272 +1719,12 @@ anyBind : (CBind -> Bool) -> List CBind -> Bool
 anyBind _ [] = False
 anyBind p (b :: rest) = if p b then True else anyBind p rest
 
--- ── W6: does the program use strings? ────────────────────────────────────────
--- True if any body contains a String/Char literal, or applies a String/IO extern
--- (intToString/putStrLn/stringConcat/…).  Any of these forces the §3.3 $str rep +
--- the byte-write runtime + ref-mode.  Detected structurally over every clause body.
-export
-isStrExternW : String -> Bool
-isStrExternW name = contains
-  name
-  [
-    "intToString",
-    "charToStr",
-    "stringConcat",
-    "stringLength",
-    "putStr",
-    "putStrLn",
-    "ePutStr",
-    "ePutStrLn",
-    "flushStdout",
-    "stringSlice",
-    "stringToUpper",
-    "stringToLower",
-    "hashString",
-    -- W8b: floatToString returns a $str; stringIndexOf/stringCompare read $str (and
-    -- return Option Int / Ordering, built inline).  All force the $str rep.
-    "floatToString",
-    "stringIndexOf",
-    "stringCompare",
-    -- W11b: stringToChars/stringFromChars are the UTF-8 codec ($str <-> Array Char);
-    -- charFromCode : Int -> Option Char is range-check + i31 rebox.  Routed here so they
-    -- reach emitStrExternRef (all touch $str / Char codepoints).
-    "stringToChars",
-    "stringFromChars",
-    "charFromCode",
-    -- W11b: the UTF-8 byte codec ($str <-> Array Int) — raw backing bytes 0..255.
-    "stringToUtf8Bytes",
-    "stringFromUtf8Bytes",
-    -- W9: the Debug-quoting externs render a String/Char as a quoted+escaped literal
-    -- ("hi" / 'a').  Both produce a fresh $str via the $mdk_dbg_quote runtime (which
-    -- reuses $mdk_cp_count + $mdk_char_to_str, both in strLeafRuntimeLines).
-    "debugStringLit",
-    "debugCharLit",
-    -- layer-6: stringToFloat : String -> Option Float.  Reads the $str, pushes bytes
-    -- via the IO path channel, calls mdk_str_to_float (host strtod) -> f64 -> $float.
-    "stringToFloat",
-  ]
-
--- ── W8: RNG + hash LEAF externs (no `$str` dependency on their own) ──────────
--- These force ref-mode (they produce/consume (ref eq) i31 values) but, unlike the
--- string externs, do NOT pull in the `$str` rep (hashString is the exception and is
--- listed under isStrExternW since it reads a $str).  Detected so emitProgram can
--- force `useRef` and gate the RNG / hash preamble.
-export
-isLeafExternW : String -> Bool
-isLeafExternW name = contains
-  name
-  [
-    "randomInt",
-    "randomBool",
-    "randomChar",
-    "setSeed",
-    "randomState",
-    "restoreRandomState",
-    "hashInt",
-    "hashChar",
-    "hashBool",
-    -- W11: charCode : Char -> Int — a Char is an i31 codepoint; charCode = cast+unbox+rebox.
-    "charCode",
-    -- W11b: char classification and case-mapping (ASCII-only, byte-identical to medaka_rt.c).
-    "charIsAlpha",
-    "charIsSpace",
-    "charIsUpper",
-    "charIsLower",
-    "charIsPunct",
-    "charToUpper",
-    "charToLower",
-    -- W8b Float leaf externs (produce/consume a boxed $float (ref eq)).
-    "intToFloat",
-    "floatToInt",
-    "hashFloat",
-    "randomFloat",
-    -- W12 IO host-surface externs.  readFile/getEnv build a $str-bearing Result/Option,
-    -- fileExists a Bool, args a List String, exit a trap — all routed through
-    -- emitLeafExternRef into the byte-channel host-import runtime.  ($str is forced by
-    -- noteW8Extern, not by listing them under isStrExternW.)
-    "readFile",
-    "fileExists",
-    "args",
-    "getEnv",
-    "exit",
-    "wallTimeSec",
-    "monotonicSec",
-    "sleepMs",
-    "ioPoll",
-    -- canonicalizePath : String -> String — realpath(3) natively; the browser wasm vfs
-    -- has no realpath, so it lowers to IDENTITY (matches the extern's "input unchanged on
-    -- failure" contract).  Reachable in the wasm playground because the loader's
-    -- canonicalModId calls it; a single-file (dep-less) buffer never actually exercises
-    -- the cross-package branch, so identity is exact for the playground.
-    "canonicalizePath",
-    -- stage-D: byte-clean file I/O.  readFileBytes builds a Result String (Array Int)
-    -- (an $arr of i31 bytes); writeFileBytes streams an Array Int OUT + fs.writeFileSync.
-    -- Both route through emitLeafExternRef into the fileBytesRuntime host seam.
-    "readFileBytes",
-    "writeFileBytes",
-    -- W10: `panic : String -> a` lowers to a `unreachable` trap (stack-polymorphic,
-    -- validates as any result type — matches the native @mdk_panic abort).  The message
-    -- arg is emitted-then-dropped; printing it to stderr is a nice-to-have not done here.
-    "panic",
-    -- Index-16a: `indexError : String -> a` -- the coded-OOB abort extern the Index/
-    -- IndexMut impls call; streams the caller's message after an E-INDEX-OOB banner
-    -- and traps, the shape `panic` uses (native peer: @mdk_oob_msg).
-    "indexError",
-    -- #1787: `indexErrorAt : Int -> a` -- the same coded-OOB abort carrying the
-    -- offending index, which the trap formats (wasmTrapNum; native @mdk_oob_at).
-    "indexErrorAt",
-    -- `indexErrorAtSite site idx` and `panicAt site msg`: indexErrorAt and panic
-    -- reporting the packed source site of the call; `__site__ file line col` is
-    -- that site as an Int literal.
-    "indexErrorAtSite",
-    "panicAt",
-    siteSentinelName,
-    -- #670: `sliceError : Int -> Int -> a` -- the coded-OOB abort the Slice impl
-    -- raises; lowers to a fixed E-SLICE-OOB trap the built-in slice path also emits,
-    -- with both bound args dropped.
-    "sliceError",
-    -- stage-A: bitwise / shift externs (Int -> Int -> Int).  Pure i64 ops over the
-    -- box/unbox seam; no $str/$arr/$float dependencies.
-    "bitAnd",
-    "shiftLeft",
-    "shiftRight",
-    -- #101: bitwise completion — bitOr/bitXor (i64.or/i64.xor) + bitNot (i64.xor -1);
-    -- intBitsToFloat (f64.reinterpret_i64 → boxed $float).  Mirror llvm isBitExtern +
-    -- the intBitsToFloat num-extern.  bitOr/bitXor/bitNot are exact i64 two's-complement
-    -- (== native mdk_bit_*); intBitsToFloat reinterprets the unboxed i64 bit pattern.
-    "bitOr",
-    "bitXor",
-    "bitNot",
-    "intBitsToFloat",
-    -- the fixed-width kernel conversions (Int -> U8/U16/U32 truncation, and the
-    -- identity back to Int).  A fixed-width value is an Int word, so these are an
-    -- `i64.and` over the box/unbox seam and a no-op respectively.
-    "u8Truncate",
-    "u8ToInt",
-    "u16Truncate",
-    "u16ToInt",
-    "u32Truncate",
-    "u32ToInt",
-    -- the Int bit primitives under their unshadowable names (`intBitAnd` is
-    -- `bitAnd`, exactly); emitLeafExternRef forwards each to its original.
-    "intBitAnd",
-    "intBitOr",
-    "intBitXor",
-    "intBitNot",
-    "intShiftLeft",
-    "intShiftRight",
-    -- the `U64` kernels (a `$u64` cell in, a `$u64` cell or an Int out).
-    "u64Truncate",
-    "u64TruncateToInt",
-    "u64BitAnd",
-    "u64BitOr",
-    "u64BitXor",
-    "u64ShiftLeft",
-    "u64ShiftRight",
-    "u64MulHigh",
-    -- the signed kernels: `I32` is an Int word held sign-extended, and the
-    -- `I64` doors move a 64-bit payload between a `$u64` and an `$i64` cell.
-    "i32Truncate",
-    "i32ToInt",
-    "i64FromBits",
-    "i64ToBits",
-    -- #101: libm math externs.  IEEE-exact ops lower to native f64 opcodes
-    -- (sqrt/floor/ceil/trunc → f64.sqrt/floor/ceil/trunc; round → $mdk_round, C-round
-    -- half-away-from-zero); transcendentals lower to JS `Math.*` HOST IMPORTS ($mdk_<name>,
-    -- gated on WasmEmit.useMath).  floatRem lowers to $mdk_float_rem (floatRemRuntimeLines).
-    -- All mirror llvm's isMathUnary/isMathBinary/floatRem NAME SET (see llvm_emit.mdk).
-    "sqrt",
-    "floor",
-    "ceil",
-    "trunc",
-    "round",
-    "cbrt",
-    "exp",
-    "log",
-    "log2",
-    "log10",
-    "sin",
-    "cos",
-    "tan",
-    "asin",
-    "acos",
-    "atan",
-    "sinh",
-    "cosh",
-    "tanh",
-    "pow",
-    "atan2",
-    "hypot",
-    "floatRem",
-  ]
-
--- the `U64` kernel externs: each consumes or produces a `$u64` cell, so each
--- demands the `$u64` type and `u64RuntimeLines` (the shifts and `u64MulHigh`).
--- The list duplicates llvm_emit.mdk's `isU64Extern` on purpose: each backend
--- names the kernels it implements, which is what the capability matrix reads.
-isU64ExternW : String -> Bool
--- lint-disable-next-line rule-duplicate-body
-isU64ExternW name = contains name [
-  "u64Truncate",
-  "u64TruncateToInt",
-  "u64BitAnd",
-  "u64BitOr",
-  "u64BitXor",
-  "u64ShiftLeft",
-  "u64ShiftRight",
-  "u64MulHigh",
-]
-
--- the `I64` kernel externs: each moves the payload between a `$u64` and an
--- `$i64` cell, so each demands both types.
-isI64ExternW : String -> Bool
-isI64ExternW name = name == "i64FromBits" || name == "i64ToBits"
-
--- #101: the libm math externs whose wasm lowering is a JS `Math.*` HOST IMPORT
--- (transcendentals + the two-arg pow/atan2/hypot).  These force WasmEmit.useMath so the
--- mathHostImportLines block is declared (and the JS harnesses provide $mdk_<name>).
--- The IEEE-exact ops (sqrt/floor/ceil/trunc/round) are NOT here — they lower to native
--- f64 opcodes / $mdk_round, needing no host import.  floatRem uses $mdk_float_rem (WAT).
-isMathHostExternW : String -> Bool
-isMathHostExternW name = contains name [
-  "cbrt",
-  "exp",
-  "log",
-  "log2",
-  "log10",
-  "sin",
-  "cos",
-  "tan",
-  "asin",
-  "acos",
-  "atan",
-  "sinh",
-  "cosh",
-  "tanh",
-  "pow",
-  "atan2",
-  "hypot",
-]
-
--- #101: the libm math externs that produce/consume a boxed $float (all of them except
--- the pure-int bitwise ops).  Force useFloat so ref-mode + floatRuntimeLines are on.
-isFloatMathExternW : String -> Bool
-isFloatMathExternW name =
-  isMathHostExternW name
-    || contains name [
-      "sqrt", "floor", "ceil", "trunc", "round", "floatRem", "intBitsToFloat"
-    ]
-
 -- Net externs (NET-DESIGN.md §6): native-only.  Raw BSD sockets have no WasmGC
 -- equivalent, so `medaka build --target wasm` must REJECT a net-importing program
 -- with a clear message rather than fall through to emitIndirectApp (which would only
 -- report a generic "unbound variable").  This single-set guard is wired into both
 -- application dispatch ladders (emitAppRef, emitTailAppRef).
-export
 isNetExternW : String -> Bool
--- Intentional cross-file duplicate of the same helper in llvm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
 isNetExternW name = contains name [
   "netResolve",
   "netTcpConnect",
@@ -2195,12 +1942,24 @@ externArityW name =
   else
     1
 
+-- The extern family an application of `name` dispatches through: the catalog's
+-- wasm column, plus the trap-site literal, which `core_ir_lower` writes, is no
+-- runtime extern, and lowers on the leaf path.
+externFamilyW : String -> Option WasmFamily
+externFamilyW name =
+  if name == siteSentinelName then
+    Some WasmLeaf
+  else match wasmFamily name
+    Some f => if isWasmExternFamily f then Some f else None
+    None => None
+
 isWasmEtaExtern : String -> Bool
-isWasmEtaExtern name =
-  isStrExternW name
-    || isLeafExternW name
-    || isArrayExternW name
-    || isByteBlockExternW name
+isWasmEtaExtern name = isSome (externFamilyW name)
+
+isStrExternFamilyW : String -> Bool
+isStrExternFamilyW name = match externFamilyW name
+  Some WasmStr => True
+  _ => False
 
 -- The file externs wasm ports, with the number of value arguments each takes
 -- before its grant.  The wasm host import reads a path and nothing else, so it
@@ -2277,96 +2036,11 @@ stringLitsW [] acc = Some (reverseL acc)
 stringLitsW ((CLit (LString s)) :: rest) acc = stringLitsW rest (s :: acc)
 stringLitsW _ _ = None
 
--- ── W10: Array intrinsic externs (RUNTIME-DESIGN array kernel) ────────────────
--- The seven array primitives from stdlib/runtime.mdk that lower to the `$arr =
--- (array (mut (ref eq)))` WasmGC array (array.len/get/set/new/copy + the apply seam
--- for arrayMakeWith's per-index closure call).  Detected so emitProgram forces the
--- $arr rep (via noteW8Extern) and the dispatch routes here.  NOTE the per-extern arg
--- orders (some take the index/size FIRST) — see stdlib/runtime.mdk:92-104.
-export
-isArrayExternW : String -> Bool
-isArrayExternW name = contains
-  name
-  [
-    "arrayLength",
-    "arrayGetUnsafe",
-    "arrayMake",
-    "arrayMakeWith",
-    "arrayCopy",
-    "arraySetUnsafe",
-    "arrayFromList",
-    -- stage-A: arrayBlit (offset copy) and arrayFill (bulk fill).
-    "arrayBlit",
-    "arrayFill",
-    -- stage-B: float-reinterpret externs build/read the $arr rep (8-byte big-endian
-    -- IEEE-754 (de)serialization).  floatToBytes64 : Float -> Array Int (produces $arr);
-    -- bytesToFloat64 : Array Int -> Int -> Float (reads $arr).
-    "floatToBytes64",
-    "bytesToFloat64",
-  ]
-
--- ── the `ByteBlock` builtin's primitives ──────────────────────────────────
--- Peer of llvm_emit's `isByteBlockExtern`, over the same names.  A block IS
--- a `$u8arr`, so these force the $str rep (which declares $u8arr) and the $arr rep
--- (which the two Array-crossing prims name) — see noteW8Extern below.
--- NOTE the arg orders, which follow stdlib/runtime.mdk, not the receiver-last
--- reading: the index/size comes FIRST, the block LAST, exactly as for $arr.
-export
-isByteBlockExternW : String -> Bool
--- Deliberately a per-backend copy of llvm_emit.mdk's `isByteBlockExtern`, not a
--- shared list.  compiler/backend/extern_catalog_test.mdk compares each backend's
--- own predicate with the catalog's column for that backend, so hoisting the
--- names into a module both backends import would make that comparison read one
--- list twice -- the duplication is what keeps the two columns independently
--- checkable.
--- lint-disable-next-line rule-duplicate-body
-isByteBlockExternW name = contains name [
-  "byteBlockMake",
-  "byteBlockLength",
-  "byteBlockGetUnsafe",
-  "byteBlockSetUnsafe",
-  "byteBlockCopyUnsafe",
-  "byteBlockBlit",
-  "byteBlockFromIntArray",
-  "byteBlockToIntArray",
-  "byteBlockFromString",
-  "byteBlockToString",
-  "byteBlockWriteStdout",
-]
-
--- ── W8b: the ONE residual deferred extern ────────────────────────────────────
--- All other Float externs (floatToString / intToFloat / floatToInt / hashFloat /
--- randomFloat) are PORTED in W8b (real WAT + the floatToString host seam).  The lone
--- holdout is `stringToFloat` — a faithful port means reimplementing `strtod` (decimal/
--- exponent/hex float parsing + the Option result), which would balloon this slice; per
--- the W8b plan it STOPs-and-defers.  It reaches a real prelude only through Foldable/
--- json's `toFloat`, which W8b fixtures avoid.  Stub to a trap so the program still
--- emits; a program that actually parses a Float traps loudly (diverges from the LLVM
--- oracle, which has strtod).
-isDeferredFloatExternW : String -> Bool
-isDeferredFloatExternW _ = False
-
--- W9: a DEFERRED Float extern (boxing + the dtoa formatter is W8b) lowers to a `unreachable`
--- TRAP STUB rather than aborting the whole build.  The real prelude's `impl Debug/
--- Display/Hash/Num Float` reference these, and DCE retains every impl WHOLE, so the
--- refs are unconditionally reachable in EVERY real-prelude program even when no Float
--- is ever displayed.  Stubbing (instead of `gap`) lets the Int/Bool/String/List
--- programs emit and run; a program that ACTUALLY evaluates a Float-extern call traps
--- loudly (and diverges from the LLVM oracle, which has full Float) — so W9 fixtures
--- avoid Float, and the W8b Float port remains the precise remaining-MVP item.
--- `unreachable` is stack-polymorphic, so it validates as any `(result (ref eq))`.
-floatExternStub : String -> List String
-floatExternStub _ = ["unreachable"]
-
--- W9: the QUOTING debug externs `debugStringLit`/`debugCharLit` (used by `impl Debug
--- String`/`impl Debug Char` to render `"hi"`/`'a'` with quotes+escapes).  These now
--- have a real WasmGC runtime ($mdk_dbg_quote / $mdk_debug_string_lit / _char_lit in
--- strLeafRuntimeLines) and are routed through isStrExternW → emitStrExternRef, so the
--- unimplemented set is now empty.  (Kept as a hook for any future trap-stubbed str
--- extern; `floatExternStub` remains the trap path.)
-isUnimplStrExternW : String -> Bool
-isUnimplStrExternW _ = False
-
+-- ── W6: does the program use strings? ────────────────────────────────────────
+-- True if any body contains a String/Char literal, or applies an extern whose
+-- catalog wasm family is `WasmStr` (intToString/putStrLn/stringConcat/…).  Any of
+-- these forces the §3.3 $str rep + the byte-write runtime + ref-mode.  Detected
+-- structurally over every clause body.
 programUsesStr : List CBind -> Bool
 programUsesStr groups = anyBind bindUsesStr groups
 
@@ -2378,7 +2052,7 @@ exprUsesStr : CExpr -> Bool
 exprUsesStr (CLit (LString _)) = True
 exprUsesStr (CLit (LChar _)) = True
 exprUsesStr (CLit _) = False
-exprUsesStr (CVar x _) = isStrExternW x
+exprUsesStr (CVar x _) = isStrExternFamilyW x
 exprUsesStr (CApp f a) =
   let (hd, args) = flattenApp (CApp f a) []
   headUsesStr hd || anyList exprUsesStr args
@@ -2400,7 +2074,7 @@ stmtUsesStr (CSLet _ _ e) = exprUsesStr e
 stmtUsesStr _ = False
 
 headUsesStr : CExpr -> Bool
-headUsesStr (CVar fn _) = isStrExternW fn
+headUsesStr (CVar fn _) = isStrExternFamilyW fn
 headUsesStr h = exprUsesStr h
 
 -- ── W7: scan the program for collection usage (sets the type-section gating refs) ──
@@ -2529,195 +2203,38 @@ scanW7Head emit (CVar "setRef" _) = setRef emit.useRefBox True
 scanW7Head emit (CVar f _) = noteW8Extern emit f
 scanW7Head emit h = scanExprW7 emit h
 
--- ── W8: note which W8 LEAF/RNG/hash runtime groups an extern occurrence reaches ──
--- Sets useStrLeaf (the pure-WAT string ops needing strLeafRuntime), per-emission
--- RNG/hash/ePut observations.  Piggybacks on the W7 walk.
+-- ── W8: note which runtime groups an extern occurrence reaches ───────────────
+-- Sets the flag of every demand the catalog lists for the name (`wasmUses`).
+-- Piggybacks on the W7 walk, which keys on the name alone: it does not track
+-- binders, so a local that shares an extern's name demands what the extern does.
 noteW8Extern : WasmEmit -> String -> Unit
-noteW8Extern emit name =
-  let _ =
-    if contains name [
-      "charToStr", "stringConcat", "stringSlice", "stringToUpper",
-      "stringToLower"
-    ] then
-      setRef emit.useStrLeaf True
-  let _ =
-    if isLeafExternW name
-      && contains
-        name
-        [
-          "randomInt",
-          "randomBool",
-          "randomChar",
-          "setSeed",
-          "randomState",
-          "restoreRandomState",
-        ] then
-      setRef emit.useRng True
-  -- a Char main from randomChar is auto-printed by encoding the codepoint to a $str
-  -- ($mdk_char_to_str → $mdk_print_strln), so randomChar needs the $str rep + the
-  -- char-encode strLeaf runtime.
-  let _ =
-    if name == "randomChar" then
-      let _ = setRef emit.useStr True in setRef emit.useStrLeaf True
-  let _ =
-    if contains name ["hashInt", "hashChar", "hashBool", "hashString"] then
-      setRef emit.useHash True
-  -- W8b: Float externs force the Float runtime (+ ref-mode + $str for floatToString).
-  let _ =
-    if contains
-      name
-      [
-        "floatToString",
-        "intToFloat",
-        "floatToInt",
-        "hashFloat",
-        "randomFloat",
-      ] then
-      setRef emit.useFloat True
-  -- #101: libm math externs that produce/consume a boxed $float force the Float runtime
-  -- (ref-mode + floatRuntimeLines carries $mdk_round; $mdk_float_rem is floatRemRuntimeLines).
-  let _ = if isFloatMathExternW name then setRef emit.useFloat True
-  let _ = if isU64ExternW name then setRef emit.useU64 True
-  let _ =
-    if contains name ["randomState", "restoreRandomState"] then
-      setRef emit.useU64 True
-  let _ =
-    if isI64ExternW name then
-      let _ = setRef emit.useU64 True in setRef emit.useI64 True
-  -- #101: the transcendental / binary math externs lower to JS Math.* host imports —
-  -- force emit.useMath so mathHostImportLines is declared.
-  let _ = if isMathHostExternW name then setRef emit.useMath True
-  -- floatToString needs the $str rep to build its result string.
-  let _ = if name == "floatToString" then setRef emit.useStr True
-  -- layer-6: stringToFloat : String -> Option Float.  Pushes bytes via the IO path
-  -- channel then calls mdk_str_to_float (host strtod acceptance set, #370).  Forces floatStr, float, str,
-  -- and IO (for mdk_path_reset/mdk_path_push).  The $C_Some ctor is in ref-type-section
-  -- which is always present when useStr/useFloat forces ref-mode.
-  let _ =
-    if name == "stringToFloat" then
-      let _ = setRef emit.useFloatStr True in
-        let _ = setRef emit.useFloat True in
-          let _ = setRef emit.useStr True in setRef emit.useIO True
-  -- hashFloat needs the shared mix64 (hashRuntime); randomFloat needs next_u64 (rngRuntime).
-  let _ =
-    if name == "hashFloat" then
-      let _ = setRef emit.useFloatHash True in setRef emit.useHash True
-  let _ =
-    if name == "randomFloat" then
-      let _ = setRef emit.useFloatRng True in setRef emit.useRng True
-  -- W8b: stringIndexOf/stringCompare use the strSearch runtime + cp_count (strLeaf) + $str.
-  let _ =
-    if contains name ["stringIndexOf", "stringCompare"] then
-      let _ = setRef emit.useStrSearch True in
-        let _ = setRef emit.useStr True in setRef emit.useStrLeaf True
-  -- W11b: stringToChars/stringFromChars are the UTF-8 codec between a $str and an $arr
-  -- of i31 Char codepoints.  Force the $str rep, the $arr rep, the strLeaf char encoder
-  -- ($mdk_char_to_str, reused by stringFromChars), and the codec runtime itself.
-  let _ =
-    if contains name ["stringToChars", "stringFromChars"] then
-      let _ = setRef emit.useStrCodec True in
-        let _ = setRef emit.useStr True in
-          let _ = setRef emit.useArray True in setRef emit.useStrLeaf True
-  -- W11b: the UTF-8 byte codec ($str <-> Array Int).  Force the codec runtime (carries
-  -- $mdk_str_to_utf8_bytes / $mdk_utf8_bytes_to_str), the $str rep, and the $arr rep.
-  let _ =
-    if contains name ["stringToUtf8Bytes", "stringFromUtf8Bytes"] then
-      let _ = setRef emit.useStrCodec True in
-        let _ = setRef emit.useStr True in setRef emit.useArray True
-  -- W9: debugStringLit/debugCharLit quote+escape into a fresh $str via $mdk_dbg_quote,
-  -- which reuses $mdk_cp_count + $mdk_char_to_str (both in strLeafRuntimeLines).  Force
-  -- the $str rep + the strLeaf runtime.  (No $arr needed.)
-  let _ =
-    if contains name ["debugStringLit", "debugCharLit"] then
-      let _ = setRef emit.useStr True in setRef emit.useStrLeaf True
-  -- W11b: charFromCode : Int -> Option Char — range-check runtime, no $str/$arr needed.
-  let _ = if name == "charFromCode" then setRef emit.useCharFromCode True
-  -- W11b: char classification + case-mapping externs — pure WAT helpers, no $str/$arr.
-  let _ =
-    if contains
-      name
-      [
-        "charIsAlpha",
-        "charIsSpace",
-        "charIsUpper",
-        "charIsLower",
-        "charIsPunct",
-        "charToUpper",
-        "charToLower",
-      ] then
-      setRef emit.useCharClass True
-  -- W10: panic's message arg is a $str → force the $str rep.  B5: the coded-trap
-  -- lowering streams that message through $mdk_eprint_str (gated on this emission's
-  -- `useEPut`) after a fixed banner -- "runtime error [E-PANIC]: " for panic,
-  -- "runtime error [E-INDEX-OOB]: " for indexError (Index-16a), which lowers to the
-  -- same shape and so wants the same two reps.
-  let _ =
-    if contains name ["panic", "indexError", "panicAt"] then
-      let _ = setRef emit.useStr True in setRef emit.useEPut True
-  -- W10: the array intrinsic externs all build/read the $arr rep (and arrayFromList
-  -- consumes a cons list).  Force useArray; arrayFromList also forces useList.
-  let _ =
-    if contains
-      name
-      [
-        "arrayLength",
-        "arrayGetUnsafe",
-        "arrayMake",
-        "arrayMakeWith",
-        "arrayCopy",
-        "arraySetUnsafe",
-        "arrayFromList",
-        "arrayBlit",
-        "arrayFill",
-        "floatToBytes64",
-        "bytesToFloat64",
-      ] then
-      -- stage-A: arrayBlit/arrayFill also operate on $arr.
+noteW8Extern emit name = forEachU (u => noteWasmUse emit u) (wasmUses name)
 
-      -- stage-B: float-reinterpret externs build/read $arr.
-      setRef emit.useArray True
-  -- stage-B: float-reinterpret externs consume/produce a boxed $float — force the
-  -- Float rep + runtime ($float is unconditionally declared, but useFloat gates the
-  -- float runtime helpers a printed/used Float result may reach).
-  let _ =
-    if contains name ["floatToBytes64", "bytesToFloat64"] then
-      setRef emit.useFloat True
-  let _ = if name == "arrayFromList" then setRef emit.useList True
-  -- the `ByteBlock` builtin: a block IS a `$u8arr`, which is declared with the $str
-  -- rep, so useStr.  byteBlockFromIntArray/ToIntArray also name $arr, and the runtime
-  -- block is emitted whole, so every one of them forces both reps rather than
-  -- letting a make-only program emit a body referencing an undeclared $arr.
-  let _ =
-    if isByteBlockExternW name then
-      let _ = setRef emit.useByteBlock True in
-        let _ = setRef emit.useStr True in setRef emit.useArray True
-  -- W12: the IO host-surface externs.  readFile/fileExists/getEnv/args all build a $str
-  -- (path/result), so force the $str rep; args additionally builds a Cons list (force
-  -- useList).  `exit` needs no $str (it lowers to mdk_exit + unreachable) but still
-  -- forces ref-mode via the useRef predicate (useIO).
-  let _ =
-    if contains name ["readFile", "fileExists", "getEnv", "args"] then
-      setRef emit.useStr True
-  let _ = if name == "args" then setRef emit.useList True
-  let _ = if name == "args" then setRef emit.useArgs True
-  let _ =
-    if contains name ["readFile", "fileExists", "args", "getEnv", "exit"] then
-      setRef emit.useIO True
-  -- stage-D: byte-clean file I/O.  Force the IO host channel ($mdk_push_path etc via
-  -- useIO), the $arr rep (useArray), the $str rep (path/Err message), and the
-  -- fileBytes runtime + write host imports (WasmEmit.useFileBytes).
-  let _ =
-    if contains name ["readFileBytes", "writeFileBytes"] then
-      let _ = setRef emit.useIO True in
-        let _ = setRef emit.useArray True in
-          let _ = setRef emit.useStr True in setRef emit.useFileBytes True
-  let _ =
-    if contains name ["wallTimeSec", "monotonicSec", "sleepMs"] then
-      setRef emit.useClock True
-  let _ =
-    if contains name ["wallTimeSec", "monotonicSec"] then
-      setRef emit.useFloat True
-  if contains name ["ePutStr", "ePutStrLn"] then setRef emit.useEPut True
+-- The `WasmEmit` flag that carries one catalog demand.
+noteWasmUse : WasmEmit -> WasmUse -> Unit
+noteWasmUse emit UseStr = setRef emit.useStr True
+noteWasmUse emit UseStrLeaf = setRef emit.useStrLeaf True
+noteWasmUse emit UseRng = setRef emit.useRng True
+noteWasmUse emit UseHash = setRef emit.useHash True
+noteWasmUse emit UseFloat = setRef emit.useFloat True
+noteWasmUse emit UseU64 = setRef emit.useU64 True
+noteWasmUse emit UseI64 = setRef emit.useI64 True
+noteWasmUse emit UseMath = setRef emit.useMath True
+noteWasmUse emit UseFloatStr = setRef emit.useFloatStr True
+noteWasmUse emit UseFloatHash = setRef emit.useFloatHash True
+noteWasmUse emit UseFloatRng = setRef emit.useFloatRng True
+noteWasmUse emit UseStrSearch = setRef emit.useStrSearch True
+noteWasmUse emit UseStrCodec = setRef emit.useStrCodec True
+noteWasmUse emit UseArray = setRef emit.useArray True
+noteWasmUse emit UseList = setRef emit.useList True
+noteWasmUse emit UseCharFromCode = setRef emit.useCharFromCode True
+noteWasmUse emit UseCharClass = setRef emit.useCharClass True
+noteWasmUse emit UseEPut = setRef emit.useEPut True
+noteWasmUse emit UseByteBlock = setRef emit.useByteBlock True
+noteWasmUse emit UseIO = setRef emit.useIO True
+noteWasmUse emit UseArgs = setRef emit.useArgs True
+noteWasmUse emit UseFileBytes = setRef emit.useFileBytes True
+noteWasmUse emit UseClock = setRef emit.useClock True
 -- `++` is runtime-dispatched ($mdk_append): needs the $str leaf concat ($mdk_str_append)
 -- AND the W7 cons list types ($C_Cons/$T_List) for the list-append branch.
 noteW8Binop : WasmEmit -> String -> Unit
@@ -6894,10 +6411,6 @@ emitVarRefPlain prog env d x =
       emitCtorConstruct prog env d x []
     else
       emitCtorEtaClosure prog x
-  else if isDeferredFloatExternW x then
-    floatExternStub x
-  else if isUnimplStrExternW x then
-    floatExternStub x
   else if progFnMemberW prog x then
     let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ x)
     -- S-4: captureless by construction (a top-level fn's wrapper closes over nothing)
@@ -6966,7 +6479,7 @@ emitExternEtaDefine prog lamName name arity =
   let argVars = map (p => CVar p AGlobal) params
   -- An ARRAY extern referenced point-free (e.g. `arrayFromList` passed to the byteparser
   -- parse path) must route to emitArrayExternRef — mirroring the DIRECT-call arm at
-  -- emitRefApp (isArrayExternW f → emitArrayExternRef).  Without this it fell to
+  -- emitAppRef (a `WasmArray` family → emitArrayExternRef).  Without this it fell to
   -- emitLeafExternRef → "unsupported leaf extern".  The array externs use the depth-0
   -- `$__aex*`/`$__raarr*` scratch locals (loop counter, size, result $arr, list cursor,
   -- closure/init/value cells, i64 reinterpret accumulator), which the synthesized eta
@@ -6974,17 +6487,16 @@ emitExternEtaDefine prog lamName name arity =
   -- the eta declares its own fixed scratch set (arrayEtaScratchLocals), so its body's
   -- W7 references must not land in the function whose codegen reached it.
   let w7Outer = w7ScopeOpen (progEmit prog)
-  let call =
-    if isStrExternW name then
-      emitStrExternRef prog params 0 name argVars
-    else if isArrayExternW name then
-      emitArrayExternRef prog params 0 name argVars
-    else if isByteBlockExternW name then
-      emitByteBlockExternRef prog params 0 name argVars
-    else
-      emitLeafExternRef prog params 0 name argVars
+  let family = externFamilyW name
+  let call = match family
+    Some WasmStr => emitStrExternRef prog params 0 name argVars
+    Some WasmArray => emitArrayExternRef prog params 0 name argVars
+    Some WasmByteBlock => emitByteBlockExternRef prog params 0 name argVars
+    _ => emitLeafExternRef prog params 0 name argVars
   let _ = w7ScopeClose (progEmit prog) w7Outer
-  let arrayScratch = if isArrayExternW name then arrayEtaScratchLocals else []
+  let arrayScratch = match family
+    Some WasmArray => arrayEtaScratchLocals
+    _ => []
   let localLines = map (l => localDeclRef l) params ++ arrayScratch
   [
       "  (func "
@@ -7853,23 +7365,17 @@ emitAppRef prog env d app =
           ("wasm: FFI extern '"
             ++ f
             ++ "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")
-      else if isStrExternW f then
-        emitStrExternRef prog env d f args
-      else if isLeafExternW f then
-        emitLeafExternRef prog env d f args
-      else if isArrayExternW f then
-        emitArrayExternRef prog env d f args
-      else if isByteBlockExternW f then
-        emitByteBlockExternRef prog env d f args
-      else if isDeferredFloatExternW f then
-        floatExternStub f
-      else if isUnimplStrExternW f then
-        floatExternStub f
-      else if progFnMemberW prog f && listLen args == progFnArity prog f then
-        let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-        argInstrs ++ ["call $" ++ gname f]
-      else
-        emitIndirectApp prog env d hd args
+      else match externFamilyW f
+        Some WasmStr => emitStrExternRef prog env d f args
+        Some WasmLeaf => emitLeafExternRef prog env d f args
+        Some WasmArray => emitArrayExternRef prog env d f args
+        Some WasmByteBlock => emitByteBlockExternRef prog env d f args
+        _ =>
+          if progFnMemberW prog f && listLen args == progFnArity prog f then
+            let argInstrs = flatMap (a => emitRefExpr prog env d a) args
+            argInstrs ++ ["call $" ++ gname f]
+          else
+            emitIndirectApp prog env d hd args
     -- W5: a method occurrence applied to its args (the common return-/arg-position
     -- dispatch shape — a CMethod head under a CApp).  Dispatch on the route.
     CMethod name iface arity route implRoutes methRoutes =>
@@ -8923,7 +8429,7 @@ emitByteBlockExternRef prog env d "byteBlockToString" _ =
 -- byteBlockWriteStdout: writes the block's bytes to stdout byte-for-byte via
 -- the same $mdk_write_byte host import putStr's $mdk_print_str loop uses,
 -- then returns Unit -- the operand is a $u8arr, so this dispatches through
--- the byte-block family rather than isStrExternW's $str-typed IO externs.
+-- the byte-block family rather than the WasmStr family's $str-typed IO externs.
 emitByteBlockExternRef prog env d "byteBlockWriteStdout" [b] =
   emitRefExpr prog env d b
     ++ [
@@ -10133,14 +9639,7 @@ emitAppTail prog env arity app =
           ("wasm: FFI extern '"
             ++ f
             ++ "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")
-      else if f == "Ref"
-        || f == "setRef"
-        || isStrExternW f
-        || isLeafExternW f
-        || isArrayExternW f
-        || isByteBlockExternW f
-        || isDeferredFloatExternW f
-        || isUnimplStrExternW f then
+      else if f == "Ref" || f == "setRef" || isSome (externFamilyW f) then
         emitAppRef prog env 0 app ++ ["return"]
       else if progFnMemberW prog f && listLen args == progFnArity prog f then
         flatMap (a => emitRefExpr prog env 0 a) args
@@ -13274,6 +12773,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true) (mem "FailSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false) (mem "wasmUses" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
@@ -13555,24 +13055,16 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "anyBind" (TyFun (TyFun (TyCon "CBind") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Bool"))))
 (DFunDef false "anyBind" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyBind" ((PVar "p") (PCons (PVar "b") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "b")) (EVar "True") (EApp (EApp (EVar "anyBind") (EVar "p")) (EVar "rest"))))
-(DTypeSig true "isStrExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isStrExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringConcat")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "flushStdout")) (ELit (LString "stringSlice")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "floatToString")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "stringToFloat")))))
-(DTypeSig true "isLeafExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isLeafExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "randomBool")) (ELit (LString "randomChar")) (ELit (LString "setSeed")) (ELit (LString "randomState")) (ELit (LString "restoreRandomState")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "args")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "wallTimeSec")) (ELit (LString "monotonicSec")) (ELit (LString "sleepMs")) (ELit (LString "ioPoll")) (ELit (LString "canonicalizePath")) (ELit (LString "readFileBytes")) (ELit (LString "writeFileBytes")) (ELit (LString "panic")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "indexErrorAtSite")) (ELit (LString "panicAt")) (EVar "siteSentinelName") (ELit (LString "sliceError")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "bitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "u8Truncate")) (ELit (LString "u8ToInt")) (ELit (LString "u16Truncate")) (ELit (LString "u16ToInt")) (ELit (LString "u32Truncate")) (ELit (LString "u32ToInt")) (ELit (LString "intBitAnd")) (ELit (LString "intBitOr")) (ELit (LString "intBitXor")) (ELit (LString "intBitNot")) (ELit (LString "intShiftLeft")) (ELit (LString "intShiftRight")) (ELit (LString "u64Truncate")) (ELit (LString "u64TruncateToInt")) (ELit (LString "u64BitAnd")) (ELit (LString "u64BitOr")) (ELit (LString "u64BitXor")) (ELit (LString "u64ShiftLeft")) (ELit (LString "u64ShiftRight")) (ELit (LString "u64MulHigh")) (ELit (LString "i32Truncate")) (ELit (LString "i32ToInt")) (ELit (LString "i64FromBits")) (ELit (LString "i64ToBits")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")))))
-(DTypeSig false "isU64ExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isU64ExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "u64Truncate")) (ELit (LString "u64TruncateToInt")) (ELit (LString "u64BitAnd")) (ELit (LString "u64BitOr")) (ELit (LString "u64BitXor")) (ELit (LString "u64ShiftLeft")) (ELit (LString "u64ShiftRight")) (ELit (LString "u64MulHigh")))))
-(DTypeSig false "isI64ExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isI64ExternW" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "i64FromBits"))) (EBinOp "==" (EVar "name") (ELit (LString "i64ToBits")))))
-(DTypeSig false "isMathHostExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isMathHostExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")))))
-(DTypeSig false "isFloatMathExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isFloatMathExternW" ((PVar "name")) (EBinOp "||" (EApp (EVar "isMathHostExternW") (EVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "floatRem")) (ELit (LString "intBitsToFloat"))))))
-(DTypeSig true "isNetExternW" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig false "isNetExternW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isNetExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "netResolve")) (ELit (LString "netTcpConnect")) (ELit (LString "netTcpListen")) (ELit (LString "netListenPort")) (ELit (LString "netTcpAccept")) (ELit (LString "netSend")) (ELit (LString "netSendFrom")) (ELit (LString "netRecv")) (ELit (LString "netShutdown")) (ELit (LString "netClose")) (ELit (LString "netCloseListener")) (ELit (LString "socketFd")) (ELit (LString "listenSocketFd")) (ELit (LString "netSetNonblockListener")) (ELit (LString "netSetTimeout")) (ELit (LString "pdsSignalStart")) (ELit (LString "pdsSignalRequested")) (ELit (LString "netSetNonblock")) (ELit (LString "netConnectStart")) (ELit (LString "netConnectCheck")) (ELit (LString "netTryAccept")) (ELit (LString "netTryRecv")) (ELit (LString "netTryRecvBytes")) (ELit (LString "netTrySend")) (ELit (LString "netTrySendFrom")) (ELit (LString "netSendBytesFrom")) (ELit (LString "netTrySendBytesFrom")))))
 (DTypeSig false "externArityW" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "externArityW" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "flushStdout")) (ELit (LString "randomBool")))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "stringConcat")) (ELit (LString "setSeed")) (ELit (LString "randomState")) (ELit (LString "restoreRandomState")) (ELit (LString "randomChar")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "panic")) (ELit (LString "arrayLength")) (ELit (LString "arrayFromList")) (ELit (LString "arrayCopy")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "floatToBytes64")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "args")) (ELit (LString "wallTimeSec")) (ELit (LString "monotonicSec")) (ELit (LString "sleepMs")) (ELit (LString "bitNot")) (ELit (LString "intBitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "stringToFloat")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")))) (ELit (LInt 1)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "intBitAnd")) (ELit (LString "intBitOr")) (ELit (LString "intBitXor")) (ELit (LString "intShiftLeft")) (ELit (LString "intShiftRight")) (ELit (LString "u64BitAnd")) (ELit (LString "u64BitOr")) (ELit (LString "u64BitXor")) (ELit (LString "u64ShiftLeft")) (ELit (LString "u64ShiftRight")) (ELit (LString "u64MulHigh")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")) (ELit (LString "sliceError")) (ELit (LString "indexErrorAtSite")) (ELit (LString "panicAt")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "readFileBytes")) (ELit (LString "canonicalizePath")))) (ELit (LInt 2)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringSlice")) (ELit (LString "arraySetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "writeFileBytes")) (ELit (LString "ioPoll")) (EVar "siteSentinelName"))) (ELit (LInt 3)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayBlit")) (ELit (LString "byteBlockBlit")))) (ELit (LInt 5)) (ELit (LInt 1))))))))
+(DTypeSig false "externFamilyW" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "WasmFamily"))))
+(DFunDef false "externFamilyW" ((PVar "name")) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EVar "Some") (EVar "WasmLeaf")) (EMatch (EApp (EVar "wasmFamily") (EVar "name")) (arm (PCon "Some" (PVar "f")) () (EIf (EApp (EVar "isWasmExternFamily") (EVar "f")) (EApp (EVar "Some") (EVar "f")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))))
 (DTypeSig false "isWasmEtaExtern" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isWasmEtaExtern" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isStrExternW") (EVar "name")) (EApp (EVar "isLeafExternW") (EVar "name"))) (EApp (EVar "isArrayExternW") (EVar "name"))) (EApp (EVar "isByteBlockExternW") (EVar "name"))))
+(DFunDef false "isWasmEtaExtern" ((PVar "name")) (EApp (EVar "isSome") (EApp (EVar "externFamilyW") (EVar "name"))))
+(DTypeSig false "isStrExternFamilyW" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isStrExternFamilyW" ((PVar "name")) (EMatch (EApp (EVar "externFamilyW") (EVar "name")) (arm (PCon "Some" (PCon "WasmStr")) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig true "wasmFileGrantExterns" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "wasmFileGrantExterns" () (EListLit (ETuple (ELit (LString "readFile")) (ELit (LInt 1))) (ETuple (ELit (LString "fileExists")) (ELit (LInt 1))) (ETuple (ELit (LString "canonicalizePath")) (ELit (LInt 1))) (ETuple (ELit (LString "readFileBytes")) (ELit (LInt 1))) (ETuple (ELit (LString "writeFileBytes")) (ELit (LInt 2)))))
 (DTypeSig true "wasmFileGrantArity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
@@ -13590,16 +13082,6 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "stringLitsW" ((PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
 (DFunDef false "stringLitsW" ((PCons (PCon "CLit" (PCon "LString" (PVar "s"))) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "stringLitsW") (EVar "rest")) (EBinOp "::" (EVar "s") (EVar "acc"))))
 (DFunDef false "stringLitsW" (PWild PWild) (EVar "None"))
-(DTypeSig true "isArrayExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isArrayExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayLength")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "arrayCopy")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayFromList")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "floatToBytes64")) (ELit (LString "bytesToFloat64")))))
-(DTypeSig true "isByteBlockExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isByteBlockExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockBlit")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")) (ELit (LString "byteBlockWriteStdout")))))
-(DTypeSig false "isDeferredFloatExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDeferredFloatExternW" (PWild) (EVar "False"))
-(DTypeSig false "floatExternStub" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "floatExternStub" (PWild) (EListLit (ELit (LString "unreachable"))))
-(DTypeSig false "isUnimplStrExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isUnimplStrExternW" (PWild) (EVar "False"))
 (DTypeSig false "programUsesStr" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Bool")))
 (DFunDef false "programUsesStr" ((PVar "groups")) (EApp (EApp (EVar "anyBind") (EVar "bindUsesStr")) (EVar "groups")))
 (DTypeSig false "bindUsesStr" (TyFun (TyCon "CBind") (TyCon "Bool")))
@@ -13608,7 +13090,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "exprUsesStr" ((PCon "CLit" (PCon "LString" PWild))) (EVar "True"))
 (DFunDef false "exprUsesStr" ((PCon "CLit" (PCon "LChar" PWild))) (EVar "True"))
 (DFunDef false "exprUsesStr" ((PCon "CLit" PWild)) (EVar "False"))
-(DFunDef false "exprUsesStr" ((PCon "CVar" (PVar "x") PWild)) (EApp (EVar "isStrExternW") (EVar "x")))
+(DFunDef false "exprUsesStr" ((PCon "CVar" (PVar "x") PWild)) (EApp (EVar "isStrExternFamilyW") (EVar "x")))
 (DFunDef false "exprUsesStr" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "a"))) (EListLit))) (DoExpr (EBinOp "||" (EApp (EVar "headUsesStr") (EVar "hd")) (EApp (EApp (EVar "anyList") (EVar "exprUsesStr")) (EVar "args"))))))
 (DFunDef false "exprUsesStr" ((PCon "CLam" PWild (PVar "b"))) (EApp (EVar "exprUsesStr") (EVar "b")))
 (DFunDef false "exprUsesStr" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "||" (EApp (EVar "exprUsesStr") (EVar "l")) (EApp (EVar "exprUsesStr") (EVar "r"))))
@@ -13624,7 +13106,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "stmtUsesStr" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprUsesStr") (EVar "e")))
 (DFunDef false "stmtUsesStr" (PWild) (EVar "False"))
 (DTypeSig false "headUsesStr" (TyFun (TyCon "CExpr") (TyCon "Bool")))
-(DFunDef false "headUsesStr" ((PCon "CVar" (PVar "fn") PWild)) (EApp (EVar "isStrExternW") (EVar "fn")))
+(DFunDef false "headUsesStr" ((PCon "CVar" (PVar "fn") PWild)) (EApp (EVar "isStrExternFamilyW") (EVar "fn")))
 (DFunDef false "headUsesStr" ((PVar "h")) (EApp (EVar "exprUsesStr") (EVar "h")))
 (DTypeSig false "scanProgW7" (TyFun (TyCon "WasmEmit") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit"))))
 (DFunDef false "scanProgW7" ((PVar "emit") (PVar "groups")) (EApp (EApp (EVar "forEachU") (ELam ((PVar "b")) (EApp (EApp (EVar "scanBindW7") (EVar "emit")) (EVar "b")))) (EVar "groups")))
@@ -13674,7 +13156,31 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "scanW7Head" ((PVar "emit") (PCon "CVar" (PVar "f") PWild)) (EApp (EApp (EVar "noteW8Extern") (EVar "emit")) (EVar "f")))
 (DFunDef false "scanW7Head" ((PVar "emit") (PVar "h")) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "h")))
 (DTypeSig false "noteW8Extern" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "noteW8Extern" ((PVar "emit") (PVar "name")) (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "charToStr")) (ELit (LString "stringConcat")) (ELit (LString "stringSlice")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "&&" (EApp (EVar "isLeafExternW") (EVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "randomBool")) (ELit (LString "randomChar")) (ELit (LString "setSeed")) (ELit (LString "randomState")) (ELit (LString "restoreRandomState"))))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRng")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "randomChar"))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "hashString")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useHash")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isFloatMathExternW") (EVar "name")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isU64ExternW") (EVar "name")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useU64")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomState")) (ELit (LString "restoreRandomState")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useU64")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isI64ExternW") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useU64")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useI64")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isMathHostExternW") (EVar "name")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useMath")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "floatToString"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "stringToFloat"))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatStr")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useIO")) (EVar "True"))))) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "hashFloat"))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatHash")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useHash")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "randomFloat"))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatRng")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRng")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrSearch")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True")))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrCodec")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True"))))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrCodec")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "charFromCode"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useCharFromCode")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useCharClass")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "panic")) (ELit (LString "indexError")) (ELit (LString "panicAt")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useEPut")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayLength")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "arrayCopy")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayFromList")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "floatToBytes64")) (ELit (LString "bytesToFloat64")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "floatToBytes64")) (ELit (LString "bytesToFloat64")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "arrayFromList"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isByteBlockExternW") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useByteBlock")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "getEnv")) (ELit (LString "args")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "args"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "args"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArgs")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "args")) (ELit (LString "getEnv")) (ELit (LString "exit")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useIO")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "readFileBytes")) (ELit (LString "writeFileBytes")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useIO")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFileBytes")) (EVar "True"))))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "wallTimeSec")) (ELit (LString "monotonicSec")) (ELit (LString "sleepMs")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useClock")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "wallTimeSec")) (ELit (LString "monotonicSec")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useEPut")) (EVar "True")) (ELit LUnit)))))
+(DFunDef false "noteW8Extern" ((PVar "emit") (PVar "name")) (EApp (EApp (EVar "forEachU") (ELam ((PVar "u")) (EApp (EApp (EVar "noteWasmUse") (EVar "emit")) (EVar "u")))) (EApp (EVar "wasmUses") (EVar "name"))))
+(DTypeSig false "noteWasmUse" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmUse") (TyCon "Unit"))))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStr")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStrLeaf")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseRng")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRng")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseHash")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useHash")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFloat")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseU64")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useU64")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseI64")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useI64")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseMath")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useMath")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFloatStr")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatStr")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFloatHash")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatHash")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFloatRng")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatRng")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStrSearch")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrSearch")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStrCodec")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrCodec")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseArray")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseList")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseCharFromCode")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useCharFromCode")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseCharClass")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useCharClass")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseEPut")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useEPut")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseByteBlock")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useByteBlock")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseIO")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useIO")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseArgs")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArgs")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFileBytes")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFileBytes")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseClock")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useClock")) (EVar "True")))
 (DTypeSig false "noteW8Binop" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "noteW8Binop" ((PVar "emit") (PLit (LString "++"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")))))
 (DFunDef false "noteW8Binop" ((PVar "emit") (PLit (LString "::"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")))
@@ -14482,13 +13988,13 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitVarRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitVarRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "x")) (EMatch (EApp (EVar "emitFtSentinel") (EVar "x")) (arm (PCon "Some" (PVar "instrs")) () (EVar "instrs")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "emitVarRefPlain") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")))))
 (DTypeSig false "emitVarRefPlain" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitVarRefPlain" ((PVar "prog") (PVar "env") (PVar "d") (PVar "x")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "x")))) (EIf (EApp (EApp (EVar "progValMemberW") (EVar "prog")) (EVar "x")) (EIf (EApp (EApp (EVar "isLazyGlobalW") (EVar "prog")) (EVar "x")) (EListLit (EBinOp "++" (ELit (LString "call $force_")) (EApp (EVar "gname") (EVar "x")))) (EListLit (EBinOp "++" (ELit (LString "global.get $")) (EApp (EVar "gname") (EVar "x"))) (ELit (LString "ref.as_non_null")))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "True"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "False"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "otherwise"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "charMinBound"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "charMaxBound"))) (EListLit (ELit (LString "i32.const 1114111")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "pi"))) (EListLit (ELit (LString "f64.const 3.141592653589793")) (ELit (LString "struct.new $float"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "e"))) (EListLit (ELit (LString "f64.const 2.718281828459045")) (ELit (LString "struct.new $float"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "intMaxBound"))) (EListLit (ELit (LString "i64.const 4611686018427387903")) (ELit (LString "call $mdk_box_int"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "intMinBound"))) (EListLit (ELit (LString "i64.const -4611686018427387904")) (ELit (LString "call $mdk_box_int"))) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "x")) (EIf (EBinOp "==" (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "x")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorConstruct") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")) (EListLit)) (EApp (EApp (EVar "emitCtorEtaClosure") (EVar "prog")) (EVar "x"))) (EIf (EApp (EVar "isDeferredFloatExternW") (EVar "x")) (EApp (EVar "floatExternStub") (EVar "x")) (EIf (EApp (EVar "isUnimplStrExternW") (EVar "x")) (EApp (EVar "floatExternStub") (EVar "x")) (EIf (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "x")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "$mdk_w_")) (EVar "x")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "$mdk_w_")) (EVar "x"))) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "x"))))) (EIf (EBinOp "/=" (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "x")) (EVar "x")) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "x"))) (EIf (EApp (EVar "isWasmEtaExtern") (EVar "x")) (EApp (EApp (EVar "emitExternEtaClosure") (EVar "prog")) (EVar "x")) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "x")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "x")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EApp (EApp (EVar "gapUnboundLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unbound variable '")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "' (not a local, global value, constructor, or known function) [in "))) (EApp (EVar "display") (EApp (EVar "currentBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))))) (ELit (LString "]")))))))))))))))))))))))
+(DFunDef false "emitVarRefPlain" ((PVar "prog") (PVar "env") (PVar "d") (PVar "x")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "x")))) (EIf (EApp (EApp (EVar "progValMemberW") (EVar "prog")) (EVar "x")) (EIf (EApp (EApp (EVar "isLazyGlobalW") (EVar "prog")) (EVar "x")) (EListLit (EBinOp "++" (ELit (LString "call $force_")) (EApp (EVar "gname") (EVar "x")))) (EListLit (EBinOp "++" (ELit (LString "global.get $")) (EApp (EVar "gname") (EVar "x"))) (ELit (LString "ref.as_non_null")))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "True"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "False"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "otherwise"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "charMinBound"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "charMaxBound"))) (EListLit (ELit (LString "i32.const 1114111")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "pi"))) (EListLit (ELit (LString "f64.const 3.141592653589793")) (ELit (LString "struct.new $float"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "e"))) (EListLit (ELit (LString "f64.const 2.718281828459045")) (ELit (LString "struct.new $float"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "intMaxBound"))) (EListLit (ELit (LString "i64.const 4611686018427387903")) (ELit (LString "call $mdk_box_int"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "intMinBound"))) (EListLit (ELit (LString "i64.const -4611686018427387904")) (ELit (LString "call $mdk_box_int"))) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "x")) (EIf (EBinOp "==" (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "x")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorConstruct") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")) (EListLit)) (EApp (EApp (EVar "emitCtorEtaClosure") (EVar "prog")) (EVar "x"))) (EIf (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "x")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "$mdk_w_")) (EVar "x")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "$mdk_w_")) (EVar "x"))) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "x"))))) (EIf (EBinOp "/=" (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "x")) (EVar "x")) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "x"))) (EIf (EApp (EVar "isWasmEtaExtern") (EVar "x")) (EApp (EApp (EVar "emitExternEtaClosure") (EVar "prog")) (EVar "x")) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "x")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "x")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EApp (EApp (EVar "gapUnboundLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unbound variable '")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "' (not a local, global value, constructor, or known function) [in "))) (EApp (EVar "display") (EApp (EVar "currentBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))))) (ELit (LString "]")))))))))))))))))))))
 (DTypeSig false "emitExternEtaClosure" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitExternEtaClosure" ((PVar "prog") (PVar "name")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "externArityW") (EVar "name"))) (DoLet false false (PVar "lamName") (EBinOp "++" (ELit (LString "$mdk_ext_")) (EVar "name"))) (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "addLiftedNamed") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName")) (EApp (EApp (EApp (EApp (EVar "emitExternEtaDefine") (EVar "prog")) (EVar "lamName")) (EVar "name")) (EVar "arity")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName")) (EVar "arity")))))
 (DTypeSig false "arrayEtaScratchLocals" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "arrayEtaScratchLocals" () (EListLit (ELit (LString "(local $__aexi0 i32)")) (ELit (LString "(local $__aexn0 i32)")) (ELit (LString "(local $__aexarr0 (ref null $arr))")) (ELit (LString "(local $__aexlst0 (ref eq))")) (ELit (LString "(local $__aexf0 (ref eq))")) (ELit (LString "(local $__aexv0 (ref eq))")) (ELit (LString "(local $__aexbits0 i64)")) (ELit (LString "(local $__raarr0 (ref null $arr))"))))
 (DTypeSig false "emitExternEtaDefine" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitExternEtaDefine" ((PVar "prog") (PVar "lamName") (PVar "name") (PVar "arity")) (EBlock (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "argPrologue") (EApp (EApp (EVar "flatMap") (EVar "argLoadAt")) (EApp (EApp (EVar "zipIdx") (EVar "params")) (ELit (LInt 0))))) (DoLet false false (PVar "argVars") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "CVar") (EVar "p")) (EVar "AGlobal")))) (EVar "params"))) (DoLet false false (PVar "w7Outer") (EApp (EVar "w7ScopeOpen") (EApp (EVar "progEmit") (EVar "prog")))) (DoLet false false (PVar "call") (EIf (EApp (EVar "isStrExternW") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars")) (EIf (EApp (EVar "isArrayExternW") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars")) (EIf (EApp (EVar "isByteBlockExternW") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars")))))) (DoLet false false PWild (EApp (EApp (EVar "w7ScopeClose") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "w7Outer"))) (DoLet false false (PVar "arrayScratch") (EIf (EApp (EVar "isArrayExternW") (EVar "name")) (EVar "arrayEtaScratchLocals") (EListLit))) (DoLet false false (PVar "localLines") (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EVar "localDeclRef") (EVar "l")))) (EVar "params")) (EVar "arrayScratch"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  (func ")) (EVar "lamName")) (ELit (LString " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))")))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "  ")) (EVar "_s")))) (EVar "localLines"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "argPrologue") (EVar "call")) (EListLit (ELit (LString "return")))))) (EListLit (ELit (LString "  )")))))))
+(DFunDef false "emitExternEtaDefine" ((PVar "prog") (PVar "lamName") (PVar "name") (PVar "arity")) (EBlock (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "argPrologue") (EApp (EApp (EVar "flatMap") (EVar "argLoadAt")) (EApp (EApp (EVar "zipIdx") (EVar "params")) (ELit (LInt 0))))) (DoLet false false (PVar "argVars") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EApp (EVar "CVar") (EVar "p")) (EVar "AGlobal")))) (EVar "params"))) (DoLet false false (PVar "w7Outer") (EApp (EVar "w7ScopeOpen") (EApp (EVar "progEmit") (EVar "prog")))) (DoLet false false (PVar "family") (EApp (EVar "externFamilyW") (EVar "name"))) (DoLet false false (PVar "call") (EMatch (EVar "family") (arm (PCon "Some" (PCon "WasmStr")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars"))) (arm (PCon "Some" (PCon "WasmArray")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars"))) (arm (PCon "Some" (PCon "WasmByteBlock")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars"))))) (DoLet false false PWild (EApp (EApp (EVar "w7ScopeClose") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "w7Outer"))) (DoLet false false (PVar "arrayScratch") (EMatch (EVar "family") (arm (PCon "Some" (PCon "WasmArray")) () (EVar "arrayEtaScratchLocals")) (arm PWild () (EListLit)))) (DoLet false false (PVar "localLines") (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EVar "localDeclRef") (EVar "l")))) (EVar "params")) (EVar "arrayScratch"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  (func ")) (EVar "lamName")) (ELit (LString " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))")))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "  ")) (EVar "_s")))) (EVar "localLines"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "argPrologue") (EVar "call")) (EListLit (ELit (LString "return")))))) (EListLit (ELit (LString "  )")))))))
 (DTypeSig false "emitCtorEtaClosure" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitCtorEtaClosure" ((PVar "prog") (PVar "ctor")) (EBlock (DoLet false false (PVar "arity") (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "ctor"))) (DoLet false false (PVar "lamName") (EBinOp "++" (ELit (LString "$mdk_wctor_")) (EApp (EVar "gname") (EVar "ctor")))) (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "addLiftedNamed") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName")) (EApp (EApp (EApp (EApp (EVar "emitCtorEtaDefine") (EVar "prog")) (EVar "lamName")) (EVar "ctor")) (EVar "arity")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName")) (EVar "arity")))))
 (DTypeSig false "emitCtorEtaDefine" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -14665,7 +14171,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PList)) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "CLit") (EVar "LUnit"))))
 (DFunDef false "emitBlockRef" ((PVar "prog") PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: unsupported block statement"))))
 (DTypeSig false "emitAppRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitAppRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxNew") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxSet") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EApp (EVar "isNetExternW") (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: net extern '")) (EVar "f")) (ELit (LString "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "f")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EIf (EApp (EVar "isStrExternW") (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EApp (EVar "isLeafExternW") (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EApp (EVar "isArrayExternW") (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EApp (EVar "isByteBlockExternW") (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EApp (EVar "isDeferredFloatExternW") (EVar "f")) (EApp (EVar "floatExternStub") (EVar "f")) (EIf (EApp (EVar "isUnimplStrExternW") (EVar "f")) (EApp (EVar "floatExternStub") (EVar "f")) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "f")))) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "f"))))))) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")))))))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")) (EVar "args"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")))))))
+(DFunDef false "emitAppRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxNew") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxSet") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EApp (EVar "isNetExternW") (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: net extern '")) (EVar "f")) (ELit (LString "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "f")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EMatch (EApp (EVar "externFamilyW") (EVar "f")) (arm (PCon "Some" (PCon "WasmStr")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmLeaf")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmArray")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmByteBlock")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm PWild () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "f")))) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "f"))))))) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")) (EVar "args"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")))))))
 (DTypeSig false "emitStrExternRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToString")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "call $mdk_unbox_int")) (ELit (LString "call $mdk_int_to_str")))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W6: intToString takes exactly one argument"))))
@@ -15065,7 +14571,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "implSelfReturnCall" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
 (DFunDef false "implSelfReturnCall" ((PVar "prog") (PVar "env") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "route") (PVar "methRoutes") (PVar "implRoutes") (PVar "app") (PVar "args")) (EMatch (EFieldAccess (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "implSelfCtx") "value") (arm (PCon "ImplSelfOff") () (EVar "None")) (arm (PCon "ImplSelfOn" (PVar "method") PWild (PVar "key") (PVar "fnName") (PVar "arity")) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "name") (EVar "method")) (EApp (EApp (EVar "isSelfHead") (EApp (EApp (EApp (EVar "SelfByMethod") (EVar "method")) (EVar "key")) (ELit (LInt 0)))) (EApp (EVar "appHead") (EVar "app")))) (EMatch (EVar "route") (arm (PCon "RKey" (PVar "rtag") PWild PWild) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "iface")) (EVar "rtag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "dictRoutes") (EApp (EApp (EApp (EApp (EVar "staticEntryDictRoutesW") (EVar "entry")) (EVar "route")) (EVar "methRoutes")) (EVar "implRoutes"))) (DoLet false false (PVar "saturated") (EBinOp "==" (EBinOp "+" (EApp (EVar "listLen") (EVar "dictRoutes")) (EApp (EVar "listLen") (EVar "args"))) (EVar "arity"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "implEntryKeyW") (EVar "entry")) (EVar "key")) (EIf (EVar "saturated") (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (ELit (LInt 0)))) (EVar "dictRoutes"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args"))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EVar "dictWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EVar "fnName"))))))) (EVar "None")) (EVar "None"))))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))) (EVar "None")))))
 (DTypeSig false "emitAppTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitAppTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply")))))) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EApp (EVar "isNetExternW") (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: net extern '")) (EVar "f")) (ELit (LString "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "f")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EBinOp "==" (EVar "f") (ELit (LString "setRef")))) (EApp (EVar "isStrExternW") (EVar "f"))) (EApp (EVar "isLeafExternW") (EVar "f"))) (EApp (EVar "isArrayExternW") (EVar "f"))) (EApp (EVar "isByteBlockExternW") (EVar "f"))) (EApp (EVar "isDeferredFloatExternW") (EVar "f"))) (EApp (EVar "isUnimplStrExternW") (EVar "f"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "f")))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "f"))))) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply"))))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSelfReturnCall") (EVar "prog")) (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "methRoutes")) (EVar "implRoutes")) (EVar "app")) (EVar "args")) (arm (PCon "Some" (PVar "retInstrs")) () (EVar "retInstrs")) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EListLit (ELit (LString "return"))))))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "name")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EBinOp "-" (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "name")) (EApp (EVar "listLen") (EVar "routes"))))) (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (ELit (LInt 0)))) (EVar "routes"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "dictWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "name"))))))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "routes")) (EVar "args")) (EListLit (ELit (LString "return")))))) (arm PWild () (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply")))))))))))
+(DFunDef false "emitAppTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply")))))) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EApp (EVar "isNetExternW") (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: net extern '")) (EVar "f")) (ELit (LString "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "f")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EBinOp "==" (EVar "f") (ELit (LString "setRef")))) (EApp (EVar "isSome") (EApp (EVar "externFamilyW") (EVar "f")))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "f")))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "f"))))) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply"))))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSelfReturnCall") (EVar "prog")) (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "methRoutes")) (EVar "implRoutes")) (EVar "app")) (EVar "args")) (arm (PCon "Some" (PVar "retInstrs")) () (EVar "retInstrs")) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EListLit (ELit (LString "return"))))))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "name")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EBinOp "-" (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "name")) (EApp (EVar "listLen") (EVar "routes"))))) (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (ELit (LInt 0)))) (EVar "routes"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "dictWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "name"))))))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "routes")) (EVar "args")) (EListLit (ELit (LString "return")))))) (arm PWild () (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply")))))))))))
 (DTypeSig false "emitBlockTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "ex")))
 (DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitBlockTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "rest"))))
@@ -15701,6 +15207,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true) (mem "FailSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
+(DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false) (mem "wasmUses" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
@@ -15982,24 +15489,16 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "anyBind" (TyFun (TyFun (TyCon "CBind") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Bool"))))
 (DFunDef false "anyBind" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyBind" ((PVar "p") (PCons (PVar "b") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "b")) (EVar "True") (EApp (EApp (EVar "anyBind") (EVar "p")) (EVar "rest"))))
-(DTypeSig true "isStrExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isStrExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringConcat")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "flushStdout")) (ELit (LString "stringSlice")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "floatToString")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")) (ELit (LString "stringToFloat")))))
-(DTypeSig true "isLeafExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isLeafExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "randomBool")) (ELit (LString "randomChar")) (ELit (LString "setSeed")) (ELit (LString "randomState")) (ELit (LString "restoreRandomState")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "args")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "wallTimeSec")) (ELit (LString "monotonicSec")) (ELit (LString "sleepMs")) (ELit (LString "ioPoll")) (ELit (LString "canonicalizePath")) (ELit (LString "readFileBytes")) (ELit (LString "writeFileBytes")) (ELit (LString "panic")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "indexErrorAtSite")) (ELit (LString "panicAt")) (EVar "siteSentinelName") (ELit (LString "sliceError")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "bitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "u8Truncate")) (ELit (LString "u8ToInt")) (ELit (LString "u16Truncate")) (ELit (LString "u16ToInt")) (ELit (LString "u32Truncate")) (ELit (LString "u32ToInt")) (ELit (LString "intBitAnd")) (ELit (LString "intBitOr")) (ELit (LString "intBitXor")) (ELit (LString "intBitNot")) (ELit (LString "intShiftLeft")) (ELit (LString "intShiftRight")) (ELit (LString "u64Truncate")) (ELit (LString "u64TruncateToInt")) (ELit (LString "u64BitAnd")) (ELit (LString "u64BitOr")) (ELit (LString "u64BitXor")) (ELit (LString "u64ShiftLeft")) (ELit (LString "u64ShiftRight")) (ELit (LString "u64MulHigh")) (ELit (LString "i32Truncate")) (ELit (LString "i32ToInt")) (ELit (LString "i64FromBits")) (ELit (LString "i64ToBits")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")))))
-(DTypeSig false "isU64ExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isU64ExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "u64Truncate")) (ELit (LString "u64TruncateToInt")) (ELit (LString "u64BitAnd")) (ELit (LString "u64BitOr")) (ELit (LString "u64BitXor")) (ELit (LString "u64ShiftLeft")) (ELit (LString "u64ShiftRight")) (ELit (LString "u64MulHigh")))))
-(DTypeSig false "isI64ExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isI64ExternW" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "i64FromBits"))) (EBinOp "==" (EVar "name") (ELit (LString "i64ToBits")))))
-(DTypeSig false "isMathHostExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isMathHostExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")))))
-(DTypeSig false "isFloatMathExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isFloatMathExternW" ((PVar "name")) (EBinOp "||" (EApp (EVar "isMathHostExternW") (EVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "floatRem")) (ELit (LString "intBitsToFloat"))))))
-(DTypeSig true "isNetExternW" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig false "isNetExternW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isNetExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "netResolve")) (ELit (LString "netTcpConnect")) (ELit (LString "netTcpListen")) (ELit (LString "netListenPort")) (ELit (LString "netTcpAccept")) (ELit (LString "netSend")) (ELit (LString "netSendFrom")) (ELit (LString "netRecv")) (ELit (LString "netShutdown")) (ELit (LString "netClose")) (ELit (LString "netCloseListener")) (ELit (LString "socketFd")) (ELit (LString "listenSocketFd")) (ELit (LString "netSetNonblockListener")) (ELit (LString "netSetTimeout")) (ELit (LString "pdsSignalStart")) (ELit (LString "pdsSignalRequested")) (ELit (LString "netSetNonblock")) (ELit (LString "netConnectStart")) (ELit (LString "netConnectCheck")) (ELit (LString "netTryAccept")) (ELit (LString "netTryRecv")) (ELit (LString "netTryRecvBytes")) (ELit (LString "netTrySend")) (ELit (LString "netTrySendFrom")) (ELit (LString "netSendBytesFrom")) (ELit (LString "netTrySendBytesFrom")))))
 (DTypeSig false "externArityW" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "externArityW" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "flushStdout")) (ELit (LString "randomBool")))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "stringConcat")) (ELit (LString "setSeed")) (ELit (LString "randomState")) (ELit (LString "restoreRandomState")) (ELit (LString "randomChar")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "panic")) (ELit (LString "arrayLength")) (ELit (LString "arrayFromList")) (ELit (LString "arrayCopy")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "floatToBytes64")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "args")) (ELit (LString "wallTimeSec")) (ELit (LString "monotonicSec")) (ELit (LString "sleepMs")) (ELit (LString "bitNot")) (ELit (LString "intBitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "stringToFloat")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")))) (ELit (LInt 1)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "intBitAnd")) (ELit (LString "intBitOr")) (ELit (LString "intBitXor")) (ELit (LString "intShiftLeft")) (ELit (LString "intShiftRight")) (ELit (LString "u64BitAnd")) (ELit (LString "u64BitOr")) (ELit (LString "u64BitXor")) (ELit (LString "u64ShiftLeft")) (ELit (LString "u64ShiftRight")) (ELit (LString "u64MulHigh")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")) (ELit (LString "sliceError")) (ELit (LString "indexErrorAtSite")) (ELit (LString "panicAt")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "readFileBytes")) (ELit (LString "canonicalizePath")))) (ELit (LInt 2)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringSlice")) (ELit (LString "arraySetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "writeFileBytes")) (ELit (LString "ioPoll")) (EVar "siteSentinelName"))) (ELit (LInt 3)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayBlit")) (ELit (LString "byteBlockBlit")))) (ELit (LInt 5)) (ELit (LInt 1))))))))
+(DTypeSig false "externFamilyW" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "WasmFamily"))))
+(DFunDef false "externFamilyW" ((PVar "name")) (EIf (EBinOp "==" (EVar "name") (EVar "siteSentinelName")) (EApp (EVar "Some") (EVar "WasmLeaf")) (EMatch (EApp (EVar "wasmFamily") (EVar "name")) (arm (PCon "Some" (PVar "f")) () (EIf (EApp (EVar "isWasmExternFamily") (EVar "f")) (EApp (EVar "Some") (EVar "f")) (EVar "None"))) (arm (PCon "None") () (EVar "None")))))
 (DTypeSig false "isWasmEtaExtern" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isWasmEtaExtern" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isStrExternW") (EVar "name")) (EApp (EVar "isLeafExternW") (EVar "name"))) (EApp (EVar "isArrayExternW") (EVar "name"))) (EApp (EVar "isByteBlockExternW") (EVar "name"))))
+(DFunDef false "isWasmEtaExtern" ((PVar "name")) (EApp (EVar "isSome") (EApp (EVar "externFamilyW") (EVar "name"))))
+(DTypeSig false "isStrExternFamilyW" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isStrExternFamilyW" ((PVar "name")) (EMatch (EApp (EVar "externFamilyW") (EVar "name")) (arm (PCon "Some" (PCon "WasmStr")) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig true "wasmFileGrantExterns" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "wasmFileGrantExterns" () (EListLit (ETuple (ELit (LString "readFile")) (ELit (LInt 1))) (ETuple (ELit (LString "fileExists")) (ELit (LInt 1))) (ETuple (ELit (LString "canonicalizePath")) (ELit (LInt 1))) (ETuple (ELit (LString "readFileBytes")) (ELit (LInt 1))) (ETuple (ELit (LString "writeFileBytes")) (ELit (LInt 2)))))
 (DTypeSig true "wasmFileGrantArity" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
@@ -16017,16 +15516,6 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "stringLitsW" ((PList) (PVar "acc")) (EApp (EVar "Some") (EApp (EVar "reverseL") (EVar "acc"))))
 (DFunDef false "stringLitsW" ((PCons (PCon "CLit" (PCon "LString" (PVar "s"))) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "stringLitsW") (EVar "rest")) (EBinOp "::" (EVar "s") (EVar "acc"))))
 (DFunDef false "stringLitsW" (PWild PWild) (EVar "None"))
-(DTypeSig true "isArrayExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isArrayExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayLength")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "arrayCopy")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayFromList")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "floatToBytes64")) (ELit (LString "bytesToFloat64")))))
-(DTypeSig true "isByteBlockExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isByteBlockExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockBlit")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")) (ELit (LString "byteBlockWriteStdout")))))
-(DTypeSig false "isDeferredFloatExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isDeferredFloatExternW" (PWild) (EVar "False"))
-(DTypeSig false "floatExternStub" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "floatExternStub" (PWild) (EListLit (ELit (LString "unreachable"))))
-(DTypeSig false "isUnimplStrExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isUnimplStrExternW" (PWild) (EVar "False"))
 (DTypeSig false "programUsesStr" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Bool")))
 (DFunDef false "programUsesStr" ((PVar "groups")) (EApp (EApp (EVar "anyBind") (EVar "bindUsesStr")) (EVar "groups")))
 (DTypeSig false "bindUsesStr" (TyFun (TyCon "CBind") (TyCon "Bool")))
@@ -16035,7 +15524,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "exprUsesStr" ((PCon "CLit" (PCon "LString" PWild))) (EVar "True"))
 (DFunDef false "exprUsesStr" ((PCon "CLit" (PCon "LChar" PWild))) (EVar "True"))
 (DFunDef false "exprUsesStr" ((PCon "CLit" PWild)) (EVar "False"))
-(DFunDef false "exprUsesStr" ((PCon "CVar" (PVar "x") PWild)) (EApp (EVar "isStrExternW") (EVar "x")))
+(DFunDef false "exprUsesStr" ((PCon "CVar" (PVar "x") PWild)) (EApp (EVar "isStrExternFamilyW") (EVar "x")))
 (DFunDef false "exprUsesStr" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "a"))) (EListLit))) (DoExpr (EBinOp "||" (EApp (EVar "headUsesStr") (EVar "hd")) (EApp (EApp (EVar "anyList") (EVar "exprUsesStr")) (EVar "args"))))))
 (DFunDef false "exprUsesStr" ((PCon "CLam" PWild (PVar "b"))) (EApp (EVar "exprUsesStr") (EVar "b")))
 (DFunDef false "exprUsesStr" ((PCon "CBinPrim" PWild (PVar "l") (PVar "r") PWild PWild)) (EBinOp "||" (EApp (EVar "exprUsesStr") (EVar "l")) (EApp (EVar "exprUsesStr") (EVar "r"))))
@@ -16051,7 +15540,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "stmtUsesStr" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "exprUsesStr") (EVar "e")))
 (DFunDef false "stmtUsesStr" (PWild) (EVar "False"))
 (DTypeSig false "headUsesStr" (TyFun (TyCon "CExpr") (TyCon "Bool")))
-(DFunDef false "headUsesStr" ((PCon "CVar" (PVar "fn") PWild)) (EApp (EVar "isStrExternW") (EVar "fn")))
+(DFunDef false "headUsesStr" ((PCon "CVar" (PVar "fn") PWild)) (EApp (EVar "isStrExternFamilyW") (EVar "fn")))
 (DFunDef false "headUsesStr" ((PVar "h")) (EApp (EVar "exprUsesStr") (EVar "h")))
 (DTypeSig false "scanProgW7" (TyFun (TyCon "WasmEmit") (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "Unit"))))
 (DFunDef false "scanProgW7" ((PVar "emit") (PVar "groups")) (EApp (EApp (EVar "forEachU") (ELam ((PVar "b")) (EApp (EApp (EVar "scanBindW7") (EVar "emit")) (EVar "b")))) (EVar "groups")))
@@ -16101,7 +15590,31 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "scanW7Head" ((PVar "emit") (PCon "CVar" (PVar "f") PWild)) (EApp (EApp (EVar "noteW8Extern") (EVar "emit")) (EVar "f")))
 (DFunDef false "scanW7Head" ((PVar "emit") (PVar "h")) (EApp (EApp (EVar "scanExprW7") (EVar "emit")) (EVar "h")))
 (DTypeSig false "noteW8Extern" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyCon "Unit"))))
-(DFunDef false "noteW8Extern" ((PVar "emit") (PVar "name")) (EBlock (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "charToStr")) (ELit (LString "stringConcat")) (ELit (LString "stringSlice")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "&&" (EApp (EVar "isLeafExternW") (EVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "randomBool")) (ELit (LString "randomChar")) (ELit (LString "setSeed")) (ELit (LString "randomState")) (ELit (LString "restoreRandomState"))))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRng")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "randomChar"))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "hashString")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useHash")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isFloatMathExternW") (EVar "name")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isU64ExternW") (EVar "name")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useU64")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomState")) (ELit (LString "restoreRandomState")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useU64")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isI64ExternW") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useU64")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useI64")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isMathHostExternW") (EVar "name")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useMath")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "floatToString"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "stringToFloat"))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatStr")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useIO")) (EVar "True"))))) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "hashFloat"))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatHash")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useHash")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "randomFloat"))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatRng")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRng")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrSearch")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True")))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrCodec")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True"))))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrCodec")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "debugStringLit")) (ELit (LString "debugCharLit")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "charFromCode"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useCharFromCode")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useCharClass")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "panic")) (ELit (LString "indexError")) (ELit (LString "panicAt")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useEPut")) (EVar "True"))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayLength")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "arrayCopy")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayFromList")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "floatToBytes64")) (ELit (LString "bytesToFloat64")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "floatToBytes64")) (ELit (LString "bytesToFloat64")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "arrayFromList"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EVar "isByteBlockExternW") (EVar "name")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useByteBlock")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "getEnv")) (ELit (LString "args")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "args"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EBinOp "==" (EVar "name") (ELit (LString "args"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArgs")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "args")) (ELit (LString "getEnv")) (ELit (LString "exit")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useIO")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "readFileBytes")) (ELit (LString "writeFileBytes")))) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useIO")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")) (ELet false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFileBytes")) (EVar "True"))))) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "wallTimeSec")) (ELit (LString "monotonicSec")) (ELit (LString "sleepMs")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useClock")) (EVar "True")) (ELit LUnit))) (DoLet false false PWild (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "wallTimeSec")) (ELit (LString "monotonicSec")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")) (ELit LUnit))) (DoExpr (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useEPut")) (EVar "True")) (ELit LUnit)))))
+(DFunDef false "noteW8Extern" ((PVar "emit") (PVar "name")) (EApp (EApp (EVar "forEachU") (ELam ((PVar "u")) (EApp (EApp (EVar "noteWasmUse") (EVar "emit")) (EVar "u")))) (EApp (EVar "wasmUses") (EVar "name"))))
+(DTypeSig false "noteWasmUse" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "WasmUse") (TyCon "Unit"))))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStr")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStrLeaf")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseRng")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useRng")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseHash")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useHash")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFloat")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloat")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseU64")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useU64")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseI64")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useI64")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseMath")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useMath")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFloatStr")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatStr")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFloatHash")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatHash")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFloatRng")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFloatRng")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStrSearch")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrSearch")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseStrCodec")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrCodec")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseArray")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArray")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseList")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseCharFromCode")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useCharFromCode")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseCharClass")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useCharClass")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseEPut")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useEPut")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseByteBlock")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useByteBlock")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseIO")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useIO")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseArgs")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useArgs")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseFileBytes")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useFileBytes")) (EVar "True")))
+(DFunDef false "noteWasmUse" ((PVar "emit") (PCon "UseClock")) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useClock")) (EVar "True")))
 (DTypeSig false "noteW8Binop" (TyFun (TyCon "WasmEmit") (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "noteW8Binop" ((PVar "emit") (PLit (LString "++"))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStrLeaf")) (EVar "True"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useStr")) (EVar "True"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")))))
 (DFunDef false "noteW8Binop" ((PVar "emit") (PLit (LString "::"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "emit") "useList")) (EVar "True")))
@@ -16909,13 +16422,13 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "emitVarRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitVarRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "x")) (EMatch (EApp (EVar "emitFtSentinel") (EVar "x")) (arm (PCon "Some" (PVar "instrs")) () (EVar "instrs")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EVar "emitVarRefPlain") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")))))
 (DTypeSig false "emitVarRefPlain" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitVarRefPlain" ((PVar "prog") (PVar "env") (PVar "d") (PVar "x")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "x")))) (EIf (EApp (EApp (EVar "progValMemberW") (EVar "prog")) (EVar "x")) (EIf (EApp (EApp (EVar "isLazyGlobalW") (EVar "prog")) (EVar "x")) (EListLit (EBinOp "++" (ELit (LString "call $force_")) (EApp (EVar "gname") (EVar "x")))) (EListLit (EBinOp "++" (ELit (LString "global.get $")) (EApp (EVar "gname") (EVar "x"))) (ELit (LString "ref.as_non_null")))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "True"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "False"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "otherwise"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "charMinBound"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "charMaxBound"))) (EListLit (ELit (LString "i32.const 1114111")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "pi"))) (EListLit (ELit (LString "f64.const 3.141592653589793")) (ELit (LString "struct.new $float"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "e"))) (EListLit (ELit (LString "f64.const 2.718281828459045")) (ELit (LString "struct.new $float"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "intMaxBound"))) (EListLit (ELit (LString "i64.const 4611686018427387903")) (ELit (LString "call $mdk_box_int"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "intMinBound"))) (EListLit (ELit (LString "i64.const -4611686018427387904")) (ELit (LString "call $mdk_box_int"))) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "x")) (EIf (EBinOp "==" (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "x")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorConstruct") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")) (EListLit)) (EApp (EApp (EVar "emitCtorEtaClosure") (EVar "prog")) (EVar "x"))) (EIf (EApp (EVar "isDeferredFloatExternW") (EVar "x")) (EApp (EVar "floatExternStub") (EVar "x")) (EIf (EApp (EVar "isUnimplStrExternW") (EVar "x")) (EApp (EVar "floatExternStub") (EVar "x")) (EIf (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "x")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "$mdk_w_")) (EVar "x")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "$mdk_w_")) (EVar "x"))) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "x"))))) (EIf (EBinOp "/=" (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "x")) (EVar "x")) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "x"))) (EIf (EApp (EVar "isWasmEtaExtern") (EVar "x")) (EApp (EApp (EVar "emitExternEtaClosure") (EVar "prog")) (EVar "x")) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "x")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "x")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EApp (EApp (EVar "gapUnboundLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unbound variable '")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString "' (not a local, global value, constructor, or known function) [in "))) (EApp (EMethodRef "display") (EApp (EVar "currentBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))))) (ELit (LString "]")))))))))))))))))))))))
+(DFunDef false "emitVarRefPlain" ((PVar "prog") (PVar "env") (PVar "d") (PVar "x")) (EIf (EApp (EApp (EVar "contains") (EVar "x")) (EVar "env")) (EListLit (EBinOp "++" (ELit (LString "local.get $")) (EApp (EVar "gname") (EVar "x")))) (EIf (EApp (EApp (EVar "progValMemberW") (EVar "prog")) (EVar "x")) (EIf (EApp (EApp (EVar "isLazyGlobalW") (EVar "prog")) (EVar "x")) (EListLit (EBinOp "++" (ELit (LString "call $force_")) (EApp (EVar "gname") (EVar "x")))) (EListLit (EBinOp "++" (ELit (LString "global.get $")) (EApp (EVar "gname") (EVar "x"))) (ELit (LString "ref.as_non_null")))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "True"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "False"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "otherwise"))) (EListLit (ELit (LString "i32.const 1")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "charMinBound"))) (EListLit (ELit (LString "i32.const 0")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "charMaxBound"))) (EListLit (ELit (LString "i32.const 1114111")) (ELit (LString "ref.i31"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "pi"))) (EListLit (ELit (LString "f64.const 3.141592653589793")) (ELit (LString "struct.new $float"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "e"))) (EListLit (ELit (LString "f64.const 2.718281828459045")) (ELit (LString "struct.new $float"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "intMaxBound"))) (EListLit (ELit (LString "i64.const 4611686018427387903")) (ELit (LString "call $mdk_box_int"))) (EIf (EBinOp "==" (EVar "x") (ELit (LString "intMinBound"))) (EListLit (ELit (LString "i64.const -4611686018427387904")) (ELit (LString "call $mdk_box_int"))) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "x")) (EIf (EBinOp "==" (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "x")) (ELit (LInt 0))) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorConstruct") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "x")) (EListLit)) (EApp (EApp (EVar "emitCtorEtaClosure") (EVar "prog")) (EVar "x"))) (EIf (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "x")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "$mdk_w_")) (EVar "x")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EApp (EVar "progEmit") (EVar "prog"))) (EBinOp "++" (ELit (LString "$mdk_w_")) (EVar "x"))) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "x"))))) (EIf (EBinOp "/=" (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "x")) (EVar "x")) (EApp (EApp (EApp (EApp (EVar "emitVarRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "x"))) (EIf (EApp (EVar "isWasmEtaExtern") (EVar "x")) (EApp (EApp (EVar "emitExternEtaClosure") (EVar "prog")) (EVar "x")) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "x")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "x")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EApp (EApp (EVar "gapUnboundLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "unbound variable '")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString "' (not a local, global value, constructor, or known function) [in "))) (EApp (EMethodRef "display") (EApp (EVar "currentBindingOfW") (EApp (EVar "progEmit") (EVar "prog"))))) (ELit (LString "]")))))))))))))))))))))
 (DTypeSig false "emitExternEtaClosure" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitExternEtaClosure" ((PVar "prog") (PVar "name")) (EBlock (DoLet false false (PVar "arity") (EApp (EVar "externArityW") (EVar "name"))) (DoLet false false (PVar "lamName") (EBinOp "++" (ELit (LString "$mdk_ext_")) (EVar "name"))) (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "addLiftedNamed") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName")) (EApp (EApp (EApp (EApp (EVar "emitExternEtaDefine") (EVar "prog")) (EVar "lamName")) (EVar "name")) (EVar "arity")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName")) (EVar "arity")))))
 (DTypeSig false "arrayEtaScratchLocals" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "arrayEtaScratchLocals" () (EListLit (ELit (LString "(local $__aexi0 i32)")) (ELit (LString "(local $__aexn0 i32)")) (ELit (LString "(local $__aexarr0 (ref null $arr))")) (ELit (LString "(local $__aexlst0 (ref eq))")) (ELit (LString "(local $__aexf0 (ref eq))")) (ELit (LString "(local $__aexv0 (ref eq))")) (ELit (LString "(local $__aexbits0 i64)")) (ELit (LString "(local $__raarr0 (ref null $arr))"))))
 (DTypeSig false "emitExternEtaDefine" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitExternEtaDefine" ((PVar "prog") (PVar "lamName") (PVar "name") (PVar "arity")) (EBlock (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "argPrologue") (EApp (EApp (EDictApp "flatMap") (EVar "argLoadAt")) (EApp (EApp (EVar "zipIdx") (EVar "params")) (ELit (LInt 0))))) (DoLet false false (PVar "argVars") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "CVar") (EVar "p")) (EVar "AGlobal")))) (EVar "params"))) (DoLet false false (PVar "w7Outer") (EApp (EVar "w7ScopeOpen") (EApp (EVar "progEmit") (EVar "prog")))) (DoLet false false (PVar "call") (EIf (EApp (EVar "isStrExternW") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars")) (EIf (EApp (EVar "isArrayExternW") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars")) (EIf (EApp (EVar "isByteBlockExternW") (EVar "name")) (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars")))))) (DoLet false false PWild (EApp (EApp (EVar "w7ScopeClose") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "w7Outer"))) (DoLet false false (PVar "arrayScratch") (EIf (EApp (EVar "isArrayExternW") (EVar "name")) (EVar "arrayEtaScratchLocals") (EListLit))) (DoLet false false (PVar "localLines") (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EVar "localDeclRef") (EVar "l")))) (EVar "params")) (EVar "arrayScratch"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  (func ")) (EVar "lamName")) (ELit (LString " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "  ")) (EVar "_s")))) (EVar "localLines"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "argPrologue") (EVar "call")) (EListLit (ELit (LString "return")))))) (EListLit (ELit (LString "  )")))))))
+(DFunDef false "emitExternEtaDefine" ((PVar "prog") (PVar "lamName") (PVar "name") (PVar "arity")) (EBlock (DoLet false false (PVar "params") (EApp (EVar "synthParams") (EVar "arity"))) (DoLet false false (PVar "argPrologue") (EApp (EApp (EDictApp "flatMap") (EVar "argLoadAt")) (EApp (EApp (EVar "zipIdx") (EVar "params")) (ELit (LInt 0))))) (DoLet false false (PVar "argVars") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EApp (EVar "CVar") (EVar "p")) (EVar "AGlobal")))) (EVar "params"))) (DoLet false false (PVar "w7Outer") (EApp (EVar "w7ScopeOpen") (EApp (EVar "progEmit") (EVar "prog")))) (DoLet false false (PVar "family") (EApp (EVar "externFamilyW") (EVar "name"))) (DoLet false false (PVar "call") (EMatch (EVar "family") (arm (PCon "Some" (PCon "WasmStr")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars"))) (arm (PCon "Some" (PCon "WasmArray")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars"))) (arm (PCon "Some" (PCon "WasmByteBlock")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "params")) (ELit (LInt 0))) (EVar "name")) (EVar "argVars"))))) (DoLet false false PWild (EApp (EApp (EVar "w7ScopeClose") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "w7Outer"))) (DoLet false false (PVar "arrayScratch") (EMatch (EVar "family") (arm (PCon "Some" (PCon "WasmArray")) () (EVar "arrayEtaScratchLocals")) (arm PWild () (EListLit)))) (DoLet false false (PVar "localLines") (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EVar "localDeclRef") (EVar "l")))) (EVar "params")) (EVar "arrayScratch"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "  (func ")) (EVar "lamName")) (ELit (LString " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))")))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (ELit (LString "  ")) (EVar "_s")))) (EVar "localLines"))) (EApp (EVar "indent") (EBinOp "++" (EBinOp "++" (EVar "argPrologue") (EVar "call")) (EListLit (ELit (LString "return")))))) (EListLit (ELit (LString "  )")))))))
 (DTypeSig false "emitCtorEtaClosure" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitCtorEtaClosure" ((PVar "prog") (PVar "ctor")) (EBlock (DoLet false false (PVar "arity") (EApp (EApp (EVar "ctorArity") (EVar "prog")) (EVar "ctor"))) (DoLet false false (PVar "lamName") (EBinOp "++" (ELit (LString "$mdk_wctor_")) (EApp (EVar "gname") (EVar "ctor")))) (DoLet false false PWild (EApp (EApp (EVar "noteFuncRef") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "addLiftedNamed") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName")) (EApp (EApp (EApp (EApp (EVar "emitCtorEtaDefine") (EVar "prog")) (EVar "lamName")) (EVar "ctor")) (EVar "arity")))) (DoExpr (EApp (EApp (EApp (EVar "wConstClos") (EApp (EVar "progEmit") (EVar "prog"))) (EVar "lamName")) (EVar "arity")))))
 (DTypeSig false "emitCtorEtaDefine" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
@@ -17092,7 +16605,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitBlockRef" ((PVar "prog") (PVar "env") (PVar "d") (PList)) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EVar "CLit") (EVar "LUnit"))))
 (DFunDef false "emitBlockRef" ((PVar "prog") PWild PWild PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "ref-mode: unsupported block statement"))))
 (DTypeSig false "emitAppRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitAppRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxNew") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxSet") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EApp (EVar "isNetExternW") (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: net extern '")) (EVar "f")) (ELit (LString "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "f")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EIf (EApp (EVar "isStrExternW") (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EApp (EVar "isLeafExternW") (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EApp (EVar "isArrayExternW") (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EApp (EVar "isByteBlockExternW") (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EApp (EVar "isDeferredFloatExternW") (EVar "f")) (EApp (EVar "floatExternStub") (EVar "f")) (EIf (EApp (EVar "isUnimplStrExternW") (EVar "f")) (EApp (EVar "floatExternStub") (EVar "f")) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "f")))) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "f"))))))) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")))))))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")) (EVar "args"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")))))))
+(DFunDef false "emitAppRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EApp (EApp (EApp (EApp (EApp (EVar "emitCtorApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxNew") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EBinOp "==" (EVar "f") (ELit (LString "setRef"))) (EApp (EApp (EApp (EApp (EVar "emitRefBoxSet") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args")) (EIf (EApp (EVar "isNetExternW") (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: net extern '")) (EVar "f")) (ELit (LString "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "f")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EMatch (EApp (EVar "externFamilyW") (EVar "f")) (arm (PCon "Some" (PCon "WasmStr")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitStrExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmLeaf")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitLeafExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmArray")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitArrayExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm (PCon "Some" (PCon "WasmByteBlock")) () (EApp (EApp (EApp (EApp (EApp (EVar "emitByteBlockExternRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "f")) (EVar "args"))) (arm PWild () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "f")))) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "f"))))))) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args"))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "routes")) (EVar "args"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "hd")) (EVar "args")))))))
 (DTypeSig false "emitStrExternRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToString")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "call $mdk_unbox_int")) (ELit (LString "call $mdk_int_to_str")))))
 (DFunDef false "emitStrExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "intToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm W6: intToString takes exactly one argument"))))
@@ -17492,7 +17005,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "implSelfReturnCall" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
 (DFunDef false "implSelfReturnCall" ((PVar "prog") (PVar "env") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "route") (PVar "methRoutes") (PVar "implRoutes") (PVar "app") (PVar "args")) (EMatch (EFieldAccess (EFieldAccess (EApp (EVar "progEmit") (EVar "prog")) "implSelfCtx") "value") (arm (PCon "ImplSelfOff") () (EVar "None")) (arm (PCon "ImplSelfOn" (PVar "method") PWild (PVar "key") (PVar "fnName") (PVar "arity")) () (EIf (EBinOp "&&" (EBinOp "==" (EVar "name") (EVar "method")) (EApp (EApp (EVar "isSelfHead") (EApp (EApp (EApp (EVar "SelfByMethod") (EVar "method")) (EVar "key")) (ELit (LInt 0)))) (EApp (EVar "appHead") (EVar "app")))) (EMatch (EVar "route") (arm (PCon "RKey" (PVar "rtag") PWild PWild) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "iface")) (EVar "rtag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "dictRoutes") (EApp (EApp (EApp (EApp (EVar "staticEntryDictRoutesW") (EVar "entry")) (EVar "route")) (EVar "methRoutes")) (EVar "implRoutes"))) (DoLet false false (PVar "saturated") (EBinOp "==" (EBinOp "+" (EApp (EVar "listLen") (EVar "dictRoutes")) (EApp (EVar "listLen") (EVar "args"))) (EVar "arity"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "implEntryKeyW") (EVar "entry")) (EVar "key")) (EIf (EVar "saturated") (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (ELit (LInt 0)))) (EVar "dictRoutes"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args"))) (DoExpr (EApp (EVar "Some") (EBinOp "++" (EBinOp "++" (EVar "dictWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EVar "fnName"))))))) (EVar "None")) (EVar "None"))))) (arm (PCon "None") () (EVar "None")))) (arm PWild () (EVar "None"))) (EVar "None")))))
 (DTypeSig false "emitAppTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "emitAppTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply")))))) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EApp (EVar "isNetExternW") (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: net extern '")) (EVar "f")) (ELit (LString "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "f")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EBinOp "==" (EVar "f") (ELit (LString "setRef")))) (EApp (EVar "isStrExternW") (EVar "f"))) (EApp (EVar "isLeafExternW") (EVar "f"))) (EApp (EVar "isArrayExternW") (EVar "f"))) (EApp (EVar "isByteBlockExternW") (EVar "f"))) (EApp (EVar "isDeferredFloatExternW") (EVar "f"))) (EApp (EVar "isUnimplStrExternW") (EVar "f"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "f")))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "f"))))) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply"))))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSelfReturnCall") (EVar "prog")) (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "methRoutes")) (EVar "implRoutes")) (EVar "app")) (EVar "args")) (arm (PCon "Some" (PVar "retInstrs")) () (EVar "retInstrs")) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EListLit (ELit (LString "return"))))))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "name")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EBinOp "-" (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "name")) (EApp (EVar "listLen") (EVar "routes"))))) (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (ELit (LInt 0)))) (EVar "routes"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "dictWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "name"))))))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "routes")) (EVar "args")) (EListLit (ELit (LString "return")))))) (arm PWild () (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply")))))))))))
+(DFunDef false "emitAppTail" ((PVar "prog") (PVar "env") (PVar "arity") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EApp (EVar "flattenApp") (EVar "app")) (EListLit))) (DoExpr (EMatch (EVar "hd") (arm (PCon "CVar" (PVar "f0") PWild) () (EBlock (DoLet false false (PVar "f") (EApp (EApp (EVar "canonFn") (EVar "prog")) (EVar "f0"))) (DoExpr (EIf (EBinOp "||" (EBinOp "==" (EVar "f0") (ELit (LString "$withFileReadBound"))) (EBinOp "==" (EVar "f0") (ELit (LString "$withFileWriteBound")))) (EMatch (EVar "args") (arm (PList (PVar "bound") (PCon "CLam" (PList (PCon "PWild")) (PVar "body"))) () (EBinOp "++" (EApp (EApp (EApp (EVar "confinedFileBoundW") (EVar "prog")) (EVar "f0")) (EVar "bound")) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "body")))) (arm PWild () (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: a file bound requires a grant and a thunk"))))) (EIf (EApp (EVar "isFtSentinel") (EVar "f0")) (EApp (EVar "ftSentinelInstrs") (EVar "f0")) (EIf (EApp (EApp (EVar "contains") (EVar "f0")) (EVar "env")) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply")))))) (EIf (EApp (EApp (EVar "isCtor") (EVar "prog")) (EVar "f")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EApp (EVar "isNetExternW") (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: net extern '")) (EVar "f")) (ELit (LString "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")))) (EIf (EApp (EApp (EVar "isFfiExternW") (EVar "prog")) (EVar "f")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "f")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "f") (ELit (LString "Ref"))) (EBinOp "==" (EVar "f") (ELit (LString "setRef")))) (EApp (EVar "isSome") (EApp (EVar "externFamilyW") (EVar "f")))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitAppRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "app")) (EListLit (ELit (LString "return")))) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "f")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "f")))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "f"))))) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply"))))))))))))))))) (arm (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "implSelfReturnCall") (EVar "prog")) (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "methRoutes")) (EVar "implRoutes")) (EVar "app")) (EVar "args")) (arm (PCon "Some" (PVar "retInstrs")) () (EVar "retInstrs")) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")) (EListLit (ELit (LString "return"))))))) (arm (PCon "CDict" (PVar "name") (PVar "routes")) () (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "name")) (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EBinOp "-" (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "name")) (EApp (EVar "listLen") (EVar "routes"))))) (EBlock (DoLet false false (PVar "dictWords") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (ELit (LInt 0)))) (EVar "routes"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "dictWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "return_call $")) (EApp (EVar "gname") (EVar "name"))))))) (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "name")) (EVar "routes")) (EVar "args")) (EListLit (ELit (LString "return")))))) (arm PWild () (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "hd"))) (DoLet false false (PVar "arr") (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "args"))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "hi") (EVar "arr")) (EListLit (ELit (LString "return_call $__mdk_apply")))))))))))
 (DTypeSig false "emitBlockTail" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PList (PCon "CSExpr" (PVar "ex")))) (EApp (EApp (EApp (EApp (EVar "emitRefTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "ex")))
 (DFunDef false "emitBlockTail" ((PVar "prog") (PVar "env") (PVar "arity") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (ELit (LInt 0))) (EVar "ex")) (EListLit (ELit (LString "drop")))) (EApp (EApp (EApp (EApp (EVar "emitBlockTail") (EVar "prog")) (EVar "env")) (EVar "arity")) (EVar "rest"))))

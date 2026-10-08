@@ -96,6 +96,36 @@ public export data WasmFamily =
   | WasmConstant
   | WasmFallthrough
 
+-- A runtime demand a WasmGC lowering places on the module.  Each constructor
+-- is one `WasmEmit.use*` flag of `wasm_emit.mdk`: the representation (`$str`,
+-- `$arr`, the cons list, `$u64`, `$i64`), runtime function group or host
+-- import block that an extern's lowering names, and so must be emitted.
+public export data WasmUse =
+  | UseStr
+  | UseStrLeaf
+  | UseRng
+  | UseHash
+  | UseFloat
+  | UseU64
+  | UseI64
+  | UseMath
+  | UseFloatStr
+  | UseFloatHash
+  | UseFloatRng
+  | UseStrSearch
+  | UseStrCodec
+  | UseArray
+  | UseList
+  | UseCharFromCode
+  | UseCharClass
+  | UseEPut
+  | UseByteBlock
+  | UseIO
+  | UseArgs
+  | UseFileBytes
+  | UseClock
+  deriving (Eq, Debug)
+
 -- One extern: its name, then the llvm, wasm and eval dispositions.  The
 -- interpreter selects through its own keyed tables, so its column has no family.
 public export data ExternRow =
@@ -174,8 +204,155 @@ isLlvmExternFamily LlvmConstant = False
 isLlvmExternFamily LlvmFallthrough = False
 isLlvmExternFamily _ = True
 
+-- The wasm emitter path for an extern name, or `None` for a name that is not a
+-- runtime extern or has no wasm lowering.
+export
+wasmFamily : String -> Option WasmFamily
+wasmFamily name = match catalogRow name
+  Some r => dispositionFamily (rowWasm r)
+  None => None
+
+-- Is this wasm family one an application dispatches through?  The `Ref` cell,
+-- the in-place constants and the fallthrough sentinel are matched by their own
+-- emit sites and are not.
+export
+isWasmExternFamily : WasmFamily -> Bool
+isWasmExternFamily WasmRefCell = False
+isWasmExternFamily WasmConstant = False
+isWasmExternFamily WasmFallthrough = False
+isWasmExternFamily _ = True
+
+-- Every runtime demand the wasm lowering of an extern makes, or `[]` for a
+-- name with none, including a name that is not a runtime extern.
+export
+wasmUses : String -> List WasmUse
+wasmUses name = match omLookup name wasmUseIndex
+  Some us => us
+  None => []
+
 catalogIndex : OrdMap ExternRow
 catalogIndex = omFromPairs (map (r => (rowName r, r)) catalogRows) omEmpty
+
+wasmUseIndex : OrdMap (List WasmUse)
+wasmUseIndex = omFromPairs wasmUseRows omEmpty
+
+-- The externs whose wasm lowering demands anything, in catalog order.  Each
+-- list is complete: a demand one flag implies in another (`stringToFloat`'s
+-- host parse reads the IO path channel, so `UseFloatStr` comes with `UseIO`)
+-- is written out, never derived.  An extern absent here demands nothing
+-- beyond what its call site already brings.
+export
+wasmUseRows : List (String, List WasmUse)
+wasmUseRows = [
+  ("ePutStr", [UseEPut]),
+  ("ePutStrLn", [UseEPut]),
+  ("readFile", [UseStr, UseIO]),
+  ("readFileBytes", [UseStr, UseArray, UseIO, UseFileBytes]),
+  ("writeFileBytes", [UseStr, UseArray, UseIO, UseFileBytes]),
+  ("fileExists", [UseStr, UseIO]),
+  ("args", [UseStr, UseList, UseIO, UseArgs]),
+  ("getEnv", [UseStr, UseIO]),
+  ("exit", [UseIO]),
+  ("panic", [UseStr, UseEPut]),
+  ("indexError", [UseStr, UseEPut]),
+  ("panicAt", [UseStr, UseEPut]),
+  ("wallTimeSec", [UseFloat, UseClock]),
+  ("monotonicSec", [UseFloat, UseClock]),
+  ("sleepMs", [UseClock]),
+  ("randomInt", [UseRng]),
+  ("randomBool", [UseRng]),
+  ("randomFloat", [UseRng, UseFloat, UseFloatRng]),
+  ("randomChar", [UseStr, UseStrLeaf, UseRng]),
+  ("setSeed", [UseRng]),
+  ("randomState", [UseRng, UseU64]),
+  ("restoreRandomState", [UseRng, UseU64]),
+  ("hashInt", [UseHash]),
+  ("hashFloat", [UseHash, UseFloat, UseFloatHash]),
+  ("hashString", [UseHash]),
+  ("hashChar", [UseHash]),
+  ("hashBool", [UseHash]),
+  ("intToFloat", [UseFloat]),
+  ("floatToInt", [UseFloat]),
+  ("floatRem", [UseFloat]),
+  ("sqrt", [UseFloat]),
+  ("cbrt", [UseFloat, UseMath]),
+  ("exp", [UseFloat, UseMath]),
+  ("log", [UseFloat, UseMath]),
+  ("log2", [UseFloat, UseMath]),
+  ("log10", [UseFloat, UseMath]),
+  ("sin", [UseFloat, UseMath]),
+  ("cos", [UseFloat, UseMath]),
+  ("tan", [UseFloat, UseMath]),
+  ("asin", [UseFloat, UseMath]),
+  ("acos", [UseFloat, UseMath]),
+  ("atan", [UseFloat, UseMath]),
+  ("sinh", [UseFloat, UseMath]),
+  ("cosh", [UseFloat, UseMath]),
+  ("tanh", [UseFloat, UseMath]),
+  ("floor", [UseFloat]),
+  ("ceil", [UseFloat]),
+  ("round", [UseFloat]),
+  ("trunc", [UseFloat]),
+  ("pow", [UseFloat, UseMath]),
+  ("atan2", [UseFloat, UseMath]),
+  ("hypot", [UseFloat, UseMath]),
+  ("intBitsToFloat", [UseFloat]),
+  ("bytesToFloat64", [UseFloat, UseArray]),
+  ("floatToBytes64", [UseFloat, UseArray]),
+  ("floatToString", [UseStr, UseFloat]),
+  ("debugStringLit", [UseStr, UseStrLeaf]),
+  ("debugCharLit", [UseStr, UseStrLeaf]),
+  ("arrayLength", [UseArray]),
+  ("arrayMake", [UseArray]),
+  ("arrayMakeWith", [UseArray]),
+  ("arrayGetUnsafe", [UseArray]),
+  ("arraySetUnsafe", [UseArray]),
+  ("arrayCopy", [UseArray]),
+  ("arrayBlit", [UseArray]),
+  ("arrayFill", [UseArray]),
+  ("arrayFromList", [UseArray, UseList]),
+  ("u64Truncate", [UseU64]),
+  ("u64TruncateToInt", [UseU64]),
+  ("u64BitAnd", [UseU64]),
+  ("u64BitOr", [UseU64]),
+  ("u64BitXor", [UseU64]),
+  ("u64ShiftLeft", [UseU64]),
+  ("u64ShiftRight", [UseU64]),
+  ("u64MulHigh", [UseU64]),
+  ("i64FromBits", [UseU64, UseI64]),
+  ("i64ToBits", [UseU64, UseI64]),
+  ("byteBlockMake", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockLength", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockGetUnsafe", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockSetUnsafe", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockCopyUnsafe", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockBlit", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockFromIntArray", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockToIntArray", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockFromString", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockToString", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockWriteStdout", [UseStr, UseArray, UseByteBlock]),
+  ("stringToChars", [UseStr, UseStrLeaf, UseStrCodec, UseArray]),
+  ("stringFromChars", [UseStr, UseStrLeaf, UseStrCodec, UseArray]),
+  ("stringToUtf8Bytes", [UseStr, UseStrCodec, UseArray]),
+  ("stringFromUtf8Bytes", [UseStr, UseStrCodec, UseArray]),
+  ("charToStr", [UseStrLeaf]),
+  ("charFromCode", [UseCharFromCode]),
+  ("stringSlice", [UseStrLeaf]),
+  ("stringConcat", [UseStrLeaf]),
+  ("stringIndexOf", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringCompare", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringToFloat", [UseStr, UseFloat, UseFloatStr, UseIO]),
+  ("charIsAlpha", [UseCharClass]),
+  ("charIsSpace", [UseCharClass]),
+  ("charIsUpper", [UseCharClass]),
+  ("charIsLower", [UseCharClass]),
+  ("charIsPunct", [UseCharClass]),
+  ("charToUpper", [UseCharClass]),
+  ("charToLower", [UseCharClass]),
+  ("stringToUpper", [UseStrLeaf]),
+  ("stringToLower", [UseStrLeaf]),
+]
 
 interpLlvmOnly : String
 interpLlvmOnly = "implemented by llvm, missing from interp — BUG(T7)"

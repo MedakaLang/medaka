@@ -1,5 +1,5 @@
 # META
-source_lines=1105
+source_lines=1282
 stages=DESUGAR,MARK
 # SOURCE
 -- The runtime extern catalog as data: one row per `stdlib/runtime.mdk` extern,
@@ -100,6 +100,36 @@ public export data WasmFamily =
   | WasmConstant
   | WasmFallthrough
 
+-- A runtime demand a WasmGC lowering places on the module.  Each constructor
+-- is one `WasmEmit.use*` flag of `wasm_emit.mdk`: the representation (`$str`,
+-- `$arr`, the cons list, `$u64`, `$i64`), runtime function group or host
+-- import block that an extern's lowering names, and so must be emitted.
+public export data WasmUse =
+  | UseStr
+  | UseStrLeaf
+  | UseRng
+  | UseHash
+  | UseFloat
+  | UseU64
+  | UseI64
+  | UseMath
+  | UseFloatStr
+  | UseFloatHash
+  | UseFloatRng
+  | UseStrSearch
+  | UseStrCodec
+  | UseArray
+  | UseList
+  | UseCharFromCode
+  | UseCharClass
+  | UseEPut
+  | UseByteBlock
+  | UseIO
+  | UseArgs
+  | UseFileBytes
+  | UseClock
+  deriving (Eq, Debug)
+
 -- One extern: its name, then the llvm, wasm and eval dispositions.  The
 -- interpreter selects through its own keyed tables, so its column has no family.
 public export data ExternRow =
@@ -178,8 +208,155 @@ isLlvmExternFamily LlvmConstant = False
 isLlvmExternFamily LlvmFallthrough = False
 isLlvmExternFamily _ = True
 
+-- The wasm emitter path for an extern name, or `None` for a name that is not a
+-- runtime extern or has no wasm lowering.
+export
+wasmFamily : String -> Option WasmFamily
+wasmFamily name = match catalogRow name
+  Some r => dispositionFamily (rowWasm r)
+  None => None
+
+-- Is this wasm family one an application dispatches through?  The `Ref` cell,
+-- the in-place constants and the fallthrough sentinel are matched by their own
+-- emit sites and are not.
+export
+isWasmExternFamily : WasmFamily -> Bool
+isWasmExternFamily WasmRefCell = False
+isWasmExternFamily WasmConstant = False
+isWasmExternFamily WasmFallthrough = False
+isWasmExternFamily _ = True
+
+-- Every runtime demand the wasm lowering of an extern makes, or `[]` for a
+-- name with none, including a name that is not a runtime extern.
+export
+wasmUses : String -> List WasmUse
+wasmUses name = match omLookup name wasmUseIndex
+  Some us => us
+  None => []
+
 catalogIndex : OrdMap ExternRow
 catalogIndex = omFromPairs (map (r => (rowName r, r)) catalogRows) omEmpty
+
+wasmUseIndex : OrdMap (List WasmUse)
+wasmUseIndex = omFromPairs wasmUseRows omEmpty
+
+-- The externs whose wasm lowering demands anything, in catalog order.  Each
+-- list is complete: a demand one flag implies in another (`stringToFloat`'s
+-- host parse reads the IO path channel, so `UseFloatStr` comes with `UseIO`)
+-- is written out, never derived.  An extern absent here demands nothing
+-- beyond what its call site already brings.
+export
+wasmUseRows : List (String, List WasmUse)
+wasmUseRows = [
+  ("ePutStr", [UseEPut]),
+  ("ePutStrLn", [UseEPut]),
+  ("readFile", [UseStr, UseIO]),
+  ("readFileBytes", [UseStr, UseArray, UseIO, UseFileBytes]),
+  ("writeFileBytes", [UseStr, UseArray, UseIO, UseFileBytes]),
+  ("fileExists", [UseStr, UseIO]),
+  ("args", [UseStr, UseList, UseIO, UseArgs]),
+  ("getEnv", [UseStr, UseIO]),
+  ("exit", [UseIO]),
+  ("panic", [UseStr, UseEPut]),
+  ("indexError", [UseStr, UseEPut]),
+  ("panicAt", [UseStr, UseEPut]),
+  ("wallTimeSec", [UseFloat, UseClock]),
+  ("monotonicSec", [UseFloat, UseClock]),
+  ("sleepMs", [UseClock]),
+  ("randomInt", [UseRng]),
+  ("randomBool", [UseRng]),
+  ("randomFloat", [UseRng, UseFloat, UseFloatRng]),
+  ("randomChar", [UseStr, UseStrLeaf, UseRng]),
+  ("setSeed", [UseRng]),
+  ("randomState", [UseRng, UseU64]),
+  ("restoreRandomState", [UseRng, UseU64]),
+  ("hashInt", [UseHash]),
+  ("hashFloat", [UseHash, UseFloat, UseFloatHash]),
+  ("hashString", [UseHash]),
+  ("hashChar", [UseHash]),
+  ("hashBool", [UseHash]),
+  ("intToFloat", [UseFloat]),
+  ("floatToInt", [UseFloat]),
+  ("floatRem", [UseFloat]),
+  ("sqrt", [UseFloat]),
+  ("cbrt", [UseFloat, UseMath]),
+  ("exp", [UseFloat, UseMath]),
+  ("log", [UseFloat, UseMath]),
+  ("log2", [UseFloat, UseMath]),
+  ("log10", [UseFloat, UseMath]),
+  ("sin", [UseFloat, UseMath]),
+  ("cos", [UseFloat, UseMath]),
+  ("tan", [UseFloat, UseMath]),
+  ("asin", [UseFloat, UseMath]),
+  ("acos", [UseFloat, UseMath]),
+  ("atan", [UseFloat, UseMath]),
+  ("sinh", [UseFloat, UseMath]),
+  ("cosh", [UseFloat, UseMath]),
+  ("tanh", [UseFloat, UseMath]),
+  ("floor", [UseFloat]),
+  ("ceil", [UseFloat]),
+  ("round", [UseFloat]),
+  ("trunc", [UseFloat]),
+  ("pow", [UseFloat, UseMath]),
+  ("atan2", [UseFloat, UseMath]),
+  ("hypot", [UseFloat, UseMath]),
+  ("intBitsToFloat", [UseFloat]),
+  ("bytesToFloat64", [UseFloat, UseArray]),
+  ("floatToBytes64", [UseFloat, UseArray]),
+  ("floatToString", [UseStr, UseFloat]),
+  ("debugStringLit", [UseStr, UseStrLeaf]),
+  ("debugCharLit", [UseStr, UseStrLeaf]),
+  ("arrayLength", [UseArray]),
+  ("arrayMake", [UseArray]),
+  ("arrayMakeWith", [UseArray]),
+  ("arrayGetUnsafe", [UseArray]),
+  ("arraySetUnsafe", [UseArray]),
+  ("arrayCopy", [UseArray]),
+  ("arrayBlit", [UseArray]),
+  ("arrayFill", [UseArray]),
+  ("arrayFromList", [UseArray, UseList]),
+  ("u64Truncate", [UseU64]),
+  ("u64TruncateToInt", [UseU64]),
+  ("u64BitAnd", [UseU64]),
+  ("u64BitOr", [UseU64]),
+  ("u64BitXor", [UseU64]),
+  ("u64ShiftLeft", [UseU64]),
+  ("u64ShiftRight", [UseU64]),
+  ("u64MulHigh", [UseU64]),
+  ("i64FromBits", [UseU64, UseI64]),
+  ("i64ToBits", [UseU64, UseI64]),
+  ("byteBlockMake", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockLength", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockGetUnsafe", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockSetUnsafe", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockCopyUnsafe", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockBlit", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockFromIntArray", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockToIntArray", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockFromString", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockToString", [UseStr, UseArray, UseByteBlock]),
+  ("byteBlockWriteStdout", [UseStr, UseArray, UseByteBlock]),
+  ("stringToChars", [UseStr, UseStrLeaf, UseStrCodec, UseArray]),
+  ("stringFromChars", [UseStr, UseStrLeaf, UseStrCodec, UseArray]),
+  ("stringToUtf8Bytes", [UseStr, UseStrCodec, UseArray]),
+  ("stringFromUtf8Bytes", [UseStr, UseStrCodec, UseArray]),
+  ("charToStr", [UseStrLeaf]),
+  ("charFromCode", [UseCharFromCode]),
+  ("stringSlice", [UseStrLeaf]),
+  ("stringConcat", [UseStrLeaf]),
+  ("stringIndexOf", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringCompare", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringToFloat", [UseStr, UseFloat, UseFloatStr, UseIO]),
+  ("charIsAlpha", [UseCharClass]),
+  ("charIsSpace", [UseCharClass]),
+  ("charIsUpper", [UseCharClass]),
+  ("charIsLower", [UseCharClass]),
+  ("charIsPunct", [UseCharClass]),
+  ("charToUpper", [UseCharClass]),
+  ("charToLower", [UseCharClass]),
+  ("stringToUpper", [UseStrLeaf]),
+  ("stringToLower", [UseStrLeaf]),
+]
 
 interpLlvmOnly : String
 interpLlvmOnly = "implemented by llvm, missing from interp — BUG(T7)"
@@ -1113,6 +1290,9 @@ catalogRows = [
 (DData Public "Disposition" ("f") ((variant "CSymbol" (ConPos (TyVar "f") (TyCon "String"))) (variant "EnvImport" (ConPos (TyVar "f") (TyCon "String"))) (variant "Inline" (ConPos (TyVar "f"))) (variant "Interpreted" (ConPos)) (variant "TrapStub" (ConPos (TyVar "f") (TyCon "String"))) (variant "FrozenConstant" (ConPos (TyVar "f") (TyCon "String"))) (variant "NotProvided" (ConPos (TyCon "GapKind") (TyCon "String")))) ())
 (DData Public "LlvmFamily" () ((variant "LlvmStr" (ConPos)) (variant "LlvmNum" (ConPos)) (variant "LlvmIo" (ConPos)) (variant "LlvmAbort" (ConPos)) (variant "LlvmArrIntrinsic" (ConPos)) (variant "LlvmArrLeaf" (ConPos)) (variant "LlvmByteBlock" (ConPos)) (variant "LlvmChar" (ConPos)) (variant "LlvmStrChar" (ConPos)) (variant "LlvmUnicode" (ConPos)) (variant "LlvmAdt" (ConPos)) (variant "LlvmEnv" (ConPos)) (variant "LlvmFile" (ConPos)) (variant "LlvmNet" (ConPos)) (variant "LlvmRng" (ConPos)) (variant "LlvmHash" (ConPos)) (variant "LlvmBit" (ConPos)) (variant "LlvmFixedWidth" (ConPos)) (variant "LlvmU64" (ConPos)) (variant "LlvmDebugLit" (ConPos)) (variant "LlvmPerf" (ConPos)) (variant "LlvmArrayMakeWith" (ConPos)) (variant "LlvmRefCell" (ConPos)) (variant "LlvmConstant" (ConPos)) (variant "LlvmFallthrough" (ConPos))) ())
 (DData Public "WasmFamily" () ((variant "WasmStr" (ConPos)) (variant "WasmLeaf" (ConPos)) (variant "WasmArray" (ConPos)) (variant "WasmByteBlock" (ConPos)) (variant "WasmRefCell" (ConPos)) (variant "WasmConstant" (ConPos)) (variant "WasmFallthrough" (ConPos))) ())
+(DData Public "WasmUse" () ((variant "UseStr" (ConPos)) (variant "UseStrLeaf" (ConPos)) (variant "UseRng" (ConPos)) (variant "UseHash" (ConPos)) (variant "UseFloat" (ConPos)) (variant "UseU64" (ConPos)) (variant "UseI64" (ConPos)) (variant "UseMath" (ConPos)) (variant "UseFloatStr" (ConPos)) (variant "UseFloatHash" (ConPos)) (variant "UseFloatRng" (ConPos)) (variant "UseStrSearch" (ConPos)) (variant "UseStrCodec" (ConPos)) (variant "UseArray" (ConPos)) (variant "UseList" (ConPos)) (variant "UseCharFromCode" (ConPos)) (variant "UseCharClass" (ConPos)) (variant "UseEPut" (ConPos)) (variant "UseByteBlock" (ConPos)) (variant "UseIO" (ConPos)) (variant "UseArgs" (ConPos)) (variant "UseFileBytes" (ConPos)) (variant "UseClock" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "WasmUse")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "UseStr") (PCon "UseStr")) () (EVar "True")) (arm (PTuple (PCon "UseStrLeaf") (PCon "UseStrLeaf")) () (EVar "True")) (arm (PTuple (PCon "UseRng") (PCon "UseRng")) () (EVar "True")) (arm (PTuple (PCon "UseHash") (PCon "UseHash")) () (EVar "True")) (arm (PTuple (PCon "UseFloat") (PCon "UseFloat")) () (EVar "True")) (arm (PTuple (PCon "UseU64") (PCon "UseU64")) () (EVar "True")) (arm (PTuple (PCon "UseI64") (PCon "UseI64")) () (EVar "True")) (arm (PTuple (PCon "UseMath") (PCon "UseMath")) () (EVar "True")) (arm (PTuple (PCon "UseFloatStr") (PCon "UseFloatStr")) () (EVar "True")) (arm (PTuple (PCon "UseFloatHash") (PCon "UseFloatHash")) () (EVar "True")) (arm (PTuple (PCon "UseFloatRng") (PCon "UseFloatRng")) () (EVar "True")) (arm (PTuple (PCon "UseStrSearch") (PCon "UseStrSearch")) () (EVar "True")) (arm (PTuple (PCon "UseStrCodec") (PCon "UseStrCodec")) () (EVar "True")) (arm (PTuple (PCon "UseArray") (PCon "UseArray")) () (EVar "True")) (arm (PTuple (PCon "UseList") (PCon "UseList")) () (EVar "True")) (arm (PTuple (PCon "UseCharFromCode") (PCon "UseCharFromCode")) () (EVar "True")) (arm (PTuple (PCon "UseCharClass") (PCon "UseCharClass")) () (EVar "True")) (arm (PTuple (PCon "UseEPut") (PCon "UseEPut")) () (EVar "True")) (arm (PTuple (PCon "UseByteBlock") (PCon "UseByteBlock")) () (EVar "True")) (arm (PTuple (PCon "UseIO") (PCon "UseIO")) () (EVar "True")) (arm (PTuple (PCon "UseArgs") (PCon "UseArgs")) () (EVar "True")) (arm (PTuple (PCon "UseFileBytes") (PCon "UseFileBytes")) () (EVar "True")) (arm (PTuple (PCon "UseClock") (PCon "UseClock")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "WasmUse")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "UseStr") () (ELit (LString "UseStr"))) (arm (PCon "UseStrLeaf") () (ELit (LString "UseStrLeaf"))) (arm (PCon "UseRng") () (ELit (LString "UseRng"))) (arm (PCon "UseHash") () (ELit (LString "UseHash"))) (arm (PCon "UseFloat") () (ELit (LString "UseFloat"))) (arm (PCon "UseU64") () (ELit (LString "UseU64"))) (arm (PCon "UseI64") () (ELit (LString "UseI64"))) (arm (PCon "UseMath") () (ELit (LString "UseMath"))) (arm (PCon "UseFloatStr") () (ELit (LString "UseFloatStr"))) (arm (PCon "UseFloatHash") () (ELit (LString "UseFloatHash"))) (arm (PCon "UseFloatRng") () (ELit (LString "UseFloatRng"))) (arm (PCon "UseStrSearch") () (ELit (LString "UseStrSearch"))) (arm (PCon "UseStrCodec") () (ELit (LString "UseStrCodec"))) (arm (PCon "UseArray") () (ELit (LString "UseArray"))) (arm (PCon "UseList") () (ELit (LString "UseList"))) (arm (PCon "UseCharFromCode") () (ELit (LString "UseCharFromCode"))) (arm (PCon "UseCharClass") () (ELit (LString "UseCharClass"))) (arm (PCon "UseEPut") () (ELit (LString "UseEPut"))) (arm (PCon "UseByteBlock") () (ELit (LString "UseByteBlock"))) (arm (PCon "UseIO") () (ELit (LString "UseIO"))) (arm (PCon "UseArgs") () (ELit (LString "UseArgs"))) (arm (PCon "UseFileBytes") () (ELit (LString "UseFileBytes"))) (arm (PCon "UseClock") () (ELit (LString "UseClock")))))))
 (DData Public "ExternRow" () ((variant "ExternRow" (ConPos (TyCon "String") (TyApp (TyCon "Disposition") (TyCon "LlvmFamily")) (TyApp (TyCon "Disposition") (TyCon "WasmFamily")) (TyApp (TyCon "Disposition") (TyCon "Unit"))))) ())
 (DTypeSig true "rowName" (TyFun (TyCon "ExternRow") (TyCon "String")))
 (DFunDef false "rowName" ((PCon "ExternRow" (PVar "n") PWild PWild PWild)) (EVar "n"))
@@ -1153,8 +1333,21 @@ catalogRows = [
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmConstant")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmFallthrough")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" (PWild) (EVar "True"))
+(DTypeSig true "wasmFamily" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "WasmFamily"))))
+(DFunDef false "wasmFamily" ((PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "dispositionFamily") (EApp (EVar "rowWasm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "isWasmExternFamily" (TyFun (TyCon "WasmFamily") (TyCon "Bool")))
+(DFunDef false "isWasmExternFamily" ((PCon "WasmRefCell")) (EVar "False"))
+(DFunDef false "isWasmExternFamily" ((PCon "WasmConstant")) (EVar "False"))
+(DFunDef false "isWasmExternFamily" ((PCon "WasmFallthrough")) (EVar "False"))
+(DFunDef false "isWasmExternFamily" (PWild) (EVar "True"))
+(DTypeSig true "wasmUses" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "WasmUse"))))
+(DFunDef false "wasmUses" ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "wasmUseIndex")) (arm (PCon "Some" (PVar "us")) () (EVar "us")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "catalogIndex" (TyApp (TyCon "OrdMap") (TyCon "ExternRow")))
 (DFunDef false "catalogIndex" () (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "rowName") (EVar "r")) (EVar "r")))) (EVar "catalogRows"))) (EVar "omEmpty")))
+(DTypeSig false "wasmUseIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "WasmUse"))))
+(DFunDef false "wasmUseIndex" () (EApp (EApp (EVar "omFromPairs") (EVar "wasmUseRows")) (EVar "omEmpty")))
+(DTypeSig true "wasmUseRows" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "WasmUse")))))
+(DFunDef false "wasmUseRows" () (EListLit (ETuple (ELit (LString "ePutStr")) (EListLit (EVar "UseEPut"))) (ETuple (ELit (LString "ePutStrLn")) (EListLit (EVar "UseEPut"))) (ETuple (ELit (LString "readFile")) (EListLit (EVar "UseStr") (EVar "UseIO"))) (ETuple (ELit (LString "readFileBytes")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseIO") (EVar "UseFileBytes"))) (ETuple (ELit (LString "writeFileBytes")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseIO") (EVar "UseFileBytes"))) (ETuple (ELit (LString "fileExists")) (EListLit (EVar "UseStr") (EVar "UseIO"))) (ETuple (ELit (LString "args")) (EListLit (EVar "UseStr") (EVar "UseList") (EVar "UseIO") (EVar "UseArgs"))) (ETuple (ELit (LString "getEnv")) (EListLit (EVar "UseStr") (EVar "UseIO"))) (ETuple (ELit (LString "exit")) (EListLit (EVar "UseIO"))) (ETuple (ELit (LString "panic")) (EListLit (EVar "UseStr") (EVar "UseEPut"))) (ETuple (ELit (LString "indexError")) (EListLit (EVar "UseStr") (EVar "UseEPut"))) (ETuple (ELit (LString "panicAt")) (EListLit (EVar "UseStr") (EVar "UseEPut"))) (ETuple (ELit (LString "wallTimeSec")) (EListLit (EVar "UseFloat") (EVar "UseClock"))) (ETuple (ELit (LString "monotonicSec")) (EListLit (EVar "UseFloat") (EVar "UseClock"))) (ETuple (ELit (LString "sleepMs")) (EListLit (EVar "UseClock"))) (ETuple (ELit (LString "randomInt")) (EListLit (EVar "UseRng"))) (ETuple (ELit (LString "randomBool")) (EListLit (EVar "UseRng"))) (ETuple (ELit (LString "randomFloat")) (EListLit (EVar "UseRng") (EVar "UseFloat") (EVar "UseFloatRng"))) (ETuple (ELit (LString "randomChar")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseRng"))) (ETuple (ELit (LString "setSeed")) (EListLit (EVar "UseRng"))) (ETuple (ELit (LString "randomState")) (EListLit (EVar "UseRng") (EVar "UseU64"))) (ETuple (ELit (LString "restoreRandomState")) (EListLit (EVar "UseRng") (EVar "UseU64"))) (ETuple (ELit (LString "hashInt")) (EListLit (EVar "UseHash"))) (ETuple (ELit (LString "hashFloat")) (EListLit (EVar "UseHash") (EVar "UseFloat") (EVar "UseFloatHash"))) (ETuple (ELit (LString "hashString")) (EListLit (EVar "UseHash"))) (ETuple (ELit (LString "hashChar")) (EListLit (EVar "UseHash"))) (ETuple (ELit (LString "hashBool")) (EListLit (EVar "UseHash"))) (ETuple (ELit (LString "intToFloat")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "floatToInt")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "floatRem")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "sqrt")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "cbrt")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "exp")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "log")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "log2")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "log10")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "sin")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "cos")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "tan")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "asin")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "acos")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "atan")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "sinh")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "cosh")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "tanh")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "floor")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "ceil")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "round")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "trunc")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "pow")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "atan2")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "hypot")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "intBitsToFloat")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "bytesToFloat64")) (EListLit (EVar "UseFloat") (EVar "UseArray"))) (ETuple (ELit (LString "floatToBytes64")) (EListLit (EVar "UseFloat") (EVar "UseArray"))) (ETuple (ELit (LString "floatToString")) (EListLit (EVar "UseStr") (EVar "UseFloat"))) (ETuple (ELit (LString "debugStringLit")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf"))) (ETuple (ELit (LString "debugCharLit")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf"))) (ETuple (ELit (LString "arrayLength")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayMake")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayMakeWith")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayGetUnsafe")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arraySetUnsafe")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayCopy")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayBlit")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayFill")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayFromList")) (EListLit (EVar "UseArray") (EVar "UseList"))) (ETuple (ELit (LString "u64Truncate")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64TruncateToInt")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64BitAnd")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64BitOr")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64BitXor")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64ShiftLeft")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64ShiftRight")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64MulHigh")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "i64FromBits")) (EListLit (EVar "UseU64") (EVar "UseI64"))) (ETuple (ELit (LString "i64ToBits")) (EListLit (EVar "UseU64") (EVar "UseI64"))) (ETuple (ELit (LString "byteBlockMake")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockLength")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockGetUnsafe")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockSetUnsafe")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockCopyUnsafe")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockBlit")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockFromIntArray")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockToIntArray")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockFromString")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockToString")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "stringToChars")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseStrCodec") (EVar "UseArray"))) (ETuple (ELit (LString "stringFromChars")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseStrCodec") (EVar "UseArray"))) (ETuple (ELit (LString "stringToUtf8Bytes")) (EListLit (EVar "UseStr") (EVar "UseStrCodec") (EVar "UseArray"))) (ETuple (ELit (LString "stringFromUtf8Bytes")) (EListLit (EVar "UseStr") (EVar "UseStrCodec") (EVar "UseArray"))) (ETuple (ELit (LString "charToStr")) (EListLit (EVar "UseStrLeaf"))) (ETuple (ELit (LString "charFromCode")) (EListLit (EVar "UseCharFromCode"))) (ETuple (ELit (LString "stringSlice")) (EListLit (EVar "UseStrLeaf"))) (ETuple (ELit (LString "stringConcat")) (EListLit (EVar "UseStrLeaf"))) (ETuple (ELit (LString "stringIndexOf")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseStrSearch"))) (ETuple (ELit (LString "stringCompare")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseStrSearch"))) (ETuple (ELit (LString "stringToFloat")) (EListLit (EVar "UseStr") (EVar "UseFloat") (EVar "UseFloatStr") (EVar "UseIO"))) (ETuple (ELit (LString "charIsAlpha")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charIsSpace")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charIsUpper")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charIsLower")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charIsPunct")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charToUpper")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charToLower")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "stringToUpper")) (EListLit (EVar "UseStrLeaf"))) (ETuple (ELit (LString "stringToLower")) (EListLit (EVar "UseStrLeaf")))))
 (DTypeSig false "interpLlvmOnly" (TyCon "String"))
 (DFunDef false "interpLlvmOnly" () (ELit (LString "implemented by llvm, missing from interp — BUG(T7)")))
 (DTypeSig false "wasmNoSockets" (TyCon "String"))
@@ -1171,6 +1364,9 @@ catalogRows = [
 (DData Public "Disposition" ("f") ((variant "CSymbol" (ConPos (TyVar "f") (TyCon "String"))) (variant "EnvImport" (ConPos (TyVar "f") (TyCon "String"))) (variant "Inline" (ConPos (TyVar "f"))) (variant "Interpreted" (ConPos)) (variant "TrapStub" (ConPos (TyVar "f") (TyCon "String"))) (variant "FrozenConstant" (ConPos (TyVar "f") (TyCon "String"))) (variant "NotProvided" (ConPos (TyCon "GapKind") (TyCon "String")))) ())
 (DData Public "LlvmFamily" () ((variant "LlvmStr" (ConPos)) (variant "LlvmNum" (ConPos)) (variant "LlvmIo" (ConPos)) (variant "LlvmAbort" (ConPos)) (variant "LlvmArrIntrinsic" (ConPos)) (variant "LlvmArrLeaf" (ConPos)) (variant "LlvmByteBlock" (ConPos)) (variant "LlvmChar" (ConPos)) (variant "LlvmStrChar" (ConPos)) (variant "LlvmUnicode" (ConPos)) (variant "LlvmAdt" (ConPos)) (variant "LlvmEnv" (ConPos)) (variant "LlvmFile" (ConPos)) (variant "LlvmNet" (ConPos)) (variant "LlvmRng" (ConPos)) (variant "LlvmHash" (ConPos)) (variant "LlvmBit" (ConPos)) (variant "LlvmFixedWidth" (ConPos)) (variant "LlvmU64" (ConPos)) (variant "LlvmDebugLit" (ConPos)) (variant "LlvmPerf" (ConPos)) (variant "LlvmArrayMakeWith" (ConPos)) (variant "LlvmRefCell" (ConPos)) (variant "LlvmConstant" (ConPos)) (variant "LlvmFallthrough" (ConPos))) ())
 (DData Public "WasmFamily" () ((variant "WasmStr" (ConPos)) (variant "WasmLeaf" (ConPos)) (variant "WasmArray" (ConPos)) (variant "WasmByteBlock" (ConPos)) (variant "WasmRefCell" (ConPos)) (variant "WasmConstant" (ConPos)) (variant "WasmFallthrough" (ConPos))) ())
+(DData Public "WasmUse" () ((variant "UseStr" (ConPos)) (variant "UseStrLeaf" (ConPos)) (variant "UseRng" (ConPos)) (variant "UseHash" (ConPos)) (variant "UseFloat" (ConPos)) (variant "UseU64" (ConPos)) (variant "UseI64" (ConPos)) (variant "UseMath" (ConPos)) (variant "UseFloatStr" (ConPos)) (variant "UseFloatHash" (ConPos)) (variant "UseFloatRng" (ConPos)) (variant "UseStrSearch" (ConPos)) (variant "UseStrCodec" (ConPos)) (variant "UseArray" (ConPos)) (variant "UseList" (ConPos)) (variant "UseCharFromCode" (ConPos)) (variant "UseCharClass" (ConPos)) (variant "UseEPut" (ConPos)) (variant "UseByteBlock" (ConPos)) (variant "UseIO" (ConPos)) (variant "UseArgs" (ConPos)) (variant "UseFileBytes" (ConPos)) (variant "UseClock" (ConPos))) ())
+(DImpl true "Eq" ((TyCon "WasmUse")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "UseStr") (PCon "UseStr")) () (EVar "True")) (arm (PTuple (PCon "UseStrLeaf") (PCon "UseStrLeaf")) () (EVar "True")) (arm (PTuple (PCon "UseRng") (PCon "UseRng")) () (EVar "True")) (arm (PTuple (PCon "UseHash") (PCon "UseHash")) () (EVar "True")) (arm (PTuple (PCon "UseFloat") (PCon "UseFloat")) () (EVar "True")) (arm (PTuple (PCon "UseU64") (PCon "UseU64")) () (EVar "True")) (arm (PTuple (PCon "UseI64") (PCon "UseI64")) () (EVar "True")) (arm (PTuple (PCon "UseMath") (PCon "UseMath")) () (EVar "True")) (arm (PTuple (PCon "UseFloatStr") (PCon "UseFloatStr")) () (EVar "True")) (arm (PTuple (PCon "UseFloatHash") (PCon "UseFloatHash")) () (EVar "True")) (arm (PTuple (PCon "UseFloatRng") (PCon "UseFloatRng")) () (EVar "True")) (arm (PTuple (PCon "UseStrSearch") (PCon "UseStrSearch")) () (EVar "True")) (arm (PTuple (PCon "UseStrCodec") (PCon "UseStrCodec")) () (EVar "True")) (arm (PTuple (PCon "UseArray") (PCon "UseArray")) () (EVar "True")) (arm (PTuple (PCon "UseList") (PCon "UseList")) () (EVar "True")) (arm (PTuple (PCon "UseCharFromCode") (PCon "UseCharFromCode")) () (EVar "True")) (arm (PTuple (PCon "UseCharClass") (PCon "UseCharClass")) () (EVar "True")) (arm (PTuple (PCon "UseEPut") (PCon "UseEPut")) () (EVar "True")) (arm (PTuple (PCon "UseByteBlock") (PCon "UseByteBlock")) () (EVar "True")) (arm (PTuple (PCon "UseIO") (PCon "UseIO")) () (EVar "True")) (arm (PTuple (PCon "UseArgs") (PCon "UseArgs")) () (EVar "True")) (arm (PTuple (PCon "UseFileBytes") (PCon "UseFileBytes")) () (EVar "True")) (arm (PTuple (PCon "UseClock") (PCon "UseClock")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
+(DImpl true "Debug" ((TyCon "WasmUse")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "UseStr") () (ELit (LString "UseStr"))) (arm (PCon "UseStrLeaf") () (ELit (LString "UseStrLeaf"))) (arm (PCon "UseRng") () (ELit (LString "UseRng"))) (arm (PCon "UseHash") () (ELit (LString "UseHash"))) (arm (PCon "UseFloat") () (ELit (LString "UseFloat"))) (arm (PCon "UseU64") () (ELit (LString "UseU64"))) (arm (PCon "UseI64") () (ELit (LString "UseI64"))) (arm (PCon "UseMath") () (ELit (LString "UseMath"))) (arm (PCon "UseFloatStr") () (ELit (LString "UseFloatStr"))) (arm (PCon "UseFloatHash") () (ELit (LString "UseFloatHash"))) (arm (PCon "UseFloatRng") () (ELit (LString "UseFloatRng"))) (arm (PCon "UseStrSearch") () (ELit (LString "UseStrSearch"))) (arm (PCon "UseStrCodec") () (ELit (LString "UseStrCodec"))) (arm (PCon "UseArray") () (ELit (LString "UseArray"))) (arm (PCon "UseList") () (ELit (LString "UseList"))) (arm (PCon "UseCharFromCode") () (ELit (LString "UseCharFromCode"))) (arm (PCon "UseCharClass") () (ELit (LString "UseCharClass"))) (arm (PCon "UseEPut") () (ELit (LString "UseEPut"))) (arm (PCon "UseByteBlock") () (ELit (LString "UseByteBlock"))) (arm (PCon "UseIO") () (ELit (LString "UseIO"))) (arm (PCon "UseArgs") () (ELit (LString "UseArgs"))) (arm (PCon "UseFileBytes") () (ELit (LString "UseFileBytes"))) (arm (PCon "UseClock") () (ELit (LString "UseClock")))))))
 (DData Public "ExternRow" () ((variant "ExternRow" (ConPos (TyCon "String") (TyApp (TyCon "Disposition") (TyCon "LlvmFamily")) (TyApp (TyCon "Disposition") (TyCon "WasmFamily")) (TyApp (TyCon "Disposition") (TyCon "Unit"))))) ())
 (DTypeSig true "rowName" (TyFun (TyCon "ExternRow") (TyCon "String")))
 (DFunDef false "rowName" ((PCon "ExternRow" (PVar "n") PWild PWild PWild)) (EVar "n"))
@@ -1211,8 +1407,21 @@ catalogRows = [
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmConstant")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" ((PCon "LlvmFallthrough")) (EVar "False"))
 (DFunDef false "isLlvmExternFamily" (PWild) (EVar "True"))
+(DTypeSig true "wasmFamily" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "WasmFamily"))))
+(DFunDef false "wasmFamily" ((PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "dispositionFamily") (EApp (EVar "rowWasm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "isWasmExternFamily" (TyFun (TyCon "WasmFamily") (TyCon "Bool")))
+(DFunDef false "isWasmExternFamily" ((PCon "WasmRefCell")) (EVar "False"))
+(DFunDef false "isWasmExternFamily" ((PCon "WasmConstant")) (EVar "False"))
+(DFunDef false "isWasmExternFamily" ((PCon "WasmFallthrough")) (EVar "False"))
+(DFunDef false "isWasmExternFamily" (PWild) (EVar "True"))
+(DTypeSig true "wasmUses" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "WasmUse"))))
+(DFunDef false "wasmUses" ((PVar "name")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "wasmUseIndex")) (arm (PCon "Some" (PVar "us")) () (EVar "us")) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "catalogIndex" (TyApp (TyCon "OrdMap") (TyCon "ExternRow")))
 (DFunDef false "catalogIndex" () (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "rowName") (EVar "r")) (EVar "r")))) (EVar "catalogRows"))) (EVar "omEmpty")))
+(DTypeSig false "wasmUseIndex" (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "WasmUse"))))
+(DFunDef false "wasmUseIndex" () (EApp (EApp (EVar "omFromPairs") (EVar "wasmUseRows")) (EVar "omEmpty")))
+(DTypeSig true "wasmUseRows" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "WasmUse")))))
+(DFunDef false "wasmUseRows" () (EListLit (ETuple (ELit (LString "ePutStr")) (EListLit (EVar "UseEPut"))) (ETuple (ELit (LString "ePutStrLn")) (EListLit (EVar "UseEPut"))) (ETuple (ELit (LString "readFile")) (EListLit (EVar "UseStr") (EVar "UseIO"))) (ETuple (ELit (LString "readFileBytes")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseIO") (EVar "UseFileBytes"))) (ETuple (ELit (LString "writeFileBytes")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseIO") (EVar "UseFileBytes"))) (ETuple (ELit (LString "fileExists")) (EListLit (EVar "UseStr") (EVar "UseIO"))) (ETuple (ELit (LString "args")) (EListLit (EVar "UseStr") (EVar "UseList") (EVar "UseIO") (EVar "UseArgs"))) (ETuple (ELit (LString "getEnv")) (EListLit (EVar "UseStr") (EVar "UseIO"))) (ETuple (ELit (LString "exit")) (EListLit (EVar "UseIO"))) (ETuple (ELit (LString "panic")) (EListLit (EVar "UseStr") (EVar "UseEPut"))) (ETuple (ELit (LString "indexError")) (EListLit (EVar "UseStr") (EVar "UseEPut"))) (ETuple (ELit (LString "panicAt")) (EListLit (EVar "UseStr") (EVar "UseEPut"))) (ETuple (ELit (LString "wallTimeSec")) (EListLit (EVar "UseFloat") (EVar "UseClock"))) (ETuple (ELit (LString "monotonicSec")) (EListLit (EVar "UseFloat") (EVar "UseClock"))) (ETuple (ELit (LString "sleepMs")) (EListLit (EVar "UseClock"))) (ETuple (ELit (LString "randomInt")) (EListLit (EVar "UseRng"))) (ETuple (ELit (LString "randomBool")) (EListLit (EVar "UseRng"))) (ETuple (ELit (LString "randomFloat")) (EListLit (EVar "UseRng") (EVar "UseFloat") (EVar "UseFloatRng"))) (ETuple (ELit (LString "randomChar")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseRng"))) (ETuple (ELit (LString "setSeed")) (EListLit (EVar "UseRng"))) (ETuple (ELit (LString "randomState")) (EListLit (EVar "UseRng") (EVar "UseU64"))) (ETuple (ELit (LString "restoreRandomState")) (EListLit (EVar "UseRng") (EVar "UseU64"))) (ETuple (ELit (LString "hashInt")) (EListLit (EVar "UseHash"))) (ETuple (ELit (LString "hashFloat")) (EListLit (EVar "UseHash") (EVar "UseFloat") (EVar "UseFloatHash"))) (ETuple (ELit (LString "hashString")) (EListLit (EVar "UseHash"))) (ETuple (ELit (LString "hashChar")) (EListLit (EVar "UseHash"))) (ETuple (ELit (LString "hashBool")) (EListLit (EVar "UseHash"))) (ETuple (ELit (LString "intToFloat")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "floatToInt")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "floatRem")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "sqrt")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "cbrt")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "exp")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "log")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "log2")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "log10")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "sin")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "cos")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "tan")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "asin")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "acos")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "atan")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "sinh")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "cosh")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "tanh")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "floor")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "ceil")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "round")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "trunc")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "pow")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "atan2")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "hypot")) (EListLit (EVar "UseFloat") (EVar "UseMath"))) (ETuple (ELit (LString "intBitsToFloat")) (EListLit (EVar "UseFloat"))) (ETuple (ELit (LString "bytesToFloat64")) (EListLit (EVar "UseFloat") (EVar "UseArray"))) (ETuple (ELit (LString "floatToBytes64")) (EListLit (EVar "UseFloat") (EVar "UseArray"))) (ETuple (ELit (LString "floatToString")) (EListLit (EVar "UseStr") (EVar "UseFloat"))) (ETuple (ELit (LString "debugStringLit")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf"))) (ETuple (ELit (LString "debugCharLit")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf"))) (ETuple (ELit (LString "arrayLength")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayMake")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayMakeWith")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayGetUnsafe")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arraySetUnsafe")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayCopy")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayBlit")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayFill")) (EListLit (EVar "UseArray"))) (ETuple (ELit (LString "arrayFromList")) (EListLit (EVar "UseArray") (EVar "UseList"))) (ETuple (ELit (LString "u64Truncate")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64TruncateToInt")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64BitAnd")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64BitOr")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64BitXor")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64ShiftLeft")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64ShiftRight")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "u64MulHigh")) (EListLit (EVar "UseU64"))) (ETuple (ELit (LString "i64FromBits")) (EListLit (EVar "UseU64") (EVar "UseI64"))) (ETuple (ELit (LString "i64ToBits")) (EListLit (EVar "UseU64") (EVar "UseI64"))) (ETuple (ELit (LString "byteBlockMake")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockLength")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockGetUnsafe")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockSetUnsafe")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockCopyUnsafe")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockBlit")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockFromIntArray")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockToIntArray")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockFromString")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockToString")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "byteBlockWriteStdout")) (EListLit (EVar "UseStr") (EVar "UseArray") (EVar "UseByteBlock"))) (ETuple (ELit (LString "stringToChars")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseStrCodec") (EVar "UseArray"))) (ETuple (ELit (LString "stringFromChars")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseStrCodec") (EVar "UseArray"))) (ETuple (ELit (LString "stringToUtf8Bytes")) (EListLit (EVar "UseStr") (EVar "UseStrCodec") (EVar "UseArray"))) (ETuple (ELit (LString "stringFromUtf8Bytes")) (EListLit (EVar "UseStr") (EVar "UseStrCodec") (EVar "UseArray"))) (ETuple (ELit (LString "charToStr")) (EListLit (EVar "UseStrLeaf"))) (ETuple (ELit (LString "charFromCode")) (EListLit (EVar "UseCharFromCode"))) (ETuple (ELit (LString "stringSlice")) (EListLit (EVar "UseStrLeaf"))) (ETuple (ELit (LString "stringConcat")) (EListLit (EVar "UseStrLeaf"))) (ETuple (ELit (LString "stringIndexOf")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseStrSearch"))) (ETuple (ELit (LString "stringCompare")) (EListLit (EVar "UseStr") (EVar "UseStrLeaf") (EVar "UseStrSearch"))) (ETuple (ELit (LString "stringToFloat")) (EListLit (EVar "UseStr") (EVar "UseFloat") (EVar "UseFloatStr") (EVar "UseIO"))) (ETuple (ELit (LString "charIsAlpha")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charIsSpace")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charIsUpper")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charIsLower")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charIsPunct")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charToUpper")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "charToLower")) (EListLit (EVar "UseCharClass"))) (ETuple (ELit (LString "stringToUpper")) (EListLit (EVar "UseStrLeaf"))) (ETuple (ELit (LString "stringToLower")) (EListLit (EVar "UseStrLeaf")))))
 (DTypeSig false "interpLlvmOnly" (TyCon "String"))
 (DFunDef false "interpLlvmOnly" () (ELit (LString "implemented by llvm, missing from interp — BUG(T7)")))
 (DTypeSig false "wasmNoSockets" (TyCon "String"))

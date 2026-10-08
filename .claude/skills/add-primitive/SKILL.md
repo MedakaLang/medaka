@@ -67,10 +67,12 @@ When you write **Medaka** code (e.g. wrappers in `core.mdk`/`list.mdk`), use
    for it: for llvm, give the row an `LlvmFamily` in its llvm column and add the
    clause to that family's emitter in `compiler/backend/llvm_emit.mdk`
    (`externEmitter` maps families to emitters, so `isAnyExtern` and
-   `emitExternApplied` follow the row); for wasm, add the name to a predicate in
-   `compiler/backend/wasm_emit.mdk` (`isStrExternW`/`isLeafExternW`/
-   `isArrayExternW`, `emitAppRef`). Run the gate and the catalog's sibling
-   test, which compares the wasm column with `wasm_emit`'s predicates:
+   `emitExternApplied` follow the row); for wasm, give the row a `WasmFamily`
+   in its wasm column and add the clause to that family's emitter in
+   `compiler/backend/wasm_emit.mdk` (`emitAppRef` selects it by `wasmFamily`),
+   and list every runtime group the lowering needs in `wasmUseRows` (a `WasmUse`
+   per `WasmEmit.use*` flag, implied ones written out). Run the gate and the
+   catalog's sibling test, which checks those demands and the WAT they produce:
    ```sh
    MEDAKA_STRICT=1 ./medaka test compiler/backend/extern_catalog_gate_test.mdk
    MEDAKA_STRICT=1 ./medaka test compiler/backend/extern_catalog_test.mdk
