@@ -1,0 +1,73 @@
+-- Self tail calls in the tail position of a match arm must not grow the native
+-- stack.  The LLVM emitter returns such a call as `musttail call` + `ret` from
+-- the arm's own leaf, so the recursion is a jump at every clang optimization
+-- level, not only where clang's own tail-call pass happens to run.  Each case
+-- recurses deep enough that a call which is not a jump exhausts the stack.
+--
+-- Run it under both build profiles:
+--   medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
+--   MEDAKA_CLANG_OPT=-O0 MEDAKA_NO_LTO=1 medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
+
+import test.{expectEqual}
+
+depth : Int
+depth = 100000000
+
+triangle : Int
+triangle = depth * (depth + 1) / 2
+
+-- Clause spelling: the self call is the second clause's whole body.
+sumClauses : Int -> Int -> Int
+sumClauses acc 0 = acc
+sumClauses acc n = sumClauses (acc + n) (n - 1)
+
+-- Clause spelling with guards.
+sumGuards : Int -> Int -> Int
+sumGuards acc n
+  | n == 0 = acc
+  | otherwise = sumGuards (acc + n) (n - 1)
+
+-- A body-level match in function tail position.
+sumMatch : Int -> Int -> Int
+-- lint-disable-next-line rule-match-on-param
+sumMatch acc n = match n
+  0 => acc
+  _ => sumMatch (acc + n) (n - 1)
+
+-- A body-level match whose self-calling arm is guarded.
+sumMatchGuard : Int -> Int -> Int
+-- lint-disable-next-line rule-match-on-param
+sumMatchGuard acc n = match n
+  k if k > 0 => sumMatchGuard (acc + k) (k - 1)
+  _ => acc
+
+-- A match nested in a clause body, with the self call under an `if` in its arm.
+sumNested : Int -> List Int -> Int -> Int
+-- lint-disable-next-line rule-match-on-param
+sumNested acc [] n = match n
+  0 => acc
+  _ => if n > 0 then sumNested (acc + n) [] (n - 1) else acc
+sumNested acc (x :: _) _ = acc + x
+
+-- A constrained self call, which carries its dictionary in the call head.
+sumConstrained : Num a => a -> a -> Int -> a
+sumConstrained acc _ 0 = acc
+sumConstrained acc step n = sumConstrained (acc + step) step (n - 1)
+
+test "self tail call, clause spelling" =
+  expectEqual triangle (sumClauses 0 depth)
+
+test "self tail call, guarded clauses" =
+  expectEqual triangle (sumGuards 0 depth)
+
+test "self tail call, body-level match" =
+  expectEqual triangle (sumMatch 0 depth)
+
+test "self tail call, guarded match arm" =
+  expectEqual triangle (sumMatchGuard 0 depth)
+
+test "self tail call, if inside a nested match arm" =
+  expectEqual triangle (sumNested 0 [] depth)
+
+test "self tail call, constrained clause spelling" =
+  expectEqual depth (sumConstrained 0 1 depth)
