@@ -352,7 +352,7 @@ const NATIVE_ONLY_EXTERNS = new Set([
 const NATIVE_ONLY_MODULES = new Set(['fs', 'net', 'io']);
 
 function nativeOnlyMessage(text) {
-  const ext = /unbound variable '([A-Za-z0-9_]+)'/.exec(text);
+  const ext = /runtime extern '([A-Za-z0-9_]+)' is not available on the wasm backend/.exec(text);
   if (ext && NATIVE_ONLY_EXTERNS.has(ext[1]))
     return ext[1] + ' is not available in the browser playground';
   return null;

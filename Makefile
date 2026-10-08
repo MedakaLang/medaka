@@ -143,6 +143,9 @@ test: medaka
 	## against runtime.mdk, both emitters and the interpreter.  The registry gate
 	## diff_compiler_capability_matrix runs extern_catalog_gate_test.mdk.
 	./medaka test compiler/backend/extern_catalog_test.mdk
+	## No entry imports a `_test.mdk` sibling, so the extern check's own tests
+	## run only from here.
+	./medaka test compiler/backend/core_validate_test.mdk
 	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 	## else runs this file's doctests — no gate script invokes `medaka test` on

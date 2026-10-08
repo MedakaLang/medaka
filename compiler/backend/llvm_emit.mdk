@@ -230,6 +230,16 @@ import support.util.{
 }
 import backend.llvm_preamble.{preambleLines}
 import backend.extern_catalog.{LlvmFamily(..), llvmFamily, isLlvmExternFamily}
+import backend.core_validate.{
+  Backend(..),
+  ExternFinding,
+  findingBinding,
+  isUnprovidedOn,
+  renderExternFinding,
+  renderExternRefusal,
+  unrefusedExternMessage,
+  validateExterns,
+}
 import support.ordmap.{
   OrdMap,
   omInsert,
@@ -495,7 +505,10 @@ setGapBind : Emit -> String -> Unit
 setGapBind e name = e.curGapBind := name
 
 noteGap : Emit -> String -> Unit
-noteGap e reason = e.gapLog := "\{!e.curGapBind}\t\{reason}" :: !e.gapLog
+noteGap e reason = noteGapAt e !e.curGapBind reason
+
+noteGapAt : Emit -> String -> String -> Unit
+noteGapAt e binding reason = e.gapLog := "\{binding}\t\{reason}" :: !e.gapLog
 
 -- ── method-call RESULT-type inference (native backend) ──────────────────────
 -- The (interface, method) -> returns-self table, computed by core_ir_lower's
@@ -880,6 +893,8 @@ data EmitInputData = EmitInputData {
   -- the method names two or more interfaces declare (by declaration word), whose
   -- dispatchers therefore carry the interface in their symbol (`dispMethodWord`)
   sharedMethodNames : OrdMap Unit,
+  -- the `stdlib/runtime.mdk` extern names (`withRuntimeExterns`)
+  runtimeExterns : List String,
 }
 
 -- The constructor is intentionally private: callers supply raw declaration facts
@@ -923,7 +938,15 @@ makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes declSigTypes 
   srcName = srcName,
   recordFieldOrders = recordFieldOrders,
   sharedMethodNames = sharedMethodNamesOf methodIfaces omEmpty omEmpty,
+  runtimeExterns = [],
 }
+
+-- The input with the extern names the entry declared from `stdlib/runtime.mdk`.
+-- The extern check (`core_validate.validateExterns`) refuses any of them that
+-- has no catalog row; an input built without them checks none.
+export
+withRuntimeExterns : List String -> EmitInput -> EmitInput
+withRuntimeExterns names input = { input | runtimeExterns = names }
 
 -- The methods declared by more than one interface word, from `methodIfaceTable` rows
 -- (one per declared interface method).  [firstWord] remembers each method's first
@@ -2255,9 +2278,12 @@ lookupVarG e env x = match omLookup x env
         let _ = emit e "  \{r} = load i64, ptr @mdk_g_\{x}"
         (r, LTInt)
       None =>
-        gapE
-          e
-          ("unbound variable '" ++ x ++ "' (not a local, ctor, or known fn)")
+        if isUnprovidedOn LlvmBackend x then
+          unprovidedExtern e x
+        else
+          gapE
+            e
+            ("unbound variable '" ++ x ++ "' (not a local, ctor, or known fn)")
 -- A not-yet-initialised global is still loaded from its `@mdk_g_<name>` cell:
 -- the `load` resolves at the instruction's RUNTIME, not emit time.  Two cases
 -- reach here, both correct as a deferred load.  (1) A reference INSIDE A LAMBDA
@@ -2284,6 +2310,15 @@ lookupVarG e env x = match omLookup x env
 -- the cell exists (declared `@mdk_g_<name> = global i64 0` up front), so emit
 -- the load.  LTy is unknown until init computes it; default LTInt (the loaded
 -- word is a uniform i64 — a downstream container op re-derives its shape).
+
+-- The fallthrough for a runtime extern llvm does not lower.  The extern check
+-- (`unprovidedExterns`) has already refused it in strict mode and
+-- recorded it in record mode, so record mode adds no second event, and strict
+-- mode reaching here means the two disagree about which references are free.
+unprovidedExtern : Emit -> String -> (String, LTy)
+unprovidedExtern e name = match e.gapMode
+  Record => ("0", LTInt)
+  Strict => panic (unrefusedExternMessage LlvmBackend name)
 
 emitLit : Emit -> Lit -> (String, LTy)
 -- Tag boundary: n*2+1 overflows the emitter's own 63-bit Medaka Int when |n| >= 2^61.
@@ -3611,7 +3646,7 @@ emitFixedWidthToInt e env args = match emitArgs e env args
 -- than a branch; the amount is masked first, so the `shl`/`lshr` itself never sees
 -- an out-of-range count.
 -- Each backend records the kernels it implements in its own column of the
--- extern catalog (`LlvmU64` here, `isU64ExternW` in wasm_emit.mdk).
+-- extern catalog (`LlvmU64` here; wasm lists a `UseU64` demand in `wasmUseRows`).
 -- `i64FromBits` and `i64ToBits` keep the payload and change only the header, so
 -- they are kernels of this family too: on payloads they are the identity.
 emitU64Extern : Emit ->
@@ -4825,10 +4860,11 @@ isConstantName name = match llvmFamily name
 -- list to the right family emitter.  Factored out of emitApp's CVar-head ladder
 -- so that the VALUE-position eta-wrap (emitExternEtaClosure) can REPLAY the exact
 -- applied-form codegen on synthetic `%argK` operands — value/applied byte-
--- consistency by construction, no parallel codegen to drift.  A name with no
--- emitter is out-of-catalog: `gapE` decides loudly (`panic`, `Strict`, every
--- real build) or quietly-recorded (`noteGap`, `Record`, the D4 census
--- scaffold).  Caller guards `hasArgs args`.
+-- consistency by construction, no parallel codegen to drift.  Both callers
+-- guard `isAnyExtern fname`, which holds only for a family `externEmitter`
+-- maps, so the two panics are invariant checks: a runtime extern llvm does not
+-- lower is refused before emission (`core_validate.validateExterns`).  Caller
+-- guards `hasArgs args`.
 emitExternApplied : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -4837,8 +4873,12 @@ emitExternApplied : Emit ->
 emitExternApplied e env fname args = match llvmFamily fname
   Some f => match externEmitter f
     Some fn => fn e env fname args
-    None => gapE e ("unsupported extern " ++ fname)
-  None => gapE e ("unsupported extern " ++ fname)
+    None => panic (notAnExternFamily fname)
+  None => panic (notAnExternFamily fname)
+
+notAnExternFamily : String -> String
+notAnExternFamily fname =
+  "internal error: emitExternApplied reached '\{fname}', which has no llvm extern family (callers guard isAnyExtern)"
 
 -- ── #2074: user-declared FFI externs — the C-ABI lowering ────────────────────
 --
@@ -15403,7 +15443,8 @@ runStrictEmission e input groups implEntries =
 -- expects: "the table the emitter built"), not two.
 export
 emitProgramWithStats : EmitInput -> CProgram -> (String, List (String, Int))
-emitProgramWithStats input (CProgram groups ctorArs ctorTypes implEntries) =
+emitProgramWithStats input (cp@(CProgram groups ctorArs ctorTypes implEntries)) =
+  let _ = unprovidedExterns Strict input cp
   let cfg = programEmitConfig Strict input groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
   let stats = tableStats e
@@ -15616,7 +15657,10 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   e
 
 emitProgramMode : GapMode -> EmitInput -> CProgram -> (String, List String)
-emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
+emitProgramMode gapMode input (cp@(CProgram groups ctorArs ctorTypes implEntries)) =
+  -- Each half's run checks the whole program it received, so a refused extern
+  -- is refused by the half that reaches it, before that half emits anything.
+  let found = unprovidedExterns gapMode input cp
   -- issue #118: the two halves are emitted by INDEPENDENT emitter runs, so they
   -- get disjoint gensym ranges or their lifted defines collide — see
   -- programHalfIdBase.  Mode 0 keeps starting at 0, so its IR is unchanged.
@@ -15626,8 +15670,28 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   -- prelude body that loads a global would hit the forward-dependency gap.
   let cfg = programEmitConfig gapMode input groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
+  let _ = noteUnprovidedExterns e found
   let text = runStrictEmission e input groups implEntries
   (text, reverseL !e.gapLog)
+
+-- Every free reference to a runtime extern llvm does not lower
+-- (`core_validate.validateExterns`).  Strict mode refuses them here, before any
+-- emitter state is built; record mode returns them for `noteUnprovidedExterns`.
+unprovidedExterns : GapMode -> EmitInput -> CProgram -> List ExternFinding
+unprovidedExterns Strict input cp =
+  match validateExterns LlvmBackend input.runtimeExterns cp
+    [] => []
+    found => panic (renderExternRefusal found)
+unprovidedExterns Record input cp =
+  validateExterns LlvmBackend input.runtimeExterns cp
+
+-- Record mode's one gap event per refused extern.  The emitter's own
+-- fallthrough for such a name then records nothing (`unprovidedExtern`).
+noteUnprovidedExterns : Emit -> List ExternFinding -> Unit
+noteUnprovidedExterns _ [] = ()
+noteUnprovidedExterns e (f :: rest) =
+  let _ = noteGapAt e (findingBinding f) (renderExternFinding f)
+  noteUnprovidedExterns e rest
 
 -- `@mdk_program_main`: the init prologue (every top-level value binding's rhs, in
 -- source order) followed by `main`'s own body and the type-directed print.
@@ -15913,7 +15977,7 @@ ctag _ = "?"
 -- The emitted LLVM text is discarded by the probe — only the gap log matters.
 export
 emitProgramGaps : EmitInput -> CProgram -> List String
-emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
+emitProgramGaps input (cp@(CProgram groups ctorArs ctorTypes implEntries)) =
   -- #561 PR-A: the gap census emits every value bind ORDINARILY (eager load), so
   -- install an EMPTY lazy set — this also RESETS any prior emitProgram's set so it
   -- cannot leak into the census. Likewise `runDispatchAnalysis = False` resets the
@@ -15927,6 +15991,7 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
     runDispatchAnalysis = False,
   }
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
+  let _ = noteUnprovidedExterns e (unprovidedExterns Record input cp)
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries

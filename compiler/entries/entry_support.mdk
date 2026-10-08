@@ -507,6 +507,15 @@ driveParseSources render = match args ()
       Ok v => v
   _ => failWith usageRuntime
 
+-- The extern names `stdlib/runtime.mdk` declares, for the emitters' extern
+-- check (`withRuntimeExterns`, `withRuntimeExternsW`).
+export
+runtimeExternNames : List Decl -> List String
+runtimeExternNames [] = []
+runtimeExternNames ((DExtern _ n _) :: rest) = n :: runtimeExternNames rest
+runtimeExternNames ((DAttrib _ d) :: rest) = runtimeExternNames (d :: rest)
+runtimeExternNames (_ :: rest) = runtimeExternNames rest
+
 -- ── trap-site files ──────────────────────────────────────────────────────────
 -- The emit drivers' trap sites name their file.  [mods] is the loader's
 -- (module, path, decls) and [modules1] the elaborated modules; the entry path is
