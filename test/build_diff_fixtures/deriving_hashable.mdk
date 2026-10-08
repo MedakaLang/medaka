@@ -92,9 +92,9 @@ ordinalSeed = (hash (A 1) /= hash (B 1), hash (A 1) + 33 == hash (B 1), hash C)
 newtypeTransparent : Bool
 newtypeTransparent = hash (Key "alpha") == hash "alpha"
 
--- `T None` folds to `0 * 33 + hash None` == core.mdk's `hash None` == 1
+-- `T None` folds to `0 * 33 + hash None` == 1; a bare `None` is annotated (DICT-SEMANTICS §3 Reject)
 nestedNone : Bool
-nestedNone = hash (T None) == hash None
+nestedNone = hash (T None) == hash (None : Option Int)
 
 -- a NEGATIVE derived hash still round-trips through a HashMap (#416 masks at
 -- slotOf), and collides correctly with its different-route twin

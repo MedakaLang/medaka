@@ -3942,6 +3942,39 @@ table = [
     codes = [Absent "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
+    entry = "undetermined-nested-requires-goal.mdk",
+    label =
+      "§6.2 T4 at a nested `requires` goal (#3757): `def : Option ?a` is determined by `impl Def (Option a) requires Def a`, which poses `Def ?a`; `impl Def Int` and `impl Def (Option a)` both reach it with no stable minimum. Was accepted by check, printed `some` under run, and the built binary segfaulted on the unconstrained dictionary",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-requires-goal-deep.mdk",
+    label =
+      "the same verdict one nesting deeper: `Option (Option ?a)` poses `Def (Option ?a)` and then `Def ?a`; the open goal is the innermost, so one diagnostic",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-requires-goal-control.mdk",
+    label =
+      "control for the two #3757 rows above: `def : Option Int` fixes the nested goal to the closed `Def Int`, which `impl Def Int` alone answers; prints `some`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "some\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
     entry = "undetermined-sole-headless-determined.mdk",
     label =
       "§3 determination at any arity: the one instance `impl Sz a` reaches `Sz ?a`, and every verb dispatches through it (#3714). Hand-derived: 14. The build stamped the method's result head and panicked",
@@ -4271,7 +4304,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 375
+tableRows = 378
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4889,7 +4922,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 26
+spanRows = 28
 
 spanTable : List SpanRow
 spanTable = [
@@ -4904,6 +4937,18 @@ spanTable = [
     label =
       "§6.2 T4: the `roundT` twin is reported at its `conv` occurrence, inside the signed body",
     want = "21:19",
+  },
+  SpanRow {
+    entry = "undetermined-nested-requires-goal.mdk",
+    label =
+      "§6.2 T4: #3757`s nested open goal is reported at the `def` occurrence whose instance poses it",
+    want = "13:22",
+  },
+  SpanRow {
+    entry = "undetermined-nested-requires-goal-deep.mdk",
+    label =
+      "§6.2 T4: the deeper nesting reports once, at the same `def` occurrence",
+    want = "11:22",
   },
   SpanRow {
     entry = "s6-c1-rigid-goal-no-call-discriminator.mdk",

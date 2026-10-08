@@ -870,6 +870,7 @@ determineByUniqueInstance : Map String Unit -> List UObligation -> Unit
 determineByUniqueInstanceGo : Map String Unit -> GoalWindow -> Bool -> List (Int, UObligation) -> Bool
 determineGoal : Map String Unit -> GoalWindow -> UObligation -> List Mono -> Bool
 determineSweeps : Map String Unit -> GoalWindow -> Int -> Unit
+determineWithNestedGoals : Map String Unit -> List UObligation -> Unit
 dictAppEntry : Obligation -> List PendingDictApp
 dictAppsIn : List Obligation -> List PendingDictApp
 dictAppsSince : Int -> List PendingDictApp
@@ -2194,6 +2195,8 @@ narrowsImplHeadMsg : String -> List String -> String -> String
 negateOp : Mono -> Mono
 negatedI32Lit : Expr -> Option Int
 negatedInI32 : Int -> Option Int
+nestedRequireGoals : Map String Unit -> List UObligation -> List UObligation
+nestedRequireGoalsGo : Map String Unit -> Int -> List UObligation -> List UObligation
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
 noDictHook : String -> EvId -> Unit
@@ -2707,6 +2710,7 @@ reqObligationsFor : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, Lis
 reqToObligation : List (String, Mono) -> Require -> (IfaceRef, List Mono)
 reqTyToMono : List (String, Mono) -> Ty -> Mono
 requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
+requireGoalAt : UObligation -> List Int -> (IfaceRef, List Mono) -> List UObligation
 requirePredicateSlot : List (String, Mono) -> Require -> PredicateSlot
 requiredMethodNames : List IfaceMethod -> List String
 requiresDepthMsg : IfaceRef -> List Mono -> String
@@ -2873,6 +2877,7 @@ selectIfaceRows : UsePath -> List (String, List String) -> List (String, List St
 selectReqImpl : IfaceRef -> List Mono -> Option (Ty, List Ty, List Require)
 selectReturnRow : ImplEnv -> String -> List Mono -> Option ImplRow
 selectedCallSupers : String -> Option ImplRow -> String -> ScopeId -> List Mono -> List Route
+selectedRequireGoals : Map String Unit -> UObligation -> List (UObligation, Bool)
 selectedRowReqMatch : List Mono -> ImplRow -> Option (List (String, Mono), List Require)
 selfBinding : String -> (String, String)
 selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)

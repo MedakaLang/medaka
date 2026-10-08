@@ -37787,6 +37787,93 @@ liveMemberIds monos =
         (dedupI (flatMap monoUnboundIds monos))))
     omEmpty
 
+-- The prerequisites of the instances [obls]' goals select, as goals of the same
+-- boundary at their parents' sites (DICT-SEMANTICS §3).  An instance answers a goal
+-- only once its `requires` is answered too, so a prerequisite left open is
+-- determined and judged like a goal the boundary posed itself.  A goal a given
+-- answers whole selects no instance; a goal every variable of which is held rigid
+-- leaves its prerequisites to the enclosing scope; a closed goal's are closed, and
+-- the obligation gate's.  Only a prerequisite smaller than its parent is followed
+-- further, which bounds a `requires` chain that does not shrink.
+nestedRequireGoals : OrdMap Unit -> List UObligation -> List UObligation
+nestedRequireGoals rigidIds obls =
+  nestedRequireGoalsGo rigidIds requiresNonShrinkingFuel obls
+
+nestedRequireGoalsGo : OrdMap Unit ->
+  Int ->
+  List UObligation ->
+  List UObligation
+nestedRequireGoalsGo rigidIds fuel obls
+  | fuel <= 0 = []
+  | otherwise = match flatMap (selectedRequireGoals rigidIds) obls
+    [] => []
+    derived =>
+      map fst derived
+        ++ nestedRequireGoalsGo
+          rigidIds
+          (fuel - 1)
+          (map fst (filterList snd derived))
+
+-- [o]'s prerequisites under the one instance its goal selects as it stands, each
+-- paired with whether it is smaller than [o]'s goal.
+selectedRequireGoals : OrdMap Unit -> UObligation -> List (UObligation, Bool)
+selectedRequireGoals rigidIds o =
+  let args = map normalize (uOblArgs o)
+  let iface = o.pred.iface
+  if isEmptyL args
+    || monoVectorClosed args
+    || goalVarsAllHeld rigidIds args
+    || goalGivenAt iface args o.uoScope then
+    []
+  else
+    let rows = goalRows iface args
+    let reach =
+      if goalIsProjection args rows then
+        ReachMany
+      else
+        goalReach args (goalCandidates rigidIds args rows)
+    match reach
+      ReachOne row => match selectedRowReqMatch args row
+        Some (subst, reqs) =>
+          let parentIds = flatMap monoUnboundIds args
+          let size = monoSizes args
+          flatMap
+            (req =>
+              map
+                (g => (g, monoSizes g.pred.args < size))
+                (requireGoalAt o parentIds (reqToObligation subst req)))
+            reqs
+        None => []
+      _ => []
+
+-- A prerequisite as a goal at [o]'s site.  One that mentions a variable the
+-- instance's head does not fix is left to the module's obligation check.
+requireGoalAt : UObligation ->
+  List Int ->
+  (IfaceRef, List Mono) ->
+  List UObligation
+requireGoalAt o parentIds (iface, args)
+  | not (allList (i => containsI i parentIds) (flatMap monoUnboundIds args)) =
+    []
+  | otherwise = [
+    UObligation {
+      pred = Predicate { iface = iface, args = args },
+      originId = o.originId,
+      prov = o.prov,
+      loc = o.loc,
+      uoScope = o.uoScope,
+      oblProj = OpProjected,
+    },
+  ]
+
+-- Determination over [obls] and the prerequisites their selected instances pose.
+determineWithNestedGoals : OrdMap Unit -> List UObligation -> Unit
+determineWithNestedGoals rigidIds obls =
+  let _ = determineByUniqueInstance rigidIds obls
+  match nestedRequireGoals rigidIds obls
+    [] => ()
+    nested => determineByUniqueInstance rigidIds (obls ++ nested)
+
 -- The verdict on the goals on a variable D3 clause 3 withheld, once the second
 -- determination has run.  The boundary owns that variable and nothing after it
 -- can choose it, so a goal on it that two or more candidates still unify with is
@@ -38419,6 +38506,8 @@ checkReqOne : ImplUniverse ->
 checkReqOne univ iface args loc scope
   | anyListM monoIsFunction args && not (implMatchesU univ iface args) =
     pushNoImplError iface.irName loc args
+  -- An open prerequisite is judged at its boundary (`nestedRequireGoals`), where the
+  -- impl-head and signature variables it may mention are known to be rigid.
   | not (allConcreteHeads args) = ()
   | implMatchesU univ iface args = checkNestedReqs univ iface args loc scope
   -- #1939 / #1938 (OPEN WORLD): the nested-`requires` twin of
@@ -39079,7 +39168,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
     monoRootIdSet (headMonos ++ [inst.mbiExpected] ++ map snd inst.mbiNamedVars)
   let bodyObls = addedObls ++ callUOblsWindow callN0
   let _ = improveByUniqueImpl bodyRigidIds bodyObls
-  let _ = determineByUniqueInstance bodyRigidIds bodyObls
+  let _ = determineWithNestedGoals bodyRigidIds bodyObls
   let _ =
     checkMethodRigidityCore
       subject
@@ -39180,13 +39269,13 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
   let _ = improveByUniqueImpl bodyRigidIds bodyObls
-  let _ = determineByUniqueInstance bodyRigidIds bodyObls
+  let _ = determineWithNestedGoals bodyRigidIds bodyObls
   let _ =
     rejectUndeterminedVectors
       bodyRigidIds
       omEmpty
       addedObls
-      (callUOblsWindow callN0)
+      (callUOblsWindow callN0 ++ nestedRequireGoals bodyRigidIds bodyObls)
   let _ = rejectWithheldAmbiguity bodyRigidIds withheld bodyObls
   let _ = registerMethodBodyGivens iface kind params mty inst bodyScope
   let _ = match kind
@@ -43518,7 +43607,7 @@ processSCC env sigs grouped0 members =
       protectedSigIds
   let _ = improveByUniqueImpl protectedSigIds addedObls
   let _ = improveByUniqueImpl protectedSigIds (callUOblsWindow callN0)
-  let _ = determineByUniqueInstance unownedIds groupObls
+  let _ = determineWithNestedGoals unownedIds groupObls
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
   -- not pendingImplObligations).  See numCallObls/numDictObls.  The synthetic entries
@@ -43542,7 +43631,7 @@ processSCC env sigs grouped0 members =
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
   let _ = improveByUniqueImpl protectedSigIds groupObls
-  let _ = determineByUniqueInstance unownedIds groupObls
+  let _ = determineWithNestedGoals unownedIds groupObls
   let _ = checkSigVarGoals protectedSigIds sigTvMaps groupObls
   let schemes =
     sccSchemes
@@ -43579,7 +43668,7 @@ processSCC env sigs grouped0 members =
       unownedIds
       (liveMemberIds (map snd placeholders))
       addedObls
-      (callUOblsWindow callN0)
+      (callUOblsWindow callN0 ++ nestedRequireGoals unownedIds groupObls)
   let _ = rejectWithheldAmbiguity unownedIds withheld groupObls
   -- SIGNATURE CONSTRAINT SOUNDNESS: a signed member whose body induces an
   -- interface constraint on one of its own quantified vars that its declared `=>`
