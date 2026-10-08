@@ -4,8 +4,9 @@
 -- in both directions, and names every extern on the wrong side:
 --   (a) the `extern` declarations of `stdlib/runtime.mdk`, parsed with the
 --       compiler's own frontend;
---   (b) the extern predicates each emitter dispatches through, plus the
---       externs each emitter handles by exact name;
+--   (b) the extern predicates the wasm emitter dispatches through, plus the
+--       externs it handles by exact name (the llvm emitter selects by the
+--       catalog itself, so there is nothing to compare it with);
 --   (c) the interpreter's extern tables.
 --
 -- `compiler/backend/extern_catalog_gate_test.mdk` is the gate over the table's
@@ -26,11 +27,9 @@ import backend.extern_catalog.{
   dispositionFamily,
   isBound,
   rowEval,
-  rowLlvm,
   rowName,
   rowWasm,
 }
-import backend.llvm_emit.{isAnyExtern}
 import backend.wasm_emit.{
   isArrayExternW,
   isByteBlockExternW,
@@ -76,10 +75,9 @@ selected column =
 isCatalogName : String -> Bool
 isCatalogName n = isSome (catalogRow n)
 
--- The externs both emitters handle by exact name rather than through a family
--- predicate: the `Ref` cell (`emitApp` / `emitAppRef`), the constants written
--- in place (`emitVar` / `emitVarRefPlain`), and the guard fallthrough sentinel.
--- `arrayMakeWith` is not here on the llvm side: `isAnyExtern` names it itself.
+-- The externs the wasm emitter handles by exact name rather than through a
+-- family predicate: the `Ref` cell (`emitAppRef`), the constants written in
+-- place (`emitVarRefPlain`), and the guard fallthrough sentinel.
 exactNameExterns : List String
 exactNameExterns = [
   "Ref",
@@ -143,13 +141,6 @@ test "(a) the catalog has exactly one row per stdlib/runtime.mdk extern" =
           "catalog rows sharing a name"
           (expectEqual (length catalogNames) (S.size (S.fromList catalogNames))),
       ]
-
-test "(b) llvm: the catalog selects exactly isAnyExtern plus the exact-name externs" =
-  sameNames
-    "llvm family in the catalog, not dispatched by llvm_emit"
-    "dispatched by llvm_emit, no llvm family in the catalog"
-    (selected rowLlvm)
-    (filter (n => isAnyExtern n || isExactName n) catalogNames)
 
 test "(b) wasm: the catalog selects exactly the dispatching predicates plus the exact-name externs" =
   sameNames

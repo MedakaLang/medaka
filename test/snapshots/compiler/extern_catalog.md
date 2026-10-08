@@ -1,5 +1,5 @@
 # META
-source_lines=1087
+source_lines=1105
 stages=DESUGAR,MARK
 # SOURCE
 -- The runtime extern catalog as data: one row per `stdlib/runtime.mdk` extern,
@@ -159,6 +159,24 @@ gapKindName GapUnported = "WASM-GAP"
 export
 catalogRow : String -> Option ExternRow
 catalogRow name = omLookup name catalogIndex
+
+-- The llvm emitter path for an extern name, or `None` for a name that is not a
+-- runtime extern or has no llvm lowering.
+export
+llvmFamily : String -> Option LlvmFamily
+llvmFamily name = match catalogRow name
+  Some r => dispositionFamily (rowLlvm r)
+  None => None
+
+-- Is this llvm family one a saturated call dispatches through?  The `Ref` cell,
+-- the in-place constants and the fallthrough sentinel are matched by their own
+-- emit sites and are not.
+export
+isLlvmExternFamily : LlvmFamily -> Bool
+isLlvmExternFamily LlvmRefCell = False
+isLlvmExternFamily LlvmConstant = False
+isLlvmExternFamily LlvmFallthrough = False
+isLlvmExternFamily _ = True
 
 catalogIndex : OrdMap ExternRow
 catalogIndex = omFromPairs (map (r => (rowName r, r)) catalogRows) omEmpty
@@ -1128,6 +1146,13 @@ catalogRows = [
 (DFunDef false "gapKindName" ((PCon "GapUnported")) (ELit (LString "WASM-GAP")))
 (DTypeSig true "catalogRow" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ExternRow"))))
 (DFunDef false "catalogRow" ((PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "catalogIndex")))
+(DTypeSig true "llvmFamily" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LlvmFamily"))))
+(DFunDef false "llvmFamily" ((PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "dispositionFamily") (EApp (EVar "rowLlvm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "isLlvmExternFamily" (TyFun (TyCon "LlvmFamily") (TyCon "Bool")))
+(DFunDef false "isLlvmExternFamily" ((PCon "LlvmRefCell")) (EVar "False"))
+(DFunDef false "isLlvmExternFamily" ((PCon "LlvmConstant")) (EVar "False"))
+(DFunDef false "isLlvmExternFamily" ((PCon "LlvmFallthrough")) (EVar "False"))
+(DFunDef false "isLlvmExternFamily" (PWild) (EVar "True"))
 (DTypeSig false "catalogIndex" (TyApp (TyCon "OrdMap") (TyCon "ExternRow")))
 (DFunDef false "catalogIndex" () (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EVar "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "rowName") (EVar "r")) (EVar "r")))) (EVar "catalogRows"))) (EVar "omEmpty")))
 (DTypeSig false "interpLlvmOnly" (TyCon "String"))
@@ -1179,6 +1204,13 @@ catalogRows = [
 (DFunDef false "gapKindName" ((PCon "GapUnported")) (ELit (LString "WASM-GAP")))
 (DTypeSig true "catalogRow" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "ExternRow"))))
 (DFunDef false "catalogRow" ((PVar "name")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "catalogIndex")))
+(DTypeSig true "llvmFamily" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "LlvmFamily"))))
+(DFunDef false "llvmFamily" ((PVar "name")) (EMatch (EApp (EVar "catalogRow") (EVar "name")) (arm (PCon "Some" (PVar "r")) () (EApp (EVar "dispositionFamily") (EApp (EVar "rowLlvm") (EVar "r")))) (arm (PCon "None") () (EVar "None"))))
+(DTypeSig true "isLlvmExternFamily" (TyFun (TyCon "LlvmFamily") (TyCon "Bool")))
+(DFunDef false "isLlvmExternFamily" ((PCon "LlvmRefCell")) (EVar "False"))
+(DFunDef false "isLlvmExternFamily" ((PCon "LlvmConstant")) (EVar "False"))
+(DFunDef false "isLlvmExternFamily" ((PCon "LlvmFallthrough")) (EVar "False"))
+(DFunDef false "isLlvmExternFamily" (PWild) (EVar "True"))
 (DTypeSig false "catalogIndex" (TyApp (TyCon "OrdMap") (TyCon "ExternRow")))
 (DFunDef false "catalogIndex" () (EApp (EApp (EVar "omFromPairs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (ETuple (EApp (EVar "rowName") (EVar "r")) (EVar "r")))) (EVar "catalogRows"))) (EVar "omEmpty")))
 (DTypeSig false "interpLlvmOnly" (TyCon "String"))

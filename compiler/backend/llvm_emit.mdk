@@ -229,6 +229,7 @@ import support.util.{
   u64HalvesHex,
 }
 import backend.llvm_preamble.{preambleLines}
+import backend.extern_catalog.{LlvmFamily(..), llvmFamily, isLlvmExternFamily}
 import support.ordmap.{
   OrdMap,
   omInsert,
@@ -2176,18 +2177,8 @@ emitVar e env x =
     ("3", LTBool)
   else if isLocal env x then
     lookupVarG e env x
-  else if x == "pi" then
-    (boxFloat e "3.141592653589793", LTFloat)
-  else if x == "e" then
-    (boxFloat e "2.718281828459045", LTFloat)
-  else if x == "intMaxBound" then
-    ("9223372036854775807", LTInt)
-  else if x == "intMinBound" then
-    ("-9223372036854775807", LTInt)
-  else if x == "charMinBound" then
-    ("1", LTChar)
-  else if x == "charMaxBound" then
-    ("2228223", LTChar)
+  else if isConstantName x then
+    emitConstantVar e x
   else if isCtor e x then
     if ctorArity e x == 0 then emitCtorAlloc e x [] else emitCtorEtaClosure e x
   else if isKnownFn e x then
@@ -2202,6 +2193,16 @@ emitVar e env x =
     emitMethodEtaClosure e x
   else
     lookupVarG e env x
+
+-- The value of a constant the catalog files under `LlvmConstant`.
+emitConstantVar : Emit -> String -> (String, LTy)
+emitConstantVar e "pi" = (boxFloat e "3.141592653589793", LTFloat)
+emitConstantVar e "e" = (boxFloat e "2.718281828459045", LTFloat)
+emitConstantVar _ "intMaxBound" = ("9223372036854775807", LTInt)
+emitConstantVar _ "intMinBound" = ("-9223372036854775807", LTInt)
+emitConstantVar _ "charMinBound" = ("1", LTChar)
+emitConstantVar _ "charMaxBound" = ("2228223", LTChar)
+emitConstantVar _ name = panic ("llvm: no constant " ++ name)
 
 -- is `x` a local (let/param) binding in the current emit env?  Used to let a local
 -- shadow the prelude math/bound constants (pi/e/intMaxBound/…) above.
@@ -2413,9 +2414,6 @@ hexDigit d
 -- contract that an extern returning a Medaka value allocates it in the GC heap
 -- (mdk_int_to_string -> mdk_str_lit -> mdk_alloc).  charToStr/stringConcat/putStr
 -- are the obvious next additions (a follow-on slice).
-isStrExtern : String -> Bool
-isStrExtern name = contains name ["intToString", "stringConcat", "stringLength"]
-
 emitStrExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2451,20 +2449,6 @@ emitStrExtern e _ name _ = gapE e ("unsupported string extern " ++ name)
 -- intToFloat / floatToInt are INTRINSIC: inline sitofp / fptosi + box/untag.
 -- floatToString is a LEAF: delegates to mdk_float_to_string (mirrors mdk_print_float's
 -- %.12g+dot logic but returns a mdk_str_lit box instead of printf-ing).
-isNumExtern : String -> Bool
-isNumExtern name =
-  contains name [
-      "intToFloat",
-      "floatToInt",
-      "floatToString",
-      "intBitsToFloat",
-      "bytesToFloat64",
-      "floatRem",
-      "floatToBytes64",
-    ]
-    || isMathUnary name
-    || isMathBinary name
-
 -- libm one-arg Float -> Float externs (native/LLVM only).  Each emits a
 -- direct `call double @mdk_<name>(double x)`, unbox in / rebox out.
 isMathUnary : String -> Bool
@@ -2606,20 +2590,6 @@ emitNumExtern e _ name _ = gapE e ("unsupported numeric extern " ++ name)
 -- IO-output externs (native extern catalog slice 3).
 -- putStr/putStrLn write to stdout; ePutStr/ePutStrLn write to stderr.
 -- All return Unit (LTUnit); the operand "1" is an arbitrary immediate never read.
-isIoExtern : String -> Bool
--- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-isIoExtern name = contains name [
-  "putStr",
-  "putStrLn",
-  "ePutStr",
-  "ePutStrLn",
-  "flushStdout",
-  "stashRunStdout",
-  "enableRunStdoutFlush",
-  "byteBlockWriteStdout",
-]
-
 emitIoExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2679,17 +2649,6 @@ emitIoExtern e _ name _ = gapE e ("unsupported IO extern " ++ name)
 -- panic/exit terminate the process; the call itself never returns, so the
 -- auto-print emitted downstream is dead code.  Return ("1", LTUnit) so
 -- emitPrint sees LTUnit (safe) rather than LTCon/LTClosure (compile panic).
-isAbortExtern : String -> Bool
-isAbortExtern name = contains name [
-  "panic",
-  "exit",
-  "indexError",
-  "indexErrorAt",
-  "sliceError",
-  "panicAt",
-  "indexErrorAtSite",
-]
-
 emitAbortExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2752,10 +2711,6 @@ emitAbortExtern e env name args = match emitArgs e env args
 -- arrayLength: header word = raw element count; tag it as a Medaka Int.
 -- arrayGetUnsafe: CIndex path minus bounds-check.
 -- arraySetUnsafe: store to element slot; returns Unit.
-isArrIntrinsic : String -> Bool
-isArrIntrinsic name =
-  contains name ["arrayLength", "arrayGetUnsafe", "arraySetUnsafe"]
-
 emitArrIntrinsic : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2782,11 +2737,6 @@ emitArrIntrinsic e _ name _ = gapE e ("unsupported array intrinsic " ++ name)
 -- arrayMake/arrayCopy/arrayFromList return Array (LTCon); arrayBlit/arrayFill return Unit.
 -- Do NOT end a fixture with an array-returning call: emitPrint LTCon panics.
 -- Project to scalar via .[i] (CIndex) in every fixture.
-isArrLeafExtern : String -> Bool
-isArrLeafExtern name = contains name [
-  "arrayMake", "arrayCopy", "arrayBlit", "arrayFill", "arrayFromList"
-]
-
 emitArrLeafExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2834,21 +2784,6 @@ emitArrLeafExtern e _ name _ = gapE e ("unsupported array leaf extern " ++ name)
 -- Length/GetUnsafe return Int; SetUnsafe and Blit return Unit.
 -- Do NOT end a fixture with a block-returning call: emitPrint LTCon panics.
 -- Project to scalar via byteBlockGetUnsafe / byteBlockLength in every fixture.
-isByteBlockExtern : String -> Bool
--- Deliberately a per-backend copy of wasm_emit.mdk's `isByteBlockExternW`, not a
--- shared list.  compiler/backend/extern_catalog_test.mdk compares each backend's
--- own predicate with the catalog's column for that backend, so hoisting the
--- names into a module both backends import would make that comparison read one
--- list twice -- the duplication is what keeps the two columns independently
--- checkable.
--- lint-disable-next-line rule-duplicate-body
-isByteBlockExtern name = contains name [
-  "byteBlockMake", "byteBlockLength", "byteBlockGetUnsafe",
-  "byteBlockSetUnsafe", "byteBlockCopyUnsafe", "byteBlockBlit",
-  "byteBlockFromIntArray", "byteBlockToIntArray", "byteBlockFromString",
-  "byteBlockToString"
-]
-
 emitByteBlockExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2924,9 +2859,6 @@ emitByteBlockExtern e _ name _ =
 -- charCode is INTRINSIC: Char and Int share the same tagged word encoding, so
 -- charCode is a pure re-type — emit the operand as-is and return LTInt.
 -- charToStr delegates to mdk_char_to_str (runtime/medaka_rt.c).
-isCharExtern : String -> Bool
-isCharExtern name = contains name ["charCode", "charToStr"]
-
 emitCharExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2944,15 +2876,6 @@ emitCharExtern e env "charToStr" args = match emitArgs e env args
 emitCharExtern e _ name _ = gapE e ("unsupported char extern " ++ name)
 
 -- slice 9: string↔char conversions + codepoint slicing.
-isStrCharExtern : String -> Bool
-isStrCharExtern name = contains name [
-  "stringToChars",
-  "stringFromChars",
-  "stringSlice",
-  "stringToUtf8Bytes",
-  "stringFromUtf8Bytes",
-]
-
 emitStrCharExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2998,19 +2921,6 @@ emitStrCharExtern e _ name _ = gapE e ("unsupported str-char extern " ++ name)
 -- Predicate externs return raw 0/1 from C; emitter wraps with tagInt to Bool.
 -- charIsPunct matches Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps for ASCII (NOT C ispunct —
 -- symbols like + $ = ^ ` | ~ are excluded).
-isUnicodeExtern : String -> Bool
-isUnicodeExtern name = contains name [
-  "charIsAlpha",
-  "charIsSpace",
-  "charIsUpper",
-  "charIsLower",
-  "charIsPunct",
-  "charToUpper",
-  "charToLower",
-  "stringToUpper",
-  "stringToLower",
-]
-
 emitUnicodeExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3078,11 +2988,6 @@ emitUnicodeExtern e _ name _ = gapE e ("unsupported unicode extern " ++ name)
 -- (`Some`) and immediate (`None`) reserved-tag round-trips end-to-end.  Slices 11/12/
 -- 13 extend this family (stringToFloat, args, readFile, …).  Result is LTCon (an ADT
 -- value): never auto-printed — fixtures `match` it down to a scalar.
-isAdtExtern : String -> Bool
-isAdtExtern name = contains name [
-  "charFromCode", "stringToFloat", "stringIndexOf", "stringCompare"
-]
-
 emitAdtExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3116,9 +3021,6 @@ emitAdtExtern e _ name _ = gapE e ("unsupported adt extern " ++ name)
 
 -- slice 12: args + env externs.  `args ()` → List String of argv[1..];
 -- `getEnv name` → Option String.  Results are LTCon — never auto-printed.
-isEnvExtern : String -> Bool
-isEnvExtern name = contains name ["args", "getEnv"]
-
 emitEnvExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3142,35 +3044,6 @@ emitEnvExtern e _ name _ = gapE e ("unsupported env extern " ++ name)
 -- fileExists returns raw 0/1 which the emitter tags (LTBool); readLine/readAll
 -- return heap Strings (LTStr).  readLine/readLineOpt/readAll are implemented
 -- but NOT fixtured — the gate does not pipe stdin.
-isFileExtern : String -> Bool
-isFileExtern name = contains name [
-  "readFile",
-  "readFileBytes",
-  "writeFile",
-  "writeFileBytes",
-  "writeFileMode",
-  "appendFile",
-  "fileExists",
-  "fileMode",
-  "canonicalizePath",
-  "listDir",
-  "readLine",
-  "readLineOpt",
-  "readAll",
-  "readExactly",
-  "makeDir",
-  "removeFile",
-  "rename",
-  "removeDir",
-  "fsync",
-  "statFile",
-  "runCommand",
-  "executablePath",
-  "buildFingerprint",
-  "buildCommit",
-  "buildDate",
-]
-
 -- A file extern whose path is an authority takes, after its value arguments, the
 -- authority granted for each path (EFFECTS-SEMANTICS §8): elaboration saturates
 -- every use of one, so a call here always carries them.
@@ -3344,44 +3217,10 @@ emitFileExtern e env "buildDate" args = match emitArgs e env args
   _ => panic "llvm: buildDate takes one (Unit) argument"
 emitFileExtern e _ name _ = gapE e ("unsupported file extern " ++ name)
 
--- Net externs (NET-DESIGN.md).  A SEPARATE family from isFileExtern — deliberately,
+-- Net externs (NET-DESIGN.md).  A SEPARATE family from `LlvmFile` — deliberately,
 -- so the wasm backend can reject the whole net set in one guard.  All return a
 -- Result (LTCon) traffic'ing raw tagged-Int fds; blocking BSD-socket shims in
 -- runtime/medaka_rt.c.
-isNetExtern : String -> Bool
--- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-isNetExtern name = contains name [
-  "netResolve",
-  "netTcpConnect",
-  "netTcpListen",
-  "netListenPort",
-  "netTcpAccept",
-  "netSend",
-  "netSendFrom",
-  "netRecv",
-  "netShutdown",
-  "netClose",
-  "netCloseListener",
-  "netSetTimeout",
-  "socketFd",
-  "listenSocketFd",
-  "ioPoll",
-  "pdsSignalStart",
-  "pdsSignalRequested",
-  "netSetNonblock",
-  "netSetNonblockListener",
-  "netConnectStart",
-  "netConnectCheck",
-  "netTryAccept",
-  "netTryRecv",
-  "netTryRecvBytes",
-  "netTrySend",
-  "netTrySendFrom",
-  "netSendBytesFrom",
-  "netTrySendBytesFrom",
-]
-
 emitNetExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3580,18 +3419,6 @@ emitNetExtern e _ name _ = gapE e ("unsupported net extern " ++ name)
 -- runtime. osEntropyBytes is deliberately separate and reads the host OS source.
 -- randomInt/Bool/Char return RAW words tagged here; randomFloat returns a boxed
 -- Float word; osEntropyBytes returns a boxed Array; setSeed is Unit.
-isRngExtern : String -> Bool
-isRngExtern name = contains name [
-  "randomInt",
-  "randomBool",
-  "randomFloat",
-  "randomChar",
-  "setSeed",
-  "randomState",
-  "restoreRandomState",
-  "osEntropyBytes",
-]
-
 emitRngExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3647,10 +3474,6 @@ emitRngExtern e _ name _ = gapE e ("unsupported rng extern " ++ name)
 
 -- wallTimeSec / allocBytes: both take Unit and return a boxed Float (same ABI
 -- as randomFloat).  C: mdk_wall_time_sec / mdk_alloc_bytes in medaka_rt.c.
-isPerfExtern : String -> Bool
-isPerfExtern name =
-  contains name ["wallTimeSec", "monotonicSec", "sleepMs", "allocBytes"]
-
 emitPerfExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3692,12 +3515,6 @@ emitPerfExtern e _ name _ = gapE e ("unsupported perf extern " ++ name)
 -- 63-bit rep.  See runtime/medaka_rt.c mdk_bit_*/mdk_shift_*.  The `int`-prefixed
 -- names (`intBitAnd`, …) are the same primitives under names a module defining its
 -- own `bitAnd` can still reach; they emit exactly what the bare name does.
-isBitExtern : String -> Bool
-isBitExtern name = contains name [
-  "bitAnd", "bitOr", "bitXor", "shiftLeft", "shiftRight", "bitNot", "intBitAnd",
-  "intBitOr", "intBitXor", "intShiftLeft", "intShiftRight", "intBitNot"
-]
-
 emitBitBin : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3743,12 +3560,6 @@ emitBitExtern e _ name _ = gapE e ("unsupported bit extern " ++ name)
 -- the tag bit, tag bit kept (`(2^n - 1) << 1 | 1`), which is exact for a
 -- negative payload too.  An `I32` is the same word held sign-extended:
 -- `i32ToInt` is the identity and `i32Truncate` the low 32 bits sign-extended.
-isFixedWidthExtern : String -> Bool
-isFixedWidthExtern name = contains name [
-  "u8Truncate", "u8ToInt", "u16Truncate", "u16ToInt", "u32Truncate", "u32ToInt",
-  "i32Truncate", "i32ToInt"
-]
-
 emitFixedWidthTruncate : Emit ->
   OrdMap (String, LTy) ->
   Int ->
@@ -3799,19 +3610,10 @@ emitFixedWidthToInt e env args = match emitArgs e env args
 -- an Int amount and give 0 for any amount outside `0 .. 63`, by a select rather
 -- than a branch; the amount is masked first, so the `shl`/`lshr` itself never sees
 -- an out-of-range count.
--- Each backend names the kernels it implements itself, and
--- compiler/backend/extern_catalog_test.mdk checks each backend's own predicate
--- against the catalog, so the list is duplicated in wasm_emit.mdk's
--- `isU64ExternW` on purpose.
+-- Each backend records the kernels it implements in its own column of the
+-- extern catalog (`LlvmU64` here, `isU64ExternW` in wasm_emit.mdk).
 -- `i64FromBits` and `i64ToBits` keep the payload and change only the header, so
 -- they are kernels of this family too: on payloads they are the identity.
-isU64Extern : String -> Bool
--- lint-disable-next-line rule-duplicate-body
-isU64Extern name = contains name [
-  "u64Truncate", "u64TruncateToInt", "u64BitAnd", "u64BitOr", "u64BitXor",
-  "u64ShiftLeft", "u64ShiftRight", "u64MulHigh", "i64FromBits", "i64ToBits"
-]
-
 emitU64Extern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -4771,7 +4573,7 @@ skipOtherwise ex = ex
 u64KernelApplied : List String -> CExpr -> Option String
 u64KernelApplied ps body = match flattenApp body []
   (CVar kern _, xs) =>
-    if isU64Extern kern && argsAreParams ps xs then Some kern else None
+    if inU64Family kern && argsAreParams ps xs then Some kern else None
   _ => None
 
 argsAreParams : List String -> List CExpr -> Bool
@@ -4885,10 +4687,6 @@ emitU64Shift e env instr a k =
   let _ = emit e "  \{r} = select i1 \{inRange}, i64 \{shifted}, i64 0"
   r
 
-isHashExtern : String -> Bool
-isHashExtern name =
-  contains name ["hashInt", "hashChar", "hashBool", "hashFloat", "hashString"]
-
 emitHashExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -4933,9 +4731,6 @@ emitHashExtern e _ name _ = gapE e ("unsupported hash extern " ++ name)
 -- Debug-literal externs (byte-exact quoted/escaped rendering; no oracle change).
 -- The String/Char arg word passes straight to the C helper (mdk_debug_*_lit
 -- reads the cell / untags the codepoint); result is a heap String (LTStr).
-isDebugLitExtern : String -> Bool
-isDebugLitExtern name = contains name ["debugStringLit", "debugCharLit"]
-
 emitDebugLitExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -4957,90 +4752,99 @@ emitDebugLitExtern e env "debugCharLit" args = match emitArgs e env args
 emitDebugLitExtern e _ name _ = gapE e ("unsupported debug-lit extern " ++ name)
 
 -- ── extern dispatch: applied form ───────────────────────────────────────────
--- ONE name-keyed catalog (RUN-EMIT-005 (B) grain (c) / RUN-EMIT-006, #358):
--- each row pairs a family's existing membership predicate with its existing
--- emitter — the per-name clause bodies inside `emitXExtern` stay exactly
--- where they are; only the SELECTION ladder collapses.  `isAnyExtern` and
--- `emitExternApplied` both derive from this one list, so a family can't
--- register in one without the other — no more hand-kept-in-sync OR-chain +
--- if-chain pair.  `arrayMakeWith` has no `isXxx` predicate (exact-name
--- dispatch, its `:10564` signature omits the name param) so it stays a
--- literal pre-check ahead of the table on both sides, exactly as before.
+-- The extern catalog (`backend.extern_catalog`) names, per runtime extern, the
+-- family whose emitter lowers it; `externEmitter` maps each family to that
+-- emitter, so selection is one keyed lookup plus one `case`.  The per-name
+-- clause bodies inside `emitXExtern` stay where they are.  `isAnyExtern` and
+-- `emitExternApplied` both read the catalog, so they cannot disagree about what
+-- counts as an extern.
 type ExternEmitter = Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 
-externCatalog : List (String -> Bool, ExternEmitter)
-externCatalog = [
-  (isStrExtern, emitStrExtern),
-  (isNumExtern, emitNumExtern),
-  (isIoExtern, emitIoExtern),
-  (isAbortExtern, emitAbortExtern),
-  (isArrIntrinsic, emitArrIntrinsic),
-  (isArrLeafExtern, emitArrLeafExtern),
-  (isByteBlockExtern, emitByteBlockExtern),
-  (isCharExtern, emitCharExtern),
-  (isStrCharExtern, emitStrCharExtern),
-  (isUnicodeExtern, emitUnicodeExtern),
-  (isAdtExtern, emitAdtExtern),
-  (isEnvExtern, emitEnvExtern),
-  (isFileExtern, emitFileExtern),
-  (isNetExtern, emitNetExtern),
-  (isRngExtern, emitRngExtern),
-  (isHashExtern, emitHashExtern),
-  (isBitExtern, emitBitExtern),
-  (isFixedWidthExtern, emitFixedWidthExtern),
-  (isU64Extern, emitU64Extern),
-  (isDebugLitExtern, emitDebugLitExtern),
-  (isPerfExtern, emitPerfExtern),
-]
+-- The emitter for a family a saturated call dispatches through.  `LlvmRefCell`,
+-- `LlvmConstant` and `LlvmFallthrough` have none: `emitApp`, `emitVar` and
+-- `isFallthroughVar` match those names at their own sites.
+externEmitter : LlvmFamily -> Option ExternEmitter
+externEmitter LlvmStr = Some emitStrExtern
+externEmitter LlvmNum = Some emitNumExtern
+externEmitter LlvmIo = Some emitIoExtern
+externEmitter LlvmAbort = Some emitAbortExtern
+externEmitter LlvmArrIntrinsic = Some emitArrIntrinsic
+externEmitter LlvmArrLeaf = Some emitArrLeafExtern
+externEmitter LlvmByteBlock = Some emitByteBlockExtern
+externEmitter LlvmChar = Some emitCharExtern
+externEmitter LlvmStrChar = Some emitStrCharExtern
+externEmitter LlvmUnicode = Some emitUnicodeExtern
+externEmitter LlvmAdt = Some emitAdtExtern
+externEmitter LlvmEnv = Some emitEnvExtern
+externEmitter LlvmFile = Some emitFileExtern
+externEmitter LlvmNet = Some emitNetExtern
+externEmitter LlvmRng = Some emitRngExtern
+externEmitter LlvmHash = Some emitHashExtern
+externEmitter LlvmBit = Some emitBitExtern
+externEmitter LlvmFixedWidth = Some emitFixedWidthExtern
+externEmitter LlvmU64 = Some emitU64Extern
+externEmitter LlvmDebugLit = Some emitDebugLitExtern
+externEmitter LlvmPerf = Some emitPerfExtern
+externEmitter LlvmArrayMakeWith =
+  Some (e env _ args => emitArrayMakeWith e env args)
+externEmitter LlvmRefCell = None
+externEmitter LlvmConstant = None
+externEmitter LlvmFallthrough = None
 
--- first (and, by the disjointness the catalog assumes, only) row whose
--- predicate accepts `name`.
-findExternFamily : String ->
-  List (String -> Bool, ExternEmitter) ->
-  Option ExternEmitter
-findExternFamily _ [] = None
-findExternFamily name ((pred, fn) :: rest)
-  | pred name = Some fn
-  | otherwise = findExternFamily name rest
-
--- Is `name` a KNOWN extern of any family the emitter handles?  Drives both the
+-- Is `name` a runtime extern lowered through `externEmitter`?  Drives both the
 -- saturated CApp head path (emitExternApplied) and the value-position eta-wrap
--- (emitVar → emitExternEtaClosure); keeping the membership in ONE place means
--- the two paths can never disagree about what counts as an extern.
-export
+-- (emitVar → emitExternEtaClosure).
 isAnyExtern : String -> Bool
-isAnyExtern name =
-  name == "arrayMakeWith" || anyList ((pred, _) => pred name) externCatalog
+isAnyExtern name = match llvmFamily name
+  Some f => isLlvmExternFamily f
+  None => False
+
+-- Is `name` an extern of exactly this family?  Used where a caller needs one
+-- family's membership rather than the dispatch.
+inIoFamily : String -> Bool
+inIoFamily name = match llvmFamily name
+  Some LlvmIo => True
+  _ => False
+
+inU64Family : String -> Bool
+inU64Family name = match llvmFamily name
+  Some LlvmU64 => True
+  _ => False
+
+isRefCellName : String -> Bool
+isRefCellName name = match llvmFamily name
+  Some LlvmRefCell => True
+  _ => False
+
+isConstantName : String -> Bool
+isConstantName name = match llvmFamily name
+  Some LlvmConstant => True
+  _ => False
 
 -- SATURATED extern application: route a known extern + its (non-empty) argument
 -- list to the right family emitter.  Factored out of emitApp's CVar-head ladder
 -- so that the VALUE-position eta-wrap (emitExternEtaClosure) can REPLAY the exact
 -- applied-form codegen on synthetic `%argK` operands — value/applied byte-
--- consistency by construction, no parallel codegen to drift.  A name matching
--- no catalog row is out-of-catalog: `gapE` decides loudly (`panic`, `Strict`,
--- every real build) or quietly-recorded (`noteGap`, `Record`, the D4 census
--- scaffold) — the same mode-aware floor the old terminal
--- `else -> emitDebugLitExtern` reached, now explicit instead of borrowed from
--- debugLit's own wildcard clause (RUN-EMIT-006 §5 property 5: debugLit is an
--- ordinary keyed entry now, and the table-lookup miss carries the fallthrough
--- role). Caller guards `hasArgs args`.
+-- consistency by construction, no parallel codegen to drift.  A name with no
+-- emitter is out-of-catalog: `gapE` decides loudly (`panic`, `Strict`, every
+-- real build) or quietly-recorded (`noteGap`, `Record`, the D4 census
+-- scaffold).  Caller guards `hasArgs args`.
 emitExternApplied : Emit ->
   OrdMap (String, LTy) ->
   String ->
   List CExpr ->
   (String, LTy)
-emitExternApplied e env fname args =
-  if fname == "arrayMakeWith" then
-    emitArrayMakeWith e env args
-  else match findExternFamily fname externCatalog
+emitExternApplied e env fname args = match llvmFamily fname
+  Some f => match externEmitter f
     Some fn => fn e env fname args
     None => gapE e ("unsupported extern " ++ fname)
+  None => gapE e ("unsupported extern " ++ fname)
 
 -- ── #2074: user-declared FFI externs — the C-ABI lowering ────────────────────
 --
 -- A USER `extern` is a different kind of thing from the `stdlib/runtime.mdk`
 -- builtins above (one row each in `backend.extern_catalog`).  A builtin is an INTERNAL name whose codegen this file owns
--- (`externCatalog`), often an intrinsic with no C symbol at all.  A user extern
+-- (`externEmitter`), often an intrinsic with no C symbol at all.  A user extern
 -- names a FOREIGN symbol this compiler has never seen: the declared name is the
 -- C symbol VERBATIM (`call @<name>`, NOT `@mdk_<name>`), and the only contract
 -- available is its declared Medaka signature, marshalled per `compiler/FFI-ABI.md`
@@ -5053,8 +4857,8 @@ emitExternApplied e env fname args =
 -- `ffiIsBuiltinExternName` (compiler/types/typecheck.mdk) exempts from slice 1's
 -- crossable-set guard.  The index itself is belt AND braces: the mint
 -- (`ir.core_ir_lower.ffiExternTypeNames`) subtracts `stdlib/runtime.mdk`'s own
--- extern names, so a runtime extern name that NO `externCatalog` family predicate
--- happens to claim still cannot become a foreign call here.
+-- extern names, so a runtime extern name with no llvm family in the catalog
+-- still cannot become a foreign call here.
 --
 -- 🚨 THE CROSSABLE SET IS NOT REDEFINED HERE.  `ffiCrossableHead` below is the
 -- SET OF TYPE-HEAD NAMES that slice 1's `ffiCrossableTy`
@@ -7306,10 +7110,8 @@ emitApp e env app =
             _ => LTInt
           (r, resultTy)
         _ => panic "llvm: file bound takes a grant and a thunk"
-      else if fname == "Ref" then
-        emitRefAlloc e env args
-      else if fname == "setRef" then
-        emitSetRef e env args
+      else if isRefCellName fname then
+        emitRefCellExtern e env fname args
       else if fname == siteSentinelName then
         emitSiteLiteral e args
       else if isLocal env fname then
@@ -14084,7 +13886,7 @@ typeOf sigs env app =
 -- them to LTUnit up front, matching the real emit path (`emitIoExtern`).
 callRetTy : OrdMap FnSig -> String -> LTy
 callRetTy sigs fname =
-  if isIoExtern fname then
+  if inIoFamily fname then
     LTUnit
   else match omLookup fname sigs
     Some (FnSig _ rty) => rty
@@ -14762,6 +14564,15 @@ emitVariantUpdate e env con base updates =
       let updatePairs = emitUpdatePairs e env updates
       let words = buildUpdateWords e bw labels updatePairs 0
       emitCtorAlloc e con words
+
+-- The `LlvmRefCell` family: `Ref` allocates a cell, `setRef` stores into one.
+emitRefCellExtern : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitRefCellExtern e env "Ref" args = emitRefAlloc e env args
+emitRefCellExtern e env _ args = emitSetRef e env args
 
 emitRefAlloc : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitRefAlloc e env [x] =

@@ -156,6 +156,24 @@ export
 catalogRow : String -> Option ExternRow
 catalogRow name = omLookup name catalogIndex
 
+-- The llvm emitter path for an extern name, or `None` for a name that is not a
+-- runtime extern or has no llvm lowering.
+export
+llvmFamily : String -> Option LlvmFamily
+llvmFamily name = match catalogRow name
+  Some r => dispositionFamily (rowLlvm r)
+  None => None
+
+-- Is this llvm family one a saturated call dispatches through?  The `Ref` cell,
+-- the in-place constants and the fallthrough sentinel are matched by their own
+-- emit sites and are not.
+export
+isLlvmExternFamily : LlvmFamily -> Bool
+isLlvmExternFamily LlvmRefCell = False
+isLlvmExternFamily LlvmConstant = False
+isLlvmExternFamily LlvmFallthrough = False
+isLlvmExternFamily _ = True
+
 catalogIndex : OrdMap ExternRow
 catalogIndex = omFromPairs (map (r => (rowName r, r)) catalogRows) omEmpty
 
