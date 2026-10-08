@@ -298,6 +298,17 @@ table = [
     codes = [Absent "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
+    entry = "s6-drain-quiescence-let-alias.mdk",
+    label =
+      "§6.2 T3 at the quiescence drain, #3031`s own repro: `greet`s `Display a` goal, posed through a let-alias, is quantified by the inferred scheme, so the drain`s undetermined-goal route defers it to the caller instead of reporting it ambiguous at a stale location. Prints `hi` twice",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "hi\nhi\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
     entry = "s3-min-subsumes.mdk",
     label =
       "§3 `inst` selects min⊑(match(IE,π)): `impl Default Int` beats `impl Default a` DESPITE being declared second (#609 regression pin -- first-match would print 0)",
@@ -4216,7 +4227,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 370
+tableRows = 371
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

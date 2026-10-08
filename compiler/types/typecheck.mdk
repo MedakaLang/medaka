@@ -32940,7 +32940,7 @@ entail name m encl useScope kind = match entailAssum m encl name useScope kind
   None => match headTyconMono m
     Some hk => entailInst name m encl useScope (headKeyTag hk) kind
     None =>
-      let result = (entailFallback useScope kind, [])
+      let result = (entailFallback useScope m kind, [])
       let _ = noteNumericEntailment kind useScope None (fst result) (snd result)
       result
 
@@ -33290,14 +33290,14 @@ selectedCallSupers name (Some (ImplRow _ _ iface _ _ supplied)) encl useScope go
     superRoutesAt iface encl useScope goals 0 0
 selectedCallSupers _ None _ _ _ = []
 
-entailFallback : ScopeId -> EntailKind -> Route
-entailFallback _ (EKReturn _ _) = RNone
-entailFallback _ (EKNumReturn _ _ _ _) = RNone
-entailFallback scope (EKNestedTop _ policy _ _ _) =
-  undeterminedRoute scope policy
-entailFallback _ (EKArg _) = RNone
-entailFallback _ (EKOp _ _) = RNone
-entailFallback _ (EKPredicateOp _ _ _) = RNone
+entailFallback : ScopeId -> Mono -> EntailKind -> Route
+entailFallback _ _ (EKReturn _ _) = RNone
+entailFallback _ _ (EKNumReturn _ _ _ _) = RNone
+entailFallback scope m (EKNestedTop _ policy _ _ rest) =
+  undeterminedRoute scope policy (m :: rest)
+entailFallback _ _ (EKArg _) = RNone
+entailFallback _ _ (EKOp _ _) = RNone
+entailFallback _ _ (EKPredicateOp _ _ _) = RNone
 
 -- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
 -- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
@@ -33331,10 +33331,10 @@ routeOfD : IfaceRef ->
 routeOfD iface encl useScope policy m rest prevSize spent =
   fst (entail "" m encl useScope (EKNestedTop iface policy prevSize spent rest))
 
-undeterminedRoute : ScopeId -> Undetermined -> Route
-undeterminedRoute _ KeepNone = RNone
-undeterminedRoute scope (CountImpls prog iface) =
-  routeUndeterminedTop prog scope iface
+undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
+undeterminedRoute _ KeepNone _ = RNone
+undeterminedRoute scope (CountImpls prog iface) goal =
+  routeUndeterminedTop prog scope iface goal
 
 -- TOP-LEVEL constraint routes (a constrained-fn CALL site, e.g. `roundtrip 10`).
 -- Like routesOfMonos but passes the CountImpls policy to routeOf, so the UNDETERMINED
@@ -33445,9 +33445,10 @@ routesOfMonosTop prog encl useScope (m :: rest) (iface :: ifacesRest) =
   routeOf iface encl useScope (CountImpls prog iface) m
     :: routesOfMonosTop prog encl useScope rest ifacesRest
 
--- the undetermined-constraint resolution: count impls of [iface] in [prog].
-routeUndeterminedTop : List Decl -> ScopeId -> IfaceRef -> Route
-routeUndeterminedTop prog scope ifaceRef
+-- the undetermined-constraint resolution: count impls of [iface] in [prog].  [goal]
+-- is the goal's argument vector, read only by the ambiguous arm.
+routeUndeterminedTop : List Decl -> ScopeId -> IfaceRef -> List Mono -> Route
+routeUndeterminedTop prog scope ifaceRef goal
   | ifaceRef.irName == "" = RNone
   | otherwise = match implHeadTagsForIface prog ifaceRef.irName
     [] => RNone
@@ -33463,14 +33464,25 @@ routeUndeterminedTop prog scope ifaceRef
         (argImplRequiresRoutes ifaceRef "" scope (tconUnresolved tag) [] 0 0)
         -- the goal is undetermined, so each super is too: answered by the same count
         (map
-          ((superIface, _) => routeUndeterminedTop prog scope superIface)
+          ((superIface, _) => routeUndeterminedTop prog scope superIface goal)
           (directSuperGoals ifaceRef []))
-    _ => reportAmbiguousImpl ifaceRef.irName
+    _ => reportAmbiguousImpl ifaceRef.irName goal
 
-reportAmbiguousImpl : String -> Route
-reportAmbiguousImpl iface =
-  let _ = pushTypeError "T-AMBIGUOUS-INSTANCE" (ambiguousImplMsg iface)
-  RNone
+-- A goal every free variable of which some generalized scheme quantifies is the
+-- caller's to decide (§6.2 T3, the `goalsClosed` test): the scheme carries the
+-- constraint, so it is deferred, not ambiguous.  Any other goal is reported at its
+-- own site (`goalSiteLoc`), not at whichever declaration was inferred last.
+reportAmbiguousImpl : String -> List Mono -> Route
+reportAmbiguousImpl iface goal =
+  if goalsClosed goal then
+    RNone
+  else
+    let _ =
+      pushTypeErrorOnceAt
+        "T-AMBIGUOUS-INSTANCE"
+        !goalSiteLoc
+        (ambiguousImplMsg iface)
+    RNone
 
 -- every impl head tycon for [iface] declared in [prog] (a single-arg interface has
 -- one head ty per impl; we read its head tycon).  Dedups so a prelude impl imported
