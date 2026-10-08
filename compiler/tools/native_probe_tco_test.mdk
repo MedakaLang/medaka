@@ -1,0 +1,50 @@
+-- Guard for the native probe build profile.  `medaka test` compiles its probes
+-- at -O0 without ThinLTO by default (MEDAKA_TEST_CLANG_OPT overrides).  Self
+-- tail calls are `musttail` and so independent of the level
+-- (compiler/backend/llvm_emit_tail_call_test.mdk guards them at 1e8); the
+-- shapes here are the ones that are not: sibling, indirect and dictionary tail
+-- calls become jumps only through clang's -O1+ call optimization.
+--
+-- Each case recurses to `depth`, which both profiles survive.  Measured on
+-- this base, the deepest passing depth and the first failing one at -O0 with
+-- no LTO (every shape passes 1e8 at -O2):
+--   mutual ping/pong       pass 5e6   fail 1e7
+--   closure tail call     pass 1e6   fail 3e6
+--   Foldable `length`     pass 1e6   fail 3e6
+-- A test that needs a deeper bound than -O0 allows sets
+-- MEDAKA_TEST_CLANG_OPT=-O2.
+--
+-- Run it under both profiles:
+--   medaka test --native compiler/tools/native_probe_tco_test.mdk
+--   MEDAKA_TEST_CLANG_OPT=-O2 medaka test --native compiler/tools/native_probe_tco_test.mdk
+
+import test.{expectEqual}
+
+depth : Int
+depth = 1000000
+
+-- Mutual tail calls between two top-level functions; `ping n` is 0 for even n.
+ping : Int -> Int
+ping n = if n == 0 then 0 else pong (n - 1)
+
+pong : Int -> Int
+pong n = if n == 0 then 1 else ping (n - 1)
+
+-- A tail call through a closure value (an indirect call).
+hop : (Int -> Int) -> Int -> Int
+hop k n = if n == 0 then 0 else k (n - 1)
+
+viaClosure : Int -> Int
+viaClosure n = hop viaClosure n
+
+-- A TRMC list build (emitter loop), consumed by the prelude's Foldable `length`.
+countDown : Int -> List Int
+countDown n = if n == 0 then [] else n :: countDown (n - 1)
+
+test "mutual tail calls survive deep recursion" = expectEqual 0 (ping depth)
+
+test "a tail call through a closure survives deep recursion" =
+  expectEqual 0 (viaClosure depth)
+
+test "Foldable length over a deep list survives deep recursion" =
+  expectEqual depth (length (countDown depth))
