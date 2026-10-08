@@ -889,7 +889,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/trust_boundary_guards"
 area = "engines"
-shard = "gates_6"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
