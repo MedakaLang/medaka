@@ -17,8 +17,8 @@ what: signature line clears all four (control.mdk: check exit 0, run prints
 what: "Hello World").
 cmd: check-json main.mdk
 exit: 1
-diag-code: T-IMPL-TOO-SPECIFIC 2:13-2:21
 diag-code: T-AMBIGUOUS-INSTANCE 7:7-7:14
+diag-code: T-IMPL-TOO-SPECIFIC 2:13-2:21
 diag-code: T-PHANTOM-METHOD 2:13-2:21
 control: check-json control.mdk
 why-verb: `check-json` for a path-independent pin on `code` + `range`, and
@@ -58,6 +58,10 @@ why-note: into `impl GreetI Int`.  That copy pass is retired (every default is n
 why-note: inherited entry sharing one body), so the copy's code is gone and three
 why-note: codes remain -- still about a type variable `_` nobody wrote, still never
 why-note: naming the missing signature, so #1460 still reproduces.
+why-note: RE-DERIVED, NOT DRAINED (S-candidates-by-unification): the same three codes
+why-note: at the same ranges, reordered. The undetermined-goal verdict now runs at
+why-note: `main`'s group close as well as when the module's obligations are checked,
+why-note: so T-AMBIGUOUS-INSTANCE is recorded before the interface's own checks.
 why-note: NOT the existing T-PHANTOM-METHOD fixtures' shape: those exercise a method
 why-note: whose WRITTEN type genuinely omits the interface parameter. Here there is
 why-note: no written type at all -- the parser's own placeholder is what fails the

@@ -1,0 +1,18 @@
+-- §4.2 OD3 at a call whose callee never reads the dictionary: `plain`'s declared
+-- `Sz a` mentions a variable its type does not, so the call `plain 14` poses
+-- `Sz ?a` and nothing fixes `?a`.  `impl Sz Int` and `impl Sz Bool` both unify
+-- with it.  The verdict depends on the goal, not on the callee's body (#3713).
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at the call.
+interface Sz a where
+  szTag : a -> Int
+
+impl Sz Int where
+  szTag _ = 1
+
+impl Sz Bool where
+  szTag _ = 2
+
+plain : Sz a => Int -> Int
+plain n = n + 1
+
+main = println (plain 14)

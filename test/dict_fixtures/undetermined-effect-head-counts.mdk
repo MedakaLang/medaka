@@ -1,0 +1,17 @@
+-- §3 the effect-qualified twin of `undetermined-constrained-head-counts.mdk`:
+-- `impl Zero (<Stdout> Int)` and `impl Zero Bool` both unify with the open goal
+-- `Zero ?a` that `ignore2 zero` poses.  Hand-derived: REJECT on all three verbs,
+-- T-AMBIGUOUS-INSTANCE (#1641).
+interface Zero a where
+  zero : a
+
+impl Zero (<Stdout> Int) where
+  zero = 0
+
+impl Zero Bool where
+  zero = False
+
+ignore2 : a -> Int
+ignore2 _ = 5
+
+main = println (ignore2 zero)

@@ -3823,13 +3823,101 @@ table = [
   Row {
     entry = "determine-arrow-instance-counts.mdk",
     label =
-      "§3 determination`s candidate count: `Conv (Int -> Int) Bool` unifies with `Conv ?a ?b` structurally and counts beside `Conv Int String`, so nothing is committed and `Display ?b` is ambiguous at the `println` call (span in section 6). Counting census-named heads only committed `Conv Int String` and printed `int`",
+      "§3 determination`s candidate count: `Conv (Int -> Int) Bool` unifies with `Conv ?a ?b` structurally and counts beside `Conv Int String`, so nothing is committed, the `conv` occurrence is ambiguous, and so is `Display ?b` at the `println` call (span in section 6). Counting census-named heads only committed `Conv Int String` and printed `int`",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
     mode = NoValue,
     pinned = "",
     codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-arrow-beside-headless-ambiguous.mdk",
+    label =
+      "§3 an open `Sz ?a` that `impl Sz (Int -> Int)` and `impl Sz a` both unify with has two candidates, so the goal is ambiguous (#2028). Was accepted at check and committed to the headless impl",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-constrained-head-counts.mdk",
+    label =
+      "§3 `impl Zero (Eq x => Int)` is a candidate for `Zero ?a`, whose first position is a variable, beside `impl Zero Bool`, so the goal is ambiguous (#1641). Was accepted at check and the build panicked",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-effect-head-counts.mdk",
+    label =
+      "§3 the effect-qualified twin: `impl Zero (<Stdout> Int)` and `impl Zero Bool` both reach `Zero ?a`, so the goal is ambiguous (#1641)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-dict-unused-ambiguous.mdk",
+    label =
+      "§4.2 OD3: `plain 14` poses `Sz ?a` although `plain`s body never reads the dictionary, and two instances reach it (#3713). Was accepted on every verb, printing 15",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-dict-unused-no-impl.mdk",
+    label =
+      "§4.2 OD3`s zero arm: `plain 14` poses `Sz ?a` and `Sz` has no instance, although `plain`s body never reads the dictionary (#3713). Was accepted on every verb, printing 15",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "undetermined-sole-headless-determined.mdk",
+    label =
+      "§3 determination at any arity: the one instance `impl Sz a` reaches `Sz ?a`, and every verb dispatches through it (#3714). Hand-derived: 14. The build stamped the method's result head and panicked",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "14\n",
+    codes = [],
+  },
+  Row {
+    entry = "undetermined-sole-headed-determined.mdk",
+    label =
+      "§3 determination of a one-position goal: the one instance `impl Zero Int` fixes `?a = Int` under `ignore2 zero`. Hand-derived: 5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    codes = [],
+  },
+  Row {
+    entry = "undetermined-comparable-overlap-min.mdk",
+    label =
+      "§3 min⊑ at an open goal: both `Sh` instances match `Sh (Q Int Bool (List ?e))` and `Q Int Bool z` is ⊑ `Q Int y z`, so the goal is not ambiguous. Hand-derived: 2",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
   },
   Row {
     entry = "determine-vector-ambiguous-headless.mdk",
@@ -4128,7 +4216,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 362
+tableRows = 370
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4848,8 +4936,8 @@ spanTable = [
   SpanRow {
     entry = "determine-arrow-instance-counts.mdk",
     label =
-      "§3 candidate count: with two `Conv` candidates nothing is committed, and the undetermined `Display ?b` is reported at the `println` call that poses it",
-    want = "18:7",
+      "§3 candidate count: with two `Conv` candidates nothing is committed, and the first report is the `conv` occurrence whose receiver `?a` both instances reach; the undetermined `Display ?b` is reported after it at the `println` call",
+    want = "18:16",
   },
   SpanRow {
     entry = "determine-vector-ambiguous-headless.mdk",
