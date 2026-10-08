@@ -140,6 +140,7 @@ declare i64 @mdk_fsync(i64, i64)
 declare i64 @mdk_stat_file(i64, i64)
 declare i64 @mdk_file_mode(i64, i64)
 declare i64 @mdk_run_command(i64, i64)
+declare i64 @mdk_run_command_batch(i64, i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
@@ -350,18 +351,12 @@ conyes45:
   %t64 = call i64 @mdk_disp_eq_0_2(i64 %arg0, i64 %t54, i64 %t60)
   %t65 = ashr i64 %t64, 1
   %t66 = icmp ne i64 %t65, 0
-  %t68 = alloca i64
   br i1 %t66, label %then67, label %else67
 then67:
-  %t69 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 %arg0, i64 %t57, i64 %t63)
-  store i64 %t69, ptr %t68
-  br label %end67
+  %t68 = musttail call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_eq(i64 %arg0, i64 %t57, i64 %t63)
+  ret i64 %t68
 else67:
-  store i64 1, ptr %t68
-  br label %end67
-end67:
-  %t70 = load i64, ptr %t68
-  store i64 %t70, ptr %t0
+  store i64 1, ptr %t0
   br label %decend1
 connext45:
   br label %clause21
@@ -371,8 +366,8 @@ clause21:
   store i64 1, ptr %t0
   br label %decend1
 decend1:
-  %t71 = load i64, ptr %t0
-  ret i64 %t71
+  %t69 = load i64, ptr %t0
+  ret i64 %t69
 }
 
 ; mdk-module program

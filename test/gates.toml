@@ -889,7 +889,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/trust_boundary_guards"
 area = "engines"
-shard = "gates_6"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -2530,6 +2530,21 @@ run = "test/diff_compiler_test_native_test.mdk"
 oracles = []
 sources = ["compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "test/compiler_cli_test_support.mdk"]
 corpus = []
+toolchain = ["clang"]
+
+[[gate]]
+name = "run_command_sigchld"
+area = "backend"
+shard = "gates_6"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "test/run_command_sigchld_test.mdk"
+oracles = []
+sources = ["runtime/medaka_rt.c", "stdlib/runtime.mdk"]
+corpus = ["test/run_command_sigchld_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]

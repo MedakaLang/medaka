@@ -1,0 +1,23 @@
+-- Prints the exit code `runCommand` and `runCommandBatch` report for a child
+-- that exits 4, for a program that does not exist, and for a child killed by
+-- SIGKILL, one line each; a row that is an `Err` prints its text instead.
+
+codeOf : Result String (Int, String, String) -> String
+codeOf (Ok (code, _, _)) = intToString code
+codeOf (Err e) = "Err \{e}"
+
+main =
+  let _ =
+    println "runCommand exit 4: \{codeOf (runCommand "sh" ["-c", "exit 4"])}"
+  let _ =
+    println
+      "runCommand missing program: \{codeOf (runCommand "medaka-no-such-program" [])}"
+  let _ =
+    println
+      "runCommand kill -9: \{codeOf (runCommand "sh" ["-c", "kill -9 $$"])}"
+  let exitAndKill =
+    runCommandBatch "sh" 2 [["-c", "exit 4"], ["-c", "kill -9 $$"]]
+  let _ =
+    println "runCommandBatch exit 4, kill -9: \{debug (map codeOf exitAndKill)}"
+  let missing = runCommandBatch "medaka-no-such-program" 2 [[]]
+  println "runCommandBatch missing program: \{debug (map codeOf missing)}"

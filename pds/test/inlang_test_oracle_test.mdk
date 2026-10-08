@@ -17,7 +17,7 @@
    fails this gate rather than going uncounted. -}
 
 import io.{readLines}
-import list.{lookup, somes}
+import list.{lookup, somes, zipWith}
 import test.{Expectation(..)}
 import test_process.{
   disagreeingFloorBlocks,
@@ -25,7 +25,7 @@ import test_process.{
   mdkModuleStem,
   missingTestFiles,
   missingUnits,
-  testAssertionCount,
+  testAssertionCounts,
   underRoot,
   ungradedRosterRows,
   unrosteredTestFiles,
@@ -351,16 +351,6 @@ libExemptNames = map fst libExempt
 libKnownNames : List String
 libKnownNames = libRosterNames ++ libExemptNames
 
--- Runs one `pds/lib/` or `pds/shell/` module under the eval engine and
--- returns its executed-assertion count, or an error naming the file and what
--- went wrong.
-runLibSuite : String -> String -> <Exec, IO> Result String Int
-runLibSuite dir name =
-  let path = "pds/\{dir}/\{name}.mdk"
-  match testAssertionCount (underRoot path) ["--engines", "eval"]
-    Err e => Err "\{path}: \{e}"
-    Ok n => Ok n
-
 {- | The key one `libSuites` row is stored and looked up under.
 
    The roster spans two directories, so a bare module name is not a key: the
@@ -371,13 +361,11 @@ runLibSuite dir name =
 libKeyOf : String -> String -> String
 libKeyOf dir name = "\{dir}/\{name}"
 
--- Every `pds/lib/`/`pds/shell/` module run exactly once, shared by every
--- assertion below — memoized the same way `results` is.
+-- Every `pds/lib/`/`pds/shell/` module run exactly once under the eval
+-- engine, shared by every assertion below — memoized the same way `results`
+-- is, and spawned in the same batch.
 libResults : <Exec, IO> List (String, (Int, Result String Int))
-libResults =
-  map
-    ((dir, name, floor) => (libKeyOf dir name, (floor, runLibSuite dir name)))
-    libSuites
+libResults = resultsOfKind LibRow
 
 -- Grades one `pds/lib/`/`pds/shell/` module's floor, same shape as
 -- `floorExpectation`.
@@ -464,33 +452,69 @@ test "every `libExempt` row names a module that exists" =
         "no phantom exemptions"
         "\{debug extras}"
 
-{- | Runs a suite under its engine and returns its executed-assertion count,
-   or an error naming the engine and what went wrong.
-
-   The engine is named because the two arms fail differently: a capability
-   refusal from the eval arm and a genuine assertion failure both surface as
-   a nonzero exit, and only the label says which arm was asked. -}
-runSuite : String -> Engine -> <Exec, IO> Result String Int
-runSuite name engine =
-  let path = underRoot "pds/test/\{name}.mdk"
-  match testAssertionCount path (engineArgs engine)
-    Err e => Err "\{path} (\{engineLabel engine}): \{e}"
-    Ok n => Ok n
-
-{- | Every non-excluded suite run exactly once, shared by every assertion
-   below — top-level nullary bindings are memoized, so a spawn placed here
-   and read from two `test` decls executes once, not twice.
+{- | One spawn per non-excluded suite: the key its result is looked up
+   under, its floor, the path to spawn, the extra `medaka test` arguments,
+   and the label its error is prefixed with.
 
    An excluded suite is absent from this list entirely rather than present
-   with a stand-in count, so it cannot be summed into `totalRan`. -}
-results : <Exec, IO> List (String, (Int, Result String Int))
-results =
+   with a stand-in count, so it cannot be summed into `totalRan`. The label
+   names the engine because the two arms fail differently: a capability
+   refusal from the eval arm and a genuine assertion failure both surface as
+   a nonzero exit, and only the label says which arm was asked. -}
+suiteSpawns : <IO> List (String, Int, String, List String, String)
+suiteSpawns =
   somes
     (map
       ((name, (floor, engine)) => match lookup name excluded
         Some _ => None
-        None => Some (name, (floor, runSuite name engine)))
+        None =>
+          let path = underRoot "pds/test/\{name}.mdk"
+          Some (
+            name,
+            floor,
+            path,
+            engineArgs engine,
+            "\{path} (\{engineLabel engine})",
+          ))
       suites)
+
+-- One eval-engine spawn per `libSuites` module, in the shape of
+-- `suiteSpawns`.
+libSpawns : <IO> List (String, Int, String, List String, String)
+libSpawns =
+  map
+    ((dir, name, floor) =>
+      let path = "pds/\{dir}/\{name}.mdk"
+      (libKeyOf dir name, floor, underRoot path, ["--engines", "eval"], path))
+    libSuites
+
+{- | Every suite and module spawned exactly once, all in one batch, each
+   with its executed-assertion count or an error naming the file and what
+   went wrong. Shared by every assertion below: top-level nullary bindings
+   are memoized, so a spawn placed here and read from two `test` decls
+   executes once, not twice. -}
+allResults : <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
+allResults =
+  let rows =
+    map (s => (SuiteRow, s)) suiteSpawns ++ map (s => (LibRow, s)) libSpawns
+  zipWith
+    ((kind, (key, floor, _, _, label)) counted =>
+      (kind, (key, (floor, mapErr (e => "\{label}: \{e}") counted))))
+    rows
+    (testAssertionCounts
+      (map ((_, (_, _, path, args, _)) => (path, args)) rows))
+
+-- Which roster a spawn row came from, so its result is regrouped by that
+-- tag rather than by its position in the batch.
+data RowKind = SuiteRow | LibRow deriving (Eq)
+
+-- The `allResults` rows of one roster, in roster order.
+resultsOfKind : RowKind -> <Exec, IO> List (String, (Int, Result String Int))
+resultsOfKind kind = map snd (filter ((k, _) => k == kind) allResults)
+
+-- Every non-excluded suite's floor and count.
+results : <Exec, IO> List (String, (Int, Result String Int))
+results = resultsOfKind SuiteRow
 
 {- | Grades one suite's floor. The message names the file and both numbers
    on a miss; a run that failed outright reports the spawn's own text

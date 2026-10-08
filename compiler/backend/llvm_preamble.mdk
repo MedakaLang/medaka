@@ -169,6 +169,7 @@ preambleLines = [
   "declare i64 @mdk_stat_file(i64, i64)",
   "declare i64 @mdk_file_mode(i64, i64)",
   "declare i64 @mdk_run_command(i64, i64)",
+  "declare i64 @mdk_run_command_batch(i64, i64, i64)",
   "declare i64 @mdk_executable_path(i64)",
   "declare i64 @mdk_build_fingerprint(i64)",
   "declare i64 @mdk_build_commit(i64)",

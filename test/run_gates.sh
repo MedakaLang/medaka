@@ -58,6 +58,16 @@ _default_jobs=$(( (NCPU * 3 + 2) / 5 ))
 [ "$_default_jobs" -ge 2 ] 2>/dev/null || _default_jobs=2
 JOBS="${JOBS:-$_default_jobs}"
 INNER_JOBS="${INNER_JOBS:-3}"
+# How many `medaka test` children a roster gate-test runs at once
+# (test_process.testAssertionCounts). Its own default is every core, which
+# JOBS concurrent gates would multiply, so split the cores between them.
+if [ -z "${MEDAKA_TEST_JOBS:-}" ]; then
+  MEDAKA_TEST_JOBS=1
+  if [ "$JOBS" -ge 1 ] 2>/dev/null && [ "$NCPU" -gt "$JOBS" ] 2>/dev/null; then
+    MEDAKA_TEST_JOBS=$(( NCPU / JOBS ))
+  fi
+fi
+export MEDAKA_TEST_JOBS
 
 # ── PER-GATE COST TRANSPORT (#2178, S-1-S-cost-record) ────────────────────────
 #

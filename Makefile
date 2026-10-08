@@ -139,6 +139,10 @@ test: medaka
 	## #3306: private_mangle.mdk's ctor-export table (incl. the #1359 re-export
 	## definer) is private; its sibling drives the exported mangleUnits.
 	./medaka test compiler/backend/private_mangle_test.mdk
+	## #3908: match-arm self tail calls must lower to musttail. The sibling is
+	## native-only (the claim is about emitted code) and has no other runner.
+	./medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
+	MEDAKA_TEST_CLANG_OPT=-O2 ./medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
 	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 	## else runs this file's doctests — no gate script invokes `medaka test` on
@@ -156,6 +160,10 @@ test: medaka
 	./medaka test compiler/tools/check_policy_test.mdk
 	./medaka test compiler/tools/doctest_test.mdk
 	./medaka test compiler/tools/native_probe_printer_test.mdk
+	./medaka test compiler/tools/native_probe_tco_test.mdk
+	MEDAKA_TEST_CLANG_OPT=-O2 ./medaka test compiler/tools/native_probe_tco_test.mdk
+	./medaka test compiler/driver/build_cmd_test.mdk
+	./medaka test compiler/tools/test_cmd_test.mdk
 	./medaka test compiler/tools/native_props_acceptance_test.mdk
 	./medaka test compiler/tools/native_props_policy_test.mdk
 	./medaka test compiler/tools/native_props_test.mdk
