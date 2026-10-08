@@ -1382,13 +1382,13 @@ while IFS= read -r f; do
     # (PINDIR="$ROOT/test/engine_value_pins") regardless of corpus, so it is the one
     # gate that reads the WHOLE tree unconditionally — map here.
     #
-    # `diff_compiler_capability_matrix.sh` also touches pin paths, but only for
-    # BOUNDARY-listed keys under corpora its own `fixdir_of` recognizes (llvm,
+    # `diff_compiler_capability_matrix` (extern_catalog_gate_test.mdk) also touches pin paths, but only for
+    # BOUNDARY-listed keys under corpora its own `fixtureDir` recognizes (llvm,
     # llvmT, wasm, wasmT) — `llvmM` is NOT one of them, so a `llvmM/*.pin` change is
-    # genuinely invisible to that gate today (verified by reading `fixdir_of`
+    # genuinely invisible to that gate today (verified by reading `fixtureDir`
     # directly, not by trusting this claim). Not added here: mapping it would be
     # over-broad for the common `llvmM` case and, for the reachable corpora, the
-    # gate only checks the pin's mere EXISTENCE (`[ ! -f "$pin" ]`), never its
+    # gate only checks the pin's mere EXISTENCE (`fileExists pin`), never its
     # value — `diff_compiler_engines` is the gate that actually exercises content.
     test/engine_value_pins/*)      add 'diff_compiler_engines' ;;
 

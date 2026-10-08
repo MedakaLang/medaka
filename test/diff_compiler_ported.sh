@@ -37,7 +37,7 @@ test_eval_internal_prims_ported.mdk"
 # ── KNOWN FAILURES ───────────────────────────────────────────────────────────
 # These files fail on REAL INTERPRETER BUGS, not test rot. They are recorded here
 # rather than skipped, following the same model as diff_compiler_engines.sh's
-# ledger and CAPABILITY-EXCEPTIONS.txt (and rustc's tests/crashes): each entry
+# ledger and the extern catalog's NotProvided rows (and rustc's tests/crashes): each entry
 # asserts the CURRENT, WRONG behavior, so that
 #   (a) the bug cannot get any worse silently, and
 #   (b) an ACCIDENTAL FIX is detected — if a listed file starts passing, this gate
@@ -46,8 +46,8 @@ test_eval_internal_prims_ported.mdk"
 # rotted in the first place (nothing ran it for months). Do not "simplify" this
 # into a skip.
 #
-# The remaining bug is the same family as the 36 remaining interpreter-extern gaps
-# (test/CAPABILITY-EXCEPTIONS.txt, category BUG) — eval.mdk was written as a value
+# The remaining bug is the same family as the remaining interpreter-extern gaps
+# (the interpreter's GapBug rows in compiler/backend/extern_catalog.mdk) — eval.mdk was written as a value
 # ORACLE and was silently promoted to be the production `medaka run` engine when
 # the OCaml reference compiler was deleted (2026-06-26).
 #
@@ -83,7 +83,7 @@ for f in $files; do
       promote=$((promote+1))
       printf 'PROMOTE %s — it now PASSES (%s) but is still listed in KNOWN_FAIL.\n' "$f" "${summary:-all assertions passed}"
       printf '        The underlying interpreter bug is FIXED. Remove it from KNOWN_FAIL in %s\n' "$0"
-      printf '        and drop its row from test/CAPABILITY-EXCEPTIONS.txt if applicable.\n'
+      printf '        and update its row in compiler/backend/extern_catalog.mdk if applicable.\n'
     else
       pass=$((pass+1))
       printf 'ok   %s (%s)\n' "$f" "${summary:-all assertions passed}"

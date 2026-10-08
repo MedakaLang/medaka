@@ -1,7 +1,7 @@
 # test/EXTERN-DOMAIN-LEDGER.txt — per-extern DOMAIN classification (issue #476)
 #
 # WHY THIS EXISTS
-#   diff_compiler_capability_matrix.sh proves each extern EXISTS on each engine.
+#   compiler/backend/extern_catalog_gate_test.mdk proves each extern EXISTS on each engine.
 #   diff_compiler_engines.sh proves the three engines AGREE on the sampled corpus.
 #   Neither asks whether the engines agree at an extern's EDGE DOMAIN — the input
 #   region where a partial function returns None / NaN / +-inf / saturates / traps.
@@ -15,7 +15,7 @@
 #   of its arguments, the only kind the value-differential can compare) and
 #   REQUIRES each one to appear here exactly once with a domain verdict.  A new
 #   pure extern with no row FAILS the gate — the classification cannot be
-#   forgotten (self-draining, like CAPABILITY-EXCEPTIONS.txt).
+#   forgotten (self-draining, like the catalog's one-row-per-extern check).
 #
 # FORMAT  (tab-separated; '#'-prefixed and blank lines ignored)
 #   extern <TAB> class <TAB> detail
@@ -49,7 +49,7 @@
 #            IO plumbing, or a compiler-internal sentinel.  There is no value to
 #            pin across engines.  reason must say which.
 #
-# HYGIENE the gate enforces (see diff_compiler_capability_matrix.sh §9):
+# HYGIENE the gate enforces (see compiler/backend/extern_catalog_gate_test.mdk):
 #   - every DERIVED-pure extern has exactly one row here (missing => FAIL);
 #   - no row names an unknown or non-pure (capability-annotated) extern;
 #   - no duplicate extern rows;

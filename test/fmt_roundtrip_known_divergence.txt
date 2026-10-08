@@ -13,7 +13,7 @@
 #       gate FAILS and tells you to promote it by deleting its line and closing the
 #       cited issue. A plain skip-list cannot notice the bug got fixed, and a silent
 #       skip is exactly how a suite like this rots (see test/engine_divergence.txt
-#       and test/CAPABILITY-EXCEPTIONS.txt, the same pattern).
+#       and the NotProvided rows of compiler/backend/extern_catalog.mdk, the same pattern).
 #
 # Format (one path per line; blank lines and '#' comments ignored):
 #   <repo-relative path to .mdk fixture>    # issue-ref + one-line reason

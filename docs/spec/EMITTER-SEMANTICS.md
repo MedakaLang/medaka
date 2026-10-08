@@ -28,7 +28,7 @@ This document fixes those invariants **from the theory of compiler refinement**
 model), not from the current code. Where this spec and the implementation
 disagree, the disagreement is a finding to triage — the spec is not a
 description of present behavior. Deliberate, gate-pinned divergences live in
-ledgers (`test/engine_divergence.txt`, `test/CAPABILITY-EXCEPTIONS.txt`), never
+ledgers (`test/engine_divergence.txt`, the `NotProvided` rows of `compiler/backend/extern_catalog.mdk`), never
 in silence.
 
 Theory anchors: compiler-correctness as observational refinement (CompCert's
@@ -92,7 +92,7 @@ where §6 (space laws) pins a bound.
 
 **Divergence ledger discipline.** A known R1/R2 violation is pinned in
 `test/engine_divergence.txt` (fail-on-accidental-fix, promote by deletion). A
-capability asymmetry is pinned in `test/CAPABILITY-EXCEPTIONS.txt`. A
+capability asymmetry is pinned as a `NotProvided` row in `compiler/backend/extern_catalog.mdk`. A
 divergence in neither ledger and not in an open issue is by definition an
 unfiled S0.
 

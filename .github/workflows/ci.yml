@@ -390,11 +390,11 @@ jobs:
             esac
 
             # ── `inlang`'s own escape list: `make test`'s first line is
-            # test/diff_compiler_ported.sh, which runs the test/ported/ corpus and reads
-            # test/CAPABILITY-EXCEPTIONS.txt. Its remaining lines are `medaka test` over
+            # test/diff_compiler_ported.sh, which runs the test/ported/ corpus. Its remaining
+            # lines are `medaka test` over
             # compiler/ and stdlib/ files, already covered by compiler_touched.
             case "$f" in
-              test/ported/*|test/diff_compiler_ported.sh|test/CAPABILITY-EXCEPTIONS.txt)
+              test/ported/*|test/diff_compiler_ported.sh)
                 inlang_corpora=true ;;
             esac
 

@@ -1,7 +1,7 @@
 {
   "schema": "gate-cost-baseline/1",
   "note": "Per-gate wall-clock cost, measured by test/run_gates.sh on UNNARROWED CI runs and folded in by test/gate_cost_ingest.sh. medianMs is the LOWER median of the retained raw ms samples; a balancer packs shards from it. GENERATED — do not hand-edit; re-derive from the artifacts instead.",
-  "generated": "2026-10-07T20:18:20Z",
+  "generated": "2026-10-08T18:38:31Z",
   "maxSamples": 9,
   "runs": [
     {"key": "37488083901:1:gates_4", "runId": "37488083901", "runAttempt": "1", "shard": "gates_4", "event": "merge_group", "sha": "79e0006173f0d3a8809638bb6dbe573d60397b2e", "ref": "refs/heads/gh-readonly-queue/main/pr-3886-0bb142aaf15dc42c5681afb3ce5a866ebea1169f", "date": "2026-10-06T15:44:10Z", "jobs": 2, "parallel": true, "rowElapsedMs": 572443, "gates": 1, "gatesDigest": 668008333},
@@ -45,7 +45,6 @@
     {"name": "diff_compiler_build", "medianMs": 27515, "samples": 9, "ms": [26071, 28024, 27255, 16655, 27515, 16487, 29227, 28357, 28269], "sampleRuns": ["37414868185", "37481728769", "37514512602", "37476847925", "37499451527", "37494252793", "37488083901", "37481554028", "37486047213"]},
     {"name": "diff_compiler_bytes_census", "medianMs": 222, "samples": 9, "ms": [283, 248, 248, 168, 255, 157, 217, 222, 222], "sampleRuns": ["37414868185", "37481728769", "37514512602", "37476847925", "37499451527", "37494252793", "37488083901", "37481554028", "37486047213"]},
     {"name": "diff_compiler_call_arity", "medianMs": 233311, "samples": 9, "ms": [244088, 184543, 237188, 252391, 181814, 233311, 228478, 202541, 244773], "sampleRuns": ["37414868185", "37481728769", "37514512602", "37476847925", "37499451527", "37494252793", "37488083901", "37481554028", "37486047213"]},
-    {"name": "diff_compiler_capability_matrix", "medianMs": 2764, "samples": 9, "ms": [2751, 3179, 2187, 2222, 2957, 3408, 2609, 2987, 2764], "sampleRuns": ["37414868185", "37481728769", "37514512602", "37476847925", "37499451527", "37494252793", "37488083901", "37481554028", "37486047213"]},
     {"name": "diff_compiler_catch_all_census", "medianMs": 141, "samples": 9, "ms": [208, 141, 166, 134, 161, 126, 170, 135, 117], "sampleRuns": ["37414868185", "37481728769", "37514512602", "37476847925", "37499451527", "37494252793", "37488083901", "37481554028", "37486047213"]},
     {"name": "diff_compiler_check", "medianMs": 27768, "samples": 9, "ms": [32783, 22009, 28538, 32977, 25771, 26278, 27768, 26795, 31750], "sampleRuns": ["37414868185", "37481728769", "37514512602", "37476847925", "37499451527", "37494252793", "37488083901", "37481554028", "37486047213"]},
     {"name": "diff_compiler_check_cli_modules", "medianMs": 38611, "samples": 9, "ms": [41594, 41612, 44847, 36219, 42490, 30429, 38611, 32787, 33396], "sampleRuns": ["37414868185", "37481728769", "37514512602", "37476847925", "37499451527", "37494252793", "37488083901", "37481554028", "37486047213"]},

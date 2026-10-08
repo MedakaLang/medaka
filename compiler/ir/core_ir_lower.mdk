@@ -2937,7 +2937,7 @@ declSigTypeEntries _ = []
 -- ── user-declared FFI externs → the lowering's own table (#2074) ─────────────
 -- The emitter's `declSigIndex` (above) cannot answer "is this name a USER
 -- extern?": it is built from `runtimeDecls ++ allDecls` and holds ordinary
--- annotated functions and the 138 `stdlib/runtime.mdk` builtins in the same
+-- annotated functions and the `stdlib/runtime.mdk` builtins in the same
 -- flat keyspace.  So the FFI lowering gets its OWN index, minted here from the
 -- same two decl lists the emit drivers already hold, and carried to the emitter
 -- as `EmitInput.ffiExternIndex`.

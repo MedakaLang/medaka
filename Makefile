@@ -140,7 +140,8 @@ test: medaka
 	## definer) is private; its sibling drives the exported mangleUnits.
 	./medaka test compiler/backend/private_mangle_test.mdk
 	## The extern catalog has no importer yet; its sibling checks every row
-	## against runtime.mdk, both emitters, the interpreter and the ledger.
+	## against runtime.mdk, both emitters and the interpreter.  The registry gate
+	## diff_compiler_capability_matrix runs extern_catalog_gate_test.mdk.
 	./medaka test compiler/backend/extern_catalog_test.mdk
 	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING

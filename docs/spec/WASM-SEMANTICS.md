@@ -282,7 +282,7 @@ import surface part of the semantics, with laws:
   explicit capability stubs in **every** shim — the set is the one
   `test/diff_compiler_wasm_shim_parity.sh` DERIVES, not a remembered pair; #543
   shipped because "both" was believed of a set of three — and (c) a
-  `test/CAPABILITY-EXCEPTIONS.txt` disposition if any engine withholds it.
+  `NotProvided` row in `compiler/backend/extern_catalog.mdk` if any engine withholds it.
   The entry is closed the same way: an emitted module's `(start $__init)` runs
   only the eager value-global initializers, and the program runs when the host
   calls the `mdk_main` export. Every host calls `exports.mdk_main()` after
@@ -373,7 +373,7 @@ binding …` and exit 1 on every host (the `Net` and `Stdin` bindings are #3666)
 The stop is at run time, not at build time, because the async scheduler names
 `ioPoll` and a clock-only async program must still build. Pinned by the
 `wasm_poll_order` and `wasm_poll_stdin` fixtures of `test/diff_async_test.mdk`;
-ledgered as the wasm `ioPoll` row of `test/CAPABILITY-EXCEPTIONS.txt`.
+ledgered as the wasm `ioPoll` `TrapStub` row of `compiler/backend/extern_catalog.mdk`.
 
 ---
 

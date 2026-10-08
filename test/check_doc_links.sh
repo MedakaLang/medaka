@@ -83,7 +83,7 @@
 # some dead references are legitimate HISTORY (PLAN-ARCHIVE.md, archive/**,
 # bootstrap logs narrating a past where compiler/typecheck.mdk genuinely
 # existed) and must be allowed. But an exceptions file that never gets
-# checked itself just becomes a landfill (see test/CAPABILITY-EXCEPTIONS.txt's
+# checked itself just becomes a landfill (see the extern catalog's
 # "accidental fix" principle, and how test/ported/ + diff_compiler_lint_multi
 # sat silently skipped-and-failing for months). So:
 #   - a REF exception (a specific dead target path) that NOW EXISTS on disk
