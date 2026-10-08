@@ -297,6 +297,7 @@ boundNames : UsePath -> Option (Map String Unit)
 boundOfList : List String -> Map String String
 boundTvarId : List Int -> Mono -> List Int
 boundTyvarIds : List Int -> List Mono -> Option (List Int)
+boundaryOwnsOpen : Map String Unit -> Int -> Bool
 bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
 bucketArgsMatch : List (List Ty, List Require) -> List Mono -> Bool
 bucketArgsMatchReqs : List (List Ty, List Require) -> List Mono -> Bool
@@ -994,7 +995,7 @@ entail : String -> Mono -> String -> ScopeId -> EntailKind -> (Route, List Route
 entailAssum : Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumVar : Option PredicateRequest -> Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
-entailFallback : ScopeId -> EntailKind -> Route
+entailFallback : ScopeId -> Mono -> EntailKind -> Route
 entailInst : String -> Mono -> String -> ScopeId -> String -> EntailKind -> (Route, List Route)
 entailedByDeclared : String -> String -> Ty -> Bool
 enterLevel : Unit -> Unit
@@ -1861,6 +1862,7 @@ letRecNonFunctionMsg : String -> String
 litType : Lit -> Mono
 literalDomainTop : List EffParamTy -> Param
 literalRouteHead : String -> String
+liveMemberIds : List Mono -> Map String Unit
 liveNumVarGo : Int -> List UObligation -> Option Mono
 liveTailId : Ref Effvar -> Int
 loadDataUniverse : Int -> Unit
@@ -2265,16 +2267,12 @@ occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
 opDictVarOf : Option PredicateRequest -> Bool -> String -> Mono -> Bool -> String -> ScopeId -> Option AssumAnswer
 openExistentialScope : List (Ref Authvar) -> ExistentialScope
 openExistentials : List (Ref Authvar) -> Unit
-openGoalCommitHelp : String
-openGoalCommitMsg : String -> List Mono -> List KeyEntry -> String
-openGoalCommitWarnCode : String
 openLocalScope : String -> ScopeId
 openLocalScopeIf : String -> Option ScopeId
 openMethodBodyScope : IfaceRef -> String -> MethodBodyKind -> ScopeId
 openRow : Unit -> EffRow
 openRowHint : List Atom -> String
 openScope : ScopeId -> Unit
-optLocEq : Option Loc -> Option Loc -> Bool
 optionOrFresh : Option Mono -> Mono
 oracleImportDecls : List Decl -> Int -> List DeclEnvModule -> List Decl
 oracleImportDeclsOf : Int -> List DeclEnvModule -> Decl -> List Decl
@@ -2461,7 +2459,6 @@ pushGiven : GivenMatch -> GivenProvenance -> PredicateSlot -> EvidenceBinderId -
 pushGoal : Obligation -> Unit
 pushIncompleteImpl : (Option Loc, String) -> Unit
 pushLocalDictApp : EvId -> LocalAbs -> List (Int, Mono) -> ScopeId -> Unit
-pushMatchWarningOnceAt : String -> Option Loc -> String -> Option String -> Unit
 pushMethodDictGoal : PendingMethodDict -> Unit
 pushNoImplError : String -> Option Loc -> List Mono -> Unit
 pushNumLitObl : ClassPredicate -> Mono -> Option Loc -> ScopeId -> Unit
@@ -2665,7 +2662,7 @@ registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List (Option
 registersElementDict : String -> List String -> Bool
 rejectAdmittedValueOccurrence : String -> Unit
 rejectCyclicAliases : Unit -> Unit
-rejectUndeterminedVectors : Map String Unit -> List UObligation -> List UObligation -> Unit
+rejectUndeterminedVectors : Map String Unit -> Map String Unit -> List UObligation -> List UObligation -> Unit
 rejectWithheldAmbiguity : Map String Unit -> List Mono -> List UObligation -> Unit
 removeAllS : List String -> List String -> List String
 renameAliasedMethods : List Decl -> List (String, List Decl) -> List (String, List Decl)
@@ -2685,7 +2682,7 @@ repeatedAxisText : String -> String
 repeatedBindings : List (String, Mono) -> List (String, Mono) -> List (Mono, Mono)
 repeatedGoalPairs : List Ty -> List Mono -> List (Mono, Mono)
 repeatedNames : List String -> List String -> List String
-reportAmbiguousImpl : String -> Route
+reportAmbiguousImpl : String -> List Mono -> Route
 reportAmbiguousImport : Map String Unit -> String -> UsePath -> Loc -> Unit
 reportAmbiguousImports : List Decl -> Unit
 reportAmbiguousImportsIn : Map String Unit -> List Decl -> Unit
@@ -2695,6 +2692,7 @@ reportBinderDomains : Ty -> List (String, Param) -> Unit
 reportEffectSummaryFailures : List (SummaryFailure ObligationSite) -> Unit
 reportImplHeadResidual : String -> List (String, Int) -> Option Loc -> (IfaceRef, List Mono) -> Unit
 reportIndexFailure : Bool -> Option Loc -> Authority -> Authority -> Unit
+reportMixedGoalAmbiguity : GoalWindow -> IfaceRef -> List Mono -> Option Loc -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportOverlapForIface : String -> List Mono -> List KeyEntry -> Unit
 reportRowFailure : SummaryFailure ObligationSite -> Unit
@@ -2702,7 +2700,7 @@ reportUnboundAuthorityNames : Ty -> SigVars -> Unit
 reportUnboundAuthorityNamesIn : List Ty -> SigVars -> Unit
 reportUncovered : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List (IfaceRef, Int) -> Unit
 reportUncoveredVec : String -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, Int) -> List VecObl -> List VecObl -> Unit
-reportUndeterminedGoal : Map String Unit -> Option GoalWindow -> IfaceRef -> List Mono -> Option Loc -> Unit
+reportUndeterminedGoal : Map String Unit -> GoalWindow -> IfaceRef -> List Mono -> Option Loc -> Unit
 reportUndeterminedNoImpl : IfaceRef -> List Mono -> Option Loc -> Unit
 reportUnsolvedExport : Map String (List (List Pat, Expr)) -> Map Int Unit -> (String, Map Int Unit) -> Map Int Unit
 reqObligationsFor : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
@@ -2792,7 +2790,7 @@ routeOfD : IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> List Mono ->
 routeOutcomeKind : Route -> EvidenceOutcomeKind
 routePrerequisiteRoutes : Route -> List Route
 routeRDictName : Route -> List String
-routeUndeterminedTop : List Decl -> ScopeId -> IfaceRef -> Route
+routeUndeterminedTop : List Decl -> ScopeId -> IfaceRef -> List Mono -> Route
 routesOfMonosTop : List Decl -> String -> ScopeId -> List Mono -> List IfaceRef -> List Route
 routesOfMonosTopV : List Decl -> String -> ScopeId -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
 rowArgAtomsApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List (String, List Atom) -> List (String, List Atom)
@@ -3123,8 +3121,8 @@ undeterminedGoalExempt : IfaceRef -> List Mono -> ScopeId -> Bool
 undeterminedGoalInstance : IfaceRef -> List Mono -> Option ImplRow
 undeterminedNoImplMsg : String -> List Mono -> String
 undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
-undeterminedRoute : ScopeId -> Undetermined -> Route
-undeterminedVectorVerdict : Map String Unit -> Option GoalWindow -> UObligation -> Unit
+undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
+undeterminedVectorVerdict : Map String Unit -> Map String Unit -> GoalWindow -> UObligation -> Unit
 unify : Mono -> Mono -> Unit
 unifyAll : Mono -> List Mono -> Unit
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit

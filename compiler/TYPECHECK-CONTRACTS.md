@@ -29,11 +29,12 @@ does not imply unconditional solving, a single checking path, or semantic eviden
 The approved default-body `RNone` exception stays pinned until its owning evidence
 work supplies a replacement. B-1/G1 is not a prerequisite of that sprint.
 
-Warn-first T4 and emitter diagnostics remain migration policies under the existing
-owner rulings. A final successful artifact must not conceal a fatal constraint
-failure. Defaulting (#2646), the per-goal T4 census correction (#2665), and the
-owner's measured SC-3 decision precede any hardening of T4; this amendment does not
-turn warnings into errors. The emitter-process/resolve choice remains deferred
+Emitter diagnostics remain a migration policy under the existing owner rulings. A
+final successful artifact must not conceal a fatal constraint failure. T4 is no
+longer warn-first: the owner's SC-3 decision (R-SC3, 2026-10-08) rejects a goal still
+open at quiescence that two or more instances reach with no stable minimum
+(`T-AMBIGUOUS-INSTANCE`, DICT-SEMANTICS §6.2 T4), and the declaration-order warning
+and its census tool are retired. The emitter-process/resolve choice remains deferred
 until after M2. Release scheduling and the one compiler-source PR rule remain.
 
 ## 2. Environments and inference

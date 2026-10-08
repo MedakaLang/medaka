@@ -153,7 +153,10 @@ done)"
 # and asserted to DIFFER, so the row reds the day they converge (the drain)
 # instead of silently passing or silently being skipped.
 #   entry | iface | orig-build-value | perm-build-value | issue
-KNOWNBAD_PERM='s6-2-t4-open-goal-deferred.mdk|Sh|1|2|#1183'
+# Empty: its one row (#1183, s6-2-t4-open-goal-deferred.mdk) drained when §6.2 T4
+# began rejecting an open goal with no stable minimum; both orderings now REJECT
+# with the same code, which the check arm above grades.
+KNOWNBAD_PERM=''
 
 # THE SAME LEDGER FOR THE **RUN** ARM. ⚠️ It exists because the build-arm ledger
 # above is NOT a general escape hatch: `RUN-DIFF` had no known-bad branch at all,
@@ -162,7 +165,7 @@ KNOWNBAD_PERM='s6-2-t4-open-goal-deferred.mdk|Sh|1|2|#1183'
 # thing it excuses is fixed. #1127 happens to diverge on `build` alone, which is
 # why one arm sufficed until F-3d.
 #   entry | iface | orig-run-value | perm-run-value | issue
-KNOWNBAD_PERM_RUN='s6-2-t4-open-goal-deferred.mdk|Sh|1|2|#1183'
+KNOWNBAD_PERM_RUN=''
 
 printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
   [ -z "$entry" ] && continue

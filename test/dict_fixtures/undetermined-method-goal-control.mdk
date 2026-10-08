@@ -1,3 +1,6 @@
+-- Control for the #3535 rows: `back (W 3)` at `Int` poses the closed goal
+-- `Conv2 Int W`, which `impl Conv2 Int W` answers.  Hand-derived: ACCEPT on all
+-- three verbs, `back (W 3)` = 3 + 1 = `4`.
 interface Conv a b where
   conv : a -> b
 interface Conv2 a b requires Conv a b where

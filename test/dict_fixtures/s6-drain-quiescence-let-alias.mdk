@@ -1,0 +1,17 @@
+-- §6.2 T3 at the quiescence drain: issue #3031's own repro.
+--
+-- `greet`'s inferred scheme is `Display a => a -> <Stdout> Unit`, so its `Display a`
+-- goals are quantified by that scheme and belong to the caller.  The graph-end drain
+-- replays the goal posed through the let-alias `msg` with `a` still an unbound
+-- variable; the drain's undetermined-goal route (`routeUndeterminedTop`) must defer
+-- such a goal, not report it as ambiguous at whichever declaration was inferred last.
+--
+-- SPEC ANSWER, hand-derived: `main` calls `greet` at `String`, `impl Display String`
+-- is the unique match, so the program prints `hi` twice on every engine and `check`
+-- accepts with no `T-AMBIGUOUS-INSTANCE`.
+greet name =
+  let msg = name
+  println msg
+  println name
+
+main = greet "hi"

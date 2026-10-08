@@ -337,13 +337,13 @@ route is listed under NOT YET COVERED below; it would add route-kind
   s6-1c-incomparable-no-minimum-control remains the discriminating control, with
   its argument INVERTED: it used to show that adding the ⊑-minimum changes nothing;
   it now shows that adding it flips the sibling to ACCEPT.
-* s6-2-t4-open-goal-deferred -- #1183 (OPEN, S1 `verified`). The residue F-3d made
-  user-reachable: at a NON-CLOSED goal the min⊑ arm still COMMITS to the head of
-  the candidate list, so declaration order decides the value at exit 0 (1 vs 2)
-  under a warning rather than in silence. §6.2 T4 says defer to quiescence; there
-  is no quiescence pass (§11's T3/T4 row). Pinned as a KNOWN-BAD row in BOTH
-  Section 4 ledgers (run and build) -- and the run-arm ledger was ADDED for it,
-  since `RUN-DIFF` previously had no known-bad branch at all.
+* s6-2-t4-open-goal-deferred -- #1183 DRAINED. The residue F-3d made
+  user-reachable: at a NON-CLOSED goal the min⊑ arm COMMITTED to the head of the
+  candidate list, so declaration order decided the value at exit 0 (1 vs 2) under
+  a warning. §6.2 T4 (R-SC3) rejects such a goal: the matches survive every
+  binding of its variable, so it is ambiguous at quiescence. Both orderings now
+  reject with the same code, and the Section 4 KNOWN-BAD ledger rows that pinned
+  the divergence are gone.
 * s4-gen-rec-inferred-asymmetric -- #1133 DRAINED. An INFERRED mutually-recursive
   group in which only ONE body dispatches used to typecheck with both correct
   `Sz a =>` schemes, then fail on both engines with an unbound `$dict_evenSz_0`.

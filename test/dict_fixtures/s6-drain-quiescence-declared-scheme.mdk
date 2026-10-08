@@ -1,12 +1,12 @@
--- §6.3 quiescence drain, DECLARED-scheme half of the `DrainDiags` population
--- (`compiler/types/typecheck.mdk`, #2705 / SA-10a item 17).
+-- §6.3 quiescence drain, DECLARED-scheme half of #3031
+-- (`compiler/types/typecheck.mdk`, `reportAmbiguousImpl`).
 --
 -- The twin of `s6-drain-quiescence-inferred-scheme.mdk`: here the receiver is
 -- quantified by a WRITTEN signature (`nonlead`'s `(Ixd a b, Shb b) => …`) rather
 -- than by an inferred one, and an unannotated relay carries it to graph end.  The
--- drain replays `Shb b` with `b` still an unbound `TVar` and
--- `routeUndeterminedTop`'s `_ => reportAmbiguousImpl` arm reports
--- `T-AMBIGUOUS-INSTANCE` on it (#3031).  Both halves matter because a fix that
+-- drain replays `Shb b` with `b` still an unbound `TVar`, which
+-- `routeUndeterminedTop`'s ambiguous arm must defer, not report as
+-- `T-AMBIGUOUS-INSTANCE` (#3031).  Both halves matter because a fix that
 -- consults only the binding's own inferred scheme would close one and leave the
 -- other.
 --
