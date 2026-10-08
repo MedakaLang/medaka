@@ -64,12 +64,13 @@ When you write **Medaka** code (e.g. wrappers in `core.mdk`/`list.mdk`), use
    primitive only needs to work under `medaka run`, file `NotProvided` for
    `llvm`/`wasm` with an honest reason instead of implementing it there. If it
    must also work under `medaka build` or the wasm playground, add dispatch
-   for it in `compiler/backend/llvm_emit.mdk` (`isAnyExtern`/
-   `emitExternApplied`, one of the `isXxxExtern` family predicates) and/or
+   for it: for llvm, give the row an `LlvmFamily` in its llvm column and add the
+   clause to that family's emitter in `compiler/backend/llvm_emit.mdk`
+   (`externEmitter` maps families to emitters, so `isAnyExtern` and
+   `emitExternApplied` follow the row); for wasm, add the name to a predicate in
    `compiler/backend/wasm_emit.mdk` (`isStrExternW`/`isLeafExternW`/
-   `isArrayExternW`, `emitAppRef`) respectively. Run the gate and the
-   catalog's sibling test, which compares each column with the backend's own
-   predicate:
+   `isArrayExternW`, `emitAppRef`). Run the gate and the catalog's sibling
+   test, which compares the wasm column with `wasm_emit`'s predicates:
    ```sh
    MEDAKA_STRICT=1 ./medaka test compiler/backend/extern_catalog_gate_test.mdk
    MEDAKA_STRICT=1 ./medaka test compiler/backend/extern_catalog_test.mdk

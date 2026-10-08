@@ -101,7 +101,6 @@ SYM	mergedAt	.claude/ORCHESTRATING.md's 2026-08-10 completion-poll lesson names 
 
 # ── SYM: naming-convention shorthand / meta-syntactic placeholder, not a literal citation ─
 SYM	Msg	harden-typechecker/SKILL.md's "an existing `Msg` builder" is prose shorthand for the "*Msg"-suffixed message-builder naming convention (effectLeakMsg, ambiguousImplMsg, …) — those real names are cited separately; "Msg" alone was never claimed to be a standalone identifier
-SYM	isXxxExtern	add-primitive/SKILL.md's "one of the isXxxExtern family predicates" is a meta-syntactic placeholder for the "is*Extern" predicate family — the real members (isAnyExtern, isStrExternW, isLeafExternW, isArrayExternW) are cited by name in the same sentence and do resolve
 SYM	pFoo	docs/stdlib/P1-STDLIB-DESIGN.md's "add a new leaf float/libc extern" walkthrough names `pFoo` as a stand-in for whatever primitive name you're actually adding (e.g. the concretely-named `pFloatRem` in the very next sentence) — a meta-syntactic placeholder, not a real citation
 
 # ── SYM: deliberately non-existent (forbidden future name / wrong past claim quoted as a lesson) ─
