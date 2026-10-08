@@ -23,7 +23,7 @@
 //                WAT→wasm assemblers over the same emitter output.
 //   * host ABI:  test/wasm/run.js here, playground/worker.js in the page. Their
 //                numeric shims are byte-identical BY GATE
-//                (test/diff_compiler_wasm_shim_parity.sh).
+//                (test/diff_compiler_wasm_shim_parity_test.mdk).
 // The browser-driven sample in playground/e2e (SITE=1 bash playground/e2e/run.sh,
 // tests/playground.spec.mjs "guide example round-trip") closes both deltas
 // empirically for a few examples by running them in an actual Chrome.

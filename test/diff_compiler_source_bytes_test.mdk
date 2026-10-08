@@ -15,11 +15,12 @@
    Does NOT prove: that the excluded trees are clean (fixtures, snapshots,
    goldens and playground/vendor are excluded on purpose); that a control
    byte is absent from non-source files; and it reports the first bad byte
-   per file only. Git's `ls-files` (no -z) quotes unusual paths, so a
-   tracked source path with a quote, backslash, control character or
-   non-ASCII byte in its name arrives C-quoted and cannot be read. Such a
-   path is a finding, not a skip: the gate fails and names it. Files that
-   fail to read are skipped, as the old script did. -}
+   per file only. Git's `ls-files` runs with core.quotePath=false, so
+   non-ASCII names arrive raw and are read. A tracked source path with a
+   quote, backslash or control character in its name still arrives
+   C-quoted and cannot be read. Such a path is a finding, not a skip: the
+   gate fails and names it under its own label. Files that fail to read
+   are skipped, as the old script did. -}
 
 import test_process.{medakaRoot, boundedVerb}
 import test.{Expectation, expectAll, expectAtLeast, expectNoFindings, fail}
@@ -84,39 +85,40 @@ quotedInner l = match stripPrefix "\"" l
 
 -- A quoted source path becomes a finding: its bytes were never read.
 addQuoted : String -> List String -> List String
-addQuoted l bad = match quotedInner l
-  None => bad
-  Some inner =>
-    if isSource inner then
-      "\{l}: quoted by git, cannot be scanned" :: bad
-    else
-      bad
+addQuoted l found = match quotedInner l
+  None => found
+  Some inner => if isSource inner then l :: found else found
 
--- Fold the quoted source paths into the bad-report list.
+-- Fold the quoted source paths into their own finding list.
 quotedScan : List String -> List String -> List String
-quotedScan [] bad = bad
-quotedScan (l :: rest) bad = quotedScan rest (addQuoted l bad)
+quotedScan [] found = found
+quotedScan (l :: rest) found = quotedScan rest (addQuoted l found)
 
 check : <Exec, IO, FileRead> Expectation
-check = match boundedVerb "git" ["-C", medakaRoot, "ls-files"]
-  Err e => fail "could not spawn git ls-files: \{e}"
-  Ok (code, out, _) =>
-    if code /= 0 then
-      fail "git ls-files exited \{intToString code}"
-    else
-      let entries = filter (/= "") (lines out)
-      let files = filter isSource entries
-      scanCheck (scanAll medakaRoot files 0 (quotedScan entries []))
+check =
+  match (boundedVerb "git" [
+    "-C", medakaRoot, "-c", "core.quotePath=false", "ls-files"
+  ])
+    Err e => fail "could not spawn git ls-files: \{e}"
+    Ok (code, out, _) =>
+      if code /= 0 then
+        fail "git ls-files exited \{intToString code}"
+      else
+        let entries = filter (/= "") (lines out)
+        let files = filter isSource entries
+        scanCheck (scanAll medakaRoot files 0 []) (quotedScan entries [])
 
--- Grade the scan: a floor on the file count, then no bad bytes. The floor
--- (about 80% of the 1909 files scanned on 2026-10-08) only catches a broken
--- listing or filter; the count falls legitimately as shell gates are deleted.
-scanCheck : (Int, List String) -> Expectation
-scanCheck (n, bad) = expectAll [
+-- Grade the scan: a floor on the file count, then no bad bytes, then no
+-- quoted source path. The floor (about 80% of the 1909 files scanned on
+-- 2026-10-08) only catches a broken listing or filter; the count falls
+-- legitimately as shell gates are deleted.
+scanCheck : (Int, List String) -> List String -> Expectation
+scanCheck (n, bad) quoted = expectAll [
   expectAtLeast 1500 n,
   expectNoFindings
     "raw control byte in tracked source (use the \\0 or \\u{XX} escape)"
     (Ok bad),
+  expectNoFindings "path git had to quote; cannot be scanned" (Ok quoted),
 ]
 
 test "diff_compiler_source_bytes: no tracked source file has a raw control byte" =

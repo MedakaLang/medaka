@@ -1,7 +1,7 @@
 {- | Catch-all clause ratchet over compiler/types/typecheck.mdk and
    compiler/types/repr.mdk (#2551). Replaces diff_compiler_catch_all_census.sh
    and the check mode of test/catch_all_census.py (the .py stays as the
-   `--update` ledger writer; the ledgers are not touched here).
+   ledger writer; the ledgers are not touched here).
 
    PROVES: the list of top-level multi-clause functions in those two files that
    dispatch on an Expr or Decl constructor at some parameter position, whose
@@ -14,8 +14,10 @@
    DOES NOT PROVE: that a listed site is justified (the ledger records a human
    decision); that the clause-shape text census finds every catch-all (it is not
    a type checker); that a DECL_RUNNERS entry names the consumer that really
-   executes the constructor. The `--update` re-derivation has no native
-   equivalent: a drift is fixed by re-running test/catch_all_census.py.
+   executes the constructor. Regenerate after a deliberate change with
+   `python3 test/catch_all_census.py . > test/catch_all_census.ledger` and
+   `python3 test/catch_all_census.py . --decl-runners > test/decl_runner.ledger`
+   (a drift failure prints the same command).
    The DECL_RUNNERS table below mirrors test/catch_all_census.py; keep the two in
    step while that script exists. Needs no built medaka binary; reads sources only.
 -}
@@ -27,9 +29,9 @@ import test.{
 }
 import string.{
   lines, split, join, trim, trimLeft, drop, startsWith, endsWith, contains,
-  toChars, fromChars, isSpace, isUpper, isLower, isAlphaNum
+  toChars, fromChars, isSpace, isUpper, isLower, isAlphaNum, toInt
 }
-import list.{nub, sort, takeWhile, dropWhile}
+import list.{nub, sort, sortBy, takeWhile, dropWhile}
 
 -- Read every subject file once. Result is (ast, typecheck+repr, site ledger, decl ledger).
 loadAll : <IO, FileRead> Result String (String, String, String, String)
@@ -54,20 +56,45 @@ declCheck = match loadAll
 siteExpect : String -> String -> String -> Expectation
 siteExpect astText srcText siteLedger =
   let rows = censusRows astText srcText
-  expectAll [
-    expectAtLeast 2 (length (ctorSet "Expr" astText)),
-    expectAtLeast 2 (length (ctorSet "Decl" astText)),
-    expectAtLeast 109 (length rows),
-    finalNewline "test/catch_all_census.ledger" siteLedger,
-    expectEqualLines
-      (join "\n" (dropFinalEmpty (lines siteLedger)))
-      (join "\n" rows),
-  ]
+  expectAll
+    [
+      expectAtLeast 2 (length (ctorSet "Expr" astText)),
+      expectAtLeast 2 (length (ctorSet "Decl" astText)),
+      -- floor catches a broken parse; the ledger shrinks by design
+      expectAtLeast 54 (length rows),
+      ledgerBytes "test/catch_all_census.ledger" siteLedger,
+      driftCheck
+        "test/catch_all_census.ledger"
+        "python3 test/catch_all_census.py . > test/catch_all_census.ledger"
+        (dropFinalEmpty (lines siteLedger))
+        rows,
+    ]
 
--- The raw ledger text must end in a newline, as the script's byte-exact diff requires.
-finalNewline : String -> String -> Expectation
-finalNewline path text =
-  if endsWith "\n" text then pass else fail "\{path} has no final newline"
+-- Ledger bytes: LF-only and newline-terminated, as the script's byte-exact diff required.
+ledgerBytes : String -> String -> Expectation
+ledgerBytes path text =
+  if contains "\r" text then
+    fail "\{path} contains a carriage return; ledgers are LF-only"
+  else if endsWith "\n" text then
+    pass
+  else
+    fail "\{path} has no final newline"
+
+-- Row-for-row equality; a red names the first difference and the regeneration command.
+driftCheck : String -> String -> List String -> List String -> Expectation
+driftCheck path regen want got =
+  if want == got then
+    pass
+  else
+    fail
+      "\{path} drifted from the census (first difference: \{firstDiff want got}); regenerate with: \{regen}"
+
+firstDiff : List String -> List String -> String
+firstDiff [] [] = "none"
+firstDiff [] (g :: _) = "extra row \{g}"
+firstDiff (w :: _) [] = "missing row \{w}"
+firstDiff (w :: ws) (g :: gs) =
+  if w == g then firstDiff ws gs else "expected \{w} but got \{g}"
 
 -- The ledger's lines, without the empty element `lines` yields after the final newline.
 dropFinalEmpty : List String -> List String
@@ -79,14 +106,20 @@ declExpect : String -> String -> Expectation
 declExpect astText declLedger =
   let ledgerRows = dropFinalEmpty (lines declLedger)
   let rows = declRows astText
-  expectAll [
-    expectAtLeast 14 (length rows),
-    finalNewline "test/decl_runner.ledger" declLedger,
-    expectEqualLines (join "\n" ledgerRows) (join "\n" rows),
-    expectNoFindings
-      "decl_runner.ledger has an unfilled TODO runner"
-      (Ok (filter (r => endsWith "TODO" r) ledgerRows)),
-  ]
+  expectAll
+    [
+      -- floor catches a broken parse; the ledger shrinks by design
+      expectAtLeast 7 (length rows),
+      ledgerBytes "test/decl_runner.ledger" declLedger,
+      driftCheck
+        "test/decl_runner.ledger"
+        "python3 test/catch_all_census.py . --decl-runners > test/decl_runner.ledger"
+        ledgerRows
+        rows,
+      expectNoFindings
+        "decl_runner.ledger has an unfilled TODO runner"
+        (Ok (filter (r => endsWith "TODO" r) ledgerRows)),
+    ]
 
 test "catch_all_census: typechecker catch-all sites over Expr/Decl match the ledger" =
   siteCheck
@@ -391,7 +424,49 @@ censusRows : String -> String -> List String
 censusRows astText srcText =
   let exprs = ctorSet "Expr" astText
   let decls = ctorSet "Decl" astText
-  nub (sort (rowsOf exprs decls (occurrences (itemsOf (lines srcText)))))
+  nub (sortRows (rowsOf exprs decls (occurrences (itemsOf (lines srcText)))))
+
+-- Python sorts the rows as (name, sum, k, n): name and sum as strings, k and n
+-- as numbers. A plain string sort puts "10/42" before "2/42".
+sortRows : List String -> List String
+sortRows rows = sortBy rowCmp rows
+
+rowCmp : String -> String -> Ordering
+rowCmp a b = keyCmp (rowKey a) (rowKey b)
+
+rowKey : String -> (String, String, Int, Int)
+rowKey r = match split "\t" r
+  name :: sum :: frac :: _ => fracKey name sum (split "/" frac)
+  _ => (r, "", 0, 0)
+
+fracKey : String -> String -> List String -> (String, String, Int, Int)
+fracKey name sum (k :: n :: _) = (name, sum, numOr k, numOr n)
+fracKey name sum _ = (name, sum, 0, 0)
+
+numOr : String -> Int
+numOr s = match toInt s
+  Some n => n
+  None => 0 - 1
+
+keyCmp : (String, String, Int, Int) -> (String, String, Int, Int) -> Ordering
+keyCmp (n1, s1, k1, m1) (n2, s2, k2, m2) =
+  chainOrd
+    (stringCompare n1 n2)
+    (chainOrd (stringCompare s1 s2) (chainOrd (intCmp k1 k2) (intCmp m1 m2)))
+
+intCmp : Int -> Int -> Ordering
+intCmp a b = if a < b then Lt else if a == b then Eq else Gt
+
+chainOrd : Ordering -> Ordering -> Ordering
+chainOrd Eq next = next
+chainOrd o _ = o
+
+test "catch_all_census: rows sort as python does (k and n numerically)" =
+  expectEqualLines
+    (join
+      "\n"
+      (sortRows ["zz\tExpr\t10/42", "zz\tExpr\t2/42", "aa\tDecl\t1/3"]))
+    (join "\n" ["aa\tDecl\t1/3", "zz\tExpr\t2/42", "zz\tExpr\t10/42"])
 
 rowsOf : List String ->
   List String ->

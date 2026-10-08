@@ -189,15 +189,17 @@ check = match walkDir (underRoot "compiler")
             Ok ledger =>
               let files = nub (sort (map fst derived ++ map fst ledger))
               let problems = flatMap (f => fileProblems derived ledger f) files
-              expectAll [
-                expectAtLeast 16 (length files),
-                expectNoFindings
-                  "ledger has more than one row for a file (one row per caller file)"
-                  (Ok (dupFiles (map fst ledger))),
-                expectNoFindings
-                  "wrapper-family caller set drifted from test/CHECK-WRAPPER-CALLERS.txt"
-                  (Ok problems),
-              ]
+              expectAll
+                [
+                  -- floor catches a broken parse; the ledger shrinks by design (today: 16 files)
+                  expectAtLeast 8 (length files),
+                  expectNoFindings
+                    "ledger has more than one row for a file (one row per caller file)"
+                    (Ok (dupFiles (map fst ledger))),
+                  expectNoFindings
+                    "wrapper-family caller set drifted from test/CHECK-WRAPPER-CALLERS.txt"
+                    (Ok problems),
+                ]
 
 test "diff_compiler_check_wrapper_callers: derived caller set matches the ledger exactly" =
   check

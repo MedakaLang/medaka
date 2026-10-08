@@ -27,6 +27,8 @@ script, target, part boundary, facts. Trust its facts; don't re-derive.
 - Red-check breaks: only in the packet's allowed mutation subjects (others work in
   parallel); via the Edit tool (`sed -i`/redirection into repo files is refused); no
   new files or symlinks in the repo; restore with `git checkout -- <path>`, say so.
+  Raw bytes (CR, 0xff, NUL) the Edit tool cannot write: a python3 script in your scratch
+  dir that writes the byte, runs the test, then `git checkout`s the file.
 - FIX packet: change only what the named findings say; rerun file; redo each finding's red proof.
 
 ## Token budget (stay well under 100k context)

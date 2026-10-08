@@ -23,14 +23,16 @@ unable to fail. Few real findings > many guesses. "CLEAN" with evidence is a fin
   work in parallel), only tracked files, via the Edit tool (`sed -i`/redirection is
   refused). No new files/symlinks in the repo (you may not be able to remove them);
   such a scenario is "argued, not mutated". Restore each mutation at once with
-  `git checkout -- <path>`; confirm `git status --short <path>`.
+  `git checkout -- <path>`; confirm `git status --short <path>`. Raw bytes (CR,
+  0xff, NUL): a python3 script in your scratch dir that writes, runs the test, restores.
 - Write tool only for your report file. No commits/stashes/adds/pushes.
 
 ## Procedure (per pair)
 1. Read script once, number its checks; read test once; map each check → carrying line.
    No carrier / looser carrier = finding.
 2. Vacuity scan: reversed `contains`/`startsWith`/`endsWith`; `length (lines "")`;
-   floor below today's count (except a tree-wide scan's ~80% floor); hardcoded list where script enumerated; listing/walk
+   floor below today's count on a fixture corpus (shrink-by-design ledgers and scans
+   take a ~50–80% broken-extractor floor); hardcoded list where script enumerated; listing/walk
    `Err` → `[]`; ungraded exit; 126/127 passing a must-fail; bare `scratchDir`;
    `expectGolden` where trailing `()`/`0` is data; `pass` on an `Err` arm;
    duplicate/extra-field input the script treated differently.

@@ -76,7 +76,8 @@ checks = [
     (r"length \(lines ", "WARN", "length (lines ...) is 1 on empty text"),
     (r"expectAtLeast 1 \(", "WARN", "floor of 1 (should be today's count)"),
     (r"-- CONTINUE:", "FAIL", "CONTINUE marker left in (unfinished parts)"),
-    (r"\bpython3\b|\"grep\"|\"sed\"|\"awk\"", "WARN", "spawns a text tool (native-rewrite should not)"),
+    (r"\b(boundedVerb\w*|runVerb|boundedInTree|expectSpawn\w*)\s+(\d+\s+)?\"(python3|grep|sed|awk)\"",
+     "WARN", "spawns a text tool (native-rewrite should not)"),
 ]
 for pat, level, msg in checks:
     hits = grep(pat)

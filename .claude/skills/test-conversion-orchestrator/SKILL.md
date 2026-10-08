@@ -17,7 +17,7 @@ wider than one file, edit registry/CI/docs/`compiler/`/`stdlib/`, delete scripts
 | Auditor | `conversion-auditor` (Haiku) | per-file check map, vacuity scan, mutation proofs; RECHECK |
 | Reviewer | `sprint-reviewer` (Sonnet) | once per PR |
 
-Haiku roles: `omitClaudeMd`, 4 tools, preloaded `convert-shell-gate` → **~11.5k
+Haiku roles: omitClaudeMd, 4 tools, preloaded `convert-shell-gate` → **~11.5k
 startup** (`general-purpose` was ~40k: never dispatch conversions as it). Agent
 types missing → session predates `.claude/agents/` entries; restart.
 
@@ -27,7 +27,8 @@ Measured 2026-10-08 (6 native-rewrite gates; default effort): converter peak 41�
 agent file) cut the 367-line case 123k → 72k at equal audit findings, but it skipped
 reading lint output; the verifier catches that. If audits of low-effort conversions keep
 finding ≥3 real defects per file, set `effort: medium` in `.claude/agents/test-converter.md`.
-A Sonnet orchestrator ran a full 6-gate wave unattended for $1.52 total, its own context peaking at 96k.
+A headless Sonnet orchestrator ran a wave unattended (2 gates converted, 6 booked) for $1.52
+total, its own context peaking at 96k.
 
 ## 0. Setup
 ```sh
@@ -47,7 +48,7 @@ for b in open(sys.argv[1]).read().split('[[gate]]')[1:]:
         print(g('shard'), g('name'), g('run'), re.search(r'toolchain = (\[.*\])', b)[1], re.search(r'oracles = (\[.*\])', b)[1])
 EOF
 ```
-First: `gates_N` shard, no `node`/`wasm-tools`. Hold back: `other-job` (a workflow
+First: a gates_N shard, no `node`/`wasm-tools`. Hold back: `other-job` (a workflow
 step runs the script, often in a job without `medaka`; decide the CI move before
 dispatch); non-empty `oracles` (probe retirement, #2594); `blocked:*`, `shell:*`,
 `inverted-polarity` (never). A script with its own `--write`/`CAPTURE` mode that docs
@@ -128,8 +129,11 @@ Don't skip the audit.
    - History, or a comment in `compiler/**`/`stdlib/**`: a `REF` line in
      `test/DOC-LINK-EXCEPTIONS.txt` (copy the wave-1 format). Never edit
      compiler/stdlib text for a citation (it moves the fingerprint and snapshots).
-4. Per wave: `medaka gate verify`; `make docs-links`; `make agent-doc-symbols`;
-   `make gen-ci`; `sh test/run_gates.sh diff_compiler_gate_registry diff_compiler_ci_gen_drift diff_compiler_ci_shard_coverage diff_compiler_tier_drift diff_compiler_fixture_corpus_coverage diff_compiler_lint_baseline`.
+4. Per wave, after `git add -N` on new files (the doc checks scan only tracked files, so an
+   untracked new skill or test passes vacuously): `medaka gate verify`; `make docs-links`; `make agent-doc-symbols`;
+   `make gen-ci`; `sh test/run_gates.sh diff_compiler_gate_registry diff_compiler_ci_gen_drift diff_compiler_ci_shard_coverage diff_compiler_tier_drift diff_compiler_fixture_corpus_coverage diff_compiler_lint_baseline diff_compiler_preflight_base`
+   (preflight_base copies the registry into a scratch tree; a converted gate preflight always
+   adds must resolve there).
    Rows merged/removed → `sh test/gate_cost_ingest.sh --baseline test/gate_cost_baseline.json --registry test/gates.toml`.
 
 ## 7. PR, review, wrap-up

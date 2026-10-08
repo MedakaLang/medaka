@@ -11,7 +11,8 @@
    call head is left without a static string-literal label within six lines; every
    derived stage is graded or waived; no waiver is stale or orphan; the perf gate
    still parses TIME_STAGES and OP_STAGES and keeps its backend_graded and ops_graded
-   non-zero guards; at least 16 stages are derived and at least 12 are graded.
+   non-zero guards; at least 8 stages are derived and at least 6 are graded (the
+   floors catch a broken parse; the ledger shrinks by design).
 
    Does NOT prove: that a profiler label is static when it is built some other way
    (a head with no literal in reach is a finding; a label assembled out of sight is
@@ -22,7 +23,8 @@ import list.{nub}
 import regex.{Regex, mustCompile, isMatch}
 import string.{lines, split, startsWith, trim}
 import test.{
-  Expectation, expectAll, expectAtLeast, expectNoFindings, fail, pass
+  Expectation, expectAll, expectAtLeast, expectNoFindings, expectTrue,
+  expectationTag, fail, pass
 }
 import test_process.{underRoot}
 
@@ -201,19 +203,22 @@ guardPresent perf re label =
       "\{perfRel} no longer guards \{label}: that assertion is what stops the perf gate exiting 0 having graded nothing on that arm. Restore it."
 
 derivationCheck : Inputs -> Expectation
-derivationCheck i = expectAll [
-  expectNoFindings
-    "emitPhaseAO call heads with no string-literal stage label within six lines (the census cannot see whether those stages are measured)"
-    (Ok (unresolved i.heads)),
-  expectAtLeast 16 (length (stagesIn i.heads)),
-]
+derivationCheck i = expectAll
+  [
+    expectNoFindings
+      "emitPhaseAO call heads with no string-literal stage label within six lines (the census cannot see whether those stages are measured)"
+      (Ok (unresolved i.heads)),
+    -- Half of today's 16: the floor catches a broken parse; the ledger shrinks by design.
+    expectAtLeast 8 (length (stagesIn i.heads)),
+  ]
 
 gradedCheck : Inputs -> Expectation
 gradedCheck i = match gradedOf i.perf
   None =>
     fail
       "could not parse TIME_STAGES / OP_STAGES out of \{perfRel}: the census derives the graded set from those two assignments"
-  Some g => expectAtLeast 12 (length g)
+  -- Half of today's 12: the floor catches a broken parse; the ledger shrinks by design.
+  Some g => expectAtLeast 6 (length g)
 
 ungradedCheck : Inputs -> Expectation
 ungradedCheck i = match gradedOf i.perf
@@ -253,8 +258,23 @@ guardCheck i = expectAll [
 test "census: stages are derived from the profilers, and none is unresolvable" =
   withInputs derivationCheck
 
-test "census: TIME_STAGES and OP_STAGES parse, and at least 12 stages are graded" =
+test "census: TIME_STAGES and OP_STAGES parse, and at least 6 stages are graded" =
   withInputs gradedCheck
+
+-- Red proof for the lowered floors (compiler/entries is not mutable): an empty parse
+-- must fail both floors.
+isFailing : Expectation -> Bool
+isFailing e = expectationTag e == "Fail"
+
+test "census: the lowered floors red on an empty parse" = expectAll [
+  expectTrue
+    (isFailing
+      (expectAtLeast
+        8
+        (length
+          (stagesIn (profilerHeads "empty.mdk" (numbered 1 (lines ""))))))),
+  expectTrue (isFailing (expectAtLeast 6 (length (stageNames [])))),
+]
 
 test "census: every derived stage is graded or waived" =
   withInputs ungradedCheck

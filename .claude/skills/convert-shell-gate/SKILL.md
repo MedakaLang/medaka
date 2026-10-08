@@ -35,10 +35,12 @@ deletion, references = orchestrator (`test-conversion-orchestrator`).
 - No `-- lint-disable`. Hand-rolling a helper? `sig.py` first. Rule looks wrong → report.
 - `contains NEEDLE HAYSTACK`, `startsWith PREFIX s`, `endsWith SUFFIX s`: needle first.
 - `length (lines "")` is 1. Empty = `text == ""`.
-- Floors = today's EXACT count (`expectAtLeast <n> (length xs)`) on every fixture corpus,
-  ledger and extraction the script guarded with "0 checked"/"ZERO". Exception: a
-  tree-wide scan (every tracked file) shrinks legitimately as files are deleted, so its
-  floor only catches a broken scan: ~80% of today's count, with a comment saying so.
+- Floors (`expectAtLeast <n> (length xs)`) on every enumeration/extraction the script
+  guarded with "0 checked"/"ZERO". Fixture corpus: today's EXACT count. Something that
+  shrinks by design (a ratchet ledger, a stage list, a tree-wide scan): the floor only
+  catches a broken extractor (~50–80% of today), with a comment saying so; the exact
+  ledger compare pins the content. An exact floor there reds the prescribed fix.
+- A drift failure names its fix (the regen command), as the script's message did.
 - Subject in `compiler/**`/`stdlib/**` (can't be mutated): make the extractor a pure
   `String -> List …` fn and red-prove it with an inline-string `test` block in the file.
 - Enumerate, never hardcode: `fixtureStems dir`; `fixtureFiles dir` + `filter (endsWith ".x")`;
@@ -50,9 +52,14 @@ deletion, references = orchestrator (`test-conversion-orchestrator`).
 - File IO native: `readFile`/`writeFile` (no import, return `Result`), `readFileBytes` for
   raw bytes, `fs.{mkdirAll}`. No `cat`/`printf >`/`mkdir` spawns. Chain `Result`s with `do`.
 - Scratch dirs: `withScratchDir (dir => …)` only; bare `scratchDir` is one dir shared by all
-  blocks. Prove order independence: `python3 <repo>/.claude/skills/convert-shell-gate/run_blocks.py <medaka> <file>`.
+  blocks. Prove order independence: `python3 <repo>/.claude/skills/convert-shell-gate/run_blocks.py <medaka> <file>`
+  (each block alone); for blocks sharing state, also swap two blocks once and rerun.
 - No cwd parameter: `boundedVerb "sh" ["-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", dir, medakaBin, …args]`.
-- Path normalising (`sed s|$ROOT/|ROOT/|`): `replaceAll (medakaRoot ++ "/") "ROOT/" s` (string).
+- Path normalising (`sed s|$ROOT/|ROOT/|`): `replaceAll (medakaRoot ++ "/") "ROOT/" s` (string);
+  `medakaRoot` defaults to "." so also replace the absolute cwd (`$PWD ++ "/"`).
+- Multi-region extraction (`sed -n '/BEGIN x/,/END x/p'` prints EVERY region): take all
+  regions, not the first. Undecodable input (invalid UTF-8, CRLF where the script compared
+  bytes) is a finding, never a silent drop.
 - `expectGolden`/`expectEqualText` strip a trailing `()` or final `0` line both sides (looser
   than `diff`). `expectEqualLines` is exact.
 - Port the header's "proves / does NOT prove" into the test header.

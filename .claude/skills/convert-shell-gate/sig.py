@@ -37,7 +37,27 @@ else:
     hits = [e for e in entries if e["name"] in args]
 for e in hits:
     show(e)
-missing = [a for a in args if not a.startswith("-") and args[0] not in ("-m", "-s")
-           and not any(e["name"] == a for e in hits)]
-for a in missing:
-    print(f"{a} : NOT IN STDLIB (try -s {a})")
+
+
+def methods(name):
+    # Interface methods (`toList`, `map`, `length`) live inside their interface's entry.
+    for e in entries:
+        if e["signature"].startswith("interface "):
+            for line in e["signature"].splitlines()[1:]:
+                parts = line.strip().split(" : ", 1)
+                if parts[0] == name and len(parts) == 2 and parts[1] != "_":
+                    yield f"{e['module']}.{e['name']}.{name} : {parts[1]}  (interface method; no import needed from core)"
+
+
+found = bool(hits)
+if args[0] not in ("-m", "-s"):
+    for a in args:
+        ms = list(methods(a))
+        found = found or bool(ms)
+        for m in ms:
+            print(m)
+        if not ms and not any(e["name"] == a for e in hits):
+            print(f"{a} : NOT IN STDLIB (try -s {a}; test-support helpers are in the skill's cheat sheet)")
+elif not hits:
+    print(f"no match for {' '.join(args[1:])}")
+sys.exit(0 if found else 1)
