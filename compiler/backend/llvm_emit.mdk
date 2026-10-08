@@ -6751,17 +6751,32 @@ bindLet e env _ _ _ _ =
 -- arbitrary forward refs and true mutual recursion all emit correctly.  A value
 -- binding interleaved INSIDE such a run (a mutual ref crossing a non-function
 -- sibling) is the residue this scheme doesn't cover — it is rejected precisely
--- (`gapE`) rather than miscompiled.
+-- (`letGroupGap`) rather than miscompiled.
 emitLetGroup : Emit ->
   OrdMap (String, LTy) ->
   List CBind ->
   CExpr ->
   (String, LTy)
-emitLetGroup e env [] body = emitExpr e env body
-emitLetGroup e env ((CBind name [CClause [] rhs] _) :: rest) body =
+emitLetGroup e env binds body = match bindLetGroup e env binds body
+  Some env2 => emitExpr e env2 body
+  None => letGroupGap e
+
+-- emit a `let`/`where` group's bindings (see `emitLetGroup`) and return the env
+-- `body` sees, or None at the knot-tying residue, whose gap the caller reports
+-- with `letGroupGap` after the bindings before it are emitted.  `body` is read
+-- only for `satOnlyUses`; it is not emitted.  Shared by the value path and the
+-- tail-position descents (`emitFnBody`, `emitSelfTailArm`), so a group emits the
+-- same instructions whether or not its body is in tail position.
+bindLetGroup : Emit ->
+  OrdMap (String, LTy) ->
+  List CBind ->
+  CExpr ->
+  Option (OrdMap (String, LTy))
+bindLetGroup _ env [] _ = Some env
+bindLetGroup e env ((CBind name [CClause [] rhs] _) :: rest) body =
   let (v, ty) = emitExpr e env rhs
-  emitLetGroup e (omInsert name (v, ty) env) rest body
-emitLetGroup e env ((CBind name clauses site) :: rest) body
+  bindLetGroup e (omInsert name (v, ty) env) rest body
+bindLetGroup e env ((CBind name clauses site) :: rest) body
   | refsLater name clauses (bindNames rest) =
     emitKnotRun e env (CBind name clauses site :: rest) body
   | otherwise =
@@ -6771,27 +6786,31 @@ emitLetGroup e env ((CBind name clauses site) :: rest) body
     -- may skip the closure's code_ptr load (`e.directFn`).
     let direct = satOnlyUses name (clauseArityC clauses) (CLetGroup rest body)
     let (w, ty) = emitGroupBind e env (CBind name clauses site) direct
-    emitLetGroup e (omInsert name (w, ty) env) rest body
+    bindLetGroup e (omInsert name (w, ty) env) rest body
+
+letGroupGap : Emit -> (String, LTy)
+letGroupGap e =
+  gapE
+    e
+    "unsupported let-group: a binding forward/mutually references a later value binding (knot-tying covers only mutual function bindings)"
 
 -- knot-tie the maximal leading run of function bindings of `binds`, then continue
 -- the group with the remainder.  A forward/mutual ref crossing into a LATER value
--- binding (outside the run) is the uncovered residue — rejected precisely.
+-- binding (outside the run) is the uncovered residue: None, emitting nothing.
 emitKnotRun : Emit ->
   OrdMap (String, LTy) ->
   List CBind ->
   CExpr ->
-  (String, LTy)
+  Option (OrdMap (String, LTy))
 emitKnotRun e env binds body =
   let run = takeFnRun binds
   let after = dropS (lengthS run) binds
   let runNames = bindNames run
   if anyRefsOutsideRun run runNames (bindNames after) then
-    gapE
-      e
-      "unsupported let-group: a binding forward/mutually references a later value binding (knot-tying covers only mutual function bindings)"
+    None
   else
     let env2 = emitLetGroupKnot e env run runNames
-    emitLetGroup e env2 after body
+    bindLetGroup e env2 after body
 
 -- the maximal leading run of LOCAL FUNCTION bindings (non-empty params) — a nullary
 -- VALUE binding (`CBind _ [CClause [] _]`) ends the run.
@@ -11189,18 +11208,22 @@ emitArmValue : Emit ->
   Ref LTy ->
   Unit
 emitArmValue e env body slot endL rty =
-  let (bv, bty) = emitExpr e env body
+  emitArmWord e (emitExpr e env body) slot endL rty
+
+-- store an arm's already-emitted value into `slot` and join at `endL`.
+emitArmWord : Emit -> (String, LTy) -> String -> String -> Ref LTy -> Unit
+emitArmWord e (bv, bty) slot endL rty =
   rty := bty
   let _ = emit e "  store i64 \{bv}, ptr \{slot}"
   emit e ("  br label %" ++ endL)
 
 -- An arm body in the tail position of the define `self` (its emitted symbol).
--- `if`, `let`, a block and a nested match pass tail position on (the nested
--- match's arms join at the same `endL`, `e.selfTailCtx` left live as
--- `emitTrmcBody` leaves `trmcCtx`; a let or block emits its bindings as the value
--- path does); a saturated call of `self` is returned with `musttail`, the
--- calling-convention proof `emitFnBody` relies on; anything else stores into
--- `slot` and joins.
+-- `if`, `let`, a `let`/`where` group, a block and a nested match pass tail
+-- position on (the nested match's arms join at the same `endL`, `e.selfTailCtx`
+-- left live as `emitTrmcBody` leaves `trmcCtx`; a let, group or block emits its
+-- bindings as the value path does); a saturated call of `self` is returned
+-- with `musttail`, the calling-convention proof `emitFnBody` relies on;
+-- anything else stores into `slot` and joins.
 emitSelfTailArm : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -11223,6 +11246,10 @@ emitSelfTailArm e env self (CLet recF pat e1 e2) slot endL rty =
     emitSelfTailArm e (bindLet e env recF pat e1 e2) self e2 slot endL rty
   else
     emitArmValue e env (CLet recF pat e1 e2) slot endL rty
+emitSelfTailArm e env self (CLetGroup binds body) slot endL rty =
+  match bindLetGroup e env binds body
+    Some env2 => emitSelfTailArm e env2 self body slot endL rty
+    None => emitArmWord e (letGroupGap e) slot endL rty
 emitSelfTailArm e env self (CBlock stmts) slot endL rty =
   match lastStmtExpr stmts
     Some last =>
@@ -13874,12 +13901,14 @@ tailCallSaturated e fname n = match defArityOf e fname
 
 -- emit a function body in TAIL position: every control path ends in a `ret`.
 -- An `if` recurses into both arms (each arm is itself in tail position and rets);
--- a `let` or a block emits its bindings as the value path does and passes tail
--- position to its body; a `match` puts its arms in tail position
--- (`emitTailDecision`); a SATURATED tail call to a known function emits
--- `[musttail] call` + `ret`; anything else is computed as a value and returned.
--- `self` is the emitted symbol of the enclosing define (`mdk_…`), the namespace
--- `directTailCallee` answers in.
+-- a `let`, a `let`/`where` group or a block emits its bindings as the value
+-- path does and passes tail position to its body; a `match` puts its arms in
+-- tail position (`emitTailDecision`); a SATURATED tail call to a known function
+-- emits `[musttail] call` + `ret`; anything else is computed as a value and
+-- returned.  `self` is the emitted symbol of the enclosing define (`mdk_…`), the
+-- namespace `directTailCallee` answers in.  A `musttail` callee must not receive
+-- a pointer into the caller's frame: every closure a let or group binds is an
+-- `@mdk_alloc` cell or a constant global, never an `alloca`, so this is sound.
 emitFnBody : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
 emitFnBody e env self (CIf c t f) =
   let (thenL, elseL) = emitTailIfHead e env c
@@ -13894,6 +13923,12 @@ emitFnBody e env self (CLet recF pat e1 e2) =
     emitFnBody e (bindLet e env recF pat e1 e2) self e2
   else
     emitValueRet e env (CLet recF pat e1 e2)
+emitFnBody e env self (CLetGroup binds body) =
+  match bindLetGroup e env binds body
+    Some env2 => emitFnBody e env2 self body
+    None =>
+      let (v, _) = letGroupGap e
+      emit e ("  ret i64 " ++ v)
 emitFnBody e env self (CBlock stmts) = match lastStmtExpr stmts
   Some last => emitFnBody e (emitBlockInit e env stmts) self last
   None => emitValueRet e env (CBlock stmts)
