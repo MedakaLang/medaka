@@ -1,0 +1,154 @@
+{- | Ratified stdlib API-conventions detector (#2306 leg 9, S-conventions-ratchet).
+   Replaces test/diff_compiler_stdlib_conventions.sh.
+
+   stdlib/README.md's "API conventions" section writes down 7 rules ratified
+   by #2306's surface-freeze sheet. Most need a human's judgment and cannot be
+   checked mechanically. This gate covers the two that CAN, reading the
+   generated docs/stdlib/inventory.json (module/name/signature for every
+   stdlib export) rather than re-parsing source:
+
+     (a) D-2 / D-5: `<type><Op>` ("xToY"-shaped) names are the PRIMITIVE
+         LAYER's naming marker (stdlib/runtime.mdk). A library module (any
+         stdlib module other than runtime) exporting a new name of that exact
+         shape would claim the marker for a name that isn't a primitive.
+
+     (b) B-3 / C-1: the keys/values/toList/elems/entries/items "container
+         accessor" family was settled into ONE name per shape per module
+         (`hash_map.entries` removed, kept `toList`; `map.elems` renamed to
+         `values`). A module re-introducing two family names with an IDENTICAL
+         signature (compared by type shape, name stripped) is exactly the
+         synonym drift that ruling closed.
+
+   Neither check is a general-purpose duplicate-signature or naming-style
+   linter: the sheet's own R-1/R-2/R-3/R-4 rulings license plenty of
+   same-shaped names elsewhere in the surface (see stdlib/README.md), and a
+   broader sweep would flag those wrong. This gate is deliberately narrow to
+   the two rules the sheet itself says are mechanically checkable.
+
+   Floors: the inventory must hold at least 1364 entries across at least 42
+   modules, so an empty, truncated or shrunken inventory is red rather than a
+   vacuous pass. If the inventory is missing, regenerate it with
+   `medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk`.
+
+   Runs under `medaka test`: it reads a generated file under the repo root. -}
+
+import json.{Json, parse, get, asString, asArray}
+import regex.{Regex, mustCompile, isMatch}
+import string.{trim, stripPrefix}
+import list.{nub}
+import test_process.{underRoot}
+import test.{Expectation, expectAll, expectAtLeast, expectNoFindings, fail}
+
+-- Rule (a): the xToY shape, kept exactly as the script's regex.
+xtoy : Regex
+xtoy = mustCompile "^[a-z][a-zA-Z0-9]*[a-z]To[A-Z][a-zA-Z0-9]*$"
+
+-- Rule (b): the container-accessor family.
+family : List String
+family = ["keys", "values", "elems", "entries", "toList", "items"]
+
+-- Read one string field of a JSON object.
+field : String -> Json -> Option String
+field key j = match get key j
+  Some v => asString v
+  None => None
+
+-- One inventory row as (module, name, signature), or None if malformed.
+entryOf : Json -> Option (String, String, String)
+entryOf j = do
+  m <- field "module" j
+  n <- field "name" j
+  s <- field "signature" j
+  Some (m, n, s)
+
+-- All rows, or None if any row is malformed.
+entriesOf : List Json -> Option (List (String, String, String))
+entriesOf [] = Some []
+entriesOf (j :: rest) = match entryOf j
+  None => None
+  Some e => map (e :: _) (entriesOf rest)
+
+-- Parse the inventory text into rows.
+inventory : String -> Result String (List (String, String, String))
+inventory text = match parse text
+  Err e => Err "inventory.json is not valid JSON: \{e}"
+  Ok doc => match asArray doc
+    None => Err "inventory.json is not a JSON array"
+    Some arr => match entriesOf (toList arr)
+      None =>
+        Err
+          "inventory.json has a malformed entry (need module, name, signature strings)"
+      Some es => Ok es
+
+rowMod : (String, String, String) -> String
+rowMod (m, _, _) = m
+
+-- The script's shape(): strip a leading "<name> :" so two names with the
+-- same TYPE compare equal.
+shape : String -> String -> String
+shape name sig = match stripPrefix (name ++ " :") sig
+  Some rest => trim rest
+  None => trim sig
+
+-- (a) findings: xToY-shaped names outside the runtime module.
+xtoyMsg : (String, String, String) -> String
+xtoyMsg (m, n, _) =
+  "\{m}.\{n}: 'xToY'-shaped name outside the primitive layer (runtime.mdk) — D-2/D-5 reserve that spelling for primitive externs; see stdlib/README.md rule 8"
+
+xtoyBad : (String, String, String) -> Bool
+xtoyBad (m, n, _) = m /= "runtime" && isMatch xtoy n
+
+xtoyFindings : List (String, String, String) -> List String
+xtoyFindings es = map xtoyMsg (filter xtoyBad es)
+
+-- (b) findings: family names with identical shapes within one module.
+inFamily : String -> (String, String, String) -> Bool
+inFamily mname (m, n, _) = m == mname && elem n family
+
+famPair : (String, String, String) -> (String, String)
+famPair (_, n, s) = (n, shape n s)
+
+pairsOf : List a -> List (a, a)
+pairsOf [] = []
+pairsOf (x :: rest) = map (y => (x, y)) rest ++ pairsOf rest
+
+sameShape : ((String, String), (String, String)) -> Bool
+sameShape ((_, s1), (_, s2)) = s1 == s2
+
+dupMsg : String -> ((String, String), (String, String)) -> String
+dupMsg mname ((n1, s1), (n2, _)) =
+  "\{mname}: '\{n1}' and '\{n2}' share an identical signature shape (\{s1}) — B-3/C-1 settled the keys/values/toList/elems/entries family to one name per shape per module; see stdlib/README.md rule 9"
+
+dupsIn : String -> List (String, String, String) -> List String
+dupsIn mname es =
+  map
+    (dupMsg mname)
+    (filter sameShape (pairsOf (map famPair (filter (inFamily mname) es))))
+
+dupsFor : List String -> List (String, String, String) -> List String
+dupsFor [] _ = []
+dupsFor (mname :: ms) es = dupsIn mname es ++ dupsFor ms es
+
+dupFindings : List (String, String, String) -> List String
+dupFindings es = dupsFor (nub (map rowMod es)) es
+
+check : <IO, FileRead> Expectation
+check = match readFile (underRoot "docs/stdlib/inventory.json")
+  Err e =>
+    fail
+      "docs/stdlib/inventory.json does not exist or is unreadable (\{e}) — regenerate with: medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk"
+  Ok text => match inventory text
+    Err e => fail e
+    Ok es => expectAll [
+      expectAtLeast 1364 (length es),
+      expectAtLeast 42 (length (nub (map rowMod es))),
+      expectNoFindings
+        "rule (a): xToY-shaped name outside runtime.mdk"
+        (Ok (xtoyFindings es)),
+      expectNoFindings
+        "rule (b): identical-shape container-accessor family pair in one module"
+        (Ok (dupFindings es)),
+    ]
+
+test "diff_compiler_stdlib_conventions: ratified stdlib API conventions (rules 8 and 9)" =
+  check

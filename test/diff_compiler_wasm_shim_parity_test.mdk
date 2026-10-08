@@ -1,0 +1,141 @@
+{- | WASM-SEMANTICS WH3 (shim parity). Replaces diff_compiler_wasm_shim_parity.sh.
+
+   The wasm engine's observable behaviour is not all in the module: parts of it run in
+   the JS host. Three hosts carry copies of the shared shim blocks:
+     test/wasm/run.js        the node runner every wasm gate diffs against native
+     playground/worker.js    the browser Web Worker that runs the user's program
+     playground/compile.mjs  the seam that runs the compiler itself (playground.wasm)
+   WH3 says they must behave identically, so each block must be byte-identical.
+
+   Each block is a region from a line starting with the BEGIN marker of a name to the
+   matching END marker. The names are enumerated from test/wasm/run.js (the reference),
+   and every other file under test/ or playground/ that carries a BEGIN marker at the
+   start of a line is a peer, derived by query, never by a fixed list (#543: a hardcoded
+   host set silently excluded compile.mjs). The floors catch a broken query: at least two
+   peer hosts and at least two shared blocks must be found, or the test is red.
+
+   What it proves: each shared block is present in run.js and every peer, carries its
+   END marker, and is byte-identical to run.js. Text, not behaviour. The block is pure
+   and the host wiring around it is exercised by the wasm gates, so byte-identity plus
+   those gates is what WH3 needs. It does not prove the hosts behave identically beyond
+   the shared blocks.
+
+   Runs under `medaka test --native`: it reads files under the repository tree. -}
+
+import test_process.{underRoot}
+import string.{lines, split, startsWith, endsWith, unlines}
+import fs.{walkDir}
+import list.{dropWhile}
+import test.{
+  Expectation, expectAll, expectEach, expectAtLeast, expectEqualLines,
+  expectNotEqual, expectTrue, fail
+}
+
+beginPrefix : String
+beginPrefix = "// --- BEGIN SHARED SHIM "
+
+endPrefix : String
+endPrefix = "// --- END SHARED SHIM "
+
+beginLine : String -> String
+beginLine name = "\{beginPrefix}\{name} ---"
+
+endLine : String -> String
+endLine name = "\{endPrefix}\{name} ---"
+
+-- The name between the prefix and the closing " ---" of a BEGIN line.
+nameOf : String -> String
+nameOf line = match split beginPrefix line
+  _ :: rest :: _ => match split " ---" rest
+    n :: _ => n
+    _ => ""
+  _ => ""
+
+-- Every BEGIN marker name in a file, in file order.
+markerNames : String -> List String
+markerNames text = map nameOf (filter (startsWith beginPrefix) (lines text))
+
+-- The block for a name: from its BEGIN line through the first END line, inclusive.
+-- An absent BEGIN gives []. A block without an END line runs to end of file, and the
+-- END-marker check then fails, the same as the script's unterminated-region guard.
+blockOf : String -> String -> List String
+blockOf name text =
+  untilEnd
+    name
+    (dropWhile (l => not (startsWith (beginLine name) l)) (lines text))
+
+untilEnd : String -> List String -> List String
+untilEnd name [] = []
+untilEnd name (l :: rest) =
+  if startsWith (endLine name) l then [l] else l :: untilEnd name rest
+
+hasEnd : String -> List String -> Bool
+hasEnd name block = any (startsWith (endLine name)) block
+
+-- Peers: files under test/ and playground/ (walked, recursively), minus run.js itself.
+-- A file that cannot be read is not a host, as `grep 2>/dev/null` treats it.
+carriesMarker : String -> <IO, FileRead> Bool
+carriesMarker p = match readFile p
+  Err _ => False
+  Ok t => any (startsWith beginPrefix) (lines t)
+
+textOr : String -> <IO, FileRead> String
+textOr p = match readFile p
+  Ok t => t
+  Err _ => ""
+
+-- A walk error is a failed test, never an empty peer list: an unreadable entry
+-- under test/ or playground/ must not silently drop a host from the comparison.
+peerTexts : List String -> <IO, FileRead> List (String, String)
+peerTexts paths =
+  map
+    (p => (p, textOr p))
+    (filter
+      carriesMarker
+      (filter (p => not (endsWith "test/wasm/run.js" p)) paths))
+
+peerCheck : String -> List String -> String -> List String -> Expectation
+peerCheck name refBlock path pb = expectEach [
+  ("\{path}: block present", expectNotEqual pb []),
+  ("\{path}: END marker present", expectTrue (hasEnd name pb)),
+  (
+    "\{path}: byte-identical to run.js",
+    expectEqualLines (unlines refBlock) (unlines pb),
+  ),
+]
+
+peerEntry : String -> List String -> (String, String) -> (String, Expectation)
+peerEntry name refBlock (path, text) =
+  (path, peerCheck name refBlock path (blockOf name text))
+
+nameCheck : List (String, String) -> String -> String -> Expectation
+nameCheck pts refText name =
+  let refBlock = blockOf name refText
+  expectAll [
+    expectEach [
+      ("run.js: block present", expectNotEqual refBlock []),
+      ("run.js: END marker present", expectTrue (hasEnd name refBlock)),
+    ],
+    expectEach (map (peerEntry name refBlock) pts),
+  ]
+
+checkRef : String -> List (String, String) -> Expectation
+checkRef refText pts =
+  let names = markerNames refText
+  expectAll [
+    expectAtLeast 2 (length pts),
+    expectAtLeast 2 (length names),
+    expectAll (map (nameCheck pts refText) names),
+  ]
+
+parity : <IO, FileRead> Expectation
+parity = match readFile (underRoot "test/wasm/run.js")
+  Err e => fail "missing reference host shim test/wasm/run.js: \{e}"
+  Ok refText => match walkDir (underRoot "test")
+    Err e => fail "could not walk test/: \{e}"
+    Ok testPaths => match walkDir (underRoot "playground")
+      Err e => fail "could not walk playground/: \{e}"
+      Ok playPaths => checkRef refText (peerTexts (testPaths ++ playPaths))
+
+test "diff_compiler_wasm_shim_parity: shared shim blocks are byte-identical across hosts" =
+  parity

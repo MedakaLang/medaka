@@ -159,7 +159,7 @@ for itself.
   a 1100-line compiler source, to every human and agent who greps it. **The defining bug
   class, planted in the search path, by our own tooling.** Fixed at the class (both escapers
   now emit `\0`/`\u{XX}`; only NUL trips grep's heuristic, measured) and gated by
-  `diff_compiler_source_bytes.sh`.
+  `diff_compiler_source_bytes_test.mdk`.
 
 And one more, in the tool meant to make all this cheap: **`test/preflight.sh` — "THE AGENT
 LOOP" — hard-failed on every compiler-source change.** It re-derived the oracle set with the

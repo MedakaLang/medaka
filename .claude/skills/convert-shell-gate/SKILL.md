@@ -1,107 +1,107 @@
 ---
 name: convert-shell-gate
-description: Convert one `migration = "native-wrap"` shell gate (a test/*.sh that drives ./medaka and compares text) into a native `*_test.mdk` gate-test. Self-contained recipe, template and helper cheat sheet; load this instead of reading stdlib or support-module sources.
+description: Convert one shell gate (test/*.sh, `migration = "native-wrap"` or `"native-rewrite"`) into a native `*_test.mdk` gate-test. Recipe, skeletons, shell-to-Medaka table, helper names. Load instead of reading stdlib or support sources. Preloaded by `test-converter` and `conversion-auditor`.
 ---
 
-# Convert a shell gate to a gate-test (epic #2600, wave 1 #2592)
+# Shell gate → native gate-test (epic #2600)
 
-The replacement does the same spawns and comparisons in Medaka. It lives at
-`test/<name>_test.mdk`, runs under `./medaka test <abs file>` (native), and must
-grade at least as much as the script did. The orchestrator flips the registry
-row and deletes the script; you only write the test file.
+Target `test/<name>_test.mdk` (or `<project>/test/…`), run by `medaka test <abs file>`.
+Must grade ≥ what the script graded. You write only the test file; registry, script
+deletion, references = orchestrator (`test-conversion-orchestrator`).
+
+- **native-wrap**: script spawns `./medaka`/a binary, compares text → same spawns (Skeleton A).
+- **native-rewrite**: script is grep/sed/awk/python over repo files → Medaka over
+  `readFile` (Skeleton B). Never spawn `grep`/`sed`/`python3`; `git` is OK.
 
 ## Recipe
+1. Read script once. Number every check (`ok`/`FAIL`, `diff`, exit test, "ZERO extracted"
+   guard). Keep all. Leave fixtures/goldens in place.
+2. Write from a skeleton; one `test` block per check group.
+3. `fmt --write`, `lint`, `check`, `test` on your file only, abs paths. Ignore "N further
+   diagnostics in imported modules". **Lint exits 0 even with warnings: clean = empty
+   output.** Fix every warning before reporting DONE.
+4. Parity + red: old script green once; file green; one break the old gate also catches →
+   file RED; `git checkout -- <path>` → green. Break a fixture/golden/doc/JSON/JS side,
+   never `compiler/**`/`stdlib/**` (moves the source fingerprint). Each absence check
+   ("must NOT contain") needs its own red: make the text present.
+5. Report per your agent def / packet.
 
-1. Read the script once. Number every check it makes (each `ok`/`FAIL`, `diff`,
-   exit-code test). The test keeps ALL of them; a dropped check is a silent
-   regression. Note the fixture/golden paths and leave them where they are.
-2. Write the file from the skeleton below, one `test` block per original script
-   (batched assignments) or per check group.
-3. `fmt --write`, `lint`, `check`, `test` on your file only, absolute paths.
-   `check` prints "N further diagnostics in imported modules": ignore it.
-4. Parity-plus-red: run the OLD script once (green) and your file (green); make
-   ONE deliberate break the old gate would have caught (a golden line or pinned
-   string that only your gate owns); show your file RED; restore with
-   `git checkout -- <path>`; green again.
-5. Report (under 25 lines): files created; the numbered checks with the `test`
-   block carrying each; the four transcripts, last lines only; anything not
-   expressible, with the reason.
+## Rules (each one shipped a bug before)
+- Grade every spawn's exit, literally `if code /= 0 then fail "…exited \{intToString code}" else …`
+  (incl. cleanup `rm`). `gate verify` matches text `code /=`/`code ==` or an
+  `expectSpawn*`/`expectCheck*` helper; `expectEqual 0 code` not recognised. Refuse row:
+  `if code /= 1 then fail …`.
+- Exit 126/127 = launch failure, never a "must fail" pass.
+- No `-- lint-disable`. Hand-rolling a helper? `sig.py` first. Rule looks wrong → report.
+- `contains NEEDLE HAYSTACK`, `startsWith PREFIX s`, `endsWith SUFFIX s`: needle first.
+- `length (lines "")` is 1. Empty = `text == ""`.
+- Floors = today's EXACT count (`expectAtLeast <n> (length xs)`) on every fixture corpus,
+  ledger and extraction the script guarded with "0 checked"/"ZERO". Exception: a
+  tree-wide scan (every tracked file) shrinks legitimately as files are deleted, so its
+  floor only catches a broken scan: ~80% of today's count, with a comment saying so.
+- Subject in `compiler/**`/`stdlib/**` (can't be mutated): make the extractor a pure
+  `String -> List …` fn and red-prove it with an inline-string `test` block in the file.
+- Enumerate, never hardcode: `fixtureStems dir`; `fixtureFiles dir` + `filter (endsWith ".x")`;
+  `fixtureDirs` when the script walked dirs (dir without its entry file = red).
+- A listing/walk `Err` is a `fail`, never `[]` (one bad entry would hide every peer).
+- Ledger/set compares: a duplicate row, an extra ` : ` field or a missing final newline must
+  go red (python dict/list semantics differ from membership). Each wave's auditors found this.
+- Spell each corpus dir literally (`underRoot "test/lsp_fixtures"`); corpus-coverage greps it.
+- File IO native: `readFile`/`writeFile` (no import, return `Result`), `readFileBytes` for
+  raw bytes, `fs.{mkdirAll}`. No `cat`/`printf >`/`mkdir` spawns. Chain `Result`s with `do`.
+- Scratch dirs: `withScratchDir (dir => …)` only; bare `scratchDir` is one dir shared by all
+  blocks. Prove order independence: `python3 <repo>/.claude/skills/convert-shell-gate/run_blocks.py <medaka> <file>`.
+- No cwd parameter: `boundedVerb "sh" ["-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", dir, medakaBin, …args]`.
+- Path normalising (`sed s|$ROOT/|ROOT/|`): `replaceAll (medakaRoot ++ "/") "ROOT/" s` (string).
+- `expectGolden`/`expectEqualText` strip a trailing `()` or final `0` line both sides (looser
+  than `diff`). `expectEqualLines` is exact.
+- Port the header's "proves / does NOT prove" into the test header.
+- `CAPTURE=1`/`--write` modes: no native equivalent; report, don't invent.
+- `BLOCKED:` on `xargs -P`, `&`+`wait`, daemons, interactive handles, or `node`/`wasm-tools`/`valgrind`.
+- A scenario needing a new repo file or symlink: argue it, or use scratch state (e.g. a temp
+  `GIT_INDEX_FILE`); never create files in the repo.
 
-Stuck on one obstacle after ~3 attempts: stop, report `BLOCKED: <obstacle>`.
-Do not re-read files you just wrote. Do not run `make`, `run_gates.sh`,
-`preflight`, `gate verify`, or any suite; do not edit `test/gates.toml`, the
-Makefile, docs, or any file outside your assignment.
+## Compile traps
+- Import non-prelude names: `import string.{lines, split, startsWith}`, `import list.{nub, sort}`.
+  `core`/`runtime` names (`map`, `filter`, `length`, `readFile`, `intToString`) are never
+  qualified (`S.map` errors). `string`/`list`/`regex` share `split`/`replaceAll`: import
+  selectively or `import string as S`. Follow the compiler's "add `import …`" hint.
+- Effect rows on every spawning/reading/writing fn, else "performs <…> where only <> is
+  allowed": usually `<Exec, IO, FileRead>`, `+ FileWrite` if writing. Pure fns: none.
+- Multi-line `match` can't sit inside a parenthesised lambda/arg list → named helper:
+  ```
+  quoted : String -> String
+  quoted l = match split "\"" l
+    _ :: k :: _ => k
+    _ => ""
+  ```
+  List patterns: `x :: rest`, `[]`. No `[a, b, ..]`.
+- `boundedVerb` → `Result String (Int, String, String)`: match `Err e` / `Ok (code, out, err)`.
 
-## Rules that the pilot hit (each one reds a gate or hides a bug)
+## Shell → Medaka (native-rewrite)
+| shell | Medaka |
+|---|---|
+| `cat f` | `readFile f` |
+| `grep -n PAT` | `lines t` → `filter (contains "lit")` / `isMatch re`; numbers via `indexed` (0-based) |
+| `grep -o RE` | `map (m => m.text) (findAll re s)` |
+| `sed 's/a/b/g'` | string `replaceAll "a" "b" s`; regex `replaceAll re "b" s` |
+| `sed -n '/a/,/b/p'` | `dropWhile`/`takeWhile` over `lines` |
+| `sort -u` | `nub (sort xs)` |
+| `comm -23 a b` | `filter (x => not (elem x b)) a` |
+| `tr '\|' '\n'` | `split "\|" s` |
+| python `json.load` | `json.parse`, `get`, `asString`, `asArray` |
+| offending-lines report | `expectNoFindings "<what>" (Ok hits)` |
 
-- **Grade the exit code of every spawn**, in the literal shape
-  `if code /= 0 then fail "…exited \{intToString code}" else <compare stdout>`.
-  `medaka gate verify` looks for the text `code /=`/`code ==` (or an
-  `expectSpawn*`/`expectCheck*` helper); `expectEqual 0 code` is NOT recognised.
-  A script that discarded stderr/exit still gets its exit pinned.
-- **Never add `-- lint-disable-…`.** A lint hit is usually right: search
-  `stdlib/string.mdk`, `list.mdk` before hand-rolling a helper (`replaceAll`,
-  `join`, `lines`, `unwords`, `split` all exist). If you believe a rule is
-  wrong, report it instead.
-- **File IO is native**: `fs.{mkdirAll}`, `readFile path`, `writeFile path text`
-  (each returns a `Result`). Do not shell out to `cat`, `printf >`, `mkdir`.
-  Chain several `Result`s with a `do` block or `map`, not a six-deep `match`
-  staircase.
-- **Enumerate fixtures, never hardcode the list.** `compiler_cli_test_support.
-  fixtureStems dir` gives the top-level `.mdk` stems; for another extension use
-  `fs.fixtureFiles dir` (all paths) then `filter (endsWith ".jsonl")` and
-  `path.stem`. Add `expectAtLeast <today's count> (length stems)` so a
-  shrunken corpus is red.
-- **Spell the fixture directory literally in your test file** (e.g.
-  `underRoot "test/lsp_fixtures"`), even when a built harness reads it. The
-  corpus-coverage gate finds a corpus's consumer by that literal path in a
-  tracked `.sh` or `_test.mdk`; a compiled program that reads it internally is
-  invisible once the script is gone. Add a `expectAtLeast <n> (length files)`
-  floor on it.
-- **`string.contains NEEDLE HAYSTACK` takes the needle FIRST**, and so do
-  `startsWith PREFIX s`, `endsWith SUFFIX s`. A reversed call turns a "must NOT
-  contain" check into one that can never fire. Every absence check needs its own
-  red proof: make the absent text present and watch the test fail.
-- **`length (lines "")` is 1, not 0.** Test emptiness with `text == ""`.
-- **A spawn that fails to launch must not satisfy a "must fail" check.** `env`
-  exits 126/127 when the command is missing; treat those as errors, not rejections.
-- **A floor equals today's corpus size**, not 1: `expectAtLeast <count> (length
-  stems)`; otherwise most of a corpus can vanish and the test stays green.
-- **If the script rejected a fixture directory with no entry file**, keep that:
-  enumerate the DIRECTORIES and require the file, do not enumerate entry files.
-- **Carry design rationale across.** If the script's header explains what each
-  state or message means (a table, a rule that fixtures must be path-stable, what
-  the gate does NOT cover), port it into the test's header; live files cite it.
-- **Grade every spawn's exit code in the file that spawns**, including cleanup
-  `rm` calls; a `refuse` row is `if code /= 1 then fail …`, not stderr text alone.
-- **No working-directory parameter exists.** For a cwd-relative run use
-  `boundedVerb "sh" ["-c", "cd \"$1\" && shift && exec \"$@\"", "medaka", dir, medakaBin, …args]`.
-- **Use `test_process.withScratchDir (dir => <Expectation>)` for every scratch
-  directory.** It makes a fresh directory per call, runs the body, and removes the
-  directory afterwards (graded, and also when the body fails). Do NOT use the bare
-  `scratchDir`: it is a value, evaluated ONCE per process, so every `test` block
-  of a file shares one directory and one block's files or `rm -rf` break the next.
-  Prove independence: run every block alone with `medaka test --filter
-  "<name substring>" <file>` AND with two blocks swapped; a file that is green only
-  in source order is wrong. If the script removed its temp tree with a `trap`, the
-  native test gets this for free from `withScratchDir`.
-- **Normalise paths** the way the script did (`sed s|$ROOT/|ROOT/|`): replace
-  both `medakaRoot ++ "/"` and, when `medakaRoot` is relative, `$PWD ++ "/"`,
-  using `replaceAll` from the `string` module.
-- `CAPTURE=1` re-capture modes have no native equivalent; do not invent one,
-  report that the script had it.
+Name lookup (one line per hit; cheap):
+`python3 <repo>/.claude/skills/convert-shell-gate/sig.py NAME…` · `-m MODULE` · `-s SUBSTRING`
 
-## Skeleton
-
+## Skeleton A (native-wrap)
 ```
 {- | Gate for <invariant>, over <fixture dir>. Replaces <script>.sh.
-   <one line on why it needs the binary>.
-
-   Runs under `medaka test --native`: it spawns subprocesses and reads
-   fixtures, neither of which the interpreter binds. -}
+   <proves / does NOT prove>. Runs under `medaka test --native`. -}
 
 import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb}
-import test.{Expectation, expectAll, expectEach, expectGolden, fail}
+import test.{Expectation, expectEach, expectGolden, fail}
 
 corpus : <IO> String
 corpus = underRoot "test/<fixtures>"
@@ -118,26 +118,37 @@ row name = match boundedVerb medakaBin ["run", "\{corpus}/\{name}.mdk"]
 test "<script name>: <what it checks>" = expectEach [("<label>", row "<name>")]
 ```
 
-## Helper cheat sheet (exact names; signatures are real)
+## Skeleton B (native-rewrite)
+```
+{- | <invariant>. Replaces <script>.sh. <proves / does NOT prove>. -}
 
-- `test_process`: `medakaRoot : <IO> String`, `medakaBin`, `underRoot rel`,
-  `boundedVerb cmd args : <Exec> Result String (Int, stdout, stderr)`,
-  `boundedVerbSeconds secs cmd args`,
-  `withScratchDir : (String -> <Exec, IO, FileRead, FileWrite> Expectation) -> <Exec, IO, FileRead, FileWrite> Expectation`,
-  `expectSpawnOk cmd args`, `expectSpawnOkLine cmd args wholeLine`,
-  `expectSpawnFails` / `expectSpawnFailsAll` (nonzero exit AND a diagnostic).
-- `compiler_cli_test_support`: `runMedaka args : Result String (Int, out++err)`,
-  `boundedInTree secs cmd args` (passes MEDAKA_ROOT/EMITTER), `fixtureIn
-  corpus name`, `fixtureStems dir : Result String (List String)`,
-  `expectCheckAccept path`, `expectCheckReject path needles`.
-- `test`: `expectGolden path actual` and `expectEqualText exp act` both strip a
-  trailing `()` suffix, or else a whole last line `0`, from BOTH sides before
-  comparing (a driver artefact normaliser, `stdlib/test.mdk` `normalizeTrailingUnit`),
-  so they are LOOSER than the shell `diff`/`cmp`/`[ "$a" = "$b" ]` they replace.
-  `expectEqualLines exp act` is exact. Use it (reading the golden yourself) where
-  the output is not an auto-printed program value, or where a trailing `()`/`0`
-  line could be real data. `expectTextContainsAll needles text`,
-  `expectLineContainsAll`, `expectAll [e…]`, `expectEach [(label, e)…]`,
-  `expectAtLeast n m` (a corpus floor: "0 checked" must be red), `expectTrue`,
-  `expectFalse`, `expectEqual`, `fail msg`, `pass`.
-- Full vocabulary and when to use which: the `write-tests` skill.
+import test_process.{underRoot}
+import test.{Expectation, expectAll, expectAtLeast, expectNoFindings, fail}
+
+items : String -> List String      -- the script's extraction, pure
+items text = …
+
+check : <IO, FileRead> Expectation
+check = match readFile (underRoot "<repo-relative path>")
+  Err e => fail "could not read <path>: \{e}"
+  Ok text =>
+    let xs = items text
+    expectAll
+      [ expectAtLeast <today's count> (length xs)
+      , expectNoFindings "<what drifted>" (Ok (filter (x => …) xs))
+      ]
+
+test "<script name>: <what it checks>" = check
+```
+
+## Helpers (exact names)
+- `test_process`: `medakaRoot`, `medakaBin`, `underRoot rel`, `boundedVerb cmd args`,
+  `boundedVerbSeconds secs cmd args`, `withScratchDir`, `expectSpawnOk`, `expectSpawnOkLine`,
+  `expectSpawnFails`/`expectSpawnFailsAll` (nonzero exit AND a diagnostic).
+- `compiler_cli_test_support` (test/): `runMedaka args` (out++err), `boundedInTree secs cmd args`
+  (sets MEDAKA_ROOT/EMITTER), fixtureIn, fixtureStems, `expectCheckAccept`, `expectCheckReject`.
+- `fs`: `fixtureFiles`, `fixtureDirs`, `walkDir`, `mkdirAll`, `isFile`, `isDir`.
+- `test`: `expectGolden`, `expectEqualText`, `expectEqualLines`, `expectTextContainsAll`,
+  `expectLineContainsAll`, `expectAll`, `expectEach`, `expectAtLeast`, `expectNoFindings`,
+  `expectFindings`, `expectTrue`, `expectFalse`, `expectEqual`, `fail`, `pass`.
+- Anything else: `sig.py`.

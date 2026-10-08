@@ -1,0 +1,267 @@
+{- | Pass-coverage census (#886, epic #880). Replaces
+   test/diff_compiler_perf_stage_census.sh. Every pipeline stage the profilers emit
+   (`emitPhaseAO on "<stage>"` in compiler/entries/profile_main.mdk and
+   compiler/entries/profile_modules_main.mdk) must be GRADED by the perf gate
+   (its TIME_STAGES or OP_STAGES in test/diff_compiler_perf_scaling.sh) or WAIVED
+   with a reason in test/PERF-STAGE-WAIVERS.txt. The waiver ledger is ratcheted: a
+   waiver for a stage no longer emitted is stale; a waiver for a stage now graded
+   is an orphan.
+
+   Proves: the stage list is derived from the profiler labels, never hardcoded; no
+   call head is left without a static string-literal label within six lines; every
+   derived stage is graded or waived; no waiver is stale or orphan; the perf gate
+   still parses TIME_STAGES and OP_STAGES and keeps its backend_graded and ops_graded
+   non-zero guards; at least 16 stages are derived and at least 12 are graded.
+
+   Does NOT prove: that a profiler label is static when it is built some other way
+   (a head with no literal in reach is a finding; a label assembled out of sight is
+   not visible here); that the perf gate measures what it names; anything about
+   timing. Pure text analysis: no compiler build, no spawn. -}
+
+import list.{nub}
+import regex.{Regex, mustCompile, isMatch}
+import string.{lines, split, startsWith, trim}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectNoFindings, fail, pass
+}
+import test_process.{underRoot}
+
+mainRel : String
+mainRel = "compiler/entries/profile_main.mdk"
+
+modulesRel : String
+modulesRel = "compiler/entries/profile_modules_main.mdk"
+
+perfRel : String
+perfRel = "test/diff_compiler_perf_scaling.sh"
+
+waiverRel : String
+waiverRel = "test/PERF-STAGE-WAIVERS.txt"
+
+-- A profiler call head: `emitPhaseAO on …`, or a bare `emitPhaseAO` whose arguments
+-- wrap onto the next lines. The import line `emitPhaseAO,` is not a call.
+callHeadRe : Regex
+callHeadRe = mustCompile "emitPhaseAO\\s+on\\b|emitPhaseAO\\s*$"
+
+backendGuardRe : Regex
+backendGuardRe = mustCompile "backend_graded\"?\\s*-eq\\s*0"
+
+opsGuardRe : Regex
+opsGuardRe = mustCompile "ops_graded\"?\\s*-eq\\s*0"
+
+data Inputs = Inputs {
+  heads : List (String, Option (String, String)),
+  perf : String,
+  waivers : String,
+}
+
+readRepo : String -> <IO, FileRead> Result String String
+readRepo rel = match readFile (underRoot rel)
+  Err e => Err "could not read \{rel}: \{e}"
+  Ok t => Ok t
+
+loadAll : <IO, FileRead> Result String Inputs
+loadAll = do
+  a <- readRepo mainRel
+  b <- readRepo modulesRel
+  p <- readRepo perfRel
+  w <- readRepo waiverRel
+  Ok Inputs {
+    heads =
+      profilerHeads mainRel (numbered 1 (lines a))
+        ++ profilerHeads modulesRel (numbered 1 (lines b)),
+    perf = p,
+    waivers = w,
+  }
+
+withInputs : (Inputs -> Expectation) -> <IO, FileRead> Expectation
+withInputs k = match loadAll
+  Err e => fail e
+  Ok i => k i
+
+numbered : Int -> List String -> List (Int, String)
+numbered _ [] = []
+numbered n (l :: rest) = (n, l) :: numbered (n + 1) rest
+
+isCommentLine : String -> Bool
+isCommentLine l = startsWith "--" (trim l)
+
+isCallHead : String -> Bool
+isCallHead l = not (isCommentLine l) && isMatch callHeadRe l
+
+locOf : String -> Int -> String
+locOf file n = "\{file}:\{intToString n}"
+
+-- The label is the first string literal. `split "\""` puts a literal's body at index 1
+-- and needs a closing quote, so `"a"` splits to ["", "a", ""].
+firstLiteral : String -> Option String
+firstLiteral l = literalOf (split "\"" l)
+
+literalOf : List String -> Option String
+literalOf (_ :: k :: _ :: _) = Some k
+literalOf _ = None
+
+-- The label is searched for on the head line and the five after it (a six-line window).
+-- `k` counts the lines still in reach.
+labelWithin : Int -> List (Int, String) -> Option (String, Int)
+labelWithin _ [] = None
+labelWithin k ((n, l) :: rest) = match firstLiteral l
+  Some s => Some (s, n)
+  None => if k <= 1 then None else labelWithin (k - 1) rest
+
+labelHere : String -> Option (String, Int) -> Option (String, String)
+labelHere _ None = None
+labelHere file (Some (s, n)) = Some (s, locOf file n)
+
+-- One row per profiler call head: its location, and the stage it names with the
+-- location of that label (None when no literal label is in reach).
+profilerHeads : String ->
+  List (Int, String) ->
+  List (String, Option (String, String))
+profilerHeads _ [] = []
+profilerHeads file ((n, l) :: rest) =
+  if isCallHead l then
+    (locOf file n, labelHere file (labelWithin 6 ((n, l) :: rest)))
+      :: profilerHeads file rest
+  else
+    profilerHeads file rest
+
+unresolved : List (String, Option (String, String)) -> List String
+unresolved [] = []
+unresolved ((loc, None) :: rest) = loc :: unresolved rest
+unresolved ((_, Some _) :: rest) = unresolved rest
+
+notLabel : String -> (String, Option (String, String)) -> Bool
+notLabel s (_, found) = match found
+  None => True
+  Some (t, _) => t /= s
+
+-- Distinct stages, each with its first emission site.
+stagesIn : List (String, Option (String, String)) -> List (String, String)
+stagesIn [] = []
+stagesIn ((_, None) :: rest) = stagesIn rest
+stagesIn ((_, Some (s, loc)) :: rest) =
+  (s, loc) :: stagesIn (filter (notLabel s) rest)
+
+stageNames : List (String, String) -> List String
+stageNames [] = []
+stageNames ((s, _) :: rest) = s :: stageNames rest
+
+firstToken : String -> String
+firstToken t = match split " " t
+  s :: _ => s
+  [] => ""
+
+isRow : String -> Bool
+isRow t = t /= "" && not (startsWith "#" t)
+
+-- Ledger rows: the stage is the first token of each line that is neither blank nor a comment.
+waivedNames : String -> List String
+waivedNames text = map firstToken (filter isRow (map trim (lines text)))
+
+-- `NAME="w w w"` on its own line: the words, or None when the assignment is absent.
+assignedWords : String -> List String -> Option (List String)
+assignedWords _ [] = None
+assignedWords var (l :: rest) =
+  if startsWith (var ++ "=\"") l then
+    assignedValue l
+  else
+    assignedWords var rest
+
+assignedValue : String -> Option (List String)
+assignedValue l = match split "\"" l
+  _ :: v :: _ :: _ => Some (filter (/= "") (split " " v))
+  _ => None
+
+gradedOf : String -> Option (List String)
+gradedOf perf = match assignedWords "TIME_STAGES" (lines perf)
+  None => None
+  Some t => map (o => nub (t ++ o)) (assignedWords "OP_STAGES" (lines perf))
+
+unmeasured : List String -> List String -> List (String, String) -> List String
+unmeasured _ _ [] = []
+unmeasured g ws ((s, loc) :: rest) =
+  if elem s g || elem s ws then
+    unmeasured g ws rest
+  else
+    "\{s} (emitted at \{loc})" :: unmeasured g ws rest
+
+staleRows : List String -> List String -> List String
+staleRows ws names = filter (w => not (elem w names)) ws
+
+orphanRows : List String -> List String -> List String
+orphanRows ws g = filter (w => elem w g) ws
+
+guardPresent : String -> Regex -> String -> Expectation
+guardPresent perf re label =
+  if isMatch re perf then
+    pass
+  else
+    fail
+      "\{perfRel} no longer guards \{label}: that assertion is what stops the perf gate exiting 0 having graded nothing on that arm. Restore it."
+
+derivationCheck : Inputs -> Expectation
+derivationCheck i = expectAll [
+  expectNoFindings
+    "emitPhaseAO call heads with no string-literal stage label within six lines (the census cannot see whether those stages are measured)"
+    (Ok (unresolved i.heads)),
+  expectAtLeast 16 (length (stagesIn i.heads)),
+]
+
+gradedCheck : Inputs -> Expectation
+gradedCheck i = match gradedOf i.perf
+  None =>
+    fail
+      "could not parse TIME_STAGES / OP_STAGES out of \{perfRel}: the census derives the graded set from those two assignments"
+  Some g => expectAtLeast 12 (length g)
+
+ungradedCheck : Inputs -> Expectation
+ungradedCheck i = match gradedOf i.perf
+  None =>
+    fail
+      "could not parse TIME_STAGES / OP_STAGES out of \{perfRel}: the census derives the graded set from those two assignments"
+  Some g =>
+    expectNoFindings
+      "profiler stages neither graded (TIME_STAGES / OP_STAGES in \{perfRel}) nor waived (\{waiverRel}): an unmeasured pass would ship silently"
+      (Ok (unmeasured g (waivedNames i.waivers) (stagesIn i.heads)))
+
+staleCheck : Inputs -> Expectation
+staleCheck i =
+  expectNoFindings
+    "\{waiverRel} waives stages the profilers no longer emit (stale: the ledger must not outlive its stage)"
+    (Ok (staleRows (waivedNames i.waivers) (stageNames (stagesIn i.heads))))
+
+orphanCheck : Inputs -> Expectation
+orphanCheck i = match gradedOf i.perf
+  None =>
+    fail
+      "could not parse TIME_STAGES / OP_STAGES out of \{perfRel}: the census derives the graded set from those two assignments"
+  Some g =>
+    expectNoFindings
+      "\{waiverRel} waives stages that are now graded (orphan: remove the waiver so the stage is measured, not excused)"
+      (Ok (orphanRows (waivedNames i.waivers) g))
+
+guardCheck : Inputs -> Expectation
+guardCheck i = expectAll [
+  guardPresent
+    i.perf
+    backendGuardRe
+    "backend_graded>0 (backend TIME arm, #359)",
+  guardPresent i.perf opsGuardRe "ops_graded>0 (op-count arm, #884)",
+]
+
+test "census: stages are derived from the profilers, and none is unresolvable" =
+  withInputs derivationCheck
+
+test "census: TIME_STAGES and OP_STAGES parse, and at least 12 stages are graded" =
+  withInputs gradedCheck
+
+test "census: every derived stage is graded or waived" =
+  withInputs ungradedCheck
+
+test "census: the waiver ledger has no stale row" = withInputs staleCheck
+
+test "census: the waiver ledger has no orphan row" = withInputs orphanCheck
+
+test "census: the perf gate keeps its backend_graded and ops_graded non-zero guards" =
+  withInputs guardCheck
