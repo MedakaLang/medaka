@@ -1,0 +1,1082 @@
+-- The runtime extern catalog as data: one row per `stdlib/runtime.mdk` extern,
+-- naming how each backend lowers it.  Design: docs/design/TARGETS-DESIGN.md §4.
+--
+-- A row holds no signature.  The declaration in `stdlib/runtime.mdk` is the only
+-- statement of an extern's type and of the effects it requires; a consumer that
+-- needs the signature joins on the name.
+--
+-- Each backend's column carries that backend's own family tag inside the
+-- disposition.  A family names the emitter path that lowers the extern, so a
+-- backend selects its emitter from its own column alone, and no backend's
+-- grouping is visible in another backend's column.
+
+import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup}
+
+-- Why a backend does not lower an extern.  Each kind is one category of the
+-- capability ledger: `GapBug` BUG, `GapDead` DEAD, `GapTodo` TODO,
+-- `GapPermanent` PERMANENT, `GapUnported` WASM-GAP.
+public export data GapKind =
+  | GapBug
+  | GapDead
+  | GapTodo
+  | GapPermanent
+  | GapUnported
+
+-- How one backend handles one extern.  `f` is that backend's family tag.
+--
+-- `CSymbol` (llvm): the lowering calls the named function of
+--   `runtime/medaka_rt.c` itself.  A `_at` site twin of the symbol is the same
+--   row.
+-- `EnvImport` (wasm): the lowering calls the named `env` host import itself.
+--   Host imports reached only through the module's own WAT runtime functions
+--   are not named here; the extern is `Inline`.
+-- `Inline`: lowered in place, with no runtime call of its own.
+-- `Interpreted` (eval): bound in one of the interpreter's extern tables.
+-- `TrapStub`: bound, but lowered to an abort instead of the extern's meaning.
+-- `FrozenConstant`: bound, but to a value that is not the extern's meaning.
+-- `NotProvided`: not lowered at all; the reason says why.
+--
+-- `TrapStub` and `FrozenConstant` are bound, so a program reaching them still
+-- builds; only `NotProvided` has no binding.
+public export data Disposition f =
+  | CSymbol f String
+  | EnvImport f String
+  | Inline f
+  | Interpreted
+  | TrapStub f String
+  | FrozenConstant f String
+  | NotProvided GapKind String
+
+-- The LLVM backend's emitter paths.  The first twenty-one are the extern
+-- families `llvm_emit.mdk` dispatches a saturated call through; the last four
+-- are the externs it handles by exact name elsewhere: `arrayMakeWith`'s own
+-- emitter, the `Ref` cell, the constants `emitVar` writes in place, and the
+-- guard fallthrough sentinel.
+public export data LlvmFamily =
+  | LlvmStr
+  | LlvmNum
+  | LlvmIo
+  | LlvmAbort
+  | LlvmArrIntrinsic
+  | LlvmArrLeaf
+  | LlvmByteBlock
+  | LlvmChar
+  | LlvmStrChar
+  | LlvmUnicode
+  | LlvmAdt
+  | LlvmEnv
+  | LlvmFile
+  | LlvmNet
+  | LlvmRng
+  | LlvmHash
+  | LlvmBit
+  | LlvmFixedWidth
+  | LlvmU64
+  | LlvmDebugLit
+  | LlvmPerf
+  | LlvmArrayMakeWith
+  | LlvmRefCell
+  | LlvmConstant
+  | LlvmFallthrough
+
+-- The WasmGC backend's emitter paths: the four extern families
+-- `wasm_emit.mdk`'s application ladders dispatch through, then the `Ref` cell,
+-- the constants written in place, and the guard fallthrough sentinel.
+public export data WasmFamily =
+  | WasmStr
+  | WasmLeaf
+  | WasmArray
+  | WasmByteBlock
+  | WasmRefCell
+  | WasmConstant
+  | WasmFallthrough
+
+-- One extern: its name, then the llvm, wasm and eval dispositions.  The
+-- interpreter selects through its own keyed tables, so its column has no family.
+public export data ExternRow =
+  | ExternRow String (Disposition LlvmFamily) (Disposition WasmFamily) (Disposition Unit)
+
+export
+rowName : ExternRow -> String
+rowName (ExternRow n _ _ _) = n
+
+export
+rowLlvm : ExternRow -> Disposition LlvmFamily
+rowLlvm (ExternRow _ l _ _) = l
+
+export
+rowWasm : ExternRow -> Disposition WasmFamily
+rowWasm (ExternRow _ _ w _) = w
+
+export
+rowEval : ExternRow -> Disposition Unit
+rowEval (ExternRow _ _ _ v) = v
+
+-- The family a backend selects its emitter by, or `None` when nothing is
+-- lowered (`NotProvided`) or the backend has no families (`Interpreted`).
+export
+dispositionFamily : Disposition f -> Option f
+dispositionFamily (CSymbol f _) = Some f
+dispositionFamily (EnvImport f _) = Some f
+dispositionFamily (Inline f) = Some f
+dispositionFamily Interpreted = None
+dispositionFamily (TrapStub f _) = Some f
+dispositionFamily (FrozenConstant f _) = Some f
+dispositionFamily (NotProvided _ _) = None
+
+export
+isBound : Disposition f -> Bool
+isBound (NotProvided _ _) = False
+isBound _ = True
+
+-- The capability ledger's (category, reason) for a disposition that is a gap or a
+-- caveat, or `None` for a binding that is the extern's meaning.
+export
+ledgerEntry : Disposition f -> Option (String, String)
+ledgerEntry (NotProvided k why) = Some (gapKindName k, why)
+ledgerEntry (TrapStub _ why) = Some ("TRAP-STUB", why)
+ledgerEntry (FrozenConstant _ why) = Some ("FROZEN-CONSTANT", why)
+ledgerEntry _ = None
+
+export
+gapKindName : GapKind -> String
+gapKindName GapBug = "BUG"
+gapKindName GapDead = "DEAD"
+gapKindName GapTodo = "TODO"
+gapKindName GapPermanent = "PERMANENT"
+gapKindName GapUnported = "WASM-GAP"
+
+-- The row for an extern name, or `None` for a name that is not a runtime extern.
+export
+catalogRow : String -> Option ExternRow
+catalogRow name = omLookup name catalogIndex
+
+catalogIndex : OrdMap ExternRow
+catalogIndex = omFromPairs (map (r => (rowName r, r)) catalogRows) omEmpty
+
+interpLlvmOnly : String
+interpLlvmOnly = "implemented by llvm, missing from interp — BUG(T7)"
+
+wasmNoSockets : String
+wasmNoSockets =
+  "raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead"
+
+wasmNoHostFs : String
+wasmNoHostFs = "ported in llvm (isFileExtern), not yet in wasm's host-fs seam"
+
+wasmNoStdin : String
+wasmNoStdin = "ported in llvm (isFileExtern, stdin family), not yet in wasm"
+
+-- In `stdlib/runtime.mdk` declaration order.
+export
+catalogRows : List ExternRow
+catalogRows = [
+  ExternRow "putStr" (CSymbol LlvmIo "mdk_putstr") (Inline WasmStr) Interpreted,
+  ExternRow
+    "putStrLn"
+    (CSymbol LlvmIo "mdk_putstrln")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "ePutStr"
+    (CSymbol LlvmIo "mdk_eputstr")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "ePutStrLn"
+    (CSymbol LlvmIo "mdk_eputstrln")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "flushStdout"
+    (CSymbol LlvmIo "mdk_flushstdout")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "readLine"
+    (CSymbol LlvmFile "mdk_read_line")
+    (NotProvided GapUnported wasmNoStdin)
+    Interpreted,
+  ExternRow
+    "readLineOpt"
+    (CSymbol LlvmFile "mdk_read_line_opt")
+    (NotProvided GapUnported wasmNoStdin)
+    Interpreted,
+  ExternRow
+    "readAll"
+    (CSymbol LlvmFile "mdk_read_all")
+    (NotProvided GapUnported wasmNoStdin)
+    Interpreted,
+  ExternRow
+    "readExactly"
+    (CSymbol LlvmFile "mdk_read_exactly")
+    (NotProvided GapUnported wasmNoStdin)
+    Interpreted,
+  ExternRow "Ref" (Inline LlvmRefCell) (Inline WasmRefCell) Interpreted,
+  ExternRow "setRef" (Inline LlvmRefCell) (Inline WasmRefCell) Interpreted,
+  ExternRow
+    "readFile"
+    (CSymbol LlvmFile "mdk_read_file")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "readFileBytes"
+    (CSymbol LlvmFile "mdk_read_file_bytes")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "writeFile"
+    (CSymbol LlvmFile "mdk_write_file")
+    (NotProvided
+      GapUnported
+      "ported in llvm (isFileExtern); wasm has writeFileBytes but not the text-mode writeFile")
+    Interpreted,
+  ExternRow
+    "writeFileBytes"
+    (CSymbol LlvmFile "mdk_write_file_bytes")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "writeFileMode"
+    (CSymbol LlvmFile "mdk_write_file_mode")
+    (NotProvided
+      GapUnported
+      "ported in llvm (isFileExtern), not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to set")
+    Interpreted,
+  ExternRow
+    "appendFile"
+    (CSymbol LlvmFile "mdk_append_file")
+    (NotProvided GapUnported wasmNoHostFs)
+    Interpreted,
+  ExternRow
+    "fileExists"
+    (CSymbol LlvmFile "mdk_file_exists")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "fileMode"
+    (CSymbol LlvmFile "mdk_file_mode")
+    (NotProvided
+      GapUnported
+      "ported in llvm (isFileExtern), not yet in wasm's host-fs seam; the browser playground has no POSIX file mode to report")
+    Interpreted,
+  ExternRow
+    "canonicalizePath"
+    (CSymbol LlvmFile "mdk_canonicalize_path")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "listDir"
+    (CSymbol LlvmFile "mdk_list_dir")
+    (NotProvided GapUnported wasmNoHostFs)
+    Interpreted,
+  ExternRow
+    "makeDir"
+    (CSymbol LlvmFile "mdk_make_dir")
+    (NotProvided GapUnported wasmNoHostFs)
+    Interpreted,
+  ExternRow
+    "removeFile"
+    (CSymbol LlvmFile "mdk_remove_file")
+    (NotProvided GapUnported wasmNoHostFs)
+    Interpreted,
+  ExternRow
+    "rename"
+    (CSymbol LlvmFile "mdk_rename")
+    (NotProvided GapUnported wasmNoHostFs)
+    Interpreted,
+  ExternRow
+    "fsync"
+    (CSymbol LlvmFile "mdk_fsync")
+    (NotProvided GapUnported wasmNoHostFs)
+    Interpreted,
+  ExternRow
+    "removeDir"
+    (CSymbol LlvmFile "mdk_remove_dir")
+    (NotProvided GapUnported wasmNoHostFs)
+    Interpreted,
+  ExternRow
+    "statFile"
+    (CSymbol LlvmFile "mdk_stat_file")
+    (NotProvided GapUnported wasmNoHostFs)
+    Interpreted,
+  ExternRow "args" (CSymbol LlvmEnv "mdk_args") (Inline WasmLeaf) Interpreted,
+  ExternRow
+    "getEnv"
+    (CSymbol LlvmEnv "mdk_get_env")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "executablePath"
+    (CSymbol LlvmFile "mdk_executable_path")
+    (NotProvided GapUnported "ported in llvm (isEnvExtern), not yet in wasm")
+    Interpreted,
+  ExternRow
+    "buildFingerprint"
+    (CSymbol LlvmFile "mdk_build_fingerprint")
+    (NotProvided
+      GapPermanent
+      "build-provenance (issue #89 staleness guard) is meaningless in the WasmGC playground — there is no build-provenance object linked in and no host filesystem to re-hash compiler/ against; the compiler is only ever built via the LLVM backend, never wasm")
+    Interpreted,
+  ExternRow
+    "buildCommit"
+    (CSymbol LlvmFile "mdk_build_commit")
+    (NotProvided
+      GapPermanent
+      "same rationale as buildFingerprint (issue #74 W8 sibling stamp) — no build-provenance object linked in and no host git checkout in the WasmGC playground")
+    Interpreted,
+  ExternRow
+    "buildDate"
+    (CSymbol LlvmFile "mdk_build_date")
+    (NotProvided
+      GapPermanent
+      "same rationale as buildFingerprint (issue #74 W8 sibling stamp) — no build-provenance object linked in in the WasmGC playground")
+    Interpreted,
+  ExternRow
+    "runCommand"
+    (CSymbol LlvmFile "mdk_run_command")
+    (NotProvided
+      GapUnported
+      "ported in llvm (isFileExtern family, <Exec>), not yet in wasm — a subprocess-exec seam has no obvious browser equivalent either, but it isn't documented PERMANENT anywhere in wasm_emit.mdk the way net is, so filed WASM-GAP not PERMANENT")
+    (NotProvided
+      GapBug
+      "implemented by llvm (isFileExtern family), missing from interp — BUG(T7). DEFERRED ON PURPOSE (2026-07-13): --allow-exec security posture first"),
+  ExternRow
+    "exit"
+    (CSymbol LlvmAbort "mdk_exit")
+    (EnvImport WasmLeaf "mdk_exit")
+    Interpreted,
+  ExternRow
+    "panic"
+    (CSymbol LlvmAbort "mdk_panic")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "indexError"
+    (CSymbol LlvmAbort "mdk_oob_msg")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "indexErrorAt"
+    (CSymbol LlvmAbort "mdk_oob_at")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "indexErrorAtSite"
+    (CSymbol LlvmAbort "mdk_oob_at")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "panicAt"
+    (CSymbol LlvmAbort "mdk_panic")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "sliceError"
+    (CSymbol LlvmAbort "mdk_slice_oob")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "stashRunStdout"
+    (CSymbol LlvmIo "mdk_stash_run_stdout")
+    (NotProvided
+      GapPermanent
+      "internal `medaka run` CLI plumbing (interpreter-only outputRef stash for the \"run drops stdout on panic\" fix) — the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program ever exercises this")
+    Interpreted,
+  ExternRow
+    "enableRunStdoutFlush"
+    (CSymbol LlvmIo "mdk_enable_run_stdout_flush")
+    (NotProvided
+      GapPermanent
+      "internal `medaka run` CLI plumbing (arms the abort-time flush for the \"run drops stdout on panic\" fix) — the compiler is only ever built via the LLVM backend, never wasm, so no WasmGC program ever exercises this")
+    Interpreted,
+  ExternRow
+    "__fallthrough__"
+    (Inline LlvmFallthrough)
+    (Inline WasmFallthrough)
+    Interpreted,
+  ExternRow
+    "assertSnapshot"
+    (NotProvided
+      GapTodo
+      "unimplemented in all 3 engines, no stdlib caller — forward-declared snapshot-testing primitive, not an asymmetric regression")
+    (NotProvided
+      GapTodo
+      "unimplemented in all 3 engines, no stdlib caller — forward-declared snapshot-testing primitive, not an asymmetric regression")
+    (NotProvided
+      GapBug
+      "unimplemented in all 3 engines (see llvm/wasm TODO rows); no stdlib caller yet — a forward-declared snapshot-testing primitive (TESTING-DESIGN.md §4.7 \"medaka test --promote\"); filed BUG(T7) here per the 37-count framing even though it isn't an asymmetric regression against another engine"),
+  ExternRow
+    "netResolve"
+    (CSymbol LlvmNet "mdk_net_resolve")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netTcpConnect"
+    (CSymbol LlvmNet "mdk_net_tcp_connect")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netTcpListen"
+    (CSymbol LlvmNet "mdk_net_tcp_listen")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netListenPort"
+    (CSymbol LlvmNet "mdk_net_listen_port")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netTcpAccept"
+    (CSymbol LlvmNet "mdk_net_tcp_accept")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netSend"
+    (CSymbol LlvmNet "mdk_net_send")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netSendFrom"
+    (CSymbol LlvmNet "mdk_net_send_from")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netRecv"
+    (CSymbol LlvmNet "mdk_net_recv")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netShutdown"
+    (CSymbol LlvmNet "mdk_net_shutdown")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netClose"
+    (CSymbol LlvmNet "mdk_net_close")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netCloseListener"
+    (CSymbol LlvmNet "mdk_net_close")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netSetTimeout"
+    (CSymbol LlvmNet "mdk_net_set_timeout")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "socketFd"
+    (Inline LlvmNet)
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "listenSocketFd"
+    (Inline LlvmNet)
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "pdsSignalStart"
+    (CSymbol LlvmNet "mdk_pds_signal_start")
+    (NotProvided
+      GapPermanent
+      "POSIX SIGTERM self-pipe and fd readiness are native-only; wasm_emit rejects the net family")
+    (NotProvided
+      GapBug
+      "native-only opt-in POSIX signal/pipe, interpreter has no signal host binding or --allow-net"),
+  ExternRow
+    "pdsSignalRequested"
+    (CSymbol LlvmNet "mdk_pds_signal_requested")
+    (NotProvided
+      GapPermanent
+      "POSIX SIGTERM state is native-only; wasm_emit rejects the net family")
+    (NotProvided
+      GapBug
+      "native-only opt-in POSIX signal flag, interpreter has no signal host binding or --allow-net"),
+  ExternRow
+    "ioPoll"
+    (CSymbol LlvmNet "mdk_io_poll")
+    (FrozenConstant
+      WasmLeaf
+      "bound to a coded runtime trap, not a value: E-WASM-NO-BINDING after evaluating its arguments; the Net/Stdin readiness bindings are #3666")
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netSetNonblock"
+    (CSymbol LlvmNet "mdk_net_set_nonblock")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netSetNonblockListener"
+    (CSymbol LlvmNet "mdk_net_set_nonblock")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netTryAccept"
+    (CSymbol LlvmNet "mdk_net_try_accept")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netConnectStart"
+    (CSymbol LlvmNet "mdk_net_connect_start")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netConnectCheck"
+    (CSymbol LlvmNet "mdk_net_connect_check")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netTryRecv"
+    (CSymbol LlvmNet "mdk_net_try_recv")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netTryRecvBytes"
+    (CSymbol LlvmNet "mdk_net_try_recv_bytes")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netTrySend"
+    (CSymbol LlvmNet "mdk_net_try_send")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netTrySendFrom"
+    (CSymbol LlvmNet "mdk_net_try_send_from")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netSendBytesFrom"
+    (CSymbol LlvmNet "mdk_net_send_bytes_from")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "netTrySendBytesFrom"
+    (CSymbol LlvmNet "mdk_net_try_send_bytes_from")
+    (NotProvided GapPermanent wasmNoSockets)
+    (NotProvided GapBug interpLlvmOnly),
+  ExternRow
+    "wallTimeSec"
+    (CSymbol LlvmPerf "mdk_wall_time_sec")
+    (EnvImport WasmLeaf "mdk_wall_time_sec")
+    Interpreted,
+  ExternRow
+    "monotonicSec"
+    (CSymbol LlvmPerf "mdk_monotonic_sec")
+    (EnvImport WasmLeaf "mdk_monotonic_sec")
+    Interpreted,
+  ExternRow
+    "sleepMs"
+    (CSymbol LlvmPerf "mdk_sleep_ms")
+    (EnvImport WasmLeaf "mdk_sleep_ms")
+    Interpreted,
+  ExternRow
+    "allocBytes"
+    (CSymbol LlvmPerf "mdk_alloc_bytes")
+    (NotProvided
+      GapUnported
+      "real GC-byte-counter FFI in llvm (isPerfExtern), no wasm host-import wired")
+    Interpreted,
+  ExternRow
+    "randomInt"
+    (CSymbol LlvmRng "mdk_random_int")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "randomBool"
+    (CSymbol LlvmRng "mdk_random_bool")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "randomFloat"
+    (CSymbol LlvmRng "mdk_random_float")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "randomChar"
+    (CSymbol LlvmRng "mdk_random_char")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "setSeed"
+    (CSymbol LlvmRng "mdk_set_seed")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "randomState"
+    (CSymbol LlvmRng "mdk_random_state")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "restoreRandomState"
+    (CSymbol LlvmRng "mdk_restore_random_state")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "osEntropyBytes"
+    (CSymbol LlvmRng "mdk_os_entropy_bytes")
+    (NotProvided
+      GapUnported
+      "OS/browser entropy host import is not wired; native/eval only (#1726)")
+    Interpreted,
+  ExternRow
+    "hashInt"
+    (CSymbol LlvmHash "mdk_hash_int")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "hashFloat"
+    (CSymbol LlvmHash "mdk_hash_float")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "hashString"
+    (CSymbol LlvmHash "mdk_hash_string")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "hashChar"
+    (CSymbol LlvmHash "mdk_hash_char")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "hashBool"
+    (CSymbol LlvmHash "mdk_hash_bool")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow "pi" (Inline LlvmConstant) (Inline WasmConstant) Interpreted,
+  ExternRow "e" (Inline LlvmConstant) (Inline WasmConstant) Interpreted,
+  ExternRow
+    "intMinBound"
+    (Inline LlvmConstant)
+    (Inline WasmConstant)
+    Interpreted,
+  ExternRow
+    "intMaxBound"
+    (Inline LlvmConstant)
+    (Inline WasmConstant)
+    Interpreted,
+  ExternRow
+    "charMinBound"
+    (Inline LlvmConstant)
+    (Inline WasmConstant)
+    Interpreted,
+  ExternRow
+    "charMaxBound"
+    (Inline LlvmConstant)
+    (Inline WasmConstant)
+    Interpreted,
+  ExternRow "intToFloat" (Inline LlvmNum) (Inline WasmLeaf) Interpreted,
+  ExternRow "floatToInt" (Inline LlvmNum) (Inline WasmLeaf) Interpreted,
+  ExternRow
+    "floatRem"
+    (CSymbol LlvmNum "mdk_float_rem")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "bitAnd"
+    (CSymbol LlvmBit "mdk_bit_and")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "bitOr"
+    (CSymbol LlvmBit "mdk_bit_or")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "bitXor"
+    (CSymbol LlvmBit "mdk_bit_xor")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "shiftLeft"
+    (CSymbol LlvmBit "mdk_shift_left")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "shiftRight"
+    (CSymbol LlvmBit "mdk_shift_right")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "bitNot"
+    (CSymbol LlvmBit "mdk_bit_not")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow "sqrt" (CSymbol LlvmNum "mdk_sqrt") (Inline WasmLeaf) Interpreted,
+  ExternRow
+    "cbrt"
+    (CSymbol LlvmNum "mdk_cbrt")
+    (EnvImport WasmLeaf "mdk_cbrt")
+    Interpreted,
+  ExternRow
+    "exp"
+    (CSymbol LlvmNum "mdk_exp")
+    (EnvImport WasmLeaf "mdk_exp")
+    Interpreted,
+  ExternRow
+    "log"
+    (CSymbol LlvmNum "mdk_log")
+    (EnvImport WasmLeaf "mdk_log")
+    Interpreted,
+  ExternRow
+    "log2"
+    (CSymbol LlvmNum "mdk_log2")
+    (EnvImport WasmLeaf "mdk_log2")
+    Interpreted,
+  ExternRow
+    "log10"
+    (CSymbol LlvmNum "mdk_log10")
+    (EnvImport WasmLeaf "mdk_log10")
+    Interpreted,
+  ExternRow
+    "sin"
+    (CSymbol LlvmNum "mdk_sin")
+    (EnvImport WasmLeaf "mdk_sin")
+    Interpreted,
+  ExternRow
+    "cos"
+    (CSymbol LlvmNum "mdk_cos")
+    (EnvImport WasmLeaf "mdk_cos")
+    Interpreted,
+  ExternRow
+    "tan"
+    (CSymbol LlvmNum "mdk_tan")
+    (EnvImport WasmLeaf "mdk_tan")
+    Interpreted,
+  ExternRow
+    "asin"
+    (CSymbol LlvmNum "mdk_asin")
+    (EnvImport WasmLeaf "mdk_asin")
+    Interpreted,
+  ExternRow
+    "acos"
+    (CSymbol LlvmNum "mdk_acos")
+    (EnvImport WasmLeaf "mdk_acos")
+    Interpreted,
+  ExternRow
+    "atan"
+    (CSymbol LlvmNum "mdk_atan")
+    (EnvImport WasmLeaf "mdk_atan")
+    Interpreted,
+  ExternRow
+    "sinh"
+    (CSymbol LlvmNum "mdk_sinh")
+    (EnvImport WasmLeaf "mdk_sinh")
+    Interpreted,
+  ExternRow
+    "cosh"
+    (CSymbol LlvmNum "mdk_cosh")
+    (EnvImport WasmLeaf "mdk_cosh")
+    Interpreted,
+  ExternRow
+    "tanh"
+    (CSymbol LlvmNum "mdk_tanh")
+    (EnvImport WasmLeaf "mdk_tanh")
+    Interpreted,
+  ExternRow "floor" (CSymbol LlvmNum "mdk_floor") (Inline WasmLeaf) Interpreted,
+  ExternRow "ceil" (CSymbol LlvmNum "mdk_ceil") (Inline WasmLeaf) Interpreted,
+  ExternRow "round" (CSymbol LlvmNum "mdk_round") (Inline WasmLeaf) Interpreted,
+  ExternRow "trunc" (CSymbol LlvmNum "mdk_trunc") (Inline WasmLeaf) Interpreted,
+  ExternRow
+    "pow"
+    (CSymbol LlvmNum "mdk_pow")
+    (EnvImport WasmLeaf "mdk_pow")
+    Interpreted,
+  ExternRow
+    "atan2"
+    (CSymbol LlvmNum "mdk_atan2")
+    (EnvImport WasmLeaf "mdk_atan2")
+    Interpreted,
+  ExternRow
+    "hypot"
+    (CSymbol LlvmNum "mdk_hypot")
+    (EnvImport WasmLeaf "mdk_hypot")
+    Interpreted,
+  ExternRow
+    "intBitsToFloat"
+    (CSymbol LlvmNum "mdk_int_bits_to_float")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "bytesToFloat64"
+    (CSymbol LlvmNum "mdk_bytes_to_float64")
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "floatToBytes64"
+    (CSymbol LlvmNum "mdk_float_to_bytes64")
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "intToString"
+    (CSymbol LlvmStr "mdk_int_to_string")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "floatToString"
+    (CSymbol LlvmNum "mdk_float_to_string")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "debugStringLit"
+    (CSymbol LlvmDebugLit "mdk_debug_string_lit")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "debugCharLit"
+    (CSymbol LlvmDebugLit "mdk_debug_char_lit")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "arrayLength"
+    (Inline LlvmArrIntrinsic)
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "arrayMake"
+    (CSymbol LlvmArrLeaf "mdk_array_make")
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "arrayMakeWith"
+    (Inline LlvmArrayMakeWith)
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "arrayGetUnsafe"
+    (Inline LlvmArrIntrinsic)
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "arraySetUnsafe"
+    (Inline LlvmArrIntrinsic)
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "arrayCopy"
+    (CSymbol LlvmArrLeaf "mdk_array_copy")
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "arrayBlit"
+    (CSymbol LlvmArrLeaf "mdk_array_blit")
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "arrayFill"
+    (CSymbol LlvmArrLeaf "mdk_array_fill")
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow
+    "arrayFromList"
+    (CSymbol LlvmArrLeaf "mdk_array_from_list")
+    (Inline WasmArray)
+    Interpreted,
+  ExternRow "u8Truncate" (Inline LlvmFixedWidth) (Inline WasmLeaf) Interpreted,
+  ExternRow "u8ToInt" (Inline LlvmFixedWidth) (Inline WasmLeaf) Interpreted,
+  ExternRow "u16Truncate" (Inline LlvmFixedWidth) (Inline WasmLeaf) Interpreted,
+  ExternRow "u16ToInt" (Inline LlvmFixedWidth) (Inline WasmLeaf) Interpreted,
+  ExternRow "u32Truncate" (Inline LlvmFixedWidth) (Inline WasmLeaf) Interpreted,
+  ExternRow "u32ToInt" (Inline LlvmFixedWidth) (Inline WasmLeaf) Interpreted,
+  ExternRow
+    "intBitAnd"
+    (CSymbol LlvmBit "mdk_bit_and")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "intBitOr"
+    (CSymbol LlvmBit "mdk_bit_or")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "intBitXor"
+    (CSymbol LlvmBit "mdk_bit_xor")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "intBitNot"
+    (CSymbol LlvmBit "mdk_bit_not")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "intShiftLeft"
+    (CSymbol LlvmBit "mdk_shift_left")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "intShiftRight"
+    (CSymbol LlvmBit "mdk_shift_right")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow "u64Truncate" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow "u64TruncateToInt" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow "u64BitAnd" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow "u64BitOr" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow "u64BitXor" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow "u64ShiftLeft" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow "u64ShiftRight" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow "u64MulHigh" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow "i32Truncate" (Inline LlvmFixedWidth) (Inline WasmLeaf) Interpreted,
+  ExternRow "i32ToInt" (Inline LlvmFixedWidth) (Inline WasmLeaf) Interpreted,
+  ExternRow "i64FromBits" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow "i64ToBits" (Inline LlvmU64) (Inline WasmLeaf) Interpreted,
+  ExternRow
+    "byteBlockMake"
+    (CSymbol LlvmByteBlock "mdk_byteblock_make")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockLength"
+    (CSymbol LlvmByteBlock "mdk_byteblock_length")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockGetUnsafe"
+    (CSymbol LlvmByteBlock "mdk_byteblock_get")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockSetUnsafe"
+    (CSymbol LlvmByteBlock "mdk_byteblock_set")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockCopyUnsafe"
+    (CSymbol LlvmByteBlock "mdk_byteblock_copy")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockBlit"
+    (CSymbol LlvmByteBlock "mdk_byteblock_blit")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockFromIntArray"
+    (CSymbol LlvmByteBlock "mdk_byteblock_from_int_array")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockToIntArray"
+    (CSymbol LlvmByteBlock "mdk_byteblock_to_int_array")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockFromString"
+    (CSymbol LlvmByteBlock "mdk_byteblock_from_string")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockToString"
+    (CSymbol LlvmByteBlock "mdk_byteblock_to_string")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "byteBlockWriteStdout"
+    (CSymbol LlvmIo "mdk_byteblock_write_stdout")
+    (Inline WasmByteBlock)
+    Interpreted,
+  ExternRow
+    "stringToChars"
+    (CSymbol LlvmStrChar "mdk_string_to_chars")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringFromChars"
+    (CSymbol LlvmStrChar "mdk_string_from_chars")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringToUtf8Bytes"
+    (CSymbol LlvmStrChar "mdk_string_to_utf8_bytes")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringFromUtf8Bytes"
+    (CSymbol LlvmStrChar "mdk_string_from_utf8_bytes")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "charToStr"
+    (CSymbol LlvmChar "mdk_char_to_str")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow "charCode" (Inline LlvmChar) (Inline WasmLeaf) Interpreted,
+  ExternRow
+    "charFromCode"
+    (CSymbol LlvmAdt "mdk_char_from_code")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow "stringLength" (Inline LlvmStr) (Inline WasmStr) Interpreted,
+  ExternRow
+    "stringSlice"
+    (CSymbol LlvmStrChar "mdk_string_slice")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringConcat"
+    (CSymbol LlvmStr "mdk_string_concat")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringIndexOf"
+    (CSymbol LlvmAdt "mdk_string_index_of")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringCompare"
+    (CSymbol LlvmAdt "mdk_string_compare")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringToFloat"
+    (CSymbol LlvmAdt "mdk_string_to_float")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "charIsAlpha"
+    (CSymbol LlvmUnicode "mdk_char_is_alpha")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "charIsSpace"
+    (CSymbol LlvmUnicode "mdk_char_is_space")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "charIsUpper"
+    (CSymbol LlvmUnicode "mdk_char_is_upper")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "charIsLower"
+    (CSymbol LlvmUnicode "mdk_char_is_lower")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "charIsPunct"
+    (CSymbol LlvmUnicode "mdk_char_is_punct")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "charToUpper"
+    (CSymbol LlvmUnicode "mdk_char_to_upper")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "charToLower"
+    (CSymbol LlvmUnicode "mdk_char_to_lower")
+    (Inline WasmLeaf)
+    Interpreted,
+  ExternRow
+    "stringToUpper"
+    (CSymbol LlvmUnicode "mdk_string_to_upper")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringToLower"
+    (CSymbol LlvmUnicode "mdk_string_to_lower")
+    (Inline WasmStr)
+    Interpreted,
+]

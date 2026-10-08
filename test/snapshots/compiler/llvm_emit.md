@@ -1,5 +1,5 @@
 # META
-source_lines=16149
+source_lines=16150
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -5010,6 +5010,7 @@ findExternFamily name ((pred, fn) :: rest)
 -- saturated CApp head path (emitExternApplied) and the value-position eta-wrap
 -- (emitVar → emitExternEtaClosure); keeping the membership in ONE place means
 -- the two paths can never disagree about what counts as an extern.
+export
 isAnyExtern : String -> Bool
 isAnyExtern name =
   name == "arrayMakeWith" || anyList ((pred, _) => pred name) externCatalog
@@ -17094,7 +17095,7 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DTypeSig false "findExternFamily" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))) (TyApp (TyCon "Option") (TyCon "ExternEmitter")))))
 (DFunDef false "findExternFamily" (PWild (PList)) (EVar "None"))
 (DFunDef false "findExternFamily" ((PVar "name") (PCons (PTuple (PVar "pred") (PVar "fn")) (PVar "rest"))) (EIf (EApp (EVar "pred") (EVar "name")) (EApp (EVar "Some") (EVar "fn")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findExternFamily") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "isAnyExtern" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig true "isAnyExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isAnyExtern" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EVar "anyList") (ELam ((PTuple (PVar "pred") PWild)) (EApp (EVar "pred") (EVar "name")))) (EVar "externCatalog"))))
 (DTypeSig false "emitExternApplied" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitExternApplied" ((PVar "e") (PVar "env") (PVar "fname") (PVar "args")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EApp (EVar "emitArrayMakeWith") (EVar "e")) (EVar "env")) (EVar "args")) (EMatch (EApp (EApp (EVar "findExternFamily") (EVar "fname")) (EVar "externCatalog")) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EVar "fn") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args"))) (arm (PCon "None") () (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported extern ")) (EVar "fname")))))))
@@ -20026,7 +20027,7 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DTypeSig false "findExternFamily" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))) (TyApp (TyCon "Option") (TyCon "ExternEmitter")))))
 (DFunDef false "findExternFamily" (PWild (PList)) (EVar "None"))
 (DFunDef false "findExternFamily" ((PVar "name") (PCons (PTuple (PVar "pred") (PVar "fn")) (PVar "rest"))) (EIf (EApp (EVar "pred") (EVar "name")) (EApp (EVar "Some") (EVar "fn")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findExternFamily") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "isAnyExtern" (TyFun (TyCon "String") (TyCon "Bool")))
+(DTypeSig true "isAnyExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isAnyExtern" ((PVar "name")) (EBinOp "||" (EBinOp "==" (EVar "name") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EVar "anyList") (ELam ((PTuple (PVar "pred") PWild)) (EApp (EVar "pred") (EVar "name")))) (EVar "externCatalog"))))
 (DTypeSig false "emitExternApplied" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DFunDef false "emitExternApplied" ((PVar "e") (PVar "env") (PVar "fname") (PVar "args")) (EIf (EBinOp "==" (EVar "fname") (ELit (LString "arrayMakeWith"))) (EApp (EApp (EApp (EVar "emitArrayMakeWith") (EVar "e")) (EVar "env")) (EVar "args")) (EMatch (EApp (EApp (EVar "findExternFamily") (EVar "fname")) (EVar "externCatalog")) (arm (PCon "Some" (PVar "fn")) () (EApp (EApp (EApp (EApp (EVar "fn") (EVar "e")) (EVar "env")) (EVar "fname")) (EVar "args"))) (arm (PCon "None") () (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported extern ")) (EVar "fname")))))))
