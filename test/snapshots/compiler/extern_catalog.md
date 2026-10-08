@@ -363,7 +363,7 @@ interpLlvmOnly = "implemented by llvm, missing from interp — BUG(T7)"
 
 wasmNoSockets : String
 wasmNoSockets =
-  "raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead"
+  "the `net` module is native-only: raw BSD sockets have no WasmGC equivalent — build for a native target instead"
 
 wasmNoHostFs : String
 wasmNoHostFs = "ported in llvm (isFileExtern), not yet in wasm's host-fs seam"
@@ -1351,7 +1351,7 @@ catalogRows = [
 (DTypeSig false "interpLlvmOnly" (TyCon "String"))
 (DFunDef false "interpLlvmOnly" () (ELit (LString "implemented by llvm, missing from interp — BUG(T7)")))
 (DTypeSig false "wasmNoSockets" (TyCon "String"))
-(DFunDef false "wasmNoSockets" () (ELit (LString "raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead")))
+(DFunDef false "wasmNoSockets" () (ELit (LString "the `net` module is native-only: raw BSD sockets have no WasmGC equivalent — build for a native target instead")))
 (DTypeSig false "wasmNoHostFs" (TyCon "String"))
 (DFunDef false "wasmNoHostFs" () (ELit (LString "ported in llvm (isFileExtern), not yet in wasm's host-fs seam")))
 (DTypeSig false "wasmNoStdin" (TyCon "String"))
@@ -1425,7 +1425,7 @@ catalogRows = [
 (DTypeSig false "interpLlvmOnly" (TyCon "String"))
 (DFunDef false "interpLlvmOnly" () (ELit (LString "implemented by llvm, missing from interp — BUG(T7)")))
 (DTypeSig false "wasmNoSockets" (TyCon "String"))
-(DFunDef false "wasmNoSockets" () (ELit (LString "raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead")))
+(DFunDef false "wasmNoSockets" () (ELit (LString "the `net` module is native-only: raw BSD sockets have no WasmGC equivalent — build for a native target instead")))
 (DTypeSig false "wasmNoHostFs" (TyCon "String"))
 (DFunDef false "wasmNoHostFs" () (ELit (LString "ported in llvm (isFileExtern), not yet in wasm's host-fs seam")))
 (DTypeSig false "wasmNoStdin" (TyCon "String"))

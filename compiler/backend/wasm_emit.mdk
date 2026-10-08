@@ -221,6 +221,15 @@ import backend.extern_catalog.{
   wasmFamily,
   wasmUses,
 }
+import backend.core_validate.{
+  Backend(..),
+  findingBinding,
+  isUnprovidedOn,
+  renderExternFinding,
+  renderExternRefusal,
+  unrefusedExternMessage,
+  validateExterns,
+}
 import support.ordmap.{
   OrdMap,
   omInsert,
@@ -524,9 +533,10 @@ freshWasmEmit mode = WasmEmit {
 }
 
 -- Declaration-derived semantic input. Raw lists retain table order where a full
--- table is required; indexes preserve lookupAssoc's first-match result.
+-- table is required; indexes preserve lookupAssoc's first-match result.  The
+-- last field is the `stdlib/runtime.mdk` extern names (`withRuntimeExternsW`).
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String)) (OrdMap Int) (OrdMap (List String, String)) Bool
+  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String)) (OrdMap Int) (OrdMap (List String, String)) Bool (List String)
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -585,6 +595,18 @@ makeWasmEmitInputFull methodIfaces declSigTypes ctorFieldTypes mainIsFloat mainI
     (omFromPairs (reverseL (map ifaceIdArityRowW methodIfaces)) omEmpty)
     (omFromPairs (reverseL ffiExternTypes) omEmpty)
     mainIsUnit
+    []
+
+-- The input with the extern names the entry declared from `stdlib/runtime.mdk`.
+-- The extern check (`core_validate.validateExterns`) refuses any of them that
+-- has no catalog row; an input built without them checks none.
+export
+withRuntimeExternsW : List String -> WasmEmitInput -> WasmEmitInput
+withRuntimeExternsW names (WasmEmitInputData a b c d e f g h i j k l m _) =
+  WasmEmitInputData a b c d e f g h i j k l m names
+
+inputRuntimeExternsW : WasmEmitInput -> List String
+inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ _ _ names) = names
 
 -- #1450/#1668 -- the two PROJECTIONS of a `methodIfaceTable` row (mirror of
 -- llvm_emit's `bareIfaceArityRow`/`ifaceIdArityRow`).  The bare projection
@@ -601,12 +623,12 @@ ifaceIdArityRowW (m, (_, ifaceWord, arity)) =
   (ifaceMethodArityKey ifaceWord m, arity)
 
 inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _ _ _ _) = isFloat
+inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _ _ _ _ _) = isFloat
 
 -- The typechecker's verdict that `main` is Unit; False when the entry has no
 -- typechecked program to ask, leaving the structural `mainBodyIsUnit` guess.
 inputMainIsUnit : WasmEmitInput -> Bool
-inputMainIsUnit (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ _ isUnit) = isUnit
+inputMainIsUnit (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ _ isUnit _) = isUnit
 
 recordLabelIndex : List (String, List String) ->
   OrdMap (String, List String) ->
@@ -732,7 +754,7 @@ methodArityOfW prog name = match progInput prog
   input => methodArityOfInput input name
 
 methodArityOfInput : WasmEmitInput -> String -> Int
-methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _) name =
+methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _ _) name =
   match omLookup name methodIndex
     Some (_, arity) => arity
     None => 0
@@ -751,7 +773,7 @@ methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _) name 
 -- PR #1346's E4 result and re-opens CLOSED S0 #1277.  A miss on the identity key
 -- falls back to the bare table, so collision-free programs emit unchanged.
 inputMethodIfaceIdIndex : WasmEmitInput -> OrdMap Int
-inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ idIndex _ _) =
+inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ idIndex _ _ _) =
   idIndex
 
 methodArityOfIfaceInput : WasmEmitInput -> String -> String -> Int
@@ -819,19 +841,20 @@ methodArityOfTagW prog method tag =
 -- Declared parameter/return type heads drive Unit-main and Float recovery.
 declRetLookupW : Prog -> String -> Option (List String, String)
 declRetLookupW prog name = match progInput prog
-  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ _ _ => omLookup name declIndex
+  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ _ _ _ =>
+    omLookup name declIndex
 
 -- #2076: the wasm peer of `llvm_emit.mdk`'s `ffiSigOf`/`isFfiExtern` — is `name`
 -- a USER-declared FFI extern?  Built from `makeWasmEmitInputFull`'s
 -- `ffiExternTypes` (empty for every other caller of `makeWasmEmitInput`, so this
 -- always answers False for the ~25 single-file test-harness entries that never
--- pass one).  Consulted by `emitAppRef`/`emitTailAppRef`'s CVar-head ladder, in
--- the same position `isNetExternW` occupies, so a call reaching this identifier
--- gets a specific "wasm: FFI extern is native-only" gap instead of falling
--- through to a generic unbound-variable panic.
+-- pass one).  Consulted by `emitAppRef`/`emitAppTail`'s CVar-head ladder, ahead
+-- of the runtime extern families, so a call reaching this identifier gets a
+-- specific "wasm: FFI extern is native-only" gap instead of falling through to
+-- a generic unbound-variable panic.
 ffiSigOfW : Prog -> String -> Option (List String, String)
 ffiSigOfW prog name = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ ffiIndex _ => omLookup name ffiIndex
+  WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ ffiIndex _ _ => omLookup name ffiIndex
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = match ffiSigOfW prog name
@@ -1069,8 +1092,11 @@ setCurrentBindingOfW : WasmEmit -> String -> Unit
 setCurrentBindingOfW emit name = setRef emit.currentBinding name
 
 noteGapW : WasmEmit -> String -> Unit
-noteGapW emit reason =
-  setRef emit.gapLog ("\{!emit.curGapBind}\t\{reason}" :: !emit.gapLog)
+noteGapW emit reason = noteGapAtW emit !emit.curGapBind reason
+
+noteGapAtW : WasmEmit -> String -> String -> Unit
+noteGapAtW emit binding reason =
+  setRef emit.gapLog ("\{binding}\t\{reason}" :: !emit.gapLog)
 
 -- typed gap-tolerant variants, one per return shape the `gap` call sites need.
 -- Each records (census mode) or panics (default), returning a placeholder.
@@ -1138,6 +1164,15 @@ gapLP prog reason = gapL (progEmit prog) reason
 
 gapUnboundLP : Prog -> String -> List String
 gapUnboundLP prog reason = gapUnboundL (progEmit prog) reason
+
+-- The fallthrough for a runtime extern wasm does not lower.  The extern check
+-- (`refuseUnprovidedExternsW`) has already refused it in strict mode and
+-- recorded it in record mode, so record mode adds no second event, and strict
+-- mode reaching here means the two disagree about which references are free.
+unprovidedExternW : WasmEmit -> String -> List String
+unprovidedExternW emit name = match emit.gapMode
+  WGapRecord => []
+  WGapStrict => panic (unrefusedExternMessage WasmBackend name)
 
 gapSP : Prog -> String -> String
 gapSP prog reason = gapS (progEmit prog) reason
@@ -1231,7 +1266,7 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ _ =>
     match omLookup ctor ctorFloatIndex
       Some idxs => containsInt idx idxs
       None => False
@@ -1418,8 +1453,24 @@ emitProgramWith emit input cp =
     WGapRecord => ()
   text
 
+-- Every free reference to a runtime extern wasm does not lower, refused before
+-- any text is emitted: one panic naming each in strict mode, one gap event per
+-- extern in record mode.  The emitter's own fallthrough for such a name then
+-- records nothing (`unprovidedExternW`).
+refuseUnprovidedExternsW : WasmEmit -> WasmEmitInput -> CProgram -> Unit
+refuseUnprovidedExternsW emit input cp =
+  match validateExterns WasmBackend (inputRuntimeExternsW input) cp
+    [] => ()
+    findings => match emit.gapMode
+      WGapStrict => panic (renderExternRefusal findings)
+      WGapRecord =>
+        forEachU
+          (f => noteGapAtW emit (findingBinding f) (renderExternFinding f))
+          findings
+
 emitProgramCore : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitProgramCore emit input (CProgram groups ctorArs ctorTypes impls) =
+emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls)) =
+  let _ = refuseUnprovidedExternsW emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
   -- ref-mode — every collection is a boxed (ref eq) value).  The scan only ever
@@ -1625,6 +1676,11 @@ export
 emitProgramGaps : WasmEmitInput -> CProgram -> List String
 emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
   let emit = freshWasmEmit WGapRecord
+  let _ =
+    refuseUnprovidedExternsW
+      emit
+      input
+      (CProgram groups ctorArs ctorTypes impls)
   let _ = setRef emit.useStr (programUsesStr groups)
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
@@ -1714,42 +1770,6 @@ programUsesClosures index groups ctorArs =
 anyBind : (CBind -> Bool) -> List CBind -> Bool
 anyBind _ [] = False
 anyBind p (b :: rest) = if p b then True else anyBind p rest
-
--- Net externs (NET-DESIGN.md §6): native-only.  Raw BSD sockets have no WasmGC
--- equivalent, so `medaka build --target wasm` must REJECT a net-importing program
--- with a clear message rather than fall through to emitIndirectApp (which would only
--- report a generic "unbound variable").  This single-set guard is wired into both
--- application dispatch ladders (emitAppRef, emitTailAppRef).
-isNetExternW : String -> Bool
-isNetExternW name = contains name [
-  "netResolve",
-  "netTcpConnect",
-  "netTcpListen",
-  "netListenPort",
-  "netTcpAccept",
-  "netSend",
-  "netSendFrom",
-  "netRecv",
-  "netShutdown",
-  "netClose",
-  "netCloseListener",
-  "socketFd",
-  "listenSocketFd",
-  "netSetNonblockListener",
-  "netSetTimeout",
-  "pdsSignalStart",
-  "pdsSignalRequested",
-  "netSetNonblock",
-  "netConnectStart",
-  "netConnectCheck",
-  "netTryAccept",
-  "netTryRecv",
-  "netTryRecvBytes",
-  "netTrySend",
-  "netTrySendFrom",
-  "netSendBytesFrom",
-  "netTrySendBytesFrom",
-]
 
 -- W9: arity of a str/leaf extern (the param count its emit* arm consumes).  Used to
 -- build an eta closure when the extern is referenced as a VALUE (point-free / passed
@@ -2959,6 +2979,8 @@ emitVarI32 emit fnNames valNames env x =
     (["global.get $" ++ gname x], WInt)
   else if contains x fnNames then
     (["call $" ++ gname x], WInt)
+  else if isUnprovidedOn WasmBackend x then
+    (unprovidedExternW emit x, WInt)
   else
     gapUnboundLTy
       emit
@@ -6432,6 +6454,8 @@ emitVarRefPlain prog env d x =
       ("wasm: FFI extern '"
         ++ x
         ++ "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")
+  else if isUnprovidedOn WasmBackend x then
+    unprovidedExternW (progEmit prog) x
   else
     gapUnboundLP
       prog
@@ -7148,7 +7172,7 @@ isArithOp op = contains op ["+", "-", "*", "/", "%"]
 -- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocals for the arm body.
 ctorPatFloatBinders : Prog -> Pat -> List String
 ctorPatFloatBinders prog (PCon c args) = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ _ =>
     match omLookup c ctorFloatIndex
       Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
       None => []
@@ -7349,12 +7373,6 @@ emitAppRef prog env d app =
         emitRefBoxNew prog env d args
       else if f == "setRef" then
         emitRefBoxSet prog env d args
-      else if isNetExternW f then
-        gapLP
-          prog
-          ("wasm: net extern '"
-            ++ f
-            ++ "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")
       else if isFfiExternW prog f then
         gapLP
           prog
@@ -9623,12 +9641,6 @@ emitAppTail prog env arity app =
         hi ++ arr ++ ["return_call $__mdk_apply"]
       else if isCtor prog f then
         emitRefExpr prog env 0 app ++ ["return"]
-      else if isNetExternW f then
-        gapLP
-          prog
-          ("wasm: net extern '"
-            ++ f
-            ++ "' is native-only — the `net` module cannot target wasm (raw BSD sockets have no WasmGC equivalent). Build for a native target instead.")
       else if isFfiExternW prog f then
         gapLP
           prog
@@ -11114,14 +11126,14 @@ findRecByField ((ctor, labels) :: rest) label =
 
 recordFieldsOf : Prog -> String -> Option (List String)
 recordFieldsOf prog ctor = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ _ _ _ =>
     match omLookup ctor recordIndex
       Some labels => Some labels
       None => lookupAssoc ctor (indexRecFieldsW (progIndex prog))
 
 recordByField : Prog -> String -> Option (String, List String)
 recordByField prog label = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ _ _ _ =>
     match omLookup label labelIndex
       Some entry => Some entry
       None => findRecByField (indexRecFieldsW (progIndex prog)) label

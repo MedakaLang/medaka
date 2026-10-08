@@ -53,9 +53,14 @@ import backend.llvm_emit.{
   emitProgramWithStats,
   makeEmitInput,
   preludeImplSymbols,
+  withRuntimeExterns,
 }
 import ir.dce.{dceFilter}
-import entries.entry_support.{driveEmitLocated, stampSiteFiles}
+import entries.entry_support.{
+  driveEmitLocated,
+  runtimeExternNames,
+  stampSiteFiles,
+}
 import support.timer.{statsEnabled, emitStats}
 import support.util.{endsWith, filterList}
 import driver.main_autoprint.{autoPrintPinName}
@@ -143,20 +148,23 @@ emitTail mods runtimeDecls coreD modules1 =
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
   let input =
-    makeEmitInput
-      (returnsSelfTable allDecls)
-      (selfFnParamTable allDecls)
-      (methodIfaceTable allDecls)
-      (ctorFieldTypeNames allDecls)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-      (mainTypeIsUnit ())
-      (mainTypeIsFloat ())
-      half
-      preludeBinds
-      preludeImpls
-      (srcNameFromArgs (args ()))
-      (declaredRecordFieldOrders allDecls)
-      (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
+    withRuntimeExterns
+      (runtimeExternNames runtimeDecls)
+      (makeEmitInput
+        (returnsSelfTable allDecls)
+        (selfFnParamTable allDecls)
+        (methodIfaceTable allDecls)
+        (ctorFieldTypeNames allDecls)
+        (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+        (mainTypeIsUnit ())
+        (mainTypeIsFloat ())
+        half
+        preludeBinds
+        preludeImpls
+        (srcNameFromArgs (args ()))
+        (declaredRecordFieldOrders allDecls)
+        (validateFfiExternTypeNames
+          (checkedFfiExternTypeNamesModules modules2)))
   let statsOn = statsEnabled ()
   if statsOn then
     let (text, stats) =

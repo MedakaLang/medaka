@@ -17,7 +17,8 @@
 # test/wasm/build_wasm_oracle.sh --modules-only`), not the full wasm toolchain.
 #
 # The file-grant cases at the bottom are the same kind of wall: a file operation
-# the wasm host cannot confine is refused with a located message.
+# the wasm host cannot confine is refused with a located message.  So are the
+# runtime-extern cases: a runtime extern the catalog gives wasm no lowering for.
 #
 # Exit: 0 if every shape walls (or builds) as expected; 1 on any divergence;
 # 2 if the oracle binary isn't built (toolchain-skip, mirroring the other wasm
@@ -45,12 +46,16 @@ EXPECT="wasm: FFI extern '%s' is native-only — foreign C calls have no WasmGC 
 fail=0
 
 check_one() {
-  name="$1"; src="$2"; extern_name="$3"
+  check_refused "$1" "$2" "$(printf "$EXPECT" "$3")"
+}
+
+# Expect `build --target wasm` to exit nonzero with a message containing $3.
+check_refused() {
+  name="$1"; src="$2"; want="$3"
   f="$WORK/$name.mdk"
   printf '%s\n' "$src" > "$f"
   out="$(MEDAKA_WASM_EMITTER="$EMITBIN" "$MEDAKA" build --target wasm "$f" -o "$WORK/$name.out" 2>&1)"
   st=$?
-  want="$(printf "$EXPECT" "$extern_name")"
   if [ "$st" -eq 0 ]; then
     echo "FAIL $name: expected refusal (exit != 0), got exit 0"
     fail=1
@@ -95,6 +100,35 @@ useIt _ = gNullary
 main : <FFI> Int
 main = (useIt ()) ()' \
   "gNullary"
+
+# ── The runtime-extern wall (compiler/backend/core_validate.mdk) ────────────
+# A program reaching a runtime extern whose catalog row gives wasm no lowering
+# is refused before any WAT is emitted, naming the extern, the gap kind and
+# the row's reason.  The two cases at the end of this file show what it does
+# not refuse.
+RUNTIME_EXPECT="wasm: runtime extern '%s' is not available on the wasm backend (%s: "
+
+check_refused "net_extern_refused" \
+'import net.{resolve}
+
+main = match resolve "localhost"
+  Ok _ => println "resolved"
+  Err e => println e' \
+  "$(printf "$RUNTIME_EXPECT" netResolve PERMANENT)"
+
+check_refused "wasm_gap_extern_refused" \
+'main = match writeFile "out.txt" "x"
+  Ok _ => println "written"
+  Err e => println e' \
+  "$(printf "$RUNTIME_EXPECT" writeFile WASM-GAP)"
+
+# The same module the unreached case below imports, now reached: `isFile`
+# reads through `statFile`.
+check_refused "module_extern_reached_refused" \
+'import fs.{isFile}
+
+main = println (isFile "x")' \
+  "$(printf "$RUNTIME_EXPECT" statFile WASM-GAP)"
 
 # ── The file-grant wall (EFFECTS-SEMANTICS §7) ──────────────────────────────
 # The wasm host reads a path with no granted authority beside it, so every grant
@@ -470,8 +504,24 @@ readCfg given = sub Box given ()
 main = println (readCfg (_ => readFile "data.txt"))' \
   'but a wasm build cannot confine a file operation to a pattern'
 
+# The runtime-extern wall refuses only a reference the program reaches: an
+# imported module whose externs go unreached builds, and so does a program
+# binding that merely shares an extern's name.
+check_grant "fs_import_unreached_built" \
+'import fs.{isFile}
+
+main = println "offline"' \
+  ""
+
+check_grant "toplevel_named_like_net_extern_built" \
+'netSend : Int -> Int
+netSend x = x + 1
+
+main = println (netSend 1)' \
+  ""
+
 if [ "$fail" -eq 0 ]; then
-  echo "37 ok, 0 failing"
+  echo "42 ok, 0 failing"
   exit 0
 else
   echo "diff_wasm_ffi_wall: FAILURES ABOVE"
