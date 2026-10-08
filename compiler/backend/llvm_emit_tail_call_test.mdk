@@ -2,9 +2,9 @@
 -- saturated call of the enclosing define as `musttail call` + `ret` from its own
 -- leaf, so the recursion is a jump at every clang optimization level, not only
 -- where clang's own tail-call pass happens to run.  The tail position reaches
--- through `if`, `match` arms, clause bodies, `let` and blocks, in top-level
--- functions and in impl and default interface methods.  Each case recurses deep
--- enough that a call which is not a jump exhausts the stack.
+-- through `if`, `match` arms, clause bodies, `let`, `where` groups and blocks,
+-- in top-level functions and in impl and default interface methods.  Each case
+-- recurses deep enough that a call which is not a jump exhausts the stack.
 --
 -- Run it under both probe profiles (-O0 without LTO is the default):
 --   medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
@@ -80,6 +80,28 @@ sumLetClause acc 0 = acc
 sumLetClause acc n =
   let next = acc + n
   sumLetClause next (n - 1)
+
+-- A `where` value binding, with the self call in an `if` branch.
+sumWhereIf : Int -> Int -> Int
+sumWhereIf acc n = if n == 0 then acc else sumWhereIf next (n - 1)
+  where
+    next = acc + n
+
+-- A function binding group in the match arm holding the self call (`fmt`
+-- prints a `where` on an arm as this `let rec … in`).
+sumWhereMatch : Int -> Int -> Int
+-- lint-disable-next-line rule-match-on-param
+sumWhereMatch acc n = match n
+  0 => acc
+  k => let rec plus x y = x + y in sumWhereMatch (plus acc k) (k - 1)
+
+-- A clause body under a `where` group of a function and a value binding.
+sumWhereClause : Int -> Int -> Int
+sumWhereClause acc 0 = acc
+sumWhereClause acc n = sumWhereClause next (n - 1)
+  where
+    plus x y = x + y
+    next = plus acc n
 
 interface SumDown a where
   sumDown : Int -> a -> Int
@@ -158,6 +180,15 @@ test "self tail call after a let, match arm" =
 
 test "self tail call after a let, clause body" =
   expectEqual triangle (sumLetClause 0 depth)
+
+test "self tail call under a where group, if branch" =
+  expectEqual triangle (sumWhereIf 0 depth)
+
+test "self tail call under a where group, match arm" =
+  expectEqual triangle (sumWhereMatch 0 depth)
+
+test "self tail call under a where group, clause body" =
+  expectEqual triangle (sumWhereClause 0 depth)
 
 test "impl method self tail call, clause spelling" =
   expectEqual triangle (sumDown 0 depth)

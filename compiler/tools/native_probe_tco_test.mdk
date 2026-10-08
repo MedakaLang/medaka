@@ -1,12 +1,12 @@
 -- Guard for the native probe build profile.  `medaka test` compiles its probes
 -- at -O0 without ThinLTO by default (MEDAKA_TEST_CLANG_OPT overrides).  A
 -- saturated self tail call reached through `if`, `match` arms, clause bodies,
--- `let` and blocks, in a top-level function or an impl or default interface
--- method, is `musttail` and so independent of the level
+-- `let`, `where` groups and blocks, in a top-level function or an impl or
+-- default interface method, is `musttail` and so independent of the level
 -- (compiler/backend/llvm_emit_tail_call_test.mdk guards those at 1e8).  The
 -- shapes here are ones that are not: sibling, indirect and dictionary tail
--- calls become jumps only through clang's -O1+ call optimization.  A self call
--- under a `where` group is another (pass 3e6, fail 1e7 at -O0).
+-- calls become jumps only through clang's -O1+ call optimization.  A local
+-- `let go …` or `where go …` worker calling itself is a closure tail call.
 --
 -- Each case recurses to `depth`, which both profiles survive.  The deepest
 -- passing depth and the first failing one at -O0 with no LTO (every shape
