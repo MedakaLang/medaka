@@ -823,6 +823,38 @@ gateOfCheck False rsrc csrc target roots mods =
       (chainKeyOf target roots)
       mods)
 
+-- The phases' trees, or `unreadTrees` when no phase under `engines` reads
+-- them.  The gate is decided before this and does not depend on it.
+phaseTrees : List Engine ->
+  List Decl ->
+  String ->
+  String ->
+  Prepared ->
+  <IO> TestPair
+phaseTrees engines userDecls rsrc csrc prepared =
+  if treesUnread engines userDecls then
+    unreadTrees
+  else
+    forcePrepared rsrc csrc prepared
+
+-- Only the prop planner (`planModules`) and the interpreter arms read the
+-- elaborated trees.  The native doctest and `test "…"` arms compile the
+-- target's source in a child process and ignore them.
+treesUnread : List Engine -> List Decl -> Bool
+treesUnread engines userDecls =
+  not (hasInterpEngine engines) && not (hasProps userDecls)
+
+hasInterpEngine : List Engine -> Bool
+hasInterpEngine [] = False
+hasInterpEngine (EngInterp :: _) = True
+hasInterpEngine (_ :: rest) = hasInterpEngine rest
+
+-- Stands in for the trees whenever `treesUnread` holds.
+unreadTrees : TestPair
+unreadTrees =
+  TestPairErr
+    "medaka test: internal error: the elaborated trees were skipped because no selected phase reads them"
+
 uncurryPair : List Decl ->
   List Decl ->
   List (String, List Decl) ->
@@ -947,7 +979,7 @@ driveMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases filt
         let _ = filterMatchedNothingNotice target
         False
       else
-        let pair = forcePrepared rsrc csrc prepared
+        let pair = phaseTrees engines userDecls rsrc csrc prepared
         let doctestsOk =
           runDoctests
             engines
@@ -1017,7 +1049,11 @@ driveSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fil
         examples
         (buildSynthResults userDecls examples)
     if hasProps userDecls || hasTests userDecls then
-      let pair = prepareSingle runtimeDecls coreDecls target roots userDecls
+      let pair =
+        if treesUnread engines userDecls then
+          unreadTrees
+        else
+          prepareSingle runtimeDecls coreDecls target roots userDecls
       let propsOk =
         runPropsPinned
           engines
@@ -1939,7 +1975,7 @@ reportMulti engines runtimeDecls rsrc csrc stdlibDir target tsrc roots cases fil
   match prepared
     (Some errText, _) => (Some errText, [], [], [], False)
     (None, prepared) =>
-      let pair = forcePrepared rsrc csrc prepared
+      let pair = phaseTrees engines userDecls rsrc csrc prepared
       (
         None,
         doctestReport
@@ -2006,7 +2042,11 @@ reportSingle engines runtimeDecls coreDecls stdlibDir target tsrc roots cases fi
       examples
       (buildSynthResults userDecls examples)
   if hasProps userDecls || includeTestDecls && hasTests userDecls then
-    let pair = prepareSingle runtimeDecls coreDecls target roots userDecls
+    let pair =
+      if treesUnread engines userDecls then
+        unreadTrees
+      else
+        prepareSingle runtimeDecls coreDecls target roots userDecls
     (
       None,
       doctestRuns,
