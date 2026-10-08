@@ -1,5 +1,5 @@
 # META
-source_lines=640
+source_lines=641
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -409,8 +409,9 @@ testAssertionCount path extraArgs =
    run side by side.
 
    Each element is what `testAssertionCount` returns for that row, in the
-   same order, with the same error text. At most `testJobs` suites run at
-   once.
+   same order, with the same error text. At most `MEDAKA_TEST_JOBS` suites
+   run at once when that is a positive integer, otherwise at most the number
+   of online processors, or 4 when that cannot be read.
 
    > testAssertionCounts [("no-such-suite.mdk", [])] == [testAssertionCount "no-such-suite.mdk" []]
    True -}
@@ -430,7 +431,7 @@ testAssertionCounts rows =
 
 {- | How many `medaka test` runs `testAssertionCounts` starts at once:
    `MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
-   online processors.
+   online processors, or 4 when that cannot be read.
 
    > testJobs > 0
    True -}

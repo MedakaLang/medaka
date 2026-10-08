@@ -15,17 +15,18 @@ import test.{
 }
 import regex as R
 
--- Best-effort prebuild of the runtime and prelude objects (cost control only;
--- a failed build just falls back to inline compilation, as the script did).
+-- Best-effort prebuild of the prelude object (cost control only; a failed build
+-- just falls back to inline compilation, as the script did).  No runtime
+-- object: the -O0 no-LTO probe build ignores MEDAKA_RT_OBJ.
 prebuildScript : String
 prebuildScript =
-  "export MEDAKA_ROOT=\"$3\"; \"$1\" build --emit-rt-obj \"$2/medaka_rt.o\" >/dev/null 2>&1; \"$1\" build --emit-prelude-obj \"$2/prelude.o\" >/dev/null 2>&1"
+  "export MEDAKA_ROOT=\"$3\"; \"$1\" build --emit-prelude-obj \"$2/prelude.o\" >/dev/null 2>&1"
 
--- Runs a verb with the prebuilt objects exported when they exist.
+-- Runs a verb with the prebuilt prelude object exported when it exists.
 -- argv: bin dir root args...
 fastRunScript : String
 fastRunScript =
-  "bin=\"$1\"; d=\"$2\"; export MEDAKA_ROOT=\"$3\"; shift 3; if [ -f \"$d/medaka_rt.o\" ]; then export MEDAKA_RT_OBJ=\"$d/medaka_rt.o\"; fi; if [ -f \"$d/prelude.o\" ]; then export MEDAKA_PRELUDE_OBJ=\"$d/prelude.o\"; fi; exec \"$bin\" \"$@\""
+  "bin=\"$1\"; d=\"$2\"; export MEDAKA_ROOT=\"$3\"; shift 3; if [ -f \"$d/prelude.o\" ]; then export MEDAKA_PRELUDE_OBJ=\"$d/prelude.o\"; fi; exec \"$bin\" \"$@\""
 
 -- Runs a verb with MEDAKA_ROOT only. argv: root bin args...
 plainRunScript : String
@@ -55,8 +56,7 @@ prebuild dir =
     Err e => Err "prebuild spawn: \{e}"
     Ok (code, _, err) =>
       if code /= 0 then
-        Err
-          "prebuild of the rt and prelude objects exited \{intToString code}: \{err}"
+        Err "prebuild of the prelude object exited \{intToString code}: \{err}"
       else
         Ok dir
 

@@ -1126,15 +1126,20 @@ public export data BuildProfile = BuildNormal | BuildProbe
 
 -- (opt flag, whether ThinLTO detection runs) for a profile, given the values of
 -- MEDAKA_CLANG_OPT (already defaulted) and MEDAKA_TEST_CLANG_OPT.  Pure so the
--- mapping is unit-testable.  A probe with MEDAKA_TEST_CLANG_OPT unset or empty is
--- -O0 with no LTO, the only pairing that is cheap: -O0 with LTO and -O1 without
--- it each cost several times as much.  A probe with it set takes that level and
--- the normal LTO detection, so `-O2` gives the same link as `BuildNormal`.
+-- mapping is unit-testable.  A probe at -O0, whether MEDAKA_TEST_CLANG_OPT is
+-- unset, empty or `-O0`, links with no LTO, the only pairing that is cheap: -O0
+-- with LTO and -O1 without it each cost several times as much.  A no-LTO link
+-- ignores MEDAKA_RT_OBJ, which is ThinLTO bitcode.  A probe at any other level
+-- takes it with the normal LTO detection, so `-O2` gives the same link as
+-- `BuildNormal`.
 export
 profileClang : BuildProfile -> String -> String -> (String, Bool)
 profileClang BuildNormal normalOpt _ = (normalOpt, True)
 profileClang BuildProbe _ probeOpt =
-  if probeOpt == "" then ("-O0", False) else (probeOpt, True)
+  if probeOpt == "" || probeOpt == "-O0" then
+    ("-O0", False)
+  else
+    (probeOpt, True)
 
 resolveProfile : BuildProfile -> <IO> (String, Bool)
 resolveProfile profile =

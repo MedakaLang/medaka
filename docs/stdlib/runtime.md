@@ -309,13 +309,14 @@ data does not come back unchanged.
 runCommandBatch : (program : String) -> Int -> List (List String) -> <Exec program> List (Result String (Int, String, String))
 ```
 
-Runs `program` once for each argument list, at most `jobs` at a time,
-and waits for all of them. A `jobs` below 1 runs them one at a time.
-Element i of the result is what `runCommand` returns for the i-th
-argument list, so results are in input order whatever order the runs
+Runs `program` once for each argument list, at most the given number of
+runs at a time, and waits for all of them. A number below 1 runs them one
+at a time. Element i of the result is what `runCommand` returns for the
+i-th argument list, so results are in input order whatever order the runs
 finish in. As with `runCommand`, a program that cannot be executed exits
 127 with the host's message on standard error, and `Err` means the run
-could not be started at all; either way the other runs still happen.
+could not be started or its exit status could not be read back; either
+way the other runs still happen.
 
 ```medaka
 > runCommandBatch "sh" 2 [["-c", "sleep 0.2; echo a"], ["-c", "echo b"]]

@@ -18,7 +18,7 @@
    check; see the roster test below). -}
 
 import io.{readLines}
-import list.{drop, lookup, take, zipWith}
+import list.{lookup, zipWith}
 import test.{Expectation(..)}
 import test_process.{
   disagreeingFloorBlocks,
@@ -143,7 +143,7 @@ libPath name = "sqlite/lib/\{name}.mdk"
 -- Every `sqlite/lib/` module run exactly once, shared by every assertion
 -- below — memoized the same way `results` is.
 libResults : <Exec, IO> List (String, (Int, Result String Int))
-libResults = drop (length suites) allResults
+libResults = resultsOfKind LibRow
 
 -- Grades one `sqlite/lib/` module's floor, same shape as `floorExpectation`.
 libFloorExpectation : String -> <Exec, IO> Expectation
@@ -231,12 +231,16 @@ test "every `libExempt` row names a module that exists" =
 suitePath : String -> String
 suitePath name = "sqlite/test/\{name}.mdk"
 
--- Every suite row then every `sqlite/lib/` row, each as its name, its
--- floor and its path relative to the tree root.
-allRows : List (String, Int, String)
+-- Which roster a row came from, so its result is regrouped by that tag
+-- rather than by its position in the batch.
+data RowKind = SuiteRow | LibRow deriving (Eq)
+
+-- Every suite row then every `sqlite/lib/` row, each as its roster, its
+-- name, its floor and its path relative to the tree root.
+allRows : List (RowKind, String, Int, String)
 allRows =
-  map ((name, floor) => (name, floor, suitePath name)) suites
-    ++ map ((name, floor) => (name, floor, libPath name)) libSuites
+  map ((name, floor) => (SuiteRow, name, floor, suitePath name)) suites
+    ++ map ((name, floor) => (LibRow, name, floor, libPath name)) libSuites
 
 {- | Every suite and `sqlite/lib/` module run exactly once under the eval
    engine, all in one batch of spawns, each with its executed-assertion
@@ -245,18 +249,24 @@ allRows =
    Shared by every assertion below: top-level nullary bindings are memoized
    (a spawn placed in a shared top-level binding and read from two `test`
    decls was confirmed, by probe, to execute once, not twice). -}
-allResults : <Exec, IO> List (String, (Int, Result String Int))
+allResults : <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
 allResults =
   zipWith
-    ((name, floor, path) counted =>
-      (name, (floor, mapErr (e => "\{path}: \{e}") counted)))
+    ((kind, name, floor, path) counted =>
+      (kind, (name, (floor, mapErr (e => "\{path}: \{e}") counted))))
     allRows
     (testAssertionCounts
-      (map ((_, _, path) => (underRoot path, ["--engines", "eval"])) allRows))
+      (map
+        ((_, _, _, path) => (underRoot path, ["--engines", "eval"]))
+        allRows))
+
+-- The `allResults` rows of one roster, in roster order.
+resultsOfKind : RowKind -> <Exec, IO> List (String, (Int, Result String Int))
+resultsOfKind kind = map snd (filter ((k, _) => k == kind) allResults)
 
 -- Every suite's floor and count.
 results : <Exec, IO> List (String, (Int, Result String Int))
-results = take (length suites) allResults
+results = resultsOfKind SuiteRow
 
 -- Grades one suite's floor: the message names both the file and both
 -- numbers on a miss, per the migration's own acceptance check.

@@ -19,6 +19,9 @@ test "a probe defaults to -O0 with no LTO" =
 test "a probe ignores the normal-build opt level when its override is unset" =
   expectEqual ("-O0", False) (profileClang BuildProbe "-O3" "")
 
+test "an explicit -O0 probe override is the default profile, with no LTO" =
+  expectEqual ("-O0", False) (profileClang BuildProbe "-O2" "-O0")
+
 test "a probe override takes that level with LTO detection on" = expectAll [
   expectEqual ("-O2", True) (profileClang BuildProbe "-O2" "-O2"),
   expectEqual ("-O1", True) (profileClang BuildProbe "-O3" "-O1"),
