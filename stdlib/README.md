@@ -158,7 +158,7 @@ Follow that; this file does not duplicate it.
 Ratified by #2306's surface-freeze sheet (leg 9). These govern the *library*
 surface — `stdlib/*.mdk` modules other than `runtime.mdk` — not the extern
 catalog above. `docs/stdlib/inventory.json` and
-`test/diff_compiler_stdlib_conventions.sh` (below) enforce what a mechanical
+`test/diff_compiler_stdlib_conventions_test.mdk` (below) enforce what a mechanical
 check can catch; the rest is judgment a reviewer applies by hand. Full
 reasoning and the counter-example each rule exists to protect: PR #2429
 (issue #2306, leg 9). The sentences below are the durable record.

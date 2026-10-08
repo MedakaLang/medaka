@@ -1,0 +1,182 @@
+{- | WASM-SEMANTICS WH3 (shim parity). Replaces diff_compiler_wasm_shim_parity.sh.
+
+   The wasm engine's observable behaviour is not all in the module: parts of it run in
+   the JS host. Three hosts carry copies of the shared shim blocks:
+     test/wasm/run.js        the node runner every wasm gate diffs against native
+     playground/worker.js    the browser Web Worker that runs the user's program
+     playground/compile.mjs  the seam that runs the compiler itself (playground.wasm)
+   WH3 says they must behave identically, so each block must be byte-identical.
+
+   Each block is a region from a line starting with the BEGIN marker of a name to the
+   matching END marker. A name may have several regions in one host: all of them are
+   compared, concatenated in file order, as the old sed did. The names are enumerated
+   from test/wasm/run.js (the reference), and every other file under test/ or playground/
+   that carries a BEGIN marker at the start of a line is a peer, derived by query, never
+   by a fixed list (#543: a hardcoded host set silently excluded compile.mjs). The floors
+   catch a broken query: at least two peer hosts and at least two shared blocks must be
+   found, or the test is red. A host that cannot be read as UTF-8 text but carries a
+   marker is a named finding, never silently dropped.
+
+   What it proves: each shared block is present in run.js and every peer, every BEGIN
+   has its END, and the concatenated regions are byte-identical to run.js. Text, not
+   behaviour. The block is pure and the host wiring around it is exercised by the wasm
+   gates, so byte-identity plus those gates is what WH3 needs. It does not prove the
+   hosts behave identically beyond the shared blocks.
+
+   Runs under `medaka test --native`: it reads files under the repository tree. -}
+
+import test_process.{underRoot}
+import string.{lines, split, startsWith, endsWith, unlines, fromUtf8}
+import fs.{walkDir, isFile}
+import test.{
+  Expectation, expectAll, expectEach, expectAtLeast, expectEqualLines,
+  expectNotEqual, expectTrue, fail
+}
+
+beginPrefix : String
+beginPrefix = "// --- BEGIN SHARED SHIM "
+
+endPrefix : String
+endPrefix = "// --- END SHARED SHIM "
+
+beginLine : String -> String
+beginLine name = "\{beginPrefix}\{name} ---"
+
+endLine : String -> String
+endLine name = "\{endPrefix}\{name} ---"
+
+-- The name between the prefix and the closing " ---" of a BEGIN line.
+nameOf : String -> String
+nameOf line = match split beginPrefix line
+  _ :: rest :: _ => match split " ---" rest
+    n :: _ => n
+    _ => ""
+  _ => ""
+
+-- Every BEGIN marker name in a file, in file order.
+markerNames : String -> List String
+markerNames text = map nameOf (filter (startsWith beginPrefix) (lines text))
+
+-- Every line inside any region for a name, in file order: each BEGIN line through its
+-- END line, for every region. `open` says whether we are inside a region. A region
+-- still open at end of file leaves its BEGIN unmatched, which `closed` reports.
+blockLines : String -> Bool -> List String -> List String
+blockLines name open [] = []
+blockLines name open (l :: rest) =
+  if open then
+    if startsWith (endLine name) l then
+      l :: blockLines name False rest
+    else
+      l :: blockLines name True rest
+  else if startsWith (beginLine name) l then
+    l :: blockLines name True rest
+  else
+    blockLines name False rest
+
+blockOf : String -> String -> List String
+blockOf name text = blockLines name False (lines text)
+
+beginsIn : String -> List String -> Int
+beginsIn name block = length (filter (startsWith (beginLine name)) block)
+
+endsIn : String -> List String -> Int
+endsIn name block = length (filter (startsWith (endLine name)) block)
+
+-- At least one region, and every BEGIN has its END.
+closed : String -> List String -> Bool
+closed name block =
+  beginsIn name block == endsIn name block && beginsIn name block > 0
+
+-- A peer host: a file whose text carries a shim BEGIN marker at a line start.
+carriesMarker : String -> Bool
+carriesMarker t = any (startsWith beginPrefix) (lines t)
+
+data Host = Peer String String | Unreadable String String | NotAHost
+
+-- A file that reads as UTF-8 is judged on its text. A file that does not is judged on
+-- its bytes, decoded lossily (ASCII markers survive): a marker in it is a named finding.
+-- A file that cannot be read at all is a named finding too, never a silent skip.
+hostOf : String -> <IO, FileRead> Host
+hostOf p = match readFile p
+  Ok t => if carriesMarker t then Peer p t else NotAHost
+  Err e => match isFile p
+    Err e3 => Unreadable p "could not stat: \{e3}"
+    Ok False => NotAHost
+    Ok True => match readFileBytes p
+      Ok bs =>
+        if carriesMarker (fromUtf8 bs) then
+          Unreadable p "not valid UTF-8 but carries a shim marker: \{e}"
+        else
+          NotAHost
+      Err e2 => Unreadable p "could not read: \{e2}"
+
+hosts : List String -> <IO, FileRead> List Host
+hosts [] = []
+hosts (p :: rest) = match hostOf p
+  NotAHost => hosts rest
+  h => h :: hosts rest
+
+peerList : List Host -> List (String, String)
+peerList [] = []
+peerList (h :: rest) = match h
+  Peer p t => (p, t) :: peerList rest
+  _ => peerList rest
+
+unreadableList : List Host -> List (String, Expectation)
+unreadableList [] = []
+unreadableList (h :: rest) = match h
+  Unreadable p r => (p, fail r) :: unreadableList rest
+  _ => unreadableList rest
+
+peerCheck : String -> List String -> String -> List String -> Expectation
+peerCheck name refBlock path pb = expectEach [
+  ("\{path}: block present", expectNotEqual pb []),
+  ("\{path}: every BEGIN has its END", expectTrue (closed name pb)),
+  (
+    "\{path}: byte-identical to run.js",
+    expectEqualLines (unlines refBlock) (unlines pb),
+  ),
+]
+
+peerEntry : String -> List String -> (String, String) -> (String, Expectation)
+peerEntry name refBlock (path, text) =
+  (path, peerCheck name refBlock path (blockOf name text))
+
+nameCheck : List (String, String) -> String -> String -> Expectation
+nameCheck pts refText name =
+  let refBlock = blockOf name refText
+  expectAll [
+    expectEach [
+      ("run.js: block present", expectNotEqual refBlock []),
+      ("run.js: every BEGIN has its END", expectTrue (closed name refBlock)),
+    ],
+    expectEach (map (peerEntry name refBlock) pts),
+  ]
+
+checkRef : String -> List Host -> Expectation
+checkRef refText hs =
+  let names = markerNames refText
+  let pts = peerList hs
+  expectAll [
+    expectAtLeast 2 (length pts),
+    expectAtLeast 2 (length names),
+    expectEach (unreadableList hs),
+    expectAll (map (nameCheck pts refText) names),
+  ]
+
+parity : <IO, FileRead> Expectation
+parity = match readFile (underRoot "test/wasm/run.js")
+  Err e => fail "missing reference host shim test/wasm/run.js: \{e}"
+  Ok refText => match walkDir (underRoot "test")
+    Err e => fail "could not walk test/: \{e}"
+    Ok testPaths => match walkDir (underRoot "playground")
+      Err e => fail "could not walk playground/: \{e}"
+      Ok playPaths =>
+        match (hosts
+          (filter
+            (p => not (endsWith "test/wasm/run.js" p))
+            (testPaths ++ playPaths)))
+          hs => checkRef refText hs
+
+test "diff_compiler_wasm_shim_parity: shared shim blocks are byte-identical across hosts" =
+  parity

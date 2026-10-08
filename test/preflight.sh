@@ -1617,7 +1617,7 @@ while IFS= read -r f; do
 done < "$CHANGED_PATHS"
 
 # ── the control-byte ratchet applies to EVERY tracked source file (#1987 F4) ──
-# diff_compiler_source_bytes.sh scans the whole tree (`git ls-files`, filtered by
+# diff_compiler_source_bytes_test.mdk scans the whole tree (`git ls-files`, filtered by
 # extension) and has no per-file consumer anywhere: no arm of the table above names
 # it, and `_gates_for_path` can only reach it when a path happens to be mentioned
 # inside the gate's own source (which is how playground/* reaches it today — via the
