@@ -938,14 +938,35 @@ nominalCtors env (GNominal key _) = planDef env key
 nominalCtors _ plan =
   Err (PlanError "" "" (planTy plan) PEUnsupportedType "not a nominal plan")
 
+-- Below `maxGenDepth` a constructor weight is either a constant or decays with
+-- depth.  The native renderer emits the decaying form as an expression over the
+-- runtime depth, so this one shape is what both engines evaluate.
+public export data SoftWeight = SoftNever | SoftFixed Int | SoftDecaying Int
+
+export
+softCtorWeights : PlanEnv -> GenPlan -> List SoftWeight
+softCtorWeights env (nominal@(GNominal _ _)) = match nominalCtors env nominal
+  Ok (PlanDef _ _ _ _ ctors) => map (softCtorWeightForm env nominal) ctors
+  Err _ => []
+softCtorWeights _ _ = []
+
+softWeightAt : Int -> SoftWeight -> Int
+softWeightAt _ SoftNever = 0
+softWeightAt _ (SoftFixed weight) = weight
+softWeightAt depth (SoftDecaying start) = max 1 (start - depth)
+
+softCtorWeightForm : PlanEnv -> GenPlan -> PlanCtor -> SoftWeight
+softCtorWeightForm env nominal ctor =
+  if not (ctorHasFiniteFields env nominal ctor) then
+    SoftNever
+  else if ctorCanDiverge env nominal ctor then
+    SoftDecaying recWeight0
+  else
+    SoftFixed recWeight0
+
 softCtorWeight : PlanEnv -> GenPlan -> Int -> PlanCtor -> Int
 softCtorWeight env nominal depth ctor =
-  if not (ctorHasFiniteFields env nominal ctor) then
-    0
-  else if ctorCanDiverge env nominal ctor then
-    max 1 (recWeight0 - depth)
-  else
-    recWeight0
+  softWeightAt depth (softCtorWeightForm env nominal ctor)
 
 ctorHasFiniteFields : PlanEnv -> GenPlan -> PlanCtor -> Bool
 ctorHasFiniteFields env nominal ctor = match instantiateCtor env nominal ctor

@@ -1,5 +1,5 @@
 # META
-source_lines=1530
+source_lines=1551
 stages=DESUGAR,MARK
 # SOURCE
 -- The engine-neutral property planning layer.
@@ -942,14 +942,35 @@ nominalCtors env (GNominal key _) = planDef env key
 nominalCtors _ plan =
   Err (PlanError "" "" (planTy plan) PEUnsupportedType "not a nominal plan")
 
+-- Below `maxGenDepth` a constructor weight is either a constant or decays with
+-- depth.  The native renderer emits the decaying form as an expression over the
+-- runtime depth, so this one shape is what both engines evaluate.
+public export data SoftWeight = SoftNever | SoftFixed Int | SoftDecaying Int
+
+export
+softCtorWeights : PlanEnv -> GenPlan -> List SoftWeight
+softCtorWeights env (nominal@(GNominal _ _)) = match nominalCtors env nominal
+  Ok (PlanDef _ _ _ _ ctors) => map (softCtorWeightForm env nominal) ctors
+  Err _ => []
+softCtorWeights _ _ = []
+
+softWeightAt : Int -> SoftWeight -> Int
+softWeightAt _ SoftNever = 0
+softWeightAt _ (SoftFixed weight) = weight
+softWeightAt depth (SoftDecaying start) = max 1 (start - depth)
+
+softCtorWeightForm : PlanEnv -> GenPlan -> PlanCtor -> SoftWeight
+softCtorWeightForm env nominal ctor =
+  if not (ctorHasFiniteFields env nominal ctor) then
+    SoftNever
+  else if ctorCanDiverge env nominal ctor then
+    SoftDecaying recWeight0
+  else
+    SoftFixed recWeight0
+
 softCtorWeight : PlanEnv -> GenPlan -> Int -> PlanCtor -> Int
 softCtorWeight env nominal depth ctor =
-  if not (ctorHasFiniteFields env nominal ctor) then
-    0
-  else if ctorCanDiverge env nominal ctor then
-    max 1 (recWeight0 - depth)
-  else
-    recWeight0
+  softWeightAt depth (softCtorWeightForm env nominal ctor)
 
 ctorHasFiniteFields : PlanEnv -> GenPlan -> PlanCtor -> Bool
 ctorHasFiniteFields env nominal ctor = match instantiateCtor env nominal ctor
@@ -1868,8 +1889,18 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DTypeSig false "nominalCtors" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "PlanDef")))))
 (DFunDef false "nominalCtors" ((PVar "env") (PCon "GNominal" (PVar "key") PWild)) (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")))
 (DFunDef false "nominalCtors" (PWild (PVar "plan")) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "planTy") (EVar "plan"))) (EVar "PEUnsupportedType")) (ELit (LString "not a nominal plan")))))
+(DData Public "SoftWeight" () ((variant "SoftNever" (ConPos)) (variant "SoftFixed" (ConPos (TyCon "Int"))) (variant "SoftDecaying" (ConPos (TyCon "Int")))) ())
+(DTypeSig true "softCtorWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "SoftWeight")))))
+(DFunDef false "softCtorWeights" ((PVar "env") (PAs "nominal" (PCon "GNominal" PWild PWild))) (EMatch (EApp (EApp (EVar "nominalCtors") (EVar "env")) (EVar "nominal")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EVar "map") (EApp (EApp (EVar "softCtorWeightForm") (EVar "env")) (EVar "nominal"))) (EVar "ctors"))) (arm (PCon "Err" PWild) () (EListLit))))
+(DFunDef false "softCtorWeights" (PWild PWild) (EListLit))
+(DTypeSig false "softWeightAt" (TyFun (TyCon "Int") (TyFun (TyCon "SoftWeight") (TyCon "Int"))))
+(DFunDef false "softWeightAt" (PWild (PCon "SoftNever")) (ELit (LInt 0)))
+(DFunDef false "softWeightAt" (PWild (PCon "SoftFixed" (PVar "weight"))) (EVar "weight"))
+(DFunDef false "softWeightAt" ((PVar "depth") (PCon "SoftDecaying" (PVar "start"))) (EApp (EApp (EVar "max") (ELit (LInt 1))) (EBinOp "-" (EVar "start") (EVar "depth"))))
+(DTypeSig false "softCtorWeightForm" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "PlanCtor") (TyCon "SoftWeight")))))
+(DFunDef false "softCtorWeightForm" ((PVar "env") (PVar "nominal") (PVar "ctor")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "ctorHasFiniteFields") (EVar "env")) (EVar "nominal")) (EVar "ctor"))) (EVar "SoftNever") (EIf (EApp (EApp (EApp (EVar "ctorCanDiverge") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (EApp (EVar "SoftDecaying") (EVar "recWeight0")) (EApp (EVar "SoftFixed") (EVar "recWeight0")))))
 (DTypeSig false "softCtorWeight" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "Int") (TyFun (TyCon "PlanCtor") (TyCon "Int"))))))
-(DFunDef false "softCtorWeight" ((PVar "env") (PVar "nominal") (PVar "depth") (PVar "ctor")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "ctorHasFiniteFields") (EVar "env")) (EVar "nominal")) (EVar "ctor"))) (ELit (LInt 0)) (EIf (EApp (EApp (EApp (EVar "ctorCanDiverge") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (EApp (EApp (EVar "max") (ELit (LInt 1))) (EBinOp "-" (EVar "recWeight0") (EVar "depth"))) (EVar "recWeight0"))))
+(DFunDef false "softCtorWeight" ((PVar "env") (PVar "nominal") (PVar "depth") (PVar "ctor")) (EApp (EApp (EVar "softWeightAt") (EVar "depth")) (EApp (EApp (EApp (EVar "softCtorWeightForm") (EVar "env")) (EVar "nominal")) (EVar "ctor"))))
 (DTypeSig false "ctorHasFiniteFields" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "PlanCtor") (TyCon "Bool")))))
 (DFunDef false "ctorHasFiniteFields" ((PVar "env") (PVar "nominal") (PVar "ctor")) (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "fields")) () (EApp (EApp (EVar "allPlansFinite") (EVar "env")) (EApp (EVar "fieldPlansOnly") (EVar "fields")))) (arm (PCon "Err" PWild) () (EVar "False"))))
 (DTypeSig false "ctorCanDiverge" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "PlanCtor") (TyCon "Bool")))))
@@ -2447,8 +2478,18 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DTypeSig false "nominalCtors" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyApp (TyApp (TyCon "Result") (TyCon "PlanError")) (TyCon "PlanDef")))))
 (DFunDef false "nominalCtors" ((PVar "env") (PCon "GNominal" (PVar "key") PWild)) (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")))
 (DFunDef false "nominalCtors" (PWild (PVar "plan")) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "PlanError") (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "planTy") (EVar "plan"))) (EVar "PEUnsupportedType")) (ELit (LString "not a nominal plan")))))
+(DData Public "SoftWeight" () ((variant "SoftNever" (ConPos)) (variant "SoftFixed" (ConPos (TyCon "Int"))) (variant "SoftDecaying" (ConPos (TyCon "Int")))) ())
+(DTypeSig true "softCtorWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "SoftWeight")))))
+(DFunDef false "softCtorWeights" ((PVar "env") (PAs "nominal" (PCon "GNominal" PWild PWild))) (EMatch (EApp (EApp (EVar "nominalCtors") (EVar "env")) (EVar "nominal")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "softCtorWeightForm") (EVar "env")) (EVar "nominal"))) (EVar "ctors"))) (arm (PCon "Err" PWild) () (EListLit))))
+(DFunDef false "softCtorWeights" (PWild PWild) (EListLit))
+(DTypeSig false "softWeightAt" (TyFun (TyCon "Int") (TyFun (TyCon "SoftWeight") (TyCon "Int"))))
+(DFunDef false "softWeightAt" (PWild (PCon "SoftNever")) (ELit (LInt 0)))
+(DFunDef false "softWeightAt" (PWild (PCon "SoftFixed" (PVar "weight"))) (EVar "weight"))
+(DFunDef false "softWeightAt" ((PVar "depth") (PCon "SoftDecaying" (PVar "start"))) (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EBinOp "-" (EVar "start") (EVar "depth"))))
+(DTypeSig false "softCtorWeightForm" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "PlanCtor") (TyCon "SoftWeight")))))
+(DFunDef false "softCtorWeightForm" ((PVar "env") (PVar "nominal") (PVar "ctor")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "ctorHasFiniteFields") (EVar "env")) (EVar "nominal")) (EVar "ctor"))) (EVar "SoftNever") (EIf (EApp (EApp (EApp (EVar "ctorCanDiverge") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (EApp (EVar "SoftDecaying") (EVar "recWeight0")) (EApp (EVar "SoftFixed") (EVar "recWeight0")))))
 (DTypeSig false "softCtorWeight" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "Int") (TyFun (TyCon "PlanCtor") (TyCon "Int"))))))
-(DFunDef false "softCtorWeight" ((PVar "env") (PVar "nominal") (PVar "depth") (PVar "ctor")) (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "ctorHasFiniteFields") (EVar "env")) (EVar "nominal")) (EVar "ctor"))) (ELit (LInt 0)) (EIf (EApp (EApp (EApp (EVar "ctorCanDiverge") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EBinOp "-" (EVar "recWeight0") (EVar "depth"))) (EVar "recWeight0"))))
+(DFunDef false "softCtorWeight" ((PVar "env") (PVar "nominal") (PVar "depth") (PVar "ctor")) (EApp (EApp (EVar "softWeightAt") (EVar "depth")) (EApp (EApp (EApp (EVar "softCtorWeightForm") (EVar "env")) (EVar "nominal")) (EVar "ctor"))))
 (DTypeSig false "ctorHasFiniteFields" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "PlanCtor") (TyCon "Bool")))))
 (DFunDef false "ctorHasFiniteFields" ((PVar "env") (PVar "nominal") (PVar "ctor")) (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "fields")) () (EApp (EApp (EVar "allPlansFinite") (EVar "env")) (EApp (EVar "fieldPlansOnly") (EVar "fields")))) (arm (PCon "Err" PWild) () (EVar "False"))))
 (DTypeSig false "ctorCanDiverge" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "PlanCtor") (TyCon "Bool")))))

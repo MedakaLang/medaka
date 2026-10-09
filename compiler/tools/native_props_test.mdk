@@ -3,7 +3,7 @@ import test.{Expectation, expectAll, expectEqual, expectTrue, fail}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), mapTyInDecl}
-import string.{contains}
+import string.{contains, countOccurrences}
 import tools.native_props.{
   runNativePlannedPropRequests, renderNativePlannedProbe,
   classifyNativeTranscript
@@ -244,11 +244,15 @@ test "native runtime failures retain the requested replay seed and budget" = wit
           _ => fail "expected one native runtime failure")
 
 rendered : String -> Result String String
-rendered text = renderNativePlannedProbe
-  "/tmp/native_props_render.mdk"
-  text
-  (nativeModules text)
-  [PropRequest "shape" 1 1]
+rendered text = renderedFor ["shape"] text
+
+renderedFor : List String -> String -> Result String String
+renderedFor names text =
+  renderNativePlannedProbe
+    "/tmp/native_props_render.mdk"
+    text
+    (nativeModules text)
+    (map (name => PropRequest name 1 1) names)
 
 nativeModules : String -> List PlanModule
 nativeModules text =
@@ -304,7 +308,7 @@ hasName : String -> List String -> Bool
 hasName _ [] = False
 hasName name (current :: rest) = name == current || hasName name rest
 
-test "native source closes every recursive plan behind parameter-scoped helpers" =
+test "native source closes every recursive plan behind shared helpers" =
   let text =
     "data Tree a = Leaf a | Fork (List (Tree a)) (Tree a)\nprop \"shape\" (left : List (Tree Int)) (right : Tree Int) = left == left && right == right\n"
   match rendered text
@@ -314,10 +318,9 @@ test "native source closes every recursive plan behind parameter-scoped helpers"
       _ =>
         expectTrue
           (contains "import core as NpCore_" probe
-            && contains "__np_source_check_gen_0_0_node_" probe
-            && contains "__np_source_check_gen_0_1_node_" probe
-            && contains "__np_source_check_gen_0_0_shrink_" probe
-            && contains "__np_source_check_gen_0_1_display_" probe
+            && contains "__np_source_check_gen_node_" probe
+            && contains "__np_source_check_gen_shrink_" probe
+            && contains "__np_source_check_gen_display_" probe
             && not (contains "__np_missing_plan" probe))
 
 test "native source salts helper globals without rewriting user globals" =
@@ -343,3 +346,17 @@ test "native source renders named fields as one string expression" =
         expectTrue
           (contains "\"__np_field = \"" probe
             && contains "\"__np_value = \"" probe)
+
+test "native source renders one generator per plan across properties" =
+  let text =
+    "prop \"a\" (xs : List Int) = xs == xs\nprop \"b\" (ys : List Int) = ys == ys\n"
+  match renderedFor ["a", "b"] text
+    Err message => fail message
+    Ok probe =>
+      expectEqual 1 (countOccurrences " : Int -> <Rand> List (Int)\n" probe)
+
+test "native source passes depth at runtime instead of unrolling levels" =
+  let text = "prop \"shape\" (pairs : List (Int, Int)) = pairs == pairs\n"
+  match rendered text
+    Err message => fail message
+    Ok probe => expectEqual 0 (countOccurrences "depth <=" probe)
