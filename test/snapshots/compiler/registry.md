@@ -1,5 +1,5 @@
 # META
-source_lines=1688
+source_lines=1686
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -631,9 +631,8 @@ mregAddAll _ [] acc = acc
 mregAddAll k (v :: vs) acc = mregAddAll k vs (mregAddK k v acc)
 
 -- ── SetRegistry: membership only ──────────────────────────────────────────
--- Stores the `RegKey` as its value so the set can be ENUMERATED, which
--- `implCountForIfaceU`-shaped consumers (`omSize` today) and any "did you
--- mean" candidate list need.
+-- Stores the `RegKey` as its value so the set can be ENUMERATED, which a
+-- size query (`sregSize`) and any "did you mean" candidate list need.
 public export data SetRegistry = SetRegistry (OrdMap RegKey)
 
 export
@@ -656,8 +655,7 @@ export
 sregMember : Ident -> SetRegistry -> Bool
 sregMember ident s = sregMemberK (regKeyOf ident) s
 
--- `implCountForIfaceU` (`types/typecheck.mdk`) is `omSize` over a per-iface
--- tag set; it could not be written against this type without this.
+-- The number of members; a count cannot be written against this type without it.
 export
 sregSize : SetRegistry -> Int
 sregSize (SetRegistry m) = omSize m

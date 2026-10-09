@@ -3163,9 +3163,7 @@ unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 uniqueMethodTemplateGiven : MethodPredicateTemplate -> ScopeId -> List GivenEntry -> Option GivenEntry
 unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
 unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
-univAddIfaceTag : Bool -> RegKey -> TabKey -> Registry SetRegistry -> Registry SetRegistry
 univConcreteBucket : ImplUniverse -> IfaceRef -> Option HeadKey -> List (List Ty, List Require)
-univHeadCountsInCensus : List Ty -> Bool
 univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
 univReceiverTag : List Ty -> Option HeadKey
 unknownCtorMsg : String -> String

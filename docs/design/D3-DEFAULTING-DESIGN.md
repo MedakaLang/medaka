@@ -10,6 +10,10 @@ prototype built from `c57d595ce`; the prototype's diff is
 `/var/tmp/medaka-sprints/the-declared-variable-holds/probes/d3/`, and the logs are in
 `…/reports/{ds,probes,intree}-*.log`. A hand-derived expectation stands above every
 captured value; where the two disagreed the hand-derived one is the one reported.
+`checkUndeterminedArgs` and `checkUndeterminedObligation`, named below as they stood
+at `c57d595ce`, were retired by #3897: the undetermined-goal verdict is now
+`checkUndeterminedObligations` over the one candidate set `goalCandidates`, with no
+per-argument loop and no sole-impl default.
 
 The question this document answers in one sentence: **when a numeric literal's type
 variable sits in a multi-parameter predicate, what settles it — the one instance that

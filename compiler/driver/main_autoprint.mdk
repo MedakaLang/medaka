@@ -117,7 +117,7 @@ autoPrintWrapModules (p :: rest) = p :: autoPrintWrapModules rest
 
 wrapMainDecl : Decl -> Decl
 wrapMainDecl (DFunDef vis "main" [] body site) =
-  DFunDef vis "main" [] (wrapPrintln body) site
+  DFunDef vis "main" [] (wrapPrintln site body) site
 wrapMainDecl (DAttrib a d) = DAttrib a (wrapMainDecl d)
 wrapMainDecl d = d
 
@@ -212,13 +212,15 @@ pinnedCopies origin pin (_ :: rest) = pinnedCopies origin pin rest
 -- call (`println`, or `putStrLn (display …)`) can be safe.  Every caller that
 -- calls `autoPrintWrapModules` MUST also pass `autoPrintPinCore coreDecls` as
 -- the core decl list, or the name is unbound.
-wrapPrintln : Expr -> Expr
-wrapPrintln body = wrapCall autoPrintPinName body
+wrapPrintln : Loc -> Expr -> Expr
+wrapPrintln site body = wrapCall autoPrintPinName site body
 
 -- `<e>` → `callee <e>`, keeping the body's outer `ELoc` around the application.
-wrapCall : String -> Expr -> Expr
-wrapCall callee (ELoc l inner) = ELoc l (EApp (EVar callee) (ELoc l inner))
-wrapCall callee body = EApp (EVar callee) body
+-- A body with none (an application such as `Err "x"`) is located at the `main`
+-- binding [site], so a goal the synthesized call poses has a source location.
+wrapCall : String -> Loc -> Expr -> Expr
+wrapCall callee _ (ELoc l inner) = ELoc l (EApp (EVar callee) (ELoc l inner))
+wrapCall callee site body = ELoc site (EApp (EVar callee) body)
 
 -- Re-run the CHECK gate on the wrapped program to surface an underived-ADT main
 -- as the clean `No impl of Display …` type error.  Runs over the WHOLE loaded
@@ -356,6 +358,6 @@ asyncPinImport =
 
 wrapAsyncMainDecl : Decl -> Decl
 wrapAsyncMainDecl (DFunDef vis "main" [] body site) =
-  DFunDef vis "main" [] (wrapCall asyncMainPinName body) site
+  DFunDef vis "main" [] (wrapCall asyncMainPinName site body) site
 wrapAsyncMainDecl (DAttrib a d) = DAttrib a (wrapAsyncMainDecl d)
 wrapAsyncMainDecl d = d

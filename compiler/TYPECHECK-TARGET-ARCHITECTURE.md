@@ -3095,7 +3095,7 @@ Every claim below is labelled **MEASURED** (run first-hand while writing this),
   irOrigin : TyConOrigin }` and `Predicate { iface : IfaceRef, args }`
   (`compiler/types/typecheck.mdk:3060-3075`); the writer
   `insertUnivImpl`/`insertUnivImplKeys`/`insertUnivImplAt` and the readers
-  `implCountForIfaceU`/`univConcreteBucket`/`univHeadless` all key the interface
+  `implCountForIfaceU` (retired by #3897)/`univConcreteBucket`/`univHeadless` all key the interface
   half in the `NsIface` namespace (`:17885-17949`, `:17981-17982`,
   `:18275-18297`). So `IE`'s interface key exists already; A-3.4 **reuses** it
   and mints no parallel scheme.

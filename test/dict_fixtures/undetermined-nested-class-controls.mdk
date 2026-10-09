@@ -1,0 +1,24 @@
+-- Controls for the two `undetermined-nested-class-*` rows: the same nested
+-- `requires` goals, each with something that settles its variable.  A literal
+-- under the variable is defaulted by D3 (`debug [1, 2]`, `[] == [1]`); a given
+-- answers `Eq a` in `f`; an annotation fixes `def`'s type; `length` and `sum`
+-- pose no goal on the element (`sum []`'s `Num ?a` is defaulted to `Int`).
+-- Hand-derived: ACCEPT on all three verbs, printing
+-- `[1, 2]`, `False`, `False`, `Some (Some 7)`, `0`, `0`.
+interface Def a where
+  def : a
+impl Def Int where
+  def = 7
+impl Def Bool where
+  def = True
+impl Def (Option a) requires Def a where
+  def = Some def
+f : Eq a => a -> Bool
+f x = [x] == []
+main =
+  println (debug [1, 2])
+  println (debug ([] == [1]))
+  println (debug (f 3))
+  println (debug (def : Option (Option Int)))
+  println (debug (length []))
+  println (debug (sum []))

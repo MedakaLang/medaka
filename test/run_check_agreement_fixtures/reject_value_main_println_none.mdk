@@ -1,0 +1,6 @@
+-- `println None` poses the same `Display (Option ?a)` an auto-printed value
+-- `main` does, so the verdict is not specific to the auto-print (DICT-SEMANTICS
+-- §6.2 "T4 implemented").  Hand-derived: REJECT on all three verbs,
+-- T-AMBIGUOUS-INSTANCE.  The annotated form is
+-- `test/engine_fixtures/main_value_println_none.mdk`.
+main = println None
