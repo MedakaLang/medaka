@@ -35887,7 +35887,7 @@ inferPropBodiesGo env ((DProp _ name params body) :: rest) =
   let dictMark = goalsMark ()
   let _ = unify (infer local body) (tconBuiltin "Bool")
   let _ = exitLevel ()
-  let _ = defaultClosedBodyNum oblMark callMark dictMark
+  let _ = settleClosedBody (tconBuiltin "Bool") oblMark callMark dictMark
   let _ = closeScope ()
   inferPropBodiesGo env rest
 inferPropBodiesGo env (_ :: rest) = inferPropBodiesGo env rest
@@ -35922,38 +35922,48 @@ inferTestBodies env ((DTest _ name body) :: rest) =
   -- shared carrier type cannot object to.
   let _ = unify (infer env body) (tconUnresolved "Expectation")
   let _ = exitLevel ()
-  let _ = defaultClosedBodyNum oblMark callMark dictMark
+  let _ =
+    settleClosedBody (tconUnresolved "Expectation") oblMark callMark dictMark
   let _ = closeScope ()
   inferTestBodies env rest
 inferTestBodies env (_ :: rest) = inferTestBodies env rest
 
--- Test/property bodies publish no polymorphic result. Their own numeric variables
--- have no later determination channel, so D1 defaults them before the module's
--- obligation checks. D4 excludes outer variables and deeper generalized locals;
--- property parameters are allocated before the body enters its level.
-defaultClosedBodyNum : Int -> Int -> Int -> Unit
-defaultClosedBodyNum oblMark callMark dictMark =
-  let obls =
-    wWindow perRun.value.implObls oblMark
-      ++ wWindow perRun.value.obls callMark
-      ++ numDictObls (dictAppsSince dictMark)
-  defaultClosedBodyNumGo
-    (perRun.value.currentLevel.value + 1)
-    (builtinIfaceRef BNum)
-    obls
-
-defaultClosedBodyNumGo : Int -> IfaceRef -> List UObligation -> Unit
-defaultClosedBodyNumGo _ _ [] = ()
-defaultClosedBodyNumGo level num (o :: rest) =
+-- A test or property body is a numeric boundary that publishes no polymorphic
+-- result: nothing after it can determine its variables.  A variable below the
+-- body's level (a property parameter, a value-restricted outer binding) belongs
+-- to its enclosing binder and is held rigid, judged where it lives.  The body runs
+-- the method-body settle sequence with an empty surviving set, then the verdict,
+-- so a goal the body leaves open is judged here as a top-level binding's is.
+-- [bodyTy] is the closed type the body was unified with.
+settleClosedBody : Mono -> Int -> Int -> Int -> Unit
+settleClosedBody bodyTy oblMark callMark dictMark =
+  let level = perRun.value.currentLevel.value + 1
+  let addedObls = wWindow perRun.value.implObls oblMark
+  let bodyObls = addedObls ++ callUOblsWindow callMark
+  let rigidIds = outerRigidIds (Some level) (flatMap uOblArgs bodyObls) omEmpty
+  let _ = improveByUniqueImpl rigidIds bodyObls
+  let _ = determineByUniqueInstance rigidIds bodyObls
+  let withheld = finalizeNumBoundary NumBoundary {
+    nbDisposition = NumBoundaryOwnedMethodBody level,
+    nbMembers = [bodyTy],
+    nbSurvivingIds = omEmpty,
+    nbDefaultObls = addedObls ++ calleeNumObls callMark dictMark,
+    nbAmbiguityObls = addedObls,
+    nbGuard = NumGuard {
+      ngGoals = bodyObls,
+      ngRigidIds = rigidIds,
+      ngOuterBelow = Some level,
+    },
+  }
+  let _ = improveByUniqueImpl rigidIds bodyObls
+  let _ = determineByUniqueInstance rigidIds bodyObls
   let _ =
-    if sameIfaceDecl num o.pred.iface then match uOblArgs o
-      [m] => match normalize m
-        TVar r => match r.value
-          Unbound _ owner => if owner == level then unify m (tconBuiltin "Int")
-          _ => ()
-        _ => ()
-      _ => ()
-  defaultClosedBodyNumGo level num rest
+    rejectUndeterminedVectors
+      rigidIds
+      omEmpty
+      addedObls
+      (callUOblsWindow callMark ++ nestedRequireGoals rigidIds bodyObls)
+  rejectWithheldAmbiguity rigidIds withheld bodyObls
 
 -- bind each prop param `x : ty` as a monomorphic scheme in the env (fresh tyvars
 -- for any free type variable in ty; props are normally concrete, e.g. `List Int`).

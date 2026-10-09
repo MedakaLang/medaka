@@ -1,0 +1,9 @@
+import test.{Expectation(..), expectEqual}
+
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+test "float key beside the Int key" =
+  expectEqual (debug ([|1.5, 2.25|][0] + [|1.5, 2.25|][1])) "3.75"
+
+main = println "ok"

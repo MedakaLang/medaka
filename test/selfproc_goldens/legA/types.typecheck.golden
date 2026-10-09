@@ -831,8 +831,6 @@ defaultAbsentNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObli
 defaultAmbiguousNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> Mono -> Unit
 defaultBodyBinderNamesProbe : Unit -> List String
 defaultBodyLocalNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> Unit
-defaultClosedBodyNum : Int -> Int -> Int -> Unit
-defaultClosedBodyNumGo : Int -> IfaceRef -> List UObligation -> Unit
 defaultDeferredPatLitsIn : Int -> Mono -> Unit
 defaultEachMemberWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
 defaultEffectLaunderMsg : String -> List Atom -> String
@@ -2899,6 +2897,7 @@ setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 setStdlibOwnership : Bool -> List String -> Unit
+settleClosedBody : Mono -> Int -> Int -> Int -> Unit
 settleDeferredPatLits : Unit -> Unit
 settlePatLits : List (Mono, Int, Option Loc) -> Unit
 settlePatLitsGo : Bool -> List (Mono, Int, Option Loc) -> Unit

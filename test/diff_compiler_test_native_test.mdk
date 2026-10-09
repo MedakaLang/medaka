@@ -480,3 +480,18 @@ forgeThenAbortRow ft = match runVerb 120 ["test", "--native", ft]
 
 test "native_test_forge_then_abort: forge-then-abort is an error, never a pass (check 18)" =
   forgeThenAbortRow (fixture "native_test_forge_then_abort.mdk")
+
+-- ── #3822: a test body's numeric key literal settles like any boundary's ──────
+
+floatKeyRow : String -> <Exec, IO, FileRead> Expectation
+floatKeyRow path = match runVerb 120 ["test", "--native", path]
+  Err e => fail "native_test_float_key.mdk: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      fail
+        "native_test_float_key.mdk: 'medaka test --native' exited \{intToString code} (expected 0): \{out ++ err}"
+    else
+      requireText "native_test_float_key.mdk" (out ++ err) "1/1 passed"
+
+test "native_test_float_key: a Float-keyed Index in a test body defaults its key and passes (#3822)" =
+  floatKeyRow (fixture "native_test_float_key.mdk")
