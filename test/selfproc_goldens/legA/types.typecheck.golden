@@ -503,8 +503,8 @@ checkReqOne : ImplUniverse -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> 
 checkSigConstraintCoverage : List ConstraintReg -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
 checkSigConstraintOne : List ConstraintReg -> List (String, Ty) -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> Unit
 checkSigTooGeneral : String -> Ty -> List (String, Mono) -> Unit
-checkSigVarGoal : Map String Unit -> List (String, Ty, List (String, Mono)) -> UObligation -> Unit
-checkSigVarGoals : Map String Unit -> List (String, Ty, List (String, Mono)) -> List UObligation -> Unit
+checkSigVarGoal : DeclaringBinder -> Map String Unit -> List (String, Ty, List (String, Mono)) -> UObligation -> Unit
+checkSigVarGoals : DeclaringBinder -> Map String Unit -> List (String, Ty, List (String, Mono)) -> List UObligation -> Unit
 checkSigsFixedBy : List (Int, String) -> List (String, Ty, List (String, Mono)) -> Unit
 checkSigsFixedByExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List ScopedMember -> List (String, Ty, List (String, Mono)) -> Unit
 checkSigsOverExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List (String, Ty, List (String, Mono)) -> Unit
@@ -793,7 +793,9 @@ declParamKinds : List String -> List (Option KindAnn) -> List Kind
 declPolarityKeys : List Decl -> List TabKey
 declRefNames : Decl -> List String
 declTopFnNames : List Decl -> List String
+declareQuantified : Scheme -> Unit
 declareRemedy : String -> String -> String
+declareRigidVars : List String -> Unit
 declaredArgEffNames : Ty -> List String
 declaredAuthority : (String, Option KindAnn) -> List (String, Param)
 declaredConstraintFor : String -> CDeclared
@@ -867,6 +869,7 @@ determinationCandidates : GoalWindow -> List Mono -> List (ImplRow, List (Int, M
 determineByUniqueInstance : Map String Unit -> List UObligation -> Unit
 determineByUniqueInstanceGo : Map String Unit -> GoalWindow -> Bool -> List (Int, UObligation) -> Bool
 determineGoal : Map String Unit -> GoalWindow -> UObligation -> List Mono -> Bool
+determineHeldGoal : Map String Unit -> GoalWindow -> UObligation -> List Mono -> Bool
 determineSweeps : Map String Unit -> GoalWindow -> Int -> Unit
 determinedEntryAnswers : IfaceRef -> List Mono -> (ImplRow, List Mono) -> Bool
 determinedGoalInstance : IfaceRef -> List Mono -> Option ImplRow
@@ -2497,6 +2500,7 @@ qualifyBy : SigVars -> String -> Mono -> Mono
 qualifyByAll : SigVars -> List String -> Mono -> Mono
 qualifyByTerms : SigVars -> List EffParamTy -> Option Loc -> Mono -> Mono
 quantifiableAuthorities : TcEnv -> Map String (List (List Pat, Expr)) -> List ScopedMember -> ScopeRoles
+quantifiedVecObls : List Int -> List VecObl -> List VecObl
 quantifyFree : List AuthResidual -> EffRow -> Mono -> Scheme
 quotedNames : List String -> String
 raiseAuthvarLevel : Int -> Ref Authvar -> Unit
@@ -2731,7 +2735,7 @@ residualFailureMsg : String -> String -> String -> String
 residualInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
 residualInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
 residualMixedPred : List Int -> IfaceRef -> List Mono -> List (IfaceRef, List Int, List Mono)
-residualOblArgs : List Mono -> List Mono
+residualOblArgs : List Int -> List Mono -> List Mono
 residualPredOne : Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualReduceFuel : Int
@@ -2934,7 +2938,7 @@ sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvarIds : List Mono -> List Int
 sigTyVarNames : Ty -> List String -> List String -> List String
 sigVarFixedBy : List (Int, String) -> List (String, Mono) -> Option (String, String)
-sigVarGoalMsg : List (String, Ty, List (String, Mono)) -> List Int -> IfaceRef -> List Mono -> String
+sigVarGoalMsg : DeclaringBinder -> List (String, Ty, List (String, Mono)) -> List Int -> IfaceRef -> List Mono -> String
 sigVarOwner : List (String, Ty, List (String, Mono)) -> Int -> List (String, (Int, String))
 sigVarsFor : Ty -> List String -> SigVars
 sigVarsForWith : Ty -> List String -> List (String, Param) -> SigVars
@@ -3008,8 +3012,8 @@ substField : List (Int, Mono) -> List (Int, Authority) -> (String, Mono) -> (Str
 substMember : List (Int, Ref Effvar) -> Ref Effvar -> Ref Effvar
 substMono : List (Int, Mono) -> List (Int, Ref Effvar) -> List (Int, Authority) -> Mono -> Mono
 substMonos : List Int -> List (Int, Mono) -> Option (List Mono)
-substOblArg : Mono -> List (Int, Mono) -> Option Mono
-substOblArgs : List Mono -> List (Int, Mono) -> Option (List Mono)
+substOblArg : List Int -> Mono -> List (Int, Mono) -> Option Mono
+substOblArgs : List Int -> List Mono -> List (Int, Mono) -> Option (List Mono)
 substParams : List String -> List (String, Ty) -> List Ty
 substRecordField : RecordSubst -> Mono -> Mono
 substRow : List (Int, Ref Effvar) -> List (Int, Authority) -> EffRow -> EffRow
@@ -3238,6 +3242,7 @@ wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, 
 withAliasMethodNames : List (String, String) -> Map String Unit -> Map String Unit
 withCtors : Map String Scheme -> TcEnv
 withDeclParamKinds : List Decl -> (Unit -> a) -> a
+withDeclaredVars : Map String Unit -> List Mono -> Map String Unit
 withFreeAuths : List (String, Ref Authvar) -> SigVars -> SigVars
 withheldGoals : List Mono -> List UObligation -> List UObligation
 withheldVectorVerdict : Map String Unit -> GoalWindow -> UObligation -> Unit

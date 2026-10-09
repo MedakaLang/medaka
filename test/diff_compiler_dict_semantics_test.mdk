@@ -2966,6 +2966,116 @@ table = [
     codes = [],
   },
   Row {
+    entry = "sig-var-rigid-generalized-local.mdk",
+    label =
+      "§3 a generalized local's goal reaches the enclosing signature (#3796): `let k u = get (Box [])` keeps `Get (Box (List t)) e` in its scheme, since only binding its own quantified `e` answers it, and `k x` poses `Get (Box (List t)) b` to `weird2 : b -> b`, refused at that use like the top-level `weird`. Drained from the must-fail pin 3796-generalized-local-escapes-signature: `check` printed `weird2 : a -> a`, `run` panicked and the binary printed a heap word",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-generalized-local-pick.mdk",
+    label =
+      "§3 #3796's `Pick` twin: `let k z = pick [z] [1]` keeps its goal, and `k y` poses `Pick (List a) (List n) (List Int)` to `f : a -> List Int`, which `impl Pick a a a` answers only at `a = Int`. Was accepted on every verb, printing [1] from an instance that does not exist",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-generalized-local-control.mdk",
+    label =
+      "control for the generalized-local rows (the 3796 pin's control): a dictionary-abstracted local used at two types inside an impl body whose `requires Show2 a` gives the goal. Hand-derived: int 1/int 2 | s:hi",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "int 1/int 2 | s:hi\n",
+    codes = [],
+  },
+  Row {
+    entry = "sig-var-rigid-generalized-local-satisfied.mdk",
+    label =
+      "control: the #3796 locals used where an instance answers their kept goal; each use solves the local's dictionary (`Get (Box (List Int)) (List Int)`, `Pick (List Int) (List Int) (List Int)`). Hand-derived: [], then [1]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[]\n[1]\n",
+    codes = [],
+  },
+  Row {
+    entry = "sig-var-rigid-method-var.mdk",
+    label =
+      "§3 an interface method signature's own variable is rigid in an impl body's matcher (#3797): `w : x -> b -> b` with body goal `Get (Box (List t)) b` is refused at the `get`. Drained from the must-fail pin 3797-method-var-escapes-via-instance: `check` accepted, `run` panicked `unknown op '+'`, `build` hit an emitter panic",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-method-var-control.mdk",
+    label =
+      "control for the method-variable row: `get (Box y)` poses `Get (Box b) b`, which the impl matches at the rigid `b`. Hand-derived: 41 + 1 = 42",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
+    entry = "sig-var-rigid-annotation-var.mdk",
+    label =
+      "§3 a variable written in an expression annotation is rigid for the annotated expression (#3799): `h : a -> List Int = y => pick [y] [1]` poses `Pick (List a) (List n) (List Int)`, answered only at `a = Int`, refused at the `pick`. Drained from the must-fail pin 3799-annotation-var-bound-by-instance, which printed [1] on `run` and the binary",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-annotation-var-control.mdk",
+    label =
+      "control for the annotation row: `h : a -> List a = y => pick [y] []`, where improvement fixes the empty list's element to `a` and the instance matches at the rigid `a`. Hand-derived: []",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[]\n",
+    codes = [],
+  },
+  Row {
+    entry = "local-goal-on-enclosing-var.mdk",
+    label =
+      "§4 `gen` at a local binder: `f = i => v[i]` keeps `Index c i e` with the enclosing `c` as itself, so `g2 : Index a Int b => a -> b` and the call at `String` poses `Index (Array Float) Int String`, which no instance answers. Base dropped the goal (`g2 : a -> b`), accepted, and `run` panicked `putStrLn: not a String`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "local-goal-on-enclosing-var-control.mdk",
+    label =
+      "control for the enclosing-variable row: the same `g2` at the element type. Hand-derived: 1.5 + 1.0 = 2.5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2.5\n",
+    codes = [],
+  },
+  Row {
     entry = "impl-head-pinned-by-body.mdk",
     label =
       "§3 W3-inst: `impl Sizer (P c d)` whose body annotates the `c` field `String` holds only for `impl Sizer (P String d)`, so it is refused at the body naming that head (#819). Drained from the must-fail pin 819-impl-head-tyvar-pinned: `run` printed 5 and the built binary for `size (P 1 2)` died with SIGSEGV",
@@ -4436,7 +4546,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 390
+tableRows = 400
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4668,7 +4778,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 24
+schemeRows = 25
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -4808,6 +4918,12 @@ schemeTable = [
     label =
       "§6.3 D3 clause 3 keeps the top-level control's scheme: the key grounds, the `Index` goal and the element's `Num` stay",
     want = "sumTwo : (Index a Int b, Num b) => a -> b",
+  },
+  SchemeRow {
+    entry = "local-goal-on-enclosing-var-control.mdk",
+    label =
+      "§4 `gen` at a local binder: a local's goal over a variable it shares with its binder reaches that binder's scheme, the variable kept as itself",
+    want = "g2 : Index a Int b => a -> b",
   },
   SchemeRow {
     entry = "default-guard-let-tied-to-enclosing-arg.mdk",

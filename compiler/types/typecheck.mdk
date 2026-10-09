@@ -11874,7 +11874,7 @@ data PerRun = PerRun {
   liveMemberMonosRef : Ref (List Mono),  -- the types of the module's closed top-level members that generalization left a variable open in: a later group can still ground it (DICT-SEMANTICS §6.2 T2), so no boundary judges a goal on it (`liveMemberIds`)
   quiescentGoalsRef : Ref (List (OrdMap Unit, GoalWindow, UObligation)),  -- the goals on such a variable, newest first, each with its boundary's rigid variables and window (`judgeQuiescentGoals`)
   determinedRowsRef : Ref (Map Int (List (ImplRow, List Mono))),  -- the instance each determination commit chose, with the committed goal's arguments, filed under the variable heading the goal (`fileDeterminedRow`)
-  declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` holds rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
+  declaredSigVarIds : Ref (OrdMap Unit),  -- every variable a closed binder declares, which `matchEqPairs` and determination hold rigid: a top-level signature's and a generalized local's quantified variables (an annotated local's included); `declareRigidVars` adds them. A method signature's and an expression annotation's variables are held only at their own close (`checkSigVarGoals`)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
   patLitPending : Ref (List (Mono, Int, Option Loc)),  -- integer literal PATTERNS inferred since the enclosing pattern site began, awaiting `settlePatLits`
@@ -20896,7 +20896,7 @@ recordSchemeCallObligations originId (o :: rest) subst =
 substVecOblArgs : VecObl -> List (Int, Mono) -> Option (List Mono)
 substVecOblArgs o subst
   | isEmptyL o.voArgs = substMonos o.voIds subst
-  | otherwise = substOblArgs o.voArgs subst
+  | otherwise = substOblArgs o.voIds o.voArgs subst
 
 -- #1937 (structured predicate carry): this walk used to substitute ONLY at a TOP-LEVEL
 -- `TVar` and pass anything else through untouched, which is why the admission pair
@@ -20905,25 +20905,30 @@ substVecOblArgs o subst
 -- the wrong-but-concrete goal its header calls strictly worse than a missing one.  It
 -- now recurses through `TApp`/`TFun` and substitutes at every `TVar` LEAF, so
 -- `Conv (Wrap a) b` at a call instantiating `a := Char, b := Bool` becomes the goal
--- `Conv (Wrap Char) Bool` — the shape #1937 is about.  A leaf id absent from [subst]
--- still fails CLOSED for the whole predicate, exactly as the top-level arm always did.
-substOblArgs : List Mono -> List (Int, Mono) -> Option (List Mono)
-substOblArgs [] _ = Some []
-substOblArgs (m :: rest) subst = match substOblArg m subst
+-- `Conv (Wrap Char) Bool` — the shape #1937 is about.  A leaf among the entry's own
+-- ids [ids] that [subst] does not map still fails CLOSED for the whole predicate,
+-- exactly as the top-level arm always did.  A leaf outside [ids] is a variable the
+-- scheme does not quantify (`residualMixedPred`), the same at every use, so it is
+-- kept as itself.
+substOblArgs : List Int -> List Mono -> List (Int, Mono) -> Option (List Mono)
+substOblArgs _ [] _ = Some []
+substOblArgs ids (m :: rest) subst = match substOblArg ids m subst
   None => None
-  Some m2 => map (m2 :: _) (substOblArgs rest subst)
+  Some m2 => map (m2 :: _) (substOblArgs ids rest subst)
 
 -- ONE predicate argument under [subst]: every tyvar leaf mapped, structure preserved.
-substOblArg : Mono -> List (Int, Mono) -> Option Mono
-substOblArg m subst = match normalize m
-  TVar cell => lookupAssocI (tyvarId cell) subst
-  TQual a q => map (a2 => TQual a2 q) (substOblArg a subst)
-  TApp a b => match substOblArg a subst
+substOblArg : List Int -> Mono -> List (Int, Mono) -> Option Mono
+substOblArg ids m subst = match normalize m
+  TVar cell => match lookupAssocI (tyvarId cell) subst
+    Some m2 => Some m2
+    None => if containsI (tyvarId cell) ids then None else Some (TVar cell)
+  TQual a q => map (a2 => TQual a2 q) (substOblArg ids a subst)
+  TApp a b => match substOblArg ids a subst
     None => None
-    Some a2 => map (b2 => TApp a2 b2) (substOblArg b subst)
-  TFun a eff b => match substOblArg a subst
+    Some a2 => map (b2 => TApp a2 b2) (substOblArg ids b subst)
+  TFun a eff b => match substOblArg ids a subst
     None => None
-    Some a2 => map (b2 => TFun a2 eff b2) (substOblArg b subst)
+    Some a2 => map (b2 => TFun a2 eff b2) (substOblArg ids b subst)
   other => Some other
 
 -- the monos [ids] map to under [subst], in order; None if any id is unmapped.
@@ -23940,6 +23945,7 @@ sourceBindingArity _ = 0
 -- constrained vars generalize and defer exactly as described above.
 registerLocalScheme : String -> Scheme -> Int -> Int -> Int -> Unit
 registerLocalScheme x sch oblN0 callN0 dictN0 =
+  let _ = declareQuantified sch
   -- Obligations registered universally (#827/#838 I2); do not gate to IMPL/DEFAULT
   -- bodies only. See docs/spec/DICT-SEMANTICS.md § "4.1 `gen` at a local binder".
   let addedObls = wWindow perRun.value.implObls oblN0
@@ -23949,6 +23955,14 @@ registerLocalScheme x sch oblN0 callN0 dictN0 =
   -- beside pushDictApp), reaching schemeOblsForMember via forwardedVecObls; the old
   -- `allDictObls` re-derivation was a redundant second source (deduped away). Retired.
   registerSchemeObligations omEmpty [] callOblsDelta addedObls [(x, sch)]
+
+-- A generalized local's quantified variables are its uses' to choose, as a
+-- signature's are its callers' (DICT-SEMANTICS §3), so they are declared before
+-- its context is read off its goals: an instance that answers a goal only by
+-- binding one does not discharge it, the goal stays in the scheme, and each use
+-- poses it at its own instantiation to the binder enclosing that use.
+declareQuantified : Scheme -> Unit
+declareQuantified sch = declareRigidVars (map intToString (schemeIds sch))
 
 inferLetSimple : TcEnv -> Pat -> Expr -> Expr -> Mono
 inferLetSimple env pat e1 e2 =
@@ -24282,6 +24296,8 @@ inferListLit env es =
 
 inferAnnot : TcEnv -> Expr -> Ty -> Mono
 inferAnnot env e ty =
+  let oblN0 = wMark perRun.value.implObls
+  let callN0 = wMark perRun.value.obls
   let t = infer env e
   let pair = astTypeFreshTbl ty
   let annot = fst pair
@@ -24289,6 +24305,20 @@ inferAnnot env e ty =
   -- into its parameter: a qualified annotation bounds its abstraction.
   let _ = argumentIntoOrd True env (Some e) annot t
   let _ = checkAnnotTooGeneral ty (map snd (snd pair))
+  -- The written variables are declared for the annotated expression's goals.
+  -- Past it they are not: an annotated local that generalizes declares them as
+  -- its quantified variables, and one that does not leaves them to its binder.
+  let annotation = [("", ty, snd pair)]
+  let declared = sccProtectedSignatureIds annotation
+  let _ =
+    if omSize declared == 0 then
+      ()
+    else
+      checkSigVarGoals
+        DeclaredByAnnotation
+        declared
+        annotation
+        (wWindow perRun.value.implObls oblN0 ++ callUOblsWindow callN0)
   annot
 
 -- Phase 108 head-pin (`:~`, EHeadAnnot): like inferAnnot but WITHOUT the
@@ -26049,19 +26079,15 @@ processLetGroup env binds =
   -- quantified ids, and substMonos skips entries whose ids a different scheme's
   -- instantiation does not map.
   let callOblsDelta = callOblsWindow callN0
+  let schemes = groupSchemesOf genv binds
+  let _ = fold (_ p => declareQuantified (snd p)) () schemes
   -- #827/#838 I2: register EVERYWHERE, not only inside a method body.  The
   -- uniform deferral (`undeterminedGoalExempt`'s OD2 test) makes a generalizable
   -- where/let var defer into the enclosing scheme rather than trip an ambiguity
   -- reject, closing the orphaned-local-constraint S0 (#827).  See registerLocalScheme.
   -- #838 I5: dict-slot forwarding rides callOblsDelta's PCallSlot obligations (see
   -- registerLocalScheme); the redundant `allDictObls` re-derivation is retired.
-  let _ =
-    registerSchemeObligations
-      omEmpty
-      []
-      callOblsDelta
-      addedObls
-      (groupSchemesOf genv binds)
+  let _ = registerSchemeObligations omEmpty [] callOblsDelta addedObls schemes
   let _ = registerLocalGroupAbs genv oblN0 callN0 (zipL binds lscopes)
   genv
 
@@ -32540,8 +32566,8 @@ implHeadSubst pats concretes
       else
         None
 
--- A declared signature variable of a closed group is a constant here, not one of
--- the goal's free variables: a repeated head variable never equates it with
+-- A variable a closed binder declared (`declaredSigVarIds`) is a constant here, not
+-- one of the goal's free variables: a repeated head variable never equates it with
 -- another type (DICT-SEMANTICS §3).
 matchEqPairs : List (Mono, Mono) -> Bool
 matchEqPairs [] = True
@@ -37197,6 +37223,11 @@ checkOneCallObligationNoImpl iface args loc scope =
   --     ALL rigid — S2-5's nested-rigid shape, which conjunct 3 now covers.)
   if goalDefersOpenWorld scope iface args then
     ()
+  else if anyIn
+    (flatMap monoUnboundIds args)
+    perRun.value.poisonedVars.value then
+    -- A variable of the goal is one an earlier diagnostic explained.
+    ()
   else
     -- #838 I4 (was checkOneImplObligation step 9): reportNumOrNoImpl is a strict superset
     -- of pushNoImplError — it reframes a ground `Num`-obligation tracing to a numeric
@@ -37379,7 +37410,27 @@ determineByUniqueInstanceGo rigidIds window changed ((_, o) :: rest) =
 -- count of distinct variables as they were; the window is re-filed either way,
 -- since the goal's variables are no longer the ones it was filed under.
 determineGoal : OrdMap Unit -> GoalWindow -> UObligation -> List Mono -> Bool
-determineGoal rigidIds window o args
+determineGoal rigidIds0 window o args =
+  let rigidIds = withDeclaredVars rigidIds0 args
+  determineHeldGoal rigidIds window o args
+
+-- [rigidIds] plus each variable of [args] a closed binder declared: determination
+-- commits a binding, and a declared variable is rigid in every matcher that does.
+withDeclaredVars : OrdMap Unit -> List Mono -> OrdMap Unit
+withDeclaredVars rigidIds args =
+  let declared = perRun.value.declaredSigVarIds.value
+  omFromNames
+    (filterList
+      (k => omHasKey k declared)
+      (map intToString (flatMap monoUnboundIds args)))
+    rigidIds
+
+determineHeldGoal : OrdMap Unit ->
+  GoalWindow ->
+  UObligation ->
+  List Mono ->
+  Bool
+determineHeldGoal rigidIds window o args
   | monoVectorClosed args || goalVarsAllHeld rigidIds args = False
   | otherwise =
     let rows = goalRows o.pred.iface args
@@ -38031,41 +38082,72 @@ rigidSigPairs sigIds pairs =
           (substMono toRigid [] [] (fst p), substMono toRigid [] [] (snd p)))
         pairs
 
--- DICT-SEMANTICS §3: a top-level signature's variable is rigid in every matcher.  A
--- goal that an instance head accepts only by binding one needs it to be a specific
--- type, which the caller chooses, so the goal is rejected at its site in the
--- definition unless the declared context gives it.  The head matcher with the
--- group's signature variables free (`rowHeadMatches` on [args]) and the same
--- matcher with them rigid disagree on exactly such a goal.  It runs at the group's
--- close, after improvement and defaulting, while the variables are still free
--- cells; [sigIds] are the group's declared variables (`sccProtectedSignatureIds`).
-checkSigVarGoals : OrdMap Unit ->
+-- DICT-SEMANTICS §3: a declared variable is rigid in every matcher.  A goal that an
+-- instance head accepts only by binding one needs it to be a specific type, which
+-- the caller chooses, so the goal is rejected at its site unless the declared
+-- context gives it.  The head matcher with [sigIds] free (`rowHeadMatches` on
+-- [args]) and the same matcher with them rigid disagree on exactly such a goal.
+-- A binder runs it at its close over the goals recorded inside it, while its
+-- declared variables are still free cells: a top-level group after improvement and
+-- defaulting (`sccProtectedSignatureIds`), a method body after its own (the
+-- method signature's variables), an expression annotation once the annotated
+-- expression has met its written type.  A generalized local declares nothing a
+-- programmer wrote, so it runs no check of its own: its quantified variables turn
+-- rigid at generalization (`declareRigidVars`), each goal they leave stays in its
+-- scheme, and each use poses that goal to the binder enclosing the use.
+checkSigVarGoals : DeclaringBinder ->
+  OrdMap Unit ->
   List (String, Ty, List (String, Mono)) ->
   List UObligation ->
   Unit
-checkSigVarGoals sigIds sigTvMaps obls
+checkSigVarGoals binder sigIds sigTvMaps obls
   | omSize sigIds == 0 = ()
-  | otherwise = fold (_ o => checkSigVarGoal sigIds sigTvMaps o) () obls
+  | otherwise = fold (_ o => checkSigVarGoal binder sigIds sigTvMaps o) () obls
 
-checkSigVarGoal : OrdMap Unit ->
+-- Who wrote the variables a `checkSigVarGoals` run holds rigid: the signature of a
+-- member or method (each entry's name is the member's), or an expression
+-- annotation (its entry's type is the written annotation).
+-- lint-disable-next-line rule-clone-type
+data DeclaringBinder = DeclaredBySignature | DeclaredByAnnotation
+
+checkSigVarGoal : DeclaringBinder ->
+  OrdMap Unit ->
   List (String, Ty, List (String, Mono)) ->
   UObligation ->
   Unit
-checkSigVarGoal sigIds sigTvMaps o =
+checkSigVarGoal binder sigIds sigTvMaps o =
   let args = map normalize (uOblArgs o)
-  match sigRigidBindings sigIds (flatMap monoVarCells args)
+  let cells = flatMap monoVarCells args
+  match sigCellsOf sigIds cells
     [] => ()
-    toRigid =>
+    own =>
       let iface = o.pred.iface
       let rows = filterList (ieRowOfIface iface) (improvementPool args)
-      let rigidArgs = map (substMono toRigid [] []) args
+      let rigidArgs = map (substMono (sigRigidBindings sigIds cells) [] []) args
       if anyList (rowHeadMatches args) rows
         && not (anyList (rowHeadMatches rigidArgs) rows)
         && not (goalGivenAt iface args o.uoScope) then
-        pushTypeErrorOnceAt
-          "T-MISSING-CONSTRAINT"
-          o.loc
-          (sigVarGoalMsg sigTvMaps (map fst toRigid) iface args)
+        let _ =
+          pushTypeErrorOnceAt
+            "T-MISSING-CONSTRAINT"
+            o.loc
+            (sigVarGoalMsg binder sigTvMaps (map tyvarId own) iface args)
+        -- The goal's other variables are explained by this report, so no later
+        -- verdict on a goal over them reports it again.
+        let ownIds = map tyvarId own
+        perRun.value.poisonedVars :=
+          filterList
+              (i => not (containsI i ownIds))
+              (flatMap monoUnboundIds args)
+            ++ perRun.value.poisonedVars.value
+
+-- A binder's declared variables join the set every instance-head matcher holds
+-- rigid (`matchEqPairs`), from the binder's close on.
+declareRigidVars : List String -> Unit
+declareRigidVars [] = ()
+declareRigidVars keys =
+  perRun.value.declaredSigVarIds :=
+    omFromNames keys perRun.value.declaredSigVarIds.value
 
 goalGivenAt : IfaceRef -> List Mono -> ScopeId -> Bool
 goalGivenAt iface args scope =
@@ -38075,23 +38157,31 @@ goalGivenAt iface args scope =
         scope)
     || goalMatchesGiven scope iface args
 
--- The goal is rendered with each signature variable under its declared name; the
+-- The goal is rendered with each declared variable under its declared name; the
 -- renderer names every other variable with a letter those names leave free.
-sigVarGoalMsg : List (String, Ty, List (String, Mono)) ->
+sigVarGoalMsg : DeclaringBinder ->
+  List (String, Ty, List (String, Mono)) ->
   List Int ->
   IfaceRef ->
   List Mono ->
   String
-sigVarGoalMsg sigTvMaps sigVarIds iface args =
+sigVarGoalMsg binder sigTvMaps sigVarIds iface args =
   let owners = flatMap (sigVarOwner sigTvMaps) (dedupI sigVarIds)
-  let member = match owners
-    (m, _) :: _ => m
-    [] => ""
   let named = map snd owners
   let pred =
     "\{iface.irName} \{joinWith " " (ppEach (Ref named) (Ref 0) 3 args)}"
   let vars = joinWith " and " (map (owner => "`\{snd (snd owner)}`") owners)
-  "the body of `\{member}` requires `\{pred}`, which its signature does not declare and which only a specific \{vars} satisfies; write that type in the signature or add `\{pred} =>`"
+  match binder
+    DeclaredBySignature =>
+      let member = match owners
+        (m, _) :: _ => m
+        [] => ""
+      "the body of `\{member}` requires `\{pred}`, which its signature does not declare and which only a specific \{vars} satisfies; write that type in the signature or add `\{pred} =>`"
+    DeclaredByAnnotation =>
+      let written = match sigTvMaps
+        (_, ty, _) :: _ => ppTy ty
+        [] => ""
+      "this expression requires `\{pred}`, which its annotation `\{written}` does not declare and which only a specific \{vars} satisfies; write that type in the annotation or add `\{pred} =>`"
 
 -- (member, (id, declared name)) for the signature in [sigTvMaps] that declares [id].
 sigVarOwner : List (String, Ty, List (String, Mono)) ->
@@ -39166,6 +39256,30 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- improved and determined once more.
   let _ = improveByUniqueImpl bodyRigidIds bodyObls
   let _ = determineByUniqueInstance bodyRigidIds bodyObls
+  -- The method signature's own variables are held at the body's close as a
+  -- top-level signature's are at its group's.  A goal that fixes a head variable is
+  -- W3-inst's (`checkImplHeadPrerequisites`), so only these are held.  The method's
+  -- own `=>` context is not yet published as givens of the body's scope
+  -- (`registerMethodBodyGivens`), so a goal it gives is set aside here.  They do not
+  -- join `declaredSigVarIds`: the module-end verdict on a default body's open goal
+  -- reads the instances its receiver variables reach
+  -- (`test/dict_fixtures/undetermined-method-goal-default-body.mdk`).
+  let methodSig = [(mname, mty, inst.mbiSurvivors)]
+  let methodVarIds = sccProtectedSignatureIds methodSig
+  let methodGivens =
+    map (constraintPredicateSlot inst.mbiNamedVars) (sigConstraintsOf mty)
+  let ungiven =
+    o =>
+      not
+        (anyList
+          (givenAnswers o.pred.iface (map normalize (uOblArgs o)))
+          methodGivens)
+  let _ =
+    checkSigVarGoals
+      DeclaredBySignature
+      methodVarIds
+      methodSig
+      (filterList ungiven bodyObls)
   let _ =
     rejectUndeterminedVectors
       bodyRigidIds
@@ -43529,7 +43643,8 @@ processSCC env sigs grouped0 members =
   -- improved and determined once more.
   let _ = improveByUniqueImpl protectedSigIds groupObls
   let _ = determineByUniqueInstance unownedIds groupObls
-  let _ = checkSigVarGoals protectedSigIds sigTvMaps groupObls
+  let _ =
+    checkSigVarGoals DeclaredBySignature protectedSigIds sigTvMaps groupObls
   let schemes =
     sccSchemes
       env2
@@ -43584,8 +43699,7 @@ processSCC env sigs grouped0 members =
   -- From here on every instance-head matcher holds this group's declared variables
   -- rigid; the group's own generalization above reads them as free variables, so a
   -- goal `checkSigVarGoals` rejected is not reported a second time.
-  perRun.value.declaredSigVarIds :=
-    omFromNames (omKeys protectedSigIds) perRun.value.declaredSigVarIds.value
+  let _ = declareRigidVars (omKeys protectedSigIds)
   -- The group's own occurrences of the members it just promoted (see
   -- `markRecursiveOccurrences`); Flat marks nothing here.
   let groupedOut = match marking
@@ -45149,26 +45263,36 @@ keepBoundResidualPred boundIds (iface, args) = match boundTyvarIds boundIds args
 -- reach the same verdict, which is §4 `(gen)`'s whole claim (OD6(a): declared and
 -- inferred contexts defer identically).
 --
--- 🚨 THE ADMISSION TEST IS `declaredOblMixed`'S, REUSED VERBATIM AND NOT RE-DERIVED —
--- `declaredOblArgOk` / `declaredOblArgId`, the same two functions, for the reason
+-- The ids are `declaredOblMixed`'s, read by the same `declaredOblArgId`, for the reason
 -- `xmodVecObl`'s header states about ITS reuse of them: this is one fact about one
 -- predicate recorded on three channels, and a channel admitting a wider argument class
 -- than its siblings is a new divergence rather than a fix.  Since #1937 THREE argument
 -- classes carry — a BARE tyvar bound by this scheme, a GROUND argument, and a STRUCTURED
 -- argument all of whose tyvar leaves are bound by this scheme — and that third class
 -- arrived on all three channels in one change, together with the structural
--- `substOblArgs` walk that makes it instantiable.  A structured argument mentioning an
--- UNBOUND tyvar is still dropped: it has no deferral target, and admitting something this
--- channel cannot instantiate substitutes to a wrong-but-CONCRETE goal, strictly worse
--- than the missing one it replaces.  At least one bound tyvar is required: a fully ground
--- residual has no deferral target on this channel and stays dropped.
+-- `substOblArgs` walk that makes it instantiable.
+-- A residual of an inferred context can also mention a variable this scheme does not
+-- quantify: one the binder shares with its enclosing scope (`v`'s type in
+-- `g v = let f = i => v[i]; f 0`, or a literal's variable handed to the enclosing
+-- boundary), or one no type of the binder mentions.  Such a variable is the same
+-- variable at every use, and `substOblArg` keeps it as itself, so the residual is
+-- admitted: dropping it lost the goal outright (`g : a -> b`).  A variable another
+-- binder declared (`declaredSigVarIds`: an inner local's quantified variable, in the
+-- inner local's own goal) is not shared: that goal is the inner binder's, already in
+-- its scheme, so it is not admitted here.  Neither other channel reaches this class: a
+-- signature and an imported context quantify every variable they name.  At least one
+-- bound tyvar is required: a residual over no quantified variable is not this
+-- binder's to defer, and stays where it was recorded.
 residualMixedPred : List Int ->
   IfaceRef ->
   List Mono ->
   List (IfaceRef, List Int, List Mono)
 residualMixedPred boundIds iface args =
   let ids = flatMap (declaredOblArgId boundIds) args
-  if isEmptyL ids || not (allList (declaredOblArgOk boundIds) args) then
+  let declared = perRun.value.declaredSigVarIds.value
+  let foreign =
+    i => not (containsI i boundIds) && omHasKey (intToString i) declared
+  if isEmptyL ids || anyList foreign (flatMap monoUnboundIds args) then
     []
   else
     [(iface, ids, args)]
@@ -45184,7 +45308,7 @@ residualMixedPred boundIds iface args =
 -- component of the triple and is unaffected by this projection.
 keepBoundResidual : (IfaceRef, List Int, List Mono) -> VecObl
 keepBoundResidual (iface, ids, args) =
-  VecObl { voIface = iface, voIds = ids, voArgs = residualOblArgs args }
+  VecObl { voIface = iface, voIds = ids, voArgs = residualOblArgs ids args }
 
 -- 🚨 #1937: THIS TEST USED TO BE `listLen ids == listLen args`, AND THAT EQUIVALENCE DIED
 -- WITH THE ADMISSION WIDENING.  It relied on `declaredOblArgId` contributing exactly one
@@ -45192,10 +45316,12 @@ keepBoundResidual (iface, ids, args) =
 -- position is a bare tyvar".  Now that a STRUCTURED argument contributes its own bound
 -- leaves, `Conv (Wrap a) b` has two ids for two arguments and would have taken the
 -- ids-only `[]` arm — instantiating through `substMonos o.voIds` to the goal `Conv a b`,
--- i.e. silently DROPPING the `Wrap`.  Ask the structural question directly instead.
-residualOblArgs : List Mono -> List Mono
-residualOblArgs args
-  | allList isBareTyvarMono args = []
+-- i.e. silently DROPPING the `Wrap`.  Ask the structural question directly instead:
+-- every position a bare tyvar, and each of them one of [ids] (a bare variable the
+-- scheme does not quantify contributes no id, and the ids-only arm would drop it).
+residualOblArgs : List Int -> List Mono -> List Mono
+residualOblArgs ids args
+  | allList isBareTyvarMono args && listLen ids == listLen args = []
   | otherwise = args
 
 isBareTyvarMono : Mono -> Bool
@@ -46791,19 +46917,34 @@ checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch =
     None => ()  -- unsigned member: its inferred constraints are promoted, not checked
     Some _ =>
       let declaredPairs = censusSuperClose (declaredPairsFor m regs)
-      let inferredA =
-        pairsOfVecObls (schemeObligationsOf (schemeIds sch) addedObls)
-      let inferredFwd =
-        pairsOfVecObls (forwardedVecObls (schemeIds sch) callObls)
-      let inferredB = inferredIfacePairs m (schemeIds sch)
-      let inferred = dedupIfacePairs (inferredA ++ inferredFwd ++ inferredB)
+      let boundIds = schemeIds sch
+      let bodyVecs =
+        quantifiedVecObls boundIds (schemeObligationsOf boundIds addedObls)
+      let fwdVecs =
+        quantifiedVecObls boundIds (forwardedVecObls boundIds callObls)
+      let inferredB = inferredIfacePairs m boundIds
+      let inferred =
+        dedupIfacePairs
+          (pairsOfVecObls bodyVecs ++ pairsOfVecObls fwdVecs ++ inferredB)
       let _ = reportUncovered m sigTvMaps declaredPairs inferred
       let declaredVecs =
-        censusSuperCloseVec (declaredSchemeOblsFor sigTvMaps m (schemeIds sch))
-      let inferredVecs =
-        schemeObligationsOf (schemeIds sch) addedObls
-          ++ forwardedVecObls (schemeIds sch) callObls
-      reportUncoveredVec m sigTvMaps declaredPairs declaredVecs inferredVecs
+        censusSuperCloseVec (declaredSchemeOblsFor sigTvMaps m boundIds)
+      reportUncoveredVec
+        m
+        sigTvMaps
+        declaredPairs
+        declaredVecs
+        (bodyVecs ++ fwdVecs)
+
+-- The vectors over [boundIds] alone.  A signature can declare no predicate on a
+-- variable it does not quantify, so a residual that mentions one is never this
+-- check's to cover: its verdict is the undetermined goal's, or `checkSigVarGoals`'.
+quantifiedVecObls : List Int -> List VecObl -> List VecObl
+quantifiedVecObls boundIds vecs =
+  filterList
+    (o =>
+      allList (id => containsI id boundIds) (flatMap monoUnboundIds o.voArgs))
+    vecs
 
 -- inferred (iface, id) pairs from the marked path: each inferred constraint var id
 -- paired with its recovered iface (skip an id whose iface can't be recovered).
