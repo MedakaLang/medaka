@@ -278,7 +278,7 @@ table = [
   Row {
     entry = "s6-drain-quiescence-inferred-scheme.mdk",
     label =
-      "§6.3 quiescence drain, INFERRED-scheme half of #3031: the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound. `routeUndeterminedTop` defers a goal every variable of which a scheme quantifies (the `goalsClosed` test) instead of reporting it ambiguous at a stale location, so `check` stays SILENT with the drain`s diagnostics kept. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
+      "§6.3 quiescence drain, INFERRED-scheme half of #3031: the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound. `reportAmbiguousImpl` defers a goal every variable of which a scheme quantifies (the `goalsClosed` test) instead of reporting it ambiguous at a stale location. `check` does not render the drain`s own diagnostics, so the drain`s verdict is pinned in-process by `compiler/types/typecheck_test.mdk`; this row pins the verdict and value. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -311,7 +311,7 @@ table = [
   Row {
     entry = "s6-drain-quiescence-projected-goal.mdk",
     label =
-      "§6.2 T3 at the quiescence drain: `relay`s call goal is on a scheme-quantified variable, so `routeUndeterminedTop`s single-tag arm mints no `Tweak Float` route from the census tag `Float` and nothing is reported ambiguous. `DrainRollback` hides the drain`s diagnostics on `check`, so this row goes RED only once `DrainDiags` is deleted with that arm unguarded. Prints 2.5",
+      "§6.2 T3 at the quiescence drain: `relay`s two call goals are on a scheme-quantified variable and each reaches exactly one instance, so `routeUndeterminedTop` chooses neither for them (its `ReachOne` `goalsClosed` guard) and nothing is reported ambiguous. `check` does not render the drain`s own verdict; `compiler/types/typecheck_test.mdk` pins that no route is minted. Prints 2.5",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",

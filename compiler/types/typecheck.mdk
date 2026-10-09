@@ -6730,7 +6730,7 @@ buildImplEnvGo (m :: rest) ia =
 -- busiest verbs in the CLI.  This function removes that emptiness FIRST, additively.
 -- ⚠️ This sentence used to end "nothing reads `bodyImplEnvRef` yet", which is FALSE from
 -- B-2.1-b2 on: the SELECTION legs read it (`concreteReqMatchByIface`,
--- `selectReqImpl`/`rowRouteKey`, `implDictRoutesForRow`/`argImplDictRoutesForEncl`),
+-- `rowRouteKey`, `implDictRoutesForRow`/`argImplDictRoutesForEncl`),
 -- and B-2.1-g added the METHOD-keyed route word (`keyForSite`) plus all three shadow
 -- existence reads (`ieImplExistsForHead`).  Derive the set, do not trust a list:
 -- `grep -n bodyImplEnvRef compiler/types/typecheck.mdk`.
@@ -10175,7 +10175,7 @@ hadTypeErrors _ = !typeErrorsSticky
 -- rollback would see a detection that no longer has a diagnostic behind it.  No site
 -- rolls the channel back within one `perRun` lifetime today: `checkGraphFinish`
 -- rolls back only the two cells that OUTLIVE a module (`typeErrorsSticky` and its
--- message list), around the graph-end drain.  Any future rollback of `typeErrors`
+-- message list), around a memo path's drain.  Any future rollback of `typeErrors`
 -- owes the same pairing.
 --
 -- ⚠️ The funnel is not cosmetic.  Before it there were SIX push sites, not the five
@@ -12072,7 +12072,7 @@ anyListM _ [] = False
 anyListM p (x :: xs) = p x || anyListM p xs
 
 -- #1576: the structural node count of a monotype.  Its ONLY consumer is the SHRINKING
--- test in `argImplRequiresRoutes` — it is a termination signal, not a semantic one, so
+-- test in `argImplRequiresRoutesForRow` — it is a termination signal, not a semantic one, so
 -- nothing here needs to agree with any other notion of type size.
 --
 -- Links are followed (`normalize`) so a solved tyvar is measured at what it stands for
@@ -12101,7 +12101,7 @@ monoSizes (m :: rest) = monoSize m + monoSizes rest
 -- spends this; a shrinking chain spends one unit at its seed and nothing after, so the
 -- constant bounds divergence WITHOUT bounding the depth of any valid program — it is now
 -- the ONLY thing standing between a valid program and an unbounded search (#1924).  See
--- `argImplRequiresRoutes`.
+-- `argImplRequiresRoutesForRow`.
 requiresNonShrinkingFuel : Int
 requiresNonShrinkingFuel = 32
 
@@ -28046,8 +28046,8 @@ ieRowAdmittedBy ir (Some ifaces) = anyList (ieRowIfaceMatches ir) ifaces
 -- the route untouched (RNone → eval arg-tag-dispatches to the real impl).  An
 -- ungrounded receiver (still a tyvar) → leave it (polymorphic, deferred).
 -- RLocal only when no impl exists.
--- S-1: [prog] is here so the stamp can call routesOfMonosTop — a PURE
--- function of the (union-find-solved) constraint monos — and fill the standalone's own
+-- S-1: the stamp calls routesOfMonosTop — a PURE
+-- function of the (union-find-solved) constraint monos — to fill the standalone's own
 -- dict routes IN PLACE.  Deliberately NOT routed through pendingDictApps: that list is
 -- resolved by resolveDictApps, which runs AFTER this in `moduleStampOrder`, so the stamp
 -- would read `[]`.  Resolving inside the stamp is ordering-immune.  An unconstrained
@@ -28086,37 +28086,26 @@ ieRowAdmittedBy ir (Some ifaces) = anyList (ieRowIfaceMatches ir) ifaces
 -- reads must name ONE population.  It is no longer enforced by a shared parameter, so it is
 -- now enforced by a shared REF — and the check on any future edit here is "does the thing I
 -- am reading answer over the same population `keyForSite` selects from?", not "am I using
--- [keyTable]?".  [keyTable] survives on this signature only for the parts of
--- `routesOfMonosTop`'s subtree that still thread it; no read AT THIS SITE consults it.
+-- [keyTable]?".  No impl list is threaded through this signature or through
+-- `routesOfMonosTop`'s subtree any more.
 -- (The inference-time existence reads in `inferShadowApp` / `definerReceiverDispatches` are
 -- the same decision at an earlier PHASE and are now on the same ref for the same reason —
 -- B-2.1-c's measurement is that a phase split of one decision is as fatal as a table split.
 -- ⚠️ Do not re-derive the retired defence "GLOBAL by design — local ∪ imported ∪ prelude":
 -- `SHADOW-SEMANTICS.md:242-245` retires that phrase as a false synonym for graph-global, and
 -- `shadowKeyTableRef` was in fact the cumulative topological PREFIX on the Module arm.)
-resolveRLocalSites : List Decl -> List PendingEntry -> Unit
-resolveRLocalSites _ [] = goalSiteLoc := None
-resolveRLocalSites prog ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
+resolveRLocalSites : List PendingEntry -> Unit
+resolveRLocalSites [] = goalSiteLoc := None
+resolveRLocalSites ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
   goalSiteLoc := loc
   let _ = match kind
     SKRLocal sym forceLocal monos ifaces argVecs =>
       if forceLocal then
-        tagRef :=
-          RLocal sym (routesOfMonosTopV prog encl scope monos ifaces argVecs)
+        tagRef := RLocal sym (routesOfMonosTopV encl scope monos ifaces argVecs)
       else
-        resolveRLocalSite
-          prog
-          name
-          tagRef
-          am
-          encl
-          scope
-          sym
-          monos
-          ifaces
-          argVecs
+        resolveRLocalSite name tagRef am encl scope sym monos ifaces argVecs
     _ => ()
-  resolveRLocalSites prog rest
+  resolveRLocalSites rest
 
 -- C5: stamp RLocal on each recorded standalone-shadow arg-position site whose
 -- receiver mono now grounds to a concrete head tycon with NO impl of the method.
@@ -28125,8 +28114,7 @@ resolveRLocalSites prog ((PendingEntry name tagRef am encl kind loc scope _) :: 
 -- stamped the correct RKey<receiverHead> via resolveArgStamps.
 -- An ungrounded receiver (still a tyvar) → leave it.  The
 -- RLocal-vs-ordinary-dispatch split keys the genuine case off the receiver.
-resolveRLocalSite : List Decl ->
-  String ->
+resolveRLocalSite : String ->
   Ref Route ->
   Mono ->
   String ->
@@ -28136,7 +28124,7 @@ resolveRLocalSite : List Decl ->
   List IfaceRef ->
   List (List Mono) ->
   Unit
-resolveRLocalSite prog name tagRef am encl scope sym monos ifaces argVecs =
+resolveRLocalSite name tagRef am encl scope sym monos ifaces argVecs =
   match headTyconMono am
     -- S2 (THE INVERSION): route by SHADOW KIND first, receiver second.
     --   * DEFINER shadow (the name is this module's own top-level fn) → the standalone,
@@ -28170,14 +28158,12 @@ resolveRLocalSite prog name tagRef am encl scope sym monos ifaces argVecs =
         && ieImplExistsForHead perRun.value.bodyImplEnvRef.value name tag then
         ()
       else
-        tagRef :=
-          RLocal sym (routesOfMonosTopV prog encl scope monos ifaces argVecs)
+        tagRef := RLocal sym (routesOfMonosTopV encl scope monos ifaces argVecs)
     -- An UNGROUNDED definer-shadow receiver keeps the old default (RLocal → standalone);
     -- other (importer) ungrounded sites stay untouched (deferred/polymorphic).
     None =>
       if omHasKey name perRun.value.definerShadowNamesRef.value then
-        tagRef :=
-          RLocal sym (routesOfMonosTopV prog encl scope monos ifaces argVecs)
+        tagRef := RLocal sym (routesOfMonosTopV encl scope monos ifaces argVecs)
 
 -- if [m] normalizes to a registered constraint variable, the dict parameter name
 -- a method at that type reads.  A return-position method at a HIGHER-KINDED
@@ -31469,7 +31455,7 @@ setStdlibOwnership flatEntry mods =
 -- ── instance-`requires` impl-dict routing (Phase 83/84 single-level) ────────
 -- `implMethodNameTc` and its callers route through the graph-global `IE`
 -- (`ieSelectRowByIface`); a headless impl's own `requires` is discharged the
--- same way, through `selectReqImpl` with the iface known.
+-- same way, through `ieSelectRowByIface` with the iface known.
 --
 -- There is a SECOND SET beyond the registrars (who writes a bucket): the
 -- READERS that index a single head bucket DIRECTLY, without the headless
@@ -32077,10 +32063,10 @@ ieRowHeadMatches [] _ = False
 --
 -- 🚨 B-4b-ii SUPPLIED REAL IDENTITY, SO THE `(Some, Some)` ARM IS NOW REACHABLE AND
 -- THE PARAGRAPH ABOVE IS HISTORY, NOT A CURRENT DESCRIPTION.  Exactly ONE of the
--- family's three entry points supplies it at every call — `findMatchingImplReqsU` →
+-- family's two entry points supplies it at every call — `findMatchingImplReqsU` →
 -- `iface`, read off `Require.requireOrigin` / `Predicate.iface`; see the derivation
--- there.  The other two (`entailInst`'s `EKNestedTop` arm and `argImplRequiresRoutes`)
--- forward the interface their caller supplies: identity-bearing on the `requires` leg
+-- there.  The other (`entailInst`'s `EKNestedTop` arm) forwards the interface its
+-- caller supplies: identity-bearing on the `requires` leg
 -- (`argImplReqRoutes` reads `requireOrigin`, #3534), and possibly the bare route word
 -- `pushDictApp` projects into on the top-level constrained-call leg
 -- (`ifaceForInferredId`'s third fallback).
@@ -32369,57 +32355,20 @@ selectedRowReqMatch goals (ImplRow _ _ _ itys reqs _) =
 -- one classifier: `headTyconTy` and `headTyconNameTy` must not disagree about
 -- WHICH node they are classifying.
 --
--- 🚨 IT IS THE **DISPATCH** WALK, AND THAT IS NOT A SYNONYM FOR "THE" WALK.  The
--- `TyEffect` peel and `headTyconTy`/`headTyconNameTy`'s `TyFun` arms are a
--- ROUTING fix (#1617/#1618): they make the impl side name the tag the goal side
--- already keys.  But `headTyconNameTy` also had two readers that decide
--- **ACCEPTANCE** rather than routing — `implHeadTagForIface` (the impl-head
--- census `routeUndeterminedTop` counts: one head → stamp it, two or more →
--- `T-AMBIGUOUS-INSTANCE`) and a candidate count that gives up on more than one
--- match.  Feeding the new arms
--- to THOSE turns an ACCEPT into a REJECT on programs that never dispatch to an
--- arrow or an effect head at all: `impl C Int` beside `impl C (Int -> Int)` or
--- `impl C (<Stdout> Bool)` went from a stamped route to *"Ambiguous instance"*,
--- exit 1, measured on both arms.  `implEntryFromTys`, the third reader, was a
--- dispatch registrar (`ImplBuckets` was looked up by `bucketOf` at the GOAL's
--- head) and correctly kept the new arms; #2548 deleted it with the rest of
--- `ImplBuckets`, which is why `headTyconNameTy` went with it.
---
--- So the acceptance pair reads `censusHeadNameTy` below, over `headTySpineNode`
--- — the walk this one WAS before #1618 — and the split is the point rather than
--- an accident of refactoring.  The narrowing may well be the right answer under
--- DICT-SEMANTICS §3, but it is a language-semantics decision owned by F-3c
--- (#1155), not a rider on a dispatch bug fix; the audit note above
--- `implEntryFromTys` said exactly that about this exact census before either
--- arm existed.  #1630's `TyConstrained` peel is the THIRD member of that same
--- routing set and is held to the same line: it lands here and NOT on
--- `headTySpineNode`, so a constrained-headed impl is still dropped from the
--- acceptance census exactly as it was.  That is a deliberate residual, and it is
--- an OBSERVABLE one — `censusHeadNameTy`'s own note carries the two-impl program
--- that reaches it, measured identically on this arm and on a peel-reverted base
--- arm.  It is PRE-EXISTING (it is the same residual the effect peel already
--- left), so it is not this fix's to close; it is this fix's to describe
--- correctly, which the note now does.
---
--- ⚠️ AND F-3c (#1155) IS **CLOSED**, so "F-3c owns the ruling" — written above
--- and at `implEntryFromTys`, both predating this PR — is no longer a live
--- deferral.  Those paragraphs are still right about WHY the walks are split (an
--- acceptance narrowing is not a rider on a dispatch bug fix); they are stale
--- only about who will decide it.  Nothing open owns it today.  Do not read the
--- citation as a scheduled ruling, and do not delete the split on the grounds
--- that its owner went away.
+-- It is the dispatch walk: the `TyEffect` peel and `headTyconTy`'s `TyFun` arm make
+-- the impl side name the tag the goal side already keys (#1617/#1618).  No
+-- acceptance question reads it.  The instances an undetermined goal can reach are
+-- counted by `goalCandidates`, which unifies every head shape with the goal, both at
+-- a boundary's verdict and in `routeUndeterminedTop`.
 headTyNode : Ty -> Ty
 headTyNode (TyApp a _) = headTyNode a
 headTyNode (TyEffect _ _ t) = headTyNode t
 headTyNode (TyConstrained _ t) = headTyNode t
 headTyNode t = t
 
--- The `TyApp`-spine-only head walk: `headTyNode` MINUS the `TyEffect` peel and
--- (since #1630) MINUS the `TyConstrained` peel.
--- Read by `censusHeadNameTy` alone, and it exists so the acceptance readers keep
--- projecting exactly what they projected before #1617/#1618/#1630 — see the 🚨 above.
--- Do NOT "unify" the two: the sharing is what carried the routing fix into an
--- acceptance census in the first place.
+-- The `TyApp`-spine-only head walk: `headTyNode` without the `TyEffect` and
+-- `TyConstrained` peels, so a qualified head reads as the qualifier it is
+-- (`rowCountsFor`).
 headTySpineNode : Ty -> Ty
 headTySpineNode (TyApp a _) = headTySpineNode a
 headTySpineNode t = t
@@ -32463,43 +32412,11 @@ headTyconTy t = match headTyNode t
   TyFun _ _ => Some (headKeyOfCon OriginBuiltin funHeadTag)
   _ => None
 
--- THE BARE-NAME RESIDUAL `headTyconNameTy` STOOD HERE AND IS GONE (#2548).  It
--- was `headTyconTy` as that projection answered before A-2.2 — the same three arms
--- over `headTyNode`, returning the bare name instead of a `HeadKey` — and by the
--- time #2548 ran it had exactly ONE reader left, `implEntryFromTys`, which #2548
--- deleted along with the whole `ImplBuckets` table.  Its two earlier readers decide
--- ACCEPTANCE rather than routing and had already moved to `censusHeadNameTy` below;
--- this paragraph carries the measurement for why they must not share the
--- dispatch walk.  Comments elsewhere in this file still name it while recounting
--- that split — they are describing the argument, not a live call site.
---
--- If a bare-name impl-head projection is ever wanted again, do NOT write it as
--- `map headKeyName (headTyconTy t)`: that spelling has no duplication at all, and
--- it is the one `compiler/AGENTS.md` warns about — it would build a `HeadKey` (and
--- an `Ident`, and a second `Option`) on every call of a projection that runs per
--- type-application node, on the GC-bound `check` stage, purely to throw them away,
--- and BOTH perf CI arms are structurally blind to a constant factor.  The price
--- paid instead was three duplicated arms held in lockstep with `headTyconTy`'s.
-
--- ── the ACCEPTANCE-census head name ───────────────────────────────────────
--- The `TyApp` spine's head name only, no `TyEffect` peel, no `TyFun` arm, no
--- constraint peel — so an arrow-headed, effect-headed or constraint-headed impl
--- answers `None` here.
---
--- This is not a duplicate of the projection above; it is the other question.
--- Above: which dispatch bucket an impl head files into, where a synthetic bucket
--- name (`__fun__`, or the peeled inner head of an effect row) is a fine answer.
--- Here: whether the head counts for `routeUndeterminedTop` (through
--- `implHeadTagForIface`), where an extra `Some` turns a stamped route into
--- `T-AMBIGUOUS-INSTANCE`.  Do not fold it into the dispatch walk.
---
--- The undetermined-goal verdict does not read it: `goalCandidates` unifies every
--- head shape with the goal, and `rowCountsFor` is its one qualifier rule.
-censusHeadNameTy : Ty -> Option String
-censusHeadNameTy t = match headTySpineNode t
-  TyCon { tyConName = n } => Some n
-  TyTuple ts => Some (tupleHeadTagTc (listLen ts))
-  _ => None
+-- A bare-name impl-head projection, if one is ever wanted, must not be written as
+-- `map headKeyName (headTyconTy t)`: it would build a `HeadKey` (and an `Ident`, and
+-- a second `Option`) on every call of a projection that runs per type-application
+-- node, on the GC-bound `check` stage, purely to throw them away
+-- (`compiler/AGENTS.md`), and both perf CI arms are blind to a constant factor.
 
 -- Exact prerequisite routing consumes the complete predicate vector and the row
 -- already selected for the route word.  The checker uses the same row matcher.
@@ -32730,29 +32647,30 @@ matchStep _ _ = MFail
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
 -- constrained call) → RDict; otherwise RNone.
-resolveDictApps : List Decl -> List PendingDictApp -> Unit
-resolveDictApps _ [] = goalSiteLoc := None
-resolveDictApps prog (app :: rest) =
+resolveDictApps : List PendingDictApp -> Unit
+resolveDictApps [] = goalSiteLoc := None
+resolveDictApps (app :: rest) =
   goalSiteLoc := app.pdaLoc
   let routes =
     routesOfMonosTopV
-      prog
       app.pdaEncl
       app.pdaScope
       app.pdaMonos
       app.pdaIfaces
       app.pdaArgVecs
   app.pdaRoutesRef := routes
-  resolveDictApps prog rest
+  resolveDictApps rest
 
 -- Caller-supplied policy for the UNDETERMINED arm of routeOf (the constraint var is
 -- pinned by NEITHER an argument nor the result).  KeepNone (the nested element-dict
--- recursion) keeps the existing RNone; CountImpls prog iface (a TOP-LEVEL
--- constrained-call site) counts impls of [iface] in [prog].  A VARIANT (not a
--- callback) so a nested element-position caller STRUCTURALLY cannot read [prog] or
+-- recursion) keeps the existing RNone; CountImpls iface (a TOP-LEVEL
+-- constrained-call site) routes by the instances of [iface] the goal can still reach
+-- (`routeUndeterminedTop`).  A VARIANT (not a
+-- callback) so a nested element-position caller STRUCTURALLY cannot
 -- raise T-AMBIGUOUS-INSTANCE — the type forbids it, so a blanket RNone→RKey can never
 -- corrupt element-dict routing (the fear the three variants were "kept SEPARATE" for).
-data Undetermined = KeepNone | CountImpls (List Decl) IfaceRef
+-- lint-disable-next-line rule-clone-type
+data Undetermined = KeepNone | CountImpls IfaceRef
 
 -- #156 S3b: the SiteKind-parametrized entailment core.  ONE `assum → inst → fallback`
 -- ladder that both the genuine return-position method resolver (`resolveSite`, EKReturn)
@@ -32766,7 +32684,7 @@ data Undetermined = KeepNone | CountImpls (List Decl) IfaceRef
 --     return-position (name∈rpNames), else RDict; EKNestedTop routes RDict.
 --   * inst: EKReturn selects one row for its canonical key and element routes;
 --     EKNestedTop stamps the
---     canonical key of the min⊑ winner + `argImplRequiresRoutes`-packed requires (with
+--     canonical key of the min⊑ winner + `argImplRequiresRoutesForRow`-packed requires (with
 --     the W2 depth fuse).
 --   * fallback: EKReturn → RNone; EKNestedTop → the caller-supplied `Undetermined` policy.
 -- #156 S3c wired arg-position + operator sites in (EKArg / EKOp below).
@@ -32780,12 +32698,12 @@ data EntailKind =
   -- nested-element / top-level constrained call: iface, undetermined policy, and the
   -- `requires`-recursion fuse — which is TWO Ints since #1576, not one depth counter:
   --   • [prevSize] — the structural size (`monoSizes`) of the goal VECTOR of the
-  --     `argImplRequiresRoutes` level that spawned this sub-goal, or 0 at a seed site
+  --     `argImplRequiresRoutesForRow` level that spawned this sub-goal, or 0 at a seed site
   --     ("no parent"; a real goal vector always measures ≥ 1, so 0 is unambiguous).
   --   • [spent]    — how many NON-SHRINKING steps this chain has taken.  Only these
   --     burn fuel; a step whose goal is structurally smaller than its parent's is
   --     free, because such a chain is guaranteed to terminate on its own.
-  -- See `argImplRequiresRoutes` for the whole argument.
+  -- See `argImplRequiresRoutesForRow` for the whole argument.
   -- #1154 (F-3a): the predicate's goal args PAST arg 0.  Arg 0 stays in `entail`'s
   -- own [m] (it keys `assum` and supplies the head tag), so this field holds only the
   -- TAIL — storing the whole vector would duplicate arg 0 and let the two copies
@@ -32824,11 +32742,11 @@ data EntailKind =
 --
 -- ⚠️ `entailFallback` HAS ONE REACHING PATH, AND IT IS NOT A VIOLATION — but it is why
 -- the rule above stops naming it.  `EKNestedTop`'s `CountImpls` policy goes
--- `undeterminedRoute` → `routeUndeterminedTop`, which answers THIS goal by COUNTING
--- (`implHeadTagsForIface`, exactly-one → that tag; two or more → `T-AMBIGUOUS-INSTANCE`),
--- never by selection — and only THEN routes the chosen impl's own nested `requires`
--- through `argImplRequiresRoutes` → `selectReqImpl`, which is a FRESH sub-goal
--- descending the ladder again, not this goal being answered on a later rung.  A refactor
+-- `undeterminedRoute` → `routeUndeterminedTop`, which answers THIS goal by its
+-- CANDIDATES (`goalCandidates`: one, or a stable minimum → that instance; two or more
+-- otherwise → `T-AMBIGUOUS-INSTANCE`), never by selection — and only THEN routes the
+-- chosen impl's own nested `requires` through `argImplRequiresRoutesForRow`, each a
+-- FRESH sub-goal descending the ladder again, not this goal being answered on a later rung.  A refactor
 -- that let the fallback rung answer the ladder's own goal by selection IS the violation
 -- this property forbids; the `KeepNone` policy (every element-dict recursion) cannot
 -- reach even this path.
@@ -33255,11 +33173,11 @@ routeOf iface encl useScope policy m =
   routeOfD iface encl useScope policy m [] 0 0
 
 -- #217: fuse-carrying core of routeOf.  [prevSize]/[spent] thread the WS-4b fuse
--- through the aware recursion (routeOfD → argImplRequiresRoutes → argImplReqRoutes
+-- through the aware recursion (routeOfD → argImplRequiresRoutesForRow → argImplReqRoutes
 -- → argReqRoute → routeOfD), the guard retained from the removed blind chain so a
 -- non-shrinking impl context (`impl C (T a) requires C (T (T a))`) terminates instead of
 -- diverging at route-resolution time.  Both are unchanged here; they are recomputed once
--- per impl level in argImplRequiresRoutes, which owns the whole shrinking argument.
+-- per impl level in argImplRequiresRoutesForRow, which owns the whole shrinking argument.
 -- #1154 (F-3a): [rest] carries the predicate's goal args past arg 0 (see EKNestedTop).
 routeOfD : IfaceRef ->
   String ->
@@ -33273,26 +33191,26 @@ routeOfD : IfaceRef ->
 -- #156 S3b: a thin adapter over `entail` (EKNestedTop kind).  The nested/top ladder
 -- packs its `requires` into the primary RKey, so `snd` is empty and only `fst` is read —
 -- byte-identical to the pre-S3b arm-by-arm body.  The requires recursion still lands back
--- here via argImplRequiresRoutes → argImplReqRoutes → argReqRoute → routeOfD, with the
+-- here via argImplRequiresRoutesForRow → argImplReqRoutes → argReqRoute → routeOfD, with the
 -- fuse pair threaded through the EKNestedTop payload.
 routeOfD iface encl useScope policy m rest prevSize spent =
   fst (entail "" m encl useScope (EKNestedTop iface policy prevSize spent rest))
 
 undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
 undeterminedRoute _ KeepNone _ = RNone
-undeterminedRoute scope (CountImpls prog iface) goal =
-  routeUndeterminedTop prog scope iface goal
+undeterminedRoute scope (CountImpls iface) goal =
+  routeUndeterminedTop scope iface goal
 
 -- TOP-LEVEL constraint routes (a constrained-fn CALL site, e.g. `roundtrip 10`).
 -- Like routesOfMonos but passes the CountImpls policy to routeOf, so the UNDETERMINED
 -- case resolves via routeUndeterminedTop instead of the nested-recursion RNone (which
--- yields an empty dict → runtime `intToString: not an Int` / a null build dict): look
--- up how many impls of the slot's interface exist:
---   • exactly ONE  → stamp a concrete RKey to that impl's head tag (deterministic
+-- yields an empty dict → runtime `intToString: not an Int` / a null build dict): the
+-- instances the slot's goal can still reach decide it:
+--   • one, or a stable minimum → stamp that instance's RKey (deterministic
 --                    dispatch on both run and build);
---   • two or more  → genuinely ambiguous → pushTypeError AmbiguousImpl (DELIBERATELY
---                    diverges from the frozen oracle's silent first-wins);
---   • zero         → keep RNone (existing no-impl behaviour/error).
+--   • two or more otherwise → genuinely ambiguous → `T-AMBIGUOUS-INSTANCE`, unless a
+--                    scheme quantifies the goal (`reportAmbiguousImpl`);
+--   • none         → keep RNone (existing no-impl behaviour/error).
 -- #1161 (F-3a-ii): the vector-aware form.  Slot COUNT, slot ORDER and the number of
 -- Routes produced are IDENTICAL to routesOfMonosTop's — the ONLY difference is the
 -- GOAL each slot is selected with.  That is what keeps the change arity-neutral:
@@ -33320,23 +33238,22 @@ undeterminedRoute scope (CountImpls prog iface) goal =
 -- Slot COUNT, slot ORDER and the number of Routes produced are unchanged either way,
 -- which is what still keeps this arity-neutral.  The self-compile fixpoint proves
 -- absence-of-regression, never correctness of the new path — as before.
-routesOfMonosTopV : List Decl ->
-  String ->
+routesOfMonosTopV : String ->
   ScopeId ->
   List Mono ->
   List IfaceRef ->
   List (List Mono) ->
   List Route
 -- no vectors at all (a caller with nothing to offer) ⇒ the scalar router, unchanged.
-routesOfMonosTopV prog encl useScope monos ifaces [] =
-  routesOfMonosTop prog encl useScope monos ifaces
-routesOfMonosTopV _ _ _ [] _ _ = []
-routesOfMonosTopV prog encl useScope (m :: rest) [] (_ :: vs) =
-  routeOf ifaceRefNone encl useScope (CountImpls prog ifaceRefNone) m
-    :: routesOfMonosTopV prog encl useScope rest [] vs
-routesOfMonosTopV prog encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
-  topRouteV prog encl useScope iface m v
-    :: routesOfMonosTopV prog encl useScope rest ifacesRest vs
+routesOfMonosTopV encl useScope monos ifaces [] =
+  routesOfMonosTop encl useScope monos ifaces
+routesOfMonosTopV _ _ [] _ _ = []
+routesOfMonosTopV encl useScope (m :: rest) [] (_ :: vs) =
+  routeOf ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
+    :: routesOfMonosTopV encl useScope rest [] vs
+routesOfMonosTopV encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
+  topRouteV encl useScope iface m v
+    :: routesOfMonosTopV encl useScope rest ifacesRest vs
 
 -- one slot.  A multi-argument predicate hands `routeOfD` the goal TAIL (arg 0 stays in
 -- `routeOfD`'s own `m`, exactly as EKNestedTop documents), so the selector sees
@@ -33347,17 +33264,10 @@ routesOfMonosTopV prog encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs)
 -- slot the mono of `b`, while the predicate's arg 0 is `a`'s): both slots are evidence
 -- for the SAME predicate, so both must select on the same goal.  That is what
 -- `vectorGoal` returning the head separately encodes; the scalar arm keeps [m].
-topRouteV : List Decl ->
-  String ->
-  ScopeId ->
-  IfaceRef ->
-  Mono ->
-  List Mono ->
-  Route
-topRouteV prog encl useScope iface m goals = match vectorGoal iface goals
-  Some (g0, gs) =>
-    routeOfD iface encl useScope (CountImpls prog iface) g0 gs 0 0
-  None => routeOf iface encl useScope (CountImpls prog iface) m
+topRouteV : String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
+topRouteV encl useScope iface m goals = match vectorGoal iface goals
+  Some (g0, gs) => routeOfD iface encl useScope (CountImpls iface) g0 gs 0 0
+  None => routeOf iface encl useScope (CountImpls iface) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
 -- under a KNOWN interface.  Everything else is None ⇒ the scalar route.
@@ -33368,55 +33278,50 @@ topRouteV prog encl useScope iface m goals = match vectorGoal iface goals
 -- against slot mono `a`, so the call site keyed its dict on `Bool` where the predicate
 -- is `Tag (Wrap Bool)`).  Arity is not what makes a vector meaningful; a recorded
 -- argument that differs from the slot's own mono is.
--- ⚠️ `iface == ""` is pinned scalar deliberately: with no interface there is no arity
--- to give a vector meaning, and `argImplRequiresRoutes`'s own iface-unknown arm pins
--- its `goals` to `[m]` for the same reason (#1168).  Holding the pin on BOTH sides is
--- what keeps that function's soundness argument true now that this is its second
--- non-empty-`rest` caller — see the re-derivation in its header.  Dropping the length-1
+-- `iface == ""` is pinned scalar deliberately: with no interface there is no arity
+-- to give a vector meaning (#1168).  Dropping the length-1
 -- clause does not touch that pin: it only widens WHICH non-empty vectors get past it.
 vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 vectorGoal _ [] = None
 vectorGoal iface (g0 :: gs) = if iface.irName == "" then None else Some (g0, gs)
 
-routesOfMonosTop : List Decl ->
-  String ->
-  ScopeId ->
-  List Mono ->
-  List IfaceRef ->
-  List Route
-routesOfMonosTop _ _ _ [] _ = []
-routesOfMonosTop prog encl useScope (m :: rest) [] =
-  routeOf ifaceRefNone encl useScope (CountImpls prog ifaceRefNone) m
-    :: routesOfMonosTop prog encl useScope rest []
-routesOfMonosTop prog encl useScope (m :: rest) (iface :: ifacesRest) =
-  routeOf iface encl useScope (CountImpls prog iface) m
-    :: routesOfMonosTop prog encl useScope rest ifacesRest
+routesOfMonosTop : String -> ScopeId -> List Mono -> List IfaceRef -> List Route
+routesOfMonosTop _ _ [] _ = []
+routesOfMonosTop encl useScope (m :: rest) [] =
+  routeOf ifaceRefNone encl useScope (CountImpls ifaceRefNone) m
+    :: routesOfMonosTop encl useScope rest []
+routesOfMonosTop encl useScope (m :: rest) (iface :: ifacesRest) =
+  routeOf iface encl useScope (CountImpls iface) m
+    :: routesOfMonosTop encl useScope rest ifacesRest
 
--- the undetermined-constraint resolution: count impls of [iface] in [prog].  [goal]
--- is the goal's argument vector, read only by the ambiguous arm.
-routeUndeterminedTop : List Decl -> ScopeId -> IfaceRef -> List Mono -> Route
-routeUndeterminedTop prog scope ifaceRef goal
+-- The undetermined-constraint resolution (DICT-SEMANTICS §3): the instances the
+-- goal [goal] can still reach, counted by `goalCandidates` and decided by
+-- `goalReach` exactly as a boundary's verdict decides them.  None leaves the goal no
+-- route; one, or a stable minimum, is its route; any other count is ambiguous.
+routeUndeterminedTop : ScopeId -> IfaceRef -> List Mono -> Route
+routeUndeterminedTop scope ifaceRef goal
   | ifaceRef.irName == "" = RNone
-  | otherwise = match implHeadTagsForIface prog ifaceRef.irName
-    [] => RNone
-    -- A goal on a scheme-quantified variable is the caller's (`reportAmbiguousImpl`):
-    -- the one census tag names no instance of it, so no route is minted from the tag.
-    [_] if not (monoVectorClosed goal) && goalsClosed goal => RNone
-    -- #1110: `tag` arrived as a bare `String` from `implHeadTagsForIface`, which
-    -- projects an impl head through `headTyconTy` and DISCARDS the `Ty` that
-    -- carried the identity — so there is no origin to acquire at this site, only
-    -- one to invent.  `tconUnresolved`, not `tconBuiltin`: an impl head is not a
-    -- builtin.  Recovering it means giving `implHeadTagsForIface` an
-    -- origin-carrying return type; that is a consumer change, not this carrier's.
-    [tag] =>
-      RKey
-        tag
-        (argImplRequiresRoutes ifaceRef "" scope (tconUnresolved tag) [] 0 0)
-        -- the goal is undetermined, so each super is too: answered by the same count
-        (map
-          ((superIface, _) => routeUndeterminedTop prog scope superIface goal)
-          (directSuperGoals ifaceRef []))
-    _ => reportAmbiguousImpl ifaceRef.irName goal
+  | otherwise =
+    match goalReach goal (goalCandidates omEmpty goal (goalRows ifaceRef goal))
+      ReachNone => RNone
+      -- A goal on a scheme-quantified variable is the caller's (`reportAmbiguousImpl`):
+      -- the one instance it reaches is not chosen for it.
+      ReachOne _ if not (monoVectorClosed goal) && goalsClosed goal => RNone
+      ReachOne row => undeterminedRowRoute scope ifaceRef goal row
+      ReachMany => reportAmbiguousImpl ifaceRef.irName goal
+
+-- The route of the one instance [row] an undetermined goal reaches: its canonical
+-- word, its prerequisites answered at the goal, and each super of [ifaceRef], which
+-- the goal leaves undetermined too, answered by the same rule.
+undeterminedRowRoute : ScopeId -> IfaceRef -> List Mono -> ImplRow -> Route
+undeterminedRowRoute _ _ [] _ = RNone
+undeterminedRowRoute scope ifaceRef (m :: rest) row =
+  RKey
+    (rowRouteKey row)
+    (argImplRequiresRoutesForRow "" scope m (m :: rest) 0 0 row)
+    (map
+      ((superIface, _) => routeUndeterminedTop scope superIface (m :: rest))
+      (directSuperGoals ifaceRef []))
 
 -- A goal every free variable of which some generalized scheme quantifies is the
 -- caller's to decide (§6.2 T3, the `goalsClosed` test): the scheme carries the
@@ -33429,28 +33334,6 @@ reportAmbiguousImpl iface goal =
   else
     let _ = pushAmbiguityAt False !goalSiteLoc (ambiguousImplMsg iface)
     RNone
-
--- every impl head tycon for [iface] declared in [prog] (a single-arg interface has
--- one head ty per impl; we read its head tycon).  Dedups so a prelude impl imported
--- twice via multi-module loading doesn't read as ambiguous.
-implHeadTagsForIface : List Decl -> String -> List String
-implHeadTagsForIface prog iface =
-  dedup (flatMap (implHeadTagForIface iface) prog)
-
-implHeadTagForIface : String -> Decl -> List String
-implHeadTagForIface want (DAttrib _ d) = implHeadTagForIface want d
--- ⚠️ `censusHeadNameTy`, NOT `headTyconNameTy`: this is the ACCEPTANCE census
--- (one head → stamp it, two or more → `T-AMBIGUOUS-INSTANCE`), so an arrow- or
--- effect-headed impl must stay DROPPED here the way it was before #1617/#1618.
--- The derivation is at `headTyNode`.
-implHeadTagForIface want (DImpl { iface, tys, ... })
-  | iface == want = match tys
-    headTy :: _ => match censusHeadNameTy headTy
-      Some tag => [tag]
-      None => []
-    [] => []
-  | otherwise = []
-implHeadTagForIface _ _ = []
 
 ambiguousImplMsg : String -> String
 ambiguousImplMsg iface =
@@ -33527,89 +33410,8 @@ ambiguousImplMsg iface =
 -- belongs — the shrinking test narrows what reaches it to genuinely non-shrinking
 -- contexts, which is exactly the population that deserves a loud reject.
 --
--- #1154 (F-3a): [rest] is the predicate's goal args past arg 0.  [goals] is bound ONCE
--- and fed to BOTH the SELECTION and the head SUBSTITUTION — §6 C2 requires the impl
--- dispatched to and the impl whose context is discharged to be the SAME impl, and a
--- scalar select paired with a vector subst could bind an impl's trailing head vars
--- from a DIFFERENT impl's goal.  (`entailInst`'s EKArg arm binds its goals once for
--- exactly this reason.)
---
--- #1161 (F-3a-ii) CORRECTION.  This comment used to add: "the property this function
--- actually rests on is NOT anything about `iface`: it is that **only `argReqRoute` ever
--- supplies a non-empty [rest]** … if a second non-empty-[rest] caller appears, re-derive
--- this."  `topRouteV` (the top-level `=>`-constrained call leg) is that second caller,
--- so the premise is now FALSE and the derivation has been redone:
---   • `iface == ""` ⇒ `goals == [m]`, so the iface-unknown arm is untouched however many
---     callers supply a vector.  `topRouteV` additionally declines to build one at all
---     when `iface == ""`, so the two pins agree from both ends.
---   • `iface /= ""` ⇒ selection runs through `ieSelectRowByIface`, which matches
---     `ifn == iface` and (for `iface == ""`) returns nothing either way.  A longer
---     [goals] can only make `entryHeadMatches` STRICTER — it is the arg-0 FALLBACK that
---     the short vector was triggering — so a second supplier cannot widen any match.
---   • selection and substitution still read the ONE `goals` binding, so §6 C2's
---     "dispatched-to impl == context-discharged impl" holds per caller, not per callsite
---     count.
--- The property this rests on is therefore about the VALUE, not the caller census: every
--- caller either supplies `[]` (⇒ `m :: rest` is `[m]` unconditionally) or supplies a
--- vector under a non-empty `iface`.  No caller supplies a non-empty [rest] with
--- `iface == ""` — #2665 measured this directly rather than resting on the census alone:
--- a panic planted on exactly that conjunction, swept over a full self-compile, `check`
--- and `test` on every `stdlib`/`compiler` module, and the dict_semantics/engines/
--- must_fail/eval_typed_modules gate corpora, fired zero times, while the same panic
--- moved to a sibling arm known to be live fired on the first thing compiled.  [goals] no
--- longer special-cases `iface == ""`: `m :: rest` already gives `[m]` whenever `rest`
--- is `[]`, which is the only value `rest` takes there.
-argImplRequiresRoutes : IfaceRef ->
-  String ->
-  ScopeId ->
-  Mono ->
-  List Mono ->
-  Int ->
-  Int ->
-  List Route
-argImplRequiresRoutes iface encl useScope m rest prevSize spent =
-  -- #1576: the goal vector is bound BEFORE the fuse test now, because the fuse test
-  -- reads it.  It is pure, so hoisting it costs a `monoSizes` walk on the limit-hit
-  -- path and changes no answer.
-  let goals = m :: rest
-  let size = monoSizes goals
-  -- SHRINKING ⇒ free.  No parent (`prevSize == 0`, a seed) ⇒ not shrinking, by
-  -- definition rather than by measurement: there is nothing to have shrunk from.
-  let spentNow = if prevSize > 0 && size < prevSize then spent else spent + 1
-  if spentNow >= requiresNonShrinkingFuel then
-    []
-  else match selectReqImpl iface goals
-    Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
-      Some subst =>
-        -- THIS level's goal size becomes the child's [prevSize] — that is the whole
-        -- shrinking comparison, one parent/child pair at a time.
-        argImplReqRoutes encl useScope subst reqs size spentNow
-      None => []
-    None => []
-
--- #203 (F): pick the impl whose `requires` this nested obligation must discharge —
--- the MOST-SPECIFIC impl matching `iface` and `goals` over the graph-global impl
--- environment `IE` (`ieSelectRowByIface`, §3 `inst` = min⊑), and ITS OWN requires — []
--- for a no-requires specific impl (the `List Int` sibling), never the general
--- `List a`'s.
--- #1154 (F-3a): also returns the winner's FULL head-type vector `itys` (via
--- `ieRowHeadTriple`), so the caller can build the head substitution from the SAME
--- impl it selected (headSubstWithParams) instead of re-matching the arg-0 pattern
--- alone — see argImplRequiresRoutes, whose `goals` binding the caller keeps
--- consistent with this selection.
--- ARCH B-2.1-b2 (LEG 2a, the ROUTER's `requires` half): reads the graph-global `IE`
--- instead of the prefix `KeyBuckets`, which #2548 later deleted outright along with
--- its last reader.  EKNestedTop now uses argImplRequiresRoutesForRow below so its
--- route word and context share one selected row; this selector remains for the
--- legacy undetermined top route.
-selectReqImpl : IfaceRef -> List Mono -> Option (Ty, List Ty, List Require)
-selectReqImpl iface goals =
-  ieRowHeadTriple
-    (ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface goals)
-
--- The selected-row form used by EKNestedTop.  It preserves the same structural
--- shrinking fuel and head substitution as argImplRequiresRoutes, but cannot drift
--- onto a second row because the caller supplies the already-selected winner.
+-- The caller supplies the selected row, so the route word and the context it
+-- discharges name the same impl (§6 C2) by construction.
 argImplRequiresRoutesForRow : String ->
   ScopeId ->
   Mono ->
@@ -33696,7 +33498,7 @@ argImplDictRoutesForEncl encl useScope name _tag mono goals =
     None => []
 
 -- #217/#1576: [prevSize]/[spent] carry the WS-4b fuse through the aware recursion (see
--- argImplRequiresRoutes, which owns the shrinking argument).  Every entry point seeds
+-- argImplRequiresRoutesForRow, which owns the shrinking argument).  Every entry point seeds
 -- `0 0` — arg-position (argImplDictRoutesForEncl), return-position
 -- (implDictRoutesForRow), routeOf/topRouteV and routeUndeterminedTop alike: `prevSize
 -- == 0` is the "no parent goal yet" sentinel, so a seed's own first level is counted
@@ -36717,8 +36519,8 @@ findMatchingImplReqsU univ iface (a0 :: rest) =
     None => firstReqMatch (univHeadless univ iface) (a0 :: rest)
 
 -- #326: the concrete-receiver-head requires match, routed through the shared min⊑
--- selector over the all-impls KeyBuckets registry (the router's `selectReqImpl` /
--- `argImplRequiresRoutes` select the SAME entry the SAME way).  Bind the winning
+-- selector over the all-impls KeyBuckets registry (the router's `ieSelectRowByIface`
+-- selects the SAME entry the SAME way).  Bind the winning
 -- impl's typaram vars by matching its FULL head types against [args] (multi-param subst
 -- preserved), then hand back that impl's OWN requires.  A selected entry whose full head
 -- fails to match [args] yields None, so findMatchingImplReqsU falls through to the
@@ -47527,7 +47329,7 @@ checkModuleFullImpl mid seedVars _accData implDecls prog =
   -- here, at the point its stampers used to run, for the one graph-end drain
   -- (`drainStampQueue`, DICT §6.2 T4).  A driver that queues and never drains
   -- leaves the queue for the next driver entry, so every Module-arm driver ends
-  -- with `checkGraphFinish` (or `elaborateModules`' own drain).
+  -- with a drain (`driveGraphK`'s, or `checkGraphFinish` on a memo path).
   let _ = enqueueStampCtx mid implDecls
   result
 -- C5: compute this module's standalone-shadow set BEFORE inference, so the
@@ -51358,50 +51160,6 @@ preludePreambleStore k coreDecls coreRow =
 --     `medaka test`'s phases and the emit entries consume.
 data GraphOut = GOutDiags | GOutTrees
 
--- Whether the graph-end drain's own diagnostics survive the drive.
---
--- `DrainRollback` saves and restores the sticky type-error cells around the
--- drain, so a caller that gates on `hadTypeErrors` right after the drive does not
--- see them; `DrainKeep` leaves them standing and they reach the caller as the
--- drive's residual.  The two are not a taste: the drain reports things an accepted
--- program contains, so reporting them universally would reject working programs.
--- (The HYPOTHESIS the census below tested named three candidate members — an
--- undefaulted `Num` literal in a test/prop body, `panic "…"` (#2315), and a route
--- re-unification the obligation channel already decided.  NONE of the three is in
--- the measured population; they are recorded here as what was looked for, not as
--- what is there.)
---
--- The population is a property of the INSTRUMENT, not of what ships.  It is what a
--- `GOutDiags` arm with the rollback REMOVED raises; the shipped `DrainKeep` callers
--- (`run`, `build`) do not report it, because `emitElaborationGate` gates on
--- `hadTypeErrors` and the residual does not arm it.
---
--- What the population is.  Measured over the 1,482 `.mdk` files under
--- `test/{dict,run_check_agreement,engine,parse,build_diff,construct}_fixtures`,
--- `stdlib/` and `compiler/driver/medaka_cli.mdk`, it is one file:
--- `stdlib/core.mdk` checked as an entry, whose drain reports `` `a` is used as an
--- authority, but nothing binds it as one `` (and the same for `h`) at `1:0`.
--- The dictionary members it once had are drained: a goal on a scheme-quantified
--- variable gets no route from `routeUndeterminedTop`, in either its ambiguous arm
--- (`reportAmbiguousImpl`) or its single-tag arm, which would otherwise mint the
--- goal `Tweak Float` from the census tag of `support.mdk`'s two `Tweak Float _`
--- impls.  Witnesses: `test/dict_fixtures/s6-drain-quiescence-*.mdk`.
---
--- DELETION CONDITION: this parameter goes away, and every caller takes one
--- behavior, when the population is EMPTY, i.e. when the `core.mdk` member is
--- fixed.  Re-derive the population before deciding; do not read the list above as
--- current.  How: build a second arm with `DrainRollback` mapped to
--- `drainStampQueue` and the drive's residual rendered as entry errors, run both
--- arms over every `.mdk` under `test/` and `stdlib/` this compiler accepts, and
--- diff.  Recorded in `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 17
--- (ONE graph driver), #2705.
-data DrainDiags = DrainRollback | DrainKeep
-
--- The drain, under the caller's choice of the bit above.
-graphDrainFinish : DrainDiags -> Unit
-graphDrainFinish DrainRollback = checkGraphFinish ()
-graphDrainFinish DrainKeep = drainStampQueue ()
-
 graphPreamble : GraphOut ->
   Option (Int, Int) ->
   List Decl ->
@@ -52143,13 +51901,7 @@ checkModulesDiagsChain : Option (Int, Int) ->
   List (String, List Decl) ->
   List ModDiags
 checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
-  (driveGraphK
-    GOutDiags
-    DrainRollback
-    None
-    runtimeDecls
-    coreDecls0
-    modules0).gdPerMod
+  (driveGraphK GOutDiags None runtimeDecls coreDecls0 modules0).gdPerMod
 checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
   -- The keyed arm mirrors `driveGraphK`'s prologue by hand, so it owes the same
   -- method-alias rewrite: without it this arm typechecks a graph in which
@@ -52406,8 +52158,7 @@ data GraphDrive = GraphDrive {
 -- Drive the whole module graph ONCE: stamp type-constructor identity, run the
 -- shared preamble, check every module dependency-first through one worker, drain
 -- at graph end, and attach the whole-graph coherence verdict.  `sel` chooses what
--- comes back (see `GraphOut`); `drain` chooses whether the drain's own diagnostics
--- survive (see `DrainDiags`).  Every UNKEYED whole-graph entry point below is a
+-- comes back (see `GraphOut`).  Every UNKEYED whole-graph entry point below is a
 -- projection of this function; the keyed memo arm (`chainGo`) shares `graphPreamble`
 -- and `graphModuleWorker` and MIRRORS the fold below rather than reusing it, which is
 -- the lockstep obligation `chainGo`'s own comment states.
@@ -52428,13 +52179,12 @@ data GraphDrive = GraphDrive {
 -- `checkCoreMemoized`); the tree arm ignores it, because it needs core's marked
 -- decls back and a memo may hold no `Decl`.
 driveGraphK : GraphOut ->
-  DrainDiags ->
   Option (Int, Int) ->
   List Decl ->
   List Decl ->
   List (String, List Decl) ->
   GraphDrive
-driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
+driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
   let stickyBefore = typeErrorsStickyDiags.value
   -- IMPORT ALIASING of an interface/impl METHOD — a method is global-by-name, so an
   -- alias of one is a second SPELLING, not a second binding.  A member alias and a
@@ -52478,7 +52228,7 @@ driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
   -- #2548: quiescence.  Every module (core first) has been inferred and has queued
   -- its stamping context; drain them all now, in module order, before any tree goes
   -- to `dictPassModulesIfEnabled`.
-  let _ = graphDrainFinish drain
+  let _ = drainStampQueue ()
   -- D3 / WS-2 part-2: attach any cross-module coherence conflict to the ENTRY
   -- module's diagnostics (last in dependency-first order), so LSP/analyzeProject
   -- surfaces it too.  User modules only (prelude excluded).
@@ -52653,7 +52403,6 @@ checkModulesEntryFullSplitK preludeKey runtimeDecls coreDecls0 modules0 =
   let g =
     driveGraphK
       GOutDiags
-      DrainRollback
       effectivePreludeKey
       runtimeDecls
       effectiveCoreDecls0
@@ -52974,8 +52723,8 @@ elaborateModules : List Decl ->
 -- WHAT is solved — the same driver, the same preamble, the same worker, the same
 -- graph-end drain — but that `GOutTrees` sets the promotion-eligible set (so its
 -- groups PROMOTE and their call sites are marked as dict applications), publishes
--- the evidence table and dict-passes the marked trees, and that it keeps the drain's
--- diagnostics as its residual (`DrainKeep`) instead of rolling them back.
+-- the evidence table and dict-passes the marked trees, and that it returns the
+-- diagnostics the drive raised as its residual.
 elaborateModules runtimeDecls coreDecls0 modulesIn =
   match elaborateModulesWithSchemes runtimeDecls coreDecls0 modulesIn
     (result, _, _) => result
@@ -52989,7 +52738,7 @@ elaborateModulesWithSchemes : List Decl ->
   List (String, List Decl) ->
   (ElabResult, List (String, Scheme), List (String, Scheme))
 elaborateModulesWithSchemes runtimeDecls coreDecls0 modulesIn =
-  let g = driveGraphK GOutTrees DrainKeep None runtimeDecls coreDecls0 modulesIn
+  let g = driveGraphK GOutTrees None runtimeDecls coreDecls0 modulesIn
   let (entrySchemes, _, _) = checkModulesEntryFromDiags g.gdPerMod
   (
     (
@@ -54318,10 +54067,9 @@ runStampStep ctx SSArithSites = resolveArithSites (arithGoalsIn ctx.scGoals)
 runStampStep ctx SSArgStamps =
   resolveArgStamps (siteGoalsIn GKArgStamp ctx.scGoals)
 runStampStep ctx SSRLocalSites =
-  resolveRLocalSites ctx.scImplDecls (siteGoalsIn GKRLocalSite ctx.scGoals)
+  resolveRLocalSites (siteGoalsIn GKRLocalSite ctx.scGoals)
 runStampStep ctx SSRecDictApps = realizeRecDictApps (recDictAppsIn ctx.scGoals)
-runStampStep ctx SSDictApps =
-  resolveDictApps ctx.scImplDecls (dictAppsIn ctx.scGoals)
+runStampStep ctx SSDictApps = resolveDictApps (dictAppsIn ctx.scGoals)
 runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
 
 -- #2548 (ARCH M3/Q2, DICT §6.2 T4): ONE ordered resolve pass over the whole graph,
@@ -54332,16 +54080,15 @@ runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
 -- The per-module context is REPLAYED, not re-derived (see `StampCtx`), and restored
 -- afterwards so `dictPassModulesIfEnabled` — which runs next — sees the state the
 -- last module left, exactly as it does today.
--- #2705: what every CHECK driver does at graph end — the drain.  Nothing is
--- published: a check driver has no reader of the evidence table, and installing
--- one would only widen the install-ordering hazard `route_key.mdk` documents.
+-- #2705: the drain at a memo's snapshot point (`checkCoreMemoized`, `chainGo`) and
+-- at the keyed chain's graph end.  Nothing is published: a check driver has no
+-- reader of the evidence table, and installing one would only widen the
+-- install-ordering hazard `route_key.mdk` documents.
 --
--- The route-time diagnostics the drain raises are NOT reported by a check driver,
--- and do not arm the sticky gate here (`run`'s multi-module arm reads
--- `hadTypeErrors` right after its check pass): the sticky cells are saved before
--- the drain and restored after it.  On the elaborate side they stay live and `elaborateModules` returns them
--- as its residual.  They are not a verdict yet: what the drain still raises on an
--- accepted program, and the deletion condition it bears on, are on `data DrainDiags`.
+-- The sticky type-error cells are saved before the drain and restored after it, so
+-- a memo snapshot never carries a drain's diagnostics.  The unkeyed drive
+-- (`driveGraphK`) keeps them instead; the two agree because the drain raises none on
+-- an accepted program.
 checkGraphFinish : Unit -> Unit
 checkGraphFinish _ =
   let savedSticky = !typeErrorsSticky

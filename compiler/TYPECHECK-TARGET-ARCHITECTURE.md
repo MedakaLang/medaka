@@ -895,12 +895,11 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    `20869bcc7`).  §E's "one driver, one mode" is now the code, not the plan.
    `driveGraphK` drives the whole module graph once — stamp, one `graphPreamble`, one
    `graphModuleWorker` through `foldModules`, one graph-end drain, one coherence attach —
-   under two parameters:
+   under one parameter:
    * `GraphOut` — `GOutDiags` (per-module diagnostics and schemes) or `GOutTrees` (those
      plus the dict-passed trees, the residual and the evidence table).  The selection gates
      more than writes; DERIVE the sites rather than trusting a count here
-     (`grep -n 'match sel' compiler/types/typecheck.mdk`, minus the one unrelated
-     `selectReqImpl` hit).  Six are state writes: `mainSchemeRef`'s clear, the empty ctor
+     (`grep -nw 'match sel' compiler/types/typecheck.mdk`).  Six are state writes: `mainSchemeRef`'s clear, the empty ctor
      oracle, `superDeclsRef`/`userIfaceNamesRef`, the promotion-eligible seed, whether the
      core pass is `checkCoreMemoized` or `elabModuleStamp` (the tree arm needs core's marked
      decls, and a memo may hold no `Decl`), and the per-module tree/harvest/`mainSchemeRef`
@@ -912,7 +911,6 @@ both landed — see item 9. #2549 is landed for its first half only — see item
      The file header names the first of those three as one of the two remaining
      by-construction divergences between the selections, so "and nothing else" would
      contradict it.
-   * `DrainDiags` — `DrainRollback` or `DrainKeep`, with its deletion condition in the code.
    `elaborateModules`, `checkModulesDiagsChain`'s unkeyed arm and `checkModulesEntryFullSplitK`
    are projections.  The memo layer stays OUTSIDE and wraps `GOutDiags` only: `ChainStep`
    captures no marked tree, so a memo over the tree arm is a different data structure, and
@@ -929,7 +927,8 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    become `checkModulesK`, `driveGraphK`; the memo's own `chainGo` fold is unchanged in
    both).  `types.typecheck`'s LEG A golden loses 20 rows and gains 10 (5 genuinely new
    bindings — `driveGraphK`, `graphPreamble`, `graphModuleWorker`, `graphCollect`,
-   `graphDrainFinish` — and 5 renames, each a lost pair and a gained row);
+   `graphDrainFinish`, since deleted (the drain is now a direct `drainStampQueue` call) —
+   and 5 renames, each a lost pair and a gained row);
    `tools.check` loses 2.  `ModDiags` names the per-module payload the widening had spelled
    out.  DERIVE the size of that widening rather than reading a number here, and say WHICH
    count you mean: `git grep -c` for the exact spelling
@@ -984,10 +983,16 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    `routeUndeterminedTop`'s single-tag arm minted the goal `Tweak Float` from the census tag
    of two `Tweak Float _` impls for a goal on a scheme-quantified variable, and the selector
    rejected it. That arm now gives such a goal no route
-   (`test/dict_fixtures/s6-drain-quiescence-projected-goal.mdk`). `DrainDiags` stays: the
-   re-derived population is `stdlib/core.mdk` checked as an entry (two unbound-authority
-   diagnostics at `1:0`). See the `data DrainDiags` comment in `compiler/types/typecheck.mdk` for the current
-   population; do not read any number above as current.
+   (`test/dict_fixtures/s6-drain-quiescence-projected-goal.mdk`).
+   ⚠️ **Closed by sprint `every-boundary-settles` (2026-10-09).** `DrainDiags` and its
+   rollback are deleted: every unkeyed drive now keeps what its drain raises. The population
+   was re-derived over all 4,902 `.mdk` files under `test/` and `stdlib/` (3,748 accepted)
+   and is EMPTY: the `stdlib/core.mdk` member is raised by the preamble (the `runtime.mdk`
+   net externs checked with `coreDecls = []`), not by the drain, so the rollback never hid
+   it. `routeUndeterminedTop` now routes by `goalCandidates`, with no census. `check` still
+   renders only the per-module diagnostics collected before the drain, so the drain's own
+   verdict on the `s6-drain-quiescence-*` programs is pinned in-process by
+   `compiler/types/typecheck_test.mdk`.
 
 18. **`run --json` envelopes a static error, 2026-09-09** (#2798). `runRunCmd`'s error arms
    — SIX of them; derive rather than trust this number, `grep -n 'runAbortJson'

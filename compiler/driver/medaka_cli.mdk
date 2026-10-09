@@ -983,10 +983,10 @@ resolveErrorJsonTriples ((file, errs) :: rest) =
 -- pass did not, so there is no located diagnostic to report instead.
 --
 -- NO KNOWN INPUT REACHES THIS ARM, so do not look for a fixture that covers it:
--- two reviewers failed to construct one, and no member of `DrainDiags`' population
--- (see `DrainDiags` in `compiler/types/typecheck.mdk`) arms the gate that would
--- route here: that population is raised by the diagnostics drive's drain, and the
--- trees drive `run` reads does not raise it.  It exists so
+-- two reviewers failed to construct one, and the graph-end drain (`driveGraphK` in
+-- `compiler/types/typecheck.mdk`) raises no diagnostic on a program the per-module
+-- pass accepts, so nothing arms the gate that would route here without a located
+-- diagnostic behind it.  It exists so
 -- the empty-residual case cannot exit 1 with an empty envelope, which is a shape the
 -- code must handle whether or not an input is known to produce it.  Documented in `compiler/DIAGNOSTIC-CODES-DESIGN.md`;
 -- `test/diag_census.sh` cannot see it, since that census enumerates codes that FIRE.

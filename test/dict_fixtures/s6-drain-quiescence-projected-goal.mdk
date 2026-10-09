@@ -1,21 +1,21 @@
--- A `DrainDiags` member (`compiler/types/typecheck.mdk`), now drained.
+-- §6.2 T3 at the graph-end drain (`compiler/types/typecheck.mdk`).
 --
 -- `relay`'s inferred scheme quantifies `a` and carries both `Tweak a Int` and
--- `Tweak a Bool`.  The diagnostics-arm drain routes `relay`'s call goal through
--- `routeUndeterminedTop`, whose census sees one head tag, `Float`, for the two
--- impls.  Its single-tag arm minted the goal `Tweak Float` from that tag, dropping
--- the vector's tail, and the selector reported it `T-AMBIGUOUS-INSTANCE`.  The goal
--- is on a scheme-quantified variable, so it is the caller's and gets no route
--- from the tag.  The trees-arm drain of `run` and `build` never produced it.
+-- `Tweak a Bool`.  The diagnostics-arm drain routes `relay`'s call goals through
+-- `routeUndeterminedTop`, where each reaches exactly one instance
+-- (`Tweak Float Int`, `Tweak Float Bool`).  A routing by head tag once minted the
+-- goal `Tweak Float` from them, dropping the vector's tail, and reported it
+-- `T-AMBIGUOUS-INSTANCE`.  The goals are on a scheme-quantified variable, so they
+-- are the caller's: the one instance each reaches is not chosen for it.
 --
 -- SPEC ANSWER, hand-derived: `relay`'s goals belong to its callers; `main` calls it at
 -- `Float`, where `Tweak Float Int` and `Tweak Float Bool` are each the unique match.
 -- `relay 1 2.5` = `value 1 2.5` = `tweak True (tweak 1 (relay 0 2.5))` = 2.5, since
 -- both impls return their second argument.  ACCEPT on every verb, printing `2.5`.
 --
--- WHAT THIS ROW PINS: `check` must not report `T-AMBIGUOUS-INSTANCE`.  With
--- `DrainRollback` hiding the drain's diagnostics it is green either way; it is the
--- witness that must stay green when `DrainDiags` is deleted.
+-- WHAT THIS ROW PINS: `check` must not report `T-AMBIGUOUS-INSTANCE`.  `check`
+-- does not render the drain's own verdict; `compiler/types/typecheck_test.mdk`
+-- reads it in-process (no route is minted for either quantified goal).
 interface Tweak a b where
   tweak : b -> a -> a
 
