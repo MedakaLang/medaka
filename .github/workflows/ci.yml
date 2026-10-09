@@ -1231,6 +1231,7 @@ jobs:
       - name: Gate shard — ${{ matrix.name }}
         if: steps.plan.outputs.has_work == 'true'
         run: |
+          free -m
           # This shard installed wasm-tools + Node and built the wasm oracle above, so an
           # unavailable wasm arm here is a WIRING BREAK, not a dev box without a toolchain.
           # The gate's honest degradation (T2/T3 "NOT RUN") stays the default everywhere
