@@ -143,7 +143,7 @@
 | `test/diff_compiler_fmt_test.mdk` | DIFFERENTIAL | none | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 695 | 175 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_fmt_test.mdk` | DIFFERENTIAL | none | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 272 | 93 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_effect_polarity.sh` | GOLDEN | none | N | NO | NATIVE-KIND-RUNNER | 1915 | 199 | WRAP: spawns ./medaka + diffs, module does the same |
-| `test/diff_compiler_engines.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE, EXTERNAL-TOOL | 258308 | 772 | REWRITE: probe/static text becomes library calls [clang,node] |
+| `test/lib_engines_differential.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE, EXTERNAL-TOOL | 258308 | 772 | REWRITE: probe/static text becomes library calls [clang,node] |
 | `test/diff_compiler_entry_exit_codes.sh` | CLI-CONTRACT | native | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE, EXTERNAL-TOOL | 421 | 124 | REWRITE: probe/static text becomes library calls [node] |
 | `test/diff_compiler_error_quality_baseline.sh` | GOLDEN | interpreter | N | NO | NATIVE-KIND-RUNNER | 9575 | 20 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_eval.sh` | GOLDEN | interpreter | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 180 | 61 | REWRITE: probe/static text becomes library calls |

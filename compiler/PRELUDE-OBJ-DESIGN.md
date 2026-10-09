@@ -352,7 +352,7 @@ the original reason for prelude DCE no longer applies.
    (Note: unlike `rt_obj`, byte-identical *binaries* are **not** achievable — the two
    paths deliberately hand clang different IR — so the gate must compare behavior, and
    say so in its header.)
-4. Wire into `test/diff_compiler_engines.sh` (alongside the `RTOBJ` block at line 326)
+4. Wire into `test/lib_engines_differential.sh` (alongside the `RTOBJ` block at line 326)
    and `test/build_oracles.sh:299`, best-effort: if the precompile fails, do not export
    the var and every build falls back to the unchanged inline path.
 

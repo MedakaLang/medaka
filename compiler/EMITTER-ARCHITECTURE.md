@@ -310,7 +310,7 @@ and capability failures are therefore part of the Wasm backend's trusted base.
 |---|---|
 | `test/selfcompile_fixpoint.sh` | native emitter reproduction/determinism |
 | `test/typecheck_compiler_source.sh` | compiler source is well typed |
-| `test/diff_compiler_engines.sh` | eval/native/Wasm observations agree on enrolled programs |
+| `test/lib_engines_differential.sh` | eval/native/Wasm observations agree on enrolled programs |
 | `test/diff_compiler_llvm*.sh` | native emitted output and typed-IR shapes |
 | `test/wasm/diff_wasm*.sh` | WAT assembly, validation, and behavior |
 | `test/diff_compiler_tmc_parity.sh` | shared TMC population parity |

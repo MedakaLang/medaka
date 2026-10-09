@@ -69,7 +69,7 @@
 #     alone is mixed-case-shaped (`Method_marker`, `Dict_pass`) even though
 #     the function segment (`marked_prelude`, `run`) is plain snake_case. A
 #     filename dotted span is EITHER all-lowercase in every segment
-#     (`core.mdk`, `core_ir_eval.mdk`, `diff_compiler_engines.sh`) or has an
+#     (`core.mdk`, `core_ir_eval.mdk`, `lib_engines_differential.sh`) or has an
 #     all-caps stem plus a lowercase extension (`AGENTS.md`, `README.md`) —
 #     in both cases NO segment individually has both an uppercase and a
 #     lowercase letter, so "at least one segment is mixed-case" cleanly

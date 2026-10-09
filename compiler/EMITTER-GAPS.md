@@ -832,7 +832,7 @@ exactly. Rows #4 and #5 in the table below are FIXED on both backends, not just 
 "OPEN (deviation, #561)" / "until #561" phrase below describes the **pre-#561 state** this
 section was written against — read them as history, not current status. PR-C added regression
 coverage for two more cycle shapes (`llvm/eager_global_mutual_cycle`,
-`llvmT/eager_global_dispatch_hidden_cycle`) to `test/diff_compiler_engines.sh` so a regression
+`llvmT/eager_global_dispatch_hidden_cycle`) to `test/lib_engines_differential.sh` so a regression
 back to eager init flips a required gate red. The rest of this section is left as the historical
 record of the investigation that led to #561.
 
@@ -908,7 +908,7 @@ on the identical program** while `CStringSlice` was wrong. Same shape, neighbour
 is what made #2 **structural completeness**, not an algorithm choice. Pinned by
 `test/llvm_fixtures_typed/eager_global_{string,list}_slice.mdk` and
 `test/llvm_fixtures/eager_global_guard.mdk`. **Stage B pins:** #1's call-hidden arm promotes to
-`eval==native==wasm` clean in `test/diff_compiler_engines.sh`, its former
+`eval==native==wasm` clean in `test/lib_engines_differential.sh`, its former
 `emitter:shared-eager-init` ledger row deleted; the build-path lock is
 `test/build_diff_fixtures/eager_call_hidden.mdk` (golden `42`, prints `0` if Stage B is
 reverted). #5's residual is pinned by `test/llvm_fixtures/eager_global_self_cycle.mdk`, ledgered

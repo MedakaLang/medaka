@@ -25,7 +25,7 @@
 # what it did not run. Do not make it quiet.
 #
 # WHAT IT DELIBERATELY SKIPS (CI runs these):
-#   * diff_compiler_engines   — the whole three-engine fixture corpus × clang. The clang
+#   * diff_compiler_engines_part* — the whole three-engine fixture corpus × clang. The clang
 #     storm, and the most expensive gate in the tree: minutes on a shared box. (Neither
 #     the fixture count nor the wall time is written down here on purpose — the gate
 #     derives and prints its own live count, and the time is whatever your box does
@@ -697,7 +697,7 @@ while IFS= read -r f; do
       add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*'
       add 'diff_compiler_check*'; add 'diff_compiler_fmt'
       add 'diff_compiler_fmt'; add 'diff_compiler_eval*'
-      add 'diff_compiler_engines'
+      add 'diff_compiler_engines_part*'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # #2551: the catch-all clause ratchet reads typecheck.mdk's clause heads directly.
       add 'diff_compiler_catch_all_census'
@@ -813,7 +813,7 @@ while IFS= read -r f; do
     compiler/eval/*|compiler/ir/core_ir_eval.mdk)
       add 'diff_compiler_eval*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_core_ir*'
       add 'diff_compiler_ported'; add 'diff_compiler_fmt'; add 'diff_compiler_capability_matrix'
-      add 'diff_compiler_engines'
+      add 'diff_compiler_engines_part*'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # F-S3-6/F-2-mechanical-fixes: gates.toml now declares compiler/eval/eval.mdk
       # a source of diff_compiler_check_ir_floor (it grades the `run`/`test` verbs,
@@ -826,7 +826,7 @@ while IFS= read -r f; do
       add 'diff_compiler_core_ir*'; add 'diff_compiler_eval*'; add 'diff_compiler_llvm*'; add 'diff_compiler_snapshot*'
       add 'diff_compiler_fmt'
       add 'diff_compiler_anf_identity'
-      add 'diff_compiler_engines'
+      add 'diff_compiler_engines_part*'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
       # core_ir_lower.mdk's methodArgTys decides declared arity for the #1034 half,
@@ -849,7 +849,7 @@ while IFS= read -r f; do
     compiler/backend/*)
       add 'diff_compiler_llvm*'; add 'diff_compiler_build'; add 'diff_compiler_core_ir*'; add 'diff_compiler_eval*'
       add 'diff_compiler_capability_matrix'
-      add 'diff_compiler_engines'; add 'diff_compiler_tmc_parity'
+      add 'diff_compiler_engines_part*'; add 'diff_compiler_tmc_parity'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # #1319 unit 0: private_mangle.mdk keeps its OWN ctor-import index — a
       # separate order-observable structure from typecheck's, and #674's root cause
@@ -1106,6 +1106,9 @@ while IFS= read -r f; do
     # The extern domain-verdict ledger: a loose file under test/ that
     # `_fixture_dir_for` cannot see, read by the capability matrix only.
     test/EXTERN-DOMAIN-LEDGER.txt) add 'diff_compiler_capability_matrix' ;;
+    # The engines body is a tool (test/CI-COVERAGE-TOOLS.txt) that the three part
+    # gates exec, so editing it means running them.
+    test/lib_engines_differential.sh) add 'diff_compiler_engines_part*' ;;
     # This script itself: a tool (test/CI-COVERAGE-TOOLS.txt), run by the two
     # gates that grade its derivation, base-ref handling and project arm.
     test/preflight.sh)             add 'diff_compiler_preflight_base'
@@ -1382,9 +1385,9 @@ while IFS= read -r f; do
     # therefore fell through to the catch-all and was reported UNMAPPED — locally
     # invisible (green having graded nothing), even though CI's `detect` job
     # correctly escalated the unmapped path to the full suite (confirmed on #1297).
-    # `diff_compiler_engines.sh` reads every `$PINDIR/$key.pin` on its PINFAIL path
-    # (PINDIR="$ROOT/test/engine_value_pins") regardless of corpus, so it is the one
-    # gate that reads the WHOLE tree unconditionally — map here.
+    # `lib_engines_differential.sh` reads every `$PINDIR/$key.pin` on its PINFAIL path
+    # (PINDIR="$ROOT/test/engine_value_pins") regardless of corpus; each part reads
+    # the pins its own slice owns, so together they read the WHOLE tree — map here.
     #
     # `diff_compiler_capability_matrix` (extern_catalog_gate_test.mdk) also touches pin paths, but only for
     # BOUNDARY-listed keys under corpora its own `fixtureDir` recognizes (llvm,
@@ -1394,7 +1397,7 @@ while IFS= read -r f; do
     # over-broad for the common `llvmM` case and, for the reachable corpora, the
     # gate only checks the pin's mere EXISTENCE (`fileExists pin`), never its
     # value — `diff_compiler_engines` is the gate that actually exercises content.
-    test/engine_value_pins/*)      add 'diff_compiler_engines' ;;
+    test/engine_value_pins/*)      add 'diff_compiler_engines_part*' ;;
 
     # ── fixture/golden corpus change: run its ACTUAL consumers, not everything.
     # See _gates_for_fixture_dir above. A directory with zero discoverable
@@ -1927,7 +1930,7 @@ fi
 # It just is not a claim about the diff.
 #
 # ⚠️ No fixture count and no wall-clock number is written down here, on purpose. The
-# gate itself says why (test/diff_compiler_engines.sh: "Corpus size is NOT hardcoded
+# gate itself says why (test/lib_engines_differential.sh: "Corpus size is NOT hardcoded
 # here on purpose … a hand-maintained total rots the moment it does. The gate derives
 # and reports the live count itself; read it off a run."). A cardinal in this comment
 # rots the same way and is invisible when it does — the count written here before
@@ -1944,7 +1947,7 @@ fi
 # test/CI-COVERAGE-EXCEPTIONS.txt), so no PR shard would run it either — but it must
 # still be PRINTED above, because the derivation is a statement about the DIFF and
 # "the playground e2e covers this file" is true whoever chooses to pay for it.
-LOCAL_SKIP='diff_compiler_engines playground/e2e/run'
+LOCAL_SKIP='diff_compiler_engines_part* playground/e2e/run'
 
 local_skipped=""
 _np=""
@@ -2172,18 +2175,18 @@ fi
 # wrong one is how #402 stayed invisible. "CI runs these on the PR" was asserted
 # unconditionally, including for gates the PR run had ALSO just been told to skip.
 # Say which of the three this is, every time.
-engines_gate="$ROOT/test/diff_compiler_engines.sh"
+engines_gate="$ROOT/test/diff_compiler_engines_part"
 case " $gates $local_skipped " in
-  *" $engines_gate "*)
-    engines_line="  diff_compiler_engines      ran above (pulled in by a wildcard gate match) — not a skip" ;;
-  *" diff_compiler_engines "*)
-    engines_line="  diff_compiler_engines      the 3-engine differential (whole fixture corpus × clang). This diff
-                             DOES touch it — skipped HERE for cost only; CI's PR run
-                             derives it and RUNS it." ;;
+  *" $engines_gate"[0-9]*)
+    engines_line="  diff_compiler_engines_part* ran above (pulled in by a wildcard gate match) — not a skip" ;;
+  *" diff_compiler_engines_part* "*)
+    engines_line="  diff_compiler_engines_part* the 3-engine differential (whole fixture corpus × clang, in
+                             three parts). This diff DOES touch it — skipped HERE for cost
+                             only; CI's PR run derives it and RUNS it." ;;
   *)
-    engines_line="  diff_compiler_engines      not derived for this diff — so whichever \`gates_N\` row
-                             holds it will no-op on the PR too. It runs FULL in the merge
-                             queue." ;;
+    engines_line="  diff_compiler_engines_part* not derived for this diff — so whichever \`gates_N\` rows
+                             hold the parts will no-op on the PR too. They run FULL in the
+                             merge queue." ;;
 esac
 
 cat <<EOF

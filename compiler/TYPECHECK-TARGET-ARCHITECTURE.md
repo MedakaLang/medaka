@@ -3688,7 +3688,7 @@ stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
    `test/selfproc_goldens/legA/types.typecheck.golden`, **additive-only**.
 5. `test/selfcompile_fixpoint.sh` C3a+C3b, `test/typecheck_compiler_source.sh`
    (which runs the ratchet), `test/diff_compiler_selfproc.sh` grading for real
-   (not exit 2), `test/diff_compiler_engines.sh` under
+   (not exit 2), `test/lib_engines_differential.sh` under
    `MEDAKA_REQUIRE_WASM=1` — an unlabelled engines number is a two-engine number.
 6. F1–F7 above; zero must-fail flips, declared in advance.
 7. `InstRef` exists and is read by no judgment, documented as A-3.7/B-2's input.

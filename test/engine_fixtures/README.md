@@ -33,7 +33,7 @@ fills with the interpreter-only fixtures it lifts up to the backends.
 
 ## How the corpus is wired (do not re-derive — read it here)
 
-`test/diff_compiler_engines.sh`, two edits, nothing else:
+`test/lib_engines_differential.sh`, two edits, nothing else:
 
 1. **key namespace** — the `--one` worker's `case "$f" in` block gets an
    `*/engine_fixtures/*) key="engine/$(basename …)" ;;` arm, placed FIRST. The
@@ -58,7 +58,7 @@ green: no new gate script, and this directory has a live consumer.
    laws relative to an observed `nanLow`, as the seed does).
 3. Verify it agrees across all three engines:
    ```sh
-   sh test/diff_compiler_engines.sh --one test/engine_fixtures/<name>.mdk   # VERBOSE=1 to print the signature
+   sh test/lib_engines_differential.sh --one test/engine_fixtures/<name>.mdk   # VERBOSE=1 to print the signature
    ```
    A clean fixture's signature is `eq:eq:eq:ran:ran:ran`.
 4. **(Recommended) pin the output value.** Add
@@ -68,7 +68,7 @@ green: no new gate script, and this directory has a live consumer.
    moves only on a real semantic change, never on an inert prelude edit. See
    `test/engine_value_pins/README.md` (⚠️ pin only a fixture with NO row in
    `test/engine_divergence.txt`).
-5. Run the whole gate once (`MEDAKA_REQUIRE_WASM=1 sh test/diff_compiler_engines.sh`)
+5. Run the whole gate once (`MEDAKA_REQUIRE_WASM=1 sh test/lib_engines_differential.sh`)
    and confirm `checked N` grew by one.
 
 ## What must NEVER be added here

@@ -272,7 +272,7 @@ watch it go red, then fix.
    Pin at minimum: `upto` on `w_trmc_deep_cons` / `w_deep_append` /
    `upto_deep_single`, and `myMap` on `mymap_deep_multi`.
 3. **Expected state after Stage 0:** `diff_compiler_tmc_parity` **RED** (coverage),
-   still `same` on parity. `test/diff_compiler_engines.sh` already red on the two
+   still `same` on parity. `test/lib_engines_differential.sh` already red on the two
    wasm fixtures — leave it red, do not touch `test/engine_divergence.txt` yet.
 
 ### Stage 1 — the fix: admit leading dict params on the SELF-recursive path (F2(b), shape (a))
@@ -366,7 +366,7 @@ which is in the self-host graph — `test/selfcompile_fixpoint.sh` and
 ### Gates that must be green at the end
 
 `test/diff_compiler_tmc_parity.sh` (parity **and** the new coverage pins, on the
-shipping arm), `test/diff_compiler_engines.sh` (the two wasm fixtures print
+shipping arm), `test/lib_engines_differential.sh` (the two wasm fixtures print
 `2000000` / `100000`), `test/diff_native_stack.sh`, `test/wasm/diff_wasm.sh`,
 `test/selfcompile_fixpoint.sh` C3a/C3b, `test/typecheck_compiler_source.sh`.
 

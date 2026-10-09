@@ -5,8 +5,8 @@ baseline does, so nothing below names a gate. What this row is:
 
 wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
 oracle (`sh test/wasm/build_wasm_oracle.sh --modules-only`). This is one
-of only two OPEN rows that carry it (the other is `gates_3`), so it is one
-of only two rows a wasm-constrained gate can legally land on — the
+of the three OPEN rows that carry it (with `gates_1` and `gates_3`), so it
+is one of only three rows a wasm-constrained gate can legally land on — the
 balancer treats that as a hard constraint, never as a cost.
 
 full_cores = false: an ordinary shared runner, open to the packer.
