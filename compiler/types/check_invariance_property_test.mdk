@@ -5,35 +5,29 @@
 -- compared with a model of the spec clause cited at the property. The checker
 -- is observed only through the module-graph entry point and the harness.
 
-import frontend.desugar.{desugar}
-import frontend.parser.{parseLocated}
-import list.{drop, filter, indexed, reverse, sort, take}
+import list.{filter, indexed, reverse, sort}
 import string.{join}
 import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
 import types.law_harness_test.{
+  Perm(..),
   Verdict(..),
   alphaEquiv,
+  countWhere,
   flatDiagnostics,
-  lawPrelude,
+  graphCodesAndSchemes,
   moduleDiagnostics,
+  permute,
 }
-import types.repr.{ppScheme}
-import types.typecheck.{checkModulesDiagsChain, tcCode}
 
 -- What a check shows: the sorted error codes, and the rendered schemes of the
--- last module of the graph.
+-- last module of the graph with their contexts, so a lost or changed
+-- constraint is a changed scheme.
 type Outcome = (List String, List (String, String))
 
 graphOutcome : List (String, String) -> Outcome
 graphOutcome modules =
-  let prelude = desugar (parseLocated lawPrelude)
-  let parsed = map ((id, source) => (id, desugar (parseLocated source))) modules
-  let results = checkModulesDiagsChain None "" [] [] prelude parsed
-  let codes = flatMap ((_, (_, errors, _)) => map tcCode errors) results
-  let own = match reverse results
-    (_, (schemes, _, _)) :: _ => map ((n, s) => (n, ppScheme s)) schemes
-    [] => []
-  (sort codes, own)
+  let (codes, schemes) = graphCodesAndSchemes modules
+  (sort codes, schemes)
 
 verdictOfOutcome : Outcome -> Verdict
 verdictOfOutcome (codes, _) = match codes
@@ -126,34 +120,6 @@ filler BBad = BPoly
 filler BUse = BMono
 filler b = b
 
--- A permutation of the declaration order.
-public export data Perm =
-  | PId
-  | PRev
-  | PRot Int
-  | PEvenOdd
-  | PRotRev Int
-  deriving (Eq, Debug)
-
-rotate : Int -> List a -> List a
-rotate k xs =
-  let n = length xs
-  if n == 0 then
-    xs
-  else
-    let j = (k % n + n) % n
-    drop j xs ++ take j xs
-
-permute : Perm -> List a -> List a
-permute PId xs = xs
-permute PRev xs = reverse xs
-permute (PRot k) xs = rotate k xs
-permute PEvenOdd xs =
-  let ixs = indexed xs
-  map snd (filter ((i, _) => isEven i) ixs)
-    ++ map snd (filter ((i, _) => isOdd i) ixs)
-permute (PRotRev k) xs = reverse (rotate k xs)
-
 blocksSource : List Block -> Perm -> String
 blocksSource blocks perm = join "" (permute perm (blockTexts blocks))
 
@@ -167,6 +133,7 @@ public export data Topology =
   | Local
   | DefinerImported
   | Importer
+  | ImporterUnnamed
   deriving (Eq, Debug)
 
 public export data Arity = A1 | A2 deriving (Eq, Debug)
@@ -208,6 +175,8 @@ public export data ShadowCase =
 normalized : ShadowCase -> ShadowCase
 normalized (ShadowCase Importer arity use xf order) =
   ShadowCase Importer arity (importerUse use) xf order
+normalized (ShadowCase ImporterUnnamed arity use xf order) =
+  ShadowCase ImporterUnnamed arity (importerUse use) xf order
 normalized (ShadowCase topo arity use xf order) =
   ShadowCase topo (arityOf arity use) use xf order
 
@@ -234,7 +203,10 @@ arityOf arity _ = arity
    constrained call (S9), so a type without the standalone's own constraint
    is rejected, not dispatched. An importer shadow dispatches when an impl
    is live at the receiver's head and is the standalone otherwise (S2), and in
-   value position is the standalone (S4). -}
+   value position is the standalone (S4). Where the interface lives is not
+   free (S6, narrowed): an importer that imports the interface's module
+   without admitting the interface or the method does not make `size` a
+   shadow (S1-NS (a)), so every use is the imported standalone. -}
 shadowVerdict : ShadowCase -> Verdict
 shadowVerdict c = match normalized c
   ShadowCase Importer _ UApplyLive _ _ => Accepted
@@ -341,17 +313,38 @@ shadowModules c = match normalized c
         ("law", "import lib.{Sizeable, Tag(..)}\n" ++ template),
       ]
       Importer =>
-        let provider =
-          "export size : \{arrow arity "String"}\nsize \{params arity p} = 7\n"
-        let imports =
-          ["import fmod.{size}\n", "import ifc.{Sizeable, Tag(..)}\n"]
-        let mods = [("ifc", ifaceText arity), ("fmod", provider)]
-        let entry =
-          join "" (permuteOrder order imports)
-            ++ front
-            ++ useText arity use ns
-            ++ back
-        permuteOrder order mods ++ [("law", entry)]
+        importerModules
+          arity
+          p
+          order
+          "Sizeable, Tag(..)"
+          (front, back)
+          (useText arity use ns)
+      ImporterUnnamed =>
+        importerModules
+          arity
+          p
+          order
+          "Tag(..)"
+          (front, back)
+          (useText arity use ns)
+
+-- The importer graph: the interface's module `ifc`, imported admitting
+-- `admitted`, and the standalone's module `fmod`.
+importerModules : Arity ->
+  String ->
+  Order ->
+  String ->
+  (String, String) ->
+  String ->
+  List (String, String)
+importerModules arity p order admitted (front, back) use =
+  let provider =
+    "export size : \{arrow arity "String"}\nsize \{params arity p} = 7\n"
+  let imports = ["import fmod.{size}\n", "import ifc.{\{admitted}}\n"]
+  let mods = [("ifc", ifaceText arity), ("fmod", provider)]
+  let entry = join "" (permuteOrder order imports) ++ front ++ use ++ back
+  permuteOrder order mods ++ [("law", entry)]
 
 permuteOrder : Order -> List a -> List a
 permuteOrder Straight xs = xs
@@ -378,7 +371,8 @@ baseOf (ShadowCase topo arity use _ _) =
 -- program follows the clause model, and neither renaming the unrelated
 -- binders, inserting an unrelated declaration, nor reordering the importer's
 -- imports and providers (S6, visibility stays unique) changes verdict, codes
--- or schemes.
+-- or schemes. Moving the interface out of the importer's reach does change
+-- the verdict, as the model says (S6, the interface's location).
 prop "a shadow program's verdict follows the clauses and survives the transformations" (c : ShadowCase) =
   let xf = xformOf c
   let expected = shadowVerdict c
@@ -466,11 +460,28 @@ progVerdict (PShadow c) = shadowVerdict c
    unrelated `Q`, then `P` again, and the two answers for `P` agree with each
    other and with the model. Fresh-process freshness cannot be observed from
    inside a test; this compares the first and the post-`Q` answer. -}
+historyHolds : Prog -> Outcome -> Outcome -> Bool
+historyHolds p first again =
+  first == again && verdictOfOutcome again == progVerdict p
+
 prop "checking P after any Q equals checking P first" (p : Prog) (q : Prog) =
   let first = graphOutcome (progModules p)
   let _ = graphOutcome (progModules q)
   let again = graphOutcome (progModules p)
-  first == again && verdictOfOutcome again == progVerdict p
+  historyHolds p first again
+
+-- The history law's first conjunct catches a second answer that differs from
+-- the first only in a scheme, with the verdict conjunct satisfied: a checker
+-- whose leftover state changed a scheme but not the verdict would be red.
+test "the history law rejects a changed scheme with an unchanged verdict" =
+  let p = PBlocks [BPoly] PId
+  let first = graphOutcome (progModules p)
+  let changed = graphOutcome [("law", "\{baseBlock}export\np1 x y = x\n")]
+  expectAll [
+    expectTrue (historyHolds p first first),
+    expectEqual (progVerdict p) (verdictOfOutcome changed),
+    expectFalse (historyHolds p first changed),
+  ]
 
 -- Censuses. The domains are enumerated, not generated; each line states the
 -- floor N it asserts.
@@ -522,10 +533,7 @@ shadowCases =
                 allXforms)
             allUses)
         [A1, A2])
-    [Local, DefinerImported, Importer]
-
-countWhere : (a -> Bool) -> List a -> Int
-countWhere keep xs = length (filter keep xs)
+    [Local, DefinerImported, Importer, ImporterUnnamed]
 
 floorN : Int
 floorN = 20
@@ -548,10 +556,11 @@ isInsert _ = False
 -- value-position receiver outside the standalone's domain): the shadow
 -- property sees both verdicts, under each topology, with each transformation
 -- applied (the rename, the insertions, the importer's swapped order) over the
--- 480 enumerated cases.
+-- 640 enumerated cases. The unnamed-interface importer rejects the applied
+-- live-impl receivers the named importer dispatches.
 test "census: the shadow law sees both verdicts, each topology and each transformation" = expectAll
   [
-    expectEqual 480 (length shadowCases),
+    expectEqual 640 (length shadowCases),
     expectAtLeast
       floorN
       (countWhere (c => shadowVerdict c == Accepted) shadowCases),
@@ -567,6 +576,11 @@ test "census: the shadow law sees both verdicts, each topology and each transfor
       floorN
       (countWhere
         (c => topoOf c == DefinerImported && shadowVerdict c == Accepted)
+        shadowCases),
+    expectAtLeast
+      floorN
+      (countWhere
+        (c => topoOf c == ImporterUnnamed && shadowVerdict c == Rejected)
         shadowCases),
     expectAtLeast floorN (countWhere (c => xformOf c == XRename) shadowCases),
     expectAtLeast floorN (countWhere (c => isInsert (xformOf c)) shadowCases),
@@ -601,11 +615,13 @@ test "census: the permutation and split laws see both verdicts and real reorderi
         programs),
   ]
 
--- N = 20: the history-independence law pairs programs of both families and
--- both verdicts, over the 5 x 5 pairs of enumerated representatives.
+-- N = 20: the history-independence law draws P and Q from both families and
+-- both verdicts, over the 671 enumerated programs (31 block programs and 640
+-- shadow cases).
 test "census: the history law pairs both families and both verdicts" =
   let progs = map (bs => PBlocks bs PId) blockLists ++ map PShadow shadowCases
   expectAll [
+    expectEqual 671 (length progs),
     expectAtLeast floorN (countWhere (p => progVerdict p == Accepted) progs),
     expectAtLeast floorN (countWhere (p => progVerdict p == Rejected) progs),
     expectAtLeast
