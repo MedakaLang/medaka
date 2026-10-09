@@ -1,0 +1,16 @@
+interface A a where
+  fa : a -> Int
+interface B a where
+  fb : a -> Int
+interface C a where
+  fc : a -> Int
+impl C Int where
+  fc _ = 1
+impl C Bool where
+  fc _ = 2
+impl B (List a) requires C a where
+  fb xs = 10 + length (map fc xs)
+impl A (Option a) requires B a where
+  fa (Some x) = 100 + fb x
+  fa None = 100
+main = println (fa None)
