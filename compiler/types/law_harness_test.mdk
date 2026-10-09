@@ -1,0 +1,479 @@
+-- Shared harness for the typechecker law siblings in compiler/types.
+-- A law renders a generated description to program text, checks it through
+-- the exported checker entry points only, and compares the verdict with its
+-- own model of the spec clause. Nothing here decides an expected verdict.
+
+import frontend.desugar.{desugar}
+import frontend.parser.{parseLocated}
+import list.{drop, filter, indexed, reverse, take}
+import string.{fromChars, isAlphaNum, isLower, isSpace, join, toChars}
+import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
+import types.typecheck.{
+  ModDiags,
+  checkModulesDiagsChain,
+  checkOneDiags,
+  ppSchemeNamed,
+  tcCode,
+  tcMsg,
+}
+
+{- The law-owned prelude every law program is checked under, passed in the
+   prelude position of both checker routes.
+
+   With no prelude an integer literal is unconstrained, so `g = (1 : Bool)`
+   and an ungeneralized binding used at `Int` and `Bool` are both accepted and
+   every law about generalization is vacuous. Anchoring literals on `fromInt`
+   restores the rejection. `Ref` is the mutable-cell constructor HM-CORE §1
+   excludes from the value set, declared as `stdlib/runtime.mdk` declares it. -}
+export
+lawPrelude : String
+lawPrelude =
+  "interface Num a where\n  fromInt : Int -> a\n"
+    ++ "impl Num Int where\n  fromInt n = n\n"
+    ++ "extern Ref : a -> Ref a\n"
+
+-- A checker verdict: accepted means no error diagnostics.
+public export data Verdict = Accepted | Rejected deriving (Eq, Debug)
+
+-- The `(code, message)` pairs of the error diagnostics of `source`, checked
+-- as one flat program under `lawPrelude`.
+export
+flatDiagnostics : String -> List (String, String)
+flatDiagnostics source = flatDiagnosticsWith "" source
+
+{- `flatDiagnostics` with `extra` appended to `lawPrelude` in the prelude
+   position. Only a prelude declaration is a built-in class (DICT §8 I7), so
+   a law about the operators' classes declares them here, in its own text,
+   rather than in the shared prelude. -}
+export
+flatDiagnosticsWith : String -> String -> List (String, String)
+flatDiagnosticsWith extra source =
+  let prelude = desugar (parseLocated (lawPrelude ++ extra))
+  let program = ("law", desugar (parseLocated source))
+  let (errors, _) = checkOneDiags [] prelude program
+  map (e => (tcCode e, tcMsg e)) errors
+
+-- `flatDiagnostics` through the module-graph route: `source` is the single
+-- module of a one-module graph under the same prelude, so it must be
+-- resolve-clean (see `graphResults`).
+export
+moduleDiagnostics : String -> List (String, String)
+moduleDiagnostics source = graphDiagnostics [("law", source)]
+
+{- The checker's per-module results for a module graph under `lawPrelude`.
+   Each module is `(id, source)`; a module imports another by its id, the
+   list is in dependency order, and the last module is the entry.
+
+   The graph route runs no resolve pass, so every module must be
+   resolve-clean: a name that does not resolve reaches the checker unbound
+   and panics it (`unbound method: …`), which ends the whole native test
+   file, not just the one case. Production rejects such a graph before
+   typechecking; a law must never generate one. -}
+graphResults : List (String, String) -> List ModDiags
+graphResults modules =
+  let parsed = map ((id, source) => (id, desugar (parseLocated source))) modules
+  checkModulesDiagsChain
+    None
+    ""
+    []
+    []
+    (desugar (parseLocated lawPrelude))
+    parsed
+
+-- The error diagnostics of every module of a graph, as `(code, message)`.
+-- Every module must be resolve-clean; see `graphResults`.
+export
+graphDiagnostics : List (String, String) -> List (String, String)
+graphDiagnostics modules =
+  flatMap
+    ((_, (_, errors, _)) => map (e => (tcCode e, tcMsg e)) errors)
+    (graphResults modules)
+
+-- Verdict plus rendered diagnostics of a module graph whose modules are
+-- resolve-clean; see `graphResults`.
+export
+checkGraph : List (String, String) -> (Verdict, String)
+checkGraph modules = verdictOf (graphDiagnostics modules)
+
+{- The error codes of a module graph and the rendered schemes of its entry
+   module's bindings, contexts included, from one check. A name can carry two
+   schemes. `ppSchemeNamed` reads the checker's tables for the module checked
+   last, so the schemes are rendered before any other check runs. Every module
+   must be resolve-clean; see `graphResults`. -}
+export
+graphCodesAndSchemes : List (String, String) ->
+  (List String, List (String, String))
+graphCodesAndSchemes modules =
+  let results = graphResults modules
+  let codes = flatMap ((_, (_, errors, _)) => map tcCode errors) results
+  let schemes = match reverse results
+    (_, (own, _, _)) :: _ => map ((n, s) => (n, ppSchemeNamed n s)) own
+    [] => []
+  (codes, schemes)
+
+-- The verdict of a diagnostic list, with the diagnostics rendered for a
+-- failure message.
+export
+verdictOf : List (String, String) -> (Verdict, String)
+verdictOf [] = (Accepted, "accepted")
+verdictOf diags =
+  (Rejected, join "; " (map ((code, message) => "\{code}: \{message}") diags))
+
+-- Verdict plus rendered diagnostics of `source` on the flat route.
+export
+checkFlat : String -> (Verdict, String)
+checkFlat source = verdictOf (flatDiagnostics source)
+
+-- Verdict plus rendered diagnostics of `source` on the module route.
+export
+checkModule : String -> (Verdict, String)
+checkModule source = verdictOf (moduleDiagnostics source)
+
+-- The error codes of `source` on the flat route, in report order.
+export
+codesFlat : String -> List String
+codesFlat source = map fst (flatDiagnostics source)
+
+-- Whether `code` is among the error codes `codes`.
+export
+hasCode : String -> List String -> Bool
+hasCode code codes = any (== code) codes
+
+-- How many elements of `xs` satisfy `keep`: the count a census asserts on.
+export
+countWhere : (a -> Bool) -> List a -> Int
+countWhere keep xs = length (filter keep xs)
+
+-- A permutation of a declaration list: identity, reversal, rotation left by
+-- `k` (any integer, taken modulo the length), evens-then-odds by position,
+-- and a rotation followed by a reversal.
+public export data Perm =
+  | PId
+  | PRev
+  | PRot Int
+  | PEvenOdd
+  | PRotRev Int
+  deriving (Eq, Debug)
+
+export
+permute : Perm -> List a -> List a
+permute PId xs = xs
+permute PRev xs = reverse xs
+permute (PRot k) xs = rotate k xs
+permute PEvenOdd xs =
+  let ixs = indexed xs
+  map snd (filter ((i, _) => isEven i) ixs)
+    ++ map snd (filter ((i, _) => isOdd i) ixs)
+permute (PRotRev k) xs = reverse (rotate k xs)
+
+rotate : Int -> List a -> List a
+rotate k xs =
+  let n = length xs
+  if n == 0 then
+    xs
+  else
+    let j = (k % n + n) % n
+    drop j xs ++ take j xs
+
+{- A generated expression shape. Every leaf and wrapper is closed; the names
+   it mentions are declared by `shapeSupport`.
+
+   Integer and string literals, an identity lambda, a variable bound to a
+   function, a bare constructor name, the empty list; a lambda around a shape,
+   a pair tuple, a one-element list, constructor applications (`Box s`,
+   `Pair s t`, the partial `Pair s`), a record construction, a type
+   ascription; and the forms outside the value grammar: a `Ref` cell, a
+   function application, a partial application of a two-parameter function,
+   a conditional and a record field read. -}
+public export data Shape =
+  | SInt
+  | SStr
+  | SId
+  | SVar
+  | SCtorVar
+  | SNil
+  | SLam Shape
+  | STuple Shape Shape
+  | SList Shape
+  | SBox Shape
+  | SPair Shape Shape
+  | SPartCtor Shape
+  | SRecord Shape
+  | SAsc Shape
+  | SRef Shape
+  | SApp Shape
+  | SPartial Shape
+  | SIf Shape
+  | SField Shape
+  deriving (Eq, Debug)
+
+-- Declarations the shapes refer to. `ident` heads applications, `idv` is
+-- the variable leaf, `const2` heads partial applications.
+export
+shapeSupport : String
+shapeSupport =
+  "data Box a = Box a\n"
+    ++ "data Pair a b = Pair a b\n"
+    ++ "data Cell a = Cell { item : a }\n"
+    ++ "ident x = x\n"
+    ++ "idv x = x\n"
+    ++ "const2 x y = x\n"
+
+-- Source text of a shape whose lambda binders are spelled `prefix` plus a
+-- position index. Distinct prefixes give alpha-equivalent renderings.
+export
+shapeAt : String -> Shape -> String
+shapeAt prefix shape = fst (renderFrom prefix 0 shape)
+
+-- Leaves whose type is a fresh variable consume one position index, in
+-- preorder; `renderFrom` and `typeFrom` must consume them identically.
+renderFrom : String -> Int -> Shape -> (String, Int)
+renderFrom _ next SInt = ("1", next)
+renderFrom _ next SStr = ("\"s\"", next)
+renderFrom prefix next SId =
+  ("(\{prefix}\{intToString next} => \{prefix}\{intToString next})", next + 1)
+renderFrom _ next SVar = ("idv", next + 1)
+renderFrom _ next SCtorVar = ("Box", next + 1)
+renderFrom _ next SNil = ("[]", next + 1)
+renderFrom prefix next (SLam body) =
+  let (text, after) = renderFrom prefix (next + 1) body
+  ("(\{prefix}\{intToString next} => \{text})", after)
+renderFrom prefix next (STuple left right) =
+  let (l, mid) = renderFrom prefix next left
+  let (r, after) = renderFrom prefix mid right
+  ("(\{l}, \{r})", after)
+renderFrom prefix next (SList inner) = wrapRender prefix next "[" "]" inner
+renderFrom prefix next (SBox inner) = wrapRender prefix next "(Box " ")" inner
+renderFrom prefix next (SPair left right) =
+  let (l, mid) = renderFrom prefix next left
+  let (r, after) = renderFrom prefix mid right
+  ("(Pair \{l} \{r})", after)
+renderFrom prefix next (SPartCtor inner) =
+  wrapRender prefix (next + 1) "(Pair " ")" inner
+renderFrom prefix next (SRecord inner) =
+  wrapRender prefix next "(Cell { item = " " })" inner
+renderFrom prefix next (SAsc inner) =
+  let (text, after) = renderFrom prefix next inner
+  let (ty, _) = typeFrom (i => "t\{intToString i}") next inner
+  ("(\{text} : \{ty})", after)
+renderFrom prefix next (SRef inner) = wrapRender prefix next "(Ref " ")" inner
+renderFrom prefix next (SApp inner) = wrapRender prefix next "(ident " ")" inner
+renderFrom prefix next (SPartial inner) =
+  wrapRender prefix (next + 1) "(const2 " ")" inner
+renderFrom prefix next (SIf inner) =
+  let (text, after) = renderFrom prefix next inner
+  ("(if True then \{text} else \{text})", after)
+renderFrom prefix next (SField inner) =
+  wrapRender prefix next "(Cell { item = " " }).item" inner
+
+wrapRender : String -> Int -> String -> String -> Shape -> (String, Int)
+wrapRender prefix next open close inner =
+  let (text, after) = renderFrom prefix next inner
+  ("\{open}\{text}\{close}", after)
+
+{- The type a shape has when every fresh-variable leaf is instantiated by
+   `leaf` applied to its position index, read off the declarations in
+   `shapeSupport` and the literal and ascription typing rules. -}
+export
+shapeTypeWith : (Int -> String) -> Shape -> String
+shapeTypeWith leaf shape = fst (typeFrom leaf 0 shape)
+
+-- The shape's type with every fresh variable instantiated at one ground type.
+export
+shapeTypeAt : String -> Shape -> String
+shapeTypeAt ground shape = shapeTypeWith (_ => ground) shape
+
+-- The shape's principal type, its fresh variables spelled `t0`, `t1`, ….
+export
+shapeScheme : Shape -> String
+shapeScheme shape = shapeTypeWith (i => "t\{intToString i}") shape
+
+-- Whether the shape's type mentions a variable, so that a binding of it
+-- can be observed generalizing at all.
+export
+shapeIsPolymorphic : Shape -> Bool
+shapeIsPolymorphic shape = shapeTypeAt "Int" shape /= shapeTypeAt "Bool" shape
+
+typeFrom : (Int -> String) -> Int -> Shape -> (String, Int)
+typeFrom _ next SInt = ("Int", next)
+typeFrom _ next SStr = ("String", next)
+typeFrom leaf next SId = ("(\{leaf next} -> \{leaf next})", next + 1)
+typeFrom leaf next SVar = ("(\{leaf next} -> \{leaf next})", next + 1)
+typeFrom leaf next SCtorVar = ("(\{leaf next} -> Box \{leaf next})", next + 1)
+typeFrom leaf next SNil = ("(List \{leaf next})", next + 1)
+typeFrom leaf next (SLam body) =
+  let (ty, after) = typeFrom leaf (next + 1) body
+  ("(\{leaf next} -> \{ty})", after)
+typeFrom leaf next (STuple left right) =
+  let (l, mid) = typeFrom leaf next left
+  let (r, after) = typeFrom leaf mid right
+  ("(\{l}, \{r})", after)
+typeFrom leaf next (SList inner) = wrapType leaf next "(List " ")" inner
+typeFrom leaf next (SBox inner) = wrapType leaf next "(Box " ")" inner
+typeFrom leaf next (SPair left right) =
+  let (l, mid) = typeFrom leaf next left
+  let (r, after) = typeFrom leaf mid right
+  ("(Pair \{l} \{r})", after)
+typeFrom leaf next (SPartCtor inner) =
+  let (ty, after) = typeFrom leaf (next + 1) inner
+  ("(\{leaf next} -> Pair \{ty} \{leaf next})", after)
+typeFrom leaf next (SRecord inner) = wrapType leaf next "(Cell " ")" inner
+typeFrom leaf next (SAsc inner) = typeFrom leaf next inner
+typeFrom leaf next (SRef inner) = wrapType leaf next "(Ref " ")" inner
+typeFrom leaf next (SApp inner) = typeFrom leaf next inner
+typeFrom leaf next (SPartial inner) =
+  let (ty, after) = typeFrom leaf (next + 1) inner
+  ("(\{leaf next} -> \{ty})", after)
+typeFrom leaf next (SIf inner) = typeFrom leaf next inner
+typeFrom leaf next (SField inner) = typeFrom leaf next inner
+
+wrapType : (Int -> String) -> Int -> String -> String -> Shape -> (String, Int)
+wrapType leaf next open close inner =
+  let (ty, after) = typeFrom leaf next inner
+  ("\{open}\{ty}\{close}", after)
+
+{- The use-at-two-types generalization observer. Appends two top-level
+   ascribed uses of `name` at `tyA` and `tyB` to `program`. A binding whose
+   type mentions a variable both types instantiate differently is accepted
+   only if it generalized; a rendered scheme cannot tell the two apart. -}
+export
+withTwoUses : String -> String -> String -> String -> String
+withTwoUses program name tyA tyB =
+  "\{program}useA = (\{name} : \{tyA})\nuseB = (\{name} : \{tyB})\n"
+
+-- The expression form of the observer, for a binding local to a body.
+export
+twoUseExpr : String -> String -> String -> String
+twoUseExpr name tyA tyB = "((\{name} : \{tyA}), (\{name} : \{tyB}))"
+
+-- A top-level binding `name = <shape>` observed at `Int` and `Bool`.
+export
+topLevelProgram : String -> String -> Shape -> String
+topLevelProgram prefix name shape =
+  withTwoUses
+    "\{shapeSupport}\{name} = \{shapeAt prefix shape}\n"
+    name
+    (shapeTypeAt "Int" shape)
+    (shapeTypeAt "Bool" shape)
+
+-- A block-local `let name = <shape>` observed at `Int` and `Bool`.
+export
+localProgram : String -> String -> Shape -> String
+localProgram prefix name shape =
+  let uses =
+    twoUseExpr name (shapeTypeAt "Int" shape) (shapeTypeAt "Bool" shape)
+  "\{shapeSupport}probe =\n  let \{name} = \{shapeAt prefix shape}\n  \{uses}\n"
+
+{- Alpha-equivalence of two rendered types or schemes, by canonical renaming:
+   each identifier starting with a lowercase letter is a variable and is
+   renamed to its first-occurrence index; every other token must match
+   exactly. Whitespace between tokens is ignored. -}
+export
+alphaEquiv : String -> String -> Bool
+alphaEquiv left right =
+  canonicalTokens (typeTokens left) == canonicalTokens (typeTokens right)
+
+-- The tokens of a rendered type: identifiers, and every other non-space
+-- character on its own (so `->` is the two tokens `-` and `>`).
+export
+typeTokens : String -> List String
+typeTokens text = tokensFrom (toList (toChars text)) [] []
+
+tokensFrom : List Char -> List Char -> List String -> List String
+tokensFrom [] word acc = reverse (flushWord word acc)
+tokensFrom (c :: rest) word acc =
+  if isAlphaNum c || c == '_' || c == '\'' then
+    tokensFrom rest (c :: word) acc
+  else if isSpace c then
+    tokensFrom rest [] (flushWord word acc)
+  else
+    tokensFrom rest [] (fromChars [c] :: flushWord word acc)
+
+flushWord : List Char -> List String -> List String
+flushWord [] acc = acc
+flushWord word acc = fromChars (reverse word) :: acc
+
+canonicalTokens : List String -> List String
+canonicalTokens tokens = canonicalFrom tokens []
+
+canonicalFrom : List String -> List String -> List String
+canonicalFrom [] _ = []
+canonicalFrom (token :: rest) seen =
+  if isVariableToken token then match positionIn token seen 0
+    Some k => "v\{intToString k}" :: canonicalFrom rest seen
+    None =>
+      "v\{intToString (length seen)}" :: canonicalFrom rest (seen ++ [token])
+  else
+    token :: canonicalFrom rest seen
+
+-- Whether a type token is a variable: it starts with a lowercase letter.
+export
+isVariableToken : String -> Bool
+isVariableToken token = match toList (toChars token)
+  c :: _ => isLower c
+  [] => False
+
+positionIn : String -> List String -> Int -> Option Int
+positionIn _ [] _ = None
+positionIn token (x :: rest) k =
+  if x == token then Some k else positionIn token rest (k + 1)
+
+-- An ungeneralized binding used at two incompatible types.
+ungeneralizedTwoUses : String
+ungeneralizedTwoUses =
+  withTwoUses "f = (x => x) (x => x)\n" "f" "Int -> Int" "Bool -> Bool"
+
+test "the law prelude rejects a literal ascribed a non-numeric type on both routes" = expectAll
+  [
+    expectEqual Rejected (fst (checkFlat "g = (1 : Bool)\n")),
+    expectEqual Rejected (fst (checkModule "g = (1 : Bool)\n")),
+  ]
+
+test "the law prelude rejects an ungeneralized binding used at two types on both routes" = expectAll
+  [
+    expectEqual Rejected (fst (checkFlat ungeneralizedTwoUses)),
+    expectEqual Rejected (fst (checkModule ungeneralizedTwoUses)),
+  ]
+
+test "the law prelude leaves the built-in Bool usable at an ascription" =
+  let program = "b = True\nc = (b : Bool)\n"
+  expectAll [
+    expectEqual (Accepted, "accepted") (checkFlat program),
+    expectEqual (Accepted, "accepted") (checkModule program),
+  ]
+
+test "flat and module routes agree on a fixed accepted and rejected pair" =
+  let accepted = withTwoUses "f = x => x\n" "f" "Int -> Int" "Bool -> Bool"
+  expectAll [
+    expectEqual (Accepted, "accepted") (checkFlat accepted),
+    expectEqual (checkFlat accepted) (checkModule accepted),
+    expectEqual
+      (checkFlat ungeneralizedTwoUses)
+      (checkModule ungeneralizedTwoUses),
+  ]
+
+test "the observer separates a generalized binding from an ungeneralized one" = expectAll
+  [
+    expectEqual Accepted (fst (checkFlat (topLevelProgram "x" "g" SId))),
+    expectEqual Rejected (fst (checkFlat (topLevelProgram "x" "g" (SApp SId)))),
+  ]
+
+test "alpha-equivalence accepts a renaming and rejects a non-renaming" = expectAll
+  [
+    expectTrue (alphaEquiv "a -> b -> a" "x -> yy -> x"),
+    expectTrue (alphaEquiv "Num a => (a, List b)" "Num c =>  (c, List d)"),
+    expectFalse (alphaEquiv "a -> b" "a -> a"),
+    expectFalse (alphaEquiv "a -> a" "a -> b"),
+    expectFalse (alphaEquiv "Box a" "Pair a"),
+    expectFalse (alphaEquiv "a -> b" "a -> b -> c"),
+  ]
+
+test "shape rendering spells binders by prefix and types by instantiation" =
+  let shape = STuple (SLam SId) (SPartCtor SInt)
+  expectAll [
+    expectEqual "((x0 => (x1 => x1)), (Pair 1))" (shapeAt "x" shape),
+    expectEqual "((w0 => (w1 => w1)), (Pair 1))" (shapeAt "w" shape),
+    expectEqual "((t0 -> (t1 -> t1)), (t2 -> Pair Int t2))" (shapeScheme shape),
+    expectNotEqual (shapeTypeAt "Int" shape) (shapeTypeAt "Bool" shape),
+    expectFalse (shapeIsPolymorphic (SRef SInt)),
+  ]

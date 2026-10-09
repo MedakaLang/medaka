@@ -1,0 +1,634 @@
+-- Invariance laws of the checker as generated-program properties: a
+-- transformation that the spec says cannot change a program's meaning leaves
+-- its verdict and its schemes unchanged. Every property carries two oracles:
+-- the transformed program is compared with the original, and each verdict is
+-- compared with a model of the spec clause cited at the property. The checker
+-- is observed only through the module-graph entry point and the harness.
+
+import list.{filter, indexed, reverse, sort}
+import string.{join}
+import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
+import types.law_harness_test.{
+  Perm(..),
+  Verdict(..),
+  alphaEquiv,
+  countWhere,
+  flatDiagnostics,
+  graphCodesAndSchemes,
+  moduleDiagnostics,
+  permute,
+}
+
+-- What a check shows: the sorted error codes, and the rendered schemes of the
+-- last module of the graph with their contexts, so a lost or changed
+-- constraint is a changed scheme.
+type Outcome = (List String, List (String, String))
+
+graphOutcome : List (String, String) -> Outcome
+graphOutcome modules =
+  let (codes, schemes) = graphCodesAndSchemes modules
+  (sort codes, schemes)
+
+verdictOfOutcome : Outcome -> Verdict
+verdictOfOutcome (codes, _) = match codes
+  [] => Accepted
+  _ => Rejected
+
+-- Every scheme of `before` has, under `rename` of its name, an
+-- alpha-equivalent scheme in `after` (a name can carry two schemes, as a
+-- shadowed method and its standalone do). Alpha-equivalence is the harness model;
+-- a rendered scheme is never compared as a string.
+schemesPreserved : (String -> String) -> Outcome -> Outcome -> Bool
+schemesPreserved rename (_, before) (_, after) =
+  all
+    ((name, scheme) =>
+      any
+        ((other, text) => other == rename name && alphaEquiv scheme text)
+        after)
+    before
+
+{- The invariance comparison: same error codes, and when the program is
+   accepted every scheme survives the renaming. -}
+invariant : (String -> String) -> Outcome -> Outcome -> Bool
+invariant rename left right =
+  fst left == fst right
+    && (verdictOfOutcome left == Rejected || schemesPreserved rename left right)
+
+-- The comparison for a pure reordering: the same names, no more and no fewer.
+sameUpToOrder : Outcome -> Outcome -> Bool
+sameUpToOrder left right =
+  invariant (n => n) left right && length (snd left) == length (snd right)
+
+-- DICT-SEMANTICS T1 and HM generalization observed through the comparison: a
+-- hand-built violation of each kind is detected, and a pure renaming is not.
+test "the invariance comparison detects a changed scheme, a changed verdict and a lost binding" =
+  let original = graphOutcome [("law", "f x = x\ng = f \"s\"\n")]
+  let renamed = graphOutcome [("law", "f y = y\ng = f \"s\"\n")]
+  let rescheme = graphOutcome [("law", "f x y = x\ng = f \"s\" \"s\"\n")]
+  let reverdict = graphOutcome [("law", "f x = x\ng = (1 : String)\n")]
+  let reused = graphOutcome [("law", "f x = x\ng = f (1 : Int)\n")]
+  expectAll [
+    expectTrue (invariant (n => n) original renamed),
+    expectTrue (sameUpToOrder original renamed),
+    expectFalse (invariant (n => n) original rescheme),
+    expectFalse (invariant (n => n) original reverdict),
+    expectFalse (invariant (n => n) original reused),
+    expectFalse (sameUpToOrder original (fst original, [])),
+    expectEqual Rejected (verdictOfOutcome reverdict),
+    expectEqual Accepted (verdictOfOutcome original),
+  ]
+
+-- Top-level blocks.
+--
+-- Each block exports what it declares so a program can be split across
+-- modules. `BUse` calls the base function `p0`, so it constrains declaration
+-- order and module placement; `BBad` is the one block the checker rejects.
+public export data Block =
+  | BPoly
+  | BMono
+  | BData
+  | BBad
+  | BUse
+  deriving (Eq, Debug)
+
+baseBlock : String
+baseBlock = "export\np0 x = x\n"
+
+renderBlock : Int -> Block -> String
+renderBlock i BPoly = "export\np\{intToString i} x = x\n"
+renderBlock i BMono = "export\nm\{intToString i} = 1\n"
+renderBlock i BData =
+  "public export data D\{intToString i} = D\{intToString i} Int\n"
+    ++ "export\nd\{intToString i} = D\{intToString i} 1\n"
+renderBlock i BBad = "export\nbad\{intToString i} = (1 : String)\n"
+renderBlock i BUse = "export\nu\{intToString i} = (p0 \"s\", p0 (1 : Int))\n"
+
+-- The base block followed by the rendered blocks, numbered from 1.
+blockTexts : List Block -> List String
+blockTexts blocks =
+  baseBlock :: map ((i, b) => renderBlock (i + 1) b) (indexed blocks)
+
+-- The spec-side verdict model: `BBad` is the only rejecting block and an
+-- error in one declaration rejects the program.
+blocksVerdict : List Block -> Verdict
+blocksVerdict blocks = if any (== BBad) blocks then Rejected else Accepted
+
+-- A block that needs nothing outside itself, for insertion into a program
+-- that lacks the base function.
+filler : Block -> Block
+filler BBad = BPoly
+filler BUse = BMono
+filler b = b
+
+blocksSource : List Block -> Perm -> String
+blocksSource blocks perm = join "" (permute perm (blockTexts blocks))
+
+-- Shadow programs.
+--
+-- The template declares an interface `Sizeable` with method `size`, an impl at
+-- `Int` and at `Tag`, and a standalone `size` over `String`, so `size` is a
+-- shadow. The topology says where the three live; the use is the one
+-- occurrence whose verdict SHADOW-SEMANTICS decides.
+public export data Topology =
+  | Local
+  | DefinerImported
+  | Importer
+  | ImporterUnnamed
+  deriving (Eq, Debug)
+
+public export data Arity = A1 | A2 deriving (Eq, Debug)
+
+public export data ShadowUse =
+  | UApplyDomain
+  | UApplyLive
+  | UApplyTag
+  | UValueDomain
+  | UValueLive
+  | UWrapDomain
+  | UWrapLive
+  | UCarveOut
+  | UConstrDomain
+  | UConstrLive
+  deriving (Eq, Debug)
+
+-- The transformations that must not change the meaning: renaming the binders
+-- unrelated to `size`, and inserting an unrelated declaration before or after
+-- the template.
+public export data Xform =
+  | XNone
+  | XRename
+  | XInsertFront Block
+  | XInsertBack Block
+  deriving (Eq, Debug)
+
+-- The order of the importer's two import clauses and of the two provider
+-- modules in the graph.
+public export data Order = Straight | Swapped deriving (Eq, Debug)
+
+public export data ShadowCase =
+  | ShadowCase Topology Arity ShadowUse Xform Order
+  deriving (Eq, Debug)
+
+-- An importer shadow is decided by S2's importer arm and S4 only, so the
+-- definer-only uses are replaced by the plain application; the constrained
+-- standalone has one parameter.
+normalized : ShadowCase -> ShadowCase
+normalized (ShadowCase Importer arity use xf order) =
+  ShadowCase Importer arity (importerUse use) xf order
+normalized (ShadowCase ImporterUnnamed arity use xf order) =
+  ShadowCase ImporterUnnamed arity (importerUse use) xf order
+normalized (ShadowCase topo arity use xf order) =
+  ShadowCase topo (arityOf arity use) use xf order
+
+importerUse : ShadowUse -> ShadowUse
+importerUse UApplyDomain = UApplyDomain
+importerUse UApplyLive = UApplyLive
+importerUse UApplyTag = UApplyTag
+importerUse UValueDomain = UValueDomain
+importerUse UValueLive = UValueLive
+importerUse _ = UApplyDomain
+
+arityOf : Arity -> ShadowUse -> Arity
+arityOf _ UConstrDomain = A1
+arityOf _ UConstrLive = A1
+arityOf arity _ = arity
+
+{- The verdict model, from SHADOW-SEMANTICS. A definer shadow (S1) applied to
+   a receiver denotes the standalone whatever impls exist (S2 inverted), so a
+   receiver outside its domain is rejected, including one at a live-impl head
+   (S3). A value-position occurrence is the standalone (S4). A wrapper over an
+   ungrounded receiver monomorphises to the standalone's domain (S5) unless
+   its receiver is a written `=>` constraint variable (S5 carve-out). Arity
+   changes none of this (S8). A constrained standalone is an ordinary
+   constrained call (S9), so a type without the standalone's own constraint
+   is rejected, not dispatched. An importer shadow dispatches when an impl
+   is live at the receiver's head and is the standalone otherwise (S2), and in
+   value position is the standalone (S4). Where the interface lives is not
+   free (S6, narrowed): an importer that imports the interface's module
+   without admitting the interface or the method does not make `size` a
+   shadow (S1-NS (a)), so every use is the imported standalone. -}
+shadowVerdict : ShadowCase -> Verdict
+shadowVerdict c = match normalized c
+  ShadowCase Importer _ UApplyLive _ _ => Accepted
+  ShadowCase Importer _ UApplyTag _ _ => Accepted
+  ShadowCase _ _ use _ _ => useVerdict use
+
+useVerdict : ShadowUse -> Verdict
+useVerdict UApplyDomain = Accepted
+useVerdict UApplyLive = Rejected
+useVerdict UApplyTag = Rejected
+useVerdict UValueDomain = Accepted
+useVerdict UValueLive = Rejected
+useVerdict UWrapDomain = Accepted
+useVerdict UWrapLive = Rejected
+useVerdict UCarveOut = Accepted
+useVerdict UConstrDomain = Accepted
+useVerdict UConstrLive = Rejected
+
+-- Binder names for the template: (method parameter, standalone parameter,
+-- wrapper, result).
+names : Bool -> (String, String, String, String)
+names renamed =
+  if renamed then ("q", "str", "wrapped", "result") else ("x", "s", "w", "r")
+
+methodSig : Arity -> String
+methodSig A1 = "a -> Int"
+methodSig A2 = "a -> a -> Int"
+
+arrow : Arity -> String -> String
+arrow A1 ground = "\{ground} -> Int"
+arrow A2 ground = "\{ground} -> \{ground} -> Int"
+
+applied : Arity -> String -> String -> String
+applied A1 head arg = "\{head} \{arg}"
+applied A2 head arg = "\{head} \{arg} \{arg}"
+
+params : Arity -> String -> String
+params A1 p = p
+params A2 p = "\{p} \{p}2"
+
+-- The provider of the interface and its two impls.
+ifaceText : Arity -> String
+ifaceText arity = join "" [
+  "export interface Sizeable a where\n  size : \{methodSig arity}\n",
+  "public export data Tag = Tag\n",
+  "export impl Sizeable Int where\n  size \{params arity "n"} = n\n",
+  "export impl Sizeable Tag where\n  size \{params arity "t"} = 1\n",
+]
+
+standaloneText : Arity -> ShadowUse -> String -> String
+standaloneText A1 UConstrDomain p = constrainedText p
+standaloneText A1 UConstrLive p = constrainedText p
+standaloneText arity _ p =
+  "size : \{arrow arity "String"}\nsize \{params arity p} = 7\n"
+
+constrainedText : String -> String
+constrainedText p = join "" [
+  "interface Show2 a where\n  show2 : a -> Int\n",
+  "impl Show2 String where\n  show2 \{p} = 1\n",
+  "size : Show2 a => a -> Int\nsize \{p} = show2 \{p}\n",
+]
+
+useText : Arity -> ShadowUse -> (String, String, String, String) -> String
+useText arity UApplyDomain (_, _, _, r) =
+  "\{r} = \{applied arity "size" "\"s\""}\n"
+useText arity UApplyLive (_, _, _, r) =
+  "\{r} = \{applied arity "size" "(1 : Int)"}\n"
+useText arity UApplyTag (_, _, _, r) = "\{r} = \{applied arity "size" "Tag"}\n"
+useText arity UValueDomain (_, _, _, r) =
+  "\{r} = (size : \{arrow arity "String"})\n"
+useText arity UValueLive (_, _, _, r) = "\{r} = (size : \{arrow arity "Int"})\n"
+useText arity UWrapDomain (x, _, w, r) =
+  "\{w} \{x} = \{applied arity "size" x}\n\{r} = (\{w} : String -> Int)\n"
+useText arity UWrapLive (x, _, w, r) =
+  "\{w} \{x} = \{applied arity "size" x}\n\{r} = (\{w} : Int -> Int)\n"
+useText arity UCarveOut (x, _, w, r) =
+  "\{w} : Sizeable a => a -> Int\n\{w} \{x} = \{applied arity "size" x}\n"
+    ++ "\{r} = (\{w} : Int -> Int)\n"
+useText _ UConstrDomain (_, _, _, r) = "\{r} = size \"s\"\n"
+useText _ UConstrLive (_, _, _, r) = "\{r} = size (1 : Int)\n"
+
+fillerAt : Int -> Block -> String
+fillerAt i b = renderBlock i (filler b)
+
+insertions : Xform -> (String, String)
+insertions (XInsertFront b) = (fillerAt 90 b, "")
+insertions (XInsertBack b) = ("", fillerAt 91 b)
+insertions _ = ("", "")
+
+-- The module graph of a shadow case, in dependency order.
+shadowModules : ShadowCase -> List (String, String)
+shadowModules c = match normalized c
+  ShadowCase topo arity use xf order =>
+    let renamed = xf == XRename
+    let ns = names renamed
+    let (_, p, _, _) = ns
+    let (front, back) = insertions xf
+    let template =
+      front ++ standaloneText arity use p ++ useText arity use ns ++ back
+    match topo
+      Local => [("law", ifaceText arity ++ template)]
+      DefinerImported => [
+        ("lib", ifaceText arity),
+        ("law", "import lib.{Sizeable, Tag(..)}\n" ++ template),
+      ]
+      Importer =>
+        importerModules
+          arity
+          p
+          order
+          "Sizeable, Tag(..)"
+          (front, back)
+          (useText arity use ns)
+      ImporterUnnamed =>
+        importerModules
+          arity
+          p
+          order
+          "Tag(..)"
+          (front, back)
+          (useText arity use ns)
+
+-- The importer graph: the interface's module `ifc`, imported admitting
+-- `admitted`, and the standalone's module `fmod`.
+importerModules : Arity ->
+  String ->
+  Order ->
+  String ->
+  (String, String) ->
+  String ->
+  List (String, String)
+importerModules arity p order admitted (front, back) use =
+  let provider =
+    "export size : \{arrow arity "String"}\nsize \{params arity p} = 7\n"
+  let imports = ["import fmod.{size}\n", "import ifc.{\{admitted}}\n"]
+  let mods = [("ifc", ifaceText arity), ("fmod", provider)]
+  let entry = join "" (permuteOrder order imports) ++ front ++ use ++ back
+  permuteOrder order mods ++ [("law", entry)]
+
+permuteOrder : Order -> List a -> List a
+permuteOrder Straight xs = xs
+permuteOrder Swapped xs = reverse xs
+
+-- A rename moves these two names and no others.
+renameResult : Bool -> String -> String
+renameResult renamed name =
+  if renamed then match name
+    "r" => "result"
+    "w" => "wrapped"
+    other => other
+  else
+    name
+
+renamer : Xform -> String -> String
+renamer xf name = renameResult (xf == XRename) name
+
+baseOf : ShadowCase -> ShadowCase
+baseOf (ShadowCase topo arity use _ _) =
+  ShadowCase topo arity use XNone Straight
+
+-- SHADOW-SEMANTICS S1, S2, S3, S4, S5, S6, S8, S9: the verdict of a shadow
+-- program follows the clause model, and neither renaming the unrelated
+-- binders, inserting an unrelated declaration, nor reordering the importer's
+-- imports and providers (S6, visibility stays unique) changes verdict, codes
+-- or schemes. Moving the interface out of the importer's reach does change
+-- the verdict, as the model says (S6, the interface's location).
+prop "a shadow program's verdict follows the clauses and survives the transformations" (c : ShadowCase) =
+  let xf = xformOf c
+  let expected = shadowVerdict c
+  let before = graphOutcome (shadowModules (baseOf c))
+  let after = graphOutcome (shadowModules c)
+  verdictOfOutcome before == expected
+    && verdictOfOutcome after == expected
+    && invariant (renamer xf) before after
+
+-- DICT-SEMANTICS T1: a module's declarations are one unordered set, so
+-- permuting them preserves verdict and schemes; the verdict also follows the
+-- block model.
+prop "permuting the top-level declarations preserves verdict and schemes" (blocks : List Block) (perm : Perm) =
+  let before = graphOutcome [("law", blocksSource blocks PId)]
+  let after = graphOutcome [("law", blocksSource blocks perm)]
+  verdictOfOutcome before == blocksVerdict blocks
+    && verdictOfOutcome after == blocksVerdict blocks
+    && sameUpToOrder before after
+
+onlySource : List (String, String) -> String
+onlySource [(_, source)] = source
+onlySource _ = ""
+
+-- DICT-SEMANTICS U1/U2: the flat entry point and a one-module graph agree on
+-- diagnostics, for a block program and for a definer-shadow program.
+prop "the flat route and the one-module route agree" (blocks : List Block) (c : ShadowCase) =
+  let blocksProgram = blocksSource blocks PId
+  let (ShadowCase _ arity use xf order) = c
+  let shadowProgram =
+    onlySource (shadowModules (ShadowCase Local arity use xf order))
+  flatDiagnostics blocksProgram == moduleDiagnostics blocksProgram
+    && flatDiagnostics shadowProgram == moduleDiagnostics shadowProgram
+    && verdictOfOutcome (graphOutcome [("law", blocksProgram)])
+      == blocksVerdict blocks
+
+-- Which side of a split a block lands on.
+public export data Cut = CEven | COdd | CAll deriving (Eq, Debug)
+
+inFirst : Cut -> Int -> Bool
+inFirst CEven i = isEven i
+inFirst COdd i = isOdd i
+inFirst CAll _ = True
+
+-- The program split across two modules: `a` holds the base block and the
+-- blocks `cut` selects; `b` imports it and holds the rest. Blocks depend only
+-- on the base, so both sides are dependency-closed.
+splitModules : List Block -> Cut -> List (String, String)
+splitModules blocks cut =
+  let numbered = indexed blocks
+  let texts = map ((i, b) => (i + 1, renderBlock (i + 1) b)) numbered
+  let first = filter ((i, _) => inFirst cut i) texts
+  let second = filter ((i, _) => not (inFirst cut i)) texts
+  [
+    ("a", baseBlock ++ join "" (map snd first)),
+    (
+      "b",
+      "import a.*\nexport\nentryMark x = x\n" ++ join "" (map snd second),
+    ),
+  ]
+
+-- DICT-SEMANTICS C4: splitting a dependency-closed program across two
+-- modules preserves the verdict, which is the block model's.
+prop "splitting a dependency-closed program across two modules preserves the verdict" (blocks : List Block) (cut : Cut) =
+  let single = graphOutcome [("law", blocksSource blocks PId)]
+  let split = graphOutcome (splitModules blocks cut)
+  verdictOfOutcome single == blocksVerdict blocks
+    && verdictOfOutcome split == blocksVerdict blocks
+
+-- A program in either family.
+public export data Prog =
+  | PBlocks (List Block) Perm
+  | PShadow ShadowCase
+  deriving (Eq, Debug)
+
+progModules : Prog -> List (String, String)
+progModules (PBlocks blocks perm) = [("law", blocksSource blocks perm)]
+progModules (PShadow c) = shadowModules c
+
+progVerdict : Prog -> Verdict
+progVerdict (PBlocks blocks _) = blocksVerdict blocks
+progVerdict (PShadow c) = shadowVerdict c
+
+{- F13: the checker keeps process-global tables, so what it answers for `P`
+   must not depend on what it checked before. `P` is checked, then an
+   unrelated `Q`, then `P` again, and the two answers for `P` agree with each
+   other and with the model. Fresh-process freshness cannot be observed from
+   inside a test; this compares the first and the post-`Q` answer. -}
+historyHolds : Prog -> Outcome -> Outcome -> Bool
+historyHolds p first again =
+  first == again && verdictOfOutcome again == progVerdict p
+
+prop "checking P after any Q equals checking P first" (p : Prog) (q : Prog) =
+  let first = graphOutcome (progModules p)
+  let _ = graphOutcome (progModules q)
+  let again = graphOutcome (progModules p)
+  historyHolds p first again
+
+-- The history law's first conjunct catches a second answer that differs from
+-- the first only in a scheme, with the verdict conjunct satisfied: a checker
+-- whose leftover state changed a scheme but not the verdict would be red.
+test "the history law rejects a changed scheme with an unchanged verdict" =
+  let p = PBlocks [BPoly] PId
+  let first = graphOutcome (progModules p)
+  let changed = graphOutcome [("law", "\{baseBlock}export\np1 x y = x\n")]
+  expectAll [
+    expectTrue (historyHolds p first first),
+    expectEqual (progVerdict p) (verdictOfOutcome changed),
+    expectFalse (historyHolds p first changed),
+  ]
+
+-- Censuses. The domains are enumerated, not generated; each line states the
+-- floor N it asserts.
+allBlocks : List Block
+allBlocks = [BPoly, BMono, BData, BBad, BUse]
+
+blockLists : List (List Block)
+blockLists =
+  [[]]
+    ++ map (b => [b]) allBlocks
+    ++ flatMap (a => map (b => [a, b]) allBlocks) allBlocks
+
+perms : List Perm
+perms = [PId, PRev, PRot 1, PEvenOdd, PRotRev 2]
+
+allUses : List ShadowUse
+allUses = [
+  UApplyDomain,
+  UApplyLive,
+  UApplyTag,
+  UValueDomain,
+  UValueLive,
+  UWrapDomain,
+  UWrapLive,
+  UCarveOut,
+  UConstrDomain,
+  UConstrLive,
+]
+
+allXforms : List Xform
+allXforms = [XNone, XRename, XInsertFront BPoly, XInsertBack BData]
+
+shadowCases : List ShadowCase
+shadowCases =
+  flatMap
+    (topo =>
+      flatMap
+        (arity =>
+          flatMap
+            (use =>
+              flatMap
+                (xf =>
+                  map
+                    (order => ShadowCase topo arity use xf order)
+                    [
+                      Straight,
+                      Swapped,
+                    ])
+                allXforms)
+            allUses)
+        [A1, A2])
+    [Local, DefinerImported, Importer, ImporterUnnamed]
+
+floorN : Int
+floorN = 20
+
+topoOf : ShadowCase -> Topology
+topoOf (ShadowCase topo _ _ _ _) = topo
+
+xformOf : ShadowCase -> Xform
+xformOf (ShadowCase _ _ _ xf _) = xf
+
+orderOf : ShadowCase -> Order
+orderOf (ShadowCase _ _ _ _ order) = order
+
+isInsert : Xform -> Bool
+isInsert (XInsertFront _) = True
+isInsert (XInsertBack _) = True
+isInsert _ = False
+
+-- N = 20 (16 for the importer's rejections, whose only rejecting use is the
+-- value-position receiver outside the standalone's domain): the shadow
+-- property sees both verdicts, under each topology, with each transformation
+-- applied (the rename, the insertions, the importer's swapped order) over the
+-- 640 enumerated cases. The unnamed-interface importer rejects the applied
+-- live-impl receivers the named importer dispatches.
+test "census: the shadow law sees both verdicts, each topology and each transformation" = expectAll
+  [
+    expectEqual 640 (length shadowCases),
+    expectAtLeast
+      floorN
+      (countWhere (c => shadowVerdict c == Accepted) shadowCases),
+    expectAtLeast
+      floorN
+      (countWhere (c => shadowVerdict c == Rejected) shadowCases),
+    expectAtLeast
+      16
+      (countWhere
+        (c => topoOf c == Importer && shadowVerdict c == Rejected)
+        shadowCases),
+    expectAtLeast
+      floorN
+      (countWhere
+        (c => topoOf c == DefinerImported && shadowVerdict c == Accepted)
+        shadowCases),
+    expectAtLeast
+      floorN
+      (countWhere
+        (c => topoOf c == ImporterUnnamed && shadowVerdict c == Rejected)
+        shadowCases),
+    expectAtLeast floorN (countWhere (c => xformOf c == XRename) shadowCases),
+    expectAtLeast floorN (countWhere (c => isInsert (xformOf c)) shadowCases),
+    expectAtLeast
+      floorN
+      (countWhere
+        (c => topoOf c == Importer && orderOf c == Swapped)
+        shadowCases),
+  ]
+
+-- N = 20: the T1 and C4 laws see both verdicts and permutations that move
+-- declarations, over the 155 enumerated block programs.
+test "census: the permutation and split laws see both verdicts and real reorderings" =
+  let programs = flatMap (bs => map (p => (bs, p)) perms) blockLists
+  let moved = (bs, p) => permute p (blockTexts bs) /= blockTexts bs
+  expectAll [
+    expectEqual 155 (length programs),
+    expectAtLeast
+      floorN
+      (countWhere ((bs, _) => blocksVerdict bs == Accepted) programs),
+    expectAtLeast
+      floorN
+      (countWhere ((bs, _) => blocksVerdict bs == Rejected) programs),
+    expectAtLeast floorN (countWhere moved programs),
+    expectAtLeast
+      floorN
+      (countWhere
+        ((bs, _) =>
+          length (splitModules bs CEven) == 2
+            && length bs >= 2
+            && any (b => b == BUse) bs)
+        programs),
+  ]
+
+-- N = 20: the history-independence law draws P and Q from both families and
+-- both verdicts, over the 671 enumerated programs (31 block programs and 640
+-- shadow cases).
+test "census: the history law pairs both families and both verdicts" =
+  let progs = map (bs => PBlocks bs PId) blockLists ++ map PShadow shadowCases
+  expectAll [
+    expectEqual 671 (length progs),
+    expectAtLeast floorN (countWhere (p => progVerdict p == Accepted) progs),
+    expectAtLeast floorN (countWhere (p => progVerdict p == Rejected) progs),
+    expectAtLeast
+      floorN
+      (countWhere
+        (p => match p
+          PBlocks _ _ => True
+          PShadow _ => False)
+        progs),
+  ]
