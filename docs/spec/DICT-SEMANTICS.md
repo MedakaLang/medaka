@@ -633,11 +633,30 @@ against `impl Get (Box a) a`) is rejected at its site in the definition with
 `test/dict_fixtures/sig-var-rigid-repeated-head-var.mdk`). An impl head's
 variables are held the same way in its bodies (W3-inst above,
 `test/dict_fixtures/impl-head-goal-only-by-binding.mdk`,
-`test/dict_fixtures/impl-head-mixed-residual.mdk`). No other declared variable is held rigid yet,
-and a matcher can still bind it: a goal abstracted by a generalized local inside
-a signed function (#3796), an interface method signature's own variable (#3797;
-improvement and determination at the body's close hold it rigid, the matcher
-that accepts the goal does not), and a variable written in an expression annotation (#3799).
+`test/dict_fixtures/impl-head-mixed-residual.mdk`). Every other declared variable
+is held the same way, at its binder's close:
+
+- An interface method signature's own variables, in an `impl` or default body:
+  a goal of the body that an instance answers only by binding one is rejected at
+  its site with `T-MISSING-CONSTRAINT` when the body closes, unless the method's
+  own `=>` context gives it (`test/dict_fixtures/sig-var-rigid-method-var.mdk`).
+- A variable written in an expression annotation, for the annotated expression:
+  a goal of the expression that an instance answers only by binding one is
+  rejected at its site (`test/dict_fixtures/sig-var-rigid-annotation-var.mdk`).
+  Past the expression the variable is its binder's: an annotated local that
+  generalizes quantifies it (next item), and one that does not leaves it to the
+  binder that will.
+- A generalized local's quantified variables are its uses' to choose, as a
+  signature's are its callers'. From its generalization on no matcher binds one,
+  so an instance that answers a goal only by binding one does not discharge it:
+  the goal stays in the local's scheme (§4 `gen`), and each use poses it,
+  instantiated, to the binder enclosing the use, whose own rule then judges it
+  (`test/dict_fixtures/sig-var-rigid-generalized-local.mdk`,
+  `test/dict_fixtures/sig-var-rigid-generalized-local-pick.mdk`). A variable of
+  that goal the local does not quantify (one it shares with its enclosing scope,
+  or one no type of the local mentions) is the same variable at every use and
+  stays itself in the instantiated goal
+  (`test/dict_fixtures/local-goal-on-enclosing-var.mdk`).
 
 Uniqueness is counted over unifying heads, not matching ones, because a
 one-sided match undercounts. At `Pick (List t) (List n) (List Int)`, with `n` a

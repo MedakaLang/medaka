@@ -1,0 +1,17 @@
+-- §3 #3796, the `Pick` face: `k z = pick [z] [1]` keeps
+-- `Pick (List z) (List n) (List r)` in its scheme, and the use `k y` poses
+-- `Pick (List a) (List n) (List Int)` to `f`.  `impl Pick a a a` answers it only if
+-- the signature's `a` is Int, so `f` is rejected at that use, as the top-level
+-- `f : a -> List Int; f y = pick [y] [1]` is at its `pick`.
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+f : a -> List Int
+f y =
+  let k z = pick [z] [1]
+  k y
+
+main = println (debug (f "s"))

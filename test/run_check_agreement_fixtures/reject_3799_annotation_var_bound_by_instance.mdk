@@ -1,0 +1,13 @@
+-- §3 #3799: a variable written in an expression annotation is declared for the
+-- annotated expression.  `h : a -> List Int = y => pick [y] [1]` poses
+-- `Pick (List a) (List n) (List Int)`, which `impl Pick a a a` answers only if `a`
+-- is Int, so the annotated expression is rejected at its `pick`.
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+main =
+  let h : a -> List Int = y => pick [y] [1]
+  println (debug (h "s"))

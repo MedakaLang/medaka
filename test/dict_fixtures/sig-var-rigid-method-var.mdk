@@ -1,0 +1,19 @@
+-- §3 #3797: an interface method signature's own variable is declared in every impl
+-- body.  `w : x -> b -> b` leaves `b` to the caller; the body of `impl W Int` poses
+-- `Get (Box (List t)) b`, which `impl Get (Box a) a` answers only if `b` is
+-- `List t`, so the body is rejected at its `get`.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+interface W x where
+  w : x -> b -> b
+
+impl W Int where
+  w _ _ = get (Box [])
+
+main = println (w (1 : Int) 41 + 1)
