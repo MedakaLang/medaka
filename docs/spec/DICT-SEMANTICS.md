@@ -2751,8 +2751,8 @@ module-qualified identity.
 > enforced. Whichever clause you are editing here, check whether it has a row
 > in `test/diff_compiler_dict_semantics_test.mdk` (the verdict/value/code
 > table, scheme lines, per-verb warnings, diagnostic spans),
-> `test/diff_compiler_dict_semantics_ir.sh` (emitted IR), or
-> `test/diff_compiler_dict_semantics_permute.sh` (declaration-order
+> `test/diff_compiler_dict_semantics_ir_test.mdk` (emitted IR), or
+> `test/diff_compiler_dict_semantics_permute_test.mdk` (declaration-order
 > permutation), and add one to whichever fits if it does not.
 >
 > **Building it found two S0s that no existing gate could see**, both `verified`
