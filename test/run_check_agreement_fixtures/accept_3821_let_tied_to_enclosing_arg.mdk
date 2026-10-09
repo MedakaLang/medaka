@@ -1,0 +1,13 @@
+-- #3821: a local `let` whose value a goal ties to the enclosing argument.  The
+-- `let` leaves `e` of `Index c k e` to `g`'s boundary, so `g` gets the `let`-free
+-- scheme `(Index a Int b, Num b) => a -> b`.  Expected on every verb: 3.75, then 7.
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+g v =
+  let s = v[0] + v[1]
+  s
+
+main =
+  println (debug (g [|1.5, 2.25|]))
+  println (debug (g [|3, 4|]))

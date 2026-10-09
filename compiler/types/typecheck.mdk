@@ -26188,7 +26188,8 @@ numObligIds o = match o.oblProj
 -- inference level while retaining the body-local surviving-channel rule.
 -- These four policies preserve the existing candidate sets while making the
 -- outliving channels named data instead of positional arguments:
---   * member: roots in one member, excluding its arguments;
+--   * member: roots in one member, excluding its arguments; a root its type does
+--     not mention is handed to the enclosing boundary (`handOffAbsentNumVars`);
 --   * group (a where component): roots no member's type mentions;
 --   * SCC: the group rule plus the existing per-member fallback;
 --   * body-local: roots absent from the boundary's explicit surviving-channel set.
@@ -26209,7 +26210,9 @@ data NumBoundary = NumBoundary {
 
 -- What D3 clause 3 reads at one boundary: the goals it tests, the variables the
 -- boundary holds for every instantiation, and, at a member or group, the level
--- below which a goal variable is an enclosing binder's and is held too.
+-- below which a goal variable is an enclosing binder's.  Such a variable is held
+-- too, seeds D3 clause 2's connection (`tiedSurvivors`), and is left out of this
+-- boundary's ambiguity registration.
 data NumGuard = NumGuard {
   ngGoals : List UObligation,
   ngRigidIds : OrdMap Unit,
@@ -26269,13 +26272,15 @@ goalSatisfiable rigidIds o args =
 
 -- [base] plus each variable of [args] whose level is below [level].
 outerRigidIds : Option Int -> List Mono -> OrdMap Unit -> OrdMap Unit
-outerRigidIds None _ base = base
-outerRigidIds (Some level) args base =
-  omFromNames
-    (map
-      (p => intToString (fst p))
-      (filterList (p => snd p < level) (flatMap monoUnboundVarLevels args)))
-    base
+outerRigidIds outerBelow args base =
+  omFromNames (map intToString (enclosingVarIds outerBelow args)) base
+
+-- The variables of [args] an enclosing binder owns: those below [outerBelow].
+-- A boundary with no enclosing binder (`None`) has none.
+enclosingVarIds : Option Int -> List Mono -> List Int
+enclosingVarIds None _ = []
+enclosingVarIds (Some level) args =
+  map fst (filterList (p => snd p < level) (flatMap monoUnboundVarLevels args))
 
 -- D1: one operation performs defaulting first, then ambiguity registration.  It
 -- returns the candidates D3 clause 3 withheld, for the boundary's verdict.
@@ -26293,14 +26298,16 @@ finalizeNumBoundary boundary =
     NumBoundaryOwnedScc owner => Some owner
     NumBoundaryOwnedMethodBody owner => Some owner
   let _ = match boundary.nbDisposition
-    NumBoundaryOwnedMember _ => match boundary.nbMembers
+    NumBoundaryOwnedMember owner => match boundary.nbMembers
       [member] =>
-        defaultAmbiguousNumWith
-          defaultOwnerPolicy
-          guard
-          boundary.nbSurvivingIds
-          boundary.nbDefaultObls
-          member
+        let _ =
+          defaultAmbiguousNumWith
+            defaultOwnerPolicy
+            guard
+            boundary.nbSurvivingIds
+            boundary.nbDefaultObls
+            member
+        handOffAbsentNumVars owner member boundary.nbDefaultObls
       _ => panic "NumBoundaryOwnedMember must carry exactly one member"
     NumBoundaryOwnedGroup _ =>
       defaultAbsentNumWith
@@ -26335,10 +26342,35 @@ finalizeNumBoundary boundary =
     Some owner =>
       registerAmbiguousConstraintsOwnedBy
         owner
+        boundary.nbGuard.ngOuterBelow
         boundary.nbAmbiguityObls
         boundary.nbMembers
     None => ()
   !guard.agWithheld
+
+-- A local binding's Num roots that its type does not mention (a key literal it
+-- consumes) are no scheme's and no caller's, but its goals may still connect them
+-- to variables the enclosing boundary settles, and that boundary determines before
+-- it defaults.  They are lowered to the enclosing level, as `lowerToCurrent` lowers
+-- a value-restricted type, so that boundary owns them.  A deeper root is an inner
+-- binding's and stays where it is.
+handOffAbsentNumVars : Int -> Mono -> List UObligation -> Unit
+handOffAbsentNumVars owner member obls =
+  let inT = monoUnboundIds member
+  fold
+    (_ id =>
+      if containsI id inT then
+        ()
+      else match liveNumVarGo id obls
+        Some m => lowerOwnedRoot owner m
+        None => ())
+    ()
+    (dedupI (numConstrainedIds obls))
+
+lowerOwnedRoot : Int -> Mono -> Unit
+lowerOwnedRoot owner m = match normalize m
+  TVar cell => if tyvarLevel cell == owner then lowerToCurrent m
+  _ => ()
 
 defaultAmbiguousNumWith : Option Int ->
   ArmedGuard ->
@@ -26422,20 +26454,26 @@ numChannelRootSet obls channels =
 
 -- D3 clause 2, the argument channel closed under connection: [base] plus the
 -- variables of [members]' types, outside an argument position, that a
--- multi-variable goal of [obls] connects, transitively, to an argument-position
--- variable.  A caller fixes them through those goals, so they are not defaulting
--- candidates.  Only defaulting reads this set: improvement and determination keep
--- the declared-signature and unowned sets, since holding a connected variable rigid
+-- multi-variable goal of [guard] connects, transitively, to an argument-position
+-- variable or to an enclosing binder's variable (one below the guard's
+-- [ngOuterBelow]).  A caller fixes them through those goals, or the enclosing
+-- binder's boundary does, so they are not defaulting candidates here.  Only
+-- defaulting reads this set: improvement and determination keep the
+-- declared-signature and unowned sets, since holding a connected variable rigid
 -- there would stop the unique instance from fixing it.
-tiedSurvivors : List Mono -> List UObligation -> OrdMap Unit -> OrdMap Unit
-tiedSurvivors members obls base =
-  omFromNames (map intToString (connectedTiedIds members obls)) base
+tiedSurvivors : List Mono -> NumGuard -> OrdMap Unit -> OrdMap Unit
+tiedSurvivors members guard base =
+  let enclosing =
+    enclosingVarIds guard.ngOuterBelow (flatMap uOblArgs guard.ngGoals)
+  omFromNames
+    (map intToString (connectedTiedIds enclosing members guard.ngGoals))
+    base
 
 -- A local binding's surviving set: its one member's, over its goals on both
 -- windows.
 memberTiedSurvivors : Mono -> List UObligation -> Int -> OrdMap Unit
 memberTiedSurvivors member addedObls callN0 =
-  tiedSurvivors [member] (addedObls ++ callUOblsWindow callN0) omEmpty
+  tiedSurvivors [member] (localNumGuard addedObls callN0) omEmpty
 
 -- A local binding's or `where` component's D3 clause 3 inputs: its goals on both
 -- windows, with the variables of an enclosing binder held rigid.  Called right
@@ -26447,15 +26485,16 @@ localNumGuard addedObls callN0 = NumGuard {
   ngOuterBelow = Some (perRun.value.currentLevel.value + 1),
 }
 
-connectedTiedIds : List Mono -> List UObligation -> List Int
-connectedTiedIds members obls = match flatMap monoArgUnboundIds members
-  [] => []
-  argList =>
-    let argIds = idSetOf argList Tip
-    let reached = connectedIds argIds obls
-    filterList
-      (id => IdMap.has id reached && not (IdMap.has id argIds))
-      (dedupI (flatMap monoUnboundIds members))
+connectedTiedIds : List Int -> List Mono -> List UObligation -> List Int
+connectedTiedIds enclosing members obls =
+  match enclosing ++ flatMap monoArgUnboundIds members
+    [] => []
+    seedList =>
+      let seeds = idSetOf seedList Tip
+      let reached = connectedIds seeds obls
+      filterList
+        (id => IdMap.has id reached && not (IdMap.has id seeds))
+        (dedupI (flatMap monoUnboundIds members))
 
 -- [seeds] grown by the variables of every goal of [obls] that meets them.
 connectedIds : Map Int Unit -> List UObligation -> Map Int Unit
@@ -26551,26 +26590,37 @@ defaultEachMemberWith ownerPolicy guard protectedIds obls (m :: rest) =
 -- rejects (ambiguousImplMsg) under the SAME exemptions (`undeterminedGoalExempt`)
 -- and the SAME candidate count (`goalCandidates`) an undetermined call site already
 -- gets (so a goal one instance determines is never over-rejected and `Num` stays on
--- its literal-defaulting path).  Three filters
+-- its literal-defaulting path).  Four filters
 -- keep this from firing on legitimately-deferred constraints:
 --   • member-type membership (`monoUnboundIds`) — a var IN the
 --     binding's type is determined by a caller/annotation;
 --   • group LEVEL — a DEEPER var belongs to an inner let/where binding that already
 --     generalized + checked it (its obligation merely leaks into our addedObls
 --     window, e.g. `maximum`'s `where step` comparing at step's own element var);
+--   • enclosing vars — at a local boundary, a var below its `ngOuterBelow` belongs to
+--     an enclosing binder (`v`'s type in `g v = let s = v[0]`), judged where it lives;
 --   • ANCHORED vars — a var that also appears inside a CONCRETE-HEADED dispatch mono
 --     of this binding (`Set _a` from a `Set {…}` literal's FromEntries/Display) is
 --     ground at emit by head-pinning, so it is sound-but-deferred, NOT ambiguous.
 -- The obligation's record-site loc rides along (currentLoc is stale post-HM).
 registerAmbiguousConstraintsOwnedBy : Int ->
+  Option Int ->
   List UObligation ->
   List Mono ->
   Unit
-registerAmbiguousConstraintsOwnedBy owner obls monos =
+registerAmbiguousConstraintsOwnedBy owner outerBelow obls monos =
   -- anchoredIds = every unbound var that appears inside a concrete-headed dispatch
   -- mono across this group's obligations (head-pinnable).
-  let anchoredIds = flatMap concreteHeadVarIds (flatMap oblDispatchMonos obls)
-  registerAmbiguousGo obls owner (flatMap monoUnboundIds monos) anchoredIds
+  let dispatchMonos = flatMap oblDispatchMonos obls
+  let anchoredIds = flatMap concreteHeadVarIds dispatchMonos
+  -- An enclosing binder's variable is that binder's question: its boundary sees
+  -- the same goal with the variable in its own type.
+  let enclosingIds = enclosingVarIds outerBelow dispatchMonos
+  registerAmbiguousGo
+    obls
+    owner
+    (flatMap monoUnboundIds monos ++ enclosingIds)
+    anchoredIds
 
 -- the dispatch monos this obligation discriminates on (empty for Num, whose
 -- ambiguity is handled by literal defaulting).
@@ -43460,19 +43510,20 @@ processSCC env sigs grouped0 members =
   -- feed ONLY the Num-defaulting search; addedObls alone still drives the
   -- ambiguous-constraint/scheme-obligation registration below.
   let defaultObls = addedObls ++ calleeNumObls callN0 dictN0
+  let sccGuard = NumGuard {
+    ngGoals = groupObls,
+    ngRigidIds = protectedSigIds,
+    ngOuterBelow = None,
+  }
   let withheld = finalizeNumBoundary
     NumBoundary {
       nbDisposition = NumBoundaryOwnedScc (perRun.value.currentLevel.value + 1),
       nbMembers = map snd placeholders,
       nbSurvivingIds =
-        tiedSurvivors (map snd placeholders) groupObls protectedSigIds,
+        tiedSurvivors (map snd placeholders) sccGuard protectedSigIds,
       nbDefaultObls = defaultObls,
       nbAmbiguityObls = addedObls,
-      nbGuard = NumGuard {
-        ngGoals = groupObls,
-        ngRigidIds = protectedSigIds,
-        ngOuterBelow = None,
-      },
+      nbGuard = sccGuard,
     }  -- RETPOS soundness
   -- Defaulting is a substitution like any other, so the goals it changed are
   -- improved and determined once more.
