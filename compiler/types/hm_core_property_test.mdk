@@ -16,6 +16,7 @@ import types.law_harness_test.{
   Verdict(..),
   alphaEquiv,
   checkFlat,
+  countWhere,
   lawPrelude,
   shapeAt,
   shapeScheme,
@@ -834,9 +835,6 @@ shapeDomain =
         ]
       ++ flatMap (l => map (r => STuple l r) leafShapes) leafShapes
       ++ flatMap (l => map (r => SPair l r) leafShapes) leafShapes)
-
-countWhere : (a -> Bool) -> List a -> Int
-countWhere keep xs = length (filter keep xs)
 
 isUnifier : Unified -> Bool
 isUnifier (Unifier _) = True

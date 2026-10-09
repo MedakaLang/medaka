@@ -5,7 +5,7 @@
 
 import frontend.desugar.{desugar}
 import frontend.parser.{parseLocated}
-import list.{reverse}
+import list.{drop, filter, indexed, reverse, take}
 import string.{fromChars, isAlphaNum, isLower, isSpace, join, toChars}
 import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
 import types.typecheck.{
@@ -28,8 +28,7 @@ import types.typecheck.{
 export
 lawPrelude : String
 lawPrelude =
-  "data Bool = False | True\n"
-    ++ "interface Num a where\n  fromInt : Int -> a\n"
+  "interface Num a where\n  fromInt : Int -> a\n"
     ++ "impl Num Int where\n  fromInt n = n\n"
     ++ "extern Ref : a -> Ref a\n"
 
@@ -40,22 +39,36 @@ public export data Verdict = Accepted | Rejected deriving (Eq, Debug)
 -- as one flat program under `lawPrelude`.
 export
 flatDiagnostics : String -> List (String, String)
-flatDiagnostics source =
-  let (errors, _) = checkOneDiags [] (desugar (parseLocated lawPrelude)) (
-    "law",
-    desugar (parseLocated source),
-  )
+flatDiagnostics source = flatDiagnosticsWith "" source
+
+{- `flatDiagnostics` with `extra` appended to `lawPrelude` in the prelude
+   position. Only a prelude declaration is a built-in class (DICT §8 I7), so
+   a law about the operators' classes declares them here, in its own text,
+   rather than in the shared prelude. -}
+export
+flatDiagnosticsWith : String -> String -> List (String, String)
+flatDiagnosticsWith extra source =
+  let prelude = desugar (parseLocated (lawPrelude ++ extra))
+  let program = ("law", desugar (parseLocated source))
+  let (errors, _) = checkOneDiags [] prelude program
   map (e => (tcCode e, tcMsg e)) errors
 
 -- `flatDiagnostics` through the module-graph route: `source` is the single
--- module of a one-module graph under the same prelude.
+-- module of a one-module graph under the same prelude, so it must be
+-- resolve-clean (see `graphResults`).
 export
 moduleDiagnostics : String -> List (String, String)
 moduleDiagnostics source = graphDiagnostics [("law", source)]
 
 {- The checker's per-module results for a module graph under `lawPrelude`.
    Each module is `(id, source)`; a module imports another by its id, the
-   list is in dependency order, and the last module is the entry. -}
+   list is in dependency order, and the last module is the entry.
+
+   The graph route runs no resolve pass, so every module must be
+   resolve-clean: a name that does not resolve reaches the checker unbound
+   and panics it (`unbound method: …`), which ends the whole native test
+   file, not just the one case. Production rejects such a graph before
+   typechecking; a law must never generate one. -}
 graphResults : List (String, String) -> List ModDiags
 graphResults modules =
   let parsed = map ((id, source) => (id, desugar (parseLocated source))) modules
@@ -68,6 +81,7 @@ graphResults modules =
     parsed
 
 -- The error diagnostics of every module of a graph, as `(code, message)`.
+-- Every module must be resolve-clean; see `graphResults`.
 export
 graphDiagnostics : List (String, String) -> List (String, String)
 graphDiagnostics modules =
@@ -75,7 +89,8 @@ graphDiagnostics modules =
     ((_, (_, errors, _)) => map (e => (tcCode e, tcMsg e)) errors)
     (graphResults modules)
 
--- Verdict plus rendered diagnostics of a module graph.
+-- Verdict plus rendered diagnostics of a module graph whose modules are
+-- resolve-clean; see `graphResults`.
 export
 checkGraph : List (String, String) -> (Verdict, String)
 checkGraph modules = verdictOf (graphDiagnostics modules)
@@ -83,7 +98,8 @@ checkGraph modules = verdictOf (graphDiagnostics modules)
 {- The error codes of a module graph and the rendered schemes of its entry
    module's bindings, contexts included, from one check. A name can carry two
    schemes. `ppSchemeNamed` reads the checker's tables for the module checked
-   last, so the schemes are rendered before any other check runs. -}
+   last, so the schemes are rendered before any other check runs. Every module
+   must be resolve-clean; see `graphResults`. -}
 export
 graphCodesAndSchemes : List (String, String) ->
   (List String, List (String, String))
@@ -117,6 +133,47 @@ checkModule source = verdictOf (moduleDiagnostics source)
 export
 codesFlat : String -> List String
 codesFlat source = map fst (flatDiagnostics source)
+
+-- Whether `code` is among the error codes `codes`.
+export
+hasCode : String -> List String -> Bool
+hasCode code codes = any (== code) codes
+
+-- How many elements of `xs` satisfy `keep`: the count a census asserts on.
+export
+countWhere : (a -> Bool) -> List a -> Int
+countWhere keep xs = length (filter keep xs)
+
+-- A permutation of a declaration list: identity, reversal, rotation left by
+-- `k` (any integer, taken modulo the length), evens-then-odds by position,
+-- and a rotation followed by a reversal.
+public export data Perm =
+  | PId
+  | PRev
+  | PRot Int
+  | PEvenOdd
+  | PRotRev Int
+  deriving (Eq, Debug)
+
+export
+permute : Perm -> List a -> List a
+permute PId xs = xs
+permute PRev xs = reverse xs
+permute (PRot k) xs = rotate k xs
+permute PEvenOdd xs =
+  let ixs = indexed xs
+  map snd (filter ((i, _) => isEven i) ixs)
+    ++ map snd (filter ((i, _) => isOdd i) ixs)
+permute (PRotRev k) xs = reverse (rotate k xs)
+
+rotate : Int -> List a -> List a
+rotate k xs =
+  let n = length xs
+  if n == 0 then
+    xs
+  else
+    let j = (k % n + n) % n
+    drop j xs ++ take j xs
 
 {- A generated expression shape. Every leaf and wrapper is closed; the names
    it mentions are declared by `shapeSupport`.
@@ -376,6 +433,13 @@ test "the law prelude rejects an ungeneralized binding used at two types on both
   [
     expectEqual Rejected (fst (checkFlat ungeneralizedTwoUses)),
     expectEqual Rejected (fst (checkModule ungeneralizedTwoUses)),
+  ]
+
+test "the law prelude leaves the built-in Bool usable at an ascription" =
+  let program = "b = True\nc = (b : Bool)\n"
+  expectAll [
+    expectEqual (Accepted, "accepted") (checkFlat program),
+    expectEqual (Accepted, "accepted") (checkModule program),
   ]
 
 test "flat and module routes agree on a fixed accepted and rejected pair" =

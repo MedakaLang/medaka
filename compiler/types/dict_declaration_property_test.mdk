@@ -20,13 +20,13 @@ import types.law_harness_test.{
   checkFlat,
   checkGraph,
   codesFlat,
+  countWhere,
+  flatDiagnosticsWith,
   graphCodesAndSchemes,
+  hasCode,
   lawPrelude,
   typeTokens,
 }
-
-hasCode : String -> List String -> Bool
-hasCode code codes = any (== code) codes
 
 -- Four interfaces whose `requires` clauses are generated edges.
 public export data Idx = I0 | I1 | I2 | I3 deriving (Eq, Debug)
@@ -556,6 +556,89 @@ literalModel _ = Rejected
 prop "a numeric literal demands the prelude's Num whatever binding is spelled fromInt" (shadow : Shadow) (target : LitTy) (lit : LitTy) =
   fst (checkFlat (literalProgram shadow target lit)) == literalModel lit
 
+-- An operator of §8 I7's table, and the type of both its operands.
+public export data Op = OpEq | OpOrd | OpAppend | OpAdd deriving (Eq, Debug)
+
+public export data Operand = OInt | OStr deriving (Eq, Debug)
+
+opSource : Op -> String
+opSource OpEq = "=="
+opSource OpOrd = "<"
+opSource OpAppend = "++"
+opSource OpAdd = "+"
+
+opClass : Op -> String
+opClass OpEq = "Eq"
+opClass OpOrd = "Ord"
+opClass OpAppend = "Semigroup"
+opClass OpAdd = "Num"
+
+operandType : Operand -> String
+operandType OInt = "Int"
+operandType OStr = "String"
+
+operandValue : Operand -> String
+operandValue OInt = "1"
+operandValue OStr = "\"s\""
+
+-- The prelude-position declaration of an operator's class with its one
+-- instance, at `Int`. The law prelude already declares `Num` that way.
+preludeClass : Op -> String
+preludeClass OpEq =
+  "interface Eq a where\n  eq : a -> a -> Bool\nimpl Eq Int where\n  eq x y = True\n"
+preludeClass OpOrd =
+  "interface Ord a where\n  compare : a -> a -> Int\nimpl Ord Int where\n  compare x y = 0\n"
+preludeClass OpAppend =
+  "interface Semigroup a where\n  append : a -> a -> a\nimpl Semigroup Int where\n  append x y = x\n"
+preludeClass OpAdd = ""
+
+-- A program class spelled like the operator's, with an instance at each
+-- listed operand type. Its method is spelled like no prelude method, so the
+-- program binds no `fromInt` (#3956).
+userClass : Op -> List Operand -> String
+userClass op ats =
+  let header = "interface \{opClass op} a where\n  userOp : a -> Int\n"
+  let instance =
+    t => "impl \{opClass op} \{operandType t} where\n  userOp x = 0\n"
+  header ++ join "" (map instance (nub ats))
+
+operatorProgram : Op -> Bool -> List Operand -> Operand -> String
+operatorProgram op user ats operand =
+  let decl = if user then userClass op ats else ""
+  let value = operandValue operand
+  "\{decl}probe = \{value} \{opSource op} \{value}\n"
+
+{- §8 I7 with its qualifications 2 and 4. An operator's predicate names the
+   prelude's class, so it holds exactly where the prelude has an instance,
+   here only at `Int`. A program class spelled the same captures nothing,
+   whatever instances it has (qualification 2). With no prelude declaration
+   of the class the operator imposes no class constraint (qualification 4). -}
+operatorModel : Op -> Bool -> Operand -> Verdict
+operatorModel op declared operand =
+  if (declared || op == OpAdd) && operand /= OInt then Rejected else Accepted
+
+operatorCodes : Op -> Bool -> Bool -> List Operand -> Operand -> List String
+operatorCodes op declared user ats operand =
+  let extra = if declared then preludeClass op else ""
+  map fst (flatDiagnosticsWith extra (operatorProgram op user ats operand))
+
+operatorAgrees : Op -> Bool -> Bool -> List Operand -> Operand -> Bool
+operatorAgrees op declared user ats operand =
+  let codes = operatorCodes op declared user ats operand
+  match operatorModel op declared operand
+    Accepted => codes == []
+    Rejected => hasCode "T-NO-IMPL" codes
+
+prop "an operator demands the prelude's class and no program class of that spelling" (op : Op) (user : Bool) (ats : List Operand) (operand : Operand) =
+  operatorAgrees op True user ats operand
+
+-- Qualification 4 with no program class present. The cell with a program
+-- class of the operator's spelling and no prelude class is not asserted
+-- here: the checker lets that program class gate the operator today, and
+-- the cell awaits its issue and pin.
+prop "with no prelude class an operator imposes no class constraint" (op : Op) (operand : Operand) =
+  operatorAgrees op False False [] operand
+
 -- Self-tests: each family's comparison rejects a hand-built wrong case, and
 -- one fixed program per family is checked against its model.
 
@@ -621,9 +704,6 @@ test "the W3 model holds both binders' b apart and rejects a pinned or launderin
     expectEqual Rejected (w3Verdict WInt RNum EInt VKv),
     expectEqual Rejected (fst (checkFlat (w3Program WBoxB RBoxVarB EX VK))),
   ]
-
-countWhere : (a -> Bool) -> List a -> Int
-countWhere keep xs = length (filter keep xs)
 
 -- N = 20 for each verdict over the edge lists of length at most two.
 test "census: the W1 law sees cyclic and acyclic superclass relations" =
@@ -731,4 +811,45 @@ test "census: the W3, identity, phantom and literal laws see both verdicts" =
       (countWhere (u => phantomModel u == Rejected) [UseUnderGiven, UseBare]),
     expectAtLeast 2 (countWhere (== Accepted) lits),
     expectAtLeast 2 (countWhere (== Rejected) lits),
+  ]
+
+-- N = 8 for each verdict of the prelude-class law over its 32 descriptions
+-- with a program class present, and for a program instance at the operand's
+-- type that still leaves the operator rejected; N = 3 for the
+-- no-prelude-class law's acceptances at a non-`Int` operand.
+test "census: the operator laws see both verdicts and both qualifications" =
+  let cells =
+    flatMap
+      (op =>
+        flatMap
+          (ats => map (operand => (op, ats, operand)) [OInt, OStr])
+          [[], [OInt], [OStr], [OInt, OStr]])
+      [OpEq, OpOrd, OpAppend, OpAdd]
+  let verdict = (op, _, operand) => operatorModel op True operand
+  let bare =
+    flatMap
+      (op => map (t => (op, t)) [OInt, OStr])
+      [OpEq, OpOrd, OpAppend, OpAdd]
+  expectAll [
+    expectEqual 32 (length cells),
+    expectAtLeast 8 (countWhere (c => verdict c == Accepted) cells),
+    expectAtLeast 8 (countWhere (c => verdict c == Rejected) cells),
+    expectAtLeast
+      8
+      (countWhere
+        (c => match c
+          (_, ats, operand) => elem operand ats && verdict c == Rejected)
+        cells),
+    expectAtLeast
+      3
+      (countWhere
+        ((op, t) => t == OStr && operatorModel op False t == Accepted)
+        bare),
+  ]
+
+test "a program class spelled Eq captures no operator and an absent prelude class gates none" = expectAll
+  [
+    expectTrue (hasCode "T-NO-IMPL" (operatorCodes OpEq True True [OStr] OStr)),
+    expectEqual [] (operatorCodes OpEq False False [] OStr),
+    expectEqual [] (operatorCodes OpEq True True [OStr] OInt),
   ]

@@ -4,7 +4,6 @@
 -- grammar below, transcribed from the spec text, and from the typing of the
 -- shapes in the harness; the checker is observed only by its verdict.
 
-import list.{filter}
 import test.{expectAll, expectAtLeast, expectEqual}
 import types.law_harness_test.{
   Shape(..),
@@ -12,6 +11,7 @@ import types.law_harness_test.{
   checkFlat,
   checkModule,
   codesFlat,
+  countWhere,
   shapeAt,
   shapeIsPolymorphic,
   shapeScheme,
@@ -61,16 +61,56 @@ expectedVerdict shape =
   else
     Rejected
 
+{- A shape with every integer literal replaced by a string literal, every
+   other constructor kept, so values and non-values both remain. Each law
+   below runs twice: over the full domain, where #3949 (integer literal
+   classified expansive) holds it red under a pin, and over this projection,
+   where #3949 cannot reach it and the law stays live. -}
+literalFree : Shape -> Shape
+literalFree SInt = SStr
+literalFree SStr = SStr
+literalFree SId = SId
+literalFree SVar = SVar
+literalFree SCtorVar = SCtorVar
+literalFree SNil = SNil
+literalFree (SLam body) = SLam (literalFree body)
+literalFree (STuple left right) = STuple (literalFree left) (literalFree right)
+literalFree (SList inner) = SList (literalFree inner)
+literalFree (SBox inner) = SBox (literalFree inner)
+literalFree (SPair left right) = SPair (literalFree left) (literalFree right)
+literalFree (SPartCtor inner) = SPartCtor (literalFree inner)
+literalFree (SRecord inner) = SRecord (literalFree inner)
+literalFree (SAsc inner) = SAsc (literalFree inner)
+literalFree (SRef inner) = SRef (literalFree inner)
+literalFree (SApp inner) = SApp (literalFree inner)
+literalFree (SPartial inner) = SPartial (literalFree inner)
+literalFree (SIf inner) = SIf (literalFree inner)
+literalFree (SField inner) = SField (literalFree inner)
+
 -- HM-CORE §1 gen-value at a top-level binding, on both checker routes.
-prop "a top-level binding generalizes iff its expression is a syntactic value" (shape : Shape) =
+topLevelLaw : Shape -> Bool
+topLevelLaw shape =
   let program = topLevelProgram "x" "g" shape
   fst (checkFlat program) == expectedVerdict shape
     && fst (checkModule program) == expectedVerdict shape
 
+prop "a top-level binding generalizes iff its expression is a syntactic value" (shape : Shape) =
+  topLevelLaw shape
+
+prop "a literal-free top-level binding generalizes iff its expression is a syntactic value" (shape : Shape) =
+  topLevelLaw (literalFree shape)
+
 -- DICT §4.1 G2: a local binding generalizes only where its bound expression
 -- is a syntactic value, by the same value set.
-prop "a local let generalizes iff its expression is a syntactic value" (shape : Shape) =
+localLaw : Shape -> Bool
+localLaw shape =
   fst (checkFlat (localProgram "x" "g" shape)) == expectedVerdict shape
+
+prop "a local let generalizes iff its expression is a syntactic value" (shape : Shape) =
+  localLaw shape
+
+prop "a literal-free local let generalizes iff its expression is a syntactic value" (shape : Shape) =
+  localLaw (literalFree shape)
 
 -- HM-CORE §1 clause 1: `g` and `helper` form one binding group (each names
 -- the other); `helper` is a value on its own account and `g` is decided on
@@ -86,8 +126,14 @@ sccProgram shape =
 sccVerdict : Shape -> Verdict
 sccVerdict shape = if isSyntacticValue shape then Accepted else Rejected
 
+sccLaw : Shape -> Bool
+sccLaw shape = fst (checkFlat (sccProgram shape)) == sccVerdict shape
+
 prop "membership in a binding group grants no generalization exemption" (shape : Shape) =
-  fst (checkFlat (sccProgram shape)) == sccVerdict shape
+  sccLaw shape
+
+prop "a literal-free binding group member gets no generalization exemption" (shape : Shape) =
+  sccLaw (literalFree shape)
 
 -- A binding `g` declared with the shape's principal type, its fresh
 -- variables quantified, then `uses` appended.
@@ -101,8 +147,15 @@ twoUses shape =
 
 -- HM-CORE §1 clause 2: whether an expression is a value is a fact about its
 -- syntax, so a signature changes nothing in gen-value's verdict.
-prop "a type signature grants no generalization exemption" (shape : Shape) =
+signatureLaw : Shape -> Bool
+signatureLaw shape =
   fst (checkFlat (signedProgram shape (twoUses shape))) == expectedVerdict shape
+
+prop "a type signature grants no generalization exemption" (shape : Shape) =
+  signatureLaw shape
+
+prop "a type signature grants a literal-free binding no generalization exemption" (shape : Shape) =
+  signatureLaw (literalFree shape)
 
 -- HM-CORE §1 clause 4: a signature quantifying a variable over an expansive
 -- body is the definition-site error `T-SIG-OVER-EXPANSIVE`, never a narrowing
@@ -110,10 +163,17 @@ prop "a type signature grants no generalization exemption" (shape : Shape) =
 overExpansive : Shape -> Bool
 overExpansive shape = shapeIsPolymorphic shape && not (isSyntacticValue shape)
 
-prop "a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE" (shape : Shape) =
+overExpansiveLaw : Shape -> Bool
+overExpansiveLaw shape =
   let oneUse = "useA = (g : \{shapeTypeAt "Int" shape})\n"
   let codes = codesFlat (signedProgram shape oneUse)
   if overExpansive shape then elem "T-SIG-OVER-EXPANSIVE" codes else codes == []
+
+prop "a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE" (shape : Shape) =
+  overExpansiveLaw shape
+
+prop "a polymorphic signature over an expansive literal-free body is T-SIG-OVER-EXPANSIVE" (shape : Shape) =
+  overExpansiveLaw (literalFree shape)
 
 -- HM-CORE §1 clause 4, second paragraph: a bare variable is a value under a
 -- constrained signature; an application under the same signature is not.
@@ -190,9 +250,6 @@ censusDomain =
     ++ flatMap (l => map (r => STuple l r) leafShapes) leafShapes
     ++ flatMap (l => map (r => SPair l r) leafShapes) leafShapes
 
-countWhere : (a -> Bool) -> List a -> Int
-countWhere keep xs = length (filter keep xs)
-
 -- N = 20 for every census below, over the 144 shapes of `censusDomain`.
 censusFloor : Int
 censusFloor = 20
@@ -230,4 +287,19 @@ test "census: the partial-application and renaming laws range over values and no
       censusFloor
       (countWhere (s => not (isSyntacticValue s)) censusDomain),
     expectAtLeast censusFloor (countWhere isSyntacticValue censusDomain),
+  ]
+
+test "census: the literal-free variants see both verdicts" =
+  let projected = map literalFree censusDomain
+  expectAll [
+    expectAtLeast
+      censusFloor
+      (countWhere (s => expectedVerdict s == Rejected) projected),
+    expectAtLeast
+      censusFloor
+      (countWhere (s => sccVerdict s == Rejected) projected),
+    expectAtLeast censusFloor (countWhere overExpansive projected),
+    expectAtLeast
+      censusFloor
+      (countWhere (s => expectedVerdict s == Accepted) projected),
   ]

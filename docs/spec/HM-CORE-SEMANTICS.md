@@ -134,7 +134,7 @@ Conformance fixtures: [hm_core_property_test.mdk](../../compiler/types/hm_core_p
 Tarjan SCCs over the reference graph; the per-group order infer → exit level → default →
 ambiguity → generalize, which is `DICT-SEMANTICS.md` §6.3 D1 realized. From `W2-C` §2.8.
 
-Conformance fixtures: [hm_core_property_test.mdk](../../compiler/types/hm_core_property_test.mdk) props `a binding group is monomorphic inside the group and generalized after it`, `a signature admits polymorphic recursion` and `every member of a group with a signed member generalizes at its principal type`.
+Conformance fixtures: [hm_core_property_test.mdk](../../compiler/types/hm_core_property_test.mdk) props `a binding group is monomorphic inside the group and generalized after it`, `a signature admits polymorphic recursion` and `every member of a group with a signed member generalizes at its principal type` (pinned, #3955). That last law asserts the Haskell 2010 §4.5.2 reading, where a reference to a signed member is dropped from the dependency graph; this section has not yet decided between that reading and plain SCCs over every reference.
 
 ## 6. Defaulting — owed (#2555)
 

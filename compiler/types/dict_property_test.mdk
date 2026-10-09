@@ -7,15 +7,19 @@
 -- checker is observed only through its verdicts, error codes and rendered
 -- schemes. Which dictionary a goal selects is not observed.
 
-import list.{filter, indexed, lookup, nub, partition, reverse, sort, splitAt}
+import list.{filter, lookup, nub, sort}
 import string.{join}
 import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
 import types.law_harness_test.{
+  Perm(..),
   Verdict(..),
   alphaEquiv,
   checkFlat,
   codesFlat,
+  countWhere,
   graphCodesAndSchemes,
+  hasCode,
+  permute,
 }
 
 -- The model's instance heads and goals: a variable, or a constructor applied
@@ -170,14 +174,13 @@ ambiguityCode = "T-AMBIGUOUS-INSTANCE"
 noImplCode : String
 noImplCode = "T-NO-IMPL"
 
-hasCode : String -> List String -> Bool
-hasCode code codes = any (== code) codes
-
--- A checker's codes agree with a selection: accepted iff unique, and a
--- rejection is ambiguity exactly when the model says so.
+-- A checker's codes agree with a selection: accepted iff unique, a missing
+-- instance is the missing-instance rejection (§6 C1) and never ambiguity,
+-- and ambiguity is reported exactly when the model says so.
 selectionAgrees : Selection -> List String -> Bool
 selectionAgrees Unique codes = codes == []
-selectionAgrees Missing codes = codes /= [] && not (hasCode ambiguityCode codes)
+selectionAgrees Missing codes =
+  hasCode noImplCode codes && not (hasCode ambiguityCode codes)
 selectionAgrees Ambiguous codes = hasCode ambiguityCode codes
 
 instanceSupport : String
@@ -202,19 +205,6 @@ c1Program spell heads goal = join "" [
   "useT x = tag x\n",
 ]
 
--- A permutation of the instance declarations.
-public export data Perm = PRev | PRot Int | PEvenOdd deriving (Eq, Debug)
-
-permute : Perm -> List a -> List a
-permute PRev xs = reverse xs
-permute (PRot k) xs =
-  let n = max 1 (length xs)
-  let (front, back) = splitAt ((k % n + n) % n) xs
-  back ++ front
-permute PEvenOdd xs =
-  let (evens, odds) = partition ((i, _) => isEven i) (indexed xs)
-  map snd evens ++ map snd odds
-
 -- Every scheme of `before` has an alpha-equivalent scheme of the same name in
 -- `after`.
 schemesKept : List (String, String) -> List (String, String) -> Bool
@@ -238,6 +228,29 @@ prop "instance selection follows the most-specific model and survives permuting 
     && sort codes == sort codes2
     && schemesKept schemes schemes2
     && length schemes == length schemes2
+
+-- Whether `dup`, declared twice, is a `⊑`-minimal head among those of
+-- `others` and `dup` matching `goal`.
+duplicateReached : List Head -> Head -> Goal -> Bool
+duplicateReached others dup goal =
+  let target = goalHT goal
+  let d = headHT dup
+  let below = h => matches h target && strictlyMoreSpecific h d
+  matches d target && not (any below (map headHT others))
+
+{- §6 C1 and §3: α-equal heads are `⊑`-equivalent yet distinct and never
+   tie-break, so at a goal where a head declared twice (the second copy with
+   its variables respelled) is `⊑`-minimal the matching set has two minimal
+   elements and the program is rejected, and not as a missing instance. A
+   goal the duplicate does not reach as a minimum is not asserted. -}
+prop "a twice-declared head that is minimal at the goal is rejected and not as missing" (heads : List Head) (dup : Head) (goal : Goal) =
+  let others = filter (/= dup) (nub heads)
+  if duplicateReached others dup goal then
+    let twice = tagImpl (v => v ++ "2") dup
+    let codes = codesFlat (c1Program plain (others ++ [dup]) goal ++ twice)
+    codes /= [] && not (hasCode noImplCode codes)
+  else
+    True
 
 -- Spellings of the instance-head variables `a` and `b`. `__none__` is the
 -- checker's reserved head tag for a goal position with no head.
@@ -676,9 +689,6 @@ headSets =
       (hs => map (c => hs ++ [c]) (filter (c => not (any (== c) hs)) allHeads))
       pairs
 
-countWhere : (a -> Bool) -> List a -> Int
-countWhere keep xs = length (filter keep xs)
-
 -- N = 50 for each selection over the 820 x 8 head-set and goal pairs.
 test "census: the C1 law sees missing, unique and ambiguous selections" =
   let cases = flatMap (hs => map (g => c1Model hs g) allGoals) headSets
@@ -687,6 +697,20 @@ test "census: the C1 law sees missing, unique and ambiguous selections" =
     expectAtLeast 50 (countWhere (== Missing) cases),
     expectAtLeast 50 (countWhere (== Unique) cases),
     expectAtLeast 50 (countWhere (== Ambiguous) cases),
+  ]
+
+-- N = 50 over the 10 x 10 x 8 one-head, duplicate and goal triples: the
+-- duplicate law reaches its asserted case, and skips some.
+test "census: the duplicate-head law reaches a minimal duplicate" =
+  let cases =
+    flatMap
+      (h =>
+        flatMap (d => map (g => duplicateReached [h] d g) allGoals) allHeads)
+      allHeads
+  expectAll [
+    expectEqual 800 (length cases),
+    expectAtLeast 50 (countWhere (r => r) cases),
+    expectAtLeast 50 (countWhere (r => not r) cases),
   ]
 
 allCtx : List Ctx
