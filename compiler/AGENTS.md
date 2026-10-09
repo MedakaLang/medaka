@@ -214,7 +214,7 @@ measured its own **2.2× win as a 2.5× SLOWDOWN** and nearly abandoned it.
 - **The decisive gate is `test/selfcompile_fixpoint.sh`** (C3a/C3b). C3b — the emitter
   reproducing its own IR byte-for-byte — is what proves determinism. A C3a "lagging seed"
   **warning** is expected on a codegen change and is **not** a break.
-- **`test/diff_compiler_engines.sh` is the silent-miscompile net** (346 fixtures × 3 engines).
+- **`test/lib_engines_differential.sh` is the silent-miscompile net** (346 fixtures × 3 engines).
   It is what caught `-O0`. **A changed `known (ledgered)` count is a behavior change and must
   be EXPLAINED, not waved through.**
 - **Typeclass dispatch is OUTLINED, not inlined at the site.** An `RDict` site emits a *call*

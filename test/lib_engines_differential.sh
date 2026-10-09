@@ -1,5 +1,28 @@
 #!/usr/bin/env bash
-# diff_compiler_engines.sh — the THREE-ENGINE differential gate (docs/ops/TESTING-DESIGN.md §4.4).
+# lib_engines_differential.sh — the body of the THREE-ENGINE differential gate
+# (docs/ops/TESTING-DESIGN.md §4.4).
+#
+# It is run by three registry gates, test/diff_compiler_engines_part{1,2,3}.sh, each a
+# thin wrapper that sets ENGINE_PART=<k> and execs this file. The corpus is split
+# because no single 4-vCPU runner finishes all of it inside the per-row budget, and a
+# gate's `run` cannot carry arguments, so each part has to be its own file. This file
+# sits outside the `diff_compiler_*` namespace on purpose: a `diff_compiler_*` pattern
+# must resolve to the three parts, never to the parts PLUS the whole corpus again.
+#
+# ── Parts (ENGINE_PART=<k>, 1 <= k <= ENGINE_PARTS) ─────────────────────────────
+# After the rejection-parity exclusion and before ONLY scoping, the corpus is sorted
+# by key (LC_ALL=C) and part k keeps the fixtures whose index is k-1 mod ENGINE_PARTS.
+# ENGINE_PARTS lives HERE and the wrappers pass only k, so the parts cannot disagree
+# about N. Every corpus fixture is therefore in exactly one part, which is what keeps
+# the per-key ledger and pin comparison below complete under a split: a ledger row or
+# pin is checked by the one part that owns its key. With ENGINE_PART unset the whole
+# corpus runs (the developer and CAPTURE entry point). Changing ENGINE_PARTS means
+# adding or deleting a wrapper and its registry row; the guard below reds every part
+# until the wrapper set matches.
+#
+# ENGINE_LIST=1 prints the selected fixture keys (after the part and ONLY filters) and
+# exits 0 before any oracle check or build — the way to prove the parts cover the
+# corpus exactly once.
 #
 # Medaka owns three independent implementations of its own semantics:
 #
@@ -137,12 +160,14 @@
 #      an unbuilt oracle means zero comparisons ran: infra rot, not a skip.
 #   The gate never exits 0 having compared nothing (see the ZERO-COMPARISON checks).
 #
-# Usage:  bash test/diff_compiler_engines.sh
-#         JOBS=8 bash test/diff_compiler_engines.sh
-#         VERBOSE=1 bash test/diff_compiler_engines.sh    # every fixture's signature
-#         CAPTURE=1 bash test/diff_compiler_engines.sh    # rewrite the ledger (review the diff!)
-#                                                          # (refused under ONLY/CORPUS_GLOB)
-#         ONLY='llvmM/*' bash test/diff_compiler_engines.sh   # scope to a SUBSET by corpus key
+# Usage:  bash test/lib_engines_differential.sh               # the whole corpus
+#         sh test/diff_compiler_engines_part2.sh              # one part, as CI runs it
+#         ENGINE_JOBS=8 bash test/lib_engines_differential.sh
+#         VERBOSE=1 bash test/lib_engines_differential.sh    # every fixture's signature
+#         CAPTURE=1 bash test/lib_engines_differential.sh    # rewrite the ledger (review the diff!)
+#                                                          # (refused under ONLY/CORPUS_GLOB/ENGINE_PART)
+#         ENGINE_PART=2 ENGINE_LIST=1 bash test/lib_engines_differential.sh  # part 2's keys
+#         ONLY='llvmM/*' bash test/lib_engines_differential.sh   # scope to a SUBSET by corpus key
 #                                                              # (CORPUS_GLOB= is an alias) —
 #                                                              # runs the real ledger/pin
 #                                                              # aggregation over just the
@@ -157,11 +182,12 @@
 set -u
 
 # CAPTURE rewrites the whole shared ledger from the fixtures compared in THIS run, so
-# under a scope (ONLY / CORPUS_GLOB) it would drop every ledger row outside the scope.
-# Refuse before any work; exit 1 so run_gates.sh cannot reclassify it as a phantom skip.
-if [ -n "${CAPTURE:-}" ] && [ -n "${ONLY:-${CORPUS_GLOB:-}}" ]; then
-  echo "REFUSED: CAPTURE=1 with ONLY/CORPUS_GLOB would truncate test/engine_divergence.txt to the scoped rows (#1524)." >&2
-  echo "         Run CAPTURE=1 over the full corpus (unset ONLY/CORPUS_GLOB), or hand-append the one new row." >&2
+# under a scope (ONLY / CORPUS_GLOB / ENGINE_PART) it would drop every ledger row outside
+# the scope. Refuse before any work; exit 1 so run_gates.sh cannot reclassify it as a
+# phantom skip.
+if [ -n "${CAPTURE:-}" ] && [ -n "${ONLY:-${CORPUS_GLOB:-${ENGINE_PART:-}}}" ]; then
+  echo "REFUSED: CAPTURE=1 with ONLY/CORPUS_GLOB/ENGINE_PART would truncate test/engine_divergence.txt to the scoped rows (#1524)." >&2
+  echo "         Run CAPTURE=1 over the full corpus (unset ONLY/CORPUS_GLOB/ENGINE_PART), or hand-append the one new row." >&2
   exit 1
 fi
 
@@ -262,7 +288,7 @@ if [ "${1:-}" = "--one" ]; then
   # WORKDIR / RESULTDIR / WASM_OK / MEDAKA_EMITTER / MEDAKA_WASM_EMITTER are
   # normally injected into this worker's env ONLY by the xargs fan-out at the
   # bottom of this file (`WORKDIR="$WORK" RESULTDIR="$RESULTS" ... xargs ...
-  # bash "$0" --one {}`).  A direct `sh test/diff_compiler_engines.sh --one
+  # bash "$0" --one {}`).  A direct `sh test/lib_engines_differential.sh --one
   # <fixture>` — the whole point of a debug affordance — never goes through
   # that fan-out, so under `set -u` it died at "WORKDIR: unbound variable"
   # (~line 188 pre-fix) before running a single engine.  Detect that case
@@ -411,89 +437,6 @@ if [ "${1:-}" = "--one" ]; then
   exit 0
 fi
 
-# ── Preflight ─────────────────────────────────────────────────────────────────
-# Genuine toolchain absence → exit 2, worded to MATCH run_gates.sh's LEGIT_SKIP_RE.
-command -v clang >/dev/null 2>&1 || { echo "no C compiler (clang) on PATH — skipping the engine gate"; exit 2; }
-
-# A missing oracle is NOT a legitimate skip: the gate would compare nothing.  Exit 2
-# with a message that deliberately does NOT match LEGIT_SKIP_RE, so run_gates.sh
-# reclassifies it as FAIL* (phantom skip: oracle/binary not built).
-[ -x "$MEDAKA" ]  || { echo "the native compiler was never built (missing $MEDAKA) — run: make medaka"; exit 2; }
-[ -x "$EVALBIN" ] || { echo "the eval oracle was never built (missing $EVALBIN) — run: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$EVALBIN")"; exit 2; }
-
-# The wasm arm DEGRADES rather than skipping: with no wasm-tools / Node 24 we still
-# run T1 (eval == native), the tier that removes the golden circularity.  Skipping
-# the whole gate over an optional third arm would silently drop 300+ live two-engine
-# comparisons — the exact failure mode docs/ops/TESTING-DESIGN.md §2.3 indicts.
-detect_wasm_ok
-
-# ── MEDAKA_REQUIRE_WASM — the degradation is right for a dev box, WRONG for CI ──
-#
-# Default-off, so a dev box with no wasm toolchain keeps the honest, announced
-# degradation above (T1 still gates fully).  CI's `engines` shard sets it to 1: there
-# the toolchain is GUARANTEED, so an unavailable wasm arm means the WIRING broke, and
-# a wiring break must never again be reported as a green two-engine run (#597).
-#
-# ⚠️ `exit 1`, NOT `exit 2`.  run_gates.sh:47 carries
-#     LEGIT_SKIP_RE='no C compiler|libgc \(bdw-gc\)|not on PATH'
-# and this gate's own reason string is "wasm-tools not on PATH" — which MATCHES that
-# regex.  An exit 2 would therefore be reclassified at run_gates.sh:101 as a
-# LEGITIMATE skip and the shard would stay GREEN — reintroducing the exact silence
-# this flag exists to abolish.  exit 1 is an unconditional FAIL.  Verified by hand:
-#     echo 'wasm-tools not on PATH' | grep -qE 'no C compiler|libgc \(bdw-gc\)|not on PATH'  -> match
-if [ "${MEDAKA_REQUIRE_WASM:-0}" = 1 ] && [ "$WASM_OK" != 1 ]; then
-  echo "MEDAKA_REQUIRE_WASM=1 but the wasm arm is unavailable: $WASM_OFF_WHY" >&2
-  echo "  the engines shard guarantees wasm-tools + Node 24 + test/bin/wasm_emit_modules_main;" >&2
-  echo "  if this fired in CI the toolchain wiring regressed — see .github/workflows/ci.yml (engines shard)." >&2
-  exit 1
-fi
-
-[ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
-# `medaka build --target wasm` reads the compiled wasm emitter from here (build_cmd.mdk);
-# without it the CLI falls back to `medaka run`ning the emitter entry, which cannot
-# resolve the `args` extern.  Exactly the MEDAKA_EMITTER contract, one target over.
-[ "$WASM_OK" = 1 ] && export MEDAKA_WASM_EMITTER="$WASMBIN"
-
-WORK="$(mktemp -d)"; RESULTS="$(mktemp -d)"
-trap 'rm -rf "$WORK" "$RESULTS"' EXIT
-
-# CI FAST PATH: precompile runtime/medaka_rt.c ONCE for the whole gate run, then
-# point every per-fixture `medaka build` at it via MEDAKA_RT_OBJ. Otherwise each
-# of the ~300 native builds recompiles the byte-identical runtime from scratch
-# (~0.6s of clang each). The COMPILER produces the object (`--emit-rt-obj`) with
-# exactly the flags its own link uses, so it can't drift; the inline-vs-prebuilt
-# binary is proven byte-identical by test/diff_compiler_rt_obj.sh. Best-effort:
-# if the precompile fails we simply don't export it and every build falls back to
-# the (unchanged) inline compile. medaka_rt.c can't change mid-run, so a single
-# object built at startup has no staleness surface.
-RTOBJ="$WORK/medaka_rt.o"
-if MEDAKA_ROOT="$ROOT" "$MEDAKA" build --emit-rt-obj "$RTOBJ" >/dev/null 2>&1 && [ -f "$RTOBJ" ]; then
-  export MEDAKA_RT_OBJ="$RTOBJ"
-fi
-
-# CI FAST PATH #2 (issue #118): the same trick one level up, and a much bigger win.
-# The PRELUDE is 88% of a small program's emitted IR (270 of 281 defines on a
-# nine-line fixture), and clang -O2 re-optimises all of it on every one of these
-# ~346 builds. Precompile it ONCE and point every build at it via
-# MEDAKA_PRELUDE_OBJ; each build then only compiles its own code plus its
-# per-program `@mdk_disp_*` dispatchers. Same discipline as the runtime object
-# above: the COMPILER emits it (`--emit-prelude-obj`) with exactly the flags its own
-# link uses, so they cannot drift; stdlib/core.mdk can't change mid-run, so a single
-# object built at startup has no staleness surface; and it is best-effort — if the
-# precompile fails we don't export it and every build falls back to the (unchanged)
-# inline path. The two link paths are proven to produce identically-behaving programs
-# by test/diff_compiler_prelude_obj.sh.
-#
-# This gate running ON the fast path is deliberate, and is the strongest validation
-# it gets: 346 fixtures × 3 engines, every native arm built against the shared
-# prelude.o, differentially compared against eval and wasm. A prelude.o that baked in
-# anything program-specific cannot survive that.
-PRELUDEOBJ="$WORK/prelude.o"
-if MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="${MEDAKA_EMITTER:-}" \
-     "$MEDAKA" build --emit-prelude-obj "$PRELUDEOBJ" >/dev/null 2>&1 && [ -f "$PRELUDEOBJ" ]; then
-  export MEDAKA_PRELUDE_OBJ="$PRELUDEOBJ"
-fi
-
 # All FOUR emitter corpora — the two untyped (prelude-free) and, since the wasm arm
 # moved onto the shipping CLI, the two TYPED ones as well — PLUS test/engine_fixtures/
 # (#530): a prelude-bearing corpus consumed by NOTHING prelude-free, so it can hold a
@@ -545,6 +488,44 @@ if [ -s "$REJECT_MANIFEST" ]; then
   fi
 fi
 
+# ── Parts (see the header): keep sorted-key index k-1 mod ENGINE_PARTS ────────
+ENGINE_PARTS=3
+PART_TAG=""
+if [ -n "${ENGINE_PART:-}" ]; then
+  case "$ENGINE_PART" in
+    *[!0-9]*) part_ok=0 ;;
+    *) part_ok=1 ;;
+  esac
+  if [ "$part_ok" = 0 ] || [ "$ENGINE_PART" -lt 1 ] || [ "$ENGINE_PART" -gt "$ENGINE_PARTS" ]; then
+    echo "ENGINE_PART='$ENGINE_PART' is not an integer in 1..$ENGINE_PARTS" >&2
+    exit 1
+  fi
+  # A missing or extra wrapper would leave a slice of the corpus run by no row, or by
+  # two; red every part until the wrapper set is exactly part1..part$ENGINE_PARTS.
+  n_wrappers="$(ls "$ROOT"/test/diff_compiler_engines_part*.sh 2>/dev/null | grep -c . || true)"
+  k=1
+  while [ "$k" -le "$ENGINE_PARTS" ]; do
+    [ -f "$ROOT/test/diff_compiler_engines_part$k.sh" ] || n_wrappers=-1
+    k=$((k + 1))
+  done
+  if [ "$n_wrappers" != "$ENGINE_PARTS" ]; then
+    echo "ENGINE_PARTS=$ENGINE_PARTS but test/ does not hold exactly test/diff_compiler_engines_part1..$ENGINE_PARTS.sh:" >&2
+    ls "$ROOT"/test/diff_compiler_engines_part*.sh >&2 2>/dev/null
+    exit 1
+  fi
+  total_before_part="$(printf '%s\n' "$CORPUS" | grep -c . || true)"
+  CORPUS="$(printf '%s\n' "$CORPUS" | while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    printf '%s\t%s\n' "$(keyfor "$p")" "$p"
+  done | LC_ALL=C sort -t "$(printf '\t')" -k1,1 \
+       | awk -F'\t' -v n="$ENGINE_PARTS" -v k="$ENGINE_PART" '(NR - 1) % n == k - 1 { print $2 }')"
+  part_n="$(printf '%s\n' "$CORPUS" | grep -c . || true)"
+  [ "${part_n:-0}" -gt 0 ] || { echo "part $ENGINE_PART/$ENGINE_PARTS selected no fixture — the gate compared nothing"; exit 2; }
+  PART_TAG="PART $ENGINE_PART/$ENGINE_PARTS"
+  part_msg="$PART_TAG: $part_n of $total_before_part fixtures (sorted-key index mod $ENGINE_PARTS == $((ENGINE_PART - 1)))"
+  if [ -n "${ENGINE_LIST:-}" ]; then echo "$part_msg" >&2; else echo "$part_msg"; fi
+fi
+
 # ── Corpus scoping (issue #723): ONLY=<glob> / CORPUS_GLOB=<glob> ─────────────
 # Scope the differential to the fixtures whose corpus-qualified KEY matches <glob>
 # (a shell glob, e.g. ONLY='llvmM/*' for the whole module arm, ONLY='llvm/adt_*',
@@ -580,26 +561,113 @@ if [ -n "$SCOPE_GLOB" ]; then
     echo "  (the glob is matched against the corpus KEY, not the file path)." >&2
     exit 2
   fi
-  echo "██████████████████████████████████████████████████████████████████████"
-  echo "██  SCOPED RUN — THIS IS A SUBSET, NOT THE FULL ENGINES GATE          ██"
-  echo "██    ONLY / CORPUS_GLOB = '$SCOPE_GLOB'"
-  echo "██    running $scoped_n of $total_before_scope comparable fixtures — $((total_before_scope - scoped_n)) NOT run"
-  echo "██    A green here does NOT mean the gate passes.  Re-run WITHOUT ONLY= ██"
-  echo "██    (the full corpus) before trusting it — #450 silent-narrowing.    ██"
-  echo "██████████████████████████████████████████████████████████████████████"
+  if [ -z "${ENGINE_LIST:-}" ]; then
+    echo "██████████████████████████████████████████████████████████████████████"
+    echo "██  SCOPED RUN — THIS IS A SUBSET, NOT THE FULL ENGINES GATE          ██"
+    echo "██    ONLY / CORPUS_GLOB = '$SCOPE_GLOB'"
+    echo "██    running $scoped_n of $total_before_scope comparable fixtures — $((total_before_scope - scoped_n)) NOT run"
+    echo "██    A green here does NOT mean the gate passes.  Re-run WITHOUT ONLY= ██"
+    echo "██    (the full corpus) before trusting it — #450 silent-narrowing.    ██"
+    echo "██████████████████████████████████████████████████████████████████████"
+  fi
+fi
+
+# ENGINE_LIST: the selected keys, then stop — before any oracle check or build.
+if [ -n "${ENGINE_LIST:-}" ]; then
+  printf '%s\n' "$CORPUS" | while IFS= read -r p; do
+    [ -n "$p" ] && keyfor "$p"
+  done
+  exit 0
+fi
+
+# ── Preflight ─────────────────────────────────────────────────────────────────
+# Genuine toolchain absence → exit 2, worded to MATCH run_gates.sh's LEGIT_SKIP_RE.
+command -v clang >/dev/null 2>&1 || { echo "no C compiler (clang) on PATH — skipping the engine gate"; exit 2; }
+
+# A missing oracle is NOT a legitimate skip: the gate would compare nothing.  Exit 2
+# with a message that deliberately does NOT match LEGIT_SKIP_RE, so run_gates.sh
+# reclassifies it as FAIL* (phantom skip: oracle/binary not built).
+[ -x "$MEDAKA" ]  || { echo "the native compiler was never built (missing $MEDAKA) — run: make medaka"; exit 2; }
+[ -x "$EVALBIN" ] || { echo "the eval oracle was never built (missing $EVALBIN) — run: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $(basename "$EVALBIN")"; exit 2; }
+
+# The wasm arm DEGRADES rather than skipping: with no wasm-tools / Node 24 we still
+# run T1 (eval == native), the tier that removes the golden circularity.  Skipping
+# the whole gate over an optional third arm would silently drop every live two-engine
+# comparison — the exact failure mode docs/ops/TESTING-DESIGN.md §2.3 indicts.
+detect_wasm_ok
+
+# ── MEDAKA_REQUIRE_WASM — the degradation is right for a dev box, WRONG for CI ──
+#
+# Default-off, so a dev box with no wasm toolchain keeps the honest, announced
+# degradation above (T1 still gates fully).  CI's `engines` shard sets it to 1: there
+# the toolchain is GUARANTEED, so an unavailable wasm arm means the WIRING broke, and
+# a wiring break must never again be reported as a green two-engine run (#597).
+#
+# ⚠️ `exit 1`, NOT `exit 2`.  run_gates.sh:47 carries
+#     LEGIT_SKIP_RE='no C compiler|libgc \(bdw-gc\)|not on PATH'
+# and this gate's own reason string is "wasm-tools not on PATH" — which MATCHES that
+# regex.  An exit 2 would therefore be reclassified at run_gates.sh:101 as a
+# LEGITIMATE skip and the shard would stay GREEN — reintroducing the exact silence
+# this flag exists to abolish.  exit 1 is an unconditional FAIL.  Verified by hand:
+#     echo 'wasm-tools not on PATH' | grep -qE 'no C compiler|libgc \(bdw-gc\)|not on PATH'  -> match
+if [ "${MEDAKA_REQUIRE_WASM:-0}" = 1 ] && [ "$WASM_OK" != 1 ]; then
+  echo "MEDAKA_REQUIRE_WASM=1 but the wasm arm is unavailable: $WASM_OFF_WHY" >&2
+  echo "  the engines shard guarantees wasm-tools + Node 24 + test/bin/wasm_emit_modules_main;" >&2
+  echo "  if this fired in CI the toolchain wiring regressed — see .github/workflows/ci.yml (engines shard)." >&2
+  exit 1
+fi
+
+[ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
+# `medaka build --target wasm` reads the compiled wasm emitter from here (build_cmd.mdk);
+# without it the CLI falls back to `medaka run`ning the emitter entry, which cannot
+# resolve the `args` extern.  Exactly the MEDAKA_EMITTER contract, one target over.
+[ "$WASM_OK" = 1 ] && export MEDAKA_WASM_EMITTER="$WASMBIN"
+
+WORK="$(mktemp -d)"; RESULTS="$(mktemp -d)"
+trap 'rm -rf "$WORK" "$RESULTS"' EXIT
+
+# CI FAST PATH: precompile runtime/medaka_rt.c ONCE for the whole gate run, then
+# point every per-fixture `medaka build` at it via MEDAKA_RT_OBJ. Otherwise each
+# of the native builds recompiles the byte-identical runtime from scratch. The COMPILER produces the object (`--emit-rt-obj`) with
+# exactly the flags its own link uses, so it can't drift; the inline-vs-prebuilt
+# binary is proven byte-identical by test/diff_compiler_rt_obj.sh. Best-effort:
+# if the precompile fails we simply don't export it and every build falls back to
+# the (unchanged) inline compile. medaka_rt.c can't change mid-run, so a single
+# object built at startup has no staleness surface.
+RTOBJ="$WORK/medaka_rt.o"
+if MEDAKA_ROOT="$ROOT" "$MEDAKA" build --emit-rt-obj "$RTOBJ" >/dev/null 2>&1 && [ -f "$RTOBJ" ]; then
+  export MEDAKA_RT_OBJ="$RTOBJ"
+fi
+
+# CI FAST PATH #2 (issue #118): the same trick one level up, and a much bigger win.
+# The PRELUDE is 88% of a small program's emitted IR (270 of 281 defines on a
+# nine-line fixture), and clang -O2 re-optimises all of it on every one of these
+# builds. Precompile it ONCE and point every build at it via
+# MEDAKA_PRELUDE_OBJ; each build then only compiles its own code plus its
+# per-program `@mdk_disp_*` dispatchers. Same discipline as the runtime object
+# above: the COMPILER emits it (`--emit-prelude-obj`) with exactly the flags its own
+# link uses, so they cannot drift; stdlib/core.mdk can't change mid-run, so a single
+# object built at startup has no staleness surface; and it is best-effort — if the
+# precompile fails we don't export it and every build falls back to the (unchanged)
+# inline path. The two link paths are proven to produce identically-behaving programs
+# by test/diff_compiler_prelude_obj.sh.
+#
+# This gate running ON the fast path is deliberate, and is the strongest validation
+# it gets: every fixture × 3 engines, every native arm built against the shared
+# prelude.o, differentially compared against eval and wasm. A prelude.o that baked in
+# anything program-specific cannot survive that.
+PRELUDEOBJ="$WORK/prelude.o"
+if MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="${MEDAKA_EMITTER:-}" \
+     "$MEDAKA" build --emit-prelude-obj "$PRELUDEOBJ" >/dev/null 2>&1 && [ -f "$PRELUDEOBJ" ]; then
+  export MEDAKA_PRELUDE_OBJ="$PRELUDEOBJ"
 fi
 
 n_dispatched="$(printf '%s\n' "$CORPUS" | wc -l | tr -d ' ')"
 
 # Fan-out. NOTE this gate deliberately does NOT honour run_gates.sh's INNER_JOBS
-# (which it exports to every gate as $JOBS, default 3). Every other gate is a
-# cheap text diff; this one shells out to clang + node once per fixture across a
-# ~346-fixture corpus, so it is the suite's long pole by an order of magnitude
-# (~295s vs ~32s for all the others combined). Throttling it to 3 would make the
-# whole suite wait on it. Because it dominates, the other gates have all finished
-# within the first ~30s and it then runs essentially alone — so a wider pool costs
-# nothing in contention. Override with ENGINE_JOBS (e.g. ENGINE_JOBS=2 on a shared
-# or loaded box). Measured on 12 cores: JOBS=3 ~5min, 4 ~3.7min, 6 ~2.5min.
+# (which it exports to every gate as $JOBS). Each fixture pays three front ends, a
+# clang link and a node run, so the pool width is set by ENGINE_JOBS alone, default
+# NCPU/2 (minimum 2) — e.g. ENGINE_JOBS=2 on a shared or loaded box.
 NCPU="$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
 JOBS="${ENGINE_JOBS:-$(( NCPU / 2 ))}"
 [ "${JOBS:-0}" -ge 2 ] 2>/dev/null || JOBS=2
@@ -706,7 +774,9 @@ t3p=$(tier 5 pass); t3f=$(tier 5 fail); t3n=$(tier 5 na)
 echo
 echo "══════════════════════════════════════════════════════════════════════"
 if [ -n "$SCOPE_GLOB" ]; then
-  echo " 3-ENGINE DIFFERENTIAL — ⚠️ SUBSET $compared of ${total_before_scope:-?} fixtures  [ONLY='$SCOPE_GLOB'] ⚠️"
+  echo " 3-ENGINE DIFFERENTIAL ${PART_TAG:+$PART_TAG }— ⚠️ SUBSET $compared of ${total_before_scope:-?} fixtures  [ONLY='$SCOPE_GLOB'] ⚠️"
+elif [ -n "$PART_TAG" ]; then
+  echo " 3-ENGINE DIFFERENTIAL $PART_TAG — $compared of $total_before_part fixtures (llvm ∪ llvm_typed ∪ wasm ∪ wasm_typed ∪ engine ∪ llvm_modules)"
 else
   echo " 3-ENGINE DIFFERENTIAL — $compared fixtures (llvm ∪ llvm_typed ∪ wasm ∪ wasm_typed ∪ engine ∪ llvm_modules)"
 fi

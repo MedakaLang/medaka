@@ -12,10 +12,11 @@
 #     their own minimal interfaces).  Gate: test/wasm/diff_wasm_typed.sh.
 #   * test/bin/wasm_emit_modules_main — the MULTI-MODULE entry.  Gates:
 #     test/wasm/diff_wasm_modules.sh, test/wasm/diff_sqlite.sh, test/build_wasm_cmd.sh,
-#     and (the only one it needs) test/diff_compiler_engines.sh:144.
+#     and (the only one it needs) test/lib_engines_differential.sh, the body of the
+#     test/diff_compiler_engines_part*.sh gates.
 #
 # ── targeted modes ────────────────────────────────────────────────────────────
-# --modules-only builds only wasm_emit_modules_main. diff_compiler_engines.sh reads
+# --modules-only builds only wasm_emit_modules_main. lib_engines_differential.sh reads
 # exactly that binary and would otherwise pay ~2.6x for binaries its runner never opens.
 # --typed-only builds only wasm_emit_typed_main for targeted diff_wasm_typed.sh recovery.
 # The default remains unchanged and builds all three for the `wasm:` job's full gate set.

@@ -8,7 +8,7 @@
 # divergence between the two on the SAME `.gz` input is a backend bug in bit
 # manipulation — the two-opposite-bit-orders format (LSB-first bit stream,
 # MSB-first Huffman codes) is exactly the kind of workload the 3-engine
-# differential (test/diff_compiler_engines.sh) has never had to find one with.
+# differential (test/lib_engines_differential.sh) has never had to find one with.
 #
 # Structure and toolchain-degrade discipline mirror test/wasm/diff_sqlite.sh —
 # its sibling in the same directory. Difference: sqlite's corpus is many small
@@ -38,7 +38,7 @@ CC="${CC:-clang}"
 DEMO="$ROOT/gzip/inflate_demo.mdk"
 
 # Portable timeout (no coreutils `timeout` on macOS) — same shim as
-# test/diff_compiler_engines.sh and gzip/test/inflate_oracle.sh. Exit 142
+# test/lib_engines_differential.sh and gzip/test/inflate_oracle.sh. Exit 142
 # (128+SIGALRM) signals "hung"; real exit codes pass through unchanged.
 run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
 

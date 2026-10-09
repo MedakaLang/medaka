@@ -3,17 +3,15 @@ ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
 regenerated into this matrix by `make gen-ci`; it changes whenever the
 baseline does, so nothing below names a gate. What this row is:
 
-full_cores = true  -> the whole runner, and CLOSED TO THE PACKER. Gates
-whose `shard` says `gates_1` stay here; the balancer never moves one in
-or out. That is deliberate: `diff_compiler_engines` is irreducible (every
-fixture pays a full `medaka build` + clang, on THREE engines) and wants
-the box rather than its own ENGINE_JOBS=NCPU/2 hedge. The cost is that
-this row runs below the median row load by construction — re-examine the
-closure if that gap ever stops being worth it.
-
 wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
-oracle, so this row's T2/T3 tiers actually run; MEDAKA_REQUIRE_WASM=1
-makes a degraded run a hard fail rather than a quiet skip.
+oracle (`sh test/wasm/build_wasm_oracle.sh --modules-only`). This is one
+of the three OPEN rows that carry it (with `gates_3` and `gates_8`), so it
+is one of only three rows a wasm-constrained gate can legally land on —
+the balancer treats that as a hard constraint, never as a cost.
+MEDAKA_REQUIRE_WASM=1 makes a degraded wasm arm a hard fail rather than a
+quiet skip.
+
+full_cores = false: an ordinary shared runner, open to the packer.
 
 The row NAME is a required status-check context (`gates_1`), so renaming it
 is a ruleset change, not an edit here. It is a bare executor number by

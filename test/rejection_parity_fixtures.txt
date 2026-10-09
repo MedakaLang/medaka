@@ -7,7 +7,7 @@
 # each REDEFINES a core name (a prelude type or interface), so BOTH shipping backends
 # (native LLVM and WasmGC) REJECT it at the front end, identically.
 #
-# In test/diff_compiler_engines.sh they therefore made ZERO cross-engine value comparison
+# In test/lib_engines_differential.sh they therefore made ZERO cross-engine value comparison
 # (signature na:na:na:* — no two arms both `ran`), inflating the engines corpus + ledger
 # while asserting nothing about engine AGREEMENT (the gate's whole point). This manifest
 # moves them OUT of the value differential (diff_compiler_engines.sh EXCLUDES every key

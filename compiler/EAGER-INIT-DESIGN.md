@@ -328,7 +328,7 @@ under a green gate for months** — **allocation is blind to a pure scan by cons
   `GC_INITIAL_HEAP_SIZE=2147483648` pinned and **min-of-k** (both per `AGENTS.md`'s measurement
   traps). The SCC arm is the one that goes red if someone replaces the Tarjan condensation with a
   visited-list.
-- ✅ **Correctness regression is well-gated already** — `test/diff_compiler_engines.sh` (346
+- ✅ **Correctness regression is well-gated already** — `test/lib_engines_differential.sh` (346
   fixtures × 3 engines) + the self-draining ledger. See §7.
 - ⚠️ **`AGENTS.md`: "If you add a gate, ask where it is skipped."** A new perf assertion must be
   enrolled in `test/gates.toml` (`diff_compiler_ci_shard_coverage.sh` catches non-enrolment) and

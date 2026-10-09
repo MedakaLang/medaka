@@ -2,7 +2,7 @@
 
 **Status:** LIVE. Prose companion to test/engine_divergence.txt, the known-failure ledger diff_compiler_engines.sh reads.
 
-Measured 2026-07-13 by `test/diff_compiler_engines.sh` (TESTING-DESIGN.md §4.4).
+Measured 2026-07-13 by `test/lib_engines_differential.sh` (TESTING-DESIGN.md §4.4).
 The machine-readable form of this document is **`test/engine_divergence.txt`**, the
 gate's known-failure ledger. This file is the prose: what each entry means, which
 engine is wrong, and why.
@@ -61,7 +61,7 @@ this section never even listed) and any replacement number written here rots the
 same way the moment a fixture is added. **Run the command; don't trust a prior run's
 number, including a number that used to be in this doc.**
 
-The gate's corpus is the union of six inputs (`test/diff_compiler_engines.sh`, the
+The gate's corpus is the union of six inputs (`test/lib_engines_differential.sh`, the
 `CORPUS=`/`MODULE_ENTRIES=` assignments, currently around line 505). Per-corpus counts:
 
 ```sh
@@ -83,7 +83,7 @@ The gate itself reports the live total and the three tier tallies — read them 
 run, do not memoize them here:
 
 ```sh
-MEDAKA_REQUIRE_WASM=1 sh test/diff_compiler_engines.sh 2>&1 | grep -E '3-ENGINE DIFFERENTIAL|^ T[123] '
+MEDAKA_REQUIRE_WASM=1 sh test/lib_engines_differential.sh 2>&1 | grep -E '3-ENGINE DIFFERENTIAL|^ T[123] '
 ```
 
 which prints a line shaped like `3-ENGINE DIFFERENTIAL — N fixtures (llvm ∪
@@ -663,7 +663,7 @@ list of excuses into a bug backlog with a countdown. It is rustc's `tests/crashe
 model.
 
 Regenerate the ledger after a deliberate change with `CAPTURE=1 bash
-test/diff_compiler_engines.sh`, **then review the diff**: a brand-new divergence is
+test/lib_engines_differential.sh`, **then review the diff**: a brand-new divergence is
 written out as a literal `TODO`, never inheriting a plausible-looking excuse from its
 neighbours.
 
