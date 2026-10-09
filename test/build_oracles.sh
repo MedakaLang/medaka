@@ -89,6 +89,19 @@ _now_ms() {
 _jstr() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
 if [ "${1:-}" = "--record-sample" ]; then
+  # The ingest refuses a whole report over one malformed row, so a clock step
+  # (negative ms) or an empty field is dropped here, loudly, rather than wedging
+  # the nightly collector. test/wasm/build_wasm_oracle.sh records through this too.
+  case "$3" in
+    ''|*[!0-9]*|0)
+      echo "build_oracles: skipping timing sample for '$2': non-positive or non-numeric ms '$3'" >&2
+      exit 0 ;;
+  esac
+  case "${4:-${JOBS:-1}}" in
+    ''|*[!0-9]*)
+      echo "build_oracles: skipping timing sample for '$2': non-numeric jobs '${4:-${JOBS:-1}}'" >&2
+      exit 0 ;;
+  esac
   if [ -n "${ORACLE_TIMING_LOG:-}" ]; then
     printf '%s\t%s\t%s\n' "$2" "$3" "${4:-${JOBS:-1}}" >>"$ORACLE_TIMING_LOG"
   fi

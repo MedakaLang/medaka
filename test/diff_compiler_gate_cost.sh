@@ -510,6 +510,61 @@ else
   bad "unreadable oracles[] row: wrong refusal"; cat "$TMP/opp.out"
 fi
 
+# A run whose key has left runs[]/oracleRuns (trimmed by --max-runs) still has
+# samples in the per-gate windows; re-ingesting it must change nothing.
+EV="$TMP/evict.json"
+rm -f "$EV"
+for _r in 8001 8002 8003; do
+  _synth "$TMP/ev$_r.json" "$_r" "gate_a:$_r:true"
+  sed -e 's/"runId": "7001"/"runId": "'"$_r"'"/' -e 's/41000/'"$_r"'/' "$OREP" >"$TMP/evo$_r.json"
+  sh "$INGEST" --max-runs 1 --baseline "$EV" "$TMP/ev$_r.json" "$TMP/evo$_r.json" >/dev/null 2>&1 \
+    || bad "eviction setup: ingest of run $_r failed"
+done
+cp "$EV" "$TMP/evict.pre"
+sh "$INGEST" --max-runs 1 --baseline "$EV" "$TMP/ev8001.json" "$TMP/evo8001.json" >/dev/null 2>&1
+if cmp -s "$EV" "$TMP/evict.pre" && grep -q '"samples": 3, "ms": \[8001, 8002, 8003\]' "$EV"; then
+  ok "re-ingesting a run evicted from runs[]/oracleRuns (samples still held) is a byte-identical no-op"
+else
+  bad "re-ingest of an evicted run changed the baseline or duplicated its samples"
+  diff "$TMP/evict.pre" "$EV"
+fi
+
+# The fail-closed accounting covers oracleRuns: a wrapped (still valid JSON) list is refused.
+sed 's/^  "oracleRuns": \[\(.*\)\],$/  "oracleRuns": [\
+    \1\
+  ],/' "$OB" >"$TMP/obase.wrap"
+cp "$TMP/obase.wrap" "$TMP/obase.wrap.orig"
+if sh "$INGEST" --baseline "$TMP/obase.wrap" "$OREP" >"$TMP/owrap.out" 2>&1; then
+  bad "ingest accepted a baseline whose oracleRuns list it cannot read"
+elif cmp -s "$TMP/obase.wrap" "$TMP/obase.wrap.orig" && grep -q 'REFUSED' "$TMP/owrap.out"; then
+  ok "ingest refuses a wrapped oracleRuns list and leaves the baseline byte-identical"
+else
+  bad "wrapped oracleRuns: wrong refusal"; cat "$TMP/owrap.out"
+fi
+
+# The summary counts gates[] rows only; oracles[] rows are reported on their own line.
+rm -f "$TMP/sum.json"
+sh "$INGEST" --baseline "$TMP/sum.json" "$TMP/s1.json" "$OREP" >"$TMP/sum.out" 2>&1
+if grep -q '^  gates: 1$' "$TMP/sum.out" && grep -q '^  oracles: 2$' "$TMP/sum.out"; then
+  ok "ingest summary counts gates and oracles separately"
+else
+  bad "ingest summary miscounts gates/oracles"; cat "$TMP/sum.out"
+fi
+
+# The instrument never emits a row the ingest would refuse whole.
+SL="$TMP/sample-guard.tsv"
+: >"$SL"
+for _v in -5 '' 0 abc; do
+  ORACLE_TIMING_LOG="$SL" sh "$ROOT/test/build_oracles.sh" --record-sample oracle_x "$_v" 2 >/dev/null 2>"$TMP/sg.err"
+  [ "$(wc -l <"$TMP/sg.err" | tr -d ' ')" = "1" ] || bad "bad ms '$_v': expected exactly one stderr line"
+done
+ORACLE_TIMING_LOG="$SL" sh "$ROOT/test/build_oracles.sh" --record-sample oracle_x 1200 2 >/dev/null 2>&1
+if [ "$(wc -l <"$SL" | tr -d ' ')" = "1" ] && grep -q 'oracle_x	1200	2' "$SL"; then
+  ok "--record-sample skips non-positive/empty/non-numeric ms (one stderr line) and records a good one"
+else
+  bad "--record-sample wrote a malformed sample"; cat "$SL"
+fi
+
 # ── 8. the collector: prunes orphans, supersedes only its own stale PRs ───────
 # A scratch copy of the tree with a local bare remote, a stubbed `gh` that logs
 # every mutating call, and a stubbed `medaka`. Nothing real is closed or pushed.
@@ -621,6 +676,30 @@ else
   bad "remote branches after the collector are wrong"
   printf '%s\n' "$_heads"
 fi
+if grep -q 'every sample this branch carried' "$TMP/gh.log"; then
+  bad "the supersede comment claims sample continuity"
+else
+  ok "the supersede comment makes no sample-continuity claim"
+fi
+
+# A failing push must leave the old PR open and its branch alive: the supersede
+# runs only after the replacement is on the remote.
+sleep 1  # a fresh timestamped branch name
+git -C "$CT" checkout -q main
+printf '#!/bin/sh\nwhile read old new ref; do\n  case "$ref" in\n    refs/heads/cost-baseline-autoadvance-*) [ "$old" = 0000000000000000000000000000000000000000 ] && { echo "rejected by fixture"; exit 1; } ;;\n  esac\ndone\nexit 0\n' >"$TMP/remote.git/hooks/pre-receive"
+chmod +x "$TMP/remote.git/hooks/pre-receive"
+printf '%s 43\nother-feature-branch 42\n' "$_new" >"$TMP/prs.txt"
+: >"$TMP/gh.log"
+_collect >"$TMP/col_fail.out" 2>&1
+_frc=$?
+if [ "$_frc" != 0 ] && ! grep -q '^close' "$TMP/gh.log" \
+   && git -C "$CT" ls-remote --heads origin | grep -q "$_new"; then
+  ok "a failing push leaves the superseded PR open and its branch in place"
+else
+  bad "collector superseded the old PR although its replacement push failed (rc=$_frc)"
+  cat "$TMP/col_fail.out" "$TMP/gh.log"
+fi
+rm -f "$TMP/remote.git/hooks/pre-receive"
 
 echo
 if [ "$fail" -eq 0 ]; then

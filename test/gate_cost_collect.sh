@@ -291,9 +291,7 @@ echo "gate_cost_collect: changes to land:"
 git -C "$ROOT" diff --stat -- $to_land
 
 # ── supersede this script's own earlier advance branches ────────────────────
-# Every advance branch is cut fresh from BASE_BRANCH and carries regenerated
-# files only, so the one this run is about to push contains everything an older
-# one did. The rule, and its only licence to close anything:
+# Runs only after the replacement branch is committed and pushed. The rule, and its only licence to close anything:
 #   - a branch qualifies only if its name starts with "${BRANCH_PREFIX}-" (the
 #     ls-remote pattern, re-checked by the `case` below);
 #   - an OPEN PR whose head is such a branch is closed with a comment naming the
@@ -302,39 +300,43 @@ git -C "$ROOT" diff --stat -- $to_land
 #   - a qualifying branch with no open PR is just deleted.
 # Under --dry-run it prints what it would do and does nothing.
 BRANCH="${BRANCH_PREFIX}-$(date -u +%Y%m%d%H%M%S)"
-prior_branches="$(git -C "$ROOT" ls-remote --heads "$REMOTE" "${BRANCH_PREFIX}-*" 2>/dev/null \
-  | awk '{print $2}' | sed 's#^refs/heads/##' | sort)"
-for pb in $prior_branches; do
-  case "$pb" in
-    "${BRANCH_PREFIX}-"*) ;;
-    *) continue ;;
-  esac
-  [ "$pb" = "$BRANCH" ] && continue
-  pb_prs="$(gh pr list --head "$pb" --state open --json number --jq '.[].number' 2>/dev/null)"
-  for n in $pb_prs; do
+supersede_prior() {
+  prior_branches="$(git -C "$ROOT" ls-remote --heads "$REMOTE" "${BRANCH_PREFIX}-*" 2>/dev/null \
+    | awk '{print $2}' | sed 's#^refs/heads/##' | sort)"
+  for pb in $prior_branches; do
+    case "$pb" in
+      "${BRANCH_PREFIX}-"*) ;;
+      *) continue ;;
+    esac
+    [ "$pb" = "$BRANCH" ] && continue
+    pb_prs="$(gh pr list --head "$pb" --state open --json number --jq '.[].number' 2>/dev/null)"
+    for n in $pb_prs; do
+      if [ "$DRY" = "1" ]; then
+        echo "gate_cost_collect: --dry-run — would close superseded PR #$n (head '$pb') in favour of '$BRANCH'."
+      else
+        echo "gate_cost_collect: closing superseded PR #$n (head '$pb') in favour of '$BRANCH'."
+        gh pr close "$n" --comment "Superseded by the next auto-advance, branch '$BRANCH' (cut fresh from '$BASE_BRANCH' and re-derived from the CI artifacts still inside the collector's lookback; samples this branch took from runs outside that window are not carried). Closed by test/gate_cost_collect.sh." >/dev/null 2>&1 \
+          || echo "gate_cost_collect: could not close PR #$n (continuing)."
+      fi
+    done
     if [ "$DRY" = "1" ]; then
-      echo "gate_cost_collect: --dry-run — would close superseded PR #$n (head '$pb') in favour of '$BRANCH'."
+      echo "gate_cost_collect: --dry-run — would delete superseded branch '$pb'."
     else
-      echo "gate_cost_collect: closing superseded PR #$n (head '$pb') in favour of '$BRANCH'."
-      gh pr close "$n" --comment "Superseded by the next auto-advance, branch '$BRANCH' (cut fresh from '$BASE_BRANCH' with every sample this branch carried). Closed by test/gate_cost_collect.sh." >/dev/null 2>&1 \
-        || echo "gate_cost_collect: could not close PR #$n (continuing)."
+      echo "gate_cost_collect: deleting superseded branch '$pb'."
+      git -C "$ROOT" push "$REMOTE" --delete "$pb" >/dev/null 2>&1 \
+        || echo "gate_cost_collect: could not delete '$pb' (continuing; it will be re-judged next run)."
     fi
   done
-  if [ "$DRY" = "1" ]; then
-    echo "gate_cost_collect: --dry-run — would delete superseded branch '$pb'."
-  else
-    echo "gate_cost_collect: deleting superseded branch '$pb'."
-    git -C "$ROOT" push "$REMOTE" --delete "$pb" >/dev/null 2>&1 \
-      || echo "gate_cost_collect: could not delete '$pb' (continuing; it will be re-judged next run)."
-  fi
-done
+
+}
 
 if [ "$DRY" = "1" ]; then
+  supersede_prior
   echo "gate_cost_collect: --dry-run — not committing or pushing."
   exit 0
 fi
 
-git -C "$ROOT" checkout -b "$BRANCH"
+git -C "$ROOT" checkout -b "$BRANCH" || { echo "gate_cost_collect: could not create branch $BRANCH; superseding nothing."; exit 1; }
 # shellcheck disable=SC2086
 git -C "$ROOT" add $to_land
 git -C "$ROOT" commit -m "gate cost: auto-advance baseline from CI artifacts ($(date -u +%Y-%m-%d))
@@ -351,7 +353,7 @@ this branch can go green:
     make gen-ci && git commit -a --amend --no-edit
 
 Until that runs, the required 'ci-gen-drift' check reds by construction and
-its own error message names this exact fix."
+its own error message names this exact fix." || { echo "gate_cost_collect: commit failed; superseding nothing."; exit 1; }
 
 git -C "$ROOT" push "$REMOTE" "$BRANCH"
 push_rc=$?
@@ -359,6 +361,10 @@ if [ "$push_rc" != 0 ]; then
   echo "gate_cost_collect: push failed (rc=$push_rc)."
   exit "$push_rc"
 fi
+
+# Only now does the replacement exist on the remote; closing earlier would
+# strand the old PR's samples if the commit or push failed.
+supersede_prior
 
 echo ""
 echo "gate_cost_collect: pushed $BRANCH. Actions cannot open the PR itself"
