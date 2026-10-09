@@ -5,8 +5,9 @@
 # here for the Bytes epic, #3134). The DEFAULT (no-flag) mode is a reporting
 # tool, run via `make bytes-census`: it asserts nothing and exits 0 on a
 # healthy run, refusing (exit 1) only if the file corpus comes back empty.
-# The `--write`/`--check` modes are the GATED path, consumed by
-# test/diff_compiler_bytes_census_test.mdk, a merge-tier gate.
+# The gated ratchet is test/diff_compiler_bytes_census_test.mdk (merge tier),
+# which reimplements the `--check` logic natively; `--write` regenerates the
+# baseline it reads, and `--check` is a manual mirror of the gate.
 #
 # The scanner matches the literal two-word text "Array Int" on a single line
 # (see count_positions below), so a type split across a line wrap, or with
