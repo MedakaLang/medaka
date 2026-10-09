@@ -2593,7 +2593,8 @@ long long mdk_fsync(long long path, long long grant) {
 
 /* runCommand : String -> List String -> Result (Int, String, String) String.
  * Spawns prog with args, captures stdout+stderr via temp files.
- * Ok (exitCode, stdout, stderr) on spawn success; Err osError on fork/exec fail.
+ * Ok (exitCode, stdout, stderr) once the child ran; Err osError when mkstemp or
+ * fork fails.  A program that cannot be executed is Ok (127, "", strerror).
  * Tuple cell layout: [header=TUPLE_TAG, tagged_exitcode, stdout_str, stderr_str].
  * TUPLE_TAG = hashName("$tuple") = djb2 of "$tuple" = 6950939912435. */
 #define MDK_TUPLE_TAG 6950939912435LL
@@ -2631,63 +2632,211 @@ static char **mdk_list_to_argv(long long list, int *argc_out) {
   return argv;
 }
 
-long long mdk_run_command(long long prog_w, long long args_w) {
-  const char *prog = (const char *)prog_w + 24;
-  /* Build argv: prog followed by the Medaka List String args. */
+/* One spawned child of runCommand or runCommandBatch: its pid and the temp
+ * files its stdout and stderr are captured to.  Capturing to files rather than
+ * pipes means a child that writes a lot never blocks on a reader, so any
+ * number of them can run at once without draining. */
+typedef struct {
+  pid_t pid;
+  char out_path[sizeof "/tmp/mdk_cmd_out_XXXXXX"];
+  char err_path[sizeof "/tmp/mdk_cmd_err_XXXXXX"];
+} mdk_cmd_child;
+
+/* Sets SIGCHLD to SIG_DFL, saving the previous disposition in *old.  Under an
+ * inherited SIG_IGN (or SA_NOCLDWAIT) the kernel reaps children itself and
+ * waitpid fails with ECHILD, so no exit status could be read back. */
+static void mdk_cmd_sigchld_default(struct sigaction *old) {
+  struct sigaction dfl;
+  memset(&dfl, 0, sizeof dfl);
+  dfl.sa_handler = SIG_DFL;
+  sigemptyset(&dfl.sa_mask);
+  sigaction(SIGCHLD, &dfl, old);
+}
+
+static void mdk_cmd_sigchld_restore(const struct sigaction *old) {
+  sigaction(SIGCHLD, old, NULL);
+}
+
+/* Starts prog with the Medaka List String args, its stdout and stderr
+ * redirected to fresh temp files.  Returns 0 once the child is running.
+ * Otherwise stores in *err the Err value runCommand reports and returns
+ * fork's errno, or -1 when mkstemp failed.  An exec failure is not reported
+ * here: the child writes strerror to its captured stderr and exits 127, so it
+ * reads back as an ordinary exit. */
+static int mdk_cmd_start(const char *prog, long long args_w, mdk_cmd_child *c,
+                         long long *err) {
   int argc = 0;
   char **argv = mdk_list_to_argv(args_w, &argc);
   argv[0] = (char *)prog;
 
-  /* Temp files for captured stdout/stderr. */
-  char out_path[] = "/tmp/mdk_cmd_out_XXXXXX";
-  char err_path[] = "/tmp/mdk_cmd_err_XXXXXX";
-  int out_fd = mkstemp(out_path);
-  int err_fd = mkstemp(err_path);
+  strcpy(c->out_path, "/tmp/mdk_cmd_out_XXXXXX");
+  strcpy(c->err_path, "/tmp/mdk_cmd_err_XXXXXX");
+  int out_fd = mkstemp(c->out_path);
+  int err_fd = mkstemp(c->err_path);
   if (out_fd < 0 || err_fd < 0) {
     free(argv);
-    if (out_fd >= 0) { close(out_fd); unlink(out_path); }
-    if (err_fd >= 0) { close(err_fd); unlink(err_path); }
-    return mdk_err(mdk_str_cstr("mkstemp failed"));
+    if (out_fd >= 0) { close(out_fd); unlink(c->out_path); }
+    if (err_fd >= 0) { close(err_fd); unlink(c->err_path); }
+    *err = mdk_err(mdk_str_cstr("mkstemp failed"));
+    return -1;
   }
 
   pid_t pid = fork();
   if (pid < 0) {
-    /* fork failed */
+    int saved_errno = errno;
     close(out_fd); close(err_fd);
-    unlink(out_path); unlink(err_path);
+    unlink(c->out_path); unlink(c->err_path);
     free(argv);
-    return mdk_err(mdk_str_cstr(strerror(errno)));
+    *err = mdk_err(mdk_str_cstr(strerror(saved_errno)));
+    return saved_errno ? saved_errno : -1;
   }
   if (pid == 0) {
-    /* child: redirect stdout/stderr then exec */
     dup2(out_fd, STDOUT_FILENO);
     dup2(err_fd, STDERR_FILENO);
     close(out_fd); close(err_fd);
     execvp(prog, argv);
-    /* exec failed — write errno message to stderr (already dup'd) and exit */
     const char *msg = strerror(errno);
     write(STDERR_FILENO, msg, strlen(msg));
     _exit(127);
   }
-  /* parent: wait for child */
   close(out_fd); close(err_fd);
   free(argv);
-  int wstatus = 0;
-  waitpid(pid, &wstatus, 0);
+  c->pid = pid;
+  return 0;
+}
+
+/* Reads back a reaped child's captured output, removes its temp files, and
+ * boxes Ok (exitCode, stdout, stderr).  A child killed by a signal reports
+ * 128 + the signal number, as a shell does. */
+static long long mdk_cmd_finish(mdk_cmd_child *c, int wstatus) {
   int code = WIFEXITED(wstatus)   ? WEXITSTATUS(wstatus)
            : WIFSIGNALED(wstatus) ? 128 + WTERMSIG(wstatus) : 1;
 
-  long long stdout_s = mdk_read_temp(out_path);
-  long long stderr_s = mdk_read_temp(err_path);
-  unlink(out_path); unlink(err_path);
+  long long stdout_s = mdk_read_temp(c->out_path);
+  long long stderr_s = mdk_read_temp(c->err_path);
+  unlink(c->out_path); unlink(c->err_path);
 
-  /* Box the 3-tuple (exitCode, stdout, stderr). */
   long long *tup = (long long *)mdk_alloc(4 * 8);
   tup[0] = MDK_TUPLE_TAG;
   tup[1] = ((long long)code << 1) | 1;  /* tagged int */
   tup[2] = stdout_s;
   tup[3] = stderr_s;
   return mdk_ok((long long)tup);
+}
+
+/* The Err for a started child whose status waitpid could not deliver, failing
+ * with saved_errno; its temp files are removed. */
+static long long mdk_cmd_wait_failed(mdk_cmd_child *c, int saved_errno) {
+  unlink(c->out_path); unlink(c->err_path);
+  char msg[160];
+  snprintf(msg, sizeof msg, "waitpid failed: %s", strerror(saved_errno));
+  return mdk_err(mdk_str_cstr(msg));
+}
+
+/* waitpid on one pid, retried on EINTR. */
+static pid_t mdk_cmd_waitpid(pid_t pid, int *wstatus, int flags) {
+  pid_t r;
+  do { r = waitpid(pid, wstatus, flags); } while (r < 0 && errno == EINTR);
+  return r;
+}
+
+long long mdk_run_command(long long prog_w, long long args_w) {
+  struct sigaction old;
+  mdk_cmd_sigchld_default(&old);
+  mdk_cmd_child c;
+  long long err = 0;
+  if (mdk_cmd_start((const char *)prog_w + 24, args_w, &c, &err)) {
+    mdk_cmd_sigchld_restore(&old);
+    return err;
+  }
+  int wstatus = 0;
+  pid_t r = mdk_cmd_waitpid(c.pid, &wstatus, 0);
+  int saved_errno = errno;
+  mdk_cmd_sigchld_restore(&old);
+  if (r < 0) return mdk_cmd_wait_failed(&c, saved_errno);
+  return mdk_cmd_finish(&c, wstatus);
+}
+
+/* runCommandBatch : String -> Int -> List (List String)
+ *                     -> List (Result String (Int, String, String)).
+ * Runs prog once per argv list, at most jobs children at a time (fewer than 1
+ * runs them one at a time), and returns each row's runCommand result in input
+ * order.  A row that cannot be started is that row's Err and the rest still
+ * run; a fork that fails with EAGAIN while children of this batch are running
+ * is retried once one of them finishes.  This returns only after every child
+ * it started has been reaped.
+ *
+ * Children are reaped by pid with WNOHANG, never with waitpid(-1), so a child
+ * this call did not start keeps its exit status for whoever waits on it. */
+long long mdk_run_command_batch(long long prog_w, long long jobs_w,
+                                long long argvs_w) {
+  const char *prog = (const char *)prog_w + 24;
+  long long jobs = jobs_w >> 1;  /* tagged int */
+  if (jobs < 1) jobs = 1;
+
+  long long n = 0;
+  for (long long cur = argvs_w; cur != mdk_nil(); cur = ((long long *)cur)[2])
+    n++;
+  if (n == 0) return mdk_nil();
+
+  /* Rows and results hold heap values, so they live in memory the collector
+   * scans; the child table holds none.  kids[k].pid is nonzero exactly while
+   * row k's child is running and unreaped. */
+  long long *rows = (long long *)mdk_alloc(n * 8);
+  long long *res = (long long *)mdk_alloc(n * 8);
+  mdk_cmd_child *kids = (mdk_cmd_child *)malloc((size_t)n * sizeof *kids);
+  long long i = 0;
+  for (long long cur = argvs_w; cur != mdk_nil(); cur = ((long long *)cur)[2])
+    rows[i++] = ((long long *)cur)[1];
+
+  struct sigaction old;
+  mdk_cmd_sigchld_default(&old);
+
+  long long next = 0, running = 0;
+  while (next < n || running > 0) {
+    while (running < jobs && next < n) {
+      long long err = 0;
+      int failed = mdk_cmd_start(prog, rows[next], &kids[next], &err);
+      if (failed == EAGAIN && running > 0) break;
+      if (failed) {
+        kids[next].pid = 0;
+        res[next] = err;
+      } else {
+        running++;
+      }
+      next++;
+    }
+    if (running == 0) continue;
+
+    /* Sweep the running children until at least one has finished, backing
+     * off from 0.1 ms to about 10 ms between sweeps. */
+    long sleep_ns = 100000;
+    for (;;) {
+      long long settled = 0;
+      for (long long k = 0; k < next; k++) {
+        if (kids[k].pid == 0) continue;
+        int wstatus = 0;
+        pid_t r = mdk_cmd_waitpid(kids[k].pid, &wstatus, WNOHANG);
+        if (r == 0) continue;
+        res[k] = r < 0 ? mdk_cmd_wait_failed(&kids[k], errno)
+                       : mdk_cmd_finish(&kids[k], wstatus);
+        kids[k].pid = 0;
+        running--;
+        settled++;
+      }
+      if (settled > 0) break;
+      struct timespec ts = { 0, sleep_ns };
+      nanosleep(&ts, NULL);
+      if (sleep_ns < 10000000) sleep_ns *= 2;
+    }
+  }
+
+  mdk_cmd_sigchld_restore(&old);
+  free(kids);
+
+  long long acc = mdk_nil();
+  for (long long k = n - 1; k >= 0; k--) acc = mdk_cons(res[k], acc);
+  return acc;
 }
 
 /* executablePath : Unit -> String — absolute path of the running executable,

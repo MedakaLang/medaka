@@ -572,6 +572,7 @@ stubSource = stringConcat
     "removeDir p g = Err \"\"\n",
     -- exec
     "runCommand cmd a = Err \"\"\n",
+    "runCommandBatch cmd j a = []\n",
     -- net
     "netResolve h = Err \"\"\n",
     "netTcpConnect h p = Err \"\"\n",

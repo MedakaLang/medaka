@@ -1,11 +1,11 @@
 # CAPABILITY-MATRIX.md — which engine implements which extern
 
-**Status:** LIVE. Prose explanation of what test/diff_compiler_capability_matrix.sh proves; its machine-readable ledger is test/CAPABILITY-EXCEPTIONS.txt. Last hand-revised 2026-07-13.
+**Status:** LIVE. Prose explanation of what `compiler/backend/extern_catalog_gate_test.mdk` proves. The data is the extern catalog, `compiler/backend/extern_catalog.mdk`.
 
 ## The bug this exists to catch
 
 Medaka has three execution engines that each must independently implement
-every `extern` primitive declared in `stdlib/runtime.mdk` (~132 of them):
+every `extern` primitive declared in `stdlib/runtime.mdk`:
 
 - the tree-walking **interpreter** (`compiler/eval/eval.mdk`) — runs
   `medaka run` / `medaka test`
@@ -19,115 +19,79 @@ testing against the (now-deleted, 2026-06-26) OCaml reference compiler — it
 only ever needed to compute `main`'s value, so effectful/IO externs
 (`readFile`, `exit`, …) were legitimately out of scope. When OCaml was
 removed, `eval.mdk` was silently promoted to be the production `medaka run`
-engine and its contract was never re-litigated. The result: **37 externs
-type-check GREEN and then panic at runtime** with `unbound identifier: X`
-under `medaka run` — including a *pure* extern with no effect row at all
+engine and its contract was never re-litigated. The result: **a block of
+externs type-checked GREEN and then panicked at runtime** with `unbound
+identifier: X` under `medaka run` — including a *pure* extern with no effect row at all
 (`arraySortBy`). Nothing in `test/` or `scripts/` ever compared the three
 engines' extern coverage against each other, so this drifted silently for
 weeks.
 
-`test/diff_compiler_capability_matrix.sh` + `test/CAPABILITY-EXCEPTIONS.txt`
-are the fix: a gate that fails the moment an extern is unsupported by an
-engine with no documented reason, *and* fails the moment a documented gap
-gets silently fixed without updating the record (so the exceptions file
-can't rot the other direction either).
+The catalog and its gate are the fix. Every extern has one row naming how each
+engine handles it, and a gap is a `NotProvided` row that must carry a kind and
+a reason, so an extern an engine does not lower can no longer be absent
+without a stated cause.
 
 ## How to read it
 
-Run `sh test/diff_compiler_capability_matrix.sh -v` for the full per-extern
-table (`Y`/`N` per engine); plain (no `-v`) prints just the summary counts
-and any failures.
-
-Every `N` cell must be explained by a row in `test/CAPABILITY-EXCEPTIONS.txt`
-(format documented in that file's header). Categories, briefly:
+`compiler/backend/extern_catalog.mdk` holds one `ExternRow` per extern, with
+the llvm, wasm and eval dispositions. A `NotProvided` disposition carries one
+of these kinds:
 
 | Category | Meaning |
 |---|---|
 | `BUG` | Works in ≥1 other engine; this engine's gap is a real regression to fix. |
 | `DEAD` | Declared but not called by current stdlib code (superseded by a rewrite); still directly reachable by a user program. |
 | `TODO` | Unimplemented everywhere — a forward-declared primitive with no caller yet, not an asymmetric gap. |
-| `PERMANENT` | Will never close for a documented structural reason (e.g. WasmGC has no raw-socket equivalent). |
-| `TRAP-STUB` | Bound in source, but to an `unreachable`/abort — better than a silent wrong value, still not real. |
-| `WASM-GAP` | Unported to WasmGC; no structural blocker, just not done. |
-| `FROZEN-CONSTANT` | Bound to a **fabricated/no-op value** — worse than missing, because it's silent instead of a loud panic. Tracked even though it counts as "implemented" for pass/fail purposes. |
+| `PERMANENT` | Structurally unavailable on this engine (e.g. WasmGC has no raw-socket equivalent, and no wasm profile grants `Exec`). |
+| `WASM-GAP` | Unported to WasmGC; a lowering is possible, just not written. |
 
-## How the gate decides "implemented" (and its limits)
+Two other dispositions are bound but are not the extern's meaning: `TrapStub`
+lowers to an abort (better than a silent wrong value, still not real), and
+`FrozenConstant` is bound to a fabricated value (worse than missing, because
+it is silent instead of a loud panic).
 
-This is **pure text analysis over checked-in `.mdk` source — no compiler
-build, no `./medaka` invocation**. It parses:
+## What is checked, and where
 
-- **Interpreter**: every literal `("name", ...)` key inside the
-  `externBindings = [ ... ]` list in `eval.mdk`, plus the one variable-keyed
-  entry (`fallthroughName` → `"__fallthrough__"`) added by hand.
-- **LLVM**: the ~20 `is*Extern`/`isMathUnary`/`isMathBinary` family
-  predicates that `isAnyExtern` ORs together (each is a `contains name [
-  "a", "b", ... ]` literal list, extracted mechanically), plus a handful of
-  names that bypass that ladder entirely — `pi`/`e`/`intMinBound`/
-  `intMaxBound`/`charMinBound`/`charMaxBound` (constant-inlined in
-  `emitVar`), `Ref`/`setRef` (dispatched by exact name ahead of the ladder),
-  `arrayMakeWith` (dispatched by exact name inside the ladder),
-  `__fallthrough__` (a desugar-generated sentinel, its own code path).
-- **Wasm**: `isStrExternW`/`isLeafExternW`/`isArrayExternW` (real
-  implementations), `isNetExternW` (an *explicit rejection* — tracked as
-  `PERMANENT`, not "implemented"), the same constant-inline/`Ref`/`setRef`/
-  `__fallthrough__` bypass list as LLVM, and `intMinBound`/`intMaxBound`
-  which the parser deliberately does NOT count as implemented even though
-  the name appears in source — they lower to `unreachable` (see
-  `TRAP-STUB`).
-
-**This is a heuristic**, documented in detail in the gate script's own
-header comment (`test/diff_compiler_capability_matrix.sh`). It will drift if
-an engine's dispatch structure is refactored (e.g. a new extern family added
-under a differently-named predicate, or a name moved from a predicate list
-into a hand-dispatched special case). When that happens the gate does the
-*safe* thing: it fails loudly (either "silent omission" if the new form
-isn't recognized, or a hygiene error) rather than silently reporting stale
-numbers — update the gate's family list or the exceptions file, don't just
-turn it off.
+- `compiler/backend/extern_catalog_gate_test.mdk` (registry gate
+  `diff_compiler_capability_matrix`): every `stdlib/runtime.mdk` extern has
+  exactly one row and no row names an undeclared extern; each `NotProvided`
+  row has a reason; and every pure extern (no capability in its signature) has
+  one verdict in `test/EXTERN-DOMAIN-LEDGER.txt`. Each check names the extern
+  it fails on.
+- `compiler/backend/extern_catalog_test.mdk`: the catalog has exactly the
+  externs `stdlib/runtime.mdk` declares; every wasm family an application
+  dispatches through has members; a wasm runtime demand (`wasmUses`) is listed
+  only for a wasm-bound extern; each demand has exactly its producers; its eval
+  column equals the interpreter's binding tables; and the WAT `wasm_emit.mdk`
+  emits for a program reaching an extern contains each runtime group the row
+  demands.
+- `compiler/backend/core_validate.mdk`: a `NotProvided` llvm or wasm column is
+  refused before emission, at every reference to that extern, with the row's
+  kind and reason. Tests: `compiler/backend/core_validate_test.mdk`,
+  `test/wasm/diff_wasm_ffi_wall.sh`.
 
 ## How to add a new primitive without breaking an engine
 
-This is the missing doc the codebase didn't have. Follow
-`.claude/skills/add-primitive` (or the manual version below) and this gate
-will tell you exactly what's left:
+Follow `.claude/skills/add-primitive` (or the manual version below).
 
 1. **Declare it** in `stdlib/runtime.mdk`: `extern myThing : T1 -> <Effect> T2`.
-   Run the gate now — it should FAIL with "SILENT OMISSION" for all three
-   engines (this is expected: you haven't implemented it anywhere yet).
-   Either implement it immediately (steps 2-4) or add three
-   `CAPABILITY-EXCEPTIONS.txt` rows with category `TODO` (unimplemented
-   everywhere is fine as a checked-in state; unimplemented in *one* engine
-   while it works in another is not).
-2. **Interpreter**: implement it in `compiler/eval/eval.mdk` — add a `pMyThing`
-   helper function and a `("myThing", prim1 pMyThing)`-shaped entry to the
-   `externBindings` list.
-3. **LLVM**: implement it in `compiler/backend/llvm_emit.mdk` — add it to the
-   most fitting existing `is*Extern` family's literal list (or start a new
-   family + fold it into `isAnyExtern`'s OR-chain and `emitExternApplied`'s
-   dispatch ladder) and write the `emit*Extern` arm that lowers it to LLVM IR
-   / a runtime call into `runtime/medaka_rt.c`.
-4. **WasmGC**: implement it in `compiler/backend/wasm_emit.mdk` similarly —
-   fold it into `isStrExternW`/`isLeafExternW`/`isArrayExternW` (or a new
-   family wired into `emitAppRef`'s dispatch ladder) and write the emitter
-   arm, plus any host-import seam it needs.
-5. **Re-run the gate.** Once all three engines implement it, remove the
-   `TODO` exceptions rows you added in step 1 — the gate will FAIL with
-   "ACCIDENTAL FIX" (this arc's term for "you fixed it, the paperwork didn't
-   catch up") until you do. Green means the catalog, the three engines' own
-   dispatch source, and the checked-in exceptions file all agree.
+   The gate fails and names `myThing` until it has a row.
+2. **Add its row** to `compiler/backend/extern_catalog.mdk`, in declaration
+   order. An engine that does not lower it gets `NotProvided <kind> "<reason>"`
+   — nothing else needs editing for that to be green.
+3. **Interpreter**: implement it in `compiler/eval/eval.mdk` and add the
+   `("myThing", ...)` entry to the binding table. The row's eval column is
+   `Interpreted`.
+4. **LLVM** and **WasmGC**: the row's llvm / wasm family selects the emitter
+   arm, so give the row an `LlvmFamily` / `WasmFamily`, write the arm in
+   `llvm_emit.mdk` / `wasm_emit.mdk`, and list the runtime groups the wasm
+   lowering needs in `wasmUseRows`. `extern_catalog_test.mdk` reds if a listed
+   demand is not emitted in the WAT.
+5. If the extern is pure, give it a verdict in `test/EXTERN-DOMAIN-LEDGER.txt`.
 
-If you deliberately DON'T want to support a primitive on one engine (e.g. it
-has no meaning there, like `net*` on wasm), add a `CAPABILITY-EXCEPTIONS.txt`
-row with category `PERMANENT` and a real reason instead of skipping this
-gate — see that file's header for the exact format, and
-`compiler/backend/wasm_emit.mdk`'s `isNetExternW` rejection message for the
-model of what a good reason looks like.
-
-## Wired into the gate suite
-
-`test/diff_compiler_capability_matrix.sh` is named to match `run_gates.sh`'s
-default `diff_compiler_*` glob, so it runs automatically as part of `sh
-test/run_gates.sh` / `make test` — no separate wiring needed. It needs no
-toolchain (no `./medaka`, no C compiler, no oracle), so it should never
-legitimately SKIP; treat any exit code other than 0/1 from it as a bug in the
-gate itself.
+If you deliberately do not support a primitive on one engine (e.g. it has no
+meaning there, like `net*` on wasm), file it `PERMANENT` with a real reason
+instead of skipping the gate. The reason is printed verbatim in the refusal
+`compiler/backend/core_validate.mdk` raises, so write it for the user who
+reads it; the `net*` rows' reason (`wasmNoSockets` in
+`compiler/backend/extern_catalog.mdk`) is the model.

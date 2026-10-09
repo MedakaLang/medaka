@@ -8,7 +8,7 @@ is tracked and still genuinely open in `compiler/RUNTIME-TRAP-UNIFY-DESIGN.md` (
 `stdlib/array.mdk:268` still has a bare uncoded `panic "Array.set: index out of bounds"`,
 exactly the under-coded state that doc's repro matrix describes).
 
-How Medaka's 71 `extern` primitives (declared in [`../stdlib/runtime.mdk`](../stdlib/runtime.mdk),
+How Medaka's `extern` primitives (declared in [`../stdlib/runtime.mdk`](../stdlib/runtime.mdk),
 were originally implemented natively in a now-removed OCaml `lib/eval.ml`'s `primitives`
 table, the historical starting point for this design — that table is now
 `runtime/medaka_rt.c` + `compiler/eval/eval.mdk`) get realized once the tree-walking
@@ -43,7 +43,7 @@ See [`STAGE2-DESIGN.md`](./STAGE2-DESIGN.md) for the backend-architecture decisi
 
 The natural first question is "C or Rust for the runtime helpers?" — but that
 choice is downstream of, and largely reversible relative to, three things that
-actually constrain the design. The 71 externs are not one kind of thing; sorting
+actually constrain the design. The externs are not one kind of thing; sorting
 them by *coupling to the runtime* (not by implementation convenience) collapses
 most of the apparent difficulty:
 
@@ -185,7 +185,7 @@ instruction emitted). Native-extern-catalog slice 1 has proven the
 literal/print/`intToString` path on this layout (`runtime/medaka_rt.c`,
 `llvm_emit.mdk`); slice 8 proves the Char path.
 
-## 5. Per-extern disposition (all 71)
+## 5. Per-extern disposition (the original design set; the live table is `compiler/backend/extern_catalog.mdk`)
 
 ### Constants & scalar conversions — `INTRINSIC`
 | Extern | Signature | Disposition | Note |

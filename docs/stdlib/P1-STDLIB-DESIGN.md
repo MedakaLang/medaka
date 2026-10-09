@@ -200,7 +200,7 @@ extern** touches exactly these five places:
    A startup completeness assertion enforces runtime↔eval parity.
 3. `runtime/medaka_rt.c` — the C function (e.g. `mdk_float_rem` → `fmod`). For
    libm this is a one-liner over `<math.h>`.
-4. `compiler/backend/llvm_emit.mdk` — add the name to `isNumExtern`'s list and an
+4. `compiler/backend/llvm_emit.mdk` — give the extern's catalog row `LlvmNum` and add an
    `emitNumExtern` arm (the float externs share a single boxed-Float ABI, so new
    ones are near-copy-paste).
 5. `compiler/backend/wasm_emit.mdk` — register in the float-extern / host-import

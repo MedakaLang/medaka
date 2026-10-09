@@ -18,7 +18,7 @@
    check; see the roster test below). -}
 
 import io.{readLines}
-import list.{lookup}
+import list.{lookup, zipWith}
 import test.{Expectation(..)}
 import test_process.{
   disagreeingFloorBlocks,
@@ -26,7 +26,7 @@ import test_process.{
   mdkModuleStem,
   missingTestFiles,
   missingUnits,
-  testAssertionCount,
+  testAssertionCounts,
   underRoot,
   ungradedRosterRows,
   unrosteredTestFiles,
@@ -136,19 +136,14 @@ libExempt = [
 libExemptNames : List String
 libExemptNames = map fst libExempt
 
--- Runs one `sqlite/lib/` module under the eval engine and returns its
--- executed-assertion count, or an error naming the file and what went wrong.
-runLibSuite : String -> <Exec, IO> Result String Int
-runLibSuite name =
-  let path = "sqlite/lib/\{name}.mdk"
-  match testAssertionCount (underRoot path) ["--engines", "eval"]
-    Err e => Err "\{path}: \{e}"
-    Ok n => Ok n
+-- The `sqlite/lib/` module `name`, relative to the tree root.
+libPath : String -> String
+libPath name = "sqlite/lib/\{name}.mdk"
 
 -- Every `sqlite/lib/` module run exactly once, shared by every assertion
 -- below — memoized the same way `results` is.
 libResults : <Exec, IO> List (String, (Int, Result String Int))
-libResults = map ((name, floor) => (name, (floor, runLibSuite name))) libSuites
+libResults = resultsOfKind LibRow
 
 -- Grades one `sqlite/lib/` module's floor, same shape as `floorExpectation`.
 libFloorExpectation : String -> <Exec, IO> Expectation
@@ -232,21 +227,46 @@ test "every `libExempt` row names a module that exists" =
         "no phantom exemptions"
         "\{debug extras}"
 
--- Runs one suite under the eval engine and returns its
--- executed-assertion count, or an error naming the file and what went wrong.
-runSuite : String -> <Exec, IO> Result String Int
-runSuite name =
-  let path = "sqlite/test/\{name}.mdk"
-  match testAssertionCount (underRoot path) ["--engines", "eval"]
-    Err e => Err "\{path}: \{e}"
-    Ok n => Ok n
+-- The `sqlite/test/` suite `name`, relative to the tree root.
+suitePath : String -> String
+suitePath name = "sqlite/test/\{name}.mdk"
 
--- Every suite run exactly once, shared by every assertion below —
--- top-level nullary bindings are memoized (a spawn placed in a shared
--- top-level binding and read from two `test` decls was confirmed, by
--- probe, to execute once, not twice).
+-- Which roster a row came from, so its result is regrouped by that tag
+-- rather than by its position in the batch.
+data RowKind = SuiteRow | LibRow deriving (Eq)
+
+-- Every suite row then every `sqlite/lib/` row, each as its roster, its
+-- name, its floor and its path relative to the tree root.
+allRows : List (RowKind, String, Int, String)
+allRows =
+  map ((name, floor) => (SuiteRow, name, floor, suitePath name)) suites
+    ++ map ((name, floor) => (LibRow, name, floor, libPath name)) libSuites
+
+{- | Every suite and `sqlite/lib/` module run exactly once under the eval
+   engine, all in one batch of spawns, each with its executed-assertion
+   count or an error naming the file and what went wrong.
+
+   Shared by every assertion below: top-level nullary bindings are memoized
+   (a spawn placed in a shared top-level binding and read from two `test`
+   decls was confirmed, by probe, to execute once, not twice). -}
+allResults : <Exec, IO> List (RowKind, (String, (Int, Result String Int)))
+allResults =
+  zipWith
+    ((kind, name, floor, path) counted =>
+      (kind, (name, (floor, mapErr (e => "\{path}: \{e}") counted))))
+    allRows
+    (testAssertionCounts
+      (map
+        ((_, _, _, path) => (underRoot path, ["--engines", "eval"]))
+        allRows))
+
+-- The `allResults` rows of one roster, in roster order.
+resultsOfKind : RowKind -> <Exec, IO> List (String, (Int, Result String Int))
+resultsOfKind kind = map snd (filter ((k, _) => k == kind) allResults)
+
+-- Every suite's floor and count.
 results : <Exec, IO> List (String, (Int, Result String Int))
-results = map ((name, floor) => (name, (floor, runSuite name))) suites
+results = resultsOfKind SuiteRow
 
 -- Grades one suite's floor: the message names both the file and both
 -- numbers on a miss, per the migration's own acceptance check.

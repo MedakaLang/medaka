@@ -1,0 +1,206 @@
+-- Self tail calls must not grow the native stack.  The LLVM emitter returns a
+-- saturated call of the enclosing define as `musttail call` + `ret` from its own
+-- leaf, so the recursion is a jump at every clang optimization level, not only
+-- where clang's own tail-call pass happens to run.  The tail position reaches
+-- through `if`, `match` arms, clause bodies, `let`, `where` groups and blocks,
+-- in top-level functions and in impl and default interface methods.  Each case
+-- recurses deep enough that a call which is not a jump exhausts the stack.
+--
+-- Run it under both probe profiles (-O0 without LTO is the default):
+--   medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
+--   MEDAKA_TEST_CLANG_OPT=-O2 medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
+
+import test.{expectEqual}
+
+depth : Int
+depth = 100000000
+
+triangle : Int
+triangle = depth * (depth + 1) / 2
+
+-- Clause spelling: the self call is the second clause's whole body.
+sumClauses : Int -> Int -> Int
+sumClauses acc 0 = acc
+sumClauses acc n = sumClauses (acc + n) (n - 1)
+
+-- Clause spelling with guards.
+sumGuards : Int -> Int -> Int
+sumGuards acc n
+  | n == 0 = acc
+  | otherwise = sumGuards (acc + n) (n - 1)
+
+-- A body-level match in function tail position.
+sumMatch : Int -> Int -> Int
+-- lint-disable-next-line rule-match-on-param
+sumMatch acc n = match n
+  0 => acc
+  _ => sumMatch (acc + n) (n - 1)
+
+-- A body-level match whose self-calling arm is guarded.
+sumMatchGuard : Int -> Int -> Int
+-- lint-disable-next-line rule-match-on-param
+sumMatchGuard acc n = match n
+  k if k > 0 => sumMatchGuard (acc + k) (k - 1)
+  _ => acc
+
+-- A match nested in a clause body, with the self call under an `if` in its arm.
+sumNested : Int -> List Int -> Int -> Int
+-- lint-disable-next-line rule-match-on-param
+sumNested acc [] n = match n
+  0 => acc
+  _ => if n > 0 then sumNested (acc + n) [] (n - 1) else acc
+sumNested acc (x :: _) _ = acc + x
+
+-- A constrained self call, which carries its dictionary in the call head.
+sumConstrained : Num a => a -> a -> Int -> a
+sumConstrained acc _ 0 = acc
+sumConstrained acc step n = sumConstrained (acc + step) step (n - 1)
+
+-- A `let` before the self call, in an `if` branch.
+sumLetIf : Int -> Int -> Int
+sumLetIf acc n =
+  if n == 0 then
+    acc
+  else
+    let next = acc + n
+    sumLetIf next (n - 1)
+
+-- A `let` before the self call, in a match arm.
+sumLetMatch : Int -> Int -> Int
+-- lint-disable-next-line rule-match-on-param
+sumLetMatch acc n = match n
+  0 => acc
+  k =>
+    let next = acc + k
+    sumLetMatch next (k - 1)
+
+-- A clause body that starts with a `let`.
+sumLetClause : Int -> Int -> Int
+sumLetClause acc 0 = acc
+sumLetClause acc n =
+  let next = acc + n
+  sumLetClause next (n - 1)
+
+-- A `where` value binding, with the self call in an `if` branch.
+sumWhereIf : Int -> Int -> Int
+sumWhereIf acc n = if n == 0 then acc else sumWhereIf next (n - 1)
+  where
+    next = acc + n
+
+-- A function binding group in the match arm holding the self call (`fmt`
+-- prints a `where` on an arm as this `let rec … in`).
+sumWhereMatch : Int -> Int -> Int
+-- lint-disable-next-line rule-match-on-param
+sumWhereMatch acc n = match n
+  0 => acc
+  k => let rec plus x y = x + y in sumWhereMatch (plus acc k) (k - 1)
+
+-- A clause body under a `where` group of a function and a value binding.
+sumWhereClause : Int -> Int -> Int
+sumWhereClause acc 0 = acc
+sumWhereClause acc n = sumWhereClause next (n - 1)
+  where
+    plus x y = x + y
+    next = plus acc n
+
+interface SumDown a where
+  sumDown : Int -> a -> Int
+
+-- Impl method, clause spelling: the self call is a statically routed method call.
+impl SumDown Int where
+  sumDown acc 0 = acc
+  sumDown acc n = sumDown (acc + n) (n - 1)
+
+interface SumDownMatch a where
+  sumDownMatch : Int -> a -> Int
+
+-- Impl method, body-level match, with a `let` before the self call.  The
+-- match on a parameter is the shape under test, so it stays a match.
+-- lint-disable-next-line rule-match-on-param
+impl SumDownMatch Int where
+  sumDownMatch acc n = match n
+    0 => acc
+    k =>
+      let next = acc + k
+      sumDownMatch next (k - 1)
+
+-- A default method: its define takes a leading dictionary word the call site's
+-- arguments do not show, and the self call passes it on.
+interface Tally a where
+  weight : a -> Int
+  tally : Int -> Int -> a -> Int
+  tally acc n x = if n == 0 then acc else tally (acc + weight x) (n - 1) x
+
+impl Tally Int where
+  weight x = x
+
+-- An impl clause shorter than the declared arity is emitted at its own arity,
+-- and its self call is saturated at that arity.
+interface Grow a where
+  grow : Int -> a -> Int -> Int
+
+impl Grow Int where
+  grow acc n = if n == 0 then (acc + _) else grow (acc + 1) (n - 1)
+
+-- A self call with one argument more than the define takes is an
+-- over-application, which keeps the plain call path; it is not a tail call, so
+-- this one recurses only to `shallow`.
+interface Rewrap a where
+  rewrap : a -> Int -> b -> b
+
+impl Rewrap Int where
+  rewrap k n x = if n == 0 then x else rewrap k (n - 1) (y => y) x
+
+shallow : Int
+shallow = 1000
+
+test "self tail call, clause spelling" =
+  expectEqual triangle (sumClauses 0 depth)
+
+test "self tail call, guarded clauses" =
+  expectEqual triangle (sumGuards 0 depth)
+
+test "self tail call, body-level match" =
+  expectEqual triangle (sumMatch 0 depth)
+
+test "self tail call, guarded match arm" =
+  expectEqual triangle (sumMatchGuard 0 depth)
+
+test "self tail call, if inside a nested match arm" =
+  expectEqual triangle (sumNested 0 [] depth)
+
+test "self tail call, constrained clause spelling" =
+  expectEqual depth (sumConstrained 0 1 depth)
+
+test "self tail call after a let, if branch" =
+  expectEqual triangle (sumLetIf 0 depth)
+
+test "self tail call after a let, match arm" =
+  expectEqual triangle (sumLetMatch 0 depth)
+
+test "self tail call after a let, clause body" =
+  expectEqual triangle (sumLetClause 0 depth)
+
+test "self tail call under a where group, if branch" =
+  expectEqual triangle (sumWhereIf 0 depth)
+
+test "self tail call under a where group, match arm" =
+  expectEqual triangle (sumWhereMatch 0 depth)
+
+test "self tail call under a where group, clause body" =
+  expectEqual triangle (sumWhereClause 0 depth)
+
+test "impl method self tail call, clause spelling" =
+  expectEqual triangle (sumDown 0 depth)
+
+test "impl method self tail call after a let, body-level match" =
+  expectEqual triangle (sumDownMatch 0 depth)
+
+test "default method self tail call" =
+  expectEqual depth (tally 0 depth (1 : Int))
+
+test "impl method self tail call below the declared arity" =
+  expectEqual (depth + 5) (grow 0 depth 5)
+
+test "impl method self call over-applied" =
+  expectEqual 7 (rewrap (0 : Int) shallow 7)

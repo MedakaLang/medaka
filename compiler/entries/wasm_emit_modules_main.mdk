@@ -55,9 +55,14 @@ import ir.dce.{dceFilter}
 import backend.wasm_emit.{
   emitProgram,
   makeWasmEmitInputFull,
+  withRuntimeExternsW,
 }
 import backend.wasm_reach.{wasmReachFilter}
-import entries.entry_support.{driveEmitLocated, stampSiteFiles}
+import entries.entry_support.{
+  driveEmitLocated,
+  runtimeExternNames,
+  stampSiteFiles,
+}
 import support.timer.{statsEnabled, emitStats}
 import support.util.{listLen}
 
@@ -92,14 +97,17 @@ emitTail mods runtimeDecls coreD modules1 =
       ++ preludeArgPosDictNames coreD allDecls
       ++ constrainedSigNames allDecls
   let input =
-    makeWasmEmitInputFull
-      (methodIfaceTable allDecls)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
-      (ctorFieldTypeNames allDecls)
-      (mainTypeIsFloat ())
-      (mainTypeIsUnit ())
-      (declaredRecordFieldOrders allDecls)
-      (validateFfiExternTypeNames (checkedFfiExternTypeNamesModules modules2))
+    withRuntimeExternsW
+      (runtimeExternNames runtimeDecls)
+      (makeWasmEmitInputFull
+        (methodIfaceTable allDecls)
+        (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+        (ctorFieldTypeNames allDecls)
+        (mainTypeIsFloat ())
+        (mainTypeIsUnit ())
+        (declaredRecordFieldOrders allDecls)
+        (validateFfiExternTypeNames
+          (checkedFfiExternTypeNamesModules modules2)))
   let lowered = lowerProgramEmit TargetWasm allDecls
   let filtered = wasmReachFilter lowered
   -- MEDAKA_STATS reporting hook (S5, #2359 closure): the S5 gate's "emitted-vs-

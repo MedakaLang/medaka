@@ -719,6 +719,7 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStder
     False
     quietEmitStderr
     stampBuild
+    BuildNormal
 
 -- Probe the C compiler up front — the native analogue of probeWasmTools
 -- below, run BEFORE the emitter/link path so a missing/misconfigured `cc`
@@ -773,8 +774,9 @@ runBuildNativeRoots : String ->
   Bool ->
   Bool ->
   Bool ->
+  BuildProfile ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild =
+runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile =
   match probeClang cc
     None => buildErr (clangMissingError cc)
     Some _ =>
@@ -790,6 +792,7 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
         strictEmit
         quietEmitStderr
         stampBuild
+        profile
 
 -- The original body, unmoved — split out only so the up-front probe above
 -- doesn't force reindenting this whole function under a match arm.
@@ -804,8 +807,9 @@ runBuildNativeRootsGo : String ->
   Bool ->
   Bool ->
   Bool ->
+  BuildProfile ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild =
+runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild profile =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -910,6 +914,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
                 ffiRoot
                 (readForeignLibs ffiRoot)
                 stampBuild
+                profile
             let (keptIr, keepNotes) =
               if effectiveKeepIr keepIrCli then
                 keepIrOutcome (outPath ++ ".ll") ir
@@ -1113,6 +1118,33 @@ clangOptFlag =
   let optFlagRaw = envOr "MEDAKA_CLANG_OPT" "-O2"
   if optFlagRaw == "" then "-O2" else optFlagRaw
 
+-- Which clang flags a build's link takes.  `BuildNormal` is every build a user
+-- asked for; `BuildProbe` is the throwaway binary `medaka test` compiles, runs
+-- once and deletes, where -O2 plus ThinLTO is most of the wall time and buys
+-- nothing the probe's assertions can observe.
+public export data BuildProfile = BuildNormal | BuildProbe
+
+-- (opt flag, whether ThinLTO detection runs) for a profile, given the values of
+-- MEDAKA_CLANG_OPT (already defaulted) and MEDAKA_TEST_CLANG_OPT.  Pure so the
+-- mapping is unit-testable.  A probe at -O0, whether MEDAKA_TEST_CLANG_OPT is
+-- unset, empty or `-O0`, links with no LTO, the only pairing that is cheap: -O0
+-- with LTO and -O1 without it each cost several times as much.  A no-LTO link
+-- ignores MEDAKA_RT_OBJ, which is ThinLTO bitcode.  A probe at any other level
+-- takes it with the normal LTO detection, so `-O2` gives the same link as
+-- `BuildNormal`.
+export
+profileClang : BuildProfile -> String -> String -> (String, Bool)
+profileClang BuildNormal normalOpt _ = (normalOpt, True)
+profileClang BuildProbe _ probeOpt =
+  if probeOpt == "" || probeOpt == "-O0" then
+    ("-O0", False)
+  else
+    (probeOpt, True)
+
+resolveProfile : BuildProfile -> <IO> (String, Bool)
+resolveProfile profile =
+  profileClang profile clangOptFlag (envOr "MEDAKA_TEST_CLANG_OPT" "")
+
 -- STEP 2: clang the IR + C runtime + Boehm GC into a native binary.
 --
 -- FOREIGN LIBRARIES (medaka.toml `[foreign-libraries]`, loader.readForeignLibs).
@@ -1130,8 +1162,9 @@ clangLink : String ->
   String ->
   List (String, String) ->
   Bool ->
+  BuildProfile ->
   <IO> Result BuildReport BuildReport
-clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs stampBuild =
+clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs stampBuild profile =
   let libErr = foreignLibErr cc tmpDir projRoot libs
   if libErr /= "" then
     buildErr libErr
@@ -1147,6 +1180,7 @@ clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs stampBuild =
         tmpDir
         (libLinkFlags libs)
         provObj
+        profile
 
 -- `-L<dir>`/`-l<name>` for each declared library, in declaration order.  A
 -- library with no search directory contributes `-l<name>` alone.
@@ -1624,8 +1658,9 @@ clangLinkGo : String ->
   String ->
   List String ->
   String ->
+  BuildProfile ->
   <IO> Result BuildReport BuildReport
-clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags provObj =
+clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags provObj profile =
   clangLinkTimed
     cc
     rtC
@@ -1635,6 +1670,7 @@ clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags provObj =
     tmpDir
     libFlags
     provObj
+    profile
     (perfEnabled ())
     (now ())
 
@@ -1646,10 +1682,11 @@ clangLinkTimed : String ->
   String ->
   List String ->
   String ->
+  BuildProfile ->
   Bool ->
   Float ->
   <IO> Result BuildReport BuildReport
-clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj perfOn tLink0 =
+clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj profile perfOn tLink0 =
   match detectGC cc tmpDir
     None => buildErr (libgcMissingError ())
     Some (gcCflags, gcLibs) =>
@@ -1660,8 +1697,8 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj perfOn tLi
       -- it to exactly the thing this slice is trying to measure.
       let tGcProbe = now ()
       let _ = emitPhase perfOn "gc-probe" (tGcProbe - tLink0) cc
-      let optFlag = clangOptFlag
-      let lto = detectLto cc
+      let (optFlag, ltoAllowed) = resolveProfile profile
+      let lto = if ltoAllowed then detectLto cc else None
       -- CI FAST PATH (MEDAKA_RT_OBJ).  Every `medaka build` otherwise recompiles the
       -- identical runtime/medaka_rt.c from scratch (~0.6s of clang each).  A gate
       -- that does hundreds of builds can precompile the runtime ONCE (via
@@ -1680,7 +1717,10 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj perfOn tLi
       -- automatic, self-managed, fingerprint-keyed object cache above — which is
       -- what makes the ~0.76 s saving the DEFAULT for ordinary users instead of a
       -- CI-only trick.  `cachedRtObj` fails open to "" (⇒ rtC, the inline compile).
-      let rtObjEnv = envOr "MEDAKA_RT_OBJ" ""
+      -- `--emit-rt-obj` writes ThinLTO bitcode wherever LTO is detected, which a
+      -- link with LTO switched off by its profile cannot read; that link takes
+      -- the cache instead of the explicit object.
+      let rtObjEnv = if ltoAllowed then envOr "MEDAKA_RT_OBJ" "" else ""
       let rtCached =
         if rtObjEnv /= "" && fileExists rtObjEnv then
           rtObjEnv

@@ -1,0 +1,226 @@
+-- Sibling test module for `compiler/backend/core_validate.mdk` ([P-TEST-SIBLING]).
+--
+-- Each program is prelude-free and lowered without typechecking, through the
+-- pipeline `compiler/entries/wasm_emit_main.mdk` and
+-- `compiler/entries/llvm_emit_main.mdk` use, so a reference to a runtime extern
+-- reaches the checked program exactly as the source spells it.
+
+import test.{
+  Expectation,
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectTextContainsAll,
+  labelFail,
+}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.typecheck.{grantWholeDomain}
+import ir.core_ir.{CProgram}
+import ir.core_ir_lower.{
+  EmitTarget(..),
+  ctorFieldTypeNames,
+  declSigTypeNames,
+  declaredRecordFieldOrders,
+  lowerProgramEmit,
+}
+import backend.extern_catalog.{catalogRow, ledgerEntry, rowLlvm, rowWasm}
+import backend.core_validate.{
+  Backend(..),
+  findingExtern,
+  missingCatalogRows,
+  missingRowsMessage,
+  renderExternFinding,
+  validateExterns,
+}
+import backend.wasm_emit.{
+  emitProgramGaps,
+  emitProgramRecord as wasmRecord,
+  makeWasmEmitInputFull,
+}
+import backend.llvm_emit.{emitProgramRecord as llvmRecord, makeEmitInput}
+
+lowered : EmitTarget -> String -> CProgram
+lowered target src =
+  lowerProgramEmit
+    target
+    (annotateProgram (grantWholeDomain (desugar (parse src))))
+
+-- The extern names `backend` refuses in `src`, in order of first reference.
+refused : Backend -> String -> List String
+refused LlvmBackend src =
+  map findingExtern (validateExterns LlvmBackend [] (lowered TargetNative src))
+refused WasmBackend src =
+  map findingExtern (validateExterns WasmBackend [] (lowered TargetWasm src))
+
+refusalLines : Backend -> String -> List String
+refusalLines LlvmBackend src =
+  map
+    renderExternFinding
+    (validateExterns LlvmBackend [] (lowered TargetNative src))
+refusalLines WasmBackend src =
+  map
+    renderExternFinding
+    (validateExterns WasmBackend [] (lowered TargetWasm src))
+
+-- The reason the extern's wasm or llvm row gives, as the row states it.
+wasmReason : String -> String
+wasmReason name = match catalogRow name
+  Some r => match ledgerEntry (rowWasm r)
+    Some (_, why) => why
+    None => ""
+  None => ""
+
+llvmReason : String -> String
+llvmReason name = match catalogRow name
+  Some r => match ledgerEntry (rowLlvm r)
+    Some (_, why) => why
+    None => ""
+  None => ""
+
+test "(a) wasm: a reference to a net extern is refused, naming extern, backend, kind and reason" =
+  expectEqual
+    [
+      "wasm: runtime extern 'netTcpConnect' is not available on the wasm backend (PERMANENT: \{wasmReason "netTcpConnect"}) [in main]",
+    ]
+    (refusalLines WasmBackend "main = netTcpConnect \"localhost\" 80")
+
+test "(b) wasm: references to WASM-GAP externs are refused, applied or as values, each in its binding" =
+  expectEqual
+    [
+      "wasm: runtime extern 'writeFile' is not available on the wasm backend (WASM-GAP: \{wasmReason "writeFile"}) [in save]",
+      "wasm: runtime extern 'listDir' is not available on the wasm backend (WASM-GAP: \{wasmReason "listDir"}) [in main]",
+    ]
+    (refusalLines
+      WasmBackend
+      "save = writeFile\nmain =\n  let _ = save \"a\" \"b\"\n  listDir \".\"")
+
+test "(c) wasm: a program that names an extern only as text, a field or a lowered extern is not refused" =
+  expectEqual
+    []
+    (refused
+      WasmBackend
+      "data Conn = Conn { netSend : Int }\nmain =\n  let c = Conn { netSend = 1 }\n  putStrLn (\"netSend\" ++ intToString c.netSend)")
+
+test "(d) a local binder or a program binding named like a refused extern shadows it, in its scope only" = expectEach
+  [
+    (
+      "lambda parameter",
+      expectEqual
+        []
+        (refused WasmBackend "main = (writeFile => writeFile 1) (x => x)"),
+    ),
+    (
+      "let binding",
+      expectEqual
+        []
+        (refused WasmBackend "main =\n  let netSend = 3\n  netSend + 1"),
+    ),
+    (
+      "match arm",
+      expectEqual
+        []
+        (refused
+          WasmBackend
+          "main = match Some 1\n  Some listDir => listDir\n  None => 0"),
+    ),
+    (
+      "top-level binding",
+      expectEqual [] (refused WasmBackend "readLine x = x\nmain = readLine 3"),
+    ),
+    (
+      "the extern outside its shadow's scope",
+      expectEqual
+        ["makeDir"]
+        (refused
+          WasmBackend
+          "main =\n  let _ = (makeDir => makeDir) 1\n  makeDir \"d\""),
+    ),
+  ]
+
+-- Two references to one refused extern, and one to another as a value and
+-- applied; the gap events must be exactly the refusal lines a strict build
+-- panics with, one per extern.
+recordSrc : String
+recordSrc =
+  "main =\n  let _ = writeFile \"a\" \"b\"\n  let _ = writeFile \"c\" \"d\"\n  let f = netSend\n  netSend 1 \"x\""
+
+test "(e) record mode logs one event per refused extern, and no unbound-variable event" =
+  let decls = grantWholeDomain (desugar (parse recordSrc))
+  let input =
+    makeWasmEmitInputFull
+      []
+      (declSigTypeNames decls)
+      (ctorFieldTypeNames decls)
+      False
+      False
+      (declaredRecordFieldOrders decls)
+      []
+  let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
+  let (_, events) = wasmRecord input cp
+  let expected = map ("main\t" ++ _) (refusalLines WasmBackend recordSrc)
+  expectAll [
+    labelFail
+      "the refused externs"
+      (expectEqual ["writeFile", "netSend"] (refused WasmBackend recordSrc)),
+    labelFail "record emission" (expectEqual expected events),
+    labelFail "gap census" (expectEqual expected (emitProgramGaps input cp)),
+  ]
+
+assertSnapshotSrc : String
+assertSnapshotSrc = "main = assertSnapshot \"a\" \"b\""
+
+test "(f) llvm refuses assertSnapshot and lowers what wasm refuses" = expectEach
+  [
+    (
+      "assertSnapshot on llvm",
+      expectEqual
+        [
+          "llvm: runtime extern 'assertSnapshot' is not available on the llvm backend (TODO: \{llvmReason "assertSnapshot"}) [in main]",
+        ]
+        (refusalLines LlvmBackend assertSnapshotSrc),
+    ),
+    (
+      "assertSnapshot on wasm, whose row does not lower it either",
+      expectEqual ["assertSnapshot"] (refused WasmBackend assertSnapshotSrc),
+    ),
+    (
+      "writeFile on llvm",
+      expectEqual [] (refused LlvmBackend "main = writeFile \"a\" \"b\""),
+    ),
+    ("llvm record mode", llvmRecordEvents),
+  ]
+
+llvmRecordEvents : Expectation
+llvmRecordEvents =
+  let decls = grantWholeDomain (desugar (parse assertSnapshotSrc))
+  let input =
+    makeEmitInput
+      []
+      []
+      []
+      []
+      []
+      False
+      False
+      0
+      []
+      []
+      ""
+      (declaredRecordFieldOrders decls)
+      []
+  let (_, events) =
+    llvmRecord input (lowerProgramEmit TargetNative (annotateProgram decls))
+  expectEqual
+    (map ("main\t" ++ _) (refusalLines LlvmBackend assertSnapshotSrc))
+    events
+
+test "(g) a runtime extern with no catalog row is an internal error naming it" =
+  let missing = missingCatalogRows ["putStrLn", "zzNoSuchExtern", "netSend"]
+  expectAll [
+    expectEqual ["zzNoSuchExtern"] missing,
+    expectTextContainsAll
+      ["internal error", "'zzNoSuchExtern'", "extern catalog"]
+      (missingRowsMessage missing),
+  ]

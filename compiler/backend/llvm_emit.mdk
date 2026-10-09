@@ -229,6 +229,17 @@ import support.util.{
   u64HalvesHex,
 }
 import backend.llvm_preamble.{preambleLines}
+import backend.extern_catalog.{LlvmFamily(..), llvmFamily, isLlvmExternFamily}
+import backend.core_validate.{
+  Backend(..),
+  ExternFinding,
+  findingBinding,
+  isUnprovidedOn,
+  renderExternFinding,
+  renderExternRefusal,
+  unrefusedExternMessage,
+  validateExterns,
+}
 import support.ordmap.{
   OrdMap,
   omInsert,
@@ -275,6 +286,7 @@ import backend.trmc_analysis.{
   dictUniformPairs,
   dropFirstN,
   clauseArityOf,
+  lastStmtExpr,
 }
 import backend.private_mangle.{hashName, injectiveIdent}
 import types.disposition.{ifaceSuperCount, installedDispositionsOpt}
@@ -494,7 +506,10 @@ setGapBind : Emit -> String -> Unit
 setGapBind e name = e.curGapBind := name
 
 noteGap : Emit -> String -> Unit
-noteGap e reason = e.gapLog := "\{!e.curGapBind}\t\{reason}" :: !e.gapLog
+noteGap e reason = noteGapAt e !e.curGapBind reason
+
+noteGapAt : Emit -> String -> String -> Unit
+noteGapAt e binding reason = e.gapLog := "\{binding}\t\{reason}" :: !e.gapLog
 
 -- ── method-call RESULT-type inference (native backend) ──────────────────────
 -- The (interface, method) -> returns-self table, computed by core_ir_lower's
@@ -862,8 +877,8 @@ data EmitInputData = EmitInputData {
   -- subtracted at the mint, `ir.core_ir_lower.ffiExternTypeNames`), keyed name →
   -- (declared param type-head names, declared return type-head name).  This is
   -- the ONLY table that answers "is this name a foreign call?"; `declSigIndex`
-  -- cannot, because it mixes the 138 builtins and every annotated function into
-  -- one flat keyspace.
+  -- cannot, because it mixes the `stdlib/runtime.mdk` builtins and every annotated
+  -- function into one flat keyspace.
   ffiExternIndex : OrdMap (List String, String),
   recordFieldOrders : List (String, List String),
   mainIsUnit : Bool,
@@ -879,6 +894,8 @@ data EmitInputData = EmitInputData {
   -- the method names two or more interfaces declare (by declaration word), whose
   -- dispatchers therefore carry the interface in their symbol (`dispMethodWord`)
   sharedMethodNames : OrdMap Unit,
+  -- the `stdlib/runtime.mdk` extern names (`withRuntimeExterns`)
+  runtimeExterns : List String,
 }
 
 -- The constructor is intentionally private: callers supply raw declaration facts
@@ -922,7 +939,15 @@ makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes declSigTypes 
   srcName = srcName,
   recordFieldOrders = recordFieldOrders,
   sharedMethodNames = sharedMethodNamesOf methodIfaces omEmpty omEmpty,
+  runtimeExterns = [],
 }
+
+-- The input with the extern names the entry declared from `stdlib/runtime.mdk`.
+-- The extern check (`core_validate.validateExterns`) refuses any of them that
+-- has no catalog row; an input built without them checks none.
+export
+withRuntimeExterns : List String -> EmitInput -> EmitInput
+withRuntimeExterns names input = { input | runtimeExterns = names }
 
 -- The methods declared by more than one interface word, from `methodIfaceTable` rows
 -- (one per declared interface method).  [firstWord] remembers each method's first
@@ -991,6 +1016,11 @@ data Emit = Emit {
   directFn : Ref (List (String, (String, Int))),
   trmcCtx : Ref TrmcCtx,
   gDispCtx : Ref GDispCtx,
+  -- The define whose match leaves are in function tail position (a clause chain,
+  -- or a body-level match `emitFnBody` reached): a leaf that is a saturated call
+  -- of it returns as `musttail call` + `ret` (`emitArmBody`).  Saved and cleared
+  -- at the same places as `trmcCtx`, and read after it and `gDispCtx`.
+  selfTailCtx : Ref (Option String),
   gDispGroups : Ref (List DispGroup),
   gDispBinds : Ref (List CBind),
   gDispBindMap : Ref (OrdMap CBind),
@@ -1186,7 +1216,7 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 --
 -- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx
+  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option String)
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -1206,6 +1236,7 @@ beginDefine e =
       !e.directFn
       !e.trmcCtx
       !e.gDispCtx
+      !e.selfTailCtx
   let _ = markScope e
   e.defineCounter := 0
   e.closureArity := []
@@ -1213,18 +1244,20 @@ beginDefine e =
   e.directFn := []
   e.trmcCtx := TrmcOff
   e.gDispCtx := GDispOff
+  e.selfTailCtx := None
   saved
 
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
-endDefine e (DefScope n ar rt df trmc gd) =
+endDefine e (DefScope n ar rt df trmc gd st) =
   e.defineCounter := n
   e.closureArity := ar
   e.closureRetTy := rt
   e.directFn := df
   e.trmcCtx := trmc
   e.gDispCtx := gd
+  e.selfTailCtx := st
 
 emit : Emit -> String -> Unit
 emit e line = let buf = e.buf in buf := line :: !buf
@@ -2176,18 +2209,8 @@ emitVar e env x =
     ("3", LTBool)
   else if isLocal env x then
     lookupVarG e env x
-  else if x == "pi" then
-    (boxFloat e "3.141592653589793", LTFloat)
-  else if x == "e" then
-    (boxFloat e "2.718281828459045", LTFloat)
-  else if x == "intMaxBound" then
-    ("9223372036854775807", LTInt)
-  else if x == "intMinBound" then
-    ("-9223372036854775807", LTInt)
-  else if x == "charMinBound" then
-    ("1", LTChar)
-  else if x == "charMaxBound" then
-    ("2228223", LTChar)
+  else if isConstantName x then
+    emitConstantVar e x
   else if isCtor e x then
     if ctorArity e x == 0 then emitCtorAlloc e x [] else emitCtorEtaClosure e x
   else if isKnownFn e x then
@@ -2202,6 +2225,16 @@ emitVar e env x =
     emitMethodEtaClosure e x
   else
     lookupVarG e env x
+
+-- The value of a constant the catalog files under `LlvmConstant`.
+emitConstantVar : Emit -> String -> (String, LTy)
+emitConstantVar e "pi" = (boxFloat e "3.141592653589793", LTFloat)
+emitConstantVar e "e" = (boxFloat e "2.718281828459045", LTFloat)
+emitConstantVar _ "intMaxBound" = ("9223372036854775807", LTInt)
+emitConstantVar _ "intMinBound" = ("-9223372036854775807", LTInt)
+emitConstantVar _ "charMinBound" = ("1", LTChar)
+emitConstantVar _ "charMaxBound" = ("2228223", LTChar)
+emitConstantVar _ name = panic ("llvm: no constant " ++ name)
 
 -- is `x` a local (let/param) binding in the current emit env?  Used to let a local
 -- shadow the prelude math/bound constants (pi/e/intMaxBound/…) above.
@@ -2254,9 +2287,12 @@ lookupVarG e env x = match omLookup x env
         let _ = emit e "  \{r} = load i64, ptr @mdk_g_\{x}"
         (r, LTInt)
       None =>
-        gapE
-          e
-          ("unbound variable '" ++ x ++ "' (not a local, ctor, or known fn)")
+        if isUnprovidedOn LlvmBackend x then
+          unprovidedExtern e x
+        else
+          gapE
+            e
+            ("unbound variable '" ++ x ++ "' (not a local, ctor, or known fn)")
 -- A not-yet-initialised global is still loaded from its `@mdk_g_<name>` cell:
 -- the `load` resolves at the instruction's RUNTIME, not emit time.  Two cases
 -- reach here, both correct as a deferred load.  (1) A reference INSIDE A LAMBDA
@@ -2283,6 +2319,15 @@ lookupVarG e env x = match omLookup x env
 -- the cell exists (declared `@mdk_g_<name> = global i64 0` up front), so emit
 -- the load.  LTy is unknown until init computes it; default LTInt (the loaded
 -- word is a uniform i64 — a downstream container op re-derives its shape).
+
+-- The fallthrough for a runtime extern llvm does not lower.  The extern check
+-- (`unprovidedExterns`) has already refused it in strict mode and
+-- recorded it in record mode, so record mode adds no second event, and strict
+-- mode reaching here means the two disagree about which references are free.
+unprovidedExtern : Emit -> String -> (String, LTy)
+unprovidedExtern e name = match e.gapMode
+  Record => ("0", LTInt)
+  Strict => panic (unrefusedExternMessage LlvmBackend name)
 
 emitLit : Emit -> Lit -> (String, LTy)
 -- Tag boundary: n*2+1 overflows the emitter's own 63-bit Medaka Int when |n| >= 2^61.
@@ -2413,9 +2458,6 @@ hexDigit d
 -- contract that an extern returning a Medaka value allocates it in the GC heap
 -- (mdk_int_to_string -> mdk_str_lit -> mdk_alloc).  charToStr/stringConcat/putStr
 -- are the obvious next additions (a follow-on slice).
-isStrExtern : String -> Bool
-isStrExtern name = contains name ["intToString", "stringConcat", "stringLength"]
-
 emitStrExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2451,20 +2493,6 @@ emitStrExtern e _ name _ = gapE e ("unsupported string extern " ++ name)
 -- intToFloat / floatToInt are INTRINSIC: inline sitofp / fptosi + box/untag.
 -- floatToString is a LEAF: delegates to mdk_float_to_string (mirrors mdk_print_float's
 -- %.12g+dot logic but returns a mdk_str_lit box instead of printf-ing).
-isNumExtern : String -> Bool
-isNumExtern name =
-  contains name [
-      "intToFloat",
-      "floatToInt",
-      "floatToString",
-      "intBitsToFloat",
-      "bytesToFloat64",
-      "floatRem",
-      "floatToBytes64",
-    ]
-    || isMathUnary name
-    || isMathBinary name
-
 -- libm one-arg Float -> Float externs (native/LLVM only).  Each emits a
 -- direct `call double @mdk_<name>(double x)`, unbox in / rebox out.
 isMathUnary : String -> Bool
@@ -2606,20 +2634,6 @@ emitNumExtern e _ name _ = gapE e ("unsupported numeric extern " ++ name)
 -- IO-output externs (native extern catalog slice 3).
 -- putStr/putStrLn write to stdout; ePutStr/ePutStrLn write to stderr.
 -- All return Unit (LTUnit); the operand "1" is an arbitrary immediate never read.
-isIoExtern : String -> Bool
--- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-isIoExtern name = contains name [
-  "putStr",
-  "putStrLn",
-  "ePutStr",
-  "ePutStrLn",
-  "flushStdout",
-  "stashRunStdout",
-  "enableRunStdoutFlush",
-  "byteBlockWriteStdout",
-]
-
 emitIoExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2679,17 +2693,6 @@ emitIoExtern e _ name _ = gapE e ("unsupported IO extern " ++ name)
 -- panic/exit terminate the process; the call itself never returns, so the
 -- auto-print emitted downstream is dead code.  Return ("1", LTUnit) so
 -- emitPrint sees LTUnit (safe) rather than LTCon/LTClosure (compile panic).
-isAbortExtern : String -> Bool
-isAbortExtern name = contains name [
-  "panic",
-  "exit",
-  "indexError",
-  "indexErrorAt",
-  "sliceError",
-  "panicAt",
-  "indexErrorAtSite",
-]
-
 emitAbortExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2752,10 +2755,6 @@ emitAbortExtern e env name args = match emitArgs e env args
 -- arrayLength: header word = raw element count; tag it as a Medaka Int.
 -- arrayGetUnsafe: CIndex path minus bounds-check.
 -- arraySetUnsafe: store to element slot; returns Unit.
-isArrIntrinsic : String -> Bool
-isArrIntrinsic name =
-  contains name ["arrayLength", "arrayGetUnsafe", "arraySetUnsafe"]
-
 emitArrIntrinsic : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2782,11 +2781,6 @@ emitArrIntrinsic e _ name _ = gapE e ("unsupported array intrinsic " ++ name)
 -- arrayMake/arrayCopy/arrayFromList return Array (LTCon); arrayBlit/arrayFill return Unit.
 -- Do NOT end a fixture with an array-returning call: emitPrint LTCon panics.
 -- Project to scalar via .[i] (CIndex) in every fixture.
-isArrLeafExtern : String -> Bool
-isArrLeafExtern name = contains name [
-  "arrayMake", "arrayCopy", "arrayBlit", "arrayFill", "arrayFromList"
-]
-
 emitArrLeafExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2834,21 +2828,6 @@ emitArrLeafExtern e _ name _ = gapE e ("unsupported array leaf extern " ++ name)
 -- Length/GetUnsafe return Int; SetUnsafe and Blit return Unit.
 -- Do NOT end a fixture with a block-returning call: emitPrint LTCon panics.
 -- Project to scalar via byteBlockGetUnsafe / byteBlockLength in every fixture.
-isByteBlockExtern : String -> Bool
--- Deliberately a per-backend copy of wasm_emit.mdk's `isByteBlockExternW`, not a
--- shared list.  test/diff_compiler_capability_matrix.sh derives each engine's
--- implemented-extern column by extracting the family binding's own quoted names
--- out of that engine's own file, so hoisting the names into a module both
--- backends import would leave the gate reading neither engine as implementing
--- them -- the duplication is what keeps the two columns independently derivable.
--- lint-disable-next-line rule-duplicate-body
-isByteBlockExtern name = contains name [
-  "byteBlockMake", "byteBlockLength", "byteBlockGetUnsafe",
-  "byteBlockSetUnsafe", "byteBlockCopyUnsafe", "byteBlockBlit",
-  "byteBlockFromIntArray", "byteBlockToIntArray", "byteBlockFromString",
-  "byteBlockToString"
-]
-
 emitByteBlockExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2924,9 +2903,6 @@ emitByteBlockExtern e _ name _ =
 -- charCode is INTRINSIC: Char and Int share the same tagged word encoding, so
 -- charCode is a pure re-type — emit the operand as-is and return LTInt.
 -- charToStr delegates to mdk_char_to_str (runtime/medaka_rt.c).
-isCharExtern : String -> Bool
-isCharExtern name = contains name ["charCode", "charToStr"]
-
 emitCharExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2944,15 +2920,6 @@ emitCharExtern e env "charToStr" args = match emitArgs e env args
 emitCharExtern e _ name _ = gapE e ("unsupported char extern " ++ name)
 
 -- slice 9: string↔char conversions + codepoint slicing.
-isStrCharExtern : String -> Bool
-isStrCharExtern name = contains name [
-  "stringToChars",
-  "stringFromChars",
-  "stringSlice",
-  "stringToUtf8Bytes",
-  "stringFromUtf8Bytes",
-]
-
 emitStrCharExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -2998,19 +2965,6 @@ emitStrCharExtern e _ name _ = gapE e ("unsupported str-char extern " ++ name)
 -- Predicate externs return raw 0/1 from C; emitter wraps with tagInt to Bool.
 -- charIsPunct matches Unicode Pc/Pd/Pe/Pf/Pi/Po/Ps for ASCII (NOT C ispunct —
 -- symbols like + $ = ^ ` | ~ are excluded).
-isUnicodeExtern : String -> Bool
-isUnicodeExtern name = contains name [
-  "charIsAlpha",
-  "charIsSpace",
-  "charIsUpper",
-  "charIsLower",
-  "charIsPunct",
-  "charToUpper",
-  "charToLower",
-  "stringToUpper",
-  "stringToLower",
-]
-
 emitUnicodeExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3078,11 +3032,6 @@ emitUnicodeExtern e _ name _ = gapE e ("unsupported unicode extern " ++ name)
 -- (`Some`) and immediate (`None`) reserved-tag round-trips end-to-end.  Slices 11/12/
 -- 13 extend this family (stringToFloat, args, readFile, …).  Result is LTCon (an ADT
 -- value): never auto-printed — fixtures `match` it down to a scalar.
-isAdtExtern : String -> Bool
-isAdtExtern name = contains name [
-  "charFromCode", "stringToFloat", "stringIndexOf", "stringCompare"
-]
-
 emitAdtExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3116,9 +3065,6 @@ emitAdtExtern e _ name _ = gapE e ("unsupported adt extern " ++ name)
 
 -- slice 12: args + env externs.  `args ()` → List String of argv[1..];
 -- `getEnv name` → Option String.  Results are LTCon — never auto-printed.
-isEnvExtern : String -> Bool
-isEnvExtern name = contains name ["args", "getEnv"]
-
 emitEnvExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3142,35 +3088,6 @@ emitEnvExtern e _ name _ = gapE e ("unsupported env extern " ++ name)
 -- fileExists returns raw 0/1 which the emitter tags (LTBool); readLine/readAll
 -- return heap Strings (LTStr).  readLine/readLineOpt/readAll are implemented
 -- but NOT fixtured — the gate does not pipe stdin.
-isFileExtern : String -> Bool
-isFileExtern name = contains name [
-  "readFile",
-  "readFileBytes",
-  "writeFile",
-  "writeFileBytes",
-  "writeFileMode",
-  "appendFile",
-  "fileExists",
-  "fileMode",
-  "canonicalizePath",
-  "listDir",
-  "readLine",
-  "readLineOpt",
-  "readAll",
-  "readExactly",
-  "makeDir",
-  "removeFile",
-  "rename",
-  "removeDir",
-  "fsync",
-  "statFile",
-  "runCommand",
-  "executablePath",
-  "buildFingerprint",
-  "buildCommit",
-  "buildDate",
-]
-
 -- A file extern whose path is an authority takes, after its value arguments, the
 -- authority granted for each path (EFFECTS-SEMANTICS §8): elaboration saturates
 -- every use of one, so a call here always carries them.
@@ -3318,6 +3235,15 @@ emitFileExtern e env "runCommand" args = match emitArgs e env args
       emit e "  \{r} = call i64 @mdk_run_command(i64 \{prog}, i64 \{argv})"
     (r, LTCon)
   _ => panic "llvm: runCommand takes two arguments"
+emitFileExtern e env "runCommandBatch" args = match emitArgs e env args
+  [prog, jobs, argvs] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_run_command_batch(i64 \{prog}, i64 \{jobs}, i64 \{argvs})"
+    (r, LTCon)
+  _ => panic "llvm: runCommandBatch takes three arguments"
 emitFileExtern e env "executablePath" args = match emitArgs e env args
   [u] =>
     let r = freshReg e
@@ -3344,44 +3270,10 @@ emitFileExtern e env "buildDate" args = match emitArgs e env args
   _ => panic "llvm: buildDate takes one (Unit) argument"
 emitFileExtern e _ name _ = gapE e ("unsupported file extern " ++ name)
 
--- Net externs (NET-DESIGN.md).  A SEPARATE family from isFileExtern — deliberately,
--- so the wasm backend can reject the whole net set in one guard.  All return a
+-- Net externs (NET-DESIGN.md).  A SEPARATE family from `LlvmFile` — deliberately,
+-- so the catalog can give the whole net set one wasm refusal.  All return a
 -- Result (LTCon) traffic'ing raw tagged-Int fds; blocking BSD-socket shims in
 -- runtime/medaka_rt.c.
-isNetExtern : String -> Bool
--- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
--- lint-disable-next-line rule-duplicate-body
-isNetExtern name = contains name [
-  "netResolve",
-  "netTcpConnect",
-  "netTcpListen",
-  "netListenPort",
-  "netTcpAccept",
-  "netSend",
-  "netSendFrom",
-  "netRecv",
-  "netShutdown",
-  "netClose",
-  "netCloseListener",
-  "netSetTimeout",
-  "socketFd",
-  "listenSocketFd",
-  "ioPoll",
-  "pdsSignalStart",
-  "pdsSignalRequested",
-  "netSetNonblock",
-  "netSetNonblockListener",
-  "netConnectStart",
-  "netConnectCheck",
-  "netTryAccept",
-  "netTryRecv",
-  "netTryRecvBytes",
-  "netTrySend",
-  "netTrySendFrom",
-  "netSendBytesFrom",
-  "netTrySendBytesFrom",
-]
-
 emitNetExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3580,18 +3472,6 @@ emitNetExtern e _ name _ = gapE e ("unsupported net extern " ++ name)
 -- runtime. osEntropyBytes is deliberately separate and reads the host OS source.
 -- randomInt/Bool/Char return RAW words tagged here; randomFloat returns a boxed
 -- Float word; osEntropyBytes returns a boxed Array; setSeed is Unit.
-isRngExtern : String -> Bool
-isRngExtern name = contains name [
-  "randomInt",
-  "randomBool",
-  "randomFloat",
-  "randomChar",
-  "setSeed",
-  "randomState",
-  "restoreRandomState",
-  "osEntropyBytes",
-]
-
 emitRngExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3647,10 +3527,6 @@ emitRngExtern e _ name _ = gapE e ("unsupported rng extern " ++ name)
 
 -- wallTimeSec / allocBytes: both take Unit and return a boxed Float (same ABI
 -- as randomFloat).  C: mdk_wall_time_sec / mdk_alloc_bytes in medaka_rt.c.
-isPerfExtern : String -> Bool
-isPerfExtern name =
-  contains name ["wallTimeSec", "monotonicSec", "sleepMs", "allocBytes"]
-
 emitPerfExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3692,12 +3568,6 @@ emitPerfExtern e _ name _ = gapE e ("unsupported perf extern " ++ name)
 -- 63-bit rep.  See runtime/medaka_rt.c mdk_bit_*/mdk_shift_*.  The `int`-prefixed
 -- names (`intBitAnd`, …) are the same primitives under names a module defining its
 -- own `bitAnd` can still reach; they emit exactly what the bare name does.
-isBitExtern : String -> Bool
-isBitExtern name = contains name [
-  "bitAnd", "bitOr", "bitXor", "shiftLeft", "shiftRight", "bitNot", "intBitAnd",
-  "intBitOr", "intBitXor", "intShiftLeft", "intShiftRight", "intBitNot"
-]
-
 emitBitBin : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -3743,12 +3613,6 @@ emitBitExtern e _ name _ = gapE e ("unsupported bit extern " ++ name)
 -- the tag bit, tag bit kept (`(2^n - 1) << 1 | 1`), which is exact for a
 -- negative payload too.  An `I32` is the same word held sign-extended:
 -- `i32ToInt` is the identity and `i32Truncate` the low 32 bits sign-extended.
-isFixedWidthExtern : String -> Bool
-isFixedWidthExtern name = contains name [
-  "u8Truncate", "u8ToInt", "u16Truncate", "u16ToInt", "u32Truncate", "u32ToInt",
-  "i32Truncate", "i32ToInt"
-]
-
 emitFixedWidthTruncate : Emit ->
   OrdMap (String, LTy) ->
   Int ->
@@ -3799,18 +3663,10 @@ emitFixedWidthToInt e env args = match emitArgs e env args
 -- an Int amount and give 0 for any amount outside `0 .. 63`, by a select rather
 -- than a branch; the amount is masked first, so the `shl`/`lshr` itself never sees
 -- an out-of-range count.
--- Each backend names the kernels it implements itself, and
--- test/diff_compiler_capability_matrix.sh reads the list from each backend's own
--- source, so the list is duplicated in wasm_emit.mdk's `isU64ExternW` on purpose.
+-- Each backend records the kernels it implements in its own column of the
+-- extern catalog (`LlvmU64` here; wasm lists a `UseU64` demand in `wasmUseRows`).
 -- `i64FromBits` and `i64ToBits` keep the payload and change only the header, so
 -- they are kernels of this family too: on payloads they are the identity.
-isU64Extern : String -> Bool
--- lint-disable-next-line rule-duplicate-body
-isU64Extern name = contains name [
-  "u64Truncate", "u64TruncateToInt", "u64BitAnd", "u64BitOr", "u64BitXor",
-  "u64ShiftLeft", "u64ShiftRight", "u64MulHigh", "i64FromBits", "i64ToBits"
-]
-
 emitU64Extern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -4407,8 +4263,8 @@ emitU32Inlined e env pats body args =
 
 -- Emit an inlined callee's body.  The enclosing define's impl context
 -- (`curImplTag`/`curSelfFnParams`, keyed by the caller's parameter names) and
--- its TRMC and dispatch-group tail contexts describe the caller, so they are
--- cleared for the body and restored after.  Each outermost inlining site may
+-- its TRMC, dispatch-group and self-tail contexts describe the caller, so they
+-- are cleared for the body and restored after.  Each outermost inlining site may
 -- open at most `inlineSiteBudget` inlinings in all, so a chain of small
 -- functions that each call the next several times cannot grow the emitted
 -- code exponentially.
@@ -4418,9 +4274,11 @@ withInlineScope e act =
   let fns = !e.curSelfFnParams
   let trmc = !e.trmcCtx
   let gd = !e.gDispCtx
+  let st = !e.selfTailCtx
   let _ = clearCurImplSelfFns e
   e.trmcCtx := TrmcOff
   e.gDispCtx := GDispOff
+  e.selfTailCtx := None
   if !e.inlineOpen == 0 then e.inlineSpent := 0
   e.inlineSpent := !e.inlineSpent + 1
   e.inlineOpen := !e.inlineOpen + 1
@@ -4429,6 +4287,7 @@ withInlineScope e act =
   let _ = setCurImplSelfFns e tag fns
   e.trmcCtx := trmc
   e.gDispCtx := gd
+  e.selfTailCtx := st
   r
 
 -- may another inlining open here?
@@ -4770,7 +4629,7 @@ skipOtherwise ex = ex
 u64KernelApplied : List String -> CExpr -> Option String
 u64KernelApplied ps body = match flattenApp body []
   (CVar kern _, xs) =>
-    if isU64Extern kern && argsAreParams ps xs then Some kern else None
+    if inU64Family kern && argsAreParams ps xs then Some kern else None
   _ => None
 
 argsAreParams : List String -> List CExpr -> Bool
@@ -4884,10 +4743,6 @@ emitU64Shift e env instr a k =
   let _ = emit e "  \{r} = select i1 \{inRange}, i64 \{shifted}, i64 0"
   r
 
-isHashExtern : String -> Bool
-isHashExtern name =
-  contains name ["hashInt", "hashChar", "hashBool", "hashFloat", "hashString"]
-
 emitHashExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -4932,9 +4787,6 @@ emitHashExtern e _ name _ = gapE e ("unsupported hash extern " ++ name)
 -- Debug-literal externs (byte-exact quoted/escaped rendering; no oracle change).
 -- The String/Char arg word passes straight to the C helper (mdk_debug_*_lit
 -- reads the cell / untags the codepoint); result is a heap String (LTStr).
-isDebugLitExtern : String -> Bool
-isDebugLitExtern name = contains name ["debugStringLit", "debugCharLit"]
-
 emitDebugLitExtern : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -4956,89 +4808,104 @@ emitDebugLitExtern e env "debugCharLit" args = match emitArgs e env args
 emitDebugLitExtern e _ name _ = gapE e ("unsupported debug-lit extern " ++ name)
 
 -- ── extern dispatch: applied form ───────────────────────────────────────────
--- ONE name-keyed catalog (RUN-EMIT-005 (B) grain (c) / RUN-EMIT-006, #358):
--- each row pairs a family's existing membership predicate with its existing
--- emitter — the per-name clause bodies inside `emitXExtern` stay exactly
--- where they are; only the SELECTION ladder collapses.  `isAnyExtern` and
--- `emitExternApplied` both derive from this one list, so a family can't
--- register in one without the other — no more hand-kept-in-sync OR-chain +
--- if-chain pair.  `arrayMakeWith` has no `isXxx` predicate (exact-name
--- dispatch, its `:10564` signature omits the name param) so it stays a
--- literal pre-check ahead of the table on both sides, exactly as before.
+-- The extern catalog (`backend.extern_catalog`) names, per runtime extern, the
+-- family whose emitter lowers it; `externEmitter` maps each family to that
+-- emitter, so selection is one keyed lookup plus one `case`.  The per-name
+-- clause bodies inside `emitXExtern` stay where they are.  `isAnyExtern` and
+-- `emitExternApplied` both read the catalog, so they cannot disagree about what
+-- counts as an extern.
 type ExternEmitter = Emit -> OrdMap (String, LTy) -> String -> List CExpr -> (String, LTy)
 
-externCatalog : List (String -> Bool, ExternEmitter)
-externCatalog = [
-  (isStrExtern, emitStrExtern),
-  (isNumExtern, emitNumExtern),
-  (isIoExtern, emitIoExtern),
-  (isAbortExtern, emitAbortExtern),
-  (isArrIntrinsic, emitArrIntrinsic),
-  (isArrLeafExtern, emitArrLeafExtern),
-  (isByteBlockExtern, emitByteBlockExtern),
-  (isCharExtern, emitCharExtern),
-  (isStrCharExtern, emitStrCharExtern),
-  (isUnicodeExtern, emitUnicodeExtern),
-  (isAdtExtern, emitAdtExtern),
-  (isEnvExtern, emitEnvExtern),
-  (isFileExtern, emitFileExtern),
-  (isNetExtern, emitNetExtern),
-  (isRngExtern, emitRngExtern),
-  (isHashExtern, emitHashExtern),
-  (isBitExtern, emitBitExtern),
-  (isFixedWidthExtern, emitFixedWidthExtern),
-  (isU64Extern, emitU64Extern),
-  (isDebugLitExtern, emitDebugLitExtern),
-  (isPerfExtern, emitPerfExtern),
-]
+-- The emitter for a family a saturated call dispatches through.  `LlvmRefCell`,
+-- `LlvmConstant` and `LlvmFallthrough` have none: `emitApp`, `emitVar` and
+-- `isFallthroughVar` match those names at their own sites.
+externEmitter : LlvmFamily -> Option ExternEmitter
+externEmitter LlvmStr = Some emitStrExtern
+externEmitter LlvmNum = Some emitNumExtern
+externEmitter LlvmIo = Some emitIoExtern
+externEmitter LlvmAbort = Some emitAbortExtern
+externEmitter LlvmArrIntrinsic = Some emitArrIntrinsic
+externEmitter LlvmArrLeaf = Some emitArrLeafExtern
+externEmitter LlvmByteBlock = Some emitByteBlockExtern
+externEmitter LlvmChar = Some emitCharExtern
+externEmitter LlvmStrChar = Some emitStrCharExtern
+externEmitter LlvmUnicode = Some emitUnicodeExtern
+externEmitter LlvmAdt = Some emitAdtExtern
+externEmitter LlvmEnv = Some emitEnvExtern
+externEmitter LlvmFile = Some emitFileExtern
+externEmitter LlvmNet = Some emitNetExtern
+externEmitter LlvmRng = Some emitRngExtern
+externEmitter LlvmHash = Some emitHashExtern
+externEmitter LlvmBit = Some emitBitExtern
+externEmitter LlvmFixedWidth = Some emitFixedWidthExtern
+externEmitter LlvmU64 = Some emitU64Extern
+externEmitter LlvmDebugLit = Some emitDebugLitExtern
+externEmitter LlvmPerf = Some emitPerfExtern
+externEmitter LlvmArrayMakeWith =
+  Some (e env _ args => emitArrayMakeWith e env args)
+externEmitter LlvmRefCell = None
+externEmitter LlvmConstant = None
+externEmitter LlvmFallthrough = None
 
--- first (and, by the disjointness the catalog assumes, only) row whose
--- predicate accepts `name`.
-findExternFamily : String ->
-  List (String -> Bool, ExternEmitter) ->
-  Option ExternEmitter
-findExternFamily _ [] = None
-findExternFamily name ((pred, fn) :: rest)
-  | pred name = Some fn
-  | otherwise = findExternFamily name rest
-
--- Is `name` a KNOWN extern of any family the emitter handles?  Drives both the
+-- Is `name` a runtime extern lowered through `externEmitter`?  Drives both the
 -- saturated CApp head path (emitExternApplied) and the value-position eta-wrap
--- (emitVar → emitExternEtaClosure); keeping the membership in ONE place means
--- the two paths can never disagree about what counts as an extern.
+-- (emitVar → emitExternEtaClosure).
 isAnyExtern : String -> Bool
-isAnyExtern name =
-  name == "arrayMakeWith" || anyList ((pred, _) => pred name) externCatalog
+isAnyExtern name = match llvmFamily name
+  Some f => isLlvmExternFamily f
+  None => False
+
+-- Is `name` an extern of exactly this family?  Used where a caller needs one
+-- family's membership rather than the dispatch.
+inIoFamily : String -> Bool
+inIoFamily name = match llvmFamily name
+  Some LlvmIo => True
+  _ => False
+
+inU64Family : String -> Bool
+inU64Family name = match llvmFamily name
+  Some LlvmU64 => True
+  _ => False
+
+isRefCellName : String -> Bool
+isRefCellName name = match llvmFamily name
+  Some LlvmRefCell => True
+  _ => False
+
+isConstantName : String -> Bool
+isConstantName name = match llvmFamily name
+  Some LlvmConstant => True
+  _ => False
 
 -- SATURATED extern application: route a known extern + its (non-empty) argument
 -- list to the right family emitter.  Factored out of emitApp's CVar-head ladder
 -- so that the VALUE-position eta-wrap (emitExternEtaClosure) can REPLAY the exact
 -- applied-form codegen on synthetic `%argK` operands — value/applied byte-
--- consistency by construction, no parallel codegen to drift.  A name matching
--- no catalog row is out-of-catalog: `gapE` decides loudly (`panic`, `Strict`,
--- every real build) or quietly-recorded (`noteGap`, `Record`, the D4 census
--- scaffold) — the same mode-aware floor the old terminal
--- `else -> emitDebugLitExtern` reached, now explicit instead of borrowed from
--- debugLit's own wildcard clause (RUN-EMIT-006 §5 property 5: debugLit is an
--- ordinary keyed entry now, and the table-lookup miss carries the fallthrough
--- role). Caller guards `hasArgs args`.
+-- consistency by construction, no parallel codegen to drift.  Both callers
+-- guard `isAnyExtern fname`, which holds only for a family `externEmitter`
+-- maps, so the two panics are invariant checks: a runtime extern llvm does not
+-- lower is refused before emission (`core_validate.validateExterns`).  Caller
+-- guards `hasArgs args`.
 emitExternApplied : Emit ->
   OrdMap (String, LTy) ->
   String ->
   List CExpr ->
   (String, LTy)
-emitExternApplied e env fname args =
-  if fname == "arrayMakeWith" then
-    emitArrayMakeWith e env args
-  else match findExternFamily fname externCatalog
+emitExternApplied e env fname args = match llvmFamily fname
+  Some f => match externEmitter f
     Some fn => fn e env fname args
-    None => gapE e ("unsupported extern " ++ fname)
+    None => panic (notAnExternFamily fname)
+  None => panic (notAnExternFamily fname)
+
+notAnExternFamily : String -> String
+notAnExternFamily fname =
+  "internal error: emitExternApplied reached '\{fname}', which has no llvm extern family (callers guard isAnyExtern)"
 
 -- ── #2074: user-declared FFI externs — the C-ABI lowering ────────────────────
 --
--- A USER `extern` is a different kind of thing from the 138 `stdlib/runtime.mdk`
--- builtins above.  A builtin is an INTERNAL name whose codegen this file owns
--- (`externCatalog`), often an intrinsic with no C symbol at all.  A user extern
+-- A USER `extern` is a different kind of thing from the `stdlib/runtime.mdk`
+-- builtins above (one row each in `backend.extern_catalog`).  A builtin is an INTERNAL name whose codegen this file owns
+-- (`externEmitter`), often an intrinsic with no C symbol at all.  A user extern
 -- names a FOREIGN symbol this compiler has never seen: the declared name is the
 -- C symbol VERBATIM (`call @<name>`, NOT `@mdk_<name>`), and the only contract
 -- available is its declared Medaka signature, marshalled per `compiler/FFI-ABI.md`
@@ -5051,8 +4918,8 @@ emitExternApplied e env fname args =
 -- `ffiIsBuiltinExternName` (compiler/types/typecheck.mdk) exempts from slice 1's
 -- crossable-set guard.  The index itself is belt AND braces: the mint
 -- (`ir.core_ir_lower.ffiExternTypeNames`) subtracts `stdlib/runtime.mdk`'s own
--- extern names, so a runtime extern name that NO `externCatalog` family predicate
--- happens to claim still cannot become a foreign call here.
+-- extern names, so a runtime extern name with no llvm family in the catalog
+-- still cannot become a foreign call here.
 --
 -- 🚨 THE CROSSABLE SET IS NOT REDEFINED HERE.  `ffiCrossableHead` below is the
 -- SET OF TYPE-HEAD NAMES that slice 1's `ffiCrossableTy`
@@ -6646,45 +6513,68 @@ emitLet : Emit ->
   CExpr ->
   CExpr ->
   (String, LTy)
-emitLet e env False (PVar x _) e1 e2 = emitExpr e (bindLetRaw e env x e1 e2) e2
-emitLet e env False PWild e1 e2 =
+emitLet e env recF pat e1 e2 =
+  if letBinds recF pat e1 then
+    emitExpr e (bindLet e env recF pat e1 e2) e2
+  else
+    gapE
+      e
+      "unsupported let (only non-recursive let var/_/tuple = e, or function-let)"
+
+-- the `let` shapes `bindLet` lowers: every non-recursive pattern, and a recursive
+-- `let` only when it binds a function.
+letBinds : Bool -> Pat -> CExpr -> Bool
+letBinds False _ _ = True
+letBinds True (PVar _ _) (CLam _ _) = True
+letBinds True _ _ = False
+
+-- emit a `let pat = e1`'s binding and return the env `e2` (its scope) sees.
+-- Callers gate on `letBinds`.  Shared by the value path (`emitLet`) and the
+-- tail-position descents (`emitFnBody`, `emitSelfTailArm`), so a let emits the
+-- same instructions whether or not its body is in tail position.
+bindLet : Emit ->
+  OrdMap (String, LTy) ->
+  Bool ->
+  Pat ->
+  CExpr ->
+  CExpr ->
+  OrdMap (String, LTy)
+bindLet e env False (PVar x _) e1 e2 = bindLetRaw e env x e1 e2
+bindLet e env False PWild e1 _ =
   let _ = emitExpr e env e1
-  emitExpr e env e2
-emitLet e env False (PTuple ps) e1 e2 = match bindTupleInline e env ps e1
-  Some env2 => emitExpr e env2 e2
+  env
+bindLet e env False (PTuple ps) e1 e2 = match bindTupleInline e env ps e1
+  Some env2 => env2
   None =>
     let (v, _) = emitExpr e env e1
-    let env2 = bindPattern e env (PTuple ps) v e2
-    emitExpr e env2 e2
+    bindPattern e env (PTuple ps) v e2
 -- a recursive (function-`let`) closure: `let f p… = … in e2` lowers to
 -- CLet True (PVar f) (CLam …).  The lambda's own name `f` is the
 -- closure itself, so it is EXCLUDED from the capture set at the alloc site and
 -- bound to `%clos` (the leading closure pointer) inside the lifted define — a
 -- recursive self-call re-enters the same code with the same cell.  Non-recursive
 -- function-lets take the same path harmlessly (`f` simply never appears free).
-emitLet e env True (PVar f _) (CLam pats body) e2 =
+bindLet e env True (PVar f _) (CLam pats body) _ =
   let (w, ty) = emitRecLam e env f pats body
-  emitExpr e (omInsert f (w, ty) env) e2
+  omInsert f (w, ty) env
 -- P0-2c: general expression-level `let pat = e1 in e2` for a non-recursive,
 -- non-(var/wild/tuple) pattern (PCon/PCons/PList/PAs) — the expression-position
 -- analog of emitBlock's general CSLet arms.  Mirrors them: an irrefutable head
 -- (single-ctor PCon) destructures unchecked (bindPattern); a refutable head
 -- (sibling ctors, list) gets the trap-on-miss check (emitRefutableCsLet), matching
--- the interpreter's blockLet "E-LET-REFUTE" panic.  Previously this shape hit the
--- gapE catch-all (build-fail); it now lowers.  Placed after the PVar/PWild/PTuple
--- and recursive-function arms so those stay byte-identical.
-emitLet e env False pat e1 e2 =
+-- the interpreter's blockLet "E-LET-REFUTE" panic.  Placed after the
+-- PVar/PWild/PTuple and recursive-function arms so those stay byte-identical.
+bindLet e env False pat e1 e2 =
   let (v, _) = emitExpr e env e1
-  let env2 =
-    if refutableCsLet e pat then
-      emitRefutableCsLet e env pat v
-    else
-      bindPattern e env pat v e2
-  emitExpr e env2 e2
-emitLet e _ _ _ _ _ =
-  gapE
+  if refutableCsLet e pat then
+    emitRefutableCsLet e env pat v
+  else
+    bindPattern e env pat v e2
+bindLet e env _ _ _ _ =
+  gapEnv
     e
     "unsupported let (only non-recursive let var/_/tuple = e, or function-let)"
+    env
 
 -- a `let`/`where` group.  Bindings emit one at a time, left-to-right, threading
 -- the growing env, so a later binding sees the earlier ones (and the body sees
@@ -6706,17 +6596,32 @@ emitLet e _ _ _ _ _ =
 -- arbitrary forward refs and true mutual recursion all emit correctly.  A value
 -- binding interleaved INSIDE such a run (a mutual ref crossing a non-function
 -- sibling) is the residue this scheme doesn't cover — it is rejected precisely
--- (`gapE`) rather than miscompiled.
+-- (`letGroupGap`) rather than miscompiled.
 emitLetGroup : Emit ->
   OrdMap (String, LTy) ->
   List CBind ->
   CExpr ->
   (String, LTy)
-emitLetGroup e env [] body = emitExpr e env body
-emitLetGroup e env ((CBind name [CClause [] rhs] _) :: rest) body =
+emitLetGroup e env binds body = match bindLetGroup e env binds body
+  Some env2 => emitExpr e env2 body
+  None => letGroupGap e
+
+-- emit a `let`/`where` group's bindings (see `emitLetGroup`) and return the env
+-- `body` sees, or None at the knot-tying residue, whose gap the caller reports
+-- with `letGroupGap` after the bindings before it are emitted.  `body` is read
+-- only for `satOnlyUses`; it is not emitted.  Shared by the value path and the
+-- tail-position descents (`emitFnBody`, `emitSelfTailArm`), so a group emits the
+-- same instructions whether or not its body is in tail position.
+bindLetGroup : Emit ->
+  OrdMap (String, LTy) ->
+  List CBind ->
+  CExpr ->
+  Option (OrdMap (String, LTy))
+bindLetGroup _ env [] _ = Some env
+bindLetGroup e env ((CBind name [CClause [] rhs] _) :: rest) body =
   let (v, ty) = emitExpr e env rhs
-  emitLetGroup e (omInsert name (v, ty) env) rest body
-emitLetGroup e env ((CBind name clauses site) :: rest) body
+  bindLetGroup e (omInsert name (v, ty) env) rest body
+bindLetGroup e env ((CBind name clauses site) :: rest) body
   | refsLater name clauses (bindNames rest) =
     emitKnotRun e env (CBind name clauses site :: rest) body
   | otherwise =
@@ -6726,27 +6631,31 @@ emitLetGroup e env ((CBind name clauses site) :: rest) body
     -- may skip the closure's code_ptr load (`e.directFn`).
     let direct = satOnlyUses name (clauseArityC clauses) (CLetGroup rest body)
     let (w, ty) = emitGroupBind e env (CBind name clauses site) direct
-    emitLetGroup e (omInsert name (w, ty) env) rest body
+    bindLetGroup e (omInsert name (w, ty) env) rest body
+
+letGroupGap : Emit -> (String, LTy)
+letGroupGap e =
+  gapE
+    e
+    "unsupported let-group: a binding forward/mutually references a later value binding (knot-tying covers only mutual function bindings)"
 
 -- knot-tie the maximal leading run of function bindings of `binds`, then continue
 -- the group with the remainder.  A forward/mutual ref crossing into a LATER value
--- binding (outside the run) is the uncovered residue — rejected precisely.
+-- binding (outside the run) is the uncovered residue: None, emitting nothing.
 emitKnotRun : Emit ->
   OrdMap (String, LTy) ->
   List CBind ->
   CExpr ->
-  (String, LTy)
+  Option (OrdMap (String, LTy))
 emitKnotRun e env binds body =
   let run = takeFnRun binds
   let after = dropS (lengthS run) binds
   let runNames = bindNames run
   if anyRefsOutsideRun run runNames (bindNames after) then
-    gapE
-      e
-      "unsupported let-group: a binding forward/mutually references a later value binding (knot-tying covers only mutual function bindings)"
+    None
   else
     let env2 = emitLetGroupKnot e env run runNames
-    emitLetGroup e env2 after body
+    bindLetGroup e env2 after body
 
 -- the maximal leading run of LOCAL FUNCTION bindings (non-empty params) — a nullary
 -- VALUE binding (`CBind _ [CClause [] _]`) ends the run.
@@ -7304,10 +7213,8 @@ emitApp e env app =
             _ => LTInt
           (r, resultTy)
         _ => panic "llvm: file bound takes a grant and a thunk"
-      else if fname == "Ref" then
-        emitRefAlloc e env args
-      else if fname == "setRef" then
-        emitSetRef e env args
+      else if isRefCellName fname then
+        emitRefCellExtern e env fname args
       else if fname == siteSentinelName then
         emitSiteLiteral e args
       else if isLocal env fname then
@@ -9574,20 +9481,20 @@ emitGroupBody e fname tag positions arity (clauses@[(pats, body)]) =
     let env = paramEnvByPos pats tyList 0
     emitFnBody e env fname body
   else
-    emitClauseTree
+    emitTailClauseTree
       e
       (implParamEnvByPos tag positions arity 0)
+      fname
       arity
       clauses
-      ""
       noDeclLoc
 emitGroupBody e fname tag positions arity clauses =
-  emitClauseTree
+  emitTailClauseTree
     e
     (implParamEnvByPos tag positions arity 0)
+    fname
     arity
     clauses
-    ""
     noDeclLoc
 
 -- build a LTy list of length n, typed as tagToLTy tag at positions ∈ positions,
@@ -10944,6 +10851,8 @@ emitDecision e env scrut arms tree =
   e.trmcCtx := TrmcOff
   let savedGDisp = !e.gDispCtx
   e.gDispCtx := GDispOff
+  let savedSelfTail = !e.selfTailCtx
+  e.selfTailCtx := None
   -- "" = a miss in an expression-position match is a genuine non-exhaustive abort,
   -- NOT the enclosing clause chain's fallthrough (the clause's pattern already
   -- matched to get here).  Passing it as an argument replaces the old
@@ -10951,6 +10860,7 @@ emitDecision e env scrut arms tree =
   let _ = emitTree e env [sv] arms [sv] slot endL "" rty tree
   e.trmcCtx := savedTrmc
   e.gDispCtx := savedGDisp
+  e.selfTailCtx := savedSelfTail
   let _ = emit e (endL ++ ":")
   let r = freshReg e
   let _ = emit e "  \{r} = load i64, ptr \{slot}"
@@ -11067,11 +10977,7 @@ emitLeaf e env roots arms i slot endL rty = match nthArm arms i
       GDispOn _ _ _ _ _ => emitGDispBody e env2 body
       GDispOff => match !e.trmcCtx
         TrmcOn _ _ _ _ _ _ => emitTrmcBody e env2 body
-        TrmcOff =>
-          let (bv, bty) = emitExpr e env2 body
-          rty := bty
-          let _ = emit e "  store i64 \{bv}, ptr \{slot}"
-          emit e ("  br label %" ++ endL)
+        TrmcOff => emitArmBody e env2 body slot endL rty
   None => gapU e "decision arm index out of range"
 -- TRMC (TRMC-DESIGN.md): when a destination-passing loop is active (multi-clause
 -- eligible fn — emitClauseTree's clause-selection tree), the clause body is a
@@ -11116,13 +11022,87 @@ emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty =
     GDispOn _ _ _ _ _ => emitGDispBody e env3 body
     GDispOff => match !e.trmcCtx
       TrmcOn _ _ _ _ _ _ => emitTrmcBody e env3 body
-      TrmcOff =>
-        let (bv, bty) = emitExpr e env3 body
-        rty := bty
-        let _ = emit e "  store i64 \{bv}, ptr \{slot}"
-        emit e ("  br label %" ++ endL)
+      TrmcOff => emitArmBody e env3 body slot endL rty
   let _ = emit e (failL ++ ":")
   emitTree e env roots arms occs slot endL ftL rty fail
+
+-- A matched arm's body.  It normally computes its value into the match's result
+-- `slot` and joins at `endL`.  When the match is in the tail position of the
+-- define named by `e.selfTailCtx`, the body is descended instead: a saturated
+-- call of that define is emitted as `musttail call` + `ret` straight from the
+-- leaf, so the recursion does not grow the stack even where clang does not turn
+-- the call into a jump (-O0).  Every other leaf still stores and joins.
+emitArmBody : Emit ->
+  OrdMap (String, LTy) ->
+  CExpr ->
+  String ->
+  String ->
+  Ref LTy ->
+  Unit
+emitArmBody e env body slot endL rty = match !e.selfTailCtx
+  Some self => emitSelfTailArm e env self body slot endL rty
+  None => emitArmValue e env body slot endL rty
+
+emitArmValue : Emit ->
+  OrdMap (String, LTy) ->
+  CExpr ->
+  String ->
+  String ->
+  Ref LTy ->
+  Unit
+emitArmValue e env body slot endL rty =
+  emitArmWord e (emitExpr e env body) slot endL rty
+
+-- store an arm's already-emitted value into `slot` and join at `endL`.
+emitArmWord : Emit -> (String, LTy) -> String -> String -> Ref LTy -> Unit
+emitArmWord e (bv, bty) slot endL rty =
+  rty := bty
+  let _ = emit e "  store i64 \{bv}, ptr \{slot}"
+  emit e ("  br label %" ++ endL)
+
+-- An arm body in the tail position of the define `self` (its emitted symbol).
+-- `if`, `let`, a `let`/`where` group, a block and a nested match pass tail
+-- position on (the nested match's arms join at the same `endL`, `e.selfTailCtx`
+-- left live as `emitTrmcBody` leaves `trmcCtx`; a let, group or block emits its
+-- bindings as the value path does); a saturated call of `self` is returned
+-- with `musttail`, the calling-convention proof `emitFnBody` relies on;
+-- anything else stores into `slot` and joins.
+emitSelfTailArm : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  String ->
+  String ->
+  Ref LTy ->
+  Unit
+emitSelfTailArm e env self (CIf c t f) slot endL rty =
+  let (thenL, elseL) = emitTailIfHead e env c
+  let _ = emit e (thenL ++ ":")
+  let _ = emitSelfTailArm e env self t slot endL rty
+  let _ = emit e (elseL ++ ":")
+  emitSelfTailArm e env self f slot endL rty
+emitSelfTailArm e env _ (CDecision scrut arms tree) slot endL rty =
+  let (sv, _) = emitExpr e env scrut
+  emitTree e env [sv] arms [sv] slot endL "" rty tree
+emitSelfTailArm e env self (CLet recF pat e1 e2) slot endL rty =
+  if letBinds recF pat e1 then
+    emitSelfTailArm e (bindLet e env recF pat e1 e2) self e2 slot endL rty
+  else
+    emitArmValue e env (CLet recF pat e1 e2) slot endL rty
+emitSelfTailArm e env self (CLetGroup binds body) slot endL rty =
+  match bindLetGroup e env binds body
+    Some env2 => emitSelfTailArm e env2 self body slot endL rty
+    None => emitArmWord e (letGroupGap e) slot endL rty
+emitSelfTailArm e env self (CBlock stmts) slot endL rty =
+  match lastStmtExpr stmts
+    Some last =>
+      emitSelfTailArm e (emitBlockInit e env stmts) self last slot endL rty
+    None => emitArmValue e env (CBlock stmts) slot endL rty
+emitSelfTailArm e env self body slot endL rty =
+  if directTailCallee e body == Some self then
+    emitTailCallRet e env self body
+  else
+    emitArmValue e env body slot endL rty
 
 -- emit the guard tests left-to-right: a `CGBool` tests a Bool (`True` = the word
 -- 3) and branches to `failL` on failure, falling through on success; a
@@ -12281,7 +12261,7 @@ emitMultiClauseFn e name clauses site =
   let _ = beginDefine e
   let _ = emit e "define i64 @mdk_\{name}(\{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
-  let _ = emitClauseTree e env arity clauses "" site
+  let _ = emitTailClauseTree e env ("mdk_" ++ name) arity clauses site
   let _ = emit e "}"
   emit e ""
 
@@ -13699,7 +13679,7 @@ emitFnClauseW e name pats ptys body =
   let _ = beginDefine e
   let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
   let _ = emit e "entry:"
-  let _ = emitFnBody e env name body
+  let _ = emitFnBody e env ("mdk_" ++ name) body
   let _ = emit e "}"
   emit e ""
 
@@ -13764,10 +13744,57 @@ tailCallSaturated e fname n = match defArityOf e fname
 
 -- emit a function body in TAIL position: every control path ends in a `ret`.
 -- An `if` recurses into both arms (each arm is itself in tail position and rets);
--- a SATURATED tail call to a known function emits `[musttail] call` + `ret`;
--- anything else is computed as a value and returned.
+-- a `let`, a `let`/`where` group or a block emits its bindings as the value
+-- path does and passes tail position to its body; a `match` puts its arms in
+-- tail position (`emitTailDecision`); a SATURATED tail call to a known function
+-- emits `[musttail] call` + `ret`; anything else is computed as a value and
+-- returned.  `self` is the emitted symbol of the enclosing define (`mdk_…`), the
+-- namespace `directTailCallee` answers in.  A `musttail` callee must not receive
+-- a pointer into the caller's frame: every closure a let or group binds is an
+-- `@mdk_alloc` cell or a constant global, never an `alloca`, so this is sound.
 emitFnBody : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
 emitFnBody e env self (CIf c t f) =
+  let (thenL, elseL) = emitTailIfHead e env c
+  let _ = emit e (thenL ++ ":")
+  let _ = emitFnBody e env self t
+  let _ = emit e (elseL ++ ":")
+  emitFnBody e env self f
+emitFnBody e env self (CDecision scrut arms tree) =
+  emitTailDecision e env self scrut arms tree
+emitFnBody e env self (CLet recF pat e1 e2) =
+  if letBinds recF pat e1 then
+    emitFnBody e (bindLet e env recF pat e1 e2) self e2
+  else
+    emitValueRet e env (CLet recF pat e1 e2)
+emitFnBody e env self (CLetGroup binds body) =
+  match bindLetGroup e env binds body
+    Some env2 => emitFnBody e env2 self body
+    None =>
+      let (v, _) = letGroupGap e
+      emit e ("  ret i64 " ++ v)
+emitFnBody e env self (CBlock stmts) = match lastStmtExpr stmts
+  Some last => emitFnBody e (emitBlockInit e env stmts) self last
+  None => emitValueRet e env (CBlock stmts)
+emitFnBody e env self other = match directTailCallee e other
+  Some _ => emitTailCallRet e env self other
+  None => emitValueRet e env other
+
+-- emit every statement of a block but the last, exactly as `emitBlock` does
+-- (each one's scope is the rest of the block, the last statement included), and
+-- return the env the last statement sees.
+emitBlockInit : Emit ->
+  OrdMap (String, LTy) ->
+  List CStmt ->
+  OrdMap (String, LTy)
+emitBlockInit _ env [] = env
+emitBlockInit _ env [_] = env
+emitBlockInit e env (s :: rest) =
+  emitBlockInit e (emitBlockLead e env s rest) rest
+
+-- test a tail `if`'s condition and branch on it; returns the (then, else) block
+-- labels, which the caller opens.
+emitTailIfHead : Emit -> OrdMap (String, LTy) -> CExpr -> (String, String)
+emitTailIfHead e env c =
   let (cv, _) = emitExpr e env c
   let ci = untagInt e cv
   let cb = freshReg e
@@ -13776,58 +13803,152 @@ emitFnBody e env self (CIf c t f) =
   let thenL = "then" ++ n
   let elseL = "else" ++ n
   let _ = emit e "  br i1 \{cb}, label %\{thenL}, label %\{elseL}"
-  let _ = emit e (thenL ++ ":")
-  let _ = emitFnBody e env self t
-  let _ = emit e (elseL ++ ":")
-  emitFnBody e env self f
-emitFnBody e env self other =
-  let (hd, args) = flattenApp other []
+  (thenL, elseL)
+
+-- a `match` in the tail position of the define `self`: `emitDecision`'s shape
+-- (result slot, join block, load + `ret`), with the arms descended under
+-- `e.selfTailCtx` so a saturated self call returns from its own leaf.
+emitTailDecision : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  CExpr ->
+  List CArm ->
+  CTree ->
+  Unit
+emitTailDecision e env self scrut arms tree =
+  let (sv, _) = emitExpr e env scrut
+  let slot = freshReg e
+  let _ = emit e ("  " ++ slot ++ " = alloca i64")
+  let endL = "decend" ++ intToString (freshLocal e)
+  let rty = Ref LTInt
+  let saved = !e.selfTailCtx
+  e.selfTailCtx := Some self
+  let _ = emitTree e env [sv] arms [sv] slot endL "" rty tree
+  e.selfTailCtx := saved
+  let _ = emit e (endL ++ ":")
+  let r = freshReg e
+  let _ = emit e "  \{r} = load i64, ptr \{slot}"
+  emit e ("  ret i64 " ++ r)
+
+-- `emitClauseTree` for a define whose clause bodies are its tail position: the
+-- leaves are descended under `e.selfTailCtx` (see `emitArmBody`).
+emitTailClauseTree : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  Int ->
+  List (List Pat, CExpr) ->
+  Loc ->
+  Unit
+emitTailClauseTree e env self arity clauses site =
+  let saved = !e.selfTailCtx
+  e.selfTailCtx := Some self
+  let _ = emitClauseTree e env arity clauses "" site
+  e.selfTailCtx := saved
+
+-- The emitted symbol (`mdk_…`, the name the IR `call`s) of `ex`'s callee when
+-- `ex` is a SATURATED call of a known function that a tail position lowers to a
+-- direct `call` + `ret` (`emitTailCallRet`), else None.  Emits nothing.
+--
+-- #1101: an UNSATURATED (over- or under-applied) tail call must not be emitted as
+-- a direct call — passing every flattened argument to a define with fewer params
+-- silently dropped the surplus and never invoked the returned closure.  Such a
+-- call returns None, so it is emitted as a value through `emitApp` ->
+-- `emitKnownFnSat` -> `emitOverApp`/`emitPapClosure`, the same correct shape an
+-- application in `main`'s own body already gets.  `emitArgs` is 1:1 with `args`,
+-- so `lengthS args` is the arg-word count.  A `u64` kernel wrapper
+-- (`u64KernelAlias`) goes through `emitApp`, which emits the kernel inline.
+--
+-- A constrained call carries its leading dictionary words in the CDict head,
+-- outside `args`.  Both lists count against the actual emitted define arity;
+-- mismatched calls keep the normal PAP/over-application path through
+-- emitDictApp.  A statically routed method call (`CMethod` with an `RKey` route,
+-- an impl method calling itself among them) is accepted on `emitMethod`'s own
+-- saturation rule (`tailMethodEntry`).
+directTailCallee : Emit -> CExpr -> Option String
+directTailCallee e ex =
+  let (hd, args) = flattenApp ex []
   match hd
     CVar fname0 _ =>
       let fname = canonFnName e fname0
-      -- #1101: an UNSATURATED (over- or under-applied) tail call must not be
-      -- emitted as a direct call — passing every flattened argument to a define
-      -- with fewer params silently dropped the surplus and never invoked the
-      -- returned closure.  Falling through to `emitValueRet` routes the node
-      -- through `emitApp` -> `emitKnownFnSat` -> `emitOverApp`/`emitPapClosure`,
-      -- the same correct shape an application in `main`'s own body already gets.
-      -- `emitArgs` is 1:1 with `args`, so `lengthS args` is the arg-word count
-      -- without emitting anything (the guard must not emit args it may discard).
-      -- A `u64` kernel wrapper (`u64KernelAlias`) goes through `emitApp`, which
-      -- emits the kernel inline.
       if isKnownFn e fname
         && hasArgs args
         && tailCallSaturated e fname (lengthS args)
         && isNone (u64KernelAlias e fname0 args)
         && isNone (rawWorkerCall e fname (lengthS args)) then
-        let argOps = emitArgs e env args
-        let r = freshReg e
-        let kw = if fname == self then "musttail call" else "call"
-        let _ = emit e "  \{r} = \{kw} i64 @mdk_\{fname}(\{argDecls argOps})"
-        emit e ("  ret i64 " ++ r)
+        Some ("mdk_" ++ fname)
       else
-        emitValueRet e env other
+        None
     CDict fname routes =>
-      -- A constrained self-call carries its leading dictionary words in the
-      -- CDict head, outside `args`.  Count both lists against the actual emitted
-      -- define arity before selecting musttail; mismatched calls keep the normal
-      -- PAP/over-application path through emitDictApp.
       let nwords = listLen routes + lengthS args
       if isKnownFn e fname
         && nwords > 0
         && tailCallSaturated e fname nwords then
-        let dictWords = dictWordsOf e env routes
-        let argOps = emitArgs e env args
-        let r = freshReg e
-        let kw = if fname == self then "musttail call" else "call"
-        let _ =
-          emit
-            e
-            "  \{r} = \{kw} i64 @mdk_\{fname}(\{argDecls (dictWords ++ argOps)})"
-        emit e ("  ret i64 " ++ r)
+        Some ("mdk_" ++ fname)
       else
-        emitValueRet e env other
-    _ => emitValueRet e env other
+        None
+    CMethod name iface siteArity route implRoutes methRoutes =>
+      let entry =
+        tailMethodEntry e name iface siteArity route implRoutes methRoutes args
+      map (implEntryFnName e name) entry
+    _ => None
+
+-- The impl entry a statically routed method call selects, when `emitApp` would
+-- lower the call to a saturated direct call of that entry's define: an `RKey`
+-- route, not the `fromInt` identity `emitApp` folds away, and as many arguments
+-- as the entry's arity (the leading dict words count on both sides of
+-- `emitMethod`'s comparison, so they cancel).  Any other call is None and keeps
+-- `emitImplCallSat`'s PAP/over-application path.  Emits nothing.
+tailMethodEntry : Emit ->
+  String ->
+  String ->
+  Int ->
+  Route ->
+  List Route ->
+  List Route ->
+  List CExpr ->
+  Option CImplEntry
+tailMethodEntry e name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes args =
+  let folded = intFromIntIdentityArg name route implRoutes methRoutes args
+  let entry =
+    if hasArgs args && isNone folded then
+      implForSite e name iface tag siteArity
+    else
+      None
+  match entry
+    Some ent =>
+      if lengthS args == methodArityOfEntry e ent name then Some ent else None
+    None => None
+tailMethodEntry _ _ _ _ _ _ _ _ = None
+
+-- emit a call `directTailCallee` accepted, then `ret` its result; a call of the
+-- enclosing define `self` is a `musttail call` (self recursion means the caller
+-- and callee prototypes match, which musttail requires).  Operands are emitted in
+-- the order the value path (`emitApp`) emits them.
+emitTailCallRet : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
+emitTailCallRet e env self ex =
+  let (hd, args) = flattenApp ex []
+  let (sym, ops) = match hd
+    CDict f routes =>
+      let dictWords = dictWordsOf e env routes
+      ("mdk_" ++ f, dictWords ++ emitArgs e env args)
+    CVar f0 _ => ("mdk_" ++ canonFnName e f0, emitArgs e env args)
+    CMethod name iface siteArity route implRoutes methRoutes =>
+      let entry =
+        tailMethodEntry e name iface siteArity route implRoutes methRoutes args
+      match entry
+        Some ent =>
+          let argOps = emitArgs e env args
+          let dictRoutes =
+            staticEntryDictRoutes e name ent route methRoutes implRoutes
+          let dictWords = dictWordsOf e env dictRoutes
+          (implEntryFnName e name ent, dictWords ++ argOps)
+        None =>
+          panic "llvm: emitTailCallRet on a call directTailCallee rejected"
+    _ => panic "llvm: emitTailCallRet on a call directTailCallee rejected"
+  let r = freshReg e
+  let kw = if sym == self then "musttail call" else "call"
+  let _ = emit e "  \{r} = \{kw} i64 @\{sym}(\{argDecls ops})"
+  emit e ("  ret i64 " ++ r)
 
 emitValueRet : Emit -> OrdMap (String, LTy) -> CExpr -> Unit
 emitValueRet e env ex =
@@ -14082,7 +14203,7 @@ typeOf sigs env app =
 -- them to LTUnit up front, matching the real emit path (`emitIoExtern`).
 callRetTy : OrdMap FnSig -> String -> LTy
 callRetTy sigs fname =
-  if isIoExtern fname then
+  if inIoFamily fname then
     LTUnit
   else match omLookup fname sigs
     Some (FnSig _ rty) => rty
@@ -14760,6 +14881,15 @@ emitVariantUpdate e env con base updates =
       let updatePairs = emitUpdatePairs e env updates
       let words = buildUpdateWords e bw labels updatePairs 0
       emitCtorAlloc e con words
+
+-- The `LlvmRefCell` family: `Ref` allocates a cell, `setRef` stores into one.
+emitRefCellExtern : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitRefCellExtern e env "Ref" args = emitRefAlloc e env args
+emitRefCellExtern e env _ args = emitSetRef e env args
 
 emitRefAlloc : Emit -> OrdMap (String, LTy) -> List CExpr -> (String, LTy)
 emitRefAlloc e env [x] =
@@ -15590,7 +15720,8 @@ runStrictEmission e input groups implEntries =
 -- expects: "the table the emitter built"), not two.
 export
 emitProgramWithStats : EmitInput -> CProgram -> (String, List (String, Int))
-emitProgramWithStats input (CProgram groups ctorArs ctorTypes implEntries) =
+emitProgramWithStats input (cp@(CProgram groups ctorArs ctorTypes implEntries)) =
+  let _ = unprovidedExterns Strict input cp
   let cfg = programEmitConfig Strict input groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
   let stats = tableStats e
@@ -15725,6 +15856,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     directFn = Ref [],
     trmcCtx = Ref TrmcOff,
     gDispCtx = Ref GDispOff,
+    selfTailCtx = Ref None,
     gDispGroups = Ref [],
     gDispBinds = Ref [],
     gDispBindMap = Ref omEmpty,
@@ -15803,7 +15935,10 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   e
 
 emitProgramMode : GapMode -> EmitInput -> CProgram -> (String, List String)
-emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
+emitProgramMode gapMode input (cp@(CProgram groups ctorArs ctorTypes implEntries)) =
+  -- Each half's run checks the whole program it received, so a refused extern
+  -- is refused by the half that reaches it, before that half emits anything.
+  let found = unprovidedExterns gapMode input cp
   -- issue #118: the two halves are emitted by INDEPENDENT emitter runs, so they
   -- get disjoint gensym ranges or their lifted defines collide — see
   -- programHalfIdBase.  Mode 0 keeps starting at 0, so its IR is unchanged.
@@ -15813,8 +15948,28 @@ emitProgramMode gapMode input (CProgram groups ctorArs ctorTypes implEntries) =
   -- prelude body that loads a global would hit the forward-dependency gap.
   let cfg = programEmitConfig gapMode input groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
+  let _ = noteUnprovidedExterns e found
   let text = runStrictEmission e input groups implEntries
   (text, reverseL !e.gapLog)
+
+-- Every free reference to a runtime extern llvm does not lower
+-- (`core_validate.validateExterns`).  Strict mode refuses them here, before any
+-- emitter state is built; record mode returns them for `noteUnprovidedExterns`.
+unprovidedExterns : GapMode -> EmitInput -> CProgram -> List ExternFinding
+unprovidedExterns Strict input cp =
+  match validateExterns LlvmBackend input.runtimeExterns cp
+    [] => []
+    found => panic (renderExternRefusal found)
+unprovidedExterns Record input cp =
+  validateExterns LlvmBackend input.runtimeExterns cp
+
+-- Record mode's one gap event per refused extern.  The emitter's own
+-- fallthrough for such a name then records nothing (`unprovidedExtern`).
+noteUnprovidedExterns : Emit -> List ExternFinding -> Unit
+noteUnprovidedExterns _ [] = ()
+noteUnprovidedExterns e (f :: rest) =
+  let _ = noteGapAt e (findingBinding f) (renderExternFinding f)
+  noteUnprovidedExterns e rest
 
 -- `@mdk_program_main`: the init prologue (every top-level value binding's rhs, in
 -- source order) followed by `main`'s own body and the type-directed print.
@@ -16100,7 +16255,7 @@ ctag _ = "?"
 -- The emitted LLVM text is discarded by the probe — only the gap log matters.
 export
 emitProgramGaps : EmitInput -> CProgram -> List String
-emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
+emitProgramGaps input (cp@(CProgram groups ctorArs ctorTypes implEntries)) =
   -- #561 PR-A: the gap census emits every value bind ORDINARILY (eager load), so
   -- install an EMPTY lazy set — this also RESETS any prior emitProgram's set so it
   -- cannot leak into the census. Likewise `runDispatchAnalysis = False` resets the
@@ -16114,6 +16269,7 @@ emitProgramGaps input (CProgram groups ctorArs ctorTypes implEntries) =
     runDispatchAnalysis = False,
   }
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
+  let _ = noteUnprovidedExterns e (unprovidedExterns Record input cp)
   let _ = emitPreamble e
   let _ = emitFnsGaps e (fnBinds groups)
   let _ = emitImplsGaps e implEntries

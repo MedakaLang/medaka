@@ -1120,7 +1120,7 @@ effect boundary (a decided non-goal, 2026-07-01).
 String -> <FileRead "_"> Result String (Int, Bool, Bool, Float)` (size, isDir,
 isFile, mtime — a tuple like `runCommand`). Threaded through `eval.mdk`? No —
 file externs are emitter-only; `medaka_rt.c` C shims + `llvm_preamble.mdk`
-declares + `llvm_emit.mdk` `isFileExtern`/`emitFileExtern` arms.
+declares + the `LlvmFile` family's `emitFileExtern` arms in `llvm_emit.mdk`.
 
 **Module API:** `FileStat { size, isDir, isFile, mtime }` record + `stat`;
 `copyFile` (read+write bytes), `mkdirAll` (`mkdir -p` via `path.dirname`
@@ -1152,13 +1152,13 @@ round-trip prop.
 Design: `NET-DESIGN.md`. **Native/build-path only, BY DESIGN** (like `fs`): net
 externs are unbound under `medaka run` (pure oracle), and `build --target wasm`
 of a net program is REJECTED (raw BSD sockets have no WasmGC equivalent — a clean
-`isNetExternW` guard, not a miscompile).
+refusal from the extern catalog's wasm column, not a miscompile).
 
 **Externs (10, in `runtime.mdk`, all `<Net "_"> Result String _`, raw tagged-Int
 fds):** `netResolve` (getaddrinfo), `netTcpConnect`, `netTcpListen`,
 `netListenPort`, `netTcpAccept`, `netSend` (may write < len), `netRecv` (empty =
 EOF), `netShutdown`, `netClose`, `netSetTimeout`. `mdk_net_*` BSD-socket C shims
-(SIGPIPE-guarded); separate `isNetExtern`/`emitNetExtern` in `llvm_emit.mdk`.
+(SIGPIPE-guarded); the `LlvmNet` family's `emitNetExtern` in `llvm_emit.mdk`.
 `Net` is host-refining (`("Net", PPrefix None)` already seeded → `connect "h" p`
 α-recovers `<Net "h">` for `manifest`/`check-policy`, zero compiler change).
 
