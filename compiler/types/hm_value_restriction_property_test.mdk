@@ -1,0 +1,233 @@
+-- HM-CORE-SEMANTICS §1 (the value restriction at every binding) and
+-- DICT-SEMANTICS §4.1 G2 (the value-restriction gate at a local binder) as
+-- generated-program laws. Each law's expected verdict comes from the value
+-- grammar below, transcribed from the spec text, and from the typing of the
+-- shapes in the harness; the checker is observed only by its verdict.
+
+import list.{filter}
+import test.{expectAll, expectAtLeast, expectEqual}
+import types.law_harness_test.{
+  Shape(..),
+  Verdict(..),
+  checkFlat,
+  checkModule,
+  codesFlat,
+  shapeAt,
+  shapeIsPolymorphic,
+  shapeScheme,
+  shapeSupport,
+  shapeTypeAt,
+  topLevelProgram,
+  localProgram,
+  withTwoUses,
+}
+
+{- The syntactic-value set of DICT §4.1 G2, which HM-CORE §1 adopts: a
+   literal, a variable, a lambda, or a construction (tuple, list literal,
+   record construction, application of a declared data constructor) whose
+   every part is a value, ascriptions transparent, a mutable-cell constructor
+   admitted at no position. Everything else is expansive, including a partial
+   application of a function (HM-CORE §1 clause 3). -}
+isSyntacticValue : Shape -> Bool
+isSyntacticValue SInt = True
+isSyntacticValue SStr = True
+isSyntacticValue SId = True
+isSyntacticValue SVar = True
+isSyntacticValue SCtorVar = True
+isSyntacticValue SNil = True
+isSyntacticValue (SLam _) = True
+isSyntacticValue (STuple left right) =
+  isSyntacticValue left && isSyntacticValue right
+isSyntacticValue (SList inner) = isSyntacticValue inner
+isSyntacticValue (SBox inner) = isSyntacticValue inner
+isSyntacticValue (SPair left right) =
+  isSyntacticValue left && isSyntacticValue right
+isSyntacticValue (SPartCtor inner) = isSyntacticValue inner
+isSyntacticValue (SRecord inner) = isSyntacticValue inner
+isSyntacticValue (SAsc inner) = isSyntacticValue inner
+isSyntacticValue (SRef _) = False
+isSyntacticValue (SApp _) = False
+isSyntacticValue (SPartial _) = False
+isSyntacticValue (SIf _) = False
+isSyntacticValue (SField _) = False
+
+-- gen-value: a binding observed at two instantiations is accepted iff it
+-- generalized, which it does iff its expression is a value; a binding whose
+-- type mentions no variable is accepted either way.
+expectedVerdict : Shape -> Verdict
+expectedVerdict shape =
+  if isSyntacticValue shape || not (shapeIsPolymorphic shape) then
+    Accepted
+  else
+    Rejected
+
+-- HM-CORE §1 gen-value at a top-level binding, on both checker routes.
+prop "a top-level binding generalizes iff its expression is a syntactic value" (shape : Shape) =
+  let program = topLevelProgram "x" "g" shape
+  fst (checkFlat program) == expectedVerdict shape
+    && fst (checkModule program) == expectedVerdict shape
+
+-- DICT §4.1 G2: a local binding generalizes only where its bound expression
+-- is a syntactic value, by the same value set.
+prop "a local let generalizes iff its expression is a syntactic value" (shape : Shape) =
+  fst (checkFlat (localProgram "x" "g" shape)) == expectedVerdict shape
+
+-- HM-CORE §1 clause 1: `g` and `helper` form one binding group (each names
+-- the other); `helper` is a value on its own account and `g` is decided on
+-- its own syntax. The group's poly leaf `helper` makes `g` observable.
+sccProgram : Shape -> String
+sccProgram shape =
+  withTwoUses
+    "\{shapeSupport}g = (Pair helper \{shapeAt "x" shape})\nhelper n = const2 n g\n"
+    "g"
+    "(Pair (Int -> Int) \{shapeTypeAt "Int" shape})"
+    "(Pair (Bool -> Bool) \{shapeTypeAt "Bool" shape})"
+
+sccVerdict : Shape -> Verdict
+sccVerdict shape = if isSyntacticValue shape then Accepted else Rejected
+
+prop "membership in a binding group grants no generalization exemption" (shape : Shape) =
+  fst (checkFlat (sccProgram shape)) == sccVerdict shape
+
+-- A binding `g` declared with the shape's principal type, its fresh
+-- variables quantified, then `uses` appended.
+signedProgram : Shape -> String -> String
+signedProgram shape uses =
+  "\{shapeSupport}g : \{shapeScheme shape}\ng = \{shapeAt "x" shape}\n\{uses}"
+
+twoUses : Shape -> String
+twoUses shape =
+  "useA = (g : \{shapeTypeAt "Int" shape})\nuseB = (g : \{shapeTypeAt "Bool" shape})\n"
+
+-- HM-CORE §1 clause 2: whether an expression is a value is a fact about its
+-- syntax, so a signature changes nothing in gen-value's verdict.
+prop "a type signature grants no generalization exemption" (shape : Shape) =
+  fst (checkFlat (signedProgram shape (twoUses shape))) == expectedVerdict shape
+
+-- HM-CORE §1 clause 4: a signature quantifying a variable over an expansive
+-- body is the definition-site error `T-SIG-OVER-EXPANSIVE`, never a narrowing
+-- to the first use, so a single use at one instantiation is still rejected.
+overExpansive : Shape -> Bool
+overExpansive shape = shapeIsPolymorphic shape && not (isSyntacticValue shape)
+
+prop "a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE" (shape : Shape) =
+  let oneUse = "useA = (g : \{shapeTypeAt "Int" shape})\n"
+  let codes = codesFlat (signedProgram shape oneUse)
+  if overExpansive shape then elem "T-SIG-OVER-EXPANSIVE" codes else codes == []
+
+-- HM-CORE §1 clause 4, second paragraph: a bare variable is a value under a
+-- constrained signature; an application under the same signature is not.
+methodProgram : String -> String
+methodProgram body =
+  "\{shapeSupport}interface Ord a where\n  min : a -> a -> a\n"
+    ++ "callMin : Ord a => a -> a -> a\ncallMin = \{body}\n"
+
+test "a variable under a constrained signature is a value" = expectAll [
+  expectEqual [] (codesFlat (methodProgram "min")),
+  expectEqual ["T-SIG-OVER-EXPANSIVE"] (codesFlat (methodProgram "ident min")),
+]
+
+-- HM-CORE §1 clause 3: a partial application is expansive even when its head
+-- has greater arity and would not run its body; eta-expanding it makes a
+-- clause with a parameter, which is a value.
+partialPrograms : Shape -> Shape -> (String, String)
+partialPrograms shape other =
+  let rendered = shapeAt "x" shape
+  let ty = ground => "(\{ground} -> \{shapeTypeAt ground shape})"
+  let support = "\{shapeSupport}const3 x y z = x\n"
+  (
+    withTwoUses
+      "\{support}g = (const3 \{rendered} \{shapeAt "w" other})\n"
+      "g"
+      (ty "Int")
+      (ty "Bool"),
+    withTwoUses
+      "\{support}g p = const3 \{rendered} \{shapeAt "w" other} p\n"
+      "g"
+      (ty "Int")
+      (ty "Bool"),
+  )
+
+prop "a partial application is expansive and its eta-expansion is a value" (shape : Shape) (other : Shape) =
+  let (partial, expanded) = partialPrograms shape other
+  fst (checkFlat partial) == Rejected && fst (checkFlat expanded) == Accepted
+
+-- HM-CORE §1: the decision is about the bound expression's syntax, so an
+-- alpha-renaming of every binder (lambda parameters and the bound name)
+-- preserves the verdict and the diagnostic codes, top-level and local.
+renamingPreserved : (String -> String -> Shape -> String) -> Shape -> Bool
+renamingPreserved render shape =
+  codesFlat (render "x" "g" shape) == codesFlat (render "w" "renamed" shape)
+
+prop "renaming binders preserves the value restriction's verdict" (shape : Shape) =
+  renamingPreserved topLevelProgram shape
+    && renamingPreserved localProgram shape
+
+-- Every shape of depth at most two: the description domain the censuses
+-- count over.
+leafShapes : List Shape
+leafShapes = [SInt, SStr, SId, SVar, SCtorVar, SNil]
+
+unaryShapes : List (Shape -> Shape)
+unaryShapes = [
+  SLam,
+  SList,
+  SBox,
+  SPartCtor,
+  SRecord,
+  SAsc,
+  SRef,
+  SApp,
+  SPartial,
+  SIf,
+  SField,
+]
+
+censusDomain : List Shape
+censusDomain =
+  leafShapes
+    ++ flatMap (wrap => map wrap leafShapes) unaryShapes
+    ++ flatMap (l => map (r => STuple l r) leafShapes) leafShapes
+    ++ flatMap (l => map (r => SPair l r) leafShapes) leafShapes
+
+countWhere : (a -> Bool) -> List a -> Int
+countWhere keep xs = length (filter keep xs)
+
+-- N = 20 for every census below, over the 144 shapes of `censusDomain`.
+censusFloor : Int
+censusFloor = 20
+
+test "census: gen-value, G2 and the signature law see both verdicts" = expectAll
+  [
+    expectAtLeast
+      censusFloor
+      (countWhere (s => expectedVerdict s == Accepted) censusDomain),
+    expectAtLeast
+      censusFloor
+      (countWhere (s => expectedVerdict s == Rejected) censusDomain),
+  ]
+
+test "census: the binding-group law sees both verdicts" = expectAll [
+  expectAtLeast
+    censusFloor
+    (countWhere (s => sccVerdict s == Accepted) censusDomain),
+  expectAtLeast
+    censusFloor
+    (countWhere (s => sccVerdict s == Rejected) censusDomain),
+]
+
+test "census: the over-expansive signature law sees both outcomes" = expectAll [
+  expectAtLeast censusFloor (countWhere overExpansive censusDomain),
+  expectAtLeast
+    censusFloor
+    (countWhere (s => not (overExpansive s)) censusDomain),
+]
+
+test "census: the partial-application and renaming laws range over values and non-values" = expectAll
+  [
+    expectEqual 144 (length censusDomain),
+    expectAtLeast
+      censusFloor
+      (countWhere (s => not (isSyntacticValue s)) censusDomain),
+    expectAtLeast censusFloor (countWhere isSyntacticValue censusDomain),
+  ]
