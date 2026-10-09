@@ -31,11 +31,11 @@ import tools.prop_plan.{
   PlanDef(..), PlanCtor(..), PlanField(..), PlanError(..), PlanErrorReason(..),
   PlanVisibility(..), planErrorText, buildPlanEnvModules, planFor, planDef,
   instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
-  optionWeights, resultWeights, maxGenDepth, intMin, intMax,
-  structuralRngModulus, structuralRngMultiplier, structuralRngIncrement,
-  structuralRngMixMultiplier1, structuralRngMixMultiplier2,
-  structuralRngWordModulus, structuralRngWordHalf, ShrinkAction(..),
-  shrinkActions, IntShrinkStep(..), intShrinkSteps
+  optionWeights, resultWeights, maxGenDepth, SoftWeight(..), softCtorWeights,
+  intMin, intMax, structuralRngModulus, structuralRngMultiplier,
+  structuralRngIncrement, structuralRngMixMultiplier1,
+  structuralRngMixMultiplier2, structuralRngWordModulus, structuralRngWordHalf,
+  ShrinkAction(..), shrinkActions, IntShrinkStep(..), intShrinkSteps
 }
 import tools.prop_runner.{
   PropResult(..), PropStatus(..), PropFailureKind(..), filterProps,
@@ -560,8 +560,10 @@ plannedProbeSource : String ->
   List NativePlanOutcome ->
   String
 plannedProbeSource nonce target tsrc modules env jobs =
+  let graph = sharedGraph env jobs
+  let prefix = genNodePrefix nonce
   joinNl
-    (plannedImports nonce modules jobs env
+    (plannedImports nonce modules graph
       ++ [probeTargetSource target tsrc, ""]
       ++ [
         "\{generatedPrefix nonce}state : Ref Int",
@@ -614,7 +616,9 @@ plannedProbeSource nonce target tsrc modules env jobs =
         "\{generatedPrefix nonce}replace_each f (x :: xs) = \{coreAlias nonce}.map (ys => ys :: xs) (f x) ++ \{coreAlias nonce}.map (ys => x :: ys) (\{generatedPrefix nonce}replace_each f xs)",
         "",
       ]
-      ++ plannedPropLines nonce modules env (coreAlias nonce) jobs 0
+      ++ plannedPropLines nonce modules env graph jobs 0
+      ++ graphLines nonce modules env (coreAlias nonce) prefix graph
+      ++ graphAuxLines nonce modules env (coreAlias nonce) prefix graph
       ++ ["main ="]
       ++ plannedMainLines nonce jobs 0
       ++ [
@@ -639,26 +643,11 @@ generatedPrefix nonce = "__np_\{probeNameNonce nonce}_"
 generatedName : String -> String -> String
 generatedName nonce stem = generatedPrefix nonce ++ stem
 
-plannedImports : String ->
-  List PlanModule ->
-  List NativePlanOutcome ->
-  PlanEnv ->
-  List String
-plannedImports nonce modules jobs env =
+plannedImports : String -> List PlanModule -> NativeGraph -> List String
+plannedImports nonce modules graph =
   "import core as \{coreAlias nonce}"
     :: "import \{runtimeDependencyName nonce}.runtime as \{runtimeAlias nonce}"
-    :: map (importLine nonce modules) (omKeys (importOwners jobs env omEmpty))
-
-importOwners : List NativePlanOutcome -> PlanEnv -> OrdMap Unit -> OrdMap Unit
-importOwners [] _ owners = owners
-importOwners ((NativeRunnable _ _ plans) :: rest) env owners =
-  importOwners rest env (planImportOwners env plans owners)
-importOwners (_ :: rest) env owners = importOwners rest env owners
-
-planImportOwners : PlanEnv -> List GenPlan -> OrdMap Unit -> OrdMap Unit
-planImportOwners _ [] owners = owners
-planImportOwners env (plan :: rest) owners =
-  planImportOwners env rest (graphImportOwners (buildGraph env plan) owners)
+    :: map (importLine nonce modules) (omKeys (graphImportOwners graph omEmpty))
 
 graphImportOwners : NativeGraph -> OrdMap Unit -> OrdMap Unit
 graphImportOwners (NativeGraph nodes order _) owners =
@@ -781,43 +770,18 @@ typeKeyName (TypeKey name _) = name
 plannedPropLines : String ->
   List PlanModule ->
   PlanEnv ->
-  String ->
+  NativeGraph ->
   List NativePlanOutcome ->
   Int ->
   List String
 plannedPropLines _ _ _ _ [] _ = []
-plannedPropLines nonce modules env core ((NativeRunnable (DProp _ _ params body) r plans) :: rest) i =
+plannedPropLines nonce modules env graph ((NativeRunnable (DProp _ _ params body) r plans) :: rest) i =
   fnLines nonce i params body
-    ++ plannedGenLines nonce modules env core i 0 params plans
-    ++ plannedRunLines nonce modules env i params plans (propRequestCases r)
-    ++ plannedShrinkLines nonce modules env i params plans
-    ++ plannedPropLines nonce modules env core rest (i + 1)
-plannedPropLines nonce modules env core (_ :: rest) i =
-  plannedPropLines nonce modules env core rest i
-
-plannedGenLines : String ->
-  List PlanModule ->
-  PlanEnv ->
-  String ->
-  Int ->
-  Int ->
-  List PropParam ->
-  List GenPlan ->
-  List String
-plannedGenLines _ _ _ _ _ _ [] [] = []
-plannedGenLines nonce modules env core i j ((PropParam _ _ _) :: rest) (p :: plans) =
-  let graph = buildGraph env p
-  let prefix = genNodePrefix nonce i j
-  let root = graphRef graph prefix p "depth"
-  [
-      "\{genName nonce i j} : Int -> \{effectfulPlanSourceTy nonce modules p}",
-      "\{genName nonce i j} depth = \{root}",
-      "",
-    ]
-    ++ graphLines nonce modules env core prefix graph
-    ++ graphAuxLines nonce modules env core prefix graph
-    ++ plannedGenLines nonce modules env core i (j + 1) rest plans
-plannedGenLines _ _ _ _ _ _ _ _ = []
+    ++ plannedRunLines nonce modules graph i params plans (propRequestCases r)
+    ++ plannedShrinkLines nonce modules graph i params plans
+    ++ plannedPropLines nonce modules env graph rest (i + 1)
+plannedPropLines nonce modules env graph (_ :: rest) i =
+  plannedPropLines nonce modules env graph rest i
 
 -- Every closed plan, including containers and primitives, gets one helper.
 -- The map is the registry; the reverse discovery list only preserves stable
@@ -830,6 +794,39 @@ data GraphNode = GraphNode Int GenPlan Int
 
 buildGraph : PlanEnv -> GenPlan -> NativeGraph
 buildGraph env root = graphExplore env root 0 (NativeGraph omEmpty [] 0)
+
+-- One probe renders one helper per distinct plan, whichever properties and
+-- parameters draw it.  Each root keeps its own closed exploration; the file
+-- registry is the union of those node sets, so a root never loses a node to
+-- another root's traversal order.
+sharedGraph : PlanEnv -> List NativePlanOutcome -> NativeGraph
+sharedGraph env jobs = sharedGraphGo env jobs (NativeGraph omEmpty [] 0)
+
+sharedGraphGo : PlanEnv -> List NativePlanOutcome -> NativeGraph -> NativeGraph
+sharedGraphGo _ [] graph = graph
+sharedGraphGo env ((NativeRunnable _ _ plans) :: rest) graph =
+  sharedGraphGo env rest (sharedGraphPlans env plans graph)
+sharedGraphGo env (_ :: rest) graph = sharedGraphGo env rest graph
+
+sharedGraphPlans : PlanEnv -> List GenPlan -> NativeGraph -> NativeGraph
+sharedGraphPlans _ [] graph = graph
+sharedGraphPlans env (plan :: rest) graph = match buildGraph env plan
+  NativeGraph nodes order _ =>
+    sharedGraphPlans env rest (mergeGraphNodes nodes (reverseL order) graph)
+
+mergeGraphNodes : OrdMap GraphNode -> List String -> NativeGraph -> NativeGraph
+mergeGraphNodes _ [] graph = graph
+mergeGraphNodes fresh (word :: rest) (graph@(NativeGraph nodes order next)) =
+  match omLookup word fresh
+    Some (GraphNode _ plan depth) if not (omHasKey word nodes) =>
+      mergeGraphNodes
+        fresh
+        rest
+        (NativeGraph
+          (omInsert word (GraphNode next plan depth) nodes)
+          (word :: order)
+          (next + 1))
+    _ => mergeGraphNodes fresh rest graph
 
 graphExplore : PlanEnv -> GenPlan -> Int -> NativeGraph -> NativeGraph
 graphExplore env plan depth (graph@(NativeGraph nodes order next)) =
@@ -981,9 +978,8 @@ genPlanWord (GNominal key ps) =
   "nominal(\{typeKeyWord key};\{joinWith "," (map genPlanWord ps)})"
 genPlanWord (GCustom (CustomPlan _ _ route)) = "custom(" ++ route ++ ")"
 
-genNodePrefix : String -> Int -> Int -> String
-genNodePrefix nonce i j =
-  "\{generatedPrefix nonce}gen_\{intToString i}_\{intToString j}"
+genNodePrefix : String -> String
+genNodePrefix nonce = "\{generatedPrefix nonce}gen"
 
 graphNodeName : String -> Int -> String
 graphNodeName prefix ident = "\{prefix}_node_\{intToString ident}"
@@ -1057,27 +1053,19 @@ graphNodeBody nonce _ _ _ _ _ GString = stringExpr nonce 0
 graphNodeBody _ _ _ _ _ _ GUnit = "()"
 graphNodeBody nonce _ _ core _ _ (GCustom _) = customDrawExpr nonce core
 graphNodeBody nonce modules env core graph prefix (GList p) =
-  renderListAtDepth nonce "[" "]" env p (graphDraw modules env graph prefix p) 0
+  renderListByDepth nonce "[" "]" env p (graphDraw modules env graph prefix p)
 graphNodeBody nonce modules env core graph prefix (GArray p) =
-  renderListAtDepth
-    nonce
-    "[|"
-    "|]"
-    env
-    p
-    (graphDraw modules env graph prefix p)
-    0
+  renderListByDepth nonce "[|" "|]" env p (graphDraw modules env graph prefix p)
 graphNodeBody nonce modules env core graph prefix (GOption p) =
-  renderOptionAtDepth nonce env p (graphDraw modules env graph prefix p) 0
+  renderOptionByDepth nonce env p (graphDraw modules env graph prefix p)
 graphNodeBody nonce modules env core graph prefix (GResult err ok) =
-  renderResultAtDepth
+  renderResultByDepth
     nonce
     env
     err
     ok
     (graphDraw modules env graph prefix err)
     (graphDraw modules env graph prefix ok)
-    0
 graphNodeBody _ modules env core graph prefix (GTuple ps) =
   "(\{joinWith ", " (map (graphDraw modules env graph prefix) ps)})"
 graphNodeBody nonce modules env core graph prefix (plan@(GNominal key _)) =
@@ -1085,11 +1073,22 @@ graphNodeBody nonce modules env core graph prefix (plan@(GNominal key _)) =
     Err _ => "panic \"native property runner: missing planned constructor\""
     Ok (PlanDef _ owner _ visibility ctors) =>
       if nominalCtorsVisible env owner visibility then
-        graphCtorAtDepth nonce modules env graph prefix plan owner ctors 0
+        graphCtorByDepth nonce modules env graph prefix plan owner ctors
       else
         "panic \"native property runner: inaccessible constructor\""
 
-graphCtorAtDepth : String ->
+-- Below `maxGenDepth` every container and constructor policy is either
+-- depth-independent or a decaying weight rendered over the runtime `depth`;
+-- at the bound the finite-height policy applies.  The two regimes share one
+-- generator body.
+byDepth : String -> String -> String
+byDepth below atBound =
+  if below == atBound then
+    below
+  else
+    "if depth < \{intToString maxGenDepth} then \{below} else \{atBound}"
+
+graphCtorByDepth : String ->
   List PlanModule ->
   PlanEnv ->
   NativeGraph ->
@@ -1097,24 +1096,43 @@ graphCtorAtDepth : String ->
   GenPlan ->
   String ->
   List PlanCtor ->
-  Int ->
   String
-graphCtorAtDepth nonce modules env graph prefix plan owner ctors depth =
-  let here =
-    graphCtorChoice
-      nonce
-      modules
-      env
-      graph
-      prefix
-      plan
-      owner
-      ctors
-      (ctorWeights env plan depth)
-  if depth >= maxGenDepth then
-    here
-  else
-    "if depth <= \{intToString depth} then \{here} else \{graphCtorAtDepth nonce modules env graph prefix plan owner ctors (depth + 1)}"
+graphCtorByDepth nonce modules env graph prefix plan owner ctors =
+  let choice = graphCtorChoice nonce modules env graph prefix plan owner ctors
+  byDepth
+    (choice (softCtorWeights env plan))
+    (choice (map SoftFixed (ctorWeights env plan maxGenDepth)))
+
+softWeightPositive : SoftWeight -> Bool
+softWeightPositive SoftNever = False
+softWeightPositive (SoftFixed weight) = weight > 0
+softWeightPositive (SoftDecaying _) = True
+
+anySoftWeightPositive : List SoftWeight -> Bool
+anySoftWeightPositive [] = False
+anySoftWeightPositive (weight :: rest) =
+  softWeightPositive weight || anySoftWeightPositive rest
+
+softWeightExpr : SoftWeight -> String
+softWeightExpr SoftNever = "0"
+softWeightExpr (SoftFixed weight) = intToString weight
+softWeightExpr (SoftDecaying start) =
+  "(if depth >= \{intToString (start - 1)} then 1 else \{intToString start} - depth)"
+
+softWeightTotal : List SoftWeight -> String
+softWeightTotal weights = softWeightTotalGo weights 0 []
+
+softWeightTotalGo : List SoftWeight -> Int -> List String -> String
+softWeightTotalGo [] fixed [] = intToString fixed
+softWeightTotalGo [] 0 decaying = "(\{joinWith " + " decaying})"
+softWeightTotalGo [] fixed decaying =
+  "(\{intToString fixed} + \{joinWith " + " decaying})"
+softWeightTotalGo (SoftNever :: rest) fixed decaying =
+  softWeightTotalGo rest fixed decaying
+softWeightTotalGo ((SoftFixed weight) :: rest) fixed decaying =
+  softWeightTotalGo rest (fixed + weight) decaying
+softWeightTotalGo ((weight@(SoftDecaying _)) :: rest) fixed decaying =
+  softWeightTotalGo rest fixed (softWeightExpr weight :: decaying)
 
 graphCtorChoice : String ->
   List PlanModule ->
@@ -1124,17 +1142,16 @@ graphCtorChoice : String ->
   GenPlan ->
   String ->
   List PlanCtor ->
-  List Int ->
+  List SoftWeight ->
   String
 graphCtorChoice _ _ _ _ _ _ _ [] _ =
   "panic \"native property runner: no finite constructor\""
 graphCtorChoice nonce modules env graph prefix plan owner ctors weights =
-  let total = sumInts weights
-  if total <= 0 then
+  if not (anySoftWeightPositive weights) then
     "panic \"native property runner: no finite constructor\""
   else
     let picked = generatedName nonce "ctor_choice"
-    "(let \{picked} = \{generatedPrefix nonce}choose \{intToString total} in \{graphCtorChoiceAt nonce modules env graph prefix plan owner ctors weights picked})"
+    "(let \{picked} = \{generatedPrefix nonce}choose \{softWeightTotal weights} in \{graphCtorChoiceAt nonce modules env graph prefix plan owner ctors weights picked})"
 
 graphCtorChoiceAt : String ->
   List PlanModule ->
@@ -1144,13 +1161,13 @@ graphCtorChoiceAt : String ->
   GenPlan ->
   String ->
   List PlanCtor ->
-  List Int ->
+  List SoftWeight ->
   String ->
   String
 graphCtorChoiceAt _ _ _ _ _ _ _ [] _ _ =
   "panic \"native property runner: no finite constructor\""
 graphCtorChoiceAt nonce modules env graph prefix plan owner (ctor :: rest) (weight :: weights) picked =
-  if weight <= 0 then
+  if not (softWeightPositive weight) then
     graphCtorChoiceAt
       nonce
       modules
@@ -1175,17 +1192,13 @@ graphCtorChoiceAt nonce modules env graph prefix plan owner (ctor :: rest) (weig
         owner
         rest
         weights
-        "(\{picked} - \{intToString weight})"
-    if sumInts weights == 0 then
+        "(\{picked} - \{softWeightExpr weight})"
+    if not (anySoftWeightPositive weights) then
       here
     else
-      "if \{picked} < \{intToString weight} then \{here} else \{tail}"
+      "if \{picked} < \{softWeightExpr weight} then \{here} else \{tail}"
 graphCtorChoiceAt _ _ _ _ _ _ _ _ _ _ =
   "panic \"native property runner: no finite constructor\""
-
-sumInts : List Int -> Int
-sumInts [] = 0
-sumInts (x :: xs) = x + sumInts xs
 
 graphCtorValue : String ->
   List PlanModule ->
@@ -1214,34 +1227,32 @@ renderOptionChoice nonce [noneWeight, someWeight] child =
   "if \{generatedPrefix nonce}choose \{noneWeight + someWeight} < \{noneWeight} then None else Some (\{child})"
 renderOptionChoice _ _ child = "Some (\{child})"
 
-renderOptionAtDepth : String -> PlanEnv -> GenPlan -> String -> Int -> String
-renderOptionAtDepth nonce env p child level =
-  let here = renderOptionChoice nonce (optionWeights env level p) child
-  if level >= maxGenDepth then
-    here
-  else
-    "if depth <= \{intToString level} then \{here} else \{renderOptionAtDepth nonce env p child (level + 1)}"
+renderOptionByDepth : String -> PlanEnv -> GenPlan -> String -> String
+renderOptionByDepth nonce env p child =
+  byDepth
+    (renderOptionChoice nonce (optionWeights env 0 p) child)
+    (renderOptionChoice nonce (optionWeights env maxGenDepth p) child)
 
 renderResultChoice : String -> List Int -> String -> String -> String
 renderResultChoice nonce [errWeight, okWeight] error ok =
   "if \{generatedPrefix nonce}choose \{errWeight + okWeight} < \{errWeight} then Err (\{error}) else Ok (\{ok})"
 renderResultChoice _ _ error _ = "Err (\{error})"
 
-renderResultAtDepth : String ->
+renderResultByDepth : String ->
   PlanEnv ->
   GenPlan ->
   GenPlan ->
   String ->
   String ->
-  Int ->
   String
-renderResultAtDepth nonce env err ok error okExpr level =
-  let here =
-    renderResultChoice nonce (resultWeights env level err ok) error okExpr
-  if level >= maxGenDepth then
-    here
-  else
-    "if depth <= \{intToString level} then \{here} else \{renderResultAtDepth nonce env err ok error okExpr (level + 1)}"
+renderResultByDepth nonce env err ok error okExpr =
+  byDepth
+    (renderResultChoice nonce (resultWeights env 0 err ok) error okExpr)
+    (renderResultChoice
+      nonce
+      (resultWeights env maxGenDepth err ok)
+      error
+      okExpr)
 
 customDrawExpr : String -> String -> String
 customDrawExpr nonce core =
@@ -1251,21 +1262,22 @@ stringExpr : String -> Int -> String
 stringExpr nonce _ =
   "\{generatedPrefix nonce}string (\{generatedPrefix nonce}choose (if depth >= \{intToString maxGenDepth} then 1 else 11))"
 
-renderListAtDepth : String ->
+renderListByDepth : String ->
   String ->
   String ->
   PlanEnv ->
   GenPlan ->
   String ->
-  Int ->
   String
-renderListAtDepth nonce open close env p child level =
-  let here =
-    renderListChoice nonce open close child (listLengthBound env level p)
-  if level >= maxGenDepth then
-    here
-  else
-    "if depth <= \{intToString level} then \{here} else \{renderListAtDepth nonce open close env p child (level + 1)}"
+renderListByDepth nonce open close env p child =
+  byDepth
+    (renderListChoice nonce open close child (listLengthBound env 0 p))
+    (renderListChoice
+      nonce
+      open
+      close
+      child
+      (listLengthBound env maxGenDepth p))
 
 renderListChoice : String -> String -> String -> String -> Int -> String
 renderListChoice nonce open close child bound =
@@ -1826,29 +1838,37 @@ graphNamedDisplaysTail _ _ _ _ = ""
 
 plannedRunLines : String ->
   List PlanModule ->
-  PlanEnv ->
+  NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   Int ->
   List String
-plannedRunLines nonce modules env i ps plans _ =
+plannedRunLines nonce modules graph i ps plans _ =
   [
       "\{runName nonce i} \{generatedPrefix nonce}cases =",
       "  if \{generatedPrefix nonce}cases <= 0 then (True, \"\") else",
     ]
-    ++ plannedBindings nonce i ps 0
+    ++ plannedBindings nonce graph i ps plans 0
     ++ [
       "    let ok = \{fnName nonce i} \{joinWith " " (paramSlots nonce i ps)}",
     ]
     ++ plannedFailureLines nonce i ps plans
     ++ [""]
 
-plannedBindings : String -> Int -> List PropParam -> Int -> List String
-plannedBindings _ _ [] _ = []
-plannedBindings nonce i ((PropParam name _ _) :: rest) j =
-  ["    let \{slotName nonce i j} = \{genName nonce i j} 0"]
-    ++ plannedBindings nonce i rest (j + 1)
+plannedBindings : String ->
+  NativeGraph ->
+  Int ->
+  List PropParam ->
+  List GenPlan ->
+  Int ->
+  List String
+plannedBindings nonce graph i ((PropParam _ _ _) :: rest) (plan :: plans) j =
+  [
+      "    let \{slotName nonce i j} = \{graphRef graph (genNodePrefix nonce) plan "0"}",
+    ]
+    ++ plannedBindings nonce graph i rest plans (j + 1)
+plannedBindings _ _ _ _ _ _ = []
 
 slotName : String -> Int -> Int -> String
 slotName nonce i j =
@@ -1887,29 +1907,29 @@ shrinkName nonce i = "\{generatedPrefix nonce}shrink_\{intToString i}"
 -- policy above and remain displayable without imposing Debug on a nominal.
 plannedShrinkLines : String ->
   List PlanModule ->
-  PlanEnv ->
+  NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   List String
 plannedShrinkLines _ _ _ _ [] _ = []
-plannedShrinkLines nonce modules env i ps plans =
-  shrinkTopLines nonce modules env i ps plans
-    ++ shrinkTryLines nonce modules env i ps plans 0
+plannedShrinkLines nonce modules graph i ps plans =
+  shrinkTopLines nonce modules graph i ps plans
+    ++ shrinkTryLines nonce modules graph i ps plans 0
 
 shrinkTopLines : String ->
   List PlanModule ->
-  PlanEnv ->
+  NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   List String
-shrinkTopLines nonce modules env i ps plans =
+shrinkTopLines nonce modules graph i ps plans =
   let startCandidates =
-    candidateExprAt nonce env i 0 (nthPlan 0 plans) (slotName nonce i 0)
+    candidateExprAt nonce graph i 0 (nthPlan 0 plans) (slotName nonce i 0)
   [
     "\{shrinkName nonce i} \{generatedPrefix nonce}fuel \{joinWith " " (paramSlots nonce i ps)} =",
-    "  if \{generatedPrefix nonce}fuel <= 0 then (False, \{plannedDetailSlots nonce modules env i ps plans} ++ \" (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)\") else \{shrinkTryName nonce i 0} \{generatedPrefix nonce}fuel \{startCandidates} \{joinWith " " (paramSlots nonce i ps)}",
+    "  if \{generatedPrefix nonce}fuel <= 0 then (False, \{plannedDetailSlots nonce modules graph i ps plans} ++ \" (WARNING: shrink fuel exhausted, counterexample may not be minimal — see #1307)\") else \{shrinkTryName nonce i 0} \{generatedPrefix nonce}fuel \{startCandidates} \{joinWith " " (paramSlots nonce i ps)}",
     "",
   ]
 
@@ -1919,7 +1939,7 @@ shrinkTryName nonce i j =
 
 shrinkTryLines : String ->
   List PlanModule ->
-  PlanEnv ->
+  NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
@@ -1928,30 +1948,30 @@ shrinkTryLines : String ->
 shrinkTryLines nonce _ _ _ [] _ _ = []
 shrinkTryLines nonce _ _ _ ps _ j
   | j >= listLen ps = []
-shrinkTryLines nonce modules env i ps plans j =
-  shrinkTryLine nonce modules env i ps plans j
-    ++ shrinkTryLines nonce modules env i ps plans (j + 1)
+shrinkTryLines nonce modules graph i ps plans j =
+  shrinkTryLine nonce modules graph i ps plans j
+    ++ shrinkTryLines nonce modules graph i ps plans (j + 1)
 
 shrinkTryLine : String ->
   List PlanModule ->
-  PlanEnv ->
+  NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   Int ->
   List String
-shrinkTryLine nonce modules env i ps plans j =
+shrinkTryLine nonce modules graph i ps plans j =
   let current = slotName nonce i j
   let plan = nthPlan j plans
   let params = paramSlots nonce i ps
   let after =
     if j + 1 >= listLen ps then
-      "(False, \{plannedDetailSlots nonce modules env i ps plans})"
+      "(False, \{plannedDetailSlots nonce modules graph i ps plans})"
     else
       let nextCandidates =
         candidateExprAt
           nonce
-          env
+          graph
           i
           (j + 1)
           (nthPlan (j + 1) plans)
@@ -1972,9 +1992,15 @@ nthPlan 0 (p :: _) = p
 nthPlan n (_ :: rest) = nthPlan (n - 1) rest
 nthPlan _ [] = GUnit
 
-candidateExprAt : String -> PlanEnv -> Int -> Int -> GenPlan -> String -> String
-candidateExprAt nonce env i j plan name =
-  "(\{graphShrinkRef (buildGraph env plan) (genNodePrefix nonce i j) plan name})"
+candidateExprAt : String ->
+  NativeGraph ->
+  Int ->
+  Int ->
+  GenPlan ->
+  String ->
+  String
+candidateExprAt nonce graph _ _ plan name =
+  "(\{graphShrinkRef graph (genNodePrefix nonce) plan name})"
 
 replaceName : Int -> String -> List String -> List String
 replaceName _ _ [] = []
@@ -1984,39 +2010,39 @@ replaceName n replacement (x :: rest) =
 
 plannedDetailSlots : String ->
   List PlanModule ->
-  PlanEnv ->
+  NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   String
 plannedDetailSlots _ _ _ _ [] _ = "\"counterexample\""
-plannedDetailSlots nonce modules env i ps plans =
-  plannedDetailSlotsGo nonce modules env i ps plans 0
+plannedDetailSlots nonce modules graph i ps plans =
+  plannedDetailSlotsGo nonce modules graph i ps plans 0
 
 plannedDetailSlotsGo : String ->
   List PlanModule ->
-  PlanEnv ->
+  NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   Int ->
   String
 plannedDetailSlotsGo _ _ _ _ [] _ _ = "\"counterexample\""
-plannedDetailSlotsGo nonce modules env i ((PropParam name _ _) :: rest) (plan :: plans) j =
-  "\"\{name} = \" ++ \{graphDisplayRef (buildGraph env plan) (genNodePrefix nonce i j) plan (slotName nonce i j)}\{plannedDetailSlotsTail nonce modules env i rest plans (j + 1)}"
+plannedDetailSlotsGo nonce modules graph i ((PropParam name _ _) :: rest) (plan :: plans) j =
+  "\"\{name} = \" ++ \{graphDisplayRef graph (genNodePrefix nonce) plan (slotName nonce i j)}\{plannedDetailSlotsTail nonce modules graph i rest plans (j + 1)}"
 plannedDetailSlotsGo _ _ _ _ _ _ _ = "\"counterexample\""
 
 plannedDetailSlotsTail : String ->
   List PlanModule ->
-  PlanEnv ->
+  NativeGraph ->
   Int ->
   List PropParam ->
   List GenPlan ->
   Int ->
   String
 plannedDetailSlotsTail _ _ _ _ [] _ _ = ""
-plannedDetailSlotsTail nonce modules env i ((PropParam name _ _) :: rest) (plan :: plans) j =
-  " ++ \"\\n\" ++ \"\{name} = \" ++ \{graphDisplayRef (buildGraph env plan) (genNodePrefix nonce i j) plan (slotName nonce i j)}\{plannedDetailSlotsTail nonce modules env i rest plans (j + 1)}"
+plannedDetailSlotsTail nonce modules graph i ((PropParam name _ _) :: rest) (plan :: plans) j =
+  " ++ \"\\n\" ++ \"\{name} = \" ++ \{graphDisplayRef graph (genNodePrefix nonce) plan (slotName nonce i j)}\{plannedDetailSlotsTail nonce modules graph i rest plans (j + 1)}"
 plannedDetailSlotsTail _ _ _ _ _ _ _ = ""
 
 tupleVars : Int -> List String
@@ -2068,10 +2094,6 @@ probeTargetSource target src =
 
 fnName : String -> Int -> String
 fnName nonce i = "\{generatedPrefix nonce}prop_\{intToString i}"
-
-genName : String -> Int -> Int -> String
-genName nonce i j =
-  "\{generatedPrefix nonce}gen_\{intToString i}_\{intToString j}"
 
 runName : String -> Int -> String
 runName nonce i = "\{generatedPrefix nonce}run_\{intToString i}"

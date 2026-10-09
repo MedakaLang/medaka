@@ -1098,6 +1098,7 @@ Assertions for a test that runs a program.
 - [`expectFloor`](test_process.md#expectfloor)
 - [`testAssertionCount`](test_process.md#testassertioncount)
 - [`testAssertionCounts`](test_process.md#testassertioncounts)
+- [`testJobs`](test_process.md#testjobs)
 - [`unrosteredUnits`](test_process.md#unrosteredunits)
 - [`missingUnits`](test_process.md#missingunits)
 - [`unrosteredTestFiles`](test_process.md#unrosteredtestfiles)

@@ -233,6 +233,8 @@ import args.{
 import json.{Json(..), jObject, jArray, stringify}
 import tools.lint.{splitLintNames}
 import string.{toInt}
+import test_process.{testJobs}
+import support.timer.{perfEnabled, now, emitPhase}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared
@@ -745,14 +747,28 @@ prepareMulti : String ->
   List Decl ->
   <IO> (Option String, Prepared)
 prepareMulti rsrc csrc target roots exempt hasDoctests synthDecls =
-  match loadProgramFilesLocatedE (_ => None) target roots
+  let loaded = perfRow "test-load" target (_ =>
+    loadProgramFilesLocatedE (_ => None) target roots)
+  match loaded
     Err le => (
       loadGate exempt target le,
       PreparedPair (TestPairErr (loadErrorMessage le)),
     )
     Ok mods =>
       modulePathMap := map modIdToPath mods
-      elaborateFor rsrc csrc target roots mods exempt hasDoctests synthDecls
+      perfRow
+        "test-gate"
+        (if hasDoctests then "check" else "elaborate")
+        (_ =>
+          elaborateFor
+            rsrc
+            csrc
+            target
+            roots
+            mods
+            exempt
+            hasDoctests
+            synthDecls)
 
 elaborateFor : String ->
   String ->
@@ -788,6 +804,14 @@ elaborateFor rsrc csrc target roots mods exempt True synthDecls = (
 forcePrepared : String -> String -> Prepared -> <IO> TestPair
 forcePrepared _ _ (PreparedPair pair) = pair
 forcePrepared rsrc csrc (PreparedInject mods synthDecls) =
+  perfRow "test-elab" "injected" (_ => forceInjected rsrc csrc mods synthDecls)
+
+forceInjected : String ->
+  String ->
+  List (String, String, List Decl) ->
+  List Decl ->
+  <IO> TestPair
+forceInjected rsrc csrc mods synthDecls =
   let injected = injectIntoLast synthDecls (desugaredModPairs mods)
   match (elaborateModules
     (desugaredPrelude rsrc)
@@ -882,11 +906,33 @@ prepareSingle runtimeDecls coreDecls target roots userDecls =
       dropShadowedExp (funNamesOf userDecls) coreDecls
   let rootId = singleRootId roots target
   modulePathMap := [(rootId, target)]
-  uncurryPair
-    runtimeDecls
-    livePrelude
-    [(rootId, userDecls)]
-    (elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)])
+  perfRow "test-elab" "single" (_ =>
+    uncurryPair
+      runtimeDecls
+      livePrelude
+      [(rootId, userDecls)]
+      (elaborateModulesMangled runtimeDecls livePrelude [(rootId, userDecls)]))
+
+-- One `[perf]` row (`MEDAKA_PERF`, support/timer.mdk) around a step of the
+-- harness itself, so the parent's load, gate, phase elaboration and prop
+-- planning are measured beside the child builds' `emit-ir`/`clang` rows.
+perfRow : String -> String -> (Unit -> <IO> a) -> <IO> a
+perfRow label ops work =
+  let t0 = now ()
+  let result = work ()
+  let _ = emitPhase (perfEnabled ()) label (now () - t0) ops
+  result
+
+-- `preparePlannedPropRequests` under the `prop-plan` row.
+planPropRequestsTimed : String ->
+  List PlanModule ->
+  List PropRequest ->
+  List Decl ->
+  <IO> Result PlanError (PlanEnv, List PreparedPropRequest)
+planPropRequestsTimed root modules requests rootProps = perfRow
+  "prop-plan"
+  root
+  (_ => preparePlannedPropRequests root modules requests rootProps)
 
 driveAll : List Engine ->
   List Decl ->
@@ -922,7 +968,13 @@ driveAll engines runtimeDecls coreDecls rsrc csrc stdlibDir target tsrc roots ca
       file
       index
   | otherwise =
-    match if exempt then None else singleFileTypeErrors target tsrc rsrc csrc
+    let gate =
+      if exempt then
+        None
+      else
+        perfRow "test-gate" "single" (_ =>
+          singleFileTypeErrors target tsrc rsrc csrc)
+    match gate
       Some errText =>
         let _ = ePutStrLn (typecheckGateFail target errText)
         False
@@ -2203,7 +2255,7 @@ propsReportEnginesInProcess engines runtimeM rawCoreM coreM rawM modsM target ts
   let root = rootPlanModuleId rawM target
   let planningRequests =
     propRequestsFor index file "eval" userDecls cases filterOpt
-  match (preparePlannedPropRequests
+  match (planPropRequestsTimed
     root
     modules
     planningRequests
@@ -2497,7 +2549,7 @@ runEvalRequestRows (TestPairErr message) _ _ _ requests =
 runEvalRequestRows (TestPair runtimeM rawCoreM coreM rawM modsM) target tsrc userDecls requests =
   let root = rootPlanModuleId rawM target
   let modules = planModules rawCoreM coreM rawM modsM
-  match (preparePlannedPropRequests
+  match (planPropRequestsTimed
     root
     modules
     requests
@@ -2537,7 +2589,7 @@ runValidatedEvalRequests (HelperValidation pair helpers rejected protocol) targe
       TestPair _runtimeM rawCoreM coreM rawM modsM =>
         let root = rootPlanModuleId rawM target
         let modules = planModules rawCoreM coreM rawM modsM
-        match (preparePlannedPropRequests
+        match (planPropRequestsTimed
           root
           modules
           requests
@@ -2567,7 +2619,7 @@ runEvalProtocolRequests (TestPairErr message) _ _ _ _ requests =
 runEvalProtocolRequests (TestPair _runtimeM rawCoreM coreM rawM modsM) message target tsrc userDecls requests =
   let root = rootPlanModuleId rawM target
   let modules = planModules rawCoreM coreM rawM modsM
-  match (preparePlannedPropRequests
+  match (planPropRequestsTimed
     root
     modules
     requests
@@ -2939,7 +2991,7 @@ runProtocolHelperEnginesGo (engine :: rest) message rawCoreM coreM rawM modsM ta
       filterOpt
       file
       index
-  match (preparePlannedPropRequests
+  match (planPropRequestsTimed
     root
     modules
     requests
@@ -2982,7 +3034,7 @@ runValidatedPropEnginesGo (engine :: rest) helpers rejected rawCoreM coreM rawM 
   let requests = propRequestsFor index file engineText userDecls cases filterOpt
   let root = rootPlanModuleId rawM target
   let modules = planModules rawCoreM coreM rawM modsM
-  match (preparePlannedPropRequests
+  match (planPropRequestsTimed
     root
     modules
     requests
@@ -4038,7 +4090,7 @@ testChildArgs engines cases filterOpt seedOpt f =
 -- process died). Each file runs `runTest` in its OWN child process — a
 -- panic in file 3 of 20 would abort the whole in-process loop, so files
 -- 4-20 print nothing (#2589 item 1). Spawning per file means a
--- dead file is contained to its own `runCommand` result: its stdout up to
+-- dead file is contained to its own child result: its stdout up to
 -- the crash still prints, it is named as died in the aggregate, and the walk
 -- continues. `envOr "MEDAKA" (executablePath ())` mirrors
 -- `native_doctest.mdk`'s spawn precedent but defaults to the RUNNING
@@ -4056,10 +4108,35 @@ testFilesGo : List Engine ->
   Bool ->
   <IO> Bool
 testFilesGo _ _ _ _ _ _ _ [] acc = acc
-testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest) acc =
+testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
-  let args = testChildArgs engines cases filterOpt seedOpt f
-  let ok = match runCommand medaka args
+  let argvs = map (testChildArgs engines cases filterOpt seedOpt) files
+  if testJobs <= 1 then
+    testFilesSerial medaka files argvs acc
+  else
+    testFilesReport files (runCommandBatch medaka testJobs argvs) acc
+
+-- One child at a time, each file's result printed as it completes, so a hang
+-- or kill part-way keeps the earlier files' output. A batch prints nothing
+-- until every file finishes.
+testFilesSerial : String ->
+  List String ->
+  List (List String) ->
+  Bool ->
+  <IO> Bool
+testFilesSerial medaka (f :: rest) (argv :: argvs) acc =
+  let failed = testFilesReport [f] [runCommand medaka argv] False
+  testFilesSerial medaka rest argvs (acc || failed)
+testFilesSerial _ _ _ acc = acc
+
+-- Prints each file's captured child result in input order, so a concurrent
+-- batch reads exactly like the serial walk it replaces.
+testFilesReport : List String ->
+  List (Result String (Int, String, String)) ->
+  Bool ->
+  <IO> Bool
+testFilesReport (f :: rest) (r :: results) acc =
+  let ok = match r
     Err e =>
       let _ = ePutStrLn "medaka test: \{f}: failed to start test runner: \{e}"
       False
@@ -4081,13 +4158,5 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
           ePutStrLn
             "medaka test: \{f}: test runner died (child exited \{intToString code})"
         False
-  testFilesGo
-    engines
-    rtPath
-    corePath
-    stdlibDir
-    cases
-    filterOpt
-    seedOpt
-    rest
-    (acc || not ok)
+  testFilesReport rest results (acc || not ok)
+testFilesReport _ _ acc = acc
