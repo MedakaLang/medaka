@@ -357,6 +357,7 @@ genParam (ge@(GenEnv planEnv _)) evalEnv ty =
 
 -- Interpret the same finite plan the native runner renders. Imported nominals
 -- resolve through PlanEnv by TypeKey, never through a spelling-only registry.
+export
 genFromPlan : GenEnv -> EvalEnv (Value e) -> Int -> GenPlan -> <e> Value e
 genFromPlan _ _ _ GInt = VInt (randIntRange intMin intMax)
 genFromPlan _ _ _ GBool = VBool (randBoolL ())

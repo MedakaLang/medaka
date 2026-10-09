@@ -4,6 +4,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.ast.{Decl(..), Ty(..), TyConOrigin(..), mapTyInDecl}
 import string.{contains, countOccurrences}
+import support.util.{splitNl, filterList}
 import tools.native_props.{
   runNativePlannedPropRequests, renderNativePlannedProbe,
   classifyNativeTranscript
@@ -360,3 +361,56 @@ test "native source passes depth at runtime instead of unrolling levels" =
   match rendered text
     Err message => fail message
     Ok probe => expectEqual 0 (countOccurrences "depth <=" probe)
+
+-- Draw-order pin: the generator section of a rendered probe fixes which RNG
+-- calls happen and in what sequence. Carriers that already terminate must keep
+-- exactly this text when the recursion bound changes.
+drawOrderSource : String
+drawOrderSource =
+  "data Shape = Dot Int | Pair Int Bool | Blank\ndata Tree = Leaf | Fork Tree Tree\nprop \"shape\" (x : Int) (l : List Int) (s : Shape) (t : Tree) (p : (Int, Option Int)) = x == x\n"
+
+generatorLines : List String -> List String
+generatorLines [] = []
+generatorLines (line :: rest) =
+  if contains "gen_node_0 : Int" line then
+    takeGenerators (line :: rest)
+  else
+    generatorLines rest
+
+takeGenerators : List String -> List String
+takeGenerators [] = []
+takeGenerators (line :: rest) =
+  if contains "gen_shrink_0 : Int" line then [] else line :: takeGenerators rest
+
+pinnedGenerators : List String
+pinnedGenerators = [
+  "__np_source_check_gen_node_0 : Int -> <Rand> Int",
+  "__np_source_check_gen_node_0 depth = __np_source_check_int ()",
+  "__np_source_check_gen_node_1 : Int -> <Rand> List (Int)",
+  "__np_source_check_gen_node_1 depth = match __np_source_check_choose 8",
+  "  0 => []", "  1 => [__np_source_check_gen_node_0 depth]",
+  "  2 => [__np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth]",
+  "  3 => [__np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth]",
+  "  4 => [__np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth]",
+  "  5 => [__np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth]",
+  "  6 => [__np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth]",
+  "  _ => [__np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth, __np_source_check_gen_node_0 depth]",
+  "__np_source_check_gen_node_2 : Int -> <Rand> Shape",
+  "__np_source_check_gen_node_2 depth = if depth < 24 then (let __np_source_check_ctor_choice = __np_source_check_choose 18 in if __np_source_check_ctor_choice < 6 then Dot (__np_source_check_gen_node_0 (depth + 1)) else if (__np_source_check_ctor_choice - 6) < 6 then Pair (__np_source_check_gen_node_0 (depth + 1)) (__np_source_check_gen_node_3 (depth + 1)) else Blank) else (let __np_source_check_ctor_choice = __np_source_check_choose 3 in if __np_source_check_ctor_choice < 1 then Dot (__np_source_check_gen_node_0 (depth + 1)) else if (__np_source_check_ctor_choice - 1) < 1 then Pair (__np_source_check_gen_node_0 (depth + 1)) (__np_source_check_gen_node_3 (depth + 1)) else Blank)",
+  "__np_source_check_gen_node_3 : Int -> <Rand> Bool",
+  "__np_source_check_gen_node_3 depth = __np_source_check_bool ()",
+  "__np_source_check_gen_node_4 : Int -> <Rand> Tree",
+  "__np_source_check_gen_node_4 depth = if depth < 24 then (let __np_source_check_ctor_choice = __np_source_check_choose (6 + (if depth >= 5 then 1 else 6 - depth)) in if __np_source_check_ctor_choice < 6 then Leaf else Fork (__np_source_check_gen_node_4 (depth + 1)) (__np_source_check_gen_node_4 (depth + 1))) else (let __np_source_check_ctor_choice = __np_source_check_choose 1 in Leaf)",
+  "__np_source_check_gen_node_5 : Int -> <Rand> (Int, Option (Int))",
+  "__np_source_check_gen_node_5 depth = (__np_source_check_gen_node_0 depth, __np_source_check_gen_node_6 depth)",
+  "__np_source_check_gen_node_6 : Int -> <Rand> Option (Int)",
+  "__np_source_check_gen_node_6 depth = if __np_source_check_choose 2 < 1 then None else Some (__np_source_check_gen_node_0 depth)"
+]
+
+test "rendered draw order for terminating carriers is pinned" =
+  match rendered drawOrderSource
+    Err message => fail message
+    Ok probe =>
+      expectEqual
+        pinnedGenerators
+        (filterList (line => line /= "") (generatorLines (splitNl probe)))

@@ -1,5 +1,5 @@
 # META
-source_lines=1551
+source_lines=1631
 stages=DESUGAR,MARK
 # SOURCE
 -- The engine-neutral property planning layer.
@@ -1377,15 +1377,95 @@ validateReachableCtors env truth nominal (ctor :: rest) seen = match (
   (Err e, _) => Err e
   (_, Err e) => Err e
 
+-- A list whose element reaches a cycle that crosses a list edge (`Rose Int
+-- (List Rose)`) shrinks its length bound by one per level of nominal depth, so
+-- the expected fan-out drops below one and the whole value stays small. Every
+-- other list keeps the flat bound, which leaves terminating carriers' draws
+-- untouched.
 export
 listLengthBound : PlanEnv -> Int -> GenPlan -> Int
 listLengthBound env depth plan =
   if not (planHasFiniteValue env plan) then
     0
+  else if planCyclesThroughList env plan then
+    max 0 (listLenMax - depth)
   else if depth >= maxGenDepth && planCanDiverge env plan then
     0
   else
     listLenMax
+
+-- The renderer emits the decaying bound over the runtime `depth`.
+export
+listBoundDecays : PlanEnv -> GenPlan -> Bool
+listBoundDecays env plan =
+  planHasFiniteValue env plan && planCyclesThroughList env plan
+
+export
+planCyclesThroughList : PlanEnv -> GenPlan -> Bool
+planCyclesThroughList env plan =
+  cyclesThroughListIn env (finiteTruth env plan) plan omEmpty 0
+
+-- `seen` records how many list edges the path had crossed when it entered each
+-- carrier state; reaching a state again after crossing more is a cycle that
+-- passes through a list.
+cyclesThroughListIn : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  OrdMap Int ->
+  Int ->
+  Bool
+cyclesThroughListIn env truth (GList p) seen lists =
+  cyclesThroughListIn env truth p seen (lists + 1)
+cyclesThroughListIn env truth (GArray p) seen lists =
+  cyclesThroughListIn env truth p seen (lists + 1)
+cyclesThroughListIn env truth (GOption p) seen lists =
+  cyclesThroughListIn env truth p seen lists
+cyclesThroughListIn env truth (GResult err ok) seen lists =
+  cyclesThroughListIn env truth err seen lists
+    || cyclesThroughListIn env truth ok seen lists
+cyclesThroughListIn env truth (GTuple ps) seen lists =
+  anyCyclesThroughList env truth ps seen lists
+cyclesThroughListIn env truth (nominal@(GNominal key args)) seen lists =
+  let word = stateWord env truth key args
+  match omLookup word seen
+    Some entered => lists > entered
+    None => match planDef env key
+      Ok (PlanDef _ _ _ _ ctors) =>
+        anyCtorCyclesThroughList
+          env
+          truth
+          nominal
+          ctors
+          (omInsert word lists seen)
+          lists
+      Err _ => False
+cyclesThroughListIn _ _ _ _ _ = False
+
+anyCyclesThroughList : PlanEnv ->
+  OrdMap Unit ->
+  List GenPlan ->
+  OrdMap Int ->
+  Int ->
+  Bool
+anyCyclesThroughList _ _ [] _ _ = False
+anyCyclesThroughList env truth (p :: ps) seen lists =
+  cyclesThroughListIn env truth p seen lists
+    || anyCyclesThroughList env truth ps seen lists
+
+anyCtorCyclesThroughList : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  List PlanCtor ->
+  OrdMap Int ->
+  Int ->
+  Bool
+anyCtorCyclesThroughList _ _ _ [] _ _ = False
+anyCtorCyclesThroughList env truth nominal (ctor :: rest) seen lists =
+  (match instantiateCtor env nominal ctor
+      Ok fields =>
+        anyCyclesThroughList env truth (fieldPlansOnly fields) seen lists
+      Err _ => False)
+    || anyCtorCyclesThroughList env truth nominal rest seen lists
 
 -- The empty/none alternatives are part of the same depth policy. A container
 -- may still expose a non-recursive payload at the bound, but it cannot enter a
@@ -2059,7 +2139,25 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "validateReachableCtors" (PWild PWild PWild (PList) PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateReachableCtors" ((PVar "env") (PVar "truth") (PVar "nominal") (PCons (PVar "ctor") (PVar "rest")) (PVar "seen")) (EMatch (ETuple (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (EApp (EApp (EApp (EApp (EApp (EVar "validateReachableCtors") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "rest")) (EVar "seen"))) (arm (PTuple (PCon "Ok" (PVar "fields")) (PCon "Ok" PWild)) () (EApp (EApp (EApp (EApp (EVar "validateReachablePlans") (EVar "env")) (EVar "truth")) (EApp (EVar "fieldPlansOnly") (EVar "fields"))) (EVar "seen"))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig true "listLengthBound" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyCon "Int")))))
-(DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax"))))
+(DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "planCyclesThroughList") (EVar "env")) (EVar "plan")) (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "listLenMax") (EVar "depth"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax")))))
+(DTypeSig true "listBoundDecays" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
+(DFunDef false "listBoundDecays" ((PVar "env") (PVar "plan")) (EBinOp "&&" (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan")) (EApp (EApp (EVar "planCyclesThroughList") (EVar "env")) (EVar "plan"))))
+(DTypeSig true "planCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
+(DFunDef false "planCyclesThroughList" ((PVar "env") (PVar "plan")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")) (EVar "omEmpty")) (ELit (LInt 0))))
+(DTypeSig false "cyclesThroughListIn" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GList" (PVar "p")) (PVar "seen") (PVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "p")) (EVar "seen")) (EBinOp "+" (EVar "lists") (ELit (LInt 1)))))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GArray" (PVar "p")) (PVar "seen") (PVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "p")) (EVar "seen")) (EBinOp "+" (EVar "lists") (ELit (LInt 1)))))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GOption" (PVar "p")) (PVar "seen") (PVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "p")) (EVar "seen")) (EVar "lists")))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GResult" (PVar "err") (PVar "ok")) (PVar "seen") (PVar "lists")) (EBinOp "||" (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "err")) (EVar "seen")) (EVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "ok")) (EVar "seen")) (EVar "lists"))))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GTuple" (PVar "ps")) (PVar "seen") (PVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "anyCyclesThroughList") (EVar "env")) (EVar "truth")) (EVar "ps")) (EVar "seen")) (EVar "lists")))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PAs "nominal" (PCon "GNominal" (PVar "key") (PVar "args"))) (PVar "seen") (PVar "lists")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "word")) (EVar "seen")) (arm (PCon "Some" (PVar "entered")) () (EBinOp ">" (EVar "lists") (EVar "entered"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "anyCtorCyclesThroughList") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "ctors")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (EVar "lists")) (EVar "seen"))) (EVar "lists"))) (arm (PCon "Err" PWild) () (EVar "False"))))))))
+(DFunDef false "cyclesThroughListIn" (PWild PWild PWild PWild PWild) (EVar "False"))
+(DTypeSig false "anyCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "anyCyclesThroughList" (PWild PWild (PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyCyclesThroughList" ((PVar "env") (PVar "truth") (PCons (PVar "p") (PVar "ps")) (PVar "seen") (PVar "lists")) (EBinOp "||" (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "p")) (EVar "seen")) (EVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "anyCyclesThroughList") (EVar "env")) (EVar "truth")) (EVar "ps")) (EVar "seen")) (EVar "lists"))))
+(DTypeSig false "anyCtorCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Bool"))))))))
+(DFunDef false "anyCtorCyclesThroughList" (PWild PWild PWild (PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyCtorCyclesThroughList" ((PVar "env") (PVar "truth") (PVar "nominal") (PCons (PVar "ctor") (PVar "rest")) (PVar "seen") (PVar "lists")) (EBinOp "||" (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "fields")) () (EApp (EApp (EApp (EApp (EApp (EVar "anyCyclesThroughList") (EVar "env")) (EVar "truth")) (EApp (EVar "fieldPlansOnly") (EVar "fields"))) (EVar "seen")) (EVar "lists"))) (arm (PCon "Err" PWild) () (EVar "False"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "anyCtorCyclesThroughList") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "rest")) (EVar "seen")) (EVar "lists"))))
 (DTypeSig true "optionWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "optionWeights" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (EListLit (ELit (LInt 1)) (ELit (LInt 0))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (EListLit (ELit (LInt 1)) (ELit (LInt 0))) (EListLit (ELit (LInt 1)) (ELit (LInt 1))))))
 (DTypeSig true "resultWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "Int")))))))
@@ -2648,7 +2746,25 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "validateReachableCtors" (PWild PWild PWild (PList) PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateReachableCtors" ((PVar "env") (PVar "truth") (PVar "nominal") (PCons (PVar "ctor") (PVar "rest")) (PVar "seen")) (EMatch (ETuple (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (EApp (EApp (EApp (EApp (EApp (EVar "validateReachableCtors") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "rest")) (EVar "seen"))) (arm (PTuple (PCon "Ok" (PVar "fields")) (PCon "Ok" PWild)) () (EApp (EApp (EApp (EApp (EVar "validateReachablePlans") (EVar "env")) (EVar "truth")) (EApp (EVar "fieldPlansOnly") (EVar "fields"))) (EVar "seen"))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig true "listLengthBound" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyCon "Int")))))
-(DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax"))))
+(DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "planCyclesThroughList") (EVar "env")) (EVar "plan")) (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "-" (EVar "listLenMax") (EVar "depth"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax")))))
+(DTypeSig true "listBoundDecays" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
+(DFunDef false "listBoundDecays" ((PVar "env") (PVar "plan")) (EBinOp "&&" (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan")) (EApp (EApp (EVar "planCyclesThroughList") (EVar "env")) (EVar "plan"))))
+(DTypeSig true "planCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
+(DFunDef false "planCyclesThroughList" ((PVar "env") (PVar "plan")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")) (EVar "omEmpty")) (ELit (LInt 0))))
+(DTypeSig false "cyclesThroughListIn" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GList" (PVar "p")) (PVar "seen") (PVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "p")) (EVar "seen")) (EBinOp "+" (EVar "lists") (ELit (LInt 1)))))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GArray" (PVar "p")) (PVar "seen") (PVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "p")) (EVar "seen")) (EBinOp "+" (EVar "lists") (ELit (LInt 1)))))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GOption" (PVar "p")) (PVar "seen") (PVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "p")) (EVar "seen")) (EVar "lists")))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GResult" (PVar "err") (PVar "ok")) (PVar "seen") (PVar "lists")) (EBinOp "||" (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "err")) (EVar "seen")) (EVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "ok")) (EVar "seen")) (EVar "lists"))))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PCon "GTuple" (PVar "ps")) (PVar "seen") (PVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "anyCyclesThroughList") (EVar "env")) (EVar "truth")) (EVar "ps")) (EVar "seen")) (EVar "lists")))
+(DFunDef false "cyclesThroughListIn" ((PVar "env") (PVar "truth") (PAs "nominal" (PCon "GNominal" (PVar "key") (PVar "args"))) (PVar "seen") (PVar "lists")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EVar "omLookup") (EVar "word")) (EVar "seen")) (arm (PCon "Some" (PVar "entered")) () (EBinOp ">" (EVar "lists") (EVar "entered"))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "anyCtorCyclesThroughList") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "ctors")) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (EVar "lists")) (EVar "seen"))) (EVar "lists"))) (arm (PCon "Err" PWild) () (EVar "False"))))))))
+(DFunDef false "cyclesThroughListIn" (PWild PWild PWild PWild PWild) (EVar "False"))
+(DTypeSig false "anyCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Bool")))))))
+(DFunDef false "anyCyclesThroughList" (PWild PWild (PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyCyclesThroughList" ((PVar "env") (PVar "truth") (PCons (PVar "p") (PVar "ps")) (PVar "seen") (PVar "lists")) (EBinOp "||" (EApp (EApp (EApp (EApp (EApp (EVar "cyclesThroughListIn") (EVar "env")) (EVar "truth")) (EVar "p")) (EVar "seen")) (EVar "lists")) (EApp (EApp (EApp (EApp (EApp (EVar "anyCyclesThroughList") (EVar "env")) (EVar "truth")) (EVar "ps")) (EVar "seen")) (EVar "lists"))))
+(DTypeSig false "anyCtorCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "Bool"))))))))
+(DFunDef false "anyCtorCyclesThroughList" (PWild PWild PWild (PList) PWild PWild) (EVar "False"))
+(DFunDef false "anyCtorCyclesThroughList" ((PVar "env") (PVar "truth") (PVar "nominal") (PCons (PVar "ctor") (PVar "rest")) (PVar "seen") (PVar "lists")) (EBinOp "||" (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "fields")) () (EApp (EApp (EApp (EApp (EApp (EVar "anyCyclesThroughList") (EVar "env")) (EVar "truth")) (EApp (EVar "fieldPlansOnly") (EVar "fields"))) (EVar "seen")) (EVar "lists"))) (arm (PCon "Err" PWild) () (EVar "False"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "anyCtorCyclesThroughList") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "rest")) (EVar "seen")) (EVar "lists"))))
 (DTypeSig true "optionWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "optionWeights" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (EListLit (ELit (LInt 1)) (ELit (LInt 0))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (EListLit (ELit (LInt 1)) (ELit (LInt 0))) (EListLit (ELit (LInt 1)) (ELit (LInt 1))))))
 (DTypeSig true "resultWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "Int")))))))
