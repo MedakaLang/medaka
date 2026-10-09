@@ -272,6 +272,9 @@ alphaEquiv : String -> String -> Bool
 alphaEquiv left right =
   canonicalTokens (typeTokens left) == canonicalTokens (typeTokens right)
 
+-- The tokens of a rendered type: identifiers, and every other non-space
+-- character on its own (so `->` is the two tokens `-` and `>`).
+export
 typeTokens : String -> List String
 typeTokens text = tokensFrom (toList (toChars text)) [] []
 
@@ -302,6 +305,8 @@ canonicalFrom (token :: rest) seen =
   else
     token :: canonicalFrom rest seen
 
+-- Whether a type token is a variable: it starts with a lowercase letter.
+export
 isVariableToken : String -> Bool
 isVariableToken token = match toList (toChars token)
   c :: _ => isLower c
