@@ -1991,11 +1991,11 @@ shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_bytes_census.sh"
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_bytes_census_test.mdk"
 oracles = []
-sources = ["test/bytes_census.sh", "test/bytes_census_baseline.toml"]
+sources = ["test/bytes_census_baseline.toml"]
 corpus = []
 toolchain = []
 

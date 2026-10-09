@@ -140,7 +140,7 @@ test/bytes_census               derived Array Int type-position census (epic #31
                                 and asserts nothing — a per-file opt-in ratchet
                                 (`--check` against test/bytes_census_baseline.toml) is
                                 the gated path, run by the real gate
-                                test/diff_compiler_bytes_census.sh, not this script
+                                test/diff_compiler_bytes_census_test.mdk, not this script
                                 directly. See the script header.
 
 test/arch_census                derived architecture census (#2289, S-arch-census,

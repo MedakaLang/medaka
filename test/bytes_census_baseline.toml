@@ -8,7 +8,7 @@
 # ratchet, never a tree-wide one (stdlib/bytes.mdk deliberately gets no
 # row: its Array Int positions are the epic's permanent bridge).
 #
-# Enforced by test/diff_compiler_bytes_census.sh (merge-tier).
+# Enforced by test/diff_compiler_bytes_census_test.mdk (merge-tier).
 #
 # Regenerate from the repo root, never by hand:
 #

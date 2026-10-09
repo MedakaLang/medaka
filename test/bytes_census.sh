@@ -6,7 +6,7 @@
 # tool, run via `make bytes-census`: it asserts nothing and exits 0 on a
 # healthy run, refusing (exit 1) only if the file corpus comes back empty.
 # The `--write`/`--check` modes are the GATED path, consumed by
-# test/diff_compiler_bytes_census.sh, a merge-tier gate.
+# test/diff_compiler_bytes_census_test.mdk, a merge-tier gate.
 #
 # The scanner matches the literal two-word text "Array Int" on a single line
 # (see count_positions below), so a type split across a line wrap, or with
@@ -201,7 +201,7 @@ $row"
     echo "# ratchet, never a tree-wide one (stdlib/bytes.mdk deliberately gets no"
     echo "# row: its Array Int positions are the epic's permanent bridge)."
     echo "#"
-    echo "# Enforced by test/diff_compiler_bytes_census.sh (merge-tier)."
+    echo "# Enforced by test/diff_compiler_bytes_census_test.mdk (merge-tier)."
     echo "#"
     echo "# Regenerate from the repo root, never by hand:"
     echo "#"
