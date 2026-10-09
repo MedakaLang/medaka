@@ -1,5 +1,5 @@
 # META
-source_lines=4093
+source_lines=4096
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -237,6 +237,7 @@ import args.{
 import json.{Json(..), jObject, jArray, stringify}
 import tools.lint.{splitLintNames}
 import string.{toInt}
+import test_process.{testJobs}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared
@@ -4060,10 +4061,20 @@ testFilesGo : List Engine ->
   Bool ->
   <IO> Bool
 testFilesGo _ _ _ _ _ _ _ [] acc = acc
-testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest) acc =
+testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
-  let args = testChildArgs engines cases filterOpt seedOpt f
-  let ok = match runCommand medaka args
+  let argvs = map (testChildArgs engines cases filterOpt seedOpt) files
+  let results = runCommandBatch medaka testJobs argvs
+  testFilesReport files results acc
+
+-- Prints each file's captured child result in input order, so a concurrent
+-- batch reads exactly like the serial walk it replaces.
+testFilesReport : List String ->
+  List (Result String (Int, String, String)) ->
+  Bool ->
+  <IO> Bool
+testFilesReport (f :: rest) (r :: results) acc =
+  let ok = match r
     Err e =>
       let _ = ePutStrLn "medaka test: \{f}: failed to start test runner: \{e}"
       False
@@ -4085,16 +4096,8 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
           ePutStrLn
             "medaka test: \{f}: test runner died (child exited \{intToString code})"
         False
-  testFilesGo
-    engines
-    rtPath
-    corePath
-    stdlibDir
-    cases
-    filterOpt
-    seedOpt
-    rest
-    (acc || not ok)
+  testFilesReport rest results (acc || not ok)
+testFilesReport _ _ acc = acc
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Loc" true) (mem "Ty" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
@@ -4130,6 +4133,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
+(DUse false (UseGroup ("test_process") ((mem "testJobs" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
@@ -4691,7 +4695,10 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DFunDef false "testChildArgs" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "f")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test")) (EVar "f") (ELit (LString "--engines")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "engineName")) (EVar "engines"))) (ELit (LString "--cases")) (EApp (EVar "intToString") (EVar "cases"))) (EMatch (EVar "filterOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--filter")) (EVar "s"))) (arm (PCon "None") () (EListLit)))) (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--seed")) (EApp (EVar "intToString") (EVar "s")))) (arm (PCon "None") () (EListLit)))))
 (DTypeSig true "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))))))))))
 (DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "args") (EApp (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "f"))) (DoLet false false (PVar "ok") (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "out"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "True") (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": test runner died (child exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (EVar "False"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
+(DFunDef false "testFilesGo" ((PVar "engines") PWild PWild PWild (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "files") (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "argvs") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt"))) (EVar "files"))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "medaka")) (EVar "testJobs")) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EVar "testFilesReport") (EVar "files")) (EVar "results")) (EVar "acc")))))
+(DTypeSig false "testFilesReport" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "testFilesReport" ((PCons (PVar "f") (PVar "rest")) (PCons (PVar "r") (PVar "results")) (PVar "acc")) (EBlock (DoLet false false (PVar "ok") (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "out"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "True") (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": test runner died (child exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (EVar "False"))))))))) (DoExpr (EApp (EApp (EApp (EVar "testFilesReport") (EVar "rest")) (EVar "results")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
+(DFunDef false "testFilesReport" (PWild PWild (PVar "acc")) (EVar "acc"))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Loc" true) (mem "Ty" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
@@ -4727,6 +4734,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
+(DUse false (UseGroup ("test_process") ((mem "testJobs" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "substringMatch" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "runTest" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))))))
@@ -5288,4 +5296,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
 (DFunDef false "testChildArgs" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "f")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test")) (EVar "f") (ELit (LString "--engines")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "engineName")) (EVar "engines"))) (ELit (LString "--cases")) (EApp (EVar "intToString") (EVar "cases"))) (EMatch (EVar "filterOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--filter")) (EVar "s"))) (arm (PCon "None") () (EListLit)))) (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--seed")) (EApp (EVar "intToString") (EVar "s")))) (arm (PCon "None") () (EListLit)))))
 (DTypeSig true "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))))))))))
 (DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "args") (EApp (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "f"))) (DoLet false false (PVar "ok") (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "out"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "True") (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": test runner died (child exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (EVar "False"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
+(DFunDef false "testFilesGo" ((PVar "engines") PWild PWild PWild (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "files") (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "argvs") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt"))) (EVar "files"))) (DoLet false false (PVar "results") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "medaka")) (EVar "testJobs")) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EVar "testFilesReport") (EVar "files")) (EVar "results")) (EVar "acc")))))
+(DTypeSig false "testFilesReport" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "testFilesReport" ((PCons (PVar "f") (PVar "rest")) (PCons (PVar "r") (PVar "results")) (PVar "acc")) (EBlock (DoLet false false (PVar "ok") (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "out"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "True") (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "f"))) (ELit (LString ": test runner died (child exited "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (EVar "False"))))))))) (DoExpr (EApp (EApp (EApp (EVar "testFilesReport") (EVar "rest")) (EVar "results")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
+(DFunDef false "testFilesReport" (PWild PWild (PVar "acc")) (EVar "acc"))

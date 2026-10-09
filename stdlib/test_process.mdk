@@ -425,12 +425,14 @@ testAssertionCounts rows =
     argvs
     spawned
 
-{- | How many `medaka test` runs `testAssertionCounts` starts at once:
+{- | How many `medaka test` runs start at once, in `testAssertionCounts` and
+   for the per-file children of `medaka test <dir>`:
    `MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
    online processors, or 4 when that cannot be read.
 
    > testJobs > 0
    True -}
+export
 testJobs : <Exec, IO> Int
 testJobs = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
   Some n if n > 0 => n
