@@ -6,7 +6,12 @@ import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import tools.doctest.{Engine(..)}
 import tools.test_cmd.{treesUnread}
-import test.{expectAll, expectFalse, expectTrue}
+import io.{runVerb}
+import string.{contains, indexOf}
+import test.{
+  expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue, fail
+}
+import test_process.{medakaBin, withScratchDir}
 
 noProps : List Decl
 noProps = parse "f : Int -> Int\nf x = x + 1\n\ntest \"t\" = f 1 == 2\n"
@@ -25,3 +30,59 @@ test "any interpreter engine reads the trees" = expectAll [
 
 test "a target with props reads the trees, even native-only" =
   expectFalse (treesUnread [EngNative] withProp)
+
+dirWithPassFailBroken : String -> <FileWrite> Result String Unit
+dirWithPassFailBroken dir = do
+  _ <- writeFile
+    "\{dir}/a_ok_test.mdk"
+    "import test.{expectEqual}\n\ntest \"fine\" = expectEqual (1 + 1) 2\n"
+  _ <- writeFile
+    "\{dir}/b_fail_test.mdk"
+    "import test.{expectEqual}\n\ntest \"bad\" = expectEqual (1 + 1) 3\n"
+  _ <- writeFile "\{dir}/c_broken_test.mdk" "test \"broken\" = (\n"
+  writeFile
+    "\{dir}/d_ok_test.mdk"
+    "import test.{expectEqual}\n\ntest \"also fine\" = expectEqual (2 + 2) 4\n"
+
+appearsBefore : String -> String -> String -> Bool
+appearsBefore first second text = match (
+  indexOf first text,
+  indexOf second text,
+)
+  (Some i, Some j) => i < j
+  _ => False
+
+dirRun : String -> String -> <Exec, IO> Result String (Int, String, String)
+dirRun jobs dir = runVerb "env" [
+  "MEDAKA_TEST_JOBS=\{jobs}",
+  medakaBin,
+  "test",
+  dir,
+  "--engines",
+  "native",
+]
+
+-- A directory target prints each file's output in input order and names each
+-- failing child, whatever MEDAKA_TEST_JOBS is.
+test "a directory run is the same serial or concurrent, in order, with death notices" = withScratchDir
+  (dir => match dirWithPassFailBroken dir
+    Err e => fail e
+    Ok () => match (dirRun "1" dir, dirRun "4" dir)
+      (Ok (c1, o1, e1), Ok (c4, o4, e4)) => expectAll [
+        expectEqual c1 c4,
+        expectEqual o1 o4,
+        expectEqual e1 e4,
+        expectNotEqual c1 0,
+        expectTrue
+          (contains "b_fail_test.mdk: test runner died (child exited" e4),
+        expectTrue
+          (contains "c_broken_test.mdk: test runner died (child exited" e4),
+        expectFalse (contains "a_ok_test.mdk: test runner died" e4),
+        expectFalse (contains "d_ok_test.mdk: test runner died" e4),
+        expectTrue
+          (appearsBefore
+            "b_fail_test.mdk: test runner died"
+            "c_broken_test.mdk: test runner died"
+            e4),
+      ]
+      _ => fail "could not spawn medaka test")

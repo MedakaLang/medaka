@@ -233,6 +233,7 @@ import args.{
 import json.{Json(..), jObject, jArray, stringify}
 import tools.lint.{splitLintNames}
 import string.{toInt}
+import test_process.{testJobs}
 
 -- `medaka test --filter <substring>`: does `needle` occur anywhere in
 -- `haystack`? Same tiny definition as `prop_runner.mdk`'s copy — not shared
@@ -4056,10 +4057,20 @@ testFilesGo : List Engine ->
   Bool ->
   <IO> Bool
 testFilesGo _ _ _ _ _ _ _ [] acc = acc
-testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest) acc =
+testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
-  let args = testChildArgs engines cases filterOpt seedOpt f
-  let ok = match runCommand medaka args
+  let argvs = map (testChildArgs engines cases filterOpt seedOpt) files
+  let results = runCommandBatch medaka testJobs argvs
+  testFilesReport files results acc
+
+-- Prints each file's captured child result in input order, so a concurrent
+-- batch reads exactly like the serial walk it replaces.
+testFilesReport : List String ->
+  List (Result String (Int, String, String)) ->
+  Bool ->
+  <IO> Bool
+testFilesReport (f :: rest) (r :: results) acc =
+  let ok = match r
     Err e =>
       let _ = ePutStrLn "medaka test: \{f}: failed to start test runner: \{e}"
       False
@@ -4081,13 +4092,5 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt seedOpt (f :: rest
           ePutStrLn
             "medaka test: \{f}: test runner died (child exited \{intToString code})"
         False
-  testFilesGo
-    engines
-    rtPath
-    corePath
-    stdlibDir
-    cases
-    filterOpt
-    seedOpt
-    rest
-    (acc || not ok)
+  testFilesReport rest results (acc || not ok)
+testFilesReport _ _ acc = acc

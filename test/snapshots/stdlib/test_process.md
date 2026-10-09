@@ -1,5 +1,5 @@
 # META
-source_lines=641
+source_lines=643
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -429,12 +429,14 @@ testAssertionCounts rows =
     argvs
     spawned
 
-{- | How many `medaka test` runs `testAssertionCounts` starts at once:
+{- | How many `medaka test` runs start at once, in `testAssertionCounts` and
+   for the per-file children of `medaka test <dir>`:
    `MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
    online processors, or 4 when that cannot be read.
 
    > testJobs > 0
    True -}
+export
 testJobs : <Exec, IO> Int
 testJobs = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
   Some n if n > 0 => n
@@ -691,7 +693,7 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "args") (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "runVerb") (EVar "bin")) (EVar "args"))))))
 (DTypeSig true "testAssertionCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyEffect ("Exec" "IO") None (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "testAssertionCounts" ((PVar "rows")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "argvs") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "path") (PVar "extraArgs"))) (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs")))) (EVar "rows"))) (DoLet false false (PVar "spawned") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "bin")) (EVar "testJobs")) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "zipWith3") (ELam ((PTuple (PVar "path") PWild) (PVar "args") (PVar "run")) (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "mapErr") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "bin"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (EVar "run"))))) (EVar "rows")) (EVar "argvs")) (EVar "spawned")))))
-(DTypeSig false "testJobs" (TyEffect ("Exec" "IO") None (TyCon "Int")))
+(DTypeSig true "testJobs" (TyEffect ("Exec" "IO") None (TyCon "Int")))
 (DFunDef false "testJobs" () (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EVar "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EVar "onlineProcessors"))))
 (DTypeSig false "onlineProcessors" (TyEffect ("Exec") None (TyCon "Int")))
 (DFunDef false "onlineProcessors" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "getconf"))) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (ELit (LInt 4))))) (arm PWild () (ELit (LInt 4)))))
@@ -779,7 +781,7 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DFunDef false "testAssertionCount" ((PVar "path") (PVar "extraArgs")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "args") (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "runVerb") (EVar "bin")) (EVar "args"))))))
 (DTypeSig true "testAssertionCounts" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyEffect ("Exec" "IO") None (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "testAssertionCounts" ((PVar "rows")) (EBlock (DoLet false false (PVar "bin") (EVar "medakaBin")) (DoLet false false (PVar "argvs") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "path") (PVar "extraArgs"))) (EApp (EApp (EVar "assertionCountArgs") (EVar "path")) (EVar "extraArgs")))) (EVar "rows"))) (DoLet false false (PVar "spawned") (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "bin")) (EVar "testJobs")) (EVar "argvs"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "zipWith3") (ELam ((PTuple (PVar "path") PWild) (PVar "args") (PVar "run")) (EApp (EApp (EApp (EApp (EVar "gradeAssertionCount") (EVar "bin")) (EVar "path")) (EVar "args")) (EApp (EApp (EVar "mapErr") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "bin"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (EVar "run"))))) (EVar "rows")) (EVar "argvs")) (EVar "spawned")))))
-(DTypeSig false "testJobs" (TyEffect ("Exec" "IO") None (TyCon "Int")))
+(DTypeSig true "testJobs" (TyEffect ("Exec" "IO") None (TyCon "Int")))
 (DFunDef false "testJobs" () (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EDictApp "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EVar "onlineProcessors"))))
 (DTypeSig false "onlineProcessors" (TyEffect ("Exec") None (TyCon "Int")))
 (DFunDef false "onlineProcessors" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "getconf"))) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (ELit (LInt 4))))) (arm PWild () (ELit (LInt 4)))))
