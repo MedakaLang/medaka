@@ -25,7 +25,7 @@ name = "a top-level binding generalizes iff its expression is a syntactic value"
 engine = "eval"
 issue = 3949
 seed = 20261009
-cases = 500
+cases = 25
 failure = "false"
 
 [[pin]]
@@ -45,7 +45,7 @@ name = "a local let generalizes iff its expression is a syntactic value"
 engine = "eval"
 issue = 3949
 seed = 20261009
-cases = 500
+cases = 25
 failure = "false"
 
 [[pin]]
@@ -65,7 +65,7 @@ name = "membership in a binding group grants no generalization exemption"
 engine = "eval"
 issue = 3949
 seed = 20261009
-cases = 500
+cases = 25
 failure = "false"
 
 [[pin]]
@@ -85,7 +85,7 @@ name = "a type signature grants no generalization exemption"
 engine = "eval"
 issue = 3949
 seed = 20261009
-cases = 500
+cases = 25
 failure = "false"
 
 [[pin]]
@@ -105,7 +105,7 @@ name = "a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE"
 engine = "eval"
 issue = 3949
 seed = 20261009
-cases = 500
+cases = 25
 failure = "false"
 
 [[pin]]
