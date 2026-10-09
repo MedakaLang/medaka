@@ -33,6 +33,12 @@ metadata. A test-infrastructure gap
 blocks this campaign until its capability is built; do not preserve a workaround
 in the algorithm suites.
 
+A type recursive through `List` or `Array` (`data Rose = Rose Int (List Rose)`)
+generates lists whose length bound falls by one per level of constructor
+depth, from 7 at depth 0 to 0 at depth 7, in both engines. A generated value is
+therefore finite, and a Rose holds at most 1957 nodes. Lists that do not sit on
+a cycle through a list keep the flat bound of 7.
+
 Custom evaluator helpers carry concrete type signatures and use the compiler's
 ordinary dictionary elaboration. The runner does not reconstruct method-table
 ordinals or dictionaries. Helper validation runs over the requested carriers

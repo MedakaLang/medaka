@@ -1373,15 +1373,95 @@ validateReachableCtors env truth nominal (ctor :: rest) seen = match (
   (Err e, _) => Err e
   (_, Err e) => Err e
 
+-- A list whose element reaches a cycle that crosses a list edge (`Rose Int
+-- (List Rose)`) shrinks its length bound by one per level of nominal depth, so
+-- the expected fan-out drops below one and the whole value stays small. Every
+-- other list keeps the flat bound, which leaves terminating carriers' draws
+-- untouched.
 export
 listLengthBound : PlanEnv -> Int -> GenPlan -> Int
 listLengthBound env depth plan =
   if not (planHasFiniteValue env plan) then
     0
+  else if planCyclesThroughList env plan then
+    max 0 (listLenMax - depth)
   else if depth >= maxGenDepth && planCanDiverge env plan then
     0
   else
     listLenMax
+
+-- The renderer emits the decaying bound over the runtime `depth`.
+export
+listBoundDecays : PlanEnv -> GenPlan -> Bool
+listBoundDecays env plan =
+  planHasFiniteValue env plan && planCyclesThroughList env plan
+
+export
+planCyclesThroughList : PlanEnv -> GenPlan -> Bool
+planCyclesThroughList env plan =
+  cyclesThroughListIn env (finiteTruth env plan) plan omEmpty 0
+
+-- `seen` records how many list edges the path had crossed when it entered each
+-- carrier state; reaching a state again after crossing more is a cycle that
+-- passes through a list.
+cyclesThroughListIn : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  OrdMap Int ->
+  Int ->
+  Bool
+cyclesThroughListIn env truth (GList p) seen lists =
+  cyclesThroughListIn env truth p seen (lists + 1)
+cyclesThroughListIn env truth (GArray p) seen lists =
+  cyclesThroughListIn env truth p seen (lists + 1)
+cyclesThroughListIn env truth (GOption p) seen lists =
+  cyclesThroughListIn env truth p seen lists
+cyclesThroughListIn env truth (GResult err ok) seen lists =
+  cyclesThroughListIn env truth err seen lists
+    || cyclesThroughListIn env truth ok seen lists
+cyclesThroughListIn env truth (GTuple ps) seen lists =
+  anyCyclesThroughList env truth ps seen lists
+cyclesThroughListIn env truth (nominal@(GNominal key args)) seen lists =
+  let word = stateWord env truth key args
+  match omLookup word seen
+    Some entered => lists > entered
+    None => match planDef env key
+      Ok (PlanDef _ _ _ _ ctors) =>
+        anyCtorCyclesThroughList
+          env
+          truth
+          nominal
+          ctors
+          (omInsert word lists seen)
+          lists
+      Err _ => False
+cyclesThroughListIn _ _ _ _ _ = False
+
+anyCyclesThroughList : PlanEnv ->
+  OrdMap Unit ->
+  List GenPlan ->
+  OrdMap Int ->
+  Int ->
+  Bool
+anyCyclesThroughList _ _ [] _ _ = False
+anyCyclesThroughList env truth (p :: ps) seen lists =
+  cyclesThroughListIn env truth p seen lists
+    || anyCyclesThroughList env truth ps seen lists
+
+anyCtorCyclesThroughList : PlanEnv ->
+  OrdMap Unit ->
+  GenPlan ->
+  List PlanCtor ->
+  OrdMap Int ->
+  Int ->
+  Bool
+anyCtorCyclesThroughList _ _ _ [] _ _ = False
+anyCtorCyclesThroughList env truth nominal (ctor :: rest) seen lists =
+  (match instantiateCtor env nominal ctor
+      Ok fields =>
+        anyCyclesThroughList env truth (fieldPlansOnly fields) seen lists
+      Err _ => False)
+    || anyCtorCyclesThroughList env truth nominal rest seen lists
 
 -- The empty/none alternatives are part of the same depth policy. A container
 -- may still expose a non-recursive payload at the bound, but it cannot enter a

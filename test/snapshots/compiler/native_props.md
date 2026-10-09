@@ -1,5 +1,5 @@
 # META
-source_lines=2108
+source_lines=2137
 stages=DESUGAR,MARK
 # SOURCE
 -- Native property runner.  It deliberately compiles one probe per target, then
@@ -35,9 +35,9 @@ import tools.prop_plan.{
   PlanDef(..), PlanCtor(..), PlanField(..), PlanError(..), PlanErrorReason(..),
   PlanVisibility(..), planErrorText, buildPlanEnvModules, planFor, planDef,
   instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
-  optionWeights, resultWeights, maxGenDepth, SoftWeight(..), softCtorWeights,
-  intMin, intMax, structuralRngModulus, structuralRngMultiplier,
-  structuralRngIncrement, structuralRngMixMultiplier1,
+  listBoundDecays, listLenMax, optionWeights, resultWeights, maxGenDepth,
+  SoftWeight(..), softCtorWeights, intMin, intMax, structuralRngModulus,
+  structuralRngMultiplier, structuralRngIncrement, structuralRngMixMultiplier1,
   structuralRngMixMultiplier2, structuralRngWordModulus, structuralRngWordHalf,
   ShrinkAction(..), shrinkActions, IntShrinkStep(..), intShrinkSteps
 }
@@ -1274,6 +1274,25 @@ renderListByDepth : String ->
   String ->
   String
 renderListByDepth nonce open close env p child =
+  if listBoundDecays env p then
+    renderListChoiceN
+      nonce
+      open
+      close
+      child
+      listLenMax
+      "(if depth >= \{intToString listLenMax} then 1 else \{intToString (listLenMax + 1)} - depth)"
+  else
+    renderListByDepthFlat nonce open close env p child
+
+renderListByDepthFlat : String ->
+  String ->
+  String ->
+  PlanEnv ->
+  GenPlan ->
+  String ->
+  String
+renderListByDepthFlat nonce open close env p child =
   byDepth
     (renderListChoice nonce open close child (listLengthBound env 0 p))
     (renderListChoice
@@ -1285,7 +1304,17 @@ renderListByDepth nonce open close env p child =
 
 renderListChoice : String -> String -> String -> String -> Int -> String
 renderListChoice nonce open close child bound =
-  "match \{generatedPrefix nonce}choose \{intToString (bound + 1)}\n\{renderListArms open close child bound 0}"
+  renderListChoiceN nonce open close child bound (intToString (bound + 1))
+
+renderListChoiceN : String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  String
+renderListChoiceN nonce open close child bound count =
+  "match \{generatedPrefix nonce}choose \{count}\n\{renderListArms open close child bound 0}"
 
 renderListArms : String -> String -> String -> Int -> Int -> String
 renderListArms open close child bound n
@@ -2123,7 +2152,7 @@ paramName (PropParam n _ _) = n
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "mintNonce" false) (mem "freshProbeNonce" false) (mem "noncedPrefix" false) (mem "renameUserMain" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false) (mem "ppTy" false))))
-(DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "TypeKey" true) (mem "CustomPlan" true) (mem "PlanEnv" true) (mem "GenPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanField" true) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "PlanVisibility" true) (mem "planErrorText" false) (mem "buildPlanEnvModules" false) (mem "planFor" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "planTy" false) (mem "typeKeyWord" false) (mem "ctorWeights" false) (mem "listLengthBound" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "maxGenDepth" false) (mem "SoftWeight" true) (mem "softCtorWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngModulus" false) (mem "structuralRngMultiplier" false) (mem "structuralRngIncrement" false) (mem "structuralRngMixMultiplier1" false) (mem "structuralRngMixMultiplier2" false) (mem "structuralRngWordModulus" false) (mem "structuralRngWordHalf" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
+(DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "TypeKey" true) (mem "CustomPlan" true) (mem "PlanEnv" true) (mem "GenPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanField" true) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "PlanVisibility" true) (mem "planErrorText" false) (mem "buildPlanEnvModules" false) (mem "planFor" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "planTy" false) (mem "typeKeyWord" false) (mem "ctorWeights" false) (mem "listLengthBound" false) (mem "listBoundDecays" false) (mem "listLenMax" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "maxGenDepth" false) (mem "SoftWeight" true) (mem "softCtorWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngModulus" false) (mem "structuralRngMultiplier" false) (mem "structuralRngIncrement" false) (mem "structuralRngMixMultiplier1" false) (mem "structuralRngMixMultiplier2" false) (mem "structuralRngWordModulus" false) (mem "structuralRngWordHalf" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propSeedValue" false) (mem "PropRequest" true) (mem "propRequestName" false) (mem "propRequestSeed" false) (mem "propRequestCases" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_prop__@@")))
@@ -2469,9 +2498,13 @@ paramName (PropParam n _ _) = n
 (DTypeSig false "stringExpr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "stringExpr" ((PVar "nonce") PWild) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "generatedPrefix") (EVar "nonce")))) (ELit (LString "string ("))) (EApp (EVar "display") (EApp (EVar "generatedPrefix") (EVar "nonce")))) (ELit (LString "choose (if depth >= "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "maxGenDepth")))) (ELit (LString " then 1 else 11))"))))
 (DTypeSig false "renderListByDepth" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "renderListByDepth" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "env") (PVar "p") (PVar "child")) (EApp (EApp (EVar "byDepth") (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoice") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EApp (EApp (EApp (EVar "listLengthBound") (EVar "env")) (ELit (LInt 0))) (EVar "p")))) (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoice") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EApp (EApp (EApp (EVar "listLengthBound") (EVar "env")) (EVar "maxGenDepth")) (EVar "p")))))
+(DFunDef false "renderListByDepth" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "env") (PVar "p") (PVar "child")) (EIf (EApp (EApp (EVar "listBoundDecays") (EVar "env")) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoiceN") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EVar "listLenMax")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(if depth >= ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "listLenMax")))) (ELit (LString " then 1 else "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "listLenMax") (ELit (LInt 1)))))) (ELit (LString " - depth)")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renderListByDepthFlat") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "env")) (EVar "p")) (EVar "child"))))
+(DTypeSig false "renderListByDepthFlat" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "renderListByDepthFlat" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "env") (PVar "p") (PVar "child")) (EApp (EApp (EVar "byDepth") (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoice") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EApp (EApp (EApp (EVar "listLengthBound") (EVar "env")) (ELit (LInt 0))) (EVar "p")))) (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoice") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EApp (EApp (EApp (EVar "listLengthBound") (EVar "env")) (EVar "maxGenDepth")) (EVar "p")))))
 (DTypeSig false "renderListChoice" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))))
-(DFunDef false "renderListChoice" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "child") (PVar "bound")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match ")) (EApp (EVar "display") (EApp (EVar "generatedPrefix") (EVar "nonce")))) (ELit (LString "choose "))) (EApp (EVar "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "bound") (ELit (LInt 1)))))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EApp (EVar "renderListArms") (EVar "open")) (EVar "close")) (EVar "child")) (EVar "bound")) (ELit (LInt 0))))) (ELit (LString ""))))
+(DFunDef false "renderListChoice" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "child") (PVar "bound")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoiceN") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EVar "bound")) (EApp (EVar "intToString") (EBinOp "+" (EVar "bound") (ELit (LInt 1))))))
+(DTypeSig false "renderListChoiceN" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "renderListChoiceN" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "child") (PVar "bound") (PVar "count")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match ")) (EApp (EVar "display") (EApp (EVar "generatedPrefix") (EVar "nonce")))) (ELit (LString "choose "))) (EApp (EVar "display") (EVar "count"))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EApp (EVar "renderListArms") (EVar "open")) (EVar "close")) (EVar "child")) (EVar "bound")) (ELit (LInt 0))))) (ELit (LString ""))))
 (DTypeSig false "renderListArms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "renderListArms" ((PVar "open") (PVar "close") (PVar "child") (PVar "bound") (PVar "n")) (EIf (EBinOp ">" (EVar "n") (EVar "bound")) (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "renderListArms" ((PVar "open") (PVar "close") (PVar "child") (PVar "bound") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EIf (EBinOp "==" (EVar "n") (EVar "bound")) (ELit (LString "_")) (EApp (EVar "intToString") (EVar "n"))))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "open"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "repeatString") (EVar "child")) (EVar "n"))))) (ELit (LString ""))) (EApp (EVar "display") (EVar "close"))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EApp (EVar "renderListArms") (EVar "open")) (EVar "close")) (EVar "child")) (EVar "bound")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))))) (ELit (LString ""))))
@@ -2712,7 +2745,7 @@ paramName (PropParam n _ _) = n
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("tools" "probe_transcript") ((mem "Chunk" true) (mem "chunksOf" false) (mem "decodeValue" false) (mem "endTag" false) (mem "firstNonEmptyLine" false) (mem "mintNonce" false) (mem "freshProbeNonce" false) (mem "noncedPrefix" false) (mem "renameUserMain" false) (mem "runtimeDependencyName" false) (mem "runtimeDependencyPrefix" false) (mem "sentinelLine" false) (mem "tagsInOrder" false) (mem "valuePrintExprWith" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "exprToString" false) (mem "ppTy" false))))
-(DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "TypeKey" true) (mem "CustomPlan" true) (mem "PlanEnv" true) (mem "GenPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanField" true) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "PlanVisibility" true) (mem "planErrorText" false) (mem "buildPlanEnvModules" false) (mem "planFor" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "planTy" false) (mem "typeKeyWord" false) (mem "ctorWeights" false) (mem "listLengthBound" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "maxGenDepth" false) (mem "SoftWeight" true) (mem "softCtorWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngModulus" false) (mem "structuralRngMultiplier" false) (mem "structuralRngIncrement" false) (mem "structuralRngMixMultiplier1" false) (mem "structuralRngMixMultiplier2" false) (mem "structuralRngWordModulus" false) (mem "structuralRngWordHalf" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
+(DUse false (UseGroup ("tools" "prop_plan") ((mem "PlanModule" true) (mem "TypeKey" true) (mem "CustomPlan" true) (mem "PlanEnv" true) (mem "GenPlan" true) (mem "PlanDef" true) (mem "PlanCtor" true) (mem "PlanField" true) (mem "PlanError" true) (mem "PlanErrorReason" true) (mem "PlanVisibility" true) (mem "planErrorText" false) (mem "buildPlanEnvModules" false) (mem "planFor" false) (mem "planDef" false) (mem "instantiateCtor" false) (mem "planTy" false) (mem "typeKeyWord" false) (mem "ctorWeights" false) (mem "listLengthBound" false) (mem "listBoundDecays" false) (mem "listLenMax" false) (mem "optionWeights" false) (mem "resultWeights" false) (mem "maxGenDepth" false) (mem "SoftWeight" true) (mem "softCtorWeights" false) (mem "intMin" false) (mem "intMax" false) (mem "structuralRngModulus" false) (mem "structuralRngMultiplier" false) (mem "structuralRngIncrement" false) (mem "structuralRngMixMultiplier1" false) (mem "structuralRngMixMultiplier2" false) (mem "structuralRngWordModulus" false) (mem "structuralRngWordHalf" false) (mem "ShrinkAction" true) (mem "shrinkActions" false) (mem "IntShrinkStep" true) (mem "intShrinkSteps" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" true) (mem "PropStatus" true) (mem "PropFailureKind" true) (mem "filterProps" false) (mem "filterPropsByName" false) (mem "propSeedValue" false) (mem "PropRequest" true) (mem "propRequestName" false) (mem "propRequestSeed" false) (mem "propRequestCases" false))))
 (DTypeSig false "sentinelBase" (TyCon "String"))
 (DFunDef false "sentinelBase" () (ELit (LString "@@__mdk_native_prop__@@")))
@@ -3058,9 +3091,13 @@ paramName (PropParam n _ _) = n
 (DTypeSig false "stringExpr" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
 (DFunDef false "stringExpr" ((PVar "nonce") PWild) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "generatedPrefix") (EVar "nonce")))) (ELit (LString "string ("))) (EApp (EMethodRef "display") (EApp (EVar "generatedPrefix") (EVar "nonce")))) (ELit (LString "choose (if depth >= "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "maxGenDepth")))) (ELit (LString " then 1 else 11))"))))
 (DTypeSig false "renderListByDepth" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "renderListByDepth" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "env") (PVar "p") (PVar "child")) (EApp (EApp (EVar "byDepth") (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoice") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EApp (EApp (EApp (EVar "listLengthBound") (EVar "env")) (ELit (LInt 0))) (EVar "p")))) (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoice") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EApp (EApp (EApp (EVar "listLengthBound") (EVar "env")) (EVar "maxGenDepth")) (EVar "p")))))
+(DFunDef false "renderListByDepth" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "env") (PVar "p") (PVar "child")) (EIf (EApp (EApp (EVar "listBoundDecays") (EVar "env")) (EVar "p")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoiceN") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EVar "listLenMax")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(if depth >= ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "listLenMax")))) (ELit (LString " then 1 else "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "listLenMax") (ELit (LInt 1)))))) (ELit (LString " - depth)")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renderListByDepthFlat") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "env")) (EVar "p")) (EVar "child"))))
+(DTypeSig false "renderListByDepthFlat" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "renderListByDepthFlat" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "env") (PVar "p") (PVar "child")) (EApp (EApp (EVar "byDepth") (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoice") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EApp (EApp (EApp (EVar "listLengthBound") (EVar "env")) (ELit (LInt 0))) (EVar "p")))) (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoice") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EApp (EApp (EApp (EVar "listLengthBound") (EVar "env")) (EVar "maxGenDepth")) (EVar "p")))))
 (DTypeSig false "renderListChoice" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String")))))))
-(DFunDef false "renderListChoice" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "child") (PVar "bound")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match ")) (EApp (EMethodRef "display") (EApp (EVar "generatedPrefix") (EVar "nonce")))) (ELit (LString "choose "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EBinOp "+" (EVar "bound") (ELit (LInt 1)))))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EApp (EVar "renderListArms") (EVar "open")) (EVar "close")) (EVar "child")) (EVar "bound")) (ELit (LInt 0))))) (ELit (LString ""))))
+(DFunDef false "renderListChoice" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "child") (PVar "bound")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "renderListChoiceN") (EVar "nonce")) (EVar "open")) (EVar "close")) (EVar "child")) (EVar "bound")) (EApp (EVar "intToString") (EBinOp "+" (EVar "bound") (ELit (LInt 1))))))
+(DTypeSig false "renderListChoiceN" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String"))))))))
+(DFunDef false "renderListChoiceN" ((PVar "nonce") (PVar "open") (PVar "close") (PVar "child") (PVar "bound") (PVar "count")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "match ")) (EApp (EMethodRef "display") (EApp (EVar "generatedPrefix") (EVar "nonce")))) (ELit (LString "choose "))) (EApp (EMethodRef "display") (EDictApp "count"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EApp (EVar "renderListArms") (EVar "open")) (EVar "close")) (EVar "child")) (EVar "bound")) (ELit (LInt 0))))) (ELit (LString ""))))
 (DTypeSig false "renderListArms" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))))
 (DFunDef false "renderListArms" ((PVar "open") (PVar "close") (PVar "child") (PVar "bound") (PVar "n")) (EIf (EBinOp ">" (EVar "n") (EVar "bound")) (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "renderListArms" ((PVar "open") (PVar "close") (PVar "child") (PVar "bound") (PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EIf (EBinOp "==" (EVar "n") (EVar "bound")) (ELit (LString "_")) (EApp (EVar "intToString") (EVar "n"))))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "open"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "repeatString") (EVar "child")) (EVar "n"))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "close"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EApp (EVar "renderListArms") (EVar "open")) (EVar "close")) (EVar "child")) (EVar "bound")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))))) (ELit (LString ""))))

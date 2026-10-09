@@ -192,3 +192,20 @@ appliedBoundWeights =
 
 test "finite witnesses distinguish repeated applied nominal carriers" =
   expectEqual (Ok [1]) appliedBoundWeights
+
+-- A type recursive through `List` must generate a finite value in bounded time
+-- in both engines. The list length bound falls by one per level of constructor
+-- depth from `listLenMax` (7), so the top Rose (depth 0) has at most 6
+-- children and a generated tree holds at most 1957 nodes (f 0 = 1, f k =
+-- 1 + k * f (k - 1)).
+data Rose = Rose Int (List Rose)
+
+roseSize : Rose -> Int
+roseSize (Rose _ kids) = 1 + roseSizes kids
+
+roseSizes : List Rose -> Int
+roseSizes [] = 0
+roseSizes (k :: ks) = roseSize k + roseSizes ks
+
+prop "a generated Rose has between 1 and 1957 nodes" (r : Rose) =
+  roseSize r >= 1 && roseSize r <= 1957
