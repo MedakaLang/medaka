@@ -140,6 +140,7 @@ declare i64 @mdk_fsync(i64, i64)
 declare i64 @mdk_stat_file(i64, i64)
 declare i64 @mdk_file_mode(i64, i64)
 declare i64 @mdk_run_command(i64, i64)
+declare i64 @mdk_run_command_batch(i64, i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
@@ -295,9 +296,8 @@ intovf47:
   call void @mdk_int_overflow(i64 0, i64 %t48, i64 %t49)
   unreachable
 intok47:
-  %t50 = call i64 @mdk___user____hashListItems(i64 %arg0, i64 %t45, i64 %t32)
-  store i64 %t50, ptr %t0
-  br label %decend1
+  %t50 = musttail call i64 @mdk___user____hashListItems(i64 %arg0, i64 %t45, i64 %t32)
+  ret i64 %t50
 connext20:
   call void @mdk_nonexhaustive_match()
   unreachable

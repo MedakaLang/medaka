@@ -542,6 +542,15 @@ catalogRows = [
       GapBug
       "implemented by llvm, missing from the interpreter on purpose: the interpreter waits on a decision about the --allow-exec security posture"),
   ExternRow
+    "runCommandBatch"
+    (CSymbol LlvmFile "mdk_run_command_batch")
+    (NotProvided
+      GapPermanent
+      "a subprocess has no WasmGC host equivalent: Exec is granted on native and run only, and no wasm profile grants it")
+    (NotProvided
+      GapBug
+      "implemented by llvm, missing from the interpreter on purpose: the same --allow-exec posture as runCommand"),
+  ExternRow
     "exit"
     (CSymbol LlvmAbort "mdk_exit")
     (EnvImport WasmLeaf "mdk_exit")

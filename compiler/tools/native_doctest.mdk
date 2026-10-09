@@ -50,6 +50,7 @@ import driver.build_cmd.{
   scratchProbeManifest,
   cleanupTempDir,
   runBuildNativeRoots,
+  BuildProfile(..),
   envOr,
   defaultMedakaRoot,
 }
@@ -301,7 +302,8 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
     extraRoots
     True
     False
-    False)
+    False
+    BuildProbe)
     Err rep =>
       Err
         "native doctest runner: could not build \{target} natively\n\{ppBuildReport rep}"

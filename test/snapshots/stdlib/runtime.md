@@ -1,5 +1,5 @@
 # META
-source_lines=973
+source_lines=995
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -201,6 +201,28 @@ extern buildDate : Unit -> String
 extern runCommand : (program : String) ->
   List String ->
   <Exec program> Result String (Int, String, String)
+
+-- | Runs `program` once for each argument list, at most the given number of
+-- runs at a time, and waits for all of them. A number below 1 runs them one
+-- at a time. Element i of the result is what `runCommand` returns for the
+-- i-th argument list, so results are in input order whatever order the runs
+-- finish in. As with `runCommand`, a program that cannot be executed exits
+-- 127 with the host's message on standard error, and `Err` means the run
+-- could not be started or its exit status could not be read back; either
+-- way the other runs still happen.
+--
+-- > runCommandBatch "sh" 2 [["-c", "sleep 0.2; echo a"], ["-c", "echo b"]]
+-- [Ok (0, "a\n", ""), Ok (0, "b\n", "")]
+-- > runCommandBatch "echo" 0 [["x"], ["y"], ["z"]]
+-- [Ok (0, "x\n", ""), Ok (0, "y\n", ""), Ok (0, "z\n", "")]
+-- > map (r => map ((c, o, e) => (c, o, e /= "")) r) (runCommandBatch "medaka-no-such-program" 2 [[], ["a"], ["b"]])
+-- [Ok (127, "", True), Ok (127, "", True), Ok (127, "", True)]
+-- > map (r => map ((c, o, _) => (c, stringLength o, stringSlice 1048560 1048576 o)) r) (runCommandBatch "sh" 2 [["-c", "yes 0123456789abcde | head -c 1048576"], ["-c", "yes 0123456789abcde | head -c 1048576"]])
+-- [Ok (0, 1048576, "0123456789abcde\n"), Ok (0, 1048576, "0123456789abcde\n")]
+extern runCommandBatch : (program : String) ->
+  Int ->
+  List (List String) ->
+  <Exec program> List (Result String (Int, String, String))
 
 -- | Ends the program with an exit code.
 extern exit : Int -> Unit
@@ -1010,6 +1032,7 @@ extern stringToLower : String -> String
 (DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyCon "String")))
 (DExtern false "buildDate" (TyFun (TyCon "Unit") (TyCon "String")))
 (DExtern false "runCommand" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
+(DExtern false "runCommandBatch" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))))
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))
@@ -1211,6 +1234,7 @@ extern stringToLower : String -> String
 (DExtern false "buildCommit" (TyFun (TyCon "Unit") (TyCon "String")))
 (DExtern false "buildDate" (TyFun (TyCon "Unit") (TyCon "String")))
 (DExtern false "runCommand" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
+(DExtern false "runCommandBatch" (TyFun (TyNamed "program" (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyEffect ((atom "Exec" (name "program"))) None (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))))
 (DExtern false "exit" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DExtern false "panic" (TyFun (TyCon "String") (TyVar "a")))
 (DExtern false "indexError" (TyFun (TyCon "String") (TyVar "a")))

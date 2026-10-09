@@ -140,6 +140,7 @@ declare i64 @mdk_fsync(i64, i64)
 declare i64 @mdk_stat_file(i64, i64)
 declare i64 @mdk_file_mode(i64, i64)
 declare i64 @mdk_run_command(i64, i64)
+declare i64 @mdk_run_command_batch(i64, i64, i64)
 declare i64 @mdk_executable_path(i64)
 declare i64 @mdk_build_fingerprint(i64)
 declare i64 @mdk_build_commit(i64)
@@ -391,19 +392,13 @@ conyes64:
   %t81 = getelementptr i8, ptr %t80, i64 16
   %t82 = load i64, ptr %t81
   %t83 = call i64 @mdk_disp_compare_0_2(i64 %arg0, i64 %t73, i64 %t79)
-  %t84 = alloca i64
-  %t86 = icmp eq i64 %t83, 3
-  br i1 %t86, label %conyes87, label %connext87
-conyes87:
-  %t88 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_compare(i64 %arg0, i64 %t76, i64 %t82)
-  store i64 %t88, ptr %t84
-  br label %decend85
-connext87:
-  store i64 %t83, ptr %t84
-  br label %decend85
-decend85:
-  %t89 = load i64, ptr %t84
-  store i64 %t89, ptr %t0
+  %t84 = icmp eq i64 %t83, 3
+  br i1 %t84, label %conyes85, label %connext85
+conyes85:
+  %t86 = musttail call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__2e_MyList_compare(i64 %arg0, i64 %t76, i64 %t82)
+  ret i64 %t86
+connext85:
+  store i64 %t83, ptr %t0
   br label %decend1
 connext64:
   call void @mdk_nonexhaustive_match()
@@ -412,8 +407,8 @@ connext49:
   call void @mdk_nonexhaustive_match()
   unreachable
 decend1:
-  %t90 = load i64, ptr %t0
-  ret i64 %t90
+  %t87 = load i64, ptr %t0
+  ret i64 %t87
 }
 
 ; mdk-module program

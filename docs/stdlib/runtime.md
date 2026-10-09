@@ -303,6 +303,32 @@ the program could not be started. The captured output is read as UTF-8:
 bytes that are not valid UTF-8 read as U+FFFD, so output that is binary
 data does not come back unchanged.
 
+### `runCommandBatch`
+
+```
+runCommandBatch : (program : String) -> Int -> List (List String) -> <Exec program> List (Result String (Int, String, String))
+```
+
+Runs `program` once for each argument list, at most the given number of
+runs at a time, and waits for all of them. A number below 1 runs them one
+at a time. Element i of the result is what `runCommand` returns for the
+i-th argument list, so results are in input order whatever order the runs
+finish in. As with `runCommand`, a program that cannot be executed exits
+127 with the host's message on standard error, and `Err` means the run
+could not be started or its exit status could not be read back; either
+way the other runs still happen.
+
+```medaka
+> runCommandBatch "sh" 2 [["-c", "sleep 0.2; echo a"], ["-c", "echo b"]]
+[Ok (0, "a\n", ""), Ok (0, "b\n", "")]
+> runCommandBatch "echo" 0 [["x"], ["y"], ["z"]]
+[Ok (0, "x\n", ""), Ok (0, "y\n", ""), Ok (0, "z\n", "")]
+> map (r => map ((c, o, e) => (c, o, e /= "")) r) (runCommandBatch "medaka-no-such-program" 2 [[], ["a"], ["b"]])
+[Ok (127, "", True), Ok (127, "", True), Ok (127, "", True)]
+> map (r => map ((c, o, _) => (c, stringLength o, stringSlice 1048560 1048576 o)) r) (runCommandBatch "sh" 2 [["-c", "yes 0123456789abcde | head -c 1048576"], ["-c", "yes 0123456789abcde | head -c 1048576"]])
+[Ok (0, 1048576, "0123456789abcde\n"), Ok (0, 1048576, "0123456789abcde\n")]
+```
+
 ### `exit`
 
 ```

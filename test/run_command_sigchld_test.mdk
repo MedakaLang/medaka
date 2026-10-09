@@ -1,0 +1,59 @@
+{- | Gate for #3910: `runCommand` and `runCommandBatch` report a child's real
+   exit status even when the program inherits SIGCHLD set to SIG_IGN.
+
+   With SIGCHLD ignored the kernel reaps children itself, so a wait that
+   does not first restore the default disposition reads no status at all.
+   The fixture `test/run_command_sigchld_fixtures/exit_codes.mdk` is built
+   natively and run twice, once as is and once under
+   `perl -e '$SIG{CHLD} = "IGNORE"; exec @ARGV' <bin>`, and both runs must
+   print the real codes: 4 for `exit 4`, 127 for a missing program, 137 for
+   SIGKILL. The launcher is perl because dash's `trap '' CHLD` leaves the
+   exec'd program's SIGCHLD at its default, which would test nothing.
+
+   Runs under `medaka test --native`: it spawns `medaka build` and the binary
+   it produces. -}
+
+import string.{unlines}
+import test_process.{
+  boundedVerb, boundedVerbSeconds, medakaBin, underRoot, withScratchDir
+}
+import test.{Expectation, expectEach, expectEqual, fail}
+
+expected : String
+expected = unlines [
+  "runCommand exit 4: 4",
+  "runCommand missing program: 127",
+  "runCommand kill -9: 137",
+  "runCommandBatch exit 4, kill -9: [\"4\", \"137\"]",
+  "runCommandBatch missing program: [\"127\"]",
+]
+
+fixture : <IO> String
+fixture = underRoot "test/run_command_sigchld_fixtures/exit_codes.mdk"
+
+-- The exit code and stdout of one run of the fixture binary.
+runOf : String -> List String -> <Exec> Result String (Int, String)
+runOf cmd args = map ((code, out, _) => (code, out)) (boundedVerb cmd args)
+
+-- Builds the fixture into `dir`, then grades both runs of the binary.
+buildAndRun : String -> <Exec, IO, FileRead, FileWrite> Expectation
+buildAndRun dir =
+  let bin = "\{dir}/exit_codes.bin"
+  match boundedVerbSeconds 600 medakaBin ["build", fixture, "-o", bin]
+    Err e => fail "could not spawn medaka build: \{e}"
+    Ok (code, out, err) =>
+      if code /= 0 then
+        fail "medaka build exited \{intToString code}: \{out}\{err}"
+      else
+        expectEach [
+          ("SIGCHLD default", expectEqual (Ok (0, expected)) (runOf bin [])),
+          (
+            "SIGCHLD inherited as SIG_IGN",
+            expectEqual
+              (Ok (0, expected))
+              (runOf "perl" ["-e", "$SIG{CHLD} = \"IGNORE\"; exec @ARGV", bin]),
+          ),
+        ]
+
+test "runCommand and runCommandBatch report real exit codes under an inherited SIG_IGN SIGCHLD (#3910)" =
+  withScratchDir buildAndRun

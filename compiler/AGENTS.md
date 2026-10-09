@@ -182,6 +182,17 @@ A **9-line** program used to emit **32,896 lines of IR — 271 of its 272 functi
 little"). It cuts the engines gate 40% and **regresses `wasm/clos_reftco_indirect`** — clang's
 tail-call elimination for **indirect** calls only runs at `-O1`+. **The deep-TCO trap bites
 LLVM, not just wasm.** `-O1` saves 10%. Both dead. Verified, not assumed.
+That holds for `medaka build`. The throwaway probes `medaka test` compiles default
+to `-O0` with ThinLTO off (`MEDAKA_TEST_CLANG_OPT=<level>` overrides; `-O2`
+restores the old probe build). A saturated self tail call is `musttail`, and so
+level-independent, when its tail position reaches it through `if`, `match`
+arms, clause bodies, `let`, `where` groups and blocks, in a top-level function
+or an impl or default interface method
+(`compiler/backend/llvm_emit_tail_call_test.mdk`). Known shapes that still
+depend on clang's sibling-call optimization, and so overflow the stack at -O0
+at about 1e6–1e7 frames: mutual, closure (a local `let go …` or `where go …`
+worker included) and dictionary (`length`) recursion
+(`compiler/tools/native_probe_tco_test.mdk` records the limits).
 
 **⇒ Making the front end faster barely moves CI. Making clang faster does nothing for the LSP.**
 Know which one you are optimising.
