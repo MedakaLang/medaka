@@ -632,12 +632,14 @@ operatorAgrees op declared user ats operand =
 prop "an operator demands the prelude's class and no program class of that spelling" (op : Op) (user : Bool) (ats : List Operand) (operand : Operand) =
   operatorAgrees op True user ats operand
 
--- Qualification 4 with no program class present. The cell with a program
--- class of the operator's spelling and no prelude class is not asserted
--- here: the checker lets that program class gate the operator today, and
--- the cell awaits its issue and pin.
+-- Qualification 4 with no program class present.
 prop "with no prelude class an operator imposes no class constraint" (op : Op) (operand : Operand) =
   operatorAgrees op False False [] operand
+
+-- Qualification 4 with a program class of the operator's spelling and no
+-- prelude class: that program class must not gate the operator (#3961).
+prop "a program class of an operator's spelling gates nothing without the prelude class" (op : Op) (ats : List Operand) (operand : Operand) =
+  operatorAgrees op False True ats operand
 
 -- Self-tests: each family's comparison rejects a hand-built wrong case, and
 -- one fixed program per family is checked against its model.

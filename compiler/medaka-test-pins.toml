@@ -197,3 +197,23 @@ issue = 3956
 seed = 20261009
 cases = 500
 failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a program class of an operator's spelling gates nothing without the prelude class"
+engine = "eval"
+issue = 3961
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a program class of an operator's spelling gates nothing without the prelude class"
+engine = "native"
+issue = 3961
+seed = 20261009
+cases = 500
+failure = "false"

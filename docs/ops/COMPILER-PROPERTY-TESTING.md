@@ -156,8 +156,7 @@ binding generalized, so generalization is observed by use at two incompatible
 types. Each row's disposition is a prop, a pin against an issue, or not
 black-box-observable. Two rows record what the spec leaves open instead: an
 interpretation the laws adopt pending a ruling, and a question no law
-asserts. A cell marked "issue and pin pending" is red at the base and has no
-issue yet; it is not asserted until it has a pin.
+asserts.
 
 | Clause | Disposition | Oracle |
 | --- | --- | --- |
@@ -225,7 +224,7 @@ censuses count each verdict class over enumerated type, wrap and shape domains.
 | --- | --- | --- |
 | DICT §3 specificity, `min⊑` and `inst`; §6 C1 | prop `instance selection follows the most-specific model and survives permuting the instances` | Matching and specificity model: an empty matching set is the missing-instance rejection `T-NO-IMPL` with no ambiguity code; one `⊑`-minimal head is accepted; two or more are `T-AMBIGUOUS-INSTANCE` |
 | DICT §6 C3, §3 resolution determinism | same prop, permuted instance declarations | The same sorted codes and alpha-equivalent schemes before and after the permutation |
-| DICT §6 C1, α-equal duplicate heads | prop `a twice-declared head that is minimal at the goal is rejected and not as missing`. The other half, a duplicate that no goal reaches as a minimum, is red at the base: the checker rejects the declaration pair as `T-CONFLICTING-IMPL` whatever the goal; issue and pin pending | §3: α-equal heads are `⊑`-equivalent and never tie-break, so a goal at which the duplicate is minimal has two minimal instances; §6.1 choice point 2 (c) decides acceptance per goal |
+| DICT §6 C1, α-equal duplicate heads | prop `a twice-declared head that is minimal at the goal is rejected and not as missing`. The other half, a duplicate that no goal reaches as a minimum, is red at the base: the checker rejects the declaration pair as `T-CONFLICTING-IMPL` whatever the goal. DICT §11 C1 records that goal-blind rejection as the one genuine residual and says it is deliberate (a goal-site check cannot see α-equal heads), so it is a documented spec position and is not asserted; whether to keep it is a question for Val | §3: α-equal heads are `⊑`-equivalent and never tie-break, so a goal at which the duplicate is minimal has two minimal instances; §6.1 choice point 2 (c) decides acceptance per goal |
 | DICT §3 `assum` | prop `a signature's context is a contract the body is checked against and every caller discharges` | A declared `Sz a` discharges `sz x` at a rigid `a` no instance matches; that the evidence is received rather than rebuilt is evidence identity |
 | DICT §3 `super` | same prop | A declared `Tg a` entails `sz x` through `Tg requires Sz` |
 | DICT §3 precedence (`assum` before `inst`) | not black-box-observable: where both rules apply the verdict is the same and only the evidence differs | n/a |
@@ -250,7 +249,7 @@ censuses count each verdict class over enumerated type, wrap and shape domains.
 | DICT §8 I6.3 | not black-box-observable: an empty module id is an internal origin no source program or module graph can name | n/a |
 | DICT §8 I7 (literals) | pin #3956 (eval and native) on prop `a numeric literal demands the prelude's Num whatever binding is spelled fromInt` | The literal's class is the prelude's `Num`, whose only instance is at `Int` |
 | DICT §8 I7 (operators), qualification 2 | prop `an operator demands the prelude's class and no program class of that spelling` | `==`, `<`, `++` and `+` demand the prelude's `Eq`, `Ord`, `Semigroup` and `Num`, each with its one instance at `Int`; a program class of the same spelling, with any instances, changes nothing |
-| DICT §8 I7 qualification 4 | prop `with no prelude class an operator imposes no class constraint`. The cell with a program class of the operator's spelling and no prelude class is red at the base: that program class gates the operator (`interface Eq a where userOp : a -> Int` then `probe = 1 == 1` is `T-NO-IMPL` on both routes); issue and pin pending | Qualification 4: absent the prelude's class the predicate is not synthesized, and the gate is never "some interface of that name exists" |
+| DICT §8 I7 qualification 4 | prop `with no prelude class an operator imposes no class constraint`. The cell with a program class of the operator's spelling and no prelude class is red at the base: that program class gates the operator (`interface Eq a where userOp : a -> Int` then `probe = 1 == 1` is `T-NO-IMPL` on both routes); pin #3961 on both engines | Qualification 4: absent the prelude's class the predicate is not synthesized, and the gate is never "some interface of that name exists" |
 
 The dictionary rows live in
 [dict_property_test.mdk](../../compiler/types/dict_property_test.mdk) and
