@@ -137,3 +137,23 @@ issue = 3949
 seed = 20261009
 cases = 500
 failure = "false"
+
+[[pin]]
+file = "types/hm_core_property_test.mdk"
+kind = "prop"
+name = "every member of a group with a signed member generalizes at its principal type"
+engine = "eval"
+issue = 3955
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/hm_core_property_test.mdk"
+kind = "prop"
+name = "every member of a group with a signed member generalizes at its principal type"
+engine = "native"
+issue = 3955
+seed = 20261009
+cases = 500
+failure = "false"
