@@ -22,6 +22,7 @@ import tools.gate_registry.{
 }
 import tools.gate_cost.{
   GateCost,
+  OracleCost,
   RunRecord,
   baselineKey,
   costOf,
@@ -32,15 +33,18 @@ import tools.gate_cost.{
   packStat,
   parseCostBaseline,
   parseCostRuns,
+  parseOracleCosts,
 }
 import support.util.{
   contains,
   isNonEmptyL,
   joinNl,
   listLen,
+  lookupAssoc,
   maxI,
   minI,
   reverseL,
+  sortUniqS,
   splitNl,
   splitOnChar,
   startsWith,
@@ -180,14 +184,64 @@ timeoutFor override cost
 -- would be unfalsifiable; this block is what makes it checkable by a reader.
 -- Read the caveat in `balCalibLines` before reading the residuals: they are
 -- only comparable while the committed assignment is still the one that ran.
+--
+-- ── A row also pays its SETUP before its first gate starts (#2209) ──────────
+--
+-- A CI row's job wall is not its gate makespan.  Before `run_gates.sh` starts,
+-- the row checks out, installs the toolchain (`balFixedSetupMs`), COLD-builds
+-- every test oracle its gates read (`test/build_oracles.sh --for`, the oracle
+-- cache being keyed per row and per compiler content hash), and on a
+-- `wasm_arm` row also builds the Wasm emitter oracle.  So a row's load is
+--
+--   fixed setup + Wasm oracle (wasm_arm rows whose gates need it)
+--     + makespan of the UNION of its gates' oracle builds over the build JOBS
+--     + makespan of its gates over its recorded workers.
+--
+-- The oracle set is a UNION, so a gate whose oracles its row already builds
+-- costs that row nothing extra; `balCharge` is what placement pays for the
+-- rest, which is what makes gates sharing oracles co-locate.
+--
+-- The setup terms are priced only from a baseline that carries `oracles[]`
+-- (`balSetup`).  One without that section has no setup data at all, and the
+-- report says the model is gate-only rather than pricing setup at zero.
 
 -- One schedulable gate, joined with its measured cost.
+--
+-- `corcs` are the oracles its row must build for it (the scrape of its script
+-- intersected with `build_oracles.sh`'s entries, each priced); `cwasmOrc` is
+-- whether a `wasm_arm` row holding it pays the Wasm oracle; `csetupMs` is the
+-- setup any row holding it cannot avoid, which is `balFloor`'s gate term.
 data Cand = Cand {
   cname : String,
   crun : String,
   curRow : String,
   cms : Int,
   needsWasm : Bool,
+  corcs : List (String, Int),
+  cwasmOrc : Bool,
+  csetupMs : Int,
+}
+
+-- The per-row setup prices: all zero on a baseline with no `oracles[]`.
+data Price = Price { fixedMs : Int, wasmMs : Int, buildJobs : Int }
+
+{- | How setup is priced on this run, and where each price came from — kept so
+   the report can state every default it used instead of hiding one.
+
+   `gateOrcs` is each schedulable gate's scraped `test/bin/<name>` set and
+   `entries` the names `build_oracles.sh` builds; both are read by `gate_cmd`,
+   because this module reads no files. -}
+data Setup = Setup {
+  modelled : Bool,
+  price : Price,
+  sampled : Int,
+  defaultMs : Int,
+  defaulted : List String,
+  wasmDefaulted : Bool,
+  jobsDefaulted : Bool,
+  prices : List (String, Int),
+  gateOrcs : List (String, List String),
+  entries : List String,
 }
 
 -- One matrix row, with the load accumulated onto it so far.
@@ -197,6 +251,10 @@ data Cand = Cand {
 -- every read because `balPick` consults it once per candidate per row.
 -- `rbuckets` always has exactly `rjobs` entries (`balJobsFor` guarantees
 -- `rjobs >= 1`), and the two are only ever updated together, by `balAdd`.
+--
+-- `rload` is the whole job wall (`balLoadOf`): `rgateMs` is the gate makespan
+-- alone, `rorcs`/`rorcMs` the oracle union and its build makespan, `rwasmOn`
+-- whether the Wasm oracle is charged.
 data Row = Row {
   rname : String,
   rwasm : Bool,
@@ -205,6 +263,11 @@ data Row = Row {
   rcount : Int,
   rjobs : Int,
   rbuckets : List Int,
+  rgateMs : Int,
+  rorcs : List (String, Int),
+  rorcMs : Int,
+  rwasmOn : Bool,
+  rprice : Price,
 }
 
 -- One gate's outcome: where it goes, and where it came from.
@@ -341,6 +404,174 @@ balNeedsWasm (t :: ts)
   | startsWith "node" t = True
   | otherwise = balNeedsWasm ts
 
+-- ── Setup pricing (#2209) ───────────────────────────────────────────────────
+
+{- | What every row pays before any build or gate: `actions/checkout` plus the
+   `setup-medaka` action.  MEASURED, not chosen: about 20 s per row on run
+   37892268045, where each row's job wall minus its gate wall minus its
+   oracle-build steps left that residue.  It is the same on every row, so it
+   never changes a placement; it is here so the predicted row figure is a job
+   wall a reader can compare with the Actions job duration. -}
+balFixedSetupMs : Int
+balFixedSetupMs = 20000
+
+-- The Wasm emitter oracle a `wasm_arm` row builds (ci.yml's
+-- `build_wasm_oracle.sh --modules-only`), not `build_oracles.sh`.
+balWasmOracle : String
+balWasmOracle = "wasm_emit_modules_main"
+
+{- | The setup prices, from the baseline's `oracles[]` plus the scrape.
+
+   No section, no model.  A baseline without `oracles[]` (every one before
+   #2209, and every synthetic fixture) has no setup data, so every price is 0
+   and `balSetupLines` says the model is gate-only.
+
+   With one, no price is a silent zero.  An oracle a gate reads that has no
+   sample yet is priced at `defaultMs`, the median of the sampled oracles, and
+   is named in the report.  That is a default rather than a refusal because an
+   oracle is sampled only after a CI run has built it, and no run builds it
+   until a row schedules the gate that reads it.  The Wasm oracle and the build
+   JOBS fall back the same way, and say so.
+
+   The build JOBS is the SMALLEST recorded across the entries' samples: fewer
+   workers over-states a build makespan, which is `balJobsFor`'s fail-closed
+   direction. -}
+balSetup : List OracleCost ->
+  List (String, List String) ->
+  List String ->
+  Result String Setup
+balSetup [] gateOrcs entries = Ok Setup {
+  modelled = False,
+  price = Price { fixedMs = 0, wasmMs = 0, buildJobs = 1 },
+  sampled = 0,
+  defaultMs = 0,
+  defaulted = [],
+  wasmDefaulted = False,
+  jobsDefaulted = False,
+  prices = [],
+  gateOrcs = gateOrcs,
+  entries = entries,
+}
+balSetup ocs gateOrcs entries =
+  let ps = balEntryPrices ocs entries
+  match ps
+    [] =>
+      Err
+        "medaka gate balance: the baseline carries oracles[], but none of its rows is an oracle test/build_oracles.sh --list builds, so there is no measured price to default an unsampled oracle to"
+    _ =>
+      let dflt = packStat (map ((_, ms) => ms) ps)
+      let js = balEntryJobs ocs entries
+      let wasm = balOracleMs balWasmOracle ocs
+      Ok Setup {
+        modelled = True,
+        price = Price {
+          fixedMs = balFixedSetupMs,
+          wasmMs = match wasm
+            Some ms => ms
+            None => dflt,
+          buildJobs = match js
+            [] => 1
+            j :: rest => balMinL (j :: rest),
+        },
+        sampled = listLen ps,
+        defaultMs = dflt,
+        defaulted = balUnsampled ps entries gateOrcs [],
+        wasmDefaulted = match wasm
+          Some _ => False
+          None => True,
+        jobsDefaulted = match js
+          [] => True
+          _ => False,
+        prices = ps,
+        gateOrcs = gateOrcs,
+        entries = entries,
+      }
+
+balEntryPrices : List OracleCost -> List String -> List (String, Int)
+balEntryPrices [] _ = []
+balEntryPrices (o :: os) es
+  | contains o.row.name es =
+    (o.row.name, o.row.medianMs) :: balEntryPrices os es
+  | otherwise = balEntryPrices os es
+
+balEntryJobs : List OracleCost -> List String -> List Int
+balEntryJobs [] _ = []
+balEntryJobs (o :: os) es
+  | contains o.row.name es = balPositive o.jobs ++ balEntryJobs os es
+  | otherwise = balEntryJobs os es
+
+balPositive : List Int -> List Int
+balPositive [] = []
+balPositive (j :: js)
+  | j >= 1 = j :: balPositive js
+  | otherwise = balPositive js
+
+balOracleMs : String -> List OracleCost -> Option Int
+balOracleMs _ [] = None
+balOracleMs n (o :: os)
+  | o.row.name == n = Some o.row.medianMs
+  | otherwise = balOracleMs n os
+
+-- Built oracles some gate reads that `oracles[]` has no price for, sorted.
+balUnsampled : List (String, Int) ->
+  List String ->
+  List (String, List String) ->
+  List String ->
+  List String
+balUnsampled _ _ [] acc = sortUniqS acc
+balUnsampled ps es ((_, names) :: rest) acc =
+  balUnsampled ps es rest (balAddMissing ps es names acc)
+
+balAddMissing : List (String, Int) ->
+  List String ->
+  List String ->
+  List String ->
+  List String
+balAddMissing _ _ [] acc = acc
+balAddMissing ps es (n :: ns) acc
+  | not (contains n es) = balAddMissing ps es ns acc
+  | contains n acc = balAddMissing ps es ns acc
+  | otherwise = match lookupAssoc n ps
+    Some _ => balAddMissing ps es ns acc
+    None => balAddMissing ps es ns (n :: acc)
+
+-- The oracles one gate's row must build for it, priced: its scrape kept to
+-- what `build_oracles.sh` builds (`--for`'s own filter), sampled or defaulted.
+balGateOrcs : Setup -> String -> List (String, Int)
+balGateOrcs s n
+  | not s.modelled = []
+  | otherwise = match lookupAssoc n s.gateOrcs
+    None => []
+    Some names => balPriceAll s names
+
+balPriceAll : Setup -> List String -> List (String, Int)
+balPriceAll _ [] = []
+balPriceAll s (n :: ns)
+  | not (contains n s.entries) = balPriceAll s ns
+  | otherwise = match lookupAssoc n s.prices
+    Some ms => (n, ms) :: balPriceAll s ns
+    None => (n, s.defaultMs) :: balPriceAll s ns
+
+-- Whether a `wasm_arm` row holding this gate pays the Wasm oracle: it needs
+-- the arm's toolchain, or its script reads the oracle itself.
+balGateReadsWasm : Setup -> String -> Bool
+balGateReadsWasm s n = match lookupAssoc n s.gateOrcs
+  None => False
+  Some names => contains balWasmOracle names
+
+-- The LPT makespan of a set of oracle builds over `jobs` workers, which is
+-- what `build_oracles.sh`'s `xargs -P "$JOBS"` pool does with them.
+balOrcMakespan : Int -> List (String, Int) -> Int
+balOrcMakespan jobs orcs =
+  balMaxL
+    (balFillDesc
+      (reverseL (balSortInts (map ((_, ms) => ms) orcs)))
+      (balZeros (maxI 1 jobs)))
+
+balFillDesc : List Int -> List Int -> List Int
+balFillDesc [] bs = bs
+balFillDesc (m :: ms) bs = balFillDesc ms (balBucketAdd m bs)
+
 -- ── Building the candidate set ──────────────────────────────────────────────
 
 -- Gates with no row for their `shard` value, as names.  A gate naming a row
@@ -376,21 +607,30 @@ balUncosted base (g :: gs)
     None =>
       "\{g.name} (baseline key '\{baselineKey g.run}')" :: balUncosted base gs
 
-balCands : List GateCost -> List Gate -> List Cand
-balCands _ [] = []
-balCands base (g :: gs)
-  | g.shard == balOtherJob = balCands base gs
+balCands : Setup -> List GateCost -> List Gate -> List Cand
+balCands _ _ [] = []
+balCands s base (g :: gs)
+  | g.shard == balOtherJob = balCands s base gs
   | otherwise = match costOf g.run base
-    None => balCands base gs
+    None => balCands s base gs
     Some ms =>
+      let w = balNeedsWasm g.toolchain
+      let orcs = balGateOrcs s g.name
+      let p = s.price
       Cand {
           cname = g.name,
           crun = g.run,
           curRow = g.shard,
           cms = ms,
-          needsWasm = balNeedsWasm g.toolchain,
+          needsWasm = w,
+          corcs = orcs,
+          cwasmOrc = w || balGateReadsWasm s g.name,
+          csetupMs =
+            p.fixedMs
+              + (if w then p.wasmMs else 0)
+              + balOrcMakespan p.buildJobs orcs,
         }
-        :: balCands base gs
+        :: balCands s base gs
 
 -- A `full_cores` row is CLOSED, not merely preferred.
 --
@@ -405,20 +645,25 @@ balCands base (g :: gs)
 -- `full_cores` flag rather than on "whatever is there now" means re-running
 -- the balancer on its own output derives the same pin set, hence the same
 -- target.  See `balTarget`.
-balRows : List RunRecord -> List Shard -> List Row
-balRows _ [] = []
-balRows runs (s :: ss) =
+balRows : Price -> List RunRecord -> List Shard -> List Row
+balRows _ _ [] = []
+balRows p runs (s :: ss) =
   let j = balJobsFor s.name runs
   Row {
       rname = s.name,
       rwasm = s.wasmArm,
       rclosed = s.fullCores,
-      rload = 0,
+      rload = p.fixedMs,
       rcount = 0,
       rjobs = j,
       rbuckets = balZeros j,
+      rgateMs = 0,
+      rorcs = [],
+      rorcMs = 0,
+      rwasmOn = False,
+      rprice = p,
     }
-    :: balRows runs ss
+    :: balRows p runs ss
 
 {- | The worker count to model this row's fan-out with: the `jobs` its own most
    recent recorded run actually used (S-1, #2208).
@@ -522,22 +767,63 @@ balMergeCands (x :: xs) (y :: ys)
   | candBefore x y = x :: balMergeCands xs (y :: ys)
   | otherwise = y :: balMergeCands (x :: xs) ys
 
--- The open row a gate should go on: the lightest row that can legally run it.
+-- The open row a gate should go on: the lightest row that can legally run it,
+-- counting what this gate would newly charge that row's setup (`balKey`).
 -- Scanning with a STRICT `<` keeps the first minimum, so an all-equal set of
 -- rows resolves in `[[shard]]` order — deterministic, and stable as loads grow.
 balPick : Cand -> List Row -> Option String
 balPick c rs = balPickGo c rs None
 
-balPickGo : Cand -> List Row -> Option Row -> Option String
+balPickGo : Cand -> List Row -> Option (String, Int) -> Option String
 balPickGo _ [] None = None
-balPickGo _ [] (Some b) = Some b.rname
+balPickGo _ [] (Some (n, _)) = Some n
 balPickGo c (r :: rs) best
   | r.rclosed = balPickGo c rs best
   | c.needsWasm && not r.rwasm = balPickGo c rs best
-  | otherwise = match best
-    None => balPickGo c rs (Some r)
-    Some b =>
-      if r.rload < b.rload then balPickGo c rs (Some r) else balPickGo c rs best
+  | otherwise =
+    let k = balKey c r
+    match best
+      None => balPickGo c rs (Some (r.rname, k))
+      Some (_, bk) =>
+        if k < bk then
+          balPickGo c rs (Some (r.rname, k))
+        else
+          balPickGo c rs best
+
+-- A row's load as this gate sees it: what the row carries now, plus the setup
+-- this gate would add to it.  The gate's own cost is left out, as LPT leaves
+-- it out; on a baseline with no setup model `balCharge` is 0 and this is
+-- exactly `rload`.
+balKey : Cand -> Row -> Int
+balKey c r = r.rload + balCharge c r
+
+{- | The setup a gate adds to a row: the growth of the row's oracle-build
+   makespan from the oracles it does not already build, plus the Wasm oracle
+   if this gate is the first on a `wasm_arm` row to need it.  A gate whose
+   oracles the row already builds is charged nothing, which is what draws
+   oracle-sharing gates together. -}
+balCharge : Cand -> Row -> Int
+balCharge c r =
+  let wasm =
+    if r.rwasm && c.cwasmOrc && not r.rwasmOn then r.rprice.wasmMs else 0
+  if balAllBuilt c.corcs r.rorcs then
+    wasm
+  else
+    balOrcMakespan r.rprice.buildJobs (balUnionOrcs c.corcs r.rorcs)
+      - r.rorcMs
+      + wasm
+
+balAllBuilt : List (String, Int) -> List (String, Int) -> Bool
+balAllBuilt [] _ = True
+balAllBuilt ((n, _) :: os) have = match lookupAssoc n have
+  Some _ => balAllBuilt os have
+  None => False
+
+balUnionOrcs : List (String, Int) -> List (String, Int) -> List (String, Int)
+balUnionOrcs [] have = have
+balUnionOrcs ((n, ms) :: os) have = match lookupAssoc n have
+  Some _ => balUnionOrcs os have
+  None => balUnionOrcs os ((n, ms) :: have)
 
 {- | The row a gate should go on, with the INCUMBENT row given a bounded
    preference over the LPT pick (S-3, #2218).
@@ -626,7 +912,7 @@ balStays c best rs
   | c.curRow == best = True
   | not (balRowTakes c rs) = False
   | otherwise =
-    balRowLoad c.curRow rs * 100 <= balRowLoad best rs * (100 + balStabPct)
+    balRowKey c c.curRow rs * 100 <= balRowKey c best rs * (100 + balStabPct)
 
 -- Whether this gate's incumbent row exists, is open, and can run it.  An
 -- unknown row name answers False — `balUnknownRows` has already refused that
@@ -638,16 +924,16 @@ balRowTakes c (r :: rs)
   | r.rname == c.curRow = not r.rclosed && (not c.needsWasm || r.rwasm)
   | otherwise = balRowTakes c rs
 
--- One row's accumulated makespan, by name.  A row that does not exist reads as
--- 0, which `balStays` only ever reaches through `balRowTakes` having already
--- answered False for the same name.
-balRowLoad : String -> List Row -> Int
-balRowLoad _ [] = 0
-balRowLoad n (r :: rs)
-  | r.rname == n = r.rload
-  | otherwise = balRowLoad n rs
+-- One row's `balKey` for this gate, by name.  A row that does not exist reads
+-- as 0, which `balStays` only ever reaches through `balRowTakes` having
+-- already answered False for the same name.
+balRowKey : Cand -> String -> List Row -> Int
+balRowKey _ _ [] = 0
+balRowKey c n (r :: rs)
+  | r.rname == n = balKey c r
+  | otherwise = balRowKey c n rs
 
--- Put one gate on a row, and re-derive that row's makespan.
+-- Put one gate on a row, and re-derive that row's load.
 --
 -- THE CALLER OWES THIS FUNCTION COST-DESCENDING ORDER.  The within-row
 -- schedule is LPT like the across-row one, and LPT's guarantee is a property of
@@ -656,13 +942,40 @@ balRowLoad n (r :: rs)
 -- `balSortCands` output — `balPlace`, `balSeedClosed` and `balCurrent` alike —
 -- so the committed assignment and the derived one are scored by the same
 -- model rather than by two schedules that happen to share a function.
-balAdd : String -> Int -> List Row -> List Row
+balAdd : String -> Cand -> List Row -> List Row
 balAdd _ _ [] = []
-balAdd n ms (r :: rs)
+balAdd n c (r :: rs)
   | r.rname == n =
-    let bs = balBucketAdd ms r.rbuckets
-    Row { r | rbuckets = bs, rload = balMaxL bs, rcount = r.rcount + 1 } :: rs
-  | otherwise = r :: balAdd n ms rs
+    let bs = balBucketAdd c.cms r.rbuckets
+    let orcs =
+      if balAllBuilt c.corcs r.rorcs then
+        r.rorcs
+      else
+        balUnionOrcs c.corcs r.rorcs
+    let orcMs =
+      if balAllBuilt c.corcs r.rorcs then
+        r.rorcMs
+      else
+        balOrcMakespan r.rprice.buildJobs orcs
+    let r2 = Row { r |
+      rbuckets = bs,
+      rgateMs = balMaxL bs,
+      rorcs = orcs,
+      rorcMs = orcMs,
+      rwasmOn = r.rwasmOn || r.rwasm && c.cwasmOrc,
+      rcount = r.rcount + 1,
+    }
+    Row { r2 | rload = balLoadOf r2 } :: rs
+  | otherwise = r :: balAdd n c rs
+
+-- A row's job wall: fixed setup, the Wasm oracle if charged, its oracle-build
+-- makespan, and its gate makespan, run one after another as ci.yml's steps are.
+balLoadOf : Row -> Int
+balLoadOf r =
+  r.rprice.fixedMs
+    + (if r.rwasmOn then r.rprice.wasmMs else 0)
+    + r.rorcMs
+    + r.rgateMs
 
 -- One worker bucket takes the gate: the least-loaded one, first minimum kept,
 -- which is what `xargs -P` does when a worker frees up.  An empty bucket list
@@ -719,7 +1032,7 @@ balPlace stab (c :: cs) rs acc =
       balPlace
         stab
         cs
-        (balAdd rn c.cms rs)
+        (balAdd rn c rs)
         (Place {
             pname = c.cname,
             pfrom = c.curRow,
@@ -754,7 +1067,7 @@ balSeedClosed (c :: cs) rs acc
   | otherwise =
     balSeedClosed
       cs
-      (balAdd c.curRow c.cms rs)
+      (balAdd c.curRow c rs)
       (Place {
           pname = c.cname,
           pfrom = c.curRow,
@@ -925,7 +1238,7 @@ balTarget stab cs rows0 =
 balCurrent : List Cand -> List Row -> (List Place, List Row)
 balCurrent [] rs = ([], rs)
 balCurrent (c :: cs) rs =
-  let (ps, rs2) = balCurrent cs (balAdd c.curRow c.cms rs)
+  let (ps, rs2) = balCurrent cs (balAdd c.curRow c rs)
   (Place { pname = c.cname, pfrom = c.curRow, pto = c.curRow } :: ps, rs2)
 
 -- ── Scoring ─────────────────────────────────────────────────────────────────
@@ -998,10 +1311,15 @@ balNth i (x :: xs)
 -- of 0 by `balFactorMilli`, matching what the old ratio did with a zero
 -- median: there is nothing to grade, and `balEnforce` must not divide by it.
 
--- Term 1: the most expensive single gate.  Over ALL gates, closed-row members
--- included — whichever row holds it, that row's makespan is at least its cost.
+-- Term 1: the most expensive single gate, with the setup any row holding it
+-- pays (`csetupMs`: fixed setup, its own oracle builds, and the Wasm oracle if
+-- it needs the arm).  Over ALL gates, closed-row members included — whichever
+-- row holds it, that row's load is at least this.
 balFloorGateMs : List Cand -> Int
-balFloorGateMs cs = (balMaxCand cs).cms
+balFloorGateMs cs = balCandFloorMs (balMaxCand cs)
+
+balCandFloorMs : Cand -> Int
+balCandFloorMs c = c.cms + c.csetupMs
 
 -- Term 2: the heaviest closed row's makespan.  A `full_cores` row's membership
 -- is declared, not packed (`balSeedClosed`), so its load is fixed input and the
@@ -1041,11 +1359,19 @@ balOpenSlots (r :: rs)
   | r.rclosed = balOpenSlots rs
   | otherwise = r.rjobs + balOpenSlots rs
 
--- Term 3: total open work spread perfectly over every open worker slot.
+-- Term 3: total open work spread perfectly over every open worker slot, after
+-- the fixed setup every row pays first.  Oracle builds are left out: they can
+-- be shared, so no per-row share of them is a bound.
 balFloorCapMs : List Cand -> List Row -> Int
 balFloorCapMs cs rs =
   let s = balOpenSlots rs
-  if s <= 0 then 0 else balOpenWork cs rs / s
+  if s <= 0 then 0 else balOpenFixed rs + balOpenWork cs rs / s
+
+balOpenFixed : List Row -> Int
+balOpenFixed [] = 0
+balOpenFixed (r :: rs)
+  | r.rclosed = balOpenFixed rs
+  | otherwise = r.rprice.fixedMs
 
 balFloor : List Cand -> List Row -> Int
 balFloor cs rs =
@@ -1065,13 +1391,23 @@ balFloorLine : List Cand -> List Row -> String
 balFloorLine cs rs
   | balFloor cs rs <= 0 = ""
   | balFloorIsGate cs rs = stringConcat [
-    "  floor: the achievable pole — set by '\{(balMaxCand cs).cname}' alone (\{balSecs (balFloorGateMs cs)}), which is indivisible.\n",
+    "  floor: the achievable pole — set by '\{(balMaxCand cs).cname}' alone (\{balSecs (balFloorGateMs cs)}\{balFloorSetupNote (balMaxCand cs)}), which is indivisible.\n",
     "         Moving the FLOOR means that gate has to get FASTER (or be split).\n",
   ]
   | balFloorClosedMs rs >= balFloor cs rs =
     "  floor: the achievable pole — set by the closed row '\{balFloorClosedRow rs}' (\{balSecs (balFloorClosedMs rs)}), whose membership the packer cannot change.\n"
   | otherwise =
-    "  floor: the achievable pole — set by \{balSecs (balOpenWork cs rs)} of open work over \{intToString (balOpenSlots rs)} open worker slots.\n"
+    "  floor: the achievable pole — set by \{balSecs (balOpenWork cs rs)} of open work over \{intToString (balOpenSlots rs)} open worker slots\{balCapSetupNote rs}.\n"
+
+balFloorSetupNote : Cand -> String
+balFloorSetupNote c
+  | c.csetupMs <= 0 = ""
+  | otherwise = ", of which \{balSecs c.csetupMs} is setup its row cannot avoid"
+
+balCapSetupNote : List Row -> String
+balCapSetupNote rs
+  | balOpenFixed rs <= 0 = ""
+  | otherwise = ", after \{balSecs (balOpenFixed rs)} of fixed setup"
 
 -- `pole / floor` in thousandths.  Integer arithmetic throughout: the factor
 -- is compared against a threshold and printed, and a float would make both
@@ -1082,12 +1418,20 @@ balFactorMilli cs rs =
   if f <= 0 then 0 else balPole rs * 1000 / f
 
 balMaxCand : List Cand -> Cand
-balMaxCand [] =
-  Cand { cname = "(none)", crun = "", curRow = "", cms = 0, needsWasm = False }
+balMaxCand [] = Cand {
+  cname = "(none)",
+  crun = "",
+  curRow = "",
+  cms = 0,
+  needsWasm = False,
+  corcs = [],
+  cwasmOrc = False,
+  csetupMs = 0,
+}
 balMaxCand (c :: []) = c
 balMaxCand (c :: cs) =
   let r = balMaxCand cs
-  if c.cms >= r.cms then c else r
+  if balCandFloorMs c >= balCandFloorMs r then c else r
 
 -- ── Rendering ───────────────────────────────────────────────────────────────
 
@@ -1148,12 +1492,43 @@ balRowLines [] _ = []
 balRowLines (r :: rs) runs =
   let tag = if r.rclosed then "  [closed: full_cores]" else ""
   let jt = if balJobsIsFallback r.rname runs then " jobs*" else " jobs "
-  "    \{balPadR 10 r.rname} \{balPadL 4 (intToString r.rcount)} gates \{balPadL 9 (balSecs r.rload)}  \{jt}\{intToString r.rjobs}\{tag}"
+  "    \{balPadR 10 r.rname} \{balPadL 4 (intToString r.rcount)} gates \{balPadL 9 (balSecs r.rload)}  \{jt}\{intToString r.rjobs}\{balSetupSplit r}\{tag}"
     :: balRowLines rs runs
 
+-- The row figure's breakdown, which sums to it exactly.  Empty on a baseline
+-- with no setup model, where the row figure is the gate makespan alone.
+balSetupSplit : Row -> String
+balSetupSplit r
+  | r.rload == r.rgateMs = ""
+  | otherwise =
+    let w = if r.rwasmOn then r.rprice.wasmMs else 0
+    "  = fixed \{balSecs r.rprice.fixedMs} + wasm \{balSecs w} + oracles \{balSecs r.rorcMs} (\{intToString (listLen r.rorcs)} built) + gates \{balSecs r.rgateMs}"
+
+{- | Where each setup price came from, in ordinary output.  Every default is
+   named: a price nobody measured is printed as one, never folded in as if it
+   were a sample. -}
+balSetupLines : Setup -> String
+balSetupLines s
+  | not s.modelled =
+    "  setup: not modelled — the cost baseline carries no oracles[] section, so each row is priced at its gate makespan alone\n"
+  | otherwise = stringConcat [
+    "  setup: fixed \{balSecs s.price.fixedMs} per row (checkout + setup-medaka); oracle builds priced from \{intToString s.sampled} oracles[] rows, as the makespan of each row's union over \{intToString s.price.buildJobs} build workers\{balDefaultTag s.jobsDefaulted}; Wasm oracle '\{balWasmOracle}' \{balSecs s.price.wasmMs}\{balDefaultTag s.wasmDefaulted} on a wasm_arm row whose gates need it\n",
+    match s.defaulted
+      [] =>
+        "  setup: every oracle the scheduled gates read has an oracles[] sample\n"
+      ds =>
+        "  setup DEFAULT: \{intToString (listLen ds)} oracle(s) the gates read have no oracles[] sample and are priced at \{balSecs s.defaultMs}, the median of the sampled ones: \{joinSpace ds}\n",
+  ]
+
+balDefaultTag : Bool -> String
+balDefaultTag True = " (DEFAULT: no sample recorded)"
+balDefaultTag False = ""
+
 {- | The model against something that is not the model: each row's recorded CI
-   wall clock (`rowElapsedMs`, S-1/#2208) beside this model's makespan for the
-   COMMITTED assignment, and the residual between them.
+   wall clock (`rowElapsedMs`, S-1/#2208) beside this model's GATE makespan for
+   the COMMITTED assignment, and the residual between them.  `rowElapsedMs`
+   spans `run_gates.sh` alone, so it is graded against `rgateMs`, never the
+   setup-inclusive `rload`; `balCalibJob` prints the job wall beside it.
 
    READ THE CAVEAT BEFORE READING THE NUMBERS.  A residual is only meaningful
    while the recorded run and the committed assignment describe the SAME gate
@@ -1259,16 +1634,26 @@ balCalibLine cands r runs = match latestRunForShard r.rname runs
     None =>
       "    \{balPadR 10 r.rname} (run \{rr.runId} recorded no rowElapsedMs)"
     Some e =>
-      let d = e - r.rload
-      let pct =
-        if r.rload > 0 then " (\{intToString (d * 100 / r.rload)}%)" else ""
+      let g = r.rgateMs
+      let d = e - g
+      let pct = if g > 0 then " (\{intToString (d * 100 / g)}%)" else ""
       let stale =
         balCalibStaleness
           r.rcount
           rr.gates
           (balRowDigest r.rname cands)
           rr.gatesDigest
-      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs r.rload)}   residual \{balPadL 9 (balDelta d)}\{pct}\{stale}"
+      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs g)}   residual \{balPadL 9 (balDelta d)}\{pct}\{balCalibJob r}\{stale}"
+
+-- The predicted JOB wall beside the gate-wall comparison.  `runs[]` records
+-- only the gate wall (`rowElapsedMs`), so the job wall has nothing recorded to
+-- be graded against here; it is printed for comparison with the Actions job
+-- duration, which is where the setup it adds is measured.
+balCalibJob : Row -> String
+balCalibJob r
+  | r.rload == r.rgateMs = ""
+  | otherwise =
+    "   job wall predicted \{balPadL 9 (balSecs r.rload)} (setup \{balSecs (r.rload - r.rgateMs)})"
 
 {- | What the incumbent preference bought, and what it cost — on EVERY run, in
    ordinary output, derived rather than asserted.
@@ -1636,16 +2021,22 @@ balCoverage gates =
 -- The projection block both `--check` and the mutating form print, verbatim.
 -- One renderer, so the two can never describe different packings.
 balReport : String ->
+  Setup ->
   List Cand ->
   List Row ->
   List Place ->
   List RunRecord ->
   String
-balReport label cs rs ps runs = stringConcat [
+balReport label s cs rs ps runs = stringConcat [
   "  \{label}: \{intToString (listLen cs)} schedulable gates over \{intToString (listLen rs)} rows\n",
-  "  predicted row wall clock (makespan of the per-gate baseline medians over the row's recorded workers; * = borrowed/defaulted worker count):\n",
+  if s.modelled then
+    "  predicted row JOB wall clock (fixed setup + Wasm oracle + makespan of the row's oracle builds + makespan of the per-gate baseline medians over the row's recorded workers; * = borrowed/defaulted worker count):\n"
+  else
+    "  predicted row wall clock (makespan of the per-gate baseline medians over the row's recorded workers; * = borrowed/defaulted worker count):\n",
   joinNl (balRowLines rs runs),
-  "\n  pole \{balSecs (balPole rs)} (\{balPoleRow rs})   median \{balSecs (balMedian rs)}   floor \{balSecs (balFloor cs rs)}   pole/floor \{balMilli (balFactorMilli cs rs)}\n",
+  "\n",
+  balSetupLines s,
+  "  pole \{balSecs (balPole rs)} (\{balPoleRow rs})   median \{balSecs (balMedian rs)}   floor \{balSecs (balFloor cs rs)}   pole/floor \{balMilli (balFactorMilli cs rs)}\n",
   balFloorLine cs rs,
   "  gates whose row changes: \{intToString (balMoved ps)}\n",
 ]
@@ -1769,7 +2160,7 @@ balEnforce cs rs
         " (it is ",
         balMilli (balFactorMilli cs rs),
         ").\n",
-        "  The floor is '\{(balMaxCand cs).cname}' alone, at \{balSecs (balMaxCand cs).cms}, against a pole of \{balSecs (balPole rs)}.\n",
+        "  The floor is '\{(balMaxCand cs).cname}' alone, at \{balSecs (balFloorGateMs cs)}, against a pole of \{balSecs (balPole rs)}.\n",
         "  Gates are indivisible, so the pole can never go below the most expensive\n",
         "  gate, and the rest of this gap is what would not fit around it.  This is\n",
         "  a gate that has to get FASTER (or be split); repacking cannot move the\n",
@@ -1842,9 +2233,16 @@ balSpliceGo vs (l :: ls) inGate acc
 -- projection to print, and the registry text to write.  `ciNewText`'s shape,
 -- for `ciCmdBody`'s reason — the mutating form and `--check` must compute the
 -- SAME answer and differ only in what they do with it.
+-- `gateOrcs` (each schedulable gate's scraped `test/bin/<name>` set) and
+-- `entries` (`build_oracles.sh --list`) are read by the caller; see `Setup`.
 export
-balNewText : String -> String -> String -> Result String (String, String)
-balNewText regPath regSrc baseSrc = match parseRegistry regSrc
+balNewText : String ->
+  String ->
+  String ->
+  List (String, List String) ->
+  List String ->
+  Result String (String, String)
+balNewText regPath regSrc baseSrc gateOrcs entries = match parseRegistry regSrc
   Err m => Err "medaka gate balance: \{m}"
   Ok gates => match parseShards regSrc
     Err m => Err "medaka gate balance: \{m}"
@@ -1856,53 +2254,65 @@ balNewText regPath regSrc baseSrc = match parseRegistry regSrc
       -- calibrated against.  S-1 landed the read; this is what consumes it.
       Ok base => match parseCostRuns baseSrc
         Err m => Err "medaka gate balance: \{m}"
-        Ok runsRead => match balUnknownRows shs gates
-          b :: bs =>
-            Err
-              "medaka gate balance: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (b :: bs)}"
-          [] => match balUncosted base gates
-            u :: us =>
+        Ok runsRead => match balSetupOf baseSrc gateOrcs entries
+          Err m => Err "medaka gate balance: \{m}"
+          Ok setup => match balUnknownRows shs gates
+            b :: bs =>
               Err
-                (stringConcat [
-                  "medaka gate balance: \{intToString (listLen (u :: us))} schedulable gate(s) have no row in the cost baseline:\n",
-                  joinNl (balIndent (u :: us)),
-                  "\n  Refusing to pack: a missing cost is not a cheap gate, it is an\n",
-                  "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
-                  "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
-                ])
-            [] => match balPinErrors gates shs
-              e :: es =>
+                "medaka gate balance: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (b :: bs)}"
+            [] => match balUncosted base gates
+              u :: us =>
                 Err
                   (stringConcat [
-                    "medaka gate balance: \{regPath}: a closed row's membership does not match its declared `pinned_gates`:\n",
-                    joinNl (balIndent (e :: es)),
-                    "\n  A `full_cores` row is CLOSED: the packer moves nothing onto it and\n",
-                    "  nothing off it, so its members are the one `shard` value no cost\n",
-                    "  measurement derives.  They are DECLARED in that [[shard]] row's\n",
-                    "  `pinned_gates` and checked against the registry in both directions,\n",
-                    "  so a hand-moved `shard` cannot be adopted as the new pin.\n",
-                    "  Repair the gate's `shard`; change `pinned_gates` only when the row's\n",
-                    "  membership is genuinely meant to differ, and say why in its rationale\n",
-                    "  file (docs/ops/GATE-REGISTRY-DESIGN.md §2).\n",
+                    "medaka gate balance: \{intToString (listLen (u :: us))} schedulable gate(s) have no row in the cost baseline:\n",
+                    joinNl (balIndent (u :: us)),
+                    "\n  Refusing to pack: a missing cost is not a cheap gate, it is an\n",
+                    "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
+                    "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
                   ])
-              [] => balCompute regPath gates shs base runsRead regSrc
+              [] => match balPinErrors gates shs
+                e :: es =>
+                  Err
+                    (stringConcat [
+                      "medaka gate balance: \{regPath}: a closed row's membership does not match its declared `pinned_gates`:\n",
+                      joinNl (balIndent (e :: es)),
+                      "\n  A `full_cores` row is CLOSED: the packer moves nothing onto it and\n",
+                      "  nothing off it, so its members are the one `shard` value no cost\n",
+                      "  measurement derives.  They are DECLARED in that [[shard]] row's\n",
+                      "  `pinned_gates` and checked against the registry in both directions,\n",
+                      "  so a hand-moved `shard` cannot be adopted as the new pin.\n",
+                      "  Repair the gate's `shard`; change `pinned_gates` only when the row's\n",
+                      "  membership is genuinely meant to differ, and say why in its rationale\n",
+                      "  file (docs/ops/GATE-REGISTRY-DESIGN.md §2).\n",
+                    ])
+                [] => balCompute regPath setup gates shs base runsRead regSrc
 
 balIndent : List String -> List String
 balIndent [] = []
 balIndent (x :: xs) = "    \{x}" :: balIndent xs
 
+balSetupOf : String ->
+  List (String, List String) ->
+  List String ->
+  Result String Setup
+balSetupOf baseSrc gateOrcs entries = match parseOracleCosts baseSrc
+  Err m => Err m
+  Ok ocs => balSetup ocs gateOrcs entries
+
 balCompute : String ->
+  Setup ->
   List Gate ->
   List Shard ->
   List GateCost ->
   List RunRecord ->
   String ->
   Result String (String, String)
-balCompute regPath gates shs base runs regSrc =
-  let cs = balCands base gates
+balCompute regPath setup gates shs base runs regSrc =
+  let cs = balCands setup base gates
+  let rows0 = balRows setup.price runs shs
   -- Cost-descending into BOTH scorings — `balAdd`'s and `balCurrent`'s notes.
-  let (_, curRows) = balCurrent (balSortCands cs) (balRows runs shs)
-  match balTarget True cs (balRows runs shs)
+  let (_, curRows) = balCurrent (balSortCands cs) rows0
+  match balTarget True cs rows0
     Err m => Err m
     Ok (ps, rows) =>
       let illegal = not (balCurrentLegal cs curRows)
@@ -1918,11 +2328,11 @@ balCompute regPath gates shs base runs regSrc =
       let head = stringConcat
         [
           "medaka gate balance: \{regPath}\n",
-          balReport label cs rows ps runs,
+          balReport label setup cs rows ps runs,
           balCoverage gates,
           balThinLine base,
           balOosBlock base cs runs,
-          balStabLine cs (balRows runs shs) ps rows,
+          balStabLine cs rows0 ps rows,
           "  hysteresis: a move needs a pole gain of more than \{intToString balMarginPct}%",
           balBandNote illegal gains moved,
           "\n  budget pole/floor \{balMilli balTargetMilli}",
@@ -1935,6 +2345,10 @@ balCompute regPath gates shs base runs regSrc =
           -- from the COMMITTED assignment, so comparing it to the DERIVED one
           -- would grade the model against a gate set that has never run.
           "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n",
+          if setup.modelled then
+            "  (recorded and predicted are the GATE wall, rowElapsedMs; runs[] records no job wall, so the predicted job wall is printed for comparison with the Actions job duration)\n"
+          else
+            "",
           joinNl (balCalibLines cs curRows runs),
           "\n",
         ]
@@ -2140,14 +2554,15 @@ budgetOverClassLines base commitMessage (g :: gs) =
 -- The SAME projection `gate balance --check` computes — `balCands` already
 -- excludes `other-job` gates from packing entirely, so their (nonexistent)
 -- cost cannot move this number by construction.
-budgetPoleFactor : List Gate ->
+budgetPoleFactor : Setup ->
+  List Gate ->
   List Shard ->
   List GateCost ->
   List RunRecord ->
   Result String (Option Int)
-budgetPoleFactor gates shs base runs =
-  let cs = balCands base gates
-  match balTarget True cs (balRows runs shs)
+budgetPoleFactor setup gates shs base runs =
+  let cs = balCands setup base gates
+  match balTarget True cs (balRows setup.price runs shs)
     Err m => Err m
     Ok (_, rows) =>
       let factor = balFactorMilli cs rows
@@ -2253,31 +2668,43 @@ budgetReport base commitMessage uncosted overClass poleFactorOpt orphans =
     Err
       "\{body}medaka gate budget: FAIL — \{intToString unacked} of \{intToString total} violation(s) not acknowledged. Paste the `Gate-Budget-Override:` trailer(s) shown above onto your commit message to accept them on purpose.\n"
 
+-- `gateOrcs`/`entries` as for `balNewText`, so clause (c) prices the same
+-- setup `gate balance --check` does.
 export
-budgetOutput : String -> String -> String -> String -> Result String String
-budgetOutput regPath regSrc baseSrc commitMessage = match parseRegistry regSrc
-  Err m => Err "medaka gate budget: \{m}"
-  Ok gates => match parseShards regSrc
+budgetOutput : String ->
+  String ->
+  String ->
+  List (String, List String) ->
+  List String ->
+  String ->
+  Result String String
+budgetOutput regPath regSrc baseSrc gateOrcs entries commitMessage =
+  match parseRegistry regSrc
     Err m => Err "medaka gate budget: \{m}"
-    Ok shs => match parseCostBaseline baseSrc
+    Ok gates => match parseShards regSrc
       Err m => Err "medaka gate budget: \{m}"
-      Ok base => match parseCostRuns baseSrc
+      Ok shs => match parseCostBaseline baseSrc
         Err m => Err "medaka gate budget: \{m}"
-        Ok runs => match balUnknownRows shs gates
-          u :: us =>
-            Err
-              "medaka gate budget: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (u :: us)}\n"
-          [] =>
-            let uncosted = budgetUncosted base gates
-            let overClass = budgetOverClassGates base gates
-            let orphans = budgetOrphanNames base gates
-            match budgetPoleFactor gates shs base runs
-              Err m => Err "medaka gate budget: \{m}\n"
-              Ok poleFactorOpt =>
-                budgetReport
-                  base
-                  commitMessage
-                  uncosted
-                  overClass
-                  poleFactorOpt
-                  orphans
+        Ok base => match parseCostRuns baseSrc
+          Err m => Err "medaka gate budget: \{m}"
+          Ok runs => match balUnknownRows shs gates
+            u :: us =>
+              Err
+                "medaka gate budget: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (u :: us)}\n"
+            [] =>
+              let uncosted = budgetUncosted base gates
+              let overClass = budgetOverClassGates base gates
+              let orphans = budgetOrphanNames base gates
+              let factor = match balSetupOf baseSrc gateOrcs entries
+                Err m => Err m
+                Ok setup => budgetPoleFactor setup gates shs base runs
+              match factor
+                Err m => Err "medaka gate budget: \{m}\n"
+                Ok poleFactorOpt =>
+                  budgetReport
+                    base
+                    commitMessage
+                    uncosted
+                    overClass
+                    poleFactorOpt
+                    orphans

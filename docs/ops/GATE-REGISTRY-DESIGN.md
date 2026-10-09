@@ -449,6 +449,20 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   set — a residual is only comparable while they do, which stops being true
   the moment a rebalance lands and stays false until the next ingest.
 
+  Since #2209 a row's load is its JOB wall, not its gate makespan alone:
+  fixed setup (`balFixedSetupMs`, checkout + setup-medaka) + the Wasm emitter
+  oracle on a `wasm_arm` row whose gates need it + the makespan of the UNION
+  of its gates' cold oracle builds over the build JOBS + the gate makespan.
+  The gate->oracle map is the same scrape `build_oracles.sh --for` uses, and
+  oracle prices come from the baseline's `oracles[]`. Placement charges a gate
+  only the oracles its row does not already build (`balCharge`), so gates
+  sharing oracles co-locate. An oracle with no sample is priced at a printed
+  default (the median of the sampled ones); a baseline with no `oracles[]`
+  section is reported as "setup: not modelled" and packed on gate cost alone
+  (`balSetup`). The calibration lines still grade the GATE part against
+  `rowElapsedMs`; `runs[]` records no job wall, so the predicted job wall is
+  printed for comparison with the Actions job duration.
+
   The tier axis (`merge` | `nightly` | `ondemand`) is the other lever on the
   pole besides re-ingesting: a gate whose failure is a breadth check rather
   than a soundness one can be moved to `tiers = ["nightly"]` and stop costing
@@ -1004,12 +1018,14 @@ The replacement divides the pole by the **achievable pole** — the best pole an
 assignment of this gate set onto these rows could reach. `balFloor` takes the largest
 of three terms, each a bound the pole provably cannot go under:
 
-1. **the most expensive single gate.** Gates are indivisible, so whichever row holds
-   it has a makespan at least that big.
+1. **the most expensive single gate**, plus the setup any row holding it pays (fixed
+   setup, its own oracle builds, the Wasm oracle if it needs the arm). Gates are
+   indivisible, so whichever row holds it has a load at least that big.
 2. **the heaviest CLOSED row's makespan.** A `full_cores` row's membership is declared
    (`pinned_gates`, §7) and the packer moves nothing onto it or off it, so its load is
    fixed input.
-3. **the open gates' total work over the open rows' worker SLOTS.** A row's capacity
+3. **the fixed setup plus the open gates' total work over the open rows' worker
+   SLOTS.** A row's capacity
    per unit of wall clock is its recorded `rjobs` workers, not one (`balJobsFor`,
    #2208), so `sum(rjobs) × pole >= total open work`. Counting rows instead of slots
    would inflate this term by roughly `jobs`×.
