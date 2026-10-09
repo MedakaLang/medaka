@@ -107,6 +107,7 @@ only for bounded tests; production code must still follow
 | Atomic effect rows and shared row DAGs | [effect_rows_property_test.mdk](../../compiler/types/effect_rows_property_test.mdk) | Finite-map normalization; grade-join algebra; independent unsolved tails; effects survive later solving after a warm normalization. |
 | Concrete authority domains | [effect_domain_property_test.mdk](../../compiler/types/effect_domain_property_test.mdk) | Prefix/Set/Product inclusion and least upper bounds against finite models; antichain admission preservation; constant-authority order; empty Set boundaries. |
 | The value restriction (HM-CORE §1, DICT §4.1 G2) | [hm_value_restriction_property_test.mdk](../../compiler/types/hm_value_restriction_property_test.mdk) | Generated bindings generalize iff a transcribed value grammar says so, at top level, at a local `let`, in a binding group and under a signature; partial application; `T-SIG-OVER-EXPANSIVE`; binder-rename invariance. |
+| Invariance of verdicts and schemes (SHADOW S1-S9, DICT T1/U1/U2/C4, history independence) | [check_invariance_property_test.mdk](../../compiler/types/check_invariance_property_test.mdk) | Shadow-clause verdict model under renaming, unrelated insertion and import/provider reordering; declaration permutation; flat route versus one-module route; two-module split; a check of `P` after any `Q` equals `P` first. |
 
 The utility deduplication model exposed a native code-generation defect:
 a lifted patterned lambda inherited its enclosing function's tail-recursion
@@ -158,6 +159,26 @@ black-box-observable.
 | HM-CORE §1 clause 4, `T-SIG-OVER-EXPANSIVE` | prop `a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE`; test `a variable under a constrained signature is a value` | Clause 4 text: a definition-site error, never a narrowing to the first use |
 | HM-CORE §1, decision by syntax | prop `renaming binders preserves the value restriction's verdict` | Alpha-equivalent programs have the same verdict and codes |
 | DICT §4.1 G2, local binder | prop `a local let generalizes iff its expression is a syntactic value` | G2 value grammar, at a block `let` |
+
+| SHADOW S1, S2 (shadow-hood; definer inversion) | prop `a shadow program's verdict follows the clauses and survives the transformations` | S2 text: a definer shadow applied to a receiver denotes the standalone, so only a receiver in the standalone's domain is accepted; importer shadow dispatches at a live-impl head |
+| SHADOW S3 (N-way) | same prop, `UApplyLive`/`UApplyTag` | S3 text: a receiver at a live-impl head is a located reject |
+| SHADOW S4 (value position) | same prop, `UValueDomain`/`UValueLive` | S4 text: a value-position shadow is the standalone, for definer and importer |
+| SHADOW S5 (ungrounded receiver) and carve-out | same prop, `UWrapDomain`/`UWrapLive`/`UCarveOut` | S5 text: the wrapper monomorphises to the standalone's domain unless the receiver is a written `=>` variable |
+| SHADOW S6 (module independence), importer half | same prop, `Importer` topology with `Swapped` order, and `DefinerImported` | S6 text: where the interface or impl live and the order of imports cannot change an outcome where visibility stays unique |
+| SHADOW S8 (arity) | same prop, `A1`/`A2` | S8 text: parameter count of the method changes no rule |
+| SHADOW S9 (constrained standalone) | same prop, `UConstrDomain`/`UConstrLive` | S9 text: an ordinary constrained call; a type lacking the standalone's own constraint is rejected, not dispatched |
+| SHADOW S1-S9 under binder renaming and unrelated insertion | same prop, `XRename`/`XInsertFront`/`XInsertBack` | Alpha-equivalent or extended programs have the same codes and alpha-equivalent schemes (harness `alphaEquiv`) |
+| SHADOW S7 (path agreement) | not black-box-observable: it compares `run`, `check` and `build`, and these laws observe only the checker entry points; graded by `test/diff_compiler_shadow_semantics_test.mdk` | n/a |
+| DICT T1 (declaration order) | prop `permuting the top-level declarations preserves verdict and schemes` | Block model (only the bad block rejects) plus same-names, alpha-equivalent-schemes comparison |
+| DICT U1/U2 (flat versus module route) | prop `the flat route and the one-module route agree` | Equal diagnostic lists; block model verdict |
+| DICT C4 (module split) | prop `splitting a dependency-closed program across two modules preserves the verdict` | Block model verdict on a program with and without the split |
+| History independence (F13) | prop `checking P after any Q equals checking P first` | The answer for `P` before and after an unrelated `Q` agrees with itself and with the model; not a claim about F12 |
+
+The invariance rows live in
+[check_invariance_property_test.mdk](../../compiler/types/check_invariance_property_test.mdk).
+Its self-test hand-builds a changed scheme, a changed verdict and a lost
+binding and requires the comparison to reject each; its censuses assert both
+verdicts and every transformation over the enumerated domains.
 
 All of these live in
 [hm_value_restriction_property_test.mdk](../../compiler/types/hm_value_restriction_property_test.mdk).
