@@ -2593,7 +2593,7 @@ table = [
   Row {
     entry = "s3-xe-one-word-per-arm/main.mdk",
     label =
-      "#1403 X-E.C (the value half of the structural exit in `diff_compiler_dict_semantics_ir.sh`): two interfaces' defaults for one method spelling at one type, each reached through a dictionary whose word is the instance's canonical key, plus a supplied method beside them. `viaA Dog` runs Speak's default, `viaB Dog` Greet's, `viaA Cat` Cat's own method",
+      "#1403 X-E.C (the value half of the structural exit in `diff_compiler_dict_semantics_ir_test.mdk`): two interfaces' defaults for one method spelling at one type, each reached through a dictionary whose word is the instance's canonical key, plus a supplied method beside them. `viaA Dog` runs Speak's default, `viaB Dog` Greet's, `viaA Cat` Cat's own method",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -2637,7 +2637,7 @@ table = [
   Row {
     entry = "s2-super-declared-single-level.mdk",
     label =
-      "#679/#993 BEFORE-PICTURE: one declared predicate `Hi a` whose super `Sz a` is needed in the body. Today's representation widens `useHi`'s emitted arity past its declared 1 dict + 1 value (pinned separately as a CURRENT-VALUE row in diff_compiler_dict_semantics_ir.sh); this row pins the VALUE only, so #993's flip is a visible arity-only golden move there, not a value regression here",
+      "#679/#993 BEFORE-PICTURE: one declared predicate `Hi a` whose super `Sz a` is needed in the body. Today's representation widens `useHi`'s emitted arity past its declared 1 dict + 1 value (pinned separately as a CURRENT-VALUE row in diff_compiler_dict_semantics_ir_test.mdk); this row pins the VALUE only, so #993's flip is a visible arity-only golden move there, not a value regression here",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -2648,7 +2648,7 @@ table = [
   Row {
     entry = "s2-super-chain3.mdk",
     label =
-      "#679/#993 BEFORE-PICTURE: a three-level super chain (Top requires Mid requires Base) reached through one declared `Top a =>` dict. Value is conformant today; the arity this call site's `useTop` widens to is pinned separately in diff_compiler_dict_semantics_ir.sh so the next slice's representation flip is a visible IR move rather than a silent one",
+      "#679/#993 BEFORE-PICTURE: a three-level super chain (Top requires Mid requires Base) reached through one declared `Top a =>` dict. Value is conformant today; the arity this call site's `useTop` widens to is pinned separately in diff_compiler_dict_semantics_ir_test.mdk so the next slice's representation flip is a visible IR move rather than a silent one",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -2659,7 +2659,7 @@ table = [
   Row {
     entry = "s2-requires-super-projected.mdk",
     label =
-      "#679/#993 BEFORE-PICTURE: an impl with `requires Hi a` whose own body needs Hi's super `Sz a`, exercised through a dict constructed with its requires. Value is conformant today; the impl fn's widened arity is pinned separately in diff_compiler_dict_semantics_ir.sh",
+      "#679/#993 BEFORE-PICTURE: an impl with `requires Hi a` whose own body needs Hi's super `Sz a`, exercised through a dict constructed with its requires. Value is conformant today; the impl fn's widened arity is pinned separately in diff_compiler_dict_semantics_ir_test.mdk",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
