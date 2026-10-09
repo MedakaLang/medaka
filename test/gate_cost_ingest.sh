@@ -332,6 +332,7 @@ BEGIN {
   # ── the existing baseline ────────────────────────────────────────────────
   sect = ""
   while ((getline line < oldf) > 0) {
+    if (line ~ /^  "generated": "/) { oldgen = line; sub(/^  "generated": "/, "", oldgen); sub(/",?$/, "", oldgen); continue }
     if (line ~ /^  "runs": \[/)  { sect = "runs";  continue }
     if (line ~ /^  "gates": \[/) { sect = "gates"; continue }
     if (line ~ /^  "oracles": \[/) { sect = "oracles"; continue }
@@ -365,6 +366,7 @@ BEGIN {
         t = "-"
         if (ns == n) { t = sparts[i]; gsub(/"/, "", t); if (t == "") t = "-" }
         osr[g] = osr[g] (osr[g] == "" ? "" : " ") t
+        if (t != "-") oldo[g SUBSEP t] = 1
         ojb[g] = ojb[g] (ojb[g] == "" ? "" : " ") (nj == n ? jparts[i] : "-")
       }
     }
@@ -388,20 +390,39 @@ BEGIN {
         t = "-"
         if (ns == n) { t = sparts[i]; gsub(/"/, "", t); if (t == "") t = "-" }
         gsr[g] = gsr[g] (gsr[g] == "" ? "" : " ") t
+        if (t != "-") oldg[g SUBSEP t] = 1
       }
     }
   }
   close(oldf)
-  printf "%d %d %d\n", nrun, ngate, nog > cntf
+  printf "%d %d %d %d\n", nrun, ngate, nog, nor > cntf
   close(cntf)
 
   # ── the new runs. A run already in the baseline is SKIPPED whole (key =
   #    runId:runAttempt:shard), so re-ingesting the same artifact is a no-op
   #    rather than a second sample of the same measurement. ─────────────────
+  # A report is a re-ingest when the baseline ALREADY holds a sample for one of
+  #    its (gate, runId) pairs: `runs[]` and the per-gate sample window trim
+  #    independently, so a run can leave `runs[]` while its samples are still
+  #    retained. Such a report is skipped whole (runs[] row included), so the
+  #    re-ingest leaves the file unchanged. The membership set is the OLD file
+  #    only, so two shards of one run ingested together both count.
+  while ((getline line < sampf) > 0) {
+    split(line, f, "\t")
+    if ((f[2] SUBSEP f[4]) in oldg) sdup[f[1]] = 1
+  }
+  close(sampf)
+  while ((getline line < osampf) > 0) {
+    split(line, f, "\t")
+    if ((f[2] SUBSEP f[5]) in oldo) odup[f[1]] = 1
+  }
+  close(osampf)
+
   while ((getline line < runsf) > 0) {
     split(line, f, "\t")
     k = f[1]
     if (k in runseen) { skipped[k] = 1; continue }
+    if (k in sdup) { skipped[k] = 1; continue }
     runseen[k] = 1; nrun++; runorder[nrun] = k
     # jobs (bare int) / parallel (bare bool) / rowElapsedMs (bare int) are
     # recorded per-run, unaveraged (#2208); a missing value (older producer)
@@ -415,7 +436,7 @@ BEGIN {
     digv  = (f[13] == "" ? "null" : f[13] + 0)
     runjson[k] = sprintf("    {\"key\": \"%s\", \"runId\": \"%s\", \"runAttempt\": \"%s\", \"shard\": \"%s\", \"event\": \"%s\", \"sha\": \"%s\", \"ref\": \"%s\", \"date\": \"%s\", \"jobs\": %s, \"parallel\": %s, \"rowElapsedMs\": %s, \"gates\": %s, \"gatesDigest\": %s}",
                          jesc(f[1]), jesc(f[2]), jesc(f[3]), jesc(f[4]), jesc(f[5]), jesc(f[6]), jesc(f[7]), jesc(f[8]), jobsv, parv, remv, f[9] + 0, digv)
-    accepted[k] = 1
+    accepted[k] = 1; nacc++
   }
   close(runsf)
 
@@ -436,7 +457,8 @@ BEGIN {
   #    gates were ingested first. ─────────────────────────────────────────────
   while ((getline line < orunsf) > 0) {
     if (line in orseen) continue
-    orseen[line] = 1; nor++; ororder[nor] = line; oaccepted[line] = 1
+    if (line in odup) continue
+    orseen[line] = 1; nor++; ororder[nor] = line; oaccepted[line] = 1; nacc++
   }
   close(orunsf)
   while ((getline line < osampf) > 0) {
@@ -455,7 +477,8 @@ BEGIN {
   print "{"
   print "  \"schema\": \"gate-cost-baseline/1\","
   print "  \"note\": \"Per-gate wall-clock cost, measured by test/run_gates.sh on UNNARROWED CI runs and folded in by test/gate_cost_ingest.sh. medianMs is the LOWER median of the retained raw ms samples; a balancer packs shards from it. GENERATED — do not hand-edit; re-derive from the artifacts instead.\","
-  printf "  \"generated\": \"%s\",\n", now
+  # A run that admitted nothing is a no-op: keep the stamp so the file is unchanged.
+  printf "  \"generated\": \"%s\",\n", (nacc == 0 && oldgen != "" ? oldgen : now)
   printf "  \"maxSamples\": %d,\n", maxs
   print "  \"runs\": ["
   first = nrun - maxr + 1; if (first < 1) first = 1
@@ -546,16 +569,16 @@ BEGIN {
 # a real JSON parser, independent of that regex, and refuse unless the two agree
 # one-for-one. Nothing has been written to $BASELINE at this point.
 if [ -s "$OLD" ]; then
-  read -r seen_runs seen_gates seen_oracles <"$TMP/old_counts.txt"
+  read -r seen_runs seen_gates seen_oracles seen_oruns <"$TMP/old_counts.txt"
   want="$(python3 -c 'import json, sys
 d = json.load(open(sys.argv[1]))
-print(len(d.get("runs", [])), len(d.get("gates", [])), len(d.get("oracles", [])))' "$OLD" 2>"$TMP/count.err")" || {
+print(len(d.get("runs", [])), len(d.get("gates", [])), len(d.get("oracles", [])), len(d.get("oracleRuns", [])))' "$OLD" 2>"$TMP/count.err")" || {
     cat "$TMP/count.err" >&2
     echo "gate_cost_ingest: REFUSED — $OLD is not parseable JSON; nothing written."
     exit 1
   }
-  if [ "$want" != "$seen_runs $seen_gates $seen_oracles" ]; then
-    echo "gate_cost_ingest: REFUSED — baseline $OLD has $want runs/gates/oracles rows (JSON count) but the line reader accounted for $seen_runs $seen_gates $seen_oracles."
+  if [ "$want" != "$seen_runs $seen_gates $seen_oracles $seen_oruns" ]; then
+    echo "gate_cost_ingest: REFUSED — baseline $OLD has $want runs/gates/oracles/oracleRuns entries (JSON count) but the line reader accounted for $seen_runs $seen_gates $seen_oracles $seen_oruns."
     echo "  The reader expects one compact row per line; a differently laid-out or duplicated-row baseline would lose rows. Nothing written."
     exit 1
   fi
@@ -628,4 +651,5 @@ fi
 cp "$TMP/out.json" "$BASELINE"
 echo "gate_cost_ingest: wrote $BASELINE"
 echo "  runs:  $(grep -c '^    {"key": ' "$BASELINE" || true)"
-echo "  gates: $(grep -c '^    {"name": ' "$BASELINE" || true)"
+echo "  gates: $(awk '/^  "gates": \[/ {s=1; next} /^  \]/ {s=0} s && /^    \{"name": / {n++} END {print n+0}' "$BASELINE")"
+echo "  oracles: $(awk '/^  "oracles": \[/ {s=1; next} /^  \]/ {s=0} s && /^    \{"name": / {n++} END {print n+0}' "$BASELINE")"
