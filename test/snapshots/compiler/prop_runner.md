@@ -1,5 +1,5 @@
 # META
-source_lines=1755
+source_lines=1756
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -361,6 +361,7 @@ genParam (ge@(GenEnv planEnv _)) evalEnv ty =
 
 -- Interpret the same finite plan the native runner renders. Imported nominals
 -- resolve through PlanEnv by TypeKey, never through a spelling-only registry.
+export
 genFromPlan : GenEnv -> EvalEnv (Value e) -> Int -> GenPlan -> <e> Value e
 genFromPlan _ _ _ GInt = VInt (randIntRange intMin intMax)
 genFromPlan _ _ _ GBool = VBool (randBoolL ())
@@ -1841,7 +1842,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genInputsPlanned" (PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "property runner: prepared parameter plan mismatch"))))
 (DTypeSig false "genParam" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Ty") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "genParam" ((PAs "ge" (PCon "GenEnv" (PVar "planEnv") PWild)) (PVar "evalEnv") (PVar "ty")) (EMatch (EApp (EApp (EApp (EApp (EVar "planFor") (EVar "planEnv")) (ELit (LString ""))) (ELit (LString "property parameter"))) (EVar "ty")) (arm (PCon "Ok" (PVar "plan")) () (EApp (EApp (EApp (EApp (EVar "genFromPlan") (EVar "ge")) (EVar "evalEnv")) (ELit (LInt 0))) (EVar "plan"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EApp (EVar "planErrorText") (EVar "e"))))))
-(DTypeSig false "genFromPlan" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
+(DTypeSig true "genFromPlan" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GInt")) (EApp (EVar "VInt") (EApp (EApp (EVar "randIntRange") (EVar "intMin")) (EVar "intMax"))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GBool")) (EApp (EVar "VBool") (EApp (EVar "randBoolL") (ELit LUnit))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GFloat")) (EApp (EVar "genFloat") (ELit LUnit)))
@@ -2317,7 +2318,7 @@ anyDecl p (d :: rest) = p d || anyDecl p rest
 (DFunDef false "genInputsPlanned" (PWild PWild PWild PWild) (EApp (EVar "panic") (ELit (LString "property runner: prepared parameter plan mismatch"))))
 (DTypeSig false "genParam" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Ty") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "genParam" ((PAs "ge" (PCon "GenEnv" (PVar "planEnv") PWild)) (PVar "evalEnv") (PVar "ty")) (EMatch (EApp (EApp (EApp (EApp (EVar "planFor") (EVar "planEnv")) (ELit (LString ""))) (ELit (LString "property parameter"))) (EVar "ty")) (arm (PCon "Ok" (PVar "plan")) () (EApp (EApp (EApp (EApp (EVar "genFromPlan") (EVar "ge")) (EVar "evalEnv")) (ELit (LInt 0))) (EVar "plan"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EApp (EVar "planErrorText") (EVar "e"))))))
-(DTypeSig false "genFromPlan" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
+(DTypeSig true "genFromPlan" (TyFun (TyCon "GenEnv") (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GInt")) (EApp (EVar "VInt") (EApp (EApp (EVar "randIntRange") (EVar "intMin")) (EVar "intMax"))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GBool")) (EApp (EVar "VBool") (EApp (EVar "randBoolL") (ELit LUnit))))
 (DFunDef false "genFromPlan" (PWild PWild PWild (PCon "GFloat")) (EApp (EVar "genFloat") (ELit LUnit)))
