@@ -157,3 +157,23 @@ issue = 3955
 seed = 20261009
 cases = 500
 failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a phantom method is legal at its declaration and only an undetermined use is rejected"
+engine = "eval"
+issue = 1134
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a phantom method is legal at its declaration and only an undetermined use is rejected"
+engine = "native"
+issue = 1134
+seed = 20261009
+cases = 500
+failure = "false"

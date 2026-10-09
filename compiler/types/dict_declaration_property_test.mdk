@@ -1,0 +1,734 @@
+-- The declaration-side dictionary laws of DICT-SEMANTICS as generated-program
+-- properties: superclass acyclicity (§3 W1), method-scheme fidelity (§3
+-- W3/W3-inst), dictionary contents (§5.1 M1-M3), `gen-sig` (§4), and
+-- module-qualified identity and the literal's class (§8 I1-I4, I7). The
+-- resolution-side laws live in `dict_property_test.mdk`; the two files are
+-- split so each stays well inside one test run's time budget under the
+-- evaluator. Each expected verdict comes from a model of the clause written
+-- below; the checker is observed only through its verdicts, error codes and
+-- rendered schemes.
+
+import frontend.desugar.{desugar}
+import frontend.parser.{parseLocated}
+import frontend.resolve.{resErrorCode, resolveProgram}
+import list.{filter, indexed, lookup, nub, reverse, sort, zip}
+import string.{isUpper, join, split, toChars}
+import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
+import types.law_harness_test.{
+  Verdict(..),
+  alphaEquiv,
+  checkFlat,
+  checkGraph,
+  codesFlat,
+  graphCodesAndSchemes,
+  lawPrelude,
+  typeTokens,
+}
+
+hasCode : String -> List String -> Bool
+hasCode code codes = any (== code) codes
+
+-- Four interfaces whose `requires` clauses are generated edges.
+public export data Idx = I0 | I1 | I2 | I3 deriving (Eq, Debug)
+
+allIdx : List Idx
+allIdx = [I0, I1, I2, I3]
+
+idxName : Idx -> String
+idxName I0 = "0"
+idxName I1 = "1"
+idxName I2 = "2"
+idxName I3 = "3"
+
+successors : List (Idx, Idx) -> Idx -> List Idx
+successors edges i = nub (map snd (filter ((from, _) => from == i) edges))
+
+-- The interfaces reachable from `frontier` along one or more edges.
+reachable : List (Idx, Idx) -> List Idx -> List Idx -> List Idx
+reachable _ [] seen = seen
+reachable edges (i :: rest) seen =
+  let next = filter (j => not (any (== j) seen)) (successors edges i)
+  reachable edges (rest ++ next) (seen ++ next)
+
+-- W1's model: the superclass relation has a cycle iff some interface reaches
+-- itself.
+superCyclic : List (Idx, Idx) -> Bool
+superCyclic edges =
+  any (i => any (== i) (reachable edges (successors edges i) [])) allIdx
+
+superProgram : List (Idx, Idx) -> String
+superProgram edges =
+  join
+    ""
+    (map
+      (i =>
+        let reqs = map (j => "I\{idxName j} a") (successors edges i)
+        let clause = if reqs == [] then "" else " requires \{join ", " reqs}"
+        "interface I\{idxName i} a\{clause} where\n  m\{idxName i} : a -> Int\n")
+      allIdx)
+
+-- §3 W1: the superclass relation must be acyclic, else `super`-search loops.
+prop "a superclass cycle is rejected and an acyclic superclass relation is accepted" (edges : List (Idx, Idx)) =
+  let codes = codesFlat (superProgram edges)
+  if superCyclic edges then
+    hasCode "T-CYCLIC-SUPERINTERFACE" codes
+  else
+    codes == []
+
+-- An impl body under a name that is no method of the interface.
+public export data Extra = XNone | XNearMiss | XUnrelated deriving (Eq, Debug)
+
+methodBlock : Int -> Bool -> String
+methodBlock i hasDefault =
+  let sig = "  s\{intToString i} : a -> Int\n"
+  if hasDefault then sig ++ "  s\{intToString i} x = anInt\n" else sig
+
+memberLine : Int -> Bool -> String
+memberLine i supplied =
+  if supplied then "  s\{intToString i} x = anInt\n" else ""
+
+extraLine : Extra -> String
+extraLine XNone = ""
+extraLine XNearMiss = "  s0x x = anInt\n"
+extraLine XUnrelated = "  other x = anInt\n"
+
+triple : (Bool, Bool, Bool) -> List Bool
+triple (a, b, c) = [a, b, c]
+
+{- The M program: an interface with three methods, the defaulted ones given
+   by `defaults`, and an impl supplying the methods `supplied` names plus an
+   extra member. The probe keeps the impl from being the last declaration. -}
+methodsProgram : List Bool -> List Bool -> Extra -> String
+methodsProgram defaults supplied extra = join "" [
+  "extern anInt : Int\n",
+  "interface Sv a where\n",
+  join "" (map ((i, d) => methodBlock i d) (indexed defaults)),
+  "data T = T\n",
+  "impl Sv T where\n",
+  join "" (map ((i, s) => memberLine i s) (indexed supplied)),
+  extraLine extra,
+  "probe = s1 T\n",
+]
+
+-- The front end's codes: resolve's, then the checker's.
+frontEndCodes : String -> List String
+frontEndCodes source =
+  let prog = desugar (parseLocated source)
+  let resolved =
+    map
+      resErrorCode
+      (resolveProgram [] (desugar (parseLocated lawPrelude)) prog)
+  resolved ++ codesFlat source
+
+{- §5.1 M1 and M2. M1: the impl supplies a body for every method without a
+   default (`T-INCOMPLETE-IMPL`). M2: it supplies no body under a name that
+   is not a method (`R-METHOD-NOT-IN-INTERFACE`), including a near-miss of a
+   defaulted method, whose override would otherwise never run. -}
+prop "an impl is accepted iff it is complete and has no extraneous method" (defaults : (Bool, Bool, Bool)) (supplied : (Bool, Bool, Bool)) (extra : Extra) =
+  let ds = triple defaults
+  let ss = triple supplied
+  let x = extra
+  let complete = all ((d, s) => d || s) (zip ds ss)
+  let codes = frontEndCodes (methodsProgram ds ss x)
+  hasCode "T-INCOMPLETE-IMPL" codes == not complete
+    && hasCode "R-METHOD-NOT-IN-INTERFACE" codes == (x /= XNone)
+    && codes == [] == (complete && x == XNone)
+
+-- The three interfaces of the gen-sig law; `Tg` requires `Sz`.
+public export data Cls = Sz | Tg | Nm deriving (Eq, Debug)
+
+clsName : Cls -> String
+clsName Sz = "Sz"
+clsName Tg = "Tg"
+clsName Nm = "Nm"
+
+clsMethod : Cls -> String
+clsMethod Sz = "sz"
+clsMethod Tg = "tg"
+clsMethod Nm = "nm"
+
+allCls : List Cls
+allCls = [Sz, Tg, Nm]
+
+pick : List Cls -> (Bool, Bool, Bool) -> List Cls
+pick classes flags =
+  map fst (filter ((_, keep) => keep) (zip classes (triple flags)))
+
+-- A set of classes closed under `requires`: `Tg` brings `Sz`.
+superClosed : List Cls -> List Cls
+superClosed cs = if any (== Tg) cs then nub (cs ++ [Sz]) else cs
+
+sigContext : List Cls -> String
+sigContext [] = ""
+sigContext [c] = "\{clsName c} a => "
+sigContext cs =
+  let preds = join ", " (map (c => clsName c ++ " a") cs)
+  "(\{preds}) => "
+
+bodyArg : List Cls -> Cls -> String
+bodyArg used c = if any (== c) used then "(\{clsMethod c} x)" else "anInt"
+
+genSigProgram : List Cls -> List Cls -> List Cls -> String
+genSigProgram declared used instances = join "" [
+  "extern anInt : Int\n",
+  "extern sum3 : Int -> Int -> Int -> Int\n",
+  "interface Sz a where\n  sz : a -> Int\n",
+  "interface Tg a requires Sz a where\n  tg : a -> Int\n",
+  "interface Nm a where\n  nm : a -> Int\n",
+  "data T = T\n",
+  join
+    ""
+    (map
+      (c => "impl \{clsName c} T where\n  \{clsMethod c} x = anInt\n")
+      instances),
+  "f : \{sigContext declared}a -> Int\n",
+  "f x = sum3 \{join " " (map (bodyArg used) allCls)}\n",
+  "use = f T\n",
+]
+
+-- The classes named before `=>` in a rendered scheme, and the type after it.
+splitContext : String -> (List String, String)
+splitContext text = match split " => " text
+  [ctx, ty] => (
+    sort
+      (filter
+        (t => match toList (toChars t)
+          c :: _ => isUpper c
+          [] => False)
+        (typeTokens ctx)),
+    ty,
+  )
+  _ => ([], text)
+
+{- §4 `gen-sig`. The body's inferred predicates are checked against the
+   declared context closed under `requires` (`T-MISSING-CONSTRAINT` when one
+   is not entailed), never merged into it: the scheme's context is exactly the
+   declared one, a declared predicate the body never uses is still abstracted
+   and every caller discharges it, and an inferred predicate a declared
+   superclass entails is not displayed. -}
+genSigModel : List Cls -> List Cls -> List Cls -> (Bool, Bool)
+genSigModel declared used instances =
+  let entailed = superClosed declared
+  let defOk = all (u => any (== u) entailed) used
+  let callOk = all (d => any (== d) instances) declared
+  (defOk, callOk)
+
+prop "a signature's context is a contract the body is checked against and every caller discharges" (declaredFlags : (Bool, Bool, Bool)) (usedFlags : (Bool, Bool, Bool)) (instanceFlags : (Bool, Bool, Bool)) =
+  let declared = pick allCls declaredFlags
+  let used = pick allCls usedFlags
+  let instances = superClosed (pick allCls instanceFlags)
+  let (defOk, callOk) = genSigModel declared used instances
+  let (codes, schemes) =
+    graphCodesAndSchemes [("law", genSigProgram declared used instances)]
+  let scheme = match lookup "f" schemes
+    Some text => text
+    None => ""
+  let (ctx, ty) = splitContext scheme
+  codes == [] == (defOk && callOk)
+    && hasCode "T-MISSING-CONSTRAINT" codes == not defOk
+    && (not defOk
+      || ctx == sort (map clsName declared) && alphaEquiv ty "a -> Int")
+
+-- Which declaration two modules share or each declare; `KTuple` is the
+-- builtin pair type, which no module declares.
+public export data Kind =
+  | KType
+  | KIface
+  | KBinding
+  | KTuple
+  deriving (Eq, Debug)
+
+public export data Side = SFirst | SSecond deriving (Eq, Debug)
+
+-- One declaration reached along two import paths, or two same-spelled
+-- declarations in two modules, the entry using the `Side` one.
+public export data Relation =
+  | SameDecl
+  | DistinctFirst
+  | DistinctSecond
+  deriving (Eq, Debug)
+
+public export data Order = Straight | Swapped deriving (Eq, Debug)
+
+ordered : Order -> List a -> List a
+ordered Straight xs = xs
+ordered Swapped xs = reverse xs
+
+identityBase : String
+identityBase =
+  "public export data T = T\n"
+    ++ "export interface Sh a where\n  sh : a -> Int\n"
+    ++ "extern anInt : Int\n"
+    ++ "export impl Sh T where\n  sh x = anInt\n"
+    ++ "export f : Sh a => a -> Int\n"
+    ++ "f x = sh x\n"
+    ++ "export tupB : Int -> (Int, String)\n"
+    ++ "tupB n = (n, \"s\")\n"
+
+identityLeft : String
+identityLeft =
+  "import base.{sh}\n"
+    ++ "export import base.{T(..), Sh, f}\n"
+    ++ "export mkL : Int -> T\n"
+    ++ "mkL n = T\n"
+    ++ "export useL : Sh a => a -> Int\n"
+    ++ "useL x = sh x\n"
+    ++ "export tupL : Int -> (Int, String)\n"
+    ++ "tupL n = (n, \"t\")\n"
+
+-- The entry of a same-declaration graph: each kind is imported from `base`
+-- and from `left`, which re-exports it.
+sameEntry : Kind -> Order -> String
+sameEntry KType o =
+  join "" (ordered o ["import base.{T(..)}\n", "import left.{T(..), mkL}\n"])
+    ++ "extern same : a -> a -> a\nextern anInt : Int\n"
+    ++ "probe = same (mkL anInt) T\n"
+sameEntry KIface o =
+  join
+      ""
+      (ordered o ["import base.{T(..), Sh, sh}\n", "import left.{Sh, useL}\n"])
+    ++ "g : Sh a => a -> Int\ng x = useL x\nprobe = (g T, sh T)\n"
+sameEntry KBinding o =
+  join "" (ordered o ["import base.{T(..), f}\n", "import left.{f}\n"])
+    ++ "probe = f T\n"
+sameEntry KTuple o =
+  join "" (ordered o ["import base.{tupB}\n", "import left.{tupL}\n"])
+    ++ "extern same : a -> a -> a\nextern anInt : Int\n"
+    ++ "probe = same (tupB anInt) (tupL anInt)\n"
+
+-- Module `m<i>`'s own declaration of the kind's name.
+distinctModule : Kind -> Int -> String
+distinctModule KType i =
+  "public export data T = T\nexport mk\{intToString i} : Int -> T\nmk\{intToString i} n = T\n"
+distinctModule KIface 1 =
+  "import base.{T(..)}\n"
+    ++ "export interface Sh a where\n  sh : a -> Int\n"
+    ++ "extern anInt : Int\n"
+    ++ "export impl Sh T where\n  sh x = anInt\n"
+    ++ "export use1 : Sh a => a -> Int\nuse1 x = sh x\n"
+distinctModule KIface _ =
+  "export interface Sh a where\n  sh : a -> Int\n"
+    ++ "export use2 : Sh a => a -> Int\nuse2 x = sh x\n"
+distinctModule KBinding 1 =
+  "export interface Sh a where\n  sh : a -> Int\n"
+    ++ "export f : Sh a => a -> Int\nf x = sh x\n"
+distinctModule KBinding _ =
+  "extern anInt : Int\nexport f : a -> Int\nf x = anInt\n"
+distinctModule KTuple i =
+  "export tup\{intToString i} : Int -> (Int, String)\ntup\{intToString i} n = (n, \"s\")\n"
+
+distinctEntry : Kind -> Side -> Order -> String
+distinctEntry KType side o = join "" [
+  join "" (ordered o ["import m1.{mk1}\n", "import m2.{mk2}\n"]),
+  "extern same : a -> a -> a\nextern anInt : Int\n",
+  distinctUse KType side,
+]
+distinctEntry KIface side o =
+  join
+      ""
+      (ordered o [
+        "import base.{T(..)}\nimport m1.{use1}\n", "import m2.{use2}\n"
+      ])
+    ++ distinctUse KIface side
+distinctEntry KBinding side _ = distinctUse KBinding side
+distinctEntry KTuple side o = join "" [
+  join "" (ordered o ["import m1.{tup1}\n", "import m2.{tup2}\n"]),
+  "extern same : a -> a -> a\nextern anInt : Int\n",
+  distinctUse KTuple side,
+]
+
+distinctUse : Kind -> Side -> String
+distinctUse KType SFirst = "probe = same (mk1 anInt) (mk1 anInt)\n"
+distinctUse KType SSecond = "probe = same (mk1 anInt) (mk2 anInt)\n"
+distinctUse KIface SFirst = "probe = use1 T\n"
+distinctUse KIface SSecond = "probe = use2 T\n"
+distinctUse KBinding SFirst =
+  "import m1.{f}\nextern anyv : a\nprobe = f (anyv : String)\n"
+distinctUse KBinding SSecond =
+  "import m2.{f}\nextern anyv : a\nprobe = f (anyv : String)\n"
+distinctUse KTuple SFirst = "probe = same (tup1 anInt) (tup1 anInt)\n"
+distinctUse KTuple SSecond = "probe = same (tup1 anInt) (tup2 anInt)\n"
+
+identityModules : Kind -> Relation -> Order -> List (String, String)
+identityModules k SameDecl o =
+  [("base", identityBase), ("left", identityLeft), ("law", sameEntry k o)]
+identityModules k r o =
+  let side = if r == DistinctFirst then SFirst else SSecond
+  [("base", "public export data T = T\n")]
+    ++ ordered o [("m1", distinctModule k 1), ("m2", distinctModule k 2)]
+    ++ [("law", distinctEntry k side o)]
+
+{- §8 I1-I4. One declaration reached along two import paths keeps one
+   identity, so its uses agree and its impls serve it: accepted. Two
+   same-spelled declarations in two modules stay distinct: the two `T`s are
+   different types, the second module's `Sh` has no impl at `T`, and the
+   unconstrained `f` abstracts no dictionary while its constrained namesake
+   needs `Sh String`. The first side of each distinct pair is its control.
+   A pair type is a builtin with one identity shared by every module (I6.2
+   (a)), so two modules' `(Int, String)` are one type on either side. -}
+identityModel : Kind -> Relation -> Verdict
+identityModel _ SameDecl = Accepted
+identityModel KType DistinctFirst = Accepted
+identityModel KType DistinctSecond = Rejected
+identityModel KIface DistinctFirst = Accepted
+identityModel KIface DistinctSecond = Rejected
+identityModel KBinding DistinctFirst = Rejected
+identityModel KBinding DistinctSecond = Accepted
+identityModel KTuple _ = Accepted
+
+prop "a declaration keeps one identity along two import paths and same-spelled declarations stay distinct" (k : Kind) (r : Relation) (o : Order) =
+  fst (checkGraph (identityModules k r o)) == identityModel k r
+
+-- The W3 program's impl head, the method's declared result, and the bodies.
+public export data WHead = WInt | WBoxC | WBoxB deriving (Eq, Debug)
+
+public export data WRes = RVarB | RHead | RNum | RBoxVarB deriving (Eq, Debug)
+
+public export data WBody =
+  | EX
+  | EY
+  | EInt
+  | EAny
+  | EBoxY
+  | EBoxInt
+  | EUnboxX
+  deriving (Eq, Debug)
+
+public export data VBody = VK | VKv | VPure | VAny deriving (Eq, Debug)
+
+-- Body and declared types: a rigid variable carries its binder, so the
+-- head's `b` and the method's `b` are different variables.
+data MT = MInt | MBox MT | MRigid String | MAny | MErr deriving (Eq, Debug)
+
+wHeadMT : WHead -> MT
+wHeadMT WInt = MInt
+wHeadMT WBoxC = MBox (MRigid "head.c")
+wHeadMT WBoxB = MBox (MRigid "head.b")
+
+wHeadSource : WHead -> String
+wHeadSource WInt = "Int"
+wHeadSource WBoxC = "(Box c)"
+wHeadSource WBoxB = "(Box b)"
+
+wResSource : WRes -> String
+wResSource RVarB = "b"
+wResSource RHead = "a"
+wResSource RNum = "Int"
+wResSource RBoxVarB = "Box b"
+
+declaredMT : WHead -> WRes -> MT
+declaredMT _ RVarB = MRigid "method.b"
+declaredMT h RHead = wHeadMT h
+declaredMT _ RNum = MInt
+declaredMT _ RBoxVarB = MBox (MRigid "method.b")
+
+bodyMT : WHead -> WBody -> MT
+bodyMT h EX = wHeadMT h
+bodyMT _ EY = MRigid "method.b"
+bodyMT _ EInt = MInt
+bodyMT _ EAny = MAny
+bodyMT _ EBoxY = MBox (MRigid "method.b")
+bodyMT _ EBoxInt = MBox MInt
+bodyMT h EUnboxX = match wHeadMT h
+  MBox inner => inner
+  _ => MErr
+
+bodySource : WBody -> String
+bodySource EX = "x"
+bodySource EY = "y"
+bodySource EInt = "anInt"
+bodySource EAny = "anyv"
+bodySource EBoxY = "(Box y)"
+bodySource EBoxInt = "(Box anInt)"
+bodySource EUnboxX = "(unboxv x)"
+
+vBodySource : VBody -> String
+vBodySource VK = "k"
+vBodySource VKv = "kv"
+vBodySource VPure = "(u => anInt)"
+vBodySource VAny = "anyv"
+
+{- §3 W3 and W3-inst: the body inhabits the method's declared type at the
+   head with the method's variables and the head's variables rigid. A rigid
+   variable equals only itself, so a body may not pin one to a type (`Int`,
+   `Box Int`) nor identify two, including two spelled alike; a body whose
+   type is a fresh variable (`anyv`) fits. On the effect axis the callback's
+   row `e` is rigid too: returning the callback or a pure function fits, and
+   returning `kv`, which performs `KV`, gives `e` a concrete atom. -}
+fitsRigid : MT -> MT -> Bool
+fitsRigid MAny _ = True
+fitsRigid MErr _ = False
+fitsRigid body declared = body == declared
+
+vFits : VBody -> Bool
+vFits VKv = False
+vFits _ = True
+
+w3Program : WHead -> WRes -> WBody -> VBody -> String
+w3Program h r body v = join "" [
+  "data Box a = Box a\n",
+  "effect KV\n",
+  "extern kv : Unit -> <KV> Int\n",
+  "extern anInt : Int\n",
+  "extern anyv : a\n",
+  "extern unboxv : Box q -> q\n",
+  "interface W a where\n",
+  "  w : a -> b -> \{wResSource r}\n",
+  "  v : a -> (Unit -> <e> Int) -> Unit -> <e> Int\n",
+  "impl W \{wHeadSource h} where\n",
+  "  w x y = \{bodySource body}\n",
+  "  v x k = \{vBodySource v}\n",
+]
+
+w3Verdict : WHead -> WRes -> WBody -> VBody -> Verdict
+w3Verdict h r body v =
+  if fitsRigid (bodyMT h body) (declaredMT h r) && vFits v then
+    Accepted
+  else
+    Rejected
+
+prop "an impl body inhabits its method's scheme with the method and head variables rigid" (h : WHead) (r : WRes) (body : WBody) (v : VBody) =
+  fst (checkFlat (w3Program h r body v)) == w3Verdict h r body v
+
+-- Where a phantom method is used.
+public export data PhantomUse = UseUnderGiven | UseBare deriving (Eq, Debug)
+
+phantomProgram : PhantomUse -> Bool -> String
+phantomProgram use blanket = join "" [
+  "extern anyv : a\n",
+  "interface Mk a where\n  mk : Int -> a\n  phantom : Int\n",
+  "data Red = Red Int\n",
+  "impl Mk Red where\n  mk n = Red n\n  phantom = 7\n",
+  if blanket then "impl Mk a where\n  mk n = anyv\n  phantom = 7\n" else "",
+  match use
+    UseUnderGiven => "f : Mk a => a -> Int\nf x = phantom\n"
+    UseBare => "probe = (phantom : Int)\n",
+]
+
+{- §5.1 M3: a method whose type mentions no interface parameter is legal at
+   its declaration. A use under a given `Mk a` is discharged by `assum`; a
+   bare use leaves `Mk ?a` undetermined and is rejected, by an empty matching
+   set or, beside a blanket impl, at quiescence (§6.2 T4). -}
+phantomModel : PhantomUse -> Verdict
+phantomModel UseUnderGiven = Accepted
+phantomModel UseBare = Rejected
+
+prop "a phantom method is legal at its declaration and only an undetermined use is rejected" (use : PhantomUse) (blanket : Bool) =
+  fst (checkFlat (phantomProgram use blanket)) == phantomModel use
+
+-- How a program shadows the prelude's `fromInt`, and the types involved.
+public export data Shadow = ShTop | ShLet deriving (Eq, Debug)
+
+public export data LitTy = LInt | LStr | LNat deriving (Eq, Debug)
+
+litTySource : LitTy -> String
+litTySource LInt = "Int"
+litTySource LStr = "String"
+litTySource LNat = "Nat"
+
+litValue : LitTy -> String
+litValue LInt = "n"
+litValue LStr = "\"s\""
+litValue LNat = "Zero"
+
+literalProgram : Shadow -> LitTy -> LitTy -> String
+literalProgram ShTop target lit = join "" [
+  "data Nat = Zero\n",
+  "fromInt : Int -> \{litTySource target}\n",
+  "fromInt n = \{litValue target}\n",
+  "probe = (1 : \{litTySource lit})\n",
+]
+literalProgram ShLet target lit = join "" [
+  "data Nat = Zero\n",
+  "probe =\n",
+  "  let fromInt = (n => (\{litValue target} : \{litTySource target}))\n",
+  "  (1 : \{litTySource lit})\n",
+]
+
+{- §8 I7: the class a numeric literal demands is the prelude's `Num`, fixed
+   by the language, and no user binding spelled `fromInt` captures it. The
+   law prelude's only `Num` instance is at `Int`, and `Nat` has none, so a
+   literal is accepted exactly at `Int`. -}
+literalModel : LitTy -> Verdict
+literalModel LInt = Accepted
+literalModel _ = Rejected
+
+prop "a numeric literal demands the prelude's Num whatever binding is spelled fromInt" (shadow : Shadow) (target : LitTy) (lit : LitTy) =
+  fst (checkFlat (literalProgram shadow target lit)) == literalModel lit
+
+-- Self-tests: each family's comparison rejects a hand-built wrong case, and
+-- one fixed program per family is checked against its model.
+
+test "the cycle model finds self-loops and long cycles and the checker rejects one" = expectAll
+  [
+    expectTrue (superCyclic [(I0, I0)]),
+    expectTrue (superCyclic [(I0, I1), (I1, I2), (I2, I3), (I3, I0)]),
+    expectFalse (superCyclic [(I0, I1), (I1, I2), (I0, I2), (I2, I3)]),
+    expectEqual
+      Rejected
+      (fst (checkFlat (superProgram [(I1, I2), (I2, I3), (I3, I1)]))),
+  ]
+
+test "the method laws see a missing method and a misspelled override of a default" = expectAll
+  [
+    expectTrue
+      (hasCode
+        "T-INCOMPLETE-IMPL"
+        (frontEndCodes
+          (methodsProgram [False, False, False] [True, False, True] XNone))),
+    expectTrue
+      (hasCode
+        "R-METHOD-NOT-IN-INTERFACE"
+        (frontEndCodes
+          (methodsProgram [True, False, False] [False, True, True] XNearMiss))),
+    expectEqual
+      []
+      (frontEndCodes
+        (methodsProgram [True, True, True] [False, False, False] XNone)),
+  ]
+
+test "the gen-sig model separates entailment, superclass entailment and the caller's obligation" = expectAll
+  [
+    expectEqual (True, True) (genSigModel [Tg] [Sz] [Sz, Tg]),
+    expectEqual (False, True) (genSigModel [Sz] [Tg] [Sz, Tg]),
+    expectEqual (True, False) (genSigModel [Nm] [] [Sz]),
+    expectEqual
+      (["Sz", "Tg"], "a -> Int")
+      (splitContext "(Tg a, Sz a) => a -> Int"),
+    expectEqual ([], "a -> Int") (splitContext "a -> Int"),
+    expectEqual
+      ["T-MISSING-CONSTRAINT"]
+      (fst (graphCodesAndSchemes [("law", genSigProgram [] [Nm] [Nm])])),
+  ]
+
+test "the identity model's distinct pairs disagree with a model that conflates them" = expectAll
+  [
+    expectEqual Rejected (identityModel KType DistinctSecond),
+    expectEqual Rejected (identityModel KIface DistinctSecond),
+    expectEqual Accepted (identityModel KBinding DistinctSecond),
+    expectEqual
+      Rejected
+      (fst (checkGraph (identityModules KType DistinctSecond Straight))),
+  ]
+
+test "the W3 model holds both binders' b apart and rejects a pinned or laundering body" = expectAll
+  [
+    expectFalse (fitsRigid (bodyMT WBoxB EX) (declaredMT WBoxB RBoxVarB)),
+    expectTrue (fitsRigid (bodyMT WBoxB EY) (declaredMT WBoxB RVarB)),
+    expectFalse (fitsRigid (bodyMT WBoxC EBoxInt) (declaredMT WBoxC RHead)),
+    expectFalse (fitsRigid (bodyMT WInt EUnboxX) (declaredMT WInt RHead)),
+    expectTrue (fitsRigid (bodyMT WInt EAny) (declaredMT WInt RVarB)),
+    expectEqual Rejected (w3Verdict WInt RNum EInt VKv),
+    expectEqual Rejected (fst (checkFlat (w3Program WBoxB RBoxVarB EX VK))),
+  ]
+
+countWhere : (a -> Bool) -> List a -> Int
+countWhere keep xs = length (filter keep xs)
+
+-- N = 20 for each verdict over the edge lists of length at most two.
+test "census: the W1 law sees cyclic and acyclic superclass relations" =
+  let pairs = flatMap (a => map (b => (a, b)) allIdx) allIdx
+  let lists =
+    [[]] ++ map (e => [e]) pairs ++ flatMap (e => map (f => [e, f]) pairs) pairs
+  expectAll [
+    expectEqual 273 (length lists),
+    expectAtLeast 20 (countWhere superCyclic lists),
+    expectAtLeast 20 (countWhere (es => not (superCyclic es)) lists),
+  ]
+
+bools3 : List (Bool, Bool, Bool)
+bools3 =
+  flatMap
+    (a => flatMap (b => map (c => (a, b, c)) [False, True]) [False, True])
+    [False, True]
+
+-- N = 20 for complete and incomplete impls, with and without an extra
+-- member, over the 8 x 8 x 3 descriptions; N = 10 for each gen-sig outcome.
+test "census: the M and gen-sig laws see every outcome" =
+  let ms =
+    flatMap
+      (d =>
+        flatMap
+          (s => map (x => (d, s, x)) [XNone, XNearMiss, XUnrelated])
+          bools3)
+      bools3
+  let complete =
+    (d, s) => all ((dd, ss) => dd || ss) (zip (triple d) (triple s))
+  let gs =
+    flatMap
+      (d =>
+        flatMap
+          (u =>
+            map
+              (i =>
+                genSigModel
+                  (pick allCls d)
+                  (pick allCls u)
+                  (superClosed (pick allCls i)))
+              bools3)
+          bools3)
+      bools3
+  expectAll [
+    expectEqual 192 (length ms),
+    expectAtLeast
+      20
+      (countWhere ((d, s, x) => complete (d, s) && x == XNone) ms),
+    expectAtLeast 20 (countWhere ((d, s, _) => not (complete (d, s))) ms),
+    expectAtLeast
+      20
+      (countWhere ((d, s, x) => complete (d, s) && x /= XNone) ms),
+    expectEqual 512 (length gs),
+    expectAtLeast 10 (countWhere (== (True, True)) gs),
+    expectAtLeast 10 (countWhere (== (False, True)) gs),
+    expectAtLeast 10 (countWhere (== (True, False)) gs),
+  ]
+
+allW : List (WHead, WRes, WBody, VBody)
+allW =
+  flatMap
+    (h =>
+      flatMap
+        (r =>
+          flatMap
+            (b => map (v => (h, r, b, v)) [VK, VKv, VPure, VAny])
+            [EX, EY, EInt, EAny, EBoxY, EBoxInt, EUnboxX])
+        [RVarB, RHead, RNum, RBoxVarB])
+    [WInt, WBoxC, WBoxB]
+
+-- N = 20 for each verdict over the 336 W3 descriptions, and for a rejection
+-- under the head whose variable is spelled `b`; N = 2 for each verdict of the identity,
+-- phantom and literal laws over their full domains.
+test "census: the W3, identity, phantom and literal laws see both verdicts" =
+  let ids =
+    flatMap
+      (k =>
+        map (r => identityModel k r) [SameDecl, DistinctFirst, DistinctSecond])
+      [KType, KIface, KBinding, KTuple]
+  let lits =
+    flatMap
+      (t => map (l => literalModel l) [LInt, LStr, LNat])
+      [LInt, LStr, LNat]
+  expectAll [
+    expectEqual 336 (length allW),
+    expectAtLeast
+      20
+      (countWhere ((h, r, b, v) => w3Verdict h r b v == Accepted) allW),
+    expectAtLeast
+      20
+      (countWhere ((h, r, b, v) => w3Verdict h r b v == Rejected) allW),
+    expectAtLeast
+      20
+      (countWhere
+        ((h, r, b, v) => h == WBoxB && w3Verdict h r b v == Rejected)
+        allW),
+    expectAtLeast 2 (countWhere (== Accepted) ids),
+    expectAtLeast 2 (countWhere (== Rejected) ids),
+    expectAtLeast
+      1
+      (countWhere (u => phantomModel u == Accepted) [UseUnderGiven, UseBare]),
+    expectAtLeast
+      1
+      (countWhere (u => phantomModel u == Rejected) [UseUnderGiven, UseBare]),
+    expectAtLeast 2 (countWhere (== Accepted) lits),
+    expectAtLeast 2 (countWhere (== Rejected) lits),
+  ]
