@@ -1981,9 +1981,9 @@ corpus = []
 toolchain = []
 
 # Epic #3134 (Bytes) — the per-file Array Int position ratchet, modelled on
-# comment_register_census's --check/--write shape. Phase A enrolls exactly
-# one file (stdlib/hex.mdk); see test/bytes_census.sh's header for why a
-# file with no baseline row is deliberately unconstrained.
+# comment_register_census's --check/--write shape. Only files with a row in
+# test/bytes_census_baseline.toml are constrained; see test/bytes_census.sh's
+# header for why a file with no baseline row is deliberately unconstrained.
 [[gate]]
 name = "diff_compiler_bytes_census"
 area = "testing"
@@ -1991,11 +1991,11 @@ shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_bytes_census.sh"
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_bytes_census_test.mdk"
 oracles = []
-sources = ["test/bytes_census.sh", "test/bytes_census_baseline.toml"]
+sources = ["test/bytes_census_baseline.toml"]
 corpus = []
 toolchain = []
 
@@ -2343,7 +2343,8 @@ area = "infra"
 shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
-cost = "cheap"
+# Measured 183-292s per run; the cheap class's 300s kill timeout sits inside that spread.
+cost = "medium"
 kind = "native"
 migration = "done"
 run = "test/diff_compiler_run_check_agreement_test.mdk"

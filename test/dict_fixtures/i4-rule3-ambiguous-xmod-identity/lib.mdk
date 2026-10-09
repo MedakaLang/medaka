@@ -1,8 +1,8 @@
--- The IMPORTED half of the RULE-3 fixture: an interface with TWO concrete-head
+-- The IMPORTED half of the ambiguity fixture: an interface with TWO concrete-head
 -- impls, and a constrained producer whose result type is fixed by NOTHING at the
--- call site.  Everything an identity-keyed `implCountForIfaceU` has to count lives
--- HERE, in a module of its own, so the count is taken through a `TkIdent lib Mk`
--- key rather than the `TkBare` one a same-file fixture would produce.
+-- call site.  Every instance the verdict counts lives HERE, in a module of its
+-- own, so the interface carries a `TkIdent lib Mk` identity rather than the
+-- `TkBare` key a same-file fixture would produce.
 public export data Widget = Widget Int
 
 public export data Gadget = Gadget Int

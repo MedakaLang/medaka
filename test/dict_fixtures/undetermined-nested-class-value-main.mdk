@@ -1,0 +1,5 @@
+-- DICT-SEMANTICS §6.2 "T4 implemented" at a value `main`: it is printed through
+-- `Display (Result String ?a)`, whose instance requires `Display ?a`, and nothing
+-- fixes `?a`.  Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE,
+-- located at the `main` binding (the body has no location of its own).
+main = Err "x"

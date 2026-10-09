@@ -1,0 +1,12 @@
+-- As the never-grounded row, with the `Eq ?a` goal in a middle group: it waits
+-- for quiescence and nothing after it grounds the variable.  Hand-derived:
+-- REJECT on all three verbs, T-AMBIGUOUS-INSTANCE.
+interface Zero a where
+  zero : a
+impl Zero Int where
+  zero = 0
+impl Zero Bool where
+  zero = False
+y = identity zero
+b = y == y
+main = println (debug b)

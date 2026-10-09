@@ -1,0 +1,12 @@
+-- Control for the #3757 rows: the annotation `def : Option Int` fixes the nested
+-- goal to the closed `Def Int`, which `impl Def Int` alone answers.  Hand-derived:
+-- ACCEPT on all three verbs, printing `some`.
+interface Def a where
+  def : a
+impl Def Int where
+  def = 7
+impl Def (Option a) requires Def a where
+  def = Some def
+main = println (match (def : Option Int)
+  Some _ => "some"
+  None => "none")

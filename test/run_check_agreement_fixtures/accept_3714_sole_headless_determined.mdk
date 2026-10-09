@@ -1,0 +1,14 @@
+-- §3 determination at any arity: `szWrap n` poses `Sz ?a` with `?a` body-local,
+-- and the one instance `impl Sz a` unifies with it, so it is the goal's instance
+-- and its dictionary is the one every verb dispatches through (#3714).
+-- `szWrap _ = []` has length 0.  Hand-derived: ACCEPT on all three verbs, `14`.
+interface Sz a where
+  szWrap : Int -> List a
+
+impl Sz a where
+  szWrap _ = []
+
+roundtrip : Sz a => Int -> Int
+roundtrip n = length (szWrap n) + n
+
+main = println (roundtrip 14)

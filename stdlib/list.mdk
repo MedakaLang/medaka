@@ -1050,7 +1050,7 @@ zip [] _ = []
 zip _ [] = []
 zip (x :: xs) (y :: ys) = (x, y) :: zip xs ys
 
--- > zip [] [1, 2]
+-- > zip ([] : List Int) [1, 2]
 -- []
 
 {- | The elements of three lists grouped into triples by position.
@@ -1127,7 +1127,7 @@ unzip : List (a, b) -> (List a, List b)
 unzip [] = ([], [])
 unzip ((x, y) :: xys) = let (xs, ys) = unzip xys in (x :: xs, y :: ys)
 
--- > unzip []
+-- > unzip ([] : List (Int, Int))
 -- ([], [])
 
 {- | A list of triples separated into three lists. The inverse of `zip3`.

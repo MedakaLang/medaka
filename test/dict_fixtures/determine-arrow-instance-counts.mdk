@@ -1,11 +1,11 @@
 -- §3 determination's candidate count: an arrow-headed instance that unifies with
 -- the goal is a candidate.  `conv []` poses `Conv ?a ?b`, and both
 -- `Conv Int String` and `Conv (Int -> Int) Bool` unify with it, so neither is the
--- one instance and nothing is committed.  `?b` is then undetermined under
--- `println`'s `Display ?b`, which has more than one instance.
--- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at the `println`
--- call that poses `Display ?b`.  Counting only census-named heads committed
--- `Conv Int String` and printed `int`.
+-- one instance and nothing is committed.  Both instances reach the occurrence's
+-- receiver `?a`, and `?b` is then undetermined under `println`'s `Display ?b`.
+-- Hand-derived: REJECT on all three verbs, one T-AMBIGUOUS-INSTANCE, at the `conv`
+-- occurrence: `Display ?b` shares its `?b`, which one annotation there answers.
+-- Counting only census heads committed `Conv Int String` and printed `int`.
 interface Conv a b where
   conv : List a -> b
 

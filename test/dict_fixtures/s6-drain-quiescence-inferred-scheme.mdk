@@ -1,12 +1,10 @@
--- §6.3 quiescence drain, INFERRED-scheme half of the `DrainDiags` population
--- (`compiler/types/typecheck.mdk`, #2705 / SA-10a item 17).
+-- §6.3 quiescence drain, INFERRED-scheme half of #3031.
 --
 -- `top`'s scheme is INFERRED, and it quantifies the receiver `Sh a` carries.  At
--- graph quiescence the drain replays that goal with `a` still an unbound `TVar`,
--- and `routeUndeterminedTop`'s `_ => reportAmbiguousImpl` arm reports
--- `T-AMBIGUOUS-INSTANCE` on it because it never asks whether some scheme
--- QUANTIFIES the variable — the `deferrableVarIds`/`goalsClosed` test the sibling
--- T4-warning arm already applies.  That is #3031.
+-- graph quiescence the drain replays that goal with `a` still an unbound `TVar`.
+-- `routeUndeterminedTop`'s ambiguous arm must ask whether some scheme QUANTIFIES
+-- the variable (the `deferrableVarIds`/`goalsClosed` test) and defer such a goal to
+-- its caller; reporting it as ambiguous, at a stale location, was #3031.
 --
 -- SPEC ANSWER, hand-derived before running anything: `main` calls `top` at
 -- `Bool`, `h` forwards to `needsSh`, `impl Sh Bool` is the unique match, so the
@@ -14,11 +12,8 @@
 -- declared `Int` return position, fully grounded, so they are not the
 -- undefaulted-`Num` class #2646 owes — the ambiguity is manufactured by the drain.
 --
--- WHAT THIS ROW PINS: `check` must NOT report `T-AMBIGUOUS-INSTANCE`.  Today it
--- does not, because `DrainRollback` discards the drain's diagnostics on every
--- check driver.  The day the drain residual reaches a shipped verb — the T4
--- census ruling #2665 asks for — this row goes RED, which is the signal that
--- `DrainDiags`'s deletion condition has moved.
+-- WHAT THIS ROW PINS: `check` must NOT report `T-AMBIGUOUS-INSTANCE`, including
+-- once the drain's own diagnostics reach `check` (`DrainDiags`' deletion).
 interface Sh a where
   shv : a -> Int
 

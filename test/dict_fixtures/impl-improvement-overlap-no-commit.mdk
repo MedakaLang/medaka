@@ -2,10 +2,10 @@
 -- `Pick (List t) (List n) (List Int)` (`n` the literals' variable, not yet
 -- defaulted when the group closes), so `t` is not committed, although the
 -- one-sided matcher accepts only `Pick a a a` there.  After defaulting both
--- match modulo `t`; `t` stays undetermined (§6.2 T4, #3535): check accepts
--- with the incomparable-impls warning, the build has no instance to emit.
--- Both bodies return their first argument, so `run` prints [] whichever
--- instance its dispatch reaches.
+-- still unify and neither is more specific, so `t` stays undetermined at
+-- quiescence: the method-occurrence goal is `T-AMBIGUOUS-INSTANCE` at `pick` on
+-- every verb (§6.2 T4, R-SC3, #3535), beside the incomparable-impls warning.
+-- It is never committed to whichever instance a dispatch happens to reach.
 interface Pick a b c where
   pick : a -> b -> c
 

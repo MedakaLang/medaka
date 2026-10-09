@@ -1,0 +1,14 @@
+-- Control for `ambiguity-one-per-variable.mdk`: each `zero` here has its own
+-- type, since `sink` takes any type and ties neither to the other, so `Zero ?a`
+-- and `Zero ?b` are two undetermined variables.  Annotating one leaves the other
+-- open, so they are two root causes and two diagnostics.
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at 14:21 and 14:33.
+interface Zero a where
+  zero : a
+impl Zero Int where
+  zero = 0
+impl Zero Bool where
+  zero = False
+sink : b -> Int
+sink _ = 0
+main = println (sink zero + sink zero)

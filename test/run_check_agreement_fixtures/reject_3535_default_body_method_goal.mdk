@@ -1,0 +1,26 @@
+-- §6.2 T4 at a method occurrence in a DEFAULT body (#3535).  `round x _ = back
+-- (conv x)` leaves the intermediate type of `conv x` open: nothing ties it to
+-- `round`'s `b`, since the second argument is `_`.  So the body poses
+-- `Conv a ?c` and `Conv2 a ?c`, with `a` the interface's (rigid) and `?c` the
+-- body's own.  No scheme can carry `?c` and nothing else can fix it; under the
+-- one instantiation that has instances (`a = Int`) both `Conv Int W` and
+-- `Conv Int String` reach it, with no stable minimum.  Hand-derived: REJECT on all
+-- three verbs, T-AMBIGUOUS-INSTANCE at the `conv` occurrence.
+interface Conv a b where
+  conv : a -> b
+  convL : List a -> List b
+  convL xs = map conv xs
+interface Conv2 a b requires Conv a b where
+  back : b -> a
+  round : a -> b -> a
+  round x _ = back (conv x)
+data W = W Int
+impl Conv Int String where
+  conv n = "s" ++ intToString n
+impl Conv Int W where
+  conv n = W (n * 2)
+impl Conv2 Int W where
+  back (W n) = n + 1
+impl Conv2 Int String where
+  back s = stringLength s
+main = println (debug (round (5 : Int) (W 0)))

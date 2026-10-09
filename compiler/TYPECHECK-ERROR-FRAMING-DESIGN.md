@@ -147,7 +147,8 @@ re-capturable. Error-path only → no re-mint.
 
 - **A — `f1705a7f`.** Poisoned-var set (`poisonedVars : Ref (List Int)`,
   `poisonMismatchVars`/`monoUnboundIds`) marked at `typeMismatch` + a poisoned
-  field-error fresh var; consulted in `checkUndeterminedObligation` to skip the
+  field-error fresh var; consulted in `checkUndeterminedObligation` (retired by
+  #3897; the skip now lives in `undeterminedGoalExempt`) to skip the
   secondary `ambiguous <C> a` on an already-errored free var. Killed the
   `Debug`/`Mappable` cascades on `too_many_args`, `apply_non_function`,
   `record_wrong_field`, `wrong_arg_type_in_map`. No over-suppression (genuine

@@ -1,0 +1,10 @@
+-- One diagnostic per ambiguous goal, at that goal's own site.  `[] == []` and
+-- `None == None` each pose an `Eq` goal whose selected instance's prerequisite is
+-- on a variable nothing binds (§6.2 "T4 implemented", R-SC3), so each of the three
+-- bindings is `T-AMBIGUOUS-INSTANCE` at its own `==`.  The three messages share
+-- their text, so a fold on text alone would report only the first.
+-- Hand-derived: REJECT on all three verbs, located at 7:4, 8:4 and 9:4.
+a = [] == []
+b = None == None
+c = [] == []
+main = println (debug (a, b, c))

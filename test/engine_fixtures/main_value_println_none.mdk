@@ -1,3 +1,3 @@
--- `println None` passes a `Display (Option a)` dictionary whose `Display a` is
--- unconstrained, so the free variable is not specific to an auto-printed `main` (#3733).
-main = println None
+-- `println` of an annotated `None` passes the same `Display (Option Int)` dictionary an
+-- auto-printed value `main` does (#3733); unannotated it is rejected.
+main = println (None : Option Int)

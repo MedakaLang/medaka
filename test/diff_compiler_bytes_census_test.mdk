@@ -1,0 +1,98 @@
+{- | Bytes census ratchet (CI, epic #3134). Replaces diff_compiler_bytes_census.sh,
+   which wrapped `sh test/bytes_census.sh --check test/bytes_census_baseline.toml`.
+
+   WHAT IT PROVES: for every file enrolled in test/bytes_census_baseline.toml,
+   the literal "Array Int" position count has not risen above that file's pinned
+   count; a baselined file that no longer exists is a failure; a baseline row
+   whose count is not an integer is a failure; a baseline file that is not
+   readable UTF-8 text is a failure (never silently skipped); and the checked
+   row count must stay at least 59 (today's exact count), so an empty or
+   broken baseline parser cannot pass with "nothing checked".
+
+   WHAT IT DOES NOT PROVE: that a file's count is CORRECT, or that every
+   byte-sequence use of Array Int in the tree has been found. The census counts
+   text positions of the literal "Array Int", not semantics, and only enrolled
+   files are checked at all (a file with no row is unconstrained by design).
+
+   NOT PORTED: the --write and default-report modes of bytes_census.sh. That
+   script stays in the tree for them. The floor of 59 is a ratchet-ledger floor,
+   so the baseline may legitimately shrink; a shrink below 59 is reviewed by hand. -}
+
+import test_process.{underRoot}
+import test.{Expectation, expectAll, expectAtLeast, fail, pass}
+import string.{lines, split, startsWith, trim, trimRight, toInt}
+import fs.{isFile}
+
+-- Value after the first "=", trimmed (awk: sub(/^count[ \t]*=[ \t]*/, "")).
+afterEq : String -> String
+afterEq l = match split "=" l
+  _ :: v :: _ => trim v
+  _ => ""
+
+-- Text between the first and second double quote (awk: strip `file = "` and `"`).
+quotedFile : String -> String
+quotedFile l = match split "\"" l
+  _ :: k :: _ => k
+  _ => ""
+
+-- awk: /^KEY[ \t]*=/ : the key starts the line and only blanks sit between it and "=".
+keyIs : String -> String -> Bool
+keyIs key l = match split "=" l
+  k :: _ :: _ => trimRight k == key
+  _ => False
+
+-- Emit (file, count) for a pending entry; an entry with no file emits nothing.
+flushRow : String -> String -> List (String, String) -> List (String, String)
+flushRow f n acc = if f == "" then acc else (f, n) :: acc
+
+-- Mirrors the awk parser in bytes_census.sh: a row is emitted at each
+-- [[entry]] boundary and at end of file. Rows keep baseline order.
+entryRows : List String -> String -> String -> List (String, String)
+entryRows [] f n = flushRow f n []
+entryRows (l :: rest) f n =
+  if startsWith "[[entry]]" l then
+    flushRow f n (entryRows rest "" "")
+  else if keyIs "file" l then
+    entryRows rest (quotedFile l) n
+  else if keyIs "count" l then
+    entryRows rest f (afterEq l)
+  else
+    entryRows rest f n
+
+-- Rows with an empty count are skipped by the script (not checked, not counted).
+hasCount : (String, String) -> Bool
+hasCount (_, c) = c /= ""
+
+-- Non-overlapping occurrences of the literal "Array Int" (grep -o | wc -l).
+countPositions : String -> Int
+countPositions text = length (split "Array Int" text) - 1
+
+rise : String -> Int -> Int -> Expectation
+rise file base cur =
+  if cur > base then
+    fail
+      "FAIL: \{file}: Array Int position count rose to \{intToString cur} (baseline: \{intToString base}). A baselined file's Array Int position count may only FALL. Regenerate the baseline after fixing (or deliberately re-pinning): sh test/bytes_census.sh --write test/bytes_census_baseline.toml \{file}"
+  else
+    pass
+
+rowCheck : (String, String) -> <IO, FileRead> Expectation
+rowCheck (file, baseText) = match toInt baseText
+  None => fail "\{file}: baseline count is not an integer: \{baseText}"
+  Some base => match isFile (underRoot file)
+    Err e => fail "\{file}: could not stat: \{e}"
+    Ok present =>
+      if present then match readFile (underRoot file)
+        Err e => fail "\{file}: could not read as UTF-8 text: \{e}"
+        Ok text => rise file base (countPositions text)
+      else
+        fail "\{file}: baselined but file no longer exists"
+
+check : <IO, FileRead> Expectation
+check = match readFile (underRoot "test/bytes_census_baseline.toml")
+  Err e => fail "could not read test/bytes_census_baseline.toml: \{e}"
+  Ok text =>
+    let rows = filter hasCount (entryRows (lines text) "" "")
+    expectAll (expectAtLeast 59 (length rows) :: map rowCheck rows)
+
+test "diff_compiler_bytes_census: Array Int counts of enrolled files have not risen" =
+  check

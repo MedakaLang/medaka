@@ -1,0 +1,19 @@
+-- §3 a constraint-qualified instance head is a candidate for a goal whose first
+-- position is a variable: binding `?a` to it peels nothing.  `ignore2` discards
+-- its argument, so `zero` poses `Zero ?a` and nothing fixes `?a`.
+-- `impl Zero (Eq x => Int)` and `impl Zero Bool` both unify with it.
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE, the verdict
+-- the same program gets with a plain `impl Zero Int` head (#1641).
+interface Zero a where
+  zero : a
+
+impl Zero (Eq x => Int) where
+  zero = 0
+
+impl Zero Bool where
+  zero = False
+
+ignore2 : a -> Int
+ignore2 _ = 5
+
+main = println (ignore2 zero)

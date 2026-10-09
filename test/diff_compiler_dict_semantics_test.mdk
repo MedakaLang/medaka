@@ -278,7 +278,7 @@ table = [
   Row {
     entry = "s6-drain-quiescence-inferred-scheme.mdk",
     label =
-      "§6.3 quiescence drain, INFERRED-scheme half of the measured `DrainDiags` population (#2705 / SA-10a item 17): the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound and the `_ => reportAmbiguousImpl` arm of `routeUndeterminedTop` manufactures a `T-AMBIGUOUS-INSTANCE` on it (#3031), at a STALE location inside the body of `impl Sh Bool`. `DrainRollback` discards the drain diagnostics on every check driver, so `check` must stay SILENT -- the `!T-AMBIGUOUS-INSTANCE` cell is what goes RED the day that residual reaches a shipped verb, which is the signal that the `DrainDiags` deletion condition has moved. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
+      "§6.3 quiescence drain, INFERRED-scheme half of #3031: the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound. `routeUndeterminedTop` defers a goal every variable of which a scheme quantifies (the `goalsClosed` test) instead of reporting it ambiguous at a stale location, so `check` stays SILENT with the drain`s diagnostics kept. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -289,12 +289,34 @@ table = [
   Row {
     entry = "s6-drain-quiescence-declared-scheme.mdk",
     label =
-      "§6.3 quiescence drain, DECLARED-scheme twin of the row above: here the receiver is quantified by a WRITTEN signature (`nonlead : (Ixd a b, Shb b) => b -> a -> a`) and an unannotated `relay` carries it to graph end, so a #3031 fix that consulted only a binding`s own INFERRED scheme would close one half of the population and leave this one standing. Same pin, same drain signal: `check` must not report `T-AMBIGUOUS-INSTANCE`",
+      "§6.3 quiescence drain, DECLARED-scheme twin of the row above: here the receiver is quantified by a WRITTEN signature (`nonlead : (Ixd a b, Shb b) => b -> a -> a`) and an unannotated `relay` carries it to graph end, so a #3031 fix that consulted only a binding`s own INFERRED scheme would close one half and leave this one standing. `check` must not report `T-AMBIGUOUS-INSTANCE`",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
     mode = AllExact,
     pinned = "7\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-drain-quiescence-let-alias.mdk",
+    label =
+      "§6.2 T3 at the quiescence drain, #3031`s own repro: `greet`s `Display a` goal, posed through a let-alias, is quantified by the inferred scheme, so the drain`s undetermined-goal route defers it to the caller instead of reporting it ambiguous at a stale location. Prints `hi` twice",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "hi\nhi\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-drain-quiescence-projected-goal.mdk",
+    label =
+      "§6.2 T3 at the quiescence drain: `relay`s call goal is on a scheme-quantified variable, so `routeUndeterminedTop`s single-tag arm mints no `Tweak Float` route from the census tag `Float` and nothing is reported ambiguous. `DrainRollback` hides the drain`s diagnostics on `check`, so this row goes RED only once `DrainDiags` is deleted with that arm unguarded. Prints 2.5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2.5\n",
     codes = [Absent "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
@@ -1206,24 +1228,68 @@ table = [
   Row {
     entry = "s6-2-t4-open-goal-deferred.mdk",
     label =
-      "§6.2 T4 OPEN half, and the ONLY in-tree test of the closedness gate. ONE TOKEN from its sibling (`[1]` -> `[]`), so `?e` is an unbound metavariable no scheme quantifies. SAME candidate set, SAME no-unique-minimum arm -- but T4 defers a non-closed goal rather than deciding it, so the goal-site reject MUST NOT fire. Since F-3d that makes the pair an ACCEPT-vs-REJECT discriminator as well. ⚠️ KEEP THE `!` ASSERTION: verdict alone cannot say the sibling`s reject came from the min⊑ arm rather than from anything else, so a positive-only row would be strictly weaker against the regression this exists for. ⚠️ The pinned value 1 is DECLARATION-ORDER-DECIDED, not correct -- see the §4 KNOWN-BAD row and #1183",
-    expCheck = "ACCEPT",
-    expRun = "ACCEPT",
-    expBuild = "ACCEPT",
-    mode = AllExact,
-    pinned = "1\n",
-    codes = [Present "W-INCOMPARABLE-IMPLS", Absent "T-AMBIGUOUS-INSTANCE"],
+      "§6.2 T4 OPEN half of the #1155 closedness pair, ONE TOKEN from its sibling (`[1]` -> `[]`), so `?e` is an unbound metavariable no scheme quantifies. SAME candidate set, SAME no-unique-minimum arm, and since R-SC3 (#1183) the SAME verdict: both impls MATCH the goal as it stands and matching survives every binding of `?e`, so the goal is ambiguous at quiescence and is rejected at its own occurrence on every verb. Before R-SC3 it was committed to the first-declared impl under a warning and printed a declaration-order-decided `1`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "W-INCOMPARABLE-IMPLS", Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "ambiguity-each-site-reported.mdk",
+    label =
+      "§6.2 T4 at three sites in one module: each `==` poses its own undetermined goal, so each is `T-AMBIGUOUS-INSTANCE` at its own site, though the three messages share their text; section 5 grades the three spans",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "ambiguity-one-per-variable.mdk",
+    label =
+      "ERROR-QUALITY rubric X: `Zero ?a` at `y = identity zero` and `Eq ?a` at `y == y` are two goals on one undetermined variable, so one `T-AMBIGUOUS-INSTANCE`, at the `zero` that introduces it; section 5 grades the count and the span",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "ambiguity-two-variables-two-diagnostics.mdk",
+    label =
+      "control for the one-per-variable row: `sink zero + sink zero` poses `Zero ?a` and `Zero ?b` on two variables, so two diagnostics; section 5 grades both spans",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "ambiguity-shared-rigid-two-diagnostics.mdk",
+    label =
+      "control for the one-per-variable row: `Conv a ?b` and `Conv a ?c` share only `g`s rigid `a`, which is no shared cause, so two diagnostics; section 5 grades both spans",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
     entry = "s6-t4-channel-multimodule/main.mdk",
     label =
-      "§6.2 T4 IN A NON-ENTRY MODULE -- the multi-module twin of `s6-2-t4-open-goal-deferred.mdk` above, and the only fixture that can grade `runBuildWarnCodes`s `W-OPEN-GOAL-COMMITTED` entry (#3027 / D3, compiler/driver/diagnostics.mdk). The open goal `Sh (Q Int Bool (List a))` and both ⊑-incomparable heads live in lib.mdk, so the commitment is reported for an IMPORTED module. ⚠️ SINGLE-FILE CANNOT STATE THIS: single-file `run`/`build` take `allWarnTriples` and widen past the allowlist entirely, so deleting the allowlist entry leaves every single-file row green -- MEASURED, by deleting `openGoalCommitWarnCode` from `runBuildWarnCodes` and rebuilding: the code vanished from THIS fixtures `run`/`build` stderr and stayed on `s6-2-t4-open-goal-deferred.mdk`s. The discriminating rows are in section 5; this row pins the VERDICT (T4 defers a non-closed goal, so no reject), the declaration-order-decided VALUE (1 -- the #1183 residue, not a correct answer) and the `check --json` CODE, which nothing in the tree asserted before (`test/t4_census.sh` is report-only and grades nothing)",
-    expCheck = "ACCEPT",
-    expRun = "ACCEPT",
-    expBuild = "ACCEPT",
-    mode = AllExact,
-    pinned = "1\n",
-    codes = [Present "W-OPEN-GOAL-COMMITTED", Absent "T-AMBIGUOUS-INSTANCE"],
+      "§6.2 T4 IN A NON-ENTRY MODULE -- the multi-module twin of `s6-2-t4-open-goal-deferred.mdk` above. The open goal `Sh (Q Int Bool (List a))` and both ⊑-incomparable heads live in lib.mdk, so the R-SC3 reject (#1183) is reported for an IMPORTED module, located in lib.mdk; section 5 grades that location on `run` and `build`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
     entry = "s6-1-3-commit-at-elaboration-site.mdk",
@@ -1349,7 +1415,7 @@ table = [
   Row {
     entry = "i4-rule3-ambiguous-xmod-identity/main.mdk",
     label =
-      "§8 I4 + §3 `inst` -- THE RULE-3 AMBIGUITY REJECT WITH ORIGIN-CARRYING IMPLS (#1446 T2). `checkUndeterminedObligation``s RULE 3 is guarded on `implCountForIfaceU >= 2`, and it is the ONE consequence of a missed `ImplUniverse` lookup that goes QUIET rather than loud: a miss reads as the count 0 and `T-AMBIGUOUS-INSTANCE` simply stops emitting. The four existing ambiguity fixtures (test/typecheck_error_fixtures/ambiguous_*) are all SINGLE-FILE; this one is cross-module. 🚨 IT DOES NOT DISCRIMINATE THE #1446 RE-KEY AND AN EARLIER VERSION OF THIS ROW CLAIMED IT DID: the stated counterfactual (reader keys TkBare => count 0 => ACCEPT at exit 0) is UNREACHABLE, refuted by building that exact neutered compiler -- `insertUnivImplKeys` indexes every identity-carrying impl under its bare spelling too, so the bare bucket holds both head tags and the count is 2 either way. It also behaves identically on the BASE binary. KEPT as a §3 CONFORMANCE row (RULE 3 must reject a genuinely ambiguous cross-module goal), NOT as evidence for the re-key; the arm-discriminating coverage is i4-xmod-requires-foreign-iface-rejected. SPEC ANSWER hand-derived, not captured: `roundtrip : Mk a => Int -> Int` fixes `a` in neither argument nor result, so `match(IE, Mk ?a)` = {Widget, Gadget}, mutually ⊑-incomparable, no unique ⊑-minimum, genuinely ambiguous. ⚠️ The diagnostic lands at `lib.mdk``s own body, not at the entry`s call -- see the fixture header",
+      "§8 I4 + §3 `inst` -- THE AMBIGUITY REJECT WITH ORIGIN-CARRYING IMPLS (#1446 T2), cross-module where the four ambiguity fixtures in test/typecheck_error_fixtures/ are single-file. The verdict counts the instance heads that unify with the goal (`goalCandidates`) and reads no per-interface count, so a missed keyed lookup cannot make it quiet. It does NOT discriminate the #1446 re-key: `insertUnivImplKeys` indexes every identity-carrying impl under its bare spelling too, and it behaves identically on the BASE binary. KEPT as a §3 CONFORMANCE row (the verdict must reject a genuinely ambiguous cross-module goal); the arm-discriminating coverage is i4-xmod-requires-foreign-iface-rejected. SPEC ANSWER hand-derived, not captured: `roundtrip : Mk a => Int -> Int` fixes `a` in neither argument nor result, so `match(IE, Mk ?a)` = {Widget, Gadget}, mutually ⊑-incomparable, no unique ⊑-minimum, genuinely ambiguous. The diagnostic lands at `lib.mdk``s own body, not at the entry`s call -- see the fixture header",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -2836,13 +2902,13 @@ table = [
   Row {
     entry = "impl-improvement-overlap-no-commit.mdk",
     label =
-      "§3 improvement never fires under overlap: `Pick a a a` and `Pick a (List Int) a` both unify with the goal, so `t` stays undetermined (§6.2 T4, #3535) and the build has no instance to emit, as before improvement existed. `T-AMBIGUOUS-INSTANCE` absent is the discriminator: a uniqueness count over one-sided matches committed `t = Int` at the group's close, where the literals were not yet defaulted, and then rejected the program as ambiguous. Both bodies return their first argument, so run prints [] under either impl order",
-    expCheck = "ACCEPT",
-    expRun = "ACCEPT",
+      "§3 improvement never fires under overlap: `Pick a a a` and `Pick a (List Int) a` both unify with the goal, so `t` is not committed at the group`s close. After defaulting both still unify and neither is ⊑ the other, so `t` stays undetermined at quiescence and the method-occurrence goal is `T-AMBIGUOUS-INSTANCE` on every verb (§6.2 T4, R-SC3, #3535). Before R-SC3 the method occurrence got no verdict: check accepted and the build had no instance to emit",
+    expCheck = "REJECT",
+    expRun = "REJECT",
     expBuild = "REJECT",
     mode = NoValue,
     pinned = "",
-    codes = [Present "W-INCOMPARABLE-IMPLS", Absent "T-AMBIGUOUS-INSTANCE"],
+    codes = [Present "W-INCOMPARABLE-IMPLS", Present "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
     entry = "impl-improvement-before-num-default.mdk",
@@ -3051,6 +3117,61 @@ table = [
     expBuild = "ACCEPT",
     mode = AllExact,
     pinned = "11\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-goal-only-by-binding.mdk",
+    label =
+      "§3 W3-inst: the body's `Conv a String` is answered by `impl Conv Int String` only if the head's `a` is Int, so it is an undeclared prerequisite (#3817). Was accepted on every verb, and `show2 (Box True)` printed \"i\" from an instance at Int",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-goal-only-by-binding-closed-head-control.mdk",
+    label =
+      "control for the #3817 row: under the closed head `impl Show2 (Box Int)` the goal is `Conv Int String`, which the one instance answers. Hand-derived: \"i\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "i\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-goal-only-by-binding-requires-control.mdk",
+    label =
+      "control for the #3817 row: `requires Conv a String` gives the body's goal, and `show2 (Box 1)` discharges it at `Conv Int String`. Hand-derived: \"i\"",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "i\n",
+    codes = [],
+  },
+  Row {
+    entry = "impl-head-mixed-residual.mdk",
+    label =
+      "§3 W3-inst on a mixed residual: the body's `Get (Box (List t)) b` is answered by `impl Get (Box a) a` only if the head's `b` is `List t`, so the impl is refused at the body (#3798). Drained from the must-fail pin 3798-implhead-mixed-residual-accepted: `check` accepted, `run` died with E-PANIC and the build found no `get`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "impl-head-mixed-residual-control.mdk",
+    label =
+      "control for the mixed-residual row: `Get (Box b) b` at the head variable alone, which the impl matches with `b` rigid. Hand-derived: 41 + 1 = 42",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
     codes = [],
   },
   Row {
@@ -3768,13 +3889,244 @@ table = [
   Row {
     entry = "determine-arrow-instance-counts.mdk",
     label =
-      "§3 determination`s candidate count: `Conv (Int -> Int) Bool` unifies with `Conv ?a ?b` structurally and counts beside `Conv Int String`, so nothing is committed and `Display ?b` is ambiguous at the `println` call (span in section 6). Counting census-named heads only committed `Conv Int String` and printed `int`",
+      "§3 determination`s candidate count: `Conv (Int -> Int) Bool` unifies with `Conv ?a ?b` structurally and counts beside `Conv Int String`, so nothing is committed, the `conv` occurrence is ambiguous, and `Display ?b` at the `println` call shares its `?b`, so it is one diagnostic (count in section 5, span in section 6). Counting census-named heads only committed `Conv Int String` and printed `int`",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
     mode = NoValue,
     pinned = "",
     codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-arrow-beside-headless-ambiguous.mdk",
+    label =
+      "§3 an open `Sz ?a` that `impl Sz (Int -> Int)` and `impl Sz a` both unify with has two candidates, so the goal is ambiguous (#2028). Was accepted at check and committed to the headless impl",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-constrained-head-counts.mdk",
+    label =
+      "§3 `impl Zero (Eq x => Int)` is a candidate for `Zero ?a`, whose first position is a variable, beside `impl Zero Bool`, so the goal is ambiguous (#1641). Was accepted at check and the build panicked",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-effect-head-counts.mdk",
+    label =
+      "§3 the effect-qualified twin: `impl Zero (<Stdout> Int)` and `impl Zero Bool` both reach `Zero ?a`, so the goal is ambiguous (#1641)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-dict-unused-ambiguous.mdk",
+    label =
+      "§4.2 OD3: `plain 14` poses `Sz ?a` although `plain`s body never reads the dictionary, and two instances reach it (#3713). Was accepted on every verb, printing 15",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-dict-unused-no-impl.mdk",
+    label =
+      "§4.2 OD3`s zero arm: `plain 14` poses `Sz ?a` and `Sz` has no instance, although `plain`s body never reads the dictionary (#3713). Was accepted on every verb, printing 15",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "undetermined-method-goal-default-body.mdk",
+    label =
+      "§6.2 T4 at a method occurrence in a default body (#3535): `round x _ = back (conv x)` poses `Conv a ?c`/`Conv2 a ?c`, `a` rigid and `?c` the body`s own, which nothing can fix; two instances reach it at `a = Int` with no stable minimum. Was accepted by check, then E-AMBIGUOUS-DISPATCH on run and an emitter panic on build",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-method-goal-top-level.mdk",
+    label =
+      "§6.2 T4 at a method occurrence in a signed top-level body, #3535`s `roundT` twin: the same open `?c` under the signature`s rigid `a`. Was accepted by check, then E-AMBIGUOUS-DISPATCH on run and an emitter panic on build",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-method-goal-control.mdk",
+    label =
+      "control for the two #3535 rows above: `back (W 3)` at `Int` poses the closed goal `Conv2 Int W`, answered by its one instance; prints 4",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-requires-goal.mdk",
+    label =
+      "§6.2 T4 at a nested `requires` goal (#3757): `def : Option ?a` is determined by `impl Def (Option a) requires Def a`, which poses `Def ?a`; `impl Def Int` and `impl Def (Option a)` both reach it with no stable minimum. Was accepted by check, printed `some` under run, and the built binary segfaulted on the unconstrained dictionary",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-requires-goal-deep.mdk",
+    label =
+      "the same verdict one nesting deeper: `Option (Option ?a)` poses `Def (Option ?a)` and then `Def ?a`; the open goal is the innermost, so one diagnostic",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-requires-goal-control.mdk",
+    label =
+      "control for the two #3757 rows above: `def : Option Int` fixes the nested goal to the closed `Def Int`, which `impl Def Int` alone answers; prints `some`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "some\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-class-prelude.mdk",
+    label =
+      "§6.2 T4 at a nested `requires` prerequisite over the prelude: `[] == []`, `None == None`, `Ok 1 == Ok 1`, `debug []`, an interpolated `[]`, `compare [] []` and `hash None` each select an instance whose prerequisite on the element type nothing fixes (no literal under it, no given, no later binding), and each interface has two or more instances with no stable minimum. One T-AMBIGUOUS-INSTANCE per binding; section 5 grades the seven sites",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-class-user.mdk",
+    label =
+      "§6.2 T4 at a nested prerequisite of a user instance (`N == N` under `impl Eq (L a) requires Eq a`) and down a `requires` chain A -> B -> C (`fa (Some [])` poses `C ?b`); section 5 grades the two sites",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-class-xmod/main.mdk",
+    label =
+      "§6.2 T4 at a nested prerequisite whose instances are imported: `match def` fixes `def : Option ?a`, whose instance poses `Def ?a`, reached by `Def Int`, `Def Bool` and `Def (Option b)` with no stable minimum",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-class-value-main.mdk",
+    label =
+      "§6.2 T4 at a value `main`: `main = Err \"x\"` is printed through `Display (Result String ?a)`, whose prerequisite `Display ?a` nothing fixes; there is no value-main carve-out",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-class-controls.mdk",
+    label =
+      "controls for the four `undetermined-nested-class-*` rows above: a literal under the element type is defaulted by D3, a given answers `Eq a`, an annotation fixes `def`, and `length []`/`sum []` pose no goal on the element. Hand-derived values in the header",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[1, 2]\nFalse\nFalse\nSome (Some 7)\n0\n0\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "determine-prerequisite-not-committed.mdk",
+    label =
+      "§3 determination never commits through a prerequisite: `Eq2 ?n` is left open rather than committed to `MyList ?m`, whose `Num (MyList ?m)` no instance meets; `?n` defaults to `Int`, and the closed `Eq2 Int` is T-NO-IMPL. Committing `MyList ?m` reported a literal-vs-`MyList Int` mismatch and gave the prelude-free emit oracles a wrong dictionary",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL", Absent "T-TYPE-MISMATCH"],
+  },
+  Row {
+    entry = "determine-prerequisite-refutes-every-candidate.mdk",
+    label =
+      "§3: `S ?s`'s candidates are each refuted by the prerequisite `C ?s`; a goal every candidate of which a sibling refutes is counted by its candidates alone, so it is T-AMBIGUOUS-INSTANCE. Committing `Box ?m` for `C ?s` reported T-NO-IMPL for `Box (Box a)`, a type the program never had; counting only unrefuted candidates accepted it and printed 11",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-NO-IMPL"],
+  },
+  Row {
+    entry = "undetermined-sole-headless-determined.mdk",
+    label =
+      "§3 determination at any arity: the one instance `impl Sz a` reaches `Sz ?a`, and every verb dispatches through it (#3714). Hand-derived: 14. The build stamped the method's result head and panicked",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "14\n",
+    codes = [],
+  },
+  Row {
+    entry = "undetermined-sole-headed-determined.mdk",
+    label =
+      "§3 determination of a one-position goal: the one instance `impl Zero Int` fixes `?a = Int` under `ignore2 zero`. Hand-derived: 5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    codes = [],
+  },
+  Row {
+    entry = "undetermined-comparable-overlap-min.mdk",
+    label =
+      "§3 min⊑ at an open goal: both `Sh` instances match `Sh (Q Int Bool (List ?e))` and `Q Int Bool z` is ⊑ `Q Int y z`, so the goal is not ambiguous. Hand-derived: 2",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
   },
   Row {
     entry = "determine-vector-ambiguous-headless.mdk",
@@ -4073,7 +4425,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 357
+tableRows = 389
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4490,55 +4842,225 @@ data VerbRow = VerbRow {
 {- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 verbRows : Int
-verbRows = 28
+verbRows = 48
 
 verbTable : List VerbRow
 verbTable = [
   VerbRow {
-    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    ventry = "undetermined-nested-class-prelude.mdk",
     vlabel =
-      "SINGLE-FILE `W-OPEN-GOAL-COMMITTED` on `run`, which NOTHING in the tree graded before this row -- the code is `test/t4_census.sh`s subject and that tool is report-only. ⚠️ NOT a test of the allowlist: single-file `run`/`build` take `allWarnTriples`, the ONE place they widen past `runBuildWarnCodes`, so this row stays green with the allowlist entry deleted (measured). It guards the UNFILTERED arm; the s6-t4-channel-multimodule rows below guard the filtered one, and neither substitutes for the other",
-    verb = "run",
-    assertion = AHas "instance for .Sh. chosen by declaration order",
-  },
-  VerbRow {
-    ventry = "s6-2-t4-open-goal-deferred.mdk",
-    vlabel =
-      "...and on `build`, the sibling verb of the same widened single-file arm",
-    verb = "build",
-    assertion = AHas "instance for .Sh. chosen by declaration order",
-  },
-  VerbRow {
-    ventry = "s6-2-t4-open-goal-deferred.mdk",
-    vlabel =
-      "...and on `check`, whose stderr carries it even for an ENTRY module -- the baseline the two verbs above had to catch up to, and the only one of the three that was ever audible",
+      "the nested-prerequisite class at `[] == []` is reported at its own site",
     verb = "check",
-    assertion = AHas "instance for .Sh. chosen by declaration order",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:8:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `None == None` is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:9:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `Ok 1 == Ok 1` is reported on its own line; the column is not pinned, because the diagnostic lands at the second literal (10:15) rather than at the `==` expression that poses the goal",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:10:[0-9]+: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `debug []` is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:11:4: ambiguous instance for .Debug.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at the interpolation is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:12:5: ambiguous instance for .Display.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `compare [] []` is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:13:4: ambiguous instance for .Ord.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `hash None` is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:14:4: ambiguous instance for .Hashable.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-user.mdk",
+    vlabel =
+      "the user instance's nested prerequisite at `N == N` is reported at its site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-user\\.mdk:28:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-user.mdk",
+    vlabel =
+      "...and the `requires` chain's innermost goal `C ?b` at `fa (Some [])`",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-user\\.mdk:29:4: ambiguous instance for .C.",
+  },
+  VerbRow {
+    ventry = "ambiguity-each-site-reported.mdk",
+    vlabel =
+      "the first of three ambiguous goals whose messages share their text is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas "ambiguity-each-site-reported\\.mdk:7:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "ambiguity-each-site-reported.mdk",
+    vlabel =
+      "...the second, a different goal at another site, is a second diagnostic and not a duplicate of the first",
+    verb = "check",
+    assertion =
+      AHas "ambiguity-each-site-reported\\.mdk:8:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "ambiguity-each-site-reported.mdk",
+    vlabel = "...and the third",
+    verb = "check",
+    assertion =
+      AHas "ambiguity-each-site-reported\\.mdk:9:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "ambiguity-one-per-variable.mdk",
+    vlabel =
+      "two goals on one undetermined variable are ONE diagnostic, though they sit at two spans",
+    verb = "check",
+    assertion = AOnce "ambiguous instance for",
+  },
+  VerbRow {
+    ventry = "ambiguity-one-per-variable.mdk",
+    vlabel = "...located at the `zero` that introduces the variable",
+    verb = "check",
+    assertion =
+      AHas
+        "ambiguity-one-per-variable\\.mdk:13:13: ambiguous instance for .Zero.",
+  },
+  VerbRow {
+    ventry = "ambiguity-two-variables-two-diagnostics.mdk",
+    vlabel = "two undetermined variables: the first `zero` is reported",
+    verb = "check",
+    assertion =
+      AHas
+        "ambiguity-two-variables-two-diagnostics\\.mdk:14:21: ambiguous instance for .Zero.",
+  },
+  VerbRow {
+    ventry = "ambiguity-two-variables-two-diagnostics.mdk",
+    vlabel = "...and so is the second, a second diagnostic",
+    verb = "check",
+    assertion =
+      AHas
+        "ambiguity-two-variables-two-diagnostics\\.mdk:14:33: ambiguous instance for .Zero.",
+  },
+  VerbRow {
+    ventry = "ambiguity-shared-rigid-two-diagnostics.mdk",
+    vlabel =
+      "two goals sharing only a rigid variable: the first `conv x` is reported",
+    verb = "check",
+    assertion =
+      AHas
+        "ambiguity-shared-rigid-two-diagnostics\\.mdk:16:12: ambiguous instance for .Conv.",
+  },
+  VerbRow {
+    ventry = "ambiguity-shared-rigid-two-diagnostics.mdk",
+    vlabel = "...and so is the second, a second diagnostic",
+    verb = "check",
+    assertion =
+      AHas
+        "ambiguity-shared-rigid-two-diagnostics\\.mdk:16:28: ambiguous instance for .Conv.",
+  },
+  VerbRow {
+    ventry = "determine-arrow-instance-counts.mdk",
+    vlabel =
+      "`Conv ?a ?b` at `conv` and `Display ?b` at `println` share `?b`: one diagnostic",
+    verb = "check",
+    assertion = AOnce "ambiguous instance for",
+  },
+  VerbRow {
+    ventry = "undetermined-method-goal-default-body.mdk",
+    vlabel =
+      "`Conv a ?c` at `conv` and `Conv2 a ?c` at `back` share `?c`: one diagnostic",
+    verb = "check",
+    assertion = AOnce "ambiguous instance for",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel =
+      "one goal judged by the boundary and by the selector is ONE diagnostic at its site, the one naming the goal and both heads",
+    verb = "check",
+    assertion = AOnce "ambiguous instance for",
   },
   VerbRow {
     ventry = "s6-t4-channel-multimodule/main.mdk",
     vlabel =
-      "🚨 THE ROW THE ALLOWLIST NEVER HAD: `run` surfaces `W-OPEN-GOAL-COMMITTED` for a NON-ENTRY module. This is the only assertion in the tree that consults `runBuildWarnCodes` for this code -- MEASURED by deleting `openGoalCommitWarnCode` from that list and rebuilding, which drops exactly this line while leaving `W-INCOMPARABLE-IMPLS` and every single-file row above untouched. ONCE, with lib.mdks own span, for `s6-1c-multimodule-overlap`s reason: an imported modules site is visible to more than one sweep, so a second occurrence is a real defect and not noise",
+      "...and in a non-entry module the same goal is one diagnostic of either wording on `run` (a multi-module `check` prints to stdout, which this section does not grade)",
+    verb = "run",
+    assertion = AOnce "ambiguous instance for",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel =
+      "the R-SC3 reject of an OPEN goal (#1183) reaches `run`, located at the goal, with the min⊑ message naming both heads",
+    verb = "run",
+    assertion = AHas "ambiguous instance for .Sh.: the goal",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel = "...and `build`, the sibling verb",
+    verb = "build",
+    assertion = AHas "ambiguous instance for .Sh.: the goal",
+  },
+  VerbRow {
+    ventry = "s6-t4-channel-multimodule/main.mdk",
+    vlabel =
+      "`run` reports the R-SC3 reject for a NON-ENTRY module ONCE, with lib.mdks own span, for `s6-1c-multimodule-overlap`s reason: an imported modules site is visible to more than one sweep, so a second occurrence is a real defect and not noise",
     verb = "run",
     assertion =
-      AOnce
-        "lib\\.mdk:[0-9]+:[0-9]+: instance for .Sh. chosen by declaration order",
+      AOnce "lib\\.mdk:[0-9]+:[0-9]+: ambiguous instance for .Sh.: the goal",
   },
   VerbRow {
     ventry = "s6-t4-channel-multimodule/main.mdk",
     vlabel =
-      "...and ONLY the allowlisted code: lib.mdk also carries a deliberate `W-NONEXHAUSTIVE`, an imported modules NON-allowlisted warning. Without it the row above could not tell \"the allowlist gained this code\" from \"the whole matchWarnings channel is surfaced\" -- #1185s 0 -> 4896 stderr lines",
+      "...and ONLY the error: lib.mdk also carries a deliberate `W-NONEXHAUSTIVE`, an imported modules NON-allowlisted warning, which must not reach `run`s stderr -- #1185s 0 -> 4896 stderr lines",
     verb = "run",
     assertion = ANot "non-exhaustive",
   },
   VerbRow {
     ventry = "s6-t4-channel-multimodule/main.mdk",
     vlabel =
-      "...and `build` reports it too, sharing the multi-module arm with `run` -- the verb that had no warning surface at all before F-3d",
+      "...and `build` reports it too, once, sharing the multi-module arm with `run`",
     verb = "build",
     assertion =
-      AOnce
-        "lib\\.mdk:[0-9]+:[0-9]+: instance for .Sh. chosen by declaration order",
+      AOnce "lib\\.mdk:[0-9]+:[0-9]+: ambiguous instance for .Sh.: the goal",
   },
   VerbRow {
     ventry = "s6-t4-channel-multimodule/main.mdk",
@@ -4549,16 +5071,7 @@ verbTable = [
   },
   VerbRow {
     ventry = "s6-t4-channel-multimodule/main.mdk",
-    vlabel =
-      "`check` reports it for the IMPORTED module on STDERR. The ENTRY modules own warnings go to `check`s STDOUT, so a stderr row here is specifically about the non-entry position -- the half `dropEntryTriple` exists for, and the position the two verbs above are being compared against",
-    verb = "check",
-    assertion =
-      AOnce
-        "lib\\.mdk:[0-9]+:[0-9]+: instance for .Sh. chosen by declaration order",
-  },
-  VerbRow {
-    ventry = "s6-t4-channel-multimodule/main.mdk",
-    vlabel = "...and `check` withholds the imported `W-NONEXHAUSTIVE` too",
+    vlabel = "`check` withholds the imported `W-NONEXHAUSTIVE` from stderr too",
     verb = "check",
     assertion = ANot "non-exhaustive",
   },
@@ -4567,30 +5080,30 @@ verbTable = [
     vlabel =
       "`run --json` carries the code in a `Diag` envelope that still PARSES -- the machine surface of the same multi-module channel, graded by a real parser rather than by a substring",
     verb = "run-json",
-    assertion = AJson "W-OPEN-GOAL-COMMITTED",
+    assertion = AJson "T-AMBIGUOUS-INSTANCE",
   },
   VerbRow {
-    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    ventry = "s6-1c-per-goal-unique-min-accepted.mdk",
     vlabel =
-      "the demoted warning is VISIBLE on `run`, located, in human caret form",
+      "the demoted warning is VISIBLE on `run` of an ACCEPTED program, located, in human caret form",
     verb = "run",
-    assertion = AHas "overlapping impls of Sh",
+    assertion = AHas "overlapping impls of C",
   },
   VerbRow {
-    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    ventry = "s6-1c-per-goal-unique-min-accepted.mdk",
     vlabel = "...and human means human: `run` must NOT emit the JSON envelope",
     verb = "run",
     assertion = ANot "(?m)^\\{\"files\"",
   },
   VerbRow {
-    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    ventry = "s6-1c-per-goal-unique-min-accepted.mdk",
     vlabel =
       "the demoted warning is VISIBLE on `build` too -- the verb that had NO warning surface at all before F-3d",
     verb = "build",
-    assertion = AHas "overlapping impls of Sh",
+    assertion = AHas "overlapping impls of C",
   },
   VerbRow {
-    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    ventry = "s6-1c-per-goal-unique-min-accepted.mdk",
     vlabel =
       "`run --json` stderr is a `Diag` JSON envelope (AGENTS.md) and must still PARSE -- human text there is worse than silence, and is what diff_compiler_eval_json caught",
     verb = "run-json",
@@ -4710,10 +5223,68 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 24
+spanRows = 34
 
 spanTable : List SpanRow
 spanTable = [
+  SpanRow {
+    entry = "undetermined-nested-class-prelude.mdk",
+    label =
+      "§6.2 T4: the first nested-prerequisite goal is reported at the `[] == []` that poses it",
+    want = "8:4",
+  },
+  SpanRow {
+    entry = "undetermined-nested-class-user.mdk",
+    label = "§6.2 T4: the user instance's nested goal is reported at `N == N`",
+    want = "28:4",
+  },
+  SpanRow {
+    entry = "undetermined-nested-class-xmod/main.mdk",
+    label =
+      "§6.2 T4: the imported instance's nested goal is reported at the `def` occurrence",
+    want = "8:13",
+  },
+  SpanRow {
+    entry = "undetermined-nested-class-value-main.mdk",
+    label =
+      "§6.2 T4: a value `main` whose body carries no location of its own is reported at the `main` binding, not at line 1",
+    want = "5:0",
+  },
+  SpanRow {
+    entry = "undetermined-method-goal-default-body.mdk",
+    label =
+      "§6.2 T4: #3535`s open goal is reported at the `conv` occurrence that poses it, inside the default body",
+    want = "16:20",
+  },
+  SpanRow {
+    entry = "undetermined-method-goal-top-level.mdk",
+    label =
+      "§6.2 T4: the `roundT` twin is reported at its `conv` occurrence, inside the signed body",
+    want = "21:19",
+  },
+  SpanRow {
+    entry = "undetermined-nested-requires-goal.mdk",
+    label =
+      "§6.2 T4: #3757`s nested open goal is reported at the `def` occurrence whose instance poses it",
+    want = "13:22",
+  },
+  SpanRow {
+    entry = "undetermined-nested-requires-goal-deep.mdk",
+    label =
+      "§6.2 T4: the deeper nesting reports once, at the same `def` occurrence",
+    want = "11:22",
+  },
+  SpanRow {
+    entry = "determine-prerequisite-not-committed.mdk",
+    label =
+      "§3: the one diagnostic is the closed `Eq2 Int`'s, at the `eq2` call, not a mismatch at the second literal (22:39)",
+    want = "22:16",
+  },
+  SpanRow {
+    entry = "determine-prerequisite-refutes-every-candidate.mdk",
+    label = "§3: the one diagnostic is `S ?s`'s, at the `s` occurrence",
+    want = "25:23",
+  },
   SpanRow {
     entry = "s6-c1-rigid-goal-no-call-discriminator.mdk",
     label =
@@ -4793,8 +5364,8 @@ spanTable = [
   SpanRow {
     entry = "determine-arrow-instance-counts.mdk",
     label =
-      "§3 candidate count: with two `Conv` candidates nothing is committed, and the undetermined `Display ?b` is reported at the `println` call that poses it",
-    want = "18:7",
+      "§3 candidate count: with two `Conv` candidates nothing is committed, and the one report is the `conv` occurrence whose receiver `?a` both instances reach; `Display ?b` at the `println` call shares its `?b` and is not reported again",
+    want = "18:16",
   },
   SpanRow {
     entry = "determine-vector-ambiguous-headless.mdk",
@@ -4821,8 +5392,8 @@ spanTable = [
   SpanRow {
     entry = "determine-variable-head-ambiguous.mdk",
     label =
-      "§3 the undetermined `Display ?b` is reported at the `println` call that poses it",
-    want = "14:7",
+      "§3 the undetermined method-occurrence goal `Conv ?n ?b` is reported first, at the `conv` occurrence that poses it (R-SC3); the `Display ?b` it leaves open follows at the `println` call (14:7)",
+    want = "14:16",
   },
   SpanRow {
     entry = "default-guard-withheld-ambiguous-method-body.mdk",

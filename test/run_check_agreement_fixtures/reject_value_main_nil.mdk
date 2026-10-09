@@ -1,0 +1,5 @@
+-- `main = []` poses `Display (List ?a)`, whose instance requires `Display ?a`;
+-- nothing fixes `?a` (DICT-SEMANTICS §6.2 "T4 implemented").  Hand-derived: REJECT
+-- on all three verbs, T-AMBIGUOUS-INSTANCE.  The annotated form is
+-- `test/engine_fixtures/main_value_nil.mdk`.
+main = []

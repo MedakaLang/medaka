@@ -15,12 +15,12 @@
 -- `[E-PANIC]: arg-tag dispatch on impl type that owns no constructors`. The gate this
 -- fixture now lives in is exactly the one that grades check/run/build agreement.
 --
--- MECHANISM: `checkUndeterminedObligation`'s RULE 3 counts `ImplUniverse`'s census
--- bucket, and `univHeadCountsInCensus` (= `censusHeadNameTy`) answers `None` for a bare
--- `TyVar` head, so the headless impl contributed no tag and the count stayed 1. RULE 3b
--- reads the sibling `univHeadless` bucket instead of widening the census — see the block
--- on RULE 3b in compiler/types/typecheck.mdk, and #1617/#1618 for why the census itself
--- must not move.
+-- MECHANISM: the undetermined-goal verdict counts every instance head of `Sz` that
+-- unifies with the goal (`goalCandidates` in compiler/types/typecheck.mdk), headless
+-- heads included, so `impl Sz Widget` and `impl Sz a` are two candidates. `impl Sz a`
+-- matches the goal but is less specific than `impl Sz Widget`, which does not match
+-- the goal as it stands, so neither is a stable minimum. Two candidates with no stable minimum is
+-- T-AMBIGUOUS-INSTANCE (DICT-SEMANTICS §3, "Reject").
 interface Sz a where
   szNew : Int -> a
   szTag : a -> Int

@@ -1,0 +1,16 @@
+-- DICT-SEMANTICS §6.2 T2: a later group can ground an earlier group's type, so a
+-- goal on a variable in a non-generalized binding's type waits for quiescence
+-- (§6.2 "T4 implemented").
+-- The goal is posed by a constrained call: `isZ y` needs `Eq ?a` and `Zero ?a` on
+-- `y`'s variable, which `main` grounds to `Int`.  Hand-derived: ACCEPT, `(True, 1)`.
+interface Zero a where
+  zero : a
+impl Zero Int where
+  zero = 0
+impl Zero Bool where
+  zero = False
+isZ : (Zero a, Eq a) => a -> Bool
+isZ x = x == zero
+y = identity zero
+b = isZ y
+main = println (debug (b, y + (1 : Int)))
