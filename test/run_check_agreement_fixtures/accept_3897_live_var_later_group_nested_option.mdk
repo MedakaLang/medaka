@@ -1,0 +1,8 @@
+-- DICT-SEMANTICS §6.2 T2: a later group can ground an earlier group's type, so a
+-- goal on a variable in a non-generalized binding's type waits for quiescence
+-- (§6.2 "T4 implemented").
+-- The prerequisite of `Eq (Option ?a)` is on `o`'s variable, which `main`'s
+-- `Some (3 : Int)` grounds.  Hand-derived: ACCEPT, `(True, False)`.
+o = identity None
+b = o == None
+main = println (debug (b, o == Some (3 : Int)))

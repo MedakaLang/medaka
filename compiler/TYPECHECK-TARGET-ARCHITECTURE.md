@@ -981,10 +981,12 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    ⚠️ **Corrected again by sprint `nothing-determines-it` (2026-10-08).** #3031 is fixed
    (`reportAmbiguousImpl` defers a scheme-quantified goal and locates at the goal), which
    empties the first two files, but `support.mdk` carried a SECOND member that is not #3031:
-   the diagnostics-arm drain replays a projected call goal (`Tweak Float`) whose quantified
-   variable reads ground, and the closed-goal `min⊑` arm rejects it. So `DrainDiags` stays,
-   with that member as its witness (`test/dict_fixtures/s6-drain-quiescence-projected-goal.mdk`).
-   See the `data DrainDiags` comment in `compiler/types/typecheck.mdk` for the current
+   `routeUndeterminedTop`'s single-tag arm minted the goal `Tweak Float` from the census tag
+   of two `Tweak Float _` impls for a goal on a scheme-quantified variable, and the selector
+   rejected it. That arm now gives such a goal no route
+   (`test/dict_fixtures/s6-drain-quiescence-projected-goal.mdk`). `DrainDiags` stays: the
+   re-derived population is `stdlib/core.mdk` checked as an entry (two unbound-authority
+   diagnostics at `1:0`). See the `data DrainDiags` comment in `compiler/types/typecheck.mdk` for the current
    population; do not read any number above as current.
 
 18. **`run --json` envelopes a static error, 2026-09-09** (#2798). `runRunCmd`'s error arms

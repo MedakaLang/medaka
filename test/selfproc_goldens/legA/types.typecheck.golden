@@ -1812,6 +1812,7 @@ joinResultIs : Int -> PendingJoin -> Bool
 joinSideCheck : Bool -> List Atom -> List Atom -> List Atom -> List Atom -> Unit
 joinValueEqual : JoinContext -> Option Loc -> Mono -> Mono -> Unit
 joinValueTypes : JoinContext -> List (Option Loc, Mono) -> Mono
+judgeQuiescentGoals : Unit -> Unit
 kauthArgVarNames : List Kind -> List Ty -> List (String, Param)
 kauthCells : List String -> List Kind -> List Mono -> List (String, Ref Authvar)
 keepBetterField : String -> Int -> Option (String, Int) -> Option (String, Int)
@@ -1868,6 +1869,7 @@ literalRouteHead : String -> String
 liveMemberIds : List Mono -> Map String Unit
 liveNumVarGo : Int -> List UObligation -> Option Mono
 liveTailId : Ref Effvar -> Int
+liveVarIdsOf : Mono -> List Int
 loadDataUniverse : Int -> Unit
 locEq : Loc -> Loc -> Bool
 locGoalKey : Option Loc -> String
@@ -2451,6 +2453,7 @@ publishProducedResults : BindingSummary -> List (Option Loc, Mono) -> Unit
 publishedPolarity : Polarity -> Polarity
 pureRow : EffRow
 pushAdmittedOccObl : String -> Mono -> Unit
+pushAmbiguityAt : Bool -> Option Loc -> String -> Unit
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
 pushArithGoal : Ref Route -> Mono -> EvId -> Unit
@@ -2687,6 +2690,7 @@ repeatedAxisText : String -> String
 repeatedBindings : List (String, Mono) -> List (String, Mono) -> List (Mono, Mono)
 repeatedGoalPairs : List Ty -> List Mono -> List (Mono, Mono)
 repeatedNames : List String -> List String -> List String
+replaceAmbiguityAt : String -> TcDiag -> Unit
 reportAmbiguousImpl : String -> List Mono -> Route
 reportAmbiguousImport : Map String Unit -> String -> UsePath -> Loc -> Unit
 reportAmbiguousImports : List Decl -> Unit

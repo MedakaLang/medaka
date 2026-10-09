@@ -1,0 +1,14 @@
+-- DICT-SEMANTICS §6.2 T2: a later group can ground an earlier group's type, so a
+-- goal on a variable in a non-generalized binding's type waits for quiescence
+-- (§6.2 "T4 implemented").
+-- `b`'s `Eq ?a` is on `y`'s variable, which `main`'s `y && True` grounds to
+-- `Bool`.  Hand-derived: ACCEPT, `(True, False)`.
+interface Zero a where
+  zero : a
+impl Zero Int where
+  zero = 0
+impl Zero Bool where
+  zero = False
+y = identity zero
+b = y == y
+main = println (debug (b, y && True))
