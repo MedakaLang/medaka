@@ -2457,6 +2457,7 @@ pushAmbiguityAt : Bool -> Option Loc -> String -> Unit
 pushAmbiguousImports : String -> Loc -> List (String, List String) -> Unit
 pushAmbiguousShadowDecl : String -> List IfaceRef -> Option Loc -> Unit
 pushArithGoal : Ref Route -> Mono -> EvId -> Unit
+pushBoundaryAmbiguity : Map String Unit -> List Mono -> Option Loc -> String -> Unit
 pushCoherenceWarning : Option Loc -> String -> Unit
 pushCtorFieldConflict : String -> String -> CtorFieldConflict -> Unit
 pushDictApp : PendingDictApp -> Unit
@@ -2701,7 +2702,7 @@ reportBinderDomains : Ty -> List (String, Param) -> Unit
 reportEffectSummaryFailures : List (SummaryFailure ObligationSite) -> Unit
 reportImplHeadResidual : String -> List (String, Int) -> Option Loc -> (IfaceRef, List Mono) -> Unit
 reportIndexFailure : Bool -> Option Loc -> Authority -> Authority -> Unit
-reportMixedGoalAmbiguity : GoalWindow -> IfaceRef -> List Mono -> Option Loc -> Unit
+reportMixedGoalAmbiguity : Map String Unit -> GoalWindow -> IfaceRef -> List Mono -> Option Loc -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportOverlapForIface : String -> List Mono -> List KeyEntry -> Unit
 reportRowFailure : SummaryFailure ObligationSite -> Unit

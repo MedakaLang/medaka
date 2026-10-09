@@ -1,0 +1,14 @@
+-- ERROR-QUALITY rubric X: one diagnostic per root cause.  `y = identity zero`
+-- leaves `y`'s type `?a` open and nothing grounds it, so `Zero ?a` at the `zero`
+-- occurrence and `Eq ?a` at `y == y` are two goals on ONE undetermined variable,
+-- each reaching both instances with no stable minimum.  One annotation on `y`
+-- answers both, so they are one diagnostic, at the `zero` that introduces `?a`.
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE once, at 13:13.
+interface Zero a where
+  zero : a
+impl Zero Int where
+  zero = 0
+impl Zero Bool where
+  zero = False
+y = identity zero
+main = println (debug (y == y))
