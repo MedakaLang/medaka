@@ -1962,7 +1962,8 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   local `let` defaults at its own close, before its goals reach the enclosing group's
   sequence. Which variables each boundary may touch is D3's: at a top-level group and
   a local `let`, a variable of a member's type that a goal connects to an argument is
-  withheld (D3 clause 2); a `where` component already withholds every variable any
+  withheld (D3 clause 2), and at a local `let` an enclosing binder's variable counts
+  as an argument; a `where` component already withholds every variable any
   member's type mentions, which includes every variable that connection reaches.
   Defaulting therefore runs:
   * **after** the boundary's bodies are inferred — nothing later can constrain the
@@ -2026,7 +2027,17 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   no channel even when a goal connects it to an argument, and is a candidate:
   `f x = ix x 0` poses `Ix a k` and `Num k`, and `k` defaults
   (`test/dict_fixtures/connect-outside-type-defaults.mdk`,
-  `test/dict_fixtures/connect-outside-type-rejected.mdk`). Connection excludes a
+  `test/dict_fixtures/connect-outside-type-rejected.mdk`). At a local `let` or `where`
+  component the free environment is part of the argument channel: a variable of an
+  enclosing binder seeds the connection as an argument does, since that binder's
+  boundary, and its callers, still determine it. In `g v = let s = v[0] + v[1]` the
+  element `e` of `Index c k e` is in `s`'s type and connected to `v`'s `c`, so the
+  `let` leaves it to `g`; `g : (Index a Int b, Num b) => a -> b`, the scheme of the
+  `let`-free body (`test/dict_fixtures/default-guard-let-tied-to-enclosing-arg.mdk`).
+  A variable a local `let`'s goals mention and its type does not (the keys here) is no
+  scheme's and no caller's, so the `let` hands it to the enclosing boundary, which
+  determines before it defaults; in a `let` inside an impl body that is the method
+  body (`test/dict_fixtures/default-guard-let-in-body-ownership-gap.mdk`). Connection excludes a
   variable from defaulting only. Improvement and determination (§3) still treat it as
   the boundary's own, so the one instance whose head unifies with a goal may bind it
   there (`wrap y = pick [y] []` still generalizes to `a -> List a`).

@@ -1,9 +1,9 @@
--- #3809 through a local `let` in an impl body, the keys unannotated.
+-- #3809 through a local `let` in an impl body, the keys unannotated (#3820).
 -- Hand-derived answer: 3.75, then 7 (`k` defaults, `e = a`).  The key literals
--- are in no type of the `let` and deeper than the body, so no boundary defaults
--- them (an ownership gap, filed separately); with `k` open, `Index (Array a) k e`
--- has two candidates and D3 clause 3's verdict rejects it as ambiguous.  Pinned:
--- REJECT on all three verbs, T-AMBIGUOUS-INSTANCE, until the gap is fixed.
+-- are in no type of the `let`, which hands them to the method body; the body
+-- grounds them to `Int`, withholds `e` (`a` is held), and its second
+-- determination fixes `e = a`.  Before #3820 no boundary defaulted the
+-- keys, and D3 clause 3's verdict rejected `Index (Array a) k e` as ambiguous.
 impl Index (Array a) Float a where
   index xs _ = xs[1]
 

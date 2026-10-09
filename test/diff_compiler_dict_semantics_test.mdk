@@ -4340,13 +4340,24 @@ table = [
   Row {
     entry = "default-guard-let-in-body-ownership-gap.mdk",
     label =
-      "#3809 through a local `let` with unannotated keys. Hand-derived: 3.75, then 7; blocked by an ownership gap (the key literals reach no defaulting boundary), so `Index (Array a) k e` keeps two candidates and D3 clause 3`s verdict rejects it. Pinned REJECT until the gap is fixed; base checked clean and failed at run and build",
-    expCheck = "REJECT",
-    expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
-    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+      "#3820, #3809 through a local `let` in an impl body with unannotated keys: the key literals are in no type of the `let`, which hands them to the method body; the body grounds them, withholds `e` and determines `e = a`. Hand-derived: 3.75, then 7. Base rejected as ambiguous (no boundary defaulted the keys)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-let-tied-to-enclosing-arg.mdk",
+    label =
+      "#3821, D3 clause 2 at a local `let`: `e` is in the `let`'s type and `Index c k e` ties it to the enclosing argument's `c`, so the `let` leaves it to the enclosing boundary; `g` gets the `let`-free scheme `(Index a Int b, Num b) => a -> b`. Hand-derived: 3.75, then 7. Base grounded `e` to `Int` at the `let` and rejected with `no impl of Index for (Array Float) Int Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
   },
   Row {
     entry = "effrow-async-do-spawntask-no-impl.mdk",
@@ -4425,7 +4436,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 389
+tableRows = 390
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4657,7 +4668,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 23
+schemeRows = 24
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -4797,6 +4808,12 @@ schemeTable = [
     label =
       "§6.3 D3 clause 3 keeps the top-level control's scheme: the key grounds, the `Index` goal and the element's `Num` stay",
     want = "sumTwo : (Index a Int b, Num b) => a -> b",
+  },
+  SchemeRow {
+    entry = "default-guard-let-tied-to-enclosing-arg.mdk",
+    label =
+      "§6.3 D3 clause 2 at a local `let` (#3821): the same body through a `let` gets the top-level control's scheme, with no `Index` goal of the `let`'s own",
+    want = "g : (Index a Int b, Num b) => a -> b",
   },
 ]
 

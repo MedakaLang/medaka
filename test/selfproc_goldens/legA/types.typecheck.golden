@@ -613,7 +613,7 @@ concreteHeadVarIds : Mono -> List Int
 concreteReqMatchByIface : IfaceRef -> List Mono -> Option (List (String, Mono), List Require)
 connectClosure : Map Int Unit -> List (List Int) -> Map Int Unit
 connectedIds : Map Int Unit -> List UObligation -> Map Int Unit
-connectedTiedIds : List Mono -> List UObligation -> List Int
+connectedTiedIds : List Int -> List Mono -> List UObligation -> List Int
 consOp : Mono -> Mono -> Mono
 consSiteFn : String -> a -> Map String (List a) -> Map String (List a)
 constrainedApplicationHelp : Mono -> Mono -> Option String
@@ -988,6 +988,7 @@ enclPreds : String -> List PredicateSlot
 enclSlot : String -> Mono -> Option Int
 enclSlotIds : String -> List Int
 enclSlotIndex : Option PredicateRequest -> Int -> String -> Option Int
+enclosingVarIds : Option Int -> List Mono -> List Int
 endsWithStr : String -> String -> Bool
 enforceStandaloneDomainAt : TcEnv -> String -> Mono -> Option Loc -> Int -> Unit
 enqueueStampCtx : String -> List Decl -> Unit
@@ -1364,6 +1365,7 @@ guardSites : Guard -> List (Ref Route)
 guardsDefaulting : UObligation -> Bool
 hadMatchWarnings : Unit -> Bool
 hadTypeErrors : Unit -> Bool
+handOffAbsentNumVars : Int -> Mono -> List UObligation -> Unit
 hasDupI : List Int -> Bool
 hasFileBoundValue : Mono -> Bool
 hasImportDefiner : String -> Bool
@@ -1912,6 +1914,7 @@ lookupTraceEvidence : EvId -> List EvEntry -> Option EvVal
 lookupVar : TcEnv -> String -> Option Scheme
 lowerAuthLevels : Int -> Authority -> Unit
 lowerMembers : Int -> List (Ref Effvar) -> Unit
+lowerOwnedRoot : Int -> Mono -> Unit
 lowerPending : Int -> List PendingJoin -> List PendingJoin
 lowerRowLevels : Int -> EffRow -> Unit
 lowerToCurrent : Mono -> Unit
@@ -2623,7 +2626,7 @@ registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 registerAllData : TcEnv -> List Decl -> TcEnv
 registerAllDataGo : TcEnv -> List Decl -> TcEnv
 registerAllDataScoped : TcEnv -> List Decl -> List Decl -> TcEnv
-registerAmbiguousConstraintsOwnedBy : Int -> List UObligation -> List Mono -> Unit
+registerAmbiguousConstraintsOwnedBy : Int -> Option Int -> List UObligation -> List Mono -> Unit
 registerAmbiguousGo : List UObligation -> Int -> List Int -> List Int -> Unit
 registerCachedRecord : String -> RecordInfo -> Unit
 registerCachedRows : TcEnv -> (List (String, Scheme), List (String, RecordInfo)) -> TcEnv
@@ -3054,7 +3057,7 @@ tconIdConflict : Mono -> Mono -> Option (String, TyConOrigin, TyConOrigin)
 tconTupleHead : Int -> Mono
 tconUnresolved : String -> Mono
 third3 : (a, b, c) -> c
-tiedSurvivors : List Mono -> List UObligation -> Map String Unit -> Map String Unit
+tiedSurvivors : List Mono -> NumGuard -> Map String Unit -> Map String Unit
 toggles : Ref Toggles
 topAbsorbs : String -> Expr -> Expr
 topGrantIds : String -> String -> List Int

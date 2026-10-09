@@ -1,0 +1,17 @@
+-- #3821: a local `let` in an unsigned function, its value tied to the enclosing
+-- argument.  `e` of `Index c k e` is in `s`'s type and a goal connects it to `c`,
+-- the type of the enclosing `v`, so D3 clause 2 leaves it to the enclosing
+-- boundary; the keys, in no type of the `let`, are handed to that boundary too.
+-- `g` gets `sumTwo`'s scheme, `(Index a Int b, Num b) => a -> b`.
+-- Hand-derived: 3.75, then 7.  Base grounded `e` to `Int` at the `let` and
+-- rejected the first call with `no impl of Index for (Array Float) Int Int`.
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+g v =
+  let s = v[0] + v[1]
+  s
+
+main =
+  println (debug (g [|1.5, 2.25|]))
+  println (debug (g [|3, 4|]))
