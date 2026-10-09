@@ -1,0 +1,37 @@
+-- Q3 shape in a test body: Get (Box Bool) ?k ?e with rows Float and N.  Hand-derived: REJECT ambiguous.
+import test.{Expectation(..), expectEqual}
+
+data Box a = Box a
+
+data N = N Int
+
+impl Eq N where
+  eq (N x) (N y) = x == y
+
+impl Debug N where
+  debug (N x) = "N \{debug x}"
+
+impl Num N where
+  add (N x) (N y) = N (x + y)
+  sub (N x) (N y) = N (x - y)
+  mul (N x) (N y) = N (x * y)
+  div (N x) (N y) = N (x / y)
+  negate (N x) = N (0 - x)
+  abs (N x) = N x
+  signum (N x) = N x
+  fromInt x = N x
+  rem (N x) (N y) = N (x % y)
+
+interface Get c k e where
+  get : c -> k -> e
+
+impl Get (Box a) Int Float where
+  get _ _ = 1.5
+
+impl Get (Box a) Int N where
+  get _ _ = N 7
+
+
+test "ambiguous element" = expectEqual (const "x" (get (Box True) 0 + 1)) "x"
+
+main = println "ok"

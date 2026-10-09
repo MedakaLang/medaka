@@ -4535,6 +4535,28 @@ table = [
     pinned = "CONTROL-OK\n",
     codes = [],
   },
+  Row {
+    entry = "test-body-float-key.mdk",
+    label =
+      "#3822 (test body, Float key): a `test` body is a numeric boundary like any other. `[|1.5, 2.25|][0]` poses `Index (Array Float) Int Float` whose key literal is the body`s own; the settle sequence defaults the key to Int and the goal has its one instance. The old closed-body defaulting grounded `?e` to Int with no determination and rejected `no impl of Index for (Array Float) Int Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [],
+  },
+  Row {
+    entry = "test-body-two-impl-get.mdk",
+    label =
+      "#3822 (test body, two instances): `get (Box True) 0 + 1` poses `Get (Box Bool) Int ?e` with `?e` Num-constrained and two instances (Float, N) reaching it, so the body boundary withholds the default and the verdict is `T-AMBIGUOUS-INSTANCE`, as the same expression in `main` gets. Was `T-NO-IMPL` for a grounding the program never wrote",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-NO-IMPL"],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -4546,7 +4568,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 400
+tableRows = 402
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
