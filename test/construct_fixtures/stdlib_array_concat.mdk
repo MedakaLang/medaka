@@ -16,7 +16,7 @@ main =
   -- total length 0, non-zero outer count
   println (toList (concat (fromList [e, e, e])))
   -- outer count 0
-  println (toList (concat (fromList [])))
+  println (toList (concat (fromList [] : Array (Array Int))))
   -- a single inner array
   println (toList (concat (fromList [mk [7, 8, 9]])))
   -- all inners length 1: every target lands exactly on a boundary

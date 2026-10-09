@@ -1382,7 +1382,7 @@ table = [
   Row {
     entry = "i4-rule3-ambiguous-xmod-identity/main.mdk",
     label =
-      "§8 I4 + §3 `inst` -- THE RULE-3 AMBIGUITY REJECT WITH ORIGIN-CARRYING IMPLS (#1446 T2). `checkUndeterminedObligation``s RULE 3 is guarded on `implCountForIfaceU >= 2`, and it is the ONE consequence of a missed `ImplUniverse` lookup that goes QUIET rather than loud: a miss reads as the count 0 and `T-AMBIGUOUS-INSTANCE` simply stops emitting. The four existing ambiguity fixtures (test/typecheck_error_fixtures/ambiguous_*) are all SINGLE-FILE; this one is cross-module. 🚨 IT DOES NOT DISCRIMINATE THE #1446 RE-KEY AND AN EARLIER VERSION OF THIS ROW CLAIMED IT DID: the stated counterfactual (reader keys TkBare => count 0 => ACCEPT at exit 0) is UNREACHABLE, refuted by building that exact neutered compiler -- `insertUnivImplKeys` indexes every identity-carrying impl under its bare spelling too, so the bare bucket holds both head tags and the count is 2 either way. It also behaves identically on the BASE binary. KEPT as a §3 CONFORMANCE row (RULE 3 must reject a genuinely ambiguous cross-module goal), NOT as evidence for the re-key; the arm-discriminating coverage is i4-xmod-requires-foreign-iface-rejected. SPEC ANSWER hand-derived, not captured: `roundtrip : Mk a => Int -> Int` fixes `a` in neither argument nor result, so `match(IE, Mk ?a)` = {Widget, Gadget}, mutually ⊑-incomparable, no unique ⊑-minimum, genuinely ambiguous. ⚠️ The diagnostic lands at `lib.mdk``s own body, not at the entry`s call -- see the fixture header",
+      "§8 I4 + §3 `inst` -- THE AMBIGUITY REJECT WITH ORIGIN-CARRYING IMPLS (#1446 T2), cross-module where the four ambiguity fixtures in test/typecheck_error_fixtures/ are single-file. The verdict counts the instance heads that unify with the goal (`goalCandidates`) and reads no per-interface count, so a missed keyed lookup cannot make it quiet. It does NOT discriminate the #1446 re-key: `insertUnivImplKeys` indexes every identity-carrying impl under its bare spelling too, and it behaves identically on the BASE binary. KEPT as a §3 CONFORMANCE row (the verdict must reject a genuinely ambiguous cross-module goal); the arm-discriminating coverage is i4-xmod-requires-foreign-iface-rejected. SPEC ANSWER hand-derived, not captured: `roundtrip : Mk a => Int -> Int` fixes `a` in neither argument nor result, so `match(IE, Mk ?a)` = {Widget, Gadget}, mutually ⊑-incomparable, no unique ⊑-minimum, genuinely ambiguous. The diagnostic lands at `lib.mdk``s own body, not at the entry`s call -- see the fixture header",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -3986,6 +3986,61 @@ table = [
     codes = [Absent "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
+    entry = "undetermined-nested-class-prelude.mdk",
+    label =
+      "§6.2 T4 at a nested `requires` prerequisite over the prelude: `[] == []`, `None == None`, `Ok 1 == Ok 1`, `debug []`, an interpolated `[]`, `compare [] []` and `hash None` each select an instance whose prerequisite on the element type nothing fixes (no literal under it, no given, no later binding), and each interface has two or more instances with no stable minimum. One T-AMBIGUOUS-INSTANCE per binding; section 5 grades the seven sites",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-class-user.mdk",
+    label =
+      "§6.2 T4 at a nested prerequisite of a user instance (`N == N` under `impl Eq (L a) requires Eq a`) and down a `requires` chain A -> B -> C (`fa (Some [])` poses `C ?b`); section 5 grades the two sites",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-class-xmod/main.mdk",
+    label =
+      "§6.2 T4 at a nested prerequisite whose instances are imported: `match def` fixes `def : Option ?a`, whose instance poses `Def ?a`, reached by `Def Int`, `Def Bool` and `Def (Option b)` with no stable minimum",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-class-value-main.mdk",
+    label =
+      "§6.2 T4 at a value `main`: `main = Err \"x\"` is printed through `Display (Result String ?a)`, whose prerequisite `Display ?a` nothing fixes; there is no value-main carve-out",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-class-controls.mdk",
+    label =
+      "controls for the four `undetermined-nested-class-*` rows above: a literal under the element type is defaulted by D3, a given answers `Eq a`, an annotation fixes `def`, and `length []`/`sum []` pose no goal on the element. Hand-derived values in the header",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[1, 2]\nFalse\nFalse\nSome (Some 7)\n0\n0\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
     entry = "determine-prerequisite-not-committed.mdk",
     label =
       "§3 determination never commits through a prerequisite: `Eq2 ?n` is left open rather than committed to `MyList ?m`, whose `Num (MyList ?m)` no instance meets; `?n` defaults to `Int`, and the closed `Eq2 Int` is T-NO-IMPL. Committing `MyList ?m` reported a literal-vs-`MyList Int` mismatch and gave the prelude-free emit oracles a wrong dictionary",
@@ -4337,7 +4392,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 381
+tableRows = 386
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4754,10 +4809,91 @@ data VerbRow = VerbRow {
 {- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 verbRows : Int
-verbRows = 31
+verbRows = 40
 
 verbTable : List VerbRow
 verbTable = [
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `[] == []` is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:8:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `None == None` is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:9:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `Ok 1 == Ok 1` is reported on its own line; the column is not pinned, because the diagnostic lands at the second literal (10:15) rather than at the `==` expression that poses the goal",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:10:[0-9]+: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `debug []` is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:11:4: ambiguous instance for .Debug.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at the interpolation is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:12:5: ambiguous instance for .Display.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `compare [] []` is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:13:4: ambiguous instance for .Ord.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-prelude.mdk",
+    vlabel =
+      "the nested-prerequisite class at `hash None` is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-prelude\\.mdk:14:4: ambiguous instance for .Hashable.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-user.mdk",
+    vlabel =
+      "the user instance's nested prerequisite at `N == N` is reported at its site",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-user\\.mdk:28:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-class-user.mdk",
+    vlabel =
+      "...and the `requires` chain's innermost goal `C ?b` at `fa (Some [])`",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-class-user\\.mdk:29:4: ambiguous instance for .C.",
+  },
   VerbRow {
     ventry = "ambiguity-each-site-reported.mdk",
     vlabel =
@@ -4992,10 +5128,33 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 30
+spanRows = 34
 
 spanTable : List SpanRow
 spanTable = [
+  SpanRow {
+    entry = "undetermined-nested-class-prelude.mdk",
+    label =
+      "§6.2 T4: the first nested-prerequisite goal is reported at the `[] == []` that poses it",
+    want = "8:4",
+  },
+  SpanRow {
+    entry = "undetermined-nested-class-user.mdk",
+    label = "§6.2 T4: the user instance's nested goal is reported at `N == N`",
+    want = "28:4",
+  },
+  SpanRow {
+    entry = "undetermined-nested-class-xmod/main.mdk",
+    label =
+      "§6.2 T4: the imported instance's nested goal is reported at the `def` occurrence",
+    want = "8:13",
+  },
+  SpanRow {
+    entry = "undetermined-nested-class-value-main.mdk",
+    label =
+      "§6.2 T4: a value `main` whose body carries no location of its own is reported at the `main` binding, not at line 1",
+    want = "5:0",
+  },
   SpanRow {
     entry = "undetermined-method-goal-default-body.mdk",
     label =

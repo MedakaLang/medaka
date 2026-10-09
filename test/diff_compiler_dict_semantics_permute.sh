@@ -148,25 +148,6 @@ PAIRS="$(cd "$FIXDIR" && for f in *.mdk; do
     | sort | uniq -c | awk -v f="$f" '$1>=2{print f"|"$2}'
 done)"
 
-# KNOWN-BAD LEDGER for this section, same convention as the top-of-file ledger:
-# a pair already covered by an OPEN issue is pinned with BOTH observed values
-# and asserted to DIFFER, so the row reds the day they converge (the drain)
-# instead of silently passing or silently being skipped.
-#   entry | iface | orig-build-value | perm-build-value | issue
-# Empty: its one row (#1183, s6-2-t4-open-goal-deferred.mdk) drained when §6.2 T4
-# began rejecting an open goal with no stable minimum; both orderings now REJECT
-# with the same code, which the check arm above grades.
-KNOWNBAD_PERM=''
-
-# THE SAME LEDGER FOR THE **RUN** ARM. ⚠️ It exists because the build-arm ledger
-# above is NOT a general escape hatch: `RUN-DIFF` had no known-bad branch at all,
-# so a pair whose divergence shows on BOTH engines could only be recorded by
-# excluding it -- and an exclusion is a skip-list, which cannot notice when the
-# thing it excuses is fixed. #1127 happens to diverge on `build` alone, which is
-# why one arm sufficed until F-3d.
-#   entry | iface | orig-run-value | perm-run-value | issue
-KNOWNBAD_PERM_RUN=''
-
 printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
   [ -z "$entry" ] && continue
   entrypath="$FIXDIR/$entry"
@@ -202,8 +183,6 @@ printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
     reason='check verdict itself flipped under permutation'
   fi
 
-  kb_line="$(printf '%s\n' "$KNOWNBAD_PERM" | awk -F'|' -v e="$entry" -v i="$iface" '$1==e && $2==i {print}')"
-  kbr_line="$(printf '%s\n' "$KNOWNBAD_PERM_RUN" | awk -F'|' -v e="$entry" -v i="$iface" '$1==e && $2==i {print}')"
   runbuild='n/a'
   if [ "$o_chk" -eq 0 ] && [ "$p_chk" -eq 0 ]; then
     bound "$MEDAKA" run "$entrypath" >"$TMP/$base.o.run.out" 2>"$TMP/$base.o.run.err"
@@ -229,27 +208,7 @@ printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
     # such structured code (#1130), so exit code is the coarsest thing that is
     # both meaningful and immune to location drift.
     if [ "$o_run" -eq 0 ] && [ "$p_run" -eq 0 ]; then
-      if [ -n "$kbr_line" ]; then
-        # KNOWN-BAD run divergence: assert BOTH pinned values AND that they still
-        # DIFFER, so the row reds on convergence (the drain) rather than absorbing
-        # the fix.  Same shape as the build arm below.
-        kbr_o="$(printf '%s' "$kbr_line" | cut -d'|' -f3)"
-        kbr_p="$(printf '%s' "$kbr_line" | cut -d'|' -f4)"
-        kbr_issue="$(printf '%s' "$kbr_line" | cut -d'|' -f5)"
-        printf '%b\n' "$kbr_o" >"$TMP/$base.kbr.o.expected"
-        printf '%b\n' "$kbr_p" >"$TMP/$base.kbr.p.expected"
-        if cmp -s "$TMP/$base.o.run.out" "$TMP/$base.p.run.out"; then
-          run_v='CONVERGED-FIXED'
-          row_ok=0
-          reason="${reason:+$reason; }KNOWN-BAD $kbr_issue run divergence has CONVERGED -- re-pin or drop this ledger row"
-        elif cmp -s "$TMP/$base.o.run.out" "$TMP/$base.kbr.o.expected" && cmp -s "$TMP/$base.p.run.out" "$TMP/$base.kbr.p.expected"; then
-          run_v="ok(known-bad $kbr_issue)"
-        else
-          run_v='WRONG-KNOWNBAD-VALUE'
-          row_ok=0
-          reason="${reason:+$reason; }KNOWN-BAD $kbr_issue row's pinned run values no longer match observed output"
-        fi
-      elif cmp -s "$TMP/$base.o.run.out" "$TMP/$base.p.run.out"; then
+      if cmp -s "$TMP/$base.o.run.out" "$TMP/$base.p.run.out"; then
         run_v='ok'
       else
         run_v='RUN-DIFF'
@@ -282,31 +241,12 @@ printf '%s\n' "$PAIRS" | while IFS='|' read -r entry iface; do
     if [ "$o_build_ok" -eq 1 ] && [ "$p_build_ok" -eq 1 ]; then
       bound "$TMP/$base.o.bin" >"$TMP/$base.o.exec.out" 2>"$TMP/$base.o.exec.err"
       bound "$TMP/$base.p.bin" >"$TMP/$base.p.exec.out" 2>"$TMP/$base.p.exec.err"
-      if [ -n "$kb_line" ]; then
-        kb_o="$(printf '%s' "$kb_line" | cut -d'|' -f3)"
-        kb_p="$(printf '%s' "$kb_line" | cut -d'|' -f4)"
-        kb_issue="$(printf '%s' "$kb_line" | cut -d'|' -f5)"
-        printf '%b\n' "$kb_o" >"$TMP/$base.kb.o.expected"
-        printf '%b\n' "$kb_p" >"$TMP/$base.kb.p.expected"
-        if cmp -s "$TMP/$base.o.exec.out" "$TMP/$base.p.exec.out"; then
-          build_v='CONVERGED-FIXED'
-          row_ok=0
-          reason="${reason:+$reason; }KNOWN-BAD $kb_issue build divergence has CONVERGED -- re-pin or drop this ledger row"
-        elif cmp -s "$TMP/$base.o.exec.out" "$TMP/$base.kb.o.expected" && cmp -s "$TMP/$base.p.exec.out" "$TMP/$base.kb.p.expected"; then
-          build_v="ok(known-bad $kb_issue)"
-        else
-          build_v='WRONG-KNOWNBAD-VALUE'
-          row_ok=0
-          reason="${reason:+$reason; }KNOWN-BAD $kb_issue row's pinned values no longer match observed output"
-        fi
+      if cmp -s "$TMP/$base.o.exec.out" "$TMP/$base.p.exec.out"; then
+        build_v='ok'
       else
-        if cmp -s "$TMP/$base.o.exec.out" "$TMP/$base.p.exec.out"; then
-          build_v='ok'
-        else
-          build_v='BUILD-DIFF'
-          row_ok=0
-          reason="${reason:+$reason; }build stdout differs under permutation"
-        fi
+        build_v='BUILD-DIFF'
+        row_ok=0
+        reason="${reason:+$reason; }build stdout differs under permutation"
       fi
     elif [ "$o_build_ok" -eq 0 ] && [ "$p_build_ok" -eq 0 ]; then
       # Same reasoning as the run arm's symmetric-failure branch: compare exit

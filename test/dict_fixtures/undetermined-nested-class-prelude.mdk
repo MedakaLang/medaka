@@ -1,0 +1,15 @@
+-- DICT-SEMANTICS §6.2 "T4 implemented" at a nested `requires` prerequisite, over
+-- the prelude's instances.  Each binding's goal selects an instance whose
+-- prerequisite is open: `Eq (List ?a)` selects `impl Eq (List a) requires Eq a`,
+-- which poses `Eq ?a`.  No literal sits under `?a` (no D3 default), no given and
+-- no later binding fixes it, and each interface has two or more instances with no
+-- stable minimum.  Hand-derived: REJECT on all three verbs, one
+-- T-AMBIGUOUS-INSTANCE per binding, at the expression that poses its goal.
+a = [] == []
+b = None == None
+c = Ok 1 == Ok 1
+d = debug []
+e = "\{[]}"
+f = compare [] []
+g = hash None
+main = println "unreached"

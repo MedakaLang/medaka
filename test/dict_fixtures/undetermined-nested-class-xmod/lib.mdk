@@ -1,0 +1,10 @@
+-- The interface and its three instances for `main.mdk`, declared in another
+-- module: the nested prerequisite is judged the same across a module boundary.
+export interface Def a where
+  def : a
+export impl Def Int where
+  def = 7
+export impl Def Bool where
+  def = True
+export impl Def (Option a) requires Def a where
+  def = Some def

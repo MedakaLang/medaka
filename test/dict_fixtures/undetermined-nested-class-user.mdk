@@ -1,0 +1,30 @@
+-- DICT-SEMANTICS §6.2 "T4 implemented" at a nested `requires` prerequisite of a
+-- user instance, and down a `requires` chain.  `N == N` selects
+-- `impl Eq (L a) requires Eq a` and poses `Eq ?a`.  `fa (Some [])` selects
+-- `impl A (Option a) requires B a`, whose `B (List ?b)` selects
+-- `impl B (List a) requires C a`, which poses `C ?b`.  `Eq` and `C` each have two
+-- or more instances and nothing fixes the variable.  Hand-derived: REJECT on all
+-- three verbs, one T-AMBIGUOUS-INSTANCE per binding, at its goal.
+data L a = N | K a (L a)
+impl Eq (L a) requires Eq a where
+  eq N N = True
+  eq (K x xs) (K y ys) = x == y && xs == ys
+  eq _ _ = False
+interface A a where
+  fa : a -> Int
+interface B a where
+  fb : a -> Int
+interface C a where
+  fc : a -> Int
+impl C Int where
+  fc _ = 1
+impl C Bool where
+  fc _ = 2
+impl B (List a) requires C a where
+  fb xs = 10 + length (map fc xs)
+impl A (Option a) requires B a where
+  fa (Some x) = 100 + fb x
+  fa None = 100
+p = N == N
+r = fa (Some [])
+main = println "unreached"
