@@ -639,24 +639,34 @@ is held the same way, at its binder's close:
 - An interface method signature's own variables, in an `impl` or default body:
   a goal of the body that an instance answers only by binding one is rejected at
   its site with `T-MISSING-CONSTRAINT` when the body closes, unless the method's
-  own `=>` context gives it (`test/dict_fixtures/sig-var-rigid-method-var.mdk`).
+  own `=>` context gives it, closed under superinterfaces as a signature's is
+  (`test/dict_fixtures/sig-var-rigid-method-var.mdk`,
+  `test/dict_fixtures/method-given-through-super.mdk`).
 - A variable written in an expression annotation, for the annotated expression:
   a goal of the expression that an instance answers only by binding one is
   rejected at its site (`test/dict_fixtures/sig-var-rigid-annotation-var.mdk`).
   Past the expression the variable is its binder's: an annotated local that
   generalizes quantifies it (next item), and one that does not leaves it to the
   binder that will.
-- A generalized local's quantified variables are its uses' to choose, as a
-  signature's are its callers'. From its generalization on no matcher binds one,
-  so an instance that answers a goal only by binding one does not discharge it:
-  the goal stays in the local's scheme (§4 `gen`), and each use poses it,
-  instantiated, to the binder enclosing the use, whose own rule then judges it
-  (`test/dict_fixtures/sig-var-rigid-generalized-local.mdk`,
-  `test/dict_fixtures/sig-var-rigid-generalized-local-pick.mdk`). A variable of
-  that goal the local does not quantify (one it shares with its enclosing scope,
-  or one no type of the local mentions) is the same variable at every use and
-  stays itself in the instantiated goal
-  (`test/dict_fixtures/local-goal-on-enclosing-var.mdk`).
+- A generalized local's own goals are improved before it generalizes, as a
+  top-level group's are ("When" below), with each variable of an enclosing
+  binder taking part as a constant. Its scheme is built from the improved type,
+  so the local gets the verdict its top-level twin gets: `let k u = get (Box [])`
+  generalizes to `k : a -> List t`, used at two element types it is accepted
+  (`test/dict_fixtures/local-improved-get-two-uses.mdk`,
+  `test/dict_fixtures/local-improved-where-two-uses.mdk`), and
+  `weird2 : b -> b; weird2 x = k x` is `T-TYPE-TOO-GENERAL`, as with a top-level
+  `k` (`test/dict_fixtures/sig-var-rigid-generalized-local.mdk`,
+  `test/dict_fixtures/sig-var-rigid-generalized-local-pick.mdk`). From its
+  generalization on, its quantified variables are its uses' to choose, as a
+  signature's are its callers', and no matcher binds one: a goal improvement
+  leaves on them stays in the local's scheme (§4 `gen`), and each use poses it,
+  instantiated, to the binder enclosing the use, whose own rule then judges it.
+  A leaf of that residual goal is either quantified or an enclosing scope's
+  variable, which stays itself in the instantiated goal
+  (`test/dict_fixtures/local-goal-on-enclosing-var.mdk`); an own variable that
+  improvement leaves open and no type of the local mentions is ambiguous at the
+  local's boundary, as at a group's.
 
 Uniqueness is counted over unifying heads, not matching ones, because a
 one-sided match undercounts. At `Pick (List t) (List n) (List Int)`, with `n` a
@@ -676,9 +686,11 @@ defaulting, so that `Get (Box Float) e` against the only instance
 generalization, so that a binding's scheme is built from the improved type
 rather than having a quantified variable bound after the fact
 (`wrap y = pick [y] []` generalizes to `a -> List a`;
-`test/dict_fixtures/impl-improvement-unique-instance.mdk`). A local `let`
-defaults at its own boundary first. Its obligations still reach the enclosing
-group's close, but a variable already defaulted there is no longer free.
+`test/dict_fixtures/impl-improvement-unique-instance.mdk`). A local `let` or
+`where` component is improved and defaults at its own boundary first, before it
+generalizes, with an enclosing binder's variables held as constants
+(`improveLocalGoals`). Its obligations still reach the enclosing group's close,
+but a variable already improved or defaulted there is no longer free.
 
 **Inside a method body.** An `impl` body, and an interface's default method
 body, is inferred outside every binding group, so its obligations never reach a

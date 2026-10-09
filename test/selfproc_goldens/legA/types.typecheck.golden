@@ -1570,6 +1570,7 @@ importerShadowDomainAt : TcEnv -> String -> Int -> Option Mono
 importerShadowOnEmitPath : String -> Ref Route -> Bool
 improveByUniqueImpl : Map String Unit -> List UObligation -> Unit
 improveGoal : Map String Unit -> IfaceRef -> List Mono -> Unit
+improveLocalGoals : List UObligation -> Int -> Unit
 improvementPool : List Mono -> List ImplRow
 indexAtomsCovered : List Atom -> List Atom -> List Atom
 indexEagerMsg : String -> String -> String
@@ -2448,6 +2449,7 @@ publicModuleExports : List Decl -> ModuleBindings -> List (String, ExportBinding
 publicStandaloneNames : List Decl -> List String
 publicValNames : List Decl -> List String
 publishEvidence : Unit -> Unit
+publishMethodPredGivens : List String -> Ty -> MethodBodyInstance -> ScopeId -> Unit
 publishMethodReturnTrace : List EvEntry -> MethodReturnTraceEntry -> MethodReturnTraceEntry
 publishProducedResults : BindingSummary -> List (Option Loc, Mono) -> Unit
 publishedPolarity : Polarity -> Polarity

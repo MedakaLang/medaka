@@ -1,0 +1,19 @@
+-- §3 "When", the `Get`/`Box` face in an unsigned `main`: `k u = get (Box [])` poses
+-- `Get (Box (List t)) e`, which `impl Get (Box a) a` improves to `e = List t`
+-- before `k` generalizes, so `k : a -> List b` and the uses at `List Int` and
+-- `List String` each instantiate it, as the top-level `k` does.
+-- Hand-derived: `get (Box [])` is [] at both types.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+main =
+  let k u = get (Box [])
+  let x = k 1 : List Int
+  let y = k 2 : List String
+  println (debug x)
+  println (debug y)

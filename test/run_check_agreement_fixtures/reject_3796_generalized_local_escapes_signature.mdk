@@ -1,8 +1,8 @@
 -- §3 #3796: a generalized local inside a signed function.  `k`'s goal
--- `Get (Box (List t)) e` is answered only by binding `k`'s own quantified `e`, so it
--- stays in `k`'s scheme; the use `k x` poses `Get (Box (List t)) b` to `weird2`,
--- whose `b` the caller chooses, so `weird2` is rejected at that use, as the
--- top-level `weird : b -> b; weird _ = get (Box [])` is at its `get`.
+-- `Get (Box (List t)) e` is improved by `impl Get (Box a) a` before `k`
+-- generalizes, so `k : u -> List t`, and `k x` returns a list where `weird2`
+-- promises the caller's `b`.  `weird2` is rejected as too general, as it is when
+-- `k` is a top-level binding.
 data Box a = Box a
 
 interface Get c e where
