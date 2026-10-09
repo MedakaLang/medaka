@@ -1,21 +1,21 @@
--- The quiescence drain's remaining `DrainDiags` member (`compiler/types/typecheck.mdk`).
+-- A `DrainDiags` member (`compiler/types/typecheck.mdk`), now drained.
 --
 -- `relay`'s inferred scheme quantifies `a` and carries both `Tweak a Int` and
--- `Tweak a Bool`.  The diagnostics-arm drain replays the call `value n x` with that
--- goal PROJECTED to its first argument and `a` reading `Float`, so the selector sees
--- `Tweak Float`, which both instances match with no stable minimum, and reports
--- `T-AMBIGUOUS-INSTANCE`.  Not the #3031 shape: the goal reaches the drain ground, so
--- no closedness test can defer it.  `DrainRollback` discards it on `check`; the
--- trees-arm drain of `run` and `build` does not produce it.
+-- `Tweak a Bool`.  The diagnostics-arm drain routes `relay`'s call goal through
+-- `routeUndeterminedTop`, whose census sees one head tag, `Float`, for the two
+-- impls.  Its single-tag arm minted the goal `Tweak Float` from that tag, dropping
+-- the vector's tail, and the selector reported it `T-AMBIGUOUS-INSTANCE`.  The goal
+-- is on a scheme-quantified variable, so it is the caller's and gets no route
+-- from the tag.  The trees-arm drain of `run` and `build` never produced it.
 --
 -- SPEC ANSWER, hand-derived: `relay`'s goals belong to its callers; `main` calls it at
 -- `Float`, where `Tweak Float Int` and `Tweak Float Bool` are each the unique match.
 -- `relay 1 2.5` = `value 1 2.5` = `tweak True (tweak 1 (relay 0 2.5))` = 2.5, since
 -- both impls return their second argument.  ACCEPT on every verb, printing `2.5`.
 --
--- WHAT THIS ROW PINS: `check` must not report `T-AMBIGUOUS-INSTANCE`.  Today that holds
--- only because `DrainRollback` hides the drain's diagnostics; it is the witness that
--- must stay green when `DrainDiags` is deleted.
+-- WHAT THIS ROW PINS: `check` must not report `T-AMBIGUOUS-INSTANCE`.  With
+-- `DrainRollback` hiding the drain's diagnostics it is green either way; it is the
+-- witness that must stay green when `DrainDiags` is deleted.
 interface Tweak a b where
   tweak : b -> a -> a
 

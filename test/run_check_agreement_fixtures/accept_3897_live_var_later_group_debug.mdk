@@ -1,0 +1,8 @@
+-- DICT-SEMANTICS §6.2 T2: a later group can ground an earlier group's type, so a
+-- goal on a variable in a non-generalized binding's type waits for quiescence
+-- (§6.2 "T4 implemented").
+-- `Debug (List ?a)`'s prerequisite is on `xs`'s element variable, which `main`
+-- grounds to `Int`.  Hand-derived: ACCEPT, `debug []` is `[]`, then `1`.
+xs = identity []
+s = debug xs
+main = println (s ++ debug (sum xs + (1 : Int)))

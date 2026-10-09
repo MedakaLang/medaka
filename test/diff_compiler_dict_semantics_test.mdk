@@ -311,7 +311,7 @@ table = [
   Row {
     entry = "s6-drain-quiescence-projected-goal.mdk",
     label =
-      "§6.2 T4 at the quiescence drain, the `DrainDiags` member #3031`s fix did not remove: the diagnostics-arm drain replays `relay`s call goal projected to `Tweak Float` and reports it ambiguous. `DrainRollback` hides that on `check`, so this row is green today; it goes RED the day the drain`s diagnostics reach `check` before the projection is fixed. Prints 2.5",
+      "§6.2 T3 at the quiescence drain: `relay`s call goal is on a scheme-quantified variable, so `routeUndeterminedTop`s single-tag arm mints no `Tweak Float` route from the census tag `Float` and nothing is reported ambiguous. `DrainRollback` hides the drain`s diagnostics on `check`, so this row goes RED only once `DrainDiags` is deleted with that arm unguarded. Prints 2.5",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -1235,6 +1235,17 @@ table = [
     mode = NoValue,
     pinned = "",
     codes = [Present "W-INCOMPARABLE-IMPLS", Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "ambiguity-each-site-reported.mdk",
+    label =
+      "§6.2 T4 at three sites in one module: each `==` poses its own undetermined goal, so each is `T-AMBIGUOUS-INSTANCE` at its own site, though the three messages share their text; section 5 grades the three spans",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
     entry = "s6-t4-channel-multimodule/main.mdk",
@@ -4326,7 +4337,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 380
+tableRows = 381
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4743,10 +4754,47 @@ data VerbRow = VerbRow {
 {- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 verbRows : Int
-verbRows = 26
+verbRows = 31
 
 verbTable : List VerbRow
 verbTable = [
+  VerbRow {
+    ventry = "ambiguity-each-site-reported.mdk",
+    vlabel =
+      "the first of three ambiguous goals whose messages share their text is reported at its own site",
+    verb = "check",
+    assertion =
+      AHas "ambiguity-each-site-reported\\.mdk:7:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "ambiguity-each-site-reported.mdk",
+    vlabel =
+      "...the second, a different goal at another site, is a second diagnostic and not a duplicate of the first",
+    verb = "check",
+    assertion =
+      AHas "ambiguity-each-site-reported\\.mdk:8:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "ambiguity-each-site-reported.mdk",
+    vlabel = "...and the third",
+    verb = "check",
+    assertion =
+      AHas "ambiguity-each-site-reported\\.mdk:9:4: ambiguous instance for .Eq.",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel =
+      "one goal judged by the boundary and by the selector is ONE diagnostic at its site, the one naming the goal and both heads",
+    verb = "check",
+    assertion = AOnce "ambiguous instance for",
+  },
+  VerbRow {
+    ventry = "s6-t4-channel-multimodule/main.mdk",
+    vlabel =
+      "...and in a non-entry module the same goal is one diagnostic of either wording on `run` (a multi-module `check` prints to stdout, which this section does not grade)",
+    verb = "run",
+    assertion = AOnce "ambiguous instance for",
+  },
   VerbRow {
     ventry = "s6-2-t4-open-goal-deferred.mdk",
     vlabel =

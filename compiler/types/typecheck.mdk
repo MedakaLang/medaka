@@ -10338,9 +10338,8 @@ pushTypeErrorOnceAt code loc msg =
 -- Like `pushTypeErrorOnceAt`, but the duplicate test is per SITE: the same text at
 -- another span is a second diagnostic, the same text at the same span (a signature
 -- elaborated twice) still folds.  For messages that describe one site's own fault,
--- where two sites with identical text must each be reported.  A message about a
--- shared root cause (an ambiguous goal reached from two dispatch sites) belongs on
--- `pushTypeErrorOnceAt`, which folds on text alone.
+-- where two sites with identical text must each be reported.  An ambiguous goal
+-- folds on its span instead (`pushAmbiguityAt`).
 pushTypeErrorOncePerSite : String -> Option Loc -> String -> Unit
 pushTypeErrorOncePerSite code loc msg =
   let at = orElseLoc loc !currentLoc
@@ -10348,6 +10347,49 @@ pushTypeErrorOncePerSite code loc msg =
     noteTypeErrorDetected ()
   else
     recordTypeError (TcDiag code 1 at msg None None)
+
+-- A `T-AMBIGUOUS-INSTANCE` is one diagnostic per span, however many checks judge
+-- the goal there: the boundary, the module's obligation check and the selector each
+-- reach the same verdict on it.  Its text does not identify it, since the short
+-- message names only the interface, so two goals at two spans are two diagnostics.
+-- Of two messages at one span the one that names the goal and its candidates
+-- ([namesGoal]) is kept.  An unlocated one folds on its text.
+pushAmbiguityAt : Bool -> Option Loc -> String -> Unit
+pushAmbiguityAt namesGoal loc msg =
+  let at = orElseLoc loc !currentLoc
+  let code = "T-AMBIGUOUS-INSTANCE"
+  if isNone at then
+    pushTypeErrorOnceAt code at msg
+  else
+    let site = locKey at
+    match omLookup site perRun.value.ambiguitySitesRef.value
+      None =>
+        perRun.value.ambiguitySitesRef :=
+          omInsert site namesGoal perRun.value.ambiguitySitesRef.value
+        recordTypeError (TcDiag code 1 at msg None None)
+      Some named =>
+        if namesGoal && not named then
+          perRun.value.ambiguitySitesRef :=
+            omInsert site True perRun.value.ambiguitySitesRef.value
+          replaceAmbiguityAt site (writtenDiag (TcDiag code 1 at msg None None))
+        else
+          noteTypeErrorDetected ()
+
+-- Puts [d] in place of the `T-AMBIGUOUS-INSTANCE` recorded at [site], in the
+-- module's channel and the sticky one.
+replaceAmbiguityAt : String -> TcDiag -> Unit
+replaceAmbiguityAt site d =
+  let same e = tcCode e == tcCode d && locKey (tcLoc e) == site
+  let swap e = if same e then d else e
+  let _ = noteTypeErrorDetected ()
+  perRun.value.typeErrorMsgSetRef :=
+    omInsert
+      (msgAtKey (tcMsg d) (tcLoc d))
+      ()
+      (omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value)
+  perRun.value.typeErrors.items := map swap !perRun.value.typeErrors.items
+  typeErrorsStickyDiags :=
+    map ((m, e) => (m, swap e)) typeErrorsStickyDiags.value
 
 -- Push a deduped type error (same dedup rule as pushTypeErrorOnceAt) that also
 -- carries a human `help` string and an optional machine-applicable `fix`
@@ -11825,6 +11867,8 @@ data PerRun = PerRun {
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
   deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
+  liveMemberMonosRef : Ref (List Mono),  -- the types of the module's closed top-level members that generalization left a variable open in: a later group can still ground it (DICT-SEMANTICS §6.2 T2), so no boundary judges a goal on it (`liveMemberIds`)
+  quiescentGoalsRef : Ref (List (OrdMap Unit, GoalWindow, UObligation)),  -- the goals on such a variable, newest first, each with its boundary's rigid variables and window (`judgeQuiescentGoals`)
   determinedRowsRef : Ref (Map Int (List (ImplRow, List Mono))),  -- the instance each determination commit chose, with the committed goal's arguments, filed under the variable heading the goal (`fileDeterminedRow`)
   declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` holds rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
@@ -11871,6 +11915,7 @@ data PerRun = PerRun {
   fieldOwnerReachRef : Ref (OrdMap Unit),  -- #1597: the module ids THIS module can reach through DUse — see declEnvSeedDataUniverse
   typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
   typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages and message-at-site keys — see recordTypeError
+  ambiguitySitesRef : Ref (OrdMap Bool),  -- the spans holding a `T-AMBIGUOUS-INSTANCE`, each with whether its message names the goal (`pushAmbiguityAt`)
   errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
   occursCheckFailed : Ref Bool,
   currentLevel : Ref Int,
@@ -11935,6 +11980,8 @@ freshPerRun _ = PerRun {
   implObls = wNew (),
   poisonedVars = Ref [],
   deferrableVarIds = Ref [],
+  liveMemberMonosRef = Ref [],
+  quiescentGoalsRef = Ref [],
   determinedRowsRef = Ref Tip,
   declaredSigVarIds = Ref omEmpty,
   tupleCallCandidates = Ref [],
@@ -11975,6 +12022,7 @@ freshPerRun _ = PerRun {
   fieldOwnerReachRef = Ref omEmpty,
   typeErrors = wNew (),
   typeErrorMsgSetRef = Ref omEmpty,
+  ambiguitySitesRef = Ref omEmpty,
   errorsDetected = Ref 0,
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
@@ -31754,10 +31802,7 @@ reportAmbiguousOverlap goals cands = match candsOneIface cands
 
 reportOverlapForIface : String -> List Mono -> List KeyEntry -> Unit
 reportOverlapForIface iface goals cands =
-  pushTypeErrorOnceAt
-    "T-AMBIGUOUS-INSTANCE"
-    !goalSiteLoc
-    (ambiguousOverlapMsg iface goals cands)
+  pushAmbiguityAt True !goalSiteLoc (ambiguousOverlapMsg iface goals cands)
 
 -- §6.2 T3's "closed": every variable of the goal is *"either quantified by the scheme
 -- just produced or already ground"* — the ground goals PLUS the rigid-variable ones.
@@ -33348,6 +33393,9 @@ routeUndeterminedTop prog scope ifaceRef goal
   | ifaceRef.irName == "" = RNone
   | otherwise = match implHeadTagsForIface prog ifaceRef.irName
     [] => RNone
+    -- A goal on a scheme-quantified variable is the caller's (`reportAmbiguousImpl`):
+    -- the one census tag names no instance of it, so no route is minted from the tag.
+    [_] if not (monoVectorClosed goal) && goalsClosed goal => RNone
     -- #1110: `tag` arrived as a bare `String` from `implHeadTagsForIface`, which
     -- projects an impl head through `headTyconTy` and DISCARDS the `Ty` that
     -- carried the identity — so there is no origin to acquire at this site, only
@@ -33373,11 +33421,7 @@ reportAmbiguousImpl iface goal =
   if goalsClosed goal then
     RNone
   else
-    let _ =
-      pushTypeErrorOnceAt
-        "T-AMBIGUOUS-INSTANCE"
-        !goalSiteLoc
-        (ambiguousImplMsg iface)
+    let _ = pushAmbiguityAt False !goalSiteLoc (ambiguousImplMsg iface)
     RNone
 
 -- every impl head tycon for [iface] declared in [prog] (a single-arg interface has
@@ -35859,6 +35903,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- reach codegen through `build`'s own elaboration.  `setNumlitFloats` is not called
     -- here on any driver any more: the Float literal stamp is `SSNumlitFloats`,
     -- first step of the graph-end drain every Module-arm driver now runs.
+    let _ = judgeQuiescentGoals ()
     let _ = checkCallObligationsU True obUniv perRun.value.implObls.items.value
     let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
     let _ = settleDeferredPatLits ()
@@ -36863,10 +36908,7 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
       None =>
         let _ =
           if methodReturnAmbiguousWithoutGiven request then
-            pushTypeErrorOnceAt
-              "T-AMBIGUOUS-INSTANCE"
-              loc
-              (ambiguousImplMsg request.mrrIface.irName)
+            pushAmbiguityAt False loc (ambiguousImplMsg request.mrrIface.irName)
           else
             checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
         noteMethodReturnTrace MRTChecked request None []
@@ -37410,7 +37452,7 @@ bucketAnyLonger ((tys, _) :: rest) n = listLen tys > n || bucketAnyLonger rest n
 -- checked: the same candidates and the same verdict a boundary gives
 -- (`rejectUndeterminedVectors`), for every arity, the module's declared signature
 -- variables held rigid.  A goal that the boundary judged reaches the same verdict
--- here, and the diagnostic folds on its text; a goal no boundary's window held
+-- here, and the diagnostic folds on its span; a goal no boundary's window held
 -- gets it here.  No impl of the interface that unifies with the goal is
 -- `T-NO-IMPL`; one is the instance; two or more with no stable minimum is
 -- `T-AMBIGUOUS-INSTANCE`.  That verdict depends on the goal alone, not on whether
@@ -37734,11 +37776,7 @@ reportUndeterminedGoal rigidIds window iface args loc =
   match goalCandidates rigidIds args (goalRows iface args)
     [] => reportUndeterminedNoImpl iface args loc
     unifying => match goalReach args (verdictCandidates window args unifying)
-      ReachMany =>
-        pushTypeErrorOnceAt
-          "T-AMBIGUOUS-INSTANCE"
-          loc
-          (ambiguousImplMsg iface.irName)
+      ReachMany => pushAmbiguityAt False loc (ambiguousImplMsg iface.irName)
       _ => ()
 
 -- DIAGNOSTIC-CODES-DESIGN `T-NO-IMPL` for an undetermined goal.  A one-position
@@ -37770,7 +37808,8 @@ rejectUndeterminedVectors rigidIds liveIds implObls callObls =
     let window = goalWindowOf obls
     fold (_ o => undeterminedVectorVerdict rigidIds liveIds window o) () obls
 
--- [window] is the boundary's goal window.
+-- [window] is the boundary's goal window.  A goal on a live variable waits for
+-- quiescence (`judgeQuiescentGoals`) with the boundary's [rigidIds] and [window].
 undeterminedVectorVerdict : OrdMap Unit ->
   OrdMap Unit ->
   GoalWindow ->
@@ -37780,12 +37819,27 @@ undeterminedVectorVerdict rigidIds liveIds window o =
   let args = map normalize (uOblArgs o)
   let ids = flatMap monoUnboundIds args
   if not (undeterminedGoalExempt o.pred.iface args o.uoScope)
-    && not (anyList (i => omHasKey (intToString i) liveIds) ids)
     && anyList (i => boundaryOwnsOpen rigidIds i) ids then
-    if isEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args)) then
+    if anyList (i => omHasKey (intToString i) liveIds) ids then
+      perRun.value.quiescentGoalsRef :=
+        (rigidIds, window, o) :: perRun.value.quiescentGoalsRef.value
+    else if isEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args)) then
       reportUndeterminedGoal rigidIds window o.pred.iface args o.loc
     else
       reportMixedGoalAmbiguity window o.pred.iface args o.loc
+
+-- The verdict on the goals boundaries left to quiescence, once every group of the
+-- module has closed: no later group is left to ground their variables, so each is
+-- judged as its boundary would have judged it.
+judgeQuiescentGoals : Unit -> Unit
+judgeQuiescentGoals _ =
+  let goals = reverseL perRun.value.quiescentGoalsRef.value
+  perRun.value.quiescentGoalsRef := []
+  fold
+    (_ (rigidIds, window, o) =>
+      undeterminedVectorVerdict rigidIds omEmpty window o)
+    ()
+    goals
 
 -- A goal that mentions both a rigid variable and one only this boundary could have
 -- fixed.  Whatever the enclosing scope instantiates the rigid variable to, the
@@ -37801,11 +37855,7 @@ reportMixedGoalAmbiguity : GoalWindow ->
 reportMixedGoalAmbiguity window iface args loc =
   let unifying = goalCandidates omEmpty args (goalRows iface args)
   match goalReach args (verdictCandidates window args unifying)
-    ReachMany =>
-      pushTypeErrorOnceAt
-        "T-AMBIGUOUS-INSTANCE"
-        loc
-        (ambiguousImplMsg iface.irName)
+    ReachMany => pushAmbiguityAt False loc (ambiguousImplMsg iface.irName)
     _ => ()
 
 -- [i] is neither held rigid nor quantified by a registered scheme.
@@ -37814,17 +37864,24 @@ boundaryOwnsOpen rigidIds i =
   not (omHasKey (intToString i) rigidIds)
     && not (containsI i perRun.value.deferrableVarIds.value)
 
--- The unbound variables of the non-generalized members' types [monos]: a later
--- group can still ground them (§6.2 T2).
+-- The variables a later group can still ground (§6.2 T2): those no scheme
+-- quantifies in the types of this group's members [monos] and of every earlier
+-- top-level member of the module.  The members that still carry one are kept for
+-- the groups after this one; a member grounded since is dropped.
 liveMemberIds : List Mono -> OrdMap Unit
 liveMemberIds monos =
-  omFromNames
-    (map
-      intToString
-      (filterList
-        (i => not (containsI i perRun.value.deferrableVarIds.value))
-        (dedupI (flatMap monoUnboundIds monos))))
-    omEmpty
+  let open =
+    filterList
+      (m => isNonEmptyL (liveVarIdsOf m))
+      (monos ++ perRun.value.liveMemberMonosRef.value)
+  perRun.value.liveMemberMonosRef := open
+  omFromNames (map intToString (dedupI (flatMap liveVarIdsOf open))) omEmpty
+
+liveVarIdsOf : Mono -> List Int
+liveVarIdsOf m =
+  filterList
+    (i => not (containsI i perRun.value.deferrableVarIds.value))
+    (monoUnboundIds m)
 
 -- The prerequisites of the instances [obls]' goals select, as goals of the same
 -- boundary at their parents' sites (DICT-SEMANTICS §3).  An instance answers a goal
@@ -37941,11 +37998,7 @@ withheldVectorVerdict rigidIds window o =
   if not (undeterminedGoalExempt iface args o.uoScope) then
     let unifying = goalCandidates rigidIds args (goalRows iface args)
     match goalReach args (verdictCandidates window args unifying)
-      ReachMany =>
-        pushTypeErrorOnceAt
-          "T-AMBIGUOUS-INSTANCE"
-          o.loc
-          (ambiguousImplMsg iface.irName)
+      ReachMany => pushAmbiguityAt False o.loc (ambiguousImplMsg iface.irName)
       _ => ()
 
 hasVectorArgs : UObligation -> Bool
@@ -51366,26 +51419,19 @@ data GraphOut = GOutDiags | GOutTrees
 -- (`run`, `build`) do not report it, because `emitElaborationGate` gates on
 -- `hadTypeErrors` and the residual does not arm it.
 --
--- What the population is.  It was measured as 3 of 2,704 accepted files (of 3,505
--- tracked): `test/engine_fixtures/where_dict_forward.mdk`, `test/parse_fixtures/blocks.mdk`
--- and `test/engine_fixtures/numlit_alias_predicates/support.mdk`.  It has two members:
---   * #3031, now fixed: `routeUndeterminedTop`'s ambiguous arm reported a receiver
---     some scheme QUANTIFIES, at a stale location.  It defers such a goal now
---     (`reportAmbiguousImpl`), which empties the first two files and the
---     `s6-drain-quiescence-{inferred,declared}-scheme` pair.
---   * OPEN: support.mdk's `relay n = value n` (`value : (Num a, Tweak a Int,
---     Tweak a Bool) => …`).  The diagnostics-arm drain replays that call's goal
---     PROJECTED to its first argument, with the scheme-quantified `a` reading
---     `Float`, so `pickMostSpecificEntry` sees the ground `Tweak Float`, matched by
---     both `Tweak Float Int` and `Tweak Float Bool`, and rejects it.  The goal reaches
---     the drain ground, so no closedness test can defer it; where `a` is bound and the
---     vector dropped is the open question.  The trees-arm drain of `run`/`build` does
---     not produce it.  Witness: `test/dict_fixtures/s6-drain-quiescence-projected-goal.mdk`.
--- The #3031 member reproduced with every numeric literal deleted, so it was not a
--- defaulting failure.
+-- What the population is.  Measured over the 1,482 `.mdk` files under
+-- `test/{dict,run_check_agreement,engine,parse,build_diff,construct}_fixtures`,
+-- `stdlib/` and `compiler/driver/medaka_cli.mdk`, it is one file:
+-- `stdlib/core.mdk` checked as an entry, whose drain reports `` `a` is used as an
+-- authority, but nothing binds it as one `` (and the same for `h`) at `1:0`.
+-- The dictionary members it once had are drained: a goal on a scheme-quantified
+-- variable gets no route from `routeUndeterminedTop`, in either its ambiguous arm
+-- (`reportAmbiguousImpl`) or its single-tag arm, which would otherwise mint the
+-- goal `Tweak Float` from the census tag of `support.mdk`'s two `Tweak Float _`
+-- impls.  Witnesses: `test/dict_fixtures/s6-drain-quiescence-*.mdk`.
 --
 -- DELETION CONDITION: this parameter goes away, and every caller takes one
--- behavior, when the population is EMPTY, i.e. when the projected-goal member is
+-- behavior, when the population is EMPTY, i.e. when the `core.mdk` member is
 -- fixed.  Re-derive the population before deciding; do not read the list above as
 -- current.  How: build a second arm with `DrainRollback` mapped to
 -- `drainStampQueue` and the drive's residual rendered as entry errors, run both
