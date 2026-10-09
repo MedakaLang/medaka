@@ -1247,6 +1247,7 @@ freshLocalAbsName : String -> String
 freshLocalAbsState : Unit -> LocalAbsState
 freshPerRun : Unit -> PerRun
 freshRowHeads : ImplRow -> List Mono
+freshRowHeadsTvs : ImplRow -> (List (String, Mono), List Mono)
 freshSubst : List Int -> List (Int, Mono)
 freshToggles : Unit -> Toggles
 freshTvMap : List String -> List (String, Mono)
@@ -3134,6 +3135,7 @@ undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
 undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
 undeterminedRowRoute : ScopeId -> IfaceRef -> List Mono -> ImplRow -> Route
 undeterminedVectorVerdict : Map String Unit -> Map String Unit -> GoalWindow -> UObligation -> Unit
+unifiedRowReqs : Map String Unit -> List Mono -> ImplRow -> Option (List (String, Mono), List Int, List Require)
 unify : Mono -> Mono -> Unit
 unifyAll : Mono -> List Mono -> Unit
 unifyFieldAssignIdx : TcEnv -> String -> RecordInfo -> RecordSubst -> String -> Expr -> Unit

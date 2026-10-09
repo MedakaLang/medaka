@@ -37797,18 +37797,42 @@ selectedRequireGoals rigidIds o =
       else
         goalReach args (goalCandidates rigidIds args rows)
     match reach
-      ReachOne row => match selectedRowReqMatch args row
-        Some (subst, reqs) =>
-          let parentIds = flatMap monoUnboundIds args
-          let size = monoSizes args
-          flatMap
-            (req =>
-              map
-                (g => (g, monoSizes g.pred.args < size))
-                (requireGoalAt o parentIds (reqToObligation subst req)))
-            reqs
-        None => []
+      ReachOne row =>
+        let parentIds = flatMap monoUnboundIds args
+        let size = monoSizes args
+        let goalsOf =
+          ids subst reqs =>
+            flatMap
+              (req =>
+                map
+                  (g => (g, monoSizes g.pred.args < size))
+                  (requireGoalAt o ids (reqToObligation subst req)))
+              reqs
+        match selectedRowReqMatch args row
+          Some (subst, reqs) => goalsOf parentIds subst reqs
+          None => match unifiedRowReqs rigidIds args row
+            Some (subst, fresh, reqs) => goalsOf (parentIds ++ fresh) subst reqs
+            None => []
       _ => []
+
+-- The prerequisites of [row] under the unifier of its heads with [args] (every
+-- variable in [rigidIds] held rigid), for a goal the row's head determines without
+-- matching it as it stands (`B ?a` under `impl B (List b)`).  The variables the
+-- unifier introduces are the head's own, and are returned beside the substitution.
+unifiedRowReqs : OrdMap Unit ->
+  List Mono ->
+  ImplRow ->
+  Option (List (String, Mono), List Int, List Require)
+unifiedRowReqs rigidIds args (row@(ImplRow _ _ _ _ reqs _)) =
+  let (tvs, allHeads) = freshRowHeadsTvs row
+  let heads = take (listLen args) allHeads
+  let scratch = Ref []
+  if listLen heads == listLen args
+    && cohOverlapGo scratch (rigidSigPairs rigidIds (zipL args heads)) then
+    let bound = map (nv => (fst nv, cohApply scratch (snd nv))) tvs
+    Some (bound, flatMap (nv => monoUnboundIds (snd nv)) bound, reqs)
+  else
+    None
 
 -- A prerequisite as a goal at [o]'s site.  One that mentions a variable the
 -- instance's head does not fix is left to the module's obligation check.
@@ -37997,10 +38021,15 @@ cohApply subst m = match cohResolve subst m
   other => other
 
 freshRowHeads : ImplRow -> List Mono
-freshRowHeads row =
+freshRowHeads row = snd (freshRowHeadsTvs row)
+
+-- [row]'s heads with each of its variables fresh, and the name each fresh variable
+-- stands for.
+freshRowHeadsTvs : ImplRow -> (List (String, Mono), List Mono)
+freshRowHeadsTvs row =
   let tys = ieRowTys row
   let tvs = freshTvMap (dedup (flatMap tyVarNames tys))
-  map (fromAstType tvs) tys
+  (tvs, map (fromAstType tvs) tys)
 
 -- DIAGNOSTIC-CODES-DESIGN `T-NO-IMPL`, undetermined vector: each variable renders
 -- as `_`, since a letter would read as a name the program wrote.
