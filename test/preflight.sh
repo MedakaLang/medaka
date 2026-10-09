@@ -1670,7 +1670,8 @@ fi
 # between two branches that were each green alone, so no pre-merge signal existed
 # anywhere except `make test` — the one thing the loop did not call.
 #
-# The file list is DERIVED from the Makefile's `test:` recipe, never re-listed here.
+# The file list is DERIVED from the Makefile's `inlang-*` step recipes (between the
+# `# inlang-steps: begin/end` markers), never re-listed here.
 # That matters more than the saved keystrokes: the Makefile's own comment instructs
 # "Add a line here for every call-site-free compiler module", so this list is expected
 # to GROW, and a copy here would silently stop covering whatever was added. Scoped to
@@ -1684,7 +1685,7 @@ fi
 # Each entry is the recipe line after `./medaka test`: optional flags (`--native`), then
 # the target as the LAST word. The flags must reach the run, or a roster the Makefile
 # grades natively runs under the interpreter here (#3302).
-inlang_lines=$(awk '/^test: medaka$/{f=1;next} f&&/^\t/{print} f&&!/^\t/{exit}' "$ROOT/Makefile" \
+inlang_lines=$(awk '/^# inlang-steps: begin/{f=1;next} /^# inlang-steps: end/{exit} f&&/^\t/{print}' "$ROOT/Makefile" \
   | sed -n 's|^	\./medaka test ||p')
 inlang_files=$(printf '%s\n' "$inlang_lines" | awk 'NF{print $NF}')
 # Prints the flags the Makefile passes for target $1 (empty when none).
