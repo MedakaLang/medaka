@@ -477,7 +477,7 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 | Inferred-constraint registration | `registerInferredConstraints`, `setDictEligible` | ~204 lines | DICT §4 `gen` |
 | Per-module fold | `foldModules` | 10 / 201 / **0** | — |
 | Check drivers | `checkModules`, `checkModuleFullImpl`, and the `checkOne*` projections | ~590 lines | — |
-| Typed elaboration | `elaborateModules` (a projection of `driveGraphK GOutTrees DrainKeep`) → `graphPreamble` → `graphModuleWorker` per module → `graphCollect` → `graphDrainFinish`; `elaborateOne` is its one-module projection | 53 / 892 / 30 | DICT §4, §8 |
+| Typed elaboration | `elaborateModules` (a projection of `driveGraphK GOutTrees`) → `graphPreamble` → `graphModuleWorker` per module → `graphCollect` → `drainStampQueue`; `elaborateOne` is its one-module projection | 53 / 892 / 30 | DICT §4, §8 |
 | Cross-module universe marshalling | `loadDataUniverse`, `appendDataUniverse`, `appendUniverseAccums` — ⚠️ **derive the cell counts from the three bodies, never from this table**: it said `14`/`14`/`11`, and #1512 slices 1–3 plus #1557 A-3.5c retired cells out of the load/store pair inside four days; the store half, `storeDataUniverse`, is itself retired, and `appendDataUniverse` writes the populations | 3 fns | DICT §6 C4, §8 I2 |
 | Import seeding / aliasing / ctor overlay | `importFormSchemes`, `aliasSchemes`, `aliasConstraintEntries` | ~370 lines | DICT §8 I2 |
 
@@ -539,7 +539,7 @@ safest extraction candidate in the file (§7.4).
 **It is ONE sweep. There is no fixpoint, and there is only one graph driver.**
 
 ```
-elaborateModules  =  driveGraphK GOutTrees DrainKeep None …   (a projection)
+elaborateModules  =  driveGraphK GOutTrees None …   (a projection)
   │
   └─ driveGraphK
        renameAliasedMethods                                   ← GOutTrees only
@@ -553,7 +553,7 @@ elaborateModules  =  driveGraphK GOutTrees DrainKeep None …   (a projection)
               tail bodies (impl/default/prop/test) marked with the module's final set
          graphModuleWorker unions promotedRef into promotionHarvestRef (GOutTrees) and
          returns the marked tree; graphCollect accumulates it on that selection only
-       graphDrainFinish  (DrainKeep here; the check selections take DrainRollback)
+       drainStampQueue  (both selections keep what the drain raises)
        dictPassModulesIfEnabled (markDictNames (bare ∪ harvest))
          → resolveAliasMethodSpellings → residual publish     ← GOutTrees only
 ```

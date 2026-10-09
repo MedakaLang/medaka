@@ -154,7 +154,6 @@ argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
 argImplDictRoutesForEncl : String -> ScopeId -> String -> String -> Mono -> List Mono -> List Route
 argImplReqRoutes : String -> ScopeId -> List (String, Mono) -> List Require -> Int -> Int -> List Route
-argImplRequiresRoutes : IfaceRef -> String -> ScopeId -> Mono -> List Mono -> Int -> Int -> List Route
 argImplRequiresRoutesForRow : String -> ScopeId -> Mono -> List Mono -> Int -> Int -> ImplRow -> List Route
 argMentions : List String -> Ty -> Bool
 argOnlyEffVarMsg : String -> String -> String -> String
@@ -389,7 +388,6 @@ ceSuperOrigin : Super -> String
 ceSuperParams : Super -> List String
 cellIdSet : List (Ref Effvar) -> Map Int Unit
 cellIdSetGo : List (Ref Effvar) -> Map Int Unit -> Map Int Unit
-censusHeadNameTy : Ty -> Option String
 censusSuperClose : List (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperCloseVec : List VecObl -> List VecObl
 censusSuperStep : List String -> Int -> Super -> Option Int
@@ -920,7 +918,7 @@ domainIsTupleOfArity : Mono -> Int -> Bool
 domainParam : Option String -> Param
 domainParamWith : Option String -> List (String, String) -> Param
 drainStampQueue : Unit -> Unit
-driveGraphK : GraphOut -> DrainDiags -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
+driveGraphK : GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> GraphDrive
 driverState : Ref DriverState
 dropFirst : Int -> List a -> List a
 dropGoalsSince : Int -> List GoalKind -> Unit
@@ -1341,7 +1339,6 @@ graphAliasEntry : String -> List ((String, String), a) -> (String, (String, Stri
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCollect : GraphOut -> Bool -> String -> (List Decl, List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag)))
-graphDrainFinish : DrainDiags -> Unit
 graphMarksNow : Unit -> GraphMarks
 graphModuleWorker : GraphOut -> String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, (List Decl, List (String, Scheme), List TcDiag, List TcDiag))
 graphPreamble : GraphOut -> Option (Int, Int) -> List Decl -> List Decl -> List (String, List Decl) -> (List (String, Scheme), ModuleBindings, List Decl, MarkSets)
@@ -1520,8 +1517,6 @@ implHeadMatchesArgs : List Ty -> List Mono -> Bool
 implHeadMonos : List Ty -> (List (String, Mono), List Mono)
 implHeadParametric : Decl -> Bool
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
-implHeadTagForIface : String -> Decl -> List String
-implHeadTagsForIface : List Decl -> String -> List String
 implHeadTypeVarRoots : List (String, Mono) -> List (String, Int)
 implHeadVarRoots : List (String, Mono) -> List (String, HeadVarRoot)
 implKeyTc : String -> List Ty -> String
@@ -2745,7 +2740,7 @@ resolveArgStamp : String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> Str
 resolveArgStamps : List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSites : List (Ref Route, Mono) -> Unit
-resolveDictApps : List Decl -> List PendingDictApp -> Unit
+resolveDictApps : List PendingDictApp -> Unit
 resolveExactReturnSite : List String -> String -> Ref Route -> Ref (List Route) -> Mono -> MethodReturnRequest -> String -> Option Loc -> ScopeId -> Unit
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
@@ -2760,8 +2755,8 @@ resolveOpSites : Bool -> List PendingEntry -> Unit
 resolvePendingJoin : PendingJoin -> Unit
 resolvePendingJoins : Int -> Unit
 resolvePredicateOpSite : Bool -> String -> Ref Route -> Mono -> Bool -> ClassPredicate -> String -> ScopeId -> Unit
-resolveRLocalSite : List Decl -> String -> Ref Route -> Mono -> String -> ScopeId -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
-resolveRLocalSites : List Decl -> List PendingEntry -> Unit
+resolveRLocalSite : String -> Ref Route -> Mono -> String -> ScopeId -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
+resolveRLocalSites : List PendingEntry -> Unit
 resolveRecMono : String -> ScopeId -> IfaceRef -> Mono -> Route
 resolveSite : List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
 resolveSites : List String -> List PendingEntry -> Unit
@@ -2801,9 +2796,9 @@ routeOfD : IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> List Mono ->
 routeOutcomeKind : Route -> EvidenceOutcomeKind
 routePrerequisiteRoutes : Route -> List Route
 routeRDictName : Route -> List String
-routeUndeterminedTop : List Decl -> ScopeId -> IfaceRef -> List Mono -> Route
-routesOfMonosTop : List Decl -> String -> ScopeId -> List Mono -> List IfaceRef -> List Route
-routesOfMonosTopV : List Decl -> String -> ScopeId -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
+routeUndeterminedTop : ScopeId -> IfaceRef -> List Mono -> Route
+routesOfMonosTop : String -> ScopeId -> List Mono -> List IfaceRef -> List Route
+routesOfMonosTopV : String -> ScopeId -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
 rowArgAtomsApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List (String, List Atom) -> List (String, List Atom)
 rowArgAtomsIn : List (String, List Kind) -> Ty -> List (String, List Atom)
 rowArgAtomsVarApp : List (String, List Kind) -> String -> List Ty -> List (String, List Atom) -> List (String, List Atom)
@@ -2880,7 +2875,6 @@ seedEffectDomains : Unit -> Unit
 seedNumLitFromIntAnchor : List MethodSchemeRow -> Unit
 seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
-selectReqImpl : IfaceRef -> List Mono -> Option (Ty, List Ty, List Require)
 selectReturnRow : ImplEnv -> String -> List Mono -> Option ImplRow
 selectedCallSupers : String -> Option ImplRow -> String -> ScopeId -> List Mono -> List Route
 selectedRequireGoals : Map String Unit -> UObligation -> List (UObligation, Bool)
@@ -3064,7 +3058,7 @@ tiedSurvivors : List Mono -> List UObligation -> Map String Unit -> Map String U
 toggles : Ref Toggles
 topAbsorbs : String -> Expr -> Expr
 topGrantIds : String -> String -> List Int
-topRouteV : List Decl -> String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
+topRouteV : String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
 transitiveImporters : Map String (Map String Unit) -> String -> List (String, List Decl) -> List (String, List Decl)
 tupleArgElems : Expr -> Option (List Expr)
 tupleCallHintFor : Mono -> Option (String, Option (Loc, String))
@@ -3132,6 +3126,7 @@ undeterminedGoalExempt : IfaceRef -> List Mono -> ScopeId -> Bool
 undeterminedNoImplMsg : String -> List Mono -> String
 undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
 undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
+undeterminedRowRoute : ScopeId -> IfaceRef -> List Mono -> ImplRow -> Route
 undeterminedVectorVerdict : Map String Unit -> Map String Unit -> GoalWindow -> UObligation -> Unit
 unify : Mono -> Mono -> Unit
 unifyAll : Mono -> List Mono -> Unit

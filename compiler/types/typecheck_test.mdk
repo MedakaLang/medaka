@@ -84,9 +84,11 @@ import types.typecheck.{
   methodReturnMemoRetentionStats,
   methodReturnMemoTeardownStats,
   methodReturnTemplatePresenceProbe,
+  resetTypeErrorsSticky,
   scopeFrameStats,
   setStdlibOwnership,
   scopeTraceContext,
+  stickyTypeErrorDiags,
   tcCode,
   tcMsg,
 }
@@ -3775,3 +3777,132 @@ test "mutually recursive top-level and where bindings still form one group" =
         "    od n = ev n",
       ],
     ]
+
+-- The `test/dict_fixtures/s6-drain-quiescence-*.mdk` programs over a minimal
+-- prelude.  `check` renders the per-module diagnostics collected before the
+-- graph-end drain, so what the drain decides about a scheme-quantified goal is
+-- visible only in the sticky accumulator and in the evidence it records.
+drainPreludeSource : String
+drainPreludeSource = joinNl [
+  "interface Eq a where",
+  "  eq : a -> a -> Bool",
+  "impl Eq Int where",
+  "  eq _ _ = True",
+  "interface Display a where",
+  "  display : a -> String",
+  "impl Display String where",
+  "  display s = s",
+  "impl Display Int where",
+  "  display _ = \"int\"",
+  "impl Display Float where",
+  "  display _ = \"float\"",
+  "println : Display a => a -> Unit",
+  "println x = let _ = display x in ()",
+]
+
+drainCheck : List String -> Unit
+drainCheck body =
+  let core = desugar (parse "\{arithmeticPreludeSource}\n\{drainPreludeSource}")
+  let _ = checkOneDiags [] core (
+    "drain_quiescence",
+    desugar (parseLocated (joinNl body)),
+  )
+  ()
+
+drainStickyObserved : List String -> List String
+drainStickyObserved body =
+  let _ = resetTypeErrorsSticky ()
+  let _ = drainCheck body
+  let raised = map (entry => tcMsg (snd entry)) (stickyTypeErrorDiags ())
+  let _ = resetTypeErrorsSticky ()
+  raised
+
+drainInferredSchemeSource : List String
+drainInferredSchemeSource = [
+  "interface Sh a where",
+  "  shv : a -> Int",
+  "impl Sh Int where",
+  "  shv _ = 11",
+  "impl Sh Bool where",
+  "  shv _ = 22",
+  "needsSh : Sh a => a -> Int",
+  "needsSh x = shv x",
+  "top a = h a",
+  "  where",
+  "    h x = needsSh x",
+  "main = println (top True)",
+]
+
+drainDeclaredSchemeSource : List String
+drainDeclaredSchemeSource = [
+  "interface Ixd a b where",
+  "  ixd : a -> b -> a",
+  "impl Ixd Int Bool where",
+  "  ixd x _ = x",
+  "interface Shb a where",
+  "  shb : a -> a",
+  "impl Shb Bool where",
+  "  shb x = x",
+  "impl Shb Int where",
+  "  shb x = x",
+  "nonlead : (Ixd a b, Shb b) => b -> a -> a",
+  "nonlead n x = ixd x (shb n)",
+  "relay n x = nonlead n x",
+  "main = println (relay True 7)",
+]
+
+drainLetAliasSource : List String
+drainLetAliasSource = [
+  "greet name =",
+  "  let msg = name",
+  "  println msg",
+  "  println name",
+  "main = greet \"hi\"",
+]
+
+drainProjectedGoalSource : List String
+drainProjectedGoalSource = [
+  "interface Tweak a b where",
+  "  tweak : b -> a -> a",
+  "impl Tweak Float Int where",
+  "  tweak _ x = x",
+  "impl Tweak Float Bool where",
+  "  tweak _ x = x",
+  "value : (Tweak a Int, Tweak a Bool) => Int -> a -> a",
+  "value n x = if n == 0 then x else tweak True (tweak 1 (relay (n - 1) x))",
+  "relay n x = value n x",
+  "main = println (relay 1 (2.5 : Float))",
+]
+
+-- A goal that reaches two or more instances and is on a scheme-quantified
+-- variable is the caller's; reporting it ambiguous at the drain was #3031.
+test "the graph-end drain reports no scheme-quantified goal ambiguous" =
+  expectEqual
+    [
+      ("inferred-scheme", []),
+      ("declared-scheme", []),
+      ("let-alias", []),
+      ("projected-goal", []),
+    ]
+    [
+      ("inferred-scheme", drainStickyObserved drainInferredSchemeSource),
+      ("declared-scheme", drainStickyObserved drainDeclaredSchemeSource),
+      ("let-alias", drainStickyObserved drainLetAliasSource),
+      ("projected-goal", drainStickyObserved drainProjectedGoalSource),
+    ]
+
+-- `relay`'s two `Tweak` goals sit on its scheme-quantified `a` and each reaches
+-- exactly one instance (`Tweak Float Int`, `Tweak Float Bool`).  The one instance
+-- a goal reaches is not chosen for a goal its caller owns, so both slots stay
+-- unrouted rather than keyed on `Float`.
+test "the graph-end drain mints no instance route for a scheme-quantified goal" =
+  let _ = beginEvidenceObservation ()
+  let _ = drainCheck drainProjectedGoalSource
+  let entries = finishEvidenceObservation ()
+  expectEqual
+    [None, None]
+    (map
+      (e => e.eoeInstanceKey)
+      (filter
+        (e => e.eoeGoalKind == "GKDictApp" && e.eoePredicate == Some "a")
+        entries))
