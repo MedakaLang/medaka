@@ -108,6 +108,7 @@ only for bounded tests; production code must still follow
 | Concrete authority domains | [effect_domain_property_test.mdk](../../compiler/types/effect_domain_property_test.mdk) | Prefix/Set/Product inclusion and least upper bounds against finite models; antichain admission preservation; constant-authority order; empty Set boundaries. |
 | The value restriction (HM-CORE §1, DICT §4.1 G2) | [hm_value_restriction_property_test.mdk](../../compiler/types/hm_value_restriction_property_test.mdk) | Generated bindings generalize iff a transcribed value grammar says so, at top level, at a local `let`, in a binding group and under a signature; partial application; `T-SIG-OVER-EXPANSIVE`; binder-rename invariance. |
 | Invariance of verdicts and schemes (SHADOW S1-S9, DICT T1/U1/U2/C4, history independence) | [check_invariance_property_test.mdk](../../compiler/types/check_invariance_property_test.mdk) | Shadow-clause verdict model under renaming, unrelated insertion and import/provider reordering; declaration permutation; flat route versus one-module route; two-module split; a check of `P` after any `Q` equals `P` first. |
+| Damas-Milner core (HM-CORE §2-5, #2555) | [hm_core_property_test.mdk](../../compiler/types/hm_core_property_test.mdk) | Principality by re-annotation; instantiation and non-instances; occurs check; operand-order symmetry against a Robinson unification model; lambda- versus let-bound polymorphism; group monomorphism and polymorphic recursion under signatures. |
 
 The utility deduplication model exposed a native code-generation defect:
 a lifted patterned lambda inherited its enclosing function's tail-recursion
@@ -179,6 +180,25 @@ The invariance rows live in
 Its self-test hand-builds a changed scheme, a changed verdict and a lost
 binding and requires the comparison to reject each; its censuses assert both
 verdicts and every transformation over the enumerated domains.
+
+| Clause | Disposition | Oracle |
+| --- | --- | --- |
+| HM-CORE §2/§4 principality (#2555) | prop `re-annotating a binding with its inferred scheme is accepted and re-infers it` | Damas-Milner principal type: the inferred scheme equals the harness typing model's type up to renaming (`alphaEquiv`), and annotating with it re-infers it |
+| HM-CORE §2/§4 with an integer literal (#2555) | prop `a binding containing an integer literal is principal and generalizes`; pin #3949 (eval and native) | Same rules; a literal is a syntactic value (HM-CORE §1) |
+| HM-CORE §3 symmetry (#2555) | prop `swapping the operands of an equation-forcing construct keeps its verdict` | Robinson unification model over generated types: each operand order's verdict is whether a unifier exists |
+| HM-CORE §3 occurs check (#2555) | prop `an equation between a type and a proper part of itself is rejected` | `α = C[α]` with non-empty `C`, or self-application, has no unifier in the model; a `let` alias of a lambda-bound variable quantifies nothing |
+| HM-CORE §4 instantiation (#2555) | prop `a generalized binding is usable at two distinct instances and at no non-instance` | Instances are substitutions of the scheme's variables; a repeated variable sent to two types is no instance |
+| HM-CORE §4 lambda versus let (#2555) | prop `a lambda-bound variable is monomorphic and its let-bound twin is polymorphic` | A lambda parameter is a monotype; the let twin is a scheme |
+| HM-CORE §5 group monomorphism (#2555) | prop `a binding group is monomorphic inside the group and generalized after it` | `letrec`: members are monotypes inside the group, generalized at its exit |
+| HM-CORE §5 polymorphic recursion (#2555) | prop `a signature admits polymorphic recursion` | Unsigned recursion at `C[α]` is an occurs failure in the model; a signed member is instantiated afresh (Mycroft) |
+| HM-CORE §5 signatures and dependency (#2555) | prop `every member of a group with a signed member generalizes at its principal type`; red at the base, no matching issue yet | Haskell 2010 §4.5.2: a reference to a signed member adds no dependency, so the unsigned member keeps its principal type |
+
+The HM-core rows live in
+[hm_core_property_test.mdk](../../compiler/types/hm_core_property_test.mdk).
+They assert none of #2555's recorded deviations: no predicate context, rows or
+authority appear in the fragment. Its self-tests hand-build a wrong case for
+each law family and require the comparison or the checker to reject it; its
+censuses count each verdict class over enumerated type, wrap and shape domains.
 
 All of these live in
 [hm_value_restriction_property_test.mdk](../../compiler/types/hm_value_restriction_property_test.mdk).
