@@ -12,6 +12,11 @@
 # is a COMMITTED file: schema `gate-cost-baseline/1`, one row per gate carrying
 # its retained raw samples and their median.
 #
+# A REPORT may instead be an `oracle-cost/1` report (test/build_oracles.sh
+# --write-timing-report): one row per COLD oracle build, `{name, ms, jobs}`. Those
+# fold into the baseline's `oracles[]` section (same window and lower median as
+# `gates[]`, plus a per-sample `jobs`). A malformed oracle report is refused whole.
+#
 # ── PRUNE MODE (#2770) ────────────────────────────────────────────────────
 # `--registry PATH` (e.g. `--registry test/gates.toml`) is the flag `medaka
 # gate budget` clause (d) tells an author to run. With it, after any sample
@@ -184,6 +189,8 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 : >"$TMP/runs.tsv"
 : >"$TMP/samples.tsv"
+: >"$TMP/osamples.tsv"
+: >"$TMP/oruns.tsv"
 
 # One provenance field out of a `gate-cost/1` report. The report is written one
 # field per line by run_gates.sh, deliberately, so this needs no JSON parser.
@@ -201,8 +208,12 @@ for r in $reports; do
     echo "gate_cost_ingest: REFUSED — no such report: $r"
     exit 1
   fi
-  if ! grep -q '^  "schema": "gate-cost/1",$' "$r"; then
-    echo "gate_cost_ingest: REFUSED — $r is not a 'gate-cost/1' report."
+  if grep -q '^  "schema": "oracle-cost/1",$' "$r"; then
+    kind=oracle
+  elif grep -q '^  "schema": "gate-cost/1",$' "$r"; then
+    kind=gate
+  else
+    echo "gate_cost_ingest: REFUSED — $r is not a 'gate-cost/1' or 'oracle-cost/1' report."
     echo "  Produce one with: GATE_TIMING_JSON=<path> sh test/run_gates.sh <patterns>"
     exit 1
   fi
@@ -252,6 +263,24 @@ for r in $reports; do
     exit 1
   fi
   key="$rid:$att:$shd"
+  if [ "$kind" = oracle ]; then
+    # An oracle-cost/1 row is `{"name": N, "ms": <int>, "jobs": <int>}`, one per line.
+    # A row that does not match in full (no `ms`, non-numeric `ms`/`jobs`) is a
+    # malformed report, refused whole: counting the rows two ways (any row / well-formed
+    # row) is what makes a dropped row loud instead of silently absent.
+    orows="$(grep -c '^    {"name": ' "$r" || true)"
+    ogood="$(grep -c '^    {"name": "[^"]*", "ms": [0-9][0-9]*, "jobs": [0-9][0-9]*}[,]\{0,1\}$' "$r" || true)"
+    if [ "$orows" != "$ogood" ]; then
+      echo "gate_cost_ingest: REFUSED — $r has $orows oracle row(s) but only $ogood well-formed (name, integer ms, integer jobs). Nothing written."
+      exit 1
+    fi
+    printf '%s\n' "$key" >>"$TMP/oruns.tsv"
+    sed -n 's/^    {"name": "\([^"]*\)", "ms": \([0-9][0-9]*\), "jobs": \([0-9][0-9]*\)}[,]\{0,1\}$/\1\t\2\t\3/p' "$r" \
+      | while IFS='	' read -r on oms ojobs; do
+          printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$on" "$oms" "$ojobs" "$rid" >>"$TMP/osamples.tsv"
+        done
+    continue
+  fi
   ngates="$(grep -c '^    {"name": ' "$r" || true)"
   # jobs / parallel / rowElapsedMs (#2208): recorded per-run (this line IS one
   # runs[] entry), never merged or averaged across runs — see the module
@@ -283,7 +312,8 @@ OLD="$BASELINE"
 awk -v maxs="$MAX_SAMPLES" -v maxr="$MAX_RUNS" \
     -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     -v oldf="$OLD" -v runsf="$TMP/runs.tsv" -v sampf="$TMP/samples.tsv" \
-    -v cntf="$TMP/old_counts.txt" '
+    -v cntf="$TMP/old_counts.txt" \
+    -v orunsf="$TMP/oruns.tsv" -v osampf="$TMP/osamples.tsv" '
 function jesc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
 # Lower median of the values ms[name][1..n], insertion-sorted into a scratch.
 function median(n,   i, j, k, v, a) {
@@ -297,18 +327,46 @@ function median(n,   i, j, k, v, a) {
   return a[k]
 }
 BEGIN {
-  nrun = 0; ngate = 0
+  nrun = 0; ngate = 0; nor = 0; nog = 0
 
   # ── the existing baseline ────────────────────────────────────────────────
   sect = ""
   while ((getline line < oldf) > 0) {
     if (line ~ /^  "runs": \[/)  { sect = "runs";  continue }
     if (line ~ /^  "gates": \[/) { sect = "gates"; continue }
+    if (line ~ /^  "oracles": \[/) { sect = "oracles"; continue }
+    if (line ~ /^  "oracleRuns": \[/) {
+      match(line, /\[[^]]*\]/); lst = substr(line, RSTART + 1, RLENGTH - 2)
+      n = split(lst, parts, /, */)
+      for (i = 1; i <= n; i++) {
+        t = parts[i]; gsub(/"/, "", t)
+        if (t != "" && !(t in orseen)) { orseen[t] = 1; nor++; ororder[nor] = t }
+      }
+      continue
+    }
     if (line ~ /^  \]/)          { sect = "";      continue }
     if (sect == "runs" && line ~ /^    \{"key": /) {
       raw = line; sub(/,$/, "", raw)
       match(line, /"key": "[^"]*"/); k = substr(line, RSTART + 8, RLENGTH - 9)
       if (!(k in runseen)) { runseen[k] = 1; nrun++; runorder[nrun] = k; runjson[k] = raw }
+    }
+    if (sect == "oracles" && line ~ /^    \{"name": /) {
+      match(line, /"name": "[^"]*"/); g = substr(line, RSTART + 9, RLENGTH - 10)
+      match(line, /"ms": \[[^]]*\]/); arr = substr(line, RSTART + 7, RLENGTH - 8)
+      sr = ""; jb = ""
+      if (match(line, /"sampleRuns": \[[^]]*\]/)) sr = substr(line, RSTART + 15, RLENGTH - 16)
+      if (match(line, /"jobs": \[[^]]*\]/)) jb = substr(line, RSTART + 9, RLENGTH - 10)
+      if (!(g in ogseen)) { ogseen[g] = 1; nog++; ogorder[nog] = g; oms[g] = ""; osr[g] = ""; ojb[g] = "" }
+      n = split(arr, parts, /, */)
+      ns = split(sr, sparts, /, */)
+      nj = split(jb, jparts, /, */)
+      for (i = 1; i <= n; i++) if (parts[i] != "") {
+        oms[g] = oms[g] (oms[g] == "" ? "" : " ") parts[i]
+        t = "-"
+        if (ns == n) { t = sparts[i]; gsub(/"/, "", t); if (t == "") t = "-" }
+        osr[g] = osr[g] (osr[g] == "" ? "" : " ") t
+        ojb[g] = ojb[g] (ojb[g] == "" ? "" : " ") (nj == n ? jparts[i] : "-")
+      }
     }
     if (sect == "gates" && line ~ /^    \{"name": /) {
       match(line, /"name": "[^"]*"/); g = substr(line, RSTART + 9, RLENGTH - 10)
@@ -334,7 +392,7 @@ BEGIN {
     }
   }
   close(oldf)
-  printf "%d %d\n", nrun, ngate > cntf
+  printf "%d %d %d\n", nrun, ngate, nog > cntf
   close(cntf)
 
   # ── the new runs. A run already in the baseline is SKIPPED whole (key =
@@ -372,6 +430,27 @@ BEGIN {
   }
   close(sampf)
 
+  # ── oracle build samples (#2209). The report run key is deduped against the
+  #    oracleRuns window, NOT runs[]: the gate report of the same shard owns the
+  #    runs[] row, so keying on it would drop every oracle sample of a run whose
+  #    gates were ingested first. ─────────────────────────────────────────────
+  while ((getline line < orunsf) > 0) {
+    if (line in orseen) continue
+    orseen[line] = 1; nor++; ororder[nor] = line; oaccepted[line] = 1
+  }
+  close(orunsf)
+  while ((getline line < osampf) > 0) {
+    split(line, f, "\t")
+    if (!(f[1] in oaccepted)) continue
+    g = f[2]
+    if (!(g in ogseen)) { ogseen[g] = 1; nog++; ogorder[nog] = g; oms[g] = ""; osr[g] = ""; ojb[g] = "" }
+    oms[g] = oms[g] (oms[g] == "" ? "" : " ") (f[3] + 0)
+    ojb[g] = ojb[g] (ojb[g] == "" ? "" : " ") (f[4] + 0)
+    rr = f[5]; if (rr == "") rr = "-"
+    osr[g] = osr[g] (osr[g] == "" ? "" : " ") rr
+  }
+  close(osampf)
+
   # ── emit ─────────────────────────────────────────────────────────────────
   print "{"
   print "  \"schema\": \"gate-cost-baseline/1\","
@@ -384,6 +463,43 @@ BEGIN {
   for (i = first; i <= nrun; i++) { printf "%s%s", sep, runjson[runorder[i]]; sep = ",\n" }
   if (sep != "") printf "\n"
   print "  ],"
+  if (nor > 0 || nog > 0) {
+    ofirst = nor - maxr + 1; if (ofirst < 1) ofirst = 1
+    osep = ""; olst = ""
+    for (i = ofirst; i <= nor; i++) { olst = olst osep "\"" jesc(ororder[i]) "\""; osep = ", " }
+    printf "  \"oracleRuns\": [%s],\n", olst
+    print "  \"oracles\": ["
+    for (i = 2; i <= nog; i++) {
+      v = ogorder[i]; j = i - 1
+      while (j >= 1 && ogorder[j] > v) { ogorder[j+1] = ogorder[j]; j-- }
+      ogorder[j+1] = v
+    }
+    sep = ""
+    for (i = 1; i <= nog; i++) {
+      g = ogorder[i]
+      n = split(oms[g], sv, " ")
+      ns = split(osr[g], srv, " ")
+      nj = split(ojb[g], jbv, " ")
+      lo = n - maxs + 1; if (lo < 1) lo = 1
+      m = 0
+      for (j = lo; j <= n; j++) { m++; SORTV[m] = sv[j] + 0 }
+      if (m == 0) continue
+      lst = ""; slst = ""; jlst = ""
+      for (j = 1; j <= m; j++) {
+        lst = lst (j == 1 ? "" : ", ") (sv[lo + j - 1] + 0)
+        t = (ns == n ? srv[lo + j - 1] : "-")
+        slst = slst (j == 1 ? "" : ", ") "\"" (t == "-" ? "" : jesc(t)) "\""
+        u = (nj == n ? jbv[lo + j - 1] : "0")
+        if (u == "-") u = "0"
+        jlst = jlst (j == 1 ? "" : ", ") (u + 0)
+      }
+      printf "%s    {\"name\": \"%s\", \"medianMs\": %d, \"samples\": %d, \"ms\": [%s], \"sampleRuns\": [%s], \"jobs\": [%s]}",
+             sep, jesc(g), median(m), m, lst, slst, jlst
+      sep = ",\n"
+    }
+    if (sep != "") printf "\n"
+    print "  ],"
+  }
   print "  \"gates\": ["
   # name order, insertion-sorted: a stable order is what makes the committed
   # file a readable diff rather than a reshuffle on every ingest.
@@ -430,16 +546,16 @@ BEGIN {
 # a real JSON parser, independent of that regex, and refuse unless the two agree
 # one-for-one. Nothing has been written to $BASELINE at this point.
 if [ -s "$OLD" ]; then
-  read -r seen_runs seen_gates <"$TMP/old_counts.txt"
+  read -r seen_runs seen_gates seen_oracles <"$TMP/old_counts.txt"
   want="$(python3 -c 'import json, sys
 d = json.load(open(sys.argv[1]))
-print(len(d.get("runs", [])), len(d.get("gates", [])))' "$OLD" 2>"$TMP/count.err")" || {
+print(len(d.get("runs", [])), len(d.get("gates", [])), len(d.get("oracles", [])))' "$OLD" 2>"$TMP/count.err")" || {
     cat "$TMP/count.err" >&2
     echo "gate_cost_ingest: REFUSED — $OLD is not parseable JSON; nothing written."
     exit 1
   }
-  if [ "$want" != "$seen_runs $seen_gates" ]; then
-    echo "gate_cost_ingest: REFUSED — baseline $OLD has $want runs/gates rows (JSON count) but the line reader accounted for $seen_runs $seen_gates."
+  if [ "$want" != "$seen_runs $seen_gates $seen_oracles" ]; then
+    echo "gate_cost_ingest: REFUSED — baseline $OLD has $want runs/gates/oracles rows (JSON count) but the line reader accounted for $seen_runs $seen_gates $seen_oracles."
     echo "  The reader expects one compact row per line; a differently laid-out or duplicated-row baseline would lose rows. Nothing written."
     exit 1
   fi

@@ -159,7 +159,7 @@ echo '{"schema": "something-else"}' >"$TMP/junk.json"
 if sh "$INGEST" --dry-run --baseline "$TMP/none.json" "$TMP/junk.json" >"$TMP/junk.out" 2>&1; then
   bad "ingest accepted a document that is not a gate-cost/1 report"
 else
-  grep -q "is not a 'gate-cost/1' report" "$TMP/junk.out" \
+  grep -q "is not a 'gate-cost/1' or 'oracle-cost/1' report" "$TMP/junk.out" \
     && ok "ingest refuses a non-report document" \
     || bad "ingest refused a non-report, but not for that reason"
 fi
@@ -427,6 +427,87 @@ else
     bad "ingest exited nonzero on a pretty-printed baseline but modified it or did not say REFUSED"
     cat "$TMP/pretty.out"
   fi
+fi
+
+# ── 7b. oracle build cost is recorded data (#2209) ────────────────────────────
+# Producer: test/build_oracles.sh appends one sample per COLD build to
+# ORACLE_TIMING_LOG and wraps the log into an oracle-cost/1 report. A cache hit
+# builds nothing, so its log is empty and NO report is written.
+OL="$TMP/oracle-samples.tsv"
+OREP="$TMP/oracle-report.json"
+: >"$OL"
+GITHUB_EVENT_NAME=merge_group GITHUB_RUN_ID=7001 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=beef GITHUB_REF=refs/heads/x \
+  GATE_TIMING_SHARD=orow ORACLE_TIMING_LOG="$OL" \
+  sh "$ROOT/test/build_oracles.sh" --write-timing-report "$OREP" >/dev/null 2>&1
+if [ -e "$OREP" ]; then
+  bad "a cache-hit build (empty sample log) still produced an oracle report"
+else
+  ok "a cache-hit build records no oracle sample (empty log writes no report)"
+fi
+ORACLE_TIMING_LOG="$OL" sh "$ROOT/test/build_oracles.sh" --record-sample oracle_a 41000 2
+ORACLE_TIMING_LOG="$OL" sh "$ROOT/test/build_oracles.sh" --record-sample oracle_b 52000 2
+env GITHUB_EVENT_NAME=pull_request GITHUB_RUN_ID=7001 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=beef GITHUB_REF=refs/heads/x \
+  ORACLE_TIMING_LOG="$OL" sh "$ROOT/test/build_oracles.sh" --write-timing-report "$TMP/oracle-pr.json" >/dev/null 2>&1
+[ -e "$TMP/oracle-pr.json" ] && bad "producer wrote an oracle report on a pull_request run" \
+                             || ok "producer writes no oracle report on a pull_request run"
+env GITHUB_EVENT_NAME=merge_group GITHUB_RUN_ID=7001 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=beef GITHUB_REF=refs/heads/x \
+  GATE_TIMING_SHARD=orow ORACLE_TIMING_LOG="$OL" \
+  sh "$ROOT/test/build_oracles.sh" --write-timing-report "$OREP" >/dev/null 2>&1
+grep -q '^  "schema": "oracle-cost/1",$' "$OREP" && grep -q '{"name": "oracle_a", "ms": 41000, "jobs": 2}' "$OREP" \
+  && ok "two cold builds are written as an oracle-cost/1 report with ms and JOBS" \
+  || { bad "oracle report malformed"; cat "$OREP"; }
+
+# Consumer: round-trip into oracles[], reader-accounted one-for-one.
+OB="$TMP/obase.json"
+rm -f "$OB"
+sh "$INGEST" --baseline "$OB" "$TMP/s1.json" "$OREP" >"$TMP/o1.out" 2>&1 || { bad "ingest failed on a gate+oracle report pair"; cat "$TMP/o1.out"; }
+if grep -q '^    {"name": "oracle_a", "medianMs": 41000, "samples": 1, "ms": \[41000\], "sampleRuns": \["7001"\], "jobs": \[2\]}' "$OB" \
+   && grep -q '^    {"name": "oracle_b", "medianMs": 52000, ' "$OB" \
+   && grep -q '^    {"name": "gate_a", ' "$OB"; then
+  ok "oracle samples fold into oracles[] (median, samples, sampleRuns, jobs) beside gates[]"
+else
+  bad "oracles[] missing or wrong in the baseline"
+  cat "$OB"
+fi
+cp "$OB" "$TMP/obase.once"
+sh "$INGEST" --baseline "$OB" "$OREP" >/dev/null 2>&1
+if [ "$(grep -c '^    {"name": "oracle_' "$OB")" = "2" ] && grep -q '"samples": 1, "ms": \[41000\]' "$OB"; then
+  ok "re-ingesting an oracle report is idempotent, and a re-read baseline keeps its oracles[] rows"
+else
+  bad "re-ingest of an oracle report duplicated or lost samples"
+  cat "$OB"
+fi
+# A second run adds a second sample to the same oracle.
+sed -e 's/"runId": "7001"/"runId": "7002"/' -e 's/41000/45000/' "$OREP" >"$TMP/oracle-report2.json"
+sh "$INGEST" --baseline "$OB" "$TMP/oracle-report2.json" >/dev/null 2>&1
+grep -q '"name": "oracle_a", "medianMs": 41000, "samples": 2, "ms": \[41000, 45000\], "sampleRuns": \["7001", "7002"\], "jobs": \[2, 2\]' "$OB" \
+  && ok "a second run's cold build is a second sample of the same oracle (lower median)" \
+  || { bad "second oracle sample not folded"; cat "$OB"; }
+
+# Malformed: a row with no ms, and a non-numeric ms. Refused, baseline untouched.
+sed 's/"ms": 41000, //' "$OREP" >"$TMP/oracle-noms.json"
+sed 's/"ms": 41000/"ms": "slow"/' "$OREP" >"$TMP/oracle-nan.json"
+for _m in noms nan; do
+  cp "$OB" "$TMP/obase.pre"
+  if sh "$INGEST" --baseline "$OB" "$TMP/oracle-$_m.json" >"$TMP/om.out" 2>&1; then
+    bad "ingest accepted a malformed oracle report ($_m)"
+  elif cmp -s "$OB" "$TMP/obase.pre" && grep -q 'REFUSED' "$TMP/om.out"; then
+    ok "malformed oracle report ($_m) refused with the baseline byte-identical"
+  else
+    bad "malformed oracle report ($_m) exited nonzero but changed the baseline or did not say REFUSED"
+    cat "$TMP/om.out"
+  fi
+done
+
+# Fail-closed accounting now covers oracles[]: a pretty-printed oracles row is refused.
+awk '/^    \{"name": "oracle_a"/ { print "    {"; print "      \"name\": \"oracle_a\", \"medianMs\": 1, \"samples\": 1, \"ms\": [1]"; print "    },"; next } { print }' "$OB" >"$TMP/obase.pp"
+cp "$TMP/obase.pp" "$TMP/obase.pp.orig"
+if sh "$INGEST" --baseline "$TMP/obase.pp" "$OREP" >"$TMP/opp.out" 2>&1; then
+  bad "ingest accepted a baseline whose oracles[] row it cannot read"
+elif cmp -s "$TMP/obase.pp" "$TMP/obase.pp.orig" && grep -q 'REFUSED' "$TMP/opp.out"; then
+  ok "ingest refuses a baseline whose oracles[] rows the line reader cannot account for"
+else
+  bad "unreadable oracles[] row: wrong refusal"; cat "$TMP/opp.out"
 fi
 
 # ── 8. the collector: prunes orphans, supersedes only its own stale PRs ───────
