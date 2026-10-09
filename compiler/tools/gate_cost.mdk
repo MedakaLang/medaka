@@ -321,15 +321,14 @@ parseCostBaseline src = match parse src
         Err "gate cost baseline: 'gates' is empty"
       Some arr => costEntries arr 0 (arrayLength arr) []
 
--- ── Oracle build cost (#2209) ───────────────────────────────────────────────
+-- ── Oracle build cost ────────────────────────────────────────────────────────
 
 {- | One `oracles[]` row of the baseline: what a CI row pays to COLD-build one
    test oracle, in the same shape as a gate's cost (`row`: lower-median
    `medianMs` over the retained `ms`, `sampleRuns` per sample) plus the `JOBS`
    each build ran under (`jobs`, same order as `ms`; empty when the row
    predates the field).  Build wall time depends on the concurrency it was
-   measured at, so a consumer must be able to see it.  Nothing consumes the
-   section yet. -}
+   measured at, so a consumer must be able to see it. -}
 public export data OracleCost = OracleCost { row : GateCost, jobs : List Int }
 
 oracleEntry : Int -> Json -> Result String OracleCost
@@ -366,7 +365,7 @@ reverseOracles [] acc = acc
 reverseOracles (c :: cs) acc = reverseOracles cs (c :: acc)
 
 {- | Parse a baseline's `oracles[]` section.  A baseline without the section
-   (every one written before #2209) reads as no oracle rows; a row that is not
+   (an older one) reads as no oracle rows; a row that is not
    a well-formed cost row (no `ms`, a non-integer sample, `samples` disagreeing
    with `ms`) rejects the whole parse, exactly as for `gates[]`. -}
 export

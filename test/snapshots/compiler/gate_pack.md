@@ -189,7 +189,7 @@ timeoutFor override cost
 -- Read the caveat in `balCalibLines` before reading the residuals: they are
 -- only comparable while the committed assignment is still the one that ran.
 --
--- ── A row also pays its SETUP before its first gate starts (#2209) ──────────
+-- ── A row also pays its SETUP before its first gate starts ──────────────────
 --
 -- A CI row's job wall is not its gate makespan.  Before `run_gates.sh` starts,
 -- the row checks out, installs the toolchain (`balFixedSetupMs`), COLD-builds
@@ -408,7 +408,7 @@ balNeedsWasm (t :: ts)
   | startsWith "node" t = True
   | otherwise = balNeedsWasm ts
 
--- ── Setup pricing (#2209) ───────────────────────────────────────────────────
+-- ── Setup pricing ───────────────────────────────────────────────────────────
 
 {- | What every row pays before any build or gate: `actions/checkout` plus the
    `setup-medaka` action.  MEASURED, not chosen: about 20 s per row on run
@@ -426,9 +426,9 @@ balWasmOracle = "wasm_emit_modules_main"
 
 {- | The setup prices, from the baseline's `oracles[]` plus the scrape.
 
-   No section, no model.  A baseline without `oracles[]` (every one before
-   #2209, and every synthetic fixture) has no setup data, so every price is 0
-   and `balSetupLines` says the model is gate-only.
+   No section, no model.  A baseline without `oracles[]` (an old one, or a
+   synthetic fixture) has no setup data, so every price is 0 and
+   `balSetupLines` says the model is gate-only.
 
    With one, no price is a silent zero.  An oracle a gate reads that has no
    sample yet is priced at `defaultMs`, the median of the sampled oracles, and
@@ -638,7 +638,7 @@ balCands s base (g :: gs)
 
 -- A `full_cores` row is CLOSED, not merely preferred.
 --
--- `engines` exists because `diff_compiler_engines` needs a whole runner to
+-- A full-cores row exists because a gate on it needs a whole runner to
 -- itself; its row-mates are there because they share that need, and none of
 -- that is a cost fact the packer can see.  So the packer neither moves a gate
 -- OFF a full-cores row nor moves one ON — the row's membership is an input,
