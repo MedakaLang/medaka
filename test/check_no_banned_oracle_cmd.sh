@@ -23,6 +23,7 @@
 #   --build-one <entry>   one oracle
 #   --for '<gate-pat>'    the set a gate needs, derived from the gate script itself
 #   --list                names only, builds nothing
+#   --record-sample, --write-timing-report   write timing data, build nothing
 #
 # ⚠️ SCOPE: MESSAGES, not invocations. This flags a line that PRINTS the bare command
 # (echo/printf/log) — one that TELLS A READER to run it. It deliberately does NOT flag a
@@ -92,7 +93,7 @@ for f in $(git ls-files '*.sh'); do
     # violation.
     quoted="$(printf '%s' "$body" | grep -o '"[^"]*"' || true)"
     printf '%s' "$quoted" | grep -q 'build_oracles\.sh' || continue
-    printf '%s' "$body" | grep -q -- '--build-one\|--for\|--list' && continue
+    printf '%s' "$body" | grep -q -- '--build-one\|--for\|--list\|--record-sample\|--write-timing-report' && continue
     hits="$hits
       $n:$(printf '%s' "$body" | sed 's/^[[:space:]]*//')"
   done <<EOF
