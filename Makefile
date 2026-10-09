@@ -77,6 +77,21 @@ check-self:
 preflight:
 	sh test/preflight.sh $(BASE)
 
+## Concurrency budget for `make test`: INLANG_JOBS steps run at once, each
+## handing MEDAKA_TEST_JOBS (INLANG_NESTED) to the suites it spawns, so
+## outer x nested stays near INLANG_CORES (4 vCPU CI: 2 x 2; 12 cores: 6 x 2).
+## Override any of the three on the command line.  GNU make 3.81 (macOS) has no
+## --output-sync, so it falls back to one step at a time with every core nested.
+## Steps share no scratch: each `medaka test --native` builds in its own mktemp
+## directory, so the only ordering kept is a -O2 rerun after its base step.
+INLANG_CORES ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+INLANG_SERIAL := $(filter 3.%,$(MAKE_VERSION))
+INLANG_JOBS ?= $(if $(INLANG_SERIAL),1,$(shell j=$$(( $(INLANG_CORES) / 2 )); [ $$j -ge 1 ] || j=1; echo $$j))
+INLANG_NESTED ?= $(shell n=$$(( $(INLANG_CORES) / $(INLANG_JOBS) )); [ $$n -ge 1 ] || n=1; echo $$n)
+INLANG_SYNC := $(if $(INLANG_SERIAL),,--output-sync=target)
+INLANG_STEPS := inlang-ported inlang-stdlib-suite-test inlang-types inlang-support-ordmap-test inlang-support-scc-test inlang-support-util-test inlang-ir-dce-test inlang-eval-eval-test inlang-backend-trmc-analysis-test inlang-backend-private-mangle-test inlang-backend-extern-catalog-test inlang-backend-core-validate-test inlang-backend-llvm-emit-tail-call-test inlang-backend-llvm-emit-tail-call-test-o2 inlang-tools-gate-cmd inlang-tools-gate-cmd-test inlang-tools-doc-test inlang-tools-check-policy-test inlang-tools-doctest-test inlang-tools-native-probe-printer-test inlang-tools-native-probe-tco-test inlang-tools-native-probe-tco-test-o2 inlang-driver-build-cmd-test inlang-tools-test-cmd-test inlang-tools-native-props-acceptance-test inlang-tools-native-props-policy-test inlang-tools-native-props-test inlang-tools-eval-props-test inlang-tools-prop-plan-test inlang-tools-test-pins-test inlang-tools-test-pins-io-test inlang-tools-test-pins-report-test inlang-tools-test-pins-report-io-test inlang-tools-snapshot-test inlang-tools-gate-registry inlang-compiler-cli-test-support inlang-tools-lint-baseline-test inlang-tools-lint-test inlang-tools-prop-runner-test inlang-regex-conformance-test inlang-frontend-resolve inlang-frontend-resolve-test inlang-gzip inlang-compiler-module-roster-test
+
+
 ## test    — the IN-LANGUAGE suite: doctests, property tests, and `test "…"` decls,
 ##           run by `medaka test` itself (dogfooding). Needs NO oracle binaries.
 ##           This is what `medaka test` means; the differential gate suite is
@@ -89,167 +104,261 @@ preflight:
 ##    PASS.  `medaka test <file>` typechecks the file before running its
 ##    doctests, so listing such a module HERE is what puts both its types and
 ##    its doctests inside a required check (`inlang` runs `make test`).  Add a
-##    line here for every call-site-free compiler module.
+##    step below (an `inlang-*` target) for every call-site-free compiler module.
 test: medaka
+	MEDAKA_TEST_JOBS=$(INLANG_NESTED) $(MAKE) --no-print-directory -j$(INLANG_JOBS) $(INLANG_SYNC) inlang-steps
+
+.PHONY: inlang-steps $(INLANG_STEPS)
+inlang-steps: $(INLANG_STEPS)
+
+# inlang-steps: begin (test/preflight.sh derives its file set from the lines between these markers)
+inlang-ported:
 	sh test/diff_compiler_ported.sh
-	## The floor gate for the whole `stdlib/` suite (#3214).  Every
-	## `stdlib/*.mdk` is reached through this one roster rather than a line of
-	## its own here: each row carries the executed-assertion floor that module
-	## commits and the engine it is spawned under, and a closure check fails
-	## when a stdlib module has neither a row nor a reasoned exemption — which
-	## is what a list of per-module lines cannot do, since a module absent from
-	## such a list is indistinguishable from one that needs no line.  The
-	## [W-MODULE-BLIND] reason each of those lines carried is stated once, in
-	## the roster module's own header.
-	## `--native` is for THIS module, not for the modules it grades: it lists
-	## `stdlib/` and spawns one `medaka test` per row, and both reach host
-	## primitives the interpreter does not bind.  Each graded module's own
-	## engine is the `Engine` column inside the roster.
+
+## The floor gate for the whole `stdlib/` suite (#3214).  Every
+## `stdlib/*.mdk` is reached through this one roster rather than a line of
+## its own here: each row carries the executed-assertion floor that module
+## commits and the engine it is spawned under, and a closure check fails
+## when a stdlib module has neither a row nor a reasoned exemption — which
+## is what a list of per-module lines cannot do, since a module absent from
+## such a list is indistinguishable from one that needs no line.  The
+## [W-MODULE-BLIND] reason each of those lines carried is stated once, in
+## the roster module's own header.
+## `--native` is for THIS module, not for the modules it grades: it lists
+## `stdlib/` and spawns one `medaka test` per row, and both reach host
+## primitives the interpreter does not bind.  Each graded module's own
+## engine is the `Engine` column inside the roster.
+inlang-stdlib-suite-test:
 	./medaka test --native test/stdlib_suite_test.mdk
-	## The one DIRECTORY target, and the only thing anywhere that reaches
-	## `checkTestMdkRoster` (compiler/driver/medaka_cli.mdk): the roster check runs
-	## inside `runTestManyTargets`, which only a multi-target/directory invocation
-	## takes, so with file targets alone its "git-tracked but never walked" arm was
-	## dead code. Directory discovery walks all tracked `compiler/types/*_test.mdk`
-	## siblings: `registry_test.mdk`, `scopes_test.mdk`,
-	## `solver_contract_test.mdk`, and `typecheck_test.mdk`. The roster therefore
-	## has something real to account for. It subsumes the four file
-	## lines that stood here, each for its own [W-MODULE-BLIND] reason:
-	##   registry.mdk / registry_test.mdk — the module is outside every entry's
-	##     import closure, so nothing else walks it;
-	##   evidence.mdk / solver_contract.mdk / solver_contract_test.mdk — the
-	##     scoped-solver foundation remains outside every production entry's
-	##     import closure until its first vertical consumer lands;
-	##   route_key.mdk (ARCH B-2.2-a) — the shared route-word mint is call-site-free
-	##     BY DESIGN, so this is the only thing that typechecks it at all;
-	##   typecheck.mdk (A-3.2, #1112) — reached by check-self and
-	##     typecheck_compiler_source.sh, but neither RUNS doctests, and `DataEnv`'s
-	##     deFieldOwnerIdents identity-collision case lives in one.
+
+## The one DIRECTORY target, and the only thing anywhere that reaches
+## `checkTestMdkRoster` (compiler/driver/medaka_cli.mdk): the roster check runs
+## inside `runTestManyTargets`, which only a multi-target/directory invocation
+## takes, so with file targets alone its "git-tracked but never walked" arm was
+## dead code. Directory discovery walks all tracked `compiler/types/*_test.mdk`
+## siblings: `registry_test.mdk`, `scopes_test.mdk`,
+## `solver_contract_test.mdk`, and `typecheck_test.mdk`. The roster therefore
+## has something real to account for. It subsumes the four file
+## lines that stood here, each for its own [W-MODULE-BLIND] reason:
+##   registry.mdk / registry_test.mdk — the module is outside every entry's
+##     import closure, so nothing else walks it;
+##   evidence.mdk / solver_contract.mdk / solver_contract_test.mdk — the
+##     scoped-solver foundation remains outside every production entry's
+##     import closure until its first vertical consumer lands;
+##   route_key.mdk (ARCH B-2.2-a) — the shared route-word mint is call-site-free
+##     BY DESIGN, so this is the only thing that typechecks it at all;
+##   typecheck.mdk (A-3.2, #1112) — reached by check-self and
+##     typecheck_compiler_source.sh, but neither RUNS doctests, and `DataEnv`'s
+##     deFieldOwnerIdents identity-collision case lives in one.
+inlang-types:
 	./medaka test compiler/types
-	## Support property siblings have no production entry and require explicit discovery.
+
+## Support property siblings have no production entry and require explicit discovery.
+inlang-support-ordmap-test:
 	./medaka test compiler/support/ordmap_test.mdk
+
+inlang-support-scc-test:
 	./medaka test compiler/support/scc_test.mdk
+
+inlang-support-util-test:
 	./medaka test compiler/support/util_test.mdk
+
+inlang-ir-dce-test:
 	./medaka test compiler/ir/dce_test.mdk
+
+inlang-eval-eval-test:
 	./medaka test compiler/eval/eval_test.mdk
-	## The shared free-variable walker in trmc_analysis.mdk drives TRMC safety and
-	## LLVM closure capture. Its sibling is outside the test roster
-	## for compiler/types and otherwise has no runner.
+
+## The shared free-variable walker in trmc_analysis.mdk drives TRMC safety and
+## LLVM closure capture. Its sibling is outside the test roster
+## for compiler/types and otherwise has no runner.
+inlang-backend-trmc-analysis-test:
 	./medaka test compiler/backend/trmc_analysis_test.mdk
-	## #3306: private_mangle.mdk's ctor-export table (incl. the #1359 re-export
-	## definer) is private; its sibling drives the exported mangleUnits.
+
+## #3306: private_mangle.mdk's ctor-export table (incl. the #1359 re-export
+## definer) is private; its sibling drives the exported mangleUnits.
+inlang-backend-private-mangle-test:
 	./medaka test compiler/backend/private_mangle_test.mdk
-	## Both emitters and core_validate import the extern catalog, but no entry
-	## imports its sibling, which checks every row against runtime.mdk, the wasm
-	## emitter's output and the interpreter.  The registry gate
-	## diff_compiler_capability_matrix runs extern_catalog_gate_test.mdk.
+
+## Both emitters and core_validate import the extern catalog, but no entry
+## imports its sibling, which checks every row against runtime.mdk, the wasm
+## emitter's output and the interpreter.  The registry gate
+## diff_compiler_capability_matrix runs extern_catalog_gate_test.mdk.
+inlang-backend-extern-catalog-test:
 	./medaka test compiler/backend/extern_catalog_test.mdk
-	## No entry imports a `_test.mdk` sibling, so the extern check's own tests
-	## run only from here.
+
+## No entry imports a `_test.mdk` sibling, so the extern check's own tests
+## run only from here.
+inlang-backend-core-validate-test:
 	./medaka test compiler/backend/core_validate_test.mdk
-	## #3908: match-arm self tail calls must lower to musttail. The sibling is
-	## native-only (the claim is about emitted code) and has no other runner.
+
+## #3908: match-arm self tail calls must lower to musttail. The sibling is
+## native-only (the claim is about emitted code) and has no other runner.
+inlang-backend-llvm-emit-tail-call-test:
 	./medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
+
+inlang-backend-llvm-emit-tail-call-test-o2: | inlang-backend-llvm-emit-tail-call-test
 	MEDAKA_TEST_CLANG_OPT=-O2 ./medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
-	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
-	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
-	## else runs this file's doctests — no gate script invokes `medaka test` on
-	## compiler/tools/*, so without this line the fail-open coverage would be
-	## fixtures that never execute. It also picks up the isProsePath/underDir
-	## doctests already in the file, which were equally unrun.
+
+## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
+## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
+## else runs this file's doctests — no gate script invokes `medaka test` on
+## compiler/tools/*, so without this line the fail-open coverage would be
+## fixtures that never execute. It also picks up the isProsePath/underDir
+## doctests already in the file, which were equally unrun.
+inlang-tools-gate-cmd:
 	./medaka test compiler/tools/gate_cmd.mdk
-	## S-the-one-file-wall (#3234): same reason, for gate_cmd.mdk's `*_test.mdk`
-	## sibling. It drives the native-grading clause's import-following rules
-	## (`gradeViolations`) over fixture module sources, and a `*_test.mdk` under
-	## compiler/ is outside every entry's import closure ([W-MODULE-BLIND]), so
-	## without this line nothing walks it at all.
+
+## S-the-one-file-wall (#3234): same reason, for gate_cmd.mdk's `*_test.mdk`
+## sibling. It drives the native-grading clause's import-following rules
+## (`gradeViolations`) over fixture module sources, and a `*_test.mdk` under
+## compiler/ is outside every entry's import closure ([W-MODULE-BLIND]), so
+## without this line nothing walks it at all.
+inlang-tools-gate-cmd-test:
 	./medaka test compiler/tools/gate_cmd_test.mdk
+
+inlang-tools-doc-test:
 	./medaka test compiler/tools/doc_test.mdk
+
+inlang-tools-check-policy-test:
 	./medaka test compiler/tools/check_policy_test.mdk
+
+inlang-tools-doctest-test:
 	./medaka test compiler/tools/doctest_test.mdk
+
+inlang-tools-native-probe-printer-test:
 	./medaka test compiler/tools/native_probe_printer_test.mdk
+
+inlang-tools-native-probe-tco-test:
 	./medaka test compiler/tools/native_probe_tco_test.mdk
+
+inlang-tools-native-probe-tco-test-o2: | inlang-tools-native-probe-tco-test
 	MEDAKA_TEST_CLANG_OPT=-O2 ./medaka test compiler/tools/native_probe_tco_test.mdk
+
+inlang-driver-build-cmd-test:
 	./medaka test compiler/driver/build_cmd_test.mdk
+
+inlang-tools-test-cmd-test:
 	./medaka test compiler/tools/test_cmd_test.mdk
+
+inlang-tools-native-props-acceptance-test:
 	./medaka test compiler/tools/native_props_acceptance_test.mdk
+
+inlang-tools-native-props-policy-test:
 	./medaka test compiler/tools/native_props_policy_test.mdk
+
+inlang-tools-native-props-test:
 	./medaka test compiler/tools/native_props_test.mdk
+
+inlang-tools-eval-props-test:
 	./medaka test compiler/tools/eval_props_test.mdk
+
+inlang-tools-prop-plan-test:
 	./medaka test compiler/tools/prop_plan_test.mdk
+
+inlang-tools-test-pins-test:
 	./medaka test compiler/tools/test_pins_test.mdk
+
+inlang-tools-test-pins-io-test:
 	./medaka test compiler/tools/test_pins_io_test.mdk
+
+inlang-tools-test-pins-report-test:
 	./medaka test compiler/tools/test_pins_report_test.mdk
+
+inlang-tools-test-pins-report-io-test:
 	./medaka test compiler/tools/test_pins_report_io_test.mdk
+
+inlang-tools-snapshot-test:
 	./medaka test compiler/tools/snapshot_test.mdk
-	## S-gate-registry (#2735): same reason, for gate_cmd.mdk's sibling. No
-	## gate script invokes `medaka test` on compiler/tools/gate_registry.mdk
-	## either, so without this line its tierPartOf/modePartOf/globMatch/
-	## parseSelector doctests and its `prop` block (selector parsing, glob
-	## matching) would be fixtures that never execute.
+
+## S-gate-registry (#2735): same reason, for gate_cmd.mdk's sibling. No
+## gate script invokes `medaka test` on compiler/tools/gate_registry.mdk
+## either, so without this line its tierPartOf/modePartOf/globMatch/
+## parseSelector doctests and its `prop` block (selector parsing, glob
+## matching) would be fixtures that never execute.
+inlang-tools-gate-registry:
 	./medaka test compiler/tools/gate_registry.mdk
-	## S-sweep-is-one-runner (#2593): same reason, for the native gates' shared
-	## support module. `medaka test --native <gate>.mdk` runs only the named
-	## module's own doctests, so chompNewlines/stripUnitAutoPrint/batchSection —
-	## the pure text surgery every migrated sweep grades its goldens through —
-	## would otherwise be documented and never executed.
+
+## S-sweep-is-one-runner (#2593): same reason, for the native gates' shared
+## support module. `medaka test --native <gate>.mdk` runs only the named
+## module's own doctests, so chompNewlines/stripUnitAutoPrint/batchSection —
+## the pure text surgery every migrated sweep grades its goldens through —
+## would otherwise be documented and never executed.
+inlang-compiler-cli-test-support:
 	./medaka test test/compiler_cli_test_support.mdk
-	## FIX-lint-mechanism-correctness (Fix C): compiler/tools/lint_baseline.mdk
-	## is outside every entry's import closure ([W-MODULE-BLIND]), so its
-	## fail-closed parse/validation paths (missing file, malformed TOML, a
-	## duplicate row, a negative count, a missing count field, findings with
-	## no row) are otherwise never run. Its sibling carries the six cases.
+
+## FIX-lint-mechanism-correctness (Fix C): compiler/tools/lint_baseline.mdk
+## is outside every entry's import closure ([W-MODULE-BLIND]), so its
+## fail-closed parse/validation paths (missing file, malformed TOML, a
+## duplicate row, a negative count, a missing count field, findings with
+## no row) are otherwise never run. Its sibling carries the six cases.
+inlang-tools-lint-baseline-test:
 	./medaka test compiler/tools/lint_baseline_test.mdk
-	## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's
-	## import closure ([W-MODULE-BLIND]), so its renderer-parity property
-	## (text/JSON/MCP cross-file findings agree) never runs otherwise.
-	## `--native`: every property here parses real fixture files, an extern
-	## `medaka test`'s interpreter policy does not bind.
+
+## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's
+## import closure ([W-MODULE-BLIND]), so its renderer-parity property
+## (text/JSON/MCP cross-file findings agree) never runs otherwise.
+## `--native`: every property here parses real fixture files, an extern
+## `medaka test`'s interpreter policy does not bind.
+inlang-tools-lint-test:
 	./medaka test --native compiler/tools/lint_test.mdk
-	## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
-	## is outside every entry's import closure ([W-MODULE-BLIND]), so without
-	## this line its `rngNextLocal` distribution regression (both Bool values
-	## appear across a run of draws, not a fixed alternation) would be a
-	## fixture that never executes.
+
+## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
+## is outside every entry's import closure ([W-MODULE-BLIND]), so without
+## this line its `rngNextLocal` distribution regression (both Bool values
+## appear across a run of draws, not a fixed alternation) would be a
+## fixture that never executes.
+inlang-tools-prop-runner-test:
 	./medaka test compiler/tools/prop_runner_test.mdk
-	## The regex conformance table beside stdlib/regex.mdk, whose expected
-	## spans, captures, replacements and split pieces come from the published
-	## Go regexp and RE2 test tables rather than from this engine. It is not
-	## enrolled as a gate, so this line is the only thing that runs it.
-	## (stdlib/regex.mdk's own doctests and props are a roster row in
-	## test/stdlib_suite_test.mdk above, not a line of their own.)
+
+## The regex conformance table beside stdlib/regex.mdk, whose expected
+## spans, captures, replacements and split pieces come from the published
+## Go regexp and RE2 test tables rather than from this engine. It is not
+## enrolled as a gate, so this line is the only thing that runs it.
+## (stdlib/regex.mdk's own doctests and props are a roster row in
+## test/stdlib_suite_test.mdk above, not a line of their own.)
+inlang-regex-conformance-test:
 	./medaka test test/regex_conformance_test.mdk
-	## compiler/frontend/resolve.mdk carries its own `test "…"` block
-	## (the did-you-mean pool memo's once-per-Env discipline, #2800): the
-	## module's TYPES are checked on every build via the live pipeline's
-	## import closure, but nothing else runs `medaka test` on it, so
-	## without this line the memo assertions would never execute.
+
+## compiler/frontend/resolve.mdk carries its own `test "…"` block
+## (the did-you-mean pool memo's once-per-Env discipline, #2800): the
+## module's TYPES are checked on every build via the live pipeline's
+## import closure, but nothing else runs `medaka test` on it, so
+## without this line the memo assertions would never execute.
+inlang-frontend-resolve:
 	./medaka test compiler/frontend/resolve.mdk
-	## S-a-missing-companion-is-a-red-gate (#1685): compiler/frontend/
-	## resolve_test.mdk is a `*_test.mdk` sibling, outside every entry's
-	## import closure ([W-MODULE-BLIND]), so without this line its
-	## structural `ModuleExports`/`reExp*From` companion census would never
-	## run. `--native`: parsing resolve.mdk's own live source needs
-	## `readFile`, an extern `medaka test`'s interpreter engine does
-	## not bind.
+
+## S-a-missing-companion-is-a-red-gate (#1685): compiler/frontend/
+## resolve_test.mdk is a `*_test.mdk` sibling, outside every entry's
+## import closure ([W-MODULE-BLIND]), so without this line its
+## structural `ModuleExports`/`reExp*From` companion census would never
+## run. `--native`: parsing resolve.mdk's own live source needs
+## `readFile`, an extern `medaka test`'s interpreter engine does
+## not bind.
+inlang-frontend-resolve-test:
 	./medaka test --native compiler/frontend/resolve_test.mdk
-	## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole
-	## in-language suite (lib + main) has no floor gate of any kind, and a
-	## directory target already grades every assertion in it with one exit
-	## code, so this is that, rather than a per-module roster row.
+
+## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole
+## in-language suite (lib + main) has no floor gate of any kind, and a
+## directory target already grades every assertion in it with one exit
+## code, so this is that, rather than a per-module roster row.
+inlang-gzip:
 	./medaka test gzip
-	## S-the-makefile-is-not-a-roster (#3081): a small fixed roster over the
-	## modules whose assertion counts no floor protects. Four are reached by
-	## nothing — `compiler/tools/gate_cost.mdk`, `compiler/support/util.mdk`
-	## and `compiler/support/manifest.mdk` are outside every entry's import
-	## closure ([W-MODULE-BLIND]), and `test/probe_runner.mdk` carries its own
-	## doctests that no other gate runs. Six are `gzip/lib/*.mdk`, which the
-	## `medaka test gzip` line above DOES run, but only as one exit code for
-	## the whole directory; `--json` is refused on a directory target, so no
-	## per-module count is committed anywhere else. `--native` is for THIS
-	## module, not the ones it grades: it spawns a `medaka test` subprocess
-	## per row via `runCommand`, an extern the interpreter does not bind.
+
+## S-the-makefile-is-not-a-roster (#3081): a small fixed roster over the
+## modules whose assertion counts no floor protects. Four are reached by
+## nothing — `compiler/tools/gate_cost.mdk`, `compiler/support/util.mdk`
+## and `compiler/support/manifest.mdk` are outside every entry's import
+## closure ([W-MODULE-BLIND]), and `test/probe_runner.mdk` carries its own
+## doctests that no other gate runs. Six are `gzip/lib/*.mdk`, which the
+## `medaka test gzip` line above DOES run, but only as one exit code for
+## the whole directory; `--json` is refused on a directory target, so no
+## per-module count is committed anywhere else. `--native` is for THIS
+## module, not the ones it grades: it spawns a `medaka test` subprocess
+## per row via `runCommand`, an extern the interpreter does not bind.
+inlang-compiler-module-roster-test:
 	./medaka test --native test/compiler_module_roster_test.mdk
+# inlang-steps: end
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:
