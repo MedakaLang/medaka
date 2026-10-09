@@ -2968,24 +2968,24 @@ table = [
   Row {
     entry = "sig-var-rigid-generalized-local.mdk",
     label =
-      "§3 a generalized local's goal reaches the enclosing signature (#3796): `let k u = get (Box [])` keeps `Get (Box (List t)) e` in its scheme, since only binding its own quantified `e` answers it, and `k x` poses `Get (Box (List t)) b` to `weird2 : b -> b`, refused at that use like the top-level `weird`. Drained from the must-fail pin 3796-generalized-local-escapes-signature: `check` printed `weird2 : a -> a`, `run` panicked and the binary printed a heap word",
+      "§3 a generalized local gets its top-level twin's verdict (#3796): `let k u = get (Box [])` is improved to `k : a -> List t` before it generalizes, so `k x` returns a list where `weird2 : b -> b` promises the caller's `b`, refused with T-TYPE-TOO-GENERAL as the same `k` at top level is. Drained from the must-fail pin 3796-generalized-local-escapes-signature: `check` printed `weird2 : a -> a`, `run` panicked and the binary printed a heap word",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
     mode = NoValue,
     pinned = "",
-    codes = [Present "T-MISSING-CONSTRAINT"],
+    codes = [Present "T-TYPE-TOO-GENERAL"],
   },
   Row {
     entry = "sig-var-rigid-generalized-local-pick.mdk",
     label =
-      "§3 #3796's `Pick` twin: `let k z = pick [z] [1]` keeps its goal, and `k y` poses `Pick (List a) (List n) (List Int)` to `f : a -> List Int`, which `impl Pick a a a` answers only at `a = Int`. Was accepted on every verb, printing [1] from an instance that does not exist",
+      "§3 #3796's `Pick` face: `let k z = pick [z] [1]` is improved by `impl Pick a a a` to `k : Num a => a -> List a` before it generalizes, so `k y` needs `f : a -> List Int`'s `a` to be Int, refused with T-TYPE-TOO-GENERAL as the same `k` at top level is. Was accepted on every verb, printing [1] from an instance that does not exist",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
     mode = NoValue,
     pinned = "",
-    codes = [Present "T-MISSING-CONSTRAINT"],
+    codes = [Present "T-TYPE-TOO-GENERAL"],
   },
   Row {
     entry = "sig-var-rigid-generalized-local-control.mdk",
@@ -3074,6 +3074,61 @@ table = [
     mode = AllExact,
     pinned = "2.5\n",
     codes = [],
+  },
+  Row {
+    entry = "local-improved-where-two-uses.mdk",
+    label =
+      "§3 \"When\" at a `where` helper, DICT §3's own `wrap y = pick [y] []`: improvement runs before the helper generalizes, so `wrap : a -> List a` is used at Int and String, as the top-level `wrap` is. Rejected after slice 3 (`no impl of Pick for (List Int) (List String) (List Int)`). Hand-derived: ([], [])",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "([], [])\n",
+    codes = [],
+  },
+  Row {
+    entry = "local-improved-let-two-uses.mdk",
+    label =
+      "§3 \"When\" at a local `let`: `k u = pick [] u` improves to `k : List a -> List a` before it generalizes and is used at `[n]` and `[\"s\"]`, as the top-level `k` is. Rejected after slice 3. Hand-derived: ([3], [\"s\"])",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "([3], [\"s\"])\n",
+    codes = [],
+  },
+  Row {
+    entry = "local-improved-get-two-uses.mdk",
+    label =
+      "§3 \"When\", the `Get`/`Box` face in an unsigned `main`: `k u = get (Box [])` improves to `k : a -> List b` before it generalizes and is used at `List Int` and `List String`, as the top-level `k` is. Rejected after slice 3. Hand-derived: [] twice",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[]\n[]\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-given-through-super.mdk",
+    label =
+      "§3 a method body's own `=>` context is given with its superinterfaces: `w : Get2 (Box (List Int)) b => x -> b -> b` gives the body's `Get (Box (List Int)) b` through `Get2`'s `requires`, as the top-level `wt` with the same context does. Rejected after slice 3 with T-MISSING-CONSTRAINT. Hand-derived: [1]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[1]\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-var-via-local-too-specific.mdk",
+    label =
+      "§3 #3797 through a local: `k u = get (Box [])` improves to `k : a -> List t`, so `w _ y = k y` pins the method's `b`, refused with T-IMPL-TOO-SPECIFIC as with a top-level `k`. After slice 3 it carried an ill-formed `add Get b =>` fix-it for the two-parameter `Get`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-TOO-SPECIFIC", Absent "T-MISSING-CONSTRAINT"],
   },
   Row {
     entry = "impl-head-pinned-by-body.mdk",
@@ -4579,7 +4634,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 403
+tableRows = 408
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

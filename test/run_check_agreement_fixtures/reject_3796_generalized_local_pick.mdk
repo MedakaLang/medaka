@@ -1,8 +1,8 @@
--- §3 #3796, the `Pick` face: `k z = pick [z] [1]` keeps
--- `Pick (List z) (List n) (List r)` in its scheme, and the use `k y` poses
--- `Pick (List a) (List n) (List Int)` to `f`.  `impl Pick a a a` answers it only if
--- the signature's `a` is Int, so `f` is rejected at that use, as the top-level
--- `f : a -> List Int; f y = pick [y] [1]` is at its `pick`.
+-- §3 #3796, the `Pick` face: `k z = pick [z] [1]` poses
+-- `Pick (List z) (List n) r`, which `impl Pick a a a` improves before `k`
+-- generalizes, so `k : Num z => z -> List z`.  The use `k y` then needs the
+-- signature's `a` to be Int, so `f` is rejected as too general, as it is when `k`
+-- is a top-level binding.
 interface Pick a b c where
   pick : a -> b -> c
 

@@ -18190,6 +18190,7 @@ blockRecLet env x xloc e =
   let _ = closeLocalScope lscope
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
+  let _ = improveLocalGoals addedObls callN0
   let _ = finalizeNumBoundary NumBoundary {
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
@@ -18218,6 +18219,7 @@ blockLet env (PVar x xloc) e =
   let residuals = finishValueEffectsKeeping [(isNonexpansive env e, t)]
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
+  let _ = improveLocalGoals addedObls callN0
   let _ = finalizeNumBoundary NumBoundary {
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
@@ -23874,6 +23876,7 @@ inferRecLet env x xloc e1 e2 =
   let _ = closeLocalScope lscope
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
+  let _ = improveLocalGoals addedObls callN0
   let _ = finalizeNumBoundary NumBoundary {
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
@@ -23983,6 +23986,7 @@ inferLetSimple env pat e1 e2 =
   -- before it generalizes, so `let z = 2 in y + z` (y:Float) is a clean type
   -- error and never leaks an unbound Num var.  Scoped to this binding's new obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
+  let _ = improveLocalGoals addedObls callN0
   let _ = finalizeNumBoundary NumBoundary {
     nbDisposition =
       NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
@@ -26056,6 +26060,7 @@ processLetGroup env binds =
   -- the enclosing binding's boundary decides what its uses leave ambiguous.
   -- Scoped to this group's newly added obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
+  let _ = improveLocalGoals addedObls callN0
   let memberMonos = map (p => schemeMono (snd p)) placeholders
   let _ = finalizeNumBoundary NumBoundary {
     nbDisposition = NumBoundaryOwnedGroup (perRun.value.currentLevel.value + 1),
@@ -26510,6 +26515,20 @@ localNumGuard addedObls callN0 = NumGuard {
   ngRigidIds = omEmpty,
   ngOuterBelow = Some (perRun.value.currentLevel.value + 1),
 }
+
+-- A local boundary's goals are improved before it generalizes, as a top-level
+-- group's are (DICT-SEMANTICS §3 "When"), so its scheme is built from the improved
+-- type.  A variable below the just-exited level is an enclosing binder's to settle,
+-- so it takes part as a constant.
+improveLocalGoals : List UObligation -> Int -> Unit
+improveLocalGoals addedObls callN0 =
+  let goals = addedObls ++ callUOblsWindow callN0
+  let outer =
+    outerRigidIds
+      (Some (perRun.value.currentLevel.value + 1))
+      (flatMap uOblArgs goals)
+      omEmpty
+  improveByUniqueImpl outer goals
 
 connectedTiedIds : List Int -> List Mono -> List UObligation -> List Int
 connectedTiedIds enclosing members obls =
@@ -37361,7 +37380,8 @@ setNumlitFloatsGo ((var, fref, n, dref) :: rest) =
 -- body's (`inferMethodBody`), before that boundary's Num defaulting and once more
 -- after it, each time ahead of
 -- `determineByUniqueInstance`, which commits a goal to its one unifying instance
--- even where no repeated head variable ties the goal to itself.
+-- even where no repeated head variable ties the goal to itself.  A local boundary
+-- runs it once, before its Num defaulting (`improveLocalGoals`).
 --
 -- [sigIds] are the group's declared-signature variables still free at its close
 -- (at a method body, its instance head's and declared signature's variables).
@@ -38131,9 +38151,10 @@ rigidSigPairs sigIds pairs =
 -- defaulting (`sccProtectedSignatureIds`), a method body after its own (the
 -- method signature's variables), an expression annotation once the annotated
 -- expression has met its written type.  A generalized local declares nothing a
--- programmer wrote, so it runs no check of its own: its quantified variables turn
--- rigid at generalization (`declareRigidVars`), each goal they leave stays in its
--- scheme, and each use poses that goal to the binder enclosing the use.
+-- programmer wrote, so it runs no check of its own: its goals are improved before
+-- it generalizes (`improveLocalGoals`), its quantified variables turn rigid at
+-- generalization (`declareRigidVars`), each goal improvement leaves on them stays in
+-- its scheme, and each use poses that goal to the binder enclosing the use.
 checkSigVarGoals : DeclaringBinder ->
   OrdMap Unit ->
   List (String, Ty, List (String, Mono)) ->
@@ -39298,27 +39319,15 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   -- The method signature's own variables are held at the body's close as a
   -- top-level signature's are at its group's.  A goal that fixes a head variable is
   -- W3-inst's (`checkImplHeadPrerequisites`), so only these are held.  The method's
-  -- own `=>` context is not yet published as givens of the body's scope
-  -- (`registerMethodBodyGivens`), so a goal it gives is set aside here.  They do not
-  -- join `declaredSigVarIds`: the module-end verdict on a default body's open goal
-  -- reads the instances its receiver variables reach
+  -- own `=>` context is given in the body's scope, with its supers, before they are
+  -- (`publishMethodPredGivens`), so the check reads it through `goalGivenAt`.  They
+  -- do not join `declaredSigVarIds`: the module-end verdict on a default body's
+  -- open goal reads the instances its receiver variables reach
   -- (`test/dict_fixtures/undetermined-method-goal-default-body.mdk`).
   let methodSig = [(mname, mty, inst.mbiSurvivors)]
   let methodVarIds = sccProtectedSignatureIds methodSig
-  let methodGivens =
-    map (constraintPredicateSlot inst.mbiNamedVars) (sigConstraintsOf mty)
-  let ungiven =
-    o =>
-      not
-        (anyList
-          (givenAnswers o.pred.iface (map normalize (uOblArgs o)))
-          methodGivens)
-  let _ =
-    checkSigVarGoals
-      DeclaredBySignature
-      methodVarIds
-      methodSig
-      (filterList ungiven bodyObls)
+  let _ = publishMethodPredGivens params mty inst bodyScope
+  let _ = checkSigVarGoals DeclaredBySignature methodVarIds methodSig bodyObls
   let _ =
     rejectUndeterminedVectors
       bodyRigidIds
@@ -39604,6 +39613,18 @@ checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats bo
     ImplBody _ => ()
   check
 
+-- The method's own `=>` context, given in the body's scope with its supers.
+publishMethodPredGivens : List String ->
+  Ty ->
+  MethodBodyInstance ->
+  ScopeId ->
+  Unit
+publishMethodPredGivens params mty inst scope =
+  registerSlotPredGivens
+    scope
+    0
+    (methodLevelPredicateSlots params mty inst.mbiNamedVars)
+
 -- Publish the method-level dictionary givens after body inference, so each
 -- constraint var's id is its SURVIVING (normalized) union-find root — the same id
 -- an in-body return-position site (`pure []`, `empty`, `++`) normalizes to
@@ -39615,7 +39636,8 @@ checkMethodBodyAgainst env iface kind mname mty gscope inst contract loc pats bo
 --     (registerMethodDictSlots);
 --   * the predicate-keyed twin, from this very instantiation, into the lexical
 --     given registry before route resolution — a complete request miss is
---     terminal, so this carrier is not optional;
+--     terminal, so this carrier is not optional.  `inferMethodBody` publishes it
+--     earlier, once the body's goals are settled (`publishMethodPredGivens`);
 --   * a default body's receiver: the body answers for whichever instance inherits
 --     it, so a sibling or superclass call inside it is discharged by the
 --     receiver's evidence (directly, or projected onto a super) instead of being
@@ -39633,11 +39655,6 @@ registerMethodBodyGivens iface kind params mty inst scope =
     ImplBody _ => registerImplMethodDicts scope params mty inst.mbiNamedVars
     DefaultBody =>
       registerMethodDictSlots scope 0 inst.mbiDictSlots inst.mbiTypeSubst
-  let _ =
-    registerSlotPredGivens
-      scope
-      0
-      (methodLevelPredicateSlots params mty inst.mbiNamedVars)
   match kind
     DefaultBody =>
       let receiverArgs =

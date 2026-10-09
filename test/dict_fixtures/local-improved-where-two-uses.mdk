@@ -1,0 +1,17 @@
+-- §3 "When", DICT §3's own `wrap` example as a `where` helper: the helper's goal
+-- `Pick (List y) (List t) r` is improved by the one instance `impl Pick a a a`
+-- before the helper generalizes, so `wrap : a -> List a` and its uses at Int and
+-- String each instantiate it, as the top-level `wrap` does.
+-- Hand-derived: `pick` returns its second argument, [], at both types.
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+both : Int -> String -> (List Int, List String)
+both n s = (wrap n, wrap s)
+  where
+    wrap y = pick [y] []
+
+main = println (debug (both 1 "s"))

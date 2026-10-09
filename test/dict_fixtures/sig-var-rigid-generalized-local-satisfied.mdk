@@ -1,7 +1,7 @@
--- Control for the generalized-local rows: the same locals used where the instance
--- answers their goal.  `h`'s use poses `Get (Box (List t)) (List Int)`, which
--- improvement fixes to `t = Int`; `p`'s poses `Pick (List Int) (List Int)
--- (List Int)`.  Each local is passed the dictionary its use solves.
+-- Control for the generalized-local rows: the same locals used where their
+-- improved types fit.  `h`'s `k` improves to `k : u -> List t` and its use fixes
+-- `t = Int`; `p`'s improves to `k : Num z => z -> List z` and its use fixes
+-- `z = Int`.
 -- Hand-derived: `get (Box [])` is [], and `pick` returns its second argument, [1].
 data Box a = Box a
 
