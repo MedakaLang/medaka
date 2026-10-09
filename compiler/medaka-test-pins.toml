@@ -17,3 +17,103 @@ engine = "native"
 issue = 3857
 detail_lines = ["native test run ended (probe exit 1) — compiler/tools/test_pins_report.mdk:73:0: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running"]
 failure = "error"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a top-level binding generalizes iff its expression is a syntactic value"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a top-level binding generalizes iff its expression is a syntactic value"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a local let generalizes iff its expression is a syntactic value"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a local let generalizes iff its expression is a syntactic value"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "membership in a binding group grants no generalization exemption"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "membership in a binding group grants no generalization exemption"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a type signature grants no generalization exemption"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a type signature grants no generalization exemption"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
