@@ -10378,6 +10378,23 @@ replaceAmbiguityAt site d =
   typeErrorsStickyDiags :=
     map ((m, e) => (m, swap e)) typeErrorsStickyDiags.value
 
+-- A boundary's `T-AMBIGUOUS-INSTANCE` on the goal [args]: one undetermined
+-- variable is one diagnostic, however many goals at however many spans pose it, so
+-- a goal sharing a boundary-owned variable with one already reported folds into
+-- it.  Only the variables the boundary owns ([rigidIds] and scheme-quantified ones
+-- excluded) identify the cause: two goals that share only a rigid variable are two
+-- defects.  The selector and the obligation check cannot tell a rigid variable
+-- from an open one, so they fold on the span alone (`pushAmbiguityAt`).
+pushBoundaryAmbiguity : OrdMap Unit -> List Mono -> Option Loc -> String -> Unit
+pushBoundaryAmbiguity rigidIds args loc msg =
+  let reported = perRun.value.ambiguityVarsRef
+  let ids = filterList (boundaryOwnsOpen rigidIds) (flatMap monoUnboundIds args)
+  if anyList (i => IdMap.has i reported.value) ids then
+    noteTypeErrorDetected ()
+  else
+    reported := fold (m i => IdMap.set i () m) reported.value ids
+    pushAmbiguityAt False loc msg
+
 -- Push a deduped type error (same dedup rule as pushTypeErrorOnceAt) that also
 -- carries a human `help` string and an optional machine-applicable `fix`
 -- (ERROR-QUALITY dim F).  #159: help/fix now ride INSIDE the TcDiag — no
@@ -11903,6 +11920,7 @@ data PerRun = PerRun {
   typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
   typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages and message-at-site keys — see recordTypeError
   ambiguitySitesRef : Ref (OrdMap Bool),  -- the spans holding a `T-AMBIGUOUS-INSTANCE`, each with whether its message names the goal (`pushAmbiguityAt`)
+  ambiguityVarsRef : Ref (Map Int Unit),  -- the boundary-owned variables a boundary has reported a `T-AMBIGUOUS-INSTANCE` on (`pushBoundaryAmbiguity`)
   errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
   occursCheckFailed : Ref Bool,
   currentLevel : Ref Int,
@@ -12010,6 +12028,7 @@ freshPerRun _ = PerRun {
   typeErrors = wNew (),
   typeErrorMsgSetRef = Ref omEmpty,
   ambiguitySitesRef = Ref omEmpty,
+  ambiguityVarsRef = Ref Tip,
   errorsDetected = Ref 0,
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
@@ -37706,7 +37725,8 @@ reportUndeterminedGoal rigidIds window iface args loc =
   match goalCandidates rigidIds args (goalRows iface args)
     [] => reportUndeterminedNoImpl iface args loc
     unifying => match goalReach args (verdictCandidates window args unifying)
-      ReachMany => pushAmbiguityAt False loc (ambiguousImplMsg iface.irName)
+      ReachMany =>
+        pushBoundaryAmbiguity rigidIds args loc (ambiguousImplMsg iface.irName)
       _ => ()
 
 -- DIAGNOSTIC-CODES-DESIGN `T-NO-IMPL` for an undetermined goal.  A one-position
@@ -37756,7 +37776,7 @@ undeterminedVectorVerdict rigidIds liveIds window o =
     else if isEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args)) then
       reportUndeterminedGoal rigidIds window o.pred.iface args o.loc
     else
-      reportMixedGoalAmbiguity window o.pred.iface args o.loc
+      reportMixedGoalAmbiguity rigidIds window o.pred.iface args o.loc
 
 -- The verdict on the goals boundaries left to quiescence, once every group of the
 -- module has closed: no later group is left to ground their variables, so each is
@@ -37777,15 +37797,17 @@ judgeQuiescentGoals _ =
 -- with no stable minimum is `T-AMBIGUOUS-INSTANCE` (§6.2 T4).  Fewer is left
 -- unjudged here: whether the rigid variable can take that instance's type is the
 -- impl-body and signature checks' question.
-reportMixedGoalAmbiguity : GoalWindow ->
+reportMixedGoalAmbiguity : OrdMap Unit ->
+  GoalWindow ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   Unit
-reportMixedGoalAmbiguity window iface args loc =
+reportMixedGoalAmbiguity rigidIds window iface args loc =
   let unifying = goalCandidates omEmpty args (goalRows iface args)
   match goalReach args (verdictCandidates window args unifying)
-    ReachMany => pushAmbiguityAt False loc (ambiguousImplMsg iface.irName)
+    ReachMany =>
+      pushBoundaryAmbiguity rigidIds args loc (ambiguousImplMsg iface.irName)
     _ => ()
 
 -- [i] is neither held rigid nor quantified by a registered scheme.
@@ -37928,7 +37950,12 @@ withheldVectorVerdict rigidIds window o =
   if not (undeterminedGoalExempt iface args o.uoScope) then
     let unifying = goalCandidates rigidIds args (goalRows iface args)
     match goalReach args (verdictCandidates window args unifying)
-      ReachMany => pushAmbiguityAt False o.loc (ambiguousImplMsg iface.irName)
+      ReachMany =>
+        pushBoundaryAmbiguity
+          rigidIds
+          args
+          o.loc
+          (ambiguousImplMsg iface.irName)
       _ => ()
 
 hasVectorArgs : UObligation -> Bool
