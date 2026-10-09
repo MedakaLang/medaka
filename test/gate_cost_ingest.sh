@@ -282,7 +282,8 @@ OLD="$BASELINE"
 
 awk -v maxs="$MAX_SAMPLES" -v maxr="$MAX_RUNS" \
     -v now="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    -v oldf="$OLD" -v runsf="$TMP/runs.tsv" -v sampf="$TMP/samples.tsv" '
+    -v oldf="$OLD" -v runsf="$TMP/runs.tsv" -v sampf="$TMP/samples.tsv" \
+    -v cntf="$TMP/old_counts.txt" '
 function jesc(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return s }
 # Lower median of the values ms[name][1..n], insertion-sorted into a scratch.
 function median(n,   i, j, k, v, a) {
@@ -333,6 +334,8 @@ BEGIN {
     }
   }
   close(oldf)
+  printf "%d %d\n", nrun, ngate > cntf
+  close(cntf)
 
   # ── the new runs. A run already in the baseline is SKIPPED whole (key =
   #    runId:runAttempt:shard), so re-ingesting the same artifact is a no-op
@@ -419,6 +422,28 @@ BEGIN {
   print "}"
 }
 ' >"$TMP/out.json" || { echo "gate_cost_ingest: merge failed"; exit 1; }
+
+# ── fail closed: every baseline row must have been read ─────────────────────
+# The reader above matches one row per physical line in a fixed layout. A
+# baseline in any other layout (pretty-printed, re-wrapped by an editor) would
+# have its rows silently dropped and the loss written back. Count the rows with
+# a real JSON parser, independent of that regex, and refuse unless the two agree
+# one-for-one. Nothing has been written to $BASELINE at this point.
+if [ -s "$OLD" ]; then
+  read -r seen_runs seen_gates <"$TMP/old_counts.txt"
+  want="$(python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+print(len(d.get("runs", [])), len(d.get("gates", [])))' "$OLD" 2>"$TMP/count.err")" || {
+    cat "$TMP/count.err" >&2
+    echo "gate_cost_ingest: REFUSED — $OLD is not parseable JSON; nothing written."
+    exit 1
+  }
+  if [ "$want" != "$seen_runs $seen_gates" ]; then
+    echo "gate_cost_ingest: REFUSED — baseline $OLD has $want runs/gates rows (JSON count) but the line reader accounted for $seen_runs $seen_gates."
+    echo "  The reader expects one compact row per line; a differently laid-out or duplicated-row baseline would lose rows. Nothing written."
+    exit 1
+  fi
+fi
 
 # ── prune (#2770) — a no-op unless --registry was given ─────────────────────
 # Drops every gates[] row whose "name" (a baselineKey) matches no live
