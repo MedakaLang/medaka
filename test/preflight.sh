@@ -349,9 +349,19 @@ _refs() {
 # `echo "no golden tree ... run sh test/capture_goldens.sh"` error message,
 # ballooning one fixture's consumer set from 3 gates to 42. Caught by testing
 # this derivation against the real corpus before trusting it.
+#
+# A second form is recognised: `exec bash "$(dirname "$0")/<name>.sh`, the way the
+# diff_compiler_engines_part{1,2,3} wrappers hand off to their shared body. It
+# resolves against the wrapper's own directory, so the body's corpus reads reach
+# the same one-hop consumer check as the quoted-$ROOT form.
 _invokes() {
-  grep -vE '^[[:space:]]*(#|--)' "$1" 2>/dev/null | grep -ohE 'sh "\$ROOT/test/(wasm/)?[A-Za-z0-9_]+\.sh' \
-    | sed 's/^sh "\$ROOT\///' | sort -u
+  _idir="$(dirname "$1")"; _idir="${_idir#"$ROOT"/}"
+  {
+    grep -vE '^[[:space:]]*(#|--)' "$1" 2>/dev/null | grep -ohE 'sh "\$ROOT/test/(wasm/)?[A-Za-z0-9_]+\.sh' \
+      | sed 's/^sh "\$ROOT\///'
+    grep -vE '^[[:space:]]*(#|--)' "$1" 2>/dev/null | grep -ohE 'exec bash "\$\(dirname "\$0"\)/[A-Za-z0-9_]+\.sh' \
+      | sed "s|^exec bash \"\$(dirname \"\$0\")/|$_idir/|"
+  } | sort -u
 }
 
 # Does gate $1 consume fixture dir $2 — directly, OR indirectly via one hop

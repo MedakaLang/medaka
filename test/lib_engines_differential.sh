@@ -23,6 +23,9 @@
 # ENGINE_LIST=1 prints the selected fixture keys (after the part and ONLY filters) and
 # exits 0 before any oracle check or build — the way to prove the parts cover the
 # corpus exactly once.
+# Every part run first lists all ENGINE_PARTS selections and exits 1 naming the first
+# fixture that is held by two parts or by none, so a broken partition rule reds every
+# part before any build.
 #
 # Medaka owns three independent implementations of its own semantics:
 #
@@ -514,11 +517,38 @@ if [ -n "${ENGINE_PART:-}" ]; then
     exit 1
   fi
   total_before_part="$(printf '%s\n' "$CORPUS" | grep -c . || true)"
-  CORPUS="$(printf '%s\n' "$CORPUS" | while IFS= read -r p; do
+  # The partition rule, in one place: the selection below and the completeness check
+  # both call it, so the check proves the rule the parts actually run.
+  sorted_corpus="$(printf '%s\n' "$CORPUS" | while IFS= read -r p; do
     [ -n "$p" ] || continue
     printf '%s\t%s\n' "$(keyfor "$p")" "$p"
-  done | LC_ALL=C sort -t "$(printf '\t')" -k1,1 \
-       | awk -F'\t' -v n="$ENGINE_PARTS" -v k="$ENGINE_PART" '(NR - 1) % n == k - 1 { print $2 }')"
+  done | LC_ALL=C sort -t "$(printf '\t')" -k1,1)"
+  part_select() {
+    printf '%s\n' "$sorted_corpus" \
+      | awk -F'\t' -v n="$ENGINE_PARTS" -v k="$1" '(NR - 1) % n == k - 1 { print $2 }'
+  }
+  # Completeness: the parts' selections must be pairwise disjoint and their union must
+  # equal the unpartitioned list, else some fixture is run by no part (or two). Listing
+  # only, so it costs seconds and runs before any oracle check or build.
+  all_paths="$(printf '%s\n' "$sorted_corpus" | awk -F'\t' 'NF { print $2 }' | LC_ALL=C sort)"
+  seen_paths=""
+  k=1
+  while [ "$k" -le "$ENGINE_PARTS" ]; do
+    this_paths="$(part_select "$k" | LC_ALL=C sort)"
+    dup="$(printf '%s\n%s\n' "$seen_paths" "$this_paths" | grep -v '^$' | LC_ALL=C sort | uniq -d | head -n 1 || true)"
+    if [ -n "$dup" ]; then
+      echo "ENGINE PARTITION NOT DISJOINT: part $k also selects a fixture an earlier part holds: $dup" >&2
+      exit 1
+    fi
+    seen_paths="$(printf '%s\n%s\n' "$seen_paths" "$this_paths" | grep -v '^$' || true)"
+    k=$((k + 1))
+  done
+  missing="$(printf '%s\n' "$seen_paths" | LC_ALL=C sort | LC_ALL=C comm -13 - <(printf '%s\n' "$all_paths") | head -n 1)"
+  if [ -n "$missing" ]; then
+    echo "ENGINE PARTITION NOT COVERING: no part selects fixture: $missing" >&2
+    exit 1
+  fi
+  CORPUS="$(part_select "$ENGINE_PART")"
   part_n="$(printf '%s\n' "$CORPUS" | grep -c . || true)"
   [ "${part_n:-0}" -gt 0 ] || { echo "part $ENGINE_PART/$ENGINE_PARTS selected no fixture — the gate compared nothing"; exit 2; }
   PART_TAG="PART $ENGINE_PART/$ENGINE_PARTS"
@@ -599,8 +629,8 @@ detect_wasm_ok
 # ── MEDAKA_REQUIRE_WASM — the degradation is right for a dev box, WRONG for CI ──
 #
 # Default-off, so a dev box with no wasm toolchain keeps the honest, announced
-# degradation above (T1 still gates fully).  CI's `engines` shard sets it to 1: there
-# the toolchain is GUARANTEED, so an unavailable wasm arm means the WIRING broke, and
+# degradation above (T1 still gates fully).  CI sets it to 1 on the rows that run these parts:
+# the toolchain is GUARANTEED there, so an unavailable wasm arm means the WIRING broke, and
 # a wiring break must never again be reported as a green two-engine run (#597).
 #
 # ⚠️ `exit 1`, NOT `exit 2`.  run_gates.sh:47 carries
@@ -612,8 +642,8 @@ detect_wasm_ok
 #     echo 'wasm-tools not on PATH' | grep -qE 'no C compiler|libgc \(bdw-gc\)|not on PATH'  -> match
 if [ "${MEDAKA_REQUIRE_WASM:-0}" = 1 ] && [ "$WASM_OK" != 1 ]; then
   echo "MEDAKA_REQUIRE_WASM=1 but the wasm arm is unavailable: $WASM_OFF_WHY" >&2
-  echo "  the engines shard guarantees wasm-tools + Node 24 + test/bin/wasm_emit_modules_main;" >&2
-  echo "  if this fired in CI the toolchain wiring regressed — see .github/workflows/ci.yml (engines shard)." >&2
+  echo "  CI guarantees wasm-tools + Node 24 + test/bin/wasm_emit_modules_main on the rows that run this gate;" >&2
+  echo "  if this fired in CI the toolchain wiring regressed — see the setup-medaka step in .github/workflows/ci.yml." >&2
   exit 1
 fi
 

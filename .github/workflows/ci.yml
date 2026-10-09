@@ -1131,7 +1131,7 @@ jobs:
       # mentions is how "this didn't run" starts looking like "this passed").
       # Installed on EVERY shard, not just `sqlite`, so a gate moved between
       # shards for cost reasons can never silently lose its oracle. Also the wasm
-      # arm of the 3-engine differential (#597, `engines` shard only) — the peer
+      # arm of the 3-engine differential (#597, rows running diff_compiler_engines_part*) — the peer
       # of the `wasm:` job's own call to this action, same toolchain pin. The
       # BINARY is downloaded from `build` (#1928); the toolchain install stays,
       # since clang still compiles this shard's oracles.
@@ -1674,7 +1674,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # wasm-tools/Node versions come from setup-medaka's own input defaults — shared
-    # verbatim with the `engines` gate shard's call to the same action, which installs
+    # verbatim with the `wasm_arm` rows' call to the same action, which installs
     # the same toolchain for the 3-engine differential's T2/T3 arms (#597). Do not
     # override either here; that is precisely the drift the single source prevents.
     steps:
