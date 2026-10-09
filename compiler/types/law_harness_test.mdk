@@ -8,7 +8,14 @@ import frontend.parser.{parseLocated}
 import list.{reverse}
 import string.{fromChars, isAlphaNum, isLower, isSpace, join, toChars}
 import test.{expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue}
-import types.typecheck.{checkModulesDiagsChain, checkOneDiags, tcCode, tcMsg}
+import types.typecheck.{
+  ModDiags,
+  checkModulesDiagsChain,
+  checkOneDiags,
+  ppSchemeNamed,
+  tcCode,
+  tcMsg,
+}
 
 {- The law-owned prelude every law program is checked under, passed in the
    prelude position of both checker routes.
@@ -44,12 +51,49 @@ flatDiagnostics source =
 -- module of a one-module graph under the same prelude.
 export
 moduleDiagnostics : String -> List (String, String)
-moduleDiagnostics source =
-  let results = checkModulesDiagsChain None "" [] [] (desugar
-    (parseLocated lawPrelude)) [
-    ("law", desugar (parseLocated source)),
-  ]
-  flatMap ((_, (_, errors, _)) => map (e => (tcCode e, tcMsg e)) errors) results
+moduleDiagnostics source = graphDiagnostics [("law", source)]
+
+{- The checker's per-module results for a module graph under `lawPrelude`.
+   Each module is `(id, source)`; a module imports another by its id, the
+   list is in dependency order, and the last module is the entry. -}
+graphResults : List (String, String) -> List ModDiags
+graphResults modules =
+  let parsed = map ((id, source) => (id, desugar (parseLocated source))) modules
+  checkModulesDiagsChain
+    None
+    ""
+    []
+    []
+    (desugar (parseLocated lawPrelude))
+    parsed
+
+-- The error diagnostics of every module of a graph, as `(code, message)`.
+export
+graphDiagnostics : List (String, String) -> List (String, String)
+graphDiagnostics modules =
+  flatMap
+    ((_, (_, errors, _)) => map (e => (tcCode e, tcMsg e)) errors)
+    (graphResults modules)
+
+-- Verdict plus rendered diagnostics of a module graph.
+export
+checkGraph : List (String, String) -> (Verdict, String)
+checkGraph modules = verdictOf (graphDiagnostics modules)
+
+{- The error codes of a module graph and the rendered schemes of its entry
+   module's bindings, contexts included, from one check. A name can carry two
+   schemes. `ppSchemeNamed` reads the checker's tables for the module checked
+   last, so the schemes are rendered before any other check runs. -}
+export
+graphCodesAndSchemes : List (String, String) ->
+  (List String, List (String, String))
+graphCodesAndSchemes modules =
+  let results = graphResults modules
+  let codes = flatMap ((_, (_, errors, _)) => map tcCode errors) results
+  let schemes = match reverse results
+    (_, (own, _, _)) :: _ => map ((n, s) => (n, ppSchemeNamed n s)) own
+    [] => []
+  (codes, schemes)
 
 -- The verdict of a diagnostic list, with the diagnostics rendered for a
 -- failure message.

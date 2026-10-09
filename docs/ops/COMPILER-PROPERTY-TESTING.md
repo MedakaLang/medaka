@@ -109,6 +109,8 @@ only for bounded tests; production code must still follow
 | The value restriction (HM-CORE §1, DICT §4.1 G2) | [hm_value_restriction_property_test.mdk](../../compiler/types/hm_value_restriction_property_test.mdk) | Generated bindings generalize iff a transcribed value grammar says so, at top level, at a local `let`, in a binding group and under a signature; partial application; `T-SIG-OVER-EXPANSIVE`; binder-rename invariance. |
 | Invariance of verdicts and schemes (SHADOW S1-S9, DICT T1/U1/U2/C4, history independence) | [check_invariance_property_test.mdk](../../compiler/types/check_invariance_property_test.mdk) | Shadow-clause verdict model under renaming, unrelated insertion and import/provider reordering; declaration permutation; flat route versus one-module route; two-module split; a check of `P` after any `Q` equals `P` first. |
 | Damas-Milner core (HM-CORE §2-5, #2555) | [hm_core_property_test.mdk](../../compiler/types/hm_core_property_test.mdk) | Principality by re-annotation; instantiation and non-instances; occurs check; operand-order symmetry against a Robinson unification model; lambda- versus let-bound polymorphism; group monomorphism and polymorphic recursion under signatures. |
+| Dictionary resolution (DICT §3, §6 C1/C3, §6.3, §8 I5/I6.1) | [dict_property_test.mdk](../../compiler/types/dict_property_test.mdk) | Most-specific selection against a matching and specificity model, invariant under instance permutation; improvement and determination against a unification model; the defaulting settle sequence and its channels; graph-global candidacy; head-variable spelling. |
+| Dictionary declarations (DICT §3 W1/W3, §4 `gen-sig`, §5.1, §8 I1-I4/I6.2/I7) | [dict_declaration_property_test.mdk](../../compiler/types/dict_declaration_property_test.mdk) | Superclass cycles against a reachability model; impl bodies against a binder-keyed rigid-variable model; impl completeness and extraneous members; signature contexts as contracts; identity along two import paths and of same-spelled declarations; the literal's class. |
 
 The utility deduplication model exposed a native code-generation defect:
 a lifted patterned lambda inherited its enclosing function's tail-recursion
@@ -127,10 +129,10 @@ expose a defect in any engine, including the interpreter.
 | Specification | Executable property families | Vehicle |
 | --- | --- | --- |
 | [EFFECTS-SEMANTICS](../spec/EFFECTS-SEMANTICS.md) §2.1–2.4, §6.8 | Finite authority models; antichain normal forms independent of input order; row join associativity/commutativity/idempotence/empty identity; independent callback tails and invariant indices. The initial siblings implement finite Prefix/Set/Product domains, atomic rows and shared tails. | Internal model props, then generated accepted/rejected programs. |
-| [DICT-SEMANTICS](../spec/DICT-SEMANTICS.md) §6 C-laws, §8 I1–I4 | Same declaration reached along two import paths retains one identity; distinct same-spelled declarations stay distinct; admissible instance permutations preserve evidence; dictionaries retain binding identity across modules. Registry identity laws are a substrate check, not a whole-pipeline proof. | Registry models plus generated module graphs and engine differentials. |
+| [DICT-SEMANTICS](../spec/DICT-SEMANTICS.md) §3, §4, §5.1, §6, §6.3, §8 | Same declaration reached along two import paths retains one identity; distinct same-spelled declarations stay distinct; instance permutations preserve verdicts and schemes; selection, improvement, determination and defaulting follow the clause models. Which dictionary a goal selects is evidence identity, which verdicts and schemes do not show. | Generated programs and module graphs with clause models (see § "Typechecker law inventory"). |
 | [SHADOW-SEMANTICS](../spec/SHADOW-SEMANTICS.md) §1 S1–S9 | Alpha-rename an unrelated binder; insert an unrelated declaration; vary import order where visibility remains unique; binding resolution must preserve the selected identity. | Generated binding graphs and scoped source transformations. |
 | [LAYOUT-SEMANTICS](../spec/LAYOUT-SEMANTICS.md) §3–8, §12 | Insert transparent comments; vary permitted indentation and bracket nesting; compare emitted layout tokens against an independent transition model; generated token streams must remain parseable. | Lexer/parser model props and grammar-aware sources. |
-| [HM-CORE-SEMANTICS](../spec/HM-CORE-SEMANTICS.md) §1 | Non-expansive forms generalize, expansive forms obey the value restriction; changing a binder name cannot change the restriction. Sections marked owed are not a finished specification to invent tests from. | Generated programs with explicit type/diagnostic expectations. |
+| [HM-CORE-SEMANTICS](../spec/HM-CORE-SEMANTICS.md) §1–5 | Non-expansive forms generalize, expansive forms obey the value restriction; changing a binder name cannot change the restriction. The owed §2–5 are covered by textbook Damas-Milner laws written law-first under #2555, not by invented prose. | Generated programs with explicit type/diagnostic expectations. |
 | [EMITTER-SEMANTICS](../spec/EMITTER-SEMANTICS.md) R1–R5, V/N/T/M/D laws | Preserve specified values, outcomes and trap codes; constructor/symbol identity remains injective; numeric boundaries match the law; repeated emission is deterministic. | Native/eval/Wasm differential programs with independently calculated expectations. |
 | [WASM-SEMANTICS](../spec/WASM-SEMANTICS.md) WP/WH laws | Physical representations refine the shared emitter contract; dependency ordering and host boundaries preserve values, outcomes and required capabilities. | Existing Wasm harness and generated bounded programs. |
 
@@ -160,6 +162,9 @@ black-box-observable.
 | HM-CORE §1 clause 4, `T-SIG-OVER-EXPANSIVE` | prop `a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE`; test `a variable under a constrained signature is a value` | Clause 4 text: a definition-site error, never a narrowing to the first use |
 | HM-CORE §1, decision by syntax | prop `renaming binders preserves the value restriction's verdict` | Alpha-equivalent programs have the same verdict and codes |
 | DICT §4.1 G2, local binder | prop `a local let generalizes iff its expression is a syntactic value` | G2 value grammar, at a block `let` |
+
+The HM-CORE §1 and G2 rows live in
+[hm_value_restriction_property_test.mdk](../../compiler/types/hm_value_restriction_property_test.mdk).
 
 | SHADOW S1, S2 (shadow-hood; definer inversion) | prop `a shadow program's verdict follows the clauses and survives the transformations` | S2 text: a definer shadow applied to a receiver denotes the standalone, so only a receiver in the standalone's domain is accepted; importer shadow dispatches at a live-impl head |
 | SHADOW S3 (N-way) | same prop, `UApplyLive`/`UApplyTag` | S3 text: a receiver at a live-impl head is a located reject |
@@ -200,8 +205,47 @@ authority appear in the fragment. Its self-tests hand-build a wrong case for
 each law family and require the comparison or the checker to reject it; its
 censuses count each verdict class over enumerated type, wrap and shape domains.
 
-All of these live in
-[hm_value_restriction_property_test.mdk](../../compiler/types/hm_value_restriction_property_test.mdk).
+| Clause | Disposition | Oracle |
+| --- | --- | --- |
+| DICT §3 specificity, `min⊑` and `inst`; §6 C1 | prop `instance selection follows the most-specific model and survives permuting the instances` | Matching and specificity model: an empty matching set is a missing instance with no ambiguity code; one `⊑`-minimal head is accepted; two or more are `T-AMBIGUOUS-INSTANCE` |
+| DICT §6 C3, §3 resolution determinism | same prop, permuted instance declarations | The same sorted codes and alpha-equivalent schemes before and after the permutation |
+| DICT §3 `assum` | prop `a signature's context is a contract the body is checked against and every caller discharges` | A declared `Sz a` discharges `sz x` at a rigid `a` no instance matches; that the evidence is received rather than rebuilt is evidence identity |
+| DICT §3 `super` | same prop | A declared `Tg a` entails `sz x` through `Tg requires Sz` |
+| DICT §3 precedence (`assum` before `inst`) | not black-box-observable: where both rules apply the verdict is the same and only the evidence differs | n/a |
+| DICT §3 improvement by the one matching instance | prop `a repeated head variable improves its goal jointly and a second unifying head blocks the commit` | Robinson unification of the goal with each head, apart; a repeated head variable binds its positions jointly; uniqueness counts unifying heads |
+| DICT §3 determination by the one unifying instance, and its Reject paragraph | prop `an open goal is determined by its one unifying instance and rejected otherwise` | One unifying head commits; none is `T-NO-IMPL`; two or more without a stable minimum are `T-AMBIGUOUS-INSTANCE` (ruling 2026-10-08) |
+| DICT §3 signature variables in every matcher | owed: no prop; see the note below | n/a |
+| DICT §3 W1 | prop `a superclass cycle is rejected and an acyclic superclass relation is accepted` | Reachability over generated `requires` edges; a cycle is `T-CYCLIC-SUPERINTERFACE` |
+| DICT §3 W2 | not black-box-observable: the clause states a decidability precondition and fixes no verdict or site for an instance that violates it | n/a |
+| DICT §3 W3 (type axis, and the effect axis of a method row) and W3-inst pinning | prop `an impl body inhabits its method's scheme with the method and head variables rigid` | Rigid variables keyed by binder, so a head `b` and a method `b` differ; a fresh body type fits; performing `KV` on the caller's row does not |
+| DICT §3 W3-inst undeclared prerequisites | owed: no prop; see the note below | n/a |
+| DICT §3 W3 graded interfaces (#1094, #1095) | owed: no prop; see the note below | n/a |
+| DICT §4 `gen-sig` | prop `a signature's context is a contract the body is checked against and every caller discharges` | The scheme's context is exactly the declared one; an unentailed body predicate is `T-MISSING-CONSTRAINT`; a declared, unused predicate is still the caller's |
+| DICT §5.1 M1, M2 | prop `an impl is accepted iff it is complete and has no extraneous method` | Every method without a default has a body (`T-INCOMPLETE-IMPL`); no body under another name (`R-METHOD-NOT-IN-INTERFACE`, from `frontend.resolve.resolveProgram`) |
+| DICT §5.1 M3 | prop `a phantom method is legal at its declaration and only an undetermined use is rejected`; pin #1134 (eval and native) | A use under a given is discharged by `assum`; a bare use is undetermined |
+| DICT §6.3 D1, D2 | prop `a defaulted literal's other predicates are still checked, after determination` | Determination over every open goal with joint consistency, then `?a := Int`, then every predicate checked as written |
+| DICT §6.3 D3, D4 | prop `a literal is defaulted exactly when no surviving channel can determine it` | An argument, a connected variable and a declared dictionary are channels; an inferred result and a local `let` are not; the enclosing binder's variable is its own |
+| DICT §8 I1, I2, I3, I4; I6.2 (a) | prop `a declaration keeps one identity along two import paths and same-spelled declarations stay distinct` | Re-exported and direct imports of one type, interface or binding agree; two modules' `T`, `Sh` or `f` stay distinct; a tuple type written in two modules is one type |
+| DICT §8 I5 | prop `instance candidacy ranges over every module of the graph` | The C1 model over the impls of an imported module and of one the entry never imports, before or after it |
+| DICT §8 I6.1 | prop `an instance-head variable is a variable under every spelling` | The C1 model, which knows no spellings, under respelled head variables including the reserved `__none__` |
+| DICT §8 I6.2 (b) | not black-box-observable: whether source text can forge the reserved builtin origin is decided where the parser builds heads, and generated programs only reach the checker through that parser | n/a |
+| DICT §8 I6.3 | not black-box-observable: an empty module id is an internal origin no source program or module graph can name | n/a |
+| DICT §8 I7 (literals) | prop `a numeric literal demands the prelude's Num whatever binding is spelled fromInt`; red at the base, no matching open issue yet | The literal's class is the prelude's `Num`, whose only instance is at `Int` |
+| DICT §8 I7 (operators), qualification 4 | owed: no prop; see the note below | n/a |
+
+The dictionary rows live in
+[dict_property_test.mdk](../../compiler/types/dict_property_test.mdk) and
+[dict_declaration_property_test.mdk](../../compiler/types/dict_declaration_property_test.mdk),
+split so that each file's evaluator run stays well inside the 600-second
+foreground ceiling. Their self-tests hand-build a wrong case for each model
+and check one fixed program per family; their censuses count every verdict
+class over enumerated description domains. Four owed rows have no law yet.
+Signature variables in every matcher and W3-inst's undeclared prerequisites
+need a model of the rule that a goal over rigid variables only is never
+reduced by an instance. The graded-interface residuals of W3 are
+Effect-kinded unification laws, out of this campaign's scope. The I7 operator
+classes need a prelude declaring them, which the law prelude does not.
+DICT §4.1 G2, §6 C4, T1 and U1/U2 are disposed of in the tables above.
 
 The `Makefile` test target reaches the support siblings explicitly. New
 `compiler/types/*_test.mdk` siblings are reached by its existing directory
