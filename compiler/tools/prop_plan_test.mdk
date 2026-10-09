@@ -17,12 +17,14 @@ import tools.prop_plan.{
   planErrorText,
   ctorWeights,
   maxGenDepth,
+  listLenMax,
+  planCyclesThroughList,
 }
 import test.{expectAll, expectEqual, expectNotEqual}
 
 runtimeTypes : String -> Ty -> (Ty, Bool)
 runtimeTypes _ (t@(TyCon { tyConName = n }))
-  | n == "Int" || n == "Bool" =
+  | n == "Int" || n == "Bool" || n == "List" || n == "Option" =
     (TyCon { t | tyConOrigin = OriginBuiltin }, True)
 runtimeTypes owner (t@(TyCon {  })) =
   (TyCon { t | tyConOrigin = OriginModule owner }, True)
@@ -195,9 +197,9 @@ test "finite witnesses distinguish repeated applied nominal carriers" =
 
 -- A type recursive through `List` must generate a finite value in bounded time
 -- in both engines. The list length bound falls by one per level of constructor
--- depth from `listLenMax` (7), so the top Rose (depth 0) has at most 6
--- children and a generated tree holds at most 1957 nodes (f 0 = 1, f k =
--- 1 + k * f (k - 1)).
+-- depth from `listLenMax`, so the top Rose (depth 0) has at most 6
+-- children and a generated tree holds at most `roseBound (listLenMax - 1)`
+-- nodes (f 0 = 1, f k = 1 + k * f (k - 1)).
 data Rose = Rose Int (List Rose)
 
 roseSize : Rose -> Int
@@ -207,5 +209,48 @@ roseSizes : List Rose -> Int
 roseSizes [] = 0
 roseSizes (k :: ks) = roseSize k + roseSizes ks
 
-prop "a generated Rose has between 1 and 1957 nodes" (r : Rose) =
-  roseSize r >= 1 && roseSize r <= 1957
+roseBound : Int -> Int
+roseBound 0 = 1
+roseBound k = 1 + k * roseBound (k - 1)
+
+prop "a generated Rose stays within the list-length node bound" (r : Rose) =
+  roseSize r >= 1 && roseSize r <= roseBound (listLenMax - 1)
+
+-- Type i holds three `Option` links to type i+1, so the paths through the
+-- chain multiply while the carrier states stay linear in its depth.
+optionChainSource : Int -> Int -> String
+optionChainSource i depth =
+  if i >= depth then
+    "public export data T\{intToString i} = N\{intToString i}\n"
+  else
+    let next = "T\{intToString (i + 1)}"
+    "public export data T\{intToString i} = M\{intToString i} (Option \{next}) (Option \{next}) (Option \{next}) | N\{intToString i}\n"
+      ++ optionChainSource (i + 1) depth
+
+chainCycles : Int -> Bool -> Result String Bool
+chainCycles depth cyclic =
+  let raw =
+    parse
+      (optionChainSource 0 depth
+        ++ (if cyclic then
+          "public export data Loop = Loop (List Loop) | Stop\n"
+        else
+          ""))
+  let root = if cyclic then "Loop" else "T0"
+  match (buildPlanEnvModules "chain" [
+    PlanModule "chain" raw (map (runtimeDecl "chain") raw),
+  ])
+    Err e => Err (planErrorText e)
+    Ok env => match planFor env "chain" "value" TyCon {
+      tyConName = root,
+      tyConOrigin = OriginModule "chain",
+      tyConLoc = None,
+    }
+      Err e => Err (planErrorText e)
+      Ok p => Ok (planCyclesThroughList env p)
+
+test "the list-cycle predicate resolves a deep Option chain and still sees a list cycle" = expectAll
+  [
+    expectEqual (Ok False) (chainCycles 14 False),
+    expectEqual (Ok True) (chainCycles 14 True),
+  ]
