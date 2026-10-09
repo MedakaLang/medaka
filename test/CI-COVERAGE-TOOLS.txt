@@ -138,10 +138,10 @@ test/bytes_census               derived Array Int type-position census (epic #31
                                 `make bytes-census`): counts the per-file `Array Int`
                                 position count tree-wide. Default mode always exits 0
                                 and asserts nothing — a per-file opt-in ratchet
-                                (`--check` against test/bytes_census_baseline.toml) is
-                                the gated path, run by the real gate
-                                test/diff_compiler_bytes_census.sh, not this script
-                                directly. See the script header.
+                                over test/bytes_census_baseline.toml is the gated
+                                path, run natively by the real gate
+                                test/diff_compiler_bytes_census_test.mdk (it does not
+                                call this script). See the script header.
 
 test/arch_census                derived architecture census (#2289, S-arch-census,
                                 `make arch-census`): reports the largest-files table plus
