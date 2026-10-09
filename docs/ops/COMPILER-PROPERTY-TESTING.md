@@ -106,6 +106,7 @@ only for bounded tests; production code must still follow
 | Identity registries and lexical scopes | Existing `compiler/types` siblings | Scripted independent models and identity/visibility laws; retain specific unit regressions. |
 | Atomic effect rows and shared row DAGs | [effect_rows_property_test.mdk](../../compiler/types/effect_rows_property_test.mdk) | Finite-map normalization; grade-join algebra; independent unsolved tails; effects survive later solving after a warm normalization. |
 | Concrete authority domains | [effect_domain_property_test.mdk](../../compiler/types/effect_domain_property_test.mdk) | Prefix/Set/Product inclusion and least upper bounds against finite models; antichain admission preservation; constant-authority order; empty Set boundaries. |
+| The value restriction (HM-CORE §1, DICT §4.1 G2) | [hm_value_restriction_property_test.mdk](../../compiler/types/hm_value_restriction_property_test.mdk) | Generated bindings generalize iff a transcribed value grammar says so, at top level, at a local `let`, in a binding group and under a signature; partial application; `T-SIG-OVER-EXPANSIVE`; binder-rename invariance. |
 
 The utility deduplication model exposed a native code-generation defect:
 a lifted patterned lambda inherited its enclosing function's tail-recursion
@@ -135,6 +136,31 @@ For each dispatched law record the exact clause, input domain, independent
 oracle, generation coverage and mutation control. Shared-state generators
 construct valid aliasing topologies from descriptions; random recursive `Ref`
 values are not a substitute for those topologies.
+
+### Typechecker law inventory
+
+Typechecker laws check generated programs through the exported checker entry
+points only, using the shared harness
+[law_harness_test.mdk](../../compiler/types/law_harness_test.mdk): a law-owned
+mini prelude, shape descriptions with source and type renderers, flat and
+module-route verdict wrappers, a use-at-two-types generalization observer and an
+`alphaEquiv` canonical-renaming model. A rendered scheme does not show whether a
+binding generalized, so generalization is observed by use at two incompatible
+types. Each row's disposition is a prop, a pin against an issue, or not
+black-box-observable.
+
+| Clause | Disposition | Oracle |
+| --- | --- | --- |
+| HM-CORE §1 gen-value, top level | prop `a top-level binding generalizes iff its expression is a syntactic value` (flat and module routes) | G2 value grammar transcribed as `isSyntacticValue`; the shape's type from the harness typing model |
+| HM-CORE §1 clause 1, binding groups | prop `membership in a binding group grants no generalization exemption` | Same grammar, applied to a member of a two-member group |
+| HM-CORE §1 clause 2, signatures | prop `a type signature grants no generalization exemption` | Same grammar under the shape's principal signature |
+| HM-CORE §1 clause 3, partial application | prop `a partial application is expansive and its eta-expansion is a value` | Clause 3 text; a clause with a parameter is a lambda |
+| HM-CORE §1 clause 4, `T-SIG-OVER-EXPANSIVE` | prop `a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE`; test `a variable under a constrained signature is a value` | Clause 4 text: a definition-site error, never a narrowing to the first use |
+| HM-CORE §1, decision by syntax | prop `renaming binders preserves the value restriction's verdict` | Alpha-equivalent programs have the same verdict and codes |
+| DICT §4.1 G2, local binder | prop `a local let generalizes iff its expression is a syntactic value` | G2 value grammar, at a block `let` |
+
+All of these live in
+[hm_value_restriction_property_test.mdk](../../compiler/types/hm_value_restriction_property_test.mdk).
 
 The `Makefile` test target reaches the support siblings explicitly. New
 `compiler/types/*_test.mdk` siblings are reached by its existing directory
