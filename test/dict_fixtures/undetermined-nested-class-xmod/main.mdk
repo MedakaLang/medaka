@@ -1,0 +1,10 @@
+-- DICT-SEMANTICS §6.2 "T4 implemented" at a nested `requires` prerequisite whose
+-- instances live in an imported module.  `match def` with `Some _`/`None` arms
+-- fixes `def : Option ?a`, which selects `impl Def (Option a) requires Def a` and
+-- poses `Def ?a`; `Def Int`, `Def Bool` and `Def (Option b)` all reach it with no
+-- stable minimum.  Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE
+-- at the `def` occurrence.
+import lib.{Def, def}
+main = match def
+  Some _ => println "some"
+  None => println "none"

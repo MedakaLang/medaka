@@ -89,7 +89,7 @@ selfEqPF (LivePF x n) = if x == x then n + 1 else 0
 
 impl DictUserPF (LivePF a) requires Eq a where
   dictUserPF = selfEqPF
-
+-- A bare `Phantom 7` or `Blind 7` leaves its `requires Eq a` goal ambiguous (DICT-SEMANTICS §3 Reject).
 main =
   println
-    "valOnly=\{debug (valOnly (Phantom 7))} noRead=\{debug (noRead (Blind 7))} dictUser=\{debug (dictUser (Live 1 41))} dictUserPF=\{debug (dictUserPF (LivePF 2 54))}"
+    "valOnly=\{debug (valOnly (Phantom 7 : Phantom Int))} noRead=\{debug (noRead (Blind 7 : Blind Int))} dictUser=\{debug (dictUser (Live 1 41))} dictUserPF=\{debug (dictUserPF (LivePF 2 54))}"

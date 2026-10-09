@@ -1,0 +1,12 @@
+-- DICT-SEMANTICS §6.2 "T4 implemented": a goal on a non-generalized binding's
+-- variable waits for quiescence, and is judged there.  Nothing grounds `y`'s
+-- variable, so `Zero ?a` and `Eq ?a` each reach two instances with no stable
+-- minimum.  Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE.
+interface Zero a where
+  zero : a
+impl Zero Int where
+  zero = 0
+impl Zero Bool where
+  zero = False
+y = identity zero
+main = println (debug (y == y))

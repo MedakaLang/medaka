@@ -4,7 +4,7 @@
 -- scheme forwarded no constraint (`f : a -> a`), so `f "abc"` was check-GREEN and
 -- panicked at run (`unknown op '+'`).  I2 flips the local-scheme registration gate
 -- (registerLocalScheme/processLetGroup) and adds the call-obligation deferral
--- (checkUndeterminedObligation RULE 2), so `f : Num a => a -> a` and this String
+-- (`undeterminedGoalExempt`'s scheme exemption), so `f : Num a => a -> a` and this String
 -- call is a clean def-site reject.  If this fixture ever passes check, #827 is back.
 f x = go x
   where

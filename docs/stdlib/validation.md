@@ -29,9 +29,9 @@ A validated value: `Success` with the value, or `Failure` with the
 accumulated errors.
 
 ```medaka
-> toResult (Success 1)
+> toResult (Success 1 : Validation String Int)
 Ok 1
-> toResult (Failure "bad")
+> toResult (Failure "bad" : Validation String Int)
 Err "bad"
 ```
 
@@ -46,7 +46,7 @@ toResult : Validation e a -> Result e a
 The validation as a `Result`, for sequencing with `andThen`.
 
 ```medaka
-> toResult (Success 1)
+> toResult (Success 1 : Validation String Int)
 Ok 1
 ```
 
@@ -109,9 +109,9 @@ impl Display (Validation e a) requires Display e, Display a
 `display` renders a value as `Success x` or `Failure e`.
 
 ```medaka
-> display (Success 7)
+> display (Success 7 : Validation String Int)
 "Success 7"
-> display (Failure "bad")
+> display (Failure "bad" : Validation String Int)
 "Failure bad"
 ```
 

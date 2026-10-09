@@ -616,7 +616,7 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    it wrong on accepted programs in 33 files (a HYPOTHESIS at the time — D1-undefaulted
    `Num` literals in test/prop bodies, `panic "…"` #2315, and route-side re-unification
    duplicates — later measured wrong: see item 17 below and sprint `default-before-you-reject`,
-   #3031); reporting is the T4 census of ruling 1, on that measured set.  Two
+   #3031); see item 17 for what the population is now.  Two
    check-side holes the unification exposed and closed: a definer-shadow occurrence
    (`add x y = x + y` beside `Num`'s `add`) took the method path, which records dict
    SLOTS but never the standalone's scheme obligations — `add "a" "b"` passed `check` at
@@ -977,9 +977,17 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    own re-scoping comment). The real class is `routeUndeterminedTop`'s `reportAmbiguousImpl` arm
    over-reporting on a scheme-quantified receiver, at a stale location — filed as #3031, which
    both files are instances of. The re-derived population also grew to 3 of 2,704 accepted
-   (`test/engine_fixtures/numlit_alias_predicates/support.mdk` joined) — see the `data
-   DrainDiags` comment in `compiler/types/typecheck.mdk` for the current count; do not read
-   either number above as current.
+   (`test/engine_fixtures/numlit_alias_predicates/support.mdk` joined).
+   ⚠️ **Corrected again by sprint `nothing-determines-it` (2026-10-08).** #3031 is fixed
+   (`reportAmbiguousImpl` defers a scheme-quantified goal and locates at the goal), which
+   empties the first two files, but `support.mdk` carried a SECOND member that is not #3031:
+   `routeUndeterminedTop`'s single-tag arm minted the goal `Tweak Float` from the census tag
+   of two `Tweak Float _` impls for a goal on a scheme-quantified variable, and the selector
+   rejected it. That arm now gives such a goal no route
+   (`test/dict_fixtures/s6-drain-quiescence-projected-goal.mdk`). `DrainDiags` stays: the
+   re-derived population is `stdlib/core.mdk` checked as an entry (two unbound-authority
+   diagnostics at `1:0`). See the `data DrainDiags` comment in `compiler/types/typecheck.mdk` for the current
+   population; do not read any number above as current.
 
 18. **`run --json` envelopes a static error, 2026-09-09** (#2798). `runRunCmd`'s error arms
    — SIX of them; derive rather than trust this number, `grep -n 'runAbortJson'
@@ -3087,7 +3095,7 @@ Every claim below is labelled **MEASURED** (run first-hand while writing this),
   irOrigin : TyConOrigin }` and `Predicate { iface : IfaceRef, args }`
   (`compiler/types/typecheck.mdk:3060-3075`); the writer
   `insertUnivImpl`/`insertUnivImplKeys`/`insertUnivImplAt` and the readers
-  `implCountForIfaceU`/`univConcreteBucket`/`univHeadless` all key the interface
+  `implCountForIfaceU` (retired by #3897)/`univConcreteBucket`/`univHeadless` all key the interface
   half in the `NsIface` namespace (`:17885-17949`, `:17981-17982`,
   `:18275-18297`). So `IE`'s interface key exists already; A-3.4 **reuses** it
   and mints no parallel scheme.

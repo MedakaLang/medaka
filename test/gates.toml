@@ -2343,7 +2343,8 @@ area = "infra"
 shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
-cost = "cheap"
+# Measured 183-292s per run; the cheap class's 300s kill timeout sits inside that spread.
+cost = "medium"
 kind = "native"
 migration = "done"
 run = "test/diff_compiler_run_check_agreement_test.mdk"

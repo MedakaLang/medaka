@@ -1,0 +1,11 @@
+-- A method occurrence's goal on a non-generalized binding's variable that nothing
+-- grounds: `length` reads no element, so only quiescence judges `Zero ?a`.
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE.
+interface Zero a where
+  zero : a
+impl Zero Int where
+  zero = 0
+impl Zero Bool where
+  zero = False
+z = identity zero
+main = println (length [z])

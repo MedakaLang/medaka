@@ -1,0 +1,5 @@
+-- `main = Err "x"` poses `Display (Result String ?a)`, whose instance requires
+-- `Display ?a`; nothing fixes `?a` (DICT-SEMANTICS §6.2 "T4 implemented").
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE, located at the
+-- `main` binding.  The annotated form is `test/engine_fixtures/main_value_err.mdk`.
+main = Err "x"

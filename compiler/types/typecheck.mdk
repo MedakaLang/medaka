@@ -462,7 +462,7 @@ import types.registry.{
   regKeyNTab,
   regKeyRender,
   dispKeyRender,
-  -- the three registry types the obligation impl universe is now built from.
+  -- the registry types the impl and class tables are built from.
   Registry,
   regEmpty,
   regInsertK,
@@ -471,11 +471,6 @@ import types.registry.{
   mregEmpty,
   mregAppendK,
   mregLookupK,
-  SetRegistry,
-  sregEmpty,
-  sregAddK,
-  sregMemberK,
-  sregSize,
   -- the cross-run constructor and record populations (`CrossRun`).
   SpellingPop,
   spEmpty,
@@ -4123,7 +4118,7 @@ recoveredShadowSym name tagRef =
 -- (checkImplObligations / checkCallObligations): three refs keyed for
 -- O(1)/O(log N) lookup, grown ONE module at a time in
 -- `appendUniverseAccums`, consumed by the keyed checkers (implMatchesU /
--- implMatchesReceiverU / findMatchingImplReqsU / implCountForIfaceU). Same
+-- implMatchesReceiverU / findMatchingImplReqsU). Same
 -- lifecycle as above. Head-tag alignment: `headTyconTy` (impl side) and
 -- `headTyconMono` (goal side) agree on the head's SPELLING, not its origin —
 -- see `dispHeadTab` for the measurement. The one deliberate non-identity:
@@ -6628,7 +6623,7 @@ ieRowMethodNames (ImplRow _ _ _ _ _ ms) = ms
 
 -- The registry.  `ieRows` is the POPULATION in build order (ordinal order across
 -- modules, `implDeclsWithReqs` order within one); the rest are INDEXES over it.
--- `ieConcrete`/`ieHeadless`/`ieIfaceTags` are the obligation channel's own three,
+-- `ieConcrete`/`ieHeadless` are the obligation channel's own two,
 -- with the SAME keys, minted through the SAME `oblIfaceKeys`/`dispHeadTab` calls
 -- (see `ieInsertRow`), so `IE` mints no parallel keying scheme; `ieByHead` is
 -- `KeyBuckets`' partition, minted through the SAME `headBucketKey` (see
@@ -6640,7 +6635,6 @@ data ImplEnv = ImplEnv {
   ieConcrete : MultiRegistry ImplRow,
   ieHeadless : MultiRegistry ImplRow,
   ieByHead : MultiRegistry ImplRow,
-  ieIfaceTags : Registry SetRegistry,
   -- 🚨 A-3.4 PR2, AND IT IS A PERFORMANCE INVARIANT, NOT A CACHE.  One entry per
   -- distinct module ordinal, in ordinal order: `(o, universe of every row with
   -- ordinal <= o)`.  `ieUniverseAt` SELECTS from this; it does not rebuild.
@@ -6674,7 +6668,6 @@ emptyImplEnv = ImplEnv {
   ieConcrete = mregEmpty,
   ieHeadless = mregEmpty,
   ieByHead = mregEmpty,
-  ieIfaceTags = regEmpty,
   ieUnivSnaps = [],
 }
 
@@ -7020,15 +7013,10 @@ ieInsertRowKeys (ifk :: rest) r env =
 ieInsertRowAt : TabKey -> ImplRow -> ImplEnv -> ImplEnv
 ieInsertRowAt ifk (r@(ImplRow _ _ _ tys _ _)) env = match univReceiverTag tys
   Some hk =>
-    let ifkey = regKeyOfTab ifk
-    let hd = dispHeadTab hk
-    -- ⚠️ `ieIfaceTags` is the ACCEPTANCE census (`ieUniverseAt` hands it to
-    -- `implCountForIfaceU`), so it is guarded — `univHeadCountsInCensus`.  This
-    -- writer and `insertUnivImplAt` must move in LOCKSTEP.
+    -- This writer and `insertUnivImplAt` move together.
     ImplEnv { env |
-      ieConcrete = mregAppendK (regKeyNTab [ifk, hd]) r env.ieConcrete,
-      ieIfaceTags =
-        univAddIfaceTag (univHeadCountsInCensus tys) ifkey hd env.ieIfaceTags,
+      ieConcrete =
+        mregAppendK (regKeyNTab [ifk, dispHeadTab hk]) r env.ieConcrete,
     }
   None => ImplEnv { env |
     ieHeadless = mregAppendK (regKeyOfTab ifk) r env.ieHeadless,
@@ -7310,7 +7298,7 @@ ieProbeEnv = buildImplEnv [
 -- > listLen (mregLookupK (ieProbeKey "zmod") (ieUnivConcreteOf (ieUniverseAt 1 ieProbeEnv)))
 -- 1
 ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)
-ieUnivConcreteOf (ImplUniverse conc _ _ _) = conc
+ieUnivConcreteOf (ImplUniverse conc _) = conc
 
 -- ── ARCH B-2.1-a3: the HEAD-keyed index's corpus, built to DISCRIMINATE ────────
 -- `ieProbeEnv` above cannot grade `ieByHead`: one impl per module means "exactly
@@ -8778,7 +8766,7 @@ pushNumLitObl predicate occurrence loc scope = wPush
 
 -- Chunk A (error framing): the union-find root ids of every type var that took
 -- part in a unification failure (`typeMismatch`).  Consulted ONLY by
--- `checkUndeterminedObligation` to SUPPRESS a secondary `ambiguous instance`
+-- `undeterminedGoalExempt` to SUPPRESS a secondary `ambiguous instance`
 -- cascade on a var the primary mismatch already explained — never read on the
 -- inference path, so a well-typed program (no mismatch) never poisons anything
 -- and behaves identically.
@@ -10337,9 +10325,8 @@ pushTypeErrorOnceAt code loc msg =
 -- Like `pushTypeErrorOnceAt`, but the duplicate test is per SITE: the same text at
 -- another span is a second diagnostic, the same text at the same span (a signature
 -- elaborated twice) still folds.  For messages that describe one site's own fault,
--- where two sites with identical text must each be reported.  A message about a
--- shared root cause (an ambiguous goal reached from two dispatch sites) belongs on
--- `pushTypeErrorOnceAt`, which folds on text alone.
+-- where two sites with identical text must each be reported.  An ambiguous goal
+-- folds on its span instead (`pushAmbiguityAt`).
 pushTypeErrorOncePerSite : String -> Option Loc -> String -> Unit
 pushTypeErrorOncePerSite code loc msg =
   let at = orElseLoc loc !currentLoc
@@ -10347,6 +10334,66 @@ pushTypeErrorOncePerSite code loc msg =
     noteTypeErrorDetected ()
   else
     recordTypeError (TcDiag code 1 at msg None None)
+
+-- A `T-AMBIGUOUS-INSTANCE` is one diagnostic per span, however many checks judge
+-- the goal there: the boundary, the module's obligation check and the selector each
+-- reach the same verdict on it.  Its text does not identify it, since the short
+-- message names only the interface, so two goals at two spans are two diagnostics.
+-- Of two messages at one span the one that names the goal and its candidates
+-- ([namesGoal]) is kept.  An unlocated one folds on its text.
+pushAmbiguityAt : Bool -> Option Loc -> String -> Unit
+pushAmbiguityAt namesGoal loc msg =
+  let at = orElseLoc loc !currentLoc
+  let code = "T-AMBIGUOUS-INSTANCE"
+  if isNone at then
+    pushTypeErrorOnceAt code at msg
+  else
+    let site = locKey at
+    match omLookup site perRun.value.ambiguitySitesRef.value
+      None =>
+        perRun.value.ambiguitySitesRef :=
+          omInsert site namesGoal perRun.value.ambiguitySitesRef.value
+        recordTypeError (TcDiag code 1 at msg None None)
+      Some named =>
+        if namesGoal && not named then
+          perRun.value.ambiguitySitesRef :=
+            omInsert site True perRun.value.ambiguitySitesRef.value
+          replaceAmbiguityAt site (writtenDiag (TcDiag code 1 at msg None None))
+        else
+          noteTypeErrorDetected ()
+
+-- Puts [d] in place of the `T-AMBIGUOUS-INSTANCE` recorded at [site], in the
+-- module's channel and the sticky one.
+replaceAmbiguityAt : String -> TcDiag -> Unit
+replaceAmbiguityAt site d =
+  let same e = tcCode e == tcCode d && locKey (tcLoc e) == site
+  let swap e = if same e then d else e
+  let _ = noteTypeErrorDetected ()
+  perRun.value.typeErrorMsgSetRef :=
+    omInsert
+      (msgAtKey (tcMsg d) (tcLoc d))
+      ()
+      (omInsert (tcMsg d) () perRun.value.typeErrorMsgSetRef.value)
+  perRun.value.typeErrors.items := map swap !perRun.value.typeErrors.items
+  typeErrorsStickyDiags :=
+    map ((m, e) => (m, swap e)) typeErrorsStickyDiags.value
+
+-- A boundary's `T-AMBIGUOUS-INSTANCE` on the goal [args]: one undetermined
+-- variable is one diagnostic, however many goals at however many spans pose it, so
+-- a goal sharing a boundary-owned variable with one already reported folds into
+-- it.  Only the variables the boundary owns ([rigidIds] and scheme-quantified ones
+-- excluded) identify the cause: two goals that share only a rigid variable are two
+-- defects.  The selector and the obligation check cannot tell a rigid variable
+-- from an open one, so they fold on the span alone (`pushAmbiguityAt`).
+pushBoundaryAmbiguity : OrdMap Unit -> List Mono -> Option Loc -> String -> Unit
+pushBoundaryAmbiguity rigidIds args loc msg =
+  let reported = perRun.value.ambiguityVarsRef
+  let ids = filterList (boundaryOwnsOpen rigidIds) (flatMap monoUnboundIds args)
+  if anyList (i => IdMap.has i reported.value) ids then
+    noteTypeErrorDetected ()
+  else
+    reported := fold (m i => IdMap.set i () m) reported.value ids
+    pushAmbiguityAt False loc msg
 
 -- Push a deduped type error (same dedup rule as pushTypeErrorOnceAt) that also
 -- carries a human `help` string and an optional machine-applicable `fix`
@@ -11823,7 +11870,10 @@ data PerRun = PerRun {
   aliasMethodOriginsRef : Ref (OrdMap String),  -- #1386: the alias-qualified method spellings this module's imports bring into scope (`import m as A` ⇒ `A.mth`, `import m.{mth as loc}` ⇒ `loc`), each mapped to the ORIGIN method name.  A projection of the same candidate rows that supply `methodAliasEntriesRef`, UNFILTERED (the supply drops ambiguous and unresolvable keys; see `aliasMethodSpellings`), so this table is a superset of the supply's key set; read through `originMethodName`.
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
-  deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — RULE 2 defers these
+  deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — `undeterminedGoalExempt` defers a goal on these into the scheme
+  liveMemberMonosRef : Ref (List Mono),  -- the types of the module's closed top-level members that generalization left a variable open in: a later group can still ground it (DICT-SEMANTICS §6.2 T2), so no boundary judges a goal on it (`liveMemberIds`)
+  quiescentGoalsRef : Ref (List (OrdMap Unit, GoalWindow, UObligation)),  -- the goals on such a variable, newest first, each with its boundary's rigid variables and window (`judgeQuiescentGoals`)
+  determinedRowsRef : Ref (Map Int (List (ImplRow, List Mono))),  -- the instance each determination commit chose, with the committed goal's arguments, filed under the variable heading the goal (`fileDeterminedRow`)
   declaredSigVarIds : Ref (OrdMap Unit),  -- the declared-signature variables of every closed top-level group, which `matchEqPairs` holds rigid; a local's, an interface method's and an expression annotation's variables are not here (#3796, #3797, #3799)
   tupleCallCandidates : Ref (List (Mono, String, Option (Loc, String))),
   numlitVarLocs : Ref (List (Mono, Loc)),
@@ -11869,6 +11919,8 @@ data PerRun = PerRun {
   fieldOwnerReachRef : Ref (OrdMap Unit),  -- #1597: the module ids THIS module can reach through DUse — see declEnvSeedDataUniverse
   typeErrors : Windowed TcDiag,  -- issue 1146: the diagnostic OUTPUT channel, on the Windowed discipline
   typeErrorMsgSetRef : Ref (OrdMap Unit),  -- #2068: membership INDEX over typeErrors' rendered messages and message-at-site keys — see recordTypeError
+  ambiguitySitesRef : Ref (OrdMap Bool),  -- the spans holding a `T-AMBIGUOUS-INSTANCE`, each with whether its message names the goal (`pushAmbiguityAt`)
+  ambiguityVarsRef : Ref (Map Int Unit),  -- the boundary-owned variables a boundary has reported a `T-AMBIGUOUS-INSTANCE` on (`pushBoundaryAmbiguity`)
   errorsDetected : Ref Int,  -- issue 1146: the CONTROL signal split out of it — see recordTypeError / erredDuring
   occursCheckFailed : Ref Bool,
   currentLevel : Ref Int,
@@ -11933,6 +11985,9 @@ freshPerRun _ = PerRun {
   implObls = wNew (),
   poisonedVars = Ref [],
   deferrableVarIds = Ref [],
+  liveMemberMonosRef = Ref [],
+  quiescentGoalsRef = Ref [],
+  determinedRowsRef = Ref Tip,
   declaredSigVarIds = Ref omEmpty,
   tupleCallCandidates = Ref [],
   numlitVarLocs = Ref [],
@@ -11972,6 +12027,8 @@ freshPerRun _ = PerRun {
   fieldOwnerReachRef = Ref omEmpty,
   typeErrors = wNew (),
   typeErrorMsgSetRef = Ref omEmpty,
+  ambiguitySitesRef = Ref omEmpty,
+  ambiguityVarsRef = Ref Tip,
   errorsDetected = Ref 0,
   occursCheckFailed = Ref False,
   currentLevel = Ref 0,
@@ -17652,8 +17709,10 @@ inferDictAtFound name ev inst =
   -- funConstraintsRef lookup and would forward the wrong module's dict slot.
   if isEmptyL declaredIds && hasImportDefiner name then
     fst inst
-  else if known && anyIdPinned declaredIds (snd inst) then
-    inferDeclaredDictAt ev dc inst
+  else if known
+    && (anyIdPinned declaredIds (snd inst)
+      || calleeIsGeneralized name q (snd inst)) then
+    inferDeclaredDictAt ev dc (fst inst, pinUnboundIds declaredIds (snd inst))
   else
     pushRecDictAppGoal
       (RecDictApp
@@ -17697,6 +17756,32 @@ inferDeclaredDictAt ev dc inst =
   -- (`Num String` from `f "hello"` where `f : Num a => a -> a`) becomes an error.
   let _ = recordCallObligations expanded monos argVecs
   fst inst
+
+-- The callee is not a member of the group being inferred: a signed binding of this
+-- module is reached in its own group through its declared scheme
+-- (`bindingDeclaredAt`), never here, and an imported one is never in the group.
+-- So a declared constraint id its instantiation does not bind is a variable its
+-- type does not mention (`plain : Sz a => Int -> Int`), not a recursive call.
+-- Unless the value restriction kept the signed binding monomorphic: then its
+-- signature's type mentions a variable that its scheme [subst] does not quantify,
+-- and its constraints are on its own variables, posed in its own group.
+calleeIsGeneralized : String -> Option (List CSlot) -> List (Int, Mono) -> Bool
+calleeIsGeneralized name q subst
+  | isSome q = True
+  | otherwise = match omLookup name driverState.value.sigTyMapRef.value
+    Some ty => isNonEmptyL subst || isEmptyL (tyVarNames ty)
+    None => False
+
+-- [subst] with a fresh variable for each of [ids] it does not bind.  A declared
+-- constraint whose variable the callee's type does not mention is instantiated at
+-- every call all the same, so the call poses its goal and the goal gets its
+-- verdict whether or not the callee's body reads the dictionary.
+pinUnboundIds : List Int -> List (Int, Mono) -> List (Int, Mono)
+pinUnboundIds ids subst =
+  subst
+    ++ map
+      (id => (id, freshVar ()))
+      (filterList (id => isNone (lookupAssocI id subst)) ids)
 
 -- True iff at least one of [ids] (the callee's registered constraint tyvar ids) is
 -- a key of the instantiation subst — i.e. instantiateTracked actually quantified it,
@@ -21190,8 +21275,8 @@ recordNumLitImplObligation anchor predicate occurrence origin scope
 -- matchTyMono to recover each constraint var's concrete mono, then record
 -- `iface mono`.  matchTyMono captures the live tyvar cell, so a slot still a fresh
 -- var at record time normalizes to its solved head at check time — a ground head
--- (`NoOrd`) with no impl hits the checker's RULE 1 reject; a still-generalized var
--- defers via RULE 2, uniform with every other obligation.  No slots ⇒ nothing
+-- (`NoOrd`) with no impl is rejected `T-NO-IMPL`; a still-generalized var defers
+-- into the scheme (`undeterminedGoalExempt`), uniform with every other obligation.  No slots ⇒ nothing
 -- recorded (the receiver-only-method common case), and a shape mismatch (matchTyMono
 -- None) records nothing — never a false reject.
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
@@ -25965,7 +26050,7 @@ processLetGroup env binds =
   -- instantiation does not map.
   let callOblsDelta = callOblsWindow callN0
   -- #827/#838 I2: register EVERYWHERE, not only inside a method body.  The
-  -- uniform deferral (checkUndeterminedObligation RULE 2) makes a generalizable
+  -- uniform deferral (`undeterminedGoalExempt`'s OD2 test) makes a generalizable
   -- where/let var defer into the enclosing scheme rather than trip an ambiguity
   -- reject, closing the orphaned-local-constraint S0 (#827).  See registerLocalScheme.
   -- #838 I5: dict-slot forwarding rides callOblsDelta's PCallSlot obligations (see
@@ -26179,7 +26264,7 @@ goalSatisfiableAfterDefault guard id o =
 -- instance's variables fresh, or a given covers them.
 goalSatisfiable : OrdMap Unit -> UObligation -> List Mono -> Bool
 goalSatisfiable rigidIds o args =
-  isNonEmptyL (unifyingRows rigidIds o.pred.iface args)
+  isNonEmptyL (goalCandidates rigidIds args (goalRows o.pred.iface args))
     || goalGivenAt o.pred.iface args o.uoScope
 
 -- [base] plus each variable of [args] whose level is below [level].
@@ -26463,9 +26548,10 @@ defaultEachMemberWith ownerPolicy guard protectedIds obls (m :: rest) =
 -- to DIFFERENT impls — a silent run≠build miscompile (RETPOS-DISPATCH-DESIGN.md).
 -- We REJECT it by handing the genuine ambiguous DISPATCH mono to the existing
 -- undetermined-obligation path (registering it as a call obligation), which
--- rejects (ambiguousImplMsg) under the SAME `Num` / active-dict / impl-count≥2
--- guards an undetermined call site already uses (so a sole-impl interface is never
--- over-rejected and `Num` stays on its literal-defaulting path).  Three filters
+-- rejects (ambiguousImplMsg) under the SAME exemptions (`undeterminedGoalExempt`)
+-- and the SAME candidate count (`goalCandidates`) an undetermined call site already
+-- gets (so a goal one instance determines is never over-rejected and `Num` stays on
+-- its literal-defaulting path).  Three filters
 -- keep this from firing on legitimately-deferred constraints:
 --   • member-type membership (`monoUnboundIds`) — a var IN the
 --     binding's type is determined by a caller/annotation;
@@ -26553,7 +26639,7 @@ registerAmbiguousGo (o :: rest) groupLevel memberIds anchoredIds =
 -- For each of this obligation's DISPATCH monos (the interface-param positions, via
 -- dispatchMonosOf — NOT the whole method type), register it as a call obligation
 -- when it carries an escaped, unanchored this-group var.  Pushing the dispatch mono
--- (not the method type) is essential: checkUndeterminedObligation's guards
+-- (not the method type) is essential: the undetermined-goal verdict's guards
 -- (`headTyconMono`, `activeDictVarOf`, `allConcreteHeads`) inspect a bare dispatch
 -- mono and do NOT traverse `TFun`, so a concrete-headed dispatch and a forwarded-
 -- dict element var are correctly NOT flagged, while a bare-var dispatch with ≥2
@@ -29681,32 +29767,6 @@ pushCoherenceWarning loc msg =
   driverState.value.matchWarnings :=
     warning :: driverState.value.matchWarnings.value
 
--- The warning-channel analogue of `pushTypeErrorOnceAt`: same channel discipline as
--- `pushCoherenceWarning` above, plus dedup.  Dedup is by `(code, loc, msg)` rather
--- than by message alone, so the collapse still absorbs one expression being visited
--- once per constraint it poses — `pickMostSpecificEntry` runs per goal occurrence,
--- and a repeat visit reproduces the SAME code/loc/msg triple — while no longer
--- collapsing two distinct sites whose message text happens to coincide.  The channel
--- is scanned linearly; that is affordable only because it holds warnings, which are
--- rare by construction, and a code that ever makes it long owes a keyed set the way
--- `typeErrorMsgSetRef` is one.
-pushMatchWarningOnceAt : String -> Option Loc -> String -> Option String -> Unit
-pushMatchWarningOnceAt code loc msg help =
-  let thisLoc = orElseLoc loc !currentLoc
-  if anyList
-    (w => tcCode w == code && optLocEq (tcLoc w) thisLoc && tcMsg w == msg)
-    driverState.value.matchWarnings.value then
-    ()
-  else
-    driverState.value.matchWarnings :=
-      writtenDiag (TcDiag code 2 thisLoc msg help None)
-        :: driverState.value.matchWarnings.value
-
-optLocEq : Option Loc -> Option Loc -> Bool
-optLocEq (Some a) (Some b) = locEq a b
-optLocEq None None = True
-optLocEq _ _ = False
-
 -- run coherence over USER decls; push at most one HARD conflict into typeErrors and
 -- at most one SOFT one onto the warning channel.  The impls are scanned in REVERSE
 -- declaration order to mirror the oracle, whose env.impls is built by prepending each
@@ -31591,14 +31651,12 @@ goalHeadCon [] = None
 -- operand (the goal's own head bucket) first.
 --
 -- WHY A MERGE AND NOT `++`.  `pickMostSpecificEntry` falls back to the head of the
--- list when the matching set has no unique min⊑, so operand order is a SEMANTIC
--- tie-break.  Concatenating buckets would make that tie-break "concrete first"
--- irrespective of where the impls appear in the source — an arbitrary internal
--- constant, and one the declaration-order permutation differential
--- (diff_compiler_dict_semantics_permute.sh) is STRUCTURALLY BLIND to, because
--- it permutes source order while bucket order stays put.  Merging on the declaration index makes
--- the tie-break DECLARATION ORDER, which is what the rest of this file documents as
--- the fallback and which that gate CAN see.
+-- list when the matching set has no unique min⊑.  That program is rejected
+-- (`T-AMBIGUOUS-INSTANCE`), so the tie-break decides no value, but it still decides
+-- which route the rejected compile stamps.  Concatenating buckets would make it
+-- "concrete first" irrespective of where the impls appear in the source; merging on
+-- the declaration index makes it DECLARATION ORDER, which the declaration-order
+-- permutation differential (diff_compiler_dict_semantics_permute.sh) can see.
 --
 -- ⚠️ The PRECONDITION — both operands ascending by index — is a property of the
 -- CALLER'S table, not of this function.  That is still worth stating, because it is
@@ -31657,15 +31715,11 @@ mergeByDeclIdx (x :: xs) (y :: ys)
 -- the caller's fallback), which changes emitted IR on a program nobody can run and
 -- buys nothing.
 --
--- ⚠️ F-3c CLOSES THIS ONLY PARTWAY, AND THE RESIDUE IS THE LIST-ORDER ONE.  The reject
--- is gated on the goal being CLOSED, because §6.2 T4 defers a goal still carrying an
--- unbound metavariable rather than deciding it.  At a NON-closed goal the fallback
--- below is still a SILENT head-of-list pick, so operand order can still decide an
--- answer there — which is why `mergeByDeclIdx`'s ascending precondition is load-bearing
--- and not bookkeeping.  Closing that residue is T4's own work (defer to quiescence),
--- not this selector's; DICT §11 forbids implementing T4 before I5.  If it is ever fixed
--- here instead, this is the comment to revisit.  (Recorded here by ARCH B-2.1-d: it
--- previously lived on `candidateBucket`, deleted with the prefix-table read side.)
+-- The reject is not gated on the goal being closed.  Every candidate here MATCHES
+-- the goal as it stands, and a match survives any later binding of the goal's
+-- variables, so no instantiation can leave fewer than two incomparable matches:
+-- an open goal that reaches this arm is as ambiguous at quiescence as it is now
+-- (§6.2 T4, "rejected as ambiguous — never committed to a default instance").
 pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
 pickMostSpecificEntry _ [] = None
 pickMostSpecificEntry goals (e :: rest) =
@@ -31678,59 +31732,12 @@ pickMostSpecificEntry goals (e :: rest) =
 -- #1155: the goal-site `T-AMBIGUOUS-INSTANCE`, with the two gates that keep it from
 -- over-rejecting.  [cands] is always ≥2 entries with no ⊑-minimum among them.
 --
---  🚦 CLOSEDNESS (§6.2 T3/T4).  `inst` may commit only at a goal every variable of
---     which is ground or rigid; a goal still carrying an unbound METAVARIABLE is
---     DEFERRED, not decided (T4), and C1 explicitly declines to quantify over it —
---     "a C1 quantified over commitment sites would reject it, while T4 and T6 say it
---     is well-formed and that deferral is the whole point."  Committing there is a T3
---     violation, and this compiler does commit there (§11's T3/T4 row records it).
---     So rejecting there would convert a latent T3 violation into a USER-VISIBLE
---     over-rejection of a legal program — the reject would be caused by our own early
---     commitment.
---
---     🚨 THIS GATE FIRES.  It has NO USER-VISIBLE EFFECT today, which is a much
---     weaker statement, and F-3c shipped the stronger one by mistake for one
---     review round.  The false argument, recorded because it is seductive: for the
---     arm to see a goal open at argument i EVERY candidate must carry a bare
---     `TyVar` at i (`matchStep` MFails on a `TyCon`/`TyApp` pattern against an
---     unbound var, and `matchOneSided`'s `cohEqR` re-check MFails once that var was
---     bound to a structure); two USER impls meeting that condition necessarily have
---     UNIFYING heads; coherence condition (a) rejects a ⊑-incomparable unifying
---     pair AT THE DECLARATION.  Every step is true and the conclusion "so the goal
---     never reaches the selector" DOES NOT FOLLOW — **a declaration-time rejection
---     is not an early exit.**  Errors accumulate here by design (see
---     `diagnostics.mdk`), so both impls are still registered in the graph-global impl
---     universe and the goal still reaches this arm.  The counterexample was already sitting in this
---     stage's own flip list: `check_json_fixtures/conflicting_impl_overlap.mdk`
---     emits `T-CONFLICTING-IMPL` **and** this diagnostic on one file.
---
---     Pinned by `test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` and its
---     one-token sibling `…/s6-2-t4-open-goal-deferred.mdk`: same two impls, same
---     candidate set, same no-unique-minimum arm; the ground goal gets this
---     diagnostic and the open goal must NOT.  Their verdict, exit code and stdout
---     are IDENTICAL, so the gate is graded by a NEGATIVE code assertion — the only
---     observable that separates them.
---
---     ✅ **AS OF F-3d (#614/#311) THIS GATE DECIDES A VERDICT.**  Until then the
---     sentence here was: "no program in the tree exercises this gate, and every
---     program that reaches it is already rejected by coherence (a) anyway, so today
---     it changes no verdict" (measured: `check --json` AND `run` over all 2389
---     `.mdk`, each gate replaced by a probe diagnostic — zero firings).  F-3d
---     DEMOTED the (a) reject to a `W-INCOMPARABLE-IMPLS` warning — it did NOT delete
---     it, per the 2026-08-01 owner decision on #311 — so the declaration no longer
---     rejects anything on the ⊑-incomparable class, and this gate is now the whole
---     of the verdict at such a goal: closed ⇒ reject here, open ⇒ ACCEPT.  The
---     one-token pair `test/dict_fixtures/s6-2-t{3,4}-*.mdk` therefore discriminates
---     REJECT from ACCEPT, not just a diagnostic set.  Without the gate the open half
---     would be a spec-violating over-rejection of a legal program.
---     ⚠️ The other side of that coin, accepted knowingly: the open half now
---     COMMITS to the head of the candidate list at exit 0, so declaration order
---     decides its value (it prints `1`; swap the two `impl` blocks and it prints
---     `2`), under a warning rather than in silence.  §6.2 T4's actual answer is to
---     DEFER such a goal to quiescence.  The graph-end pass (`drainStampQueue`)
---     replays route stamping only; it re-runs no selection, so the
---     residue is pinned as a KNOWN-BAD row in
---     `test/diff_compiler_dict_semantics_permute.sh` and tracked at #1183.
+--  Open or closed, the same verdict, never a commit to the first-declared
+--     candidate.  Matching is preserved by every later binding of
+--     the goal's variables, so an open goal here can never become unambiguous;
+--     §6.2 T4 rejects it.  Pinned by the one-token pair
+--     `test/dict_fixtures/s6-2-t3-closed-goal-reported.mdk` (ground goal) and
+--     `…/s6-2-t4-open-goal-deferred.mdk` (open goal): both reject at their goal.
 --
 --  🚦 ONE INTERFACE.  `ieEntriesForMethod` used to filter by METHOD NAME alone, so
 --     two impls of two DIFFERENT interfaces that happen to share a method name could
@@ -31799,41 +31806,9 @@ reportAmbiguousOverlap goals cands = match candsOneIface cands
   None => ()
   Some iface => reportOverlapForIface iface goals cands
 
--- the closedness gate, as the two-sided split it now is: reject a CLOSED goal, WARN an
--- open one (see `openGoalCommitWarnCode`).  Both sides describe the same commitment;
--- they differ only in whether the spec licenses rejecting it.
 reportOverlapForIface : String -> List Mono -> List KeyEntry -> Unit
-reportOverlapForIface iface goals cands
-  | goalsClosed goals =
-    pushTypeErrorOnceAt
-      "T-AMBIGUOUS-INSTANCE"
-      !goalSiteLoc
-      (ambiguousOverlapMsg iface goals cands)
-  | otherwise =
-    pushMatchWarningOnceAt
-      openGoalCommitWarnCode
-      !goalSiteLoc
-      (openGoalCommitMsg iface goals cands)
-      (Some openGoalCommitHelp)
-
--- At a CLOSED goal this commitment is a reject (`T-AMBIGUOUS-INSTANCE`, above). At an
--- open goal (still carrying an unbound metavariable), WARN, not error: do not promote
--- this arm to a reject without spec approval — the spec ACCEPTS this program. UNGATED
--- on when the arm is reached: `pickMostSpecificEntry`'s no-unique-minimum arm is a
--- commitment point, not a deferral point, so its first-declared pick is already final
--- whenever it is reached. See docs/spec/DICT-SEMANTICS.md § "6.2 Scheduling, and when
--- `inst` may commit" for the #2548 ruling and the measurement behind ungating it.
-export
-openGoalCommitWarnCode : String
-openGoalCommitWarnCode = "W-OPEN-GOAL-COMMITTED"
-
-openGoalCommitMsg : String -> List Mono -> List KeyEntry -> String
-openGoalCommitMsg iface goals cands =
-  "instance for `\{iface}` chosen by declaration order: the goal `\{iface} \{ppPredArgsShared goals}` is still undetermined here and matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)}, so the first declared is the one that runs"
-
-openGoalCommitHelp : String
-openGoalCommitHelp =
-  "annotate this expression with a type only one of these impls matches"
+reportOverlapForIface iface goals cands =
+  pushAmbiguityAt True !goalSiteLoc (ambiguousOverlapMsg iface goals cands)
 
 -- §6.2 T3's "closed": every variable of the goal is *"either quantified by the scheme
 -- just produced or already ground"* — the ground goals PLUS the rigid-variable ones.
@@ -31846,11 +31821,11 @@ openGoalCommitHelp =
 -- rigid-vs-undetermined distinction is not visible in the `Mono` at all; it lives in
 -- whether some enclosing scheme QUANTIFIED that id, which is exactly what
 -- `deferrableVarIds` records (`schemeIds` at each generalized group close).  Same
--- test `checkUndeterminedObligation`'s RULE 2 uses, for the same reason.
+-- test `undeterminedGoalExempt` uses, for the same reason.
 --
--- Conservative in the safe direction: a var recorded outside any generalized-group-
--- close window is in NEITHER set (see checkCallObligations' #838 I4 note), so it reads
--- as non-closed and this diagnostic stays silent rather than over-rejecting.
+-- A var recorded outside any generalized-group-close window is in NEITHER set (see
+-- checkCallObligations' #838 I4 note), so it reads as non-closed: the caller of this
+-- test reports such a goal rather than deferring it.
 --
 -- ⚠️ One deliberate imprecision, so nobody has to spot it twice: T3 says "quantified
 -- by the scheme JUST PRODUCED", whereas `deferrableVarIds` is a RUN-GLOBAL
@@ -32507,76 +32482,19 @@ headTyconTy t = match headTyNode t
 -- paid instead was three duplicated arms held in lockstep with `headTyconTy`'s.
 
 -- ── the ACCEPTANCE-census head name ───────────────────────────────────────
--- THE DISPATCH HEAD NAME AS IT WAS BEFORE #1617/#1618: the `TyApp` spine only, no
--- `TyEffect` peel, no `TyFun` arm — so an arrow-headed or effect-headed impl
--- answers `None` and is DROPPED from the census, exactly as it was.
+-- The `TyApp` spine's head name only, no `TyEffect` peel, no `TyFun` arm, no
+-- constraint peel — so an arrow-headed, effect-headed or constraint-headed impl
+-- answers `None` here.
 --
--- 🚨 THIS IS NOT A DUPLICATE OF THE PROJECTION ABOVE, IT IS THE OTHER QUESTION.
--- Above: *"which dispatch bucket does this impl head file into?"* — every impl
--- needs an answer, and a synthetic bucket name (`__fun__`, or the peeled inner
--- head of an effect row) is a fine one.  Here: *"does this impl head COUNT as a
--- candidate when the goal is still undetermined?"* — where an extra `Some`
--- turns a stamped route into `T-AMBIGUOUS-INSTANCE`, i.e. rejects a program.
+-- This is not a duplicate of the projection above; it is the other question.
+-- Above: which dispatch bucket an impl head files into, where a synthetic bucket
+-- name (`__fun__`, or the peeled inner head of an effect row) is a fine answer.
+-- Here: whether the head counts for `routeUndeterminedTop` (through
+-- `implHeadTagForIface`), where an extra `Some` turns a stamped route into
+-- `T-AMBIGUOUS-INSTANCE`.  Do not fold it into the dispatch walk.
 --
--- Its reader: `implHeadTagForIface` → `implHeadTagsForIface` → `routeUndeterminedTop`.
--- Determination's candidate count (`rowCountsInCensus`) does not read it: there an
--- arrow-headed instance that unifies with the goal is a second candidate, and only a
--- head the matcher reaches by peeling a qualifier is not counted.
---
--- Whoever flips this to the narrowing owns F-3c (#1155)'s flip list, an owner
--- ruling, and fixtures for the programs it stops accepting.  Do not fold it back
--- into `headTyconNameTy` to "remove duplication".
---
--- 🚨 #1630's `TyConstrained` peel STOPS HERE TOO — the census walks
--- `headTySpineNode`, which does not peel the wrapper, so `impl Sz (Eq a => Int)`
--- still answers `None` here and is still dropped from BOTH readers even though
--- its peeled head `Int` is perfectly ordinary.  That is deliberate: the same
--- ACCEPTANCE-narrowing argument the 🚨 above records for `__fun__` and for the
--- effect peel applies verbatim — a narrowing is not a rider on a dispatch bug
--- fix, and it should be taken once for all three wrappers rather than bolted on
--- per bug.  ⚠️ The 🚨 above defers that ruling to F-3c (**#1155, CLOSED**); read
--- the reasoning, not the owner.
---
--- 🚨 AND THE RESIDUAL IS **OBSERVABLE**.  This note used to read "STRUCTURAL,
--- NOT DEMONSTRATED", citing a program #1630 "tried and FAILED to build" — a
--- return-position method with the constrained impl as the interface's ONLY
--- impl.  That candidate was DISQUALIFIED BY CONSTRUCTION and the note did not
--- know it: `checkUndeterminedObligation`'s RULE 3 is guarded on
--- `implCountForIfaceU >= 2`, so a ONE-IMPL program can never reach the arm the
--- census residual disables.  A failed probe that could not have succeeded is not
--- evidence of absence.  With TWO impls it is observable in one `check` cell:
---
---   interface Zero a where
---     zero : a
---   impl Zero (Eq x => Int) where zero = 0    -- control: plain `impl Zero Int`
---   impl Zero Bool where zero = False
---   ignore2 : a -> Int
---   ignore2 _ = 5
---   main = println (ignore2 zero)
---
--- CONTROL (plain `Int` head): `check` exits **1**, *"Ambiguous instance for
--- `Zero`. Cannot determine which impl; add a type annotation"*.  CONSTRAINED
--- head: `check` exits **0**, `run` prints 5, `build` exits **1**
--- (`E-PANIC: arg-tag dispatch for method 'zero': discriminating arg position not
--- supplied`).  The constrained impl is invisible to the census, the count stays
--- at 1, RULE 3 never fires, and a genuinely ambiguous program is ACCEPTED.
---
--- ⚠️ IT IS PRE-EXISTING AND NOT #1630's TO FIX.  Measured cell-for-cell
--- identically on this branch's binary AND on a base arm built from this branch
--- with the one-line `headTyNode` peel deleted and both stages rebuilt —
--- arm-invariant, so the peel neither introduced it nor could have removed it.
--- The same shape with an EFFECT wrapper (`impl Zero (<Stdout> Int)` beside
--- `impl Zero Bool`) gives the same three cells on both arms, so "structural, not
--- demonstrated" was false for TWO of the three wrappers, not just this one.
---
--- ⚠️ AND NOTHING OPEN OWNS IT.  This note used to defer the ruling to F-3c
--- (#1155); **#1155 is CLOSED**, so that deferral pointed at nothing.  The
--- acceptance-narrowing argument the 🚨 above records is still the right reason
--- to keep the census walk split from the dispatch walk, but "F-3c will rule on
--- it" is no longer a live commitment and must not be cited as one.  Whoever
--- picks this up owns the flip list and the fixtures; do not downgrade it to
--- "benign", which is the exact over-generalisation #1630 was, and do not assume
--- an unfiled residual is an unimportant one.
+-- The undetermined-goal verdict does not read it: `goalCandidates` unifies every
+-- head shape with the goal, and `rowCountsFor` is its one qualifier rule.
 censusHeadNameTy : Ty -> Option String
 censusHeadNameTy t = match headTySpineNode t
   TyCon { tyConName = n } => Some n
@@ -32975,7 +32893,7 @@ entail name m encl useScope kind = match entailAssum m encl name useScope kind
   None => match headTyconMono m
     Some hk => entailInst name m encl useScope (headKeyTag hk) kind
     None =>
-      let result = (entailFallback useScope kind, [])
+      let result = (entailFallback useScope m kind, [])
       let _ = noteNumericEntailment kind useScope None (fst result) (snd result)
       result
 
@@ -33113,6 +33031,32 @@ entailAssumRoute dname (EKArg _) = RDict dname
 entailAssumRoute dname (EKOp _ _) = RDict dname
 entailAssumRoute dname (EKPredicateOp _ _ _) = RDict dname
 
+selectReturnRow : ImplEnv -> String -> List Mono -> Option ImplRow
+selectReturnRow env name goals = match ieSelectRowByMethod env name goals
+  Some row => Some row
+  None => match methodIfaceHere name
+    Some iface => determinedGoalInstance iface goals
+    None => None
+
+-- The instance a boundary's determination committed [iface]'s goal [goals] to
+-- (`fileDeterminedRow`).  Selection by head constructor names nothing for a goal
+-- whose first position is still a variable, such as one committed to a headless
+-- instance; the commit is that goal's evidence.  The route reads the boundary's
+-- decision rather than deciding again.
+determinedGoalInstance : IfaceRef -> List Mono -> Option ImplRow
+determinedGoalInstance _ [] = None
+determinedGoalInstance iface (first :: rest) = match normalize first
+  TVar cell =>
+    let goals = first :: rest
+    let filed =
+      optionOr
+        []
+        (IdMap.get (tyvarId cell) perRun.value.determinedRowsRef.value)
+    match filterList (entry => determinedEntryAnswers iface goals entry) filed
+      (row, _) :: _ => Some row
+      [] => None
+  _ => None
+
 -- inst: a concrete head [tag].  EKReturn → canonical full-type key + split element routes
 -- (implRef-bound); EKNestedTop → the min⊑ winner's canonical key (bare head only when the
 -- iface-keyed collision gate is False — see the arm's own body comment) with requires PACKED
@@ -33133,7 +33077,7 @@ entailInst : String ->
 entailInst name m encl useScope tag (EKReturn fullMono _) =
   let env = perRun.value.bodyImplEnvRef.value
   match ifaceParamMonos name fullMono
-    Some goals => match ieSelectRowByMethod env name goals
+    Some goals => match selectReturnRow env name goals
       Some row =>
         let routeKey = rowRouteKey row
         let routes = implDictRoutesForRow encl useScope goals row
@@ -33293,14 +33237,14 @@ selectedCallSupers name (Some (ImplRow _ _ iface _ _ supplied)) encl useScope go
     superRoutesAt iface encl useScope goals 0 0
 selectedCallSupers _ None _ _ _ = []
 
-entailFallback : ScopeId -> EntailKind -> Route
-entailFallback _ (EKReturn _ _) = RNone
-entailFallback _ (EKNumReturn _ _ _ _) = RNone
-entailFallback scope (EKNestedTop _ policy _ _ _) =
-  undeterminedRoute scope policy
-entailFallback _ (EKArg _) = RNone
-entailFallback _ (EKOp _ _) = RNone
-entailFallback _ (EKPredicateOp _ _ _) = RNone
+entailFallback : ScopeId -> Mono -> EntailKind -> Route
+entailFallback _ _ (EKReturn _ _) = RNone
+entailFallback _ _ (EKNumReturn _ _ _ _) = RNone
+entailFallback scope m (EKNestedTop _ policy _ _ rest) =
+  undeterminedRoute scope policy (m :: rest)
+entailFallback _ _ (EKArg _) = RNone
+entailFallback _ _ (EKOp _ _) = RNone
+entailFallback _ _ (EKPredicateOp _ _ _) = RNone
 
 -- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
 -- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
@@ -33334,10 +33278,10 @@ routeOfD : IfaceRef ->
 routeOfD iface encl useScope policy m rest prevSize spent =
   fst (entail "" m encl useScope (EKNestedTop iface policy prevSize spent rest))
 
-undeterminedRoute : ScopeId -> Undetermined -> Route
-undeterminedRoute _ KeepNone = RNone
-undeterminedRoute scope (CountImpls prog iface) =
-  routeUndeterminedTop prog scope iface
+undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
+undeterminedRoute _ KeepNone _ = RNone
+undeterminedRoute scope (CountImpls prog iface) goal =
+  routeUndeterminedTop prog scope iface goal
 
 -- TOP-LEVEL constraint routes (a constrained-fn CALL site, e.g. `roundtrip 10`).
 -- Like routesOfMonos but passes the CountImpls policy to routeOf, so the UNDETERMINED
@@ -33448,12 +33392,16 @@ routesOfMonosTop prog encl useScope (m :: rest) (iface :: ifacesRest) =
   routeOf iface encl useScope (CountImpls prog iface) m
     :: routesOfMonosTop prog encl useScope rest ifacesRest
 
--- the undetermined-constraint resolution: count impls of [iface] in [prog].
-routeUndeterminedTop : List Decl -> ScopeId -> IfaceRef -> Route
-routeUndeterminedTop prog scope ifaceRef
+-- the undetermined-constraint resolution: count impls of [iface] in [prog].  [goal]
+-- is the goal's argument vector, read only by the ambiguous arm.
+routeUndeterminedTop : List Decl -> ScopeId -> IfaceRef -> List Mono -> Route
+routeUndeterminedTop prog scope ifaceRef goal
   | ifaceRef.irName == "" = RNone
   | otherwise = match implHeadTagsForIface prog ifaceRef.irName
     [] => RNone
+    -- A goal on a scheme-quantified variable is the caller's (`reportAmbiguousImpl`):
+    -- the one census tag names no instance of it, so no route is minted from the tag.
+    [_] if not (monoVectorClosed goal) && goalsClosed goal => RNone
     -- #1110: `tag` arrived as a bare `String` from `implHeadTagsForIface`, which
     -- projects an impl head through `headTyconTy` and DISCARDS the `Ty` that
     -- carried the identity — so there is no origin to acquire at this site, only
@@ -33466,14 +33414,21 @@ routeUndeterminedTop prog scope ifaceRef
         (argImplRequiresRoutes ifaceRef "" scope (tconUnresolved tag) [] 0 0)
         -- the goal is undetermined, so each super is too: answered by the same count
         (map
-          ((superIface, _) => routeUndeterminedTop prog scope superIface)
+          ((superIface, _) => routeUndeterminedTop prog scope superIface goal)
           (directSuperGoals ifaceRef []))
-    _ => reportAmbiguousImpl ifaceRef.irName
+    _ => reportAmbiguousImpl ifaceRef.irName goal
 
-reportAmbiguousImpl : String -> Route
-reportAmbiguousImpl iface =
-  let _ = pushTypeError "T-AMBIGUOUS-INSTANCE" (ambiguousImplMsg iface)
-  RNone
+-- A goal every free variable of which some generalized scheme quantifies is the
+-- caller's to decide (§6.2 T3, the `goalsClosed` test): the scheme carries the
+-- constraint, so it is deferred, not ambiguous.  Any other goal is reported at its
+-- own site (`goalSiteLoc`), not at whichever declaration was inferred last.
+reportAmbiguousImpl : String -> List Mono -> Route
+reportAmbiguousImpl iface goal =
+  if goalsClosed goal then
+    RNone
+  else
+    let _ = pushAmbiguityAt False !goalSiteLoc (ambiguousImplMsg iface)
+    RNone
 
 -- every impl head tycon for [iface] declared in [prog] (a single-arg interface has
 -- one head ty per impl; we read its head tycon).  Dedups so a prelude impl imported
@@ -35954,6 +35909,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- reach codegen through `build`'s own elaboration.  `setNumlitFloats` is not called
     -- here on any driver any more: the Float literal stamp is `SSNumlitFloats`,
     -- first step of the graph-end drain every Module-arm driver now runs.
+    let _ = judgeQuiescentGoals ()
     let _ = checkCallObligationsU True obUniv perRun.value.implObls.items.value
     let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
     let _ = settleDeferredPatLits ()
@@ -36148,7 +36104,7 @@ extendPropParams env ((PropParam x _ ty) :: rest) =
 -- checkImplObligations/checkCallObligations either finds the impl or emits the genuine
 -- `No impl of Eq for Inner`.  A PARAMETRIC impl (`impl Eq (List a) requires Eq a`) instead
 -- records obligations on its abstract element tyvar; those never ground on the check path
--- and would reach checkUndeterminedObligation, which reports a spurious `Ambiguous instance`
+-- and would reach checkUndeterminedObligations, which reports a spurious `Ambiguous instance`
 -- for any iface with >= 2 impls (it fired on EVERY program the moment core's own parametric
 -- impls were inferred standalone — the prelude snapshot).  The emit path never exercised
 -- that because it SKIPS the obligation gate.  Inferring only ground impls records the
@@ -36210,7 +36166,7 @@ inferUserImplBodies env allProg ce cur decls =
   -- ground-head fix.  BUT a parametric impl also records obligations on its ABSTRACT
   -- element tyvar (`impl Eq (List a) requires Eq a` → an `Eq a` obligation over an
   -- unground var); those never ground on the check path and would reach
-  -- checkUndeterminedObligation as a SPURIOUS `Ambiguous instance` for any iface with
+  -- checkUndeterminedObligations as a SPURIOUS `Ambiguous instance` for any iface with
   -- >= 2 impls (it fired on every program the moment core's own parametric impls were
   -- inferred — the prelude snapshot).  So WINDOW the obligation channel across this
   -- pass and restore it afterward: the body-clash errors go through `typeErrors`, NOT
@@ -36392,10 +36348,9 @@ methodLevelPredicateSlot typarams tvMap c
 -- call on a type WITH an impl is satisfied; a default-method call on a type with
 -- NO impl is rejected — both matching the oracle.
 -- #154 PR3: the KEYED impl universe consumed by the obligation checkers below.  Bundles
--- the three buckets `insertUnivImplAt` writes (#1112 A-3.4 PR2 deleted the three
--- `CrossRun` refs this line used to name; the buckets are unchanged): concrete-head impls
--- keyed "iface|tag", HEADLESS-receiver impls keyed by iface (matched against ANY
--- receiver), and iface→concrete-head-tag set (for `implCountForIfaceU`). Standalone
+-- the two buckets `insertUnivImplAt` writes (#1112 A-3.4 PR2 deleted the three
+-- `CrossRun` refs this line used to name): concrete-head impls keyed "iface|tag" and
+-- HEADLESS-receiver impls keyed by iface (matched against ANY receiver). Standalone
 -- builds one from its whole `prog` via `buildImplUniverse` (O(N) once — the same cost
 -- as the old `implDeclsWithReqs`+`implHeadsOf` it replaces); the Module path passes the
 -- ⚠️ #1112 A-3.4 PR2: NO LONGER A PERSISTENT ACCUMULATOR.  This block's header used
@@ -36406,7 +36361,7 @@ methodLevelPredicateSlot typarams tvMap c
 -- `ieBuildSnapsGo`); internal standalone-list checks use `buildImplUniverse`.
 -- Everything below about the KEYS is unchanged — the same `insertUnivImplAt` writer
 -- mints them on both paths, which is what made that flip equality-preserving.
--- A-2.2b (#1111): all three buckets are IDENTITY-KEYED registries.  What each
+-- A-2.2b (#1111): both buckets are IDENTITY-KEYED registries.  What each
 -- key carries, and what it deliberately does NOT:
 --   * the INTERFACE half is an IDENTITY key on both the writer and every reader
 --     (#1446 T2) — `tabKeyOf NsIface` over the occurrence's `TyConOrigin`, see
@@ -36421,13 +36376,11 @@ methodLevelPredicateSlot typarams tvMap c
 -- order — which is the invariant the ratchet asks a cross-module table to
 -- declare.  They use `mregAppendK`, not `mregAddK`, because within one bucket
 -- the FORWARD declaration order is semantic (`findMatchingImplReqsU`).
--- The fourth field is not a bucket: it is the set of interface keys that have at
--- least one impl of ANY head shape, read only by `univHasAnyImpl`.
 data ImplUniverse =
-  | ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require)) (Registry SetRegistry) SetRegistry
+  | ImplUniverse (MultiRegistry (List Ty, List Require)) (MultiRegistry (List Ty, List Require))
 
 emptyImplUniverse : ImplUniverse
-emptyImplUniverse = ImplUniverse mregEmpty mregEmpty regEmpty sregEmpty
+emptyImplUniverse = ImplUniverse mregEmpty mregEmpty
 
 buildImplUniverse : List Decl -> ImplUniverse
 buildImplUniverse prog =
@@ -36442,8 +36395,7 @@ growImplUniverse [] univ = univ
 growImplUniverse (t :: rest) univ =
   growImplUniverse rest (insertUnivImpl univ t)
 
--- concrete receiver head (Some tag) → the "iface|tag" bucket + record the tag in the
--- iface's tag set; headless receiver (TyVar/function/empty head — None) → the iface's
+-- concrete receiver head (Some tag) → the "iface|tag" bucket; headless receiver (TyVar/function/empty head — None) → the iface's
 -- headless bucket, which every lookup also consults (matchTyMono wildcard matches any).
 insertUnivImpl : ImplUniverse ->
   (IfaceRef, List Ty, List Require) ->
@@ -36562,25 +36514,12 @@ insertUnivImplAt : TabKey ->
   List Require ->
   ImplUniverse ->
   ImplUniverse
-insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags anyImpl) =
-  -- Each key is bound ONCE — Medaka is strict and `regKeyRender` BUILDS a
-  -- string, so a re-minted key is a re-rendered key.  `regInsertCheckedK`
-  -- (`types/registry.mdk`) carries the same warning for the same reason, and
-  -- `check` is GC-bound.
-  let ifkey = regKeyOfTab ifk
-  let anyImpl2 = sregAddK ifkey anyImpl
-  match univReceiverTag tys
-    Some hk =>
-      let hd = dispHeadTab hk
-      -- ⚠️ the third bucket is the ACCEPTANCE census, not a dispatch table — see
-      -- `univHeadCountsInCensus`.  It is the ONE of these three that an arrow- or
-      -- effect-headed impl must stay out of.
-      ImplUniverse
-        (mregAppendK (regKeyNTab [ifk, hd]) (tys, reqs) conc)
-        hl
-        (univAddIfaceTag (univHeadCountsInCensus tys) ifkey hd tags)
-        anyImpl2
-    None => ImplUniverse conc (mregAppendK ifkey (tys, reqs) hl) tags anyImpl2
+insertUnivImplAt ifk tys reqs (ImplUniverse conc hl) = match univReceiverTag tys
+  Some hk =>
+    ImplUniverse
+      (mregAppendK (regKeyNTab [ifk, dispHeadTab hk]) (tys, reqs) conc)
+      hl
+  None => ImplUniverse conc (mregAppendK (regKeyOfTab ifk) (tys, reqs) hl)
 
 -- ✅ #1446 (T2): THE OBLIGATION CHANNEL'S INTERFACE KEY IS AN IDENTITY.  `Predicate`
 -- carries an `IfaceRef` (P1), so `checkOneCallObligation`'s goal side supplies the
@@ -36599,9 +36538,7 @@ insertUnivImplAt ifk tys reqs (ImplUniverse conc hl tags anyImpl) =
 -- `main = println 1` exit 1 with 9 rejects.  The reasoning that produced the wrong
 -- prediction generalised from a GATE-shaped sibling (`ifaceRegistered`, `Unit`-valued)
 -- while describing a payload-shaped table; `.claude/workstreams/TYPECHECK.md` trap 11
--- now carries the rule.  ONE sub-case is genuinely silent and it is nested inside this
--- one: `checkUndeterminedObligation`'s RULE 3 is guarded on `implCountForIfaceU >= 2`,
--- so a missed count reads 0 and `T-AMBIGUOUS-INSTANCE` stops emitting.
+-- now carries the rule.
 --
 -- ⚠️ THE HEAD HALF STILL DOES NOT MOVE, and that is not symmetry-for-its-own-sake:
 -- see `dispHeadTab` for the measured derivation (#1317 T1 / the closed S0 #1277).
@@ -36654,47 +36591,6 @@ dispHeadTab hk = TkBare NsType (headKeyTag hk)
 univReceiverTag : List Ty -> Option HeadKey
 univReceiverTag (headTy :: _) = headTyconTy headTy
 univReceiverTag [] = None
-
--- ── the acceptance census, at the impl-UNIVERSE layer ─────────────────────
--- 🚨 THE THIRD BUCKET (`iface → SET of head tags`) IS NOT A DISPATCH TABLE, AND
--- IT MUST NOT BE POPULATED BY `univReceiverTag`.  Its only reader is
--- `implCountForIfaceU`, whose only reader is `checkUndeterminedObligation`'s
--- RULE 3 — *"the var escaped its group anchored to NOTHING and the iface has >= 2
--- impls ⇒ genuinely ambiguous"*, a `T-AMBIGUOUS-INSTANCE` REJECT.  The other two
--- buckets ARE dispatch tables and keep `univReceiverTag`.
---
--- Giving `headTyconTy` a `TyFun` arm and a `TyEffect` peel (#1617/#1618) is a
--- ROUTING fix, but it reached this set through the shared writer and pushed the
--- count from 1 to 2 for `impl C Int` beside `impl C (Int -> Int)` — measured on
--- both arms, exit 0 → exit 1 on a program that never dispatches to the arrow.
--- The set's own doc-comment already stated the rule this restores: *"headless
--- impls contribute no tag, exactly as `implHeadTagsFromHeads` skipped them"* —
--- and `implHeadTagsFromHeads`' successor, `implHeadTagForIface`, is the sibling
--- census that reads `censusHeadNameTy` for exactly the same reason.
---
--- Two writers, one helper, on purpose. `insertUnivImplAt` (standalone-list helper) and
--- `ieInsertRowAt` (`IE`, the Module path `ieUniverseAt` projects the universe
--- out of) both write a tag set, and a fix applied to one is silently absent from
--- the other — the parallel-driver hazard `AGENTS.md` names for
--- `evalModules`/`cevalModules`.  Both call THIS.
-univHeadCountsInCensus : List Ty -> Bool
-univHeadCountsInCensus (headTy :: _) = isSome (censusHeadNameTy headTy)
-univHeadCountsInCensus [] = False
-
--- Add [hd] to [ifkey]'s tag set, or leave the set alone when the head does not
--- count in the census.  The `True` arm is byte-identical to what both writers
--- did inline before; the `False` arm is the restored drop.
-univAddIfaceTag : Bool ->
-  RegKey ->
-  TabKey ->
-  Registry SetRegistry ->
-  Registry SetRegistry
-univAddIfaceTag False _ _ tags = tags
-univAddIfaceTag True ifkey hd tags =
-  regInsertK
-    ifkey
-    (sregAddK (regKeyOfTab hd) (optionOr sregEmpty (regLookupK ifkey tags)))
-    tags
 
 -- ── PR3 keyed lookups (replace implMatches / implMatchesReceiver / findMatchingImplReqs /
 -- implCountForIface).  Each first scans the concrete "iface|tag" bucket, then the iface's
@@ -36852,12 +36748,6 @@ firstReqMatch ((tys, reqs) :: rest) args = match implHeadSubst tys args
   Some sub => Some (sub, reqs)
   None => firstReqMatch rest args
 
--- the number of DISTINCT concrete-head impls of [iface] (headless impls contribute no
--- tag, exactly as the old implHeadTagsFromHeads skipped them).
-implCountForIfaceU : ImplUniverse -> IfaceRef -> Int
-implCountForIfaceU (ImplUniverse _ _ tags _) iface =
-  optionOr 0 (map sregSize (regLookupK (regKeyOfTab (oblIfaceKey iface)) tags))
-
 -- the concrete "iface|tag" bucket (empty when the tag is None / no such impl).
 -- A-2.2 (#1111): the GOAL-side head arrives as a `HeadKey` that CAN carry
 -- identity — this is the row the concrete bucket's `"<iface>|<tag>"` key is
@@ -36872,22 +36762,13 @@ univConcreteBucket : ImplUniverse ->
   IfaceRef ->
   Option HeadKey ->
   List (List Ty, List Require)
-univConcreteBucket (ImplUniverse conc _ _ _) iface (Some hk) =
+univConcreteBucket (ImplUniverse conc _) iface (Some hk) =
   mregLookupK (regKeyNTab [oblIfaceKey iface, dispHeadTab hk]) conc
 univConcreteBucket _ _ None = []
 
 univHeadless : ImplUniverse -> IfaceRef -> List (List Ty, List Require)
-univHeadless (ImplUniverse _ hl _ _) iface =
+univHeadless (ImplUniverse _ hl) iface =
   mregLookupK (regKeyOfTab (oblIfaceKey iface)) hl
-
--- Whether [iface]'s declaration has at least one impl anywhere in the universe, of
--- any head shape: concrete, headless, arrow-, tuple-, effect- or constraint-headed.
--- `implCountForIfaceU` cannot answer this — its census deliberately drops headless,
--- arrow-, effect- and constraint-headed impls, so a census count of 0 does not mean
--- no impl exists.
-univHasAnyImpl : ImplUniverse -> IfaceRef -> Bool
-univHasAnyImpl (ImplUniverse _ _ _ anyImpl) iface =
-  sregMemberK (regKeyOfTab (oblIfaceKey iface)) anyImpl
 
 -- ── Error-path B4: missing-impl dispatch-obligation check ──────────────────
 -- The `No impl of … for …` reject.  For each recorded interface-method occurrence, recover the types the
@@ -36922,17 +36803,17 @@ univHasAnyImpl (ImplUniverse _ _ _ anyImpl) iface =
 -- obligation channels this single checker now serves (all GROUND rules — no-prelude-Num,
 -- unimplementable-head, function-reject, accept/nested-reqs, reportNumOrNoImpl reframe —
 -- are shared, which is the payoff).  False = the CALL channel: a non-ground obligation
--- runs checkUndeterminedObligations (RULE 2/3 ambiguity).  True = the retired IMPL
+-- runs checkUndeterminedObligations (the undetermined-goal verdict).  True = the retired IMPL
 -- channel's semantics: a non-ground impl obligation DEFERS unconditionally (old
 -- checkOneImplObligation step 7).  This is NOT a mode fork on elaboration — it is the
 -- same fact the two checkers always encoded: the impl channel's genuinely-ambiguous
 -- subset is caught out-of-band by registerAmbiguousConstraintsOwnedBy (which re-records the
--- escaped-unanchored var as a PCallSlot CALL obligation → RULE 3), so applying RULE 3
+-- escaped-unanchored var as a PCallSlot call obligation → the undetermined-goal verdict), so applying that verdict
 -- to the impl channel directly would ALSO reject the benign non-ground impl obligations
 -- (prelude interface-method occurrences: a bare receiver var recorded outside any
 -- generalized-group-close window, so in neither deferrableVarIds nor the RETPOS pass) —
 -- a spurious `Ambiguous instance` on essentially every program.  Adding those vars to
--- deferrableVarIds instead is UNSOUND: it is shared with the call channel's RULE 2, and
+-- deferrableVarIds instead is UNSOUND: it is shared with the call channel's scheme exemption, and
 -- the RETPOS-registered ambiguous var must stay OUT of it or the genuine ambiguity would
 -- defer too.  So the disposition is per-channel, byte-identical to each retired checker.
 -- #838 I4 (S0 fix, PR #863 review): a CHECK-level [dedup] flag used to be the SECOND
@@ -36976,10 +36857,7 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
       None =>
         let _ =
           if methodReturnAmbiguousWithoutGiven request then
-            pushTypeErrorOnceAt
-              "T-AMBIGUOUS-INSTANCE"
-              loc
-              (ambiguousImplMsg request.mrrIface.irName)
+            pushAmbiguityAt False loc (ambiguousImplMsg request.mrrIface.irName)
           else
             checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
         noteMethodReturnTrace MRTChecked request None []
@@ -37088,7 +36966,12 @@ solveExactReturnInstance request wanted [] = MethodReturnResolution {
 }
 solveExactReturnInstance request wanted args =
   let env = perRun.value.bodyImplEnvRef.value
-  match ieSelectRowByIface env wanted.predicate.predicateInterface args
+  let iface = wanted.predicate.predicateInterface
+  let selected =
+    orElseOpt
+      (ieSelectRowByIface env iface args)
+      (determinedGoalInstance iface args)
+  match selected
     Some (row@(ImplRow _ inst selectedIface _ _ _)) =>
       let prerequisites = methodReturnPrerequisites args row
       MethodReturnResolution {
@@ -37321,7 +37204,7 @@ checkOneCallObligation deferNonGround univ iface occs loc scope =
     ()
   else if iface.irName == "Num" && anyListM numUnimplementableHead args then
     -- ⚠️ P1 (#1446): the three `Num` tests in this checker and in
-    -- `checkUndeterminedObligation` stay SPELLING tests, not identity tests against
+    -- `undeterminedGoalExempt` stay SPELLING tests, not identity tests against
     -- `builtinIfaceRef BNum`.  They select a DIAGNOSTIC/defaulting policy for the numeric
     -- class, and an identity test would change which programs take these arms the moment a
     -- second `Num` can exist — a behaviour change §7.1 U1 owns, not this re-key.  Today the
@@ -37353,12 +37236,12 @@ checkOneCallObligation deferNonGround univ iface occs loc scope =
     -- #838 I4: the ONE per-channel branch (see checkCallObligations).  IMPL channel
     -- (deferNonGround) defers a non-ground obligation unconditionally; the signed-body
     -- coverage census below verifies that its complete predicate is declared.  CALL
-    -- channel runs the RULE 2/3 undetermined-var analysis.
+    -- channel gives the goal the undetermined-goal verdict.
 
     if deferNonGround then
       ()
     else
-      checkUndeterminedObligations univ iface args loc scope
+      checkUndeterminedObligations iface args loc scope
   else match oblCallVerdict univ iface args
     -- 🚨 #1867 (S1): A TRUNCATED GOAL IS UNDER-DETERMINED, NOT DECIDABLE HERE.
     -- `recordCallObligations` records one obligation per SHATTERED per-tyvar dict slot,
@@ -37450,8 +37333,8 @@ checkOneCallObligationNoImpl iface args loc scope =
   --     golden is exactly this reject.  [W-QUIETER]: that is a severity INCREASE, not
   --     a fix, and it is the reason this arm is not the one-line `not
   --     (monoVectorClosed args)`.
-  --   * `deferrableVarIds` — RULE 2's own test, one arm up in
-  --     `checkUndeterminedObligation`: a goal whose variables NO enclosing scheme
+  --   * `deferrableVarIds` — the scheme exemption's own test, one arm up in
+  --     `undeterminedGoalExempt`: a goal whose variables NO enclosing scheme
   --     quantifies has nowhere to defer TO, and dropping it would green a program the
   --     emitter builds a null dict for.  ⚠️ A DECLARED CONTEXT'S VARIABLES ARE NOT
   --     `TRigid` AT THIS SITE — MEASURED: `g : Tag (Wrap a) => …` reaches here carrying
@@ -37514,135 +37397,25 @@ bucketAnyLonger : List (List Ty, List Require) -> Int -> Bool
 bucketAnyLonger [] _ = False
 bucketAnyLonger ((tys, _) :: rest) n = listLen tys > n || bucketAnyLonger rest n
 
--- the undetermined-var check of a one-position predicate.  A goal of two or more
--- positions is decided as a vector at its boundary: `determineByUniqueInstance`
--- commits it to its one candidate, and `rejectUndeterminedVectors` gives what
--- stays open and is the boundary's its verdict.  Such a goal no instance head
--- unifies with is `T-NO-IMPL`; one a constrained call posed that two or more
--- candidates unify with is `T-AMBIGUOUS-INSTANCE`; one an interface method's own
--- occurrence posed that two or more candidates unify with gets no verdict.  Asking
--- per argument would accept a vector no instance matches.  A goal that a given visible
--- from its scope answers as a whole predicate is determined by that given, whichever
--- kind of binder carries it — a default body's receiver has no tyvar-keyed
--- registration for the per-argument rule to find.
-checkUndeterminedObligations : ImplUniverse ->
-  IfaceRef ->
+-- The verdict on a call-channel goal still open when the module's obligations are
+-- checked: the same candidates and the same verdict a boundary gives
+-- (`rejectUndeterminedVectors`), for every arity, the module's declared signature
+-- variables held rigid.  A goal that the boundary judged reaches the same verdict
+-- here, and the diagnostic folds on its span; a goal no boundary's window held
+-- gets it here.  No impl of the interface that unifies with the goal is
+-- `T-NO-IMPL`; one is the instance; two or more with no stable minimum is
+-- `T-AMBIGUOUS-INSTANCE`.  That verdict depends on the goal alone, not on whether
+-- the callee's body reads the dictionary.
+checkUndeterminedObligations : IfaceRef ->
   List Mono ->
   Option Loc ->
   ScopeId ->
   Unit
-checkUndeterminedObligations univ iface args loc scope =
-  let request = PredicateRequest { prIface = iface, prArgs = PSArgsKnown args }
-  if isSome (activeFunDictPredOf request scope) then
-    ()
-  else if listLen args >= 2 then
-    ()
-  else
-    checkUndeterminedArgs univ iface args loc scope
-
-checkUndeterminedArgs : ImplUniverse ->
-  IfaceRef ->
-  List Mono ->
-  Option Loc ->
-  ScopeId ->
-  Unit
-checkUndeterminedArgs _ _ [] _ _ = ()
-checkUndeterminedArgs univ iface (a :: rest) loc scope =
-  let _ = checkUndeterminedObligation univ iface a loc scope
-  checkUndeterminedArgs univ iface rest loc scope
-
--- WS-1c: a constrained call whose constraint var stays UNDETERMINED (pinned by
--- neither arg nor result, `roundtrip 14` where `roundtrip : Sub a => Int -> Int`).
--- If the var is a FORWARDED enclosing-fn dict (activeDictVarOf Some), it's resolved
--- by dict-passing — fine.  Otherwise it is genuinely free, and the route must pick
--- an impl with no type to guide it: ONE impl of [iface] → sole-impl default (no
--- error); TWO or more → genuinely ambiguous → AmbiguousImpl (the deliberate
--- divergence from the oracle's silent first-wins).  RULE 3b (#1180) is the second
--- spelling of "two or more": one census-counted impl beside a HEADLESS one.  Skip
--- "Num" (its literal defaulting handles ambiguity).  ZERO impls of the interface
--- declaration, of any head shape, is `T-NO-IMPL` (OD3's zero arm, #3676).  This
--- runs on BOTH the check path (checkModuleFullImpl) and the emit/eval path, so
--- `check` rejects too.
---
--- ⚠️ This block used to say the sole-impl case is one "routeUndeterminedTop stamps
--- concretely".  MEASURED FALSE (sprint `dispatch-must-not-guess`, 1st attempt at
--- #1180): `routeUndeterminedTop` is instrumented-unreached for this shape on every
--- verb — a one-impl program compiles and runs without ever entering it, and the
--- ambiguity reject the two-impl case produces comes from `pushTypeErrorOnceAt`
--- below, not from `reportAmbiguousImpl`.  Both render `ambiguousImplMsg`, which is
--- how the misattribution survived: the MESSAGE is not a witness for the PATH.
-checkUndeterminedObligation : ImplUniverse ->
-  IfaceRef ->
-  Mono ->
-  Option Loc ->
-  ScopeId ->
-  Unit
-checkUndeterminedObligation univ iface occ loc scope
-  | iface.irName == "Num" = ()  -- RULE 4a: Num → literal defaulting, never ambiguity (a SPELLING test — see checkOneCallObligation)
-  | isSome (activeDictVarOf occ scope) = ()  -- forwarded enclosing-dict slot (fold-in)
-  | anyIn (monoUnboundIds occ) perRun.value.poisonedVars.value = ()  -- Chunk A: primary mismatch already explained this var
-  -- RULE 2 (#838 I2): every free var of this predicate is QUANTIFIED by
-  -- some enclosing scheme (`deferrableVarIds`, populated from `schemeIds` at each
-  -- generalized group close) ⇒ it is `deferredToCaller` — the constraint is forwarded
-  -- and re-checked at each concrete use, so DEFER here.  It is what checkOneImplObligation
-  -- does unconditionally on a non-ground arg, now shared by the call channel.  Without it
-  -- a where-helper's re-instantiated `Ord a` (once #827's registration gate is flipped)
-  -- would trip the rule-3 ambiguity reject instead of deferring into the enclosing scheme
-  -- (`guard_gap_where.mdk`, #827).  Keyed on QUANTIFIED (post-generalization) ids, NOT
-  -- pre-gen member monos: a value-restricted intermediate never quantifies its var, so a
-  -- genuinely-ambiguous escaped var (`let x = mk n` under `mk : Int -> a`, ≥2 impls) is
-  -- NOT in the set and RULE 3 rejects it — the S0 the #855 review caught.
-  | isNonEmptyL (monoUnboundIds occ)
-    && allList
-      (i => containsI i perRun.value.deferrableVarIds.value)
-      (monoUnboundIds occ) = ()
-  -- RULE 3: the var escaped its group anchored to NOTHING and the iface has >= 2 impls
-  -- ⇒ genuinely ambiguous (the escaped-unanchored case registerDispatchMonos records).
-  | implCountForIfaceU univ iface >= 2 =
-    pushTypeErrorOnceAt
-      "T-AMBIGUOUS-INSTANCE"
-      loc
-      (ambiguousImplMsg iface.irName)
-  -- RULE 3b (#1180): the census bucket RULE 3 counts drops a HEADLESS impl
-  -- (`impl Sz a`) by design — `univHeadCountsInCensus` is `censusHeadNameTy`, which
-  -- answers `None` for a bare `TyVar` head — so a program with ONE concrete impl
-  -- beside a fully-general one counted 1 and this undetermined goal was silently
-  -- COMMITTED to the concrete impl (check clean, `run` a wrong value, `build` an
-  -- arg-tag E-PANIC).  Two instances match an unanchored `Sz ?a` and neither is
-  -- preferred over the other for a goal that is not closed, so DICT-SEMANTICS §6.2 T3
-  -- forbids `inst` firing at all: the verdict is the same `T-AMBIGUOUS-INSTANCE`.
-  --
-  -- 🚨 THIS READS A SIBLING BUCKET; IT DOES NOT WIDEN THE CENSUS.  #1617/#1618 gave
-  -- `headTyconTy` a `TyFun` arm and reached the tag set through the shared writer,
-  -- pushing the count 1 → 2 for `impl C Int` beside `impl C (Int -> Int)` and flipping
-  -- a program that never dispatches to the arrow from exit 0 to exit 1 — see
-  -- `univHeadCountsInCensus`' block.  Nothing here touches `univAddIfaceTag`,
-  -- `univHeadCountsInCensus`, or either writer, and an arrow- or tuple-headed impl is
-  -- NOT in `univHeadless` either (its writers file by `univReceiverTag`/`headTyconTy`,
-  -- which DOES have the `TyFun`/`TyTuple` arms), so #1617's two-arrow-impl program has
-  -- an EMPTY headless bucket, a census count of 0, and stays accepted by both guards.
-  -- The `>= 1` conjunct is what keeps it that way: a headless impl alone is a UNIQUE
-  -- instance and must still commit (that is `control.mdk`'s shape, one impl, no
-  -- ambiguity).
-  --
-  -- Both universe writers — `insertUnivImplAt` (Flat) and `ieInsertRowAt` (Module/`IE`)
-  -- — already populate `univHeadless` through the same `univReceiverTag None` arm, so
-  -- this needs no third writer and answers identically single-file and cross-module.
-  | implCountForIfaceU univ iface >= 1
-    && isNonEmptyL (univHeadless univ iface) =
-    pushTypeErrorOnceAt
-      "T-AMBIGUOUS-INSTANCE"
-      loc
-      (ambiguousImplMsg iface.irName)
-  -- OD3's zero arm (#3676): no impl of this interface DECLARATION exists anywhere in
-  -- the program, so the goal has no candidate at all and nothing can discharge it.
-  -- The verdict depends on the goal alone, not on whether the callee's body reads
-  -- the dict.  `univHasAnyImpl` and not `implCountForIfaceU == 0`: the census drops
-  -- headless, arrow-, effect- and constraint-headed impls, and each of those is a
-  -- real candidate that must keep the sole-impl default below.
-  | not (univHasAnyImpl univ iface) =
-    pushNoImplError (qualifiedIfaceLabel iface) loc [occ]
-  | otherwise = ()
+checkUndeterminedObligations iface args loc scope =
+  let rigidIds = perRun.value.declaredSigVarIds.value
+  if not (undeterminedGoalExempt iface args scope)
+    && isEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args)) then
+    reportUndeterminedGoal rigidIds (goalWindowOf []) iface args loc
 
 -- An interface's name qualified by its declaring module (`mb.Sz`), for a diagnostic
 -- that must say WHICH declaration lacks an impl when two modules declare the same
@@ -37708,25 +37481,25 @@ improveByUniqueImpl sigIds (o :: rest) =
   improveByUniqueImpl sigIds rest
 
 -- Determination by the unique unifying instance (DICT-SEMANTICS §3, the settle
--- sequence's second step).  A goal of arity two or more that is not closed is
--- unified with a fresh instance of the one instance head that unifies with it,
--- every variable in [rigidIds] held rigid.  [rigidIds] are the variables the
--- boundary does not own: at a group, the declared signatures' variables and the
--- variables in an argument position of a member's type; at a method body, the
--- instance head's and declared signature's.  Any other variable of the goal is the
--- boundary's, and the unique instance is the only type the program can have there.
+-- sequence's second step).  A goal of any arity that is not closed is unified with
+-- a fresh instance of the one instance head that unifies with it, every variable in
+-- [rigidIds] held rigid.  [rigidIds] are the variables the boundary does not own:
+-- at a group, the declared signatures' variables and the variables in an argument
+-- position of a member's type; at a method body, the instance head's and declared
+-- signature's.  Any other variable of the goal is the boundary's, and the unique
+-- instance is the only type the program can have there.
 --
--- A candidate counts unless its first head unifies only by peeling a qualifier
--- (`rowCountsInCensus`), and only if its commit leaves every sibling goal on a
--- variable it binds satisfiable: a sibling the commit closes must have an instance
--- in the table.
+-- The candidates are `goalCandidates`', kept only if a commit leaves every sibling
+-- goal on a variable it binds satisfiable: a sibling the commit closes must have an
+-- instance in the table.  A projection of a wider goal is not determined: the
+-- positions it drops can still tell its candidates apart.
 --
 -- Sweeps repeat until one commits nothing, so a goal that another goal's commit
 -- makes unique is determined in the same pass whatever order the window lists
 -- them in.  What stays open gets its verdict from `rejectUndeterminedVectors`.
 determineByUniqueInstance : OrdMap Unit -> List UObligation -> Unit
 determineByUniqueInstance rigidIds obls =
-  if anyList hasVectorArgs obls then
+  if isNonEmptyL obls then
     determineSweeps rigidIds (goalWindowOf obls) (listLen obls + 1)
 
 -- The fuel only bounds the loop: every sweep but the last changes some goal's
@@ -37755,10 +37528,15 @@ determineByUniqueInstanceGo rigidIds window changed ((_, o) :: rest) =
 -- since the goal's variables are no longer the ones it was filed under.
 determineGoal : OrdMap Unit -> GoalWindow -> UObligation -> List Mono -> Bool
 determineGoal rigidIds window o args
-  | listLen args <= 1 || monoVectorClosed args = False
+  | monoVectorClosed args || goalVarsAllHeld rigidIds args = False
   | otherwise =
-    let unifying = unifyingRows rigidIds o.pred.iface args
-    match determinationCandidates window unifying
+    let rows = goalRows o.pred.iface args
+    let unifying =
+      if goalIsProjection args rows then
+        []
+      else
+        goalCandidates rigidIds args rows
+    match determinationCandidates window args unifying
       [(row, _)] =>
         let oldIds = dedupI (flatMap monoUnboundIds args)
         let sizeBefore = monoSizes args
@@ -37768,85 +37546,376 @@ determineGoal rigidIds window o args
         let heads = freshRowHeads row
         let _ = exitLevel ()
         let _ = commitImprovement rigidIds (zipL args heads)
+        let _ = fileDeterminedRow row args
         let _ = refileGoals window oldIds
         monoSizes args /= sizeBefore
           || listLen (dedupI (flatMap monoUnboundIds args)) /= listLen oldIds
       _ => False
 
--- The instances of [iface] whose heads unify with [args], [rigidIds] held rigid,
--- each with the substitution that unifies it.
-unifyingRows : OrdMap Unit ->
-  IfaceRef ->
-  List Mono ->
-  List (ImplRow, List (Int, Mono))
-unifyingRows rigidIds iface args =
-  flatMap
-    (row => match rowHeadSubstRigid rigidIds args row
-      Some subst => [(row, subst)]
-      None => [])
-    (filterList (ieRowOfIface iface) (improvementPool args))
+determinedEntryAnswers : IfaceRef -> List Mono -> (ImplRow, List Mono) -> Bool
+determinedEntryAnswers iface goals (row, committed) =
+  ieRowOfIface iface row
+    && listLen committed == listLen goals
+    && allList (pair => cohEqMono (fst pair) (snd pair)) (zipL committed goals)
 
-determinationCandidates : GoalWindow ->
-  List (ImplRow, List (Int, Mono)) ->
+-- Files a commit's instance under the variable heading the committed goal, the
+-- one `determinedGoalInstance` reads when selection by head finds nothing.
+fileDeterminedRow : ImplRow -> List Mono -> Unit
+fileDeterminedRow _ [] = ()
+fileDeterminedRow row (first :: rest) = match normalize first
+  TVar cell =>
+    let table = perRun.value.determinedRowsRef.value
+    let filed = optionOr [] (IdMap.get (tyvarId cell) table)
+    let entry = (row, map normalize (first :: rest))
+    perRun.value.determinedRowsRef :=
+      IdMap.set (tyvarId cell) (entry :: filed) table
+  _ => ()
+
+-- Every variable of the goal is one the boundary holds rigid, so a commit could
+-- bind none of them.
+goalVarsAllHeld : OrdMap Unit -> List Mono -> Bool
+goalVarsAllHeld rigidIds args =
+  allList
+    (c => omHasKey (intToString (tyvarId c)) rigidIds)
+    (flatMap monoVarCells args)
+
+-- The rows of [iface] a goal can unify with: those filed under the goal's first
+-- head constructor or under none, or every row of [iface] when the goal's first
+-- position is a variable.
+goalRows : IfaceRef -> List Mono -> List ImplRow
+goalRows iface args =
+  let env = perRun.value.bodyImplEnvRef.value
+  let pool = match goalHeadCon args
+    Some hk => ieHeadRows (Some hk) env ++ ieHeadRows None env
+    None => ieRowsAll env
+  filterList (ieRowOfIface iface) pool
+
+-- A goal with fewer positions than some head of its interface is the projection
+-- of a wider goal onto its first positions: a per-slot goal `recordCallObligations`
+-- shatters a predicate into, or the receiver position of a method occurrence.
+goalIsProjection : List Mono -> List ImplRow -> Bool
+goalIsProjection args rows =
+  anyList (row => listLen (ieRowTys row) > listLen args) rows
+
+-- The instances an undetermined goal can still reach (DICT-SEMANTICS §3): the rows
+-- of [rows] whose heads unify with [args], every variable in [rigidIds] held rigid
+-- and the instance's variables fresh, each with the substitution that unifies it.
+-- Every head shape is unified by its structure: data, tuple, arrow, qualified and
+-- variable heads alike.  A projection is unified with each head's first positions,
+-- and heads that agree there reach it as one candidate.
+goalCandidates : OrdMap Unit ->
+  List Mono ->
+  List ImplRow ->
   List (ImplRow, List (Int, Mono))
-determinationCandidates window unifying =
-  filterList
-    (cand =>
-      rowCountsInCensus (fst cand) && siblingsStaySatisfiable window (snd cand))
+goalCandidates rigidIds args rows =
+  let unifying =
+    flatMap
+      (row => match rowPrefixSubstRigid rigidIds args row
+        Some subst => [(row, subst)]
+        None => [])
+      rows
+  if goalIsProjection args rows then
+    distinctPrefixes (listLen args) unifying []
+  else
     unifying
 
--- The verdict on a goal of arity two or more that determination left open
--- (DICT-SEMANTICS §3, §4.2 OD3).  A goal generalization abstracts is the caller's:
--- every free variable in it is quantified by a scheme, the test residual
--- selection admits a predicate into a scheme by (`declaredOblArgOk`).  So is a
--- goal with a variable the boundary does not own.  A goal a given answers, or one
--- whose variable a primary mismatch already explained, gets no verdict either.
--- Any other such goal that no instance head unifies with is `T-NO-IMPL`: no
--- later boundary can satisfy it.  One of the call window [callObls] that two or
--- more candidates unify with is `T-AMBIGUOUS-INSTANCE`: the constrained call that
--- posed it has no type to choose its dictionary by.  The same goal posed by an
--- interface method's own occurrence ([implObls]) gets no verdict here.  At a
--- group it runs once the group's schemes are registered.
+-- [row]'s first `listLen args` heads, freshened, unified with [args] in a scratch
+-- substitution with every variable in [rigidIds] held rigid.
+rowPrefixSubstRigid : OrdMap Unit ->
+  List Mono ->
+  ImplRow ->
+  Option (List (Int, Mono))
+rowPrefixSubstRigid rigidIds args row =
+  let heads = take (listLen args) (freshRowHeads row)
+  let scratch = Ref []
+  if listLen heads == listLen args
+    && cohOverlapGo scratch (rigidSigPairs rigidIds (zipL args heads)) then
+    Some !scratch
+  else
+    None
+
+distinctPrefixes : Int ->
+  List (ImplRow, List (Int, Mono)) ->
+  List (ImplRow, List (Int, Mono)) ->
+  List (ImplRow, List (Int, Mono))
+distinctPrefixes _ [] kept = reverseL kept
+distinctPrefixes k (cand :: rest) kept =
+  let prefix = take k (ieRowTys (fst cand))
+  if anyList (seen => tyHeadEqV prefix (take k (ieRowTys (fst seen)))) kept then
+    distinctPrefixes k rest kept
+  else
+    distinctPrefixes k rest (cand :: kept)
+
+-- The candidates that count toward a commitment or an ambiguity: `rowCountsFor`'s,
+-- each kept only if its commit leaves every sibling goal on a variable it binds
+-- satisfiable.
+determinationCandidates : GoalWindow ->
+  List Mono ->
+  List (ImplRow, List (Int, Mono)) ->
+  List (ImplRow, List (Int, Mono))
+determinationCandidates window args unifying =
+  filterList
+    (cand =>
+      rowCountsFor args (fst cand) && siblingsStaySatisfiable window (snd cand))
+    unifying
+
+-- The candidates an undetermined goal's verdict counts: `determinationCandidates`,
+-- or, when a sibling refutes every one of them, every candidate `rowCountsFor`
+-- keeps.  Such a goal has no type that satisfies the boundary's goals together,
+-- and its verdict is the one its candidates alone give.
+verdictCandidates : GoalWindow ->
+  List Mono ->
+  List (ImplRow, List (Int, Mono)) ->
+  List (ImplRow, List (Int, Mono))
+verdictCandidates window args unifying =
+  match determinationCandidates window args unifying
+    [] => filterList (cand => rowCountsFor args (fst cand)) unifying
+    counted => counted
+
+-- What an undetermined goal's counted candidates decide (DICT-SEMANTICS §3, §4.2
+-- OD3).  None leaves the goal no instance.  One is the instance.  So is one that
+-- matches the goal as it stands and is ⊑ every other candidate: min⊑ selects it,
+-- and no binding of the goal's variables can make another instance more specific.
+-- Anything else is ambiguous.
+data GoalReach = ReachNone | ReachOne ImplRow | ReachMany
+
+goalReach : List Mono -> List (ImplRow, List (Int, Mono)) -> GoalReach
+goalReach _ [] = ReachNone
+goalReach _ [(row, _)] = ReachOne row
+goalReach args cands =
+  let rows = map fst cands
+  match filterList (row => stableMinimum args rows row) rows
+    row :: _ => ReachOne row
+    [] => ReachMany
+
+stableMinimum : List Mono -> List ImplRow -> ImplRow -> Bool
+stableMinimum args rows row =
+  rowHeadMatches args row
+    && allList (other => tySubsumesV (ieRowTys other) (ieRowTys row)) rows
+
+-- An undetermined goal no verdict is owed for.  A `Num` goal belongs to literal
+-- defaulting (a spelling test, see `checkOneCallObligation`).  A closed goal is
+-- the obligation gate's.  A goal whose variable a primary mismatch already
+-- explained is not reported twice.  A goal generalization abstracts is the
+-- caller's: every free variable in it is quantified by a scheme, the test residual
+-- selection admits a predicate into a scheme by (`declaredOblArgOk`).  A goal each
+-- argument of which is a forwarded enclosing dictionary's variable, or that a
+-- given answers, is answered.
+undeterminedGoalExempt : IfaceRef -> List Mono -> ScopeId -> Bool
+undeterminedGoalExempt iface args scope =
+  iface.irName == "Num"
+    || monoVectorClosed args
+    || anyIn (flatMap monoUnboundIds args) perRun.value.poisonedVars.value
+    || allList (declaredOblArgOk perRun.value.deferrableVarIds.value) args
+    || allList (a => isSome (activeDictVarOf a scope)) args
+    || goalGivenAt iface args scope
+
+-- The verdict on an undetermined goal (DICT-SEMANTICS §3, §4.2 OD3).  No unifying
+-- instance is `T-NO-IMPL`: no later binding can satisfy it.  Two or more counted
+-- candidates with no stable minimum is `T-AMBIGUOUS-INSTANCE`: the goal has no
+-- type to choose its dictionary by.  One candidate, or a stable minimum,
+-- determines the goal.
+reportUndeterminedGoal : OrdMap Unit ->
+  GoalWindow ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  Unit
+reportUndeterminedGoal rigidIds window iface args loc =
+  match goalCandidates rigidIds args (goalRows iface args)
+    [] => reportUndeterminedNoImpl iface args loc
+    unifying => match goalReach args (verdictCandidates window args unifying)
+      ReachMany =>
+        pushBoundaryAmbiguity rigidIds args loc (ambiguousImplMsg iface.irName)
+      _ => ()
+
+-- DIAGNOSTIC-CODES-DESIGN `T-NO-IMPL` for an undetermined goal.  A one-position
+-- goal names its interface by its declaring module, so the diagnostic says which
+-- of two same-spelled declarations lacks an impl; a vector renders each variable
+-- as `_`.
+reportUndeterminedNoImpl : IfaceRef -> List Mono -> Option Loc -> Unit
+reportUndeterminedNoImpl iface [a] loc =
+  pushNoImplError (qualifiedIfaceLabel iface) loc [a]
+reportUndeterminedNoImpl iface args loc =
+  pushTypeErrorOnceAt "T-NO-IMPL" loc (undeterminedNoImplMsg iface.irName args)
+
+-- The verdict on a boundary's goals that determination left open, once the
+-- group's schemes are registered.  A goal is this boundary's to judge when it has a
+-- variable nothing outside the boundary can bind: not held rigid ([rigidIds], the
+-- enclosing scope's), not quantified by a scheme (the caller's), and not in the
+-- type of a non-generalized member ([liveIds], which a later group can still
+-- ground, §6.2 T2).  Such a goal is judged by `reportUndeterminedGoal` in full,
+-- whether a constrained call posed it ([callObls]) or an interface method's own
+-- occurrence did ([implObls]): nothing left can give it a type (§6.2 T4).
 rejectUndeterminedVectors : OrdMap Unit ->
+  OrdMap Unit ->
   List UObligation ->
   List UObligation ->
   Unit
-rejectUndeterminedVectors rigidIds implObls callObls =
-  let _ = fold (_ o => undeterminedVectorVerdict rigidIds None o) () implObls
-  if anyList hasVectorArgs callObls then
-    let window = Some (goalWindowOf (implObls ++ callObls))
-    fold (_ o => undeterminedVectorVerdict rigidIds window o) () callObls
-  else
-    fold (_ o => undeterminedVectorVerdict rigidIds None o) () callObls
+rejectUndeterminedVectors rigidIds liveIds implObls callObls =
+  let obls = implObls ++ callObls
+  if isNonEmptyL obls then
+    let window = goalWindowOf obls
+    fold (_ o => undeterminedVectorVerdict rigidIds liveIds window o) () obls
 
--- [callWindow] is the boundary's window when [o] is on the call window.
+-- [window] is the boundary's goal window.  A goal on a live variable waits for
+-- quiescence (`judgeQuiescentGoals`) with the boundary's [rigidIds] and [window].
 undeterminedVectorVerdict : OrdMap Unit ->
-  Option GoalWindow ->
+  OrdMap Unit ->
+  GoalWindow ->
   UObligation ->
   Unit
-undeterminedVectorVerdict rigidIds callWindow o =
+undeterminedVectorVerdict rigidIds liveIds window o =
+  let args = map normalize (uOblArgs o)
+  let ids = flatMap monoUnboundIds args
+  if not (undeterminedGoalExempt o.pred.iface args o.uoScope)
+    && anyList (i => boundaryOwnsOpen rigidIds i) ids then
+    if anyList (i => omHasKey (intToString i) liveIds) ids then
+      perRun.value.quiescentGoalsRef :=
+        (rigidIds, window, o) :: perRun.value.quiescentGoalsRef.value
+    else if isEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args)) then
+      reportUndeterminedGoal rigidIds window o.pred.iface args o.loc
+    else
+      reportMixedGoalAmbiguity rigidIds window o.pred.iface args o.loc
+
+-- The verdict on the goals boundaries left to quiescence, once every group of the
+-- module has closed: no later group is left to ground their variables, so each is
+-- judged as its boundary would have judged it.
+judgeQuiescentGoals : Unit -> Unit
+judgeQuiescentGoals _ =
+  let goals = reverseL perRun.value.quiescentGoalsRef.value
+  perRun.value.quiescentGoalsRef := []
+  fold
+    (_ (rigidIds, window, o) =>
+      undeterminedVectorVerdict rigidIds omEmpty window o)
+    ()
+    goals
+
+-- A goal that mentions both a rigid variable and one only this boundary could have
+-- fixed.  Whatever the enclosing scope instantiates the rigid variable to, the
+-- other stays open, so two or more instances reachable under some instantiation
+-- with no stable minimum is `T-AMBIGUOUS-INSTANCE` (§6.2 T4).  Fewer is left
+-- unjudged here: whether the rigid variable can take that instance's type is the
+-- impl-body and signature checks' question.
+reportMixedGoalAmbiguity : OrdMap Unit ->
+  GoalWindow ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  Unit
+reportMixedGoalAmbiguity rigidIds window iface args loc =
+  let unifying = goalCandidates omEmpty args (goalRows iface args)
+  match goalReach args (verdictCandidates window args unifying)
+    ReachMany =>
+      pushBoundaryAmbiguity rigidIds args loc (ambiguousImplMsg iface.irName)
+    _ => ()
+
+-- [i] is neither held rigid nor quantified by a registered scheme.
+boundaryOwnsOpen : OrdMap Unit -> Int -> Bool
+boundaryOwnsOpen rigidIds i =
+  not (omHasKey (intToString i) rigidIds)
+    && not (containsI i perRun.value.deferrableVarIds.value)
+
+-- The variables a later group can still ground (§6.2 T2): those no scheme
+-- quantifies in the types of this group's members [monos] and of every earlier
+-- top-level member of the module.  The members that still carry one are kept for
+-- the groups after this one; a member grounded since is dropped.
+liveMemberIds : List Mono -> OrdMap Unit
+liveMemberIds monos =
+  let open =
+    filterList
+      (m => isNonEmptyL (liveVarIdsOf m))
+      (monos ++ perRun.value.liveMemberMonosRef.value)
+  perRun.value.liveMemberMonosRef := open
+  omFromNames (map intToString (dedupI (flatMap liveVarIdsOf open))) omEmpty
+
+liveVarIdsOf : Mono -> List Int
+liveVarIdsOf m =
+  filterList
+    (i => not (containsI i perRun.value.deferrableVarIds.value))
+    (monoUnboundIds m)
+
+-- The prerequisites of the instances [obls]' goals select, as goals of the same
+-- boundary at their parents' sites (DICT-SEMANTICS §3).  An instance answers a goal
+-- only once its `requires` is answered too, so a prerequisite left open is judged
+-- like a goal the boundary posed itself.  It is not determined: an open sibling
+-- refutes no candidate, so a commit through a prerequisite could choose a
+-- structural instance whose open sibling no instance meets (`Num (MyList ?m)`).
+-- A goal a given
+-- answers whole selects no instance; a goal every variable of which is held rigid
+-- leaves its prerequisites to the enclosing scope; a closed goal's are closed, and
+-- the obligation gate's.  Only a prerequisite smaller than its parent is followed
+-- further, which bounds a `requires` chain that does not shrink.
+nestedRequireGoals : OrdMap Unit -> List UObligation -> List UObligation
+nestedRequireGoals rigidIds obls =
+  nestedRequireGoalsGo rigidIds requiresNonShrinkingFuel obls
+
+nestedRequireGoalsGo : OrdMap Unit ->
+  Int ->
+  List UObligation ->
+  List UObligation
+nestedRequireGoalsGo rigidIds fuel obls
+  | fuel <= 0 = []
+  | otherwise = match flatMap (selectedRequireGoals rigidIds) obls
+    [] => []
+    derived =>
+      map fst derived
+        ++ nestedRequireGoalsGo
+          rigidIds
+          (fuel - 1)
+          (map fst (filterList snd derived))
+
+-- [o]'s prerequisites under the one instance its goal selects as it stands, each
+-- paired with whether it is smaller than [o]'s goal.
+selectedRequireGoals : OrdMap Unit -> UObligation -> List (UObligation, Bool)
+selectedRequireGoals rigidIds o =
   let args = map normalize (uOblArgs o)
   let iface = o.pred.iface
-  if listLen args <= 1
+  if isEmptyL args
     || monoVectorClosed args
-    || isNonEmptyL (sigCellsOf rigidIds (flatMap monoVarCells args))
-    || anyIn (flatMap monoUnboundIds args) perRun.value.poisonedVars.value
-    || goalGivenAt iface args o.uoScope
-    || allList (declaredOblArgOk perRun.value.deferrableVarIds.value) args then
-    ()
-  else match (unifyingRows rigidIds iface args, callWindow)
-    ([], _) =>
-      pushTypeErrorOnceAt
-        "T-NO-IMPL"
-        o.loc
-        (undeterminedNoImplMsg iface.irName args)
-    (unifying, Some window) =>
-      if listLen (determinationCandidates window unifying) >= 2 then
-        pushTypeErrorOnceAt
-          "T-AMBIGUOUS-INSTANCE"
-          o.loc
-          (ambiguousImplMsg iface.irName)
-    _ => ()
+    || goalVarsAllHeld rigidIds args
+    || goalGivenAt iface args o.uoScope then
+    []
+  else
+    let rows = goalRows iface args
+    let reach =
+      if goalIsProjection args rows then
+        ReachMany
+      else
+        goalReach args (goalCandidates rigidIds args rows)
+    match reach
+      ReachOne row => match selectedRowReqMatch args row
+        Some (subst, reqs) =>
+          let parentIds = flatMap monoUnboundIds args
+          let size = monoSizes args
+          flatMap
+            (req =>
+              map
+                (g => (g, monoSizes g.pred.args < size))
+                (requireGoalAt o parentIds (reqToObligation subst req)))
+            reqs
+        None => []
+      _ => []
+
+-- A prerequisite as a goal at [o]'s site.  One that mentions a variable the
+-- instance's head does not fix is left to the module's obligation check.
+requireGoalAt : UObligation ->
+  List Int ->
+  (IfaceRef, List Mono) ->
+  List UObligation
+requireGoalAt o parentIds (iface, args)
+  | not (allList (i => containsI i parentIds) (flatMap monoUnboundIds args)) =
+    []
+  | otherwise = [
+    UObligation {
+      pred = Predicate { iface = iface, args = args },
+      originId = o.originId,
+      prov = o.prov,
+      loc = o.loc,
+      uoScope = o.uoScope,
+      oblProj = OpProjected,
+    },
+  ]
 
 -- The verdict on the goals on a variable D3 clause 3 withheld, once the second
 -- determination has run.  The boundary owns that variable and nothing after it
@@ -37878,19 +37947,16 @@ withheldVectorVerdict : OrdMap Unit -> GoalWindow -> UObligation -> Unit
 withheldVectorVerdict rigidIds window o =
   let args = map normalize (uOblArgs o)
   let iface = o.pred.iface
-  if listLen args <= 1
-    || monoVectorClosed args
-    || anyIn (flatMap monoUnboundIds args) perRun.value.poisonedVars.value
-    || goalGivenAt iface args o.uoScope
-    || allList (declaredOblArgOk perRun.value.deferrableVarIds.value) args then
-    ()
-  else if listLen
-      (determinationCandidates window (unifyingRows rigidIds iface args))
-    >= 2 then
-    pushTypeErrorOnceAt
-      "T-AMBIGUOUS-INSTANCE"
-      o.loc
-      (ambiguousImplMsg iface.irName)
+  if not (undeterminedGoalExempt iface args o.uoScope) then
+    let unifying = goalCandidates rigidIds args (goalRows iface args)
+    match goalReach args (verdictCandidates window args unifying)
+      ReachMany =>
+        pushBoundaryAmbiguity
+          rigidIds
+          args
+          o.loc
+          (ambiguousImplMsg iface.irName)
+      _ => ()
 
 hasVectorArgs : UObligation -> Bool
 hasVectorArgs o = listLen (uOblArgs o) >= 2
@@ -37954,14 +38020,23 @@ rowHeadSubstRigid rigidIds args row =
 
 -- A candidate does not count when its first head unifies with the goal only by
 -- peeling a qualifier: `<Stdout> Int` elaborates to `Int`, and the head matcher
--- reads through a constraint or authority qualifier the same way, so such an
--- instance is not a second type the goal could have
--- (`test/engine_fixtures/fun_head_impl_bystander.mdk`).  An arrow-, tuple- or
+-- reads through a constraint or authority qualifier the same way, so against a
+-- goal whose first position is already `Int` such an instance is not a second
+-- type the goal could have (`test/engine_fixtures/fun_head_impl_bystander.mdk`).
+-- A goal whose first position is a variable binds it to the qualified head
+-- without peeling anything, so there the instance counts.  An arrow-, tuple- or
 -- variable-headed instance unifies by its structure and counts.
-rowCountsInCensus : ImplRow -> Bool
-rowCountsInCensus row = match ieRowTys row
-  headTy :: _ => not (tyIsQualified (headTySpineNode headTy))
+rowCountsFor : List Mono -> ImplRow -> Bool
+rowCountsFor args row = match ieRowTys row
+  headTy :: _ =>
+    not (tyIsQualified (headTySpineNode headTy)) || goalFirstIsVariable args
   [] => False
+
+goalFirstIsVariable : List Mono -> Bool
+goalFirstIsVariable (a :: _) = match normalize a
+  TVar _ => True
+  _ => False
+goalFirstIsVariable [] = False
 
 tyIsQualified : Ty -> Bool
 tyIsQualified (TyEffect _ _ _) = True
@@ -38475,6 +38550,8 @@ checkReqOne : ImplUniverse ->
 checkReqOne univ iface args loc scope
   | anyListM monoIsFunction args && not (implMatchesU univ iface args) =
     pushNoImplError iface.irName loc args
+  -- An open prerequisite is judged at its boundary (`nestedRequireGoals`), where the
+  -- impl-head and signature variables it may mention are known to be rigid.
   | not (allConcreteHeads args) = ()
   | implMatchesU univ iface args = checkNestedReqs univ iface args loc scope
   -- #1939 / #1938 (OPEN WORLD): the nested-`requires` twin of
@@ -39238,7 +39315,11 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
   let _ = improveByUniqueImpl bodyRigidIds bodyObls
   let _ = determineByUniqueInstance bodyRigidIds bodyObls
   let _ =
-    rejectUndeterminedVectors bodyRigidIds addedObls (callUOblsWindow callN0)
+    rejectUndeterminedVectors
+      bodyRigidIds
+      omEmpty
+      addedObls
+      (callUOblsWindow callN0 ++ nestedRequireGoals bodyRigidIds bodyObls)
   let _ = rejectWithheldAmbiguity bodyRigidIds withheld bodyObls
   let _ = registerMethodBodyGivens iface kind params mty inst bodyScope
   let _ = match kind
@@ -40038,9 +40119,9 @@ narrowsImplHeadMsg subject narrowed head =
 -- before `inst`), and a residual over head variables alone that no given answers is
 -- reported at the goal's site.  The givens are the impl's own head, its `requires`
 -- with their superinterfaces, and the method signature's own `=>` context.
--- A goal no instance matches is not reported here.  A residual that mixes a head
--- variable with another variable is not reported here either, and no other check
--- rejects it (#3798).
+-- A residual that an instance answers only by binding a head variable is reported
+-- too, whatever other variables it mentions.  A goal no instance can answer even
+-- with the head variables free is not reported here.
 checkImplHeadPrerequisites : String ->
   IfaceRef ->
   ImplBodySite ->
@@ -40100,7 +40181,12 @@ implGoalResiduals fuel headIds givens iface args
     let cells = sigCellsOf headIds (flatMap monoVarCells args)
     let toRigid = sigRigidBindings headIds cells
     match findMatchingImplReqsU univ iface (map (substMono toRigid [] []) args)
-      None => if implMatchesU univ iface args then [(iface, args)] else []
+      None =>
+        if implMatchesU univ iface args
+          || answeredOnlyByBindingHead headIds iface args then
+          [(iface, args)]
+        else
+          []
       Some (subst, reqs) =>
         flatMap
           (r =>
@@ -40111,6 +40197,17 @@ implGoalResiduals fuel headIds givens iface args
               (fst r)
               (map (unrigidSig cells) (snd r)))
           (map (reqToObligation subst) reqs)
+
+-- An instance answers the goal only by fixing a head variable: some instance head
+-- unifies with it while the head variables are free, and none does while they are
+-- held rigid.  Unification rather than matching, because the instance may need the
+-- goal's other variables bound as well (`Conv a String` against
+-- `impl Conv Int String`, `Get (Box (List t)) b` against `impl Get (Box a) a`).
+answeredOnlyByBindingHead : OrdMap Unit -> IfaceRef -> List Mono -> Bool
+answeredOnlyByBindingHead headIds iface args =
+  let rows = filterList (ieRowOfIface iface) (improvementPool args)
+  anyList (rowHeadUnifies args) rows
+    && not (anyList (row => isSome (rowHeadSubstRigid headIds args row)) rows)
 
 givenAnswers : IfaceRef -> List Mono -> PredicateSlot -> Bool
 givenAnswers iface args slot =
@@ -40152,6 +40249,9 @@ knownPredicateSlot iface args = PredicateSlot {
   psBoundIds = dedupI (flatMap monoTyvarIds args),
 }
 
+-- A residual over head variables alone names the `requires` to add.  One that also
+-- mentions a variable of the body's own has no `requires` to name, so it is
+-- reported only when an instance answers it by fixing a head variable.
 reportImplHeadResidual : String ->
   List (String, Int) ->
   Option Loc ->
@@ -40160,19 +40260,27 @@ reportImplHeadResidual : String ->
 reportImplHeadResidual subject roots loc (iface, args) =
   let ids = flatMap monoUnboundIds args
   let headIds = map snd roots
-  if isEmptyL ids || not (allList (i => containsI i headIds) ids) then
+  let named = map (p => (snd p, fst p)) roots
+  let rendered = ppEach (Ref named) (Ref 0) 3 args
+  let pred = "\{iface.irName} \{joinWith " " rendered}"
+  if isEmptyL ids || not (anyList (i => containsI i headIds) ids) then
     ()
-  else
-    let named = map (p => (snd p, fst p)) roots
-    let rendered = ppEach (Ref named) (Ref 0) 3 args
+  else if allList (i => containsI i headIds) ids then
     let msg = match (map normalize args, rendered)
       ([TVar _], [vname]) =>
         undeclaredImplPrerequisiteMsg subject iface.irName vname
-      _ =>
-        undeclaredImplPredicateMsg
-          subject
-          "\{iface.irName} \{joinWith " " rendered}"
+      _ => undeclaredImplPredicateMsg subject pred
     pushTypeErrorOnceAt "T-IMPL-MISSING-REQUIRES" loc msg
+  else if answeredOnlyByBindingHead
+    (omFromNames (map (r => intToString (snd r)) roots) omEmpty)
+    iface
+    args then
+    let fixed =
+      dedup (flatMap (r => if containsI (snd r) ids then [fst r] else []) roots)
+    pushTypeErrorOnceAt
+      "T-IMPL-MISSING-REQUIRES"
+      loc
+      (implGoalFixesHeadMsg subject pred fixed)
 
 -- the CALL-obligation half of the constraint axis: recordCallObligations pushes
 -- (iface, [constraint-var mono], loc) for each dict slot a constrained CALLEE
@@ -40596,6 +40704,10 @@ undeclaredConstraintMsg subject mty oiface vname =
 undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeclaredImplPrerequisiteMsg subject oiface vname =
   "\{subject} requires `\{oiface}` on the instance-head type variable `\{vname}`, which the impl does not declare; add `requires \{oiface} \{vname}` to the impl"
+
+implGoalFixesHeadMsg : String -> String -> List String -> String
+implGoalFixesHeadMsg subject pred fixed =
+  "\{subject} requires `\{pred}`, which only a specific instance-head type \{tyVarNoun fixed} \{quotedNames fixed} satisfies, but the impl is declared for every type in their place; make the body parametric in \{quotedNames fixed}, or narrow the head"
 
 undeclaredImplPredicateMsg : String -> String -> String
 undeclaredImplPredicateMsg subject pred =
@@ -43596,7 +43708,11 @@ processSCC env sigs grouped0 members =
       addedObls
       schemes
   let _ =
-    rejectUndeterminedVectors unownedIds addedObls (callUOblsWindow callN0)
+    rejectUndeterminedVectors
+      unownedIds
+      (liveMemberIds (map snd placeholders))
+      addedObls
+      (callUOblsWindow callN0 ++ nestedRequireGoals unownedIds groupObls)
   let _ = rejectWithheldAmbiguity unownedIds withheld groupObls
   -- SIGNATURE CONSTRAINT SOUNDNESS: a signed member whose body induces an
   -- interface constraint on one of its own quantified vars that its declared `=>`
@@ -44811,12 +44927,12 @@ registerSchemeObligations memberDefIds sigTvMaps callObls addedObls ((m, sch) ::
   -- #838 I2 / #827: record this binding's QUANTIFIED (generalized) var ids as
   -- caller-deferrable.  A var this binding ∀-quantifies is FORWARDED to its callers
   -- (each use re-instantiates it fresh), so an end-of-run call obligation carrying
-  -- that exact id is this binding's own deferred predicate — checkUndeterminedObligation
-  -- RULE 2 defers it into the scheme instead of a spurious `Ambiguous instance` reject.
+  -- that exact id is this binding's own deferred predicate — undeterminedGoalExempt
+  -- defers it into the scheme instead of a spurious `Ambiguous instance` reject.
   -- CRITICAL (S0 #855-review): this uses the POST-generalization `schemeIds`, NOT the
   -- pre-generalization member monos.  A value-restricted intermediate (`let x = mk n`,
   -- `mk : Int -> a`) does NOT quantify its var (`Forall []`), so an escaped ambiguous
-  -- var never enters this set and RULE 3 correctly rejects it (a1_greet/a1_letleak).
+  -- var never enters this set and the undetermined-goal verdict rejects it (a1_greet/a1_letleak).
   perRun.value.deferrableVarIds :=
     schemeIds sch ++ perRun.value.deferrableVarIds.value
   let obs =
@@ -45099,7 +45215,7 @@ vecOblOfPred boundIds (iface, ds, loc) = match boundTyvarIds boundIds ds
 -- deferrable as written (its head is concrete, so it is not `P'`) nor dischargeable
 -- (its `t` is generalizable): §3 `inst` reduces it against `impl Tag (Wrap a) requires
 -- Tag a`, and the RESIDUAL `Tag t` is what defers.  Reducing here is what makes the
--- deferral OD2 already performs on the CHECK side (checkUndeterminedObligation RULE 2
+-- deferral OD2 already performs on the CHECK side (`undeterminedGoalExempt`
 -- defers `Tag t` "to the caller") actually reach a caller: without the residual in the
 -- scheme there is no context for `(var)` to discharge and no `λd̄.` for `gen` to
 -- abstract, so `check` was silent, `run` fell back to declaration order, and the built
@@ -51260,34 +51376,25 @@ data GraphOut = GOutDiags | GOutTrees
 -- (`run`, `build`) do not report it, because `emitElaborationGate` gates on
 -- `hadTypeErrors` and the residual does not arm it.
 --
--- What the population actually is: every member is #3031 — `routeUndeterminedTop`'s
--- `_ => reportAmbiguousImpl` arm firing on a receiver some scheme QUANTIFIES,
--- because the drain replays the goal without the `deferrableVarIds`/`goalsClosed`
--- test the sibling T4-warning arm (`reportOverlapForIface`) already applies, and
--- pushing it at a STALE location (bare `pushTypeError`/`currentLoc`, so the span
--- names whichever declaration was inferred last).  Not a defaulting failure: every
--- member still reproduces with every numeric literal deleted.  Both halves of the
--- shape are pinned: `test/dict_fixtures/s6-drain-quiescence-inferred-scheme.mdk`
--- has the receiver quantified by an INFERRED scheme,
--- `test/dict_fixtures/s6-drain-quiescence-declared-scheme.mdk` by a WRITTEN one, so
--- a fix that closes one half and not the other goes red.
+-- What the population is.  Measured over the 1,482 `.mdk` files under
+-- `test/{dict,run_check_agreement,engine,parse,build_diff,construct}_fixtures`,
+-- `stdlib/` and `compiler/driver/medaka_cli.mdk`, it is one file:
+-- `stdlib/core.mdk` checked as an entry, whose drain reports `` `a` is used as an
+-- authority, but nothing binds it as one `` (and the same for `h`) at `1:0`.
+-- The dictionary members it once had are drained: a goal on a scheme-quantified
+-- variable gets no route from `routeUndeterminedTop`, in either its ambiguous arm
+-- (`reportAmbiguousImpl`) or its single-tag arm, which would otherwise mint the
+-- goal `Tweak Float` from the census tag of `support.mdk`'s two `Tweak Float _`
+-- impls.  Witnesses: `test/dict_fixtures/s6-drain-quiescence-*.mdk`.
 --
 -- DELETION CONDITION: this parameter goes away, and every caller takes one
--- behavior, when the population is EMPTY or every member of it is reported —
--- which, since the population is exactly #3031's output, means when #3031 is fixed
--- (it empties) or when the T4 census ruling #2665 asks for decides to report the
--- drain residual on a wider verb channel (it is reported).  Neither is this
--- parameter's own call, and neither has happened.
--- Re-derive the population before deciding — do not read the number below as
+-- behavior, when the population is EMPTY, i.e. when the `core.mdk` member is
+-- fixed.  Re-derive the population before deciding; do not read the list above as
 -- current.  How: build a second arm with `DrainRollback` mapped to
--- `drainStampQueue` and the drive's residual rendered as entry warnings, run both
+-- `drainStampQueue` and the drive's residual rendered as entry errors, run both
 -- arms over every `.mdk` under `test/` and `stdlib/` this compiler accepts, and
--- diff.  Measured that way on this tree, it is 3 of 2,704 accepted files (of 3,505
--- tracked) — `test/engine_fixtures/where_dict_forward.mdk`,
--- `test/parse_fixtures/blocks.mdk` and
--- `test/engine_fixtures/numlit_alias_predicates/support.mdk`.  Recorded in
--- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 17 (ONE graph driver),
--- #2705.
+-- diff.  Recorded in `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 17
+-- (ONE graph driver), #2705.
 data DrainDiags = DrainRollback | DrainKeep
 
 -- The drain, under the caller's choice of the bit above.
@@ -54233,12 +54340,8 @@ runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
 -- and do not arm the sticky gate here (`run`'s multi-module arm reads
 -- `hadTypeErrors` right after its check pass): the sticky cells are saved before
 -- the drain and restored after it.  On the elaborate side they stay live and `elaborateModules` returns them
--- as its residual.  They are not a verdict yet: measured over `test/` and
--- `stdlib/`, every one of them is #3031 — an `Ambiguous instance` the drain
--- manufactures on a receiver some scheme QUANTIFIES, at a stale location.  The
--- measurement, the file list and the deletion condition it bears on are on
--- `data DrainDiags`; whether and how these are reported is the T4 census ruling 1
--- asks for (#2705), not this driver's call.
+-- as its residual.  They are not a verdict yet: what the drain still raises on an
+-- accepted program, and the deletion condition it bears on, are on `data DrainDiags`.
 checkGraphFinish : Unit -> Unit
 checkGraphFinish _ =
   let savedSticky = !typeErrorsSticky

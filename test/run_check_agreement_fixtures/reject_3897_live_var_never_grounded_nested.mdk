@@ -1,0 +1,6 @@
+-- The prerequisite `Eq ?a` of `Eq (List ?a)` is on `xs`'s element variable, which
+-- nothing grounds: at quiescence it reaches every `Eq` instance with no stable
+-- minimum.  Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE.
+xs = identity []
+b = xs == []
+main = println (debug b)

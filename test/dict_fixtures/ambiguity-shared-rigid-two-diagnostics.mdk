@@ -1,0 +1,17 @@
+-- Control for `ambiguity-one-per-variable.mdk`: the two `conv x` goals are
+-- `Conv a ?b` and `Conv a ?c`.  They share only `a`, which `g`'s signature holds
+-- rigid; `?b` and `?c` are each undetermined, and `Conv Int String` and
+-- `Conv Int Bool` both reach each of them.  Annotating one leaves the other
+-- open, so a shared rigid variable is not a shared cause: two diagnostics.
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at 16:12 and 16:28.
+interface Conv a b where
+  conv : a -> b
+impl Conv Int String where
+  conv _ = "s"
+impl Conv Int Bool where
+  conv _ = True
+sink : b -> Int
+sink _ = 0
+g : a -> Int
+g x = sink (conv x) + sink (conv x)
+main = println (g (1 : Int))

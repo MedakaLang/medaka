@@ -1,0 +1,14 @@
+-- §3 determination of a one-position goal: `ignore2 zero` poses `Zero ?a` with
+-- `?a` owned by `main`, and the one instance `impl Zero Int` unifies with it, so
+-- `?a` is Int.  `ignore2` returns 5 for any argument.  Hand-derived: ACCEPT on
+-- all three verbs, `5`.
+interface Zero a where
+  zero : a
+
+impl Zero Int where
+  zero = 0
+
+ignore2 : a -> Int
+ignore2 _ = 5
+
+main = println (ignore2 zero)

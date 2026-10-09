@@ -71,8 +71,6 @@ import types.typecheck.{
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
   -- typechecker because S1's `nameable in M` operand does; see its own comment.
   importedStandaloneShadows,
-  -- #3027 / D3: T4's own warning code, defined beside `reportOverlapForIface`.
-  openGoalCommitWarnCode
 }
 -- #2738: the two colliding signatures are SURFACE types, and this is the one
 -- surface-type renderer in the tree (`tools/doc.mdk`'s `ppTyP` is private to the
@@ -2461,7 +2459,7 @@ export
 coherenceWarnCode : String
 coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 
--- These four warning codes are on the allowlist because they satisfy three
+-- These three warning codes are on the allowlist because they satisfy three
 -- measurements: (1) oracle properties and false-positive rates are bounded,
 -- (2) occurrence frequency is bounded (not graph-wide), and (3) render cost
 -- is bounded by collision/site count, not module-graph size. This list is
@@ -2477,7 +2475,6 @@ runBuildWarnCodes = [
   coherenceWarnCode,
   "W-PRELUDE-METHOD-SHADOW",
   "W-IMPORT-METHOD-SHADOW",
-  openGoalCommitWarnCode,
 ]
 
 export

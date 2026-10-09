@@ -48,5 +48,5 @@ main = println (c (Pair 1 2))
 -- `filter isDiagError diags`, so warnings are dropped whenever any error fired.
 -- Pre-existing, not caused or repaired here.
 -- ⚠️ The program is still REJECTED (exit 1) -- by the goal-site error, at the
--- CLOSED goal.  Its sibling with an OPEN goal now compiles; see
--- test/dict_fixtures/s6-2-t4-open-goal-deferred.mdk and #1183.
+-- CLOSED goal.  Its sibling with an OPEN goal is rejected the same way (R-SC3);
+-- see test/dict_fixtures/s6-2-t4-open-goal-deferred.mdk and #1183.

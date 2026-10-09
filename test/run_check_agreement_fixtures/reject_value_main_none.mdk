@@ -1,0 +1,7 @@
+-- A value `main` is printed through `Display`, so `main = None` poses
+-- `Display (Option ?a)`, whose instance requires `Display ?a`.  Nothing fixes `?a`
+-- and `Display` has many instances (DICT-SEMANTICS §6.2 "T4 implemented"; no
+-- value-main carve-out).  Hand-derived: REJECT on all three verbs,
+-- T-AMBIGUOUS-INSTANCE.  `test/engine_fixtures/main_value_none.mdk` is the
+-- annotated form every engine prints.
+main = None

@@ -1,0 +1,20 @@
+-- DICT-SEMANTICS §6.2 T2: a later group can ground an earlier group's type, so a
+-- goal on a variable in a non-generalized binding's type waits for quiescence
+-- (§6.2 "T4 implemented").
+-- A mutually recursive group reads `probe`, whose type `main`'s `probe && True`
+-- grounds to `Bool`.  Hand-derived: ACCEPT; `isEven 3` reaches `isOdd 0`, which
+-- is `False == False`, so `(True, False)`.
+interface Zero a where
+  zero : a
+impl Zero Int where
+  zero = 0
+impl Zero Bool where
+  zero = False
+
+isEven : Int -> Bool
+isEven n = if n == 0 then True else isOdd (n - 1)
+isOdd : Int -> Bool
+isOdd n = if n == 0 then probe == zero else isEven (n - 1)
+probe = identity zero
+
+main = println (debug (isEven 3, probe && True))

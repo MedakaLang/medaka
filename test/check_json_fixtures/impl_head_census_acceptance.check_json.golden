@@ -1,1 +1,1 @@
-{"files":[{"file":"<fixture>","diagnostics":[]}]}
+{"files":[{"file":"<fixture>","diagnostics":[{"code":"T-AMBIGUOUS-INSTANCE","kind":"type","message":"ambiguous instance for `Sz`: the type here does not determine which impl applies; add a type annotation","range":{"end":{"character":28,"line":62},"start":{"character":25,"line":62}},"severity":1,"source":"medaka"}]}]}

@@ -1,0 +1,25 @@
+-- §3 determination leaves a prerequisite open, and the verdict once every
+-- candidate is refuted.  `c (Box s)` poses `C (Box ?s)` and `S ?s`; the one
+-- instance `C (Box a)` poses the prerequisite `C ?s`, which is judged but never
+-- committed through, so `Box ?m` (whose `S (Box ?m)` no instance meets) is not
+-- chosen for it.  `S ?s`'s candidates `Bool` and `String` are each refuted by the
+-- closed `C Bool` / `C String`; with every candidate refuted the goal is counted
+-- by its candidates alone, two with no stable minimum.  `C ?s` keeps `Box ?m`
+-- alone (an open sibling refutes nothing), so it gets no verdict of its own.
+-- Hand-derived: REJECT on all three verbs, one T-AMBIGUOUS-INSTANCE, at the `s`
+-- occurrence (25:23), never a T-NO-IMPL for a `Box (Box a)` the program never had,
+-- and never accepted (an unrefuted run would print 11).
+interface C a where
+  c : a -> Int
+impl C Int where
+  c _ = 1
+data Box a = Box a
+impl C (Box a) requires C a where
+  c (Box x) = 10 + c x
+interface S a where
+  s : a
+impl S Bool where
+  s = True
+impl S String where
+  s = "x"
+main = println (c (Box s))

@@ -1,5 +1,5 @@
 # META
-source_lines=4503
+source_lines=4496
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -208,7 +208,6 @@ import types.typecheck.{
   ModDiags,
   mainTypeIsUnit,
   setStdlibOwnership,
-  openGoalCommitWarnCode,
 }
 import driver.main_autoprint.{
   shouldAsyncWrapMain,
@@ -988,11 +987,10 @@ resolveErrorJsonTriples ((file, errs) :: rest) =
 -- pass did not, so there is no located diagnostic to report instead.
 --
 -- NO KNOWN INPUT REACHES THIS ARM, so do not look for a fixture that covers it:
--- two reviewers failed to construct one, and none of the three files
--- `DrainDiags`'s own population comprises (see `DrainDiags` in
--- `compiler/types/typecheck.mdk`) arms the gate that would route here — one of
--- them runs to completion, and the other two have no `main`, so `run` rejects
--- them at `E-NO-MAIN` AFTER elaboration has already let them through.  It exists so
+-- two reviewers failed to construct one, and no member of `DrainDiags`' population
+-- (see `DrainDiags` in `compiler/types/typecheck.mdk`) arms the gate that would
+-- route here: that population is raised by the diagnostics drive's drain, and the
+-- trees drive `run` reads does not raise it.  It exists so
 -- the empty-residual case cannot exit 1 with an empty envelope, which is a shape the
 -- code must handle whether or not an input is known to produce it.  Documented in `compiler/DIAGNOSTIC-CODES-DESIGN.md`;
 -- `test/diag_census.sh` cannot see it, since that census enumerates codes that FIRE.
@@ -1735,19 +1733,14 @@ trimEntryTriple [(p, s, ds)] =
   [(p, s, filter (d => not (onTypecheckWarnChannel d)) ds)]
 trimEntryTriple (t :: rest) = t :: trimEntryTriple rest
 
--- #3027 / D3: `openGoalCommitWarnCode` is pushed the same way `coherenceWarnCode`
--- is (`pushMatchWarningOnceAt`, off the entry module's own diags), so the entry
--- report already prints it loc-free exactly as it does the coherence warning —
--- measured on a multi-module fixture with the T4 commitment in the entry module
--- itself. Added here for the same reason `coherenceWarnCode` is: without it,
--- `trimEntryTriple` would leave the code in the entry triple and `check` would
--- print it twice. `W-PRELUDE-METHOD-SHADOW` and `W-IMPORT-METHOD-SHADOW` are NOT
--- added — they are `analyzeProject`-side `Diag`s the entry report does not print
--- (see `trimEntryTriple`'s own comment), so this stays a two-literal test, not a
--- membership test over `runBuildWarnCodes`.
+-- `coherenceWarnCode` is pushed off the entry module's own diags, so the entry
+-- report already prints it; without this test `trimEntryTriple` would leave it in
+-- the entry triple and `check` would print it twice. `W-PRELUDE-METHOD-SHADOW` and
+-- `W-IMPORT-METHOD-SHADOW` are NOT included — they are `analyzeProject`-side
+-- `Diag`s the entry report does not print (see `trimEntryTriple`'s own comment), so
+-- this is a one-code test, not a membership test over `runBuildWarnCodes`.
 onTypecheckWarnChannel : Diag -> Bool
-onTypecheckWarnChannel (Diag _ c _ _ _ _) =
-  c == coherenceWarnCode || c == openGoalCommitWarnCode
+onTypecheckWarnChannel (Diag _ c _ _ _ _) = c == coherenceWarnCode
 
 tripleHasDiags : (String, String, List Diag) -> Bool
 tripleHasDiags (_, _, []) = False
@@ -4527,7 +4520,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedE" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false) (mem "availableModulesText" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProjectFull" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "hintResErrorPairs" false) (mem "stdlibExportsReader" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "Severity" true) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "asString" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false) (mem "openGoalCommitWarnCode" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAsyncWrapMain" false) (mem "asyncWrapModules" false) (mem "asyncMainShapeError" false) (mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false) (mem "runTestReport" false) (mem "runTestGradedReport" false) (mem "filterMatchedNothing" false) (mem "testHelpText" false) (mem "testArgSpec" false) (mem "parseTestEngines" false) (mem "parseTestCasesFlag" false) (mem "parseTestIntFlag" false) (mem "runTestOne" false) (mem "cliTestReportOk" false) (mem "cliTestReportJson" false) (mem "cliGradedTestReportOk" false) (mem "cliGradedTestReportJson" false) (mem "checkTestMdkRoster" false) (mem "testFilesGo" false) (mem "runEvalPropsWorker" false))))
@@ -4692,7 +4685,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "trimEntryTriple" ((PList (PTuple (PVar "p") (PVar "s") (PVar "ds")))) (EListLit (ETuple (EVar "p") (EVar "s") (EApp (EApp (EVar "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "onTypecheckWarnChannel") (EVar "d"))))) (EVar "ds")))))
 (DFunDef false "trimEntryTriple" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "trimEntryTriple") (EVar "rest"))))
 (DTypeSig false "onTypecheckWarnChannel" (TyFun (TyCon "Diag") (TyCon "Bool")))
-(DFunDef false "onTypecheckWarnChannel" ((PCon "Diag" PWild (PVar "c") PWild PWild PWild PWild)) (EBinOp "||" (EBinOp "==" (EVar "c") (EVar "coherenceWarnCode")) (EBinOp "==" (EVar "c") (EVar "openGoalCommitWarnCode"))))
+(DFunDef false "onTypecheckWarnChannel" ((PCon "Diag" PWild (PVar "c") PWild PWild PWild PWild)) (EBinOp "==" (EVar "c") (EVar "coherenceWarnCode")))
 (DTypeSig false "tripleHasDiags" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
 (DFunDef false "tripleHasDiags" ((PTuple PWild PWild (PList))) (EVar "False"))
 (DFunDef false "tripleHasDiags" (PWild) (EVar "True"))
@@ -5005,7 +4998,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" true) (mem "loadProgramFilesLocatedE" false) (mem "readSource" false) (mem "readSourceE" false) (mem "sourceNotUtf8Message" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false) (mem "availableModulesText" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProjectFull" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "hintResErrorPairs" false) (mem "stdlibExportsReader" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "Severity" true) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "mainShapeWarnings" false) (mem "mainEntryError" false) (mem "ppMainEntryError" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "asString" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false) (mem "openGoalCommitWarnCode" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAsyncWrapMain" false) (mem "asyncWrapModules" false) (mem "asyncMainShapeError" false) (mem "shouldAutoPrintMain" false) (mem "autoPrintWrapModules" false) (mem "autoPrintPinCore" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTest" false) (mem "runTestReport" false) (mem "runTestGradedReport" false) (mem "filterMatchedNothing" false) (mem "testHelpText" false) (mem "testArgSpec" false) (mem "parseTestEngines" false) (mem "parseTestCasesFlag" false) (mem "parseTestIntFlag" false) (mem "runTestOne" false) (mem "cliTestReportOk" false) (mem "cliTestReportJson" false) (mem "cliGradedTestReportOk" false) (mem "cliGradedTestReportJson" false) (mem "checkTestMdkRoster" false) (mem "testFilesGo" false) (mem "runEvalPropsWorker" false))))
@@ -5170,7 +5163,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "trimEntryTriple" ((PList (PTuple (PVar "p") (PVar "s") (PVar "ds")))) (EListLit (ETuple (EVar "p") (EVar "s") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EVar "onTypecheckWarnChannel") (EVar "d"))))) (EVar "ds")))))
 (DFunDef false "trimEntryTriple" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "trimEntryTriple") (EVar "rest"))))
 (DTypeSig false "onTypecheckWarnChannel" (TyFun (TyCon "Diag") (TyCon "Bool")))
-(DFunDef false "onTypecheckWarnChannel" ((PCon "Diag" PWild (PVar "c") PWild PWild PWild PWild)) (EBinOp "||" (EBinOp "==" (EVar "c") (EVar "coherenceWarnCode")) (EBinOp "==" (EVar "c") (EVar "openGoalCommitWarnCode"))))
+(DFunDef false "onTypecheckWarnChannel" ((PCon "Diag" PWild (PVar "c") PWild PWild PWild PWild)) (EBinOp "==" (EVar "c") (EVar "coherenceWarnCode")))
 (DTypeSig false "tripleHasDiags" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
 (DFunDef false "tripleHasDiags" ((PTuple PWild PWild (PList))) (EVar "False"))
 (DFunDef false "tripleHasDiags" (PWild) (EVar "True"))
