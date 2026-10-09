@@ -89,7 +89,10 @@ INLANG_SERIAL := $(filter 3.%,$(MAKE_VERSION))
 INLANG_JOBS ?= $(if $(INLANG_SERIAL),1,$(shell j=$$(( $(INLANG_CORES) / 2 )); [ $$j -ge 1 ] || j=1; echo $$j))
 INLANG_NESTED ?= $(shell n=$$(( $(INLANG_CORES) / $(INLANG_JOBS) )); [ $$n -ge 1 ] || n=1; echo $$n)
 INLANG_SYNC := $(if $(INLANG_SERIAL),,--output-sync=target)
-INLANG_STEPS := inlang-ported inlang-stdlib-suite-test inlang-types inlang-support-ordmap-test inlang-support-scc-test inlang-support-util-test inlang-ir-dce-test inlang-eval-eval-test inlang-backend-trmc-analysis-test inlang-backend-private-mangle-test inlang-backend-extern-catalog-test inlang-backend-core-validate-test inlang-backend-llvm-emit-tail-call-test inlang-backend-llvm-emit-tail-call-test-o2 inlang-tools-gate-cmd inlang-tools-gate-cmd-test inlang-tools-doc-test inlang-tools-check-policy-test inlang-tools-doctest-test inlang-tools-native-probe-printer-test inlang-tools-native-probe-tco-test inlang-tools-native-probe-tco-test-o2 inlang-driver-build-cmd-test inlang-tools-test-cmd-test inlang-tools-native-props-acceptance-test inlang-tools-native-props-policy-test inlang-tools-native-props-test inlang-tools-eval-props-test inlang-tools-prop-plan-test inlang-tools-test-pins-test inlang-tools-test-pins-io-test inlang-tools-test-pins-report-test inlang-tools-test-pins-report-io-test inlang-tools-snapshot-test inlang-tools-gate-registry inlang-compiler-cli-test-support inlang-tools-lint-baseline-test inlang-tools-lint-test inlang-tools-prop-runner-test inlang-regex-conformance-test inlang-frontend-resolve inlang-frontend-resolve-test inlang-gzip inlang-compiler-module-roster-test
+INLANG_MAKEFILE := $(lastword $(MAKEFILE_LIST))
+## The step list is READ from the `inlang-*` targets between the markers below,
+## so the targets are the one declaration (preflight reads the same span).
+INLANG_STEPS := $(shell awk '/^. inlang-steps: begin/{f=1;next} /^. inlang-steps: end/{exit} f&&/^inlang-[^ :]*:/{sub(/:.*/,""); print}' $(INLANG_MAKEFILE))
 
 
 ## test    — the IN-LANGUAGE suite: doctests, property tests, and `test "…"` decls,
@@ -106,7 +109,7 @@ INLANG_STEPS := inlang-ported inlang-stdlib-suite-test inlang-types inlang-suppo
 ##    its doctests inside a required check (`inlang` runs `make test`).  Add a
 ##    step below (an `inlang-*` target) for every call-site-free compiler module.
 test: medaka
-	MEDAKA_TEST_JOBS=$(INLANG_NESTED) $(MAKE) --no-print-directory -j$(INLANG_JOBS) $(INLANG_SYNC) inlang-steps
+	MEDAKA_TEST_JOBS=$(if $(MEDAKA_TEST_JOBS),$(MEDAKA_TEST_JOBS),$(INLANG_NESTED)) $(MAKE) -f $(INLANG_MAKEFILE) --no-print-directory -j$(INLANG_JOBS) $(INLANG_SYNC) inlang-steps
 
 .PHONY: inlang-steps $(INLANG_STEPS)
 inlang-steps: $(INLANG_STEPS)
@@ -203,7 +206,7 @@ inlang-backend-llvm-emit-tail-call-test-o2: | inlang-backend-llvm-emit-tail-call
 ## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 ## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 ## else runs this file's doctests — no gate script invokes `medaka test` on
-## compiler/tools/*, so without this line the fail-open coverage would be
+## compiler/tools/*, so without this step the fail-open coverage would be
 ## fixtures that never execute. It also picks up the isProsePath/underDir
 ## doctests already in the file, which were equally unrun.
 inlang-tools-gate-cmd:
@@ -213,7 +216,7 @@ inlang-tools-gate-cmd:
 ## sibling. It drives the native-grading clause's import-following rules
 ## (`gradeViolations`) over fixture module sources, and a `*_test.mdk` under
 ## compiler/ is outside every entry's import closure ([W-MODULE-BLIND]), so
-## without this line nothing walks it at all.
+## without this step nothing walks it at all.
 inlang-tools-gate-cmd-test:
 	./medaka test compiler/tools/gate_cmd_test.mdk
 
@@ -273,7 +276,7 @@ inlang-tools-snapshot-test:
 
 ## S-gate-registry (#2735): same reason, for gate_cmd.mdk's sibling. No
 ## gate script invokes `medaka test` on compiler/tools/gate_registry.mdk
-## either, so without this line its tierPartOf/modePartOf/globMatch/
+## either, so without this step its tierPartOf/modePartOf/globMatch/
 ## parseSelector doctests and its `prop` block (selector parsing, glob
 ## matching) would be fixtures that never execute.
 inlang-tools-gate-registry:
@@ -305,7 +308,7 @@ inlang-tools-lint-test:
 
 ## S-two-way-draws-are-random (#2344): compiler/tools/prop_runner_test.mdk
 ## is outside every entry's import closure ([W-MODULE-BLIND]), so without
-## this line its `rngNextLocal` distribution regression (both Bool values
+## this step its `rngNextLocal` distribution regression (both Bool values
 ## appear across a run of draws, not a fixed alternation) would be a
 ## fixture that never executes.
 inlang-tools-prop-runner-test:
@@ -314,7 +317,7 @@ inlang-tools-prop-runner-test:
 ## The regex conformance table beside stdlib/regex.mdk, whose expected
 ## spans, captures, replacements and split pieces come from the published
 ## Go regexp and RE2 test tables rather than from this engine. It is not
-## enrolled as a gate, so this line is the only thing that runs it.
+## enrolled as a gate, so this step is the only thing that runs it.
 ## (stdlib/regex.mdk's own doctests and props are a roster row in
 ## test/stdlib_suite_test.mdk above, not a line of their own.)
 inlang-regex-conformance-test:
@@ -324,13 +327,13 @@ inlang-regex-conformance-test:
 ## (the did-you-mean pool memo's once-per-Env discipline, #2800): the
 ## module's TYPES are checked on every build via the live pipeline's
 ## import closure, but nothing else runs `medaka test` on it, so
-## without this line the memo assertions would never execute.
+## without this step the memo assertions would never execute.
 inlang-frontend-resolve:
 	./medaka test compiler/frontend/resolve.mdk
 
 ## S-a-missing-companion-is-a-red-gate (#1685): compiler/frontend/
 ## resolve_test.mdk is a `*_test.mdk` sibling, outside every entry's
-## import closure ([W-MODULE-BLIND]), so without this line its
+## import closure ([W-MODULE-BLIND]), so without this step its
 ## structural `ModuleExports`/`reExp*From` companion census would never
 ## run. `--native`: parsing resolve.mdk's own live source needs
 ## `readFile`, an extern `medaka test`'s interpreter engine does
@@ -351,7 +354,7 @@ inlang-gzip:
 ## and `compiler/support/manifest.mdk` are outside every entry's import
 ## closure ([W-MODULE-BLIND]), and `test/probe_runner.mdk` carries its own
 ## doctests that no other gate runs. Six are `gzip/lib/*.mdk`, which the
-## `medaka test gzip` line above DOES run, but only as one exit code for
+## `medaka test gzip` step above DOES run, but only as one exit code for
 ## the whole directory; `--json` is refused on a directory target, so no
 ## per-module count is committed anywhere else. `--native` is for THIS
 ## module, not the ones it grades: it spawns a `medaka test` subprocess

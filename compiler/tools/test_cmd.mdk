@@ -968,8 +968,12 @@ driveAll engines runtimeDecls coreDecls rsrc csrc stdlibDir target tsrc roots ca
       file
       index
   | otherwise =
-    let gate = perfRow "test-gate" "single" (_ =>
-      if exempt then None else singleFileTypeErrors target tsrc rsrc csrc)
+    let gate =
+      if exempt then
+        None
+      else
+        perfRow "test-gate" "single" (_ =>
+          singleFileTypeErrors target tsrc rsrc csrc)
     match gate
       Some errText =>
         let _ = ePutStrLn (typecheckGateFail target errText)
@@ -4086,7 +4090,7 @@ testChildArgs engines cases filterOpt seedOpt f =
 -- process died). Each file runs `runTest` in its OWN child process — a
 -- panic in file 3 of 20 would abort the whole in-process loop, so files
 -- 4-20 print nothing (#2589 item 1). Spawning per file means a
--- dead file is contained to its own `runCommand` result: its stdout up to
+-- dead file is contained to its own child result: its stdout up to
 -- the crash still prints, it is named as died in the aggregate, and the walk
 -- continues. `envOr "MEDAKA" (executablePath ())` mirrors
 -- `native_doctest.mdk`'s spawn precedent but defaults to the RUNNING
@@ -4107,8 +4111,23 @@ testFilesGo _ _ _ _ _ _ _ [] acc = acc
 testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
   let argvs = map (testChildArgs engines cases filterOpt seedOpt) files
-  let results = runCommandBatch medaka testJobs argvs
-  testFilesReport files results acc
+  if testJobs <= 1 then
+    testFilesSerial medaka files argvs acc
+  else
+    testFilesReport files (runCommandBatch medaka testJobs argvs) acc
+
+-- One child at a time, each file's result printed as it completes, so a hang
+-- or kill part-way keeps the earlier files' output. A batch prints nothing
+-- until every file finishes.
+testFilesSerial : String ->
+  List String ->
+  List (List String) ->
+  Bool ->
+  <IO> Bool
+testFilesSerial medaka (f :: rest) (argv :: argvs) acc =
+  let failed = testFilesReport [f] [runCommand medaka argv] False
+  testFilesSerial medaka rest argvs (acc || failed)
+testFilesSerial _ _ _ acc = acc
 
 -- Prints each file's captured child result in input order, so a concurrent
 -- batch reads exactly like the serial walk it replaces.
