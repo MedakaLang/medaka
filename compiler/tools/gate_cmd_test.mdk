@@ -14,7 +14,12 @@
 -- fixture module sources rather than the tree: `gradeViolations` takes the
 -- import resolver as an argument, and these tests hand it a table.
 
-import test.{Expectation, expectEqual, expectTextContainsAll, expectTrue}
+import test.{
+  Expectation, expectEqual, expectErrContains, expectTextContainsAll, expectTrue
+}
+import tools.gate_cost.{
+  GateCost(..), OracleCost(..), parseCostBaseline, parseOracleCosts
+}
 import tools.gate_cmd.{
   ImportTarget(..), gradeViolations, duplicateBaselineKeyViolations,
   verifyClasses
@@ -477,3 +482,54 @@ test "gate list --json omits shares_baseline_with when unset" =
   expectTrue
     (not
       (contains "shares_baseline_with" (jsonOf [("a_shell", "test/a.sh", "")])))
+
+-- ── oracle build cost in the baseline (#2209) ───────────────────────────────
+
+oracleDoc : String -> String
+oracleDoc oracles =
+  "{\"schema\": \"gate-cost-baseline/1\", \"runs\": [], \"gates\": [{\"name\": \"g\", \"medianMs\": 5, \"samples\": 1, \"ms\": [5]}], \"oracles\": [\{oracles}]}"
+
+oracleRowSummary : OracleCost -> (String, Int, List Int, List Int)
+oracleRowSummary o = (o.row.name, o.row.medianMs, o.row.ms, o.jobs)
+
+oracleSummary : String -> Result String (List (String, Int, List Int, List Int))
+oracleSummary src = map (os => map oracleRowSummary os) (parseOracleCosts src)
+
+test "the reader parses oracles[] rows with their ms and JOBS" =
+  expectEqual
+    (Ok [("eval_main", 41000, [41000, 45000], [2, 4])])
+    (oracleSummary
+      (oracleDoc
+        "{\"name\": \"eval_main\", \"medianMs\": 41000, \"samples\": 2, \"ms\": [41000, 45000], \"sampleRuns\": [\"1\", \"2\"], \"jobs\": [2, 4]}"))
+
+test "an oracles[] row with no ms is rejected" =
+  expectErrContains
+    "oracles[0] 'eval_main': missing array field 'ms'"
+    (oracleSummary
+      (oracleDoc
+        "{\"name\": \"eval_main\", \"medianMs\": 1, \"samples\": 1, \"jobs\": [2]}"))
+
+test "an oracles[] row with a non-numeric ms is rejected" =
+  expectErrContains
+    "ms[0] is not an integer"
+    (oracleSummary
+      (oracleDoc
+        "{\"name\": \"eval_main\", \"medianMs\": 1, \"samples\": 1, \"ms\": [\"slow\"]}"))
+
+test "a baseline lacking oracles[] still parses, as no oracle rows" =
+  expectEqual
+    (Ok [])
+    (oracleSummary
+      "{\"schema\": \"gate-cost-baseline/1\", \"runs\": [], \"gates\": [{\"name\": \"g\", \"medianMs\": 5, \"samples\": 1, \"ms\": [5]}]}")
+
+gateRowName : GateCost -> String
+gateRowName g = g.name
+
+test "the gate reader still reads a baseline carrying oracles[]" =
+  expectEqual
+    (Ok ["g"])
+    (map
+      (gs => map gateRowName gs)
+      (parseCostBaseline
+        (oracleDoc
+          "{\"name\": \"o\", \"medianMs\": 1, \"samples\": 1, \"ms\": [1]}")))

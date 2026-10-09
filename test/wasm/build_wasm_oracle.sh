@@ -51,18 +51,29 @@ command -v clang >/dev/null 2>&1 || { echo "no clang — skipping (W2/W5 oracle 
 [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
 
 mkdir -p "$ROOT/test/bin"
+# Cold-build cost (#2209): each build appends one sample to ORACLE_TIMING_LOG when
+# set (see test/build_oracles.sh); a no-op otherwise.
+_ms() { # epoch ms; whole seconds where date has no %N (BSD/macOS)
+  _n=$(date +%s%N 2>/dev/null)
+  case "$_n" in ''|*[!0-9]*) echo $(( $(date +%s) * 1000 )) ;; *) echo $(( _n / 1000000 )) ;; esac
+}
+_build_timed() { # <entry> <out>
+  _t0=$(_ms)
+  "$MEDAKA" build --allow-internal "$1" -o "$2" || return 1
+  sh "$ROOT/test/build_oracles.sh" --record-sample "$(basename "$2")" "$(( $(_ms) - _t0 ))" "${JOBS:-1}"
+}
 # --allow-internal: the emitter entries pull in the compiler graph, which uses the
 # internal-only array-kernel externs (arrayGetUnsafe, …) — the same flag the LLVM
 # entry oracles pass in test/build_oracles.sh.
 if [ "$MODE" = all ]; then
-  "$MEDAKA" build --allow-internal "$ENTRY" -o "$OUT" || { echo "build failed for $ENTRY"; exit 1; }
+  _build_timed "$ENTRY" "$OUT" || { echo "build failed for $ENTRY"; exit 1; }
   echo "built $ENTRY -> $OUT"
 fi
 if [ "$MODE" = all ] || [ "$MODE" = typed ]; then
-  "$MEDAKA" build --allow-internal "$ENTRY_TYPED" -o "$OUT_TYPED" || { echo "build failed for $ENTRY_TYPED"; exit 1; }
+  _build_timed "$ENTRY_TYPED" "$OUT_TYPED" || { echo "build failed for $ENTRY_TYPED"; exit 1; }
   echo "built $ENTRY_TYPED -> $OUT_TYPED"
 fi
 if [ "$MODE" = all ] || [ "$MODE" = modules ]; then
-  "$MEDAKA" build --allow-internal "$ENTRY_MODULES" -o "$OUT_MODULES" || { echo "build failed for $ENTRY_MODULES"; exit 1; }
+  _build_timed "$ENTRY_MODULES" "$OUT_MODULES" || { echo "build failed for $ENTRY_MODULES"; exit 1; }
   echo "built $ENTRY_MODULES -> $OUT_MODULES"
 fi

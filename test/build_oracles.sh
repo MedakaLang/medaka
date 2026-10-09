@@ -71,6 +71,56 @@ MEDAKA="$ROOT/medaka"
 EMITTER="$ROOT/medaka_emitter"
 CC="${CC:-clang}"
 
+# ── Oracle build-cost record (#2209) ────────────────────────────────────────────
+# A COLD oracle build is setup cost a CI row pays before any gate runs. With
+# ORACLE_TIMING_LOG=<path> set, each cold build appends one `name<TAB>ms<TAB>JOBS`
+# line (a cache hit builds nothing, so records nothing); one `printf` per line keeps
+# concurrent xargs workers from interleaving. `--write-timing-report <out.json>`
+# wraps the log in an `oracle-cost/1` report with the same provenance block as
+# run_gates.sh's `gate-cost/1` (test/gate_cost_ingest.sh admits or refuses on it),
+# and writes nothing for an empty log or a narrowable pull_request run.
+_now_ms() {
+  _n=$(date +%s%N 2>/dev/null)
+  case "$_n" in
+    ''|*[!0-9]*) date +%s | awk '{ printf "%d\n", $1 * 1000 }' ;;
+    *)           echo $(( _n / 1000000 )) ;;
+  esac
+}
+_jstr() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
+if [ "${1:-}" = "--record-sample" ]; then
+  if [ -n "${ORACLE_TIMING_LOG:-}" ]; then
+    printf '%s\t%s\t%s\n' "$2" "$3" "${4:-${JOBS:-1}}" >>"$ORACLE_TIMING_LOG"
+  fi
+  exit 0
+fi
+
+if [ "${1:-}" = "--write-timing-report" ]; then
+  out="$2"
+  _ev="${GITHUB_EVENT_NAME:-local}"
+  case "$_ev" in pull_request|pull_request_target) exit 0 ;; esac
+  [ -s "${ORACLE_TIMING_LOG:-}" ] || exit 0
+  {
+    echo '{'
+    printf '  "schema": "oracle-cost/1",\n'
+    printf '  "provenance": {\n'
+    printf '    "event": "%s",\n'      "$(_jstr "$_ev")"
+    printf '    "shard": "%s",\n'      "$(_jstr "${GATE_TIMING_SHARD:-local}")"
+    printf '    "runId": "%s",\n'      "$(_jstr "${GITHUB_RUN_ID:-}")"
+    printf '    "runAttempt": "%s",\n' "$(_jstr "${GITHUB_RUN_ATTEMPT:-}")"
+    printf '    "repo": "%s",\n'       "$(_jstr "${GITHUB_REPOSITORY:-}")"
+    printf '    "ref": "%s",\n'        "$(_jstr "${GITHUB_REF:-}")"
+    printf '    "sha": "%s",\n'        "$(_jstr "${GITHUB_SHA:-}")"
+    printf '    "date": "%s"\n'        "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  },\n'
+    printf '  "oracles": [\n'
+    awk -F '\t' '{ printf "%s    {\"name\": \"%s\", \"ms\": %s, \"jobs\": %s}", (NR > 1 ? ",\n" : ""), $1, $2, $3 }' "$ORACLE_TIMING_LOG"
+    printf '\n  ]\n}\n'
+  } >"$out"
+  echo "build_oracles: oracle cost report -> $out ($(wc -l <"$ORACLE_TIMING_LOG" | tr -d ' ') cold build(s))"
+  exit 0
+fi
+
 # ── Parallel worker mode ───────────────────────────────────────────────────────
 # The script re-invokes itself as `sh "$0" --build-one <entry>` under an xargs -P
 # pool (see the main loop). Each build is collision-free: the emitter reads shared
@@ -88,6 +138,7 @@ if [ "${1:-}" = "--build-one" ]; then
   # Reported by two separate agents who each lost time to it.
   mkdir -p "$BINDIR"
   printf 'building    %s ...\n' "$e"
+  _t0=$(_now_ms)
   # The two profilers are read by test/diff_compiler_stage_ir_scaling.sh through
   # Callgrind's per-symbol attribution, so valgrind must be able to read their symbol
   # tables. valgrind 3.22 (CI's Ubuntu) reads none from some lld ThinLTO layouts and
@@ -105,6 +156,7 @@ if [ "${1:-}" = "--build-one" ]; then
   fi
   [ -x "$out" ] || { echo "FAIL: $e build produced no binary" >&2; tail -8 "$BINDIR/$e.buildlog" >&2; exit 1; }
   rm -f "$BINDIR/$e.buildlog"
+  sh "$0" --record-sample "$e" "$(( $(_now_ms) - _t0 ))" "${JOBS:-1}"
   printf 'built       %s\n' "$e"
   exit 0
 fi
@@ -598,6 +650,7 @@ fi
 # Default concurrency = logical CPU count (override with JOBS=n). Each build is a
 # self-reinvocation (`sh "$0" --build-one <e>`); xargs exits non-zero if any fails.
 JOBS="${JOBS:-$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
+export JOBS
 built=0
 rc=0
 if [ -n "$worklist" ]; then

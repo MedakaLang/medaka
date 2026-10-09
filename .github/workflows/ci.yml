@@ -1192,6 +1192,8 @@ jobs:
       # would otherwise defeat build_oracles.sh's own staleness check).
       - name: Build the oracles this shard needs
         if: steps.plan.outputs.has_work == 'true' && steps.oracle-cache.outputs.cache-hit != 'true'
+        env:
+          ORACLE_TIMING_LOG: ${{ runner.temp }}/oracle-samples-${{ matrix.name }}.tsv
         run: FORCE=1 sh test/build_oracles.sh --for ${{ steps.plan.outputs.pats }}
 
       # build_oracles.sh does not build the wasm emitter oracles (#597) — this
@@ -1202,9 +1204,21 @@ jobs:
       # the medaka cache above already keys.
       - name: Build the wasm emitter oracle (wasm arm)
         if: steps.plan.outputs.has_work == 'true' && matrix.wasm_arm != ''
+        env:
+          ORACLE_TIMING_LOG: ${{ runner.temp }}/oracle-samples-${{ matrix.name }}.tsv
         run: |
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
           sh test/wasm/build_wasm_oracle.sh --modules-only
+
+      # Setup cost as recorded data (#2209): the cold builds above, wrapped as an
+      # `oracle-cost/1` report beside the gate timings. Writes nothing on a cache
+      # hit (no samples) or on a pull_request (narrowable, like run_gates.sh).
+      - name: Write this shard's oracle build timings
+        if: ${{ always() && steps.plan.outputs.has_work == 'true' }}
+        env:
+          ORACLE_TIMING_LOG: ${{ runner.temp }}/oracle-samples-${{ matrix.name }}.tsv
+          GATE_TIMING_SHARD: ${{ matrix.name }}
+        run: sh test/build_oracles.sh --write-timing-report "$RUNNER_TEMP/oracle-timings-${{ matrix.name }}.json"
 
       # Runs the CONCRETE gate list `plan` resolved (never a glob) — the shard's
       # whole pattern on merge_group/push, the diff intersection on a narrowed
@@ -1312,7 +1326,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gate-timings-${{ matrix.name }}
-          path: ${{ runner.temp }}/gate-timings-${{ matrix.name }}.json
+          path: |
+            ${{ runner.temp }}/gate-timings-${{ matrix.name }}.json
+            ${{ runner.temp }}/oracle-timings-${{ matrix.name }}.json
           retention-days: 30
           if-no-files-found: ignore
 
