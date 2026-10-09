@@ -1,5 +1,5 @@
 # META
-source_lines=4162
+source_lines=4180
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
@@ -4114,11 +4114,29 @@ testFilesGo : List Engine ->
 testFilesGo _ _ _ _ _ _ _ [] acc = acc
 testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
-  let argvs = map (testChildArgs engines cases filterOpt seedOpt) files
-  if testJobs <= 1 then
-    testFilesSerial medaka files argvs acc
+  let childArgvs = map (testChildArgs engines cases filterOpt seedOpt) files
+  let jobs = testJobs
+  let prefix = childJobsPrefix (isSome (getEnv "MEDAKA_TEST_JOBS")) jobs jobs
+  let program = if prefix == [] then medaka else "env"
+  let argvs =
+    if prefix == [] then
+      childArgvs
+    else
+      map (prefix ++ [medaka] ++ _) childArgvs
+  if jobs <= 1 then
+    testFilesSerial program files argvs acc
   else
-    testFilesReport files (runCommandBatch medaka testJobs argvs) acc
+    testFilesReport files (runCommandBatch program jobs argvs) acc
+
+-- The `env` assignment that splits the core budget between `outer` concurrent
+-- children and what each child fans out to itself. An explicit
+-- MEDAKA_TEST_JOBS is inherited untouched; unset, a child would otherwise
+-- default to every core and `outer` of them would multiply it.
+export
+childJobsPrefix : Bool -> Int -> Int -> List String
+childJobsPrefix True _ _ = []
+childJobsPrefix False outer budget =
+  ["MEDAKA_TEST_JOBS=\{intToString (max 1 (budget / max 1 outer))}"]
 
 -- One child at a time, each file's result printed as it completes, so a hang
 -- or kill part-way keeps the earlier files' output. A batch prints nothing
@@ -4768,7 +4786,10 @@ testFilesReport _ _ acc = acc
 (DFunDef false "testChildArgs" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "f")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test")) (EVar "f") (ELit (LString "--engines")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EVar "map") (EVar "engineName")) (EVar "engines"))) (ELit (LString "--cases")) (EApp (EVar "intToString") (EVar "cases"))) (EMatch (EVar "filterOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--filter")) (EVar "s"))) (arm (PCon "None") () (EListLit)))) (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--seed")) (EApp (EVar "intToString") (EVar "s")))) (arm (PCon "None") () (EListLit)))))
 (DTypeSig true "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))))))))))
 (DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "testFilesGo" ((PVar "engines") PWild PWild PWild (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "files") (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "argvs") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt"))) (EVar "files"))) (DoExpr (EIf (EBinOp "<=" (EVar "testJobs") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "testFilesSerial") (EVar "medaka")) (EVar "files")) (EVar "argvs")) (EVar "acc")) (EApp (EApp (EApp (EVar "testFilesReport") (EVar "files")) (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "medaka")) (EVar "testJobs")) (EVar "argvs"))) (EVar "acc"))))))
+(DFunDef false "testFilesGo" ((PVar "engines") PWild PWild PWild (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "files") (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "childArgvs") (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt"))) (EVar "files"))) (DoLet false false (PVar "jobs") (EVar "testJobs")) (DoLet false false (PVar "prefix") (EApp (EApp (EApp (EVar "childJobsPrefix") (EApp (EVar "isSome") (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))))) (EVar "jobs")) (EVar "jobs"))) (DoLet false false (PVar "program") (EIf (EBinOp "==" (EVar "prefix") (EListLit)) (EVar "medaka") (ELit (LString "env")))) (DoLet false false (PVar "argvs") (EIf (EBinOp "==" (EVar "prefix") (EListLit)) (EVar "childArgvs") (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "++" (EBinOp "++" (EVar "prefix") (EListLit (EVar "medaka"))) (EVar "_s")))) (EVar "childArgvs")))) (DoExpr (EIf (EBinOp "<=" (EVar "jobs") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "testFilesSerial") (EVar "program")) (EVar "files")) (EVar "argvs")) (EVar "acc")) (EApp (EApp (EApp (EVar "testFilesReport") (EVar "files")) (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "program")) (EVar "jobs")) (EVar "argvs"))) (EVar "acc"))))))
+(DTypeSig true "childJobsPrefix" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "childJobsPrefix" ((PCon "True") PWild PWild) (EListLit))
+(DFunDef false "childJobsPrefix" ((PCon "False") (PVar "outer") (PVar "budget")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_TEST_JOBS=")) (EApp (EVar "display") (EApp (EVar "intToString") (EApp (EApp (EVar "max") (ELit (LInt 1))) (EBinOp "/" (EVar "budget") (EApp (EApp (EVar "max") (ELit (LInt 1))) (EVar "outer"))))))) (ELit (LString "")))))
 (DTypeSig false "testFilesSerial" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool")))))))
 (DFunDef false "testFilesSerial" ((PVar "medaka") (PCons (PVar "f") (PVar "rest")) (PCons (PVar "argv") (PVar "argvs")) (PVar "acc")) (EBlock (DoLet false false (PVar "failed") (EApp (EApp (EApp (EVar "testFilesReport") (EListLit (EVar "f"))) (EListLit (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")))) (EVar "False"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "testFilesSerial") (EVar "medaka")) (EVar "rest")) (EVar "argvs")) (EBinOp "||" (EVar "acc") (EVar "failed"))))))
 (DFunDef false "testFilesSerial" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
@@ -5379,7 +5400,10 @@ testFilesReport _ _ acc = acc
 (DFunDef false "testChildArgs" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "f")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test")) (EVar "f") (ELit (LString "--engines")) (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EApp (EApp (EMethodRef "map") (EVar "engineName")) (EVar "engines"))) (ELit (LString "--cases")) (EApp (EVar "intToString") (EVar "cases"))) (EMatch (EVar "filterOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--filter")) (EVar "s"))) (arm (PCon "None") () (EListLit)))) (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EListLit (ELit (LString "--seed")) (EApp (EVar "intToString") (EVar "s")))) (arm (PCon "None") () (EListLit)))))
 (DTypeSig true "testFilesGo" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool"))))))))))))
 (DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "testFilesGo" ((PVar "engines") PWild PWild PWild (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "files") (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "argvs") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt"))) (EVar "files"))) (DoExpr (EIf (EBinOp "<=" (EVar "testJobs") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "testFilesSerial") (EVar "medaka")) (EVar "files")) (EVar "argvs")) (EVar "acc")) (EApp (EApp (EApp (EVar "testFilesReport") (EVar "files")) (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "medaka")) (EVar "testJobs")) (EVar "argvs"))) (EVar "acc"))))))
+(DFunDef false "testFilesGo" ((PVar "engines") PWild PWild PWild (PVar "cases") (PVar "filterOpt") (PVar "seedOpt") (PVar "files") (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "childArgvs") (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "seedOpt"))) (EVar "files"))) (DoLet false false (PVar "jobs") (EVar "testJobs")) (DoLet false false (PVar "prefix") (EApp (EApp (EApp (EVar "childJobsPrefix") (EApp (EVar "isSome") (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))))) (EVar "jobs")) (EVar "jobs"))) (DoLet false false (PVar "program") (EIf (EBinOp "==" (EVar "prefix") (EListLit)) (EVar "medaka") (ELit (LString "env")))) (DoLet false false (PVar "argvs") (EIf (EBinOp "==" (EVar "prefix") (EListLit)) (EVar "childArgvs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "++" (EBinOp "++" (EVar "prefix") (EListLit (EVar "medaka"))) (EVar "_s")))) (EVar "childArgvs")))) (DoExpr (EIf (EBinOp "<=" (EVar "jobs") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "testFilesSerial") (EVar "program")) (EVar "files")) (EVar "argvs")) (EVar "acc")) (EApp (EApp (EApp (EVar "testFilesReport") (EVar "files")) (EApp (EApp (EApp (EVar "runCommandBatch") (EVar "program")) (EVar "jobs")) (EVar "argvs"))) (EVar "acc"))))))
+(DTypeSig true "childJobsPrefix" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "childJobsPrefix" ((PCon "True") PWild PWild) (EListLit))
+(DFunDef false "childJobsPrefix" ((PCon "False") (PVar "outer") (PVar "budget")) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "MEDAKA_TEST_JOBS=")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EBinOp "/" (EVar "budget") (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EVar "outer"))))))) (ELit (LString "")))))
 (DTypeSig false "testFilesSerial" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "Bool") (TyEffect ("IO") None (TyCon "Bool")))))))
 (DFunDef false "testFilesSerial" ((PVar "medaka") (PCons (PVar "f") (PVar "rest")) (PCons (PVar "argv") (PVar "argvs")) (PVar "acc")) (EBlock (DoLet false false (PVar "failed") (EApp (EApp (EApp (EVar "testFilesReport") (EListLit (EVar "f"))) (EListLit (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "argv")))) (EVar "False"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "testFilesSerial") (EVar "medaka")) (EVar "rest")) (EVar "argvs")) (EBinOp "||" (EVar "acc") (EVar "failed"))))))
 (DFunDef false "testFilesSerial" (PWild PWild PWild (PVar "acc")) (EVar "acc"))

@@ -5,7 +5,7 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import tools.doctest.{Engine(..)}
-import tools.test_cmd.{treesUnread}
+import tools.test_cmd.{treesUnread, childJobsPrefix}
 import io.{runVerb}
 import string.{contains, indexOf}
 import test.{
@@ -111,5 +111,38 @@ test "a slow first file still prints first under concurrent jobs" = withScratchD
         expectEqual e1 e4,
         expectTrue (appearsBefore "slow one" "fast two" o4),
         expectTrue (appearsBefore "fast two" "fast three" o4),
+      ]
+      _ => fail "could not spawn medaka test")
+
+test "children of an unset budget split the cores with the outer fan-out" = expectAll
+  [
+    expectEqual ["MEDAKA_TEST_JOBS=2"] (childJobsPrefix False 2 4),
+    expectEqual ["MEDAKA_TEST_JOBS=1"] (childJobsPrefix False 4 4),
+    expectEqual ["MEDAKA_TEST_JOBS=1"] (childJobsPrefix False 8 4),
+    expectEqual ["MEDAKA_TEST_JOBS=1"] (childJobsPrefix False 1 1),
+  ]
+
+test "an explicit MEDAKA_TEST_JOBS is left for the children to inherit" =
+  expectEqual [] (childJobsPrefix True 2 4)
+
+dirWithKnobProbe : String -> <FileWrite> Result String Unit
+dirWithKnobProbe dir =
+  writeFile
+    "\{dir}/a_knob_test.mdk"
+    "import test.{expectEqual}\n\ntest \"knob\" = expectEqual (getEnv \"MEDAKA_TEST_JOBS\") (Some \"1\")\n"
+
+-- With the knob unset the per-file child sees a divided budget (cores / outer
+-- jobs, here the outer jobs being every core, so 1); with it set to 3 the
+-- child sees 3, so the same probe fails.
+test "a directory run hands each child the divided budget when the knob is unset" = withScratchDir
+  (dir => match dirWithKnobProbe dir
+    Err e => fail e
+    Ok () => match (
+      runVerb "env" ["-u", "MEDAKA_TEST_JOBS", medakaBin, "test", dir],
+      runVerb "env" ["MEDAKA_TEST_JOBS=3", medakaBin, "test", dir],
+    )
+      (Ok (cu, _, _), Ok (cs, _, _)) => expectAll [
+        expectEqual 0 cu,
+        expectNotEqual 0 cs,
       ]
       _ => fail "could not spawn medaka test")
