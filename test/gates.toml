@@ -297,7 +297,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "lsp_harness"
 area = "tools"
-shard = "gates_6"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -814,7 +814,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/secp256k1_public_key"
 area = "engines"
-shard = "gates_6"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -999,7 +999,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/overflow_oracle"
 area = "engines"
-shard = "gates_7"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1363,16 +1363,16 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_capability_matrix"
 area = "infra"
-shard = "gates_3"
+shard = "gates_6"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_capability_matrix.sh"
+kind = "native"
+migration = "done"
+run = "compiler/backend/extern_catalog_gate_test.mdk"
 oracles = []
-sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "test/diff_compiler_capability_matrix.sh"]
-corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
+sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "stdlib/runtime.mdk", "test/EXTERN-DOMAIN-LEDGER.txt"]
+corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed", "test/engine_value_pins"]
 toolchain = []
 
 
@@ -1409,7 +1409,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_check_policy"
 area = "types"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1668,7 +1668,7 @@ toolchain = ["wasm-tools", "node>=24", "clang"]
 [[gate]]
 name = "diff_compiler_eval_json"
 area = "eval"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2107,7 +2107,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_mcp"
 area = "tools"
-shard = "gates_7"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2130,7 +2130,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_os_entropy_test.mdk"
 oracles = []
-sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c", "test/CAPABILITY-EXCEPTIONS.txt"]
+sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c"]
 corpus = ["test/os_entropy_fixtures"]
 toolchain = ["clang"]
 
@@ -2610,7 +2610,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_native_stack"
 area = "infra"
-shard = "gates_6"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2685,7 +2685,7 @@ toolchain = []
 [[gate]]
 name = "effect_product_domain"
 area = "infra"
-shard = "gates_6"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3005,7 +3005,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm_ffi_wall.sh"
 oracles = []
-sources = []
+sources = ["compiler/backend/core_validate.mdk", "compiler/backend/extern_catalog.mdk", "compiler/backend/wasm_emit.mdk"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
@@ -3035,7 +3035,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm_typed.sh"
 oracles = []
-sources = []
+sources = ["compiler/backend/wasm_emit.mdk"]
 corpus = ["test/llvm_fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
 

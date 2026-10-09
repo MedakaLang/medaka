@@ -42,6 +42,7 @@ import driver.loader.{
   unknownModuleIdOf,
 }
 import backend.private_mangle.{mangleUnitsEv}
+import ir.core_ir_lower.{externDeclNamesOf}
 import driver.main_autoprint.{
   shouldAutoPrintMain,
   autoPrintWrapModules,
@@ -506,6 +507,12 @@ driveParseSources render = match args ()
       Err msg => failWith msg
       Ok v => v
   _ => failWith usageRuntime
+
+-- The extern names `stdlib/runtime.mdk` declares, for the emitters' extern
+-- check (`withRuntimeExterns`, `withRuntimeExternsW`).
+export
+runtimeExternNames : List Decl -> List String
+runtimeExternNames decls = externDeclNamesOf decls
 
 -- ── trap-site files ──────────────────────────────────────────────────────────
 -- The emit drivers' trap sites name their file.  [mods] is the loader's

@@ -258,8 +258,11 @@ for required in \
     exit 1
   }
 done
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useEPut True' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
-  echo "FAIL H2B9-EPUT-WRITERS: expected panic and ePut scan writers"
+# Which externs demand EPut (the abort externs and the stderr writers), and what it implies, is catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useEPut True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
+  has_wasm_pin 'noteWasmUse emit UseEPut = setRef emit.useEPut True' || {
+  echo "FAIL H2B9-EPUT-WRITERS: expected one writer, the catalog demand's"
   exit 1
 }
 if grep -E '^_?useDivGuardRef[[:space:]]*[:=]|setRef (_?useDivGuardRef)' "$WASM_SRC" >/dev/null; then
@@ -338,11 +341,10 @@ for required in \
   'useRng = Ref' \
   'useHash : Ref Bool' \
   'useHash = Ref' \
-  'noteW8Extern emit name =' \
-  'setRef emit.useRng True' \
-  'setRef emit.useHash True' \
-  '|| !emit.useRng || !emit.useHash || !emit.useFloat' \
-  'setRef emit.useFloatRng True in setRef emit.useRng True'; do
+  'noteW8Extern emit name = forEachU (u => noteWasmUse emit u) (wasmUses name)' \
+  'noteWasmUse emit UseRng = setRef emit.useRng True' \
+  'noteWasmUse emit UseHash = setRef emit.useHash True' \
+  '|| !emit.useRng || !emit.useHash || !emit.useFloat'; do
   has_wasm_pin "$required" || {
     echo "FAIL H2B9-RNG-HASH-AUTHORITY: missing $required"
     exit 1
@@ -384,7 +386,9 @@ for required in \
     exit 1
   }
 done
-has_wasm_pin 'then let _ = setRef emit.useIO True in let _ = setRef emit.useArray True in let _ = setRef emit.useStr True in setRef emit.useFileBytes True' &&
+# Which externs demand FileBytes, and what it implies, is catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
+has_wasm_pin 'noteWasmUse emit UseFileBytes = setRef emit.useFileBytes True' &&
   has_wasm_pin '++ (if (progEmit prog).useFileBytes.value then fileBytesHostImportLines else [])' &&
   has_wasm_pin 'let fileBytesRt = if (progEmit prog).useFileBytes.value then fileBytesRuntimeLines else []' &&
   ! grep -E 'setRef emit\.useFileBytes False|setRef useFileBytesRef False' "$WASM_SRC" >/dev/null || {
@@ -439,7 +443,9 @@ for required in \
     exit 1
   }
 done
-has_wasm_pin 'if name == "args" then setRef emit.useArgs True' &&
+# Which externs demand Args, and what it implies, is catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
+has_wasm_pin 'noteWasmUse emit UseArgs = setRef emit.useArgs True' &&
   has_wasm_pin 'let ioArgsRt = if (progEmit prog).useArgs.value then ioArgsRuntimeLines else []' &&
   ! grep -E 'setRef emit\.useArgs False|setRef useArgsRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL A3-ARGS-ROUTES: writer, drain, or reset changed"
@@ -482,7 +488,9 @@ for required in \
     exit 1
   }
 done
-has_wasm_pin 'then let _ = setRef emit.useFloatStr True in let _ = setRef emit.useFloat True in let _ = setRef emit.useStr True in setRef emit.useIO True' &&
+# Which externs demand FloatStr, and what it implies, is catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
+has_wasm_pin 'noteWasmUse emit UseFloatStr = setRef emit.useFloatStr True' &&
   has_wasm_pin '++ (if (progEmit prog).useFloatStr.value then floatStrImportLines else [])' &&
   has_wasm_pin 'let floatStrRt = if (progEmit prog).useFloatStr.value then floatStrRuntimeLines else []' &&
   ! grep -E 'setRef emit\.useFloatStr False|setRef useFloatStrRef False' "$WASM_SRC" >/dev/null || {
@@ -532,7 +540,9 @@ for required in \
     exit 1
   }
 done
-has_wasm_pin 'then setRef emit.useCharClass True' &&
+# Which externs demand CharClass, and what it implies, is catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
+has_wasm_pin 'noteWasmUse emit UseCharClass = setRef emit.useCharClass True' &&
   has_wasm_pin '|| !emit.useCharClass || !emit.useIO' &&
   has_wasm_pin 'let charClassRt = if (progEmit prog).useCharClass.value then charClassRuntimeLines else []' &&
   ! grep -E 'setRef emit\.useCharClass False|setRef useCharClassRef False' "$WASM_SRC" >/dev/null || {
@@ -559,7 +569,9 @@ for required in \
     exit 1
   }
 done
-has_wasm_pin 'then let _ = setRef emit.useFloatRng True in setRef emit.useRng True' &&
+# Which externs demand FloatRng, and what it implies, is catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
+has_wasm_pin 'noteWasmUse emit UseFloatRng = setRef emit.useFloatRng True' &&
   ! grep -E 'setRef emit\.useFloatRng False|setRef useFloatRngRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-FLOATRNG-ROUTES: writer, operational read, or reset changed"
     exit 1
@@ -583,15 +595,14 @@ for required in \
     exit 1
   }
 done
-has_wasm_pin 'let _ = if contains name ["stringToChars", "stringFromChars"]' &&
-  has_wasm_pin 'then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in let _ = setRef emit.useArray True in setRef emit.useStrLeaf True' &&
-  has_wasm_pin 'let _ = if contains name ["stringToUtf8Bytes", "stringFromUtf8Bytes"]' &&
-  has_wasm_pin 'then let _ = setRef emit.useStrCodec True in let _ = setRef emit.useStr True in setRef emit.useArray True' &&
+# Which externs demand StrCodec, and what it implies, is catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
+has_wasm_pin 'noteWasmUse emit UseStrCodec = setRef emit.useStrCodec True' &&
   ! grep -E 'setRef emit\.useStrCodec False|setRef useStrCodecRef False' "$WASM_SRC" >/dev/null || {
     echo "FAIL H2B-LR-STRCODEC-ROUTES: producers, cofactors, or reset changed"
     exit 1
   }
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useStrCodec True' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'setRef emit.useStrCodec True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F '(progEmit prog).useStrCodec.value' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   has_wasm_pin 'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let emit = freshWasmEmit WGapRecord' | wc -l | tr -d '[:space:]')" -eq 2 ] || {
@@ -638,38 +649,20 @@ for required in \
     exit 1
   }
 done
-EXPECTED_MATH_HOST_NAMES="$(printf '%s\n' \
-  acos asin atan atan2 cbrt cos cosh exp hypot log log10 log2 pow sin sinh tan tanh | LC_ALL=C sort)"
-ACTUAL_MATH_HOST_NAMES="$(awk '
-  /^isMathHostExternW name = contains( name \[)?$/ { in_math_host = 1; next }
-  in_math_host {
-    if ($0 ~ /^ *\]$/) exit
-    while (match($0, /"[^"]+"/)) {
-      print substr($0, RSTART + 1, RLENGTH - 2)
-      $0 = substr($0, RSTART + RLENGTH)
-    }
-  }
-' "$WASM_SRC" | LC_ALL=C sort -u)"
-[ "$ACTUAL_MATH_HOST_NAMES" = "$EXPECTED_MATH_HOST_NAMES" ] || {
-  echo "FAIL H2B-LR-MATH-PREDICATE: Math host-extern name set changed"
-  exit 1
-}
-MATH_FLOAT_COFACTOR_LINE="$(grep -n -F 'let _ = if isFloatMathExternW name then setRef emit.useFloat True' "$WASM_SRC" | cut -d: -f1)"
-MATH_WRITER_LINE="$(grep -n -F 'let _ = if isMathHostExternW name then setRef emit.useMath True' "$WASM_SRC" | cut -d: -f1)"
+# The Math host-import name set (the 17 libm externs lowered to a JS Math.* import)
+# and its Float cofactor are catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
 MATH_IMPORT_LINE="$(grep -n -F 'mathHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 FLOAT_IMPORT_LINE="$(grep -n -F 'floatFmtImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 FLOATSTR_IMPORT_LINE="$(grep -n -F 'floatStrImportLines else []' "$WASM_SRC" | cut -d: -f1)"
-[ -n "$MATH_FLOAT_COFACTOR_LINE" ] &&
-  [ -n "$MATH_WRITER_LINE" ] &&
+has_wasm_pin 'noteWasmUse emit UseMath = setRef emit.useMath True' &&
+  has_wasm_pin 'noteWasmUse emit UseFloat = setRef emit.useFloat True' &&
   [ -n "$MATH_IMPORT_LINE" ] &&
   [ -n "$FLOAT_IMPORT_LINE" ] &&
   [ -n "$FLOATSTR_IMPORT_LINE" ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = if isFloatMathExternW name then setRef emit.useFloat True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'let _ = if isMathHostExternW name then setRef emit.useMath True' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'mathHostImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'floatFmtImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
   [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'floatStrImportLines else []' | wc -l | tr -d '[:space:]')" -eq 1 ] &&
-  [ "$MATH_FLOAT_COFACTOR_LINE" -lt "$MATH_WRITER_LINE" ] &&
   [ "$FLOAT_IMPORT_LINE" -lt "$MATH_IMPORT_LINE" ] &&
   [ "$MATH_IMPORT_LINE" -lt "$FLOATSTR_IMPORT_LINE" ] &&
   ! grep -E 'setRef emit\.useMath False|setRef useMathRef False' "$WASM_SRC" >/dev/null || {
@@ -697,7 +690,9 @@ for required in \
     exit 1
   }
 done
-has_wasm_pin 'let _ = if name == "charFromCode" then setRef emit.useCharFromCode True' &&
+# Which externs demand CharFromCode, and what it implies, is catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
+has_wasm_pin 'noteWasmUse emit UseCharFromCode = setRef emit.useCharFromCode True' &&
   has_wasm_pin 'let charFromCodeRt = if (progEmit prog).useCharFromCode.value then ' &&
   ! grep -E 'setRef emit\.useCharFromCode False|setRef useCharFromCodeRef False' "$WASM_SRC" >/dev/null || {
   echo "FAIL H2B11-CHAR-FROM-CODE-ROUTES: writer, reader, or retired reset changed"
@@ -727,7 +722,9 @@ for required in \
     exit 1
   }
 done
-has_wasm_pin 'let _ = if name == "hashFloat" then let _ = setRef emit.useFloatHash True in setRef emit.useHash True' &&
+# Which externs demand FloatHash, and what it implies, is catalog data, asserted in
+# compiler/backend/extern_catalog_test.mdk (b); the emitter writes the flag from it.
+has_wasm_pin 'noteWasmUse emit UseFloatHash = setRef emit.useFloatHash True' &&
   has_wasm_pin 'let hashFloatRt = if (progEmit prog).useFloatHash.value then hashFloatRuntimeLines else []' &&
   ! grep -E 'setRef emit\.useFloatHash False|setRef useFloatHashRef False' "$WASM_SRC" >/dev/null || {
   echo "FAIL H2B10-FLOAT-HASH-ROUTES: writer, reader, or retired reset changed"

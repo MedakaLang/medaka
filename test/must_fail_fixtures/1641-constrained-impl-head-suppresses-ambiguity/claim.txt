@@ -50,7 +50,7 @@ what: code or instrument the census; I am relaying the issue's citation. What IS
 what: every cell above, including the effect-wrapper equivalence.
 cmd: build main.mdk
 exit: 1
-stdout-line: compiler/backend/llvm_emit.mdk:727:12: runtime error [E-PANIC]: arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)
+stdout-line: compiler/backend/llvm_emit.mdk:741:12: runtime error [E-PANIC]: arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)
 control: build control.mdk
 why-verb: `build`, and NOT `build-run`: no binary is produced at all, so there is nothing to
 why-verb: execute — `build` is this suite's only verb that grades a build FAILURE (its exit

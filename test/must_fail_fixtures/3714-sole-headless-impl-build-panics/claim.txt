@@ -4,7 +4,7 @@ what: Int -> Int`) checks clean and `run` prints 14, but `build` stamps the bare
 what: emitter fails with "no impl of method 'szWrap' for instance 'List'" at exit 1.
 cmd: build main.mdk
 exit: 1
-stdout-line: compiler/backend/llvm_emit.mdk:710:12: runtime error [E-PANIC]: no impl of method 'szWrap' for instance 'List'
+stdout-line: compiler/backend/llvm_emit.mdk:724:12: runtime error [E-PANIC]: no impl of method 'szWrap' for instance 'List'
 control: build-run control.mdk
 why-verb: `build`, because only the emitter path fails. Under the #3713 ruling the program
 why-verb: may instead be rejected at check; that also changes this output, so re-derive

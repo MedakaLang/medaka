@@ -139,6 +139,14 @@ test: medaka
 	## #3306: private_mangle.mdk's ctor-export table (incl. the #1359 re-export
 	## definer) is private; its sibling drives the exported mangleUnits.
 	./medaka test compiler/backend/private_mangle_test.mdk
+	## Both emitters and core_validate import the extern catalog, but no entry
+	## imports its sibling, which checks every row against runtime.mdk, the wasm
+	## emitter's output and the interpreter.  The registry gate
+	## diff_compiler_capability_matrix runs extern_catalog_gate_test.mdk.
+	./medaka test compiler/backend/extern_catalog_test.mdk
+	## No entry imports a `_test.mdk` sibling, so the extern check's own tests
+	## run only from here.
+	./medaka test compiler/backend/core_validate_test.mdk
 	## #3908: match-arm self tail calls must lower to musttail. The sibling is
 	## native-only (the claim is about emitted code) and has no other runner.
 	./medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk

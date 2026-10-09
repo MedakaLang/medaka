@@ -371,8 +371,8 @@ These are ledgered, never silently skipped, and each carries its specific reason
 > `flushStdout` (a no-op by construction while `run` buffers stdout — fix it with
 > the "run drops stdout on panic" bug). Also: only `medaka run` installs the I/O
 > table; `medaka test`/`repl`/`check-policy` still drive the pure one, so a
-> *doctest* still sees the frozen clock and has its stderr dropped. See
-> `test/CAPABILITY-EXCEPTIONS.txt`.
+> *doctest* still sees the frozen clock and has its stderr dropped. See the interpreter's
+> `NotProvided` rows in `compiler/backend/extern_catalog.mdk`.
 >
 > Everything below this line is the ORIGINAL census text, kept for the diagnosis.
 
@@ -572,7 +572,7 @@ its own gaps, which is to its credit. Distinct causes, by frequency:
 
 | n | gap |
 |---|---|
-| 5 | `ref-mode: unbound variable 'writeFile'` (and `statFile`, `runCommand`, …) — the I/O externs, same set as §4.1 |
+| 5 | `ref-mode: unbound variable 'writeFile'` (and `statFile`, …) — the I/O externs, same set as §4.1. Now refused before emission: `wasm: runtime extern 'writeFile' is not available on the wasm backend (WASM-GAP: …)` (`compiler/backend/core_validate.mdk`); a `PERMANENT` extern such as `runCommand` is `wasm:capability-wall` (§4.8) |
 | 4 | `wasm-tools parse: unknown func $mdk_char_to_str` — the preamble omits a helper it emits calls to |
 | 4 | `ref-mode: unsupported pattern in match arm` |
 | 4 | `ref-mode: unbound variable 'index'` |
@@ -599,6 +599,16 @@ its own gaps, which is to its credit. Distinct causes, by frequency:
 >
 > **All 8 are now FIXED** (2026-07-14): the two TMC ones by the dict-veto fix, and the
 > other six in `compiler/backend/wasm_emit.mdk` — see §3.3.
+
+### 4.8 `wasm:capability-wall`
+
+A fixture whose wasm build is refused because it reaches a runtime extern whose wasm row
+in `compiler/backend/extern_catalog.mdk` is `NotProvided GapPermanent`: the capability is
+declared unavailable on wasm (a subprocess, a raw socket), so the refusal is the correct
+behaviour and nothing in the emitter is missing. The refusal comes from
+`core_validate.validateExterns` before any WAT is written and names the extern, the kind
+and the row's reason. A `GapUnported` (`WASM-GAP`) extern is the other case: its lowering
+is possible and unwritten, so its rows stay `wasm:emitter-gap`.
 
 ### 3.3 The 6 shipping-path wasm bugs — FIXED 2026-07-14
 

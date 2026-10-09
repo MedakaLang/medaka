@@ -852,8 +852,8 @@ workerStages root sel runtimeDecls coreDecls decls =
     -- EVAL goes last because it is the only stage that RUNS the fixture, so it is by
     -- far the likeliest to take the process down — and whatever kills it must not also
     -- cost us the LLVM/WASM sections.  (Concretely: llvm_fixtures/abort_exit_after_output
-    -- calls `exit`, which the interpreter does not implement — CAPABILITY-EXCEPTIONS.txt
-    -- BUG(T7) — so its EVAL panics while both backends emit it perfectly well.)
+    -- calls `exit`, which ends the interpreter's process as soon as EVAL runs it,
+    -- while both backends emit it perfectly well.)
     let _ =
       if wants sel "LLVM" || wants sel "WASM" then
         emitBoth root sel runtimeDecls d

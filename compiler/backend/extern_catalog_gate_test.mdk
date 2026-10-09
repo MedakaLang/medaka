@@ -1,0 +1,591 @@
+{- | Capability-coverage gate: every `stdlib/runtime.mdk` extern has a row in
+   `backend/extern_catalog.mdk`, the rows grade themselves consistently, and
+   every pure extern carries a domain verdict in
+   `test/EXTERN-DOMAIN-LEDGER.txt`. Replaces the shell gate of the same name.
+
+   An extern a backend does not lower is a `NotProvided` row carrying its kind
+   and reason, so there is no second file to keep in step: adding a row with a
+   `NotProvided` disposition needs no other edit, and declaring a runtime
+   extern with no row fails here by name. What each backend actually
+   dispatches is graded against the table by
+   `compiler/backend/extern_catalog_test.mdk`; this gate grades the table
+   against the declarations and against itself.
+
+   Domain leg (#476): `stdlib/runtime.mdk` declares the externs; the ones
+   whose signature names no capability (`<Stdout>`, `<Rand>`, ...) are the
+   value-comparable ones, which the engine differential can compare. The
+   engines can all implement such an extern and still disagree at its edge
+   domain (the input region where a partial function returns None, NaN or
+   infinity, saturates or traps; `floatToInt` out of range was a three-way
+   divergence for months, #346). So each one needs exactly one verdict:
+     TOTAL     the domain is total, the reason says why
+     BOUNDARY  `<key,...>  <reason>`: each key `corpus/name` names a fixture
+               in one of the four engine corpora with a value pin, and the
+               fixture source names the extern
+     PENDING   `#<issue>  <reason>`: edge domain, cells not yet authored; a
+               counted, green state that keeps the residual visible
+     EXEMPT    not a value-comparable function, the reason says which
+
+   Every check function takes its inputs as text, so a block can feed it a
+   scratch `runtime.mdk`, ledger or fixture tree and show the check go red.
+
+   Runs under `medaka test --native`: it reads source files and writes
+   scratch trees, neither of which the interpreter binds. -}
+
+import test.{
+  Expectation,
+  expectAll,
+  expectAtLeast,
+  expectEach,
+  expectEqual,
+  expectNoFindings,
+  fail,
+  labelFail,
+  pass,
+}
+import test_process.{medakaRoot, underRoot, withScratchDir}
+import frontend.parser.{parse}
+import backend.extern_catalog_test.{externDeclNames, minus}
+import backend.extern_catalog.{
+  Disposition(..),
+  ExternRow(..),
+  GapKind(..),
+  catalogRow,
+  catalogRows,
+  gapKindName,
+  isBound,
+  ledgerEntry,
+  rowEval,
+  rowLlvm,
+  rowName,
+  rowWasm,
+}
+import fs.{mkdirAll}
+import list.{span}
+import string.{
+  contains,
+  drop,
+  join,
+  lines,
+  split,
+  startsWith,
+  take,
+  trim,
+  unwords,
+  words,
+}
+import set as S
+
+-- # The declarations
+
+duplicates : List String -> List String
+duplicates names =
+  toList (S.fromList (filter (n => length (filter (== n) names) > 1) names))
+
+-- # The catalog against the declarations
+
+-- Findings naming every extern on the wrong side of the declarations/rows
+-- comparison, and every row name shared by two rows.
+coverageFindings : String -> List ExternRow -> List String
+coverageFindings runtimeSrc rows =
+  let declared = externDeclNames (parse runtimeSrc)
+  let named = map rowName rows
+  map
+      (n => "extern `\{n}` is declared in runtime.mdk and has no catalog row")
+      (minus declared named)
+    ++ map
+      (n => "catalog row `\{n}` names no runtime.mdk extern")
+      (minus named declared)
+    ++ map (n => "catalog has two rows for `\{n}`") (duplicates named)
+
+-- # The rows against their own grading
+
+gapFindings : String -> String -> Disposition f -> List String
+gapFindings ext column (NotProvided kind why) =
+  (if trim why == "" then
+      ["`\{ext}` \{column}: NotProvided with no reason"]
+    else
+      [])
+    ++ (if gapKindName kind == "WASM-GAP" && column /= "wasm" then
+      ["`\{ext}` \{column}: WASM-GAP is a wasm-only kind"]
+    else
+      [])
+gapFindings _ _ _ = []
+
+-- A `NotProvided` row must say why, and `WASM-GAP` (a wasm lowering is
+-- possible and not yet written) can only describe the wasm column.
+gradeFindings : List ExternRow -> List String
+gradeFindings rows =
+  flatMap
+    (r =>
+      gapFindings (rowName r) "llvm" (rowLlvm r)
+        ++ gapFindings (rowName r) "wasm" (rowWasm r)
+        ++ gapFindings (rowName r) "eval" (rowEval r))
+    rows
+
+-- How many rows an engine provides.
+providedCount : (ExternRow -> Disposition f) -> List ExternRow -> Int
+providedCount column rows = length (filter (r => isBound (column r)) rows)
+
+-- The rows an engine does not provide, each with its category name.
+gapCategories : (ExternRow -> Disposition f) -> List ExternRow -> List String
+gapCategories column rows =
+  filterMap
+    (r => if isBound (column r) then None else map fst (ledgerEntry (column r)))
+    rows
+
+-- Every row is either provided or a categorised gap, so the engine's counts
+-- add up to the table.
+accountingFindings : String ->
+  (ExternRow -> Disposition f) ->
+  List ExternRow ->
+  List String
+accountingFindings engine column rows =
+  let provided = providedCount column rows
+  let gaps = length (gapCategories column rows)
+  if provided + gaps == length rows && provided > 0 then
+    []
+  else
+    [
+      "\{engine}: \{intToString provided} provided + \{intToString gaps} categorised gaps /= \{intToString (length rows)} rows",
+    ]
+
+-- # The domain ledger
+
+-- Each `extern` declaration of `runtime.mdk` as one line: the head and its
+-- indented continuation lines, which a wide signature wraps onto.
+declGroups : List String -> List String
+declGroups [] = []
+declGroups (l :: rest) =
+  if startsWith "extern " l then
+    let (cont, after) = span isContinuation rest
+    unwords (map trim (l :: cont)) :: declGroups after
+  else
+    declGroups rest
+
+isContinuation : String -> Bool
+isContinuation l = startsWith " " l || startsWith "\t" l
+
+upperAlphabet : String
+upperAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+-- A capability annotation is `<` then an uppercase name: `<Stdout>`, `<Rand>`.
+hasCapability : String -> Bool
+hasCapability decl = match split "<" decl
+  [] => False
+  _ :: tails =>
+    any (after => after /= "" && contains (take 1 after) upperAlphabet) tails
+
+declName : String -> Option String
+declName decl = match words decl
+  _ :: name :: ":" :: _ => Some name
+  _ => None
+
+-- The externs whose signature names no capability.
+pureExterns : String -> List String
+pureExterns runtimeSrc =
+  toList
+    (S.fromList
+      (filterMap
+        (d => if hasCapability d then None else declName d)
+        (declGroups (lines runtimeSrc))))
+
+-- A ledger row: extern, class, and the rest of the line.
+ledgerRows : String -> List (String, String, String)
+ledgerRows src =
+  filterMap
+    (l =>
+      if trim l == "" || startsWith "#" (trim l) then
+        None
+      else match split "\t" l
+        ext :: cls :: detail => Some (ext, cls, join "\t" detail)
+        [ext] => Some (ext, "", "")
+        [] => None)
+    (lines src)
+
+firstOf : (String, String, String) -> String
+firstOf (a, _, _) = a
+
+-- The directories a BOUNDARY key's corpus prefix names, under the tree root.
+fixtureDir : String -> Option String
+fixtureDir "llvm" = Some "test/llvm_fixtures"
+fixtureDir "llvmT" = Some "test/llvm_fixtures_typed"
+fixtureDir "wasm" = Some "test/wasm/fixtures"
+fixtureDir "wasmT" = Some "test/wasm/fixtures_typed"
+fixtureDir _ = None
+
+wordChars : String
+wordChars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+
+-- `src`'s characters, one string each.
+chars : String -> List String
+chars s = if s == "" then [] else take 1 s :: chars (drop 1 s)
+
+-- `name` as a whole word of `src`: bounded by anything but a letter, digit
+-- or underscore.
+mentionsWord : String -> String -> Bool
+mentionsWord name src =
+  any
+    (== name)
+    (words
+      (join
+        ""
+        (map (c => if contains c wordChars then c else " ") (chars src))))
+
+-- What a BOUNDARY key must resolve to under `root`: a fixture that names the
+-- extern, and a value pin beside the others of its corpus.
+keyFindings : String -> String -> String -> <IO, FileRead> List String
+keyFindings root ext key = match split "/" key
+  corpus :: first :: more =>
+    keyCell root ext key corpus (join "/" (first :: more))
+  _ => ["`\{ext}` BOUNDARY key `\{key}`: want corpus/name"]
+
+keyCell : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, FileRead> List String
+keyCell root ext key corpus name = match fixtureDir corpus
+  None => [
+    "`\{ext}` BOUNDARY key `\{key}`: unknown corpus prefix (want llvm, llvmT, wasm or wasmT)",
+  ]
+  Some dir =>
+    let fixture = "\{root}/\{dir}/\{name}.mdk"
+    let pin = "\{root}/test/engine_value_pins/\{corpus}/\{name}.pin"
+    if not (fileExists fixture) then
+      ["`\{ext}` BOUNDARY key `\{key}`: missing fixture \{dir}/\{name}.mdk"]
+    else
+      pinFinding ext key corpus name pin
+        ++ mentionFinding ext key dir name fixture
+
+pinFinding : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <FileRead> List String
+pinFinding ext key corpus name pin =
+  if fileExists pin then
+    []
+  else
+    [
+      "`\{ext}` BOUNDARY key `\{key}`: fixture has no value pin test/engine_value_pins/\{corpus}/\{name}.pin",
+    ]
+
+mentionFinding : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <FileRead> List String
+mentionFinding ext key dir name fixture = match readFile fixture
+  Err e => ["`\{ext}` BOUNDARY key `\{key}`: \{e}"]
+  Ok text =>
+    if mentionsWord ext text then
+      []
+    else
+      [
+        "`\{ext}` BOUNDARY key `\{key}`: fixture \{dir}/\{name}.mdk does not mention `\{ext}`",
+      ]
+
+isIssueRef : String -> Bool
+isIssueRef detail =
+  startsWith "#" detail && contains (take 1 (drop 1 detail)) "0123456789"
+
+rowFindings : String ->
+  List String ->
+  List String ->
+  (String, String, String) ->
+  <IO, FileRead> List String
+rowFindings root pure everything (ext, cls, detail) =
+  if not (any (== ext) pure) then
+    if any (== ext) everything then
+      [
+        "ledger row `\{ext}` is not a pure extern: its runtime.mdk signature names a capability",
+      ]
+    else
+      ["ledger row `\{ext}` names no runtime.mdk extern"]
+  else match cls
+    "TOTAL" => []
+    "EXEMPT" => []
+    "PENDING" =>
+      if isIssueRef detail then
+        []
+      else
+        [
+          "PENDING row `\{ext}` must begin its detail with an issue reference (#NNN); got `\{detail}`",
+        ]
+    "BOUNDARY" => match words detail
+      [] => ["BOUNDARY row `\{ext}` names no fixture keys"]
+      keys :: _ => flatMap (keyFindings root ext) (split "," keys)
+    other => [
+      "ledger row `\{ext}` has unknown class `\{other}` (want TOTAL, BOUNDARY, PENDING or EXEMPT)",
+    ]
+
+-- Every way the ledger text can disagree with the declarations and the
+-- fixture corpora under `root`.
+domainFindings : String -> String -> String -> <IO, FileRead> List String
+domainFindings root runtimeSrc ledgerSrc =
+  let rows = ledgerRows ledgerSrc
+  let pure = pureExterns runtimeSrc
+  let everything = externDeclNames (parse runtimeSrc)
+  let seen = map firstOf rows
+  flatMap (rowFindings root pure everything) rows
+    ++ map (n => "ledger has two rows for `\{n}`") (duplicates seen)
+    ++ map
+      (n => "pure extern `\{n}` has no row in test/EXTERN-DOMAIN-LEDGER.txt")
+      (minus pure seen)
+
+-- # Inputs
+
+runtimeText : <IO, FileRead> Result String String
+runtimeText = readFile (underRoot "stdlib/runtime.mdk")
+
+ledgerText : <IO, FileRead> Result String String
+ledgerText = readFile (underRoot "test/EXTERN-DOMAIN-LEDGER.txt")
+
+-- A row for an extern no backend lowers yet.
+unprovidedRow : String -> ExternRow
+unprovidedRow n =
+  ExternRow
+    n
+    (NotProvided GapTodo "no backend lowers it yet")
+    (NotProvided GapTodo "no backend lowers it yet")
+    (NotProvided GapTodo "no backend lowers it yet")
+
+-- # Catalog coverage
+
+test "every stdlib/runtime.mdk extern has a catalog row and no row is orphaned" =
+  match runtimeText
+    Err e => expectEqual "read runtime.mdk" "failed: \{e}"
+    Ok src => expectAll [
+      labelFail
+        "runtime.mdk externs parsed"
+        (expectAtLeast 100 (length (externDeclNames (parse src)))),
+      expectNoFindings
+        "catalog coverage"
+        (Ok (coverageFindings src catalogRows)),
+    ]
+
+test "red: an extern declared with no catalog row is named" = match runtimeText
+  Err e => expectEqual "read runtime.mdk" "failed: \{e}"
+  Ok src =>
+    expectEqual
+      [
+        "extern `zzNoRowExtern` is declared in runtime.mdk and has no catalog row",
+      ]
+      (coverageFindings
+        (src ++ "\nextern zzNoRowExtern : Int -> Int\n")
+        catalogRows)
+
+test "red: a row for an extern runtime.mdk does not declare is named" =
+  match runtimeText
+    Err e => expectEqual "read runtime.mdk" "failed: \{e}"
+    Ok src =>
+      expectEqual
+        ["catalog row `zzGhostExtern` names no runtime.mdk extern"]
+        (coverageFindings src (catalogRows ++ [unprovidedRow "zzGhostExtern"]))
+
+test "green: a NotProvided row for a newly declared extern needs no other edit" =
+  match runtimeText
+    Err e => expectEqual "read runtime.mdk" "failed: \{e}"
+    Ok src => expectAll [
+      expectNoFindings
+        "coverage with the new row"
+        (Ok
+          (coverageFindings
+            (src ++ "\nextern zzNewExtern : Int -> Int\n")
+            (catalogRows ++ [unprovidedRow "zzNewExtern"]))),
+      expectNoFindings
+        "grading with the new row"
+        (Ok (gradeFindings (catalogRows ++ [unprovidedRow "zzNewExtern"]))),
+    ]
+
+-- # Row grading
+
+test "every NotProvided row says why, and WASM-GAP stays in the wasm column" =
+  expectNoFindings "row grading" (Ok (gradeFindings catalogRows))
+
+test "red: a reasonless NotProvided row and a non-wasm WASM-GAP are named" =
+  let bad =
+    ExternRow
+      "zzBadRow"
+      (NotProvided GapUnported "an llvm gap filed as a wasm kind")
+      (NotProvided GapPermanent "  ")
+      Interpreted
+  expectEqual
+    [
+      "`zzBadRow` llvm: WASM-GAP is a wasm-only kind",
+      "`zzBadRow` wasm: NotProvided with no reason",
+    ]
+    (gradeFindings [bad])
+
+-- The per-engine counts are derived from the table, never typed: the test
+-- runner discards a passing block's output, so what is graded is that the
+-- derived counts account for every row.
+test "capability matrix: each engine's provided and categorised-gap rows cover the table" = expectEach
+  [
+    (
+      "llvm",
+      expectNoFindings
+        "llvm accounting"
+        (Ok (accountingFindings "llvm" rowLlvm catalogRows)),
+    ),
+    (
+      "wasm",
+      expectNoFindings
+        "wasm accounting"
+        (Ok (accountingFindings "wasm" rowWasm catalogRows)),
+    ),
+    (
+      "eval",
+      expectNoFindings
+        "eval accounting"
+        (Ok (accountingFindings "eval" rowEval catalogRows)),
+    ),
+  ]
+
+-- #1726: OS entropy has no wasm host import yet, and the gap is a declared
+-- row rather than an omission. `test/diff_compiler_os_entropy_test.mdk`
+-- cannot import the catalog, so the row is pinned here.
+test "osEntropyBytes: wasm is a declared WASM-GAP row" =
+  match catalogRow "osEntropyBytes"
+    None => fail "osEntropyBytes has no catalog row"
+    Some row => match rowWasm row
+      NotProvided GapUnported _ => pass
+      _ => fail "osEntropyBytes wasm is not a NotProvided WASM-GAP row"
+
+-- # The domain ledger
+
+test "domain ledger: every pure extern has exactly one well-formed row" =
+  match (runtimeText, ledgerText)
+    (Ok src, Ok ledger) =>
+      let pure = pureExterns src
+      expectAll [
+        labelFail "pure externs derived" (expectAtLeast 100 (length pure)),
+        labelFail
+          "ledger rows read"
+          (expectAtLeast 100 (length (ledgerRows ledger))),
+        expectNoFindings
+          "domain ledger"
+          (Ok (domainFindings medakaRoot src ledger)),
+      ]
+    (Err e, _) => expectEqual "read runtime.mdk" "failed: \{e}"
+    (_, Err e) => expectEqual "read EXTERN-DOMAIN-LEDGER.txt" "failed: \{e}"
+
+-- Red controls: each feeds the real declarations a ledger with the named
+-- externs' rows removed and `extra` appended.
+domainRed : String ->
+  List String ->
+  String ->
+  List String ->
+  <IO, FileRead> Expectation
+domainRed label dropped extra expected = match (runtimeText, ledgerText)
+  (Ok src, Ok ledger) =>
+    let kept =
+      filter
+        (l => not (any (e => startsWith "\{e}\t" l) dropped))
+        (split "\n" ledger)
+    labelFail
+      label
+      (expectEqual
+        expected
+        (domainFindings medakaRoot src "\{join "\n" kept}\n\{extra}\n"))
+  (Err e, _) => expectEqual "read runtime.mdk" "failed: \{e}"
+  (_, Err e) => expectEqual "read EXTERN-DOMAIN-LEDGER.txt" "failed: \{e}"
+
+test "red: a pure extern with no ledger row is named" =
+  domainRed
+    "missing row"
+    ["floatToInt"]
+    ""
+    ["pure extern `floatToInt` has no row in test/EXTERN-DOMAIN-LEDGER.txt"]
+
+test "red: a row naming an unknown extern is named" = domainRed
+  "unknown extern"
+  []
+  "zzNotAnExtern\tTOTAL\tno such extern"
+  ["ledger row `zzNotAnExtern` names no runtime.mdk extern"]
+
+test "red: a row for an effectful extern is named" = domainRed
+  "capability extern"
+  []
+  "putStr\tTOTAL\tit prints"
+  [
+    "ledger row `putStr` is not a pure extern: its runtime.mdk signature names a capability",
+  ]
+
+test "red: a duplicate row is named" = domainRed
+  "duplicate row"
+  []
+  "sqrt\tTOTAL\ta second verdict"
+  ["ledger has two rows for `sqrt`"]
+
+test "red: an unknown class is named" =
+  domainRed
+    "unknown class"
+    ["sqrt"]
+    "sqrt\tMAYBE\tnot a class"
+    [
+      "ledger row `sqrt` has unknown class `MAYBE` (want TOTAL, BOUNDARY, PENDING or EXEMPT)",
+    ]
+
+test "red: a PENDING row without an issue reference is named" =
+  domainRed
+    "bad PENDING"
+    ["tan"]
+    "tan\tPENDING\tno issue given"
+    [
+      "PENDING row `tan` must begin its detail with an issue reference (#NNN); got `no issue given`",
+    ]
+
+test "red: a BOUNDARY row naming no keys is named" =
+  domainRed
+    "BOUNDARY without keys"
+    ["sqrt"]
+    "sqrt\tBOUNDARY\t"
+    ["BOUNDARY row `sqrt` names no fixture keys"]
+
+test "red: a BOUNDARY key into no corpus fixture is named" =
+  domainRed
+    "BOUNDARY fixture"
+    ["sqrt"]
+    "sqrt\tBOUNDARY\tllvm/zz_no_such_fixture\tpoints nowhere"
+    [
+      "`sqrt` BOUNDARY key `llvm/zz_no_such_fixture`: missing fixture test/llvm_fixtures/zz_no_such_fixture.mdk",
+    ]
+
+-- The pin and mention checks need fixtures in a state the real corpora never
+-- hold, so they run against a scratch tree.
+test "BOUNDARY keys: a fixture needs a pin and must name the extern" = withScratchDir
+  (dir => match mkdirAll "\{dir}/test/llvm_fixtures"
+    Err e => expectEqual "scratch fixtures" "failed: \{e}"
+    Ok _ => match mkdirAll "\{dir}/test/engine_value_pins/llvm"
+      Err e => expectEqual "scratch pins" "failed: \{e}"
+      Ok _ => match writeCells dir
+        Err e => expectEqual "scratch cells" "failed: \{e}"
+        Ok _ => expectAll [
+          expectEqual
+            [
+              "`sqrt` BOUNDARY key `llvm/cell`: fixture has no value pin test/engine_value_pins/llvm/cell.pin",
+            ]
+            (keyFindings dir "sqrt" "llvm/cell"),
+          expectEqual
+            [
+              "`sqrt` BOUNDARY key `llvm/other`: fixture test/llvm_fixtures/other.mdk does not mention `sqrt`",
+            ]
+            (keyFindings dir "sqrt" "llvm/other"),
+          expectEqual
+            [
+              "`sqrt` BOUNDARY key `nope/cell`: unknown corpus prefix (want llvm, llvmT, wasm or wasmT)",
+            ]
+            (keyFindings dir "sqrt" "nope/cell"),
+          expectEqual [] (keyFindings dir "other" "llvm/other"),
+        ])
+
+writeCells : String -> <FileWrite> Result String Unit
+writeCells dir = do
+  writeFile "\{dir}/test/llvm_fixtures/cell.mdk" "main = sqrt 4.0\n"
+  writeFile "\{dir}/test/llvm_fixtures/other.mdk" "other = 1 + 2\n"
+  writeFile "\{dir}/test/engine_value_pins/llvm/other.pin" "3\n"
