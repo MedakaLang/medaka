@@ -336,6 +336,22 @@ of online processors, or 4 when that cannot be read.
 True
 ```
 
+### `testJobs`
+
+```
+testJobs : <Exec, IO> Int
+```
+
+How many `medaka test` runs start at once, in `testAssertionCounts` and
+for the per-file children of `medaka test <dir>`:
+`MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
+online processors, or 4 when that cannot be read.
+
+```medaka
+> testJobs > 0
+True
+```
+
 ### `unrosteredUnits`
 
 ```

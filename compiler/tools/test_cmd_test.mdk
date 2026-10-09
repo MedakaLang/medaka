@@ -86,3 +86,30 @@ test "a directory run is the same serial or concurrent, in order, with death not
             e4),
       ]
       _ => fail "could not spawn medaka test")
+
+dirWithSlowFirst : String -> <FileWrite> Result String Unit
+dirWithSlowFirst dir = do
+  _ <- writeFile
+    "\{dir}/a_slow_test.mdk"
+    "import test.{expectEqual}\n\nfib : Int -> Int\nfib n = if n < 2 then n else fib (n - 1) + fib (n - 2)\n\ntest \"slow one\" = expectEqual (fib 36) 14930352\n"
+  _ <- writeFile
+    "\{dir}/b_fast_test.mdk"
+    "import test.{expectEqual}\n\ntest \"fast two\" = expectEqual 1 1\n"
+  writeFile
+    "\{dir}/c_fast_test.mdk"
+    "import test.{expectEqual}\n\ntest \"fast three\" = expectEqual 2 2\n"
+
+-- The slow first file finishes last at JOBS=4, yet its output still leads.
+test "a slow first file still prints first under concurrent jobs" = withScratchDir
+  (dir => match dirWithSlowFirst dir
+    Err e => fail e
+    Ok () => match (dirRun "1" dir, dirRun "4" dir)
+      (Ok (c1, o1, e1), Ok (c4, o4, e4)) => expectAll [
+        expectEqual 0 c4,
+        expectEqual c1 c4,
+        expectEqual o1 o4,
+        expectEqual e1 e4,
+        expectTrue (appearsBefore "slow one" "fast two" o4),
+        expectTrue (appearsBefore "fast two" "fast three" o4),
+      ]
+      _ => fail "could not spawn medaka test")
