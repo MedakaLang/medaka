@@ -3066,9 +3066,10 @@ whole arc.
   **2026-09-03:** the emitter arc replaced its V/ANF/AP plan with a Core-IR
   fact ledger (`compiler/EMITTER-TARGET-ARCHITECTURE.md`, REVISION block). Its
   R8 records what this plan does and does not publish downstream: F6
-  (evidence, dispositions) waits on #2549 and #993; every other fact is
-  produced by lowering from the elaborated AST and needs nothing from steps
-  1-8. Ruling 3 (does the emitter run resolve) and ruling 4 (`RNone` stays)
+  (evidence, dispositions) reads the published evidence table and
+  `disposition.mdk`'s table, and since 2026-10-10 needs nothing further from
+  #2549 (#3966); every other fact is produced by lowering from the elaborated
+  AST and needs nothing from steps 1-8. Ruling 3 (does the emitter run resolve) and ruling 4 (`RNone` stays)
   are carried there as constraints, not re-litigated.
 - **Not in scope:** engine-realization bugs (#1034/#826/#1101/#1020, the
   emitter E-PANIC halves, and — since the 2026-08-14 ruling above — the whole
