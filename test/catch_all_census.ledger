@@ -52,7 +52,6 @@ implDeclFact	Decl	2/14
 implDeclWithReqs	Decl	2/14
 implHeadGround	Decl	2/14
 implHeadParametric	Decl	2/14
-implHeadTagForIface	Decl	2/14
 importOverlayDecls	Decl	2/14
 importShadowsOfDecl	Decl	2/14
 infer	Expr	30/42

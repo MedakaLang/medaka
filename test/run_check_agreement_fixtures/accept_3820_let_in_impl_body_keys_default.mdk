@@ -1,0 +1,17 @@
+-- #3820: key literals inside a local `let` in an impl body.  The keys are in no
+-- type of the `let`, which hands them to the method body; the body grounds them
+-- to `Int` and determines `e = a`.  Expected on every verb: 3.75, then 7.
+impl Index (Array a) Float a where
+  index xs _ = xs[1]
+
+interface Report t where
+  report : t -> String
+
+impl Report (Array a) requires Num a, Debug a where
+  report v =
+    let s = v[0] + v[1]
+    debug s
+
+main =
+  println (report [|1.5, 2.25|])
+  println (report [|3, 4|])

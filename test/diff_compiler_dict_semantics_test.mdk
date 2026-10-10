@@ -278,7 +278,7 @@ table = [
   Row {
     entry = "s6-drain-quiescence-inferred-scheme.mdk",
     label =
-      "§6.3 quiescence drain, INFERRED-scheme half of #3031: the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound. `routeUndeterminedTop` defers a goal every variable of which a scheme quantifies (the `goalsClosed` test) instead of reporting it ambiguous at a stale location, so `check` stays SILENT with the drain`s diagnostics kept. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
+      "§6.3 quiescence drain, INFERRED-scheme half of #3031: the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound. `reportAmbiguousImpl` defers a goal every variable of which a scheme quantifies (the `goalsClosed` test) instead of reporting it ambiguous at a stale location. `check` does not render the drain`s own diagnostics, so the drain`s verdict is pinned in-process by `compiler/types/typecheck_test.mdk`; this row pins the verdict and value. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -311,7 +311,7 @@ table = [
   Row {
     entry = "s6-drain-quiescence-projected-goal.mdk",
     label =
-      "§6.2 T3 at the quiescence drain: `relay`s call goal is on a scheme-quantified variable, so `routeUndeterminedTop`s single-tag arm mints no `Tweak Float` route from the census tag `Float` and nothing is reported ambiguous. `DrainRollback` hides the drain`s diagnostics on `check`, so this row goes RED only once `DrainDiags` is deleted with that arm unguarded. Prints 2.5",
+      "§6.2 T3 at the quiescence drain: `relay`s two call goals are on a scheme-quantified variable and each reaches exactly one instance, so `routeUndeterminedTop` chooses neither for them (its `ReachOne` `goalsClosed` guard) and nothing is reported ambiguous. `check` does not render the drain`s own verdict; `compiler/types/typecheck_test.mdk` pins that no route is minted. Prints 2.5",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -1944,7 +1944,7 @@ table = [
   Row {
     entry = "b4bii-xmod-req-route-leg-still-spelling/main.mdk",
     label =
-      "§6 C2 -- WHERE B-4b-iis DELIBERATE ASYMMETRY IS OBSERVED RATHER THAN ARGUED. The supply landed at ONE of the `*ByIface` familys three entry points (`findMatchingImplReqsU`, the CHECKER leg); the two ROUTE-WORD entry points (`entailInst`s `EKNestedTop` arm and `argImplRequiresRoutes`) still mint a bare query, because their upstream (`shadowStandaloneDictSlots` / `pushDictApp`) projects `csIface.irName` on purpose and that projection is the route-word design question, not an identity-supply omission. This program puts BOTH legs on the same goal: a CONSTRAINED STANDALONE `useIt : Same a => a -> Int` in `zmod` is called at `Box Opaque`, so the checker selects `zmod.Same` by IDENTITY while the router selects over the same two candidate rows by SPELLING. SPEC ANSWER hand-derived first: `useIt (Box Opaque)` = 11 via `zmod`s context-free impl, `bar (Box 1)` = 22 via `amod`s `requires Eq a` at `Eq Int`; total 33, ACCEPT. ⚠️ THE DICT IS THE ASSERTION, NOT THE NUMBER -- a router that reached `amod`s row would hand `useIt` a witness for the OTHER class, whose only slot is `bar`, and `foo x` would read that slot: a wrong value or a fault AT EXIT 0. Section 3s IR row is what a value-only assertion cannot see. ⚠️ MEASURED: this program was REJECTED at exit 1 on the B-4b-i base binary (the same false reject the `-decl-order` pair isolates), so the route leg had never been asked this question and this is a NEW cell, not a re-pin",
+      "§6 C2 -- WHERE B-4b-iis DELIBERATE ASYMMETRY IS OBSERVED RATHER THAN ARGUED. The supply landed at the CHECKER leg (`findMatchingImplReqsU`); the ROUTE-WORD leg (`entailInst`s `EKNestedTop` arm) selects one row on the interface its caller supplies and hands that row to `argImplRequiresRoutesForRow`, and on the top-level constrained-call leg that interface can be the bare `csIface.irName` `pushDictApp` projects, which matches by spelling. That projection is the route-word design question, not an identity-supply omission. This program puts BOTH legs on the same goal: a CONSTRAINED STANDALONE `useIt : Same a => a -> Int` in `zmod` is called at `Box Opaque`, so the checker selects `zmod.Same` by IDENTITY while the router selects over the same two candidate rows by SPELLING. SPEC ANSWER hand-derived first: `useIt (Box Opaque)` = 11 via `zmod`s context-free impl, `bar (Box 1)` = 22 via `amod`s `requires Eq a` at `Eq Int`; total 33, ACCEPT. ⚠️ THE DICT IS THE ASSERTION, NOT THE NUMBER -- a router that reached `amod`s row would hand `useIt` a witness for the OTHER class, whose only slot is `bar`, and `foo x` would read that slot: a wrong value or a fault AT EXIT 0. Section 3s IR row is what a value-only assertion cannot see. ⚠️ MEASURED: this program was REJECTED at exit 1 on the B-4b-i base binary (the same false reject the `-decl-order` pair isolates), so the route leg had never been asked this question and this is a NEW cell, not a re-pin",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -2964,6 +2964,171 @@ table = [
     mode = AllExact,
     pinned = "[]\n",
     codes = [],
+  },
+  Row {
+    entry = "sig-var-rigid-generalized-local.mdk",
+    label =
+      "§3 a generalized local gets its top-level twin's verdict (#3796): `let k u = get (Box [])` is improved to `k : a -> List t` before it generalizes, so `k x` returns a list where `weird2 : b -> b` promises the caller's `b`, refused with T-TYPE-TOO-GENERAL as the same `k` at top level is. Drained from the must-fail pin 3796-generalized-local-escapes-signature: `check` printed `weird2 : a -> a`, `run` panicked and the binary printed a heap word",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-TYPE-TOO-GENERAL"],
+  },
+  Row {
+    entry = "sig-var-rigid-generalized-local-pick.mdk",
+    label =
+      "§3 #3796's `Pick` face: `let k z = pick [z] [1]` is improved by `impl Pick a a a` to `k : Num a => a -> List a` before it generalizes, so `k y` needs `f : a -> List Int`'s `a` to be Int, refused with T-TYPE-TOO-GENERAL as the same `k` at top level is. Was accepted on every verb, printing [1] from an instance that does not exist",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-TYPE-TOO-GENERAL"],
+  },
+  Row {
+    entry = "sig-var-rigid-generalized-local-control.mdk",
+    label =
+      "control for the generalized-local rows (the 3796 pin's control): a dictionary-abstracted local used at two types inside an impl body whose `requires Show2 a` gives the goal. Hand-derived: int 1/int 2 | s:hi",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "int 1/int 2 | s:hi\n",
+    codes = [],
+  },
+  Row {
+    entry = "sig-var-rigid-generalized-local-satisfied.mdk",
+    label =
+      "control: the #3796 locals used where an instance answers their kept goal; each use solves the local's dictionary (`Get (Box (List Int)) (List Int)`, `Pick (List Int) (List Int) (List Int)`). Hand-derived: [], then [1]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[]\n[1]\n",
+    codes = [],
+  },
+  Row {
+    entry = "sig-var-rigid-method-var.mdk",
+    label =
+      "§3 an interface method signature's own variable is rigid in an impl body's matcher (#3797): `w : x -> b -> b` with body goal `Get (Box (List t)) b` is refused at the `get`. Drained from the must-fail pin 3797-method-var-escapes-via-instance: `check` accepted, `run` panicked `unknown op '+'`, `build` hit an emitter panic",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-method-var-control.mdk",
+    label =
+      "control for the method-variable row: `get (Box y)` poses `Get (Box b) b`, which the impl matches at the rigid `b`. Hand-derived: 41 + 1 = 42",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
+    entry = "sig-var-rigid-annotation-var.mdk",
+    label =
+      "§3 a variable written in an expression annotation is rigid for the annotated expression (#3799): `h : a -> List Int = y => pick [y] [1]` poses `Pick (List a) (List n) (List Int)`, answered only at `a = Int`, refused at the `pick`. Drained from the must-fail pin 3799-annotation-var-bound-by-instance, which printed [1] on `run` and the binary",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "sig-var-rigid-annotation-var-control.mdk",
+    label =
+      "control for the annotation row: `h : a -> List a = y => pick [y] []`, where improvement fixes the empty list's element to `a` and the instance matches at the rigid `a`. Hand-derived: []",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[]\n",
+    codes = [],
+  },
+  Row {
+    entry = "local-goal-on-enclosing-var.mdk",
+    label =
+      "§4 `gen` at a local binder: `f = i => v[i]` keeps `Index c i e` with the enclosing `c` as itself, so `g2 : Index a Int b => a -> b` and the call at `String` poses `Index (Array Float) Int String`, which no instance answers. Base dropped the goal (`g2 : a -> b`), accepted, and `run` panicked `putStrLn: not a String`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "local-goal-on-enclosing-var-control.mdk",
+    label =
+      "control for the enclosing-variable row: the same `g2` at the element type. Hand-derived: 1.5 + 1.0 = 2.5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2.5\n",
+    codes = [],
+  },
+  Row {
+    entry = "local-improved-where-two-uses.mdk",
+    label =
+      "§3 \"When\" at a `where` helper, DICT §3's own `wrap y = pick [y] []`: improvement runs before the helper generalizes, so `wrap : a -> List a` is used at Int and String, as the top-level `wrap` is. Rejected after slice 3 (`no impl of Pick for (List Int) (List String) (List Int)`). Hand-derived: ([], [])",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "([], [])\n",
+    codes = [],
+  },
+  Row {
+    entry = "local-improved-let-two-uses.mdk",
+    label =
+      "§3 \"When\" at a local `let`: `k u = pick [] u` improves to `k : List a -> List a` before it generalizes and is used at `[n]` and `[\"s\"]`, as the top-level `k` is. Rejected after slice 3. Hand-derived: ([3], [\"s\"])",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "([3], [\"s\"])\n",
+    codes = [],
+  },
+  Row {
+    entry = "local-improved-get-two-uses.mdk",
+    label =
+      "§3 \"When\", the `Get`/`Box` face in an unsigned `main`: `k u = get (Box [])` improves to `k : a -> List b` before it generalizes and is used at `List Int` and `List String`, as the top-level `k` is. Rejected after slice 3. Hand-derived: [] twice",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[]\n[]\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-given-through-super.mdk",
+    label =
+      "§3 a method body's own `=>` context is given with its superinterfaces: `w : Get2 (Box (List Int)) b => x -> b -> b` gives the body's `Get (Box (List Int)) b` through `Get2`'s `requires`, as the top-level `wt` with the same context does. Rejected after slice 3 with T-MISSING-CONSTRAINT. Hand-derived: [1]",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[1]\n",
+    codes = [],
+  },
+  Row {
+    entry = "method-var-via-local-too-specific.mdk",
+    label =
+      "§3 #3797 through a local: `k u = get (Box [])` improves to `k : a -> List t`, so `w _ y = k y` pins the method's `b`, refused with T-IMPL-TOO-SPECIFIC as with a top-level `k`. After slice 3 it carried an ill-formed `add Get b =>` fix-it for the two-parameter `Get`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-TOO-SPECIFIC", Absent "T-MISSING-CONSTRAINT"],
   },
   Row {
     entry = "impl-head-pinned-by-body.mdk",
@@ -4041,6 +4206,50 @@ table = [
     codes = [Present "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
+    entry = "undetermined-nested-prerequisite-none.mdk",
+    label =
+      "#3923: `fa None` poses `B ?a`, which `impl B (List b)` determines, and that instance's prerequisite `C ?b` is judged: two impls, ambiguous",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-prerequisite-live-grounded.mdk",
+    label =
+      "#3941 F2: `fa !cell` on a live variable that `main` grounds to `List Bool`. The unifier path's `C ?x` waits for quiescence with its parent and selects `C Bool`; a prerequisite posed on the head's fresh variable was falsely ambiguous",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "12\n",
+    codes = [],
+  },
+  Row {
+    entry = "undetermined-nested-prerequisite-live-never-grounded.mdk",
+    label =
+      "#3941 F2 control: the same live `cell`, never grounded, is walked at quiescence: `C ?x` reaches two impls, ambiguous (deferring the walk must not drop it)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-prerequisite-quantified.mdk",
+    label =
+      "#3941 F2, scheme face: `w`'s goal is on a variable its scheme quantifies, so the unifier path poses no `C ?x` at `w`; `main` instantiates it to `List Bool`. A prerequisite on the head's fresh variable was falsely ambiguous at `w`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "100\n",
+    codes = [],
+  },
+  Row {
     entry = "undetermined-nested-class-xmod/main.mdk",
     label =
       "§6.2 T4 at a nested prerequisite whose instances are imported: `match def` fixes `def : Option ?a`, whose instance poses `Def ?a`, reached by `Def Int`, `Def Bool` and `Def (Option b)` with no stable minimum",
@@ -4340,13 +4549,24 @@ table = [
   Row {
     entry = "default-guard-let-in-body-ownership-gap.mdk",
     label =
-      "#3809 through a local `let` with unannotated keys. Hand-derived: 3.75, then 7; blocked by an ownership gap (the key literals reach no defaulting boundary), so `Index (Array a) k e` keeps two candidates and D3 clause 3`s verdict rejects it. Pinned REJECT until the gap is fixed; base checked clean and failed at run and build",
-    expCheck = "REJECT",
-    expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
-    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+      "#3820, #3809 through a local `let` in an impl body with unannotated keys: the key literals are in no type of the `let`, which hands them to the method body; the body grounds them, withholds `e` and determines `e = a`. Hand-derived: 3.75, then 7. Base rejected as ambiguous (no boundary defaulted the keys)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "default-guard-let-tied-to-enclosing-arg.mdk",
+    label =
+      "#3821, D3 clause 2 at a local `let`: `e` is in the `let`'s type and `Index c k e` ties it to the enclosing argument's `c`, so the `let` leaves it to the enclosing boundary; `g` gets the `let`-free scheme `(Index a Int b, Num b) => a -> b`. Hand-derived: 3.75, then 7. Base grounded `e` to `Int` at the `let` and rejected with `no impl of Index for (Array Float) Int Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3.75\n7\n",
+    codes = [],
   },
   Row {
     entry = "effrow-async-do-spawntask-no-impl.mdk",
@@ -4414,6 +4634,28 @@ table = [
     pinned = "CONTROL-OK\n",
     codes = [],
   },
+  Row {
+    entry = "test-body-float-key.mdk",
+    label =
+      "#3822 (test body, Float key): a `test` body is a numeric boundary like any other. `[|1.5, 2.25|][0]` poses `Index (Array Float) Int Float` whose key literal is the body`s own; the settle sequence defaults the key to Int and the goal has its one instance. The old closed-body defaulting grounded `?e` to Int with no determination and rejected `no impl of Index for (Array Float) Int Int`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [],
+  },
+  Row {
+    entry = "test-body-two-impl-get.mdk",
+    label =
+      "#3822 (test body, two instances): `get (Box True) 0 + 1` poses `Get (Box Bool) Int ?e` with `?e` Num-constrained and two instances (Float, N) reaching it, so the body boundary withholds the default and the verdict is `T-AMBIGUOUS-INSTANCE`, as the same expression in `main` gets. Was `T-NO-IMPL` for a grounding the program never wrote",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-NO-IMPL"],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -4425,7 +4667,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 389
+tableRows = 411
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4657,7 +4899,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 23
+schemeRows = 25
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -4798,6 +5040,18 @@ schemeTable = [
       "§6.3 D3 clause 3 keeps the top-level control's scheme: the key grounds, the `Index` goal and the element's `Num` stay",
     want = "sumTwo : (Index a Int b, Num b) => a -> b",
   },
+  SchemeRow {
+    entry = "local-goal-on-enclosing-var-control.mdk",
+    label =
+      "§4 `gen` at a local binder: a local's goal over a variable it shares with its binder reaches that binder's scheme, the variable kept as itself",
+    want = "g2 : Index a Int b => a -> b",
+  },
+  SchemeRow {
+    entry = "default-guard-let-tied-to-enclosing-arg.mdk",
+    label =
+      "§6.3 D3 clause 2 at a local `let` (#3821): the same body through a `let` gets the top-level control's scheme, with no `Index` goal of the `let`'s own",
+    want = "g : (Index a Int b, Num b) => a -> b",
+  },
 ]
 
 -- # Section 5 -- the DEMOTED warning reaches every verb, and NOTHING ELSE does
@@ -4842,7 +5096,7 @@ data VerbRow = VerbRow {
 {- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 verbRows : Int
-verbRows = 48
+verbRows = 50
 
 verbTable : List VerbRow
 verbTable = [
@@ -4926,6 +5180,24 @@ verbTable = [
     assertion =
       AHas
         "undetermined-nested-class-user\\.mdk:29:4: ambiguous instance for .C.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-prerequisite-none.mdk",
+    vlabel =
+      "the prerequisite `C ?b` of the determined `B ?a` is reported at `fa None`",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-prerequisite-none\\.mdk:16:16: ambiguous instance for .C.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-prerequisite-live-never-grounded.mdk",
+    vlabel =
+      "the quiescent walk reports the never-grounded live goal's prerequisite `C ?x` at `fa !cell`",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-prerequisite-live-never-grounded\\.mdk:27:9: ambiguous instance for .C.",
   },
   VerbRow {
     ventry = "ambiguity-each-site-reported.mdk",

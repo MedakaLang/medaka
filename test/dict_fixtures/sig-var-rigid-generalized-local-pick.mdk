@@ -1,0 +1,17 @@
+-- §3 #3796, the `Pick` face: `k z = pick [z] [1]` poses
+-- `Pick (List z) (List n) r`, which `impl Pick a a a` improves before `k`
+-- generalizes, so `k : Num z => z -> List z`.  The use `k y` then needs the
+-- signature's `a` to be Int, so `f` is rejected as too general, as it is when `k`
+-- is a top-level binding.
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+f : a -> List Int
+f y =
+  let k z = pick [z] [1]
+  k y
+
+main = println (debug (f "s"))

@@ -1,0 +1,31 @@
+-- DICT-SEMANTICS §3 and §6.2 T2: `fa !cell` poses `A (Option ?a)` on `cell`'s
+-- live variable, whose instance's prerequisite `B ?a` reaches `impl B (List x)`
+-- only by unification.  Its prerequisite `C ?x` is the element of `?a`, which
+-- `main` grounds to `Bool`, so it waits for quiescence and selects `C Bool`.
+-- Hand-derived: ACCEPT, `b [True] = 10 + c True = 12`.
+interface C a where
+  c : a -> Int
+impl C Int where
+  c _ = 1
+impl C Bool where
+  c _ = 2
+interface B a where
+  b : a -> Int
+impl B (List x) requires C x where
+  b xs = 10 + c (match xs
+    [] => panic "e"
+    (y :: _) => y)
+interface A a where
+  fa : a -> Int
+impl A (Option a) requires B a where
+  fa o = match o
+    Some v => b v
+    None => 100
+
+cell = Ref None
+
+peek u = fa !cell
+
+main =
+  cell := Some [True]
+  println (peek ())

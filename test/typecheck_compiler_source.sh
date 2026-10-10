@@ -1312,17 +1312,20 @@ if grep -Fq 'recordArithSite :' "$predicate_slot_src"; then
   exit 1
 fi
 
-# Every numeric boundary supplies one explicit descriptor. All seven boundaries name
+# Every numeric boundary supplies one explicit descriptor. All eight boundaries name
 # their ambiguity owner; the one method-body driver captures it inside its own balanced
 # inference window. SCC defaulting remains explicitly unrestricted while its ambiguity channel owns
-# the just-exited level.
+# the just-exited level. A test or property body settles as a method body does, after
+# its caller (`inferPropBodiesGo`, `inferTestBodies`) has exited the body's level, so
+# its owner is the level just exited.
 numeric_boundaries='blockRecLet blockLet NumBoundaryOwnedMember
 blockLet inferRecordCreate NumBoundaryOwnedMember
 inferRecLet registerLocalScheme NumBoundaryOwnedMember
 inferLetSimple inferLetBody NumBoundaryOwnedMember
 processLetGroup inferLetBinds NumBoundaryOwnedGroup
 processSCC sccSchemes NumBoundaryOwnedScc
-inferMethodBody openMethodBodyScope NumBoundaryOwnedMethodBody'
+inferMethodBody openMethodBodyScope NumBoundaryOwnedMethodBody
+settleClosedBody extendPropParams NumBoundaryOwnedMethodBody'
 printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
   require_typecheck_arm "$reader" "$next" 'finalizeNumBoundary'
   require_typecheck_arm "$reader" "$next" 'NumBoundary {'
@@ -1330,6 +1333,15 @@ printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
   require_typecheck_arm "$reader" "$next" "$disposition"
   require_typecheck_arm "$reader" "$next" 'nbMembers ='
   require_typecheck_arm "$reader" "$next" 'nbSurvivingIds ='
+  if [ "$reader" = settleClosedBody ]; then
+    require_typecheck_arm inferPropBodiesGo inferTestBodies 'let _ = exitLevel ()'
+    require_typecheck_arm inferPropBodiesGo inferTestBodies 'let _ = settleClosedBody (tconBuiltin "Bool")'
+    require_typecheck_arm inferTestBodies settleClosedBody 'let _ = exitLevel ()'
+    require_typecheck_arm inferTestBodies settleClosedBody 'settleClosedBody (tconUnresolved "Expectation")'
+    require_typecheck_arm "$reader" "$next" 'let level = perRun.value.currentLevel.value + 1'
+    require_typecheck_arm "$reader" "$next" 'NumBoundaryOwnedMethodBody level'
+    continue
+  fi
   require_typecheck_arm "$reader" "$next" 'let _ = exitLevel ()'
   if [ "$disposition" = NumBoundaryOwnedMethodBody ]; then
     require_typecheck_arm "$reader" "$next" 'let bodyLevel = perRun.value.currentLevel.value'
@@ -1340,7 +1352,8 @@ printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
 done || exit 1
 
 numeric_boundary_expected="$(printf '%s\n' "$numeric_boundaries" | wc -l | tr -d ' ')"
-# A group and a method body keep the candidates D3 clause 3 withheld for their verdict.
+# A group, a method body and a test or property body keep the candidates D3 clause 3
+# withheld for their verdict.
 numeric_boundary_actual="$(grep -Ec 'let (_|withheld) = finalizeNumBoundary' "$predicate_slot_src")"
 if [ "$numeric_boundary_actual" -ne "$numeric_boundary_expected" ]; then
   echo "FAIL: numeric boundary descriptor census changed: $numeric_boundary_actual calls, $numeric_boundary_expected checked boundaries"

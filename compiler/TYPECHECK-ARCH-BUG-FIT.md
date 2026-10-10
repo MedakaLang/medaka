@@ -782,9 +782,10 @@ decision is at elaboration. That is right, but the cause is one step earlier sti
 - `keyEntryOf` (`:11362`) emits a `KeyEntry` **only** when `headTyconTy headTy` is
   `Some`; `headTyconTy` (`:11632`) has arms for `TyCon` / `TyApp` / `TyTuple` and falls
   to `headTyconTy _ = None` for a `TyVar`. `implEntryFromTys` (`:11318`) and
-  `implHeadTagForIface` (`:12071`) gate identically.
+  `implHeadTagForIface` (`:12071`, since deleted) gate identically.
 - Therefore `impl Tag a` produces no entry in `KeyBuckets`, none in `ImplBuckets`, and
-  no head tag in `implHeadTagsForIface`. `matchingEntries` (`:11427`) then scans only
+  no head tag in `implHeadTagsForIface` (since deleted: `routeUndeterminedTop` now
+  routes by `goalCandidates`). `matchingEntries` (`:11427`) then scans only
   the bucket at `goalHeadCon goals` = `Box`, `keyForSite` returns `None`, and the caller
   keeps the fallback `tag`: `let routeKey = fromOption tag (keyForSite keyTable name
   paramMonos)` (`:11950`, `:11981`). The route is `RKey "Box"` — the *receiver's* head
@@ -2339,7 +2340,7 @@ ledger's index of them.
 | #1169 multi-param `requires` reads the wrong dict slot | candidate member of **G-10 (#1318)** — slot mis-assignment upstream of both engine symptoms | #1318 | inference, on-issue |
 | #1174 (Int, Char) call vs bare-tyvar-head impl rejects a legal program | **unmapped** — plausibly the #1161 shattered-goal class (bare-TyVar head matches anything at `entryHeadMatches`' arg-0 fallback); adjudication owed | none yet; candidate #1318-class | inference, HERE only — no on-issue comment |
 | #1177 predicate ORDER in a `=>` context decides dispatch | member of **G-10 (#1318)** — slot-per-tyvar cardinality is the mechanism | #1318 | inference, on-issue |
-| #1180 undetermined constraint silently picks the concrete impl | **CANDIDATE member only** of #1318 — the named fix site (`implHeadTagForIface`) may make it S-lane selector work instead | #1318 (candidate) | adjudication owed, on-issue |
+| #1180 undetermined constraint silently picks the concrete impl | **CANDIDATE member only** of #1318 — the named fix site (`implHeadTagForIface`, since deleted) may make it S-lane selector work instead | #1318 (candidate) | adjudication owed, on-issue |
 | #1182 two interfaces, one method name — `impl` block order decides | plausibly **A-3** (#1112): candidate collection keyed by interface identity in K's `IE` (`matchingEntries` keys by method name today) | A-3 (proposed) | inference, on-issue |
 | #1183 ⊑-incomparable overlap at a non-closed goal commits with a warning | **deferred by owner decision** (F-3d record) — needs the T4 quiescence pass, i.e. **E-4** territory; the accepted cost is on the epic | E-4 (revisit condition) | adjudicated (owner decision) |
 | #1191 prelude-standalone collision on the zero-import path | plausibly **E-1** (#1115) — the Flat arm's prelude concatenation; belongs in E-1's divergence enumeration | E-1 (proposed) | inference, on-issue |

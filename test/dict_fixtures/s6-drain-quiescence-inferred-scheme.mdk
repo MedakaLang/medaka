@@ -12,8 +12,8 @@
 -- declared `Int` return position, fully grounded, so they are not the
 -- undefaulted-`Num` class #2646 owes — the ambiguity is manufactured by the drain.
 --
--- WHAT THIS ROW PINS: `check` must NOT report `T-AMBIGUOUS-INSTANCE`, including
--- once the drain's own diagnostics reach `check` (`DrainDiags`' deletion).
+-- WHAT THIS ROW PINS: `check` must NOT report `T-AMBIGUOUS-INSTANCE`.  The drain's
+-- own verdict is read in-process by `compiler/types/typecheck_test.mdk`.
 interface Sh a where
   shv : a -> Int
 

@@ -1,0 +1,19 @@
+-- §3 #3796: a generalized local inside a signed function.  `k`'s goal
+-- `Get (Box (List t)) e` is improved by `impl Get (Box a) a` before `k`
+-- generalizes, so `k : u -> List t`, and `k x` returns a list where `weird2`
+-- promises the caller's `b`.  `weird2` is rejected as too general, as it is when
+-- `k` is a top-level binding.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+weird2 : b -> b
+weird2 x =
+  let k u = get (Box [])
+  k x
+
+main = println (weird2 41 + 1)

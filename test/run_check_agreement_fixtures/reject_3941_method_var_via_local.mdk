@@ -1,0 +1,22 @@
+-- §3 #3797 through a local: `k u = get (Box [])` is improved to `k : a -> List t`
+-- before it generalizes, so `k y` returns a list where `w : x -> b -> b` promises
+-- the caller's `b`.  The impl body is refused for pinning `b`, as it is when `k`
+-- is a top-level binding, and nothing proposes `Get b =>` for the two-parameter
+-- `Get`.
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+interface W x where
+  w : x -> b -> b
+
+impl W Int where
+  w _ y =
+    let k u = get (Box [])
+    k y
+
+main = println (w (1 : Int) 41 + 1)

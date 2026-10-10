@@ -1,0 +1,17 @@
+-- §3 "When" at a local `let`: `k u = pick [] u` poses `Pick (List t) u r`, which
+-- `impl Pick a a a` improves to `u = r = List t` before `k` generalizes, so
+-- `k : List a -> List a` and the uses at `[n]` and `["s"]` each instantiate it,
+-- as the top-level `k` does.
+-- Hand-derived: `pick` returns its second argument, so [3] and ["s"].
+interface Pick a b c where
+  pick : a -> b -> c
+
+impl Pick a a a where
+  pick _ y = y
+
+both : Int -> (List Int, List String)
+both n =
+  let k u = pick [] u
+  (k [n], k ["s"])
+
+main = println (debug (both 3))

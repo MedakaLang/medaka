@@ -1,0 +1,29 @@
+-- §3 a method body's own `=>` context is given with its superinterfaces, as a
+-- top-level signature's is: `w`'s `Get2 (Box (List Int)) b` gives
+-- `Get (Box (List Int)) b` through `Get2`'s `requires`, so the impl body's
+-- `get (Box [1])` is answered, as the top-level `wt` with the same context is.
+-- Hand-derived: `wt 1 [5]` is `get (Box [1])`, [1].
+data Box a = Box a
+
+interface Get c e where
+  get : c -> e
+
+impl Get (Box a) a where
+  get (Box x) = x
+
+interface Get2 c e requires Get c e where
+  get2 : c -> e
+
+impl Get2 (Box a) a where
+  get2 (Box x) = x
+
+interface W x where
+  w : Get2 (Box (List Int)) b => x -> b -> b
+
+impl W Int where
+  w _ _ = get (Box [1])
+
+wt : Get2 (Box (List Int)) b => Int -> b -> b
+wt _ _ = get (Box [1])
+
+main = println (debug (wt 1 [5]))

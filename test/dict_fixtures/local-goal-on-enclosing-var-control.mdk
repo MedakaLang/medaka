@@ -1,0 +1,7 @@
+-- Control for `local-goal-on-enclosing-var`: the same `g2` at the element type.
+-- `g2 : Index a Int b => a -> b`.  Hand-derived: 1.5 + 1.0 = 2.5.
+g2 v =
+  let f = i => v[i]
+  f 0
+
+main = println (g2 [|1.5, 2.25|] + 1.0)

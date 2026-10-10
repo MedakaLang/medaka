@@ -1,0 +1,13 @@
+-- §4 `gen` at a local binder: `f = i => v[i]` quantifies `i` and `e` but not `v`'s
+-- type, which it shares with `g2`.  Its goal `Index c i e` stays in `f`'s scheme
+-- with `c` as itself, so `f 0` poses `Index c Int e` to `g2`, and
+-- `g2 : Index a Int b => a -> b`.  The call at `String` has no instance:
+-- `Index (Array Float) Int String`.  Base dropped the goal (`g2 : a -> b`) and
+-- accepted the call; `run` panicked `putStrLn: not a String`.
+g2 v =
+  let f = i => v[i]
+  f 0
+
+main =
+  let r : String = g2 [|1.5, 2.25|]
+  println r

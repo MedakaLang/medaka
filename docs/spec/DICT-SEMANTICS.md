@@ -633,11 +633,40 @@ against `impl Get (Box a) a`) is rejected at its site in the definition with
 `test/dict_fixtures/sig-var-rigid-repeated-head-var.mdk`). An impl head's
 variables are held the same way in its bodies (W3-inst above,
 `test/dict_fixtures/impl-head-goal-only-by-binding.mdk`,
-`test/dict_fixtures/impl-head-mixed-residual.mdk`). No other declared variable is held rigid yet,
-and a matcher can still bind it: a goal abstracted by a generalized local inside
-a signed function (#3796), an interface method signature's own variable (#3797;
-improvement and determination at the body's close hold it rigid, the matcher
-that accepts the goal does not), and a variable written in an expression annotation (#3799).
+`test/dict_fixtures/impl-head-mixed-residual.mdk`). Every other declared variable
+is held the same way, at its binder's close:
+
+- An interface method signature's own variables, in an `impl` or default body:
+  a goal of the body that an instance answers only by binding one is rejected at
+  its site with `T-MISSING-CONSTRAINT` when the body closes, unless the method's
+  own `=>` context gives it, closed under superinterfaces as a signature's is
+  (`test/dict_fixtures/sig-var-rigid-method-var.mdk`,
+  `test/dict_fixtures/method-given-through-super.mdk`).
+- A variable written in an expression annotation, for the annotated expression:
+  a goal of the expression that an instance answers only by binding one is
+  rejected at its site (`test/dict_fixtures/sig-var-rigid-annotation-var.mdk`).
+  Past the expression the variable is its binder's: an annotated local that
+  generalizes quantifies it (next item), and one that does not leaves it to the
+  binder that will.
+- A generalized local's own goals are improved before it generalizes, as a
+  top-level group's are ("When" below), with each variable of an enclosing
+  binder taking part as a constant. Its scheme is built from the improved type,
+  so the local gets the verdict its top-level twin gets: `let k u = get (Box [])`
+  generalizes to `k : a -> List t`, used at two element types it is accepted
+  (`test/dict_fixtures/local-improved-get-two-uses.mdk`,
+  `test/dict_fixtures/local-improved-where-two-uses.mdk`), and
+  `weird2 : b -> b; weird2 x = k x` is `T-TYPE-TOO-GENERAL`, as with a top-level
+  `k` (`test/dict_fixtures/sig-var-rigid-generalized-local.mdk`,
+  `test/dict_fixtures/sig-var-rigid-generalized-local-pick.mdk`). From its
+  generalization on, its quantified variables are its uses' to choose, as a
+  signature's are its callers', and no matcher binds one: a goal improvement
+  leaves on them stays in the local's scheme (§4 `gen`), and each use poses it,
+  instantiated, to the binder enclosing the use, whose own rule then judges it.
+  A leaf of that residual goal is either quantified or an enclosing scope's
+  variable, which stays itself in the instantiated goal
+  (`test/dict_fixtures/local-goal-on-enclosing-var.mdk`); an own variable that
+  improvement leaves open and no type of the local mentions is ambiguous at the
+  local's boundary, as at a group's.
 
 Uniqueness is counted over unifying heads, not matching ones, because a
 one-sided match undercounts. At `Pick (List t) (List n) (List Int)`, with `n` a
@@ -657,9 +686,11 @@ defaulting, so that `Get (Box Float) e` against the only instance
 generalization, so that a binding's scheme is built from the improved type
 rather than having a quantified variable bound after the fact
 (`wrap y = pick [y] []` generalizes to `a -> List a`;
-`test/dict_fixtures/impl-improvement-unique-instance.mdk`). A local `let`
-defaults at its own boundary first. Its obligations still reach the enclosing
-group's close, but a variable already defaulted there is no longer free.
+`test/dict_fixtures/impl-improvement-unique-instance.mdk`). A local `let` or
+`where` component is improved and defaults at its own boundary first, before it
+generalizes, with an enclosing binder's variables held as constants
+(`improveLocalGoals`). Its obligations still reach the enclosing group's close,
+but a variable already improved or defaulted there is no longer free.
 
 **Inside a method body.** An `impl` body, and an interface's default method
 body, is inferred outside every binding group, so its obligations never reach a
@@ -1929,7 +1960,18 @@ an implementation matter.
   (`test/dict_fixtures/undetermined-nested-requires-goal.mdk`,
   `test/dict_fixtures/undetermined-nested-requires-goal-deep.mdk`). A prerequisite is
   judged, never determined: its open siblings refute no candidate, so a commit through
-  it could choose an instance no sibling is met by. The no-unique-minimum arm of `pickMostSpecificEntry` (`reportOverlapForIface`)
+  it could choose an instance no sibling is met by. When the one instance an open
+  goal reaches unifies with it without matching it as it stands (`B ?a` under
+  `impl B (List b)`), its prerequisites are posed under that unifier, uncommitted:
+  `C ?b` stands for the element of `?a`, so it is posed only when every goal
+  variable the unifier binds is one this boundary judges. A goal whose variable a
+  scheme quantifies leaves them to its caller, which poses them on its own
+  variables. A goal on a live variable is walked at quiescence with its own verdict:
+  `fa !cell` under `impl A (Option a) requires B a`, with `cell = Ref None` grounded
+  by a later `cell := Some [True]`, selects `C Bool`, while a `cell` nothing grounds
+  leaves `C ?b` ambiguous (`test/dict_fixtures/undetermined-nested-prerequisite-none.mdk`,
+  `test/run_check_agreement_fixtures/accept_3941_nested_prerequisite_live_grounded.mdk`).
+  The no-unique-minimum arm of `pickMostSpecificEntry` (`reportOverlapForIface`)
   rejects an open goal exactly as it rejects a closed one: every candidate there
   MATCHES the goal, and a match survives every later binding of the goal's
   variables, so the goal is as ambiguous at quiescence as at the selector. A boundary
@@ -1962,7 +2004,8 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   local `let` defaults at its own close, before its goals reach the enclosing group's
   sequence. Which variables each boundary may touch is D3's: at a top-level group and
   a local `let`, a variable of a member's type that a goal connects to an argument is
-  withheld (D3 clause 2); a `where` component already withholds every variable any
+  withheld (D3 clause 2), and at a local `let` an enclosing binder's variable counts
+  as an argument; a `where` component already withholds every variable any
   member's type mentions, which includes every variable that connection reaches.
   Defaulting therefore runs:
   * **after** the boundary's bodies are inferred — nothing later can constrain the
@@ -2026,7 +2069,17 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   no channel even when a goal connects it to an argument, and is a candidate:
   `f x = ix x 0` poses `Ix a k` and `Num k`, and `k` defaults
   (`test/dict_fixtures/connect-outside-type-defaults.mdk`,
-  `test/dict_fixtures/connect-outside-type-rejected.mdk`). Connection excludes a
+  `test/dict_fixtures/connect-outside-type-rejected.mdk`). At a local `let` or `where`
+  component the free environment is part of the argument channel: a variable of an
+  enclosing binder seeds the connection as an argument does, since that binder's
+  boundary, and its callers, still determine it. In `g v = let s = v[0] + v[1]` the
+  element `e` of `Index c k e` is in `s`'s type and connected to `v`'s `c`, so the
+  `let` leaves it to `g`; `g : (Index a Int b, Num b) => a -> b`, the scheme of the
+  `let`-free body (`test/dict_fixtures/default-guard-let-tied-to-enclosing-arg.mdk`).
+  A variable a local `let`'s goals mention and its type does not (the keys here) is no
+  scheme's and no caller's, so the `let` hands it to the enclosing boundary, which
+  determines before it defaults; in a `let` inside an impl body that is the method
+  body (`test/dict_fixtures/default-guard-let-in-body-ownership-gap.mdk`). Connection excludes a
   variable from defaulting only. Improvement and determination (§3) still treat it as
   the boundary's own, so the one instance whose head unifies with a goal may bind it
   there (`wrap y = pick [y] []` still generalizes to `a -> List a`).
@@ -2109,10 +2162,13 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   is withheld, and the second determination fixes `e = a`
   (`test/dict_fixtures/body-settle-3809-float-key.mdk`). A goal on a withheld
   variable that determination still leaves open is rejected (§3 "Reject"). The
-  clause runs at the four boundaries that default — a top-level group, a `where`
-  component, a local `let`, and a method body. A closed `test` or property body
-  defaults without it, since it has no determination and no verdict after
-  defaulting.
+  clause runs at the five boundaries that default — a top-level group, a `where`
+  component, a local `let`, a method body, and a closed `test` or property body. A
+  `test` or property body settles as a method body does (`settleClosedBody`):
+  improvement and determination, defaulting under this clause, improvement and
+  determination once more, then the verdict on what stays open. A variable below
+  the body's level (a property parameter, a value-restricted outer binding) is
+  held rigid there and judged by the binder it belongs to.
 
 - **D4 — Scope, and the level discipline.** Defaulting, and the ambiguity check that
   follows it, are scoped to the variables the boundary **owns**. A variable belonging
@@ -2923,7 +2979,7 @@ not this paragraph.
 | §3 `inst` | `entailInst`, `compiler/types/typecheck.mdk:11941-11991`, via `keyForSite:11386`/`keyForSiteByIface:11608` → `matchedEntry:11416` → `pickMostSpecificEntry` | fresh dictionary construction at the `min⊑` instance, recursively discharging its own context | goal keyed by `ifaceParamMonos`'s **full param-mono vector** (the #609 fix, code comment 11971-11978) — shares ONE binding between the method route and its own `requires`-context routes so both arms pick the same impl (closes the C2 "same-impl" hazard) |
 | §3 precedence (`assum`/`super` before `inst`) | `entail`, `compiler/types/typecheck.mdk:11892-11896` | in-scope evidence wins over instance construction | tries `entailAssum` first, falls to `entailInst` only on `None` |
 | §3 **W1** (superclass acyclic) | `ifaceDfsCycle:11076-11101`, invoked at `:11062` pushing `T-CYCLIC-SUPERINTERFACE` (`compiler/types/typecheck.mdk`) | rejects a cyclic `requires` chain | DFS keyed on **bare interface name** (`String`), not module-qualified — not independently re-verified for a same-named-interface cross-module collision here |
-| §3 **W2** (instance-context termination / Paterson coverage) | `routeOfD:12863` (`compiler/types/typecheck.mdk`), the depth-carrying core of `routeOf:12852`, threaded through `argImplRequiresRoutes:13054` → `argImplReqRoutes:13144` → `argReqRoute` → back to `routeOfD` — the #217 "WS-4b fuse" | ⚠️ **NOT the spec's W2.** W2 is a *static, declaration-time* condition (reject an instance whose context isn't structurally smaller than the goal). What exists is a **dynamic, resolution-time cutoff** inside `argImplRequiresRoutes`, which since **#1576** is a *shrinking test* rather than a flat depth counter: a `requires` sub-goal whose whole argument vector is structurally SMALLER (`monoSizes`) than the goal that spawned it costs nothing, and only a NON-shrinking step spends one unit of `requiresNonShrinkingFuel` (32). So a non-shrinking context (`impl C (T a) requires C (T (T a))`) still *terminates* by silently returning no further requires-routes — it grows its goal every step, so it exhausts the fuel almost immediately — rather than being *rejected* at declaration. The program is accepted either way; only route resolution stops recursing | 🟢 **the flat `if depth >= 32 then []` this row used to describe was itself an S0** (#1576/#1836): it truncated the dict witness of a perfectly valid GROUND chain (`impl Tag (Wrap a) requires Tag a` at `Wrap^34 Int`) one level early, and the built binary read the missing cell and segfaulted at exit 0 from `check` and `build`. The old text's "a legitimately-deep-but-terminating context presumably degrades identically to a genuinely non-terminating one at depth 33" was exactly right about the hazard and exactly wrong about it being harmless. The shrinking test separates the two populations: a shrinking chain now compiles at ANY depth its type needs (measured to `Wrap^202`), and the fuel bounds only the divergent shape it was written for. Still no *diagnostic* on the fuse arm — a `pushTypeErrorOnceAt` from the `resolve*` stamp passes is discarded on `check`, `run` and `build` alike (**#1910**), which is what a loud reject here is blocked on |
+| §3 **W2** (instance-context termination / Paterson coverage) | `routeOfD:12863` (`compiler/types/typecheck.mdk`), the depth-carrying core of `routeOf:12852`, threaded through `argImplRequiresRoutesForRow` → `argImplReqRoutes:13144` → `argReqRoute` → back to `routeOfD` — the #217 "WS-4b fuse" | ⚠️ **NOT the spec's W2.** W2 is a *static, declaration-time* condition (reject an instance whose context isn't structurally smaller than the goal). What exists is a **dynamic, resolution-time cutoff** inside `argImplRequiresRoutesForRow`, which since **#1576** is a *shrinking test* rather than a flat depth counter: a `requires` sub-goal whose whole argument vector is structurally SMALLER (`monoSizes`) than the goal that spawned it costs nothing, and only a NON-shrinking step spends one unit of `requiresNonShrinkingFuel` (32). So a non-shrinking context (`impl C (T a) requires C (T (T a))`) still *terminates* by silently returning no further requires-routes — it grows its goal every step, so it exhausts the fuel almost immediately — rather than being *rejected* at declaration. The program is accepted either way; only route resolution stops recursing | 🟢 **the flat `if depth >= 32 then []` this row used to describe was itself an S0** (#1576/#1836): it truncated the dict witness of a perfectly valid GROUND chain (`impl Tag (Wrap a) requires Tag a` at `Wrap^34 Int`) one level early, and the built binary read the missing cell and segfaulted at exit 0 from `check` and `build`. The old text's "a legitimately-deep-but-terminating context presumably degrades identically to a genuinely non-terminating one at depth 33" was exactly right about the hazard and exactly wrong about it being harmless. The shrinking test separates the two populations: a shrinking chain now compiles at ANY depth its type needs (measured to `Wrap^202`), and the fuel bounds only the divergent shape it was written for. Still no *diagnostic* on the fuse arm — a `pushTypeErrorOnceAt` from the `resolve*` stamp passes is discarded on `check`, `run` and `build` alike (**#1910**), which is what a loud reject here is blocked on |
 | §3 **W3** (method-scheme fidelity / rigidity) | `checkMethodRigidityCore`, `checkMethodEffVarRigidity`, `checkImplEffVarRigidity` (all `compiler/types/typecheck.mdk`) | an impl/default body may not pin a non-head quantified variable (type *or* effect) to a concrete shape | run by the one method-body driver `inferMethodBody` for both kinds (`MethodBodyKind`); a default body's rigidity reads the same instantiation as its body |
 | §3 **W3-inst** (instance-head rigidity) | `checkImplHeadRigidity`, `checkImplHeadPrerequisites` (`compiler/types/typecheck.mdk`) | an impl body may not pin or identify a head variable, and every predicate it leaves on one is entailed by the impl's `requires` (with superinterfaces), the method's `=>` context or the head itself | impl bodies only, at the same boundary as W3, before body-local defaulting; a pin is reported by the body that introduced it; a goal an instance answers only by fixing a head variable is reported whatever other variables it mentions (#3798, #3817) |
 | §4 `var` | `instantiate:3630`; per-residual entailment via `entail:11892`; obligation discharge `checkCallObligationsU:13793`/`checkOneCallObligation:13814` | instantiation + per-predicate entailment at each use | — |
@@ -2951,7 +3007,7 @@ not this paragraph.
 | §6 uniform resolution corollary | no single dedicated site — structural consequence of every resolution position sharing `entail:11892` | all resolution positions agree on the same-goal evidence | audit-level claim, not an independently-checkable function |
 | §6.2 **T1** (groups = SCCs of the reference graph, topological order) | `processTopGroups:15568` → `tarjanSCCs` over `depGraphMap` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`); `isLetrecGroup:15789` distinguishes a multi-member group from a singleton | dependency-first group order; one shared `λd̄.` per mutually-recursive group | ⚠️ the graph's node set is **top-level value bindings only** — `depsOf:15579` builds edges from `allEVars` over `clausesOf`, so `impl` bodies, `default` bodies, prop and test bodies are **not nodes**. They are inferred after every SCC has generalized (`processTopGroups`, then `inferUserImplBodies` — since #2705 on every driver), which satisfies T1 for them only because nothing schedules them at all |
 | §6.2 **T2** (a later group observes only the earlier group's scheme) | structural: `processSCCs:15600` threads the environment forward as `snd er ++ …` over `fst er`, and the only thing added is `extendVars env (dropSchemesNamed …) schemes` (`:15782`) | no evidence, route, or instance choice crosses a group boundary — only schemes | keyed by binder name into the environment. The second half of T2 (a non-generalized binding's monotype carries **live** metavariables into later groups) is structural too: `genBindingRestricted:3606`'s non-value arm returns `monoScheme t` after `lowerToCurrent:3582`, i.e. the same cells |
-| §6.2 **T3/T4** (`inst` commits only on a closed goal; non-closed goals resolve at graph quiescence) | ✅ the main graph driver queues one `StampCtx` per module in `checkModuleFullImpl` and runs the single `moduleStampOrder` through `drainStampQueue` at graph end (`graphDrainFinish`) | one graph-end resolution schedule after every module has inferred; a goal still open is determined by its one unifying instance or rejected (§4.2 OD3's row) | an open goal with no stable minimum is rejected at the selector and at the boundary that owns its variable (R-SC3), never committed by declaration order. ⚠️ the keyed module-chain memo may drain a closed prefix before snapshotting it; that explicitly documented cache schedule is the remaining path to audit against T4, not a second checking mode. ⚠️ the diagnostics drive still discards its drain's own diagnostics (`DrainDiags`): its dictionary members are drained (`test/dict_fixtures/s6-drain-quiescence-*.mdk`); the one member left is `stdlib/core.mdk` checked as an entry, two unbound-authority diagnostics |
+| §6.2 **T3/T4** (`inst` commits only on a closed goal; non-closed goals resolve at graph quiescence) | ✅ the main graph driver queues one `StampCtx` per module in `checkModuleFullImpl` and runs the single `moduleStampOrder` through `drainStampQueue` at graph end (`driveGraphK`) | one graph-end resolution schedule after every module has inferred; a goal still open is determined by its one unifying instance or rejected (§4.2 OD3's row) | an open goal with no stable minimum is rejected at the selector and at the boundary that owns its variable (R-SC3), never committed by declaration order. ⚠️ the keyed module-chain memo may drain a closed prefix before snapshotting it; that explicitly documented cache schedule is the remaining path to audit against T4, not a second checking mode. ⚠️ the unkeyed drive keeps what its drain raises in the sticky accumulator (the keyed chain's tail and the memo paths still roll it back through `checkGraphFinish`), but `check` renders only the per-module diagnostics collected before the drain, so the drain's own verdict on a scheme-quantified goal is pinned in-process (`compiler/types/typecheck_test.mdk`, over the `test/dict_fixtures/s6-drain-quiescence-*.mdk` programs) rather than by `check` |
 | §6.2 **T5** (freeze-at-module-close REJECTED) | N/A — a rejected alternative | — | recorded so a later implementation does not adopt it as an optimization: it is sound but narrowing, and it makes module partitioning semantically significant |
 | §6.3 **D1** (defaulting placement) | `finalizeNumBoundary` is the one sequencer for the five local/member boundaries, the SCC boundary, and the method-body driver `inferMethodBody` (impl and default kinds); it runs the boundary's numeric defaulting primitive before `registerAmbiguousConstraintsOwnedBy`. Each method path finalizes only after body inference and rigidity, and before the later obligation drains | defaulting is the last determination step at its boundary | ✅ ENFORCED by one operation over `NumBoundary`; callers choose a policy/owner, but cannot reverse defaulting and ambiguity rejection |
 | §6.3 **D2** (defaulting substitutes, never discharges) | `groundNumVars:9273` grounds by `unify m (TCon "Int")` (`:9277`) — an ordinary unification, so the now-ground predicate is checked by whatever would have checked it | a defaulted variable's obligations are still obligations | ENFORCED by mechanism (substitution, not removal). Note the *choice* this encodes: the target is always `Int`, with no `default`-declaration analogue and no fall-through to a second type |
@@ -2978,7 +3034,7 @@ not this paragraph.
 
 **Partial enforcement found (NOT "unimplemented"):** §3 W2 (instance-context
 termination/Paterson coverage) has no *static, declaration-time* check, but a *dynamic,
-resolution-time* cutoff does exist — `routeOfD`/`argImplRequiresRoutes`, the
+resolution-time* cutoff does exist — `routeOfD`/`argImplRequiresRoutesForRow`, the
 #217 "WS-4b fuse", which since #1576 fires on NON-SHRINKING steps
 (`requiresNonShrinkingFuel`, 32 of them) rather than on raw depth. See the W2 row above
 for why that is not equivalent to the spec's condition: a non-shrinking context

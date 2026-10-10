@@ -895,12 +895,11 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    `20869bcc7`).  §E's "one driver, one mode" is now the code, not the plan.
    `driveGraphK` drives the whole module graph once — stamp, one `graphPreamble`, one
    `graphModuleWorker` through `foldModules`, one graph-end drain, one coherence attach —
-   under two parameters:
+   under one parameter:
    * `GraphOut` — `GOutDiags` (per-module diagnostics and schemes) or `GOutTrees` (those
      plus the dict-passed trees, the residual and the evidence table).  The selection gates
      more than writes; DERIVE the sites rather than trusting a count here
-     (`grep -n 'match sel' compiler/types/typecheck.mdk`, minus the one unrelated
-     `selectReqImpl` hit).  Six are state writes: `mainSchemeRef`'s clear, the empty ctor
+     (`grep -nw 'match sel' compiler/types/typecheck.mdk`).  Six are state writes: `mainSchemeRef`'s clear, the empty ctor
      oracle, `superDeclsRef`/`userIfaceNamesRef`, the promotion-eligible seed, whether the
      core pass is `checkCoreMemoized` or `elabModuleStamp` (the tree arm needs core's marked
      decls, and a memo may hold no `Decl`), and the per-module tree/harvest/`mainSchemeRef`
@@ -912,7 +911,6 @@ both landed — see item 9. #2549 is landed for its first half only — see item
      The file header names the first of those three as one of the two remaining
      by-construction divergences between the selections, so "and nothing else" would
      contradict it.
-   * `DrainDiags` — `DrainRollback` or `DrainKeep`, with its deletion condition in the code.
    `elaborateModules`, `checkModulesDiagsChain`'s unkeyed arm and `checkModulesEntryFullSplitK`
    are projections.  The memo layer stays OUTSIDE and wraps `GOutDiags` only: `ChainStep`
    captures no marked tree, so a memo over the tree arm is a different data structure, and
@@ -929,7 +927,8 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    become `checkModulesK`, `driveGraphK`; the memo's own `chainGo` fold is unchanged in
    both).  `types.typecheck`'s LEG A golden loses 20 rows and gains 10 (5 genuinely new
    bindings — `driveGraphK`, `graphPreamble`, `graphModuleWorker`, `graphCollect`,
-   `graphDrainFinish` — and 5 renames, each a lost pair and a gained row);
+   `graphDrainFinish`, since deleted (the drain is now a direct `drainStampQueue` call) —
+   and 5 renames, each a lost pair and a gained row);
    `tools.check` loses 2.  `ModDiags` names the per-module payload the widening had spelled
    out.  DERIVE the size of that widening rather than reading a number here, and say WHICH
    count you mean: `git grep -c` for the exact spelling
@@ -984,10 +983,16 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    `routeUndeterminedTop`'s single-tag arm minted the goal `Tweak Float` from the census tag
    of two `Tweak Float _` impls for a goal on a scheme-quantified variable, and the selector
    rejected it. That arm now gives such a goal no route
-   (`test/dict_fixtures/s6-drain-quiescence-projected-goal.mdk`). `DrainDiags` stays: the
-   re-derived population is `stdlib/core.mdk` checked as an entry (two unbound-authority
-   diagnostics at `1:0`). See the `data DrainDiags` comment in `compiler/types/typecheck.mdk` for the current
-   population; do not read any number above as current.
+   (`test/dict_fixtures/s6-drain-quiescence-projected-goal.mdk`).
+   ⚠️ **Closed by sprint `every-boundary-settles` (2026-10-09).** `DrainDiags` and its
+   rollback are deleted: every unkeyed drive now keeps what its drain raises. The population
+   was re-derived over all 4,902 `.mdk` files under `test/` and `stdlib/` (3,748 accepted)
+   and is EMPTY: the `stdlib/core.mdk` member is raised by the preamble (the `runtime.mdk`
+   net externs checked with `coreDecls = []`), not by the drain, so the rollback never hid
+   it. `routeUndeterminedTop` now routes by `goalCandidates`, with no census. `check` still
+   renders only the per-module diagnostics collected before the drain, so the drain's own
+   verdict on the `s6-drain-quiescence-*` programs is pinned in-process by
+   `compiler/types/typecheck_test.mdk`.
 
 18. **`run --json` envelopes a static error, 2026-09-09** (#2798). `runRunCmd`'s error arms
    — SIX of them; derive rather than trust this number, `grep -n 'runAbortJson'
@@ -3516,7 +3521,7 @@ reach. Run the three commands rather than trusting this table's membership.
 | `obUnivConcreteRef` / `obUnivHeadlessRef` / `obUnivIfaceTagsRef` (`ImplUniverse`) | `CrossRun` registries, identity-keyed interface half | **SUBSUMED** (PR2) — this *is* `IE` |
 | `buildImplUniverse` / `growImplUniverse` / `implDeclsWithReqs` | pure builders over a decl list | **SUBSUMED** as `IE`'s builder input; the Flat shim keeps them |
 | `universeKeyBucketsRef` / `buildKeyTable` / `keyEntryOf` / `matchingEntries*` / `keyForSite*` / `headCollides*` / `implExistsForHead` (`KeyBuckets`) | route-word registry, head half bare by design | **LANDED — `S-keytable-payoff` (`75f4148f`) deleted the whole closed pass-through cycle.** `B-2.1-g` repointed `keyForSite` onto the graph-global `bodyImplEnvRef` (its `KeyBuckets` parameter removed); `B-2.1-d` DELETED `universeKeyBucketsRef`, `shadowKeyTableRef` and the whole prefix-table READ side — `implExistsForHead(Go)`, `matchedEntry`, `matchingEntries(Go)`, `candidateBucket`, `bucketOfHead`, `headCollides`, `countHead(Go)` and `B-2.1-f`'s `routeWordHeadSkew`/`reportRouteWordSkew`/`routeWordAmbiguousMsg`. `S-keytable-payoff` then deleted the zero-terminal-read remainder — `buildKeyTable`, `bucketKeyEntries(From)`, `keyEntryOf`, `KeyBuckets` itself, and `headBucketRender` — across its 20 sites. **STILL LIVE:** `KeyEntry`, `mergeByDeclIdx`, `keyForSite*`, `headBucketKey`/`headlessBucketKey`, `implKeyTc`, `keyEntryIdx`, `keyEntryOfRow` |
-| `buildImplTable` / `implEntryOf` / `findImplEntry` (`ImplBuckets`, 2 build sites: `:11369`, `:24576`) | per-run bucket table keyed by bare iface+tag, consumed by `entail`/`routeOf` | **DEFERRED → #1622 (OPEN).** §2 K's *"K's IE is the single environment both must read"* consolidation stays owed — verified still live: `buildImplTable`/`implEntryOf`/`findImplEntry` are unchanged in `compiler/types/typecheck.mdk` (`:20196-20215`, `:22050-22051`). B-2 (#1113) closed 2026-08-16 without moving this reader; #1622 documents the exact obstruction (`selectReqImpl`'s `iface == ""` arm reads `ImplBuckets` by first-match over a different population/rule/goal-vector than the `IE`-backed `iface != ""` arm, so collapsing them unguarded is a semantics change, not a refactor) |
+| `buildImplTable` / `implEntryOf` / `findImplEntry` (`ImplBuckets`, 2 build sites: `:11369`, `:24576`) | per-run bucket table keyed by bare iface+tag, consumed by `entail`/`routeOf` | **DEFERRED → #1622 (OPEN).** §2 K's *"K's IE is the single environment both must read"* consolidation was owed when B-2 (#1113) closed 2026-08-16 without moving this reader. #1622 documented the obstruction as `selectReqImpl`'s `iface == ""` arm reading `ImplBuckets` by first-match over a different population/rule/goal-vector than the `IE`-backed `iface != ""` arm. Both halves of that obstruction are since deleted from `compiler/types/typecheck.mdk`: `buildImplTable`/`implEntryOf`/`findImplEntry` by S-quiescence-drain (#2548), and `selectReqImpl` by S-drain-one-behavior-2 (#3941), which routes an undetermined goal through `goalCandidates` over `IE`. Re-derive what #1622 still owes from the current source, not from this row |
 | **`implKeyOf` and its per-impl dict-registry family** — `declImplEntries`/`declImplIfaceIdRow` (`eval.mdk:305`, `:2001`), `lowerDeclImpl` → `CImplEntry`'s `key` field (`compiler/ir/core_ir_lower.mdk:1293-1313`, `:1221`), `distinctImplKeys` (`compiler/backend/wasm_emit.mdk:4066-4070`) | the **engine-side** per-impl dict-cell registry: a **bare-iface-name** key rendered into a runtime cell/symbol name, consumed by all three engines | **NOT `IE` — consolidated within B-2's own phases, #1113 (CLOSED 2026-08-16) does not gate it further.** `implKeyOf` itself is **deleted** (`B-2.2-e`, `compiler/eval/eval.mdk:543-548`): its own doc-comment records the fold — the mint now lives once, in `compiler/types/route_key.mdk`'s `implRouteKeyWord`, which both `eval.mdk`'s callers (`declImplIfaceIdRow`, `implMethodEntry`) and typecheck's `implKeyTc` (`typecheck.mdk:20415-20416`, calling `implRouteKeyWord` directly) now share — that shared call site, not a separate `keyEntryOf`/`KeyBuckets` hop (both deleted, see the `KeyBuckets` row above — this row's prior citation of them was stale), is what keeps the two byte-identical. It remains a **route-word** registry, not a declaration environment, and identity-keying it re-runs #1317's measured T1 failure (`typecheck.mdk:21411-21432`, where re-keying the *counting* scans alone reproduced #1277's S0 — and the same block records why the question is *inherently* spelling-scoped: three engines re-derive the same uniqueness test from a bare `String` tag). `Route` is an orthogonal concept, not a routing destination. ⚠️ Do not confuse `implKeyOf`'s old home with wasm's *homonym* at `wasm_emit.mdk:4068` (`CImplEntry -> List (String, String)`, a different function that merely projects the key this one minted) |
 | `cohCollectImpls` / `cohCollectModuleImpls` / `cohImplsOf` (`:12590-12591`) / `cohImplsOfMid` (`:12612-12616`) / `CohImpl` / `coherenceUserDecls` | user-decls-only list, class identity a bare `String` (`:12588`, compared at `:12909`) | ✅ **LANDED at A-3.7 (#1559)**, with one carve-out. `CohImpl`'s interface half is an `IfaceRef` compared by `cohSameIface` (`sameTyConHead`), and both sweeps now read `IE`: `checkCoherence` takes `cohRowsOwnedBy cur hasPrelude`, `globalCoherenceConflict` takes `cohRowsOf True`, both projected through `cohImplOfRow` — which is where `InstRef` gets its FIRST judgment reader (`instRefMid`). The four decl-walking adapters (`cohCollectImpls`/`cohCollectModuleImpls`/`cohImplsOf`/`cohImplsOfMid`) are **deleted**. ⚠️ **`coherenceUserDecls` does NOT retire** and A-3.7 shrinks `driver_allowed` by **zero** rows: on the Flat arm there is no ordinal-0 prelude row to filter (`flatImplEnvOf` seats its one user module at ordinal 0), so that field *is* the Flat arm's prelude carve-out. Retiring it needs the flat path to gain a prelude node (§7.1 U1 / E-4) |
 | `implCompletenessMsgsOf` / `implCompletenessMsgsOfMap` | per-decl scans; the Flat arm scanned a decl list by BARE NAME (`ifaceRequiredMethods`), the Map arm read `universeIfaceRequiredRef` | ✅ **LANDED at A-3.5a (#1557).** The two checkers are now ONE (`checkImplCompletenessMap`, kept under its historical `Map` name to avoid stranding this citation and three others), reading `CE` at the reading module's ordinal via `ceRequiredAt` → `ceLookupAt`. Retires `universeIfaceRequiredRef` + its writer `insertIfaceRequired`; `cross_allowed` **24 → 23**, derived on this unit's own base — do not quote that pair elsewhere without re-deriving (`sh test/registry_keying_ratchet.sh` prints it). ⚠️ **NOT byte-identical, and the delta is confined to the FLAT arm**: the Module arm's key does not move (`regKeyOfTab (ifaceTabKey implOrigin iface)` on both sides, and `classEnvRowsOf` mints `CeRow`'s key from the same `ifaceTabKey ifaceOrigin name`), so that arm is a population/lifetime move; the Flat arm's bare first-match scan → identity lookup **is** the re-key, per the owner ruling on #1557 OWED 1. **The bare-name key this replaced was the exact defect #1258 reproduced**: interface names are not globally unique across modules (only within one), so two unrelated modules each declaring `Same` shared one bare-name registry key, and whichever module registered last supplied the required-method list checked against BOTH — an impl that completely implemented its own `Same` was rejected as missing the other module's method (`'impl Same ET' is missing method 'bar'`, exit 1, on a program whose only `Same` in scope declares `foo`). #1111 A-2.4 fixed the key to a `RegKey` carrying the interface's identity (`ifaceTabKey`, write side from `DInterface.ifaceOrigin`, read side from the naming `DImpl`'s `implOrigin`) before A-3.5a moved the lookup's source onto `CE` |
