@@ -1395,6 +1395,7 @@ headVarNarrowed : List (String, HeadVarRoot) -> List (String, HeadVarRoot) -> (S
 headVarRootOf : Mono -> Option HeadVarRoot
 headVarsNarrowedBy : List (String, HeadVarRoot) -> List (String, Mono) -> List String
 headlessBucketKey : RegKey
+headsUnifier : Map String Unit -> List Mono -> List Mono -> Option (Ref (List (Int, Mono)))
 i64RangeText : String
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
 idSetOf : List Int -> Map Int Unit -> Map Int Unit
@@ -2200,8 +2201,8 @@ narrowsImplHeadMsg : String -> List String -> String -> String
 negateOp : Mono -> Mono
 negatedI32Lit : Expr -> Option Int
 negatedInI32 : Int -> Option Int
-nestedRequireGoals : Map String Unit -> List UObligation -> List UObligation
-nestedRequireGoalsGo : Map String Unit -> Int -> List UObligation -> List UObligation
+nestedRequireGoals : Map String Unit -> Map String Unit -> List UObligation -> List UObligation
+nestedRequireGoalsGo : Map String Unit -> Map String Unit -> Int -> List UObligation -> List UObligation
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
 noDictHook : String -> EvId -> Unit
@@ -2885,7 +2886,7 @@ seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
 selectIfaceRows : UsePath -> List (String, List String) -> List (String, List String)
 selectReturnRow : ImplEnv -> String -> List Mono -> Option ImplRow
 selectedCallSupers : String -> Option ImplRow -> String -> ScopeId -> List Mono -> List Route
-selectedRequireGoals : Map String Unit -> UObligation -> List (UObligation, Bool)
+selectedRequireGoals : Map String Unit -> Map String Unit -> UObligation -> List (UObligation, Bool)
 selectedRowReqMatch : List Mono -> ImplRow -> Option (List (String, Mono), List Require)
 selfBinding : String -> (String, String)
 selfDeclArities : String -> List Decl -> List ((String, String), a) -> List (String, a) -> List (String, a)

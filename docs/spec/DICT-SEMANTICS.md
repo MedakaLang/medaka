@@ -1960,7 +1960,18 @@ an implementation matter.
   (`test/dict_fixtures/undetermined-nested-requires-goal.mdk`,
   `test/dict_fixtures/undetermined-nested-requires-goal-deep.mdk`). A prerequisite is
   judged, never determined: its open siblings refute no candidate, so a commit through
-  it could choose an instance no sibling is met by. The no-unique-minimum arm of `pickMostSpecificEntry` (`reportOverlapForIface`)
+  it could choose an instance no sibling is met by. When the one instance an open
+  goal reaches unifies with it without matching it as it stands (`B ?a` under
+  `impl B (List b)`), its prerequisites are posed under that unifier, uncommitted:
+  `C ?b` stands for the element of `?a`, so it is posed only when every goal
+  variable the unifier binds is one this boundary judges. A goal whose variable a
+  scheme quantifies leaves them to its caller, which poses them on its own
+  variables. A goal on a live variable is walked at quiescence with its own verdict:
+  `fa !cell` under `impl A (Option a) requires B a`, with `cell = Ref None` grounded
+  by a later `cell := Some [True]`, selects `C Bool`, while a `cell` nothing grounds
+  leaves `C ?b` ambiguous (`test/dict_fixtures/undetermined-nested-prerequisite-none.mdk`,
+  `test/run_check_agreement_fixtures/accept_3941_nested_prerequisite_live_grounded.mdk`).
+  The no-unique-minimum arm of `pickMostSpecificEntry` (`reportOverlapForIface`)
   rejects an open goal exactly as it rejects a closed one: every candidate there
   MATCHES the goal, and a match survives every later binding of the goal's
   variables, so the goal is as ambiguous at quiescence as at the selector. A boundary
@@ -2151,10 +2162,13 @@ where it sits, which variables it may touch, and what it is not allowed to do.
   is withheld, and the second determination fixes `e = a`
   (`test/dict_fixtures/body-settle-3809-float-key.mdk`). A goal on a withheld
   variable that determination still leaves open is rejected (§3 "Reject"). The
-  clause runs at the four boundaries that default — a top-level group, a `where`
-  component, a local `let`, and a method body. A closed `test` or property body
-  defaults without it, since it has no determination and no verdict after
-  defaulting.
+  clause runs at the five boundaries that default — a top-level group, a `where`
+  component, a local `let`, a method body, and a closed `test` or property body. A
+  `test` or property body settles as a method body does (`settleClosedBody`):
+  improvement and determination, defaulting under this clause, improvement and
+  determination once more, then the verdict on what stays open. A variable below
+  the body's level (a property parameter, a value-restricted outer binding) is
+  held rigid there and judged by the binder it belongs to.
 
 - **D4 — Scope, and the level discipline.** Defaulting, and the ambiguity check that
   follows it, are scoped to the variables the boundary **owns**. A variable belonging

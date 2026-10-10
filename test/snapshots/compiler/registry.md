@@ -1,5 +1,5 @@
 # META
-source_lines=1686
+source_lines=1682
 stages=DESUGAR,MARK
 # SOURCE
 -- Identity + registry substrate — Stage A-2 unit A-2.0
@@ -838,19 +838,15 @@ lookupReg k ((k2, v) :: rest) =
 --       answers `Some Int`.  A constraint wrapper is peeled the same way as of
 --       #1630, so `Eq a => Int` answers `Some Int` too.  The projections that
 --       moved are `headTyconTy`
---       (impl side) and `headTyconMono` (goal side), plus the bare-name
---       residual `headTyconNameTy`.  The two that did NOT move are deliberate,
---       for two different reasons, and they owe DIFFERENT answers now that the
---       list has three entries rather than two — say which, do not say "both":
+--       (impl side) and `headTyconMono` (goal side).  The one that did NOT
+--       move is deliberate:
 --         * `headTyconNameMono` still answers `None` for an arrow and an effect
 --           row (its `TFun` arm would merge two populations
 --           `uOblIsDecidableNow` keeps apart).  The CONSTRAINT entry does not
 --           apply to it at all: it walks `Mono`, and `Mono` has no constrained
 --           constructor — constraints have become obligations by then — so
 --           there is no arm it could gain or decline.
---         * `censusHeadNameTy` still answers `None` for ALL THREE (an extra
---           `Some` there is an ACCEPTANCE narrowing, not a routing fix).
---       Each carries its own derivation in `types/typecheck.mdk`.  So "what `None`
+--       It carries its own derivation in `types/typecheck.mdk`.  So "what `None`
 --       means" is now a property of the TYPE **and** of WHICH projection you
 --       asked; do not re-derive one side's answer from the other's.
 --   (2) "there is a head type constructor, but no identity for it" — `mkIdent`
