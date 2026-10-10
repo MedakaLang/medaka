@@ -1,0 +1,29 @@
+-- DICT-SEMANTICS §3 and §6.2 T2: `fa !cell` poses `A (Option ?a)` on `cell`'s
+-- live variable, and nothing grounds it.  At quiescence `B ?a` reaches
+-- `impl B (List x)` by unification, and that instance's prerequisite `C ?x`
+-- reaches `C Int` and `C Bool` with no stable minimum.
+-- Hand-derived: REJECT on all three verbs, T-AMBIGUOUS-INSTANCE at `fa`.
+interface C a where
+  c : a -> Int
+impl C Int where
+  c _ = 1
+impl C Bool where
+  c _ = 2
+interface B a where
+  b : a -> Int
+impl B (List x) requires C x where
+  b xs = 10 + c (match xs
+    [] => panic "e"
+    (y :: _) => y)
+interface A a where
+  fa : a -> Int
+impl A (Option a) requires B a where
+  fa o = match o
+    Some v => b v
+    None => 100
+
+cell = Ref None
+
+peek u = fa !cell
+
+main = println (peek ())

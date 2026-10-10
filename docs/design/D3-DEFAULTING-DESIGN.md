@@ -96,7 +96,7 @@ What the code does today, at the three places the question touches
   head constructor only, skipping goals whose first argument is a variable, after
   `sigVarsStayFree`. The spec records it as "a separate step" (§3, last paragraph).
 - **Defaulting** (`finalizeNumBoundary` :26055 with `unprotectedNumCandidates` :26161,
-  `groundNumVarsWith`, `defaultClosedBodyNum` :35878 for test/prop bodies, and the
+  `groundNumVarsWith`, `settleClosedBody` for test/prop bodies, and the
   method-body special case `bodyExtraNumObls`/`multiParamIds` :26220 for #3506). A
   candidate is a `Num`-constrained variable not protected by a declared signature and
   not reachable from an argument position of a member's type.

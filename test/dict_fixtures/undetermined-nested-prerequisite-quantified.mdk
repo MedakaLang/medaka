@@ -1,0 +1,34 @@
+-- DICT-SEMANTICS §3 and §4 (gen): `w`'s goal `A (Option ?a)` is on a variable its
+-- scheme quantifies (the result's `Option a`), so `B a` is `w`'s context and the
+-- prerequisite `C` of `impl B (List x)` is posed by the caller, on its own
+-- variable: `main` instantiates `a` to `List Bool`, which selects `C Bool`.
+-- Hand-derived: ACCEPT, `mk` returns `None`, so `fa` answers 100.
+interface C a where
+  c : a -> Int
+impl C Int where
+  c _ = 1
+impl C Bool where
+  c _ = 2
+interface B a where
+  b : a -> Int
+impl B (List x) requires C x where
+  b xs = 10 + c (match xs
+    [] => panic "e"
+    (y :: _) => y)
+interface A a where
+  fa : a -> Int
+impl A (Option a) requires B a where
+  fa o = match o
+    Some v => b v
+    None => 100
+
+mk : Unit -> Option a
+mk _ = None
+
+w u =
+  let o = mk u
+  (fa o, o)
+
+main =
+  let p : (Int, Option (List Bool)) = w ()
+  println (fst p)

@@ -32507,12 +32507,6 @@ headTyconTy t = match headTyNode t
   TyFun _ _ => Some (headKeyOfCon OriginBuiltin funHeadTag)
   _ => None
 
--- A bare-name impl-head projection, if one is ever wanted, must not be written as
--- `map headKeyName (headTyconTy t)`: it would build a `HeadKey` (and an `Ident`, and
--- a second `Option`) on every call of a projection that runs per type-application
--- node, on the GC-bound `check` stage, purely to throw them away
--- (`compiler/AGENTS.md`), and both perf CI arms are blind to a constant factor.
-
 -- Exact prerequisite routing consumes the complete predicate vector and the row
 -- already selected for the route word.  The checker uses the same row matcher.
 implDictRoutesForRow : String -> ScopeId -> List Mono -> ImplRow -> List Route
@@ -35981,7 +35975,7 @@ settleClosedBody bodyTy oblMark callMark dictMark =
       rigidIds
       omEmpty
       addedObls
-      (callUOblsWindow callMark ++ nestedRequireGoals rigidIds bodyObls)
+      (callUOblsWindow callMark ++ nestedRequireGoals rigidIds omEmpty bodyObls)
   rejectWithheldAmbiguity rigidIds withheld bodyObls
 
 -- bind each prop param `x : ty` as a monomorphic scheme in the env (fresh tyvars
@@ -37559,11 +37553,20 @@ rowPrefixSubstRigid : OrdMap Unit ->
   ImplRow ->
   Option (List (Int, Mono))
 rowPrefixSubstRigid rigidIds args row =
-  let heads = take (listLen args) (freshRowHeads row)
+  map (scratch => !scratch) (headsUnifier rigidIds args (freshRowHeads row))
+
+-- [args] unified with the first `listLen args` of [heads] in a scratch
+-- substitution, every variable in [rigidIds] held rigid.
+headsUnifier : OrdMap Unit ->
+  List Mono ->
+  List Mono ->
+  Option (Ref (List (Int, Mono)))
+headsUnifier rigidIds args allHeads =
+  let heads = take (listLen args) allHeads
   let scratch = Ref []
   if listLen heads == listLen args
     && cohOverlapGo scratch (rigidSigPairs rigidIds (zipL args heads)) then
-    Some !scratch
+    Some scratch
   else
     None
 
@@ -37713,14 +37716,18 @@ undeterminedVectorVerdict rigidIds liveIds window o =
 
 -- The verdict on the goals boundaries left to quiescence, once every group of the
 -- module has closed: no later group is left to ground their variables, so each is
--- judged as its boundary would have judged it.
+-- judged as its boundary would have judged it, and so are the prerequisites its
+-- boundary left to this point (`nestedRequireGoals`).
 judgeQuiescentGoals : Unit -> Unit
 judgeQuiescentGoals _ =
   let goals = reverseL perRun.value.quiescentGoalsRef.value
   perRun.value.quiescentGoalsRef := []
   fold
     (_ (rigidIds, window, o) =>
-      undeterminedVectorVerdict rigidIds omEmpty window o)
+      fold
+        (_ g => undeterminedVectorVerdict rigidIds omEmpty window g)
+        ()
+        (o :: nestedRequireGoals rigidIds omEmpty [o]))
     ()
     goals
 
@@ -37777,37 +37784,50 @@ liveVarIdsOf m =
 -- A goal a given
 -- answers whole selects no instance; a goal every variable of which is held rigid
 -- leaves its prerequisites to the enclosing scope; a closed goal's are closed, and
--- the obligation gate's.  Only a prerequisite smaller than its parent is followed
--- further, which bounds a `requires` chain that does not shrink.
-nestedRequireGoals : OrdMap Unit -> List UObligation -> List UObligation
-nestedRequireGoals rigidIds obls =
-  nestedRequireGoalsGo rigidIds requiresNonShrinkingFuel obls
+-- the obligation gate's.  A goal whose verdict waits for quiescence, on a variable
+-- of [liveIds], is walked there with it (`judgeQuiescentGoals`), after a later
+-- group could ground that variable.  Only a prerequisite smaller than its parent
+-- is followed further, which bounds a `requires` chain that does not shrink.
+nestedRequireGoals : OrdMap Unit ->
+  OrdMap Unit ->
+  List UObligation ->
+  List UObligation
+nestedRequireGoals rigidIds liveIds obls =
+  nestedRequireGoalsGo rigidIds liveIds requiresNonShrinkingFuel obls
 
 nestedRequireGoalsGo : OrdMap Unit ->
+  OrdMap Unit ->
   Int ->
   List UObligation ->
   List UObligation
-nestedRequireGoalsGo rigidIds fuel obls
+nestedRequireGoalsGo rigidIds liveIds fuel obls
   | fuel <= 0 = []
-  | otherwise = match flatMap (selectedRequireGoals rigidIds) obls
+  | otherwise = match flatMap (selectedRequireGoals rigidIds liveIds) obls
     [] => []
     derived =>
       map fst derived
         ++ nestedRequireGoalsGo
           rigidIds
+          liveIds
           (fuel - 1)
           (map fst (filterList snd derived))
 
 -- [o]'s prerequisites under the one instance its goal selects as it stands, each
 -- paired with whether it is smaller than [o]'s goal.
-selectedRequireGoals : OrdMap Unit -> UObligation -> List (UObligation, Bool)
-selectedRequireGoals rigidIds o =
+selectedRequireGoals : OrdMap Unit ->
+  OrdMap Unit ->
+  UObligation ->
+  List (UObligation, Bool)
+selectedRequireGoals rigidIds liveIds o =
   let args = map normalize (uOblArgs o)
   let iface = o.pred.iface
+  let parentIds = flatMap monoUnboundIds args
   if isEmptyL args
     || monoVectorClosed args
     || goalVarsAllHeld rigidIds args
-    || goalGivenAt iface args o.uoScope then
+    || goalGivenAt iface args o.uoScope
+    || anyList (i => omHasKey (intToString i) liveIds) parentIds
+      && not (undeterminedGoalExempt iface args o.uoScope) then
     []
   else
     let rows = goalRows iface args
@@ -37818,7 +37838,6 @@ selectedRequireGoals rigidIds o =
         goalReach args (goalCandidates rigidIds args rows)
     match reach
       ReachOne row =>
-        let parentIds = flatMap monoUnboundIds args
         let size = monoSizes args
         let goalsOf =
           ids subst reqs =>
@@ -37837,22 +37856,35 @@ selectedRequireGoals rigidIds o =
 
 -- The prerequisites of [row] under the unifier of its heads with [args] (every
 -- variable in [rigidIds] held rigid), for a goal the row's head determines without
--- matching it as it stands (`B ?a` under `impl B (List b)`).  The variables the
--- unifier introduces are the head's own, and are returned beside the substitution.
+-- matching it as it stands (`B ?a` under `impl B (List b)`).  The unifier is not
+-- committed, so the head variable it introduces (`?b` in `?a := List ?b`) stands
+-- for a part of the goal's variable only while nothing outside the boundary can
+-- still bind that variable: every goal variable it binds must be the boundary's.
+-- One a scheme quantifies makes the goal the caller's, and the caller walks it on
+-- its own variables.  The substitution keeps the goal's own variables where the
+-- unifier held them rigid, and the variables it introduces are returned beside it.
 unifiedRowReqs : OrdMap Unit ->
   List Mono ->
   ImplRow ->
   Option (List (String, Mono), List Int, List Require)
 unifiedRowReqs rigidIds args (row@(ImplRow _ _ _ _ reqs _)) =
-  let (tvs, allHeads) = freshRowHeadsTvs row
-  let heads = take (listLen args) allHeads
-  let scratch = Ref []
-  if listLen heads == listLen args
-    && cohOverlapGo scratch (rigidSigPairs rigidIds (zipL args heads)) then
-    let bound = map (nv => (fst nv, cohApply scratch (snd nv))) tvs
-    Some (bound, flatMap (nv => monoUnboundIds (snd nv)) bound, reqs)
-  else
-    None
+  let (tvs, heads) = freshRowHeadsTvs row
+  let goalIds = flatMap monoUnboundIds args
+  match headsUnifier rigidIds args heads
+    Some scratch =>
+      if allList
+        (b =>
+          not (containsI (fst b) goalIds) || boundaryOwnsOpen rigidIds (fst b))
+        !scratch then
+        let sigCells = sigCellsOf rigidIds (flatMap monoVarCells args)
+        let bound =
+          map
+            (nv => (fst nv, unrigidSig sigCells (cohApply scratch (snd nv))))
+            tvs
+        Some (bound, flatMap (nv => monoUnboundIds (snd nv)) bound, reqs)
+      else
+        None
+    None => None
 
 -- A prerequisite as a goal at [o]'s site.  One that mentions a variable the
 -- instance's head does not fix is left to the module's obligation check.
@@ -39333,7 +39365,8 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
       bodyRigidIds
       omEmpty
       addedObls
-      (callUOblsWindow callN0 ++ nestedRequireGoals bodyRigidIds bodyObls)
+      (callUOblsWindow callN0
+        ++ nestedRequireGoals bodyRigidIds omEmpty bodyObls)
   let _ = rejectWithheldAmbiguity bodyRigidIds withheld bodyObls
   let _ = registerMethodBodyGivens iface kind params mty inst bodyScope
   let _ = match kind
@@ -43731,12 +43764,14 @@ processSCC env sigs grouped0 members =
       callOblsDelta
       addedObls
       schemes
+  let liveIds = liveMemberIds (map snd placeholders)
   let _ =
     rejectUndeterminedVectors
       unownedIds
-      (liveMemberIds (map snd placeholders))
+      liveIds
       addedObls
-      (callUOblsWindow callN0 ++ nestedRequireGoals unownedIds groupObls)
+      (callUOblsWindow callN0
+        ++ nestedRequireGoals unownedIds liveIds groupObls)
   let _ = rejectWithheldAmbiguity unownedIds withheld groupObls
   -- SIGNATURE CONSTRAINT SOUNDNESS: a signed member whose body induces an
   -- interface constraint on one of its own quantified vars that its declared `=>`
@@ -45332,7 +45367,7 @@ keepBoundResidualPred boundIds (iface, args) = match boundTyvarIds boundIds args
 -- `g v = let f = i => v[i]; f 0`, or a literal's variable handed to the enclosing
 -- boundary), or one no type of the binder mentions.  Such a variable is the same
 -- variable at every use, and `substOblArg` keeps it as itself, so the residual is
--- admitted: dropping it lost the goal outright (`g : a -> b`).  A variable another
+-- admitted: no other channel carries the goal.  A variable another
 -- binder declared (`declaredSigVarIds`: an inner local's quantified variable, in the
 -- inner local's own goal) is not shared: that goal is the inner binder's, already in
 -- its scheme, so it is not admitted here.  Neither other channel reaches this class: a

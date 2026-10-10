@@ -1,10 +1,10 @@
 -- WHAT THIS PINS, AND WHAT IT DOES NOT.
 --
--- B-4b-ii supplied real interface identity at ONE of the three `*ByIface` entry
--- points — `findMatchingImplReqsU`, the CHECKER leg — and deliberately left the two
--- ROUTE-WORD entry points (`entailInst`'s `EKNestedTop` arm and
--- `argImplRequiresRoutes`) minting a bare query, because their upstream
--- (`shadowStandaloneDictSlots` / `pushDictApp`) projects `csIface.irName` on purpose.
+-- B-4b-ii supplied real interface identity at the CHECKER leg
+-- (`findMatchingImplReqsU`).  The ROUTE-WORD leg, `entailInst`'s `EKNestedTop` arm,
+-- selects one row on the interface its caller supplies and hands that row to
+-- `argImplRequiresRoutesForRow`; on this top-level constrained-call leg that can be
+-- the bare `csIface.irName` `pushDictApp` projects, which matches by spelling.
 -- That asymmetry is the risk the bite takes on, and this fixture is where it is
 -- observed rather than argued: the checker now selects `zmod.Same` by IDENTITY while
 -- the router still selects by SPELLING over the same two candidate rows.

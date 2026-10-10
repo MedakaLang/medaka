@@ -1944,7 +1944,7 @@ table = [
   Row {
     entry = "b4bii-xmod-req-route-leg-still-spelling/main.mdk",
     label =
-      "§6 C2 -- WHERE B-4b-iis DELIBERATE ASYMMETRY IS OBSERVED RATHER THAN ARGUED. The supply landed at ONE of the `*ByIface` familys three entry points (`findMatchingImplReqsU`, the CHECKER leg); the two ROUTE-WORD entry points (`entailInst`s `EKNestedTop` arm and `argImplRequiresRoutes`) still mint a bare query, because their upstream (`shadowStandaloneDictSlots` / `pushDictApp`) projects `csIface.irName` on purpose and that projection is the route-word design question, not an identity-supply omission. This program puts BOTH legs on the same goal: a CONSTRAINED STANDALONE `useIt : Same a => a -> Int` in `zmod` is called at `Box Opaque`, so the checker selects `zmod.Same` by IDENTITY while the router selects over the same two candidate rows by SPELLING. SPEC ANSWER hand-derived first: `useIt (Box Opaque)` = 11 via `zmod`s context-free impl, `bar (Box 1)` = 22 via `amod`s `requires Eq a` at `Eq Int`; total 33, ACCEPT. ⚠️ THE DICT IS THE ASSERTION, NOT THE NUMBER -- a router that reached `amod`s row would hand `useIt` a witness for the OTHER class, whose only slot is `bar`, and `foo x` would read that slot: a wrong value or a fault AT EXIT 0. Section 3s IR row is what a value-only assertion cannot see. ⚠️ MEASURED: this program was REJECTED at exit 1 on the B-4b-i base binary (the same false reject the `-decl-order` pair isolates), so the route leg had never been asked this question and this is a NEW cell, not a re-pin",
+      "§6 C2 -- WHERE B-4b-iis DELIBERATE ASYMMETRY IS OBSERVED RATHER THAN ARGUED. The supply landed at the CHECKER leg (`findMatchingImplReqsU`); the ROUTE-WORD leg (`entailInst`s `EKNestedTop` arm) selects one row on the interface its caller supplies and hands that row to `argImplRequiresRoutesForRow`, and on the top-level constrained-call leg that interface can be the bare `csIface.irName` `pushDictApp` projects, which matches by spelling. That projection is the route-word design question, not an identity-supply omission. This program puts BOTH legs on the same goal: a CONSTRAINED STANDALONE `useIt : Same a => a -> Int` in `zmod` is called at `Box Opaque`, so the checker selects `zmod.Same` by IDENTITY while the router selects over the same two candidate rows by SPELLING. SPEC ANSWER hand-derived first: `useIt (Box Opaque)` = 11 via `zmod`s context-free impl, `bar (Box 1)` = 22 via `amod`s `requires Eq a` at `Eq Int`; total 33, ACCEPT. ⚠️ THE DICT IS THE ASSERTION, NOT THE NUMBER -- a router that reached `amod`s row would hand `useIt` a witness for the OTHER class, whose only slot is `bar`, and `foo x` would read that slot: a wrong value or a fault AT EXIT 0. Section 3s IR row is what a value-only assertion cannot see. ⚠️ MEASURED: this program was REJECTED at exit 1 on the B-4b-i base binary (the same false reject the `-decl-order` pair isolates), so the route leg had never been asked this question and this is a NEW cell, not a re-pin",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -4217,6 +4217,39 @@ table = [
     codes = [Present "T-AMBIGUOUS-INSTANCE"],
   },
   Row {
+    entry = "undetermined-nested-prerequisite-live-grounded.mdk",
+    label =
+      "#3941 F2: `fa !cell` on a live variable that `main` grounds to `List Bool`. The unifier path's `C ?x` waits for quiescence with its parent and selects `C Bool`; a prerequisite posed on the head's fresh variable was falsely ambiguous",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "12\n",
+    codes = [],
+  },
+  Row {
+    entry = "undetermined-nested-prerequisite-live-never-grounded.mdk",
+    label =
+      "#3941 F2 control: the same live `cell`, never grounded, is walked at quiescence: `C ?x` reaches two impls, ambiguous (deferring the walk must not drop it)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "undetermined-nested-prerequisite-quantified.mdk",
+    label =
+      "#3941 F2, scheme face: `w`'s goal is on a variable its scheme quantifies, so the unifier path poses no `C ?x` at `w`; `main` instantiates it to `List Bool`. A prerequisite on the head's fresh variable was falsely ambiguous at `w`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "100\n",
+    codes = [],
+  },
+  Row {
     entry = "undetermined-nested-class-xmod/main.mdk",
     label =
       "§6.2 T4 at a nested prerequisite whose instances are imported: `match def` fixes `def : Option ?a`, whose instance poses `Def ?a`, reached by `Def Int`, `Def Bool` and `Def (Option b)` with no stable minimum",
@@ -4634,7 +4667,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 408
+tableRows = 411
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -5063,7 +5096,7 @@ data VerbRow = VerbRow {
 {- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 verbRows : Int
-verbRows = 49
+verbRows = 50
 
 verbTable : List VerbRow
 verbTable = [
@@ -5156,6 +5189,15 @@ verbTable = [
     assertion =
       AHas
         "undetermined-nested-prerequisite-none\\.mdk:16:16: ambiguous instance for .C.",
+  },
+  VerbRow {
+    ventry = "undetermined-nested-prerequisite-live-never-grounded.mdk",
+    vlabel =
+      "the quiescent walk reports the never-grounded live goal's prerequisite `C ?x` at `fa !cell`",
+    verb = "check",
+    assertion =
+      AHas
+        "undetermined-nested-prerequisite-live-never-grounded\\.mdk:27:9: ambiguous instance for .C.",
   },
   VerbRow {
     ventry = "ambiguity-each-site-reported.mdk",
