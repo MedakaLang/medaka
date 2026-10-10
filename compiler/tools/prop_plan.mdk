@@ -1373,15 +1373,155 @@ validateReachableCtors env truth nominal (ctor :: rest) seen = match (
   (Err e, _) => Err e
   (_, Err e) => Err e
 
+-- A list whose element reaches a cycle that crosses a list edge (`Rose Int
+-- (List Rose)`) shrinks its length bound by one per level of nominal depth, so
+-- the expected fan-out drops below one and the whole value stays small. Every
+-- other list keeps the flat bound, which leaves terminating carriers' draws
+-- untouched.
 export
 listLengthBound : PlanEnv -> Int -> GenPlan -> Int
 listLengthBound env depth plan =
-  if not (planHasFiniteValue env plan) then
+  let truth = finiteTruth env plan
+  if not (abstractFinite env truth plan) then
     0
+  else if cyclesThroughListUnder env truth plan then
+    max 0 (listLenMax - depth)
   else if depth >= maxGenDepth && planCanDiverge env plan then
     0
   else
     listLenMax
+
+-- The renderer emits the decaying bound over the runtime `depth`.
+export
+listBoundDecays : PlanEnv -> GenPlan -> Bool
+listBoundDecays env plan =
+  let truth = finiteTruth env plan
+  abstractFinite env truth plan && cyclesThroughListUnder env truth plan
+
+export
+planCyclesThroughList : PlanEnv -> GenPlan -> Bool
+planCyclesThroughList env plan =
+  cyclesThroughListUnder env (finiteTruth env plan) plan
+
+-- A carrier state is a node; an edge records whether the field path leading to
+-- the next state crosses a list. A cycle through a list is a closed walk using
+-- at least one list edge. Building the graph visits each state once and the
+-- walk search marks (state, crossed) pairs, so the cost is polynomial in the
+-- state count rather than in the number of distinct paths.
+cyclesThroughListUnder : PlanEnv -> OrdMap Unit -> GenPlan -> Bool
+cyclesThroughListUnder env truth root =
+  let graph = buildListGraph env truth (nominalLeaves root False []) omEmpty
+  anyStateReturns graph (omKeys graph)
+
+-- The nominal carriers directly below a field plan, each paired with whether a
+-- list or array lies between.
+nominalLeaves : GenPlan -> Bool -> List (GenPlan, Bool) -> List (GenPlan, Bool)
+nominalLeaves (GList p) _ acc = nominalLeaves p True acc
+nominalLeaves (GArray p) _ acc = nominalLeaves p True acc
+nominalLeaves (GOption p) crossed acc = nominalLeaves p crossed acc
+nominalLeaves (GResult err ok) crossed acc =
+  nominalLeaves err crossed (nominalLeaves ok crossed acc)
+nominalLeaves (GTuple ps) crossed acc = nominalLeavesAll ps crossed acc
+nominalLeaves (nominal@(GNominal _ _)) crossed acc = (nominal, crossed) :: acc
+nominalLeaves _ _ acc = acc
+
+nominalLeavesAll : List GenPlan ->
+  Bool ->
+  List (GenPlan, Bool) ->
+  List (GenPlan, Bool)
+nominalLeavesAll [] _ acc = acc
+nominalLeavesAll (p :: ps) crossed acc =
+  nominalLeaves p crossed (nominalLeavesAll ps crossed acc)
+
+buildListGraph : PlanEnv ->
+  OrdMap Unit ->
+  List (GenPlan, Bool) ->
+  OrdMap (List (String, Bool)) ->
+  OrdMap (List (String, Bool))
+buildListGraph _ _ [] graph = graph
+buildListGraph env truth ((GNominal key args, _) :: rest) graph =
+  let word = stateWord env truth key args
+  if omHasKey word graph then
+    buildListGraph env truth rest graph
+  else
+    let nominal = GNominal key args
+    let leaves = stateLeaves env nominal
+    buildListGraph
+      env
+      truth
+      (leaves ++ rest)
+      (omInsert word (leafEdges env truth leaves) graph)
+buildListGraph env truth (_ :: rest) graph = buildListGraph env truth rest graph
+
+stateLeaves : PlanEnv -> GenPlan -> List (GenPlan, Bool)
+stateLeaves env (nominal@(GNominal key _)) = match planDef env key
+  Ok (PlanDef _ _ _ _ ctors) => ctorLeaves env nominal ctors []
+  Err _ => []
+stateLeaves _ _ = []
+
+ctorLeaves : PlanEnv ->
+  GenPlan ->
+  List PlanCtor ->
+  List (GenPlan, Bool) ->
+  List (GenPlan, Bool)
+ctorLeaves _ _ [] acc = acc
+ctorLeaves env nominal (ctor :: rest) acc =
+  match instantiateCtor env nominal ctor
+    Ok fields =>
+      ctorLeaves
+        env
+        nominal
+        rest
+        (nominalLeavesAll (fieldPlansOnly fields) False acc)
+    Err _ => ctorLeaves env nominal rest acc
+
+leafEdges : PlanEnv ->
+  OrdMap Unit ->
+  List (GenPlan, Bool) ->
+  List (String, Bool)
+leafEdges _ _ [] = []
+leafEdges env truth ((GNominal key args, crossed) :: rest) =
+  (stateWord env truth key args, crossed) :: leafEdges env truth rest
+leafEdges env truth (_ :: rest) = leafEdges env truth rest
+
+anyStateReturns : OrdMap (List (String, Bool)) -> List String -> Bool
+anyStateReturns _ [] = False
+anyStateReturns graph (word :: rest) = match omLookup word graph
+  Some edges =>
+    walkReturns graph word omEmpty edges || anyStateReturns graph rest
+  None => anyStateReturns graph rest
+
+-- Walks from `target` looking for a way back to it after crossing a list edge.
+-- `visited` holds the (state, crossed) pairs already expanded.
+walkReturns : OrdMap (List (String, Bool)) ->
+  String ->
+  OrdMap Unit ->
+  List (String, Bool) ->
+  Bool
+walkReturns _ _ _ [] = False
+walkReturns graph target visited ((word, crossed) :: rest) =
+  if crossed && word == target then
+    True
+  else
+    let mark = if crossed then "\{word}|1" else "\{word}|0"
+    if omHasKey mark visited then
+      walkReturns graph target visited rest
+    else
+      walkReturns
+        graph
+        target
+        (omInsert mark () visited)
+        (crossEdges crossed (edgesOf graph word) ++ rest)
+
+edgesOf : OrdMap (List (String, Bool)) -> String -> List (String, Bool)
+edgesOf graph word = match omLookup word graph
+  Some edges => edges
+  None => []
+
+crossEdges : Bool -> List (String, Bool) -> List (String, Bool)
+crossEdges _ [] = []
+crossEdges crossed ((word, c) :: rest) =
+  (word, crossed || c) :: crossEdges crossed rest
 
 -- The empty/none alternatives are part of the same depth policy. A container
 -- may still expose a non-recursive payload at the bound, but it cannot enter a

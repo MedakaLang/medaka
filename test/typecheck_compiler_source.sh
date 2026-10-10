@@ -308,6 +308,7 @@ originun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
 compiler/tools/native_props_test.mdk
 compiler/tools/prop_plan.mdk
+compiler/tools/prop_runner_test.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
 compiler/types/typecheck.mdk"
@@ -469,6 +470,8 @@ check_origin_observers() {
 }
 check_origin_observers compiler/tools/prop_plan.mdk \
   'hasAmbiguousUnresolved (TypeKey n OriginUnresolved) defs = listLength defs > 1' || exit 1
+check_origin_observers compiler/tools/prop_runner_test.mdk \
+  'stampBuiltinTy (ty@(TyCon { tyConName, tyConOrigin = OriginUnresolved })) =' || exit 1
 check_origin_observers compiler/tools/native_props_test.mdk \
   'stampDeclOwner (decl@(DData { dataOrigin = OriginUnresolved })) =
 stampDeclOwner (decl@(DNewtype { newtypeOrigin = OriginUnresolved })) =

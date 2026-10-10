@@ -15,6 +15,8 @@
 import test.{expectEach, expectEqual, expectNotEqual, expectTrue}
 import tools.prop_runner.{
   seedPropRng,
+  genFromPlan,
+  GenEnv(..),
   randBoolL,
   PropHelper(..),
   PropRequest(..),
@@ -28,6 +30,8 @@ import eval.eval.{
   EvalEnv(..), Value(..), lookupEnv, lookupRuntimeBinding, runtimeCellsOf
 }
 import list.{nub}
+import support.ordmap.{omEmpty}
+import support.util.{joinWith}
 import frontend.ast.{
   Decl(..),
   mapTyInDecl,
@@ -464,5 +468,86 @@ test "newtype constructors are available only to their owner module" = expectEac
       expectTrue (match wrappedPlan "consumer"
         Ok _ => False
         Err _ => True),
+    ),
+  ]
+
+-- Seeded draws for carriers that already terminate. These pin the draw order
+-- (which RNG calls happen, in what sequence) so a change to the recursion
+-- bound cannot silently reshuffle every existing property's cases.
+builtinApp : String -> Ty -> Ty
+builtinApp name arg =
+  TyApp
+    TyCon { tyConName = name, tyConLoc = None, tyConOrigin = OriginBuiltin }
+    arg
+
+showValue : Value e -> String
+showValue (VInt n) = intToString n
+showValue (VBool b) = if b then "T" else "F"
+showValue (VList vs) = "[\{joinWith "," (map showValue vs)}]"
+showValue (VTuple vs) = "(\{joinWith "," (map showValue vs)})"
+showValue (VCon name []) = name
+showValue (VCon name vs) = "\{name}(\{joinWith "," (map showValue vs)})"
+showValue _ = "?"
+
+stampBuiltins : Decl -> Decl
+stampBuiltins decl = fst (mapTyInDecl stampBuiltinTy decl)
+
+stampBuiltinTy : Ty -> (Ty, Bool)
+stampBuiltinTy (ty@(TyCon { tyConName, tyConOrigin = OriginUnresolved })) =
+  if tyConName == "Int" || tyConName == "Bool" then
+    (TyCon { ty | tyConOrigin = OriginBuiltin }, True)
+  else
+    (ty, False)
+stampBuiltinTy ty = (ty, False)
+
+drawsFor : String -> Ty -> List String
+drawsFor source ty =
+  let env = buildPlanEnv (map stampBuiltins (parse source))
+  match planFor env "policy" "value" ty
+    Ok plan =>
+      let _ = seedPropRng 20261009
+      let ge = GenEnv env omEmpty
+      map (_ => showValue (genFromPlan ge (EvalEnv [[]]) 0 plan)) [1, 2, 3, 4]
+    Err e => [planErrorText e]
+
+shapeSource : String
+shapeSource = "data Shape = Dot Int | Pair Int Bool | Blank\n"
+
+treeSource : String
+treeSource = "data Tree = Leaf | Fork Tree Tree\n"
+
+test "seeded eval draws for terminating carriers keep their order" = expectEach
+  [
+    ("Int", expectEqual (drawsFor "" intTy) ["733", "-701", "476", "294"]),
+    (
+      "List Int",
+      expectEqual (drawsFor "" (builtinApp "List" intTy)) [
+        "[-701,476,294,-843,422,-279,461]", "[261,-829,682,481,-198,725]",
+        "[-423,259]", "[55,962,-936,193,-827,752,-435]"
+      ],
+    ),
+    (
+      "multi-constructor data",
+      expectEqual (drawsFor shapeSource (namedTy "Shape")) [
+        "Blank", "Blank", "Blank", "Pair(-843,T)"
+      ],
+    ),
+    (
+      "recursive Tree",
+      expectEqual (drawsFor treeSource (namedTy "Tree")) [
+        "Fork(Leaf,Leaf)", "Fork(Leaf,Leaf)",
+        "Fork(Fork(Fork(Fork(Leaf,Leaf),Leaf),Leaf),Fork(Leaf,Leaf))", "Leaf"
+      ],
+    ),
+    (
+      "tuple of Int and Option",
+      expectEqual (drawsFor
+        ""
+        (TyApp (TyApp tupleHead intTy) (builtinApp "Option" intTy))) [
+        "(733,Some(476))",
+        "(294,None)",
+        "(422,Some(461))",
+        "(-847,None)",
+      ],
     ),
   ]

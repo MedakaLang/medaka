@@ -1,0 +1,793 @@
+-- The resolution-side dictionary laws of DICT-SEMANTICS as generated-program
+-- properties: instance selection and coherence (§3, §6 C1/C3), improvement
+-- and determination by the one unifying instance (§3), numeric defaulting
+-- (§6.3 D1-D4), and instance identity and candidacy (§8 I5, I6.1). The
+-- declaration-side laws live in `dict_declaration_property_test.mdk`. Each
+-- expected verdict comes from a model of the clause written below; the
+-- checker is observed only through its verdicts, error codes and rendered
+-- schemes. Which dictionary a goal selects is not observed.
+
+import list.{filter, lookup, nub, sort}
+import string.{join}
+import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
+import types.law_harness_test.{
+  Perm(..),
+  Verdict(..),
+  alphaEquiv,
+  checkFlat,
+  codesFlat,
+  countWhere,
+  graphCodesAndSchemes,
+  hasCode,
+  permute,
+}
+
+-- The model's instance heads and goals: a variable, or a constructor applied
+-- to arguments.
+data HT = HV String | HC String (List HT) deriving (Eq, Debug)
+
+type Subst = List (String, HT)
+
+{- One-sided matching (DICT §3 `match`): a substitution of `pattern`'s
+   variables that makes it equal to `target`. The target's variables are
+   constants, and a repeated pattern variable must bind one type. -}
+matchHT : Subst -> HT -> HT -> Option Subst
+matchHT s (HV v) target = match lookup v s
+  Some bound => if bound == target then Some s else None
+  None => Some ((v, target) :: s)
+matchHT s (HC n ps) (HC m ts) =
+  if n == m && length ps == length ts then matchAll s ps ts else None
+matchHT _ (HC _ _) (HV _) = None
+
+matchAll : Subst -> List HT -> List HT -> Option Subst
+matchAll s [] [] = Some s
+matchAll s (p :: ps) (t :: ts) = match matchHT s p t
+  Some next => matchAll next ps ts
+  None => None
+matchAll _ _ _ = None
+
+matches : HT -> HT -> Bool
+matches pattern target = matchHT [] pattern target /= None
+
+-- DICT §3 specificity: `a ⊑ b` iff `a`'s head is a substitution instance of
+-- `b`'s.
+atLeastAsSpecific : HT -> HT -> Bool
+atLeastAsSpecific a b = matches b a
+
+strictlyMoreSpecific : HT -> HT -> Bool
+strictlyMoreSpecific a b = atLeastAsSpecific a b && not (atLeastAsSpecific b a)
+
+walk : Subst -> HT -> HT
+walk s (HV v) = match lookup v s
+  Some bound => walk s bound
+  None => HV v
+walk _ t = t
+
+occursIn : Subst -> String -> HT -> Bool
+occursIn s v t = match walk s t
+  HV other => other == v
+  HC _ args => any (occursIn s v) args
+
+-- Robinson unification, both sides' variables free.
+unifyHT : Subst -> HT -> HT -> Option Subst
+unifyHT s left right = match (walk s left, walk s right)
+  (HV x, HV y) => if x == y then Some s else Some ((x, HV y) :: s)
+  (HV x, t) => if occursIn s x t then None else Some ((x, t) :: s)
+  (t, HV x) => if occursIn s x t then None else Some ((x, t) :: s)
+  (HC n xs, HC m ys) =>
+    if n == m && length xs == length ys then unifyList s xs ys else None
+
+unifyList : Subst -> List HT -> List HT -> Option Subst
+unifyList s [] [] = Some s
+unifyList s (x :: xs) (y :: ys) = match unifyHT s x y
+  Some next => unifyList next xs ys
+  None => None
+unifyList _ _ _ = None
+
+-- Heads unify with variables apart: the instance's are renamed.
+renameApart : HT -> HT
+renameApart (HV v) = HV "inst.\{v}"
+renameApart (HC n args) = HC n (map renameApart args)
+
+unifies : HT -> HT -> Bool
+unifies head goal = unifyHT [] (renameApart head) goal /= None
+
+-- Source text of a head or a goal, its variables spelled by `spell`.
+renderHT : (String -> String) -> HT -> String
+renderHT spell (HV v) = spell v
+renderHT _ (HC n []) = n
+renderHT spell (HC n args) = "(\{n} \{join " " (map (renderHT spell) args)})"
+
+plain : String -> String
+plain v = v
+
+-- Generated instance heads, at `Int`, `String`, a variable, `Box` and `Pair`.
+public export data Head =
+  | HInt
+  | HStr
+  | HAny
+  | HBoxAny
+  | HBoxInt
+  | HPairAny
+  | HPairIntL
+  | HPairIntR
+  | HPairInts
+  | HPairSame
+  deriving (Eq, Debug)
+
+tInt : HT
+tInt = HC "Int" []
+
+tStr : HT
+tStr = HC "String" []
+
+headHT : Head -> HT
+headHT HInt = tInt
+headHT HStr = tStr
+headHT HAny = HV "a"
+headHT HBoxAny = HC "Box" [HV "a"]
+headHT HBoxInt = HC "Box" [tInt]
+headHT HPairAny = HC "Pair" [HV "a", HV "b"]
+headHT HPairIntL = HC "Pair" [tInt, HV "a"]
+headHT HPairIntR = HC "Pair" [HV "a", tInt]
+headHT HPairInts = HC "Pair" [tInt, tInt]
+headHT HPairSame = HC "Pair" [HV "a", HV "a"]
+
+public export data Atom = AInt | AStr deriving (Eq, Debug)
+
+-- A ground goal argument.
+public export data Goal =
+  | GAtom Atom
+  | GBox Atom
+  | GPair Atom Atom
+  deriving (Eq, Debug)
+
+atomHT : Atom -> HT
+atomHT AInt = tInt
+atomHT AStr = tStr
+
+goalHT : Goal -> HT
+goalHT (GAtom a) = atomHT a
+goalHT (GBox a) = HC "Box" [atomHT a]
+goalHT (GPair a b) = HC "Pair" [atomHT a, atomHT b]
+
+-- How a goal fares under §3/§6 C1.
+public export data Selection = Missing | Unique | Ambiguous deriving (Eq, Debug)
+
+{- §6 C1 and §3 `inst` at a closed goal. The matching set's `⊑`-minimal
+   elements decide: none matching is the missing-instance rejection, not
+   ambiguity; exactly one minimal element is the selection; two or more
+   `⊑`-incomparable minima are ambiguous overlap. -}
+c1Model : List Head -> Goal -> Selection
+c1Model heads goal =
+  let ms = filter (h => matches h (goalHT goal)) (map headHT heads)
+  if ms == [] then
+    Missing
+  else
+    let minimal =
+      filter (h => not (any (other => strictlyMoreSpecific other h) ms)) ms
+    if length minimal == 1 then Unique else Ambiguous
+
+ambiguityCode : String
+ambiguityCode = "T-AMBIGUOUS-INSTANCE"
+
+noImplCode : String
+noImplCode = "T-NO-IMPL"
+
+-- A checker's codes agree with a selection: accepted iff unique, a missing
+-- instance is the missing-instance rejection (§6 C1) and never ambiguity,
+-- and ambiguity is reported exactly when the model says so.
+selectionAgrees : Selection -> List String -> Bool
+selectionAgrees Unique codes = codes == []
+selectionAgrees Missing codes =
+  hasCode noImplCode codes && not (hasCode ambiguityCode codes)
+selectionAgrees Ambiguous codes = hasCode ambiguityCode codes
+
+instanceSupport : String
+instanceSupport =
+  "data Box a = Box a\n"
+    ++ "data Pair a b = Pair a b\n"
+    ++ "extern anyv : a\n"
+    ++ "extern anInt : Int\n"
+
+tagImpl : (String -> String) -> Head -> String
+tagImpl spell h =
+  "impl Tag \{renderHT spell (headHT h)} where\n  tag x = anInt\n"
+
+{- The C1 program: one `Tag` impl per head, a use at the goal and a
+   constrained binding whose scheme the C3 comparison reads. -}
+c1Program : (String -> String) -> List Head -> Goal -> String
+c1Program spell heads goal = join "" [
+  instanceSupport,
+  "interface Tag a where\n  tag : a -> Int\n",
+  join "" (map (tagImpl spell) heads),
+  "probe = tag (anyv : \{renderHT plain (goalHT goal)})\n",
+  "useT x = tag x\n",
+]
+
+-- Every scheme of `before` has an alpha-equivalent scheme of the same name in
+-- `after`.
+schemesKept : List (String, String) -> List (String, String) -> Bool
+schemesKept before after =
+  all
+    ((name, scheme) =>
+      any ((other, text) => other == name && alphaEquiv scheme text) after)
+    before
+
+{- §6 C1 and C3. The verdict at a ground goal follows the specificity model,
+   and permuting the instance declarations changes neither the codes nor any
+   scheme: selection is a function of the instance set and the goal, never of
+   declaration order. Duplicate heads are removed, so every pair of distinct
+   instances has heads that are not alpha-equal. -}
+prop "instance selection follows the most-specific model and survives permuting the instances" (heads : List Head) (goal : Goal) (perm : Perm) =
+  let hs = nub heads
+  let (codes, schemes) = graphCodesAndSchemes [("law", c1Program plain hs goal)]
+  let (codes2, schemes2) =
+    graphCodesAndSchemes [("law", c1Program plain (permute perm hs) goal)]
+  selectionAgrees (c1Model hs goal) codes
+    && sort codes == sort codes2
+    && schemesKept schemes schemes2
+    && length schemes == length schemes2
+
+-- Whether `dup`, declared twice, is a `⊑`-minimal head among those of
+-- `others` and `dup` matching `goal`.
+duplicateReached : List Head -> Head -> Goal -> Bool
+duplicateReached others dup goal =
+  let target = goalHT goal
+  let d = headHT dup
+  let below = h => matches h target && strictlyMoreSpecific h d
+  matches d target && not (any below (map headHT others))
+
+{- §6 C1 and §3: α-equal heads are `⊑`-equivalent yet distinct and never
+   tie-break, so at a goal where a head declared twice (the second copy with
+   its variables respelled) is `⊑`-minimal the matching set has two minimal
+   elements and the program is rejected, and not as a missing instance. A
+   goal the duplicate does not reach as a minimum is not asserted. -}
+prop "a twice-declared head that is minimal at the goal is rejected and not as missing" (heads : List Head) (dup : Head) (goal : Goal) =
+  let others = filter (/= dup) (nub heads)
+  if duplicateReached others dup goal then
+    let twice = tagImpl (v => v ++ "2") dup
+    let codes = codesFlat (c1Program plain (others ++ [dup]) goal ++ twice)
+    codes /= [] && not (hasCode noImplCode codes)
+  else
+    True
+
+-- Spellings of the instance-head variables `a` and `b`. `__none__` is the
+-- checker's reserved head tag for a goal position with no head.
+public export data Spelling =
+  | SpPlain
+  | SpOther
+  | SpReserved
+  deriving (Eq, Debug)
+
+spellWith : Spelling -> String -> String
+spellWith SpPlain v = v
+spellWith SpOther "a" = "u"
+spellWith SpOther _ = "w"
+spellWith SpReserved "a" = "__none__"
+spellWith SpReserved _ = "w"
+
+{- §8 I6.1: a head spelled as a type parameter is a type variable whatever
+   its spelling, carries no declaration identity, and is distinct from every
+   declared type. Under any respelling of the head variables, the reserved
+   tag included, the verdict stays the C1 model's, which knows no spellings. -}
+prop "an instance-head variable is a variable under every spelling" (heads : List Head) (goal : Goal) (sp : Spelling) =
+  let hs = nub heads
+  selectionAgrees
+    (c1Model hs goal)
+    (codesFlat (c1Program (spellWith sp) hs goal))
+
+-- The open goal of the determination law: a hole `?g` inside a context.
+public export data Ctx =
+  | CHole
+  | CBox
+  | CPairL Atom
+  | CPairR Atom
+  deriving (Eq, Debug)
+
+ctxHT : Ctx -> HT
+ctxHT CHole = HV "goal.g"
+ctxHT CBox = HC "Box" [HV "goal.g"]
+ctxHT (CPairL a) = HC "Pair" [HV "goal.g", atomHT a]
+ctxHT (CPairR a) = HC "Pair" [atomHT a, HV "goal.g"]
+
+ctxSource : Ctx -> String
+ctxSource c = renderHT (_ => "g") (ctxHT c)
+
+{- §3 "Determination by the one unifying instance" at arity 1, and its
+   "Reject" paragraph. `peel zero` poses `Zero C[?g]` with `?g` in no
+   member's type, so the group owns it. The candidates are the heads that
+   unify with the goal. One candidate determines the goal; none is
+   `T-NO-IMPL`; two or more are `T-AMBIGUOUS-INSTANCE` unless one of them
+   matches the goal as it stands and is `⊑` every other, which min⊑ selects. -}
+determinationModel : List Head -> Ctx -> Selection
+determinationModel heads ctx =
+  let goal = ctxHT ctx
+  let cands = filter (h => unifies h goal) (map headHT heads)
+  match cands
+    [] => Missing
+    [_] => Unique
+    _ => if hasStableMinimum goal cands then Unique else Ambiguous
+
+hasStableMinimum : HT -> List HT -> Bool
+hasStableMinimum goal cands =
+  any (c => matches c goal && all (o => atLeastAsSpecific c o) cands) cands
+
+determinationAgrees : Selection -> List String -> Bool
+determinationAgrees Missing codes =
+  hasCode noImplCode codes && not (hasCode ambiguityCode codes)
+determinationAgrees other codes = selectionAgrees other codes
+
+determinationProgram : List Head -> Ctx -> String
+determinationProgram heads ctx = join "" [
+  instanceSupport,
+  "interface Zero a where\n  zero : a\n",
+  join
+    ""
+    (map
+      (h => "impl Zero \{renderHT plain (headHT h)} where\n  zero = anyv\n")
+      heads),
+  "extern peel : \{ctxSource ctx} -> Int\n",
+  "probe = peel zero\n",
+]
+
+prop "an open goal is determined by its one unifying instance and rejected otherwise" (heads : List Head) (ctx : Ctx) =
+  let hs = nub heads
+  determinationAgrees
+    (determinationModel hs ctx)
+    (codesFlat (determinationProgram hs ctx))
+
+-- A term at one position of the improvement law's `Pick` goal.
+public export data PTerm =
+  | PtInt
+  | PtStr
+  | PtFresh
+  | PtBoxInt
+  | PtBoxStr
+  | PtBoxFresh
+  deriving (Eq, Debug)
+
+ptSource : PTerm -> String
+ptSource PtInt = "anInt"
+ptSource PtStr = "\"s\""
+ptSource PtFresh = "anyv"
+ptSource PtBoxInt = "(Box anInt)"
+ptSource PtBoxStr = "(Box \"s\")"
+ptSource PtBoxFresh = "(Box anyv)"
+
+-- The term's type, a fresh `anyv` at position `i` spelled `?p<i>`.
+ptHT : Int -> PTerm -> HT
+ptHT _ PtInt = tInt
+ptHT _ PtStr = tStr
+ptHT i PtFresh = HV "goal.p\{intToString i}"
+ptHT _ PtBoxInt = HC "Box" [tInt]
+ptHT _ PtBoxStr = HC "Box" [tStr]
+ptHT i PtBoxFresh = HC "Box" [HV "goal.p\{intToString i}"]
+
+pickRepeated : HT
+pickRepeated = HC "Pick" [HV "a", HV "a", HV "a"]
+
+pickOverlap : HT
+pickOverlap = HC "Pick" [HV "a", HC "Box" [tInt], HV "a"]
+
+pickHeads : Bool -> List HT
+pickHeads second =
+  if second then [pickRepeated, pickOverlap] else [pickRepeated]
+
+pickGoal : PTerm -> PTerm -> PTerm -> HT
+pickGoal t1 t2 t3 = HC "Pick" [ptHT 1 t1, ptHT 2 t2, ptHT 3 t3]
+
+{- §3 "Improvement by the one matching instance". `pick e1 e2` used at the
+   type of `e3` poses `Pick τ1 τ2 τ3`. The candidates are the heads that
+   unify with it, both sides' variables free, so the repeated variable of
+   `impl Pick a a a` binds its three positions jointly (#3521) and a
+   second instance that only a later binding could make match still counts.
+   One candidate commits; none rejects; two or more leave the goal open,
+   rejected as ambiguous unless one matches the goal as it stands and is
+   `⊑` the other, which is `min⊑`'s selection at a closed goal. -}
+improvementModel : Bool -> PTerm -> PTerm -> PTerm -> Selection
+improvementModel second t1 t2 t3 =
+  let goal = pickGoal t1 t2 t3
+  match filter (h => unifies h goal) (pickHeads second)
+    [] => Missing
+    [_] => Unique
+    cands => if hasStableMinimum goal cands then Unique else Ambiguous
+
+improvementProgram : Bool -> PTerm -> PTerm -> PTerm -> String
+improvementProgram second t1 t2 t3 = join "" [
+  "data Box a = Box a\n",
+  "extern anyv : a\n",
+  "extern anInt : Int\n",
+  "extern same : a -> a -> a\n",
+  "interface Pick a b c where\n  pick : a -> b -> c\n",
+  "impl Pick a a a where\n  pick x y = x\n",
+  if second then "impl Pick a (Box Int) a where\n  pick x y = x\n" else "",
+  "probe = same (pick \{ptSource t1} \{ptSource t2}) \{ptSource t3}\n",
+]
+
+prop "a repeated head variable improves its goal jointly and a second unifying head blocks the commit" (second : Bool) (t1 : PTerm) (t2 : PTerm) (t3 : PTerm) =
+  selectionAgrees
+    (improvementModel second t1 t2 t3)
+    (codesFlat (improvementProgram second t1 t2 t3))
+
+-- Instance heads for the defaulting law; `Nat` has a `Num` instance.
+public export data DHead =
+  | DInt
+  | DStr
+  | DNat
+  | DAny
+  | DBoxAny
+  | DBoxInt
+  deriving (Eq, Debug)
+
+dHeadSource : DHead -> String
+dHeadSource DInt = "Int"
+dHeadSource DStr = "String"
+dHeadSource DNat = "Nat"
+dHeadSource DAny = "a"
+dHeadSource DBoxAny = "(Box a)"
+dHeadSource DBoxInt = "(Box Int)"
+
+-- A ground head whose type has a `Num` instance in the law program.
+numGround : DHead -> Bool
+numGround h = h == DInt || h == DNat
+
+isGroundHead : DHead -> Bool
+isGroundHead h = h /= DAny && h /= DBoxAny
+
+-- A `Tag` head that answers the ground goal `Tag n`.
+answers : DHead -> DHead -> Bool
+answers h n = h == n || h == DAny
+
+-- The `Tag` heads determination keeps: committing one leaves `Num ?a`
+-- satisfiable, so a ground head needs a `Num` instance.
+tagKept : List DHead -> List DHead
+tagKept heads = filter (h => not (isGroundHead h) || numGround h) heads
+
+-- The `Num` instances determination keeps: committing one leaves `Tag ?a`
+-- satisfiable.
+numKept : List DHead -> List DHead
+numKept heads = filter (n => any (h => answers h n) heads) [DInt, DNat]
+
+{- The settle sequence of §6.3 D1 on `tag 1`, which poses `Tag ?a` and
+   `Num ?a` with `?a` in no member's type. First determination (§3), over
+   every open goal of any arity, `Num ?a` included: a candidate is kept only
+   if the sibling goal its commit closes has an instance (joint consistency),
+   and a goal with one kept candidate is committed to it. Then defaulting:
+   `?a := Int`, a substitution after which every predicate is checked as if
+   `Int` were written (D2), so `Tag Int` needs a head that answers it. A
+   commit to `Box ?c` leaves `Num (Box ?c)`, which no head unifies with; a
+   commit to the blanket head leaves `?a` open for defaulting. -}
+defaultingModel : List DHead -> Verdict
+defaultingModel heads = match (tagKept heads, numKept heads)
+  ([DBoxAny], _) => Rejected
+  ([_], _) => Accepted
+  (_, [_]) => Accepted
+  _ => if any (h => answers h DInt) heads then Accepted else Rejected
+
+natSupport : String
+natSupport = "data Nat = Zero\nimpl Num Nat where\n  fromInt n = Zero\n"
+
+defaultingProgram : List DHead -> String
+defaultingProgram heads = join "" [
+  "data Box a = Box a\n",
+  natSupport,
+  "extern anInt : Int\n",
+  "interface Tag a where\n  tag : a -> Int\n",
+  join
+    ""
+    (map (h => "impl Tag \{dHeadSource h} where\n  tag x = anInt\n") heads),
+  "probe = tag 1\n",
+]
+
+-- §6.3 D1 and D2: determination runs before defaulting, and defaulting
+-- substitutes and never discharges.
+prop "a defaulted literal's other predicates are still checked, after determination" (heads : List DHead) =
+  let hs = nub heads
+  fst (checkFlat (defaultingProgram hs)) == defaultingModel hs
+
+-- Where the literal sits relative to the channels of §6.3 D3.
+public export data Place =
+  | PArg
+  | PResult
+  | PSigned
+  | PConnected
+  | PLocal
+  | PEnclosing
+  deriving (Eq, Debug)
+
+public export data NumTy = NInt | NNat deriving (Eq, Debug)
+
+numTySource : NumTy -> String
+numTySource NInt = "Int"
+numTySource NNat = "Nat"
+
+placeDecl : Place -> String
+placeDecl PArg = "f x = same x 1\n"
+placeDecl PResult = "f x = 1\n"
+placeDecl PSigned = "f : Num a => b -> a\nf x = 1\n"
+placeDecl PConnected = "f x = same (conv x) 1\n"
+placeDecl PLocal = "f x =\n  let n = 1\n  same x n\n"
+placeDecl PEnclosing = "f x =\n  let n = same x 1\n  n\n"
+
+-- The type `f` is used at, with `t` where the literal's type lands.
+useType : Place -> NumTy -> String
+useType PArg t = "\{numTySource t} -> \{numTySource t}"
+useType PLocal t = "\{numTySource t} -> \{numTySource t}"
+useType PEnclosing t = "\{numTySource t} -> \{numTySource t}"
+useType _ t = "String -> \{numTySource t}"
+
+{- §6.3 D3 and D4. A literal's variable is defaulted only when no channel
+   outliving its boundary can determine it. An argument is a channel, and so
+   is a variable the boundary's goals connect to one (`conv x`); a declared
+   signature's dictionary is one. An inferred binding's result is not, so
+   `f x = 1` grounds to `Int` before it generalizes, and so does a local
+   `let n = 1` at its own close. A local whose literal is unified with the
+   enclosing binder's variable is that binder's to decide (D4). -}
+usableAt : Place -> NumTy -> Bool
+usableAt PResult t = t == NInt
+usableAt PLocal t = t == NInt
+usableAt _ _ = True
+
+placeProgram : Place -> NumTy -> NumTy -> String
+placeProgram p t1 t2 = join "" [
+  natSupport,
+  "extern same : a -> a -> a\n",
+  "extern anyv : a\n",
+  "interface Conv a b where\n  conv : a -> b\n",
+  "impl Conv String Int where\n  conv x = anyv\n",
+  "impl Conv String Nat where\n  conv x = anyv\n",
+  placeDecl p,
+  "useA = (f : \{useType p t1})\n",
+  "useB = (f : \{useType p t2})\n",
+]
+
+placeVerdict : Place -> NumTy -> NumTy -> Verdict
+placeVerdict p t1 t2 =
+  if usableAt p t1 && usableAt p t2 then Accepted else Rejected
+
+prop "a literal is defaulted exactly when no surviving channel can determine it" (p : Place) (t1 : NumTy) (t2 : NumTy) =
+  fst (checkFlat (placeProgram p t1 t2)) == placeVerdict p t1 t2
+
+-- Where the module holding the other impls sits relative to the entry,
+-- which never imports it.
+public export data Place5 = BeforeEntry | AfterEntry deriving (Eq, Debug)
+
+i5Modules : List Head -> List Head -> Goal -> Place5 -> List (String, String)
+i5Modules imported other goal place =
+  let base =
+    "public export data Box a = Box a\n"
+      ++ "public export data Pair a b = Pair a b\n"
+      ++ "extern anInt : Int\n"
+      ++ "export interface Tag a where\n  tag : a -> Int\n"
+      ++ join "" (map (h => "export \{tagImpl plain h}") imported)
+  let inst =
+    "import base.{Box(..), Pair(..), Tag}\nextern anInt : Int\n"
+      ++ join "" (map (h => "export \{tagImpl plain h}") other)
+  let entry =
+    "import base.{Box(..), Pair(..), tag}\nextern anyv : a\n"
+      ++ "probe = tag (anyv : \{renderHT plain (goalHT goal)})\n"
+  match place
+    BeforeEntry => [("base", base), ("inst", inst), ("law", entry)]
+    AfterEntry => [("base", base), ("law", entry), ("inst", inst)]
+
+{- §8 I5: candidacy is graph-global. The impls of a module the entry never
+   imports, before or after it in the graph's order, are candidates exactly
+   like the imported ones, so the C1 model over the union decides. -}
+prop "instance candidacy ranges over every module of the graph" (imported : List Head) (other : List Head) (goal : Goal) (place : Place5) =
+  let hs = nub imported
+  let os = filter (h => not (any (== h) hs)) (nub other)
+  let (codes, _) = graphCodesAndSchemes (i5Modules hs os goal place)
+  selectionAgrees (c1Model (hs ++ os) goal) codes
+
+-- Self-tests: each family's comparison rejects a hand-built wrong case, and
+-- one fixed program per family is checked against its model.
+
+test "the specificity model orders heads, rejects repeated-variable mismatches and finds ambiguity" = expectAll
+  [
+    expectTrue (atLeastAsSpecific (headHT HPairInts) (headHT HPairSame)),
+    expectFalse (atLeastAsSpecific (headHT HPairSame) (headHT HPairInts)),
+    expectFalse (matches (headHT HPairSame) (goalHT (GPair AInt AStr))),
+    expectTrue (strictlyMoreSpecific (headHT HBoxInt) (headHT HAny)),
+    expectEqual Missing (c1Model [HStr, HBoxAny] (GAtom AInt)),
+    expectEqual Unique (c1Model [HAny, HInt] (GAtom AInt)),
+    expectEqual Ambiguous (c1Model [HPairIntL, HPairIntR] (GPair AInt AInt)),
+    expectEqual
+      Unique
+      (c1Model [HPairIntL, HPairIntR, HPairInts] (GPair AInt AInt)),
+    expectFalse (selectionAgrees Missing [ambiguityCode]),
+    expectFalse (selectionAgrees Unique [noImplCode]),
+    expectFalse (selectionAgrees Ambiguous [noImplCode]),
+    expectFalse (schemesKept [("useT", "a -> Int")] [("useT", "Int -> Int")]),
+  ]
+
+test "the C1 law's checker verdicts on an overlap with and without a common lower instance" = expectAll
+  [
+    expectTrue
+      (selectionAgrees
+        Ambiguous
+        (codesFlat (c1Program plain [HPairIntL, HPairIntR] (GPair AInt AInt)))),
+    expectTrue
+      (selectionAgrees
+        Unique
+        (codesFlat
+          (c1Program
+            plain
+            [HPairIntL, HPairIntR, HPairInts]
+            (GPair AInt AInt)))),
+  ]
+
+test "the determination model counts unifying heads and finds a stable minimum" = expectAll
+  [
+    expectEqual Missing (determinationModel [HInt, HStr] CBox),
+    expectEqual Unique (determinationModel [HBoxAny, HAny] CBox),
+    expectEqual Ambiguous (determinationModel [HBoxAny, HBoxInt, HAny] CBox),
+    expectEqual Ambiguous (determinationModel [HInt, HStr] CHole),
+    expectEqual Unique (determinationModel [HPairIntL] (CPairR AInt)),
+    expectFalse (determinationAgrees Missing [ambiguityCode, noImplCode]),
+    expectTrue
+      (determinationAgrees
+        Ambiguous
+        (codesFlat (determinationProgram [HInt, HStr] CHole))),
+  ]
+
+test "the improvement model unifies jointly and counts unifying heads" = expectAll
+  [
+    expectEqual Unique (improvementModel False PtBoxFresh PtBoxInt PtFresh),
+    expectEqual Missing (improvementModel False PtBoxStr PtBoxInt PtFresh),
+    expectEqual Ambiguous (improvementModel True PtBoxFresh PtBoxInt PtFresh),
+    expectEqual Ambiguous (improvementModel True PtBoxInt PtBoxInt PtBoxInt),
+    expectEqual Unique (improvementModel True PtStr PtStr PtStr),
+    expectFalse (matches pickRepeated (pickGoal PtBoxFresh PtBoxInt PtBoxInt)),
+    expectTrue
+      (selectionAgrees
+        Missing
+        (codesFlat (improvementProgram False PtBoxStr PtBoxInt PtFresh))),
+  ]
+
+test "the defaulting models follow determination, joint consistency and the channels" = expectAll
+  [
+    expectEqual Accepted (defaultingModel [DNat, DStr]),
+    expectEqual Rejected (defaultingModel [DStr]),
+    expectEqual Rejected (defaultingModel [DBoxAny, DStr]),
+    expectEqual Accepted (defaultingModel [DAny, DStr]),
+    expectEqual Accepted (defaultingModel [DNat, DBoxAny]),
+    expectEqual Rejected (defaultingModel [DStr, DBoxInt]),
+    expectEqual Rejected (placeVerdict PResult NInt NNat),
+    expectEqual Accepted (placeVerdict PConnected NNat NInt),
+    expectEqual Rejected (fst (checkFlat (placeProgram PResult NNat NNat))),
+  ]
+
+-- Census domains: every description up to the sizes below, enumerated.
+allHeads : List Head
+allHeads = [
+  HInt,
+  HStr,
+  HAny,
+  HBoxAny,
+  HBoxInt,
+  HPairAny,
+  HPairIntL,
+  HPairIntR,
+  HPairInts,
+  HPairSame,
+]
+
+allGoals : List Goal
+allGoals =
+  map GAtom [AInt, AStr]
+    ++ map GBox [AInt, AStr]
+    ++ flatMap (a => map (b => GPair a b) [AInt, AStr]) [AInt, AStr]
+
+-- Instance sets of one, two and three distinct heads, in every order.
+headSets : List (List Head)
+headSets =
+  let pairs = flatMap (a => map (b => [a, b]) (filter (/= a) allHeads)) allHeads
+  map (h => [h]) allHeads
+    ++ pairs
+    ++ flatMap
+      (hs => map (c => hs ++ [c]) (filter (c => not (any (== c) hs)) allHeads))
+      pairs
+
+-- N = 50 for each selection over the 820 x 8 head-set and goal pairs.
+test "census: the C1 law sees missing, unique and ambiguous selections" =
+  let cases = flatMap (hs => map (g => c1Model hs g) allGoals) headSets
+  expectAll [
+    expectEqual 6560 (length cases),
+    expectAtLeast 50 (countWhere (== Missing) cases),
+    expectAtLeast 50 (countWhere (== Unique) cases),
+    expectAtLeast 50 (countWhere (== Ambiguous) cases),
+  ]
+
+-- N = 50 over the 10 x 10 x 8 one-head, duplicate and goal triples: the
+-- duplicate law reaches its asserted case, and skips some.
+test "census: the duplicate-head law reaches a minimal duplicate" =
+  let cases =
+    flatMap
+      (h =>
+        flatMap (d => map (g => duplicateReached [h] d g) allGoals) allHeads)
+      allHeads
+  expectAll [
+    expectEqual 800 (length cases),
+    expectAtLeast 50 (countWhere (r => r) cases),
+    expectAtLeast 50 (countWhere (r => not r) cases),
+  ]
+
+allCtx : List Ctx
+allCtx = [CHole, CBox] ++ map CPairL [AInt, AStr] ++ map CPairR [AInt, AStr]
+
+-- N = 50 for each outcome over the 820 x 6 head-set and context pairs, and
+-- for a stable minimum among two or more candidates.
+test "census: the determination law sees all three outcomes" =
+  let cases =
+    flatMap (hs => map (c => (hs, c, determinationModel hs c)) allCtx) headSets
+  let several =
+    (hs, c) => length (filter (h => unifies h (ctxHT c)) (map headHT hs)) >= 2
+  expectAll [
+    expectEqual 4920 (length cases),
+    expectAtLeast 50 (countWhere ((_, _, s) => s == Missing) cases),
+    expectAtLeast 50 (countWhere ((_, _, s) => s == Unique) cases),
+    expectAtLeast 50 (countWhere ((_, _, s) => s == Ambiguous) cases),
+    expectAtLeast
+      50
+      (countWhere ((hs, c, s) => s == Unique && several (hs, c)) cases),
+  ]
+
+allPTerms : List PTerm
+allPTerms = [PtInt, PtStr, PtFresh, PtBoxInt, PtBoxStr, PtBoxFresh]
+
+-- N = 20 for each outcome over the 2 x 6 x 6 x 6 improvement descriptions,
+-- and for a commit no one-sided match makes.
+test "census: the improvement law sees all three outcomes" =
+  let cases =
+    flatMap
+      (s =>
+        flatMap
+          (a => flatMap (b => map (c => (s, a, b, c)) allPTerms) allPTerms)
+          allPTerms)
+      [False, True]
+  let outcome = (s, a, b, c) => improvementModel s a b c
+  expectAll [
+    expectEqual 432 (length cases),
+    expectAtLeast 20 (countWhere (x => outcome x == Missing) cases),
+    expectAtLeast 20 (countWhere (x => outcome x == Unique) cases),
+    expectAtLeast 20 (countWhere (x => outcome x == Ambiguous) cases),
+    expectAtLeast
+      20
+      (countWhere
+        ((s, a, b, c) =>
+          outcome (s, a, b, c) == Unique
+            && not (matches pickRepeated (pickGoal a b c)))
+        cases),
+  ]
+
+allDHeads : List DHead
+allDHeads = [DInt, DStr, DNat, DAny, DBoxAny, DBoxInt]
+
+-- N = 5 for each verdict, for a set one goal's determination commits and
+-- for one defaulting decides, over the 36 one- and two-head sets; N = 3 for
+-- each verdict of the placements.
+test "census: the defaulting laws see both verdicts" =
+  let sets =
+    map (h => [h]) allDHeads
+      ++ flatMap (a => map (b => [a, b]) (filter (/= a) allDHeads)) allDHeads
+  let places = [PArg, PResult, PSigned, PConnected, PLocal, PEnclosing]
+  let combos =
+    flatMap
+      (p => flatMap (a => map (b => (p, a, b)) [NInt, NNat]) [NInt, NNat])
+      places
+  let committed = hs => length (tagKept hs) == 1 || length (numKept hs) == 1
+  expectAll [
+    expectEqual 36 (length sets),
+    expectAtLeast 5 (countWhere (hs => defaultingModel hs == Accepted) sets),
+    expectAtLeast 5 (countWhere (hs => defaultingModel hs == Rejected) sets),
+    expectAtLeast 5 (countWhere committed sets),
+    expectAtLeast 5 (countWhere (hs => not (committed hs)) sets),
+    expectEqual 24 (length combos),
+    expectAtLeast
+      3
+      (countWhere ((p, a, b) => placeVerdict p a b == Accepted) combos),
+    expectAtLeast
+      3
+      (countWhere ((p, a, b) => placeVerdict p a b == Rejected) combos),
+  ]

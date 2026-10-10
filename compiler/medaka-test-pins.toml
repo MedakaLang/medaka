@@ -17,3 +17,203 @@ engine = "native"
 issue = 3857
 detail_lines = ["native test run ended (probe exit 1) — compiler/tools/test_pins_report.mdk:73:0: runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match; the abort happened while this test was running"]
 failure = "error"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a top-level binding generalizes iff its expression is a syntactic value"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a top-level binding generalizes iff its expression is a syntactic value"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a local let generalizes iff its expression is a syntactic value"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a local let generalizes iff its expression is a syntactic value"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "membership in a binding group grants no generalization exemption"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "membership in a binding group grants no generalization exemption"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a type signature grants no generalization exemption"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a type signature grants no generalization exemption"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/hm_value_restriction_property_test.mdk"
+kind = "prop"
+name = "a polymorphic signature over an expansive body is T-SIG-OVER-EXPANSIVE"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_core_property_test.mdk"
+kind = "prop"
+name = "a binding containing an integer literal is principal and generalizes"
+engine = "eval"
+issue = 3949
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/hm_core_property_test.mdk"
+kind = "prop"
+name = "a binding containing an integer literal is principal and generalizes"
+engine = "native"
+issue = 3949
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/hm_core_property_test.mdk"
+kind = "prop"
+name = "every member of a group with a signed member generalizes at its principal type"
+engine = "eval"
+issue = 3955
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/hm_core_property_test.mdk"
+kind = "prop"
+name = "every member of a group with a signed member generalizes at its principal type"
+engine = "native"
+issue = 3955
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a phantom method is legal at its declaration and only an undetermined use is rejected"
+engine = "eval"
+issue = 1134
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a phantom method is legal at its declaration and only an undetermined use is rejected"
+engine = "native"
+issue = 1134
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a numeric literal demands the prelude's Num whatever binding is spelled fromInt"
+engine = "eval"
+issue = 3956
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a numeric literal demands the prelude's Num whatever binding is spelled fromInt"
+engine = "native"
+issue = 3956
+seed = 20261009
+cases = 500
+failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a program class of an operator's spelling gates nothing without the prelude class"
+engine = "eval"
+issue = 3961
+seed = 20261009
+cases = 25
+failure = "false"
+
+[[pin]]
+file = "types/dict_declaration_property_test.mdk"
+kind = "prop"
+name = "a program class of an operator's spelling gates nothing without the prelude class"
+engine = "native"
+issue = 3961
+seed = 20261009
+cases = 500
+failure = "false"

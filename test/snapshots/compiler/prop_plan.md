@@ -1,5 +1,5 @@
 # META
-source_lines=1551
+source_lines=1691
 stages=DESUGAR,MARK
 # SOURCE
 -- The engine-neutral property planning layer.
@@ -1377,15 +1377,155 @@ validateReachableCtors env truth nominal (ctor :: rest) seen = match (
   (Err e, _) => Err e
   (_, Err e) => Err e
 
+-- A list whose element reaches a cycle that crosses a list edge (`Rose Int
+-- (List Rose)`) shrinks its length bound by one per level of nominal depth, so
+-- the expected fan-out drops below one and the whole value stays small. Every
+-- other list keeps the flat bound, which leaves terminating carriers' draws
+-- untouched.
 export
 listLengthBound : PlanEnv -> Int -> GenPlan -> Int
 listLengthBound env depth plan =
-  if not (planHasFiniteValue env plan) then
+  let truth = finiteTruth env plan
+  if not (abstractFinite env truth plan) then
     0
+  else if cyclesThroughListUnder env truth plan then
+    max 0 (listLenMax - depth)
   else if depth >= maxGenDepth && planCanDiverge env plan then
     0
   else
     listLenMax
+
+-- The renderer emits the decaying bound over the runtime `depth`.
+export
+listBoundDecays : PlanEnv -> GenPlan -> Bool
+listBoundDecays env plan =
+  let truth = finiteTruth env plan
+  abstractFinite env truth plan && cyclesThroughListUnder env truth plan
+
+export
+planCyclesThroughList : PlanEnv -> GenPlan -> Bool
+planCyclesThroughList env plan =
+  cyclesThroughListUnder env (finiteTruth env plan) plan
+
+-- A carrier state is a node; an edge records whether the field path leading to
+-- the next state crosses a list. A cycle through a list is a closed walk using
+-- at least one list edge. Building the graph visits each state once and the
+-- walk search marks (state, crossed) pairs, so the cost is polynomial in the
+-- state count rather than in the number of distinct paths.
+cyclesThroughListUnder : PlanEnv -> OrdMap Unit -> GenPlan -> Bool
+cyclesThroughListUnder env truth root =
+  let graph = buildListGraph env truth (nominalLeaves root False []) omEmpty
+  anyStateReturns graph (omKeys graph)
+
+-- The nominal carriers directly below a field plan, each paired with whether a
+-- list or array lies between.
+nominalLeaves : GenPlan -> Bool -> List (GenPlan, Bool) -> List (GenPlan, Bool)
+nominalLeaves (GList p) _ acc = nominalLeaves p True acc
+nominalLeaves (GArray p) _ acc = nominalLeaves p True acc
+nominalLeaves (GOption p) crossed acc = nominalLeaves p crossed acc
+nominalLeaves (GResult err ok) crossed acc =
+  nominalLeaves err crossed (nominalLeaves ok crossed acc)
+nominalLeaves (GTuple ps) crossed acc = nominalLeavesAll ps crossed acc
+nominalLeaves (nominal@(GNominal _ _)) crossed acc = (nominal, crossed) :: acc
+nominalLeaves _ _ acc = acc
+
+nominalLeavesAll : List GenPlan ->
+  Bool ->
+  List (GenPlan, Bool) ->
+  List (GenPlan, Bool)
+nominalLeavesAll [] _ acc = acc
+nominalLeavesAll (p :: ps) crossed acc =
+  nominalLeaves p crossed (nominalLeavesAll ps crossed acc)
+
+buildListGraph : PlanEnv ->
+  OrdMap Unit ->
+  List (GenPlan, Bool) ->
+  OrdMap (List (String, Bool)) ->
+  OrdMap (List (String, Bool))
+buildListGraph _ _ [] graph = graph
+buildListGraph env truth ((GNominal key args, _) :: rest) graph =
+  let word = stateWord env truth key args
+  if omHasKey word graph then
+    buildListGraph env truth rest graph
+  else
+    let nominal = GNominal key args
+    let leaves = stateLeaves env nominal
+    buildListGraph
+      env
+      truth
+      (leaves ++ rest)
+      (omInsert word (leafEdges env truth leaves) graph)
+buildListGraph env truth (_ :: rest) graph = buildListGraph env truth rest graph
+
+stateLeaves : PlanEnv -> GenPlan -> List (GenPlan, Bool)
+stateLeaves env (nominal@(GNominal key _)) = match planDef env key
+  Ok (PlanDef _ _ _ _ ctors) => ctorLeaves env nominal ctors []
+  Err _ => []
+stateLeaves _ _ = []
+
+ctorLeaves : PlanEnv ->
+  GenPlan ->
+  List PlanCtor ->
+  List (GenPlan, Bool) ->
+  List (GenPlan, Bool)
+ctorLeaves _ _ [] acc = acc
+ctorLeaves env nominal (ctor :: rest) acc =
+  match instantiateCtor env nominal ctor
+    Ok fields =>
+      ctorLeaves
+        env
+        nominal
+        rest
+        (nominalLeavesAll (fieldPlansOnly fields) False acc)
+    Err _ => ctorLeaves env nominal rest acc
+
+leafEdges : PlanEnv ->
+  OrdMap Unit ->
+  List (GenPlan, Bool) ->
+  List (String, Bool)
+leafEdges _ _ [] = []
+leafEdges env truth ((GNominal key args, crossed) :: rest) =
+  (stateWord env truth key args, crossed) :: leafEdges env truth rest
+leafEdges env truth (_ :: rest) = leafEdges env truth rest
+
+anyStateReturns : OrdMap (List (String, Bool)) -> List String -> Bool
+anyStateReturns _ [] = False
+anyStateReturns graph (word :: rest) = match omLookup word graph
+  Some edges =>
+    walkReturns graph word omEmpty edges || anyStateReturns graph rest
+  None => anyStateReturns graph rest
+
+-- Walks from `target` looking for a way back to it after crossing a list edge.
+-- `visited` holds the (state, crossed) pairs already expanded.
+walkReturns : OrdMap (List (String, Bool)) ->
+  String ->
+  OrdMap Unit ->
+  List (String, Bool) ->
+  Bool
+walkReturns _ _ _ [] = False
+walkReturns graph target visited ((word, crossed) :: rest) =
+  if crossed && word == target then
+    True
+  else
+    let mark = if crossed then "\{word}|1" else "\{word}|0"
+    if omHasKey mark visited then
+      walkReturns graph target visited rest
+    else
+      walkReturns
+        graph
+        target
+        (omInsert mark () visited)
+        (crossEdges crossed (edgesOf graph word) ++ rest)
+
+edgesOf : OrdMap (List (String, Bool)) -> String -> List (String, Bool)
+edgesOf graph word = match omLookup word graph
+  Some edges => edges
+  None => []
+
+crossEdges : Bool -> List (String, Bool) -> List (String, Bool)
+crossEdges _ [] = []
+crossEdges crossed ((word, c) :: rest) =
+  (word, crossed || c) :: crossEdges crossed rest
 
 -- The empty/none alternatives are part of the same depth policy. A container
 -- may still expose a non-recursive payload at the bound, but it cannot enter a
@@ -2059,7 +2199,49 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "validateReachableCtors" (PWild PWild PWild (PList) PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateReachableCtors" ((PVar "env") (PVar "truth") (PVar "nominal") (PCons (PVar "ctor") (PVar "rest")) (PVar "seen")) (EMatch (ETuple (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (EApp (EApp (EApp (EApp (EApp (EVar "validateReachableCtors") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "rest")) (EVar "seen"))) (arm (PTuple (PCon "Ok" (PVar "fields")) (PCon "Ok" PWild)) () (EApp (EApp (EApp (EApp (EVar "validateReachablePlans") (EVar "env")) (EVar "truth")) (EApp (EVar "fieldPlansOnly") (EVar "fields"))) (EVar "seen"))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig true "listLengthBound" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyCon "Int")))))
-(DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax"))))
+(DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "listLenMax") (EVar "depth"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax")))))))
+(DTypeSig true "listBoundDecays" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
+(DFunDef false "listBoundDecays" ((PVar "env") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EBinOp "&&" (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan"))))))
+(DTypeSig true "planCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
+(DFunDef false "planCyclesThroughList" ((PVar "env") (PVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")))
+(DTypeSig false "cyclesThroughListUnder" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyCon "Bool")))))
+(DFunDef false "cyclesThroughListUnder" ((PVar "env") (PVar "truth") (PVar "root")) (EBlock (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "root")) (EVar "False")) (EListLit))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EApp (EVar "omKeys") (EVar "graph"))))))
+(DTypeSig false "nominalLeaves" (TyFun (TyCon "GenPlan") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool")))))))
+(DFunDef false "nominalLeaves" ((PCon "GList" (PVar "p")) PWild (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "p")) (EVar "True")) (EVar "acc")))
+(DFunDef false "nominalLeaves" ((PCon "GArray" (PVar "p")) PWild (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "p")) (EVar "True")) (EVar "acc")))
+(DFunDef false "nominalLeaves" ((PCon "GOption" (PVar "p")) (PVar "crossed") (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "p")) (EVar "crossed")) (EVar "acc")))
+(DFunDef false "nominalLeaves" ((PCon "GResult" (PVar "err") (PVar "ok")) (PVar "crossed") (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "err")) (EVar "crossed")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "ok")) (EVar "crossed")) (EVar "acc"))))
+(DFunDef false "nominalLeaves" ((PCon "GTuple" (PVar "ps")) (PVar "crossed") (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeavesAll") (EVar "ps")) (EVar "crossed")) (EVar "acc")))
+(DFunDef false "nominalLeaves" ((PAs "nominal" (PCon "GNominal" PWild PWild)) (PVar "crossed") (PVar "acc")) (EBinOp "::" (ETuple (EVar "nominal") (EVar "crossed")) (EVar "acc")))
+(DFunDef false "nominalLeaves" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DTypeSig false "nominalLeavesAll" (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool")))))))
+(DFunDef false "nominalLeavesAll" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "nominalLeavesAll" ((PCons (PVar "p") (PVar "ps")) (PVar "crossed") (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "p")) (EVar "crossed")) (EApp (EApp (EApp (EVar "nominalLeavesAll") (EVar "ps")) (EVar "crossed")) (EVar "acc"))))
+(DTypeSig false "buildListGraph" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))))))
+(DFunDef false "buildListGraph" (PWild PWild (PList) (PVar "graph")) (EVar "graph"))
+(DFunDef false "buildListGraph" ((PVar "env") (PVar "truth") (PCons (PTuple (PCon "GNominal" (PVar "key") (PVar "args")) PWild) (PVar "rest")) (PVar "graph")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "graph")) (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EVar "rest")) (EVar "graph")) (EBlock (DoLet false false (PVar "nominal") (EApp (EApp (EVar "GNominal") (EVar "key")) (EVar "args"))) (DoLet false false (PVar "leaves") (EApp (EApp (EVar "stateLeaves") (EVar "env")) (EVar "nominal"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EBinOp "++" (EVar "leaves") (EVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (EApp (EApp (EApp (EVar "leafEdges") (EVar "env")) (EVar "truth")) (EVar "leaves"))) (EVar "graph")))))))))
+(DFunDef false "buildListGraph" ((PVar "env") (PVar "truth") (PCons PWild (PVar "rest")) (PVar "graph")) (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EVar "rest")) (EVar "graph")))
+(DTypeSig false "stateLeaves" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))))))
+(DFunDef false "stateLeaves" ((PVar "env") (PAs "nominal" (PCon "GNominal" (PVar "key") PWild))) (EMatch (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EApp (EApp (EVar "ctorLeaves") (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EListLit))) (arm (PCon "Err" PWild) () (EListLit))))
+(DFunDef false "stateLeaves" (PWild PWild) (EListLit))
+(DTypeSig false "ctorLeaves" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))))))))
+(DFunDef false "ctorLeaves" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "ctorLeaves" ((PVar "env") (PVar "nominal") (PCons (PVar "ctor") (PVar "rest")) (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "fields")) () (EApp (EApp (EApp (EApp (EVar "ctorLeaves") (EVar "env")) (EVar "nominal")) (EVar "rest")) (EApp (EApp (EApp (EVar "nominalLeavesAll") (EApp (EVar "fieldPlansOnly") (EVar "fields"))) (EVar "False")) (EVar "acc")))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EVar "ctorLeaves") (EVar "env")) (EVar "nominal")) (EVar "rest")) (EVar "acc")))))
+(DTypeSig false "leafEdges" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))))
+(DFunDef false "leafEdges" (PWild PWild (PList)) (EListLit))
+(DFunDef false "leafEdges" ((PVar "env") (PVar "truth") (PCons (PTuple (PCon "GNominal" (PVar "key") (PVar "args")) (PVar "crossed")) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args")) (EVar "crossed")) (EApp (EApp (EApp (EVar "leafEdges") (EVar "env")) (EVar "truth")) (EVar "rest"))))
+(DFunDef false "leafEdges" ((PVar "env") (PVar "truth") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "leafEdges") (EVar "env")) (EVar "truth")) (EVar "rest")))
+(DTypeSig false "anyStateReturns" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "anyStateReturns" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyStateReturns" ((PVar "graph") (PCons (PVar "word") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "word")) (EVar "graph")) (arm (PCon "Some" (PVar "edges")) () (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "walkReturns") (EVar "graph")) (EVar "word")) (EVar "omEmpty")) (EVar "edges")) (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EVar "rest")))))
+(DTypeSig false "walkReturns" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyCon "Bool"))))))
+(DFunDef false "walkReturns" (PWild PWild PWild (PList)) (EVar "False"))
+(DFunDef false "walkReturns" ((PVar "graph") (PVar "target") (PVar "visited") (PCons (PTuple (PVar "word") (PVar "crossed")) (PVar "rest"))) (EIf (EBinOp "&&" (EVar "crossed") (EBinOp "==" (EVar "word") (EVar "target"))) (EVar "True") (EBlock (DoLet false false (PVar "mark") (EIf (EVar "crossed") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "word"))) (ELit (LString "|1"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "word"))) (ELit (LString "|0"))))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "mark")) (EVar "visited")) (EApp (EApp (EApp (EApp (EVar "walkReturns") (EVar "graph")) (EVar "target")) (EVar "visited")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkReturns") (EVar "graph")) (EVar "target")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mark")) (ELit LUnit)) (EVar "visited"))) (EBinOp "++" (EApp (EApp (EVar "crossEdges") (EVar "crossed")) (EApp (EApp (EVar "edgesOf") (EVar "graph")) (EVar "word"))) (EVar "rest"))))))))
+(DTypeSig false "edgesOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))))))
+(DFunDef false "edgesOf" ((PVar "graph") (PVar "word")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "word")) (EVar "graph")) (arm (PCon "Some" (PVar "edges")) () (EVar "edges")) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "crossEdges" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))))))
+(DFunDef false "crossEdges" (PWild (PList)) (EListLit))
+(DFunDef false "crossEdges" ((PVar "crossed") (PCons (PTuple (PVar "word") (PVar "c")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "word") (EBinOp "||" (EVar "crossed") (EVar "c"))) (EApp (EApp (EVar "crossEdges") (EVar "crossed")) (EVar "rest"))))
 (DTypeSig true "optionWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "optionWeights" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (EListLit (ELit (LInt 1)) (ELit (LInt 0))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (EListLit (ELit (LInt 1)) (ELit (LInt 0))) (EListLit (ELit (LInt 1)) (ELit (LInt 1))))))
 (DTypeSig true "resultWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "Int")))))))
@@ -2648,7 +2830,49 @@ intShrinkSteps = [IntToZero, IntHalf, IntTowardZero]
 (DFunDef false "validateReachableCtors" (PWild PWild PWild (PList) PWild) (EApp (EVar "Ok") (ELit LUnit)))
 (DFunDef false "validateReachableCtors" ((PVar "env") (PVar "truth") (PVar "nominal") (PCons (PVar "ctor") (PVar "rest")) (PVar "seen")) (EMatch (ETuple (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (EApp (EApp (EApp (EApp (EApp (EVar "validateReachableCtors") (EVar "env")) (EVar "truth")) (EVar "nominal")) (EVar "rest")) (EVar "seen"))) (arm (PTuple (PCon "Ok" (PVar "fields")) (PCon "Ok" PWild)) () (EApp (EApp (EApp (EApp (EVar "validateReachablePlans") (EVar "env")) (EVar "truth")) (EApp (EVar "fieldPlansOnly") (EVar "fields"))) (EVar "seen"))) (arm (PTuple (PCon "Err" (PVar "e")) PWild) () (EApp (EVar "Err") (EVar "e"))) (arm (PTuple PWild (PCon "Err" (PVar "e"))) () (EApp (EVar "Err") (EVar "e")))))
 (DTypeSig true "listLengthBound" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyCon "Int")))))
-(DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax"))))
+(DFunDef false "listLengthBound" ((PVar "env") (PVar "depth") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan"))) (ELit (LInt 0)) (EIf (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "-" (EVar "listLenMax") (EVar "depth"))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (ELit (LInt 0)) (EVar "listLenMax")))))))
+(DTypeSig true "listBoundDecays" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
+(DFunDef false "listBoundDecays" ((PVar "env") (PVar "plan")) (EBlock (DoLet false false (PVar "truth") (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (DoExpr (EBinOp "&&" (EApp (EApp (EApp (EVar "abstractFinite") (EVar "env")) (EVar "truth")) (EVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EVar "truth")) (EVar "plan"))))))
+(DTypeSig true "planCyclesThroughList" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyCon "Bool"))))
+(DFunDef false "planCyclesThroughList" ((PVar "env") (PVar "plan")) (EApp (EApp (EApp (EVar "cyclesThroughListUnder") (EVar "env")) (EApp (EApp (EVar "finiteTruth") (EVar "env")) (EVar "plan"))) (EVar "plan")))
+(DTypeSig false "cyclesThroughListUnder" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "GenPlan") (TyCon "Bool")))))
+(DFunDef false "cyclesThroughListUnder" ((PVar "env") (PVar "truth") (PVar "root")) (EBlock (DoLet false false (PVar "graph") (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "root")) (EVar "False")) (EListLit))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EApp (EVar "omKeys") (EVar "graph"))))))
+(DTypeSig false "nominalLeaves" (TyFun (TyCon "GenPlan") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool")))))))
+(DFunDef false "nominalLeaves" ((PCon "GList" (PVar "p")) PWild (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "p")) (EVar "True")) (EVar "acc")))
+(DFunDef false "nominalLeaves" ((PCon "GArray" (PVar "p")) PWild (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "p")) (EVar "True")) (EVar "acc")))
+(DFunDef false "nominalLeaves" ((PCon "GOption" (PVar "p")) (PVar "crossed") (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "p")) (EVar "crossed")) (EVar "acc")))
+(DFunDef false "nominalLeaves" ((PCon "GResult" (PVar "err") (PVar "ok")) (PVar "crossed") (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "err")) (EVar "crossed")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "ok")) (EVar "crossed")) (EVar "acc"))))
+(DFunDef false "nominalLeaves" ((PCon "GTuple" (PVar "ps")) (PVar "crossed") (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeavesAll") (EVar "ps")) (EVar "crossed")) (EVar "acc")))
+(DFunDef false "nominalLeaves" ((PAs "nominal" (PCon "GNominal" PWild PWild)) (PVar "crossed") (PVar "acc")) (EBinOp "::" (ETuple (EVar "nominal") (EVar "crossed")) (EVar "acc")))
+(DFunDef false "nominalLeaves" (PWild PWild (PVar "acc")) (EVar "acc"))
+(DTypeSig false "nominalLeavesAll" (TyFun (TyApp (TyCon "List") (TyCon "GenPlan")) (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool")))))))
+(DFunDef false "nominalLeavesAll" ((PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "nominalLeavesAll" ((PCons (PVar "p") (PVar "ps")) (PVar "crossed") (PVar "acc")) (EApp (EApp (EApp (EVar "nominalLeaves") (EVar "p")) (EVar "crossed")) (EApp (EApp (EApp (EVar "nominalLeavesAll") (EVar "ps")) (EVar "crossed")) (EVar "acc"))))
+(DTypeSig false "buildListGraph" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))))))
+(DFunDef false "buildListGraph" (PWild PWild (PList) (PVar "graph")) (EVar "graph"))
+(DFunDef false "buildListGraph" ((PVar "env") (PVar "truth") (PCons (PTuple (PCon "GNominal" (PVar "key") (PVar "args")) PWild) (PVar "rest")) (PVar "graph")) (EBlock (DoLet false false (PVar "word") (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "word")) (EVar "graph")) (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EVar "rest")) (EVar "graph")) (EBlock (DoLet false false (PVar "nominal") (EApp (EApp (EVar "GNominal") (EVar "key")) (EVar "args"))) (DoLet false false (PVar "leaves") (EApp (EApp (EVar "stateLeaves") (EVar "env")) (EVar "nominal"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EBinOp "++" (EVar "leaves") (EVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EVar "word")) (EApp (EApp (EApp (EVar "leafEdges") (EVar "env")) (EVar "truth")) (EVar "leaves"))) (EVar "graph")))))))))
+(DFunDef false "buildListGraph" ((PVar "env") (PVar "truth") (PCons PWild (PVar "rest")) (PVar "graph")) (EApp (EApp (EApp (EApp (EVar "buildListGraph") (EVar "env")) (EVar "truth")) (EVar "rest")) (EVar "graph")))
+(DTypeSig false "stateLeaves" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))))))
+(DFunDef false "stateLeaves" ((PVar "env") (PAs "nominal" (PCon "GNominal" (PVar "key") PWild))) (EMatch (EApp (EApp (EVar "planDef") (EVar "env")) (EVar "key")) (arm (PCon "Ok" (PCon "PlanDef" PWild PWild PWild PWild (PVar "ctors"))) () (EApp (EApp (EApp (EApp (EVar "ctorLeaves") (EVar "env")) (EVar "nominal")) (EVar "ctors")) (EListLit))) (arm (PCon "Err" PWild) () (EListLit))))
+(DFunDef false "stateLeaves" (PWild PWild) (EListLit))
+(DTypeSig false "ctorLeaves" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "GenPlan") (TyFun (TyApp (TyCon "List") (TyCon "PlanCtor")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))))))))
+(DFunDef false "ctorLeaves" (PWild PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "ctorLeaves" ((PVar "env") (PVar "nominal") (PCons (PVar "ctor") (PVar "rest")) (PVar "acc")) (EMatch (EApp (EApp (EApp (EVar "instantiateCtor") (EVar "env")) (EVar "nominal")) (EVar "ctor")) (arm (PCon "Ok" (PVar "fields")) () (EApp (EApp (EApp (EApp (EVar "ctorLeaves") (EVar "env")) (EVar "nominal")) (EVar "rest")) (EApp (EApp (EApp (EVar "nominalLeavesAll") (EApp (EVar "fieldPlansOnly") (EVar "fields"))) (EVar "False")) (EVar "acc")))) (arm (PCon "Err" PWild) () (EApp (EApp (EApp (EApp (EVar "ctorLeaves") (EVar "env")) (EVar "nominal")) (EVar "rest")) (EVar "acc")))))
+(DTypeSig false "leafEdges" (TyFun (TyCon "PlanEnv") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "GenPlan") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))))))
+(DFunDef false "leafEdges" (PWild PWild (PList)) (EListLit))
+(DFunDef false "leafEdges" ((PVar "env") (PVar "truth") (PCons (PTuple (PCon "GNominal" (PVar "key") (PVar "args")) (PVar "crossed")) (PVar "rest"))) (EBinOp "::" (ETuple (EApp (EApp (EApp (EApp (EVar "stateWord") (EVar "env")) (EVar "truth")) (EVar "key")) (EVar "args")) (EVar "crossed")) (EApp (EApp (EApp (EVar "leafEdges") (EVar "env")) (EVar "truth")) (EVar "rest"))))
+(DFunDef false "leafEdges" ((PVar "env") (PVar "truth") (PCons PWild (PVar "rest"))) (EApp (EApp (EApp (EVar "leafEdges") (EVar "env")) (EVar "truth")) (EVar "rest")))
+(DTypeSig false "anyStateReturns" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "anyStateReturns" (PWild (PList)) (EVar "False"))
+(DFunDef false "anyStateReturns" ((PVar "graph") (PCons (PVar "word") (PVar "rest"))) (EMatch (EApp (EApp (EVar "omLookup") (EVar "word")) (EVar "graph")) (arm (PCon "Some" (PVar "edges")) () (EBinOp "||" (EApp (EApp (EApp (EApp (EVar "walkReturns") (EVar "graph")) (EVar "word")) (EVar "omEmpty")) (EVar "edges")) (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EVar "rest")))) (arm (PCon "None") () (EApp (EApp (EVar "anyStateReturns") (EVar "graph")) (EVar "rest")))))
+(DTypeSig false "walkReturns" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyCon "Bool"))))))
+(DFunDef false "walkReturns" (PWild PWild PWild (PList)) (EVar "False"))
+(DFunDef false "walkReturns" ((PVar "graph") (PVar "target") (PVar "visited") (PCons (PTuple (PVar "word") (PVar "crossed")) (PVar "rest"))) (EIf (EBinOp "&&" (EVar "crossed") (EBinOp "==" (EVar "word") (EVar "target"))) (EVar "True") (EBlock (DoLet false false (PVar "mark") (EIf (EVar "crossed") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "word"))) (ELit (LString "|1"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "word"))) (ELit (LString "|0"))))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "mark")) (EVar "visited")) (EApp (EApp (EApp (EApp (EVar "walkReturns") (EVar "graph")) (EVar "target")) (EVar "visited")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkReturns") (EVar "graph")) (EVar "target")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mark")) (ELit LUnit)) (EVar "visited"))) (EBinOp "++" (EApp (EApp (EVar "crossEdges") (EVar "crossed")) (EApp (EApp (EVar "edgesOf") (EVar "graph")) (EVar "word"))) (EVar "rest"))))))))
+(DTypeSig false "edgesOf" (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))))))
+(DFunDef false "edgesOf" ((PVar "graph") (PVar "word")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "word")) (EVar "graph")) (arm (PCon "Some" (PVar "edges")) () (EVar "edges")) (arm (PCon "None") () (EListLit))))
+(DTypeSig false "crossEdges" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Bool"))))))
+(DFunDef false "crossEdges" (PWild (PList)) (EListLit))
+(DFunDef false "crossEdges" ((PVar "crossed") (PCons (PTuple (PVar "word") (PVar "c")) (PVar "rest"))) (EBinOp "::" (ETuple (EVar "word") (EBinOp "||" (EVar "crossed") (EVar "c"))) (EApp (EApp (EVar "crossEdges") (EVar "crossed")) (EVar "rest"))))
 (DTypeSig true "optionWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "optionWeights" ((PVar "env") (PVar "depth") (PVar "plan")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "planHasFiniteValue") (EVar "env")) (EVar "plan"))) (EListLit (ELit (LInt 1)) (ELit (LInt 0))) (EIf (EBinOp "&&" (EBinOp ">=" (EVar "depth") (EVar "maxGenDepth")) (EApp (EApp (EVar "planCanDiverge") (EVar "env")) (EVar "plan"))) (EListLit (ELit (LInt 1)) (ELit (LInt 0))) (EListLit (ELit (LInt 1)) (ELit (LInt 1))))))
 (DTypeSig true "resultWeights" (TyFun (TyCon "PlanEnv") (TyFun (TyCon "Int") (TyFun (TyCon "GenPlan") (TyFun (TyCon "GenPlan") (TyApp (TyCon "List") (TyCon "Int")))))))

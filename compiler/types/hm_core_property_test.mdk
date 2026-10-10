@@ -1,0 +1,926 @@
+-- The Damas-Milner core laws HM-CORE-SEMANTICS §2-§5 still owes (#2555), as
+-- generated-program properties. Each expected verdict comes from the
+-- textbook rule, written below as a model (a type language, Robinson
+-- unification with the occurs check, instances of a scheme); the checker is
+-- observed only through its verdicts and rendered schemes. The fragment has
+-- no rows, effects, authority or predicate context, so none of #2555's four
+-- recorded deviations is asserted or contradicted here.
+
+import frontend.desugar.{desugar}
+import frontend.parser.{parseLocated}
+import list.{drop, elemIndex, filter, lookup, nub, reverse}
+import string.{isAlphaNum, isLower, join, toChars}
+import test.{expectAll, expectAtLeast, expectEqual, expectFalse, expectTrue}
+import types.law_harness_test.{
+  Shape(..),
+  Verdict(..),
+  alphaEquiv,
+  checkFlat,
+  countWhere,
+  lawPrelude,
+  shapeAt,
+  shapeScheme,
+  shapeSupport,
+  isVariableToken,
+  typeTokens,
+  withTwoUses,
+}
+import types.repr.{ppScheme}
+import types.typecheck.{checkModulesDiagsChain, tcCode}
+
+-- The model's types: a variable, a constructor applied to arguments, an
+-- arrow, a tuple.
+data Ty =
+  | TV String
+  | TC String (List Ty)
+  | TF Ty Ty
+  | TT (List Ty)
+  deriving (Eq, Debug)
+
+-- Fully parenthesized source text of a type.
+renderTy : Ty -> String
+renderTy (TV name) = name
+renderTy (TC name []) = name
+renderTy (TC name args) = "(\{name} \{join " " (map renderTy args)})"
+renderTy (TF from to) = "(\{renderTy from} -> \{renderTy to})"
+renderTy (TT items) = "(\{join ", " (map renderTy items)})"
+
+-- Equal up to a renaming of variables, by the harness's canonical renaming.
+sameType : Ty -> Ty -> Bool
+sameType left right = alphaEquiv (renderTy left) (renderTy right)
+
+{- Reads a rendered type back into the model: the printer's spelling and the
+   harness's spelling both, redundant parentheses allowed. A token the
+   grammar does not expect yields the constructor `?`, which no model type
+   contains, so an unreadable rendering never compares equal. -}
+parseTy : String -> Ty
+parseTy text = match parseArrow (typeTokens text)
+  (ty, []) => if mentionsUnreadable ty then unreadable else ty
+  _ => unreadable
+
+mentionsUnreadable : Ty -> Bool
+mentionsUnreadable (TV _) = False
+mentionsUnreadable (TC name args) = name == "?" || any mentionsUnreadable args
+mentionsUnreadable (TF from to) =
+  mentionsUnreadable from || mentionsUnreadable to
+mentionsUnreadable (TT items) = any mentionsUnreadable items
+
+unreadable : Ty
+unreadable = TC "?" []
+
+parseArrow : List String -> (Ty, List String)
+parseArrow tokens =
+  let (left, rest) = parseApp tokens
+  match rest
+    "-" :: ">" :: more =>
+      let (right, after) = parseArrow more
+      (TF left right, after)
+    _ => (left, rest)
+
+parseApp : List String -> (Ty, List String)
+parseApp tokens = match parseAtom tokens
+  (TC name [], rest) =>
+    let (args, after) = parseArgs rest
+    (TC name args, after)
+  other => other
+
+parseArgs : List String -> (List Ty, List String)
+parseArgs tokens =
+  if startsAtom tokens then
+    let (arg, rest) = parseAtom tokens
+    let (more, after) = parseArgs rest
+    (arg :: more, after)
+  else
+    ([], tokens)
+
+startsAtom : List String -> Bool
+startsAtom [] = False
+startsAtom (token :: _) = token == "(" || isIdent token
+
+isIdent : String -> Bool
+isIdent token = match toList (toChars token)
+  c :: _ => isAlphaNum c
+  [] => False
+
+parseAtom : List String -> (Ty, List String)
+parseAtom [] = (unreadable, [])
+parseAtom ("(" :: rest) =
+  let (first, after) = parseArrow rest
+  parseGroup [first] after
+parseAtom (token :: rest) =
+  if isVariableToken token then
+    (TV token, rest)
+  else if isIdent token then
+    (TC token [], rest)
+  else
+    (unreadable, rest)
+
+parseGroup : List Ty -> List String -> (Ty, List String)
+parseGroup items ("," :: rest) =
+  let (next, after) = parseArrow rest
+  parseGroup (items ++ [next]) after
+parseGroup [single] (")" :: rest) = (single, rest)
+parseGroup items (")" :: rest) = (TT items, rest)
+parseGroup _ rest = (unreadable, rest)
+
+-- A substitution, as bindings of variable names; `resolve` follows a chain.
+type Subst = List (String, Ty)
+
+resolve : Subst -> Ty -> Ty
+resolve subst (TV name) = match lookup name subst
+  Some bound => resolve subst bound
+  None => TV name
+resolve _ ty = ty
+
+-- How unification ended: a unifier, a constructor clash, or the occurs check.
+data Unified = Unifier Subst | Clash | Occurs deriving (Eq, Debug)
+
+{- Robinson's unification, the textbook algorithm the checker's equations
+   answer to: structural, with a variable bound only to a type it does not
+   occur in, since no type is a proper part of itself. -}
+unifyModel : Subst -> Ty -> Ty -> Unified
+unifyModel subst left right = match (resolve subst left, resolve subst right)
+  (TV x, TV y) => if x == y then Unifier subst else Unifier ((x, TV y) :: subst)
+  (TV x, other) => bindVar subst x other
+  (other, TV x) => bindVar subst x other
+  (TF a b, TF c d) => unifyAll subst [a, b] [c, d]
+  (TC n xs, TC m ys) =>
+    if n == m && length xs == length ys then unifyAll subst xs ys else Clash
+  (TT xs, TT ys) =>
+    if length xs == length ys then unifyAll subst xs ys else Clash
+  _ => Clash
+
+bindVar : Subst -> String -> Ty -> Unified
+bindVar subst name ty =
+  if occursIn subst name ty then Occurs else Unifier ((name, ty) :: subst)
+
+occursIn : Subst -> String -> Ty -> Bool
+occursIn subst name ty = match resolve subst ty
+  TV other => other == name
+  TC _ args => any (occursIn subst name) args
+  TF from to => occursIn subst name from || occursIn subst name to
+  TT items => any (occursIn subst name) items
+
+unifyAll : Subst -> List Ty -> List Ty -> Unified
+unifyAll subst [] [] = Unifier subst
+unifyAll subst (x :: xs) (y :: ys) = match unifyModel subst x y
+  Unifier next => unifyAll next xs ys
+  failed => failed
+unifyAll _ _ _ = Clash
+
+modelVerdict : Unified -> Verdict
+modelVerdict (Unifier _) = Accepted
+modelVerdict _ = Rejected
+
+substTy : (String -> Ty) -> Ty -> Ty
+substTy f (TV name) = f name
+substTy f (TC name args) = TC name (map (substTy f) args)
+substTy f (TF from to) = TF (substTy f from) (substTy f to)
+substTy f (TT items) = TT (map (substTy f) items)
+
+-- Variable occurrences in preorder, repeats kept.
+occurrences : Ty -> List String
+occurrences (TV name) = [name]
+occurrences (TC _ args) = flatMap occurrences args
+occurrences (TF from to) = occurrences from ++ occurrences to
+occurrences (TT items) = flatMap occurrences items
+
+-- Generated types over the lambda-bound variables `x0`, `x1`, `x2`.
+public export data Var = V0 | V1 | V2 deriving (Eq, Debug)
+
+public export data GTy =
+  | GVar Var
+  | GInt
+  | GStr
+  | GList GTy
+  | GBox GTy
+  | GPair GTy GTy
+  | GFun GTy GTy
+  deriving (Eq, Debug)
+
+varName : Var -> String
+varName V0 = "x0"
+varName V1 = "x1"
+varName V2 = "x2"
+
+toTy : GTy -> Ty
+toTy (GVar v) = TV (varName v)
+toTy GInt = TC "Int" []
+toTy GStr = TC "String" []
+toTy (GList t) = TC "List" [toTy t]
+toTy (GBox t) = TC "Box" [toTy t]
+toTy (GPair a b) = TC "Pair" [toTy a, toTy b]
+toTy (GFun a b) = TF (toTy a) (toTy b)
+
+-- The ground type obtained by sending each variable to a fixed ground.
+closeG : GTy -> GTy
+closeG (GVar V0) = GInt
+closeG (GVar V1) = GStr
+closeG (GVar V2) = GBox GInt
+closeG GInt = GInt
+closeG GStr = GStr
+closeG (GList t) = GList (closeG t)
+closeG (GBox t) = GBox (closeG t)
+closeG (GPair a b) = GPair (closeG a) (closeG b)
+closeG (GFun a b) = GFun (closeG a) (closeG b)
+
+-- Declarations the generated terms use; the externs give each type a term
+-- without a literal or a body.
+termSupport : String
+termSupport =
+  "data Box a = Box a\n"
+    ++ "data Pair a b = Pair a b\n"
+    ++ "extern anInt : Int\n"
+    ++ "extern same : a -> a -> a\n"
+    ++ "extern arrow : a -> b -> a -> b\n"
+    ++ "const2 x y = x\n"
+
+-- A term whose type is exactly `toTy t`, each variable spelled by `name`.
+termWith : (Var -> String) -> GTy -> String
+termWith name (GVar v) = name v
+termWith _ GInt = "anInt"
+termWith _ GStr = "\"s\""
+termWith name (GList t) = "[\{termWith name t}]"
+termWith name (GBox t) = "(Box \{termWith name t})"
+termWith name (GPair a b) = "(Pair \{termWith name a} \{termWith name b})"
+termWith name (GFun a b) = "(arrow \{termWith name a} \{termWith name b})"
+
+termOf : GTy -> String
+termOf t = termWith varName t
+
+-- A construct whose typing forces its two operands' types equal: a
+-- function of type `a -> a -> a`, a list literal, the branches of a
+-- conditional, and an argument against a parameter type.
+public export data Forcing = FSame | FList | FIf | FArg deriving (Eq, Debug)
+
+forced : Forcing -> String -> String -> String
+forced FSame left right = "(same \{left} \{right})"
+forced FList left right = "[\{left}, \{right}]"
+forced FIf left right = "(if c then \{left} else \{right})"
+forced FArg left right = "((arrow \{left} anInt) \{right})"
+
+-- The function whose body forces `left` and `right` equal.
+equationProgram : Forcing -> GTy -> GTy -> String
+equationProgram form left right =
+  "\{termSupport}probe c x0 x1 x2 = \{forced form (termOf left) (termOf right)}\n"
+
+equationModel : GTy -> GTy -> Unified
+equationModel left right = unifyModel [] (toTy left) (toTy right)
+
+{- §3 symmetry. Unification solves an unordered equation: a unifier of
+   `τ1 = τ2` is a unifier of `τ2 = τ1`, so which operand a construct puts
+   first cannot change whether the program types. The verdict of each order
+   is the model's (a most general unifier exists), not the other order's. -}
+prop "swapping the operands of an equation-forcing construct keeps its verdict" (form : Forcing) (left : GTy) (right : GTy) =
+  let expected = modelVerdict (equationModel left right)
+  fst (checkFlat (equationProgram form left right)) == expected
+    && fst (checkFlat (equationProgram form right left)) == expected
+
+-- One layer of type structure around a hole, with a sibling type.
+public export data Wrap =
+  | WList
+  | WBox
+  | WPairL GTy
+  | WPairR GTy
+  | WFunArg GTy
+  | WFunRes GTy
+  deriving (Eq, Debug)
+
+plug : List Wrap -> GTy -> GTy
+plug [] t = t
+plug (w :: rest) t = wrapOnce w (plug rest t)
+
+wrapOnce : Wrap -> GTy -> GTy
+wrapOnce WList t = GList t
+wrapOnce WBox t = GBox t
+wrapOnce (WPairL other) t = GPair t other
+wrapOnce (WPairR other) t = GPair other t
+wrapOnce (WFunArg other) t = GFun t other
+wrapOnce (WFunRes other) t = GFun other t
+
+-- A cyclic equation: a variable equated, by one of the forcing constructs,
+-- with a non-empty context around itself, or applied to a context around
+-- itself (self-application when the context is empty).
+public export data Cycle =
+  | CEquate Forcing Wrap
+  | CSelfApply
+  deriving (Eq, Debug)
+
+-- Whether the variable is used directly or through a block `let` alias.
+public export data Alias = Direct | ThroughLet deriving (Eq, Debug)
+
+cycleProgram : Var -> Cycle -> List Wrap -> Alias -> String
+cycleProgram v cycle inner alias =
+  let name = w => if w == v && alias == ThroughLet then "y" else varName w
+  let body = match cycle
+    CEquate form outer =>
+      forced form (name v) (termWith name (plug (outer :: inner) (GVar v)))
+    CSelfApply => "(\{name v} \{termWith name (plug inner (GVar v))})"
+  let rhs = match alias
+    Direct => " \{body}"
+    ThroughLet => "\n  let y = \{varName v}\n  \{body}"
+  "\{termSupport}probe c x0 x1 x2 =\{rhs}\n"
+
+{- The model's equation for a cycle. An alias does not change it: `let`
+   quantifies only variables not free in the environment, and the alias's
+   type is `x_v`'s, which the environment binds. -}
+cycleModel : Var -> Cycle -> List Wrap -> Unified
+cycleModel v (CEquate _ outer) inner =
+  unifyModel [] (TV (varName v)) (toTy (plug (outer :: inner) (GVar v)))
+cycleModel v CSelfApply inner =
+  unifyModel [] (TV (varName v)) (TF (toTy (plug inner (GVar v))) (TV "result"))
+
+{- §3 occurs check. An equation `α = C[α]` with `C` a non-empty context has
+   no finite solution, so unification fails and the program is rejected;
+   self-application `x x` is the instance `α = α -> β`. -}
+prop "an equation between a type and a proper part of itself is rejected" (v : Var) (cycle : Cycle) (inner : List Wrap) (alias : Alias) =
+  cycleModel v cycle inner == Occurs
+    && fst (checkFlat (cycleProgram v cycle inner alias)) == Rejected
+
+-- A generated shape projected onto the values with no integer literal, so
+-- the polymorphism laws are neither satisfied nor defeated by #3949
+-- (integer literal classified expansive); the literal law below covers it.
+pureShape : Shape -> Shape
+pureShape SInt = SStr
+pureShape SStr = SStr
+pureShape SId = SId
+pureShape SVar = SVar
+pureShape SCtorVar = SCtorVar
+pureShape SNil = SNil
+pureShape (SLam body) = SLam (pureShape body)
+pureShape (STuple left right) = STuple (pureShape left) (pureShape right)
+pureShape (SList inner) = SList (pureShape inner)
+pureShape (SBox inner) = SBox (pureShape inner)
+pureShape (SPair left right) = SPair (pureShape left) (pureShape right)
+pureShape (SPartCtor inner) = SPartCtor (pureShape inner)
+pureShape (SRecord inner) = SRecord (pureShape inner)
+pureShape (SAsc inner) = SAsc (pureShape inner)
+pureShape (SRef inner) = SBox (pureShape inner)
+pureShape (SApp inner) = SLam (pureShape inner)
+pureShape (SPartial inner) = SPartCtor (pureShape inner)
+pureShape (SIf inner) = SList (pureShape inner)
+pureShape (SField inner) = SRecord (pureShape inner)
+
+-- The shape's principal type in the model, from the harness typing model.
+modelScheme : Shape -> Ty
+modelScheme shape = parseTy (shapeScheme shape)
+
+isPolymorphic : Shape -> Bool
+isPolymorphic shape = occurrences (modelScheme shape) /= []
+
+-- The generated grounds, closed; two defaults when none were generated.
+groundsOf : List GTy -> List GTy
+groundsOf [] = [GInt, GStr]
+groundsOf grounds = map closeG grounds
+
+pick : List GTy -> Int -> GTy
+pick grounds k = match drop (k % length grounds) grounds
+  g :: _ => g
+  [] => GInt
+
+-- The instance of `ty` sending its k-th distinct variable to `wrap` of the
+-- k-th ground, cyclically.
+instanceAt : (Ty -> Ty) -> List GTy -> Ty -> Ty
+instanceAt wrap grounds ty =
+  let vars = nub (occurrences ty)
+  let gs = groundsOf grounds
+  substTy
+    (name => match elemIndex name vars
+      Some k => wrap (toTy (pick gs k))
+      None => TV name)
+    ty
+
+-- Two ground instances of a shape's scheme that differ at every variable:
+-- the second sends each variable to a list of what the first sends it to.
+instancePair : List GTy -> Shape -> (String, String)
+instancePair grounds shape =
+  let scheme = modelScheme shape
+  (
+    renderTy (instanceAt (t => t) grounds scheme),
+    renderTy (instanceAt (t => TC "List" [t]) grounds scheme),
+  )
+
+-- The first variable with two occurrences, if any.
+repeatedVar : Ty -> Option String
+repeatedVar ty =
+  let occ = occurrences ty
+  match filter (v => length (filter (== v) occ) >= 2) occ
+    v :: _ => Some v
+    [] => None
+
+-- `ty` with the first occurrence of `name` replaced by `first` and every
+-- later occurrence by `later`.
+splitVar : String -> Ty -> Ty -> Bool -> Ty -> (Ty, Bool)
+splitVar name first later seen (TV other) =
+  if other /= name then
+    (TV other, seen)
+  else if seen then
+    (later, True)
+  else
+    (first, True)
+splitVar name first later seen (TC n args) =
+  let (args2, seen2) = splitList name first later seen args
+  (TC n args2, seen2)
+splitVar name first later seen (TF from to) =
+  let (from2, seen2) = splitVar name first later seen from
+  let (to2, seen3) = splitVar name first later seen2 to
+  (TF from2 to2, seen3)
+splitVar name first later seen (TT items) =
+  let (items2, seen2) = splitList name first later seen items
+  (TT items2, seen2)
+
+splitList : String -> Ty -> Ty -> Bool -> List Ty -> (List Ty, Bool)
+splitList _ _ _ seen [] = ([], seen)
+splitList name first later seen (t :: rest) =
+  let (t2, seen2) = splitVar name first later seen t
+  let (rest2, seen3) = splitList name first later seen2 rest
+  (t2 :: rest2, seen3)
+
+{- A ground type that is not an instance of `ty`'s scheme: a repeated
+   variable's occurrences are sent to two different grounds, which no single
+   substitution does. -}
+nonInstance : List GTy -> Ty -> Option Ty
+nonInstance grounds ty = match repeatedVar ty
+  Some name =>
+    let ground = toTy (pick (groundsOf grounds) 0)
+    let split = fst (splitVar name ground (TC "List" [ground]) False ty)
+    Some (instanceAt (t => t) grounds split)
+  None => None
+
+topBinding : Shape -> String
+topBinding shape = "\{shapeSupport}g = \{shapeAt "x" shape}\n"
+
+{- §4 instantiation. A generalized binding `g : ∀ᾱ. τ` may be used at
+   `τ[ᾱ := σ̄]` for any σ̄, independently at each use, so two uses at
+   instances that differ at every variable are accepted; a type that is no
+   substitution instance of `τ` (one variable sent to two different types)
+   is rejected. The bound values are syntactic values (HM-CORE §1), so they
+   generalize. -}
+prop "a generalized binding is usable at two distinct instances and at no non-instance" (shape : Shape) (grounds : List GTy) =
+  let s = pureShape shape
+  let (tyA, tyB) = instancePair grounds s
+  let instances =
+    fst (checkFlat (withTwoUses (topBinding s) "g" tyA tyB)) == Accepted
+  match nonInstance grounds (modelScheme s)
+    Some other =>
+      instances
+        && fst (checkFlat (withTwoUses (topBinding s) "g" tyA (renderTy other)))
+          == Rejected
+    None => instances
+
+lambdaTwin : Shape -> String -> String -> String
+lambdaTwin shape tyA tyB =
+  "\{shapeSupport}probe = (g => ((g : \{tyA}), (g : \{tyB}))) \{shapeAt "x" shape}\n"
+
+letTwin : Shape -> String -> String -> String
+letTwin shape tyA tyB =
+  "\{shapeSupport}probe =\n  let g = \{shapeAt "x" shape}\n  ((g : \{tyA}), (g : \{tyB}))\n"
+
+lambdaExpected : Shape -> Verdict
+lambdaExpected shape = if isPolymorphic shape then Rejected else Accepted
+
+{- §4 lambda-bound monomorphism. A lambda parameter enters the environment
+   as a monotype `x : τ`, so two uses at different ground types force
+   `τ = A` and `τ = B` with `A ≠ B`; the let-bound twin enters as the scheme
+   `∀ᾱ. τ` and each use instantiates afresh. -}
+prop "a lambda-bound variable is monomorphic and its let-bound twin is polymorphic" (shape : Shape) (grounds : List GTy) =
+  let s = pureShape shape
+  let (tyA, tyB) = instancePair grounds s
+  fst (checkFlat (lambdaTwin s tyA tyB)) == lambdaExpected s
+    && fst (checkFlat (letTwin s tyA tyB)) == Accepted
+
+-- The error codes and the rendered scheme of `name` in `source`, checked as
+-- a one-module graph under the law prelude; "" when `name` has no scheme.
+schemeOf : String -> String -> (List String, String)
+schemeOf name source =
+  let prelude = desugar (parseLocated lawPrelude)
+  let results = checkModulesDiagsChain None "" [] [] prelude [
+    ("law", desugar (parseLocated source)),
+  ]
+  let codes = flatMap ((_, (_, errors, _)) => map tcCode errors) results
+  let schemes = match reverse results
+    (_, (own, _, _)) :: _ => map ((n, s) => (n, ppScheme s)) own
+    [] => []
+  (
+    codes,
+    match lookup name schemes
+      Some text => text
+      None => "",
+  )
+
+{- The principality comparison: the unannotated binding is accepted with a
+   scheme equal, up to renaming, to the model's principal type; annotated
+   with that rendered scheme it is accepted again and re-infers the same
+   scheme up to renaming. -}
+principalAgrees : Ty -> (List String, String) -> (List String, String) -> Bool
+principalAgrees model (codes, inferred) (codesAgain, reinferred) =
+  codes == []
+    && sameType (parseTy inferred) model
+    && codesAgain == []
+    && alphaEquiv inferred reinferred
+
+annotatedBinding : String -> Shape -> String
+annotatedBinding scheme shape =
+  "\{shapeSupport}g : \{scheme}\ng = \{shapeAt "w" shape}\n"
+
+principal : Shape -> Bool
+principal shape =
+  let first = schemeOf "g" (topBinding shape)
+  let again = schemeOf "g" (annotatedBinding (snd first) shape)
+  principalAgrees (modelScheme shape) first again
+
+{- §2/§4 principality (Damas-Milner): a generalizable binding has a
+   principal scheme `σ` of which every type it can be given is an instance,
+   and the checker infers it. Then `σ` itself is a valid signature (σ ≤ σ),
+   and checking under it yields `σ` again. -}
+prop "re-annotating a binding with its inferred scheme is accepted and re-infers it" (shape : Shape) =
+  principal (pureShape shape)
+
+{- The literal-bearing variant of the principality, instantiation and
+   let-polymorphism laws. An integer literal is a syntactic value (HM-CORE
+   §1), so a tuple of a literal and a value generalizes like any value:
+   textbook rules, unchanged. -}
+prop "a binding containing an integer literal is principal and generalizes" (shape : Shape) (grounds : List GTy) =
+  let s = STuple SInt (pureShape shape)
+  let (tyA, tyB) = instancePair grounds s
+  principal s
+    && fst (checkFlat (withTwoUses (topBinding s) "g" tyA tyB)) == Accepted
+    && fst (checkFlat (letTwin s tyA tyB)) == Accepted
+
+-- Rendered ground type of a generated type.
+groundText : GTy -> String
+groundText t = renderTy (toTy (closeG t))
+
+-- A two-member group, `f` and `g` naming each other, with `g` used at two
+-- types inside `f`'s body.
+insideGroup : GTy -> GTy -> String
+insideGroup a b =
+  let ta = groundText a
+  let tb = groundText b
+  "\{termSupport}f x = const2 x ((g : \{ta} -> \{ta}), (g : \{tb} -> \{tb}))\n"
+    ++ "g y = const2 y f\n"
+
+-- The same group used at two types after it.
+afterGroup : GTy -> GTy -> String
+afterGroup a b =
+  let ta = groundText a
+  let tb = groundText b
+  "\{termSupport}f x = const2 x (g x)\ng y = const2 y f\n"
+    ++ "useA = ((f : \{ta} -> \{ta}), (g : \{ta} -> \{ta}))\n"
+    ++ "useB = ((f : \{tb} -> \{tb}), (g : \{tb} -> \{tb}))\n"
+
+insideExpected : GTy -> GTy -> Verdict
+insideExpected a b = if closeG a == closeG b then Accepted else Rejected
+
+{- §5 binding groups. A group's members are typed together with each other
+   as monotypes in the environment (the rule for `letrec`), so a member used
+   at two different ground types inside the group forces one type equal to
+   both; generalization happens at the group's exit, so after it every
+   member is usable at two types. -}
+prop "a binding group is monomorphic inside the group and generalized after it" (a : GTy) (b : GTy) =
+  fst (checkFlat (insideGroup a b)) == insideExpected a b
+    && fst (checkFlat (afterGroup a b)) == Accepted
+
+-- Which members of the recursive pair carry the signature `a -> a`.
+public export data Sigs = SigNone | SigF | SigG | SigBoth deriving (Eq, Debug)
+
+-- A wrap whose sibling type is closed, so a context around `x` mentions
+-- only `x`.
+closeWrap : Wrap -> Wrap
+closeWrap WList = WList
+closeWrap WBox = WBox
+closeWrap (WPairL t) = WPairL (closeG t)
+closeWrap (WPairR t) = WPairR (closeG t)
+closeWrap (WFunArg t) = WFunArg (closeG t)
+closeWrap (WFunRes t) = WFunRes (closeG t)
+
+context : Wrap -> List Wrap -> GTy
+context outer inner = plug (map closeWrap (outer :: inner)) (GVar V0)
+
+sigLine : Bool -> String -> String
+sigLine True name = "\{name} : a -> a\n"
+sigLine False _ = ""
+
+signsF : Sigs -> Bool
+signsF sigs = sigs == SigF || sigs == SigBoth
+
+signsG : Sigs -> Bool
+signsG sigs = sigs == SigG || sigs == SigBoth
+
+-- `f` calls `g` at a context around its own argument; `g` calls `f` back.
+mutualProgram : Sigs -> Wrap -> List Wrap -> String
+mutualProgram sigs outer inner =
+  let ctx = termWith (_ => "x") (context outer inner)
+  "\{termSupport}\{sigLine (signsF sigs) "f"}f x = const2 x (g \{ctx})\n"
+    ++ "\{sigLine (signsG sigs) "g"}g y = const2 y (f y)\n"
+
+-- `h` calls itself at a context around its own argument.
+selfProgram : Bool -> Wrap -> List Wrap -> String
+selfProgram signed outer inner =
+  let ctx = termWith (_ => "x") (context outer inner)
+  "\{termSupport}\{sigLine signed "h"}h x = const2 x (h \{ctx})\n"
+
+recursionExpected : Sigs -> Verdict
+recursionExpected SigNone = Rejected
+recursionExpected _ = Accepted
+
+-- The model's equation for unsigned recursion at a context: `α = C[α]`.
+recursionModel : Wrap -> List Wrap -> Unified
+recursionModel outer inner =
+  unifyModel [] (TV (varName V0)) (toTy (context outer inner))
+
+{- §5 polymorphic recursion. Without a signature a recursive call is typed
+   at the group's own monotype, so a call at `C[α]` from a body at `α`
+   forces `α = C[α]` and the occurs check rejects it; a signature puts the
+   member in the environment as a scheme before its group is checked, so
+   each recursive call instantiates it afresh (Mycroft), and one signed
+   member suffices to break the cycle. -}
+prop "a signature admits polymorphic recursion" (sigs : Sigs) (outer : Wrap) (inner : List Wrap) =
+  recursionModel outer inner == Occurs
+    && fst (checkFlat (mutualProgram sigs outer inner))
+      == recursionExpected sigs
+    && fst (checkFlat (selfProgram (sigs /= SigNone) outer inner))
+      == recursionExpected sigs
+
+-- At least one member signed.
+public export data Signed = SignF | SignG | SignBoth deriving (Eq, Debug)
+
+signedSigs : Signed -> Sigs
+signedSigs SignF = SigF
+signedSigs SignG = SigG
+signedSigs SignBoth = SigBoth
+
+afterRecursion : Signed -> Wrap -> List Wrap -> GTy -> String
+afterRecursion signed outer inner a =
+  let ta = groundText a
+  let tb = "(List \{ta})"
+  "\{mutualProgram (signedSigs signed) outer inner}"
+    ++ "useA = ((f : \{ta} -> \{ta}), (g : \{ta} -> \{ta}))\n"
+    ++ "useB = ((f : \{tb} -> \{tb}), (g : \{tb} -> \{tb}))\n"
+
+{- §4/§5 principal types of a group with a signature. A signed member is in
+   the environment as its declared scheme, so a reference to it constrains
+   nothing (Haskell 2010 §4.5.2 drops such references from the dependency
+   analysis); the unsigned member `g y = const2 y (f y)` then has the
+   principal type `∀b. b -> b` whatever context `f` calls it at, and `f`'s
+   is `∀a. a -> a`. Both are usable at two types after the group. -}
+prop "every member of a group with a signed member generalizes at its principal type" (signed : Signed) (outer : Wrap) (inner : List Wrap) (a : GTy) =
+  fst (checkFlat (afterRecursion signed outer inner a)) == Accepted
+
+-- Self-tests: each law's comparison rejects a hand-built wrong case, and the
+-- model's verdict on a fixed case agrees with the checker's.
+
+test "the type reader round-trips both spellings and rejects junk" = expectAll [
+  expectEqual
+    (TF (TV "a") (TC "Pair" [TV "a", TC "Box" [TV "b"]]))
+    (parseTy "a -> Pair a (Box b)"),
+  expectEqual
+    (TT [
+      TF (TV "t0") (TV "t0"),
+      TF (TV "t2") (TC "Pair" [TC "Int" [], TV "t2"]),
+    ])
+    (parseTy "((t0 -> t0), (t2 -> Pair Int t2))"),
+  expectEqual (TF (TF (TV "a") (TV "b")) (TV "c")) (parseTy "(a -> b) -> c"),
+  expectEqual unreadable (parseTy "a -> "),
+  expectTrue (sameType (parseTy "a -> b -> a") (parseTy "(t1 -> (t0 -> t1))")),
+  expectFalse (sameType (parseTy "a -> b") (parseTy "t0 -> t0")),
+]
+
+test "the unification model finds unifiers, clashes and cycles" = expectAll [
+  expectEqual Clash (equationModel GInt GStr),
+  expectEqual Accepted (modelVerdict (equationModel (GVar V0) GInt)),
+  expectEqual Occurs (equationModel (GVar V0) (GList (GVar V0))),
+  expectEqual
+    Occurs
+    (equationModel
+      (GPair (GVar V0) (GVar V1))
+      (GPair (GVar V1) (GBox (GVar V0)))),
+  expectEqual
+    Accepted
+    (modelVerdict
+      (equationModel (GFun (GVar V0) (GVar V1)) (GFun GInt (GVar V0)))),
+]
+
+test "the symmetry law's verdicts match the checker on a clash, a unifier and a cycle" =
+  let check =
+    (l, r) => (
+      fst (checkFlat (equationProgram FSame l r)),
+      fst (checkFlat (equationProgram FSame r l)),
+    )
+  expectAll [
+    expectEqual (Rejected, Rejected) (check (GInt, GStr)),
+    expectEqual (Accepted, Accepted) (check (GVar V0, GList GInt)),
+    expectEqual (Rejected, Rejected) (check (GVar V0, GList (GVar V0))),
+  ]
+
+test "the occurs law's twin around a different variable is a unifier the checker accepts" =
+  let twin = equationProgram FList (GVar V0) (GList (GVar V1))
+  expectAll [
+    expectEqual
+      Accepted
+      (modelVerdict (equationModel (GVar V0) (GList (GVar V1)))),
+    expectEqual Accepted (fst (checkFlat twin)),
+    expectEqual Occurs (cycleModel V0 CSelfApply []),
+    expectEqual
+      Rejected
+      (fst (checkFlat (cycleProgram V1 (CEquate FIf WBox) [] ThroughLet))),
+  ]
+
+test "the principality comparison rejects a less general, a different and an erroring outcome" =
+  let model = parseTy "(t0 -> t0)"
+  let fine = ([], "a -> a")
+  expectAll [
+    expectTrue (principalAgrees model fine fine),
+    expectFalse (principalAgrees model ([], "a -> b") ([], "a -> b")),
+    expectFalse (principalAgrees model fine ([], "Int -> Int")),
+    expectFalse (principalAgrees model (["T-TYPE-MISMATCH"], "a -> a") fine),
+    expectFalse
+      (principalAgrees
+        model
+        fine
+        (schemeOf "g" (annotatedBinding "Int -> Int" SId))),
+    expectTrue (principal SId),
+  ]
+
+test "a non-instance is not an instance, and the checker rejects a use at it" =
+  let scheme = modelScheme SId
+  let program = withTwoUses (topBinding SId) "g"
+  match nonInstance [GInt] scheme
+    Some other => expectAll [
+      expectEqual (TF (TC "Int" []) (TC "List" [TC "Int" []])) other,
+      expectEqual
+        Rejected
+        (fst (checkFlat (program "(Int -> Int)" (renderTy other)))),
+      expectEqual
+        Accepted
+        (fst (checkFlat (program "(Int -> Int)" "(String -> String)"))),
+    ]
+    None => expectTrue False
+
+test "the lambda twin rejects a polymorphic use pair and accepts a monomorphic one" = expectAll
+  [
+    expectEqual
+      Rejected
+      (fst (checkFlat (lambdaTwin SId "(Int -> Int)" "(String -> String)"))),
+    expectEqual
+      Accepted
+      (fst (checkFlat (letTwin SId "(Int -> Int)" "(String -> String)"))),
+    expectEqual Accepted (fst (checkFlat (lambdaTwin SStr "String" "String"))),
+    expectEqual Rejected (lambdaExpected SId),
+  ]
+
+test "the group laws reject an unsigned polymorphic recursion and a two-type use inside" = expectAll
+  [
+    expectEqual Rejected (fst (checkFlat (insideGroup GInt GStr))),
+    expectEqual Accepted (fst (checkFlat (insideGroup GInt GInt))),
+    expectEqual Rejected (fst (checkFlat (mutualProgram SigNone WBox []))),
+    expectEqual Accepted (fst (checkFlat (mutualProgram SigG WBox []))),
+    expectEqual Rejected (fst (checkFlat (selfProgram False WList []))),
+    expectEqual Accepted (fst (checkFlat (selfProgram True WList []))),
+  ]
+
+-- Census domains: every generated type of depth at most one over the leaves,
+-- every wrap whose sibling is a leaf, and shapes of depth at most two.
+leafTypes : List GTy
+leafTypes = [GVar V0, GVar V1, GVar V2, GInt, GStr]
+
+smallTypes : List GTy
+smallTypes =
+  leafTypes
+    ++ map GList leafTypes
+    ++ map GBox leafTypes
+    ++ flatMap (a => map (b => GPair a b) leafTypes) leafTypes
+    ++ flatMap (a => map (b => GFun a b) leafTypes) leafTypes
+
+wraps : List Wrap
+wraps =
+  [WList, WBox]
+    ++ map WPairL leafTypes
+    ++ map WPairR leafTypes
+    ++ map WFunArg leafTypes
+    ++ map WFunRes leafTypes
+
+innerWraps : List (List Wrap)
+innerWraps = [[], [WList], [WFunRes GInt]]
+
+cycles : List Cycle
+cycles =
+  CSelfApply
+    :: flatMap
+      (form => map (w => CEquate form w) wraps)
+      [FSame, FList, FIf, FArg]
+
+leafShapes : List Shape
+leafShapes = [SInt, SStr, SId, SVar, SCtorVar, SNil]
+
+shapeDomain : List Shape
+shapeDomain =
+  map
+    pureShape
+    (leafShapes
+      ++ flatMap
+        (wrap => map wrap leafShapes)
+        [
+          SLam,
+          SList,
+          SBox,
+          SPartCtor,
+          SRecord,
+          SAsc,
+          SRef,
+          SApp,
+          SPartial,
+          SIf,
+          SField,
+        ]
+      ++ flatMap (l => map (r => STuple l r) leafShapes) leafShapes
+      ++ flatMap (l => map (r => SPair l r) leafShapes) leafShapes)
+
+isUnifier : Unified -> Bool
+isUnifier (Unifier _) = True
+isUnifier _ = False
+
+pairs : List (GTy, GTy)
+pairs = flatMap (a => map (b => (a, b)) smallTypes) smallTypes
+
+-- N = 100 for each outcome over the 4225 ordered pairs of `smallTypes`.
+test "census: the symmetry law sees unifiers, clashes and cycles" =
+  let outcomes = map ((a, b) => equationModel a b) pairs
+  expectAll [
+    expectEqual 4225 (length pairs),
+    expectAtLeast 100 (countWhere isUnifier outcomes),
+    expectAtLeast 100 (countWhere (== Clash) outcomes),
+    expectAtLeast 100 (countWhere (== Occurs) outcomes),
+  ]
+
+-- Every one of the 3 x 89 x 3 = 801 cycles is an occurs failure in the
+-- model; N = 500 for the twin that puts a different variable in the hole,
+-- which the model unifies.
+test "census: the occurs law's domain is all cycles and its twin is all unifiers" =
+  let domain =
+    flatMap
+      (v => flatMap (c => map (i => (v, c, i)) innerWraps) cycles)
+      [V0, V1, V2]
+  let twinOk =
+    (v, c, i) => match c
+      CEquate _ outer =>
+        isUnifier
+          (unifyModel
+            []
+            (TV (varName v))
+            (toTy
+              (plug
+                (map closeWrap (outer :: i))
+                (GVar (if v == V0 then V1 else V0)))))
+      CSelfApply => True
+  expectAll [
+    expectEqual 801 (length domain),
+    expectEqual
+      801
+      (countWhere ((v, c, i) => cycleModel v c i == Occurs) domain),
+    expectAtLeast 500 (countWhere twinOk domain),
+  ]
+
+-- N = 20 for each class, over the 144 projected shapes.
+test "census: the shape laws see polymorphic, monomorphic and non-instance cases" = expectAll
+  [
+    expectEqual 144 (length shapeDomain),
+    expectEqual 0 (countWhere (s => modelScheme s == unreadable) shapeDomain),
+    expectAtLeast 20 (countWhere isPolymorphic shapeDomain),
+    expectAtLeast 20 (countWhere (s => not (isPolymorphic s)) shapeDomain),
+    expectAtLeast
+      20
+      (countWhere (s => nonInstance [] (modelScheme s) /= None) shapeDomain),
+    expectAtLeast
+      20
+      (countWhere (s => lambdaExpected s == Rejected) shapeDomain),
+    expectAtLeast
+      20
+      (countWhere (s => lambdaExpected s == Accepted) shapeDomain),
+  ]
+
+-- N = 50 over the 4 x 22 x 3 = 264 recursion cases and 20 over the group
+-- type pairs.
+test "census: the group laws see both verdicts" =
+  let recursion =
+    flatMap
+      (s => flatMap (w => map (i => (s, w, i)) innerWraps) wraps)
+      [SigNone, SigF, SigG, SigBoth]
+  expectAll [
+    expectEqual 264 (length recursion),
+    expectEqual
+      264
+      (countWhere ((_, w, i) => recursionModel w i == Occurs) recursion),
+    expectAtLeast
+      50
+      (countWhere ((s, _, _) => recursionExpected s == Rejected) recursion),
+    expectAtLeast
+      50
+      (countWhere ((s, _, _) => recursionExpected s == Accepted) recursion),
+    expectAtLeast
+      20
+      (countWhere ((a, b) => insideExpected a b == Accepted) pairs),
+    expectAtLeast
+      20
+      (countWhere ((a, b) => insideExpected a b == Rejected) pairs),
+  ]

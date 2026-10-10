@@ -31,9 +31,9 @@ import tools.prop_plan.{
   PlanDef(..), PlanCtor(..), PlanField(..), PlanError(..), PlanErrorReason(..),
   PlanVisibility(..), planErrorText, buildPlanEnvModules, planFor, planDef,
   instantiateCtor, planTy, typeKeyWord, ctorWeights, listLengthBound,
-  optionWeights, resultWeights, maxGenDepth, SoftWeight(..), softCtorWeights,
-  intMin, intMax, structuralRngModulus, structuralRngMultiplier,
-  structuralRngIncrement, structuralRngMixMultiplier1,
+  listBoundDecays, listLenMax, optionWeights, resultWeights, maxGenDepth,
+  SoftWeight(..), softCtorWeights, intMin, intMax, structuralRngModulus,
+  structuralRngMultiplier, structuralRngIncrement, structuralRngMixMultiplier1,
   structuralRngMixMultiplier2, structuralRngWordModulus, structuralRngWordHalf,
   ShrinkAction(..), shrinkActions, IntShrinkStep(..), intShrinkSteps
 }
@@ -1270,6 +1270,25 @@ renderListByDepth : String ->
   String ->
   String
 renderListByDepth nonce open close env p child =
+  if listBoundDecays env p then
+    renderListChoiceN
+      nonce
+      open
+      close
+      child
+      listLenMax
+      "(if depth >= \{intToString listLenMax} then 1 else \{intToString (listLenMax + 1)} - depth)"
+  else
+    renderListByDepthFlat nonce open close env p child
+
+renderListByDepthFlat : String ->
+  String ->
+  String ->
+  PlanEnv ->
+  GenPlan ->
+  String ->
+  String
+renderListByDepthFlat nonce open close env p child =
   byDepth
     (renderListChoice nonce open close child (listLengthBound env 0 p))
     (renderListChoice
@@ -1281,7 +1300,17 @@ renderListByDepth nonce open close env p child =
 
 renderListChoice : String -> String -> String -> String -> Int -> String
 renderListChoice nonce open close child bound =
-  "match \{generatedPrefix nonce}choose \{intToString (bound + 1)}\n\{renderListArms open close child bound 0}"
+  renderListChoiceN nonce open close child bound (intToString (bound + 1))
+
+renderListChoiceN : String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  String
+renderListChoiceN nonce open close child bound count =
+  "match \{generatedPrefix nonce}choose \{count}\n\{renderListArms open close child bound 0}"
 
 renderListArms : String -> String -> String -> Int -> Int -> String
 renderListArms open close child bound n

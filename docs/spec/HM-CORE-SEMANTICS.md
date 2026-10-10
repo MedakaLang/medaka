@@ -109,6 +109,8 @@ be observed.
 with an effect row, `TEff` index slots; tuples as saturated `__tupleN__` spines; `Scheme`
 without context. To be written from the survey's `W2-C` §1.
 
+Conformance fixtures: [hm_core_property_test.mdk](../../compiler/types/hm_core_property_test.mdk) props `re-annotating a binding with its inferred scheme is accepted and re-infers it` and `a binding containing an integer literal is principal and generalizes` (pinned, #3949).
+
 ## 3. Unification — owed (#2555)
 
 Structural, symmetric, equality-only; the occurs check fused with level lowering; the
@@ -117,16 +119,22 @@ row-unification relations (arrow rows, subsumption-permissive; index rows, invar
 the closed~closed and same-tail arms stated as obligations discharged by
 `EFFECTS-SEMANTICS.md` §5/§6's declaration-time checks. From `W2-C` §2.1–2.3, §2.6, §3.4.
 
+Conformance fixtures: [hm_core_property_test.mdk](../../compiler/types/hm_core_property_test.mdk) props `swapping the operands of an equation-forcing construct keeps its verdict` and `an equation between a type and a proper part of itself is rejected`.
+
 ## 4. Generalization and instantiation — owed (#2555)
 
 Levels; `gen` quantifying variables deeper than the current level; `inst` as fresh
 substitution, **plus** the Medaka-specific re-opening of closed rows at covariant positions,
 stated as its own rule. From `W2-C` §2.4–2.5.
 
+Conformance fixtures: [hm_core_property_test.mdk](../../compiler/types/hm_core_property_test.mdk) props `a generalized binding is usable at two distinct instances and at no non-instance` and `a lambda-bound variable is monomorphic and its let-bound twin is polymorphic`.
+
 ## 5. Binding groups — owed (#2555)
 
 Tarjan SCCs over the reference graph; the per-group order infer → exit level → default →
 ambiguity → generalize, which is `DICT-SEMANTICS.md` §6.3 D1 realized. From `W2-C` §2.8.
+
+Conformance fixtures: [hm_core_property_test.mdk](../../compiler/types/hm_core_property_test.mdk) props `a binding group is monomorphic inside the group and generalized after it`, `a signature admits polymorphic recursion` and `every member of a group with a signed member generalizes at its principal type` (pinned, #3955). That last law asserts the Haskell 2010 §4.5.2 reading, where a reference to a signed member is dropped from the dependency graph; this section has not yet decided between that reading and plain SCCs over every reference.
 
 ## 6. Defaulting — owed (#2555)
 
