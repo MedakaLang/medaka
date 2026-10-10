@@ -14,14 +14,25 @@
 -- fixture module sources rather than the tree: `gradeViolations` takes the
 -- import resolver as an argument, and these tests hand it a table.
 
-import test.{Expectation, expectEqual, expectTextContainsAll, expectTrue}
+import test.{
+  Expectation,
+  expectEqual,
+  expectErrContains,
+  expectOkThen,
+  expectTextContainsAll,
+  expectTrue,
+}
+import tools.gate_cost.{
+  GateCost(..), OracleCost(..), parseCostBaseline, parseOracleCosts
+}
 import tools.gate_cmd.{
   ImportTarget(..), gradeViolations, duplicateBaselineKeyViolations,
   verifyClasses
 }
 import tools.gate_registry.{Gate, parseRegistry, renderJson}
 import string.{contains}
-import support.util.{listLen, joinNl}
+import tools.gate_pack.{balNewText}
+import support.util.{joinNl, joinWith, listLen}
 
 -- ── the fixture resolver ─────────────────────────────────────────────────────
 
@@ -477,3 +488,200 @@ test "gate list --json omits shares_baseline_with when unset" =
   expectTrue
     (not
       (contains "shares_baseline_with" (jsonOf [("a_shell", "test/a.sh", "")])))
+
+-- ── oracle build cost in the baseline (#2209) ───────────────────────────────
+
+oracleDoc : String -> String
+oracleDoc oracles =
+  "{\"schema\": \"gate-cost-baseline/1\", \"runs\": [], \"gates\": [{\"name\": \"g\", \"medianMs\": 5, \"samples\": 1, \"ms\": [5]}], \"oracles\": [\{oracles}]}"
+
+oracleRowSummary : OracleCost -> (String, Int, List Int, List Int)
+oracleRowSummary o = (o.row.name, o.row.medianMs, o.row.ms, o.jobs)
+
+oracleSummary : String -> Result String (List (String, Int, List Int, List Int))
+oracleSummary src = map (os => map oracleRowSummary os) (parseOracleCosts src)
+
+test "the reader parses oracles[] rows with their ms and JOBS" =
+  expectEqual
+    (Ok [("eval_main", 41000, [41000, 45000], [2, 4])])
+    (oracleSummary
+      (oracleDoc
+        "{\"name\": \"eval_main\", \"medianMs\": 41000, \"samples\": 2, \"ms\": [41000, 45000], \"sampleRuns\": [\"1\", \"2\"], \"jobs\": [2, 4]}"))
+
+test "an oracles[] row with no ms is rejected" =
+  expectErrContains
+    "oracles[0] 'eval_main': missing array field 'ms'"
+    (oracleSummary
+      (oracleDoc
+        "{\"name\": \"eval_main\", \"medianMs\": 1, \"samples\": 1, \"jobs\": [2]}"))
+
+test "an oracles[] row with a non-numeric ms is rejected" =
+  expectErrContains
+    "ms[0] is not an integer"
+    (oracleSummary
+      (oracleDoc
+        "{\"name\": \"eval_main\", \"medianMs\": 1, \"samples\": 1, \"ms\": [\"slow\"]}"))
+
+test "a baseline lacking oracles[] still parses, as no oracle rows" =
+  expectEqual
+    (Ok [])
+    (oracleSummary
+      "{\"schema\": \"gate-cost-baseline/1\", \"runs\": [], \"gates\": [{\"name\": \"g\", \"medianMs\": 5, \"samples\": 1, \"ms\": [5]}]}")
+
+gateRowName : GateCost -> String
+gateRowName g = g.name
+
+test "the gate reader still reads a baseline carrying oracles[]" =
+  expectEqual
+    (Ok ["g"])
+    (map
+      (gs => map gateRowName gs)
+      (parseCostBaseline
+        (oracleDoc
+          "{\"name\": \"o\", \"medianMs\": 1, \"samples\": 1, \"ms\": [1]}")))
+
+-- ── setup-aware packing (#2209) ─────────────────────────────────────────────
+--
+-- `balNewText` over hand-built registries.  No `runs[]`, so every row is
+-- modelled with one gate worker; the oracle rows record `jobs`, which is the
+-- build worker count.  Fixed setup is `balFixedSetupMs`, 20.0s.
+
+-- (name, row, toolchain); the run path, hence the baseline key, is the name.
+packGate : (String, String, String) -> String
+packGate (name, row, tc) =
+  "[[gate]]\nname = \"\{name}\"\narea = \"a\"\nshard = \"\{row}\"\nproject = \"p\"\ntiers = [\"merge\"]\ncost = \"cheap\"\nkind = \"exec\"\nmigration = \"none\"\nrun = \"test/\{name}.sh\"\noracles = []\nsources = []\ncorpus = []\ntoolchain = [\{tc}]\n"
+
+packRow : (String, Bool) -> String
+packRow (name, wasm) =
+  "[[shard]]\nname = \"\{name}\"\nfull_cores = false\nwasm_arm = \{if wasm then "true" else "false"}\nrationale = \"r\"\npinned_gates = []\n"
+
+packReg : List (String, String, String) -> List (String, Bool) -> String
+packReg gs rows = joinNl (map packGate gs ++ map packRow rows)
+
+-- (name, seconds) per gate, and (name, seconds, build jobs) per oracle row.
+packBase : List (String, Int) -> List (String, Int, Int) -> String
+packBase gs os =
+  let gRow =
+    (n, s) =>
+      "{\"name\": \"\{n}\", \"medianMs\": \{intToString (s * 1000)}, \"samples\": 1, \"ms\": [\{intToString (s * 1000)}]}"
+  let oRow =
+    (n, s, j) =>
+      "{\"name\": \"\{n}\", \"medianMs\": \{intToString (s * 1000)}, \"samples\": 1, \"ms\": [\{intToString (s * 1000)}], \"jobs\": [\{intToString j}]}"
+  let osPart =
+    if listLen os == 0 then
+      ""
+    else
+      ", \"oracles\": [\{joinWith ", " (map oRow os)}]"
+  "{\"schema\": \"gate-cost-baseline/1\", \"runs\": []\{osPart}, \"gates\": [\{joinWith ", " (map gRow gs)}]}"
+
+packEntries : List String
+packEntries = ["ox", "oy", "oz", "unsampled"]
+
+packRun : String ->
+  String ->
+  List (String, List String) ->
+  Result String (String, String)
+packRun reg base orcs = balNewText "reg.toml" reg base orcs packEntries
+
+shardIn : String -> String -> Option String
+shardIn name regText = match parseRegistry regText
+  Err _ => None
+  Ok gs => shardOfGate name gs
+
+shardOfGate : String -> List Gate -> Option String
+shardOfGate _ [] = None
+shardOfGate name (g :: gs)
+  | g.name == name = Some g.shard
+  | otherwise = shardOfGate name gs
+
+-- gA reads ox, gB reads oy, gC reads ox.  After gA lands on a and gB on b,
+-- a carries 100s of gates and b 90s, so gate-only LPT moves gC to b; with
+-- setup, b would newly build ox (50s) and a already builds it, so gC stays.
+shareReg : String
+shareReg =
+  packReg
+    [("gA", "a", ""), ("gB", "b", ""), ("gC", "a", "")]
+    [("a", False), ("b", False)]
+
+shareGates : List (String, Int)
+shareGates = [("gA", 100), ("gB", 90), ("gC", 10)]
+
+shareOrcs : List (String, List String)
+shareOrcs = [("gA", ["ox"]), ("gB", ["oy"]), ("gC", ["ox"])]
+
+-- One build worker, so a second oracle on a row costs its full price.
+test "two gates sharing an oracle co-locate when setup is priced" =
+  expectOkThen
+    ((_, out) => expectEqual (Some "a") (shardIn "gC" out))
+    (packRun
+      shareReg
+      (packBase shareGates [("ox", 50, 1), ("oy", 50, 1)])
+      shareOrcs)
+
+test "without oracles[] the same gates pack on gate cost alone, and say so" =
+  expectOkThen
+    ((head, out) =>
+      expectEqual
+        (Some "b", True)
+        (shardIn "gC" out, contains "setup: not modelled" head))
+    (packRun shareReg (packBase shareGates []) shareOrcs)
+
+test "an oracle with no sample is priced at the stated default, not zero" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "setup DEFAULT: 1 oracle(s) the gates read have no oracles[] sample and are priced at 40.0s, the median of the sampled ones: unsampled",
+          "oracles 40.0s (1 built)",
+        ]
+        head)
+    (packRun (packReg [("g1", "a", "")] [("a", False)]) (packBase
+      [("g1", 100)]
+      [("ox", 30, 4), ("oy", 40, 4), ("oz", 50, 4)]) [
+      ("g1", ["unsampled"]),
+    ])
+
+-- gp reads the Wasm oracle but needs no arm, so it takes the plain row and
+-- pays no Wasm build there; gw needs the arm and pays it on w.
+test "the Wasm oracle is charged only on a wasm_arm row" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "p             1 gates    120.0s   jobs*1  = fixed 20.0s + wasm 0.0s",
+          "w             1 gates    190.0s   jobs*1  = fixed 20.0s + wasm 70.0s",
+        ]
+        head)
+    (packRun (packReg
+      [("gp", "p", ""), ("gw", "w", "\"wasm-tools\"")]
+      [("p", False), ("w", True)]) (packBase
+      [("gp", 100), ("gw", 100)]
+      [("ox", 30, 4), ("wasm_emit_modules_main", 70, 1)]) [
+      ("gp", ["wasm_emit_modules_main"]),
+      ("gw", []),
+    ])
+
+-- One row: 20 fixed + 70 Wasm + LPT of {30, 20, 10} over 2 build workers
+-- (30 | 20+10, so 30) + 100+10 serially = 230, inside the pole/floor budget
+-- against g1's own 220.
+test "a row's predicted load is fixed + wasm + oracle makespan + gate makespan" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "w             2 gates    230.0s   jobs*1  = fixed 20.0s + wasm 70.0s + oracles 30.0s (3 built) + gates 110.0s",
+        ]
+        head)
+    (packRun (packReg
+      [("g1", "w", "\"wasm-tools\""), ("g2", "w", "")]
+      [("w", True)]) (packBase
+      [("g1", 100), ("g2", 10)]
+      [
+        ("ox", 30, 2),
+        ("oy", 20, 2),
+        ("oz", 10, 2),
+        ("wasm_emit_modules_main", 70, 1),
+      ]) [
+      ("g1", ["ox", "oy"]),
+      ("g2", ["oz"]),
+    ])

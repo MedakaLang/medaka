@@ -4110,11 +4110,29 @@ testFilesGo : List Engine ->
 testFilesGo _ _ _ _ _ _ _ [] acc = acc
 testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
-  let argvs = map (testChildArgs engines cases filterOpt seedOpt) files
-  if testJobs <= 1 then
-    testFilesSerial medaka files argvs acc
+  let childArgvs = map (testChildArgs engines cases filterOpt seedOpt) files
+  let jobs = testJobs
+  let prefix = childJobsPrefix (isSome (getEnv "MEDAKA_TEST_JOBS")) jobs jobs
+  let program = if prefix == [] then medaka else "env"
+  let argvs =
+    if prefix == [] then
+      childArgvs
+    else
+      map (prefix ++ [medaka] ++ _) childArgvs
+  if jobs <= 1 then
+    testFilesSerial program files argvs acc
   else
-    testFilesReport files (runCommandBatch medaka testJobs argvs) acc
+    testFilesReport files (runCommandBatch program jobs argvs) acc
+
+-- The `env` assignment that splits the core budget between `outer` concurrent
+-- children and what each child fans out to itself. An explicit
+-- MEDAKA_TEST_JOBS is inherited untouched; unset, a child would otherwise
+-- default to every core and `outer` of them would multiply it.
+export
+childJobsPrefix : Bool -> Int -> Int -> List String
+childJobsPrefix True _ _ = []
+childJobsPrefix False outer budget =
+  ["MEDAKA_TEST_JOBS=\{intToString (max 1 (budget / max 1 outer))}"]
 
 -- One child at a time, each file's result printed as it completes, so a hang
 -- or kill part-way keeps the earlier files' output. A batch prints nothing

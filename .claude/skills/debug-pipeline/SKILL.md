@@ -86,7 +86,7 @@ category of bugs where `run` was right and `build` was wrong (or vice versa).
 **First: does the bug survive the change of engine?**
 
 ```sh
-sh test/diff_compiler_engines.sh   # eval == native == wasm on the same programs
+sh test/lib_engines_differential.sh   # eval == native == wasm on the same programs
                                    # known-divergence ledger: test/engine_divergence.txt
 ```
 

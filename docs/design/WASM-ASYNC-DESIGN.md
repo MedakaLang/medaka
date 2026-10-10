@@ -390,7 +390,7 @@ while the emitter still lacks the lowering. `test/engine_divergence.txt`: the
 row `llvm/clock_monotonic_sleep … wasm:emitter-gap … unbound variable
 'monotonicSec'` (**read**) is promoted (the gate says `PROMOTE` and refuses
 to stay green with a passing ledgered row, **read**:
-`test/diff_compiler_engines.sh`). #2426 closes.
+`test/lib_engines_differential.sh`). #2426 closes.
 
 ### 6.2 WH1 and WH3
 

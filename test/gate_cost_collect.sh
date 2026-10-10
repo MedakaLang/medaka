@@ -55,26 +55,15 @@
 #   --base-branch B    branch the new landing branch is cut FROM and the one
 #                       the human-merge command above targets (default: the
 #                       current branch's upstream, else "main")
-#   --stale-threshold N  file-count delta above which an already-pushed,
-#                       still-unmerged "${BRANCH_PREFIX}-*" branch is judged
-#                       too stale to land (default 20). See STALENESS GUARD
-#                       below.
+#   --stale-threshold N  accepted and ignored (retired with the staleness guard).
 #
-# STALENESS GUARD (S-autoadvance-notify, #2181 deliverable 2): if nobody has
-# merged the most recent previously-pushed "${BRANCH_PREFIX}-*" branch and
-# --base-branch has since drifted more than --stale-threshold files away from
-# it, this script refuses to push ANOTHER advance branch on top and says so —
-# rather than silently compounding an already-stale, unreviewed pile (F3: a
-# 2026-08-30 branch sat unmerged after its own job's report step got skipped
-# by a failure, and by the time anyone looked it was 179 files / +2659/-15239
-# against main — landing it then would have reverted unrelated work). 20 is
-# comfortably above the routine per-run touch (at most 3 generated files:
-# gate_cost_baseline.json, gates.toml, ci.yml) and comfortably below F3's
-# magnitude. The guard applies only to a prior branch that has an OPEN PR:
-# a prior branch with no PR was never engaged by anyone, is a strict subset
-# of what this run will cut, and is deleted rather than piled on. Without
-# that distinction the guard deadlocked the loop (2026-09-02: an unopened
-# 01:03 branch drifted 672 files by the 12:07 run, which then refused).
+# SUPERSEDE (replaces the old staleness guard, which refused forever once its
+# own advance PR failed CI: 2026-10-08, PR #3896 drifted 396 files and wedged
+# the loop): an earlier "${BRANCH_PREFIX}-*" branch is superseded by the one this
+# run cuts. Its open PR, if any, is closed with a comment naming the replacement
+# and the branch is deleted. Only heads matching this script's own prefix are
+# ever touched. --dry-run prints and closes nothing. The ingest is run with
+# --registry so baseline rows for gates no longer in test/gates.toml are pruned.
 #
 # THE OTHER HALF — opening the PR and regenerating ci.yml — is
 # scripts/cost_baseline_land.sh, run from cron on the build box (see
@@ -183,7 +172,7 @@ BASELINE_BEFORE="$(mktemp)"
 cp "$ROOT/test/gate_cost_baseline.json" "$BASELINE_BEFORE"
 
 # shellcheck disable=SC2086
-sh "$ROOT/test/gate_cost_ingest.sh" $reports
+sh "$ROOT/test/gate_cost_ingest.sh" --registry "$ROOT/test/gates.toml" $reports
 ingest_rc=$?
 if [ "$ingest_rc" != 0 ]; then
   echo "gate_cost_collect: gate_cost_ingest.sh refused (rc=$ingest_rc) — see its output above. No partial baseline written (the ingest script only writes on a fully successful run)."
@@ -301,52 +290,53 @@ echo "gate_cost_collect: changes to land:"
 # shellcheck disable=SC2086
 git -C "$ROOT" diff --stat -- $to_land
 
-# ── staleness guard: refuse to push another advance while an existing, ─────
-#    unmerged "${BRANCH_PREFIX}-*" branch has already drifted too far from
-#    BASE_BRANCH to land cleanly. See the STALENESS GUARD header comment.
-# shellcheck disable=SC2086
-prior_branch="$(git -C "$ROOT" ls-remote --heads "$REMOTE" "${BRANCH_PREFIX}-*" 2>/dev/null \
-  | awk '{print $2}' | sed 's#^refs/heads/##' | sort | tail -1)"
-prior_pr=""
-if [ -n "$prior_branch" ]; then
-  prior_pr="$(gh pr list --head "$prior_branch" --state open --json number --jq '.[0].number' 2>/dev/null)"
-fi
-if [ -n "$prior_branch" ] && [ -z "$prior_pr" ]; then
-  # A prior branch that nobody opened a PR from is superseded by the one this
-  # run is about to cut: every advance branch is cut fresh from BASE_BRANCH
-  # and carries only regenerated files, so the newer one contains everything
-  # the older one did. Delete it and go on; the staleness guard below is for
-  # a branch a human (or scripts/cost_baseline_land.sh) has already engaged.
-  echo "gate_cost_collect: '$prior_branch' has no open PR — superseded; deleting it and cutting a fresh advance."
-  git -C "$ROOT" push "$REMOTE" --delete "$prior_branch" >/dev/null 2>&1 \
-    || echo "gate_cost_collect: could not delete '$prior_branch' (continuing; it will be re-judged next run)."
-elif [ -n "$prior_branch" ]; then
-  if git -C "$ROOT" fetch --depth=1 "$REMOTE" "$prior_branch" >/dev/null 2>&1; then
-    prior_sha="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
-    if git -C "$ROOT" fetch --depth=1 "$REMOTE" "$BASE_BRANCH" >/dev/null 2>&1; then
-      base_sha="$(git -C "$ROOT" rev-parse FETCH_HEAD)"
-      stale_files="$(git -C "$ROOT" diff --numstat "$prior_sha" "$base_sha" 2>/dev/null | wc -l | tr -d ' ')"
-      if [ -z "$stale_files" ]; then stale_files=0; fi
-      if [ "$stale_files" -gt "$STALE_THRESHOLD" ]; then
-        echo "gate_cost_collect: refusing to push a new advance branch — '$prior_branch' has PR #$prior_pr open and has drifted $stale_files files from '$BASE_BRANCH' (threshold $STALE_THRESHOLD files). CI has not let it land; a human needs to land or close PR #$prior_pr before this job can safely push another advance on top of it."
-        exit 1
+# ── supersede this script's own earlier advance branches ────────────────────
+# Runs only after the replacement branch is committed and pushed. The rule, and its only licence to close anything:
+#   - a branch qualifies only if its name starts with "${BRANCH_PREFIX}-" (the
+#     ls-remote pattern, re-checked by the `case` below);
+#   - an OPEN PR whose head is such a branch is closed with a comment naming the
+#     replacement branch, then the old branch is deleted;
+#   - a PR from any other head branch is never listed, closed or commented on;
+#   - a qualifying branch with no open PR is just deleted.
+# Under --dry-run it prints what it would do and does nothing.
+BRANCH="${BRANCH_PREFIX}-$(date -u +%Y%m%d%H%M%S)"
+supersede_prior() {
+  prior_branches="$(git -C "$ROOT" ls-remote --heads "$REMOTE" "${BRANCH_PREFIX}-*" 2>/dev/null \
+    | awk '{print $2}' | sed 's#^refs/heads/##' | sort)"
+  for pb in $prior_branches; do
+    case "$pb" in
+      "${BRANCH_PREFIX}-"*) ;;
+      *) continue ;;
+    esac
+    [ "$pb" = "$BRANCH" ] && continue
+    pb_prs="$(gh pr list --head "$pb" --state open --json number --jq '.[].number' 2>/dev/null)"
+    for n in $pb_prs; do
+      if [ "$DRY" = "1" ]; then
+        echo "gate_cost_collect: --dry-run — would close superseded PR #$n (head '$pb') in favour of '$BRANCH'."
+      else
+        echo "gate_cost_collect: closing superseded PR #$n (head '$pb') in favour of '$BRANCH'."
+        gh pr close "$n" --comment "Superseded by the next auto-advance, branch '$BRANCH' (cut fresh from '$BASE_BRANCH' and re-derived from the CI artifacts still inside the collector's lookback; samples this branch took from runs outside that window are not carried). Closed by test/gate_cost_collect.sh." >/dev/null 2>&1 \
+          || echo "gate_cost_collect: could not close PR #$n (continuing)."
       fi
-      echo "gate_cost_collect: staleness check — '$prior_branch' (PR #$prior_pr) is $stale_files file(s) from '$BASE_BRANCH' (threshold $STALE_THRESHOLD) — OK to push another advance."
+    done
+    if [ "$DRY" = "1" ]; then
+      echo "gate_cost_collect: --dry-run — would delete superseded branch '$pb'."
     else
-      echo "gate_cost_collect: staleness check — could not fetch '$BASE_BRANCH' from '$REMOTE' to compare; proceeding without the guard."
+      echo "gate_cost_collect: deleting superseded branch '$pb'."
+      git -C "$ROOT" push "$REMOTE" --delete "$pb" >/dev/null 2>&1 \
+        || echo "gate_cost_collect: could not delete '$pb' (continuing; it will be re-judged next run)."
     fi
-  else
-    echo "gate_cost_collect: staleness check — could not fetch prior branch '$prior_branch' from '$REMOTE' to compare; proceeding without the guard."
-  fi
-fi
+  done
+
+}
 
 if [ "$DRY" = "1" ]; then
+  supersede_prior
   echo "gate_cost_collect: --dry-run — not committing or pushing."
   exit 0
 fi
 
-BRANCH="${BRANCH_PREFIX}-$(date -u +%Y%m%d%H%M%S)"
-git -C "$ROOT" checkout -b "$BRANCH"
+git -C "$ROOT" checkout -b "$BRANCH" || { echo "gate_cost_collect: could not create branch $BRANCH; superseding nothing."; exit 1; }
 # shellcheck disable=SC2086
 git -C "$ROOT" add $to_land
 git -C "$ROOT" commit -m "gate cost: auto-advance baseline from CI artifacts ($(date -u +%Y-%m-%d))
@@ -363,7 +353,7 @@ this branch can go green:
     make gen-ci && git commit -a --amend --no-edit
 
 Until that runs, the required 'ci-gen-drift' check reds by construction and
-its own error message names this exact fix."
+its own error message names this exact fix." || { echo "gate_cost_collect: commit failed; superseding nothing."; exit 1; }
 
 git -C "$ROOT" push "$REMOTE" "$BRANCH"
 push_rc=$?
@@ -371,6 +361,10 @@ if [ "$push_rc" != 0 ]; then
   echo "gate_cost_collect: push failed (rc=$push_rc)."
   exit "$push_rc"
 fi
+
+# Only now does the replacement exist on the remote; closing earlier would
+# strand the old PR's samples if the commit or push failed.
+supersede_prior
 
 echo ""
 echo "gate_cost_collect: pushed $BRANCH. Actions cannot open the PR itself"

@@ -631,15 +631,16 @@ else
   ok "every committed medianMs is reproduced by gate_cost.packStat"
 fi
 
-# The real registry's own closed row, asserted by NAME and not by count: the
-# whole point of `engines` is WHICH gates are on it (diff_compiler_engines needs
-# a whole runner; the other two ride along for the same wasm toolchain), and a
-# check that counted three members would pass a swap.
-if grep -q '^pinned_gates = \["pds/test/protocol_all_engines", "pds/test/read_routes_all_engines", "diff_compiler_engines", "diff_compiler_rejection_parity"\]$' "$TMP/real_before.toml"; then
-  ok "the real engines row declares its four pinned gates, by name"
+# The real registry has no closed row: the engines differential that once needed
+# a whole runner is split into parts that fit an open one (#3946). Closing a row is
+# a CI-capacity decision, so one appearing without this assertion moving with it
+# is exactly what this check exists to catch.
+if grep -q '^full_cores = true$' "$TMP/real_before.toml" \
+   || grep '^pinned_gates = ' "$TMP/real_before.toml" | grep -vqx 'pinned_gates = \[\]'; then
+  bad "test/gates.toml declares a closed row (full_cores = true or a non-empty pinned_gates)"
+  grep -n 'full_cores = true\|^pinned_gates = ' "$TMP/real_before.toml" | sed -e 's/^/        /'
 else
-  bad "test/gates.toml's engines row does not declare the expected four pinned gates"
-  grep -n 'pinned_gates' "$TMP/real_before.toml" | sed -e 's/^/        /'
+  ok "the real registry declares no closed row: every pinned_gates is [] and no row is full_cores"
 fi
 
 # ── 12. the incumbent preference HOLDS, and is BOUNDED (S-3, #2218) ───────────

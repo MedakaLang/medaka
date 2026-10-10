@@ -23,7 +23,7 @@ That is the harness's ceiling firing, not the change hanging — don't debug a p
 
 Measured timings: `test/diff_compiler_perf_scaling.sh` directly, 654-748s (~11-12 min) — one of
 the slowest gates in the tree, just as foreground-unsafe as a single blocking call.
-`test/diff_compiler_engines.sh` (3-engine differential): its own `ENGINE_JOBS` table reads
+`test/lib_engines_differential.sh` (3-engine differential): its own `ENGINE_JOBS` table reads
 `JOBS=3 ~5min`; `MEDAKA_REQUIRE_WASM=1` (the CI wasm arm) pushes it to ~7min.
 
 Knobs, each independently settable (not just measurements): `PERF_N=<n>` (default 250, shrinks
@@ -214,7 +214,7 @@ FORCE=1 sh test/build_oracles.sh                     # ❌ ALL of them — count
 into the expensive path. Derive: `grep -n '"--for"' test/build_oracles.sh`.
 
 🚨 **[L-FOREGROUND-CEILING]** `make preflight` on `compiler/backend/*`,
-`test/diff_compiler_perf_scaling.sh`, `test/diff_compiler_engines.sh`: can exceed the 10-min
+`test/diff_compiler_perf_scaling.sh`, `test/lib_engines_differential.sh`: can exceed the 10-min
 foreground ceiling — `exit 143` at 600s is the ceiling, not a hang. Knobs: `PERF_N=<n>`/
 `PERF_DEEP=1`, `ENGINE_JOBS=<n>`, `ONLY=<glob>` (#723). Remedy: background + poll. Check first:
 `PREFLIGHT_DRY=1`, `PREFLIGHT_CHANGED_FILE=<path>` (does not surface a forced fixpoint, #520,#540).

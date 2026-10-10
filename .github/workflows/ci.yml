@@ -767,24 +767,21 @@ jobs:
             # regenerated into this matrix by `make gen-ci`; it changes whenever the
             # baseline does, so nothing below names a gate. What this row is:
             #
-            # full_cores = true  -> the whole runner, and CLOSED TO THE PACKER. Gates
-            # whose `shard` says `gates_1` stay here; the balancer never moves one in
-            # or out. That is deliberate: `diff_compiler_engines` is irreducible (every
-            # fixture pays a full `medaka build` + clang, on THREE engines) and wants
-            # the box rather than its own ENGINE_JOBS=NCPU/2 hedge. The cost is that
-            # this row runs below the median row load by construction — re-examine the
-            # closure if that gap ever stops being worth it.
-            #
             # wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
-            # oracle, so this row's T2/T3 tiers actually run; MEDAKA_REQUIRE_WASM=1
-            # makes a degraded run a hard fail rather than a quiet skip.
+            # oracle (`sh test/wasm/build_wasm_oracle.sh --modules-only`). This is one
+            # of the three OPEN rows that carry it (with `gates_3` and `gates_8`), so it
+            # is one of only three rows a wasm-constrained gate can legally land on —
+            # the balancer treats that as a hard constraint, never as a cost.
+            # MEDAKA_REQUIRE_WASM=1 makes a degraded wasm arm a hard fail rather than a
+            # quiet skip.
+            #
+            # full_cores = false: an ordinary shared runner, open to the packer.
             #
             # The row NAME is a required status-check context (`gates_1`), so renaming it
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/protocol_all_engines' 'pds/test/read_routes_all_engines' 'diff_compiler_engines' 'diff_compiler_rejection_parity'"
-            full_cores: "1"
+            pattern: "'pds/test/did_key_all_engines' 'pds/test/protocol_all_engines' 'pds/test/read_routes_all_engines' 'pds/test/repo_vectors' 'bootstrap_eval' 'bootstrap_resolve' 'bootstrap_typecheck' 'diff_compiler_anf_identity' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_engines_part1' 'diff_compiler_bytes_census' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_mcp' 'diff_compiler_rejection_parity' 'diff_compiler_shadow_semantics' 'diff_compiler_partition_stability'"
             wasm_arm: "1"
           - name: gates_2
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
@@ -801,7 +798,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'gzip/test/deflate_oracle' 'parsec/test/check' 'pds/test/opaque_field_scalar' 'pds/test/pbkdf2' 'pds/test/rfc6979_vectors' 'sqlite/test/dml_oracle' 'sqlite/test/inlang_test_oracle' 'sqlite/test/oracle' 'sqlite/test/sql_oracle' 'sqlite/test/writer_oracle' 'bootstrap_eval' 'bootstrap_resolve' 'bootstrap_typecheck' 'diff_compiler_anf_identity' 'diff_compiler_check_json' 'diff_compiler_check_wrapper_callers' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_dict_semantics' 'diff_compiler_dispatch_shape' 'diff_compiler_doc' 'diff_compiler_doc_stdlib_reference' 'diff_compiler_stdlib_conventions' 'diff_compiler_lint_cache' 'diff_compiler_bytes_census' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_perf_stage_census' 'diff_compiler_prelude_obj' 'diff_compiler_slice_oob' 'diff_compiler_stack_overflow' 'diff_compiler_wasm_shim_parity' 'diff_native_stack' 'diff_compiler_cli_help_conformance' 'diff_compiler_cli_reject_floor' 'pds/test/lib_boundary' 'diff_compiler_catch_all_census' 'diff_compiler_partition_stability'"
+            pattern: "'diff_compiler_prose_classifier' 'parsec/test/check' 'pds/test/pbkdf2' 'pds/test/sha256_vectors' 'sqlite/test/inlang_test_oracle' 'sqlite/test/overflow_oracle' 'check_syntax_examples' 'diff_compiler_call_arity' 'diff_compiler_check_cli_modules' 'diff_compiler_check_wrapper_callers' 'diff_compiler_dict_semantics' 'diff_compiler_argtag_matrix' 'diff_compiler_doc' 'diff_compiler_doc_stdlib_reference' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_internal_extern' 'diff_compiler_lint_cache' 'diff_compiler_lint_baseline' 'diff_compiler_comment_shout_diff' 'diff_compiler_llvm_ffi' 'diff_compiler_os_entropy' 'diff_compiler_perf_stage_census' 'diff_compiler_ported' 'diff_compiler_prelude_shadow_census' 'diff_compiler_snapshot_frontend' 'diff_compiler_test_native' 'run_command_sigchld' 'effect_builtin_param_domain' 'native_fixtures/run' 'pds/test/deploy_config_lint' 'diff_compiler_catch_all_census'"
           - name: gates_3
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -809,8 +806,8 @@ jobs:
             # baseline does, so nothing below names a gate. What this row is:
             #
             # wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
-            # oracle. This is one of only two OPEN rows that carry it (the other is
-            # `gates_8`), so it is one of only two rows a wasm-constrained gate can
+            # oracle. This is one of the three OPEN rows that carry it (with `gates_1`
+            # and `gates_8`), so it is one of only three rows a wasm-constrained gate can
             # legally land on — the balancer treats that as a hard constraint, never
             # as a cost, and refuses to pack rather than schedule such a gate where
             # its toolchain is absent.
@@ -824,7 +821,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'diff_compiler_prose_classifier' 'lsp_harness' 'pds/test/car_vectors' 'pds/test/constant_time_parity' 'pds/test/constant_time_reductions' 'pds/test/repo_vectors' 'pds/test/secp256k1_public_key' 'pds/test/trust_boundary_guards' 'sqlite/test/overflow_oracle' 'diff_compiler_check_policy' 'diff_compiler_dict_semantics_permute' 'diff_compiler_eval_json' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_fmt' 'diff_compiler_ir_scaling' 'diff_compiler_lint_multi' 'diff_compiler_llvm_typed_ir' 'diff_compiler_llvm_typed' 'diff_compiler_mcp' 'diff_compiler_parse_error_loc' 'diff_compiler_preflight_base' 'diff_compiler_reach_fail_open' 'diff_compiler_references_scaling' 'diff_compiler_snapshot_bless' 'effect_product_domain' 'manifest_emit'"
+            pattern: "'pds/test/constant_time_parity' 'pds/test/constant_time_reductions' 'pds/test/constant_time_signing' 'pds/test/secp256k1_public_key' 'pds/test/trust_boundary_guards' 'sqlite/test/sql_oracle' 'diff_compiler_check_policy' 'diff_compiler_dict_semantics_permute' 'diff_compiler_ir_scaling' 'diff_compiler_lint_multi' 'diff_compiler_llvm_typed_ir' 'diff_compiler_llvm_typed' 'diff_compiler_parse_error_loc' 'diff_compiler_reach_fail_open' 'diff_compiler_references_scaling' 'diff_compiler_snapshot_bless' 'diff_compiler_stack_overflow' 'diff_compiler_stage_ir_scaling' 'diff_native_stack' 'effect_product_domain' 'manifest_emit' 'diff_compiler_gate_registry'"
             wasm_arm: "1"
           - name: gates_4
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
@@ -857,7 +854,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/atsyntax_vectors' 'pds/test/constant_time_public_key' 'pds/test/constant_time_signing' 'pds/test/hmac_vectors' 'bootstrap_lex' 'build_construct_coverage' 'cross_project_deps' 'diff_compiler_codemod' 'diff_compiler_dict_semantics_ir' 'diff_compiler_argtag_matrix' 'diff_compiler_error_quality_baseline' 'diff_compiler_fmt_roundtrip' 'diff_compiler_fmt_write_safety' 'diff_compiler_index' 'diff_compiler_let_refute' 'diff_compiler_references_tool' 'diff_compiler_run_stdout_flush' 'diff_compiler_shadow_semantics' 'diff_compiler_snapshot_wasm_input' 'effect_set_domain' 'pr_helper_test' 'selfcompile_build_fixpoint' 'diff_compiler_check_ir_floor' 'diff_compiler_emitted_code_floor' 'pds/test/serve_e2e'"
+            pattern: "'gzip/test/deflate_oracle' 'pds/test/atsyntax_vectors' 'pds/test/constant_time_public_key' 'pds/test/hmac_vectors' 'pds/test/opaque_field_scalar' 'pds/test/rfc6979_vectors' 'bootstrap_lex' 'cross_project_deps' 'diff_compiler_codemod' 'diff_compiler_dict_semantics_ir' 'diff_compiler_dispatch_shape' 'diff_compiler_effect_polarity' 'diff_compiler_error_quality_baseline' 'diff_compiler_fmt' 'diff_compiler_fmt_write_safety' 'diff_compiler_index' 'diff_compiler_let_refute' 'diff_compiler_llvm_modules' 'diff_compiler_lsp' 'diff_compiler_prelude_obj' 'diff_compiler_project_enrolment' 'diff_compiler_references_tool' 'diff_compiler_rt_obj' 'diff_compiler_run_entry_subdir' 'diff_compiler_run_stdout_flush' 'diff_compiler_slice_oob' 'diff_compiler_snapshot_wasm_input' 'diff_compiler_wasm_shim_parity' 'effect_set_domain' 'pr_helper_test' 'selfcompile_emit' 'selfcompile_lex' 'diff_compiler_check_ir_floor' 'diff_compiler_emitted_code_floor' 'pds/test/serve_e2e'"
           - name: gates_6
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -873,7 +870,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/ecdsa_vectors' 'pds/test/encodings_vectors' 'pds/test/lexjson_vectors' 'pds/test/sha256_vectors' 'pds/test/store_persistence' 'sqlite/test/index_write_oracle' 'diff_compiler_build' 'diff_compiler_capability_matrix' 'diff_compiler_check_cli_modules' 'diff_compiler_check' 'diff_compiler_eval' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_iface_order' 'diff_compiler_index_oob' 'diff_compiler_internal_extern' 'diff_compiler_perf_scaling' 'diff_compiler_ported' 'diff_compiler_selfproc' 'diff_compiler_snapshot_frontend' 'diff_compiler_test_native' 'run_command_sigchld' 'diff_compiler_test_typecheck' 'native_fixtures/run' 'selfcompile_emit' 'selfcompile_lex' 'diff_compiler_tier_drift' 'pds/test/deploy_config_lint'"
+            pattern: "'pds/test/secp256k1_point_vectors' 'sqlite/test/dml_oracle' 'sqlite/test/writer_oracle' 'build_construct_coverage' 'diff_compiler_check' 'diff_compiler_eval' 'diff_compiler_perf_scaling' 'diff_native_cli' 'diff_compiler_tier_drift' 'diff_compiler_cli_reject_floor'"
           - name: gates_7
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -889,7 +886,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'build_cmd' 'gzip/test/inflate_oracle' 'pds/test/signing_corpus' 'check_syntax_examples' 'diff_compiler_call_arity' 'diff_compiler_import_order' 'diff_compiler_ir_size' 'diff_compiler_lint_baseline' 'diff_compiler_comment_shout_diff' 'diff_compiler_llvm_ffi' 'diff_compiler_llvm_modules' 'diff_compiler_llvm' 'diff_compiler_os_entropy' 'diff_compiler_rt_obj' 'diff_compiler_run_check_agreement' 'diff_compiler_source_bytes' 'diff_native_cli' 'effect_builtin_param_domain' 'diff_compiler_gate_registry' 'diff_compiler_closure_alloc' 'dist_install_smoke'"
+            pattern: "'build_cmd' 'gzip/test/inflate_oracle' 'pds/test/signing_corpus' 'pds/test/store_persistence' 'sqlite/test/index_write_oracle' 'sqlite/test/oracle' 'diff_compiler_build' 'diff_compiler_capability_matrix' 'diff_compiler_check_json' 'diff_compiler_stdlib_conventions' 'diff_compiler_eval_json' 'diff_compiler_eval_scaling' 'diff_compiler_fmt_roundtrip' 'diff_compiler_import_order' 'diff_compiler_ir_size' 'diff_compiler_llvm' 'diff_compiler_run_check_agreement' 'diff_compiler_source_bytes' 'diff_compiler_tmc_parity' 'selfcompile_build_fixpoint' 'diff_compiler_closure_alloc' 'diff_compiler_cli_help_conformance' 'dist_install_smoke'"
           - name: gates_8
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -898,8 +895,8 @@ jobs:
             #
             # wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
             # oracle (`sh test/wasm/build_wasm_oracle.sh --modules-only`). This is one
-            # of only two OPEN rows that carry it (the other is `gates_3`), so it is one
-            # of only two rows a wasm-constrained gate can legally land on — the
+            # of the three OPEN rows that carry it (with `gates_1` and `gates_3`), so it
+            # is one of only three rows a wasm-constrained gate can legally land on — the
             # balancer treats that as a hard constraint, never as a cost.
             #
             # full_cores = false: an ordinary shared runner, open to the packer.
@@ -908,7 +905,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'diff_compiler_ci_shard_coverage' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/field_vectors' 'pds/test/mst_vectors' 'pds/test/scalar_vectors' 'pds/test/secp256k1_point_vectors' 'pds/test/signing_parity' 'pds/test/vector_provenance' 'check_build_oracles_for_consistency' 'diff_compiler_effect_polarity' 'diff_compiler_eval_scaling' 'diff_compiler_lsp' 'diff_compiler_prelude_shadow_census' 'diff_compiler_project_enrolment' 'diff_compiler_run_entry_subdir' 'diff_compiler_stage_ir_scaling' 'diff_compiler_tmc_parity' 'diff_net' 'diff_async' 'effect_param_domain' 'diff_compiler_guide_render'"
+            pattern: "'diff_compiler_ci_shard_coverage' 'lsp_harness' 'pds/test/car_vectors' 'pds/test/dagcbor_cid_vectors' 'pds/test/ecdsa_vectors' 'pds/test/encodings_vectors' 'pds/test/field_vectors' 'pds/test/lexjson_vectors' 'pds/test/mst_vectors' 'pds/test/scalar_vectors' 'pds/test/signing_parity' 'pds/test/vector_provenance' 'check_build_oracles_for_consistency' 'diff_compiler_engines_part2' 'diff_compiler_engines_part3' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_index_oob' 'diff_compiler_preflight_base' 'diff_compiler_selfproc' 'diff_compiler_test_typecheck' 'diff_net' 'diff_async' 'effect_param_domain' 'diff_compiler_guide_render' 'pds/test/lib_boundary'"
             wasm_arm: "1"
           # GENERATED:END gates-matrix
     # The job name IS the required status-check context. It is a bare executor
@@ -1134,7 +1131,7 @@ jobs:
       # mentions is how "this didn't run" starts looking like "this passed").
       # Installed on EVERY shard, not just `sqlite`, so a gate moved between
       # shards for cost reasons can never silently lose its oracle. Also the wasm
-      # arm of the 3-engine differential (#597, `engines` shard only) — the peer
+      # arm of the 3-engine differential (#597, rows running diff_compiler_engines_part*) — the peer
       # of the `wasm:` job's own call to this action, same toolchain pin. The
       # BINARY is downloaded from `build` (#1928); the toolchain install stays,
       # since clang still compiles this shard's oracles.
@@ -1192,19 +1189,33 @@ jobs:
       # would otherwise defeat build_oracles.sh's own staleness check).
       - name: Build the oracles this shard needs
         if: steps.plan.outputs.has_work == 'true' && steps.oracle-cache.outputs.cache-hit != 'true'
+        env:
+          ORACLE_TIMING_LOG: ${{ runner.temp }}/oracle-samples-${{ matrix.name }}.tsv
         run: FORCE=1 sh test/build_oracles.sh --for ${{ steps.plan.outputs.pats }}
 
       # build_oracles.sh does not build the wasm emitter oracles (#597) — this
-      # shard builds them separately. `--modules-only`: diff_compiler_engines
-      # reads exactly one of the three wasm oracles, so building all three here
+      # shard builds them separately. `--modules-only`: the diff_compiler_engines_part*
+      # gates read exactly one of the three wasm oracles, so building all three here
       # would over-buy; the `wasm:` job's seven gates open all three and build
       # accordingly. Not cached — a pure function of the compiler graph, which
       # the medaka cache above already keys.
       - name: Build the wasm emitter oracle (wasm arm)
         if: steps.plan.outputs.has_work == 'true' && matrix.wasm_arm != ''
+        env:
+          ORACLE_TIMING_LOG: ${{ runner.temp }}/oracle-samples-${{ matrix.name }}.tsv
         run: |
           export MEDAKA_EMITTER="$PWD/medaka_emitter"
           sh test/wasm/build_wasm_oracle.sh --modules-only
+
+      # Setup cost as recorded data (#2209): the cold builds above, wrapped as an
+      # `oracle-cost/1` report beside the gate timings. Writes nothing on a cache
+      # hit (no samples) or on a pull_request (narrowable, like run_gates.sh).
+      - name: Write this shard's oracle build timings
+        if: ${{ always() && steps.plan.outputs.has_work == 'true' }}
+        env:
+          ORACLE_TIMING_LOG: ${{ runner.temp }}/oracle-samples-${{ matrix.name }}.tsv
+          GATE_TIMING_SHARD: ${{ matrix.name }}
+        run: sh test/build_oracles.sh --write-timing-report "$RUNNER_TEMP/oracle-timings-${{ matrix.name }}.json"
 
       # Runs the CONCRETE gate list `plan` resolved (never a glob) — the shard's
       # whole pattern on merge_group/push, the diff intersection on a narrowed
@@ -1213,23 +1224,18 @@ jobs:
       # substitution is deliberate — quoting would collapse the gate list into
       # ONE argument and silently degrade the shard to a single bad glob.)
       #
-      # `full_cores` gives `engines` the whole runner instead of its own
-      # ENGINE_JOBS=NCPU/2 hedge (derived from `nproc`, so it tracks runner
-      # size). `wasm_arm` sets MEDAKA_REQUIRE_WASM=1 — the shard already
+      # `wasm_arm` sets MEDAKA_REQUIRE_WASM=1 — the shard already
       # installed wasm-tools/Node and built the wasm oracle, so a missing wasm
       # arm here is a WIRING BREAK (exit 1), never the gate's honest elsewhere
-      # degradation (exit 2, T2/T3 "NOT RUN"). See diff_compiler_engines.sh.
+      # degradation (exit 2, T2/T3 "NOT RUN"). See test/lib_engines_differential.sh.
       - name: Gate shard — ${{ matrix.name }}
         if: steps.plan.outputs.has_work == 'true'
         run: |
-          if [ -n "${{ matrix.full_cores }}" ]; then
-            export ENGINE_JOBS="$(nproc)"
-            echo "engines shard owns this runner: ENGINE_JOBS=$ENGINE_JOBS"
-          fi
+          free -m
           # This shard installed wasm-tools + Node and built the wasm oracle above, so an
           # unavailable wasm arm here is a WIRING BREAK, not a dev box without a toolchain.
           # The gate's honest degradation (T2/T3 "NOT RUN") stays the default everywhere
-          # else; here it becomes exit 1. See diff_compiler_engines.sh's MEDAKA_REQUIRE_WASM
+          # else; here it becomes exit 1. See lib_engines_differential.sh's MEDAKA_REQUIRE_WASM
           # block for why it must be exit 1 and never exit 2 (#597).
           if [ -n "${{ matrix.wasm_arm }}" ]; then
             export MEDAKA_REQUIRE_WASM=1
@@ -1312,7 +1318,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gate-timings-${{ matrix.name }}
-          path: ${{ runner.temp }}/gate-timings-${{ matrix.name }}.json
+          path: |
+            ${{ runner.temp }}/gate-timings-${{ matrix.name }}.json
+            ${{ runner.temp }}/oracle-timings-${{ matrix.name }}.json
           retention-days: 30
           if-no-files-found: ignore
 
@@ -1666,7 +1674,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # wasm-tools/Node versions come from setup-medaka's own input defaults — shared
-    # verbatim with the `engines` gate shard's call to the same action, which installs
+    # verbatim with the `wasm_arm` rows' call to the same action, which installs
     # the same toolchain for the 3-engine differential's T2/T3 arms (#597). Do not
     # override either here; that is precisely the drift the single source prevents.
     steps:

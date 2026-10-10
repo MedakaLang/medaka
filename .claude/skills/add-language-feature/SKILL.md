@@ -152,7 +152,7 @@ bash test/typecheck_compiler_source.sh   # the build does NOT gate on type error
                                          #   an ill-typed compiler passes all 83 gates.
                                          #   This is what the required `soundness` check runs.
 bash test/selfcompile_fixpoint.sh        # decisive for anything touching compiler/backend/
-sh   test/diff_compiler_engines.sh       # eval == native == wasm on the same programs.
+sh   test/lib_engines_differential.sh       # eval == native == wasm on the same programs.
                                          #   The gate that catches "step 8 was skipped".
 ```
 

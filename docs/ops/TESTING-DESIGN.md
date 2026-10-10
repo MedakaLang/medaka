@@ -61,7 +61,7 @@ listing them together because the shape is only visible as a set.
 
 | gate | what it cannot see | why |
 |---|---|---|
-| `test/diff_compiler_engines.sh` | a bug **all three engines agree on** | it grades eval == native == wasm. Unanimity is its pass condition, so a shared wrong answer *is* a pass. Live examples: #1045, #1047. |
+| `test/lib_engines_differential.sh` | a bug **all three engines agree on** | it grades eval == native == wasm. Unanimity is its pass condition, so a shared wrong answer *is* a pass. Live examples: #1045, #1047. |
 | `test/llvm_fixtures_modules/` goldens | an **eval** defect | the goldens are captured **from eval**, so pinning an eval-wrong shape *enshrines* the wrong value as expected. #1071; PR #1058's author hit it and routed around it by hand. |
 | perf **allocation** arm | a **constant-factor** regression | it grades a growth *ratio* (linear ≈2.0×, quadratic ≈4.0×). A 15× constant factor at fixed *n* cannot move a ratio. |
 | perf **op-count** arm | a fix that **removes the counted steps** | it counts `contains`-steps via `opBump` — exactly what a List→map migration deletes — so the count goes **down** and it reports an improvement. |
@@ -508,7 +508,7 @@ default is the native backend alone.
 `medaka test --engines eval,native` (#2588) runs two and ANDs the exit codes, but nothing
 in `Makefile` or `ci.yml` passes it (#3207), and wasm is deferred by decision. What
 actually keeps the unit tier from being the sole oracle is the independent
-differential/fixpoint floor — `test/diff_compiler_engines.sh` and the self-compile
+differential/fixpoint floor — `test/lib_engines_differential.sh` and the self-compile
 fixpoint — which is a separate tier that would catch the miscompile whether or not a
 `test` block existed. See `docs/ops/TESTING-ARCHITECTURE.md` §4.
 
@@ -560,7 +560,7 @@ git diff --exit-code test/snapshots   # ← the gate
 Medaka's "goldens never bake an absolute path" is currently a *convention* — make it
 a **normalization pass**.
 
-### 4.4 The differential tier — the biggest win available ✅ BUILT (`test/diff_compiler_engines.sh`)
+### 4.4 The differential tier — the biggest win available ✅ BUILT (`test/lib_engines_differential.sh`)
 
 > **STATUS (2026-07-17, #597). Built, and REQUIRED on all three engines.** The proposal
 > below is kept for its rationale; two of its claims are now retired by measurement.

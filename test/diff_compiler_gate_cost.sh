@@ -159,7 +159,7 @@ echo '{"schema": "something-else"}' >"$TMP/junk.json"
 if sh "$INGEST" --dry-run --baseline "$TMP/none.json" "$TMP/junk.json" >"$TMP/junk.out" 2>&1; then
   bad "ingest accepted a document that is not a gate-cost/1 report"
 else
-  grep -q "is not a 'gate-cost/1' report" "$TMP/junk.out" \
+  grep -q "is not a 'gate-cost/1' or 'oracle-cost/1' report" "$TMP/junk.out" \
     && ok "ingest refuses a non-report document" \
     || bad "ingest refused a non-report, but not for that reason"
 fi
@@ -392,6 +392,314 @@ if [ "$_d2" != "$_d4" ]; then
 else
   bad "swapping one gate for another left the digest unchanged ($_d2)"
 fi
+
+# ── 7. the ingest reader fails closed on a layout it cannot read ──────────────
+# A pretty-printed baseline matches none of the reader's one-row-per-line
+# patterns; without the row-count check the rows vanish and the loss is written.
+PP="$TMP/pretty.json"
+cat >"$PP" <<'PRETTY_EOF'
+{
+  "schema": "gate-cost-baseline/1",
+  "generated": "2026-01-01T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [
+    {
+      "key": "1:1:x", "runId": "1", "runAttempt": "1", "shard": "x", "event": "push",
+      "sha": "a", "ref": "r", "date": "d", "jobs": null, "parallel": null,
+      "rowElapsedMs": null, "gates": 1, "gatesDigest": null
+    }
+  ],
+  "gates": [
+    {
+      "name": "gate_a", "medianMs": 100, "samples": 1, "ms": [100], "sampleRuns": ["1"]
+    }
+  ]
+}
+PRETTY_EOF
+cp "$PP" "$TMP/pretty.orig"
+if sh "$INGEST" --baseline "$PP" "$TMP/s1.json" >"$TMP/pretty.out" 2>&1; then
+  bad "ingest accepted a pretty-printed baseline and would have dropped its rows"
+  cat "$TMP/pretty.out"
+else
+  if cmp -s "$PP" "$TMP/pretty.orig" && grep -q 'REFUSED' "$TMP/pretty.out"; then
+    ok "ingest refuses a pretty-printed baseline and leaves it byte-identical"
+  else
+    bad "ingest exited nonzero on a pretty-printed baseline but modified it or did not say REFUSED"
+    cat "$TMP/pretty.out"
+  fi
+fi
+
+# ── 7b. oracle build cost is recorded data (#2209) ────────────────────────────
+# Producer: test/build_oracles.sh appends one sample per COLD build to
+# ORACLE_TIMING_LOG and wraps the log into an oracle-cost/1 report. A cache hit
+# builds nothing, so its log is empty and NO report is written.
+OL="$TMP/oracle-samples.tsv"
+OREP="$TMP/oracle-report.json"
+: >"$OL"
+GITHUB_EVENT_NAME=merge_group GITHUB_RUN_ID=7001 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=beef GITHUB_REF=refs/heads/x \
+  GATE_TIMING_SHARD=orow ORACLE_TIMING_LOG="$OL" \
+  sh "$ROOT/test/build_oracles.sh" --write-timing-report "$OREP" >/dev/null 2>&1
+if [ -e "$OREP" ]; then
+  bad "a cache-hit build (empty sample log) still produced an oracle report"
+else
+  ok "a cache-hit build records no oracle sample (empty log writes no report)"
+fi
+ORACLE_TIMING_LOG="$OL" sh "$ROOT/test/build_oracles.sh" --record-sample oracle_a 41000 2
+ORACLE_TIMING_LOG="$OL" sh "$ROOT/test/build_oracles.sh" --record-sample oracle_b 52000 2
+env GITHUB_EVENT_NAME=pull_request GITHUB_RUN_ID=7001 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=beef GITHUB_REF=refs/heads/x \
+  ORACLE_TIMING_LOG="$OL" sh "$ROOT/test/build_oracles.sh" --write-timing-report "$TMP/oracle-pr.json" >/dev/null 2>&1
+[ -e "$TMP/oracle-pr.json" ] && bad "producer wrote an oracle report on a pull_request run" \
+                             || ok "producer writes no oracle report on a pull_request run"
+env GITHUB_EVENT_NAME=merge_group GITHUB_RUN_ID=7001 GITHUB_RUN_ATTEMPT=1 GITHUB_SHA=beef GITHUB_REF=refs/heads/x \
+  GATE_TIMING_SHARD=orow ORACLE_TIMING_LOG="$OL" \
+  sh "$ROOT/test/build_oracles.sh" --write-timing-report "$OREP" >/dev/null 2>&1
+grep -q '^  "schema": "oracle-cost/1",$' "$OREP" && grep -q '{"name": "oracle_a", "ms": 41000, "jobs": 2}' "$OREP" \
+  && ok "two cold builds are written as an oracle-cost/1 report with ms and JOBS" \
+  || { bad "oracle report malformed"; cat "$OREP"; }
+
+# Consumer: round-trip into oracles[], reader-accounted one-for-one.
+OB="$TMP/obase.json"
+rm -f "$OB"
+sh "$INGEST" --baseline "$OB" "$TMP/s1.json" "$OREP" >"$TMP/o1.out" 2>&1 || { bad "ingest failed on a gate+oracle report pair"; cat "$TMP/o1.out"; }
+if grep -q '^    {"name": "oracle_a", "medianMs": 41000, "samples": 1, "ms": \[41000\], "sampleRuns": \["7001"\], "jobs": \[2\]}' "$OB" \
+   && grep -q '^    {"name": "oracle_b", "medianMs": 52000, ' "$OB" \
+   && grep -q '^    {"name": "gate_a", ' "$OB"; then
+  ok "oracle samples fold into oracles[] (median, samples, sampleRuns, jobs) beside gates[]"
+else
+  bad "oracles[] missing or wrong in the baseline"
+  cat "$OB"
+fi
+cp "$OB" "$TMP/obase.once"
+sh "$INGEST" --baseline "$OB" "$OREP" >/dev/null 2>&1
+if [ "$(grep -c '^    {"name": "oracle_' "$OB")" = "2" ] && grep -q '"samples": 1, "ms": \[41000\]' "$OB"; then
+  ok "re-ingesting an oracle report is idempotent, and a re-read baseline keeps its oracles[] rows"
+else
+  bad "re-ingest of an oracle report duplicated or lost samples"
+  cat "$OB"
+fi
+# A second run adds a second sample to the same oracle.
+sed -e 's/"runId": "7001"/"runId": "7002"/' -e 's/41000/45000/' "$OREP" >"$TMP/oracle-report2.json"
+sh "$INGEST" --baseline "$OB" "$TMP/oracle-report2.json" >/dev/null 2>&1
+grep -q '"name": "oracle_a", "medianMs": 41000, "samples": 2, "ms": \[41000, 45000\], "sampleRuns": \["7001", "7002"\], "jobs": \[2, 2\]' "$OB" \
+  && ok "a second run's cold build is a second sample of the same oracle (lower median)" \
+  || { bad "second oracle sample not folded"; cat "$OB"; }
+
+# Malformed: a row with no ms, and a non-numeric ms. Refused, baseline untouched.
+sed 's/"ms": 41000, //' "$OREP" >"$TMP/oracle-noms.json"
+sed 's/"ms": 41000/"ms": "slow"/' "$OREP" >"$TMP/oracle-nan.json"
+for _m in noms nan; do
+  cp "$OB" "$TMP/obase.pre"
+  if sh "$INGEST" --baseline "$OB" "$TMP/oracle-$_m.json" >"$TMP/om.out" 2>&1; then
+    bad "ingest accepted a malformed oracle report ($_m)"
+  elif cmp -s "$OB" "$TMP/obase.pre" && grep -q 'REFUSED' "$TMP/om.out"; then
+    ok "malformed oracle report ($_m) refused with the baseline byte-identical"
+  else
+    bad "malformed oracle report ($_m) exited nonzero but changed the baseline or did not say REFUSED"
+    cat "$TMP/om.out"
+  fi
+done
+
+# Fail-closed accounting now covers oracles[]: a pretty-printed oracles row is refused.
+awk '/^    \{"name": "oracle_a"/ { print "    {"; print "      \"name\": \"oracle_a\", \"medianMs\": 1, \"samples\": 1, \"ms\": [1]"; print "    },"; next } { print }' "$OB" >"$TMP/obase.pp"
+cp "$TMP/obase.pp" "$TMP/obase.pp.orig"
+if sh "$INGEST" --baseline "$TMP/obase.pp" "$OREP" >"$TMP/opp.out" 2>&1; then
+  bad "ingest accepted a baseline whose oracles[] row it cannot read"
+elif cmp -s "$TMP/obase.pp" "$TMP/obase.pp.orig" && grep -q 'REFUSED' "$TMP/opp.out"; then
+  ok "ingest refuses a baseline whose oracles[] rows the line reader cannot account for"
+else
+  bad "unreadable oracles[] row: wrong refusal"; cat "$TMP/opp.out"
+fi
+
+# A run whose key has left runs[]/oracleRuns (trimmed by --max-runs) still has
+# samples in the per-gate windows; re-ingesting it must change nothing.
+EV="$TMP/evict.json"
+rm -f "$EV"
+for _r in 8001 8002 8003; do
+  _synth "$TMP/ev$_r.json" "$_r" "gate_a:$_r:true"
+  sed -e 's/"runId": "7001"/"runId": "'"$_r"'"/' -e 's/41000/'"$_r"'/' "$OREP" >"$TMP/evo$_r.json"
+  sh "$INGEST" --max-runs 1 --baseline "$EV" "$TMP/ev$_r.json" "$TMP/evo$_r.json" >/dev/null 2>&1 \
+    || bad "eviction setup: ingest of run $_r failed"
+done
+cp "$EV" "$TMP/evict.pre"
+sh "$INGEST" --max-runs 1 --baseline "$EV" "$TMP/ev8001.json" "$TMP/evo8001.json" >/dev/null 2>&1
+if cmp -s "$EV" "$TMP/evict.pre" && grep -q '"samples": 3, "ms": \[8001, 8002, 8003\]' "$EV"; then
+  ok "re-ingesting a run evicted from runs[]/oracleRuns (samples still held) is a byte-identical no-op"
+else
+  bad "re-ingest of an evicted run changed the baseline or duplicated its samples"
+  diff "$TMP/evict.pre" "$EV"
+fi
+
+# The fail-closed accounting covers oracleRuns: a wrapped (still valid JSON) list is refused.
+sed 's/^  "oracleRuns": \[\(.*\)\],$/  "oracleRuns": [\
+    \1\
+  ],/' "$OB" >"$TMP/obase.wrap"
+cp "$TMP/obase.wrap" "$TMP/obase.wrap.orig"
+if sh "$INGEST" --baseline "$TMP/obase.wrap" "$OREP" >"$TMP/owrap.out" 2>&1; then
+  bad "ingest accepted a baseline whose oracleRuns list it cannot read"
+elif cmp -s "$TMP/obase.wrap" "$TMP/obase.wrap.orig" && grep -q 'REFUSED' "$TMP/owrap.out"; then
+  ok "ingest refuses a wrapped oracleRuns list and leaves the baseline byte-identical"
+else
+  bad "wrapped oracleRuns: wrong refusal"; cat "$TMP/owrap.out"
+fi
+
+# The summary counts gates[] rows only; oracles[] rows are reported on their own line.
+rm -f "$TMP/sum.json"
+sh "$INGEST" --baseline "$TMP/sum.json" "$TMP/s1.json" "$OREP" >"$TMP/sum.out" 2>&1
+if grep -q '^  gates: 1$' "$TMP/sum.out" && grep -q '^  oracles: 2$' "$TMP/sum.out"; then
+  ok "ingest summary counts gates and oracles separately"
+else
+  bad "ingest summary miscounts gates/oracles"; cat "$TMP/sum.out"
+fi
+
+# The instrument never emits a row the ingest would refuse whole.
+SL="$TMP/sample-guard.tsv"
+: >"$SL"
+for _v in -5 '' 0 abc; do
+  ORACLE_TIMING_LOG="$SL" sh "$ROOT/test/build_oracles.sh" --record-sample oracle_x "$_v" 2 >/dev/null 2>"$TMP/sg.err"
+  [ "$(wc -l <"$TMP/sg.err" | tr -d ' ')" = "1" ] || bad "bad ms '$_v': expected exactly one stderr line"
+done
+ORACLE_TIMING_LOG="$SL" sh "$ROOT/test/build_oracles.sh" --record-sample oracle_x 1200 2 >/dev/null 2>&1
+if [ "$(wc -l <"$SL" | tr -d ' ')" = "1" ] && grep -q 'oracle_x	1200	2' "$SL"; then
+  ok "--record-sample skips non-positive/empty/non-numeric ms (one stderr line) and records a good one"
+else
+  bad "--record-sample wrote a malformed sample"; cat "$SL"
+fi
+
+# ── 8. the collector: prunes orphans, supersedes only its own stale PRs ───────
+# A scratch copy of the tree with a local bare remote, a stubbed `gh` that logs
+# every mutating call, and a stubbed `medaka`. Nothing real is closed or pushed.
+CT="$TMP/ctree"
+mkdir -p "$CT/test" "$CT/stubbin"
+cp "$ROOT/test/gate_cost_collect.sh" "$ROOT/test/gate_cost_ingest.sh" "$CT/test/"
+printf 'gen-ci:\n\t@true\n' >"$CT/Makefile"
+printf '# registry stand-in\n' >"$CT/test/gates.toml"
+mkdir -p "$CT/.github/workflows"
+echo "name: ci" >"$CT/.github/workflows/ci.yml"
+cat >"$CT/medaka" <<'STUB'
+#!/bin/sh
+case "$1 $2" in
+  "gate list") echo '[{"baselineKey": "gate_a"}]' ;;
+  "gate balance") exit 0 ;;
+  *) exit 0 ;;
+esac
+STUB
+chmod +x "$CT/medaka"
+cat >"$CT/test/gate_cost_baseline.json" <<'BASE_EOF'
+{
+  "schema": "gate-cost-baseline/1",
+  "note": "n",
+  "generated": "2026-01-01T00:00:00Z",
+  "maxSamples": 9,
+  "runs": [
+  ],
+  "gates": [
+    {"name": "gate_a", "medianMs": 100, "samples": 1, "ms": [100], "sampleRuns": ["1"]},
+    {"name": "gate_orphan", "medianMs": 50, "samples": 1, "ms": [50], "sampleRuns": ["1"]}
+  ]
+}
+BASE_EOF
+_synth "$TMP/c1.json" 7001 "gate_a:120:true" "gate_orphan:60:true"
+cat >"$CT/stubbin/gh" <<'GHSTUB'
+#!/bin/sh
+# run list -> one successful push run; run download -> copy the synthetic report;
+# pr list --head B -> PR numbers from $GH_PRS (lines "branch number"); pr close -> log.
+case "$1 $2" in
+  "run list") echo '[{"databaseId": 7001, "event": "push", "conclusion": "success", "headSha": "x"}]' ;;
+  "repo view") echo "o/r" ;;
+  "run download")
+    shift 2; dir=""
+    while [ $# -gt 0 ]; do case "$1" in --dir) dir="$2"; shift 2 ;; *) shift ;; esac; done
+    cp "$GH_REPORT" "$dir/gate-timings-synth.json" ;;
+  "pr list")
+    head=""
+    while [ $# -gt 0 ]; do case "$1" in --head) head="$2"; shift 2 ;; *) shift ;; esac; done
+    awk -v h="$head" '$1 == h { print $2 }' "$GH_PRS" ;;
+  "pr close") echo "close $3 :: $*" >>"$GH_LOG" ;;
+  *) echo "unexpected gh $*" >>"$GH_LOG" ;;
+esac
+GHSTUB
+chmod +x "$CT/stubbin/gh"
+git init -q --bare "$TMP/remote.git"
+git -C "$CT" init -q -b main
+git -C "$CT" config user.email t@example.com
+git -C "$CT" config user.name t
+git -C "$CT" remote add origin "$TMP/remote.git"
+git -C "$CT" add -A
+git -C "$CT" commit -q -m base
+git -C "$CT" push -q origin main
+for old in cost-baseline-autoadvance-20200101000000 other-feature-branch; do
+  git -C "$CT" push -q origin "main:refs/heads/$old"
+done
+printf 'cost-baseline-autoadvance-20200101000000 41\nother-feature-branch 42\n' >"$TMP/prs.txt"
+: >"$TMP/gh.log"
+_collect() {
+  env PATH="$CT/stubbin:$PATH" GH_PRS="$TMP/prs.txt" GH_LOG="$TMP/gh.log" GH_REPORT="$TMP/c1.json" \
+    sh "$CT/test/gate_cost_collect.sh" --base-branch main "$@"
+}
+_collect --dry-run >"$TMP/col_dry.out" 2>&1
+if grep -q 'would close superseded PR #41' "$TMP/col_dry.out" && [ ! -s "$TMP/gh.log" ] \
+   && git -C "$CT" ls-remote --heads origin | grep -q 'cost-baseline-autoadvance-20200101000000'; then
+  ok "collector --dry-run says what it would close and closes/deletes nothing"
+else
+  bad "collector --dry-run closed something or did not say what it would close"
+  cat "$TMP/col_dry.out" "$TMP/gh.log"
+fi
+cp "$CT/test/gate_cost_baseline.json" "$TMP/col_dry_baseline.json"
+git -C "$CT" checkout -q -- test/gate_cost_baseline.json
+_collect >"$TMP/col.out" 2>&1
+if grep -q '"name": "gate_orphan"' "$CT/test/gate_cost_baseline.json" 2>/dev/null; then
+  bad "collector left the orphan baseline row (no --registry on the ingest)"
+  cat "$TMP/col.out"
+else
+  # after the run the collector sits on its new branch with the baseline committed
+  if git -C "$CT" show HEAD:test/gate_cost_baseline.json | grep -q '"name": "gate_a"' \
+     && ! git -C "$CT" show HEAD:test/gate_cost_baseline.json | grep -q 'gate_orphan'; then
+    ok "collector path prunes the orphan baseline row and keeps the live one"
+  else
+    bad "collector pruned the live row or the commit does not hold the pruned baseline"
+    cat "$TMP/col.out"
+  fi
+fi
+_new="$(git -C "$CT" rev-parse --abbrev-ref HEAD)"
+if grep -q '^close 41 ' "$TMP/gh.log" && grep -q "$_new" "$TMP/gh.log" \
+   && ! grep -q '42' "$TMP/gh.log" && [ "$(grep -c '^close' "$TMP/gh.log")" = "1" ]; then
+  ok "collector closes only its own cost-baseline-autoadvance-* PR, comment names the replacement"
+else
+  bad "collector close behaviour wrong (expected exactly: close 41, naming $_new)"
+  cat "$TMP/gh.log"
+fi
+_heads="$(git -C "$CT" ls-remote --heads origin)"
+if printf '%s\n' "$_heads" | grep -q 'other-feature-branch' \
+   && ! printf '%s\n' "$_heads" | grep -q 'cost-baseline-autoadvance-20200101000000'; then
+  ok "collector deleted the superseded branch and left the differently-named branch alone"
+else
+  bad "remote branches after the collector are wrong"
+  printf '%s\n' "$_heads"
+fi
+if grep -q 'every sample this branch carried' "$TMP/gh.log"; then
+  bad "the supersede comment claims sample continuity"
+else
+  ok "the supersede comment makes no sample-continuity claim"
+fi
+
+# A failing push must leave the old PR open and its branch alive: the supersede
+# runs only after the replacement is on the remote.
+sleep 1  # a fresh timestamped branch name
+git -C "$CT" checkout -q main
+printf '#!/bin/sh\nwhile read old new ref; do\n  case "$ref" in\n    refs/heads/cost-baseline-autoadvance-*) [ "$old" = 0000000000000000000000000000000000000000 ] && { echo "rejected by fixture"; exit 1; } ;;\n  esac\ndone\nexit 0\n' >"$TMP/remote.git/hooks/pre-receive"
+chmod +x "$TMP/remote.git/hooks/pre-receive"
+printf '%s 43\nother-feature-branch 42\n' "$_new" >"$TMP/prs.txt"
+: >"$TMP/gh.log"
+_collect >"$TMP/col_fail.out" 2>&1
+_frc=$?
+if [ "$_frc" != 0 ] && ! grep -q '^close' "$TMP/gh.log" \
+   && git -C "$CT" ls-remote --heads origin | grep -q "$_new"; then
+  ok "a failing push leaves the superseded PR open and its branch in place"
+else
+  bad "collector superseded the old PR although its replacement push failed (rc=$_frc)"
+  cat "$TMP/col_fail.out" "$TMP/gh.log"
+fi
+rm -f "$TMP/remote.git/hooks/pre-receive"
 
 echo
 if [ "$fail" -eq 0 ]; then

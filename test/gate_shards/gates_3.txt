@@ -4,8 +4,8 @@ regenerated into this matrix by `make gen-ci`; it changes whenever the
 baseline does, so nothing below names a gate. What this row is:
 
 wasm_arm = true  -> installs wasm-tools + Node and builds the Wasm
-oracle. This is one of only two OPEN rows that carry it (the other is
-`gates_8`), so it is one of only two rows a wasm-constrained gate can
+oracle. This is one of the three OPEN rows that carry it (with `gates_1`
+and `gates_8`), so it is one of only three rows a wasm-constrained gate can
 legally land on — the balancer treats that as a hard constraint, never
 as a cost, and refuses to pack rather than schedule such a gate where
 its toolchain is absent.

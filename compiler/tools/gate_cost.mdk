@@ -149,26 +149,26 @@ export
 costSchema : String
 costSchema = "gate-cost-baseline/1"
 
-costEntry : Int -> Json -> Result String GateCost
-costEntry i e = match asString (orNull (get "name" e))
+costEntry : String -> Int -> Json -> Result String GateCost
+costEntry sect i e = match asString (orNull (get "name" e))
   None =>
     Err
-      "gate cost baseline: gates[\{intToString i}]: missing string field 'name'"
+      "gate cost baseline: \{sect}[\{intToString i}]: missing string field 'name'"
   Some n => match asInt (orNull (get "medianMs" e))
     None =>
       Err
-        "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'medianMs'"
+        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': missing integer field 'medianMs'"
     Some ms if ms < 0 =>
       Err
-        "gate cost baseline: gates[\{intToString i}] '\{n}': negative medianMs \{intToString ms}"
+        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': negative medianMs \{intToString ms}"
     Some ms => match asInt (orNull (get "samples" e))
       None =>
         Err
-          "gate cost baseline: gates[\{intToString i}] '\{n}': missing integer field 'samples'"
+          "gate cost baseline: \{sect}[\{intToString i}] '\{n}': missing integer field 'samples'"
       Some sc if sc < 1 =>
         Err
-          "gate cost baseline: gates[\{intToString i}] '\{n}': samples must be >= 1, got \{intToString sc}"
-      Some sc => match costSamples i n e
+          "gate cost baseline: \{sect}[\{intToString i}] '\{n}': samples must be >= 1, got \{intToString sc}"
+      Some sc => match costSamples sect i n e
         Err m => Err m
         -- `samples` and `ms` are two spellings of the same fact, so a row
         -- where they disagree is REFUSED rather than reconciled: the whole
@@ -177,7 +177,7 @@ costEntry i e = match asString (orNull (get "name" e))
         -- array makes every such derivation quietly wrong.
         Ok raw if listLen raw /= sc =>
           Err
-            "gate cost baseline: gates[\{intToString i}] '\{n}': samples is \{intToString sc} but 'ms' holds \{intToString (listLen raw)} value(s)"
+            "gate cost baseline: \{sect}[\{intToString i}] '\{n}': samples is \{intToString sc} but 'ms' holds \{intToString (listLen raw)} value(s)"
         Ok raw =>
           map
             (rids => GateCost {
@@ -187,7 +187,7 @@ costEntry i e = match asString (orNull (get "name" e))
               ms = raw,
               sampleRuns = rids,
             })
-            (costSampleRuns i n e (listLen raw))
+            (costSampleRuns sect i n e (listLen raw))
 
 -- The retained raw samples of one `gates[]` entry.  Required, not optional:
 -- every baseline this reader has ever accepted carries them (the ingester has
@@ -195,30 +195,31 @@ costEntry i e = match asString (orNull (get "name" e))
 -- empty one would silently turn "this file predates the field" into "this
 -- gate has no evidence", which reads as a thin-evidence finding rather than
 -- as the schema error it is.
-costSamples : Int -> String -> Json -> Result String (List Int)
-costSamples i n e = match asArray (orNull (get "ms" e))
+costSamples : String -> Int -> String -> Json -> Result String (List Int)
+costSamples sect i n e = match asArray (orNull (get "ms" e))
   None =>
     Err
-      "gate cost baseline: gates[\{intToString i}] '\{n}': missing array field 'ms'"
-  Some arr => costSampleInts i n arr 0 (arrayLength arr) []
+      "gate cost baseline: \{sect}[\{intToString i}] '\{n}': missing array field 'ms'"
+  Some arr => costSampleInts sect i n arr 0 (arrayLength arr) []
 
-costSampleInts : Int ->
+costSampleInts : String ->
+  Int ->
   String ->
   Array Json ->
   Int ->
   Int ->
   List Int ->
   Result String (List Int)
-costSampleInts i n arr k len acc
+costSampleInts sect i n arr k len acc
   | k >= len = Ok (reverseInts acc [])
   | otherwise = match asInt (arrayGetUnsafe k arr)
     None =>
       Err
-        "gate cost baseline: gates[\{intToString i}] '\{n}': ms[\{intToString k}] is not an integer"
+        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': ms[\{intToString k}] is not an integer"
     Some v if v < 0 =>
       Err
-        "gate cost baseline: gates[\{intToString i}] '\{n}': ms[\{intToString k}] is negative (\{intToString v})"
-    Some v => costSampleInts i n arr (k + 1) len (v :: acc)
+        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': ms[\{intToString k}] is negative (\{intToString v})"
+    Some v => costSampleInts sect i n arr (k + 1) len (v :: acc)
 
 -- The per-sample run attribution of one `gates[]` entry — OPTIONAL, unlike
 -- `ms`, and the asymmetry is deliberate.  `ms` has been written by every
@@ -233,33 +234,39 @@ costSampleInts i n arr k len acc
 -- match `ms` cannot be a per-sample attribution of those samples under any
 -- reading, and silently truncating or padding it would put the alignment bug
 -- back in a new place.
-costSampleRuns : Int -> String -> Json -> Int -> Result String (List String)
-costSampleRuns i n e want = match get "sampleRuns" e
+costSampleRuns : String ->
+  Int ->
+  String ->
+  Json ->
+  Int ->
+  Result String (List String)
+costSampleRuns sect i n e want = match get "sampleRuns" e
   None => Ok (blankRuns want)
   Some JNull => Ok (blankRuns want)
   Some j => match asArray j
     None =>
       Err
-        "gate cost baseline: gates[\{intToString i}] '\{n}': 'sampleRuns' is present but is not an array"
+        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': 'sampleRuns' is present but is not an array"
     Some arr if arrayLength arr /= want =>
       Err
-        "gate cost baseline: gates[\{intToString i}] '\{n}': 'sampleRuns' holds \{intToString (arrayLength arr)} entr(ies) but 'ms' holds \{intToString want}"
-    Some arr => costSampleRunStrs i n arr 0 want []
+        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': 'sampleRuns' holds \{intToString (arrayLength arr)} entr(ies) but 'ms' holds \{intToString want}"
+    Some arr => costSampleRunStrs sect i n arr 0 want []
 
-costSampleRunStrs : Int ->
+costSampleRunStrs : String ->
+  Int ->
   String ->
   Array Json ->
   Int ->
   Int ->
   List String ->
   Result String (List String)
-costSampleRunStrs i n arr k len acc
+costSampleRunStrs sect i n arr k len acc
   | k >= len = Ok (reverseStrs acc [])
   | otherwise = match asString (arrayGetUnsafe k arr)
     None =>
       Err
-        "gate cost baseline: gates[\{intToString i}] '\{n}': sampleRuns[\{intToString k}] is not a string"
-    Some v => costSampleRunStrs i n arr (k + 1) len (v :: acc)
+        "gate cost baseline: \{sect}[\{intToString i}] '\{n}': sampleRuns[\{intToString k}] is not a string"
+    Some v => costSampleRunStrs sect i n arr (k + 1) len (v :: acc)
 
 -- `n` unattributed slots — the empty string is the sentinel, and it can never
 -- collide with a real runId (Actions' `github.run_id` is a nonempty decimal).
@@ -287,7 +294,7 @@ costEntries : Array Json ->
   Result String (List GateCost)
 costEntries arr i n acc
   | i >= n = Ok (reverseCosts acc [])
-  | otherwise = match costEntry i (arrayGetUnsafe i arr)
+  | otherwise = match costEntry "gates" i (arrayGetUnsafe i arr)
     Err m => Err m
     Ok c => costEntries arr (i + 1) n (c :: acc)
 
@@ -313,6 +320,64 @@ parseCostBaseline src = match parse src
       Some arr if arrayLength arr == 0 =>
         Err "gate cost baseline: 'gates' is empty"
       Some arr => costEntries arr 0 (arrayLength arr) []
+
+-- ── Oracle build cost ────────────────────────────────────────────────────────
+
+{- | One `oracles[]` row of the baseline: what a CI row pays to COLD-build one
+   test oracle, in the same shape as a gate's cost (`row`: lower-median
+   `medianMs` over the retained `ms`, `sampleRuns` per sample) plus the `JOBS`
+   each build ran under (`jobs`, same order as `ms`; empty when the row
+   predates the field).  Build wall time depends on the concurrency it was
+   measured at, so a consumer must be able to see it. -}
+public export data OracleCost = OracleCost { row : GateCost, jobs : List Int }
+
+oracleEntry : Int -> Json -> Result String OracleCost
+oracleEntry i e = match costEntry "oracles" i e
+  Err m => Err m
+  Ok c => match get "jobs" e
+    None => Ok OracleCost { row = c, jobs = [] }
+    Some JNull => Ok OracleCost { row = c, jobs = [] }
+    Some j => match asArray j
+      None =>
+        Err
+          "gate cost baseline: oracles[\{intToString i}] '\{c.name}': 'jobs' is present but is not an array"
+      Some arr if arrayLength arr /= listLen c.ms =>
+        Err
+          "gate cost baseline: oracles[\{intToString i}] '\{c.name}': 'jobs' holds \{intToString (arrayLength arr)} entr(ies) but 'ms' holds \{intToString (listLen c.ms)}"
+      Some arr =>
+        map
+          (js => OracleCost { row = c, jobs = js })
+          (costSampleInts "oracles" i c.name arr 0 (arrayLength arr) [])
+
+oracleEntries : Array Json ->
+  Int ->
+  Int ->
+  List OracleCost ->
+  Result String (List OracleCost)
+oracleEntries arr i n acc
+  | i >= n = Ok (reverseOracles acc [])
+  | otherwise = match oracleEntry i (arrayGetUnsafe i arr)
+    Err m => Err m
+    Ok c => oracleEntries arr (i + 1) n (c :: acc)
+
+reverseOracles : List OracleCost -> List OracleCost -> List OracleCost
+reverseOracles [] acc = acc
+reverseOracles (c :: cs) acc = reverseOracles cs (c :: acc)
+
+{- | Parse a baseline's `oracles[]` section.  A baseline without the section
+   (an older one) reads as no oracle rows; a row that is not
+   a well-formed cost row (no `ms`, a non-integer sample, `samples` disagreeing
+   with `ms`) rejects the whole parse, exactly as for `gates[]`. -}
+export
+parseOracleCosts : String -> Result String (List OracleCost)
+parseOracleCosts src = match parse src
+  Err m => Err "gate cost baseline: \{m}"
+  Ok doc => match get "oracles" doc
+    None => Ok []
+    Some JNull => Ok []
+    Some j => match asArray j
+      None => Err "gate cost baseline: 'oracles' is present but is not an array"
+      Some arr => oracleEntries arr 0 (arrayLength arr) []
 
 -- ── The packing statistic (S-2, #2222) ──────────────────────────────────────
 

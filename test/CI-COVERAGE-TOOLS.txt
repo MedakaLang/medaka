@@ -532,6 +532,14 @@ test/lib/pcg_partition         shell library, not a script (#2780): sourced by
                                observable, so there is nothing for a shard to assert. Its behavior
                                IS asserted — by diff_compiler_partition_stability.sh, which is
                                enrolled in test/gates.toml with a shard.
+test/lib_engines_differential  the BODY of the three-engine differential, not a gate in its own
+                               right (#3946): test/diff_compiler_engines_part{1,2,3}.sh each exec
+                               it with ENGINE_PART=<k>, and those three are the registry gates,
+                               each with a shard. Run with no ENGINE_PART it covers the whole
+                               corpus — the developer and CAPTURE entry point — so enrolling it
+                               would run every fixture a second time on top of the parts. It sits
+                               outside `diff_compiler_*` so no pattern resolves to it. Its
+                               behavior IS asserted — by the three part gates.
 test/regex_conformance_test.mdk  the RE2/Go conformance table for stdlib/regex.mdk (#2924,
                                S-regex-engine): deliberately not a test/gates.toml `run` target —
                                adding a brand-new gate mid-slice would hit [W-SHARD-DERIVED]'s

@@ -1518,7 +1518,7 @@ sh test/typecheck_compiler_source.sh
 sh test/selfcompile_fixpoint.sh
 FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one eval_autoprint_main
 FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one wasm_emit_modules_main
-MEDAKA_REQUIRE_WASM=1 ONLY=engine/effects_recursive_contracts INNER_JOBS=1 JOBS=1 sh test/diff_compiler_engines.sh
+MEDAKA_REQUIRE_WASM=1 ONLY=engine/effects_recursive_contracts INNER_JOBS=1 JOBS=1 sh test/lib_engines_differential.sh
 ./medaka snapshot --check test/eval_dict_fixtures --out test/snapshots/eval_dict_fixtures --stages eval
 ```
 

@@ -74,6 +74,7 @@ import tools.gate_registry.{
 import tools.gate_cost.{baselineKey}
 import tools.gate_pack.{
   balNewText,
+  balOtherJob,
   budgetOutput,
   timeoutFor,
 }
@@ -557,6 +558,23 @@ scrapedOracles : String -> List Gate -> <IO> List String
 scrapedOracles _ [] = []
 scrapedOracles root (g :: gs) =
   scrapedOraclesIn "\{root}/\{g.run}" ++ scrapedOracles root gs
+
+-- What `gate balance` and `gate budget` price a row's oracle builds from:
+-- each schedulable gate's scrape, by registry name — `build_oracles.sh --for`'s
+-- own derivation, which `gate_pack` then keeps to `knownOracles`.  A registry
+-- that does not parse yields nothing here; `balNewText` reports the parse error.
+balGateOracles : String -> String -> <IO> List (String, List String)
+balGateOracles root regSrc = match parseRegistry regSrc
+  Err _ => []
+  Ok gates => balScrapeEach root gates
+
+balScrapeEach : String -> List Gate -> <IO> List (String, List String)
+balScrapeEach _ [] = []
+balScrapeEach root (g :: gs)
+  | g.shard == balOtherJob = balScrapeEach root gs
+  | otherwise =
+    (g.name, sortUniqS (scrapedOraclesIn "\{root}/\{g.run}"))
+      :: balScrapeEach root gs
 
 -- MISSING is not stale — the gate's own "oracle not built" exit-2 owns that
 -- case and says so in its own words.
@@ -3632,13 +3650,15 @@ balCmdBody argv = match parseBalArgs argv BalArgs {
           emit
             (Err
               "medaka gate balance: cannot read cost baseline \{basePath}: \{m}")
-        Ok baseSrc => match balNewText regPath regSrc baseSrc
-          Err m => emit (Err m)
-          Ok (head, out) =>
-            if a.check then
-              emit (balCheckResult regPath regSrc out head)
-            else
-              balWrite regPath regSrc out head
+        Ok baseSrc =>
+          let orcs = balGateOracles root regSrc
+          match balNewText regPath regSrc baseSrc orcs (knownOracles root)
+            Err m => emit (Err m)
+            Ok (head, out) =>
+              if a.check then
+                emit (balCheckResult regPath regSrc out head)
+              else
+                balWrite regPath regSrc out head
 
 data BudgetArgs = BudgetArgs {
   registry : Option String,
@@ -3698,4 +3718,12 @@ budgetCmdBody argv = match parseBudgetArgs argv
           emit
             (Err
               "medaka gate budget: cannot read cost baseline \{basePath}: \{m}")
-        Ok baseSrc => emit (budgetOutput regPath regSrc baseSrc a.commitMessage)
+        Ok baseSrc =>
+          emit
+            (budgetOutput
+              regPath
+              regSrc
+              baseSrc
+              (balGateOracles root regSrc)
+              (knownOracles root)
+              a.commitMessage)

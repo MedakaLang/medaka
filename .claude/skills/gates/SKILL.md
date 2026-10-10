@@ -31,7 +31,7 @@ deliberately NOT repeated here, so there is only one copy to drift.
 | `test/diff_compiler_*.sh` | Differential: native stage output vs captured goldens |
 | `test/selfcompile_fixpoint.sh` | Self-compile fixpoint (C3a/C3b) — decisive gate for compiler-source changes |
 | `test/typecheck_compiler_source.sh` | Strict-typechecks WHOLE source. Build oracle first: `FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one <name>`; rebuild each edit. ⚠️ A missing/stale oracle exits 2 — reads like a skip, not a failure. Fast alt: `make check-self` |
-| `test/diff_compiler_engines.sh` | eval == native == wasm. Ledger: `test/engine_divergence.txt` |
+| `test/lib_engines_differential.sh` | eval == native == wasm. Ledger: `test/engine_divergence.txt` |
 | `test/diff_compiler_perf_scaling.sh` | O(n²) detector: allocation growth N vs 2N (linear ≈2.0×, quadratic ≈4.0×) |
 | `compiler/backend/extern_catalog_gate_test.mdk` | Externs vs engine coverage. Every runtime extern needs a row in `compiler/backend/extern_catalog.mdk` (a gap is a `NotProvided` row); pure externs need a verdict in `test/EXTERN-DOMAIN-LEDGER.txt` or self-drain (#476). Would have caught the `floatToInt` 3-way edge divergence (#346) structurally |
 | `test/diff_compiler_tmc_parity.sh` | Both backends TMC same functions (`sh test/wasm/build_wasm_oracle.sh`) |
@@ -99,7 +99,7 @@ correctness.
   `printf '\336\255\276\357'`. Rewriting a fixed-width field? Assert the file LENGTH is
   unchanged.
 - ⚠️ **[WT-TIMEOUT]** `timeout` (coreutils) doesn't exist on macOS. Use the shim from
-  `test/diff_compiler_engines.sh`:
+  `test/lib_engines_differential.sh`:
   ```sh
   run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
   ```

@@ -12,10 +12,11 @@
 #     their own minimal interfaces).  Gate: test/wasm/diff_wasm_typed.sh.
 #   * test/bin/wasm_emit_modules_main — the MULTI-MODULE entry.  Gates:
 #     test/wasm/diff_wasm_modules.sh, test/wasm/diff_sqlite.sh, test/build_wasm_cmd.sh,
-#     and (the only one it needs) test/diff_compiler_engines.sh:144.
+#     and (the only one it needs) test/lib_engines_differential.sh, the body of the
+#     test/diff_compiler_engines_part*.sh gates.
 #
 # ── targeted modes ────────────────────────────────────────────────────────────
-# --modules-only builds only wasm_emit_modules_main. diff_compiler_engines.sh reads
+# --modules-only builds only wasm_emit_modules_main. lib_engines_differential.sh reads
 # exactly that binary and would otherwise pay ~2.6x for binaries its runner never opens.
 # --typed-only builds only wasm_emit_typed_main for targeted diff_wasm_typed.sh recovery.
 # The default remains unchanged and builds all three for the `wasm:` job's full gate set.
@@ -51,18 +52,29 @@ command -v clang >/dev/null 2>&1 || { echo "no clang — skipping (W2/W5 oracle 
 [ -x "$EMITTER" ] && export MEDAKA_EMITTER="$EMITTER"
 
 mkdir -p "$ROOT/test/bin"
+# Cold-build cost (#2209): each build appends one sample to ORACLE_TIMING_LOG when
+# set (see test/build_oracles.sh); a no-op otherwise.
+_ms() { # epoch ms; whole seconds where date has no %N (BSD/macOS)
+  _n=$(date +%s%N 2>/dev/null)
+  case "$_n" in ''|*[!0-9]*) echo $(( $(date +%s) * 1000 )) ;; *) echo $(( _n / 1000000 )) ;; esac
+}
+_build_timed() { # <entry> <out>
+  _t0=$(_ms)
+  "$MEDAKA" build --allow-internal "$1" -o "$2" || return 1
+  sh "$ROOT/test/build_oracles.sh" --record-sample "$(basename "$2")" "$(( $(_ms) - _t0 ))" "${JOBS:-1}"
+}
 # --allow-internal: the emitter entries pull in the compiler graph, which uses the
 # internal-only array-kernel externs (arrayGetUnsafe, …) — the same flag the LLVM
 # entry oracles pass in test/build_oracles.sh.
 if [ "$MODE" = all ]; then
-  "$MEDAKA" build --allow-internal "$ENTRY" -o "$OUT" || { echo "build failed for $ENTRY"; exit 1; }
+  _build_timed "$ENTRY" "$OUT" || { echo "build failed for $ENTRY"; exit 1; }
   echo "built $ENTRY -> $OUT"
 fi
 if [ "$MODE" = all ] || [ "$MODE" = typed ]; then
-  "$MEDAKA" build --allow-internal "$ENTRY_TYPED" -o "$OUT_TYPED" || { echo "build failed for $ENTRY_TYPED"; exit 1; }
+  _build_timed "$ENTRY_TYPED" "$OUT_TYPED" || { echo "build failed for $ENTRY_TYPED"; exit 1; }
   echo "built $ENTRY_TYPED -> $OUT_TYPED"
 fi
 if [ "$MODE" = all ] || [ "$MODE" = modules ]; then
-  "$MEDAKA" build --allow-internal "$ENTRY_MODULES" -o "$OUT_MODULES" || { echo "build failed for $ENTRY_MODULES"; exit 1; }
+  _build_timed "$ENTRY_MODULES" "$OUT_MODULES" || { echo "build failed for $ENTRY_MODULES"; exit 1; }
   echo "built $ENTRY_MODULES -> $OUT_MODULES"
 fi
