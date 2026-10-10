@@ -2253,7 +2253,12 @@ KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="2.20"
 #
 # ⚠️ That second run is also where the 2.22 floor came from — the arm that proved the
 # PROMOTE branch works is the same one that proved 2.60 would have fired it spuriously.
-KNOWN_TCEIL_modules_typecheck="4.2";  KNOWN_TFIXED_modules_typecheck="2.00"
+#
+# ⚠️ TFIXED IS 1.6, NOT 2.00 (floor re-measured on CI, same band): four consecutive gates_6
+# runs of this tree read r2 1.78-1.99, under the 2.00 line, so the row PROMOTED every run
+# while `stage_ir_scaling` still counted the quadratic. 1.6 sits ~10% under the new floor
+# (1.78); the drain of record stays stage_ir_scaling's KNOWN_FIXED_modules_typecheck.
+KNOWN_TCEIL_modules_typecheck="4.2";  KNOWN_TFIXED_modules_typecheck="1.6"
 # nestedparens:{parse,fmt,lint} (TIME) — see the block above KNOWN_SLOW_TIME for the
 # sample band and the margin/placement rationale. TFIXED uses the file's 2.60
 # convention on all three (none straddles the 3.0 threshold the way
