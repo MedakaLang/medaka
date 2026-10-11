@@ -282,8 +282,8 @@ refsField : CField -> List String
 refsField (CField _ _ e) = refsE e
 
 refsImplBody : CImplBody -> List String
-refsImplBody (CImplTagged _ _ _ _ _ body) = refsE body
-refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
+refsImplBody (CImplTagged _ _ _ _ _ _ body) = refsE body
+refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
@@ -371,8 +371,8 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "refsField" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsField" ((PCon "CField" PWild PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DTypeSig false "refsImplBody" (TyFun (TyCon "CImplBody") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
-(DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
+(DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
+(DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
@@ -460,5 +460,5 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "refsField" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsField" ((PCon "CField" PWild PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DTypeSig false "refsImplBody" (TyFun (TyCon "CImplBody") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
-(DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
+(DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
+(DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))

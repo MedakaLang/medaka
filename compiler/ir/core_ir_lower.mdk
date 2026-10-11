@@ -59,6 +59,8 @@ import ir.core_ir.{
   CClause(..),
   CImplEntry(..),
   CImplBody(..),
+  ImplSym(..),
+  noImplSym,
   CProgram(..),
   CallMode(..),
   CallSite(..),
@@ -773,7 +775,7 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 export
 lowerProgram : List Decl -> CProgram
 lowerProgram prog =
-  finishLowering (refoldProgram noLetCheck (lowerProgramWith None prog))
+  finishLowering (refoldProgram noLetCheck (lowerProgramWith None [] prog))
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
@@ -783,24 +785,29 @@ lowerTypedProgram prog =
   finishLowering
     (refoldProgram
       noLetCheck
-      (lowerProgramWith (Some (installedDispositions ())) prog))
+      (lowerProgramWith (Some (installedDispositions ())) [] prog))
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
 -- probe; see `lowerProgram`).  Refutable lets are still one-arm decisions here
 -- (`letDecision`); each public lowering decides which of them to keep, and ends
 -- with `finishLowering`.
-lowerProgramWith : Option DispositionTable -> List Decl -> CProgram
-lowerProgramWith dispositions prog =
+lowerProgramWith : Option DispositionTable ->
+  List (String, String, String) ->
+  List Decl ->
   CProgram
-    (lowerGroupsRaw prog)
-    (ctorArities prog)
-    (buildCtorToType prog)
-    (lowerImplsRaw
-      (installDispatchTables prog)
-      (instanceReqCounts prog)
-      (declaredMethodArities prog)
-      dispositions
-      prog)
+lowerProgramWith dispositions pins prog =
+  stampImplSymbols
+    pins
+    (CProgram
+      (lowerGroupsRaw prog)
+      (ctorArities prog)
+      (buildCtorToType prog)
+      (lowerImplsRaw
+        (installDispatchTables prog)
+        (instanceReqCounts prog)
+        (declaredMethodArities prog)
+        dispositions
+        prog))
 
 -- ── which refutable lets keep their decision (see `letDecision`) ─────────────
 -- Only the native backend tests a refutable `let` through its decision; every
@@ -879,10 +886,18 @@ refoldClause : (Pat -> Bool) -> CClause -> CClause
 refoldClause keep (CClause pats body) = CClause pats (refoldExpr keep body)
 
 refoldImpl : (Pat -> Bool) -> CImplEntry -> CImplEntry
-refoldImpl keep (CImplEntry n s d (CImplTagged tag key iface ps pats body)) =
-  CImplEntry n s d (CImplTagged tag key iface ps pats (refoldExpr keep body))
-refoldImpl keep (CImplEntry n s d (CImplDefault ifaceId tag key ps pats body)) =
-  CImplEntry n s d (CImplDefault ifaceId tag key ps pats (refoldExpr keep body))
+refoldImpl keep (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
+  CImplEntry
+    n
+    s
+    d
+    (CImplTagged tag key iface sym ps pats (refoldExpr keep body))
+refoldImpl keep (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
+  CImplEntry
+    n
+    s
+    d
+    (CImplDefault ifaceId tag key sym ps pats (refoldExpr keep body))
 
 refoldExpr : (Pat -> Bool) -> CExpr -> CExpr
 refoldExpr keep (CDecision scrut [CArm pat [] body] tree)
@@ -1012,10 +1027,16 @@ public export data EmitTarget = TargetNative | TargetWasm | TargetBothUnknown
 -- the positional indices line up with the cell's stored field offsets (verified by the fixture byte-diff).
 export
 lowerProgramEmit : EmitTarget -> List Decl -> CProgram
-lowerProgramEmit target prog =
-  -- #1950: refuse a program whose impls collide on ONE emitted symbol, here rather
-  -- than letting clang report it unlocated.  Both backends reach this seam.
-  let _ = implSymbolCollisionGuard prog
+lowerProgramEmit target prog = lowerProgramEmitPinned target [] prog
+
+-- `lowerProgramEmit` against a prelude object already compiled: [pins] are that
+-- object's (method, key, symTag) impl rows (see `stampImplSymbols`).
+export
+lowerProgramEmitPinned : EmitTarget ->
+  List (String, String, String) ->
+  List Decl ->
+  CProgram
+lowerProgramEmitPinned target pins prog =
   -- #348/#377: refuse a program whose dict-witness TAGS collide under djb2, in
   -- either backend's tag width the caller's `target` cannot rule out.  Same seam,
   -- same reason.
@@ -1023,7 +1044,10 @@ lowerProgramEmit target prog =
   let sited = match target
     TargetBothUnknown => prog
     _ => siteTrapCalls prog
-  let raw = lowerProgramWith (installedDispositionsOpt ()) sited
+  let raw = lowerProgramWith (installedDispositionsOpt ()) pins sited
+  -- #1950: refuse a program whose impls collide on ONE emitted symbol, here rather
+  -- than letting clang report it unlocated.  Both backends reach this seam.
+  let _ = implSymbolCollisionGuard raw
   let fo = declaredRecordFieldOrders prog
   finishLowering
     (hoistNullaryMemo
@@ -1084,9 +1108,9 @@ clausesArity [] = 0
 -- An entry's group key (`entryArityKey`) and value arity.
 export
 entryArityRow : CImplEntry -> (String, Int)
-entryArityRow (CImplEntry m _ _ (CImplTagged _ key _ _ pats _)) =
+entryArityRow (CImplEntry m _ _ (CImplTagged _ key _ _ _ pats _)) =
   (entryArityKey m key, valueArity pats)
-entryArityRow (CImplEntry m _ _ (CImplDefault _ _ key _ pats _)) =
+entryArityRow (CImplEntry m _ _ (CImplDefault _ _ key _ _ pats _)) =
   (entryArityKey m key, valueArity pats)
 
 entryArityKey : String -> String -> String
@@ -1240,12 +1264,12 @@ keepWholeGroup split (before, after) =
   if omHasKey (fst (entryArityRow before)) split then before else after
 
 mergeEntryLambda : CImplEntry -> CImplEntry
-mergeEntryLambda (CImplEntry m s declared (CImplTagged tag key iface pos pats body)) =
+mergeEntryLambda (CImplEntry m s declared (CImplTagged tag key iface sym pos pats body)) =
   let (pats2, body2) = mergeTailLambda declared pats body
-  CImplEntry m s declared (CImplTagged tag key iface pos pats2 body2)
-mergeEntryLambda (CImplEntry m s declared (CImplDefault w tag key pos pats body)) =
+  CImplEntry m s declared (CImplTagged tag key iface sym pos pats2 body2)
+mergeEntryLambda (CImplEntry m s declared (CImplDefault w tag key sym pos pats body)) =
   let (pats2, body2) = mergeTailLambda declared pats body
-  CImplEntry m s declared (CImplDefault w tag key pos pats2 body2)
+  CImplEntry m s declared (CImplDefault w tag key sym pos pats2 body2)
 
 -- A clause whose body is a lambda literal takes the lambda's parameters as its
 -- own, up to [declared] value parameters.  Building a closure runs nothing, so
@@ -1284,15 +1308,15 @@ etaBind env (b@(CBind name [CClause pats body] site)) =
 etaBind _ b = b
 
 etaEntry : ArityEnv -> CImplEntry -> CImplEntry
-etaEntry env (ent@(CImplEntry m s declared (CImplTagged tag key iface pos pats body))) =
+etaEntry env (ent@(CImplEntry m s declared (CImplTagged tag key iface sym pos pats body))) =
   match etaEntryClause env declared pats body
     Some (CClause pats2 body2) =>
-      CImplEntry m s declared (CImplTagged tag key iface pos pats2 body2)
+      CImplEntry m s declared (CImplTagged tag key iface sym pos pats2 body2)
     None => ent
-etaEntry env (ent@(CImplEntry m s declared (CImplDefault w tag key pos pats body))) =
+etaEntry env (ent@(CImplEntry m s declared (CImplDefault w tag key sym pos pats body))) =
   match etaEntryClause env declared pats body
     Some (CClause pats2 body2) =>
-      CImplEntry m s declared (CImplDefault w tag key pos pats2 body2)
+      CImplEntry m s declared (CImplDefault w tag key sym pos pats2 body2)
     None => ent
 
 etaEntryClause : ArityEnv -> Int -> List Pat -> CExpr -> Option CClause
@@ -1404,7 +1428,7 @@ callsClause env scope (CClause pats body) =
   CClause pats (callsExpr env (bindPatsScope pats scope) body)
 
 callsEntry : ArityEnv -> CImplEntry -> CImplEntry
-callsEntry env (CImplEntry m s d (CImplTagged tag key iface pos pats body)) =
+callsEntry env (CImplEntry m s d (CImplTagged tag key iface sym pos pats body)) =
   CImplEntry
     m
     s
@@ -1413,10 +1437,11 @@ callsEntry env (CImplEntry m s d (CImplTagged tag key iface pos pats body)) =
       tag
       key
       iface
+      sym
       pos
       pats
       (callsExpr env (bindPatsScope pats omEmpty) body))
-callsEntry env (CImplEntry m s d (CImplDefault w tag key pos pats body)) =
+callsEntry env (CImplEntry m s d (CImplDefault w tag key sym pos pats body)) =
   CImplEntry
     m
     s
@@ -1425,6 +1450,7 @@ callsEntry env (CImplEntry m s d (CImplDefault w tag key pos pats body)) =
       w
       tag
       key
+      sym
       pos
       pats
       (callsExpr env (bindPatsScope pats omEmpty) body))
@@ -1570,18 +1596,18 @@ tailClause : CClause -> CClause
 tailClause (CClause pats body) = CClause pats (tailExpr (isNonEmptyL pats) body)
 
 tailEntry : CImplEntry -> CImplEntry
-tailEntry (CImplEntry m s d (CImplTagged tag key iface pos pats body)) =
+tailEntry (CImplEntry m s d (CImplTagged tag key iface sym pos pats body)) =
   CImplEntry
     m
     s
     d
-    (CImplTagged tag key iface pos pats (tailExpr (isNonEmptyL pats) body))
-tailEntry (CImplEntry m s d (CImplDefault w tag key pos pats body)) =
+    (CImplTagged tag key iface sym pos pats (tailExpr (isNonEmptyL pats) body))
+tailEntry (CImplEntry m s d (CImplDefault w tag key sym pos pats body)) =
   CImplEntry
     m
     s
     d
-    (CImplDefault w tag key pos pats (tailExpr (isNonEmptyL pats) body))
+    (CImplDefault w tag key sym pos pats (tailExpr (isNonEmptyL pats) body))
 
 tailExpr : Bool -> CExpr -> CExpr
 tailExpr tl (CApp f args (CallSite mode _)) =
@@ -1894,7 +1920,7 @@ rewriteClauseRP fo (CClause pats body) =
   CClause (map (rewritePat fo) pats) (rewriteExprRP fo body)
 
 rewriteImplRP : RecOrders -> CImplEntry -> CImplEntry
-rewriteImplRP fo (CImplEntry n s d (CImplTagged tag key iface ps pats body)) =
+rewriteImplRP fo (CImplEntry n s d (CImplTagged tag key iface sym ps pats body)) =
   CImplEntry
     n
     s
@@ -1903,10 +1929,11 @@ rewriteImplRP fo (CImplEntry n s d (CImplTagged tag key iface ps pats body)) =
       tag
       key
       iface
+      sym
       ps
       (map (rewritePat fo) pats)
       (rewriteExprRP fo body))
-rewriteImplRP fo (CImplEntry n s d (CImplDefault ifaceId tag key ps pats body)) =
+rewriteImplRP fo (CImplEntry n s d (CImplDefault ifaceId tag key sym ps pats body)) =
   CImplEntry
     n
     s
@@ -1915,6 +1942,7 @@ rewriteImplRP fo (CImplEntry n s d (CImplDefault ifaceId tag key ps pats body)) 
       ifaceId
       tag
       key
+      sym
       ps
       (map (rewritePat fo) pats)
       (rewriteExprRP fo body))
@@ -2223,52 +2251,18 @@ bindUpdateTemps fields body base =
 
 -- the (method, key, SELECTOR) instances that are per-instance CAFs — see the gate
 -- above.  An RKey occurrence carries the instance's canonical `key`, which is what
--- the walk matches.  The selector only NAMES the CAF: the bare head when this is the
--- SOLE impl at (method, head), else the key (TYPECHECK-AUDIT C7) — the emitters'
--- `implFnSymTag` choice, so a dispatcher arm finds the CAF under its symbol tag.
+-- the walk matches.  The selector only NAMES the CAF: it is the entry's stamped
+-- symbol tag, so a dispatcher arm finds the CAF under its symbol tag.
 memoKeys : List CImplEntry -> List (String, String, String)
-memoKeys entries = memoKeysGo entries entries
+memoKeys entries = memoKeysGo entries
 
-memoKeysGo : List CImplEntry -> List CImplEntry -> List (String, String, String)
-memoKeysGo _ [] = []
-memoKeysGo all ((CImplEntry m _ _ (CImplTagged tag key _ positions pats _)) :: rest)
-  | isEmptyL positions && isEmptyL pats =
-    (m, key, memoSelector all m tag key) :: memoKeysGo all rest
-memoKeysGo all ((CImplEntry m _ _ (CImplDefault _ tag key positions pats _)) :: rest)
-  | isEmptyL positions && isEmptyL pats =
-    (m, key, memoSelector all m tag key) :: memoKeysGo all rest
-memoKeysGo all (_ :: rest) = memoKeysGo all rest
-
--- the symbol tag of (method, head-tag): the bare head when the head is the sole impl
--- of (method, head), else the canonical C7 key.
-memoSelector : List CImplEntry -> String -> String -> String -> String
-memoSelector all method tag key =
-  if headTagUniqueL all method tag then tag else key
-
--- does the head tycon [tag] of [method] have a single impl, or several distinct C7
--- keys (a same-head collision)?  Counts DISTINCT keys, not raw entries (the joint
--- prelude+module list duplicates each prelude impl, and a multi-clause impl
--- contributes several entries sharing one key).  Mirror of llvm_emit.headTagUnique.
-headTagUniqueL : List CImplEntry -> String -> String -> Bool
-headTagUniqueL entries method tag =
-  listLen (distinctKeysAtHeadL entries method tag []) <= 1
-
-distinctKeysAtHeadL : List CImplEntry ->
-  String ->
-  String ->
-  List String ->
-  List String
-distinctKeysAtHeadL [] _ _ acc = acc
-distinctKeysAtHeadL ((CImplEntry n _ _ (CImplTagged t k _ _ _ _)) :: rest) method tag acc
-  | n == method && t == tag && not (contains k acc) =
-    distinctKeysAtHeadL rest method tag (k :: acc)
-  | otherwise = distinctKeysAtHeadL rest method tag acc
-distinctKeysAtHeadL ((CImplEntry n _ _ (CImplDefault _ t k _ _ _)) :: rest) method tag acc
-  | n == method && t == tag && not (contains k acc) =
-    distinctKeysAtHeadL rest method tag (k :: acc)
-  | otherwise = distinctKeysAtHeadL rest method tag acc
-distinctKeysAtHeadL (_ :: rest) method tag acc =
-  distinctKeysAtHeadL rest method tag acc
+memoKeysGo : List CImplEntry -> List (String, String, String)
+memoKeysGo [] = []
+memoKeysGo ((CImplEntry m _ _ (CImplTagged _ key _ (ImplSym tag _ _) positions pats _)) :: rest)
+  | isEmptyL positions && isEmptyL pats = (m, key, tag) :: memoKeysGo rest
+memoKeysGo ((CImplEntry m _ _ (CImplDefault _ _ key (ImplSym tag _ _) positions pats _)) :: rest)
+  | isEmptyL positions && isEmptyL pats = (m, key, tag) :: memoKeysGo rest
+memoKeysGo (_ :: rest) = memoKeysGo rest
 
 -- the CAF selector of the memoisable instance of [m] whose canonical key is [key]
 memoSelectorOf : List (String, String, String) ->
@@ -2311,11 +2305,11 @@ distinctImplKeysL : List CImplEntry ->
 distinctImplKeysL [] _ _ acc = acc
 distinctImplKeysL _ _ cap acc
   | listLen acc > cap = acc
-distinctImplKeysL ((CImplEntry n _ _ (CImplTagged _ k _ _ _ _)) :: rest) method cap acc
+distinctImplKeysL ((CImplEntry n _ _ (CImplTagged _ k _ _ _ _ _)) :: rest) method cap acc
   | n == method && not (contains k acc) =
     distinctImplKeysL rest method cap (k :: acc)
   | otherwise = distinctImplKeysL rest method cap acc
-distinctImplKeysL ((CImplEntry n _ _ (CImplDefault _ _ k _ _ _)) :: rest) method cap acc
+distinctImplKeysL ((CImplEntry n _ _ (CImplDefault _ _ k _ _ _ _)) :: rest) method cap acc
   | n == method && not (contains k acc) =
     distinctImplKeysL rest method cap (k :: acc)
   | otherwise = distinctImplKeysL rest method cap acc
@@ -2355,20 +2349,10 @@ data LowerState = LowerState {
 -- the synthesized CAF binding name for a memoised (selector, method) instance.  The
 -- `$` prefix is the internal-binder convention (cf. composeVar `$cf`), so it cannot
 -- collide with a user/prelude binding; it flows verbatim into `@mdk_g_<name>`.  The
--- selector is encoded with `private_mangle.injectiveIdent`, the shared emitted-
--- identifier encoding: a C7 key carries `|`/`(`/`)`/spaces, none legal in that
--- global symbol, and a module-qualified head tag (`app.T`) carries a dot.  A
--- prelude or builtin head tag is alphanumeric, and `injectiveIdent` is the
--- identity on such strings.
---
--- ⚠️ It was `sanitizeId` until #1950, and that is a SECOND, independent instance of
--- that bug, one symbol family over: `sanitizeId` is MANY-TO-ONE, so two impls whose
--- C7 keys differ only in `[^A-Za-z0-9_]` positions were given ONE `$memo_` CAF —
--- surfacing as a raw `invalid redefinition of function 'mdk_force_$memo_…'` from
--- clang.  `implSymbolCollisionGuard` below never covered this family (its SCOPE is
--- `mdk_impl_*`), so the encoder is the only thing keeping these names apart.
+-- selector is an entry's stamped symbol tag, already encoded by `stampImplSymbols`,
+-- so it is spelled as given.
 memoBindName : String -> String -> String
-memoBindName selector method = "$memo_\{injectiveIdent selector}_\{method}"
+memoBindName selector method = "$memo_\{selector}_\{method}"
 
 recordMemoRef : LowerState -> String -> String -> String -> Unit
 recordMemoRef st sel key method =
@@ -2458,10 +2442,14 @@ hoistClause : LowerState -> CClause -> CClause
 hoistClause st (CClause pats body) = CClause pats (hoistExpr st body)
 
 hoistImpl : LowerState -> CImplEntry -> CImplEntry
-hoistImpl st (CImplEntry n s d (CImplTagged tag key iface pos pats body)) =
-  CImplEntry n s d (CImplTagged tag key iface pos pats (hoistExpr st body))
-hoistImpl st (CImplEntry n s d (CImplDefault ifaceId tag key pos pats body)) =
-  CImplEntry n s d (CImplDefault ifaceId tag key pos pats (hoistExpr st body))
+hoistImpl st (CImplEntry n s d (CImplTagged tag key iface sym pos pats body)) =
+  CImplEntry n s d (CImplTagged tag key iface sym pos pats (hoistExpr st body))
+hoistImpl st (CImplEntry n s d (CImplDefault ifaceId tag key sym pos pats body)) =
+  CImplEntry
+    n
+    s
+    d
+    (CImplDefault ifaceId tag key sym pos pats (hoistExpr st body))
 
 -- the structural walk (mirrors rewriteExprRP), rewriting ONLY the gated CMethod
 -- occurrence; everything else recurses unchanged.
@@ -2716,114 +2704,93 @@ ifaceImplHeadEntries (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs,
 ]
 ifaceImplHeadEntries _ = []
 
--- ── emitted impl-symbol collision guard (#1950) ───────────────────────────────
+-- ── emitted impl symbols: the one rule, and its collision guard (#1950) ───────
 -- An impl method is emitted as `mdk_impl_<symTag>_<method>`, where `symTag` is the
--- bare head tag when that head is the SOLE impl of (method, head), and otherwise
--- (TYPECHECK-AUDIT C7) the canonical dispatch key run through
--- `private_mangle.injectiveIdent` — the SAME encoding both backends use
--- (`llvm_emit.implFnSymTag`, `wasm_emit.implFnSymTagW`) and the one called here.
+-- encoded head tag when that head is the SOLE impl of (method, head), and otherwise
+-- (TYPECHECK-AUDIT C7) the encoded canonical dispatch key.  `stampImplSymbols` is
+-- the only place that rule is written: it stamps every entry with its `ImplSym`, and
+-- both emitters read the stamp.  The encoding is `private_mangle.injectiveIdent`,
+-- which is injective, so two distinct keys can never reach one symbol through the
+-- key arm.  The count of distinct keys at a (method, head) is over the entries of
+-- the one lowered program, supplied and inherited alike, each key counted once (the
+-- joint prelude+module list duplicates each prelude impl, and a multi-clause impl
+-- contributes several entries sharing one key).
 --
--- ⚠️ THIS GUARD IS NO LONGER FIREABLE FOR THE #1950 CLASS, BY CONSTRUCTION — AND IS
--- KEPT ANYWAY.  It catches a real collision class: spelling the C7 key
--- with the MANY-TO-ONE `sanitizeId` (everything outside [A-Za-z0-9_] → `_`) makes two
--- impls whose keys differ ONLY in those characters (`Sz|(Q A_B C)|` vs
--- `Sz|(Q A B_C)|`) land on ONE emitted symbol and reach the user as a RAW,
--- UNLOCATED clang `invalid redefinition of function` (#1950).  `injectiveIdent`
--- removed the collapse at its source, so no two distinct keys can reach one symbol
--- through this arm any more.  What survives here is the ASSERTION — (method, tag,
--- key) → symbol is injective — a real invariant of the emitted-symbol scheme that a
--- future change to either backend's tag rule could otherwise break silently.  Its
--- live surface is narrower than that invariant: see SCOPE below, in particular that
--- it never covered #1397's identical-pre-image shape.  Anything it does print now
--- describes a defect in the SCHEME, not a user naming mistake.
---
--- ⚠️ NOT BY SOURCE LINE, and that is a property of the pipeline, not of this site.
--- MEASURED: every emit driver parses through `parser.parse` (`entry_support`'s
--- `readAllDecls`/`driveModulesGo`) or `loader.loadProgram`, both of which use the
--- PLACEHOLDER-LOC parser — only `parseLocated`/`parseLocatedResult` (the `check`
--- and LSP paths) populate spans, and even those leave `Loc`'s `file` field "" for
--- the caller to fill.  Printing
--- `firstTyLocList`'s answer here gives `:1:0` for BOTH impls of the repro — a wrong
--- location is worse than none, so the canonical dispatch key (which is
--- `<module>::<Iface>|<type args>|`, i.e. exactly the impl's declared identity) is
--- what the message names instead.  Giving the emit path real spans is a
--- pipeline-wide change and is deliberately not attempted here.
---
--- Sited HERE, not in either backend, for the reason `private_mangle`'s own guard
--- states for itself: `lowerProgramEmit` is the ONE seam every emit driver of BOTH
--- backends funnels through (`llvm_emit_*_main`, `wasm_emit_*_main`, the playground,
--- `tools/snapshot.mdk`, the dump probes), so one check serves all of them instead of
--- a fifth and sixth per-backend copy of the collision predicate desyncing.  The rows
--- are read off the DECLARATIONS — matched arm-for-arm with `lowerDeclImpl`, DAttrib
--- unwrapping included (#1037) — because `CImplEntry` carries no source location and
--- an unlocated refusal would only trade one unlocated message for another.
--- Enumerating `methods` gives exactly the (method, tag, key) triples
--- `lowerImplMethod` mints for the same `prog`, so the domain is the entry set, not
--- an approximation of it.
---
--- SCOPE — stated out loud, because a partial check cited as a total one is how this
--- bug class survives:
---   * covers TAGGED IMPL METHOD symbols only.  Interface DEFAULTS
---     (`mdk_default_<method>_<injectiveIdent tag>`), the per-instance `$memo_` CAFs
---     (`memoBindName`) and emitter-gensym'd lambdas/etas are minted elsewhere and
---     are NOT checked here.
---   * it is a check on DISTINCT PRE-IMAGES.  Rows are deduplicated by
---     (method, head tag, canonical key) FIRST, so two impls that are already
---     IDENTICAL in that triple pass through here.  Two modules' same-spelled
---     types never are (#1397): a head tag and a route word carry the type's
---     module (`route_key.typeTagOf`, injective by construction), and the symbol
---     spells that tag through `injectiveIdent`.
---   * it is likewise NOT a duplicate-clause check: a legitimate multi-clause impl
---     contributes several rows sharing ONE key, and the joint prelude+module decl
---     list duplicates each prelude impl.  Both collapse in the dedup and can never
---     fire this.
---   * it observes the symbol the backends are about to mint; it does not change the
---     mangling scheme.  Every collision-free program emits byte-identical IR.
-implSymbolCollisionGuard : List Decl -> Unit
-implSymbolCollisionGuard prog =
-  let rows = dedupImplSymRows (flatMap implSymRowsOf prog) omEmpty
-  checkImplSymbolsInjective (collidingHeads rows omEmpty omEmpty) rows omEmpty
+-- [pins] are (method, key, symTag) rows fixed by an earlier lowering whose object is
+-- being linked against: the standalone prelude object (`llvm_emit_modules_main`'s
+-- program half).  An entry named by a pin takes the pinned tag instead of the
+-- whole-program answer, because a program impl that joins a prelude (method, head)
+-- must not rename a symbol `prelude.o` already exports.
+export
+stampImplSymbols : List (String, String, String) -> CProgram -> CProgram
+stampImplSymbols pins (CProgram groups ctorArs ctorTypes impls) =
+  let collide = collidingHeads (map implEntryRow impls) omEmpty omEmpty
+  let pinned = pinTable pins omEmpty
+  CProgram groups ctorArs ctorTypes (map (stampEntry collide pinned) impls)
 
--- one row per lowered impl-method clause: (method, head tag, canonical key).
--- Matched arm-for-arm with `lowerDeclImpl` — same DAttrib unwrap, same `methods`
--- traversal, and the tag/key computed by the SAME two expressions `lowerImplMethod`
--- uses, so the two cannot drift apart on a program.
-implSymRowsOf : Decl -> List (String, String, String)
-implSymRowsOf (DAttrib _ d) = implSymRowsOf d
-implSymRowsOf (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
-  map
-    (implSymRow
-      (optionOr noneHeadTag (headTyconHead typeArgs))
-      (implRouteKeyWord o ifaceName typeArgs None))
-    methods
-implSymRowsOf _ = []
+-- (method, head tag, canonical key) of an entry of either kind
+implEntryRow : CImplEntry -> (String, String, String)
+implEntryRow (CImplEntry m _ _ (CImplTagged tag key _ _ _ _ _)) = (m, tag, key)
+implEntryRow (CImplEntry m _ _ (CImplDefault _ tag key _ _ _ _)) = (m, tag, key)
 
-implSymRow : String -> String -> ImplMethod -> (String, String, String)
-implSymRow tag key (ImplMethod mname _ _) = (mname, tag, key)
+pinTable : List (String, String, String) -> OrdMap String -> OrdMap String
+pinTable [] acc = acc
+pinTable ((m, key, tag) :: rest) acc =
+  pinTable rest (omInsert (implHeadKey m key) tag acc)
 
--- distinct pre-images, first arrival wins.  This is what keeps #1397's shape and
--- every multi-clause impl out of the check — see the SCOPE paragraph above.
-dedupImplSymRows : List (String, String, String) ->
-  OrdMap Unit ->
-  List (String, String, String)
-dedupImplSymRows [] _ = []
-dedupImplSymRows ((m, tag, key) :: rest) seen
-  | omHasKey (implPreImageKey m tag key) seen = dedupImplSymRows rest seen
-  | otherwise =
-    (m, tag, key)
-      :: dedupImplSymRows rest (omInsert (implPreImageKey m tag key) () seen)
+stampEntry : OrdMap Unit -> OrdMap String -> CImplEntry -> CImplEntry
+stampEntry collide pinned (CImplEntry m s d (CImplTagged tag key iface _ pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplTagged
+      tag
+      key
+      iface
+      (ImplSym (implSymTagFor collide pinned m tag key) "" "")
+      pos
+      pats
+      body)
+stampEntry collide pinned (CImplEntry m s d (CImplDefault w tag key _ pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplDefault
+      w
+      tag
+      key
+      (ImplSym
+        (implSymTagFor collide pinned m tag key)
+        (injectiveIdent w)
+        (injectiveIdent key))
+      pos
+      pats
+      body)
 
--- `\n` cannot occur in a method name, a head tag or a route word, so this is an
--- injective rendering of the triple and safe as a set key.
-implPreImageKey : String -> String -> String -> String
-implPreImageKey m tag key = "\{m}\n\{tag}\n\{key}"
+implSymTagFor : OrdMap Unit ->
+  OrdMap String ->
+  String ->
+  String ->
+  String ->
+  String
+implSymTagFor collide pinned method tag key =
+  match omLookup (implHeadKey method key) pinned
+    Some pinnedTag => pinnedTag
+    None => implSymTagOf collide method tag key
 
--- the (method, head tag) pairs carrying ≥2 DISTINCT canonical keys — i.e. exactly
--- the pairs `headTagUnique`/`headTagUniqueW` answer False for, so exactly the ones
--- whose symbols take the sanitized-key arm.  Computed ONCE, in O(n log n) through the
--- weight-balanced tree, rather than re-scanned per row: the emitters can afford the
--- linear `distinctKeysAtHead` count because they call it per METHOD BUCKET (#990),
--- and this guard sees the whole program at once.
+-- the SYMBOL tag of an entry that is not pinned: the encoded head tag when it is the
+-- sole impl of (method, head), else the encoded canonical key.
+implSymTagOf : OrdMap Unit -> String -> String -> String -> String
+implSymTagOf collide method tag key =
+  if omHasKey (implHeadKey method tag) collide then
+    injectiveIdent key
+  else
+    injectiveIdent tag
+
+-- The (method, head tag) pairs carrying >= 2 DISTINCT canonical keys, computed once
+-- in O(n log n) through the weight-balanced tree.
 collidingHeads : List (String, String, String) ->
   OrdMap String ->
   OrdMap Unit ->
@@ -2838,42 +2805,63 @@ collidingHeads ((m, tag, key) :: rest) firstKey acc =
       else
         collidingHeads rest firstKey (omInsert (implHeadKey m tag) () acc)
 
+-- `\n` cannot occur in a method name, a head tag or a route word, so this is an
+-- injective rendering of the pair and safe as a map key.
 implHeadKey : String -> String -> String
 implHeadKey m tag = "\{m}\n\{tag}"
 
--- injectivity of (method, tag, key) -> emitted symbol, one pass, O(n log n) through
--- the same weight-balanced tree `private_mangle`'s guard uses.  Rows are already
--- distinct pre-images, so ANY second arrival at one symbol is a genuine collision.
+-- Two DISTINCT impls cannot share one emitted symbol.  The stamp is injective by
+-- construction (#1950), so this guard is an assertion on the scheme, not a check a
+-- user program can trip by naming: anything it prints describes a defect in the
+-- scheme.  It reads the stamped entries -- the symbols the backends are about to
+-- mint -- and covers supplied-method symbols (`mdk_impl_*`) only; defaults are
+-- named by interface word and key, and `$memo_` CAFs by the same stamped tag.
+-- Rows are deduplicated by (method, symbol tag, key) first, so a multi-clause impl
+-- and the joint list's duplicated prelude impls never fire it.
 --
--- ⚠️ The three data lines are UNINDENTED on purpose: they are CONTENT-derived (the
--- symbol and the two dispatch keys), so a `stdout-line` pin can match them with
--- `grep -qxF` against a whitespace-stripped claim value without false-draining on a
--- rewording of the prose around them.  Keep them flush-left if this message is ever
--- pinned again.
-checkImplSymbolsInjective : OrdMap Unit ->
-  List (String, String, String) ->
+-- Sited at the one lowering seam every emit driver of both backends funnels through
+-- (`lowerProgramEmit`).  An entry carries no source location, so the message names
+-- the canonical dispatch keys, `<module>::<Interface>|<type arguments>|`.
+implSymbolCollisionGuard : CProgram -> Unit
+implSymbolCollisionGuard (CProgram _ _ _ impls) =
+  checkImplSymbolsInjective
+    (dedupImplSymRows (flatMap taggedImplSymRow impls) omEmpty)
+    omEmpty
+
+-- (method, symbol tag, canonical key) of a supplied-method entry
+taggedImplSymRow : CImplEntry -> List (String, String, String)
+taggedImplSymRow (CImplEntry m _ _ (CImplTagged _ key _ (ImplSym tag _ _) _ _ _)) =
+  [(m, tag, key)]
+taggedImplSymRow _ = []
+
+dedupImplSymRows : List (String, String, String) ->
+  OrdMap Unit ->
+  List (String, String, String)
+dedupImplSymRows [] _ = []
+dedupImplSymRows ((m, tag, key) :: rest) seen
+  | omHasKey (implPreImageKey m tag key) seen = dedupImplSymRows rest seen
+  | otherwise =
+    (m, tag, key)
+      :: dedupImplSymRows rest (omInsert (implPreImageKey m tag key) () seen)
+
+implPreImageKey : String -> String -> String -> String
+implPreImageKey m tag key = "\{m}\n\{tag}\n\{key}"
+
+-- one pass, O(n log n).  The three data lines are UNINDENTED on purpose: they are
+-- CONTENT-derived (the symbol and the two dispatch keys), so a `stdout-line` pin can
+-- match them with `grep -qxF` against a whitespace-stripped claim value without
+-- false-draining on a rewording of the prose around them.
+checkImplSymbolsInjective : List (String, String, String) ->
   OrdMap String ->
   Unit
-checkImplSymbolsInjective _ [] _ = ()
-checkImplSymbolsInjective collide ((m, tag, key) :: rest) seen =
-  let sym = "mdk_impl_\{implSymTagOf collide m tag key}_\{m}"
+checkImplSymbolsInjective [] _ = ()
+checkImplSymbolsInjective ((m, tag, key) :: rest) seen =
+  let sym = "mdk_impl_\{tag}_\{m}"
   match omLookup sym seen
-    None => checkImplSymbolsInjective collide rest (omInsert sym key seen)
+    None => checkImplSymbolsInjective rest (omInsert sym key seen)
     Some prev =>
       panic
         "emitted impl-symbol collision: two DISTINCT impls of method `\{m}` are emitted under one symbol.\ncollided symbol: \{sym}\nimpl 1 key: \{prev}\nimpl 2 key: \{key}\nTwo distinct impls cannot share one emitted symbol: the backend would define one body twice (the native link fails) or keep one and silently drop the other. The two keys above are the impls' canonical dispatch keys, spelled `<module>::<Interface>|<type arguments>|`. Since #1950 those keys are spelled into the symbol by `private_mangle.injectiveIdent`, which is INJECTIVE, so this is NOT a naming mistake you can rename your way out of -- it means the emitted-symbol scheme itself lost injectivity. Please report this message, with both keys above."
-
--- the SYMBOL tag this row is emitted under — the injectively encoded head tag when
--- it is the sole impl of (method, head), else the injectively encoded canonical key.  Mirror of
--- `llvm_emit.implFnSymTag` / `wasm_emit.implFnSymTagW`, over declaration rows: it
--- MUST call the same `injectiveIdent` they do, or the guard and the backends
--- disagree about what symbol was actually emitted.
-implSymTagOf : OrdMap Unit -> String -> String -> String -> String
-implSymTagOf collide method tag key =
-  if omHasKey (implHeadKey method tag) collide then
-    injectiveIdent key
-  else
-    injectiveIdent tag
 
 -- ── dict-witness TAG injectivity — #348 (native i64), #377 (wasm 30-bit) ──────
 --
@@ -3132,7 +3120,14 @@ lowerImplMethod disp arities o ifaceName typeArgs (ImplMethod mname pats body) =
     mname
     (tyvarsInArgs typeArgs)
     (declaredArityOr arities (ifaceWordOfKey key) mname pats)
-    (CImplTagged tag key ifaceName positions pats (lower body))
+    (CImplTagged
+      tag
+      key
+      (ifaceWordOf o ifaceName)
+      noImplSym
+      positions
+      pats
+      (lower body))
 
 lowerInheritedDefault : List ((String, String, String), List Int) ->
   OrdMap Int ->
@@ -3178,6 +3173,7 @@ lowerInheritedDefault disp reqCounts arities dt o ifaceName (IfaceMethod mname _
           ifaceWord
           (optionOr noneHeadTag (headTyconHead shape.isTys))
           shape.isWord
+          noImplSym
           positions
           params
           (specializeRow (spec shape) lowered)))
@@ -3413,16 +3409,18 @@ returnsSelfTable prog = flatMap ifaceReturnsSelfEntries prog
 ifaceReturnsSelfEntries : Decl -> List ((String, String), Bool)
 -- #1037: an attribute on an `interface` must not delete it from this table either.
 ifaceReturnsSelfEntries (DAttrib _ d) = ifaceReturnsSelfEntries d
-ifaceReturnsSelfEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) =
-  map (m => ifaceReturnsSelfEntry ifaceName typeParams m) methods
+ifaceReturnsSelfEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) =
+  map
+    (m => ifaceReturnsSelfEntry (ifaceWordOf o ifaceName) typeParams m)
+    methods
 ifaceReturnsSelfEntries _ = []
 
 ifaceReturnsSelfEntry : String ->
   List String ->
   IfaceMethod ->
   ((String, String), Bool)
-ifaceReturnsSelfEntry ifaceName typeParams (IfaceMethod mname mty _ _) = (
-  (ifaceName, mname),
+ifaceReturnsSelfEntry ifaceWord typeParams (IfaceMethod mname mty _ _) = (
+  (ifaceWord, mname),
   tyMentionsParams (methodResultTy mty) (headParamOnly typeParams),
 )
 
@@ -3490,16 +3488,18 @@ selfFnParamTable prog = flatMap ifaceSelfFnParamEntries prog
 ifaceSelfFnParamEntries : Decl -> List ((String, String), List Int)
 -- #1037
 ifaceSelfFnParamEntries (DAttrib _ d) = ifaceSelfFnParamEntries d
-ifaceSelfFnParamEntries (DInterface { name = ifaceName, typarams = typeParams, methods, ... }) =
-  map (m => ifaceSelfFnParamEntry ifaceName typeParams m) methods
+ifaceSelfFnParamEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams = typeParams, methods, ... }) =
+  map
+    (m => ifaceSelfFnParamEntry (ifaceWordOf o ifaceName) typeParams m)
+    methods
 ifaceSelfFnParamEntries _ = []
 
 ifaceSelfFnParamEntry : String ->
   List String ->
   IfaceMethod ->
   ((String, String), List Int)
-ifaceSelfFnParamEntry ifaceName typeParams (IfaceMethod mname mty _ _) =
-  ((ifaceName, mname), selfFnPositions 0 (methodArgTys mty) typeParams)
+ifaceSelfFnParamEntry ifaceWord typeParams (IfaceMethod mname mty _ _) =
+  ((ifaceWord, mname), selfFnPositions 0 (methodArgTys mty) typeParams)
 
 -- the argument types of a method type (the a's of `a -> a -> … -> r`).
 methodArgTys : Ty -> List Ty
@@ -3560,8 +3560,7 @@ ifaceMethodArityKey ifaceWord mname = "\{ifaceWord}#\{mname}"
 -- The interface DECLARATION word an impl route key carries in its first field
 -- (`route_key.implRouteKeyWord` = `<iface word>|<type args>|<method>`).  This is a
 -- READ of the key's existing, already-identity-bearing content -- NOT a re-keying
--- of it, and not a read of `CImplTagged`'s bare `iface` field, which keeps its
--- current spelling and its current route-word readers (#1277 / PR #1346 E4).
+-- of it.  `CImplTagged`'s interface field carries this same word.
 export
 ifaceWordOfKey : String -> String
 ifaceWordOfKey key = match splitOnChar '|' key
