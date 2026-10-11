@@ -57,7 +57,6 @@ import entries.check_batch.{oracleMain as check_batch}
 import entries.check_modules_main.{oracleMain as check_modules_main}
 import entries.check_all_main.{oracleMain as check_all_main}
 import entries.check_match_main.{oracleMain as check_match_main}
-import entries.exhaust_main.{oracleMain as exhaust_main}
 import entries.lint_main.{oracleMain as lint_main}
 import entries.lint_fix_main.{oracleMain as lint_fix_main}
 import entries.check_one_diags_main.{oracleMain as check_one_diags_main}
@@ -110,7 +109,6 @@ main = match basename (executablePath ())
   "check_modules_main" => check_modules_main ()
   "check_all_main" => check_all_main ()
   "check_match_main" => check_match_main ()
-  "exhaust_main" => exhaust_main ()
   "lint_main" => lint_main ()
   "lint_fix_main" => lint_fix_main ()
   "check_one_diags_main" => check_one_diags_main ()

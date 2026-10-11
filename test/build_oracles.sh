@@ -282,7 +282,6 @@ fi
 #   check_modules_main      — diff_compiler_check (multi-module leg)
 #   check_all_main          — diff_compiler_selfproc.sh (LEG A)
 #   check_match_main        — diff_compiler_check (match-exhaustiveness leg)
-#   exhaust_main            — diff_compiler_fmt (the exhaust row of test/diff_compiler_fmt_test.mdk)
 #   lint_main               — diff_compiler_fmt (the lint row of
 #                             test/diff_compiler_fmt_test.mdk; added by the lint workstream)
 #   diagnostics_main        — diff_compiler_fmt (the diagnostics row of
@@ -309,7 +308,7 @@ llvm_bootstrap_lex_main \
 lex_main parse_main parse_result_main \
 resolve_main resolve_batch resolve_modules_main draft_semantic_main anf_identity_main \
 typecheck_main check_main check_batch \
-check_modules_main check_all_main check_match_main exhaust_main lint_main lint_fix_main \
+check_modules_main check_all_main check_match_main lint_main lint_fix_main \
 check_one_diags_main \
 diagnostics_main diagnostics_project_main \
 fmt_main new_main test_main repl_main fuzz_gen_main \

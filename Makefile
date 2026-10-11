@@ -323,6 +323,12 @@ inlang-tools-prop-runner-test:
 inlang-regex-conformance-test:
 	./medaka test test/regex_conformance_test.mdk
 
+## Guard exhaustiveness over test/exhaust_fixtures, called in-process
+## (replaces the exhaust_main probe row). A `*_test.mdk` sibling is outside
+## every entry's import closure ([W-MODULE-BLIND]); `--native` for `readFile`.
+inlang-frontend-exhaust-test:
+	./medaka test --native compiler/frontend/exhaust_test.mdk
+
 ## compiler/frontend/resolve.mdk carries its own `test "…"` block
 ## (the did-you-mean pool memo's once-per-Env discipline, #2800): the
 ## module's TYPES are checked on every build via the live pipeline's
