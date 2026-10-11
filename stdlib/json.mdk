@@ -26,7 +26,7 @@
 import core.{Ordering(..), Debug, Display, Option, Result, Thenable, map}
 import list.{reverse}
 import array
-import string.{join, fromChars, isDigit, toInt}
+import string.{fromChars, isDigit, toInt}
 
 -- # The Json type
 
@@ -129,19 +129,36 @@ escapeString s =
   let pieces = escapeGo arr (arrayLength arr - 1) []
   stringConcat (["\""] ++ pieces ++ ["\""])
 
-elemStrings : Array Json -> Int -> List String -> List String
-elemStrings arr i acc
-  | i < 0 = acc
-  | otherwise =
-    elemStrings arr (i - 1) (stringify (arrayGetUnsafe i arr) :: acc)
+-- The text of a value, as pieces pushed onto `acc` in reverse order. Each
+-- nested value appends to the same piece list, so the whole document is
+-- joined once. Joining each child into its own string and then copying it
+-- into its parent costs O(depth * size) on a deeply nested value.
+stringifyInto : Json -> List String -> List String
+stringifyInto JNull acc = "null" :: acc
+stringifyInto (JBool True) acc = "true" :: acc
+stringifyInto (JBool False) acc = "false" :: acc
+stringifyInto (JInt n) acc = intToString n :: acc
+stringifyInto (JFloat f) acc = renderFloat f :: acc
+stringifyInto (JString s) acc = escapeString s :: acc
+stringifyInto (JArray arr) acc = "]" :: arrayPiecesInto arr 0 ("[" :: acc)
+stringifyInto (JObject pairs) acc = "}" :: objectPiecesInto pairs 0 ("{" :: acc)
 
-memberStrings : Array (String, Json) -> Int -> List String -> List String
-memberStrings pairs i acc
-  | i < 0 = acc
+-- Elements from index `i` on, with a `,` before every element but the first.
+arrayPiecesInto : Array Json -> Int -> List String -> List String
+arrayPiecesInto arr i acc
+  | i >= arrayLength arr = acc
+  | otherwise =
+    let sep = if i == 0 then acc else "," :: acc
+    arrayPiecesInto arr (i + 1) (stringifyInto (arrayGetUnsafe i arr) sep)
+
+objectPiecesInto : Array (String, Json) -> Int -> List String -> List String
+objectPiecesInto pairs i acc
+  | i >= arrayLength pairs = acc
   | otherwise =
     let p = arrayGetUnsafe i pairs
-    let s = stringConcat [escapeString (fst p), ":", stringify (snd p)]
-    memberStrings pairs (i - 1) (s :: acc)
+    let sep = if i == 0 then acc else "," :: acc
+    let keyed = ":" :: escapeString (fst p) :: sep
+    objectPiecesInto pairs (i + 1) (stringifyInto (snd p) keyed)
 
 {- | The value as compact JSON text, with no whitespace between tokens.
 
@@ -151,21 +168,12 @@ memberStrings pairs i acc
    > stringify (jObject [("a", JInt 1), ("b", JString "hi")])
    "{\"a\":1,\"b\":\"hi\"}"
    > stringify (JFloat 1000.0)
-   "1000.0" -}
+   "1000.0"
+   > stringify (jObject [("a", jArray [JInt 1, jObject []]), ("b", JNull)])
+   "{\"a\":[1,{}],\"b\":null}" -}
 export
 stringify : Json -> String
-stringify JNull = "null"
-stringify (JBool True) = "true"
-stringify (JBool False) = "false"
-stringify (JInt n) = intToString n
-stringify (JFloat f) = renderFloat f
-stringify (JString s) = escapeString s
-stringify (JArray arr) =
-  let body = join "," (elemStrings arr (arrayLength arr - 1) [])
-  stringConcat ["[", body, "]"]
-stringify (JObject pairs) =
-  let body = join "," (memberStrings pairs (arrayLength pairs - 1) [])
-  stringConcat ["{", body, "}"]
+stringify j = stringConcat (reverse (stringifyInto j []))
 
 -- > stringify JNull
 -- "null"

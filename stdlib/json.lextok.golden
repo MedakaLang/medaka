@@ -32,8 +32,6 @@ NEWLINE
 IMPORT
 IDENT "string"
 DOT_LBRACE
-IDENT "join"
-COMMA
 IDENT "fromChars"
 COMMA
 IDENT "isDigit"
@@ -455,7 +453,119 @@ RPAREN
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "elemStrings"
+IDENT "stringifyInto"
+COLON
+UPPER "Json"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "stringifyInto"
+UPPER "JNull"
+IDENT "acc"
+EQUAL
+STRING "null"
+CONS
+IDENT "acc"
+NEWLINE
+IDENT "stringifyInto"
+LPAREN
+UPPER "JBool"
+UPPER "True"
+RPAREN
+IDENT "acc"
+EQUAL
+STRING "true"
+CONS
+IDENT "acc"
+NEWLINE
+IDENT "stringifyInto"
+LPAREN
+UPPER "JBool"
+UPPER "False"
+RPAREN
+IDENT "acc"
+EQUAL
+STRING "false"
+CONS
+IDENT "acc"
+NEWLINE
+IDENT "stringifyInto"
+LPAREN
+UPPER "JInt"
+IDENT "n"
+RPAREN
+IDENT "acc"
+EQUAL
+IDENT "intToString"
+IDENT "n"
+CONS
+IDENT "acc"
+NEWLINE
+IDENT "stringifyInto"
+LPAREN
+UPPER "JFloat"
+IDENT "f"
+RPAREN
+IDENT "acc"
+EQUAL
+IDENT "renderFloat"
+IDENT "f"
+CONS
+IDENT "acc"
+NEWLINE
+IDENT "stringifyInto"
+LPAREN
+UPPER "JString"
+IDENT "s"
+RPAREN
+IDENT "acc"
+EQUAL
+IDENT "escapeString"
+IDENT "s"
+CONS
+IDENT "acc"
+NEWLINE
+IDENT "stringifyInto"
+LPAREN
+UPPER "JArray"
+IDENT "arr"
+RPAREN
+IDENT "acc"
+EQUAL
+STRING "]"
+CONS
+IDENT "arrayPiecesInto"
+IDENT "arr"
+INT 0
+LPAREN
+STRING "["
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+IDENT "stringifyInto"
+LPAREN
+UPPER "JObject"
+IDENT "pairs"
+RPAREN
+IDENT "acc"
+EQUAL
+STRING "}"
+CONS
+IDENT "objectPiecesInto"
+IDENT "pairs"
+INT 0
+LPAREN
+STRING "{"
+CONS
+IDENT "acc"
+RPAREN
+NEWLINE
+IDENT "arrayPiecesInto"
 COLON
 UPPER "Array"
 UPPER "Json"
@@ -468,15 +578,16 @@ ARROW
 UPPER "List"
 UPPER "String"
 NEWLINE
-IDENT "elemStrings"
+IDENT "arrayPiecesInto"
 IDENT "arr"
 IDENT "i"
 IDENT "acc"
 INDENT
 PIPE
 IDENT "i"
-LT
-INT 0
+GEQ
+IDENT "arrayLength"
+IDENT "arr"
 EQUAL
 IDENT "acc"
 NEWLINE
@@ -484,29 +595,42 @@ PIPE
 IDENT "otherwise"
 EQUAL
 INDENT
-IDENT "elemStrings"
+LET
+IDENT "sep"
+EQUAL
+IF
+IDENT "i"
+EQ_EQ
+INT 0
+THEN
+IDENT "acc"
+ELSE
+STRING ","
+CONS
+IDENT "acc"
+NEWLINE
+IDENT "arrayPiecesInto"
 IDENT "arr"
 LPAREN
 IDENT "i"
-MINUS
+PLUS
 INT 1
 RPAREN
 LPAREN
-IDENT "stringify"
+IDENT "stringifyInto"
 LPAREN
 IDENT "arrayGetUnsafe"
 IDENT "i"
 IDENT "arr"
 RPAREN
-CONS
-IDENT "acc"
+IDENT "sep"
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "memberStrings"
+IDENT "objectPiecesInto"
 COLON
 UPPER "Array"
 LPAREN
@@ -523,15 +647,16 @@ ARROW
 UPPER "List"
 UPPER "String"
 NEWLINE
-IDENT "memberStrings"
+IDENT "objectPiecesInto"
 IDENT "pairs"
 IDENT "i"
 IDENT "acc"
 INDENT
 PIPE
 IDENT "i"
-LT
-INT 0
+GEQ
+IDENT "arrayLength"
+IDENT "pairs"
 EQUAL
 IDENT "acc"
 NEWLINE
@@ -547,36 +672,46 @@ IDENT "i"
 IDENT "pairs"
 NEWLINE
 LET
-IDENT "s"
+IDENT "sep"
 EQUAL
-IDENT "stringConcat"
-LBRACKET
+IF
+IDENT "i"
+EQ_EQ
+INT 0
+THEN
+IDENT "acc"
+ELSE
+STRING ","
+CONS
+IDENT "acc"
+NEWLINE
+LET
+IDENT "keyed"
+EQUAL
+STRING ":"
+CONS
 IDENT "escapeString"
 LPAREN
 IDENT "fst"
 IDENT "p"
 RPAREN
-COMMA
-STRING ":"
-COMMA
-IDENT "stringify"
+CONS
+IDENT "sep"
+NEWLINE
+IDENT "objectPiecesInto"
+IDENT "pairs"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+LPAREN
+IDENT "stringifyInto"
 LPAREN
 IDENT "snd"
 IDENT "p"
 RPAREN
-RBRACKET
-NEWLINE
-IDENT "memberStrings"
-IDENT "pairs"
-LPAREN
-IDENT "i"
-MINUS
-INT 1
-RPAREN
-LPAREN
-IDENT "s"
-CONS
-IDENT "acc"
+IDENT "keyed"
 RPAREN
 NEWLINE
 DEDENT
@@ -592,124 +727,18 @@ ARROW
 UPPER "String"
 NEWLINE
 IDENT "stringify"
-UPPER "JNull"
+IDENT "j"
 EQUAL
-STRING "null"
-NEWLINE
-IDENT "stringify"
-LPAREN
-UPPER "JBool"
-UPPER "True"
-RPAREN
-EQUAL
-STRING "true"
-NEWLINE
-IDENT "stringify"
-LPAREN
-UPPER "JBool"
-UPPER "False"
-RPAREN
-EQUAL
-STRING "false"
-NEWLINE
-IDENT "stringify"
-LPAREN
-UPPER "JInt"
-IDENT "n"
-RPAREN
-EQUAL
-IDENT "intToString"
-IDENT "n"
-NEWLINE
-IDENT "stringify"
-LPAREN
-UPPER "JFloat"
-IDENT "f"
-RPAREN
-EQUAL
-IDENT "renderFloat"
-IDENT "f"
-NEWLINE
-IDENT "stringify"
-LPAREN
-UPPER "JString"
-IDENT "s"
-RPAREN
-EQUAL
-IDENT "escapeString"
-IDENT "s"
-NEWLINE
-IDENT "stringify"
-LPAREN
-UPPER "JArray"
-IDENT "arr"
-RPAREN
-EQUAL
-INDENT
-LET
-IDENT "body"
-EQUAL
-IDENT "join"
-STRING ","
-LPAREN
-IDENT "elemStrings"
-IDENT "arr"
-LPAREN
-IDENT "arrayLength"
-IDENT "arr"
-MINUS
-INT 1
-RPAREN
-LBRACKET
-RBRACKET
-RPAREN
-NEWLINE
 IDENT "stringConcat"
-LBRACKET
-STRING "["
-COMMA
-IDENT "body"
-COMMA
-STRING "]"
-RBRACKET
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "stringify"
 LPAREN
-UPPER "JObject"
-IDENT "pairs"
-RPAREN
-EQUAL
-INDENT
-LET
-IDENT "body"
-EQUAL
-IDENT "join"
-STRING ","
+IDENT "reverse"
 LPAREN
-IDENT "memberStrings"
-IDENT "pairs"
-LPAREN
-IDENT "arrayLength"
-IDENT "pairs"
-MINUS
-INT 1
-RPAREN
+IDENT "stringifyInto"
+IDENT "j"
 LBRACKET
 RBRACKET
 RPAREN
-NEWLINE
-IDENT "stringConcat"
-LBRACKET
-STRING "{"
-COMMA
-IDENT "body"
-COMMA
-STRING "}"
-RBRACKET
-NEWLINE
-DEDENT
+RPAREN
 NEWLINE
 IDENT "isWs"
 COLON
