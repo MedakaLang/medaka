@@ -1,24 +1,16 @@
--- §3 `inst` REDUCTION DEPTH -- THE AT-LIMIT CONTROL for the issue 1562 reject, and the
--- false-reject canary for making exhaustion loud.
+-- §3 `inst` reduction at a generalizing binder, the control for
+-- s4-requires-depth-exceeded-rejected.mdk (one `Wrap` deeper).
 --
--- `deep` nests `Wrap` 32 deep: exactly the reducer's bound (`residualReduceFuel` = 32),
--- one step shallower than its `…-exceeded-rejected.mdk` sibling.  The reduction bottoms
--- out on `impl Tag Int`, leaves the residual `Tag t`, and `gen` abstracts its dict, so
--- this file must ACCEPT and its BUILT BINARY must print
+-- `deep` nests `Wrap` 32 deep, the old flat bound.  Every step is one `Wrap` smaller,
+-- so under §3 W2's measure none spends fuel.  The reduction bottoms out on `impl Tag
+-- Int`, leaves the residual `Tag t`, and `gen` abstracts its dict, so this file must
+-- ACCEPT and its BUILT BINARY must print
 --     wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwint
 -- (32 `w`s, hand-counted from the nesting depth) at exit 0.
 --
--- ⚠️ THIS ROW IS HALF THE ASSERTION.  A change that rejected every deep residual, or
--- that lowered the bound, would satisfy the sibling's `T-REQUIRES-DEPTH` row on its own;
--- only an at-limit control that is EXECUTED can tell "the bound is now loud" from "the
--- bound moved".  The pair pins the boundary from both sides, so a change to
--- `residualReduceFuel` in EITHER direction reds one of these two files.
---
--- ⚠️ The usable depth is 32, not the 31 issue 1562 measured, and that is deliberate: the
--- terminal test in `residualPredsOf` now runs BEFORE the fuel test, so a predicate that
--- is ALREADY fully reduced when the fuel runs out is returned as the residual it is
--- rather than reported as too deep.  Ordering them the other way rejected a chain whose
--- very next step was the answer.
+-- It is built and EXECUTED: before issue 1562 this depth was silently dropped from the
+-- scheme and the dict prefix, and the binary segfaulted.  Accepted under the flat bound
+-- (the terminal test in `residualPredsOf` runs before a goal is entered) and under W2.
 data Wrap a = Wrap a
 
 interface Tag t where

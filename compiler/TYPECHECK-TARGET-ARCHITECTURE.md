@@ -400,7 +400,7 @@ the prose first would destroy the only record of why each table is keyed as it i
   `diff_compiler_must_fail` on every pin it drains; name the expected pins in the PR.
 - **Out-of-scope, stated rather than implied.** **SC-1** (identity-keyed cross-module
   namespaces, the heaviest single drain at ≈60 weighted points) has **no step**; "after 5" is
-  neither in nor out — decide (SA-10 Q6). Likewise DICT §3 W2, §5.1 M3, §8 I7 (literals and
+  neither in nor out — decide (SA-10 Q6). Likewise DICT §5.1 M3, §8 I7 (literals and
   operators), §6.2 T1/T3, and the five EFFECTS declared-kind rules have no owner; the sequence
   above schedules T4 alone. And **CP3/T6** is a standing divergence, not a T4 consequence:
   nothing commits at the site today (module end), and after step 6 it is graph end.
@@ -1286,7 +1286,10 @@ both landed — see item 9. #2549 is landed for its first half only — see item
    the parent reports as a failed emit. The claim's `exit:` is now 1 with a `why-exit:`
    block; the discriminating `stdout-line` is untouched. **Any shape-(a)-like change must
    re-read every `must_fail` row whose verb is `build`: a process boundary between the
-   defect and the exit code can drain a pin that nothing fixed.**
+   defect and the exit code can drain a pin that nothing fixed.** (The pin drained for
+   real when the end-of-body obligation checker joined DICT §3 W2's measure: it is now
+   `test/dict_fixtures/requires-cycle-self-naming-rejected.mdk`, whose `build` row grades
+   build's own located message and the absence of `emitter failed`.)
    **THE GENERAL HAZARD, and the fix round's most useful finding.** Any driver fact the
    parent publishes to typecheck BEFORE its own pass has to be published in the child too,
    or the two verdicts differ on exactly that fact's class. `setStdlibOwnership` (#2072) was
@@ -1548,22 +1551,24 @@ keyed by qualified identity, **assembled once and never per-module**:
   (currently enforced with no spec — the owed paragraph is task S-2 in §6);
   declaration-time overlap diagnostics (advisory (a)-warnings; acceptance stays
   per-goal C1(c)).
-  ⚠️ **W2 is NOT among these, and this bullet claimed it was.** No static,
-  declaration-time W2 (instance-context termination / Paterson coverage) exists
-  anywhere in the tree. What exists is a *dynamic* resolution-time cutoff —
-  `argImplRequiresRoutesRecD`'s `if depth >= 32 then []`
-  (`compiler/types/typecheck.mdk`) — under which a non-shrinking context
-  (`impl C (T a) requires C (T (T a))`) terminates by silently yielding no
-  further requires-routes rather than being rejected, and, per DICT §11's W2
-  row, *"the program is accepted either way."* This design **keeps the fuse and
-  leaves W2 unenforced**: making it static would *reject* programs `main`
-  accepts today — a language-visible acceptance **narrowing**, and §5 R2's two
-  enumerated exceptions are both widenings carried by a could-not-pass-before
-  fixture, a bar a narrowing cannot meet. Promoting W2 to a static check is
-  therefore a separate, owner-adjudicated decision with its own migration and
-  fixture story, deliberately **not** taken here. Note the consequence for K's
-  outputs: because the fuse can truncate a requires chain, IE's derived route
-  data is *not* total at depth ≥32, and no clause below may assume otherwise.
+  W2 (instance-context termination) is **not** among these: it is not a
+  declaration-time check. DICT §3 states it as a rule on each walk through
+  instance contexts (owner ruling R-W2, 2026-10-10), and one helper enforces it,
+  `reqWalkEnter` beside `monoSizes` (`compiler/types/typecheck.mdk`), called by
+  every `requires` walk: the solving walks (`residualPredsOf`, `implGoalResiduals`,
+  `checkNestedReqs`, `nestedRequireGoals`) and the route walk
+  (`argImplRequiresRoutesForRow`). A step to a strictly smaller goal vector is
+  free, any other step spends one unit of `requiresNonShrinkingFuel` (32), and a
+  goal equal to one on the walk's path is a cycle; the solving walks reject a
+  cycle (`T-REQUIRES-CYCLE`) or spent fuel (`T-REQUIRES-DEPTH`) at the goal's
+  site. `monoSize` counts an effect row as one node; that under-counts a child at
+  most, which only makes a step look shrinking, and the size stays a natural
+  number, so the measure is still well-founded. A static Paterson check was
+  measured and declined: it would reject impls in 14 test fixtures, an acceptance
+  **narrowing** §5 R2 does not license. Consequence for K's outputs: the route
+  walk shares the measure, so IE's derived route data is total on every program
+  the solving walks accept; the route walk's cut (`requiresRouteWalkCut`) is
+  reached only on a rejected program and is a compiler panic otherwise.
 - **`DataEnv`**: datatypes, constructor schemes, records and field ownership,
   aliases with cycle rejection.
 

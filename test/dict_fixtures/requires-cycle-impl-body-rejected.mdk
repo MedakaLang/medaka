@@ -1,0 +1,18 @@
+-- §3 W2, a cycle reached from an impl body (#3801): the body of `impl C (Q a)` poses
+-- `C (Box a)`, and `impl C (Box a) requires C (Box a)` asks for that same goal again.
+-- `T-REQUIRES-CYCLE`, located at the goal's site (`cc (Box x)`), on every verb.  It
+-- used to overflow the compiler's stack.
+interface C a where
+  cc : a -> Int
+
+data Box a = Box a
+
+impl C (Box a) requires C (Box a) where
+  cc _ = 1
+
+data Q a = Q a
+
+impl C (Q a) where
+  cc (Q x) = cc (Box x)
+
+main = println (cc (Q (1 : Int)))

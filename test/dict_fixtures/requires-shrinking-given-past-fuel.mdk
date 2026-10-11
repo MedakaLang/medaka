@@ -1,0 +1,20 @@
+-- §3 W2, a shrinking chain ended by a given past the fuel (#3802): in `g`, the goal
+-- `Tag (W^40 a)` reduces through `impl Tag (W a) requires Tag a`, each step one `W`
+-- smaller, so no step spends fuel, and after 40 steps `g`'s declared `Tag a` answers
+-- it.  Accepted on every verb.  `g 1` adds one per `W` to 1, so it prints 41.  It used
+-- to stop after 32 steps with `T-REQUIRES-DEPTH`.
+interface Tag a where
+  tag : a -> Int
+
+impl Tag Int where
+  tag n = n
+
+data W a = W a
+
+impl Tag (W a) requires Tag a where
+  tag (W x) = tag x + 1
+
+g : Tag a => a -> Int
+g x = tag (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (W (x)))))))))))))))))))))))))))))))))))))))))
+
+main = println (g (1 : Int))

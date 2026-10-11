@@ -968,18 +968,18 @@ table = [
   Row {
     entry = "s4-requires-depth-exceeded-rejected.mdk",
     label =
-      "§3 `inst` -- ISSUE 1562, the DRAIN. `requires`-nesting 33 deep crosses the reducers depth bound, which used to be SILENT: it returned the same `[]` as \"no matching impl\", the predicate was dropped from both the scheme and the `λ d̄.` prefix, and the program landed back in 1549s S0 (check 0 on `deep : a -> String`, build 0, BINARY 139). It is now a located reject. Its SPAN is pinned in section 6",
-    expCheck = "REJECT",
-    expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
-    codes = [Present "T-REQUIRES-DEPTH"],
+      "§3 W2 at a generalizing binder: `requires`-nesting 33 deep SHRINKS one `Wrap` per step, so no step spends fuel and `deep : Tag a => a -> String` is inferred. Hand-derived: one `w` per `Wrap`, then `int`. Was a T-REQUIRES-DEPTH reject under the flat 32-step bound, and before that issue 1562s silent drop (binary 139); the name is historical",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwint\n",
+    codes = [],
   },
   Row {
     entry = "s4-requires-depth-at-limit-control.mdk",
     label =
-      "THE AT-LIMIT CONTROL for the row above and the false-reject canary for making exhaustion loud: ONE fewer `Wrap` (depth 32, exactly the bound). Built and EXECUTED, so it distinguishes \"the bound is now loud\" from \"the bound moved\" -- a change to `residualReduceFuel` in EITHER direction reds one of these two files. Pre-fix this depth was ALSO silently dropped and its binary segfaulted",
+      "THE CONTROL for the row above: ONE fewer `Wrap` (depth 32, the old flat bound), accepted before and after §3 W2 made shrinking steps free. Built and EXECUTED. Pre-#1562 this depth was silently dropped and its binary segfaulted",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -3262,13 +3262,68 @@ table = [
   Row {
     entry = "impl-head-requires-depth-past-fuel.mdk",
     label =
-      "§3 W3-inst one step past the requires fuel: `Tag (W^33 a)` exhausts the fuel before reaching `Tag a`, which is a located T-REQUIRES-DEPTH, as on the signature path. Running out of fuel used to return no residual, so `check` accepted the impl, `run` printed 34 and the built binary died with SIGSEGV",
+      "§3 W3-inst one step deeper than the row above: `Tag (W^33 a)` shrinks one `W` per step, so under §3 W2 no step spends fuel and the chain reaches `Tag a`, which no `requires` gives: refused naming `requires Tag a`, as at depth 32. Was a T-REQUIRES-DEPTH under the flat bound; running out of fuel before THAT used to return no residual, so `check` accepted the impl and the built binary died with SIGSEGV",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
     mode = NoValue,
     pinned = "",
-    codes = [Present "T-REQUIRES-DEPTH"],
+    codes = [Present "T-IMPL-MISSING-REQUIRES", Absent "T-REQUIRES-DEPTH"],
+  },
+  Row {
+    entry = "impl-head-requires-shrinking-given-past-fuel.mdk",
+    label =
+      "§3 W2 on the impl-body path (#3802s twin): `Tag (W^40 a)` shrinks to the impls own given `Tag a` in 40 free steps, so the impl is accepted. Hand-derived: `tag` adds one per `W` to 1, so 41. Was T-REQUIRES-DEPTH under the flat 32-step bound",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "41\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-shrinking-given-past-fuel.mdk",
+    label =
+      "§3 W2, #3802 DRAIN: `g : Tag a => a -> Int` poses `Tag (W^40 a)`, which shrinks to the declared given `Tag a` in 40 free steps. Hand-derived: 1 + 40 = 41. Was T-REQUIRES-DEPTH under the flat 32-step bound (a false reject)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "41\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-cycle-self-naming-rejected.mdk",
+    label =
+      "§3 W2, #1575 DRAIN: `impl C (Box a) requires C (Box a)` leads the goal `C (Box a)` back to itself, a cycle: located T-REQUIRES-CYCLE on every verb. Was a compiler stack overflow (exit 134) after ~40 s. `build`s own message is pinned in section 5",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-CYCLE"],
+  },
+  Row {
+    entry = "requires-cycle-impl-body-rejected.mdk",
+    label =
+      "§3 W2, #3801 DRAIN: an impl bodys goal `C (Box a)` meets the self-naming `requires C (Box a)`, a cycle: located T-REQUIRES-CYCLE on every verb. Was a compiler stack overflow",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-CYCLE"],
+  },
+  Row {
+    entry = "requires-growing-context-depth-rejected.mdk",
+    label =
+      "§3 W2, #2120: `impl Tag (Wrap a) requires Tag (Wrap (Wrap a))` grows its goal every step and never repeats one, so the fuel runs out: located T-REQUIRES-DEPTH on every verb. Was a compiler stack overflow after ~50 s",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-DEPTH", Absent "T-REQUIRES-CYCLE"],
   },
   Row {
     entry = "impl-head-deep-requires-control.mdk",
@@ -4664,7 +4719,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 411
+tableRows = 416
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -5094,7 +5149,7 @@ data VerbRow = VerbRow {
 {- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 verbRows : Int
-verbRows = 50
+verbRows = 59
 
 verbTable : List VerbRow
 verbTable = [
@@ -5472,6 +5527,70 @@ verbTable = [
     verb = "build",
     assertion = AEmpty,
   },
+  VerbRow {
+    ventry = "requires-cycle-self-naming-rejected.mdk",
+    vlabel =
+      "§3 W2 (#1575): `build` reports the cycle itself, located, with the impl whose `requires` repeats",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-cycle-self-naming-rejected\\.mdk:17:6: cannot resolve this constraint: the .requires. of .impl C \\(Box a\\). asks for .C \\(Box a\\).",
+  },
+  VerbRow {
+    ventry = "requires-cycle-self-naming-rejected.mdk",
+    vlabel =
+      "§3 W2 (#1575): ...and not as a failed emit. The old pin was drained once by a process boundary alone, when the overflow moved into the emitter child and `build` began reporting `emitter failed`",
+    verb = "build",
+    assertion = ANot "emitter failed",
+  },
+  VerbRow {
+    ventry = "requires-cycle-self-naming-rejected.mdk",
+    vlabel = "§3 W2 (#1575): `run` reports the cycle under its code",
+    verb = "run-json",
+    assertion = AJson "T-REQUIRES-CYCLE",
+  },
+  VerbRow {
+    ventry = "requires-cycle-impl-body-rejected.mdk",
+    vlabel =
+      "§3 W2 (#3801): `build` reports the cycle reached from the impl body, located",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-cycle-impl-body-rejected\\.mdk:16:13: cannot resolve this constraint: the .requires. of .impl C \\(Box a\\). asks for .C \\(Box a\\).",
+  },
+  VerbRow {
+    ventry = "requires-cycle-impl-body-rejected.mdk",
+    vlabel = "§3 W2 (#3801): ...and not as a failed emit",
+    verb = "build",
+    assertion = ANot "emitter failed",
+  },
+  VerbRow {
+    ventry = "requires-cycle-impl-body-rejected.mdk",
+    vlabel = "§3 W2 (#3801): `run` reports the cycle under its code",
+    verb = "run-json",
+    assertion = AJson "T-REQUIRES-CYCLE",
+  },
+  VerbRow {
+    ventry = "requires-growing-context-depth-rejected.mdk",
+    vlabel =
+      "§3 W2 (#2120): `build` reports the spent walk itself, located, naming the fuel",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-growing-context-depth-rejected\\.mdk:14:16: cannot resolve this constraint: following the .requires. clauses .* after 32 steps that did not make the goal smaller",
+  },
+  VerbRow {
+    ventry = "requires-growing-context-depth-rejected.mdk",
+    vlabel = "§3 W2 (#2120): ...and not as a failed emit",
+    verb = "build",
+    assertion = ANot "emitter failed",
+  },
+  VerbRow {
+    ventry = "requires-growing-context-depth-rejected.mdk",
+    vlabel = "§3 W2 (#2120): `run` reports the spent walk under its code",
+    verb = "run-json",
+    assertion = AJson "T-REQUIRES-DEPTH",
+  },
 ]
 
 -- # Section 6 -- diagnostic SPANS
@@ -5493,7 +5612,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 34
+spanRows = 36
 
 spanTable : List SpanRow
 spanTable = [
@@ -5608,10 +5727,22 @@ spanTable = [
     want = "11:10",
   },
   SpanRow {
-    entry = "s4-requires-depth-exceeded-rejected.mdk",
+    entry = "requires-growing-context-depth-rejected.mdk",
     label =
-      "issue 1562: the depth reject is attributed to the METHOD CALL that posed the goal (`tagOf …` in `deep`), through the `goalSiteLoc` the reducer republishes -- NOT to whatever `currentLoc` holds at the generalized groups close, which is the failure mode this whole section exists for",
-    want = "33:9",
+      "§3 W2 (#2120): the depth reject is attributed to the METHOD CALL that posed the goal (`tag (Wrap 1)` in `main`), at the goal's site -- NOT to whatever `currentLoc` holds when the walk runs out, which is the failure mode this whole section exists for",
+    want = "14:16",
+  },
+  SpanRow {
+    entry = "requires-cycle-self-naming-rejected.mdk",
+    label =
+      "§3 W2 (#1575): the cycle reject lands on the method call that posed the repeating goal (`cm` in `g`), not on the impl or on `main`",
+    want = "17:6",
+  },
+  SpanRow {
+    entry = "requires-cycle-impl-body-rejected.mdk",
+    label =
+      "§3 W2 (#3801): the cycle reached from an impl body lands on that bodys goal (`cc (Box x)`), not on the cyclic impl",
+    want = "16:13",
   },
   SpanRow {
     entry = "s4-gen-residual-mixed-vector-rejected.mdk",

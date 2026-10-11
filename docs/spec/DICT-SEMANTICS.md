@@ -442,10 +442,27 @@ run time (§6 "uniform resolution", §7).
 **Well-formedness (for entailment to be a single-valued function).** Beyond
 at-most-one most-specific match (§6 C1), resolution is decidable only if (W1) the
 **superclass relation is acyclic** — otherwise `super`-search loops — and (W2)
-**instance resolution terminates** — each `inst` premise `πᵢ ∈ φ(Q)` (the
-context of the *selected* instance) must be structurally smaller than the goal
-(a Paterson/coverage-style condition), otherwise the recursive discharge of
-`Q` diverges. Most-specific selection itself adds no termination risk:
+**instance resolution terminates**. W2 is a rule on each *walk* through instance
+contexts, not a static condition on declarations. Every walk that follows the
+context `Q` of a selected instance — solving a goal (`inst`), checking an impl
+body's goals (W3-inst), judging a boundary's prerequisites, checking a ground
+obligation's nested `requires`, or building a dictionary's route — measures
+each step by the structural size of the goal's whole argument vector, and all of
+them use the one measure:
+- a step to a premise `πᵢ ∈ φ(Q)` **strictly smaller** than its parent goal is
+  free;
+- any other step spends one unit of a fixed fuel (32);
+- a premise **equal** to a goal already on the current walk (the same interface
+  declaration, pointwise-identical arguments) is a **cycle**.
+
+A cycle is rejected with `T-REQUIRES-CYCLE`, naming the instance whose context
+repeats the goal; spent fuel is rejected with `T-REQUIRES-DEPTH`. Both are
+located at the goal's site and reach every verb. Between two spending steps the
+size strictly decreases, so every walk is finite, and because only a step that
+does not shrink its goal spends fuel, a shrinking chain resolves at any depth its
+types need. No declaration is rejected for its shape alone: an equal-size
+context across classes (`impl U (List a) requires S (List a)`) is legal, and
+only a walk that actually repeats or keeps growing a goal is reported. Most-specific selection itself adds no termination risk:
 `match(IE, π)` is a finite subset of a finite `IE`, membership is one
 one-sided matching problem per instance, and `⊑` between two heads is one
 more — so `min⊑` is computed by finitely many decidable comparisons, before
@@ -569,9 +586,10 @@ One rule, two rejections:
   are all type variables is never reduced by an instance, exactly as in a
   signature's body: it is its own residual, so a blanket `impl Describe a` does not
   answer `Describe c` for a head variable `c`, and only a given does. The
-  reduction follows at most 32 `requires` steps; a goal still unreduced after them
-  is rejected at its site with `T-REQUIRES-DEPTH`, as on the signature path, even
-  when a given would have ended the chain further down (#3802). A residual over
+  reduction is bounded by W2's measure, as on the signature path: a step that
+  shrinks the goal is free, so a given that ends a shrinking chain is reached at
+  any depth, and a cycle or spent fuel is rejected at the goal's site
+  (`T-REQUIRES-CYCLE`, `T-REQUIRES-DEPTH`). A residual over
   `c̄` that no given answers is rejected at the goal's site with
   `T-IMPL-MISSING-REQUIRES`, naming the `requires` to add (#2721). Without the
   check such a residual was deferred forever: the impl obligation channel defers a
@@ -2979,7 +2997,7 @@ not this paragraph.
 | §3 `inst` | `entailInst`, `compiler/types/typecheck.mdk:11941-11991`, via `keyForSite:11386`/`keyForSiteByIface:11608` → `matchedEntry:11416` → `pickMostSpecificEntry` | fresh dictionary construction at the `min⊑` instance, recursively discharging its own context | goal keyed by `ifaceParamMonos`'s **full param-mono vector** (the #609 fix, code comment 11971-11978) — shares ONE binding between the method route and its own `requires`-context routes so both arms pick the same impl (closes the C2 "same-impl" hazard) |
 | §3 precedence (`assum`/`super` before `inst`) | `entail`, `compiler/types/typecheck.mdk:11892-11896` | in-scope evidence wins over instance construction | tries `entailAssum` first, falls to `entailInst` only on `None` |
 | §3 **W1** (superclass acyclic) | `ifaceDfsCycle:11076-11101`, invoked at `:11062` pushing `T-CYCLIC-SUPERINTERFACE` (`compiler/types/typecheck.mdk`) | rejects a cyclic `requires` chain | DFS keyed on **bare interface name** (`String`), not module-qualified — not independently re-verified for a same-named-interface cross-module collision here |
-| §3 **W2** (instance-context termination / Paterson coverage) | `routeOfD:12863` (`compiler/types/typecheck.mdk`), the depth-carrying core of `routeOf:12852`, threaded through `argImplRequiresRoutesForRow` → `argImplReqRoutes:13144` → `argReqRoute` → back to `routeOfD` — the #217 "WS-4b fuse" | ⚠️ **NOT the spec's W2.** W2 is a *static, declaration-time* condition (reject an instance whose context isn't structurally smaller than the goal). What exists is a **dynamic, resolution-time cutoff** inside `argImplRequiresRoutesForRow`, which since **#1576** is a *shrinking test* rather than a flat depth counter: a `requires` sub-goal whose whole argument vector is structurally SMALLER (`monoSizes`) than the goal that spawned it costs nothing, and only a NON-shrinking step spends one unit of `requiresNonShrinkingFuel` (32). So a non-shrinking context (`impl C (T a) requires C (T (T a))`) still *terminates* by silently returning no further requires-routes — it grows its goal every step, so it exhausts the fuel almost immediately — rather than being *rejected* at declaration. The program is accepted either way; only route resolution stops recursing | 🟢 **the flat `if depth >= 32 then []` this row used to describe was itself an S0** (#1576/#1836): it truncated the dict witness of a perfectly valid GROUND chain (`impl Tag (Wrap a) requires Tag a` at `Wrap^34 Int`) one level early, and the built binary read the missing cell and segfaulted at exit 0 from `check` and `build`. The old text's "a legitimately-deep-but-terminating context presumably degrades identically to a genuinely non-terminating one at depth 33" was exactly right about the hazard and exactly wrong about it being harmless. The shrinking test separates the two populations: a shrinking chain now compiles at ANY depth its type needs (measured to `Wrap^202`), and the fuel bounds only the divergent shape it was written for. Still no *diagnostic* on the fuse arm — a `pushTypeErrorOnceAt` from the `resolve*` stamp passes is discarded on `check`, `run` and `build` alike (**#1910**), which is what a loud reject here is blocked on |
+| §3 **W2** (instance-context termination) | `ReqWalk` / `reqWalkEnter` beside `monoSizes` (`compiler/types/typecheck.mdk`), the one measure every `requires` walk calls: `residualPredsOf` (generalizing binder), `implGoalResiduals` (W3-inst), `checkNestedReqs` (the end-of-body obligation checker's nested `requires`), `nestedRequireGoals` (a boundary's prerequisites) and the route walk `argImplRequiresRoutesForRow` (reached through `routeOfD` → `entail` (EKNestedTop) and `argImplReqRoutes` → `argReqRoute`) | a step to a strictly smaller goal vector (`monoSizes`) is free; any other step spends one unit of `requiresNonShrinkingFuel` (32); a goal equal to one on the walk's path (`sameIfaceDecl` + `monoVecSameGiven`) is a cycle | ✅ **CONFORMANT (R-W2, 2026-10-10).** W2 is the dynamic rule §3 states. The solving walks report through `reqWalkReported`: `T-REQUIRES-CYCLE` or `T-REQUIRES-DEPTH` at the goal's site, on every verb. The route walk shares the measure; its cut (`requiresRouteWalkCut`) is reached only on a program a solving walk already rejected, and on any other it is a compiler panic, never a silent `[]` (#1910). `monoSize` counts an effect row as one node: under-counting a child only makes a step look shrinking (free), and the size stays a natural number, so the measure is still well-founded. History: the route walk's flat `depth >= 32` cutoff truncated valid ground chains (#1576/#1836); the solving walks' flat 32-step fuel false-rejected shrinking chains (#3802); the end-of-body obligation checker had no bound at all and overflowed the compiler's stack on a self-naming or growing context (#1575, #3801, #2120) |
 | §3 **W3** (method-scheme fidelity / rigidity) | `checkMethodRigidityCore`, `checkMethodEffVarRigidity`, `checkImplEffVarRigidity` (all `compiler/types/typecheck.mdk`) | an impl/default body may not pin a non-head quantified variable (type *or* effect) to a concrete shape | run by the one method-body driver `inferMethodBody` for both kinds (`MethodBodyKind`); a default body's rigidity reads the same instantiation as its body |
 | §3 **W3-inst** (instance-head rigidity) | `checkImplHeadRigidity`, `checkImplHeadPrerequisites` (`compiler/types/typecheck.mdk`) | an impl body may not pin or identify a head variable, and every predicate it leaves on one is entailed by the impl's `requires` (with superinterfaces), the method's `=>` context or the head itself | impl bodies only, at the same boundary as W3, before body-local defaulting; a pin is reported by the body that introduced it; a goal an instance answers only by fixing a head variable is reported whatever other variables it mentions (#3798, #3817) |
 | §4 `var` | `instantiate:3630`; per-residual entailment via `entail:11892`; obligation discharge `checkCallObligationsU:13793`/`checkOneCallObligation:13814` | instantiation + per-predicate entailment at each use | — |
@@ -3032,13 +3050,12 @@ not this paragraph.
 | §8 **I7** ⚠️2 (identity fixed ⇏ dictionary discharged) — an operator satisfied by a user instance must dispatch through it | `evalArith:1852` (`compiler/eval/eval.mdk`), the arithmetic fallthrough: `panic ("unknown op '" ++ op ++ "'")` | 🔴 **DIVERGENT, and it is the distinct §5 defect the clause's second trap names.** The `Num` obligation for `+ - * / %` is recorded and correctly discharged against a user `impl Num T`, and then no dictionary is projected. **MEASURED at `adb789ca`:** a complete `impl Num Money` with `Money 3 + Money 4` gives `check` exit 0, `run` exit 1 `E-PANIC: unknown op '+'`, `build` exit **0**, and the built binary **segfaults**, `E-FATAL-SIGNAL`, exit **139** — on both the flat and the module arm. ⚠️ **The three other operator classes do NOT share this**: `==` (`Eq`), `<` (`Ord`) and `++` (`Semigroup`) each dispatch to the user's impl correctly and print the right answer on both engines, measured on the same binary. The gap is arithmetic-only | — (a §5 dispatch gap, not a keying one; recorded here because I7's identity ruling is what makes it visible as a *separate* defect rather than a consequence) |
 | §9 soundness statements (type preservation, semantic adequacy, coherence, evaluator interchangeability, `gen-sig` authority) | composite of every row above | explicitly "targets for a later proof/audit" (§9's own header) — not independently implemented checks | — |
 
-**Partial enforcement found (NOT "unimplemented"):** §3 W2 (instance-context
-termination/Paterson coverage) has no *static, declaration-time* check, but a *dynamic,
-resolution-time* cutoff does exist — `routeOfD`/`argImplRequiresRoutesForRow`, the
-#217 "WS-4b fuse", which since #1576 fires on NON-SHRINKING steps
-(`requiresNonShrinkingFuel`, 32 of them) rather than on raw depth. See the W2 row above
-for why that is not equivalent to the spec's condition: a non-shrinking context
-terminates but is never rejected, and the cutoff carries no diagnostic.
+**W2 is enforced as §3 states it (2026-10-10, R-W2).** It used to read as a static,
+declaration-time Paterson condition that the tree never checked, while five walks
+carried separate dynamic cutoffs and a sixth had none. §3 now states the dynamic
+rule, and one helper (`reqWalkEnter`) enforces it on every walk; see the W2 row above.
+A static check was measured and declined: it would have rejected impls in 14 test
+fixtures, an acceptance narrowing.
 
 **Prominent divergence found — and CLOSED, 2026-08-01 (F-3d, #614/#311). Kept here
 because the reasoning that resolved it is what a future reader needs, not the
