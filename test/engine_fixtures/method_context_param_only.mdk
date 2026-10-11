@@ -1,5 +1,7 @@
--- A method-level constraint on the interface parameter, `desc : Show2 a =>`,
--- used at `impl Desc (Pair b)`.  Expected: prints "int 1" on every verb.
+-- #3800: `desc`'s own context constrains only the interface parameter.  At
+-- `impl Desc (Pair b)` the context is `Show2 (Pair b)`, which the instance head
+-- leaves open, so the call supplies that dictionary and the body's `show2 p`
+-- reads it.  Expected, from the impls: `show2 (Pair 1 2)` = `show2 1` = "int 1".
 data Pair a = Pair a a
 
 interface Show2 a where

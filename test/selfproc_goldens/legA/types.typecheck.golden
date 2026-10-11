@@ -627,14 +627,13 @@ constraintArgMono : Ty -> List (String, Mono) -> Option Mono
 constraintArgMonos : List Ty -> List (String, Mono) -> Option (List Mono)
 constraintArgVarName : Ty -> Option String
 constraintArgVarNames : Constraint -> List String
-constraintFirstNonParam : List String -> Constraint -> List String
 constraintIface : Constraint -> String
 constraintIsMethodLevel : List String -> Constraint -> Bool
 constraintMethodPredicateSlot : List String -> List (String, Mono) -> List Int -> Constraint -> List MethodPredicateSlot
 constraintMonosOf : List Int -> List (Int, Mono) -> List Mono
 constraintNameMonos : List String -> List (String, Mono) -> List Mono
-constraintNonParamVars : List String -> Constraint -> List String
 constraintPredicateSlot : List (String, Mono) -> Constraint -> PredicateSlot
+constraintSlotDispatchVar : List String -> Constraint -> List String
 constraintSlotId : List String -> List (String, Mono) -> Constraint -> List Int
 constraintSlotVarIface : List String -> Constraint -> List (String, IfaceRef)
 constraintTyVarArgs : Constraint -> List (List Ty)

@@ -792,7 +792,7 @@ for required in \
   'reverseL !emit.stringSegments' \
   'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
   'emitProgramRecord input cp =' \
-  'emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =' \
+  'emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx) =' \
   'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
   'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do

@@ -324,11 +324,22 @@ cprogramToSexp prog = cprogramToSexpWith defaultSexpMode prog
 -- would otherwise be reached by flipping an ambient flag first.
 export
 cprogramToSexpWith : SexpMode -> CProgram -> String
-cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls) = node
-  "CProgram"
-  [
-    bindsSexp m binds,
-    slist (map ctorArityPairSexp ctorArities),
-    slist (map ctorTypePairSexp ctorToType),
-    slist (map (cimplEntrySexp m) impls),
-  ]
+cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls mctx) =
+  node
+    "CProgram"
+    ([
+        bindsSexp m binds,
+        slist (map ctorArityPairSexp ctorArities),
+        slist (map ctorTypePairSexp ctorToType),
+        slist (map (cimplEntrySexp m) impls),
+      ]
+      ++ methodContextsSexp mctx)
+
+-- The method-context table is written only when it has a row, so a program whose
+-- interfaces declare no method context keeps the four-element form.
+methodContextsSexp : List (String, Int) -> List String
+methodContextsSexp [] = []
+methodContextsSexp rows = [slist (map methodContextPairSexp rows)]
+
+methodContextPairSexp : (String, Int) -> String
+methodContextPairSexp (key, n) = node "mc" [escStr key, intToString n]

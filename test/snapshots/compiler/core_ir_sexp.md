@@ -1,5 +1,5 @@
 # META
-source_lines=334
+source_lines=345
 stages=DESUGAR,MARK
 # SOURCE
 -- Structural S-expression dump of the Core IR (STAGE2-DESIGN §2.1).  Mirrors
@@ -328,14 +328,25 @@ cprogramToSexp prog = cprogramToSexpWith defaultSexpMode prog
 -- would otherwise be reached by flipping an ambient flag first.
 export
 cprogramToSexpWith : SexpMode -> CProgram -> String
-cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls) = node
-  "CProgram"
-  [
-    bindsSexp m binds,
-    slist (map ctorArityPairSexp ctorArities),
-    slist (map ctorTypePairSexp ctorToType),
-    slist (map (cimplEntrySexp m) impls),
-  ]
+cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls mctx) =
+  node
+    "CProgram"
+    ([
+        bindsSexp m binds,
+        slist (map ctorArityPairSexp ctorArities),
+        slist (map ctorTypePairSexp ctorToType),
+        slist (map (cimplEntrySexp m) impls),
+      ]
+      ++ methodContextsSexp mctx)
+
+-- The method-context table is written only when it has a row, so a program whose
+-- interfaces declare no method context keeps the four-element form.
+methodContextsSexp : List (String, Int) -> List String
+methodContextsSexp [] = []
+methodContextsSexp rows = [slist (map methodContextPairSexp rows)]
+
+methodContextPairSexp : (String, Int) -> String
+methodContextPairSexp (key, n) = node "mc" [escStr key, intToString n]
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
@@ -439,7 +450,12 @@ cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls) = node
 (DTypeSig true "cprogramToSexp" (TyFun (TyCon "CProgram") (TyCon "String")))
 (DFunDef false "cprogramToSexp" ((PVar "prog")) (EApp (EApp (EVar "cprogramToSexpWith") (EVar "defaultSexpMode")) (EVar "prog")))
 (DTypeSig true "cprogramToSexpWith" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CProgram") (TyCon "String"))))
-(DFunDef false "cprogramToSexpWith" ((PVar "m") (PCon "CProgram" (PVar "binds") (PVar "ctorArities") (PVar "ctorToType") (PVar "impls"))) (EApp (EApp (EVar "node") (ELit (LString "CProgram"))) (EListLit (EApp (EApp (EVar "bindsSexp") (EVar "m")) (EVar "binds")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "ctorArityPairSexp")) (EVar "ctorArities"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "ctorTypePairSexp")) (EVar "ctorToType"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "cimplEntrySexp") (EVar "m"))) (EVar "impls"))))))
+(DFunDef false "cprogramToSexpWith" ((PVar "m") (PCon "CProgram" (PVar "binds") (PVar "ctorArities") (PVar "ctorToType") (PVar "impls") (PVar "mctx"))) (EApp (EApp (EVar "node") (ELit (LString "CProgram"))) (EBinOp "++" (EListLit (EApp (EApp (EVar "bindsSexp") (EVar "m")) (EVar "binds")) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "ctorArityPairSexp")) (EVar "ctorArities"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "ctorTypePairSexp")) (EVar "ctorToType"))) (EApp (EVar "slist") (EApp (EApp (EVar "map") (EApp (EVar "cimplEntrySexp") (EVar "m"))) (EVar "impls")))) (EApp (EVar "methodContextsSexp") (EVar "mctx")))))
+(DTypeSig false "methodContextsSexp" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "methodContextsSexp" ((PList)) (EListLit))
+(DFunDef false "methodContextsSexp" ((PVar "rows")) (EListLit (EApp (EVar "slist") (EApp (EApp (EVar "map") (EVar "methodContextPairSexp")) (EVar "rows")))))
+(DTypeSig false "methodContextPairSexp" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String")))
+(DFunDef false "methodContextPairSexp" ((PTuple (PVar "key") (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "mc"))) (EListLit (EApp (EVar "escStr") (EVar "key")) (EApp (EVar "intToString") (EVar "n")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true))))
@@ -543,4 +559,9 @@ cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls) = node
 (DTypeSig true "cprogramToSexp" (TyFun (TyCon "CProgram") (TyCon "String")))
 (DFunDef false "cprogramToSexp" ((PVar "prog")) (EApp (EApp (EVar "cprogramToSexpWith") (EVar "defaultSexpMode")) (EVar "prog")))
 (DTypeSig true "cprogramToSexpWith" (TyFun (TyCon "SexpMode") (TyFun (TyCon "CProgram") (TyCon "String"))))
-(DFunDef false "cprogramToSexpWith" ((PVar "m") (PCon "CProgram" (PVar "binds") (PVar "ctorArities") (PVar "ctorToType") (PVar "impls"))) (EApp (EApp (EVar "node") (ELit (LString "CProgram"))) (EListLit (EApp (EApp (EVar "bindsSexp") (EVar "m")) (EVar "binds")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "ctorArityPairSexp")) (EVar "ctorArities"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "ctorTypePairSexp")) (EVar "ctorToType"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "cimplEntrySexp") (EVar "m"))) (EVar "impls"))))))
+(DFunDef false "cprogramToSexpWith" ((PVar "m") (PCon "CProgram" (PVar "binds") (PVar "ctorArities") (PVar "ctorToType") (PVar "impls") (PVar "mctx"))) (EApp (EApp (EVar "node") (ELit (LString "CProgram"))) (EBinOp "++" (EListLit (EApp (EApp (EVar "bindsSexp") (EVar "m")) (EVar "binds")) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "ctorArityPairSexp")) (EVar "ctorArities"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "ctorTypePairSexp")) (EVar "ctorToType"))) (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EApp (EVar "cimplEntrySexp") (EVar "m"))) (EVar "impls")))) (EApp (EVar "methodContextsSexp") (EVar "mctx")))))
+(DTypeSig false "methodContextsSexp" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "methodContextsSexp" ((PList)) (EListLit))
+(DFunDef false "methodContextsSexp" ((PVar "rows")) (EListLit (EApp (EVar "slist") (EApp (EApp (EMethodRef "map") (EVar "methodContextPairSexp")) (EVar "rows")))))
+(DTypeSig false "methodContextPairSexp" (TyFun (TyTuple (TyCon "String") (TyCon "Int")) (TyCon "String")))
+(DFunDef false "methodContextPairSexp" ((PTuple (PVar "key") (PVar "n"))) (EApp (EApp (EVar "node") (ELit (LString "mc"))) (EListLit (EApp (EVar "escStr") (EVar "key")) (EApp (EVar "intToString") (EVar "n")))))

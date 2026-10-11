@@ -27777,8 +27777,8 @@ recPatFieldVarsTc : RecPatField -> List String
 recPatFieldVarsTc (RecPatField label _ None) = [label]
 recPatFieldVarsTc (RecPatField _ _ (Some p)) = patVarsTc p
 
--- interface methods carrying a method-level constraint (a `=>` over a tyvar that is
--- NOT the interface param, e.g. foldMap's `Monoid m`) — rewritten to EMethodAt
+-- interface methods carrying a method-level constraint (a `=>` in the method's own
+-- signature over any tyvar, e.g. foldMap's `Monoid m`) — rewritten to EMethodAt
 -- alongside the return-position methods so the method-level dict can be folded on.
 -- Computed structurally before `checkBodyImpl` populates `methodPredicateSlotsRef`.
 methodConstraintNames : List Decl -> List String
@@ -27795,8 +27795,8 @@ methodConstraintNameOf typarams (IfaceMethod mname mty _ _)
   | hasMethodLevelConstraint typarams mty = [mname]
   | otherwise = []
 
--- does this method type carry a leading `=>` constraint whose tyvar is not an
--- interface param? (a method-LEVEL constraint, as opposed to one over the param)
+-- does this method type carry a leading `=>` constraint over some tyvar? (a
+-- method-LEVEL constraint: the method's own context, as opposed to an impl `requires`)
 hasMethodLevelConstraint : List String -> Ty -> Bool
 hasMethodLevelConstraint typarams (TyConstrained cs t) =
   constraintsHaveMethodLevel typarams cs || hasMethodLevelConstraint typarams t
@@ -27809,15 +27809,23 @@ constraintsHaveMethodLevel _ [] = False
 constraintsHaveMethodLevel typarams (c :: rest) =
   constraintIsMethodLevel typarams c || constraintsHaveMethodLevel typarams rest
 
--- a constraint is method-level iff it mentions at least one tyvar that is not an
--- interface param (so the dict is supplied per-call, not by the impl's dispatch)
+-- a constraint in a method's own `=>` context is method-level iff it mentions a
+-- tyvar.  One over only interface params is a slot too: an impl head such as
+-- `Pair b` leaves `Show2 (Pair b)` open, so the caller must supply its dict.
 constraintIsMethodLevel : List String -> Constraint -> Bool
 constraintIsMethodLevel typarams c =
-  isNonEmptyL (constraintNonParamVars typarams c)
+  isNonEmptyL (constraintSlotDispatchVar typarams c)
 
-constraintNonParamVars : List String -> Constraint -> List String
-constraintNonParamVars typarams (Constraint { constraintArgs = args }) =
-  removeAllS typarams (flatMap tyVarNames args)
+-- the dispatch var of a method-level slot: its first tyvar that is not an
+-- interface param, else its first tyvar.  Empty for a constraint over no tyvar.
+constraintSlotDispatchVar : List String -> Constraint -> List String
+constraintSlotDispatchVar typarams (Constraint { constraintArgs = args }) =
+  let vars = flatMap tyVarNames args
+  match removeAllS typarams vars
+    n :: _ => [n]
+    [] => match vars
+      n :: _ => [n]
+      [] => []
 
 resolveSites : List String -> List PendingEntry -> Unit
 resolveSites _ [] = goalSiteLoc := None
@@ -36467,7 +36475,7 @@ methodLevelPredicateSlot : List String ->
   Constraint ->
   List PredicateSlot
 methodLevelPredicateSlot typarams tvMap c
-  | isEmptyL (constraintNonParamVars typarams c) = []
+  | not (constraintIsMethodLevel typarams c) = []
   | otherwise =
     let args = map (fromAstType tvMap) c.constraintArgs
     [
@@ -39387,8 +39395,9 @@ data ImplBodySite = ImplBodySite {
 --   * [mbiSurvivors]: the caller-owned type variables W3 requires to survive the
 --     body: the non-head variables of an impl body, every signature variable of a
 --     default body (the default must be parametric in the receiver too).
---   * [mbiNamedVars]: each signature variable name's mono, which the method-level
---     dictionary givens are published over.
+--   * [mbiNamedVars]: each signature variable name's mono (an impl body maps its
+--     interface params to the head monos), which the method-level dictionary givens
+--     are published over and the head-prerequisite verdict is read against.
 --   * [mbiCheckedForce]: read where the body's own forcing row is checked.  An impl
 --     body elaborates its written leading row again at that point, so a row naming
 --     several tail variables gets a join cell of its own there.
@@ -39616,7 +39625,7 @@ inferMethodBody env iface kind (params, mty, gscope) mname pats body =
         subject
         iface
         site
-        (zipL params site.ibHeadMonos ++ inst.mbiNamedVars)
+        inst.mbiNamedVars
         mty
         addedObls
         addedCallObls
@@ -39765,7 +39774,7 @@ instantiateMethodBody (ImplBody site) ifaceParams mty gscope =
     mbiCheckedForce = _ => bindingForceFromAst effMap mtvs mty,
     mbiEffVars = effMap.svRows,
     mbiSurvivors = extraMap,
-    mbiNamedVars = extraMap,
+    mbiNamedVars = mtvs,
     mbiDictSlots = [],
     mbiTypeSubst = [],
   }
@@ -40724,8 +40733,9 @@ checkSurvivorDispatchMonos subject ownIface ownTyparams mty extraMap oiface (dm 
     loc
 
 -- entailment base per var kind: a RECEIVER typaram (default path only) is
--- entailed by the owning interface itself + requires-closure; a method-level
--- var by its declared `=>` constraints + requires-closure.
+-- entailed by the owning interface itself + requires-closure, and by the method's
+-- declared `=>` constraints on it; a method-level var by its declared `=>`
+-- constraints + requires-closure.
 survivorObligationEntailed : String ->
   List String ->
   String ->
@@ -40733,7 +40743,9 @@ survivorObligationEntailed : String ->
   Ty ->
   Bool
 survivorObligationEntailed ownIface ownTyparams oiface vname mty
-  | contains vname ownTyparams = contains oiface (ifaceSelfAndSupers ownIface)
+  | contains vname ownTyparams =
+    contains oiface (ifaceSelfAndSupers ownIface)
+      || entailedByDeclared oiface vname mty
   | otherwise = entailedByDeclared oiface vname mty
 
 -- the method-scheme var name whose post-unify root [omono] resolves to, if any
@@ -41107,11 +41119,11 @@ effVarLaunderMsg subject evar escaping =
 -- Register an impl method's OWN method-level constraints (`Thenable m => …`) into
 -- activeDictVars, one slot per constraint, so a return-position method in the impl
 -- body whose result type is the constraint var routes RDictFwd $dict_<mname>_<slot>.
--- [tvMap] maps the method type's non-interface-param tyvar names → the fresh vars
--- expected/the body unified against; normalize each to its surviving root before
--- registering.  Slot numbering matches methodConstraintSlotIds (same flatMap order),
--- so it lines up with implDictPassMethods' prepended params and the call-site
--- methodRoutes resolveMethodDicts fills.
+-- [tvMap] maps the method type's tyvar names → the monos expected/the body unified
+-- against; normalize each to its surviving root before registering.  Slot numbering
+-- matches methodConstraintSlotIds (same flatMap order), so it lines up with
+-- implDictPassMethods' prepended params and the call-site methodRoutes
+-- resolveMethodDicts fills.
 registerImplMethodDicts : ScopeId ->
   List String ->
   Ty ->
@@ -41146,15 +41158,17 @@ registerImplMethodDictOne scope slot vname tvMap = match lookupAssoc vname tvMap
       graphRun.value.activeDictVars :=
         (tyvarId cell, Scopes.binderAt scope slot)
           :: graphRun.value.activeDictVars.value
+    -- A slot over a structured head (`Show2 (Pair b)` in `impl Desc (Pair b)`) has
+    -- no single var to key by id; publishMethodPredGivens's predicate-keyed given
+    -- for the same slot answers the body's goal instead.
     _ => ()
 
--- the non-interface-param dispatch var name of each method-level constraint, in
--- declaration order — the name-returning mirror of methodConstraintSlotIds (which
--- returns the ids).  One name per constraint slot; a constraint over only interface
--- params contributes nothing (it dispatches via the impl, not a dict).
+-- the dispatch var name of each method-level constraint (constraintSlotDispatchVar),
+-- in declaration order — the name-returning mirror of methodConstraintSlotIds (which
+-- returns the ids).  One name per constraint slot.
 methodLevelConstraintVarNames : List String -> Ty -> List String
 methodLevelConstraintVarNames typarams (TyConstrained cs t) =
-  flatMap (constraintFirstNonParam typarams) cs
+  flatMap (constraintSlotDispatchVar typarams) cs
     ++ methodLevelConstraintVarNames typarams t
 methodLevelConstraintVarNames typarams (TyEffect _ _ t) =
   methodLevelConstraintVarNames typarams t
@@ -41171,14 +41185,9 @@ methodLevelConstraintMonos ifaceParams mty tvMap =
       None => [])
     (methodLevelConstraintVarNames ifaceParams mty)
 
-constraintFirstNonParam : List String -> Constraint -> List String
-constraintFirstNonParam typarams c = match constraintNonParamVars typarams c
-  [] => []
-  n :: _ => [n]
-
 -- #818 (#838 I3): (dispatch-var-name, interface-name) per method-level `=>` constraint
--- slot — the same slots methodLevelConstraintVarNames enumerates (a non-interface-param
--- dispatch var, in declaration order), each paired with its constraint's interface.
+-- slot — the same slots methodLevelConstraintVarNames enumerates (its dispatch var, in
+-- declaration order), each paired with its constraint's interface.
 -- recordMethodLevelObls uses it to attach the right iface to each slot's obligation.
 methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
 methodLevelConstraintSlots typarams (TyConstrained cs t) =
@@ -41191,7 +41200,7 @@ methodLevelConstraintSlots _ _ = []
 -- P1 (#1446): the slot's interface identity comes from the `Constraint` occurrence
 -- resolve already stamped (`constraintOrigin`, #1110) — no new supply pass.
 constraintSlotVarIface : List String -> Constraint -> List (String, IfaceRef)
-constraintSlotVarIface typarams c = match constraintNonParamVars typarams c
+constraintSlotVarIface typarams c = match constraintSlotDispatchVar typarams c
   [] => []
   n :: _ => [
     (
@@ -43037,7 +43046,7 @@ constraintMethodPredicateSlot : List String ->
   Constraint ->
   List MethodPredicateSlot
 constraintMethodPredicateSlot typarams tvs fullIds c
-  | isEmptyL (constraintNonParamVars typarams c) = []
+  | not (constraintIsMethodLevel typarams c) = []
   | otherwise =
     let bound = constraintNameMonos (constraintVarNames c) tvs
     let ids = map monoTyvarId bound
@@ -43081,11 +43090,10 @@ methodConstraintSlotIds typarams (TyEffect _ _ t) tvs =
   methodConstraintSlotIds typarams t tvs
 methodConstraintSlotIds _ _ _ = []
 
--- one slot per method-level constraint: the id of its first non-interface-param
--- tyvar (the dispatch var the supplied dict narrows by).  A constraint over only
--- interface params contributes no slot (it dispatches via the impl, not a dict).
+-- one slot per method-level constraint: the id of its dispatch var
+-- (constraintSlotDispatchVar), which the supplied dict narrows by.
 constraintSlotId : List String -> List (String, Mono) -> Constraint -> List Int
-constraintSlotId typarams tvs c = match constraintNonParamVars typarams c
+constraintSlotId typarams tvs c = match constraintSlotDispatchVar typarams c
   [] => []
   n :: _ => match lookupAssoc n tvs
     Some m => [monoTyvarId m]
@@ -44373,7 +44381,7 @@ sccProtectedSignatureIds sigTvMaps =
 -- `inferDictAtFound` (call side) both size from.  It used to emit one entry per bare
 -- tyvar ARGUMENT — `Ix a b =>` shattered into TWO dict params for ONE predicate, both
 -- routed from the same single-argument goal — so the emitted convention disagreed with
--- the METHOD-level channel (`methodLevelConstraintVarNames`/`constraintFirstNonParam`,
+-- the METHOD-level channel (`methodLevelConstraintVarNames`/`constraintSlotDispatchVar`,
 -- one slot per constraint since #818) and with the impl-`requires` channel
 -- (`registerReqSlots`, one slot per ENTRY).  All three channels now agree: one dict per
 -- predicate.  ⚠️ The names are kept as a LIST, not collapsed to the first one here,
@@ -44572,7 +44580,7 @@ registerMember m scope ifaceMonos argVecs =
 -- least one of them is still abstract after body inference (a predicate ALL of whose
 -- variables the body forced concrete takes no dict, as before), and it is keyed on the
 -- FIRST such id — the same "first dispatch variable" rule the method-level channel has
--- used since #818 (`constraintFirstNonParam`).
+-- used since #818 (`constraintSlotDispatchVar`).
 --
 -- ⚠️ EVERY abstract id of the predicate is registered in `activeDictVars` against THAT
 -- ONE slot, not just the lead: `Ix a b => …` binds one dict param, and a body use whose

@@ -1,5 +1,5 @@
 # META
-source_lines=463
+source_lines=476
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -453,7 +453,20 @@ parseCProgram s = match parseAll s
       (map toCtorArity ctorArities)
       (map toCtorType ctorTypes)
       (map toCImplEntry impls)
+      []
+  SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls, SList mctx]) =>
+    CProgram
+      (map toCBind binds)
+      (map toCtorArity ctorArities)
+      (map toCtorType ctorTypes)
+      (map toCImplEntry impls)
+      (map toMethodContext mctx)
   other => panic ("core_ir_sexp_parse: bad CProgram: " ++ sexprToStr other)
+
+toMethodContext : SExp -> (String, Int)
+toMethodContext (SList ((SAtom "mc") :: [key, n])) = (toStr key, toInt n)
+toMethodContext other =
+  panic ("core_ir_sexp_parse: bad method context: " ++ sexprToStr other)
 
 -- ── debug helper ─────────────────────────────────────────────────────────────
 
@@ -665,7 +678,10 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCtorType" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "ct"))) (PList (PVar "ctor") (PVar "ty"))))) (ETuple (EApp (EVar "toStr") (EVar "ctor")) (EApp (EVar "toStr") (EVar "ty"))))
 (DFunDef false "toCtorType" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad ctor-type: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig true "parseCProgram" (TyFun (TyCon "String") (TyCon "CProgram")))
-(DFunDef false "parseCProgram" ((PVar "s")) (EMatch (EApp (EVar "parseAll") (EVar "s")) (arm (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CProgram"))) (PList (PCon "SList" (PVar "binds")) (PCon "SList" (PVar "ctorArities")) (PCon "SList" (PVar "ctorTypes")) (PCon "SList" (PVar "impls"))))) () (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EVar "toCBind")) (EVar "binds"))) (EApp (EApp (EVar "map") (EVar "toCtorArity")) (EVar "ctorArities"))) (EApp (EApp (EVar "map") (EVar "toCtorType")) (EVar "ctorTypes"))) (EApp (EApp (EVar "map") (EVar "toCImplEntry")) (EVar "impls")))) (arm (PVar "other") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CProgram: ")) (EApp (EVar "sexprToStr") (EVar "other")))))))
+(DFunDef false "parseCProgram" ((PVar "s")) (EMatch (EApp (EVar "parseAll") (EVar "s")) (arm (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CProgram"))) (PList (PCon "SList" (PVar "binds")) (PCon "SList" (PVar "ctorArities")) (PCon "SList" (PVar "ctorTypes")) (PCon "SList" (PVar "impls"))))) () (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EVar "toCBind")) (EVar "binds"))) (EApp (EApp (EVar "map") (EVar "toCtorArity")) (EVar "ctorArities"))) (EApp (EApp (EVar "map") (EVar "toCtorType")) (EVar "ctorTypes"))) (EApp (EApp (EVar "map") (EVar "toCImplEntry")) (EVar "impls"))) (EListLit))) (arm (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CProgram"))) (PList (PCon "SList" (PVar "binds")) (PCon "SList" (PVar "ctorArities")) (PCon "SList" (PVar "ctorTypes")) (PCon "SList" (PVar "impls")) (PCon "SList" (PVar "mctx"))))) () (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EVar "toCBind")) (EVar "binds"))) (EApp (EApp (EVar "map") (EVar "toCtorArity")) (EVar "ctorArities"))) (EApp (EApp (EVar "map") (EVar "toCtorType")) (EVar "ctorTypes"))) (EApp (EApp (EVar "map") (EVar "toCImplEntry")) (EVar "impls"))) (EApp (EApp (EVar "map") (EVar "toMethodContext")) (EVar "mctx")))) (arm (PVar "other") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CProgram: ")) (EApp (EVar "sexprToStr") (EVar "other")))))))
+(DTypeSig false "toMethodContext" (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "toMethodContext" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "mc"))) (PList (PVar "key") (PVar "n"))))) (ETuple (EApp (EVar "toStr") (EVar "key")) (EApp (EVar "toInt") (EVar "n"))))
+(DFunDef false "toMethodContext" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad method context: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "sexprToStr" (TyFun (TyCon "SExp") (TyCon "String")))
 (DFunDef false "sexprToStr" ((PCon "SAtom" (PVar "s"))) (EVar "s"))
 (DFunDef false "sexprToStr" ((PCon "SList" (PVar "xs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinSexps") (EVar "xs"))) (ELit (LString ")"))))
@@ -873,7 +889,10 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCtorType" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "ct"))) (PList (PVar "ctor") (PVar "ty"))))) (ETuple (EApp (EVar "toStr") (EVar "ctor")) (EApp (EVar "toStr") (EVar "ty"))))
 (DFunDef false "toCtorType" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad ctor-type: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig true "parseCProgram" (TyFun (TyCon "String") (TyCon "CProgram")))
-(DFunDef false "parseCProgram" ((PVar "s")) (EMatch (EApp (EVar "parseAll") (EVar "s")) (arm (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CProgram"))) (PList (PCon "SList" (PVar "binds")) (PCon "SList" (PVar "ctorArities")) (PCon "SList" (PVar "ctorTypes")) (PCon "SList" (PVar "impls"))))) () (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EVar "toCBind")) (EVar "binds"))) (EApp (EApp (EMethodRef "map") (EVar "toCtorArity")) (EVar "ctorArities"))) (EApp (EApp (EMethodRef "map") (EVar "toCtorType")) (EVar "ctorTypes"))) (EApp (EApp (EMethodRef "map") (EVar "toCImplEntry")) (EVar "impls")))) (arm (PVar "other") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CProgram: ")) (EApp (EVar "sexprToStr") (EVar "other")))))))
+(DFunDef false "parseCProgram" ((PVar "s")) (EMatch (EApp (EVar "parseAll") (EVar "s")) (arm (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CProgram"))) (PList (PCon "SList" (PVar "binds")) (PCon "SList" (PVar "ctorArities")) (PCon "SList" (PVar "ctorTypes")) (PCon "SList" (PVar "impls"))))) () (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EVar "toCBind")) (EVar "binds"))) (EApp (EApp (EMethodRef "map") (EVar "toCtorArity")) (EVar "ctorArities"))) (EApp (EApp (EMethodRef "map") (EVar "toCtorType")) (EVar "ctorTypes"))) (EApp (EApp (EMethodRef "map") (EVar "toCImplEntry")) (EVar "impls"))) (EListLit))) (arm (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CProgram"))) (PList (PCon "SList" (PVar "binds")) (PCon "SList" (PVar "ctorArities")) (PCon "SList" (PVar "ctorTypes")) (PCon "SList" (PVar "impls")) (PCon "SList" (PVar "mctx"))))) () (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EVar "toCBind")) (EVar "binds"))) (EApp (EApp (EMethodRef "map") (EVar "toCtorArity")) (EVar "ctorArities"))) (EApp (EApp (EMethodRef "map") (EVar "toCtorType")) (EVar "ctorTypes"))) (EApp (EApp (EMethodRef "map") (EVar "toCImplEntry")) (EVar "impls"))) (EApp (EApp (EMethodRef "map") (EVar "toMethodContext")) (EVar "mctx")))) (arm (PVar "other") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CProgram: ")) (EApp (EVar "sexprToStr") (EVar "other")))))))
+(DTypeSig false "toMethodContext" (TyFun (TyCon "SExp") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "toMethodContext" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "mc"))) (PList (PVar "key") (PVar "n"))))) (ETuple (EApp (EVar "toStr") (EVar "key")) (EApp (EVar "toInt") (EVar "n"))))
+(DFunDef false "toMethodContext" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad method context: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "sexprToStr" (TyFun (TyCon "SExp") (TyCon "String")))
 (DFunDef false "sexprToStr" ((PCon "SAtom" (PVar "s"))) (EVar "s"))
 (DFunDef false "sexprToStr" ((PCon "SList" (PVar "xs"))) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "joinSexps") (EVar "xs"))) (ELit (LString ")"))))
