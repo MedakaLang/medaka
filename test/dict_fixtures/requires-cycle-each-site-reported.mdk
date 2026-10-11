@@ -1,0 +1,19 @@
+-- One diagnostic per goal site.  `tagOf (Wrap (Wrap 1))` and `f (Wrap 2)` each pose
+-- `Tag (Wrap ..)`, whose impl `requires Tag2 a` reaches the self-requiring
+-- `impl Tag2 (Wrap a) requires Tag2 (Wrap a)`: the `requires` chain never ends
+-- (T-REQUIRES-CYCLE).  The two messages share their text, so a fold on text alone
+-- would report only the first.  Hand-derived: REJECT on all three verbs, located
+-- at 18:11 and 19:11.
+data Wrap a = Wrap a
+interface Tag t where
+  tagOf : t -> String
+interface Tag2 t where
+  tag2Of : t -> String
+impl Tag2 (Wrap a) requires Tag2 (Wrap a) where
+  tag2Of _ = "i"
+impl Tag (Wrap a) requires Tag2 a where
+  tagOf (Wrap x) = "w"
+f x = tagOf (Wrap x)
+main =
+  println (tagOf (Wrap (Wrap 1)))
+  println (f (Wrap 2))

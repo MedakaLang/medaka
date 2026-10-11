@@ -1,0 +1,35 @@
+{- | The suites whose interpreter arm runs nightly, not on the merge path.
+
+   `pds/test/inlang_test_oracle_test.mdk` spawns each of these under
+   `--native` and grades it against the floor below. The eval-engine arm,
+   which is the slow one, is spawned by
+   `pds/nightly/inlang_eval_engine_test.mdk` over this same list, so the
+   two gates cannot disagree about a floor. A `test` file cannot be imported
+   by another file, which is why the list lives in this support module. -}
+
+-- | Suite stem and the assertion-count floor it commits, the same shape as
+-- the `suites` rows of the merge-path gate.
+export
+interpreterSuites : List (String, Int)
+interpreterSuites = [
+  ("skeleton_test", 2),
+  ("httpclient_test", 12),
+  ("http_test", 85),
+  ("xrpc_test", 29),
+  ("server_core_test", 14),
+  ("encodings_test", 29),
+  ("dagcbor_cid_test", 12),
+  -- lowered from 14: two cells fed out-of-range bytes that `Bytes` cannot
+  -- represent, and were deleted rather than converted
+  ("car_store_test", 12),
+  -- lowered from 11: cells fed out-of-range bytes that `Bytes` cannot
+  -- represent and were deleted, and the byte-array ingress cell left with
+  -- the ingress it tested
+  ("sign_key_test", 7),
+  ("secp256k1_point_test", 8),
+  ("rfc6979_test", 4),
+  ("ecdsa_test", 2),
+  ("read_buffer_test", 19),
+  ("egress_census_test", 9),
+  ("route_policy_test", 4),
+]

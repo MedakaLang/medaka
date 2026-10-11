@@ -1491,59 +1491,18 @@ NEWLINE
 DEDENT
 ELSE
 INDENT
-LET
-IDENT "mid"
-EQUAL
-IDENT "n"
-SLASH
-INT 2
-NEWLINE
-LET
-IDENT "left"
-EQUAL
-IDENT "arrayMakeWith"
-IDENT "mid"
+IDENT "mergePasses"
+IDENT "cmp"
 LPAREN
-IDENT "i"
-FAT_ARROW
-IDENT "arrayGetUnsafe"
-IDENT "i"
+IDENT "arrayCopy"
 IDENT "arr"
 RPAREN
-NEWLINE
-LET
-IDENT "right"
-EQUAL
-IDENT "arrayMakeWith"
 LPAREN
-IDENT "n"
-MINUS
-IDENT "mid"
-RPAREN
-LPAREN
-IDENT "i"
-FAT_ARROW
-IDENT "arrayGetUnsafe"
-LPAREN
-IDENT "mid"
-PLUS
-IDENT "i"
-RPAREN
+IDENT "arrayCopy"
 IDENT "arr"
 RPAREN
-NEWLINE
-IDENT "merge"
-IDENT "cmp"
-LPAREN
-IDENT "sortBy"
-IDENT "cmp"
-IDENT "left"
-RPAREN
-LPAREN
-IDENT "sortBy"
-IDENT "cmp"
-IDENT "right"
-RPAREN
+IDENT "n"
+INT 1
 NEWLINE
 DEDENT
 NEWLINE
@@ -1665,7 +1624,7 @@ RPAREN
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "merge"
+IDENT "mergePasses"
 COLON
 LPAREN
 IDENT "a"
@@ -1678,11 +1637,19 @@ GT
 UPPER "Ordering"
 RPAREN
 ARROW
+INDENT
 UPPER "Array"
 IDENT "a"
 ARROW
+NEWLINE
 UPPER "Array"
 IDENT "a"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
 ARROW
 LT
 IDENT "e"
@@ -1690,35 +1657,161 @@ GT
 UPPER "Array"
 IDENT "a"
 NEWLINE
-IDENT "merge"
+DEDENT
+NEWLINE
+IDENT "mergePasses"
 IDENT "cmp"
-IDENT "left"
-IDENT "right"
+IDENT "src"
+IDENT "dst"
+IDENT "n"
+IDENT "width"
 EQUAL
 INDENT
-IDENT "arrayFromList"
-LPAREN
-IDENT "mergeGo"
+IF
+IDENT "width"
+GEQ
+IDENT "n"
+THEN
+INDENT
+IDENT "src"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "mergeRuns"
 IDENT "cmp"
-IDENT "left"
-IDENT "right"
+IDENT "src"
+IDENT "dst"
+IDENT "n"
+IDENT "width"
 INT 0
-INT 0
+NEWLINE
+IDENT "mergePasses"
+IDENT "cmp"
+IDENT "dst"
+IDENT "src"
+IDENT "n"
 LPAREN
-IDENT "arrayLength"
-IDENT "left"
-RPAREN
-LPAREN
-IDENT "arrayLength"
-IDENT "right"
-RPAREN
-LBRACKET
-RBRACKET
+IDENT "width"
+STAR
+INT 2
 RPAREN
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "mergeGo"
+DEDENT
+NEWLINE
+IDENT "mergeRuns"
+COLON
+LPAREN
+IDENT "a"
+ARROW
+IDENT "a"
+ARROW
+LT
+IDENT "e"
+GT
+UPPER "Ordering"
+RPAREN
+ARROW
+INDENT
+UPPER "Array"
+IDENT "a"
+ARROW
+NEWLINE
+UPPER "Array"
+IDENT "a"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+LT
+IDENT "e"
+GT
+UPPER "Unit"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "mergeRuns"
+IDENT "cmp"
+IDENT "src"
+IDENT "dst"
+IDENT "n"
+IDENT "width"
+IDENT "lo"
+EQUAL
+INDENT
+IF
+IDENT "lo"
+GEQ
+IDENT "n"
+THEN
+INDENT
+LPAREN
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+INDENT
+LET
+IDENT "mid"
+EQUAL
+IDENT "min"
+LPAREN
+IDENT "lo"
+PLUS
+IDENT "width"
+RPAREN
+IDENT "n"
+NEWLINE
+LET
+IDENT "hi"
+EQUAL
+IDENT "min"
+LPAREN
+IDENT "lo"
+PLUS
+IDENT "width"
+PLUS
+IDENT "width"
+RPAREN
+IDENT "n"
+NEWLINE
+LET
+UNDERSCORE
+EQUAL
+IDENT "mergeRun"
+IDENT "cmp"
+IDENT "src"
+IDENT "dst"
+IDENT "lo"
+IDENT "mid"
+IDENT "mid"
+IDENT "hi"
+IDENT "lo"
+NEWLINE
+IDENT "mergeRuns"
+IDENT "cmp"
+IDENT "src"
+IDENT "dst"
+IDENT "n"
+IDENT "width"
+IDENT "hi"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "mergeRun"
 COLON
 LPAREN
 IDENT "a"
@@ -1752,109 +1845,68 @@ NEWLINE
 UPPER "Int"
 ARROW
 NEWLINE
-UPPER "List"
-IDENT "a"
+UPPER "Int"
 ARROW
 LT
 IDENT "e"
 GT
-UPPER "List"
-IDENT "a"
+UPPER "Unit"
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "mergeGo"
+IDENT "mergeRun"
 IDENT "cmp"
-IDENT "left"
-IDENT "right"
-IDENT "il"
-IDENT "ir"
-IDENT "nl"
-IDENT "nr"
-IDENT "acc"
-INDENT
-PIPE
-IDENT "il"
-GEQ
-IDENT "nl"
-AND
-IDENT "ir"
-GEQ
-IDENT "nr"
-EQUAL
-IDENT "revList"
-IDENT "acc"
-LBRACKET
-RBRACKET
-NEWLINE
-PIPE
-IDENT "il"
-GEQ
-IDENT "nl"
+IDENT "src"
+IDENT "dst"
+IDENT "i"
+IDENT "iEnd"
+IDENT "j"
+IDENT "jEnd"
+IDENT "k"
 EQUAL
 INDENT
-IDENT "mergeGo"
-IDENT "cmp"
-IDENT "left"
-IDENT "right"
-IDENT "il"
-LPAREN
-IDENT "ir"
-PLUS
-INT 1
-RPAREN
-IDENT "nl"
-IDENT "nr"
-LPAREN
-IDENT "arrayGetUnsafe"
-IDENT "ir"
-IDENT "right"
-CONS
-IDENT "acc"
-RPAREN
+IF
+IDENT "i"
+GEQ
+IDENT "iEnd"
+THEN
+INDENT
+IDENT "copyRun"
+IDENT "src"
+IDENT "dst"
+IDENT "j"
+IDENT "jEnd"
+IDENT "k"
 NEWLINE
 DEDENT
-NEWLINE
-PIPE
-IDENT "ir"
+ELSE
+IF
+IDENT "j"
 GEQ
-IDENT "nr"
-EQUAL
+IDENT "jEnd"
+THEN
 INDENT
-IDENT "mergeGo"
-IDENT "cmp"
-IDENT "left"
-IDENT "right"
-LPAREN
-IDENT "il"
-PLUS
-INT 1
-RPAREN
-IDENT "ir"
-IDENT "nl"
-IDENT "nr"
-LPAREN
-IDENT "arrayGetUnsafe"
-IDENT "il"
-IDENT "left"
-CONS
-IDENT "acc"
-RPAREN
+IDENT "copyRun"
+IDENT "src"
+IDENT "dst"
+IDENT "i"
+IDENT "iEnd"
+IDENT "k"
 NEWLINE
 DEDENT
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
+ELSE
+INDENT
 IDENT "mergeStep"
 IDENT "cmp"
-IDENT "left"
-IDENT "right"
-IDENT "il"
-IDENT "ir"
-IDENT "nl"
-IDENT "nr"
-IDENT "acc"
+IDENT "src"
+IDENT "dst"
+IDENT "i"
+IDENT "iEnd"
+IDENT "j"
+IDENT "jEnd"
+IDENT "k"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -1892,62 +1944,70 @@ NEWLINE
 UPPER "Int"
 ARROW
 NEWLINE
-UPPER "List"
-IDENT "a"
+UPPER "Int"
 ARROW
 LT
 IDENT "e"
 GT
-UPPER "List"
-IDENT "a"
+UPPER "Unit"
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "mergeStep"
 IDENT "cmp"
-IDENT "left"
-IDENT "right"
-IDENT "il"
-IDENT "ir"
-IDENT "nl"
-IDENT "nr"
-IDENT "acc"
+IDENT "src"
+IDENT "dst"
+IDENT "i"
+IDENT "iEnd"
+IDENT "j"
+IDENT "jEnd"
+IDENT "k"
 EQUAL
 INDENT
 MATCH
 IDENT "cmp"
 LPAREN
 IDENT "arrayGetUnsafe"
-IDENT "il"
-IDENT "left"
+IDENT "i"
+IDENT "src"
 RPAREN
 LPAREN
 IDENT "arrayGetUnsafe"
-IDENT "ir"
-IDENT "right"
+IDENT "j"
+IDENT "src"
 RPAREN
 INDENT
 UPPER "Gt"
 FAT_ARROW
 INDENT
-IDENT "mergeGo"
-IDENT "cmp"
-IDENT "left"
-IDENT "right"
-IDENT "il"
+LET
+UNDERSCORE
+EQUAL
+IDENT "arraySetUnsafe"
+IDENT "k"
 LPAREN
-IDENT "ir"
+IDENT "arrayGetUnsafe"
+IDENT "j"
+IDENT "src"
+RPAREN
+IDENT "dst"
+NEWLINE
+IDENT "mergeRun"
+IDENT "cmp"
+IDENT "src"
+IDENT "dst"
+IDENT "i"
+IDENT "iEnd"
+LPAREN
+IDENT "j"
 PLUS
 INT 1
 RPAREN
-IDENT "nl"
-IDENT "nr"
+IDENT "jEnd"
 LPAREN
-IDENT "arrayGetUnsafe"
-IDENT "ir"
-IDENT "right"
-CONS
-IDENT "acc"
+IDENT "k"
+PLUS
+INT 1
 RPAREN
 NEWLINE
 DEDENT
@@ -1955,27 +2015,104 @@ NEWLINE
 UNDERSCORE
 FAT_ARROW
 INDENT
-IDENT "mergeGo"
-IDENT "cmp"
-IDENT "left"
-IDENT "right"
+LET
+UNDERSCORE
+EQUAL
+IDENT "arraySetUnsafe"
+IDENT "k"
 LPAREN
-IDENT "il"
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "src"
+RPAREN
+IDENT "dst"
+NEWLINE
+IDENT "mergeRun"
+IDENT "cmp"
+IDENT "src"
+IDENT "dst"
+LPAREN
+IDENT "i"
 PLUS
 INT 1
 RPAREN
-IDENT "ir"
-IDENT "nl"
-IDENT "nr"
+IDENT "iEnd"
+IDENT "j"
+IDENT "jEnd"
 LPAREN
-IDENT "arrayGetUnsafe"
-IDENT "il"
-IDENT "left"
-CONS
-IDENT "acc"
+IDENT "k"
+PLUS
+INT 1
 RPAREN
 NEWLINE
 DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "copyRun"
+COLON
+UPPER "Array"
+IDENT "a"
+ARROW
+UPPER "Array"
+IDENT "a"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Unit"
+NEWLINE
+IDENT "copyRun"
+IDENT "src"
+IDENT "dst"
+IDENT "i"
+IDENT "iEnd"
+IDENT "k"
+EQUAL
+INDENT
+IF
+IDENT "i"
+GEQ
+IDENT "iEnd"
+THEN
+INDENT
+LPAREN
+RPAREN
+NEWLINE
+DEDENT
+ELSE
+INDENT
+LET
+UNDERSCORE
+EQUAL
+IDENT "arraySetUnsafe"
+IDENT "k"
+LPAREN
+IDENT "arrayGetUnsafe"
+IDENT "i"
+IDENT "src"
+RPAREN
+IDENT "dst"
+NEWLINE
+IDENT "copyRun"
+IDENT "src"
+IDENT "dst"
+LPAREN
+IDENT "i"
+PLUS
+INT 1
+RPAREN
+IDENT "iEnd"
+LPAREN
+IDENT "k"
+PLUS
+INT 1
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE

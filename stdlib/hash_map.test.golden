@@ -17,9 +17,9 @@ running doctests in stdlib/hash_map.mdk
   ok   stdlib/hash_map.mdk:290: elem 20 (fromList [(1, 10), (2, 20)])
   ok   stdlib/hash_map.mdk:292: sum (fromList [(1, 10), (2, 20)])
   ok   stdlib/hash_map.mdk:310: eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
-  ok   stdlib/hash_map.mdk:337: display (fromList [(2, 20), (1, 10)])
-  ok   stdlib/hash_map.mdk:339: display (new () : HashMap Int Int)
-  ok   stdlib/hash_map.mdk:351: (fromList [(1, 10), (2, 20)])[2]
+  ok   stdlib/hash_map.mdk:336: display (fromList [(2, 20), (1, 10)])
+  ok   stdlib/hash_map.mdk:338: display (new () : HashMap Int Int)
+  ok   stdlib/hash_map.mdk:350: (fromList [(1, 10), (2, 20)])[2]
 
 stdlib/hash_map.mdk: 21/21 passed
 Testing "Display HashMap is layout-independent" [eval] ... OK (100 tests passed)

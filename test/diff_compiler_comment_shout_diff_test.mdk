@@ -1,0 +1,308 @@
+{- | Gate for the comment-register shout rule. Replaces test/diff_compiler_comment_shout_diff.sh.
+
+   Two assertions, in the script's order:
+   1. Tree-wide baseline ratchet (runs first, unconditionally): the census helper
+      `sh test/comment_register_census.sh --check test/comment_register_baseline.toml`
+      must exit 0. Native-wrap of the helper (kept, not ported).
+   2. Diff shout check: over `git diff --name-only --diff-filter=ACM <merge-base> HEAD
+      -- *.mdk :(exclude)test/**`, no ADDED line (a `+` line, not `+++`) in a .mdk
+      outside test/ introduces 🚨/⚠️/🔒, nor the sigil-free ALL-CAPS register (3+
+      consecutive ALL-CAPS words) on a comment-scope line. Comment scope is `--` line
+      comments plus the lines the census helper's --comment-scope classifies on the
+      post-image (HEAD:<path>). Membership is by exact line text.
+
+   WHAT IT PROVES: a PR adds no new shout line (sigil or sigil-free) to a .mdk outside
+   test/, and the tree-wide comment-register counts match the pinned baseline.
+
+   WHAT IT DOES NOT PROVE: that the census figures are right, wrong or moving (this gate
+   drains nothing). .md files are out of scope.
+
+   Shallow-clone recovery (script lines 101-118) is ported: when origin/main does not
+   resolve, `git fetch --depth=50 origin refs/heads/main:refs/remotes/origin/main` runs;
+   when the merge-base with HEAD fails, `git fetch --depth=50 origin <HEAD sha>` runs.
+   Fetch failures are ignored, as in the script. Locally, with origin/main present, no
+   fetch runs. If the merge-base is still unresolvable, the test fails with the
+   script's own merge-base message.
+   The re_emoji/re_shout literals are the same text as the script; the cross-file
+   divergence check (.githooks/pre-commit, census helper) is not repeated here. -}
+
+import test_process.{medakaRoot, boundedVerb, underRoot}
+import test.{Expectation, expectAll, expectEqual, expectNoFindings, fail, pass}
+import string.{lines, contains, startsWith, trim, stripPrefix}
+import list.{nub, sort}
+import regex.{Regex, mustCompile, isMatch}
+
+-- Same literal as re_shout in .githooks/pre-commit and the census helper.
+reShout : Regex
+reShout = mustCompile "([A-Z][A-Z]+[,.:;)]? ){2,}[A-Z][A-Z]+"
+
+-- Assertion 1: tree-wide comment-register baseline ratchet.
+baselineCheck : <Exec, IO> Expectation
+baselineCheck = match boundedVerb "sh" [
+  underRoot "test/comment_register_census.sh",
+  "--check",
+  underRoot "test/comment_register_baseline.toml",
+]
+  Err e => fail "could not run comment_register_census.sh --check: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      fail
+        "comment-register baseline ratchet violated (exit \{intToString code}); the census output names the regen command:\n\{out}\{err}"
+    else
+      pass
+
+-- Pure helpers ---------------------------------------------------------------
+
+stripOne : String -> String -> String
+stripOne p s = match stripPrefix p s
+  Some r => r
+  None => s
+
+dropPlus : String -> String
+dropPlus l = stripOne "+" l
+
+-- The `+` lines of a unified diff, minus the `+++` file header (grep '^+' | grep -v '^+++').
+addedOf : String -> List String
+addedOf diffText =
+  filter (l => startsWith "+" l && not (startsWith "+++" l)) (lines diffText)
+
+-- grep -E '^[ \t]*--' matches a bracket set of space, backslash, `t` and tab: replicate
+-- that set exactly (it is looser than intended, so a stricter port).
+leadPrefix : String -> Option String
+leadPrefix s =
+  if startsWith " " s then
+    Some " "
+  else if startsWith "\t" s then
+    Some "\t"
+  else if startsWith "\\" s then
+    Some "\\"
+  else if startsWith "t" s then
+    Some "t"
+  else
+    None
+
+dropLead : String -> String
+dropLead s = match leadPrefix s
+  Some p => dropLead (stripOne p s)
+  None => s
+
+isLineComment : String -> Bool
+isLineComment l = startsWith "--" (dropLead l)
+
+hasSigil : String -> Bool
+hasSigil l = contains "🚨" l || contains "⚠️" l || contains "🔒" l
+
+-- Sigil hits keep the diff's `+` prefix (the script printed the raw added line).
+sigilHits : List String -> List String
+sigilHits added = filter hasSigil added
+
+-- Sigil-free ALL-CAPS register, only on comment-scope lines (line comments, or lines
+-- the census helper classifies as comment scope on the post-image).
+shoutHits : List String -> List String -> List String
+shoutHits added scope =
+  let stripped = map dropPlus added
+  let cands =
+    filter (l => l /= "" && (isLineComment l || elem l scope)) stripped
+  filter (l => isMatch reShout l) (nub (sort cands))
+
+findingsOf : List String -> List String -> List String
+findingsOf added scope = sigilHits added ++ shoutHits added scope
+
+-- Git-touching helpers ---------------------------------------------------------
+
+-- Merge-base of HEAD with the given ref, or "" when it cannot be resolved.
+mergeBaseWith : String -> <Exec, IO> String
+mergeBaseWith ref =
+  match boundedVerb "git" ["-C", medakaRoot, "merge-base", ref, "HEAD"]
+    Err _ => ""
+    Ok (code, out, _) => if code == 0 then trim out else ""
+
+-- Fetch with output discarded; returns whether the fetch exited 0. Failures are ignored
+-- (the script's `2>/dev/null` and unchecked fetch status).
+fetchQuiet : List String -> <Exec, IO> Bool
+fetchQuiet args =
+  match runCommand "git" (["-C", medakaRoot, "fetch", "--quiet"] ++ args)
+    Ok (0, _, _) => True
+    _ => False
+
+-- HEAD's commit sha, or "" when it cannot be resolved.
+headSha : <Exec, IO> String
+headSha = match runCommand "git" ["-C", medakaRoot, "rev-parse", "HEAD"]
+  Ok (0, out, _) => trim out
+  _ => ""
+
+originMainResolves : <Exec, IO> Bool
+originMainResolves = match runCommand "git" [
+  "-C",
+  medakaRoot,
+  "rev-parse",
+  "--verify",
+  "--quiet",
+  "origin/main",
+]
+  Ok (0, _, _) => True
+  _ => False
+
+-- CI shallow-clone recovery (script lines 101-118). actions/checkout@v4's default
+-- checkout is depth=1 of the triggering ref: origin/main is unresolvable and HEAD has
+-- no parent history, so both fetches are needed there. Locally they never run.
+-- Each step is sequenced by `let`; the Bool result is only for ordering.
+recoverShallow : <Exec, IO> Bool
+recoverShallow =
+  let originOk =
+    originMainResolves
+      || fetchQuiet [
+        "--depth=50", "origin", "refs/heads/main:refs/remotes/origin/main"
+      ]
+  let historyOk =
+    mergeBaseWith "origin/main" /= ""
+      || fetchQuiet ["--depth=50", "origin", headSha]
+  originOk && historyOk
+
+-- origin/main first, then local main (the script's fallback order).
+baseOf : <Exec, IO> String
+baseOf =
+  let _recovered = recoverShallow
+  let b = mergeBaseWith "origin/main"
+  if b /= "" then b else mergeBaseWith "main"
+
+mdkFiles : String -> <Exec, IO> Result String (List String)
+mdkFiles base =
+  match (boundedVerb "git" [
+    "-C", medakaRoot, "diff", "--name-only", "--diff-filter=ACM", base, "HEAD",
+    "--", "*.mdk", ":(exclude)test/**"
+  ])
+    Err e => Err e
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err "exit \{intToString code}: \{err}"
+      else
+        Ok (filter (/= "") (lines out))
+
+fileDiff : String -> String -> <Exec, IO> Result String String
+fileDiff base f =
+  match (boundedVerb "git" [
+    "-C", medakaRoot, "diff", "-U0", base, "HEAD", "--", f
+  ])
+    Err e => Err e
+    Ok (code, out, err) =>
+      if code /= 0 then
+        Err
+          "git diff -U0 \{base} HEAD -- \{f} exited \{intToString code}: \{err}"
+      else
+        Ok out
+
+-- The post-image's comment-scope lines; a failing census run is an error, not
+-- an empty scope.
+postScope : String -> <Exec, IO> Result String (List String)
+postScope f = match boundedVerb "sh" [
+  "-c",
+  "git -C \"$3\" show \"$2\" 2>/dev/null | sh \"$1\" --comment-scope -",
+  "medaka",
+  underRoot "test/comment_register_census.sh",
+  "HEAD:" ++ f,
+  medakaRoot,
+]
+  Err e => Err e
+  Ok (code, out, err) =>
+    if code /= 0 then
+      Err "comment-scope census for \{f} exited \{intToString code}: \{err}"
+    else
+      Ok (lines out)
+
+withScope : String -> List String -> <Exec, IO> Result String (List String)
+withScope f added =
+  map (scope => map (h => "\{f}: \{h}") (findingsOf added scope)) (postScope f)
+
+checkAdded : String -> List String -> <Exec, IO> Result String (List String)
+checkAdded f added = if isEmpty added then Ok [] else withScope f added
+
+checkFile : String -> String -> <Exec, IO> Result String (List String)
+checkFile base f = match fileDiff base f
+  Err e => Err e
+  Ok diff => checkAdded f (addedOf diff)
+
+diffFindings : String -> List String -> <Exec, IO> Result String (List String)
+diffFindings base [] = Ok []
+diffFindings base (f :: rest) = match checkFile base f
+  Err e => Err e
+  Ok hits => map (hits ++ _) (diffFindings base rest)
+
+-- Assertion 2: diff shout check over the PR's .mdk changes outside test/.
+diffCheckFrom : String -> <Exec, IO> Expectation
+diffCheckFrom base = match mdkFiles base
+  Err e =>
+    fail
+      "git diff --name-only \{base} HEAD failed (unresolvable ref or too-shallow clone): \{e}"
+  Ok files =>
+    expectNoFindings
+      "new shout comment line(s) added (🚨/⚠️/🔒 or sigil-free ALL-CAPS) in .mdk outside test/ -- see AGENTS.md [T-COMMENT-REGISTER]: no new shout comments"
+      (diffFindings base files)
+
+diffCheck : <Exec, IO> Expectation
+diffCheck =
+  let base = baseOf
+  if base == "" then
+    fail "could not determine a merge-base with main -- pass a base explicitly"
+  else
+    diffCheckFrom base
+
+-- Detector self-check over synthetic diff text: a planted shout must be caught, and
+-- prose or non-comment caps must not be. Green proves the detector fires.
+detectorSelfCheck : Expectation
+detectorSelfCheck =
+  let planted =
+    addedOf
+      "diff --git a/x.mdk b/x.mdk\n+++ b/x.mdk\n@@ -1 +1,2 @@\n x = 1\n+-- CHANGE THIS NOW PLEASE\n"
+  let blockPlanted = addedOf "+++ b/x.mdk\n+  SHOUTING ACROSS LINES HERE\n"
+  expectAll [
+    expectEqual (length planted) 1,
+    expectEqual (length (findingsOf planted ["-- CHANGE THIS NOW PLEASE"])) 1,
+    expectEqual
+      (length (findingsOf blockPlanted ["  SHOUTING ACROSS LINES HERE"]))
+      1,
+    expectEqual (length (findingsOf ["+x = 1 🔒"] [])) 1,
+    expectEqual (length (findingsOf ["+-- quiet note here"] [])) 0,
+    expectEqual (length (findingsOf ["+CODE: LOUD OK"] [])) 0,
+  ]
+
+-- Literal agreement: the first `re_emoji=` / `re_shout=` line of each twin must equal
+-- this file's literal (the script's `grep -m1` + textual compare, lines 86-99).
+thisEmoji : String
+thisEmoji = "re_emoji='🚨|⚠️|🔒'"
+
+thisShout : String
+thisShout = "re_shout='([A-Z][A-Z]+[,.:;)]? ){2,}[A-Z][A-Z]+'"
+
+firstMatching : String -> String -> String
+firstMatching key text = match filter (startsWith key) (lines text)
+  [] => ""
+  l :: _ => l
+
+copyAgrees : String -> <IO, FileRead> Expectation
+copyAgrees path = match readFile path
+  Err e => fail "could not read \{path}: \{e}"
+  Ok text =>
+    let gotEmoji = firstMatching "re_emoji=" text
+    let gotShout = firstMatching "re_shout=" text
+    if gotEmoji /= thisEmoji then
+      fail "re_emoji diverges in \{path}: \{gotEmoji} vs \{thisEmoji}"
+    else if gotShout /= thisShout then
+      fail "re_shout diverges in \{path}: \{gotShout} vs \{thisShout}"
+    else
+      pass
+
+test "diff_compiler_comment_shout_diff.sh: re_emoji/re_shout literals agree with the hook and census twins" = expectAll
+  [
+    copyAgrees (underRoot ".githooks/pre-commit"),
+    copyAgrees (underRoot "test/comment_register_census.sh"),
+  ]
+
+test "diff_compiler_comment_shout_diff.sh: comment-register baseline ratchet (tree-wide)" =
+  baselineCheck
+
+test "diff_compiler_comment_shout_diff.sh: no new shout line in .mdk outside test/ (PR diff)" =
+  diffCheck
+
+test "diff_compiler_comment_shout_diff.sh: detector catches planted shouts on synthetic diff text" =
+  detectorSelfCheck

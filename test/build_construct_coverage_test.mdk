@@ -1,0 +1,156 @@
+{- | Coverage gate for the NATIVE `medaka build`, over test/construct_fixtures/*.mdk.
+
+   Proves: every construct fixture builds natively (`medaka build --allow-internal`,
+   emit host = medaka_emitter), the build exits 0, the binary launches (exit 126/127
+   fail), and its stdout equals <fixture>.build.golden. Trailing newlines are stripped
+   on both sides. Stderr is dropped; the binary's exit code is ignored except 126/127
+   (could not launch), which FAIL. Every failing fixture is reported, with a count.
+
+   Does NOT prove: that the goldens are correct (they were captured from the OCaml
+   oracle); stderr; the native-only path beyond stdout. The SKIP list is EMPTY and has
+   no skip mechanism by design. The runtime precompile (--emit-rt-obj) is best-effort
+   and only an optimisation: on failure every build inlines the runtime instead.
+
+   Fan-out: builds and runs go through runCommandBatch, at MEDAKA_TEST_JOBS a time
+   (test_process.testJobs); results come back in input order. The floor (146) is a
+   lower bound on the fixture count: a shrinking corpus fails it.
+   Needs clang and libgc on the box. Do not write goldens here: regenerate them with
+   `sh test/capture_goldens.sh --frozen build_construct`. -}
+
+import test_process.{medakaBin, medakaRoot, underRoot, withScratchDir, testJobs}
+import fs.{fixtureFiles, isFile}
+import path.{stem}
+import string.{endsWith, stripSuffix, lines, unlines}
+import list.{sort, take}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEqual, expectNoFindings, fail
+}
+
+fixDir : <IO> String
+fixDir = underRoot "test/construct_fixtures"
+
+-- Strip every trailing newline.
+stripNl : String -> String
+stripNl s = match stripSuffix "\n" s
+  Some t => stripNl t
+  None => s
+
+-- The first n lines of s, indented, without a trailing newline.
+excerpt : Int -> String -> String
+excerpt n s = stripNl (unlines (map ("    " ++ _) (take n (lines s))))
+
+goldenOf : String -> String -> String
+goldenOf dir label = "\{dir}/\{label}.build.golden"
+
+-- Best-effort runtime precompile: the override env var, or [] (silent fallback).
+rtOverride : String -> Result String Bool -> List String
+rtOverride _ (Err _) = []
+rtOverride _ (Ok False) = []
+rtOverride obj (Ok True) = ["MEDAKA_RT_OBJ=\{obj}"]
+
+precompile : List String -> String -> String -> <Exec, IO, FileRead> List String
+precompile envs medaka dir =
+  let obj = "\{dir}/medaka_rt.o"
+  match runCommand "env" (envs ++ [medaka, "build", "--emit-rt-obj", obj])
+    Ok (0, _, _) => rtOverride obj (isFile obj)
+    _ => []
+
+buildArgv : List String -> String -> String -> String -> List String
+buildArgv envs medaka src bin =
+  envs ++ [medaka, "build", "--allow-internal", src, "-o", bin]
+
+binOf : String -> String -> String
+binOf dir label = "\{dir}/\{label}.bin"
+
+-- Run the built binary; stderr dropped, exit code left to the caller.
+runArgv : String -> List String
+runArgv bin = ["-c", "\"$1\" 2>/dev/null", "sh", bin]
+
+-- Each judge returns "" when the fixture passes, else its failure message.
+judgeGolden : String -> String -> Result String String -> String
+judgeGolden label _ (Err e) =
+  "\{label}: could not read its .build.golden (\{e}) — run sh test/capture_goldens.sh --frozen build_construct"
+judgeGolden label out (Ok g) =
+  if stripNl out == stripNl g then
+    ""
+  else
+    "\{label}: native binary stdout differs from its .build.golden\n  got:\n\{excerpt 8 out}\n  expected:\n\{excerpt 8 g}"
+
+judgeRun : String ->
+  Result String (Int, String, String) ->
+  Result String String ->
+  String
+judgeRun label (Err e) _ = "\{label}: binary did not spawn: \{e}"
+judgeRun label (Ok (rc, out, _)) golden =
+  if rc == 126 || rc == 127 then
+    "\{label}: binary did not launch (exit \{intToString rc})"
+  else
+    judgeGolden label out golden
+
+judge : String ->
+  Result String (Int, String, String) ->
+  Result String (Int, String, String) ->
+  Result String String ->
+  String
+judge label (Err e) _ _ = "\{label}: native build did not spawn: \{e}"
+judge label (Ok (bc, _, berr)) ran golden =
+  if bc /= 0 then
+    "\{label}: native build exited \{intToString bc}:\n\{excerpt 5 berr}"
+  else
+    judgeRun label ran golden
+
+rowOf : String ->
+  String ->
+  Result String (Int, String, String) ->
+  Result String (Int, String, String) ->
+  <IO, FileRead> String
+rowOf dir label built ran =
+  judge label built ran (readFile (goldenOf dir label))
+
+rows : String ->
+  List String ->
+  List (Result String (Int, String, String)) ->
+  List (Result String (Int, String, String)) ->
+  <IO, FileRead> List String
+rows _ [] _ _ = []
+rows _ (_ :: _) [] _ = []
+rows _ (_ :: _) (_ :: _) [] = []
+rows dir (l :: ls) (b :: bs) (r :: rs) = rowOf dir l b r :: rows dir ls bs rs
+
+check : String -> <Exec, IO, FileRead, FileWrite> Expectation
+check dir = match fixtureFiles fixDir
+  Err e => fail "could not list construct fixtures in \{fixDir}: \{e}"
+  Ok entries =>
+    let labels =
+      sort (filter (/= "") (map stem (filter (endsWith ".mdk") entries)))
+    let medaka = medakaBin
+    let envs = [
+      "MEDAKA_ROOT=\{medakaRoot}",
+      "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
+    ]
+    let allEnvs = envs ++ precompile envs medaka dir
+    let builds =
+      runCommandBatch
+        "env"
+        testJobs
+        (map
+          (l => buildArgv allEnvs medaka "\{fixDir}/\{l}.mdk" (binOf dir l))
+          labels)
+    let runs =
+      runCommandBatch "sh" testJobs (map (l => runArgv (binOf dir l)) labels)
+    let table = rows fixDir labels builds runs
+    let failures = filter (/= "") table
+    let what =
+      "\{intToString (length failures)} of \{intToString (length labels)} construct fixtures failed (regen the goldens only after reviewing the native output: sh test/capture_goldens.sh --frozen build_construct)"
+    -- A batch that returns a different number of results than fixtures would
+    -- make `rows` truncate silently; these equalities make that a hard FAIL.
+    expectAll [
+      expectAtLeast 146 (length labels),
+      expectEqual (length labels) (length builds),
+      expectEqual (length labels) (length runs),
+      expectAtLeast 146 (length table),
+      expectNoFindings what (Ok failures),
+    ]
+
+test "build_construct_coverage: every construct fixture builds natively and its stdout matches its .build.golden" =
+  withScratchDir (dir => check dir)

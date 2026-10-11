@@ -1,0 +1,59 @@
+{- | The eval interpreter prints the same bytes as the native binary on the
+   secp256k1 `did:key` driver: the 16 official-PDS rows and the 14 named
+   malformed cells.
+
+   It runs nightly, not in the merge queue. The PR-path
+   `pds/test/did_key_all_engines_test.mdk` grades the native and Wasm arms
+   against the same needle list, so this gate adds only the interpreter's
+   own agreement with them.
+
+   The needle list and the malformed cell names live in
+   `pds/test/did_key_support.mdk`. Both arms must print every needle, and the
+   interpreter's stdout must equal the native binary's.
+
+   Runs under `medaka test --native`, as the nightly job's
+   `pds/nightly/*_eval_engine_test.mdk` step does. -}
+
+import test.did_key_support.{didKeyNeedles}
+import test.vector_runner.{
+  Arm(..),
+  Bound(..),
+  Corpus(..),
+  Engine(..),
+  Row(..),
+  expectRow,
+}
+
+gate : String
+gate = "pds/nightly/did_key_eval_engine"
+
+driver : String
+driver = "pds/test/did_key_all_engines_main.mdk"
+
+corpusFile : String
+corpusFile = "pds/test/vectors/pds_did_key_corpus.txt"
+
+arm : Engine -> Arm
+arm e = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = didKeyNeedles,
+  lastLine = Some "TOTAL: PASS",
+  exactStdout = None,
+}
+
+row : Row
+row = Row {
+  gate = gate,
+  driver = driver,
+  corpus = Explicit [corpusFile],
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [arm NativeEngine, arm EvalEngine],
+  parity = True,
+}
+
+test "did:key: the eval interpreter prints the native binary's bytes on 16 external rows and 14 malformed cells" =
+  expectRow row

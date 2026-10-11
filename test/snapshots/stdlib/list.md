@@ -1,5 +1,5 @@
 # META
-source_lines=1210
+source_lines=1212
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `List a`.
@@ -1024,7 +1024,9 @@ partitionResults ((Err e) :: rest) =
 
 {- | Each distinct element paired with the number of times it occurs.
 
-   Elements appear in the order they were first seen.
+   Elements appear in the order they were first seen. Needs only `Eq`, so it
+   suits few distinct elements; for many, count into a `map.Map` or
+   `hash_map.HashMap`.
 
    > tally [1, 2, 1, 3, 1, 2]
    [(1, 3), (2, 2), (3, 1)] -}

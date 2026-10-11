@@ -66,19 +66,21 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  Agreement(..), binaryRanClean, runMedaka, summarizeSweep, sweepAgreements,
-  sweepSpawn, sweepSpawns, verdictOf
+  Agreement(..), binaryRanClean, summarizeSweep, sweepAgreements, sweepSpawn,
+  sweepSpawns, verdictOf
 }
 import fs.{expectUnitCount, fixtureDirs}
 import json.{Json(..), get, parse}
-import list.{indexed, somes, sort}
+import list.{indexed, lookup, somes, sort, zip}
 import path.{basename}
 import regex.{Regex, compile, find, findAll, isMatch, mustCompile}
 import string.{
   contains, endsWith, lines, padRight, replaceAll, stripSuffix, unwords
 }
 import test.{Expectation, fail, pass}
-import test_process.{medakaBin, medakaRoot, testAssertionCount, unrosteredUnits}
+import test_process.{
+  medakaBin, medakaRoot, testAssertionCount, testJobs, unrosteredUnits
+}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -275,7 +277,7 @@ table = [
   Row {
     entry = "s6-drain-quiescence-inferred-scheme.mdk",
     label =
-      "§6.3 quiescence drain, INFERRED-scheme half of #3031: the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound. `reportAmbiguousImpl` defers a goal every variable of which a scheme quantifies (the `goalsClosed` test) instead of reporting it ambiguous at a stale location. `check` does not render the drain`s own diagnostics, so the drain`s verdict is pinned in-process by `compiler/types/typecheck_test.mdk`; this row pins the verdict and value. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
+      "§6.3 quiescence drain, INFERRED-scheme half of #3031: the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound. `routeUndeterminedTop` gives a goal every variable of which a scheme quantifies (the `goalsClosed` test) no route, leaving the verdict to the boundary, instead of reporting it ambiguous at a stale location. `check` does not render the drain`s own diagnostics, so the drain`s verdict is pinned in-process by `compiler/types/typecheck_test.mdk`; this row pins the verdict and value. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -4799,7 +4801,150 @@ table = [
   Row {
     entry = "requires-super-context-unsatisfied-rejected.mdk",
     label =
-      "§2/§3: `Sub (Box Bool)`s dictionary carries a `Sup (Box Bool)` one, whose only instance requires the missing `Show2 Bool`, so the goal is unsatisfiable exactly as the direct `sup (Box True)` is: located T-NO-IMPL on every verb. Was ACCEPT printing `supisub` through a dictionary of the wrong type",
+      "§2/§3: `Sub (Box Bool)`s dictionary carries a `Sup (Box Bool)` one, whose only instance requires the missing `Show2 Bool`, so the goal is unsatisfiable exactly as the direct `sup (Box True)` is: located T-NO-IMPL on every verb. R-SUPER-DECL also rejects `impl Sub (Box a)` at its declaration, which does not entail that instance's `Show2 a` (T-IMPL-MISSING-REQUIRES). Was ACCEPT printing `supisub` through a dictionary of the wrong type",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL", Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-decl-generalized-rejected.mdk",
+    label =
+      "§3 R-SUPER-DECL (#3995): `impl Sub (Box a)` does not entail `Show2 a`, the context of the `Sup (Box a)` instance its head selects: T-IMPL-MISSING-REQUIRES at the impl on every verb. Was ACCEPT printing `supisub` for `f True` (generalizing binder)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-decl-signed-rejected.mdk",
+    label =
+      "§3 R-SUPER-DECL (#3995), signed binder face: rejected at the impl on every verb. Was ACCEPT printing `supisub` for `g True`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-decl-impl-body-rejected.mdk",
+    label =
+      "§3 R-SUPER-DECL (#3995), impl-body face: rejected at the impl on every verb. Was ACCEPT printing `supisub` for `desc (Q True)`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-decl-local-let-rejected.mdk",
+    label =
+      "§3 R-SUPER-DECL (#3995), local `let` face: rejected at the impl on every verb. Was ACCEPT printing `supisub` for `h True`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-decl-chain-rejected.mdk",
+    label =
+      "§3 R-SUPER-DECL (#3995), the context two supers up: `impl Sub (Box a)` is the one rejected, once; `impl Sub2 (Box a)` entails the empty context of `impl Sub (Box a)`. Was ACCEPT printing `supis2`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-decl-only-rejected.mdk",
+    label =
+      "§3 R-SUPER-DECL (#3995) is a declaration rule, the ruled narrowing: rejected at the impl with no use that needs the super dictionary. Was ACCEPT printing `sub`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-decl-ground-rejected.mdk",
+    label =
+      "§3 R-SUPER-DECL on a ground head: `impl Sub (Box Bool)` selects a `Sup` instance whose context `Show2 Bool` no instance provides: T-NO-IMPL at the impl on every verb, with no use of `Sub`. Was ACCEPT printing `supi`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL", Absent "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-decl-derived-rejected.mdk",
+    label =
+      "§3 R-SUPER-DECL on DERIVED impls: `deriving (Ord)` needs `Eq (V a)`, which a hand-written `impl Eq (V a) requires Debug a` makes require `Debug a`; the derived `Ord` cannot declare it, so each of V and W is rejected on every verb, at its own `data` line",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-qualified-iface-rejected/main.mdk",
+    label =
+      "§3 R-SUPER-DECL across modules: `xs` and `ys` each declare `Show2`; `impl Sub (Box a)` lacks the `requires` of the `Sup` instance that uses `xs.Show2`, and the message qualifies the interface so it is not read as `ys.Show2`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-decl-entailed.mdk",
+    label =
+      "§3 R-SUPER-DECL, the positive half: `impl Sub (Box a) requires Show2 a` entails the super instance's context and is accepted; both calls print `supisub`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "supisub\nsupisub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-overlap-context-rejected.mdk",
+    label =
+      "§6.1.4 pt 4: the ground goal selects a more specific super instance than the declaration check saw at the head, and its context `Show2 Bool` is unsatisfiable: T-NO-IMPL at the call on every verb (the use-site super walk's own case; accepted printing `suptisub` without it)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL", Absent "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-cycle-each-site-reported.mdk",
+    label =
+      "§3 R-SC3 (#3998 (pushTypeErrorOnceAt dedups on message text)): two goal sites reach the same never-ending `requires` chain, and the two messages share their text, so each site is its own `T-REQUIRES-CYCLE`; section 5 grades both spans on every verb. Was one diagnostic, the second site silently folded",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-CYCLE"],
+  },
+  Row {
+    entry = "no-impl-one-fault-folds.mdk",
+    label =
+      "§3 one fault is one diagnostic: `x + 1` at `String` poses `Num String` at the operator and at the literal, and `T-NO-IMPL` keeps its text-keyed fold, so the pair is ONE diagnostic; section 5 grades the count on every verb",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -4818,7 +4963,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 425
+tableRows = 438
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4885,54 +5030,85 @@ codeProblem json (Absent c) =
    is paid for only where a row asks for it. The exit code is deliberately
    not graded here — `checkRunBuild` already pins `check`'s verdict for
    every row, and grading it twice would make a row that pins a code
-   stricter than the identical row that does not. -}
+   stricter than the identical row that does not. `out` is that row's
+   `check --json` spawn, as `codeOutputs` batched it. -}
 codeFailures : List CodeAssert ->
-  String ->
-  <Exec, IO> Result String (List String)
+  Result String (Int, String) ->
+  Result String (List String)
 codeFailures [] _ = Ok []
-codeFailures cs entrypath = match runMedaka ["check", "--json", entrypath]
-  Err e => Err "could not run `medaka check --json`: \{e}"
-  Ok (_, json) => Ok (somes (map (codeProblem json) cs))
+codeFailures _ (Err e) = Err "could not run `medaka check --json`: \{e}"
+codeFailures cs (Ok (_, json)) = Ok (somes (map (codeProblem json) cs))
+
+entryPath : Row -> <IO> String
+entryPath r = "\{corpus}/\{r.entry}"
+
+hasCodes : Row -> Bool
+hasCodes r = match r.codes
+  [] => False
+  _ => True
+
+{- | The `check --json` spawn for every row that asks for a code, keyed by
+   the entry path `gradeOne` looks it up under. The spawns go `testJobs` at
+   a time, and each one's result is what `runMedaka` returns for it. A row
+   with no code assertion spawns nothing. -}
+codeOutputs : List Row -> <Exec, IO> List (String, Result String (Int, String))
+codeOutputs rows =
+  let coded = filter hasCodes rows
+  let argvs = map (r => ["check", "--json", entryPath r]) coded
+  let outs =
+    map
+      (map ((code, out, err) => (code, out ++ err)))
+      (runCommandBatch medakaBin testJobs argvs)
+  zip (map entryPath coded) outs
+
+codeOutput : List (String, Result String (Int, String)) ->
+  String ->
+  Result String (Int, String)
+codeOutput outs entrypath = match lookup entrypath outs
+  Some out => out
+  None => Err "no check --json spawn was batched for \{entrypath}"
 
 planOne : String -> Row -> <FileRead, IO> Result Graded (String, String)
 planOne scratch r =
-  let entrypath = "\{corpus}/\{r.entry}"
+  let entrypath = entryPath r
   match readFile entrypath
     Err e => Err (structuralRow r.entry "missing fixture file: \{e}")
     Ok _ => Ok (entrypath, "\{scratch}/\{binName r.entry}.bin")
 
-gradeOne : Row ->
+gradeOne : List (String, Result String (Int, String)) ->
+  Row ->
   (String, String) ->
   Result String Agreement ->
   <Exec, FileRead, IO> Graded
-gradeOne r _ (Err e) = structuralRow r.entry e
-gradeOne r (entrypath, binPath) (Ok a) = match codeFailures r.codes entrypath
-  Err e => structuralRow r.entry e
-  Ok codeNotes =>
-    let checkV = verdictOf a.checkCode
-    let runV = verdictOf a.runCode
-    -- A `build` ACCEPT must have produced a binary: exit 0 alone
-    -- would let a `NoValue` row pin ACCEPT over a build that
-    -- emitted nothing.
-    let buildV =
-      if a.buildCode == 0 && fileExists binPath then "ACCEPT" else "REJECT"
-    let grade = gradeValue r.mode r.pinned a
-    Graded {
-      entry = r.entry,
-      checkV = checkV,
-      runV = runV,
-      buildV = buildV,
-      grade = grade,
-      ok =
-        checkV == r.expCheck
-          && runV == r.expRun
-          && buildV == r.expBuild
-          && gradePasses grade
-          && codeNotes == [],
-      note = match codeNotes
-        [] => ""
-        _ => " codes=\{unwords codeNotes}",
-    }
+gradeOne _ r _ (Err e) = structuralRow r.entry e
+gradeOne outs r (entrypath, binPath) (Ok a) =
+  match codeFailures r.codes (codeOutput outs entrypath)
+    Err e => structuralRow r.entry e
+    Ok codeNotes =>
+      let checkV = verdictOf a.checkCode
+      let runV = verdictOf a.runCode
+      -- A `build` ACCEPT must have produced a binary: exit 0 alone
+      -- would let a `NoValue` row pin ACCEPT over a build that
+      -- emitted nothing.
+      let buildV =
+        if a.buildCode == 0 && fileExists binPath then "ACCEPT" else "REJECT"
+      let grade = gradeValue r.mode r.pinned a
+      Graded {
+        entry = r.entry,
+        checkV = checkV,
+        runV = runV,
+        buildV = buildV,
+        grade = grade,
+        ok =
+          checkV == r.expCheck
+            && runV == r.expRun
+            && buildV == r.expBuild
+            && gradePasses grade
+            && codeNotes == [],
+        note = match codeNotes
+          [] => ""
+          _ => " codes=\{unwords codeNotes}",
+      }
 
 rowFailure : Graded -> Option String
 rowFailure g =
@@ -4954,8 +5130,9 @@ summarize graded failures =
   else
     summarizeSweep graded failures
 
-sweep : <Exec, FileRead, IO> Expectation
-sweep = sweepAgreements table planOne gradeOne rowFailure summarize
+sweep : List (String, Result String (Int, String)) ->
+  <Exec, FileRead, IO> Expectation
+sweep outs = sweepAgreements table planOne (gradeOne outs) rowFailure summarize
 
 -- A row may name a secondary entry point inside a fixture directory
 -- (`<dir>/control.mdk`), which grades that directory a second way; only
@@ -5035,7 +5212,7 @@ test "the closed test-body defaulting fixture's own cases run natively" =
         fail "\{cases}: expected 3 passing assertions, got \{intToString n}"
 
 test "check, run and build agree with every row's verdict, value and codes" =
-  sweep
+  sweep (codeOutputs table)
 
 -- # Section 2 -- exact `medaka check` scheme lines
 --
@@ -5278,7 +5455,7 @@ data VerbRow = VerbRow {
 {- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 verbRows : Int
-verbRows = 68
+verbRows = 114
 
 verbTable : List VerbRow
 verbTable = [
@@ -5782,6 +5959,412 @@ verbTable = [
     vlabel = "§2/§3: `run` reports it under its code",
     verb = "run-json",
     assertion = AJson "T-NO-IMPL",
+  },
+  VerbRow {
+    ventry = "requires-super-context-unsatisfied-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL: `check` also rejects `impl Sub (Box a)` at its declaration (line 25)",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-context-unsatisfied-rejected\\.mdk:25:5: .impl Sub \\(Box a\\). must provide its superinterface .Sup \\(Box a\\)., whose instance requires .Show2 a.",
+  },
+  VerbRow {
+    ventry = "requires-super-context-unsatisfied-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL: `run` also rejects `impl Sub (Box a)` at its declaration (line 25)",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-super-context-unsatisfied-rejected\\.mdk:25:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-context-unsatisfied-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-context-unsatisfied-rejected\\.Show2 a.",
+  },
+  VerbRow {
+    ventry = "requires-super-context-unsatisfied-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL: `build` also rejects `impl Sub (Box a)` at its declaration (line 25)",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-context-unsatisfied-rejected\\.mdk:25:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-context-unsatisfied-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-context-unsatisfied-rejected\\.Show2 a.",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-generalized-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (generalizing binder): `check` rejects the impl at its declaration and names the `requires` to add",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-decl-generalized-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .Sup \\(Box a\\)., whose instance requires .Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-generalized-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (generalizing binder): `run` rejects the impl at its declaration and names the `requires` to add",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-super-decl-generalized-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-generalized-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-generalized-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-generalized-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (generalizing binder): `build` rejects the impl at its declaration and names the `requires` to add",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-decl-generalized-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-generalized-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-generalized-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-signed-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (signed binder): `check` rejects the impl at its declaration and names the `requires` to add",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-decl-signed-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .Sup \\(Box a\\)., whose instance requires .Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-signed-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (signed binder): `run` rejects the impl at its declaration and names the `requires` to add",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-super-decl-signed-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-signed-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-signed-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-signed-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (signed binder): `build` rejects the impl at its declaration and names the `requires` to add",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-decl-signed-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-signed-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-signed-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-impl-body-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (impl body): `check` rejects the impl at its declaration and names the `requires` to add",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-decl-impl-body-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .Sup \\(Box a\\)., whose instance requires .Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-impl-body-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (impl body): `run` rejects the impl at its declaration and names the `requires` to add",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-super-decl-impl-body-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-impl-body-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-impl-body-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-impl-body-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (impl body): `build` rejects the impl at its declaration and names the `requires` to add",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-decl-impl-body-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-impl-body-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-impl-body-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-local-let-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (local let): `check` rejects the impl at its declaration and names the `requires` to add",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-decl-local-let-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .Sup \\(Box a\\)., whose instance requires .Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-local-let-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (local let): `run` rejects the impl at its declaration and names the `requires` to add",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-super-decl-local-let-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-local-let-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-local-let-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-local-let-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (local let): `build` rejects the impl at its declaration and names the `requires` to add",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-decl-local-let-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-local-let-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-local-let-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-chain-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (two supers up): `check` rejects the impl at its declaration and names the `requires` to add",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-decl-chain-rejected\\.mdk:24:5: .impl Sub \\(Box a\\). must provide its superinterface .Sup \\(Box a\\)., whose instance requires .Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-chain-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (two supers up): `run` rejects the impl at its declaration and names the `requires` to add",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-super-decl-chain-rejected\\.mdk:24:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-chain-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-chain-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-chain-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (two supers up): `build` rejects the impl at its declaration and names the `requires` to add",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-decl-chain-rejected\\.mdk:24:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-chain-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-chain-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-chain-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (two supers up): the missing `Show2 a` is reported once, at `impl Sub (Box a)`, not again at `impl Sub2 (Box a)`",
+    verb = "check",
+    assertion = AOnce "must provide its superinterface",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-only-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (declaration only): `check` rejects the impl at its declaration and names the `requires` to add",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-decl-only-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .Sup \\(Box a\\)., whose instance requires .Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-only-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (declaration only): `run` rejects the impl at its declaration and names the `requires` to add",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-super-decl-only-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-only-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-only-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-only-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (declaration only): `build` rejects the impl at its declaration and names the `requires` to add",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-decl-only-rejected\\.mdk:23:5: .impl Sub \\(Box a\\). must provide its superinterface .requires-super-decl-only-rejected\\.Sup \\(Box a\\)., whose instance requires .requires-super-decl-only-rejected\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-derived-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (derived impl): `check` reports `impl Ord (V a)` once, at its own `data` line 1, and says to write the impl by hand",
+    verb = "check",
+    assertion =
+      AOnce
+        "requires-super-decl-derived-rejected\\.mdk:1:5: .impl Ord \\(V a\\). \\(derived\\) must provide its superinterface .core\\.Eq \\(V a\\)., whose instance requires .core\\.Debug a., which the derived impl does not declare; a .deriving. clause takes no .requires., so write the impl by hand with .requires Debug a.",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-derived-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (derived impl): `check` reports `impl Ord (W a)` once, at its own `data` line 6, and says to write the impl by hand",
+    verb = "check",
+    assertion =
+      AOnce
+        "requires-super-decl-derived-rejected\\.mdk:6:5: .impl Ord \\(W a\\). \\(derived\\) must provide its superinterface .core\\.Eq \\(W a\\)., whose instance requires .core\\.Debug a., which the derived impl does not declare; a .deriving. clause takes no .requires., so write the impl by hand with .requires Debug a.",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-derived-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (derived impl): `run` reports `impl Ord (V a)` once, at its own `data` line 1, and says to write the impl by hand",
+    verb = "run",
+    assertion =
+      AOnce
+        "requires-super-decl-derived-rejected\\.mdk:1:5: .impl Ord \\(V a\\). \\(derived\\) must provide its superinterface .core\\.Eq \\(V a\\)., whose instance requires .core\\.Debug a., which the derived impl does not declare; a .deriving. clause takes no .requires., so write the impl by hand with .requires Debug a.",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-derived-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (derived impl): `run` reports `impl Ord (W a)` once, at its own `data` line 6, and says to write the impl by hand",
+    verb = "run",
+    assertion =
+      AOnce
+        "requires-super-decl-derived-rejected\\.mdk:6:5: .impl Ord \\(W a\\). \\(derived\\) must provide its superinterface .core\\.Eq \\(W a\\)., whose instance requires .core\\.Debug a., which the derived impl does not declare; a .deriving. clause takes no .requires., so write the impl by hand with .requires Debug a.",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-derived-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (derived impl): `build` reports `impl Ord (V a)` once, at its own `data` line 1, and says to write the impl by hand",
+    verb = "build",
+    assertion =
+      AOnce
+        "requires-super-decl-derived-rejected\\.mdk:1:5: .impl Ord \\(V a\\). \\(derived\\) must provide its superinterface .core\\.Eq \\(V a\\)., whose instance requires .core\\.Debug a., which the derived impl does not declare; a .deriving. clause takes no .requires., so write the impl by hand with .requires Debug a.",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-derived-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (derived impl): `build` reports `impl Ord (W a)` once, at its own `data` line 6, and says to write the impl by hand",
+    verb = "build",
+    assertion =
+      AOnce
+        "requires-super-decl-derived-rejected\\.mdk:6:5: .impl Ord \\(W a\\). \\(derived\\) must provide its superinterface .core\\.Eq \\(W a\\)., whose instance requires .core\\.Debug a., which the derived impl does not declare; a .deriving. clause takes no .requires., so write the impl by hand with .requires Debug a.",
+  },
+  VerbRow {
+    ventry = "requires-super-qualified-iface-rejected/main.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL (two modules declare `Show2`): the message names the offending interface by its module, `xs.Show2`, so it cannot be read as the other module's, and still tells the user to add the bare `requires Show2 a`",
+    verb = "run",
+    assertion =
+      AHas
+        "subbox\\.mdk:4:12: .impl Sub \\(Box a\\). must provide its superinterface .core2\\.Sup \\(Box a\\)., whose instance requires .xs\\.Show2 a., which the impl does not declare; add .requires Show2 a. to the impl",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-ground-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL on a ground head: `check` rejects the impl at its declaration and names the missing instance",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-decl-ground-rejected\\.mdk:22:5: .impl Sub \\(Box Bool\\). must provide its superinterface .Sup \\(Box Bool\\)., whose instance requires .Show2 Bool., and no impl provides it; add .impl Show2 Bool.",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-ground-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL on a ground head: `run` rejects the impl at its declaration and names the missing instance",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-super-decl-ground-rejected\\.mdk:22:5: .impl Sub \\(Box Bool\\). must provide its superinterface .requires-super-decl-ground-rejected\\.Sup \\(Box Bool\\)., whose instance requires .requires-super-decl-ground-rejected\\.Show2 Bool., and no impl provides it; add .impl Show2 Bool.",
+  },
+  VerbRow {
+    ventry = "requires-super-decl-ground-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL on a ground head: `build` rejects the impl at its declaration and names the missing instance",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-decl-ground-rejected\\.mdk:22:5: .impl Sub \\(Box Bool\\). must provide its superinterface .requires-super-decl-ground-rejected\\.Sup \\(Box Bool\\)., whose instance requires .requires-super-decl-ground-rejected\\.Show2 Bool., and no impl provides it; add .impl Show2 Bool.",
+  },
+  VerbRow {
+    ventry = "requires-super-overlap-context-rejected.mdk",
+    vlabel =
+      "§6.1.4 pt 4: `check` rejects the ground goal whose more specific super instance needs the missing `Show2 Bool`, at the call",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-overlap-context-rejected\\.mdk:36:16: no impl of Show2 for Bool",
+  },
+  VerbRow {
+    ventry = "requires-super-overlap-context-rejected.mdk",
+    vlabel =
+      "§6.1.4 pt 4: `run` rejects the ground goal whose more specific super instance needs the missing `Show2 Bool`, at the call",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-super-overlap-context-rejected\\.mdk:36:16: no impl of Show2 for Bool",
+  },
+  VerbRow {
+    ventry = "requires-super-overlap-context-rejected.mdk",
+    vlabel =
+      "§6.1.4 pt 4: `build` rejects the ground goal whose more specific super instance needs the missing `Show2 Bool`, at the call",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-overlap-context-rejected\\.mdk:36:16: no impl of Show2 for Bool",
+  },
+  VerbRow {
+    ventry = "requires-super-cycle-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL: the super instance's context cycles, so `impl Sub (Box a)` cannot entail it and is rejected at its declaration too",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-cycle-rejected\\.mdk:19:5: cannot resolve this constraint: the .requires. of .impl Sup \\(Box a\\). asks for .Sup \\(Box a\\).",
+  },
+  VerbRow {
+    ventry = "requires-super-cross-class-cycle-rejected.mdk",
+    vlabel =
+      "§3 R-SUPER-DECL: the super instance's context reaches a cycle, so `impl Sub (Box a)` cannot entail it and is rejected at its declaration too",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-super-cross-class-cycle-rejected\\.mdk:23:5: cannot resolve this constraint: the .requires. of .impl D \\(Box a\\). asks for .D \\(Box a\\).",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "the first goal site of a never-ending `requires` chain is reported at its own site (check)",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:18:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "...the second site, whose message shares the first's text, is a second diagnostic and not a folded duplicate (check)",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:19:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "the first goal site of a never-ending `requires` chain is reported at its own site (run)",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:18:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "...the second site, whose message shares the first's text, is a second diagnostic and not a folded duplicate (run)",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:19:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "the first goal site of a never-ending `requires` chain is reported at its own site (build)",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:18:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "...the second site, whose message shares the first's text, is a second diagnostic and not a folded duplicate (build)",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:19:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "no-impl-one-fault-folds.mdk",
+    vlabel =
+      "one mistake posing `Num String` at two spans is ONE diagnostic (check)",
+    verb = "check",
+    assertion = AOnce "no impl of Num for String",
+  },
+  VerbRow {
+    ventry = "no-impl-one-fault-folds.mdk",
+    vlabel =
+      "one mistake posing `Num String` at two spans is ONE diagnostic (run)",
+    verb = "run",
+    assertion = AOnce "no impl of Num for String",
+  },
+  VerbRow {
+    ventry = "no-impl-one-fault-folds.mdk",
+    vlabel =
+      "one mistake posing `Num String` at two spans is ONE diagnostic (build)",
+    verb = "build",
+    assertion = AOnce "no impl of Num for String",
   },
 ]
 

@@ -149,7 +149,7 @@ EVAL_MODULES_BIN="$ROOT/test/bin/eval_modules_main"
 REPL_BIN="$ROOT/test/bin/repl_main"
 
 # capture_build_golden <fixture.mdk> <golden path> — mirrors
-# test/build_construct_coverage.sh's check() EXACTLY: `medaka build
+# test/build_construct_coverage_test.mdk's build step: `medaka build
 # --allow-internal <fixture> -o <bin>` under the same MEDAKA_ROOT/
 # MEDAKA_EMITTER env, then run <bin> and capture stdout. Defined here (ahead
 # of the FROZEN_TAG block below, which calls it and `exit 0`s before reaching

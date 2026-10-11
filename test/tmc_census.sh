@@ -3,7 +3,7 @@
 #
 # Emits a pinned corpus through the LLVM and WasmGC emitters and extracts, per
 # backend, the set of SOURCE functions that received a TMC (tail-modulo-cons)
-# destination-passing transform.  The parity gate (diff_compiler_tmc_parity.sh)
+# destination-passing transform.  The parity gate (diff_compiler_tmc_parity_test.mdk)
 # wraps this helper and FAILS on any DIFF row; run standalone to inspect.
 # Comparison is exact on the PROBE arm and subset-tolerant (wasm ⊆ llvm) on the
 # SHIPPING arm — see the summary section at the bottom for why.

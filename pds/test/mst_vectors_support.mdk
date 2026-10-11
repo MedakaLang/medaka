@@ -1,0 +1,73 @@
+{- | The MST vector corpora and the stdout substrings the MST driver must
+   print, shared by the merge-tier `pds/test/mst_vectors` row and the nightly
+   `pds/nightly/mst_vectors_eval_engine` row so the two cannot drift. -}
+
+-- The driver reads the reference corpus first and the covering-proof corpus
+-- second, so the two are named in that order rather than looked up by
+-- consumer id, whose result is sorted.
+export
+mstCorpora : List String
+mstCorpora = [
+  "pds/test/vectors/mst_reference_corpus.txt",
+  "pds/test/vectors/mst_covering_proof_corpus.txt",
+]
+
+export
+externalCases : List String
+externalCases = [
+  "empty",
+  "leading-zero-bits-0",
+  "leading-zero-bits-2",
+  "leading-zero-bits-4",
+  "leading-zero-bits-6",
+  "prefix-compression",
+  "permutation-forward",
+  "permutation-reverse",
+  "replace",
+  "delete",
+  "delete-to-empty",
+]
+
+export
+hostileRoutes : List String
+hostileRoutes = [
+  "empty-key",
+  "duplicates",
+  "depth",
+  "order",
+  "prefix",
+  "undercompressed",
+  "misplaced-left",
+  "misplaced-between",
+  "misplaced-right",
+  "misplaced-transitive",
+  "malformed-links",
+  "truncation",
+  "unreachable",
+  "invalid-node",
+]
+
+export
+proofCases : List String
+proofCases = ["proof-single-node", "proof-two-layer", "proof-three-layer"]
+
+export
+lexicalControls : List String
+lexicalControls = ["left-neighbor", "between-neighbor", "right-neighbor"]
+
+-- Every case by name, so a driver that stopped emitting one is a missing
+-- substring rather than a total that still happens to add up.
+export
+routeNeeds : List String
+routeNeeds =
+  [
+      "external: 11/11 official-reference cases",
+      "covering proofs: 17/17 official-reference rows",
+      "narrower than the whole tree: 13/17 proof rows",
+      "hostile: 14/14 rejected on named routes",
+      "controls: 3/3 valid lexical neighbors",
+    ]
+    ++ map (n => "CASE \{n} PASS ") externalCases
+    ++ map (l => "HOSTILE \{l} PASS route=") hostileRoutes
+    ++ map (n => "PROOFCASE \{n} ") proofCases
+    ++ map (l => "MST CONTROL \{l} PASS") lexicalControls

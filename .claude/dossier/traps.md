@@ -234,7 +234,7 @@ literal-character form to a 219-byte file produced 235 bytes, not 223.
   carry a per-(file, class) count baseline that may only fall
   (`test/comment_register_baseline.toml`, `[H-COMMENT-REGISTER]`), enforced by
   `.githooks/pre-commit` check 6b and by
-  `test/diff_compiler_comment_shout_diff.sh` in CI.
+  `test/diff_compiler_comment_shout_diff_test.mdk` in CI.
 
 ## [T-STDLIB-IMPORT] — full rule text
 

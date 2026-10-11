@@ -84,7 +84,7 @@ bash test/selfcompile_fixpoint.sh      # C3a/C3b — the decisive gate
 CI is too late; run it locally for a backend change (this is one of the few cases where a
 heavy local run IS justified).
 
-If both backends are in scope, `test/diff_compiler_tmc_parity.sh` checks that LLVM and
+If both backends are in scope, `test/diff_compiler_tmc_parity_test.mdk` checks that LLVM and
 WasmGC apply TMC to the same functions (needs the wasm probes:
 `sh test/wasm/build_wasm_oracle.sh`).
 

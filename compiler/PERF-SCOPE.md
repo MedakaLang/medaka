@@ -354,7 +354,7 @@ If C3a/C3b fail, revert and investigate before proceeding.
 
 Also run the behavioral gate:
 ```sh
-sh test/diff_compiler_build.sh
+medaka test test/diff_compiler_build_test.mdk
 ```
 Expected: all programs byte-identical between compiler and OCaml builds.
 

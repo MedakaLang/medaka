@@ -1,5 +1,5 @@
 # META
-source_lines=775
+source_lines=781
 stages=DESUGAR,MARK
 # SOURCE
 {- | A JSON value type with a parser and a serializer.
@@ -30,7 +30,7 @@ stages=DESUGAR,MARK
 import core.{Ordering(..), Debug, Display, Option, Result, Thenable, map}
 import list.{reverse}
 import array
-import string.{join, fromChars, isDigit, toInt}
+import string.{fromChars, isDigit, toInt}
 
 -- # The Json type
 
@@ -133,19 +133,34 @@ escapeString s =
   let pieces = escapeGo arr (arrayLength arr - 1) []
   stringConcat (["\""] ++ pieces ++ ["\""])
 
-elemStrings : Array Json -> Int -> List String -> List String
-elemStrings arr i acc
-  | i < 0 = acc
-  | otherwise =
-    elemStrings arr (i - 1) (stringify (arrayGetUnsafe i arr) :: acc)
+-- The text of a value, as pieces pushed onto `acc` in reverse order and
+-- joined once by the caller.
+stringifyInto : Json -> List String -> List String
+stringifyInto JNull acc = "null" :: acc
+stringifyInto (JBool True) acc = "true" :: acc
+stringifyInto (JBool False) acc = "false" :: acc
+stringifyInto (JInt n) acc = intToString n :: acc
+stringifyInto (JFloat f) acc = renderFloat f :: acc
+stringifyInto (JString s) acc = escapeString s :: acc
+stringifyInto (JArray arr) acc = "]" :: arrayPiecesInto arr 0 ("[" :: acc)
+stringifyInto (JObject pairs) acc = "}" :: objectPiecesInto pairs 0 ("{" :: acc)
 
-memberStrings : Array (String, Json) -> Int -> List String -> List String
-memberStrings pairs i acc
-  | i < 0 = acc
+-- Elements from index `i` on, with a `,` before every element but the first.
+arrayPiecesInto : Array Json -> Int -> List String -> List String
+arrayPiecesInto arr i acc
+  | i >= arrayLength arr = acc
+  | otherwise =
+    let sep = if i == 0 then acc else "," :: acc
+    arrayPiecesInto arr (i + 1) (stringifyInto (arrayGetUnsafe i arr) sep)
+
+objectPiecesInto : Array (String, Json) -> Int -> List String -> List String
+objectPiecesInto pairs i acc
+  | i >= arrayLength pairs = acc
   | otherwise =
     let p = arrayGetUnsafe i pairs
-    let s = stringConcat [escapeString (fst p), ":", stringify (snd p)]
-    memberStrings pairs (i - 1) (s :: acc)
+    let sep = if i == 0 then acc else "," :: acc
+    let keyed = ":" :: escapeString (fst p) :: sep
+    objectPiecesInto pairs (i + 1) (stringifyInto (snd p) keyed)
 
 {- | The value as compact JSON text, with no whitespace between tokens.
 
@@ -155,21 +170,12 @@ memberStrings pairs i acc
    > stringify (jObject [("a", JInt 1), ("b", JString "hi")])
    "{\"a\":1,\"b\":\"hi\"}"
    > stringify (JFloat 1000.0)
-   "1000.0" -}
+   "1000.0"
+   > stringify (jObject [("a", jArray [JInt 1, jObject []]), ("b", JNull)])
+   "{\"a\":[1,{}],\"b\":null}" -}
 export
 stringify : Json -> String
-stringify JNull = "null"
-stringify (JBool True) = "true"
-stringify (JBool False) = "false"
-stringify (JInt n) = intToString n
-stringify (JFloat f) = renderFloat f
-stringify (JString s) = escapeString s
-stringify (JArray arr) =
-  let body = join "," (elemStrings arr (arrayLength arr - 1) [])
-  stringConcat ["[", body, "]"]
-stringify (JObject pairs) =
-  let body = join "," (memberStrings pairs (arrayLength pairs - 1) [])
-  stringConcat ["{", body, "}"]
+stringify j = stringConcat (reverse (stringifyInto j []))
 
 -- > stringify JNull
 -- "null"
@@ -781,7 +787,7 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseName ("array")))
-(DUse false (UseGroup ("string") ((mem "join" false) (mem "fromChars" false) (mem "isDigit" false) (mem "toInt" false))))
+(DUse false (UseGroup ("string") ((mem "fromChars" false) (mem "isDigit" false) (mem "toInt" false))))
 (DData Public "Json" () ((variant "JNull" (ConPos)) (variant "JBool" (ConPos (TyCon "Bool"))) (variant "JInt" (ConPos (TyCon "Int"))) (variant "JFloat" (ConPos (TyCon "Float"))) (variant "JString" (ConPos (TyCon "String"))) (variant "JArray" (ConPos (TyApp (TyCon "Array") (TyCon "Json")))) (variant "JObject" (ConPos (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json")))))) ())
 (DTypeSig true "jArray" (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyCon "Json")))
 (DFunDef false "jArray" ((PVar "xs")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EVar "xs"))))
@@ -805,19 +811,21 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DFunDef false "escapeGo" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "escapeGo") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "escapeChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "escapeString" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escapeString" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "pieces") (EApp (EApp (EApp (EVar "escapeGo") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "\""))) (EVar "pieces")) (EListLit (ELit (LString "\""))))))))
-(DTypeSig false "elemStrings" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "elemStrings" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "elemStrings") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "stringify") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "memberStrings" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "memberStrings" ((PVar "pairs") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs"))) (DoLet false false (PVar "s") (EApp (EVar "stringConcat") (EListLit (EApp (EVar "escapeString") (EApp (EVar "fst") (EVar "p"))) (ELit (LString ":")) (EApp (EVar "stringify") (EApp (EVar "snd") (EVar "p")))))) (DoExpr (EApp (EApp (EApp (EVar "memberStrings") (EVar "pairs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "s") (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "stringifyInto" (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "stringifyInto" ((PCon "JNull") (PVar "acc")) (EBinOp "::" (ELit (LString "null")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JBool" (PCon "True")) (PVar "acc")) (EBinOp "::" (ELit (LString "true")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JBool" (PCon "False")) (PVar "acc")) (EBinOp "::" (ELit (LString "false")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JInt" (PVar "n")) (PVar "acc")) (EBinOp "::" (EApp (EVar "intToString") (EVar "n")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JFloat" (PVar "f")) (PVar "acc")) (EBinOp "::" (EApp (EVar "renderFloat") (EVar "f")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JString" (PVar "s")) (PVar "acc")) (EBinOp "::" (EApp (EVar "escapeString") (EVar "s")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JArray" (PVar "arr")) (PVar "acc")) (EBinOp "::" (ELit (LString "]")) (EApp (EApp (EApp (EVar "arrayPiecesInto") (EVar "arr")) (ELit (LInt 0))) (EBinOp "::" (ELit (LString "[")) (EVar "acc")))))
+(DFunDef false "stringifyInto" ((PCon "JObject" (PVar "pairs")) (PVar "acc")) (EBinOp "::" (ELit (LString "}")) (EApp (EApp (EApp (EVar "objectPiecesInto") (EVar "pairs")) (ELit (LInt 0))) (EBinOp "::" (ELit (LString "{")) (EVar "acc")))))
+(DTypeSig false "arrayPiecesInto" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "arrayPiecesInto" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "sep") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EBinOp "::" (ELit (LString ",")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "arrayPiecesInto") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "stringifyInto") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EVar "sep"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "objectPiecesInto" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "objectPiecesInto" ((PVar "pairs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "pairs"))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs"))) (DoLet false false (PVar "sep") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EBinOp "::" (ELit (LString ",")) (EVar "acc")))) (DoLet false false (PVar "keyed") (EBinOp "::" (ELit (LString ":")) (EBinOp "::" (EApp (EVar "escapeString") (EApp (EVar "fst") (EVar "p"))) (EVar "sep")))) (DoExpr (EApp (EApp (EApp (EVar "objectPiecesInto") (EVar "pairs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "stringifyInto") (EApp (EVar "snd") (EVar "p"))) (EVar "keyed"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "stringify" (TyFun (TyCon "Json") (TyCon "String")))
-(DFunDef false "stringify" ((PCon "JNull")) (ELit (LString "null")))
-(DFunDef false "stringify" ((PCon "JBool" (PCon "True"))) (ELit (LString "true")))
-(DFunDef false "stringify" ((PCon "JBool" (PCon "False"))) (ELit (LString "false")))
-(DFunDef false "stringify" ((PCon "JInt" (PVar "n"))) (EApp (EVar "intToString") (EVar "n")))
-(DFunDef false "stringify" ((PCon "JFloat" (PVar "f"))) (EApp (EVar "renderFloat") (EVar "f")))
-(DFunDef false "stringify" ((PCon "JString" (PVar "s"))) (EApp (EVar "escapeString") (EVar "s")))
-(DFunDef false "stringify" ((PCon "JArray" (PVar "arr"))) (EBlock (DoLet false false (PVar "body") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EApp (EVar "elemStrings") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "[")) (EVar "body") (ELit (LString "]")))))))
-(DFunDef false "stringify" ((PCon "JObject" (PVar "pairs"))) (EBlock (DoLet false false (PVar "body") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EApp (EVar "memberStrings") (EVar "pairs")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "pairs")) (ELit (LInt 1)))) (EListLit)))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "{")) (EVar "body") (ELit (LString "}")))))))
+(DFunDef false "stringify" ((PVar "j")) (EApp (EVar "stringConcat") (EApp (EVar "reverse") (EApp (EApp (EVar "stringifyInto") (EVar "j")) (EListLit)))))
 (DTypeSig false "isWs" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isWs" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 32))) (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 9)))) (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 10)))) (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 13)))))
 (DTypeSig false "skipWs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))
@@ -969,7 +977,7 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseName ("array")))
-(DUse false (UseGroup ("string") ((mem "join" false) (mem "fromChars" false) (mem "isDigit" false) (mem "toInt" false))))
+(DUse false (UseGroup ("string") ((mem "fromChars" false) (mem "isDigit" false) (mem "toInt" false))))
 (DData Public "Json" () ((variant "JNull" (ConPos)) (variant "JBool" (ConPos (TyCon "Bool"))) (variant "JInt" (ConPos (TyCon "Int"))) (variant "JFloat" (ConPos (TyCon "Float"))) (variant "JString" (ConPos (TyCon "String"))) (variant "JArray" (ConPos (TyApp (TyCon "Array") (TyCon "Json")))) (variant "JObject" (ConPos (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json")))))) ())
 (DTypeSig true "jArray" (TyFun (TyApp (TyCon "List") (TyCon "Json")) (TyCon "Json")))
 (DFunDef false "jArray" ((PVar "xs")) (EApp (EVar "JArray") (EApp (EVar "arrayFromList") (EVar "xs"))))
@@ -993,19 +1001,21 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DFunDef false "escapeGo" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "escapeGo") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "escapeChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "escapeString" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "escapeString" ((PVar "s")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "pieces") (EApp (EApp (EApp (EVar "escapeGo") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))) (DoExpr (EApp (EVar "stringConcat") (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "\""))) (EVar "pieces")) (EListLit (ELit (LString "\""))))))))
-(DTypeSig false "elemStrings" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "elemStrings" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "elemStrings") (EVar "arr")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EApp (EVar "stringify") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "memberStrings" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "memberStrings" ((PVar "pairs") (PVar "i") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs"))) (DoLet false false (PVar "s") (EApp (EVar "stringConcat") (EListLit (EApp (EVar "escapeString") (EApp (EVar "fst") (EVar "p"))) (ELit (LString ":")) (EApp (EVar "stringify") (EApp (EVar "snd") (EVar "p")))))) (DoExpr (EApp (EApp (EApp (EVar "memberStrings") (EVar "pairs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EBinOp "::" (EVar "s") (EVar "acc"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "stringifyInto" (TyFun (TyCon "Json") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "stringifyInto" ((PCon "JNull") (PVar "acc")) (EBinOp "::" (ELit (LString "null")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JBool" (PCon "True")) (PVar "acc")) (EBinOp "::" (ELit (LString "true")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JBool" (PCon "False")) (PVar "acc")) (EBinOp "::" (ELit (LString "false")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JInt" (PVar "n")) (PVar "acc")) (EBinOp "::" (EApp (EVar "intToString") (EVar "n")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JFloat" (PVar "f")) (PVar "acc")) (EBinOp "::" (EApp (EVar "renderFloat") (EVar "f")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JString" (PVar "s")) (PVar "acc")) (EBinOp "::" (EApp (EVar "escapeString") (EVar "s")) (EVar "acc")))
+(DFunDef false "stringifyInto" ((PCon "JArray" (PVar "arr")) (PVar "acc")) (EBinOp "::" (ELit (LString "]")) (EApp (EApp (EApp (EVar "arrayPiecesInto") (EVar "arr")) (ELit (LInt 0))) (EBinOp "::" (ELit (LString "[")) (EVar "acc")))))
+(DFunDef false "stringifyInto" ((PCon "JObject" (PVar "pairs")) (PVar "acc")) (EBinOp "::" (ELit (LString "}")) (EApp (EApp (EApp (EVar "objectPiecesInto") (EVar "pairs")) (ELit (LInt 0))) (EBinOp "::" (ELit (LString "{")) (EVar "acc")))))
+(DTypeSig false "arrayPiecesInto" (TyFun (TyApp (TyCon "Array") (TyCon "Json")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "arrayPiecesInto" ((PVar "arr") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "sep") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EBinOp "::" (ELit (LString ",")) (EVar "acc")))) (DoExpr (EApp (EApp (EApp (EVar "arrayPiecesInto") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "stringifyInto") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EVar "sep"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "objectPiecesInto" (TyFun (TyApp (TyCon "Array") (TyTuple (TyCon "String") (TyCon "Json"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "objectPiecesInto" ((PVar "pairs") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "pairs"))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "pairs"))) (DoLet false false (PVar "sep") (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EBinOp "::" (ELit (LString ",")) (EVar "acc")))) (DoLet false false (PVar "keyed") (EBinOp "::" (ELit (LString ":")) (EBinOp "::" (EApp (EVar "escapeString") (EApp (EVar "fst") (EVar "p"))) (EVar "sep")))) (DoExpr (EApp (EApp (EApp (EVar "objectPiecesInto") (EVar "pairs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "stringifyInto") (EApp (EVar "snd") (EVar "p"))) (EVar "keyed"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "stringify" (TyFun (TyCon "Json") (TyCon "String")))
-(DFunDef false "stringify" ((PCon "JNull")) (ELit (LString "null")))
-(DFunDef false "stringify" ((PCon "JBool" (PCon "True"))) (ELit (LString "true")))
-(DFunDef false "stringify" ((PCon "JBool" (PCon "False"))) (ELit (LString "false")))
-(DFunDef false "stringify" ((PCon "JInt" (PVar "n"))) (EApp (EVar "intToString") (EVar "n")))
-(DFunDef false "stringify" ((PCon "JFloat" (PVar "f"))) (EApp (EVar "renderFloat") (EVar "f")))
-(DFunDef false "stringify" ((PCon "JString" (PVar "s"))) (EApp (EVar "escapeString") (EVar "s")))
-(DFunDef false "stringify" ((PCon "JArray" (PVar "arr"))) (EBlock (DoLet false false (PVar "body") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EApp (EVar "elemStrings") (EVar "arr")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit)))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "[")) (EVar "body") (ELit (LString "]")))))))
-(DFunDef false "stringify" ((PCon "JObject" (PVar "pairs"))) (EBlock (DoLet false false (PVar "body") (EApp (EApp (EVar "join") (ELit (LString ","))) (EApp (EApp (EApp (EVar "memberStrings") (EVar "pairs")) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "pairs")) (ELit (LInt 1)))) (EListLit)))) (DoExpr (EApp (EVar "stringConcat") (EListLit (ELit (LString "{")) (EVar "body") (ELit (LString "}")))))))
+(DFunDef false "stringify" ((PVar "j")) (EApp (EVar "stringConcat") (EApp (EVar "reverse") (EApp (EApp (EVar "stringifyInto") (EVar "j")) (EListLit)))))
 (DTypeSig false "isWs" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isWs" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 32))) (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 9)))) (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 10)))) (EBinOp "==" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 13)))))
 (DTypeSig false "skipWs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Int"))))

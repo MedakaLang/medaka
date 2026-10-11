@@ -327,9 +327,8 @@ export impl Debug (HashMap k v) requires Debug k, Debug v where
 
 -- Comma-joined `k => v` entries, mirroring `map.mdk`'s `displayMapEntries`.
 displayEntries : (Display k, Display v) => List (k, v) -> String
-displayEntries [] = ""
-displayEntries [(k, v)] = "\{k} => \{v}"
-displayEntries ((k, v) :: rest) = "\{k} => \{v}, \{displayEntries rest}"
+displayEntries es =
+  stringConcat (L.intersperse ", " (map ((k, v) => "\{k} => \{v}") es))
 
 {- | `display` renders a table as `HashMap { k => v, ... }` with the entries
    in ascending key order, so the text depends only on the entries.

@@ -5,7 +5,7 @@
 # a healthy run, and refuses (exit 1) only if the file corpus comes back empty
 # — see below. The `--write`/`--check` modes are the GATED path: `--check` is a
 # verdict (exit 1 on a baselined count that rose), consumed by
-# .githooks/pre-commit check 6b and by test/diff_compiler_comment_shout_diff.sh,
+# .githooks/pre-commit check 6b and by test/diff_compiler_comment_shout_diff_test.mdk,
 # which is a merge-tier gate.
 #
 # WHY THIS EXISTS (#2281, leg 3 P of crusade #2276): source comments in this
@@ -79,12 +79,12 @@
 # <baseline> (a missing row reads as 0, so a brand-new nonzero count fails
 # closed). A count that fell is fine. Prints the regen command on failure.
 # Used by .githooks/pre-commit (per staged file, cheap) and by
-# test/diff_compiler_comment_shout_diff.sh (whole tree, so --no-verify
+# test/diff_compiler_comment_shout_diff_test.mdk (whole tree, so --no-verify
 # cannot smuggle a rise past the hook).
 #
 # --comment-scope <file>|-: print the comment-scope lines of <file> (or of
 # stdin, for `-`) and exit. Exposed so .githooks/pre-commit and
-# test/diff_compiler_comment_shout_diff.sh can scope an added line the same
+# test/diff_compiler_comment_shout_diff_test.mdk can scope an added line the same
 # way the baseline does without a second copy of the scanner.
 
 set -u
@@ -258,7 +258,7 @@ if [ "${1:-}" = "--write" ]; then
     echo "# regex count."
     echo "#"
     echo "# Enforced by .githooks/pre-commit check 6b (per staged file) and by"
-    echo "# test/diff_compiler_comment_shout_diff.sh (whole tree, so --no-verify"
+    echo "# test/diff_compiler_comment_shout_diff_test.mdk (whole tree, so --no-verify"
     echo "# cannot smuggle a rise past the hook)."
     echo "#"
     echo "# Regenerate from the repo root, never by hand:"

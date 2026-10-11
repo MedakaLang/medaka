@@ -1,0 +1,32 @@
+-- §3 R-SUPER-DECL, the positive half: `impl Sub (Box a) requires Show2 a` entails the
+-- context of `impl Sup (Box a) requires Show2 a`, so it is accepted, `f` keeps
+-- `Show2 a` in its scheme (`f : Show2 a => a -> String`) and both calls print
+-- `supisub`.
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+interface Sup a where
+  sup : a -> String
+
+interface Sub a requires Sup a where
+  sub : a -> String
+
+data Box a = Box a
+
+impl Sup (Box a) requires Show2 a where
+  sup (Box x) = "sup" ++ show2 x
+
+impl Sub (Box a) requires Show2 a where
+  sub _ = "sub"
+
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+
+f x = useSup (Box x)
+
+main =
+  println (f (1 : Int))
+  println (f (2 : Int))

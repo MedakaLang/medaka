@@ -1,0 +1,28 @@
+-- §3 R-SUPER-DECL on a ground head: `impl Sub (Box Bool)` selects the `Sup (Box Bool)`
+-- instance `impl Sup (Box a) requires Show2 a`, whose context `Show2 Bool` no `requires`
+-- of the impl entails and no instance provides: T-NO-IMPL at the impl (line 22), on
+-- every verb, with no use of `Sub` at all.  It used to be accepted and print `supi`.
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+interface Sup a where
+  sup : a -> String
+
+interface Sub a requires Sup a where
+  sub : a -> String
+
+data Box a = Box a
+
+impl Sup (Box a) requires Show2 a where
+  sup (Box x) = "sup" ++ show2 x
+
+impl Sub (Box Bool) where
+  sub _ = "sub"
+
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+
+main = println (sup (Box (1 : Int)))

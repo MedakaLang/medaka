@@ -31,6 +31,8 @@ when that segment should be dropped as well.
 "a/b"
 > dirname "c.txt"
 "."
+> dirname "/a"
+"/"
 ```
 
 ### `basename`

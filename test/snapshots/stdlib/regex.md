@@ -1,5 +1,5 @@
 # META
-source_lines=1711
+source_lines=1746
 stages=DESUGAR,MARK
 # SOURCE
 {- | Regular expressions, matched in linear time.
@@ -833,11 +833,10 @@ compileNode (NCat a b) pc =
   let ca = compileNode a pc
   ca ++ compileNode b (pc + length ca)
 compileNode (NAlt a b) pc =
-  let ca = compileNode a (pc + 1)
-  let jmpAt = pc + 1 + length ca
-  let cb = compileNode b (jmpAt + 1)
-  let out = jmpAt + 1 + length cb
-  ISplit (pc + 1) (jmpAt + 1) :: ca ++ (IJmp out :: cb)
+  let code = compileAltBranches (altBranches (NAlt a b) []) pc
+  let out = pc + length code
+  map (retargetAltExit out) code
+
 compileNode (NStar greedy body) pc =
   let cb = compileNode body (pc + 1)
   let out = pc + 1 + length cb + 1
@@ -855,6 +854,31 @@ compileNode (NOpt greedy body) pc =
   sp :: cb
 compileNode (NGroup idx body) pc =
   ISave (2 * idx) :: compileNode body (pc + 1) ++ [ISave (2 * idx + 1)]
+
+-- The branches of a left-nested alternation, in source order. The parser
+-- builds `a|b|c` as `NAlt (NAlt a b) c`.
+altBranches : Node -> List Node -> List Node
+altBranches (NAlt l r) acc = altBranches l (r :: acc)
+altBranches n acc = n :: acc
+
+-- Each branch but the last is preceded by a split to the next branch and
+-- followed by a jump to the exit. The split prefers its branch, so priority
+-- follows source order. The exit is unknown until every branch is sized, so
+-- those jumps carry `altExit` for `compileNode` to patch.
+compileAltBranches : List Node -> Int -> List Inst
+compileAltBranches [] _ = []
+compileAltBranches (b :: []) pc = compileNode b pc
+compileAltBranches (b :: rest) pc =
+  let cb = compileNode b (pc + 1)
+  let next = pc + 1 + length cb + 1
+  ISplit (pc + 1) next :: cb ++ (IJmp altExit :: compileAltBranches rest next)
+
+altExit : Int
+altExit = -1
+
+retargetAltExit : Int -> Inst -> Inst
+retargetAltExit out (IJmp x) = if x == altExit then IJmp out else IJmp x
+retargetAltExit _ i = i
 
 -- Pike VM
 
@@ -1062,7 +1086,18 @@ searchWindow re codes (lo, hi) startAt anchorStart anchorEnd steps =
     steps = steps,
     found = Ref None,
   }
-  vmSearch vm startAt anchorStart
+  vmSearch vm startAt (anchorStart || startsAtBol re)
+
+-- A pattern that begins with `^` (outside multiline mode) can only match at
+-- the window start, so its search seeds a single thread.
+startsAtBol : Regex -> Bool
+startsAtBol re = not re.multiline && startsAtBolFrom re.prog 0
+
+startsAtBolFrom : Array Inst -> Int -> Bool
+startsAtBolFrom prog pc = match arrayGetUnsafe pc prog
+  IAssert kind => kind == asStart
+  ISave _ => startsAtBolFrom prog (pc + 1)
+  _ => False
 
 -- `[start, end)` narrowed to a buffer of `n` bytes, with `lo` never past
 -- `hi`, so no caller can read a window outside the buffer.
@@ -1903,11 +1938,23 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "compileNode" ((PCon "NAny" (PVar "dotAll")) PWild) (EListLit (EApp (EVar "IAny") (EVar "dotAll"))))
 (DFunDef false "compileNode" ((PCon "NAssert" (PVar "kind")) PWild) (EListLit (EApp (EVar "IAssert") (EVar "kind"))))
 (DFunDef false "compileNode" ((PCon "NCat" (PVar "a") (PVar "b")) (PVar "pc")) (EBlock (DoLet false false (PVar "ca") (EApp (EApp (EVar "compileNode") (EVar "a")) (EVar "pc"))) (DoExpr (EBinOp "++" (EVar "ca") (EApp (EApp (EVar "compileNode") (EVar "b")) (EBinOp "+" (EVar "pc") (EApp (EVar "length") (EVar "ca"))))))))
-(DFunDef false "compileNode" ((PCon "NAlt" (PVar "a") (PVar "b")) (PVar "pc")) (EBlock (DoLet false false (PVar "ca") (EApp (EApp (EVar "compileNode") (EVar "a")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (DoLet false false (PVar "jmpAt") (EBinOp "+" (EBinOp "+" (EVar "pc") (ELit (LInt 1))) (EApp (EVar "length") (EVar "ca")))) (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "b")) (EBinOp "+" (EVar "jmpAt") (ELit (LInt 1))))) (DoLet false false (PVar "out") (EBinOp "+" (EBinOp "+" (EVar "jmpAt") (ELit (LInt 1))) (EApp (EVar "length") (EVar "cb")))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "ISplit") (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "jmpAt") (ELit (LInt 1)))) (EBinOp "++" (EVar "ca") (EBinOp "::" (EApp (EVar "IJmp") (EVar "out")) (EVar "cb")))))))
+(DFunDef false "compileNode" ((PCon "NAlt" (PVar "a") (PVar "b")) (PVar "pc")) (EBlock (DoLet false false (PVar "code") (EApp (EApp (EVar "compileAltBranches") (EApp (EApp (EVar "altBranches") (EApp (EApp (EVar "NAlt") (EVar "a")) (EVar "b"))) (EListLit))) (EVar "pc"))) (DoLet false false (PVar "out") (EBinOp "+" (EVar "pc") (EApp (EVar "length") (EVar "code")))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "retargetAltExit") (EVar "out"))) (EVar "code")))))
 (DFunDef false "compileNode" ((PCon "NStar" (PVar "greedy") (PVar "body")) (PVar "pc")) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "body")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (DoLet false false (PVar "out") (EBinOp "+" (EBinOp "+" (EBinOp "+" (EVar "pc") (ELit (LInt 1))) (EApp (EVar "length") (EVar "cb"))) (ELit (LInt 1)))) (DoLet false false (PVar "sp") (EIf (EVar "greedy") (EApp (EApp (EVar "ISplit") (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EVar "out")) (EApp (EApp (EVar "ISplit") (EVar "out")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))))) (DoExpr (EBinOp "::" (EVar "sp") (EBinOp "++" (EVar "cb") (EListLit (EApp (EVar "IJmp") (EVar "pc"))))))))
 (DFunDef false "compileNode" ((PCon "NPlus" (PVar "greedy") (PVar "body")) (PVar "pc")) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "body")) (EVar "pc"))) (DoLet false false (PVar "out") (EBinOp "+" (EBinOp "+" (EVar "pc") (EApp (EVar "length") (EVar "cb"))) (ELit (LInt 1)))) (DoLet false false (PVar "sp") (EIf (EVar "greedy") (EApp (EApp (EVar "ISplit") (EVar "pc")) (EVar "out")) (EApp (EApp (EVar "ISplit") (EVar "out")) (EVar "pc")))) (DoExpr (EBinOp "++" (EVar "cb") (EListLit (EVar "sp"))))))
 (DFunDef false "compileNode" ((PCon "NOpt" (PVar "greedy") (PVar "body")) (PVar "pc")) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "body")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (DoLet false false (PVar "out") (EBinOp "+" (EBinOp "+" (EVar "pc") (ELit (LInt 1))) (EApp (EVar "length") (EVar "cb")))) (DoLet false false (PVar "sp") (EIf (EVar "greedy") (EApp (EApp (EVar "ISplit") (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EVar "out")) (EApp (EApp (EVar "ISplit") (EVar "out")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))))) (DoExpr (EBinOp "::" (EVar "sp") (EVar "cb")))))
 (DFunDef false "compileNode" ((PCon "NGroup" (PVar "idx") (PVar "body")) (PVar "pc")) (EBinOp "::" (EApp (EVar "ISave") (EBinOp "*" (ELit (LInt 2)) (EVar "idx"))) (EBinOp "++" (EApp (EApp (EVar "compileNode") (EVar "body")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EListLit (EApp (EVar "ISave") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EVar "idx")) (ELit (LInt 1))))))))
+(DTypeSig false "altBranches" (TyFun (TyCon "Node") (TyFun (TyApp (TyCon "List") (TyCon "Node")) (TyApp (TyCon "List") (TyCon "Node")))))
+(DFunDef false "altBranches" ((PCon "NAlt" (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "altBranches") (EVar "l")) (EBinOp "::" (EVar "r") (EVar "acc"))))
+(DFunDef false "altBranches" ((PVar "n") (PVar "acc")) (EBinOp "::" (EVar "n") (EVar "acc")))
+(DTypeSig false "compileAltBranches" (TyFun (TyApp (TyCon "List") (TyCon "Node")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Inst")))))
+(DFunDef false "compileAltBranches" ((PList) PWild) (EListLit))
+(DFunDef false "compileAltBranches" ((PCons (PVar "b") (PList)) (PVar "pc")) (EApp (EApp (EVar "compileNode") (EVar "b")) (EVar "pc")))
+(DFunDef false "compileAltBranches" ((PCons (PVar "b") (PVar "rest")) (PVar "pc")) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "b")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (DoLet false false (PVar "next") (EBinOp "+" (EBinOp "+" (EBinOp "+" (EVar "pc") (ELit (LInt 1))) (EApp (EVar "length") (EVar "cb"))) (ELit (LInt 1)))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "ISplit") (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EVar "next")) (EBinOp "++" (EVar "cb") (EBinOp "::" (EApp (EVar "IJmp") (EVar "altExit")) (EApp (EApp (EVar "compileAltBranches") (EVar "rest")) (EVar "next"))))))))
+(DTypeSig false "altExit" (TyCon "Int"))
+(DFunDef false "altExit" () (EUnOp "-" (ELit (LInt 1))))
+(DTypeSig false "retargetAltExit" (TyFun (TyCon "Int") (TyFun (TyCon "Inst") (TyCon "Inst"))))
+(DFunDef false "retargetAltExit" ((PVar "out") (PCon "IJmp" (PVar "x"))) (EIf (EBinOp "==" (EVar "x") (EVar "altExit")) (EApp (EVar "IJmp") (EVar "out")) (EApp (EVar "IJmp") (EVar "x"))))
+(DFunDef false "retargetAltExit" (PWild (PVar "i")) (EVar "i"))
 (DData Private "Vm" () ((variant "Vm" (ConNamed (field "prog" (TyApp (TyCon "Array") (TyCon "Inst"))) (field "codes" (TyApp (TyCon "Array") (TyCon "Int"))) (field "subjStart" (TyCon "Int")) (field "subjEnd" (TyCon "Int")) (field "multi" (TyCon "Bool")) (field "anchorEnd" (TyCon "Bool")) (field "nslots" (TyCon "Int")) (field "steps" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "found" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))))))) ())
 (DData Private "ThreadList" () ((variant "ThreadList" (ConNamed (field "dense" (TyApp (TyCon "Array") (TyCon "Int"))) (field "slots" (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyCon "Int")))) (field "live" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "mark" (TyApp (TyCon "Array") (TyCon "Int"))) (field "gen" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DTypeSig false "noSlots" (TyApp (TyCon "Array") (TyCon "Int")))
@@ -1937,7 +1984,11 @@ spansOrdered (m :: rest) floor =
 (DTypeSig false "searchFrom" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))))
 (DFunDef false "searchFrom" ((PVar "re") (PVar "codes") (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (EVar "startAt")) (EVar "anchorStart")) (EVar "anchorEnd")) (EVar "steps")))
 (DTypeSig false "searchWindow" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))))))))))
-(DFunDef false "searchWindow" ((PVar "re") (PVar "codes") (PTuple (PVar "lo") (PVar "hi")) (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EBlock (DoLet false false (PVar "vm") (ERecordCreate "Vm" ((fa "prog" (EFieldAccess (EVar "re") "prog")) (fa "codes" (EVar "codes")) (fa "subjStart" (EVar "lo")) (fa "subjEnd" (EVar "hi")) (fa "multi" (EFieldAccess (EVar "re") "multiline")) (fa "anchorEnd" (EVar "anchorEnd")) (fa "nslots" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EFieldAccess (EVar "re") "ngroups") (ELit (LInt 1))))) (fa "steps" (EVar "steps")) (fa "found" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EApp (EVar "vmSearch") (EVar "vm")) (EVar "startAt")) (EVar "anchorStart")))))
+(DFunDef false "searchWindow" ((PVar "re") (PVar "codes") (PTuple (PVar "lo") (PVar "hi")) (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EBlock (DoLet false false (PVar "vm") (ERecordCreate "Vm" ((fa "prog" (EFieldAccess (EVar "re") "prog")) (fa "codes" (EVar "codes")) (fa "subjStart" (EVar "lo")) (fa "subjEnd" (EVar "hi")) (fa "multi" (EFieldAccess (EVar "re") "multiline")) (fa "anchorEnd" (EVar "anchorEnd")) (fa "nslots" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EFieldAccess (EVar "re") "ngroups") (ELit (LInt 1))))) (fa "steps" (EVar "steps")) (fa "found" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EApp (EVar "vmSearch") (EVar "vm")) (EVar "startAt")) (EBinOp "||" (EVar "anchorStart") (EApp (EVar "startsAtBol") (EVar "re")))))))
+(DTypeSig false "startsAtBol" (TyFun (TyCon "Regex") (TyCon "Bool")))
+(DFunDef false "startsAtBol" ((PVar "re")) (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "re") "multiline")) (EApp (EApp (EVar "startsAtBolFrom") (EFieldAccess (EVar "re") "prog")) (ELit (LInt 0)))))
+(DTypeSig false "startsAtBolFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Inst")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "startsAtBolFrom" ((PVar "prog") (PVar "pc")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pc")) (EVar "prog")) (arm (PCon "IAssert" (PVar "kind")) () (EBinOp "==" (EVar "kind") (EVar "asStart"))) (arm (PCon "ISave" PWild) () (EApp (EApp (EVar "startsAtBolFrom") (EVar "prog")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "clampWindow" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "clampWindow" ((PVar "n") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (EVar "end")) (EVar "n")))) (DoExpr (ETuple (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (EVar "start")) (EVar "hi"))) (EVar "hi")))))
 (DTypeSig false "windowCodes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Int")))))))
@@ -2209,11 +2260,23 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "compileNode" ((PCon "NAny" (PVar "dotAll")) PWild) (EListLit (EApp (EVar "IAny") (EVar "dotAll"))))
 (DFunDef false "compileNode" ((PCon "NAssert" (PVar "kind")) PWild) (EListLit (EApp (EVar "IAssert") (EVar "kind"))))
 (DFunDef false "compileNode" ((PCon "NCat" (PVar "a") (PVar "b")) (PVar "pc")) (EBlock (DoLet false false (PVar "ca") (EApp (EApp (EVar "compileNode") (EVar "a")) (EVar "pc"))) (DoExpr (EBinOp "++" (EVar "ca") (EApp (EApp (EVar "compileNode") (EVar "b")) (EBinOp "+" (EVar "pc") (EApp (EMethodRef "length") (EVar "ca"))))))))
-(DFunDef false "compileNode" ((PCon "NAlt" (PVar "a") (PVar "b")) (PVar "pc")) (EBlock (DoLet false false (PVar "ca") (EApp (EApp (EVar "compileNode") (EVar "a")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (DoLet false false (PVar "jmpAt") (EBinOp "+" (EBinOp "+" (EVar "pc") (ELit (LInt 1))) (EApp (EMethodRef "length") (EVar "ca")))) (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "b")) (EBinOp "+" (EVar "jmpAt") (ELit (LInt 1))))) (DoLet false false (PVar "out") (EBinOp "+" (EBinOp "+" (EVar "jmpAt") (ELit (LInt 1))) (EApp (EMethodRef "length") (EVar "cb")))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "ISplit") (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EBinOp "+" (EVar "jmpAt") (ELit (LInt 1)))) (EBinOp "++" (EVar "ca") (EBinOp "::" (EApp (EVar "IJmp") (EVar "out")) (EVar "cb")))))))
+(DFunDef false "compileNode" ((PCon "NAlt" (PVar "a") (PVar "b")) (PVar "pc")) (EBlock (DoLet false false (PVar "code") (EApp (EApp (EVar "compileAltBranches") (EApp (EApp (EVar "altBranches") (EApp (EApp (EVar "NAlt") (EVar "a")) (EVar "b"))) (EListLit))) (EVar "pc"))) (DoLet false false (PVar "out") (EBinOp "+" (EVar "pc") (EApp (EMethodRef "length") (EVar "code")))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "retargetAltExit") (EVar "out"))) (EVar "code")))))
 (DFunDef false "compileNode" ((PCon "NStar" (PVar "greedy") (PVar "body")) (PVar "pc")) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "body")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (DoLet false false (PVar "out") (EBinOp "+" (EBinOp "+" (EBinOp "+" (EVar "pc") (ELit (LInt 1))) (EApp (EMethodRef "length") (EVar "cb"))) (ELit (LInt 1)))) (DoLet false false (PVar "sp") (EIf (EVar "greedy") (EApp (EApp (EVar "ISplit") (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EVar "out")) (EApp (EApp (EVar "ISplit") (EVar "out")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))))) (DoExpr (EBinOp "::" (EVar "sp") (EBinOp "++" (EVar "cb") (EListLit (EApp (EVar "IJmp") (EVar "pc"))))))))
 (DFunDef false "compileNode" ((PCon "NPlus" (PVar "greedy") (PVar "body")) (PVar "pc")) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "body")) (EVar "pc"))) (DoLet false false (PVar "out") (EBinOp "+" (EBinOp "+" (EVar "pc") (EApp (EMethodRef "length") (EVar "cb"))) (ELit (LInt 1)))) (DoLet false false (PVar "sp") (EIf (EVar "greedy") (EApp (EApp (EVar "ISplit") (EVar "pc")) (EVar "out")) (EApp (EApp (EVar "ISplit") (EVar "out")) (EVar "pc")))) (DoExpr (EBinOp "++" (EVar "cb") (EListLit (EVar "sp"))))))
 (DFunDef false "compileNode" ((PCon "NOpt" (PVar "greedy") (PVar "body")) (PVar "pc")) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "body")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (DoLet false false (PVar "out") (EBinOp "+" (EBinOp "+" (EVar "pc") (ELit (LInt 1))) (EApp (EMethodRef "length") (EVar "cb")))) (DoLet false false (PVar "sp") (EIf (EVar "greedy") (EApp (EApp (EVar "ISplit") (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EVar "out")) (EApp (EApp (EVar "ISplit") (EVar "out")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))))) (DoExpr (EBinOp "::" (EVar "sp") (EVar "cb")))))
 (DFunDef false "compileNode" ((PCon "NGroup" (PVar "idx") (PVar "body")) (PVar "pc")) (EBinOp "::" (EApp (EVar "ISave") (EBinOp "*" (ELit (LInt 2)) (EVar "idx"))) (EBinOp "++" (EApp (EApp (EVar "compileNode") (EVar "body")) (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EListLit (EApp (EVar "ISave") (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EVar "idx")) (ELit (LInt 1))))))))
+(DTypeSig false "altBranches" (TyFun (TyCon "Node") (TyFun (TyApp (TyCon "List") (TyCon "Node")) (TyApp (TyCon "List") (TyCon "Node")))))
+(DFunDef false "altBranches" ((PCon "NAlt" (PVar "l") (PVar "r")) (PVar "acc")) (EApp (EApp (EVar "altBranches") (EVar "l")) (EBinOp "::" (EVar "r") (EVar "acc"))))
+(DFunDef false "altBranches" ((PVar "n") (PVar "acc")) (EBinOp "::" (EVar "n") (EVar "acc")))
+(DTypeSig false "compileAltBranches" (TyFun (TyApp (TyCon "List") (TyCon "Node")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Inst")))))
+(DFunDef false "compileAltBranches" ((PList) PWild) (EListLit))
+(DFunDef false "compileAltBranches" ((PCons (PVar "b") (PList)) (PVar "pc")) (EApp (EApp (EVar "compileNode") (EVar "b")) (EVar "pc")))
+(DFunDef false "compileAltBranches" ((PCons (PVar "b") (PVar "rest")) (PVar "pc")) (EBlock (DoLet false false (PVar "cb") (EApp (EApp (EVar "compileNode") (EVar "b")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (DoLet false false (PVar "next") (EBinOp "+" (EBinOp "+" (EBinOp "+" (EVar "pc") (ELit (LInt 1))) (EApp (EMethodRef "length") (EVar "cb"))) (ELit (LInt 1)))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "ISplit") (EBinOp "+" (EVar "pc") (ELit (LInt 1)))) (EVar "next")) (EBinOp "++" (EVar "cb") (EBinOp "::" (EApp (EVar "IJmp") (EVar "altExit")) (EApp (EApp (EVar "compileAltBranches") (EVar "rest")) (EVar "next"))))))))
+(DTypeSig false "altExit" (TyCon "Int"))
+(DFunDef false "altExit" () (EUnOp "-" (ELit (LInt 1))))
+(DTypeSig false "retargetAltExit" (TyFun (TyCon "Int") (TyFun (TyCon "Inst") (TyCon "Inst"))))
+(DFunDef false "retargetAltExit" ((PVar "out") (PCon "IJmp" (PVar "x"))) (EIf (EBinOp "==" (EVar "x") (EVar "altExit")) (EApp (EVar "IJmp") (EVar "out")) (EApp (EVar "IJmp") (EVar "x"))))
+(DFunDef false "retargetAltExit" (PWild (PVar "i")) (EVar "i"))
 (DData Private "Vm" () ((variant "Vm" (ConNamed (field "prog" (TyApp (TyCon "Array") (TyCon "Inst"))) (field "codes" (TyApp (TyCon "Array") (TyCon "Int"))) (field "subjStart" (TyCon "Int")) (field "subjEnd" (TyCon "Int")) (field "multi" (TyCon "Bool")) (field "anchorEnd" (TyCon "Bool")) (field "nslots" (TyCon "Int")) (field "steps" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "found" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))))))) ())
 (DData Private "ThreadList" () ((variant "ThreadList" (ConNamed (field "dense" (TyApp (TyCon "Array") (TyCon "Int"))) (field "slots" (TyApp (TyCon "Array") (TyApp (TyCon "Array") (TyCon "Int")))) (field "live" (TyApp (TyCon "Ref") (TyCon "Int"))) (field "mark" (TyApp (TyCon "Array") (TyCon "Int"))) (field "gen" (TyApp (TyCon "Ref") (TyCon "Int")))))) ())
 (DTypeSig false "noSlots" (TyApp (TyCon "Array") (TyCon "Int")))
@@ -2243,7 +2306,11 @@ spansOrdered (m :: rest) floor =
 (DTypeSig false "searchFrom" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))))
 (DFunDef false "searchFrom" ((PVar "re") (PVar "codes") (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "codes")) (ETuple (ELit (LInt 0)) (EApp (EVar "arrayLength") (EVar "codes")))) (EVar "startAt")) (EVar "anchorStart")) (EVar "anchorEnd")) (EVar "steps")))
 (DTypeSig false "searchWindow" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyTuple (TyCon "Int") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "Ref") (TyCon "Int")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int")))))))))))
-(DFunDef false "searchWindow" ((PVar "re") (PVar "codes") (PTuple (PVar "lo") (PVar "hi")) (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EBlock (DoLet false false (PVar "vm") (ERecordCreate "Vm" ((fa "prog" (EFieldAccess (EVar "re") "prog")) (fa "codes" (EVar "codes")) (fa "subjStart" (EVar "lo")) (fa "subjEnd" (EVar "hi")) (fa "multi" (EFieldAccess (EVar "re") "multiline")) (fa "anchorEnd" (EVar "anchorEnd")) (fa "nslots" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EFieldAccess (EVar "re") "ngroups") (ELit (LInt 1))))) (fa "steps" (EVar "steps")) (fa "found" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EApp (EVar "vmSearch") (EVar "vm")) (EVar "startAt")) (EVar "anchorStart")))))
+(DFunDef false "searchWindow" ((PVar "re") (PVar "codes") (PTuple (PVar "lo") (PVar "hi")) (PVar "startAt") (PVar "anchorStart") (PVar "anchorEnd") (PVar "steps")) (EBlock (DoLet false false (PVar "vm") (ERecordCreate "Vm" ((fa "prog" (EFieldAccess (EVar "re") "prog")) (fa "codes" (EVar "codes")) (fa "subjStart" (EVar "lo")) (fa "subjEnd" (EVar "hi")) (fa "multi" (EFieldAccess (EVar "re") "multiline")) (fa "anchorEnd" (EVar "anchorEnd")) (fa "nslots" (EBinOp "*" (ELit (LInt 2)) (EBinOp "+" (EFieldAccess (EVar "re") "ngroups") (ELit (LInt 1))))) (fa "steps" (EVar "steps")) (fa "found" (EApp (EVar "Ref") (EVar "None")))))) (DoExpr (EApp (EApp (EApp (EVar "vmSearch") (EVar "vm")) (EVar "startAt")) (EBinOp "||" (EVar "anchorStart") (EApp (EVar "startsAtBol") (EVar "re")))))))
+(DTypeSig false "startsAtBol" (TyFun (TyCon "Regex") (TyCon "Bool")))
+(DFunDef false "startsAtBol" ((PVar "re")) (EBinOp "&&" (EApp (EVar "not") (EFieldAccess (EVar "re") "multiline")) (EApp (EApp (EVar "startsAtBolFrom") (EFieldAccess (EVar "re") "prog")) (ELit (LInt 0)))))
+(DTypeSig false "startsAtBolFrom" (TyFun (TyApp (TyCon "Array") (TyCon "Inst")) (TyFun (TyCon "Int") (TyCon "Bool"))))
+(DFunDef false "startsAtBolFrom" ((PVar "prog") (PVar "pc")) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pc")) (EVar "prog")) (arm (PCon "IAssert" (PVar "kind")) () (EBinOp "==" (EVar "kind") (EVar "asStart"))) (arm (PCon "ISave" PWild) () (EApp (EApp (EVar "startsAtBolFrom") (EVar "prog")) (EBinOp "+" (EVar "pc") (ELit (LInt 1))))) (arm PWild () (EVar "False"))))
 (DTypeSig false "clampWindow" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "clampWindow" ((PVar "n") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "hi") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (EVar "end")) (EVar "n")))) (DoExpr (ETuple (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (EVar "start")) (EVar "hi"))) (EVar "hi")))))
 (DTypeSig false "windowCodes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyApp (TyCon "Array") (TyCon "Int")))))))

@@ -1,10 +1,10 @@
 -- §2/§3: a dictionary for `Sub (Box Bool)` carries a `Sup (Box Bool)` dictionary,
 -- and the only instance that builds it, `impl Sup (Box a) requires Show2 a`, needs
--- `Show2 Bool`, which no instance gives.  The goal at `useSup (Box True)` is
--- unsatisfiable, exactly as the direct `sup (Box True)` is: `T-NO-IMPL` (`no impl of
--- Show2 for Bool`), located at the call, on every verb.  It used to be accepted on
--- every verb and print `supisub`, running `show2` through a dictionary of the wrong
--- type.
+-- `Show2 Bool`, which no instance gives: `T-NO-IMPL` (`no impl of Show2 for Bool`) at
+-- the call `useSup (Box True)`, on every verb.  §3 R-SUPER-DECL also rejects
+-- `impl Sub (Box a)` (line 25), which does not entail that instance's `Show2 a`:
+-- `T-IMPL-MISSING-REQUIRES` at the impl.  It used to be accepted on every verb and
+-- print `supisub`, running `show2` through a dictionary of the wrong type.
 interface Show2 t where
   show2 : t -> String
 

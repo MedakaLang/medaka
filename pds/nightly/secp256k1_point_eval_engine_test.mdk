@@ -1,0 +1,47 @@
+{- | The eval interpreter over three sampled rows of the secp256k1 point
+   corpus: the `n * G` raw ladder to canonical infinity (row 17), `G + INF`
+   (row 19) and `2 * INF` (row 25), the same lines the native row of
+   `pds/test/secp256k1_point_vectors_test.mdk` keeps from the same ledgered
+   file.
+
+   It runs nightly, not in the merge queue: a 256-round ladder is slow to
+   interpret, so the eval arm costs minutes where the native row costs well
+   under a second. The merge-tier native row sweeps every row and grades
+   row 17 through the same ladder.
+
+   Runs under `medaka test --native`: the arm spawns the driver. -}
+
+import test.secp256k1_point_support.{corpusFile, driver}
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+
+gate : String
+gate = "pds/nightly/secp256k1_point_eval_engine"
+
+evalSample : Row
+evalSample = Row {
+  gate = gate,
+  driver = driver,
+  corpus = Lines corpusFile [17, 19, 25],
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = EvalEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = [
+        "PASS\trow 1 raw-ladder canonical-infinity",
+        "counted: 3/3 rows ok",
+      ],
+      lastLine = Some "TOTAL: PASS",
+      exactStdout = None,
+    },
+  ],
+  parity = False,
+}
+
+test "secp256k1 points (eval): 3 sampled rows, nG reaches canonical infinity" =
+  expectRow evalSample

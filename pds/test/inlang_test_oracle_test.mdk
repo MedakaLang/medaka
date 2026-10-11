@@ -19,6 +19,7 @@
 import io.{readLines}
 import list.{lookup, somes, zipWith}
 import test.{Expectation(..)}
+import test.inlang_roster_support.{interpreterSuites}
 import test_process.{
   disagreeingFloorBlocks,
   expectFloor,
@@ -76,57 +77,46 @@ engineLabel NativeSpeed = "native (speed)"
    the `lexicon_*` files read their vectors with `readFile`; the
    interpreter's capability policy binds neither.
 
-   `NativeSpeed` (7 files): eval completes but is materially slower —
-   `field_test` 159 s vs 2.2 s, `scalar_test` and `pbkdf2_test` both past a
-   180 s timeout vs 2.5 s / 18.0 s, the two JWT/PBKDF2 files roughly 4-5x,
-   `websocket_test` 295 s vs 4 s (RFC 3174's one-million-byte SHA-1
+   `NativeSpeed` (7 inline files, plus every row of `interpreterSuites` in
+   `pds/test/inlang_roster_support.mdk`): eval completes but is materially
+   slower — `field_test` 159 s vs 2.2 s, `scalar_test` and `pbkdf2_test` both
+   past a 180 s timeout vs 2.5 s / 18.0 s, the two JWT/PBKDF2 files roughly
+   4-5x, `websocket_test` 295 s vs 4 s (RFC 3174's one-million-byte SHA-1
    vector is most of that), and `mst_test` 416-446 s vs 3 s (the MST
-   sharing mutation test walks a large synthetic tree). -}
+   sharing mutation test walks a large synthetic tree). The shared rows
+   were measured the same way: `http_test` 155 s vs 2.5 s. Their eval arm is
+   not spawned here; `pds/nightly/inlang_eval_engine_test.mdk` runs it over
+   the same list. -}
 suites : List (String, (Int, Engine))
-suites = [
-  ("skeleton_test", (2, Eval)),
-  ("httpclient_test", (12, Eval)),
-  ("http_test", (85, Eval)),
-  ("xrpc_test", (29, Eval)),
-  ("server_core_test", (14, Eval)),
-  ("encodings_test", (29, Eval)),
-  ("dagcbor_cid_test", (12, Eval)),
-  -- lowered from 13: the defensive-copy cell mutated the returned entry and
-  -- root arrays, and `Bytes` has no mutation for it to attempt
-  ("mst_test", (12, NativeSpeed)),
-  -- lowered from 14: two cells fed out-of-range bytes that `Bytes` cannot
-  -- represent, and were deleted rather than converted
-  ("car_store_test", (12, Eval)),
-  ("repo_tid_test", (15, NativeCapability)),
-  ("field_test", (30, NativeSpeed)),
-  ("scalar_test", (38, NativeSpeed)),
-  -- lowered from 11: cells fed out-of-range bytes that `Bytes` cannot
-  -- represent and were deleted, and the byte-array ingress cell left with
-  -- the ingress it tested
-  ("sign_key_test", (7, Eval)),
-  ("secp256k1_point_test", (8, Eval)),
-  ("rfc6979_test", (4, Eval)),
-  ("ecdsa_test", (2, Eval)),
-  ("pbkdf2_test", (4, NativeSpeed)),
-  ("jwt_test", (32, NativeSpeed)),
-  ("credential_test", (20, NativeSpeed)),
-  ("session_routes_test", (49, NativeCapability)),
-  ("auth_seam_test", (32, NativeCapability)),
-  ("blob_routes_test", (15, NativeCapability)),
-  ("ratelimit_test", (43, Eval)),
-  ("read_buffer_test", (19, Eval)),
-  ("egress_census_test", (9, Eval)),
-  ("websocket_test", (43, NativeSpeed)),
-  ("event_log_test", (22, NativeCapability)),
-  ("sync_event_test", (7, NativeCapability)),
-  ("route_policy_test", (4, Eval)),
-  ("lexicon_corpus_test", (4, NativeCapability)),
-  ("lexicon_schemas_test", (3, NativeCapability)),
-  ("lexicon_write_test", (14, NativeCapability)),
-  -- these two spawn `medaka`, and the interpreter binds no subprocess extern
-  ("authority_pins_test", (14, NativeCapability)),
-  ("sandbox_agreement_test", (7, NativeCapability)),
-]
+suites =
+  [
+      -- lowered from 13: the defensive-copy cell mutated the returned entry and
+      -- root arrays, and `Bytes` has no mutation for it to attempt
+      ("mst_test", (12, NativeSpeed)),
+      ("repo_tid_test", (15, NativeCapability)),
+      ("field_test", (30, NativeSpeed)),
+      ("scalar_test", (38, NativeSpeed)),
+      ("pbkdf2_test", (4, NativeSpeed)),
+      ("jwt_test", (32, NativeSpeed)),
+      ("credential_test", (20, NativeSpeed)),
+      ("session_routes_test", (49, NativeCapability)),
+      ("auth_seam_test", (32, NativeCapability)),
+      ("blob_routes_test", (15, NativeCapability)),
+      -- the native arm fails `allocBytes` scaling in "a decision's allocation
+      -- cost does not scale 100x with other active identities", so this row
+      -- stays on eval
+      ("ratelimit_test", (43, Eval)),
+      ("websocket_test", (43, NativeSpeed)),
+      ("event_log_test", (22, NativeCapability)),
+      ("sync_event_test", (7, NativeCapability)),
+      ("lexicon_corpus_test", (4, NativeCapability)),
+      ("lexicon_schemas_test", (3, NativeCapability)),
+      ("lexicon_write_test", (14, NativeCapability)),
+      -- these two spawn `medaka`, and the interpreter binds no subprocess extern
+      ("authority_pins_test", (14, NativeCapability)),
+      ("sandbox_agreement_test", (7, NativeCapability)),
+    ]
+    ++ map ((name, floor) => (name, (floor, NativeSpeed))) interpreterSuites
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
    which must name a tracking issue. Empty, and kept empty-but-present so

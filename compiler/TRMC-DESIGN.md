@@ -597,7 +597,7 @@ path) + full `diff_compiler_*` + `selfcompile_fixpoint` C3a/C3b.
 > `trmcEligible`, the dispatch-graph detection, the v5 stage-1-claims predicate)
 > lives in `backend/trmc_analysis.mdk`; the wasm-only uniform-ctor gate was
 > retired (mixed leaf-ctor sets now emit on both backends); both emitters write
-> `; tmc:` / `;; tmc:` census markers, and `test/diff_compiler_tmc_parity.sh`
+> `; tmc:` / `;; tmc:` census markers, and `test/diff_compiler_tmc_parity_test.mdk`
 > FAILS on any per-function TMC-set difference across backends
 > (`test/tmc_census.sh` is the underlying census; corpus = stack fixtures + wasm
 > TMC fixtures + the `check_main` module graph — 109 TMC'd fns incl. 11 dispatch

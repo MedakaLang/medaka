@@ -365,7 +365,7 @@ _invokes() {
 }
 
 # Does gate $1 consume fixture dir $2 — directly, OR indirectly via one hop
-# through a helper it invokes? (Real case: diff_compiler_tmc_parity.sh never
+# through a helper it invokes? (Real case: diff_compiler_tmc_parity_test.mdk never
 # mentions test/wasm/fixtures itself — it shells to test/tmc_census.sh, and
 # THAT script reads the corpus. Missing this one-hop case would silently drop
 # a genuine consumer, exactly the false-negative this derivation must avoid.)
@@ -1655,7 +1655,7 @@ if [ -s "$CHANGED_PATHS" ]; then
 fi
 
 # ── the emoji-shout ratchet is the same shape: whole-tree sources = ["*"] ──
-# diff_compiler_comment_shout_diff.sh (#2621) rejects a commit/diff that ADDS a
+# diff_compiler_comment_shout_diff_test.mdk (#2621) rejects a commit/diff that ADDS a
 # new 🚨/⚠️/🔒 line to any .mdk, so like diff_compiler_source_bytes above it has
 # no single per-file consumer to hang off of — it is registered `sources = ["*"]`
 # and must derive unconditionally, or the local fast-feedback loop this gate

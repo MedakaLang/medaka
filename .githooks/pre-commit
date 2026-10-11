@@ -38,7 +38,7 @@
 #      comment-scope added lines only. Diff-scoped on ADDED lines only (`git diff
 #      --cached -U0`) — an existing shout that is merely touched but textually
 #      unchanged does not trigger, and it needs no built binary. CI twin:
-#      test/diff_compiler_comment_shout_diff.sh (#2621, widened #3032).
+#      test/diff_compiler_comment_shout_diff_test.mdk (#2621, widened #3032).
 #   6b. COMMENT-REGISTER BASELINE: `test/comment_register_census.sh --check
 #      test/comment_register_baseline.toml <staged files>` — a per-file COUNT
 #      ratchet (not diff-scoped like 6) over the 8 baselined comment-register
@@ -48,7 +48,7 @@
 #      row in the baseline fails closed. Counts move only by regenerating
 #      (`sh test/comment_register_census.sh --write
 #      test/comment_register_baseline.toml`), never by hand. CI twin:
-#      test/diff_compiler_comment_shout_diff.sh's second assertion
+#      test/diff_compiler_comment_shout_diff_test.mdk's second assertion
 #      (#3034).
 #
 # ── #491: this hook covers ONE of five golden families outright, plus one more
@@ -461,7 +461,7 @@ fi
 # would be an unrelated behavior change.
 #
 # re_emoji/re_shout must stay byte-identical to the same-named literals in
-# test/comment_register_census.sh and test/diff_compiler_comment_shout_diff.sh
+# test/comment_register_census.sh and test/diff_compiler_comment_shout_diff_test.mdk
 # — the CI gate asserts this on every run (see that script) rather than the
 # three copies sharing code, so `--no-verify` cannot bypass the gate by
 # skipping this hook.

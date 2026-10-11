@@ -313,7 +313,7 @@ and capability failures are therefore part of the Wasm backend's trusted base.
 | `test/lib_engines_differential.sh` | eval/native/Wasm observations agree on enrolled programs |
 | `test/diff_compiler_llvm*.sh` | native emitted output and typed-IR shapes |
 | `test/wasm/diff_wasm*.sh` | WAT assembly, validation, and behavior |
-| `test/diff_compiler_tmc_parity.sh` | shared TMC population parity |
+| `test/diff_compiler_tmc_parity_test.mdk` | shared TMC population parity |
 | `test/diff_compiler_dispatch_shape_test.mdk` | outlined dispatch and prelude independence |
 | `compiler/backend/extern_catalog_gate_test.mdk` | extern existence/disposition and pure-domain ledger |
 | `test/diff_compiler_wasm_shim_parity_test.mdk` | every marker block declared by reference host `run.js` is present and byte-identical across marker-discovered hosts (WH3); not symmetric key-set completeness |
