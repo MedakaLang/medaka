@@ -1,0 +1,168 @@
+{- | Gate for the SELF-HOSTED `medaka build`, re-rooted off the OCaml oracle
+   (REROOT-PLAN §2d). Replaces the former shell gate of the same name.
+
+   For every top-level test/build_diff_fixtures/*.mdk, plus six multi-module
+   specials (subfolder entry files), it runs `medaka build` with MEDAKA_EMITTER
+   (default <root>/medaka_emitter) and MEDAKA_CLANG_OPT=-O0, runs the produced
+   binary, and compares its stdout with the committed <fixture>.build.golden.
+   Trailing newlines are ignored on both sides, as the script's `$(...)` did.
+   The binary's exit code is ignored, except 126/127 (could not launch), which FAIL.
+   Its stderr is dropped. Every build spawn's exit and Err are graded.
+
+   Proves: every fixture builds through the native driver and its binary emits
+   the committed golden stdout.
+   Does NOT prove: that the goldens are right (they are hand-reviewed, and are
+   never written by this test), nor OCaml-oracle parity.
+   Needs clang and libgc. Build and run each fixture in one batch, at
+   MEDAKA_TEST_JOBS at a time. -}
+
+import test_process.{medakaBin, medakaRoot, underRoot, withScratchDir, testJobs}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEqual, expectNoFindings, fail
+}
+import fs.{fixtureFiles}
+import io.{getEnvOr}
+import string.{contains, startsWith, stripSuffix, take, replaceAll}
+import list.{zip}
+
+fixDir : <IO> String
+fixDir = underRoot "test/build_diff_fixtures"
+
+-- The script's six multi-module specials: (label, entry file under fixDir).
+specials : List (String, String)
+specials = [
+  ("multimodule", "mm/entry.mdk"),
+  ("l1_twomod", "l1/entry.mdk"),
+  ("nested_subfolder", "nested/main.mdk"),
+  ("bimappable_constrained_sibling", "bimappable_constrained_sibling/main.mdk"),
+  ("bimappable_tuple_sibling", "bimappable_tuple_sibling/main.mdk"),
+  ("traverse_parametric_sibling", "traverse_parametric_sibling/main.mdk"),
+]
+
+-- A (label, src) row for a top-level `<name>.mdk` file; subfolder files are not top-level.
+topRow : String -> String -> List (String, String)
+topRow dir rel = match stripSuffix ".mdk" rel
+  Some stem => if contains "/" rel then [] else [(stem, "\{dir}/\{rel}")]
+  None => []
+
+topRows : String -> List String -> List (String, String)
+topRows dir paths = flatMap (p => topRow dir (replaceAll "\{dir}/" "" p)) paths
+
+-- Golden path: the source with `.mdk` replaced by `.build.golden`.
+goldenOf : String -> String
+goldenOf src = match stripSuffix ".mdk" src
+  Some stem => "\{stem}.build.golden"
+  None => "\{src}.build.golden"
+
+-- Equal once trailing newlines are dropped from both sides, as `$(...)` did.
+sameModuloNl : String -> String -> Bool
+sameModuloNl a b = match stripSuffix "\n" a
+  Some a2 => sameModuloNl a2 b
+  None => match stripSuffix "\n" b
+    Some b2 => sameModuloNl a b2
+    None => a == b
+
+-- Tops (floor-checked) and specials, as (label, src) rows.
+worklist : <IO, FileRead> Result String (List (String, String), List (String, String))
+worklist = match fixtureFiles fixDir
+  Err e => Err "could not list \{fixDir}: \{e}"
+  Ok paths => Ok (
+    topRows fixDir paths,
+    map ((l, rel) => (l, "\{fixDir}/\{rel}")) specials,
+  )
+
+binOf : String -> String -> String
+binOf dir label = "\{dir}/\{label}.bin"
+
+-- Argv for `env MEDAKA_ROOT=… MEDAKA_EMITTER=… MEDAKA_CLANG_OPT=-O0 medaka build src -o bin`.
+buildArgv : String -> String -> String -> String -> String -> List String
+buildArgv root emitter bin src medaka = [
+  "MEDAKA_ROOT=\{root}",
+  "MEDAKA_EMITTER=\{emitter}",
+  "MEDAKA_CLANG_OPT=-O0",
+  medaka,
+  "build",
+  src,
+  "-o",
+  bin,
+]
+
+-- One fixture's verdict: "ok   <label>" or "FAIL <label> (...)".
+verdict : String ->
+  Result String String ->
+  Result String (Int, String, String) ->
+  Result String (Int, String, String) ->
+  String
+verdict label (Err e) _ _ = "FAIL \{label} (no .build.golden: \{e})"
+verdict label (Ok want) built ran = buildVerdict label want built ran
+
+buildVerdict : String ->
+  String ->
+  Result String (Int, String, String) ->
+  Result String (Int, String, String) ->
+  String
+buildVerdict label want (Err e) _ =
+  "FAIL \{label} (native build could not run: \{e})"
+buildVerdict label want (Ok (bc, _, berr)) ran =
+  if bc /= 0 then
+    "FAIL \{label} (native build exited \{intToString bc}: \{take 300 berr})"
+  else
+    runVerdict label want ran
+
+runVerdict : String -> String -> Result String (Int, String, String) -> String
+runVerdict label want (Err e) = "FAIL \{label} (binary could not run: \{e})"
+runVerdict label want (Ok (rc, out, _)) =
+  if rc == 126 || rc == 127 then
+    "FAIL \{label} (binary launch failure, exit \{intToString rc})"
+  else if sameModuloNl out want then
+    "ok   \{label}"
+  else
+    "FAIL \{label} (diff)\n  native  : \{take 600 out}\n  expected: \{take 600 want}"
+
+gate : String ->
+  String ->
+  List (String, String) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+gate dir medaka rows =
+  let root = medakaRoot
+  let emitter = getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
+  let argvs =
+    map
+      ((label, src) => buildArgv root emitter (binOf dir label) src medaka)
+      rows
+  let builds = runCommandBatch "env" testJobs argvs
+  let runs =
+    runCommandBatch
+      "sh"
+      testJobs
+      (map
+        ((label, _) => ["-c", "exec \"$0\" 2>/dev/null", binOf dir label])
+        rows)
+  let goldens = map ((_, src) => readFile (goldenOf src)) rows
+  let withB = zip rows builds
+  let withR = zip withB runs
+  let withG = zip withR goldens
+  let n = length rows
+  let verdicts = map (((((label, _), b), r), g) => verdict label g b r) withG
+  let failures = filter (v => not (startsWith "ok " v)) verdicts
+  -- zip truncates to the shortest list; these equalities make a short batch a hard FAIL.
+  expectAll [
+    expectEqual n (length builds),
+    expectEqual n (length runs),
+    expectAtLeast 92 (length verdicts),
+    expectNoFindings
+      "\{intToString (length failures)} of \{intToString (length verdicts)} build_diff fixtures failed (regen: build and review the fixture yourself, then write its .build.golden)"
+      (Ok failures),
+  ]
+
+check : <Exec, IO, FileRead, FileWrite> Expectation
+check = match worklist
+  Err e => fail e
+  Ok (tops, sp) => withScratchDir (dir => expectAll [
+    expectAtLeast 86 (length tops),
+    expectAtLeast 6 (length sp),
+    gate dir medakaBin (tops ++ sp),
+  ])
+
+test "diff_compiler_build: native build of every build_diff fixture matches its golden stdout" =
+  check
