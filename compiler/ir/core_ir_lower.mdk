@@ -1056,8 +1056,8 @@ public export data ArityEnv =
   | ArityEnv (OrdMap Int) (OrdMap Int) (OrdMap Int) (OrdMap Int)
 
 -- The local binders in scope: `Some k` for a let-group function whose clauses
--- take k parameters, `None` for any other binder.  A local shadows a top-level
--- name of the same spelling.
+-- take k parameters or a `let` of a k-parameter lambda, `None` for any other
+-- binder.  A local shadows a top-level name of the same spelling.
 export type CallScope = OrdMap (Option Int)
 
 export
@@ -1076,6 +1076,8 @@ clausesArity : List CClause -> Int
 clausesArity ((CClause pats _) :: _) = listLen pats
 clausesArity [] = 0
 
+-- An entry's group key (`entryArityKey`) and value arity.
+export
 entryArityRow : CImplEntry -> (String, Int)
 entryArityRow (CImplEntry m _ _ (CImplTagged _ key _ _ pats _)) =
   (entryArityKey m key, valueArity pats)
@@ -1145,6 +1147,14 @@ callModeFor (Some k) n =
   else
     CallOver (n - k)
 
+-- The scope after `let pat = rhs`: a variable bound to a lambda is a function
+-- local of the lambda's parameter count, any other binder a non-function local.
+export
+bindLetScope : Pat -> CExpr -> CallScope -> CallScope
+bindLetScope (PVar x _) (CLam (ps@(_ :: _)) _) s =
+  omInsert x (Some (listLen ps)) s
+bindLetScope pat _ s = bindPatScope pat s
+
 -- The scope after a pattern: each variable it binds is a non-function local.
 export
 bindPatScope : Pat -> CallScope -> CallScope
@@ -1190,11 +1200,34 @@ bindGroupScope ((CBind name clauses _) :: rest) s =
 -- the head's defined arity, read before the pass lengthens anything; through a
 -- runtime dictionary it is the least arity of any entry of the method.  An impl
 -- entry never grows past its method's declared arity.  Applies to top-level
--- bindings of one clause and to impl entries.
+-- bindings of one clause and to impl entries.  The entries of one method and
+-- route word are the clauses of one define, so they are expanded together: when
+-- the pass would leave them taking different arities, none of them is expanded.
 etaSaturateProgram : CProgram -> CProgram
 etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls)) =
   let env = programArities prog
-  CProgram (map (etaBind env) groups) ctors ctorTypes (map (etaEntry env) impls)
+  let expanded = map (ent => (ent, etaEntry env ent)) impls
+  let split = splitEntryGroups (map snd expanded) omEmpty omEmpty
+  CProgram
+    (map (etaBind env) groups)
+    ctors
+    ctorTypes
+    (map (keepWholeGroup split) expanded)
+
+keepWholeGroup : OrdMap Unit -> (CImplEntry, CImplEntry) -> CImplEntry
+keepWholeGroup split (before, after) =
+  if omHasKey (fst (entryArityRow before)) split then before else after
+
+-- The (method, route word) groups whose entries take more than one value arity,
+-- keyed as `entryArityKey`.
+splitEntryGroups : List CImplEntry -> OrdMap Int -> OrdMap Unit -> OrdMap Unit
+splitEntryGroups [] _ split = split
+splitEntryGroups (ent :: rest) seen split =
+  let (key, n) = entryArityRow ent
+  let split2 = match omLookup key seen
+    Some k => if k == n then split else omInsert key () split
+    None => split
+  splitEntryGroups rest (omInsert key n seen) split2
 
 etaBind : ArityEnv -> CBind -> CBind
 etaBind env (b@(CBind name [CClause pats body] site)) =
@@ -1224,7 +1257,10 @@ etaEntryClause env declared pats body =
 -- the parameters the clause's tail is short of, 0 when it may not be expanded
 etaMissing : ArityEnv -> CallScope -> CExpr -> Int
 etaMissing env scope (CLet _ pat rhs body) =
-  if isAtomicArg rhs then etaMissing env (bindPatScope pat scope) body else 0
+  if isAtomicArg rhs then
+    etaMissing env (bindLetScope pat rhs scope) body
+  else
+    0
 etaMissing env scope (CLetGroup binds body) =
   if allList isFunctionBind binds then
     etaMissing env (bindGroupScope binds scope) body
@@ -1355,7 +1391,7 @@ callsExpr _ _ (CVar x addr) = CVar x addr
 callsExpr env scope (CLam pats body) =
   CLam pats (callsExpr env (bindPatsScope pats scope) body)
 callsExpr env scope (CLet recF pat rhs body) =
-  let inner = bindPatScope pat scope
+  let inner = bindLetScope pat rhs scope
   CLet
     recF
     pat
@@ -1454,7 +1490,7 @@ callsStmts _ _ [] = []
 callsStmts env scope ((CSExpr e) :: rest) =
   CSExpr (callsExpr env scope e) :: callsStmts env scope rest
 callsStmts env scope ((CSLet recF pat e) :: rest) =
-  let inner = bindPatScope pat scope
+  let inner = bindLetScope pat e scope
   CSLet recF pat (callsExpr env (if recF then inner else scope) e)
     :: callsStmts env inner rest
 callsStmts env scope ((CSAssign x e) :: rest) =

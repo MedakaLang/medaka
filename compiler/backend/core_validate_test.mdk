@@ -22,12 +22,14 @@ import ir.core_ir.{
   CClause(..),
   CExpr(..),
   CField(..),
+  CImplBody(..),
+  CImplEntry(..),
   CProgram(..),
   CStmt(..),
   CallMode(..),
   CallSite(..),
 }
-import frontend.ast.{Lit(..), noDeclLoc}
+import frontend.ast.{Lit(..), Pat(..), noDeclLoc}
 import ir.core_ir_lower.{
   EmitTarget(..),
   ctorFieldTypeNames,
@@ -542,5 +544,87 @@ test "(o) a tail flag against the position is refused, naming head and binding" 
           "tail: g is in tail position, stamped CallExact, but not flagged [in f]",
         ]
         (validateTails (reflag "g" False (lowered TargetNative tailSrc))),
+    ),
+  ]
+
+-- ── let-bound lambdas ───────────────────────────────────────────────────────
+
+-- A `let` of a lambda, as a block statement or a `let ... in`, is a function
+-- local of the lambda's parameter count: an exact call of it and an
+-- over-application of a curried one.
+letLamSrc : String
+letLamSrc =
+  "main =\n  let f = x => x + 1\n  let g = x => y => x + y\n  g (f 2) 3"
+
+letInLamSrc : String
+letInLamSrc = "main = let f = x => x + 1 in f 2"
+
+test "(p) a call of a let-bound lambda is read against the lambda's parameters" = expectEach
+  [
+    (
+      "lowering stamps both calls, so the program validates clean",
+      expectEqual [] (validateCalls (lowered TargetNative letLamSrc)),
+    ),
+    (
+      "a `let ... in` of a lambda validates clean",
+      expectEqual [] (validateCalls (lowered TargetNative letInLamSrc)),
+    ),
+    (
+      "an exact call stamped dynamic",
+      expectEqual
+        ["call: f applied to 1 of 1, stamped CallDynamic [in main]"]
+        (validateCalls
+          (restamp "f" CallDynamic (lowered TargetNative letLamSrc))),
+    ),
+    (
+      "an over-application stamped dynamic",
+      expectEqual
+        ["call: g applied to 2 of 1, stamped CallDynamic [in main]"]
+        (validateCalls (restamp "g" CallDynamic (lowered TargetWasm letLamSrc))),
+    ),
+  ]
+
+-- ── impl entry groups ───────────────────────────────────────────────────────
+
+-- Two clauses of one impl method: the eta pass could give `foo A`'s
+-- point-free tail (`add` is a method name routed to the user's binding) a
+-- second parameter, but `foo B`'s tail is not atomic.
+mixedGroupSrc : String
+mixedGroupSrc =
+  "add : Int -> Int -> Int\nadd a b = a + b\nsub : Int -> Int -> Int\nsub a b = a - b\ninterface Foo a where\n  foo : a -> Int -> Int\ndata T = A | B\nimpl Foo T where\n  foo A = add 1\n  foo B = sub (3 + 0)\nmain = foo A 5"
+
+-- [prog] with one more parameter on the first impl entry of method [m].
+widenFirstEntry : String -> CProgram -> CProgram
+widenFirstEntry m (CProgram groups ctors ctorTypes impls) =
+  CProgram groups ctors ctorTypes (widenEntries m impls)
+
+widenEntries : String -> List CImplEntry -> List CImplEntry
+widenEntries _ [] = []
+widenEntries m ((ent@(CImplEntry n s d body)) :: rest) =
+  if n == m then
+    CImplEntry n s d (widenBody body) :: rest
+  else
+    ent :: widenEntries m rest
+
+widenBody : CImplBody -> CImplBody
+widenBody (CImplTagged tag key iface pos pats body) =
+  CImplTagged tag key iface pos (pats ++ [PVar "w" noDeclLoc]) body
+widenBody (CImplDefault w tag key pos pats body) =
+  CImplDefault w tag key pos (pats ++ [PVar "w" noDeclLoc]) body
+
+test "(q) the impl entries of one method and route word take one arity" = expectEach
+  [
+    (
+      "the eta pass expands a group whole or not at all, so it validates clean",
+      expectEqual [] (validateCalls (typedLowered i2078Prelude mixedGroupSrc)),
+    ),
+    (
+      "an entry widened apart from its group is refused",
+      expectEqual
+        [
+          "call: impl entry takes 1 value parameters, the first entry of its group 2 [in impl foo@calls.T]",
+        ]
+        (validateCalls
+          (widenFirstEntry "foo" (typedLowered i2078Prelude mixedGroupSrc))),
     ),
   ]

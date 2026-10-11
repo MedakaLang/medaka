@@ -16,7 +16,9 @@
 -- the binding an `RLocal` route or a `CDict` names, less the dictionaries the
 -- occurrence supplies) or a constructor's field count; any other head is
 -- dynamic.  An application with no arguments, or whose head is itself an
--- application, is refused too: a spine is one node.
+-- application, is refused too: a spine is one node.  So are impl entries of
+-- one method and route word that take different value arities: they are the
+-- clauses of one define.
 --
 -- The extern check: a runtime extern whose catalog row gives the backend no
 -- lowering (`NotProvided`) is refused wherever the program references it
@@ -44,10 +46,12 @@ import ir.core_ir_lower.{
   ArityEnv,
   CallScope,
   bindGroupScope,
+  bindLetScope,
   bindPatScope,
   bindPatsScope,
   callModeFor,
   definedArityOf,
+  entryArityRow,
   programArities,
 }
 import ir.core_ir_sexp.{callModeSexp}
@@ -59,7 +63,7 @@ import backend.extern_catalog.{
   rowLlvm,
   rowWasm,
 }
-import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey, omLookup}
 import support.util.{isNonEmptyL, joinWith, listLen, reverseL}
 
 public export data Backend = LlvmBackend | WasmBackend
@@ -129,8 +133,31 @@ renderRecordRefusal bad = joinWith "\n" bad
 -- program order; empty for a well-stamped program.
 export
 validateCalls : CProgram -> List String
-validateCalls prog = match walkProgram LlvmBackend prog
-  Walk _ _ _ bad => reverseL bad
+validateCalls (prog@(CProgram _ _ _ impls)) = match walkProgram LlvmBackend prog
+  Walk _ _ _ bad => reverseL bad ++ splitGroupFaults impls omEmpty []
+
+-- The entries of one method and route word are the clauses of one define, which
+-- takes one parameter count, so an entry whose value arity differs from the
+-- first entry of its group is refused.
+splitGroupFaults : List CImplEntry -> OrdMap Int -> List String -> List String
+splitGroupFaults [] _ acc = reverseL acc
+splitGroupFaults ((ent@(CImplEntry method _ _ body)) :: rest) seen acc =
+  let (key, n) = entryArityRow ent
+  match omLookup key seen
+    Some k =>
+      if k == n then
+        splitGroupFaults rest seen acc
+      else
+        splitGroupFaults
+          rest
+          seen
+          ("call: impl entry takes \{intToString n} value parameters, the first entry of its group \{intToString k} [in impl \{method}@\{implBodyTag body}]"
+            :: acc)
+    None => splitGroupFaults rest (omInsert key n seen) acc
+
+implBodyTag : CImplBody -> String
+implBodyTag (CImplTagged tag _ _ _ _ _) = tag
+implBodyTag (CImplDefault _ tag _ _ _ _) = tag
 
 export
 renderCallRefusal : List String -> String
@@ -259,7 +286,7 @@ walkE ctx scope (CApp f args site) w =
   walkList ctx scope args (walkE ctx scope f (noteCall ctx scope f args site w))
 walkE ctx scope (CLam pats body) w = walkE ctx (bindPatsScope pats scope) body w
 walkE ctx scope (CLet recF pat rhs body) w =
-  let inner = bindPatScope pat scope
+  let inner = bindLetScope pat rhs scope
   walkE ctx inner body (walkE ctx (if recF then inner else scope) rhs w)
 walkE ctx scope (CLetGroup binds body) w =
   let inner = bindGroupScope binds scope
@@ -433,7 +460,7 @@ walkStmts _ _ [] w = w
 walkStmts ctx scope ((CSExpr e) :: rest) w =
   walkStmts ctx scope rest (walkE ctx scope e w)
 walkStmts ctx scope ((CSLet recF pat e) :: rest) w =
-  let inner = bindPatScope pat scope
+  let inner = bindLetScope pat e scope
   walkStmts ctx inner rest (walkE ctx (if recF then inner else scope) e w)
 walkStmts ctx scope ((CSAssign _ e) :: rest) w =
   walkStmts ctx scope rest (walkE ctx scope e w)
