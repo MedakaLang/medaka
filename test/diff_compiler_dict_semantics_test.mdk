@@ -275,7 +275,7 @@ table = [
   Row {
     entry = "s6-drain-quiescence-inferred-scheme.mdk",
     label =
-      "§6.3 quiescence drain, INFERRED-scheme half of #3031: the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound. `reportAmbiguousImpl` defers a goal every variable of which a scheme quantifies (the `goalsClosed` test) instead of reporting it ambiguous at a stale location. `check` does not render the drain`s own diagnostics, so the drain`s verdict is pinned in-process by `compiler/types/typecheck_test.mdk`; this row pins the verdict and value. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
+      "§6.3 quiescence drain, INFERRED-scheme half of #3031: the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound. `routeUndeterminedTop` gives a goal every variable of which a scheme quantifies (the `goalsClosed` test) no route, leaving the verdict to the boundary, instead of reporting it ambiguous at a stale location. `check` does not render the drain`s own diagnostics, so the drain`s verdict is pinned in-process by `compiler/types/typecheck_test.mdk`; this row pins the verdict and value. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -4906,6 +4906,28 @@ table = [
     pinned = "",
     codes = [Present "T-NO-IMPL", Absent "T-IMPL-MISSING-REQUIRES"],
   },
+  Row {
+    entry = "requires-cycle-each-site-reported.mdk",
+    label =
+      "§3 R-SC3 (#3998 (pushTypeErrorOnceAt dedups on message text)): two goal sites reach the same never-ending `requires` chain, and the two messages share their text, so each site is its own `T-REQUIRES-CYCLE`; section 5 grades both spans on every verb. Was one diagnostic, the second site silently folded",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-CYCLE"],
+  },
+  Row {
+    entry = "no-impl-one-fault-folds.mdk",
+    label =
+      "§3 one fault is one diagnostic: `x + 1` at `String` poses `Num String` at the operator and at the literal, and `T-NO-IMPL` keeps its text-keyed fold, so the pair is ONE diagnostic; section 5 grades the count on every verb",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -4917,7 +4939,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 434
+tableRows = 436
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -5377,7 +5399,7 @@ data VerbRow = VerbRow {
 {- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 verbRows : Int
-verbRows = 98
+verbRows = 107
 
 verbTable : List VerbRow
 verbTable = [
@@ -6149,6 +6171,81 @@ verbTable = [
     assertion =
       AHas
         "requires-super-cross-class-cycle-rejected\\.mdk:23:5: cannot resolve this constraint: the .requires. of .impl D \\(Box a\\). asks for .D \\(Box a\\).",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "the first goal site of a never-ending `requires` chain is reported at its own site (check)",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:18:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "...the second site, whose message shares the first's text, is a second diagnostic and not a folded duplicate (check)",
+    verb = "check",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:19:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "the first goal site of a never-ending `requires` chain is reported at its own site (run)",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:18:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "...the second site, whose message shares the first's text, is a second diagnostic and not a folded duplicate (run)",
+    verb = "run",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:19:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "the first goal site of a never-ending `requires` chain is reported at its own site (build)",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:18:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "requires-cycle-each-site-reported.mdk",
+    vlabel =
+      "...the second site, whose message shares the first's text, is a second diagnostic and not a folded duplicate (build)",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-cycle-each-site-reported\\.mdk:19:11: cannot resolve this constraint",
+  },
+  VerbRow {
+    ventry = "no-impl-one-fault-folds.mdk",
+    vlabel =
+      "one mistake posing `Num String` at two spans is ONE diagnostic (check)",
+    verb = "check",
+    assertion = AOnce "no impl of Num for String",
+  },
+  VerbRow {
+    ventry = "no-impl-one-fault-folds.mdk",
+    vlabel =
+      "one mistake posing `Num String` at two spans is ONE diagnostic (run)",
+    verb = "run",
+    assertion = AOnce "no impl of Num for String",
+  },
+  VerbRow {
+    ventry = "no-impl-one-fault-folds.mdk",
+    vlabel =
+      "one mistake posing `Num String` at two spans is ONE diagnostic (build)",
+    verb = "build",
+    assertion = AOnce "no impl of Num for String",
   },
 ]
 

@@ -2717,7 +2717,6 @@ repeatedBindings : List (String, Mono) -> List (String, Mono) -> List (Mono, Mon
 repeatedGoalPairs : List Ty -> List Mono -> List (Mono, Mono)
 repeatedNames : List String -> List String -> List String
 replaceAmbiguityAt : String -> TcDiag -> Unit
-reportAmbiguousImpl : String -> List Mono -> Route
 reportAmbiguousImport : Map String Unit -> String -> UsePath -> Loc -> Unit
 reportAmbiguousImports : List Decl -> Unit
 reportAmbiguousImportsIn : Map String Unit -> List Decl -> Unit

@@ -1,0 +1,7 @@
+-- One fault, one diagnostic.  `x + 1` at `String` poses `Num String` at the
+-- operator and again at the literal: two obligations on one mistake, so the second
+-- folds into the first by its text (T-NO-IMPL keeps the text-keyed fold).
+-- Hand-derived: REJECT on all three verbs, one diagnostic.
+f : String -> String
+f x = x + 1
+main = println (f "a")
