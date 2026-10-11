@@ -34088,7 +34088,7 @@ ambiguousImplMsg iface =
 -- its type needs (#1576); a non-shrinking step spends fuel; a repeated goal is a cycle.
 -- This walk also enters each super of a goal beside it (`superRoutesAt`) and follows
 -- that super instance's `requires`.  The solving walks follow the same goals under that
--- measure, the super goals included (`checkSuperContext`, entered beside the goal the
+-- measure, the super goals included (`superGoalsEntered`, entered beside the goal the
 -- same way), and reject a cycle or a spent walk at the goal's site, so this walk
 -- reaches either outcome only on a rejected program (`requiresRouteWalkCut`).
 --
@@ -34121,7 +34121,7 @@ argImplRequiresRoutesForRow encl useScope m goals walk row =
 
 -- A route walk that met a cycle or ran out of fuel.  The solving walks share its
 -- measure and follow the same goals, a super instance's `requires` included
--- (`checkSuperContext`), and reject the goal at its site, so this is reached only on a
+-- (`superGoalsEntered`), and reject the goal at its site, so this is reached only on a
 -- program that already carries a type error, and its routes are never emitted.  With no error
 -- recorded it is a compiler invariant failure, never a silent `[]` (#1910).
 requiresRouteWalkCut : ReqStep -> List Route
@@ -39096,7 +39096,7 @@ monoIsFunction m = match normalize m
 -- The recursion is bounded by the shared `requires` measure: [walk] is the path that
 -- reached (iface, args), and a repeated or non-shrinking-past-fuel goal is reported at
 -- [loc] (#1575, #2120).  The goal's dictionary also carries its supers', so each super
--- instance's `requires` is checked too (`checkSuperContext`).
+-- instance's `requires` is checked too (`superGoalsEntered`).
 checkNestedReqs : ImplUniverse ->
   ReqWalk ->
   IfaceRef ->
@@ -39115,33 +39115,76 @@ checkNestedReqs univ walk iface args loc scope =
       let (erred, _) = erredDuring (_ =>
         let _ = checkEnteredReqs univ next iface args loc scope
         fold
-          (_ sg => checkSuperContext univ walk sg loc scope)
+          (_ e => checkEnteredReqs univ e.sgWalk e.sgIface e.sgArgs loc scope)
           ()
-          (superGoalClosure iface args))
+          (superGoalsEntered univ walk loc [] iface args))
       if erred then () else noteWalkGoalDischarged next iface args
 
--- A dictionary for a goal carries one for each of its interface's supers at the same
--- arguments (DICT-SEMANTICS §2), built by the instance each of those selects, so that
--- instance's `requires` is part of the goal's.  A super goal is entered beside the
--- goal, on the walk that reached it, as the route walk enters it (`superRoutesAt`).  A
--- super with no instance is the impl declaration's error (`checkSuperImpls`).
--- The declaration also entails the context of the super instance its head selects
--- (`checkImplSuperContexts`), but a ground goal can select a more specific super
--- instance (DICT-SEMANTICS §6.1.4), whose context that check never saw, so this walk
--- is what rejects it (`test/dict_fixtures/requires-super-overlap-context-rejected.mdk`).
--- That covers ground goals only: a goal with a binder in it, where the overlap is
--- still open, is not checked (#4010).
-checkSuperContext : ImplUniverse ->
+-- A super goal a goal's construction builds, entered on the walk that reached the goal.
+data SuperGoalEntry = SuperGoalEntry {
+  sgWalk : ReqWalk,
+  sgIface : IfaceRef,
+  sgArgs : List Mono,
+}
+
+-- R-SUPER-CARRY (DICT-SEMANTICS §6.1.4 point 4).  A dictionary for a goal carries one
+-- for each of its interface's supers at the same arguments, transitively, each built
+-- by the instance that super goal selects, so that instance's `requires` is part of
+-- the goal's residual at every walk that reduces the goal: the end-of-body checker
+-- (`checkNestedReqs`), a generalizing or signed binder (`residualPredsOf`) and an impl
+-- body (`implGoalResiduals`).  The declaration entails the context of the super
+-- instance its head selects (`checkImplSuperContexts`), so only a strictly more
+-- specific super instance adds a goal.  A super goal is entered beside the goal, on the
+-- walk that reached it, as the route walk enters it (`superRoutesAt`), a cycle or
+-- spent fuel reported at [loc].  A super goal [answered] gives, itself or through its
+-- supers, is not entered: the construction's ladder tries `assum` before `inst`.  A
+-- super goal with no constructed argument is answered by a given, and one no instance
+-- matches is the impl declaration's error (`checkSuperImpls`).
+superGoalsEntered : ImplUniverse ->
   ReqWalk ->
-  (IfaceRef, List Mono) ->
   Option Loc ->
-  ScopeId ->
-  Unit
-checkSuperContext univ walk (iface, args) loc scope
-  | not (allConcreteHeads args && implMatchesU univ iface args) = ()
-  | otherwise = match reqWalkReported loc (reqWalkEnter walk iface args)
-    Some next => checkEnteredReqs univ next iface args loc scope
-    None => ()
+  List (IfaceRef, List Mono) ->
+  IfaceRef ->
+  List Mono ->
+  List SuperGoalEntry
+superGoalsEntered univ walk loc answered iface args =
+  flatMap
+    (sg => superGoalEntered univ walk loc answered (fst sg) (snd sg))
+    (superGoalClosure iface args)
+
+superGoalEntered : ImplUniverse ->
+  ReqWalk ->
+  Option Loc ->
+  List (IfaceRef, List Mono) ->
+  IfaceRef ->
+  List Mono ->
+  List SuperGoalEntry
+superGoalEntered univ walk loc answered sup supArgs
+  | not (anyConcreteHead supArgs && implMatchesU univ sup supArgs) = []
+  | goalAnsweredBy answered sup supArgs = []
+  | otherwise = match reqWalkReported loc (reqWalkEnter walk sup supArgs)
+    Some next =>
+      [SuperGoalEntry { sgWalk = next, sgIface = sup, sgArgs = supArgs }]
+    None => []
+
+-- Whether one of [answered], or one of its supers at its arguments, is the goal.
+goalAnsweredBy : List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
+goalAnsweredBy answered iface args =
+  anyList
+    (g =>
+      walkGoalSame (fst g) (snd g) iface args
+        || anyList
+          (s => walkGoalSame (fst s) (snd s) iface args)
+          (superGoalClosure (fst g) (snd g)))
+    answered
+
+-- The goals a goal's super instances leave beyond [own], the residuals its own
+-- instance's context left: one [own] answers is not new.
+superCarriedResiduals : List (IfaceRef, List Mono) ->
+  List (IfaceRef, List Mono) ->
+  List (IfaceRef, List Mono)
+superCarriedResiduals own carried =
+  own ++ filterList (g => not (goalAnsweredBy own (fst g) (snd g))) carried
 
 -- The goals of [iface]'s supers at [args], transitively, each interface once, so a
 -- cyclic super graph (rejected by W1) still ends.
@@ -40991,8 +41034,9 @@ checkImplHeadGoal subject roots givens (iface, ds, loc) =
 -- instance that accepts the goal only by fixing a head variable does not reduce
 -- it, and the goal itself is the residual.  A goal whose arguments are all type
 -- variables is its own residual, as in a signature's body: no instance reduces it,
--- a blanket one included.  The walk is bounded by the shared `requires` measure and
--- solves each goal once (`solvedOnWalk`), as in `residualPredsOf`; [headIds] and
+-- a blanket one included.  A reduced goal's super instances contribute their context
+-- too, as in `residualPredsOf`.  The walk is bounded by the shared `requires` measure
+-- and solves each goal once (`solvedOnWalk`), as in `residualPredsOf`; [headIds] and
 -- [givens] are fixed for the walk `checkImplHeadGoal` starts.
 implGoalResiduals : ReqWalk ->
   OrdMap Unit ->
@@ -41021,15 +41065,27 @@ implGoalResiduals walk headIds givens iface args
             else
               []
           Some (subst, reqs) =>
-            flatMap
-              (r =>
-                implGoalResiduals
-                  next
-                  headIds
-                  givens
-                  (fst r)
-                  (map (unrigidSig cells) (snd r)))
-              (map (reqToObligation subst) reqs))
+            let own =
+              flatMap
+                (r =>
+                  implGoalResiduals
+                    next
+                    headIds
+                    givens
+                    (fst r)
+                    (map (unrigidSig cells) (snd r)))
+                (map (reqToObligation subst) reqs)
+            superCarriedResiduals
+              own
+              (flatMap
+                (e =>
+                  flatMap
+                    (g =>
+                      implGoalResiduals e.sgWalk headIds givens (fst g) (snd g))
+                    (optionOr
+                      []
+                      (rigidHeadInstanceContext headIds e.sgIface e.sgArgs)))
+                (superGoalsEntered univ walk !goalSiteLoc own iface args)))
 
 -- An instance answers the goal only by fixing a head variable: some instance head
 -- unifies with it while the head variables are free, and none does while they are
@@ -46218,7 +46274,9 @@ isBareTyvarMono m = match normalize m
 -- instance-head variable to whatever stands at its position but never binds a free
 -- goal variable: an instance is selected only where it is generic exactly where the
 -- goal is still free, so `impl Conv Int Bool` is never selected for `Conv (Wrap t) u`.
--- The selected instance's `requires`, under the match, are solved in turn.
+-- The selected instance's `requires`, under the match, are solved in turn, and so is
+-- the context of each super instance the goal's construction selects, beyond what
+-- those leave (`superGoalsEntered`).
 -- - No instance matches: `unroutedResidual` decides between a reject at the goal's site
 --   and keeping the goal as its own residual.
 -- - The match is not the instance every use selects (`residualSelectionStable`, §6.1.3):
@@ -46242,22 +46300,25 @@ residualPredsOf chosen walk iface args
   | otherwise =
     match reqWalkReported !goalSiteLoc (reqWalkEnter walk iface args)
       None => []
-      Some next => solvedOnWalk
-        next
-        iface
-        args
-        (_ =>
-          match (findMatchingImplReqsU
-            perRun.value.residualUnivRef.value
-            iface
-            args)
-            None => unroutedResidual iface args
-            Some _ if not (residualSelectionStable chosen iface args) =>
-              [(iface, args)]
-            Some (subst, reqs) =>
+      Some next => solvedOnWalk next iface args (_ =>
+        let univ = perRun.value.residualUnivRef.value
+        match findMatchingImplReqsU univ iface args
+          None => unroutedResidual iface args
+          Some _ if not (residualSelectionStable chosen iface args) =>
+            [(iface, args)]
+          Some (subst, reqs) =>
+            let own =
               flatMap
                 (r => residualPredsOf chosen next (fst r) (snd r))
-                (map (reqToObligation subst) reqs))
+                (map (reqToObligation subst) reqs)
+            superCarriedResiduals
+              own
+              (flatMap
+                (e =>
+                  flatMap
+                    (r => residualPredsOf chosen e.sgWalk (fst r) (snd r))
+                    (reqObligationsFor univ e.sgIface e.sgArgs))
+                (superGoalsEntered univ walk !goalSiteLoc own iface args)))
 
 -- Whether every use of the binder selects the instance the goal matches now
 -- (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or among the

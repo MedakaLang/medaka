@@ -4997,6 +4997,127 @@ table = [
     codes = [Present "T-NO-IMPL", Absent "T-IMPL-MISSING-REQUIRES"],
   },
   Row {
+    entry = "requires-super-carried-generalized-rejected.mdk",
+    label =
+      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), generalizing binder: the more specific super instance `Sub (Box (Two x))`'s construction selects requires `Show2 x`, so `f : Show2 a => a -> String` and `f True` is T-NO-IMPL at the call on every verb. Was ACCEPT printing `suptisub` twice, `Bool` through `Show2 Int`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL", Absent "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-carried-signed-rejected.mdk",
+    label =
+      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), signed binder: `f : a -> String` does not declare the carried `Show2 a`: T-MISSING-CONSTRAINT at `f` on every verb. Was ACCEPT printing `suptisub` twice",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "requires-super-carried-local-let-rejected.mdk",
+    label =
+      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), local `let`: the `let` generalizes the carried `Show2 a`, so `f True` is T-NO-IMPL at the call on every verb. Was ACCEPT printing `suptisub` twice",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL", Absent "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-carried-impl-body-rejected.mdk",
+    label =
+      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), impl body: `go`'s goal on the head variable carries `Show2 a`, which `impl Run (Box a)` does not declare: T-IMPL-MISSING-REQUIRES naming `requires Show2 a` on every verb. Was ACCEPT printing `suptisub` twice",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-MISSING-REQUIRES"],
+  },
+  Row {
+    entry = "requires-super-carried-both-instances-accepted.mdk",
+    label =
+      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), the positive half: `Show2 Bool` is declared, the carried `Show2 a` is satisfied at both calls, and each runs its own instance on every engine. The built binary used to segfault (rc 139)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "suptisub\nsuptbsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-carried-ground-uses-accepted.mdk",
+    label =
+      "R-SUPER-CARRY control: ground uses each select their own `Sup` instance, whose context holds",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "supsub\nsuptisub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-carried-signed-given-accepted.mdk",
+    label =
+      "R-SUPER-CARRY control: `f : Show2 a => a -> String` declares the carried context, and the super dictionary is built from the caller's evidence",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "suptisub\nsuptbsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-carried-requires-given-accepted.mdk",
+    label =
+      "R-SUPER-CARRY control: `impl Sub (Box a) requires Sup (Box a)` hands the super to the use, so `f` carries `Show2 a`, satisfied at both calls",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "suptisub\nsuptbsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-carried-requires-given-rejected.mdk",
+    label =
+      "R-SUPER-CARRY control: `impl Sub (Box a) requires Sup (Box a)` with no `Show2 Bool`: T-NO-IMPL at `f True` on every verb, and the impl itself is accepted",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL", Absent "T-MISSING-SUPER-IMPL"],
+  },
+  Row {
+    entry = "requires-super-carried-requires-ground-accepted.mdk",
+    label =
+      "R-SUPER-CARRY control: `impl Sub (Box a) requires Sup (Box a)` at ground uses, each selecting its own `Sup` instance",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "supsub\nsuptisub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-carried-downstream-eq-accepted.mdk",
+    label =
+      "R-SUPER-CARRY control: a program `impl Eq (List Color)` more specific than the prelude's `Eq (List a)` does not destabilize `impl Ord (List a)` (declaration stability is declined)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "False\nLt\n",
+    codes = [],
+  },
+  Row {
     entry = "requires-cycle-each-site-reported.mdk",
     label =
       "§3 R-SC3 (#3998 (pushTypeErrorOnceAt dedups on message text)): two goal sites reach the same never-ending `requires` chain, and the two messages share their text, so each site is its own `T-REQUIRES-CYCLE`; section 5 grades both spans on every verb. Was one diagnostic, the second site silently folded",
@@ -5029,7 +5150,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 444
+tableRows = 455
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

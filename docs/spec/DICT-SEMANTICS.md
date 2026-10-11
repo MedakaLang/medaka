@@ -639,11 +639,35 @@ because every impl is checked: in `Sub2 requires Sub`, `Sub requires Sup`, the i
 must entail the `Sup` instance's context, and the impl of `Sub2` only the `Sub`
 instance's. This is a rule on declarations, so it rejects an impl that no use ever
 reduces (`test/dict_fixtures/requires-super-decl-only-rejected.mdk`). It is
-entailment at the declared head, not a pre-resolution of the super dictionary: at a
-ground goal a more specific super instance may still be selected (§6.1.4, point 4),
-and its context is checked where that goal is solved when the goal is ground; at a
-goal with variables it is not checked (#4010). Enforced by
-`checkImplSuperContexts` beside `checkSuperImpls` (`compiler/types/typecheck.mdk`).
+entailment at the declared head, not a pre-resolution of the super dictionary: a goal
+may still select a more specific super instance (§6.1.4, point 4), and that instance's
+context is carried to the binder that reduces the goal (**R-SUPER-CARRY**, below).
+Enforced by `checkImplSuperContexts` beside `checkSuperImpls`
+(`compiler/types/typecheck.mdk`).
+
+**R-SUPER-CARRY (the reduced goal keeps its supers' contexts).** When a binder
+reduces a goal `C τ̄` by `inst`, the super goals `D τ̄` its construction builds
+(every super of `C`, transitively, at `τ̄`) each select an instance as the
+construction does: `min⊑(match(IE, D τ̄))`, the goal's variables held as they stand
+(§6.1.3). Each selected instance's context, instantiated at `τ̄`, is part of the
+goal's residual, beside the residual of `C`'s own instance context, and is reduced
+the same way. The binder treats that residual as every residual: a generalizing
+binder (`gen`, a local `let`) quantifies it, R-STABLE and determination applying to
+each of its goals; a signed binder, an impl body (W3-inst) and the end-of-body
+obligation checker must entail it, and reject it at the goal's site otherwise. A
+super goal the residual of `C`'s own context already answers, itself or through its
+supers, adds nothing (the construction tries `assum` before `inst`), and by W-super
+the super instance the declared head selects never adds a goal: only a strictly more
+specific super instance does. So with `impl Sub (Box a)`,
+`impl Sup (Box a)` and `impl Sup (Box (Two a)) requires Show2 a`,
+`f x = useSup (Box (Two x))` has scheme `Show2 a ⇒ a → String`, `f True` is
+`T-NO-IMPL` at the call when no `Show2 Bool` exists, and the signed
+`f : a -> String` is `T-MISSING-CONSTRAINT` at its body
+(`test/dict_fixtures/requires-super-carried-*.mdk`). Each super goal is entered
+beside the goal on the W2 walk that reached it, as the route walk enters it, so a
+cycle or a runaway chain through a super instance's context is rejected at the
+goal's site. Enforced by `superGoalsEntered`, called from `residualPredsOf`,
+`implGoalResiduals` and `checkNestedReqs` (`compiler/types/typecheck.mdk`).
 
 ### Improvement by the one matching instance
 
@@ -1907,14 +1931,15 @@ to it later is a semantics change, not a bug fix.
    The declaration check §3 W-super is **entailment**, not that pre-resolution: it
    asks whether `Q` entails the context of the super instance the head selects with
    its variables rigid, and builds nothing. Super dictionaries are still resolved at
-   the construction goal. So a ground goal can select a more specific super instance
+   the construction goal. So a goal can select a more specific super instance
    than the one the declaration saw, whose context W-super never checked
    (`impl Sup (Box (Two a)) requires Show2 a` beside `impl Sup (Box a)` and
-   `impl Sub (Box a)`, at `Sub (Box (Two Bool))`); at a ground goal that context is
-   checked beside the goal (`checkSuperContext`), and rejected there
-   (`test/dict_fixtures/requires-super-overlap-context-rejected.mdk`). At a goal that
-   still has variables (a generalizing, signed, local or impl-body binder) nothing
-   checks it yet: #4010.
+   `impl Sub (Box a)`, at `Sub (Box (Two x))`). That context is carried to the
+   binder that reduces the goal (§3 R-SUPER-CARRY): at a ground goal it is checked
+   beside the goal and rejected there
+   (`test/dict_fixtures/requires-super-overlap-context-rejected.mdk`); a generalizing
+   or local binder quantifies it, and a signed or impl-body binder must declare it
+   (`test/dict_fixtures/requires-super-carried-*.mdk`).
 
 ### 6.2 Scheduling, and when `inst` may commit
 
@@ -3074,10 +3099,10 @@ not this paragraph.
 | §3 `inst` | `entailInst`, `compiler/types/typecheck.mdk:11941-11991`, via `keyForSite:11386`/`keyForSiteByIface:11608` → `matchedEntry:11416` → `pickMostSpecificEntry` | fresh dictionary construction at the `min⊑` instance, recursively discharging its own context | goal keyed by `ifaceParamMonos`'s **full param-mono vector** (the #609 fix, code comment 11971-11978) — shares ONE binding between the method route and its own `requires`-context routes so both arms pick the same impl (closes the C2 "same-impl" hazard) |
 | §3 precedence (`assum`/`super` before `inst`) | `entail`, `compiler/types/typecheck.mdk:11892-11896` | in-scope evidence wins over instance construction | tries `entailAssum` first, falls to `entailInst` only on `None` |
 | §3 **W1** (superclass acyclic) | `ifaceDfsCycle:11076-11101`, invoked at `:11062` pushing `T-CYCLIC-SUPERINTERFACE` (`compiler/types/typecheck.mdk`) | rejects a cyclic `requires` chain | DFS keyed on **bare interface name** (`String`), not module-qualified — not independently re-verified for a same-named-interface cross-module collision here |
-| §3 **W2** (instance-context termination) | `ReqWalk` / `reqWalkEnter` beside `monoSizes` (`compiler/types/typecheck.mdk`), the one measure every `requires` walk calls: `residualPredsOf` (generalizing binder), `implGoalResiduals` (W3-inst), `superContextLeaves` (W-super, at the impl declaration), `checkNestedReqs` (the end-of-body obligation checker's nested `requires`, and through `checkSuperContext` each super instance's `requires`), `nestedRequireGoals` (a boundary's prerequisites) and the route walk `argImplRequiresRoutesForRow` (reached through `routeOfD` → `entail` (EKNestedTop) and `argImplReqRoutes` → `argReqRoute`) | a step to a strictly smaller goal vector (`monoSizes`) is free; any other step spends one unit of `requiresNonShrinkingFuel` (32); a goal equal to one on the walk's path (`sameIfaceDecl` + `monoVecSameGiven`) is a cycle; each walk's `WalkMemo` follows a goal reached along many paths once, keyed on the whole goal and the fuel left after entering it, and records no subtree that met an error or a cut (#1924); the solving walks (`wmSolved`, `wmFollowed`) compare goals with `walkGoalSame`, which also compares effect rows and authorities, and record a solve only when no variable it minted appears in its result; `nestedRequireGoals` first walks without reporting (`wmStopped`) and re-walks with reporting when any seed's walk stopped (#3996) | ✅ **CONFORMANT (R-W2, 2026-10-10).** W2 is the dynamic rule §3 states. The solving walks report through `reqWalkReported`: `T-REQUIRES-CYCLE` or `T-REQUIRES-DEPTH` at the goal's site, on every verb. The route walk shares the measure and enters each super of a goal beside it (`superRoutesAt`); the obligation checker follows the same super goals the same way (`checkSuperContext`), so the route walk's cut (`requiresRouteWalkCut`) is reached only on a program a solving walk already rejected, and on any other it is a compiler panic, never a silent `[]` (#1910). Until the obligation checker followed supers, a cycle reached only through a super instance's `requires` (`impl Sup (Box a) requires Sup (Box a)` under `interface Sub a requires Sup a`) passed every solving walk and hit that panic. `monoSize` counts an effect row as one node: under-counting a child only makes a step look shrinking (free), and the size stays a natural number, so the measure is still well-founded. History: the route walk's flat `depth >= 32` cutoff truncated valid ground chains (#1576/#1836); the solving walks' flat 32-step fuel false-rejected shrinking chains (#3802); the end-of-body obligation checker had no bound at all and overflowed the compiler's stack on a self-naming or growing context (#1575, #3801, #2120) |
+| §3 **W2** (instance-context termination) | `ReqWalk` / `reqWalkEnter` beside `monoSizes` (`compiler/types/typecheck.mdk`), the one measure every `requires` walk calls: `residualPredsOf` (generalizing binder), `implGoalResiduals` (W3-inst), `superContextLeaves` (W-super, at the impl declaration), `checkNestedReqs` (the end-of-body obligation checker's nested `requires`, and through `superGoalsEntered` each super instance's `requires`), `nestedRequireGoals` (a boundary's prerequisites) and the route walk `argImplRequiresRoutesForRow` (reached through `routeOfD` → `entail` (EKNestedTop) and `argImplReqRoutes` → `argReqRoute`) | a step to a strictly smaller goal vector (`monoSizes`) is free; any other step spends one unit of `requiresNonShrinkingFuel` (32); a goal equal to one on the walk's path (`sameIfaceDecl` + `monoVecSameGiven`) is a cycle; each walk's `WalkMemo` follows a goal reached along many paths once, keyed on the whole goal and the fuel left after entering it, and records no subtree that met an error or a cut (#1924); the solving walks (`wmSolved`, `wmFollowed`) compare goals with `walkGoalSame`, which also compares effect rows and authorities, and record a solve only when no variable it minted appears in its result; `nestedRequireGoals` first walks without reporting (`wmStopped`) and re-walks with reporting when any seed's walk stopped (#3996) | ✅ **CONFORMANT (R-W2, 2026-10-10).** W2 is the dynamic rule §3 states. The solving walks report through `reqWalkReported`: `T-REQUIRES-CYCLE` or `T-REQUIRES-DEPTH` at the goal's site, on every verb. The route walk shares the measure and enters each super of a goal beside it (`superRoutesAt`); the solving walks follow the same super goals the same way (`superGoalsEntered`), so the route walk's cut (`requiresRouteWalkCut`) is reached only on a program a solving walk already rejected, and on any other it is a compiler panic, never a silent `[]` (#1910). Until the obligation checker followed supers, a cycle reached only through a super instance's `requires` (`impl Sup (Box a) requires Sup (Box a)` under `interface Sub a requires Sup a`) passed every solving walk and hit that panic. `monoSize` counts an effect row as one node: under-counting a child only makes a step look shrinking (free), and the size stays a natural number, so the measure is still well-founded. History: the route walk's flat `depth >= 32` cutoff truncated valid ground chains (#1576/#1836); the solving walks' flat 32-step fuel false-rejected shrinking chains (#3802); the end-of-body obligation checker had no bound at all and overflowed the compiler's stack on a self-naming or growing context (#1575, #3801, #2120) |
 | §3 **W3** (method-scheme fidelity / rigidity) | `checkMethodRigidityCore`, `checkMethodEffVarRigidity`, `checkImplEffVarRigidity` (all `compiler/types/typecheck.mdk`) | an impl/default body may not pin a non-head quantified variable (type *or* effect) to a concrete shape | run by the one method-body driver `inferMethodBody` for both kinds (`MethodBodyKind`); a default body's rigidity reads the same instantiation as its body |
 | §3 **W3-inst** (instance-head rigidity) | `checkImplHeadRigidity`, `checkImplHeadPrerequisites` (`compiler/types/typecheck.mdk`) | an impl body may not pin or identify a head variable, and every predicate it leaves on one is entailed by the impl's `requires` (with superinterfaces), the method's `=>` context or the head itself | impl bodies only, at the same boundary as W3, before body-local defaulting; a pin is reported by the body that introduced it; a goal an instance answers only by fixing a head variable is reported whatever other variables it mentions (#3798, #3817) |
-| §3 **W-super** (the declaration entails its supers' instance contexts) | `checkImplSuperContexts` beside `checkSuperImpls` (`compiler/types/typecheck.mdk`) | for each direct super `D` of an impl's interface, the context of the instance `D` selects at the impl head (head variables rigid) is entailed by the impl's `requires` with their superinterfaces | every impl declaration, whether or not a use reduces it; a residual over head variables is `T-IMPL-MISSING-REQUIRES` at the impl, a ground one no instance matches `T-NO-IMPL` at the impl; no impl row covering the super itself, and no given of the `requires` answering it, is `T-MISSING-SUPER-IMPL` at the impl (a concrete head by `checkSuperImpls`, a parametric one by `checkImplSuperContexts`, over the same graph-wide rows); a more specific super instance selected at a ground goal is checked at that goal (`checkSuperContext`, §6.1.4 point 4), and at a goal with variables it is not checked (#4010) (#3995) |
+| §3 **W-super** (the declaration entails its supers' instance contexts) | `checkImplSuperContexts` beside `checkSuperImpls` (`compiler/types/typecheck.mdk`) | for each direct super `D` of an impl's interface, the context of the instance `D` selects at the impl head (head variables rigid) is entailed by the impl's `requires` with their superinterfaces | every impl declaration, whether or not a use reduces it; a residual over head variables is `T-IMPL-MISSING-REQUIRES` at the impl, a ground one no instance matches `T-NO-IMPL` at the impl; no impl row covering the super itself, and no given of the `requires` answering it, is `T-MISSING-SUPER-IMPL` at the impl (a concrete head by `checkSuperImpls`, a parametric one by `checkImplSuperContexts`, over the same graph-wide rows); a more specific super instance a goal selects has its context carried to the binder that reduces the goal (R-SUPER-CARRY, `superGoalsEntered`, §6.1.4 point 4) (#3995, #4010) |
 | §4 `var` | `instantiate:3630`; per-residual entailment via `entail:11892`; obligation discharge `checkCallObligationsU:13793`/`checkOneCallObligation:13814` | instantiation + per-predicate entailment at each use | — |
 | §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates. A concrete-headed residual is reduced by `residualPredsOf` only when `residualSelectionStable` holds (every other unifying head ⊒ the matching one, §6.1.3, R-STABLE); otherwise it is deferred as written (`test/dict_fixtures/r-stable-overlap-goal-quantified.mdk`, #1579). The signed path (`checkSigConstraintOne`) commits as written |
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |

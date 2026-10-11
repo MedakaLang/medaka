@@ -1572,7 +1572,7 @@ keyed by qualified identity, **assembled once and never per-module**:
   walk shares the measure and the solving walks follow every goal it follows,
   including each super a dictionary carries: the route walk enters a goal's supers
   beside it (`superRoutesAt`), and `checkNestedReqs` checks each super instance's
-  `requires` the same way (`checkSuperContext`). So IE's derived route data is
+  `requires` the same way (`superGoalsEntered`). So IE's derived route data is
   total on every program the solving walks accept; the route walk's cut
   (`requiresRouteWalkCut`) is reached only on a rejected program and is a compiler
   panic otherwise. Until the solving walks followed supers, a cycle reached only

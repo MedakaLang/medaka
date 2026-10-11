@@ -512,7 +512,6 @@ checkSigsFixedByExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List 
 checkSigsOverExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List (String, Ty, List (String, Mono)) -> Unit
 checkSigsTooGeneral : List (String, Ty, List (String, Mono)) -> Unit
 checkStmtNotDiscarded : List UObligation -> Mono -> Expr -> Unit
-checkSuperContext : ImplUniverse -> ReqWalk -> (IfaceRef, List Mono) -> Option Loc -> ScopeId -> Unit
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
 checkSuperInstanceContext : String -> List (String, Int) -> Map String Unit -> List PredicateSlot -> Option Loc -> Bool -> IfaceRef -> List Mono -> Bool -> Unit
 checkSuperKinds : List Decl -> String -> List String -> List (Option KindAnn) -> List IfaceMethod -> List Super -> Unit
@@ -1292,6 +1291,7 @@ givenInScope : GivenScope -> GivenEntry -> Bool
 givenRoute : Bool -> EvidenceBinderId -> Route
 givensForScope : ScopeId -> List GivenEntry
 globalCoherenceConflict : ImplEnv -> (Option String, Option String)
+goalAnsweredBy : List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
 goalCandidates : Map String Unit -> List Mono -> List ImplRow -> List (ImplRow, List (Int, Mono))
 goalDefersOpenWorld : ScopeId -> IfaceRef -> List Mono -> Bool
 goalFirstIsVariable : List Mono -> Bool
@@ -3067,11 +3067,14 @@ substituteIndex : Ref Authvar -> Authority -> Unit
 substituteIndexLinked : Ref Authvar -> Authority -> Unit
 suggestField : String -> List String -> Option String
 summaryEscape : Bool -> List Atom -> List Atom -> List Atom
+superCarriedResiduals : List (IfaceRef, List Mono) -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 superContextLeaves : ReqWalk -> Map String Unit -> List PredicateSlot -> Option Loc -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 superContextNoImplMsg : String -> Bool -> String -> String -> String -> String
 superContextUndeclaredMsg : String -> Bool -> String -> String -> String -> String
 superGoalClosure : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 superGoalClosureGo : List (IfaceRef, List Mono) -> List IfaceRef -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+superGoalEntered : ImplUniverse -> ReqWalk -> Option Loc -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> List SuperGoalEntry
+superGoalsEntered : ImplUniverse -> ReqWalk -> Option Loc -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> List SuperGoalEntry
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
 superImplMsgsOf : ClassEnv -> Int -> List ImplRow -> Decl -> List String
 superLookup : IfaceRef -> Option (List String, List Super)
