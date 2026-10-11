@@ -1,5 +1,5 @@
 # META
-source_lines=788
+source_lines=789
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR evaluator — STAGE2-DESIGN §2.1's "trivial Core-IR tree-walker" that
@@ -32,6 +32,7 @@ stages=DESUGAR,MARK
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..)}
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -174,7 +175,7 @@ ceval env (CRangeArray lo hi incl) =
 -- methodReqCountRef state initialized by installDispatchTables (derives both
 -- tables from one decl list). See .claude/dossier/traps.md § "[T-EVAL-LOCKSTEP]
 -- evalModules / cevalModules lockstep".
-ceval env (CMethod name iface _ route implRoutes methRoutes) =
+ceval env (CMethod name (MethodEvidence iface _ route implRoutes methRoutes)) =
   let (narrowed, fwdReqs) =
     methodAtNarrow env name (narrowToIface iface (lookupEnv env name)) route
   applyMethodDicts env name route narrowed fwdReqs implRoutes methRoutes
@@ -792,7 +793,7 @@ cevalModulesOutput preludeDecls modules =
   !outputRef
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroups" false) (mem "lowerImplsWith" false) (mem "instanceReqCounts" false) (mem "declaredMethodArities" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
@@ -829,7 +830,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalSlice") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeListMk")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeArrayMk")))
-(DFunDef false "ceval" ((PVar "env") (PCon "CMethod" (PVar "name") (PVar "iface") PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EBlock (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "narrowToIface") (EVar "iface")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name")))) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs")) (EVar "implRoutes")) (EVar "methRoutes")))))
+(DFunDef false "ceval" ((PVar "env") (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EBlock (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "narrowToIface") (EVar "iface")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name")))) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs")) (EVar "implRoutes")) (EVar "methRoutes")))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CDict" (PVar "name") (PVar "routes"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name"))) (EVar "routes")))
 (DFunDef false "ceval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "core_ir ceval: unsupported node"))))
 (DTypeSig false "cevalField" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CField") (TyEffect () (Some "e") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
@@ -993,7 +994,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "cevalModulesOutput" ((PVar "preludeDecls") (PVar "modules")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "outputRef")) (ELit (LString "")))) (DoLet false false (PVar "binds") (EApp (EApp (EVar "cevalModules") (EVar "preludeDecls")) (EVar "modules"))) (DoLet false false PWild (EApp (EVar "cRunMainForEffect") (EVar "binds"))) (DoExpr (EUnOp "!" (EVar "outputRef")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Decl" false) (mem "Loc" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "lowerGroups" false) (mem "lowerImplsWith" false) (mem "instanceReqCounts" false) (mem "declaredMethodArities" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isEmptyL" false) (mem "dedup" false) (mem "contains" false) (mem "filterList" false))))
@@ -1030,7 +1031,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalSlice") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeListMk")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalRange") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "hi"))) (EVar "incl")) (EVar "rangeArrayMk")))
-(DFunDef false "ceval" ((PVar "env") (PCon "CMethod" (PVar "name") (PVar "iface") PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EBlock (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "narrowToIface") (EVar "iface")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name")))) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs")) (EVar "implRoutes")) (EVar "methRoutes")))))
+(DFunDef false "ceval" ((PVar "env") (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" (PVar "iface") PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EBlock (DoLet false false (PTuple (PVar "narrowed") (PVar "fwdReqs")) (EApp (EApp (EApp (EApp (EVar "methodAtNarrow") (EVar "env")) (EVar "name")) (EApp (EApp (EVar "narrowToIface") (EVar "iface")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name")))) (EVar "route"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "applyMethodDicts") (EVar "env")) (EVar "name")) (EVar "route")) (EVar "narrowed")) (EVar "fwdReqs")) (EVar "implRoutes")) (EVar "methRoutes")))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CDict" (PVar "name") (PVar "routes"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name"))) (EVar "routes")))
 (DFunDef false "ceval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "core_ir ceval: unsupported node"))))
 (DTypeSig false "cevalField" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CField") (TyEffect () (Some "e") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))

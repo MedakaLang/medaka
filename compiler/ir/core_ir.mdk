@@ -134,15 +134,23 @@ public export data CExpr =
   | CBlock (List CStmt)
   -- typeclass dispatch, dicts explicit (slice 5; Route read out of the AST's
   -- mutable cell at lowering time so the IR is immutable):
-  --   CMethod = a method occurrence: its name, the `ifaceWordOf` word of the
-  --             interface it resolved to (`""` when unknown — no engine may
-  --             then narrow by interface), and its selected denotation pre-use
-  --             arrow arity, used to narrow its RKey/RDict candidates;
-  --             implRoutes applies per-instance requires dicts (Phase 83/84);
-  --             methRoutes applies method-level constraint dicts (Phase 69.x-e).
+  --   CMethod = a method occurrence: its name and its `MethodEvidence`.
   --   CDict   = a constrained-function occurrence, one Route per `=>` constraint.
-  | CMethod String String Int Route (List Route) (List Route)
+  | CMethod String MethodEvidence
   | CDict String (List Route)
+
+-- The evidence a method occurrence carries, exactly as elaboration published it
+-- (`route_key.evMethodRoutes`): the interface word (`""` when the occurrence
+-- denotes no interface method, so no engine may narrow by interface), the
+-- selected denotation's pre-use arity, the dispatch answer, the selected
+-- instance's prerequisite dictionaries, and the method's own context dictionaries.
+public export data MethodEvidence = MethodEvidence {
+  meIface : String,
+  meArity : Int,
+  meDispatch : Route,
+  mePrereqs : List Route,
+  meContext : List Route,
+}
 
 -- How an application is made, from its head's defined arity k and its n
 -- arguments.  `core_ir_lower.stampCallModes` decides it for every application a

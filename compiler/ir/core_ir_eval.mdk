@@ -28,6 +28,7 @@
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..)}
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -170,7 +171,7 @@ ceval env (CRangeArray lo hi incl) =
 -- methodReqCountRef state initialized by installDispatchTables (derives both
 -- tables from one decl list). See .claude/dossier/traps.md § "[T-EVAL-LOCKSTEP]
 -- evalModules / cevalModules lockstep".
-ceval env (CMethod name iface _ route implRoutes methRoutes) =
+ceval env (CMethod name (MethodEvidence iface _ route implRoutes methRoutes)) =
   let (narrowed, fwdReqs) =
     methodAtNarrow env name (narrowToIface iface (lookupEnv env name)) route
   applyMethodDicts env name route narrowed fwdReqs implRoutes methRoutes

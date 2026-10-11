@@ -12,6 +12,7 @@
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..)}
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -178,7 +179,7 @@ cexprSexp m (CListSlice a lo hi incl) = node "CListSlice" [
   boolStr incl,
 ]
 cexprSexp m (CBlock stmts) = node "CBlock" (map (cstmtSexp m) stmts)
-cexprSexp m (CMethod name iface arity route implRoutes methRoutes) = node
+cexprSexp m (CMethod name (MethodEvidence iface arity route implRoutes methRoutes)) = node
   "CMethod"
   [
     escStr name,

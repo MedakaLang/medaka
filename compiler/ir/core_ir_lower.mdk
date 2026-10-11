@@ -51,6 +51,7 @@ import types.route_key.{
 }
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -127,7 +128,7 @@ composeVar = "$cf"
 -- The published answer for a method occurrence, as the IR node carries it.
 cmethodOf : String -> (String, Int, Route, List Route, List Route) -> CExpr
 cmethodOf name (iface, arity, route, implRoutes, methodRoutes) =
-  CMethod name iface arity route implRoutes methodRoutes
+  CMethod name (MethodEvidence iface arity route implRoutes methodRoutes)
 
 lower : Expr -> CExpr
 lower (ELit l) = CLit l
@@ -954,8 +955,8 @@ refoldExpr keep (CListIndex a i) =
 refoldExpr keep (CListSlice a lo hi incl) =
   CListSlice (refoldExpr keep a) (refoldExpr keep lo) (refoldExpr keep hi) incl
 refoldExpr keep (CBlock stmts) = CBlock (refoldStmts keep stmts)
-refoldExpr _ (CMethod name iface arity r ir mr) =
-  CMethod name iface arity r ir mr
+refoldExpr _ (CMethod name (MethodEvidence iface arity r ir mr)) =
+  CMethod name (MethodEvidence iface arity r ir mr)
 refoldExpr _ (CDict name rs) = CDict name rs
 
 -- A block that ends with a `lowerStmts` let decision gets its `let` statement
@@ -1143,9 +1144,9 @@ definedArityOf : ArityEnv -> CallScope -> CExpr -> Option Int
 definedArityOf env scope (CVar x _) = match omLookup x scope
   Some local => local
   None => globalArityOf env x
-definedArityOf (ArityEnv _ _ entries _) _ (CMethod name _ _ (RKey key _ _) _ _) =
+definedArityOf (ArityEnv _ _ entries _) _ (CMethod name (MethodEvidence _ _ (RKey key _ _) _ _)) =
   omLookup (entryArityKey name key) entries
-definedArityOf env _ (CMethod name _ _ (RLocal sym dicts) _ _) =
+definedArityOf env _ (CMethod name (MethodEvidence _ _ (RLocal sym dicts) _ _)) =
   lessDicts (listLen dicts) (topArityOf env (if sym == "" then name else sym))
 definedArityOf env scope (CDict name routes) =
   lessDicts (listLen routes) (definedArityOf env scope (CVar name AGlobal))
@@ -1352,9 +1353,9 @@ etaMissing env scope tailE =
 -- the defined arity of a method or constrained-function head; through a runtime
 -- dictionary, the least over the method's entries
 etaTargetArity : ArityEnv -> CallScope -> CExpr -> Option Int
-etaTargetArity (ArityEnv _ _ _ least) _ (CMethod name _ _ route _ _)
+etaTargetArity (ArityEnv _ _ _ least) _ (CMethod name (MethodEvidence _ _ route _ _))
   | isRuntimeDictRoute route = omLookup name least
-etaTargetArity env scope (h@(CMethod _ _ _ _ _ _)) = definedArityOf env scope h
+etaTargetArity env scope (h@(CMethod _ _)) = definedArityOf env scope h
 etaTargetArity env scope (h@(CDict _ _)) = definedArityOf env scope h
 etaTargetArity _ _ _ = None
 
@@ -1378,9 +1379,9 @@ isAtomicArg : CExpr -> Bool
 isAtomicArg (CVar _ _) = True
 isAtomicArg (CLit _) = True
 isAtomicArg (CLam _ _) = True
-isAtomicArg (CMethod _ _ _ _ _ _) = True
+isAtomicArg (CMethod _ _) = True
 isAtomicArg (CDict _ _) = True
-isAtomicArg (CApp (CMethod "fromInt" _ _ (RKey key _ _) _ _) [CLit _] _) =
+isAtomicArg (CApp (CMethod "fromInt" (MethodEvidence _ _ (RKey key _ _) _ _)) [CLit _] _) =
   key == numIntWord || key == numFloatWord
 isAtomicArg _ = False
 
@@ -1536,8 +1537,8 @@ callsExpr env scope (CListSlice a lo hi incl) =
     (callsExpr env scope hi)
     incl
 callsExpr env scope (CBlock stmts) = CBlock (callsStmts env scope stmts)
-callsExpr _ _ (CMethod name iface arity r ir mr) =
-  CMethod name iface arity r ir mr
+callsExpr _ _ (CMethod name (MethodEvidence iface arity r ir mr)) =
+  CMethod name (MethodEvidence iface arity r ir mr)
 callsExpr _ _ (CDict name rs) = CDict name rs
 
 callsApp : ArityEnv -> CallScope -> CExpr -> List CExpr -> Bool -> CExpr
@@ -1659,7 +1660,8 @@ tailExpr _ (CListIndex a i) = CListIndex (tailExpr False a) (tailExpr False i)
 tailExpr _ (CListSlice a lo hi incl) =
   CListSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
 tailExpr tl (CBlock stmts) = CBlock (tailStmts tl stmts)
-tailExpr _ (CMethod name iface arity r ir mr) = CMethod name iface arity r ir mr
+tailExpr _ (CMethod name (MethodEvidence iface arity r ir mr)) =
+  CMethod name (MethodEvidence iface arity r ir mr)
 tailExpr _ (CDict name rs) = CDict name rs
 
 -- A partial application builds a closure; it is never a call, so never a tail call.
@@ -2019,8 +2021,8 @@ rewriteExprRP fo (CListSlice a lo hi incl) =
     (rewriteExprRP fo hi)
     incl
 rewriteExprRP fo (CBlock stmts) = CBlock (map (rewriteStmtRP fo) stmts)
-rewriteExprRP _ (CMethod name iface arity r ir mr) =
-  CMethod name iface arity r ir mr
+rewriteExprRP _ (CMethod name (MethodEvidence iface arity r ir mr)) =
+  CMethod name (MethodEvidence iface arity r ir mr)
 rewriteExprRP _ (CDict name rs) = CDict name rs
 
 rewriteArmRP : RecOrders -> CArm -> CArm
@@ -2381,7 +2383,7 @@ hoistDictNullary st name iface route = match lookupAssoc name st.soleKeys
     CVar (memoBindName sel name) AGlobal
   None =>
     let _ = recordMultiImplMemo st name
-    CMethod name iface 0 route [] []
+    CMethod name (MethodEvidence iface 0 route [] [])
 
 -- #747: synthesize one per-tag CAF for every nullary/return-position impl of a
 -- multi-impl method reached via a runtime-dict route.  Records each (selector, method)
@@ -2426,7 +2428,7 @@ memoCafBind : (String, String, String) -> CBind
 memoCafBind (sel, key, method) =
   CBind
     (memoBindName sel method)
-    [CClause [] (CMethod method "" 0 (RKey key [] []) [] [])]
+    [CClause [] (CMethod method (MethodEvidence "" 0 (RKey key [] []) [] []))]
     noDeclLoc
 
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
@@ -2459,12 +2461,12 @@ hoistImpl st (CImplEntry n s d (CImplDefault ifaceId tag key sym pos pats body))
 -- the structural walk (mirrors rewriteExprRP), rewriting ONLY the gated CMethod
 -- occurrence; everything else recurses unchanged.
 hoistExpr : LowerState -> CExpr -> CExpr
-hoistExpr st (CMethod name iface 0 (RKey key [] sups) [] []) =
+hoistExpr st (CMethod name (MethodEvidence iface 0 (RKey key [] sups) [] [])) =
   match memoSelectorOf st.memoKeysAll name key
     Some sel =>
       let _ = recordMemoRef st sel key name
       CVar (memoBindName sel name) AGlobal
-    None => CMethod name iface 0 (RKey key [] sups) [] []
+    None => CMethod name (MethodEvidence iface 0 (RKey key [] sups) [] [])
 -- #731 item 1: a nullary return-position method reached via a runtime-dict route
 -- (RDictFwd from a polymorphic caller forwarding a concrete dict, or a plain RDict)
 -- resolves — when the method has exactly one impl and no default — statically to
@@ -2472,14 +2474,14 @@ hoistExpr st (CMethod name iface 0 (RKey key [] sups) [] []) =
 -- direct RKey occurrence hits); hoist it to the SAME CAF the RKey path uses so the
 -- side effect fires once on build too, shared across routes.  A multi-impl method's
 -- tag is only known at runtime, so it stays a per-call dispatch (unchanged).
-hoistExpr st (CMethod name iface 0 (RDict d) [] []) =
+hoistExpr st (CMethod name (MethodEvidence iface 0 (RDict d) [] [])) =
   hoistDictNullary st name iface (RDict d)
-hoistExpr st (CMethod name iface 0 (RDictFwd d) [] []) =
+hoistExpr st (CMethod name (MethodEvidence iface 0 (RDictFwd d) [] [])) =
   hoistDictNullary st name iface (RDictFwd d)
-hoistExpr st (CMethod name iface 0 (RProj r path) [] []) =
+hoistExpr st (CMethod name (MethodEvidence iface 0 (RProj r path) [] [])) =
   hoistDictNullary st name iface (RProj r path)
-hoistExpr _ (CMethod name iface arity r ir mr) =
-  CMethod name iface arity r ir mr
+hoistExpr _ (CMethod name (MethodEvidence iface arity r ir mr)) =
+  CMethod name (MethodEvidence iface arity r ir mr)
 hoistExpr _ (CLit l) = CLit l
 hoistExpr _ (CVar x addr) = CVar x addr
 hoistExpr st (CApp f xs site) =
@@ -3221,23 +3223,25 @@ receiverFields recv from n =
   map (i => RProj (RDict recv) [i]) (range from (from + n))
 
 specializeRow : DefaultRow -> CExpr -> CExpr
-specializeRow row (CMethod name iface arity route implRoutes methRoutes) =
+specializeRow row (CMethod name (MethodEvidence iface arity route implRoutes methRoutes)) =
   if iface == row.drIface && isReceiverRoute row route then
     CMethod
       name
-      iface
-      arity
-      (RKey row.drWord [] row.drSupers)
-      row.drReqs
-      (map (renameReceiver row) methRoutes)
+      (MethodEvidence
+        iface
+        arity
+        (RKey row.drWord [] row.drSupers)
+        row.drReqs
+        (map (renameReceiver row) methRoutes))
   else
     CMethod
       name
-      iface
-      arity
-      (renameReceiver row route)
-      (map (renameReceiver row) implRoutes)
-      (map (renameReceiver row) methRoutes)
+      (MethodEvidence
+        iface
+        arity
+        (renameReceiver row route)
+        (map (renameReceiver row) implRoutes)
+        (map (renameReceiver row) methRoutes))
 specializeRow row (CDict name routes) =
   CDict name (map (renameReceiver row) routes)
 specializeRow row (CVar x addr) =
@@ -3390,6 +3394,7 @@ declaredArityOr arities ifaceWord mname pats =
     None => listLen pats - leadingDictParams pats
 
 -- the leading `$dict_*` parameters dict-passing prepended to a default's clause
+export
 leadingDictParams : List Pat -> Int
 leadingDictParams ((PVar x _) :: rest) =
   if startsWith "$dict" x then 1 + leadingDictParams rest else 0

@@ -76,6 +76,7 @@ import frontend.ast.{Route(..)}
 import ir.core_ir.{
   CProgram(..),
   CExpr(..),
+  MethodEvidence(..),
   CBind(..),
   CClause(..),
   CArm(..),
@@ -240,7 +241,7 @@ refsE (CListSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
 refsE (CBlock stmts) = flatMap refsStmt stmts
 -- a method occurrence names its METHOD KEY; its routes can additionally name a
 -- shadowing standalone (RLocal).
-refsE (CMethod name _ _ route implRoutes methRoutes) =
+refsE (CMethod name (MethodEvidence _ _ route implRoutes methRoutes)) =
   name :: flatMap refsRoute (route :: implRoutes ++ methRoutes)
 refsE (CDict name routes) = name :: flatMap refsRoute routes
 

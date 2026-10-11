@@ -201,6 +201,7 @@ import ir.core_ir.{
   CBind(..),
   CClause(..),
   CExpr(..),
+  MethodEvidence(..),
   CStmt(..),
   CArm(..),
   CGuard(..),
@@ -236,6 +237,7 @@ import backend.core_validate.{
   validateCalls,
   validateImplSymbols,
   validateMethodContexts,
+  validateDispatchEvidence,
   validateTails,
   validateRecords,
   unrefusedExternMessage,
@@ -1349,7 +1351,10 @@ refuseUnprovidedExternsW emit input cp =
     [] => ()
     bad => panic ("internal error: " ++ renderRecordRefusal bad)
   let badCalls =
-    validateCalls cp ++ validateImplSymbols cp ++ validateMethodContexts cp
+    validateCalls cp
+      ++ validateImplSymbols cp
+      ++ validateMethodContexts cp
+      ++ validateDispatchEvidence cp
   let _ = match badCalls
     [] => ()
     bad => panic ("internal error: " ++ renderCallRefusal bad)
@@ -2259,7 +2264,7 @@ scanExprValueUses fnNames ctorArs (app@(CApp _ _ _)) =
     -- ref.func and never the func: "unknown func $mdk_w_…" at assemble (exactly the
     -- failure the composite-arm comment below records).  Kept in lockstep with
     -- emitMethodRef's RLocal arm, including the `sym == ""` bare-name fallback.
-    CMethod mname _ _ (RLocal sym dicts) _ _ =>
+    CMethod mname (MethodEvidence _ _ (RLocal sym dicts) _ _) =>
       let target = if sym == "" then mname else sym
       if isEmpty dicts
         && fnMemberIndexW fnNames target
@@ -3742,7 +3747,7 @@ mainBodyIsUnit prog _ (CApp f _ _) = match appHead f
   -- `println`/`print` are `Display a =>` constrained → the dict-pass rewrites the
   -- head to a CDict (or CMethod) carrying the routes; recover the bare name.
   CDict fn _ => declRetTypeOf prog fn == "Unit"
-  CMethod fn _ _ _ _ _ => declRetTypeOf prog fn == "Unit"
+  CMethod fn _ => declRetTypeOf prog fn == "Unit"
   _ => False
 mainBodyIsUnit prog cafs (CVar fn _) =
   if declRetTypeOf prog fn == "Unit" then
@@ -3751,7 +3756,7 @@ mainBodyIsUnit prog cafs (CVar fn _) =
     Some body => mainBodyIsUnit prog (omDelete fn cafs) body
     None => False
 mainBodyIsUnit prog _ (CDict fn _) = declRetTypeOf prog fn == "Unit"
-mainBodyIsUnit prog _ (CMethod fn _ _ _ _ _) = declRetTypeOf prog fn == "Unit"
+mainBodyIsUnit prog _ (CMethod fn _) = declRetTypeOf prog fn == "Unit"
 mainBodyIsUnit prog cafs (CLet _ pat _ b) =
   mainBodyIsUnit prog (shadowCafs (patVars pat) cafs) b
 -- the native branch-(2) equivalent: an UNANNOTATED `main = match … { … }` whose
@@ -3907,7 +3912,7 @@ refMainKind prog (CApp f _ _) = match appHead f
       refMainKind prog (appHead f)
   -- a resolved dispatch head (`main = myeq a b` lowers to CApp (CMethod/CDict …) …):
   -- same composite-autoprint Bool recovery as the CVar method case above.
-  CMethod fn _ _ _ _ _ =>
+  CMethod fn _ =>
     if declRetTypeOf prog fn == "Unit" then
       WUnit
     else if methodReturnsBoolW prog fn then
@@ -5178,7 +5183,8 @@ emitMethodValueRef : Prog ->
   List Route ->
   List String
 emitMethodValueRef prog env d name iface siteArity route implRoutes methRoutes =
-  let node = CMethod name iface siteArity route implRoutes methRoutes
+  let node =
+    CMethod name (MethodEvidence iface siteArity route implRoutes methRoutes)
   let arity = methodValueArityW prog node
   if arity <= 0 then
     emitMethodRef
@@ -5206,7 +5212,7 @@ emitMethodValueRef prog env d name iface siteArity route implRoutes methRoutes =
 -- the selected entry's parameters).  A route with no static arity (a runtime
 -- dictionary) exposes the occurrence's declared arity.
 methodValueArityW : Prog -> CExpr -> Int
-methodValueArityW prog (node@(CMethod _ _ siteArity _ _ _)) =
+methodValueArityW prog (node@(CMethod _ (MethodEvidence _ siteArity _ _ _))) =
   match definedArityW prog node
     Some n => maxI 0 n
     None => siteArity
@@ -5701,7 +5707,7 @@ emitRefExpr prog env d (app@(CApp _ _ _)) = emitAppRef prog env d app
 emitRefExpr prog env d (CDecision scrut arms tree) =
   emitDecisionRef prog env d scrut arms tree
 emitRefExpr prog env d (CLam pats body) = emitClosure prog env d pats body
-emitRefExpr prog env d (CMethod name iface arity route implRoutes methRoutes) =
+emitRefExpr prog env d (CMethod name (MethodEvidence iface arity route implRoutes methRoutes)) =
   emitMethodValueRef prog env d name iface arity route implRoutes methRoutes
 emitRefExpr prog env d (CDict name routes) =
   emitDictValueRef prog env d name routes
@@ -6905,7 +6911,7 @@ emitAppRef prog env d app =
             emitIndirectApp prog env d hd args CallValueW
     -- W5: a method occurrence applied to its args (the common return-/arg-position
     -- dispatch shape — a CMethod head under a CApp).  Dispatch on the route.
-    CMethod name iface arity route implRoutes methRoutes =>
+    CMethod name (MethodEvidence iface arity route implRoutes methRoutes) =>
       emitMethodRef
         prog
         env
@@ -9171,7 +9177,7 @@ emitTailCallW prog env app =
     -- #1349: a dispatched method in tail position.  An RKey route return_calls the
     -- selected entry (an impl method calling itself among them); a runtime
     -- dictionary return_calls the entry each dispatch arm selects.
-    CMethod name iface arity route implRoutes methRoutes =>
+    CMethod name (MethodEvidence iface arity route implRoutes methRoutes) =>
       emitMethodRef
         prog
         env
@@ -10023,7 +10029,7 @@ freeVarsExpr bound (CSlice e lo hi _) =
 -- where-group closure (`minimum`/`maximum`'s `step`) drops the dict from the closure
 -- capture set → "dict param '$dict_…' not in scope".  (These nodes carry no value
 -- args of their own — args arrive via the surrounding CApp, already handled.)
-freeVarsExpr bound (CMethod _ _ _ route implRoutes methRoutes) =
+freeVarsExpr bound (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
   flatMap (freeVarsRoute bound) (route :: implRoutes ++ methRoutes)
 freeVarsExpr bound (CDict name routes) =
   (if contains name bound then [] else [name])
@@ -11278,7 +11284,8 @@ collectExprLocals (CLetGroup binds body) =
     ++ flatMap collectLgValLocals binds
     ++ collectExprLocals body
 -- a method dispatched on a projected super dictionary reads it through a local
-collectExprLocals (CMethod _ _ _ (RProj r path) _ _) = [projLocalName r path]
+collectExprLocals (CMethod _ (MethodEvidence _ _ (RProj r path) _ _)) =
+  [projLocalName r path]
 collectExprLocals _ = []
 
 collectFieldLocals : CField -> List String
@@ -12128,9 +12135,9 @@ ctag (CRangeList _ _ _) = "CRangeList (W7)"
 ctag (CRangeArray _ _ _) = "CRangeArray (W7)"
 ctag (CIndex _ _) = "CIndex (W7)"
 ctag (CSlice _ _ _ _) = "CSlice (W7)"
-ctag (CMethod _ _ _ _ _ _) = "CMethod (dispatch — W5)"
-ctag (CDict _ _) = "CDict (dispatch — W5)"
-ctag (CLetGroup _ _) = "CLetGroup (where/let-group — W4)"
+ctag (CMethod _ _) = "CMethod (dispatch — W5) (MethodEvidence "
+ctag (CDict _ _) = " CDict (dispatch — W5) "
+ctag (CLetGroup _ _) = " CLetGroup) (where/let-group — W4)"
 ctag _ = "?"
 
 -- a readable tag for an unsupported pattern.
