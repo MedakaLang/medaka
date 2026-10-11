@@ -71,6 +71,7 @@ order.
 
 ```
 stringify : Json -> String
+stringify j
 ```
 
 The value as compact JSON text, with no whitespace between tokens.
@@ -83,6 +84,8 @@ its decimal point, so the text parses again.
 "{\"a\":1,\"b\":\"hi\"}"
 > stringify (JFloat 1000.0)
 "1000.0"
+> stringify (jObject [("a", jArray [JInt 1, jObject []]), ("b", JNull)])
+"{\"a\":[1,{}],\"b\":null}"
 ```
 
 ## Parsing
