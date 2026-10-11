@@ -356,6 +356,14 @@ CONSFAM_N="${PERF_CONSFAM_N:-200}"
 # KNOWN_OCEIL_conlocal_mark and both must be re-derived, not scaled.
 CONLOCAL_N="${PERF_CONLOCAL_N:-400}"
 
+# `wrapchain` (#3514) samples at 200/400/800. The variance fixpoint was cubic on a
+# top-down wrapper chain. With the dependency-order step disabled this band reads
+# ALLOC r1 3.74 r2 3.86 and typecheck/elaborate TIME r1 5.1 r2 7.8 (0.35 s / 1.8 s /
+# 13.8 s), so both arms go red with the stage far over the floor. Fixed, the same
+# sizes read ALLOC linear and the TIME rows SKIP under the floor (typecheck 143 ms at
+# 800). Both rows are band-specific, so re-derive them if this knob moves.
+WRAPCHAIN_N="${PERF_WRAPCHAIN_N:-200}"
+
 # `guardwild` (issues #2333, #2125) samples at 100/200/400, NOT the default
 # 250/500/1000, and the band is FORCED from BOTH sides. It is the only shape here
 # whose PROGRAM SIZE is linear in N while its lowered decision TREE is quadratic in
@@ -747,6 +755,8 @@ trap 'rm -rf "$WORK"' EXIT
 #              N import-chained modules — see gen_modules and the dedicated block
 #              after the single-file loop. It is a LEDGERED, currently-UNFIXED
 #              quadratic (#154/#150); see KNOWN_SUPERLINEAR / KNOWN_SLOW_TIME.
+#   wrapchain — N data types declared TOP-DOWN, each wrapping the next (issue #3514).
+#              Pins the variance fixpoint's dependency-order step; see gen_wrapchain.
 gen_bindings() {
   n=$1; f=$2; : > "$f"
   i=0; while [ "$i" -lt "$n" ]; do
@@ -1285,6 +1295,30 @@ gen_conlocal() {
   done >> "$f"
   # `main` CALLS f0 — same rooting rule as every other shape here, same reason.
   printf 'main = println (f0 1)\n' >> "$f"
+}
+
+# gen_wrapchain — THE TOP-DOWN WRAPPER CHAIN (issue #3514). N one-field data types, each
+# wrapping the NEXT one declared below it:
+#
+#     data W1 x = W1 (W2 x)
+#     data W2 x = W2 (W3 x)
+#     ...
+#     data Wn x = Wn x
+#
+# The variance fixpoint (`declEnvPolarityEntriesFix`) reads a type's row from the
+# previous round for everything declared after it, so source order decided how many
+# rounds it needed: N when declared top-down, 1 bottom-up. The declarations are fed to
+# it in dependency order now, so this shape pins that. It must stay TOP-DOWN and each
+# wrapper must name the NEXT type; reversing the order measures the cheap case.
+# 0-DIAGNOSTIC: `./medaka check` must print "N declaration(s) checked, 0 errors".
+gen_wrapchain() {
+  n=$1; f=$2; : > "$f"
+  i=1; while [ "$i" -lt "$n" ]; do
+    printf 'data W%s x = W%s (W%s x)\n' "$i" "$i" "$((i+1))"
+    i=$((i+1))
+  done >> "$f"
+  printf 'data W%s x = W%s x\n' "$n" "$n" >> "$f"
+  printf 'main = println 1\n' >> "$f"
 }
 
 # gen_modules — the only multi-module generator that declares any DATA TYPE (issue #153).
@@ -3267,7 +3301,7 @@ unset _cc_t _cc_c
 # until this same slice's #1017 marker.mdk fix drained it as a side effect (now watch-
 # only, reads linear). Its ~13 s is the whole reason #2030's pin is here and not on the
 # callgrind Ir gate, which needs 415 s for the same verdict.
-SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam conlocal guardwild"
+SHAPES="bindings match listlit nesting xref comments marksweep manyifaces widerecords typos consfam conlocal guardwild wrapchain"
 if [ "$PERF_DEEP" = "1" ]; then
   SHAPES="$SHAPES manydefs nestedparens"
 else
@@ -3292,6 +3326,7 @@ for shape in $SHAPES; do
     consfam)    base_n="$CONSFAM_N" ;;
     conlocal)   base_n="$CONLOCAL_N" ;;
     guardwild)  base_n="$GUARDWILD_N" ;;
+    wrapchain)  base_n="$WRAPCHAIN_N" ;;
     nestedparens) base_n="$NESTEDPARENS_N" ;;
     *)          base_n="$N" ;;
   esac
