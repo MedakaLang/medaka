@@ -1191,6 +1191,7 @@ fan_out() {
   (
     trap - EXIT
     WORK="$_fdir"
+    fail=0; graded=0; known=0
     "$@"
     echo "$fail $graded ${known:-0}" >"$UNITS_OUT/$_fname.st"
   ) >"$UNITS_OUT/$_fname.out" 2>&1 &

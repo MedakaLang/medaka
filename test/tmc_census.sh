@@ -138,18 +138,18 @@ run_arm() {
 # the SHIPPING sets.  A pinned fn must appear (any mode; module-prefixed names
 # match on the `__<fn>` suffix) in BOTH backends' NAME.ship.*.tmc.  Returns 1 on any miss.
 check_pins() {
-  fx="$1"; nm="$2"; pinfile="$3"; rc=0
-  pins="$(sed -n 's/^-- EXPECT-TMC: *//p' "$fx")"
+  pin_fx="$1"; pin_nm="$2"; pin_file="$3"; pin_rc=0
+  pins="$(sed -n 's/^-- EXPECT-TMC: *//p' "$pin_fx")"
   [ -n "$pins" ] || return 0
   for fn in $pins; do
     for be in llvm wasm; do
-      if ! grep -Eq "(^|__)$fn " "$OUT/$nm.ship.$be.tmc" 2>/dev/null; then
-        echo "PINFAIL $nm: '$fn' missing from the $be SHIPPING TMC set" >> "$pinfile"
-        rc=1
+      if ! grep -Eq "(^|__)$fn " "$OUT/$pin_nm.ship.$be.tmc" 2>/dev/null; then
+        echo "PINFAIL $pin_nm: '$fn' missing from the $be SHIPPING TMC set" >> "$pin_file"
+        pin_rc=1
       fi
     done
   done
-  return $rc
+  return $pin_rc
 }
 
 # worker N — one corpus item. Both arms run concurrently; the replay below mirrors the
