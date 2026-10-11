@@ -13,10 +13,16 @@
    are reproducible. -}
 
 import array as A
-import list.{replicate}
+import list.{replicate, zipWith}
 import string.{join, take}
 import test.{Expectation, expectAll, expectEach, expectAtLeast, fail, pass}
-import test_process.{medakaBin, medakaRoot, withScratchDir, boundedVerbSeconds}
+import test_process.{
+  medakaBin,
+  medakaRoot,
+  withScratchDir,
+  boundedVerbSeconds,
+  testJobs,
+}
 
 -- How a case's input is produced. `ByteIn n f` is `n` bytes, byte i = f i.
 data Input = TextIn String | ByteIn Int (Int -> Int) | RealIn String | SeedGz
@@ -94,9 +100,26 @@ corpus = [
     False,
 ]
 
--- Builds gzip/<name>.mdk into the scratch dir; Ok binary path, or Err.
-build : String -> String -> <Exec, IO> Result String String
-build dir name = match boundedVerbSeconds 600 "sh" [
+-- Builds every gzip/<name>.mdk in `names` into the scratch dir, all at once
+-- (`testJobs` at a time, serially under `MEDAKA_TEST_JOBS=1`). Each element
+-- is the Ok binary path, or the Err, in the order of `names`. Each build runs
+-- under the same 600s ceiling it had alone.
+builds : String -> List String -> <Exec, IO> List (Result String String)
+builds dir names =
+  let argvs = map (name => buildPerlArgs dir name) names
+  zipWith
+    (name run => gradeBuild dir name run)
+    names
+    (runCommandBatch "perl" testJobs argvs)
+
+-- The argv `boundedVerbSeconds 600 "sh" [...]` runs for one build: that
+-- wrapper's `perl` alarm around `env sh`, then the `sh` script itself.
+buildPerlArgs : String -> String -> <IO> List String
+buildPerlArgs dir name =
+  ["-e", "alarm 600; exec @ARGV", "env", "sh"] ++ buildShArgs dir name
+
+buildShArgs : String -> String -> <IO> List String
+buildShArgs dir name = [
   "-c",
   "MEDAKA_EMITTER=\"$1\" MEDAKA_ROOT=\"$2\" exec \"$3\" build \"$4\" -o \"$5\"",
   "sh",
@@ -106,13 +129,27 @@ build dir name = match boundedVerbSeconds 600 "sh" [
   "\{medakaRoot}/gzip/\{name}.mdk",
   "\{dir}/\{name}",
 ]
-  Err e => Err "could not run medaka build on gzip/\{name}.mdk: \{e}"
-  Ok (code, _, _) =>
-    if code /= 0 then
-      Err
-        "could not build gzip/\{name}.mdk (medaka build exited \{intToString code})"
-    else
-      Ok "\{dir}/\{name}"
+
+gradeBuild : String ->
+  String ->
+  Result String (Int, String, String) ->
+  Result String String
+gradeBuild _ name (Err e) =
+  Err "could not run medaka build on gzip/\{name}.mdk: \{e}"
+gradeBuild dir name (Ok (code, _, _)) =
+  if code /= 0 then
+    Err
+      "could not build gzip/\{name}.mdk (medaka build exited \{intToString code})"
+  else
+    Ok "\{dir}/\{name}"
+
+-- Both demos, or the first build's error (deflate, then inflate).
+builtPair : String -> <Exec, IO> Result String (String, String)
+builtPair dir = match builds dir ["deflate_demo", "inflate_demo"]
+  [Ok deflateBin, Ok inflateBin] => Ok (deflateBin, inflateBin)
+  [Err e, _] => Err e
+  [_, Err e] => Err e
+  _ => Err "no build result for the gzip demos"
 
 -- The system gunzip's output for the committed seed, via a shell redirect so
 -- the binary bytes never pass through a String.
@@ -321,12 +358,10 @@ gzipPresent = match boundedVerbSeconds 10 "gzip" ["--version"]
     if code /= 0 then fail "gzip --version exited \{intToString code}" else pass
 
 test "deflate_oracle: demos build, system gzip exists, every corpus case gunzip-accepted and byte-identical" = withScratchDir
-  (dir => match build dir "deflate_demo"
+  (dir => match builtPair dir
     Err e => fail e
-    Ok deflateBin => match build dir "inflate_demo"
-      Err e => fail e
-      Ok inflateBin => expectAll [
-        gzipPresent,
-        expectAtLeast 10 (length corpus),
-        expectEach (map (c => runCase deflateBin inflateBin dir c) corpus),
-      ])
+    Ok (deflateBin, inflateBin) => expectAll [
+      gzipPresent,
+      expectAtLeast 10 (length corpus),
+      expectEach (map (c => runCase deflateBin inflateBin dir c) corpus),
+    ])
