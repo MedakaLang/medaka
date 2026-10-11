@@ -18,20 +18,75 @@
    interpreter binds no subprocess extern. -}
 
 import json.{Json, asArray, asInt, asString, get, parse}
-import list.{somes}
+import list.{lookup, somes, zipWith}
 import string.{endsWith}
 import test.{Expectation(..), expectEqual}
-import test_process.{boundedVerb, medakaBin, underRoot}
+import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
 
 -- # Reading one program's verdict
+
+-- Every pin program, by its file name under `pds/test/authority_pins/`. Each
+-- one is checked exactly once, by `pinVerdicts`.
+pinPrograms : List String
+pinPrograms = [
+  "egress_wrong_host",
+  "egress_right_host",
+  "sign_pure",
+  "sign_labelled",
+  "service_auth_pure",
+  "service_auth_labelled",
+  "mint_pure",
+  "mint_labelled",
+  "kdf_pure",
+  "kdf_labelled",
+  "blocks_into_secrets",
+  "blocks_into_data",
+  "server_pure",
+  "server_labelled",
+]
+
+{- | The verdict of every pin program, in `pinPrograms` order, each as
+   `checkCodes` reports it. The checks run side by side, at most `testJobs`
+   at once. Each is wrapped the way `boundedVerb` wraps one (the same
+   `alarm`), so a hung check still fails its own row. -}
+pinVerdicts : <Exec, IO> List (String, Result String (Int, List String))
+pinVerdicts =
+  let bin = medakaBin
+  let base = underRoot "pds/test/authority_pins"
+  let argvs = map (checkArgv bin base) pinPrograms
+  zipWith
+    (name run => (name, checkGraded name run))
+    pinPrograms
+    (runCommandBatch "perl" testJobs argvs)
+
+-- | The arguments to `perl` that run `bin check --json` on pin program `name`
+-- under the same `alarm` wrapper `boundedVerb` gives each spawn.
+checkArgv : String -> String -> String -> List String
+checkArgv bin base name = [
+  "-e",
+  "alarm \{intToString spawnTimeoutSeconds}; exec @ARGV",
+  "env",
+  bin,
+  "check",
+  "--json",
+  "\{base}/\{name}.mdk",
+]
 
 {- | The exit status of `medaka check --json` on
    `pds/test/authority_pins/<name>.mdk`, and the codes of the errors it
    reports against that file, in report order. -}
 checkCodes : String -> <Exec, IO> Result String (Int, List String)
-checkCodes name =
+checkCodes name = match lookup name pinVerdicts
+  Some verdict => verdict
+  None => Err "no pin program named \{name}"
+
+-- | Grades the spawned `medaka check --json` run of pin program `name`.
+checkGraded : String ->
+  Result String (Int, String, String) ->
+  Result String (Int, List String)
+checkGraded name spawned =
   let rel = "pds/test/authority_pins/\{name}.mdk"
-  match boundedVerb medakaBin ["check", "--json", underRoot rel]
+  match spawned
     Err e => Err "could not run `medaka check --json \{rel}`: \{e}"
     Ok (code, out, _) => match parse out
       Err e => Err "`medaka check --json \{rel}` printed no JSON: \{e}"
