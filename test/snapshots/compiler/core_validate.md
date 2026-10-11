@@ -1,5 +1,5 @@
 # META
-source_lines=602
+source_lines=613
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -333,10 +333,21 @@ walkE ctx scope (CBlock stmts) w = walkStmts ctx scope stmts w
 walkE _ _ (CMethod _ _ _ _ _ _) w = w
 walkE _ _ (CDict _ _) w = w
 
--- A field access is stamped, or reads a `Ref` cell through `.value`.
+-- A field access is stamped, or reads a `Ref` cell through `.value`, which is
+-- never stamped: an emitter reading a stamped `.value` as a record field would
+-- cast the cell to whichever record declares a field `value`.
 noteAccess : Ctx -> String -> String -> Int -> Walk -> Walk
+noteAccess ctx "value" name ord w =
+  if ord == -1 then
+    w
+  else
+    noteRecordBad
+      ctx
+      "CFieldAccess"
+      "\{name}.value: a Ref read stamped with field ordinal \{intToString ord}"
+      w
 noteAccess ctx label name ord w =
-  if ord >= 0 || label == "value" then
+  if ord >= 0 then
     w
   else
     noteRecordBad
@@ -713,7 +724,8 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DFunDef false "walkE" (PWild PWild (PCon "CMethod" PWild PWild PWild PWild PWild PWild) (PVar "w")) (EVar "w"))
 (DFunDef false "walkE" (PWild PWild (PCon "CDict" PWild PWild) (PVar "w")) (EVar "w"))
 (DTypeSig false "noteAccess" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
-(DFunDef false "noteAccess" ((PVar "ctx") (PVar "label") (PVar "name") (PVar "ord") (PVar "w")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "ord") (ELit (LInt 0))) (EBinOp "==" (EVar "label") (ELit (LString "value")))) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (ELit (LString "CFieldAccess"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "label"))) (ELit (LString ": unstamped field ordinal")))) (EVar "w"))))
+(DFunDef false "noteAccess" ((PVar "ctx") (PLit (LString "value")) (PVar "name") (PVar "ord") (PVar "w")) (EIf (EBinOp "==" (EVar "ord") (EUnOp "-" (ELit (LInt 1)))) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (ELit (LString "CFieldAccess"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ".value: a Ref read stamped with field ordinal "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "ord")))) (ELit (LString "")))) (EVar "w"))))
+(DFunDef false "noteAccess" ((PVar "ctx") (PVar "label") (PVar "name") (PVar "ord") (PVar "w")) (EIf (EBinOp ">=" (EVar "ord") (ELit (LInt 0))) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (ELit (LString "CFieldAccess"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "label"))) (ELit (LString ": unstamped field ordinal")))) (EVar "w"))))
 (DTypeSig false "noteRecord" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
 (DFunDef false "noteRecord" ((PVar "ctx") (PVar "node") (PVar "name") (PVar "literal") (PVar "fields") (PVar "w")) (EIf (EApp (EApp (EApp (EApp (EVar "ordinalsOk") (EVar "literal")) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EVar "fields")) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (EVar "node")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ": field ordinals ["))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "fieldOrdinalText")) (EVar "fields"))))) (ELit (LString "] are not "))) (EApp (EVar "display") (EIf (EVar "literal") (ELit (LString "the declared positions")) (ELit (LString "strictly ascending"))))) (ELit (LString "")))) (EVar "w"))))
 (DTypeSig false "ordinalsOk" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool"))))))
@@ -948,7 +960,8 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DFunDef false "walkE" (PWild PWild (PCon "CMethod" PWild PWild PWild PWild PWild PWild) (PVar "w")) (EVar "w"))
 (DFunDef false "walkE" (PWild PWild (PCon "CDict" PWild PWild) (PVar "w")) (EVar "w"))
 (DTypeSig false "noteAccess" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
-(DFunDef false "noteAccess" ((PVar "ctx") (PVar "label") (PVar "name") (PVar "ord") (PVar "w")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "ord") (ELit (LInt 0))) (EBinOp "==" (EVar "label") (ELit (LString "value")))) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (ELit (LString "CFieldAccess"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString ": unstamped field ordinal")))) (EVar "w"))))
+(DFunDef false "noteAccess" ((PVar "ctx") (PLit (LString "value")) (PVar "name") (PVar "ord") (PVar "w")) (EIf (EBinOp "==" (EVar "ord") (EUnOp "-" (ELit (LInt 1)))) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (ELit (LString "CFieldAccess"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ".value: a Ref read stamped with field ordinal "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "ord")))) (ELit (LString "")))) (EVar "w"))))
+(DFunDef false "noteAccess" ((PVar "ctx") (PVar "label") (PVar "name") (PVar "ord") (PVar "w")) (EIf (EBinOp ">=" (EVar "ord") (ELit (LInt 0))) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (ELit (LString "CFieldAccess"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString ": unstamped field ordinal")))) (EVar "w"))))
 (DTypeSig false "noteRecord" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
 (DFunDef false "noteRecord" ((PVar "ctx") (PVar "node") (PVar "name") (PVar "literal") (PVar "fields") (PVar "w")) (EIf (EApp (EApp (EApp (EApp (EVar "ordinalsOk") (EVar "literal")) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EVar "fields")) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (EVar "node")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ": field ordinals ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "fieldOrdinalText")) (EVar "fields"))))) (ELit (LString "] are not "))) (EApp (EMethodRef "display") (EIf (EVar "literal") (ELit (LString "the declared positions")) (ELit (LString "strictly ascending"))))) (ELit (LString "")))) (EVar "w"))))
 (DTypeSig false "ordinalsOk" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool"))))))

@@ -1,0 +1,31 @@
+-- A literal at a user `Num` type is converted by the user's `fromInt`, which may
+-- panic, so it runs where the program evaluates it: `foo T` evaluates
+-- `add 500`, whose `500` is `fromInt 500`, and `Nat`'s `fromInt` refuses it.
+-- Read with no engine in the loop: `start` is printed, then the program aborts
+-- with "Nat.fromInt: too big" before the list's length is printed.
+
+data Nat = Nat Int deriving (Eq)
+
+impl Num Nat where
+  add (Nat a) (Nat b) = Nat (a + b)
+  sub (Nat a) (Nat b) = Nat (a - b)
+  mul (Nat a) (Nat b) = Nat (a * b)
+  div (Nat a) (Nat b) = Nat (a / b)
+  negate n = n
+  abs n = n
+  signum _ = Nat 1
+  fromInt n = if n > 100 then panic "Nat.fromInt: too big" else Nat n
+  rem (Nat a) (Nat b) = Nat (a % b)
+
+interface Foo a where
+  foo : a -> Nat -> Nat
+
+data T = T
+
+impl Foo T where
+  foo _ = add 500
+
+main =
+  println "start"
+  let fs = [foo T]
+  println (length fs)

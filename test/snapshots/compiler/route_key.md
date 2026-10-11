@@ -1,5 +1,5 @@
 # META
-source_lines=620
+source_lines=632
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -349,6 +349,12 @@ export
 numIntWord : String
 numIntWord = "core::Num|Int|"
 
+-- The dictionary word of the prelude's `Num Float` instance, whose `fromInt`
+-- cannot fail.
+export
+numFloatWord : String
+numFloatWord = "core::Num|Float|"
+
 -- ── the type-head word (#1397) ───────────────────────────────────────────
 -- The word a type head contributes to every impl tag, route word, dictionary
 -- word and runtime type tag: the prelude's and the language's types by their
@@ -495,6 +501,10 @@ rkTyBool : Ty
 rkTyBool =
   TyCon { tyConName = "Bool", tyConLoc = None, tyConOrigin = OriginUnresolved }
 
+rkTyFloat : Ty
+rkTyFloat =
+  TyCon { tyConName = "Float", tyConLoc = None, tyConOrigin = OriginUnresolved }
+
 rkTyIntM : Ty
 rkTyIntM =
   TyCon { tyConName = "Int", tyConLoc = None, tyConOrigin = OriginModule "m" }
@@ -556,6 +566,8 @@ rkTyList =
 
 -- `numIntWord` is `implRouteKeyWord`'s word for the prelude's `Num Int`.
 -- > numIntWord == implRouteKeyWord (OriginModule "core") "Num" [rkTyInt] None
+-- True
+-- > numFloatWord == implRouteKeyWord (OriginModule "core") "Num" [rkTyFloat] None
 -- True
 
 -- `implRouteKeyWord`, origin PRESENT: the #1047/#1265 route-word substitution
@@ -664,6 +676,8 @@ rkTyList =
 (DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EVar "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig true "numIntWord" (TyCon "String"))
 (DFunDef false "numIntWord" () (ELit (LString "core::Num|Int|")))
+(DTypeSig true "numFloatWord" (TyCon "String"))
+(DFunDef false "numFloatWord" () (ELit (LString "core::Num|Float|")))
 (DTypeSig true "typeTagOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ""))))
@@ -707,6 +721,8 @@ rkTyList =
 (DFunDef false "rkTyInt" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Int"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig false "rkTyBool" (TyCon "Ty"))
 (DFunDef false "rkTyBool" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Bool"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig false "rkTyFloat" (TyCon "Ty"))
+(DFunDef false "rkTyFloat" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Float"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig false "rkTyIntM" (TyCon "Ty"))
 (DFunDef false "rkTyIntM" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Int"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
 (DTypeSig false "rkTyList" (TyCon "Ty"))
@@ -753,6 +769,8 @@ rkTyList =
 (DFunDef false "implRouteKeyWord" ((PVar "o") (PVar "iface") (PVar "tys") (PVar "nm")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "ifaceWordOf") (EVar "o")) (EVar "iface")))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "rkTyAtom")) (EVar "tys"))))) (ELit (LString "|"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EVar "nm")))) (ELit (LString ""))))
 (DTypeSig true "numIntWord" (TyCon "String"))
 (DFunDef false "numIntWord" () (ELit (LString "core::Num|Int|")))
+(DTypeSig true "numFloatWord" (TyCon "String"))
+(DFunDef false "numFloatWord" () (ELit (LString "core::Num|Float|")))
 (DTypeSig true "typeTagOf" (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PLit (LString "core"))) (PVar "name")) (EVar "name"))
 (DFunDef false "typeTagOf" ((PCon "OriginModule" (PVar "m")) (PVar "name")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ""))))
@@ -796,6 +814,8 @@ rkTyList =
 (DFunDef false "rkTyInt" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Int"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig false "rkTyBool" (TyCon "Ty"))
 (DFunDef false "rkTyBool" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Bool"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
+(DTypeSig false "rkTyFloat" (TyCon "Ty"))
+(DFunDef false "rkTyFloat" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Float"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig false "rkTyIntM" (TyCon "Ty"))
 (DFunDef false "rkTyIntM" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Int"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
 (DTypeSig false "rkTyList" (TyCon "Ty"))

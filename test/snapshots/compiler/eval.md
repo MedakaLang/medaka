@@ -1,5 +1,5 @@
 # META
-source_lines=5411
+source_lines=5432
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1723,14 +1723,35 @@ evalApp env app =
   applySpine fv nodes (evalSpineArgs env nodes)
 
 -- The head of an application spine and its application nodes, innermost first.
--- A located spine in head position is part of the spine: `(f a) b` is `f a b`;
--- its location is current while the head evaluates, as when it was its own node.
+-- A spine in head position is part of the spine, through the wrappers the Core IR
+-- lowering strips: `(f a) b` and `(f a : T) b` are `f a b`, and `x |> f a` is
+-- `f a x`, as `core_ir_lower.lowerBinop` builds it.  A located head's location is
+-- current while the head evaluates, as when it was its own node.
 appSpine : Expr -> List Expr -> (Expr, List Expr)
 appSpine (node@(EApp f _)) acc = appSpine f (node :: acc)
-appSpine (ELoc l (inner@(EApp _ _))) acc =
-  let _ = updateEvalLoc l
-  appSpine inner acc
+appSpine (EBinOp "|>" l r _) acc = appSpine r (EApp r l :: acc)
+appSpine (ELoc l inner) acc
+  | isAppSpine inner =
+    let _ = updateEvalLoc l
+    appSpine inner acc
+appSpine (EAnnot inner _) acc
+  | isAppSpine inner = appSpine inner acc
+appSpine (EHeadAnnot inner _) acc
+  | isAppSpine inner = appSpine inner acc
+appSpine (EDoOrigin _ inner) acc
+  | isAppSpine inner = appSpine inner acc
 appSpine hd acc = (hd, acc)
+
+-- Whether an expression lowers to an application the Core IR flattens into an
+-- enclosing one (`core_ir.mkApp`).
+isAppSpine : Expr -> Bool
+isAppSpine (EApp _ _) = True
+isAppSpine (EBinOp "|>" _ _ _) = True
+isAppSpine (ELoc _ e) = isAppSpine e
+isAppSpine (EAnnot e _) = isAppSpine e
+isAppSpine (EHeadAnnot e _) = isAppSpine e
+isAppSpine (EDoOrigin _ e) = isAppSpine e
+isAppSpine _ = False
 
 evalSpineArgs : EvalEnv (Value e) -> List Expr -> <e> List (Value e)
 evalSpineArgs _ [] = []
@@ -2193,7 +2214,7 @@ evalUnop "not" _ = panic "'!' on non-Bool"
 evalUnop op _ = panic ("unknown unary op: " ++ op)
 
 evalBinop : EvalEnv (Value e) -> String -> Expr -> Expr -> <e> Value e
-evalBinop env "|>" l r = apply (eval env r) (eval env l)
+evalBinop env "|>" l r = evalApp env (EApp r l)
 evalBinop env ">>" l r = composeFwd (eval env l) (eval env r)
 evalBinop env "<<" l r = composeBwd (eval env l) (eval env r)
 evalBinop env "&&" l r = evalAnd env (eval env l) r
@@ -6029,8 +6050,20 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalApp" ((PVar "env") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "nodes")) (EApp (EApp (EVar "appSpine") (EVar "app")) (EListLit))) (DoLet false false (PVar "fv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hd"))) (DoExpr (EApp (EApp (EApp (EVar "applySpine") (EVar "fv")) (EVar "nodes")) (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "nodes"))))))
 (DTypeSig false "appSpine" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "appSpine" ((PAs "node" (PCon "EApp" (PVar "f") PWild)) (PVar "acc")) (EApp (EApp (EVar "appSpine") (EVar "f")) (EBinOp "::" (EVar "node") (EVar "acc"))))
-(DFunDef false "appSpine" ((PCon "ELoc" (PVar "l") (PAs "inner" (PCon "EApp" PWild PWild))) (PVar "acc")) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")))))
+(DFunDef false "appSpine" ((PCon "EBinOp" (PLit (LString "|>")) (PVar "l") (PVar "r") PWild) (PVar "acc")) (EApp (EApp (EVar "appSpine") (EVar "r")) (EBinOp "::" (EApp (EApp (EVar "EApp") (EVar "r")) (EVar "l")) (EVar "acc"))))
+(DFunDef false "appSpine" ((PCon "ELoc" (PVar "l") (PVar "inner")) (PVar "acc")) (EIf (EApp (EVar "isAppSpine") (EVar "inner")) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "appSpine" ((PCon "EAnnot" (PVar "inner") PWild) (PVar "acc")) (EIf (EApp (EVar "isAppSpine") (EVar "inner")) (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "appSpine" ((PCon "EHeadAnnot" (PVar "inner") PWild) (PVar "acc")) (EIf (EApp (EVar "isAppSpine") (EVar "inner")) (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "appSpine" ((PCon "EDoOrigin" PWild (PVar "inner")) (PVar "acc")) (EIf (EApp (EVar "isAppSpine") (EVar "inner")) (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "appSpine" ((PVar "hd") (PVar "acc")) (ETuple (EVar "hd") (EVar "acc")))
+(DTypeSig false "isAppSpine" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isAppSpine" ((PCon "EApp" PWild PWild)) (EVar "True"))
+(DFunDef false "isAppSpine" ((PCon "EBinOp" (PLit (LString "|>")) PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isAppSpine" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isAppSpine") (EVar "e")))
+(DFunDef false "isAppSpine" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "isAppSpine") (EVar "e")))
+(DFunDef false "isAppSpine" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "isAppSpine") (EVar "e")))
+(DFunDef false "isAppSpine" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "isAppSpine") (EVar "e")))
+(DFunDef false "isAppSpine" (PWild) (EVar "False"))
 (DTypeSig false "evalSpineArgs" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "evalSpineArgs" (PWild (PList)) (EListLit))
 (DFunDef false "evalSpineArgs" ((PVar "env") (PCons (PCon "EApp" PWild (PVar "x")) (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))) (DoExpr (EBinOp "::" (EVar "v") (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "rest"))))))
@@ -6191,7 +6224,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalUnop" ((PLit (LString "not")) PWild) (EApp (EVar "panic") (ELit (LString "'!' on non-Bool"))))
 (DFunDef false "evalUnop" ((PVar "op") PWild) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unknown unary op: ")) (EVar "op"))))
 (DTypeSig false "evalBinop" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalBinop" ((PVar "env") (PLit (LString "|>")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "apply") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "r"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "l"))))
+(DFunDef false "evalBinop" ((PVar "env") (PLit (LString "|>")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "evalApp") (EVar "env")) (EApp (EApp (EVar "EApp") (EVar "r")) (EVar "l"))))
 (DFunDef false "evalBinop" ((PVar "env") (PLit (LString ">>")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "composeFwd") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "r"))))
 (DFunDef false "evalBinop" ((PVar "env") (PLit (LString "<<")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "composeBwd") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "r"))))
 (DFunDef false "evalBinop" ((PVar "env") (PLit (LString "&&")) (PVar "l") (PVar "r")) (EApp (EApp (EApp (EVar "evalAnd") (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "l"))) (EVar "r")))
@@ -7810,8 +7843,20 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalApp" ((PVar "env") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "nodes")) (EApp (EApp (EVar "appSpine") (EVar "app")) (EListLit))) (DoLet false false (PVar "fv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hd"))) (DoExpr (EApp (EApp (EApp (EVar "applySpine") (EVar "fv")) (EVar "nodes")) (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "nodes"))))))
 (DTypeSig false "appSpine" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
 (DFunDef false "appSpine" ((PAs "node" (PCon "EApp" (PVar "f") PWild)) (PVar "acc")) (EApp (EApp (EVar "appSpine") (EVar "f")) (EBinOp "::" (EVar "node") (EVar "acc"))))
-(DFunDef false "appSpine" ((PCon "ELoc" (PVar "l") (PAs "inner" (PCon "EApp" PWild PWild))) (PVar "acc")) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")))))
+(DFunDef false "appSpine" ((PCon "EBinOp" (PLit (LString "|>")) (PVar "l") (PVar "r") PWild) (PVar "acc")) (EApp (EApp (EVar "appSpine") (EVar "r")) (EBinOp "::" (EApp (EApp (EVar "EApp") (EVar "r")) (EVar "l")) (EVar "acc"))))
+(DFunDef false "appSpine" ((PCon "ELoc" (PVar "l") (PVar "inner")) (PVar "acc")) (EIf (EApp (EVar "isAppSpine") (EVar "inner")) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "appSpine" ((PCon "EAnnot" (PVar "inner") PWild) (PVar "acc")) (EIf (EApp (EVar "isAppSpine") (EVar "inner")) (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "appSpine" ((PCon "EHeadAnnot" (PVar "inner") PWild) (PVar "acc")) (EIf (EApp (EVar "isAppSpine") (EVar "inner")) (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "appSpine" ((PCon "EDoOrigin" PWild (PVar "inner")) (PVar "acc")) (EIf (EApp (EVar "isAppSpine") (EVar "inner")) (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "appSpine" ((PVar "hd") (PVar "acc")) (ETuple (EVar "hd") (EVar "acc")))
+(DTypeSig false "isAppSpine" (TyFun (TyCon "Expr") (TyCon "Bool")))
+(DFunDef false "isAppSpine" ((PCon "EApp" PWild PWild)) (EVar "True"))
+(DFunDef false "isAppSpine" ((PCon "EBinOp" (PLit (LString "|>")) PWild PWild PWild)) (EVar "True"))
+(DFunDef false "isAppSpine" ((PCon "ELoc" PWild (PVar "e"))) (EApp (EVar "isAppSpine") (EVar "e")))
+(DFunDef false "isAppSpine" ((PCon "EAnnot" (PVar "e") PWild)) (EApp (EVar "isAppSpine") (EVar "e")))
+(DFunDef false "isAppSpine" ((PCon "EHeadAnnot" (PVar "e") PWild)) (EApp (EVar "isAppSpine") (EVar "e")))
+(DFunDef false "isAppSpine" ((PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EVar "isAppSpine") (EVar "e")))
+(DFunDef false "isAppSpine" (PWild) (EVar "False"))
 (DTypeSig false "evalSpineArgs" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "evalSpineArgs" (PWild (PList)) (EListLit))
 (DFunDef false "evalSpineArgs" ((PVar "env") (PCons (PCon "EApp" PWild (PVar "x")) (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))) (DoExpr (EBinOp "::" (EVar "v") (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "rest"))))))
@@ -7972,7 +8017,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "evalUnop" ((PLit (LString "not")) PWild) (EApp (EVar "panic") (ELit (LString "'!' on non-Bool"))))
 (DFunDef false "evalUnop" ((PVar "op") PWild) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "unknown unary op: ")) (EVar "op"))))
 (DTypeSig false "evalBinop" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))
-(DFunDef false "evalBinop" ((PVar "env") (PLit (LString "|>")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "apply") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "r"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "l"))))
+(DFunDef false "evalBinop" ((PVar "env") (PLit (LString "|>")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "evalApp") (EVar "env")) (EApp (EApp (EVar "EApp") (EVar "r")) (EVar "l"))))
 (DFunDef false "evalBinop" ((PVar "env") (PLit (LString ">>")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "composeFwd") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "r"))))
 (DFunDef false "evalBinop" ((PVar "env") (PLit (LString "<<")) (PVar "l") (PVar "r")) (EApp (EApp (EVar "composeBwd") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "l"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "r"))))
 (DFunDef false "evalBinop" ((PVar "env") (PLit (LString "&&")) (PVar "l") (PVar "r")) (EApp (EApp (EApp (EVar "evalAnd") (EVar "env")) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "l"))) (EVar "r")))

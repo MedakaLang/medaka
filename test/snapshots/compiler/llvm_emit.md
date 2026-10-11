@@ -1,5 +1,5 @@
 # META
-source_lines=15657
+source_lines=15656
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -1371,9 +1371,8 @@ implEntriesOf e = !e.implEntries
 -- first-match / flat-map / distinct-key result, so the emitted IR is byte-for-byte
 -- unchanged (fixpoint C3a/C3b).  `installImplIndex` builds it once in
 -- `buildEmitState`, the ONE `Emit` construction path shared by emitProgram and
--- emitProgramGaps.  RUN-EMIT-003: the "fall back to the full list" second path is
--- RETIRED — a live second path that has to agree with the index is the duality
--- this slice removes.  Mirrors wasm_emit's `implsByMethodW`.
+-- emitProgramGaps.  There is no fall-back scan of the full entry list: a second
+-- path would have to agree with the index.  Mirrors wasm_emit's `implsByMethodW`.
 
 -- the interface method an impl entry implements (field 0).
 implEntryMethodOf : CImplEntry -> String

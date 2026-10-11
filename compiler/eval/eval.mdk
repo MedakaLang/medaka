@@ -1719,14 +1719,35 @@ evalApp env app =
   applySpine fv nodes (evalSpineArgs env nodes)
 
 -- The head of an application spine and its application nodes, innermost first.
--- A located spine in head position is part of the spine: `(f a) b` is `f a b`;
--- its location is current while the head evaluates, as when it was its own node.
+-- A spine in head position is part of the spine, through the wrappers the Core IR
+-- lowering strips: `(f a) b` and `(f a : T) b` are `f a b`, and `x |> f a` is
+-- `f a x`, as `core_ir_lower.lowerBinop` builds it.  A located head's location is
+-- current while the head evaluates, as when it was its own node.
 appSpine : Expr -> List Expr -> (Expr, List Expr)
 appSpine (node@(EApp f _)) acc = appSpine f (node :: acc)
-appSpine (ELoc l (inner@(EApp _ _))) acc =
-  let _ = updateEvalLoc l
-  appSpine inner acc
+appSpine (EBinOp "|>" l r _) acc = appSpine r (EApp r l :: acc)
+appSpine (ELoc l inner) acc
+  | isAppSpine inner =
+    let _ = updateEvalLoc l
+    appSpine inner acc
+appSpine (EAnnot inner _) acc
+  | isAppSpine inner = appSpine inner acc
+appSpine (EHeadAnnot inner _) acc
+  | isAppSpine inner = appSpine inner acc
+appSpine (EDoOrigin _ inner) acc
+  | isAppSpine inner = appSpine inner acc
 appSpine hd acc = (hd, acc)
+
+-- Whether an expression lowers to an application the Core IR flattens into an
+-- enclosing one (`core_ir.mkApp`).
+isAppSpine : Expr -> Bool
+isAppSpine (EApp _ _) = True
+isAppSpine (EBinOp "|>" _ _ _) = True
+isAppSpine (ELoc _ e) = isAppSpine e
+isAppSpine (EAnnot e _) = isAppSpine e
+isAppSpine (EHeadAnnot e _) = isAppSpine e
+isAppSpine (EDoOrigin _ e) = isAppSpine e
+isAppSpine _ = False
 
 evalSpineArgs : EvalEnv (Value e) -> List Expr -> <e> List (Value e)
 evalSpineArgs _ [] = []
@@ -2189,7 +2210,7 @@ evalUnop "not" _ = panic "'!' on non-Bool"
 evalUnop op _ = panic ("unknown unary op: " ++ op)
 
 evalBinop : EvalEnv (Value e) -> String -> Expr -> Expr -> <e> Value e
-evalBinop env "|>" l r = apply (eval env r) (eval env l)
+evalBinop env "|>" l r = evalApp env (EApp r l)
 evalBinop env ">>" l r = composeFwd (eval env l) (eval env r)
 evalBinop env "<<" l r = composeBwd (eval env l) (eval env r)
 evalBinop env "&&" l r = evalAnd env (eval env l) r

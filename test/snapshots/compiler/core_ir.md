@@ -1,5 +1,5 @@
 # META
-source_lines=318
+source_lines=320
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -103,7 +103,9 @@ public export data CExpr =
   -- table.  A `CRecord`'s fields are listed in declared order (ordinal = position).
   | CRecord String (List CField)
   -- field access `r.f`; 3rd = the resolved record name ("" = unknown), 4th = the
-  -- field's declared ordinal (-1 = unstamped, valid only for the `Ref` read `.value`).
+  -- field's declared ordinal.  The label `value` is the `Ref` read (`!r`, `r.value`;
+  -- the typechecker refuses `.value` on a record) and is always -1 (unstamped),
+  -- even when a record declares a field `value`; every other label is stamped.
   | CFieldAccess CExpr String String Int
   -- functional record update `{ base | f = v … }`.  1st = the receiver's record
   -- name, resolved by `core_ir_lower`.  The overrides are listed in strictly

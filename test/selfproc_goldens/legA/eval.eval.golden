@@ -221,6 +221,7 @@ intSeq : Int -> Int -> List Int
 intSeqIncl : Int -> Int -> List Int
 ioExternBindings : Unit -> List (String, Value <IO>)
 ioHostExterns : Unit -> List (String, Value <IO>)
+isAppSpine : Expr -> Bool
 isClauseGroup : List (Value a) -> Bool
 isDispatching : Value a -> Bool
 isInheritedEntry : String -> String -> Bool

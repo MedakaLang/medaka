@@ -10487,7 +10487,9 @@ emitRecordRef prog env d name fields =
   tagField ++ argInstrs ++ ["struct.new $" ++ ctorStructName name]
 
 -- field access `r.label`: cast to the record's ctor struct and struct.get the field
--- at index (1 + its declared ordinal), both stamped by `core_ir_lower`.
+-- at index (1 + its declared ordinal), both stamped by `core_ir_lower`.  The label
+-- `value` is always a `Ref` read (the typechecker refuses `.value` on a record),
+-- whatever ordinal it carries, as in llvm_emit's `emitFieldAccess`.
 emitFieldAccessRef : Prog ->
   List String ->
   Int ->
@@ -10497,18 +10499,16 @@ emitFieldAccessRef : Prog ->
   Int ->
   List String
 emitFieldAccessRef prog env d ex label recName ord =
-  if ord >= 0 then
+  if label == "value" then
+    -- a $refbox read: cast to $refbox and read the mutable field at slot 0.
+    emitRefExpr prog env d ex
+      ++ ["ref.cast (ref $refbox)", "struct.get $refbox 0"]
+  else if ord >= 0 then
     emitRefExpr prog env d ex
       ++ [
         "ref.cast (ref $" ++ ctorStructName recName ++ ")",
         "struct.get $\{ctorStructName recName} \{intToString (ord + 1)}",
       ]
-  else if label == "value" then
-    -- `r.value` on a Ref: no record ctor owns the field `value`, so this is a
-    -- $refbox read — cast to $refbox and read the mutable field at slot 0.
-
-    emitRefExpr prog env d ex
-      ++ ["ref.cast (ref $refbox)", "struct.get $refbox 0"]
   else
     gapLP
       prog
