@@ -1,0 +1,415 @@
+{- | DICT-SEMANTICS section 4: DECLARATION-ORDER PERMUTATION. Replaces
+   diff_compiler_dict_semantics_permute.sh (section 4 of that script only).
+
+   For every fixture directly in test/dict_fixtures (*.mdk, no recursion) with
+   >= 2 `impl` blocks of one interface, the top-level chunks tagged with that
+   interface are reversed in place (every other declaration stays where it was),
+   and the permuted source is graded against the original:
+     * `check --json`: both accept, or both reject with the same diagnostic code
+     * both accept: `run` exit + stdout and `build` + built-binary stdout match
+     * both reject: `run` / `build` exit codes match (never stderr text: the
+       permutation shifts every line number, so text would false-positive)
+   An asymmetric outcome (one ordering accepts, the other rejects; one runs, the
+   other does not) fails the row. Exit 126/127 is a launch failure, never a pass.
+
+   PROVES: declaration order decides neither acceptance, the reject code, the
+   runtime stdout, nor the built binary's stdout, over the corpus.
+   DOES NOT PROVE: order-freedom on any axis this permuter does not move -- in
+   particular the predicate order inside a signature or `requires` clause
+   (#1177), which is not permuted. Nor that any answer is the right one (Section
+   1 pins values).
+
+   Floor: the derived set keeps at least 135 (fixture, interface) rows. Fewer
+   means the derivation (enumeration or qualifying-interface scan) broke; the
+   floor catches that, not a change in which rows exist. Rows run sequentially,
+   each in its own scratch dir. Needs clang (build).
+
+   Usage: medaka test <this file>
+-}
+
+import fs.{fixtureFiles}
+import list.{dropWhile, nub, takeWhile}
+import string.{contains, endsWith, lines, replaceAll, split, startsWith}
+import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
+import test_process.{boundedVerb, medakaBin, underRoot, withScratchDir}
+
+-- ── Permuter (pure; ports the script's perl PERMPL) ──────────────────────────
+
+-- A top-level line starts in column 0 with a non-blank character. Anything
+-- else (indented or blank) attaches to the chunk above it.
+topLevel : String -> Bool
+topLevel l = l /= "" && not (startsWith " " l) && not (startsWith "\t" l)
+
+isBody : String -> Bool
+isBody l = not (topLevel l)
+
+-- Interface named by a top-level `impl X` / `export impl X` header, else "".
+implIface : String -> String
+implIface l = if topLevel l then wordsIface (split " " l) else ""
+
+wordsIface : List String -> String
+wordsIface [] = ""
+wordsIface (w :: rest) =
+  if w == "export" then implName rest else implName (w :: rest)
+
+implName : List String -> String
+implName ("impl" :: n :: _) = n
+implName _ = ""
+
+-- (interface, lines) per top-level chunk; "" interface for non-impl chunks.
+chunks : List String -> List (String, List String)
+chunks [] = []
+chunks (l :: rest) =
+  (implIface l, l :: takeWhile isBody rest) :: chunks (dropWhile isBody rest)
+
+bodiesOf : String -> List (String, List String) -> List (List String)
+bodiesOf _ [] = []
+bodiesOf iface ((ifc, ls) :: rest) =
+  if ifc == iface then ls :: bodiesOf iface rest else bodiesOf iface rest
+
+-- Slot k of the tagged chunks receives the body of tagged chunk n-1-k.
+placeAll : String ->
+  List (List String) ->
+  List (String, List String) ->
+  List (String, List String)
+placeAll _ _ [] = []
+placeAll iface pending ((ifc, ls) :: rest) =
+  if ifc /= iface then
+    (ifc, ls) :: placeAll iface pending rest
+  else
+    placeTagged iface pending ifc ls rest
+
+placeTagged : String ->
+  List (List String) ->
+  String ->
+  List String ->
+  List (String, List String) ->
+  List (String, List String)
+placeTagged iface (p :: ps) ifc _ rest = (ifc, p) :: placeAll iface ps rest
+placeTagged iface [] ifc ls rest = (ifc, ls) :: placeAll iface [] rest
+
+revList : List a -> List a
+revList xs = revAcc xs []
+
+revAcc : List a -> List a -> List a
+revAcc [] acc = acc
+revAcc (x :: rest) acc = revAcc rest (x :: acc)
+
+flatten : List (String, List String) -> List String
+flatten [] = []
+flatten ((_, ls) :: rest) = ls ++ flatten rest
+
+endEach : String -> List String -> String
+endEach _ [] = ""
+endEach sep (l :: rest) = l ++ sep ++ endEach sep rest
+
+joinSemi : List String -> String
+joinSemi [] = ""
+joinSemi [r] = r
+joinSemi (r :: rest) = "\{r}; \{joinSemi rest}"
+
+permuteText : String -> String -> String
+permuteText iface text = permuteChunks iface (chunks (lines text))
+
+permuteChunks : String -> List (String, List String) -> String
+permuteChunks iface cs =
+  endEach "\n" (flatten (placeAll iface (revList (bodiesOf iface cs)) cs))
+
+-- Interfaces with >= 2 `impl` headers in one fixture (the script's PAIRS grep).
+qualifying : String -> List String
+qualifying text = qualifyingIn (lines text)
+
+qualifyingIn : List String -> List String
+qualifyingIn ls =
+  filter
+    (n => length (filter (l => implIface l == n) ls) >= 2)
+    (nub (filter (/= "") (map implIface ls)))
+
+pairsIn : String ->
+  List String ->
+  <FileRead> Result String (List (String, String))
+pairsIn _ [] = Ok []
+pairsIn dir (f :: rest) = match readFile "\{dir}/\{f}"
+  Err e => Err "could not read \{f}: \{e}"
+  Ok t => map (withPairs f t) (pairsIn dir rest)
+
+withPairs : String -> String -> List (String, String) -> List (String, String)
+withPairs f t more = map (i => (f, i)) (qualifying t) ++ more
+
+-- ── Verdicts (pure) ──────────────────────────────────────────────────────────
+
+-- The first "code" of a `check --json` report, or "" (the script's grep | head -1).
+codeOf : String -> String
+codeOf s = match split "\"code\":\"" s
+  _ :: r :: _ => codeEnd r
+  _ => ""
+
+codeEnd : String -> String
+codeEnd r = match split "\"" r
+  c :: _ => c
+  _ => ""
+
+-- Exit 126/127: the process never launched, so it cannot grade anything.
+launchFail : Int -> Bool
+launchFail code = code == 126 || code == 127
+
+outcome : List String -> Expectation
+outcome [] = pass
+outcome rs = fail (joinSemi rs)
+
+rejectReasons : String -> String -> List String
+rejectReasons a b =
+  if a == b then [] else ["reject code changed under permutation: \{a} -> \{b}"]
+
+-- (verdict label, reasons) from the two `check --json` results.
+checkVerdict : Int -> String -> Int -> String -> (String, List String)
+checkVerdict oc ocode pc pcode =
+  if launchFail oc || launchFail pc then
+    (
+      "LAUNCH",
+      ["check could not launch (exit \{intToString oc}/\{intToString pc})"],
+    )
+  else if oc == 0 && pc == 0 then
+    ("ACCEPT/ACCEPT", [])
+  else if oc /= 0 && pc /= 0 then
+    ("REJECT/REJECT", rejectReasons (codeOf ocode) (codeOf pcode))
+  else
+    ("DIVERGED", ["check verdict itself flipped under permutation"])
+
+runReasons : Int -> String -> Int -> String -> List String
+runReasons oc oo pc po =
+  if launchFail oc || launchFail pc then
+    ["run could not launch (exit \{intToString oc}/\{intToString pc})"]
+  else if oc == 0 && pc == 0 then
+    if oo == po then [] else ["run stdout differs under permutation"]
+  else if oc /= 0 && pc /= 0 then
+    if oc == pc then
+      []
+    else
+      [
+        "run fails on both orderings but with DIFFERENT exit codes: orig=\{intToString oc} perm=\{intToString pc}",
+      ]
+  else
+    [
+      "run exit code diverges under permutation: orig=\{intToString oc} perm=\{intToString pc} (order changed whether the program runs at all)",
+    ]
+
+-- oOk / pOk: build exited 0 AND produced an executable.
+buildReasons : Int -> Int -> Bool -> Bool -> String -> String -> List String
+buildReasons ob pb oOk pOk oo po =
+  if launchFail ob || launchFail pb then
+    ["build could not launch (exit \{intToString ob}/\{intToString pb})"]
+  else if oOk && pOk then
+    if oo == po then [] else ["build stdout differs under permutation"]
+  else if not oOk && not pOk then
+    if ob == pb then
+      []
+    else
+      [
+        "build fails on both orderings but with DIFFERENT exit codes: orig=\{intToString ob} perm=\{intToString pb}",
+      ]
+  else
+    [
+      "build exit code (or missing binary) diverges under permutation: orig=\{intToString ob}(ok=\{boolText oOk}) perm=\{intToString pb}(ok=\{boolText pOk})",
+    ]
+
+boolText : Bool -> String
+boolText b = if b then "1" else "0"
+
+-- ── Spawning rows ────────────────────────────────────────────────────────────
+
+-- Stdout of a built binary (both must be run only when both builds succeeded).
+binOut : String -> <Exec> Result String String
+binOut p = match boundedVerb p []
+  Err e => Err e
+  Ok (code, out, _) =>
+    if launchFail code then
+      Err "built binary could not launch (exit \{intToString code})"
+    else
+      Ok out
+
+bothOuts : Bool -> String -> String -> <Exec> Result String (String, String)
+bothOuts False _ _ = Ok ("", "")
+bothOuts True o p = match binOut o
+  Err e => Err e
+  Ok oo => withSecond oo (binOut p)
+
+withSecond : String -> Result String String -> Result String (String, String)
+withSecond oo r = map (po => (oo, po)) r
+
+-- Build both orderings, check each produced an executable, compare the binaries.
+buildAndCompare : String ->
+  String ->
+  List String ->
+  Int ->
+  Int ->
+  <Exec> Expectation
+buildAndCompare dir origBin runRs ob pb =
+  match boundedVerb "sh" ["-c", "test -x \"$1\"", "x", origBin]
+    Err e => fail "could not test -x \{origBin}: \{e}"
+    Ok (oxc, _, _) =>
+      if launchFail oxc then
+        fail "test -x could not launch on \{origBin}: exit \{intToString oxc}"
+      else match boundedVerb "sh" [
+        "-c",
+        "test -x \"$1\"",
+        "x",
+        "\{dir}/perm.bin",
+      ]
+        Err e => fail "could not test -x \{dir}/perm.bin: \{e}"
+        Ok (pxc, _, _) =>
+          if launchFail pxc then
+            fail
+              "test -x could not launch on \{dir}/perm.bin: exit \{intToString pxc}"
+          else
+            compareBuilds
+              dir
+              origBin
+              runRs
+              (ob == 0 && oxc == 0)
+              (pb == 0 && pxc == 0)
+              ob
+              pb
+
+compareBuilds : String ->
+  String ->
+  List String ->
+  Bool ->
+  Bool ->
+  Int ->
+  Int ->
+  <Exec> Expectation
+compareBuilds dir origBin runRs oOk pOk ob pb =
+  match bothOuts (oOk && pOk) origBin "\{dir}/perm.bin"
+    Err e => fail "could not run a built binary: \{e}"
+    Ok (oo, po) => outcome (runRs ++ buildReasons ob pb oOk pOk oo po)
+
+-- The ACCEPT/ACCEPT arm: run both orderings, then build both and compare.
+acceptRows : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+acceptRows bin dir origPath permPath = match boundedVerb bin ["run", origPath]
+  Err e => fail "could not spawn run on \{origPath}: \{e}"
+  Ok (orc, oro, _) =>
+    if launchFail orc then
+      fail "run could not launch on \{origPath}: exit \{intToString orc}"
+    else match boundedVerb bin ["run", permPath]
+      Err e => fail "could not spawn run on \{permPath}: \{e}"
+      Ok (prc, pro, _) =>
+        if launchFail prc then
+          fail "run could not launch on \{permPath}: exit \{intToString prc}"
+        else match boundedVerb bin ["build", origPath, "-o", "\{dir}/orig.bin"]
+          Err e => fail "could not spawn build on \{origPath}: \{e}"
+          Ok (ob, _, _) =>
+            if launchFail ob then
+              fail
+                "build could not launch on \{origPath}: exit \{intToString ob}"
+            else match boundedVerb bin [
+              "build",
+              permPath,
+              "-o",
+              "\{dir}/perm.bin",
+            ]
+              Err e => fail "could not spawn build on \{permPath}: \{e}"
+              Ok (pb, _, _) =>
+                if launchFail pb then
+                  fail
+                    "build could not launch on \{permPath}: exit \{intToString pb}"
+                else
+                  buildAndCompare
+                    dir
+                    "\{dir}/orig.bin"
+                    (runReasons orc oro prc pro)
+                    ob
+                    pb
+
+decide : String ->
+  String ->
+  String ->
+  String ->
+  (String, List String) ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+decide bin dir origPath permPath verdictPair =
+  if fst verdictPair == "ACCEPT/ACCEPT" then
+    acceptRows bin dir origPath permPath
+  else
+    outcome (snd verdictPair)
+
+verdictRow : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+verdictRow bin dir origPath permPath =
+  match boundedVerb bin ["check", "--json", origPath]
+    Err e => fail "could not spawn check on \{origPath}: \{e}"
+    Ok (oc, oo, oe) =>
+      if launchFail oc then
+        fail "check could not launch on \{origPath}: exit \{intToString oc}"
+      else match boundedVerb bin ["check", "--json", permPath]
+        Err e => fail "could not spawn check on \{permPath}: \{e}"
+        Ok (pc, po, pe) =>
+          if launchFail pc then
+            fail "check could not launch on \{permPath}: exit \{intToString pc}"
+          else
+            decide
+              bin
+              dir
+              origPath
+              permPath
+              (checkVerdict oc (oo ++ oe) pc (po ++ pe))
+
+rowIn : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+rowIn bin fixDir dir f iface =
+  rowPaths bin dir "\{fixDir}/\{f}" "\{dir}/\{f}__\{iface}_perm.mdk" iface
+
+rowPaths : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Expectation
+rowPaths bin dir origPath permPath iface = match readFile origPath
+  Err e => fail "could not read \{origPath}: \{e}"
+  Ok text => match writeFile permPath (permuteText iface text)
+    Err e => fail "could not write \{permPath}: \{e}"
+    Ok _ => verdictRow bin dir origPath permPath
+
+rowFor : String ->
+  String ->
+  (String, String) ->
+  <Exec, IO, FileRead, FileWrite> (String, Expectation)
+rowFor bin fixDir (f, iface) =
+  ("\{f} [\{iface}]", withScratchDir (dir => rowIn bin fixDir dir f iface))
+
+check : <Exec, IO, FileRead, FileWrite> Expectation
+check = checkIn medakaBin (underRoot "test/dict_fixtures")
+
+-- The script globbed `*.mdk` directly in the fixture dir (no recursion). The
+-- enumerator returns full paths, recursive; keep top-level `.mdk` leaves only.
+-- A leaf with a "/" lives in a subdirectory (multi-file fixture) and is excluded.
+directLeaves : String -> List String -> List String
+directLeaves fixDir names =
+  filter
+    (l => endsWith ".mdk" l && not (contains "/" l))
+    (map (p => replaceAll "\{fixDir}/" "" p) names)
+
+checkIn : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
+checkIn bin fixDir = match fixtureFiles fixDir
+  Err e => fail "could not enumerate test/dict_fixtures: \{e}"
+  Ok names => match pairsIn fixDir (directLeaves fixDir names)
+    Err e => fail e
+    Ok ps => expectAll [
+      expectAtLeast 135 (length ps),
+      expectEach (map (p => rowFor bin fixDir p) ps),
+    ]
+
+test "DICT-SEMANTICS section 4: declaration-order permutation keeps verdict, run and build" =
+  check

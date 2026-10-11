@@ -14,8 +14,8 @@ scattered across this tree. Where each lives now:
 |---|---|---|
 | 1 | verdict + value + diagnostic code, and the coverage self-audit | `test/diff_compiler_dict_semantics_test.mdk` |
 | 2 | the `medaka check` scheme line | `test/diff_compiler_dict_semantics_test.mdk` |
-| 3 | emitted LLVM IR (`build --keep-ir`) | `test/diff_compiler_dict_semantics_ir.sh` |
-| 4 | declaration-order permutation | `test/diff_compiler_dict_semantics_permute.sh` |
+| 3 | emitted LLVM IR (`build --keep-ir`) | `test/diff_compiler_dict_semantics_ir_test.mdk` |
+| 4 | declaration-order permutation | `test/diff_compiler_dict_semantics_permute_test.mdk` |
 | 5 | the per-verb warning surface | `test/diff_compiler_dict_semantics_test.mdk` |
 | 6 | diagnostic spans | `test/diff_compiler_dict_semantics_test.mdk` |
 
@@ -442,7 +442,7 @@ NOT yet cover:
   * §2 -- the dictionary RECORD SHAPE itself (`word`/`reqs`/`supers` as real
     fields, landed #993/#679). This section pins only its observable
     consequences; asserting the representation directly is
-    `diff_compiler_dict_semantics_ir.sh`'s job, not this one's. §2's
+    `diff_compiler_dict_semantics_ir_test.mdk`'s job, not this one's. §2's
     method-level-constraint exception is behaviourally observable and IS
     covered here, by s2-method-level-constraint-abstract.
   * §3 W2 -- instance-resolution termination (the Paterson/coverage-style
