@@ -43679,11 +43679,12 @@ numDictObls (app :: rest) =
 -- (`callPredOf` / `oblPredOf`) and map it through the ONE `vecOblOfPred` — so the
 -- residual reduction §4 `gen` requires cannot be present on one channel and absent
 -- from the other (this file's signature failure mode).
-forwardedVecObls : List Int ->
+forwardedVecObls : Bool ->
+  List Int ->
   List (IfaceRef, List Mono, Option Loc) ->
   List VecObl
-forwardedVecObls boundIds callObls =
-  flatMap (vecOblOfPred boundIds) (flatMap callPredOf callObls)
+forwardedVecObls generalizing boundIds callObls =
+  flatMap (vecOblOfPred generalizing boundIds) (flatMap callPredOf callObls)
 
 -- the (interface, argument-vector) predicate a constrained-callee call-delta entry
 -- carries.  An entry whose interface name is unrecoverable contributes nothing: the
@@ -45131,8 +45132,8 @@ schemeOblsForMember sigTvMaps callObls addedObls m sch =
   match lookupSigTvMap m sigTvMaps
     Some _ => declaredSchemeOblsFor sigTvMaps m (schemeIds sch)
     None =>
-      schemeObligationsOf (schemeIds sch) addedObls
-        ++ forwardedVecObls (schemeIds sch) callObls
+      schemeObligationsOf True (schemeIds sch) addedObls
+        ++ forwardedVecObls True (schemeIds sch) callObls
 
 -- the DECLARED `=>` predicates of signed member [m], each as its argument vector of
 -- scheme-quantified tyvar ids.  A predicate is kept only if EVERY argument is a plain
@@ -45335,9 +45336,9 @@ eqIntList _ _ = False
 
 -- the (iface, var-id VECTOR) entries of the obligations whose discriminating monos are
 -- all quantified ids of this scheme.  Deduped on (iface, ids).
-schemeObligationsOf : List Int -> List UObligation -> List VecObl
-schemeObligationsOf boundIds obls =
-  flatMap (vecOblOfPred boundIds) (flatMap oblPredOf obls)
+schemeObligationsOf : Bool -> List Int -> List UObligation -> List VecObl
+schemeObligationsOf generalizing boundIds obls =
+  flatMap (vecOblOfPred generalizing boundIds) (flatMap oblPredOf obls)
 
 -- #991: the impl-channel arm only — a call-channel obligation is re-instantiated from
 -- `schemeObligationsRef` by its own path and contributes nothing here.
@@ -45373,10 +45374,14 @@ oblPredOf o = match o.oblProj
 -- residual that reduction leaves over this scheme's own quantified vars is deferred
 -- here.  Dropping it outright is what severed `nest x = tagOf (Wrap x)` from its
 -- `Tag a` (DICT-SEMANTICS §4 `gen` / §4.2 OD2).
-vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
-vecOblOfPred boundIds (iface, ds, loc) = match boundTyvarIds boundIds ds
-  Some ids => [VecObl { voIface = iface, voIds = ids, voArgs = [] }]
-  None => residualVecObls boundIds iface ds loc
+vecOblOfPred : Bool ->
+  List Int ->
+  (IfaceRef, List Mono, Option Loc) ->
+  List VecObl
+vecOblOfPred generalizing boundIds (iface, ds, loc) =
+  match boundTyvarIds boundIds ds
+    Some ids => [VecObl { voIface = iface, voIds = ids, voArgs = [] }]
+    None => residualVecObls generalizing boundIds iface ds loc
 
 -- ── #1549: residual reduction at `gen` ──────────────────────────────────────
 -- DICT-SEMANTICS §4 `gen` makes a binding's principal context `P'` = "the predicates
@@ -45415,9 +45420,14 @@ vecOblOfPred boundIds (iface, ds, loc) = match boundTyvarIds boundIds ds
 -- So publish the obligation's OWN snapshotted span for the duration of the reduction and
 -- restore `None` after, exactly as `checkNestedReqs` does, per `goalSiteLoc`'s scoping
 -- rule (outside a drain the selector must fall back rather than inherit a stale span).
-residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
-residualVecObls boundIds iface ds loc =
-  map keepBoundResidual (residualBoundPreds boundIds iface ds loc)
+residualVecObls : Bool ->
+  List Int ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  List VecObl
+residualVecObls generalizing boundIds iface ds loc =
+  map keepBoundResidual (residualBoundPreds generalizing boundIds iface ds loc)
 
 -- S-inferred-vector-supply: the reduction itself, factored out of `residualVecObls` so
 -- the DICT-ABSTRACTION channel can read the residual predicate's ARGUMENT MONOS and not
@@ -45428,17 +45438,20 @@ residualVecObls boundIds iface ds loc =
 -- Each entry is (interface, the residual's bare-tyvar ids IN ORDER, the residual's whole
 -- argument vector); a residual not entirely over this scheme's own quantified vars is
 -- dropped, exactly as `keepBoundResidual` always dropped it.
-residualBoundPreds : List Int ->
+residualBoundPreds : Bool ->
+  List Int ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   List (IfaceRef, List Int, List Mono)
-residualBoundPreds boundIds iface ds loc
+residualBoundPreds generalizing boundIds iface ds loc
   | isSome (boundTyvarIds boundIds ds) = []
   | not (anyIn (flatMap monoUnboundIds ds) boundIds) = []
   | otherwise =
     goalSiteLoc := loc
-    let preds = residualPredsOf reqWalkStart iface ds
+    -- A signed binder's variables are rigid in its body, so no use chooses them.
+    let chosen = if generalizing then boundIds else []
+    let preds = residualPredsOf chosen reqWalkStart iface ds
     goalSiteLoc := None
     flatMap (keepBoundResidualPred boundIds) preds
 
@@ -45558,11 +45571,15 @@ isBareTyvarMono m = match normalize m
 -- impl anywhere, so `unroutedResidual`'s existence test is False for it and it still
 -- takes the silent `[]`: 1578 is untouched by Door 4, which splits off only the case
 -- where an impl DOES match the goal.
--- ⚠️ A SECOND thing this arm's neighbourhood does NOT own: when the goal IS matched but
--- only the GENERAL member of a specific-vs-general overlap can match a partially-free
--- vector, committing to that impl's `requires` saddles the binding with a constraint its
--- real (more specific, `requires`-free) instance never demanded — a FALSE REJECT, issue
--- 1579, likewise measured byte-identical before and after the `anyConcreteHead` widening.
+-- When the goal IS matched but a more specific instance still unifies with it (only the
+-- GENERAL member of a specific-vs-general overlap can match a partially-free vector),
+-- the matched instance is not the one every use selects, and committing to its
+-- `requires` saddles the binding with a constraint the more specific instance never
+-- demanded (issue 1579's false reject).  At a generalizing binder such a goal is
+-- therefore not reduced: `residualSelectionStable` keeps it in the scheme as written,
+-- and each use selects at its own instantiation (DICT-SEMANTICS §6.1.3).  [chosen] are
+-- the variables the binder's uses choose: the quantified variables of a generalizing
+-- binder, and none at a signed binder, whose goal commits as written.
 -- ⚠️ #1560: the terminal test is `anyConcreteHead`, NOT `allConcreteHeads`, and the
 -- difference is an S0.  `allConcreteHeads` is ALL-OR-NOTHING on the vector, so a MIXED
 -- argument vector — one argument concrete-headed, another a bare tyvar, e.g.
@@ -45597,8 +45614,12 @@ isBareTyvarMono m = match normalize m
 -- so the predicate would be dropped from the scheme and the dict prefix (issue 1562).
 -- The terminal test runs before the goal is entered, so a predicate that is already
 -- fully reduced is returned as the residual it is, never counted as a step.
-residualPredsOf : ReqWalk -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
-residualPredsOf walk iface args
+residualPredsOf : List Int ->
+  ReqWalk ->
+  IfaceRef ->
+  List Mono ->
+  List (IfaceRef, List Mono)
+residualPredsOf chosen walk iface args
   | not (anyConcreteHead args) = [(iface, args)]
   | otherwise =
     match reqWalkReported !goalSiteLoc (reqWalkEnter walk iface args)
@@ -45609,10 +45630,35 @@ residualPredsOf walk iface args
           iface
           args)
           None => unroutedResidual iface args
+          Some _ if not (residualSelectionStable chosen iface args) =>
+            [(iface, args)]
           Some (subst, reqs) =>
             flatMap
-              (r => residualPredsOf next (fst r) (snd r))
+              (r => residualPredsOf chosen next (fst r) (snd r))
               (map (reqToObligation subst) reqs)
+
+-- Whether every use of the binder selects the instance the goal matches now
+-- (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or among the
+-- instance heads that unify with it, those variables free and every other one rigid,
+-- one matches it and is ⊑ every other (`goalReach`'s stable minimum).
+residualSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
+residualSelectionStable chosen iface args =
+  let goalIds = dedupI (flatMap monoUnboundIds args)
+  if not (anyIn goalIds chosen) then
+    True
+  else
+    let rigidIds =
+      omFromNames
+        (map intToString (filterList (i => not (containsI i chosen)) goalIds))
+        omEmpty
+    let cands =
+      filterList
+        (c => rowCountsFor args (fst c))
+        (goalCandidates rigidIds args (goalRows iface args))
+    match goalReach args cands
+      ReachMany => False
+      ReachOne _ => True
+      ReachNone => True
 
 -- ── #1564 / Stage A "Door 4": the un-plumbed case is a LOUD reject ────────────
 -- `residualPredsOf`'s `None` arm conflates TWO facts, and since the instance axis went
@@ -47005,7 +47051,7 @@ residualInferredPredOf : List Int ->
   (IfaceRef, List Mono, Option Loc) ->
   List (IfaceRef, Int, List Mono)
 residualInferredPredOf boundIds (iface, ds, loc) =
-  flatMap leadInferredPred (residualBoundPreds boundIds iface ds loc)
+  flatMap leadInferredPred (residualBoundPreds True boundIds iface ds loc)
 
 -- the DIRECT arm's twin: a predicate every one of whose arguments is already a bound
 -- tyvar IS its own residual (`residualVecObls` returns [] for it by design), so its own
@@ -47107,9 +47153,11 @@ checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch =
       let declaredPairs = censusSuperClose (declaredPairsFor m regs)
       let boundIds = schemeIds sch
       let bodyVecs =
-        quantifiedVecObls boundIds (schemeObligationsOf boundIds addedObls)
+        quantifiedVecObls
+          boundIds
+          (schemeObligationsOf False boundIds addedObls)
       let fwdVecs =
-        quantifiedVecObls boundIds (forwardedVecObls boundIds callObls)
+        quantifiedVecObls boundIds (forwardedVecObls False boundIds callObls)
       let inferredB = inferredIfacePairs m boundIds
       let inferred =
         dedupIfacePairs
