@@ -20,7 +20,7 @@
 
 import io.{getEnvOr, runVerb}
 import json.{asInt, get, parse}
-import list.{somes, zipWith3}
+import list.{findMap, somes, zipWith3}
 import string.{
   contains,
   drop,
@@ -407,7 +407,7 @@ testAssertionCount path extraArgs =
    Each element is what `testAssertionCount` returns for that row, in the
    same order, with the same error text. At most `MEDAKA_TEST_JOBS` suites
    run at once when that is a positive integer, otherwise at most the number
-   of online processors, or 4 when that cannot be read.
+   of available processors, or 4 when that cannot be read.
 
    > testAssertionCounts [("no-such-suite.mdk", [])] == [testAssertionCount "no-such-suite.mdk" []]
    True -}
@@ -426,9 +426,11 @@ testAssertionCounts rows =
     spawned
 
 {- | How many `medaka test` runs start at once, in `testAssertionCounts` and
-   for the per-file children of `medaka test <dir>`:
+   for the per-file children of `medaka test <dir>`, and the batch width of
+   every fixture sweep in test/compiler_cli_test_support.mdk:
    `MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
-   online processors, or 4 when that cannot be read.
+   processors available to the process (nproc, else getconf), or 4 when
+   that cannot be read.
 
    > testJobs > 0
    True -}
@@ -438,13 +440,21 @@ testJobs = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
   Some n if n > 0 => n
   _ => onlineProcessors
 
--- The number of online processors, or 4 when it cannot be read.
+-- The processors this process may run on (`nproc` honours affinity masks and
+-- cgroup quotas), else the online count, else 4.
 onlineProcessors : <Exec> Int
-onlineProcessors = match runVerb "getconf" ["_NPROCESSORS_ONLN"]
+onlineProcessors =
+  findMap
+      ((cmd, args) => cpuCountFrom cmd args)
+      [("nproc", []), ("getconf", ["_NPROCESSORS_ONLN"])]
+    |> optionOr 4
+
+cpuCountFrom : String -> List String -> <Exec> Option Int
+cpuCountFrom cmd args = match runVerb cmd args
   Ok (0, out, _) => match toInt (trim out)
-    Some n if n > 0 => n
-    _ => 4
-  _ => 4
+    Some n if n > 0 => Some n
+    _ => None
+  _ => None
 
 -- The `medaka test` arguments that report the suite at `path` as JSON.
 assertionCountArgs : String -> List String -> List String

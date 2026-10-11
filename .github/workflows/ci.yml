@@ -4,12 +4,14 @@ name: CI
 # jobs on the Free plan. No self-hosted runner — a fork PR on a public repo with one
 # is arbitrary code execution on the runner host. Do not reintroduce one.
 #
-# ── Oracles build per shard; the binary builds once ─────────────────────────────
-# Two different questions. ORACLES: no gate needs all 54, so each shard builds only
-# the handful its own gates read (`build_oracles.sh --for '<pattern>'`, the same
-# derivation `test/preflight.sh` uses locally). THE BINARY (`build:` job, #1928): a
-# pure function of the checkout, so it builds exactly once and the other jobs
-# download it — never rebuilt per shard. History/measurements: dossier `ci.md`.
+# ── The oracles and the binary each build once ──────────────────────────────────
+# THE BINARY (`build:` job, #1928): a pure function of the checkout, so it builds
+# exactly once and the other jobs download it — never rebuilt per shard. ORACLES
+# (`oracles:` job, #3965): all but a few test/bin oracles are ONE multicall binary,
+# built once and downloaded by each shard, which hardlinks it under every name. A
+# shard still builds the few single oracles its own gates read
+# (`build_oracles.sh --for '<pattern>'`, the same derivation `test/preflight.sh`
+# uses locally). History/measurements: dossier `ci.md`.
 #
 # The drift check (`git diff --exit-code` after the gates run) lives INSIDE each
 # shard, not as a separate job — a fresh checkout in a fresh VM would never see
@@ -701,11 +703,86 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  gates:
-    # `build` is added to `needs` so the binaries exist; `detect` stays for its
-    # outputs. See the `if:` below for why this does NOT reintroduce the
-    # skipped-required-context hazard the header warns about.
+  # ── Build the multicall oracle ONCE per run (#3965) ──────────────────────────
+  # Every oracle in test/build_oracles.sh's ENTRIES except its MULTICALL_SINGLES
+  # is one binary, test/bin/oracle_multicall, hardlinked under each oracle's name
+  # (compiler/entries/oracle_multicall.mdk dispatches on that name). It costs
+  # about twice the largest single oracle whatever subset a shard needs, so it is
+  # built here once and each `gates` shard downloads this one file instead of
+  # building the oracles its gates read.
+  #
+  # Same shape as `build`: the job always runs and reports, only its steps are
+  # conditional. Not a required context. `!cancelled()` so a failed `build`
+  # still runs it, and it fails at the download, loudly, like every consumer.
+  #
+  # Cache: the content hash the per-shard oracle cache uses, WITHOUT the shard
+  # name or `oracle_key`, because every shard and every narrowed subset uses the
+  # same file. No partial `restore-keys` (file header).
+  oracles:
+    name: build the oracles once
     needs: [detect, build]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + downloaded binary)
+        if: needs.detect.outputs.docs_only != 'true'
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: artifact
+
+      - name: Restore the cached multicall oracle
+        id: multicall-cache
+        if: needs.detect.outputs.docs_only != 'true'
+        uses: actions/cache@v4
+        with:
+          path: test/bin/oracle_multicall
+          key: oracle-multicall-v1-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}-${{ hashFiles('.github/workflows/ci.yml', '.github/actions/**') }}
+
+      - name: Build the multicall oracle
+        if: needs.detect.outputs.docs_only != 'true' && steps.multicall-cache.outputs.cache-hit != 'true'
+        env:
+          ORACLE_TIMING_LOG: ${{ runner.temp }}/oracle-samples-oracles.tsv
+        run: FORCE=1 sh test/build_oracles.sh --build-multicall
+
+      # The same `oracle-cost/1` report a shard writes (#2209), under the shard
+      # name `oracles`; nothing on a cache hit or a pull_request.
+      - name: Write the oracle build timings
+        if: ${{ always() && needs.detect.outputs.docs_only != 'true' }}
+        env:
+          ORACLE_TIMING_LOG: ${{ runner.temp }}/oracle-samples-oracles.tsv
+          GATE_TIMING_SHARD: oracles
+        run: sh test/build_oracles.sh --write-timing-report "$RUNNER_TEMP/oracle-timings-oracles.json"
+
+      # ONE file: an artifact zip keeps neither hardlinks nor the execute bit, so
+      # each shard restores both itself (`build_oracles.sh --link-multicall`).
+      - name: Upload the multicall oracle
+        if: needs.detect.outputs.docs_only != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: oracle-multicall
+          path: test/bin/oracle_multicall
+          if-no-files-found: error
+          retention-days: 1
+
+      # Named `gate-timings-*` so test/gate_cost_collect.sh downloads it with the
+      # shards' reports.
+      - name: Upload the oracle build timings
+        if: ${{ always() && needs.detect.outputs.docs_only != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-timings-oracles
+          path: ${{ runner.temp }}/oracle-timings-oracles.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  gates:
+    # `build` and `oracles` are in `needs` so the binaries exist; `detect` stays
+    # for its outputs. See the `if:` below for why this does NOT reintroduce the
+    # skipped-required-context hazard the header warns about.
+    needs: [detect, build, oracles]
     # ⚠️ MUST NEVER EVALUATE FALSE FOR A REASON OTHER THAN THE WORKFLOW RUN ITSELF
     # BEING CANCELLED — this is a required context and a skipped job does not
     # report. The guard below runs on every outcome except that: `detect` failing
@@ -781,7 +858,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/did_key_all_engines' 'pds/test/protocol_all_engines' 'pds/test/read_routes_all_engines' 'pds/test/repo_vectors' 'bootstrap_eval' 'bootstrap_resolve' 'bootstrap_typecheck' 'diff_compiler_anf_identity' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_engines_part1' 'diff_compiler_bytes_census' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_mcp' 'diff_compiler_rejection_parity' 'diff_compiler_shadow_semantics' 'diff_compiler_partition_stability'"
+            pattern: "'pds/test/constant_time_parity' 'pds/test/constant_time_reductions' 'pds/test/did_key_all_engines' 'pds/test/protocol_all_engines' 'pds/test/read_routes_all_engines' 'pds/test/repo_vectors' 'bootstrap_eval' 'bootstrap_resolve' 'bootstrap_typecheck' 'diff_compiler_anf_identity' 'diff_compiler_ci_guard_failsafe' 'diff_compiler_engines_part1' 'diff_compiler_bytes_census' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_mcp' 'diff_compiler_rejection_parity' 'diff_compiler_partition_stability'"
             wasm_arm: "1"
           - name: gates_2
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
@@ -798,7 +875,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'diff_compiler_prose_classifier' 'parsec/test/check' 'pds/test/pbkdf2' 'pds/test/sha256_vectors' 'sqlite/test/inlang_test_oracle' 'sqlite/test/overflow_oracle' 'check_syntax_examples' 'diff_compiler_call_arity' 'diff_compiler_check_cli_modules' 'diff_compiler_check_wrapper_callers' 'diff_compiler_dict_semantics' 'diff_compiler_argtag_matrix' 'diff_compiler_doc' 'diff_compiler_doc_stdlib_reference' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_internal_extern' 'diff_compiler_lint_cache' 'diff_compiler_lint_baseline' 'diff_compiler_comment_shout_diff' 'diff_compiler_llvm_ffi' 'diff_compiler_os_entropy' 'diff_compiler_perf_stage_census' 'diff_compiler_ported' 'diff_compiler_prelude_shadow_census' 'diff_compiler_snapshot_frontend' 'diff_compiler_test_native' 'run_command_sigchld' 'effect_builtin_param_domain' 'native_fixtures/run' 'pds/test/deploy_config_lint' 'diff_compiler_catch_all_census'"
+            pattern: "'diff_compiler_prose_classifier' 'parsec/test/check' 'pds/test/secp256k1_point_vectors' 'pds/test/sha256_vectors' 'sqlite/test/inlang_test_oracle' 'sqlite/test/overflow_oracle' 'sqlite/test/writer_oracle' 'build_construct_coverage' 'diff_compiler_call_arity' 'diff_compiler_check_wrapper_callers' 'diff_compiler_dict_semantics' 'diff_compiler_argtag_matrix' 'diff_compiler_doc' 'diff_compiler_doc_stdlib_reference' 'diff_compiler_internal_extern' 'diff_compiler_lint_cache' 'diff_compiler_lint_baseline' 'diff_compiler_llvm_ffi' 'diff_compiler_os_entropy' 'diff_compiler_perf_stage_census' 'diff_compiler_ported' 'diff_compiler_prelude_shadow_census' 'run_command_sigchld' 'diff_compiler_cli_reject_floor' 'pds/test/deploy_config_lint' 'diff_compiler_catch_all_census'"
           - name: gates_3
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -821,7 +898,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/constant_time_parity' 'pds/test/constant_time_reductions' 'pds/test/constant_time_signing' 'pds/test/secp256k1_public_key' 'pds/test/trust_boundary_guards' 'sqlite/test/sql_oracle' 'diff_compiler_check_policy' 'diff_compiler_dict_semantics_permute' 'diff_compiler_ir_scaling' 'diff_compiler_lint_multi' 'diff_compiler_llvm_typed_ir' 'diff_compiler_llvm_typed' 'diff_compiler_parse_error_loc' 'diff_compiler_reach_fail_open' 'diff_compiler_references_scaling' 'diff_compiler_snapshot_bless' 'diff_compiler_stack_overflow' 'diff_compiler_stage_ir_scaling' 'diff_native_stack' 'effect_product_domain' 'manifest_emit' 'diff_compiler_gate_registry'"
+            pattern: "'gzip/test/deflate_oracle' 'pds/test/secp256k1_public_key' 'pds/test/trust_boundary_guards' 'sqlite/test/dml_oracle' 'sqlite/test/sql_oracle' 'diff_compiler_capability_matrix' 'diff_compiler_check_policy' 'diff_compiler_dict_semantics_permute' 'diff_compiler_index_oob' 'diff_compiler_ir_scaling' 'diff_compiler_lint_multi' 'diff_compiler_llvm_typed_ir' 'diff_compiler_llvm_typed' 'diff_compiler_parse_error_loc' 'diff_compiler_reach_fail_open' 'diff_compiler_references_scaling' 'diff_compiler_selfproc' 'diff_compiler_snapshot_bless' 'diff_compiler_stack_overflow' 'diff_compiler_stage_ir_scaling' 'diff_native_stack' 'effect_product_domain' 'manifest_emit' 'diff_compiler_gate_registry'"
             wasm_arm: "1"
           - name: gates_4
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
@@ -854,7 +931,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'gzip/test/deflate_oracle' 'pds/test/atsyntax_vectors' 'pds/test/constant_time_public_key' 'pds/test/hmac_vectors' 'pds/test/opaque_field_scalar' 'pds/test/rfc6979_vectors' 'bootstrap_lex' 'cross_project_deps' 'diff_compiler_codemod' 'diff_compiler_dict_semantics_ir' 'diff_compiler_dispatch_shape' 'diff_compiler_effect_polarity' 'diff_compiler_error_quality_baseline' 'diff_compiler_fmt' 'diff_compiler_fmt_write_safety' 'diff_compiler_index' 'diff_compiler_let_refute' 'diff_compiler_llvm_modules' 'diff_compiler_lsp' 'diff_compiler_prelude_obj' 'diff_compiler_project_enrolment' 'diff_compiler_references_tool' 'diff_compiler_rt_obj' 'diff_compiler_run_entry_subdir' 'diff_compiler_run_stdout_flush' 'diff_compiler_slice_oob' 'diff_compiler_snapshot_wasm_input' 'diff_compiler_wasm_shim_parity' 'effect_set_domain' 'pr_helper_test' 'selfcompile_emit' 'selfcompile_lex' 'diff_compiler_check_ir_floor' 'diff_compiler_emitted_code_floor' 'pds/test/serve_e2e'"
+            pattern: "'pds/test/atsyntax_vectors' 'pds/test/constant_time_signing' 'pds/test/opaque_field_scalar' 'pds/test/rfc6979_vectors' 'bootstrap_lex' 'check_syntax_examples' 'diff_compiler_codemod' 'diff_compiler_dict_semantics_ir' 'diff_compiler_dispatch_shape' 'diff_compiler_fmt_roundtrip' 'diff_compiler_fmt' 'diff_compiler_fmt_write_safety' 'diff_compiler_llvm_modules' 'diff_compiler_lsp' 'diff_compiler_prelude_obj' 'diff_compiler_project_enrolment' 'diff_compiler_shadow_semantics' 'diff_compiler_slice_oob' 'effect_set_domain' 'pr_helper_test' 'selfcompile_emit' 'selfcompile_lex' 'diff_compiler_emitted_code_floor' 'pds/test/serve_e2e'"
           - name: gates_6
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -870,7 +947,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/secp256k1_point_vectors' 'sqlite/test/dml_oracle' 'sqlite/test/writer_oracle' 'build_construct_coverage' 'diff_compiler_check' 'diff_compiler_eval' 'diff_compiler_perf_scaling' 'diff_native_cli' 'diff_compiler_tier_drift' 'diff_compiler_cli_reject_floor'"
+            pattern: "'pds/test/hmac_vectors' 'pds/test/pbkdf2' 'cross_project_deps' 'diff_compiler_check_cli_modules' 'diff_compiler_check_json' 'diff_compiler_check' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_error_quality_baseline' 'diff_compiler_eval' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_index' 'diff_compiler_let_refute' 'diff_compiler_comment_shout_diff' 'diff_compiler_llvm' 'diff_compiler_perf_scaling' 'diff_compiler_references_tool' 'diff_compiler_rt_obj' 'diff_compiler_run_entry_subdir' 'diff_compiler_run_stdout_flush' 'diff_compiler_snapshot_frontend' 'diff_compiler_snapshot_wasm_input' 'diff_compiler_test_native' 'diff_compiler_wasm_shim_parity' 'diff_native_cli' 'effect_builtin_param_domain' 'native_fixtures/run' 'diff_compiler_closure_alloc' 'diff_compiler_check_ir_floor'"
           - name: gates_7
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -886,7 +963,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'build_cmd' 'gzip/test/inflate_oracle' 'pds/test/signing_corpus' 'pds/test/store_persistence' 'sqlite/test/index_write_oracle' 'sqlite/test/oracle' 'diff_compiler_build' 'diff_compiler_capability_matrix' 'diff_compiler_check_json' 'diff_compiler_stdlib_conventions' 'diff_compiler_eval_json' 'diff_compiler_eval_scaling' 'diff_compiler_fmt_roundtrip' 'diff_compiler_import_order' 'diff_compiler_ir_size' 'diff_compiler_llvm' 'diff_compiler_run_check_agreement' 'diff_compiler_source_bytes' 'diff_compiler_tmc_parity' 'selfcompile_build_fixpoint' 'diff_compiler_closure_alloc' 'diff_compiler_cli_help_conformance' 'dist_install_smoke'"
+            pattern: "'build_cmd' 'gzip/test/inflate_oracle' 'pds/test/signing_corpus' 'pds/test/store_persistence' 'sqlite/test/index_write_oracle' 'sqlite/test/oracle' 'diff_compiler_build' 'diff_compiler_stdlib_conventions' 'diff_compiler_eval_json' 'diff_compiler_eval_scaling' 'diff_compiler_import_order' 'diff_compiler_ir_size' 'diff_compiler_run_check_agreement' 'diff_compiler_source_bytes' 'diff_compiler_tmc_parity' 'selfcompile_build_fixpoint' 'diff_compiler_tier_drift' 'diff_compiler_cli_help_conformance' 'dist_install_smoke'"
           - name: gates_8
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -905,7 +982,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'diff_compiler_ci_shard_coverage' 'lsp_harness' 'pds/test/car_vectors' 'pds/test/dagcbor_cid_vectors' 'pds/test/ecdsa_vectors' 'pds/test/encodings_vectors' 'pds/test/field_vectors' 'pds/test/lexjson_vectors' 'pds/test/mst_vectors' 'pds/test/scalar_vectors' 'pds/test/signing_parity' 'pds/test/vector_provenance' 'check_build_oracles_for_consistency' 'diff_compiler_engines_part2' 'diff_compiler_engines_part3' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_index_oob' 'diff_compiler_preflight_base' 'diff_compiler_selfproc' 'diff_compiler_test_typecheck' 'diff_net' 'diff_async' 'effect_param_domain' 'diff_compiler_guide_render' 'pds/test/lib_boundary'"
+            pattern: "'diff_compiler_ci_shard_coverage' 'lsp_harness' 'pds/test/car_vectors' 'pds/test/constant_time_public_key' 'pds/test/dagcbor_cid_vectors' 'pds/test/ecdsa_vectors' 'pds/test/encodings_vectors' 'pds/test/field_vectors' 'pds/test/lexjson_vectors' 'pds/test/mst_vectors' 'pds/test/scalar_vectors' 'pds/test/signing_parity' 'pds/test/vector_provenance' 'check_build_oracles_for_consistency' 'diff_compiler_effect_polarity' 'diff_compiler_engines_part2' 'diff_compiler_engines_part3' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_preflight_base' 'diff_compiler_test_typecheck' 'diff_net' 'diff_async' 'effect_param_domain' 'diff_compiler_guide_render' 'pds/test/lib_boundary'"
             wasm_arm: "1"
           # GENERATED:END gates-matrix
     # The job name IS the required status-check context. It is a bare executor
@@ -1162,7 +1239,8 @@ jobs:
           wasm: ${{ matrix.wasm_arm != '' }}
           binary: artifact
 
-      # This shard's oracle set, keyed on the compiler/build-script inputs PLUS
+      # This shard's SINGLE oracles (the ones the multicall does not cover),
+      # keyed on the compiler/build-script inputs PLUS
       # the shard's own `pattern` (which oracles get built is DERIVED from the
       # pattern, so a pattern change without the key changing would restore a
       # `test/bin` missing the newly-needed oracles) PLUS `detect`'s `oracle_key`
@@ -1180,17 +1258,39 @@ jobs:
         uses: actions/cache@v4
         with:
           path: test/bin
-          key: oracles-${{ matrix.name }}-v3-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}-${{ hashFiles('.github/workflows/ci.yml', '.github/actions/**') }}-${{ needs.detect.outputs.oracle_key }}
+          key: oracles-${{ matrix.name }}-v4-${{ hashFiles('compiler/**', 'stdlib/**', 'runtime/**', 'test/build_native_medaka.sh', 'test/bootstrap_from_seed.sh', 'test/build_oracles.sh', 'Makefile') }}-${{ hashFiles('.github/workflows/ci.yml', '.github/actions/**') }}-${{ needs.detect.outputs.oracle_key }}
 
-      # Only the oracles THIS shard's gates actually read. See the header.
-      # Skipped only on an exact cache hit above — a miss always rebuilds with
-      # FORCE=1, so a restored oracle is never trusted on mtime alone (a cache
-      # restore sets mtimes to extraction time, not original-build time, which
-      # would otherwise defeat build_oracles.sh's own staleness check).
-      - name: Build the oracles this shard needs
+      # The multicall oracle the `oracles` job built. Downloaded beside the tree
+      # and copied in after an `rm`, so it never writes through a hardlink a
+      # cache restore left in test/bin.
+      - name: Download the multicall oracle
+        if: steps.plan.outputs.has_work == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: oracle-multicall
+          path: ${{ runner.temp }}/oracle-multicall
+
+      # Every shard links it, cache hit or not: the zip kept neither the
+      # hardlinks nor the execute bit.
+      - name: Link the multicall oracle
+        if: steps.plan.outputs.has_work == 'true'
+        run: |
+          mkdir -p test/bin
+          rm -f test/bin/oracle_multicall
+          cp "$RUNNER_TEMP/oracle-multicall/oracle_multicall" test/bin/oracle_multicall
+          chmod +x test/bin/oracle_multicall
+          sh test/build_oracles.sh --link-multicall
+
+      # Only the SINGLE oracles this shard's gates read; the multicall names are
+      # skipped by ORACLE_MULTICALL_PROVIDED, never by an mtime comparison (a
+      # download or cache restore sets mtimes to extraction time). Skipped only
+      # on an exact cache hit above — a miss always rebuilds with FORCE=1, so a
+      # restored oracle is never trusted on mtime alone.
+      - name: Build the single oracles this shard needs
         if: steps.plan.outputs.has_work == 'true' && steps.oracle-cache.outputs.cache-hit != 'true'
         env:
           ORACLE_TIMING_LOG: ${{ runner.temp }}/oracle-samples-${{ matrix.name }}.tsv
+          ORACLE_MULTICALL_PROVIDED: '1'
         run: FORCE=1 sh test/build_oracles.sh --for ${{ steps.plan.outputs.pats }}
 
       # build_oracles.sh does not build the wasm emitter oracles (#597) — this

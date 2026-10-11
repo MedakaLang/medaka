@@ -111,6 +111,7 @@ ALLOW_SET=0
 MAX_SAMPLES=9
 MAX_RUNS=24
 DRY=0
+ALLOW_NO_JOBWALL=0
 REGISTRY=""
 reports=""
 
@@ -164,6 +165,10 @@ while [ "$#" -gt 0 ]; do
     --max-samples)  MAX_SAMPLES="$2"; shift 2 ;;
     --max-runs)     MAX_RUNS="$2"; shift 2 ;;
     --dry-run)      DRY=1; shift ;;
+    # Admit a gate report that carries no `jobWallMs`. Only for hand-carried
+    # artifacts of a run that predates the job-wall field; the collector never
+    # passes it, so an automated ingest cannot record a run without one.
+    --allow-missing-job-wall) ALLOW_NO_JOBWALL=1; shift ;;
     # Print the gate-SET digest of a report and exit, computing NOTHING else.
     # Exists so test/diff_compiler_gate_cost.sh can check this awk against
     # `gate_cost.gateSetDigest` on the Medaka side: the two are a mirror pair
@@ -289,10 +294,31 @@ for r in $reports; do
   jobs="$(_top "$r" jobs)"
   parallel="$(_top "$r" parallel)"
   rowms="$(_top "$r" rowElapsedMs)"
+  # jobWallMs: the Actions job's started_at -> completed_at for this shard's
+  # matrix job. run_gates.sh cannot produce it (it runs inside the job), so
+  # test/gate_cost_collect.sh adds it from the Actions API. Unlike the three
+  # above it IS part of admission: a report without it would record a run that
+  # the balancer's job-wall calibration can only call "not gradeable".
+  jobwall="$(_top "$r" jobWallMs)"
+  case "$jobwall" in
+    "")
+      if [ "$ALLOW_NO_JOBWALL" != 1 ]; then
+        echo "gate_cost_ingest: REFUSED — $r carries no jobWallMs (the shard's Actions job wall, started_at to completed_at)."
+        echo "  test/gate_cost_collect.sh adds it from the Actions API; a report taken straight from the"
+        echo "  artifact has none. Without it the run's job-wall calibration is ungradeable. Nothing written."
+        echo "  (--allow-missing-job-wall admits a legacy artifact deliberately.)"
+        exit 1
+      fi
+      ;;
+    *[!0-9]*)
+      echo "gate_cost_ingest: REFUSED — $r has a non-integer jobWallMs '$jobwall'. Nothing written."
+      exit 1
+      ;;
+  esac
   gdig="$(_digest "$r")"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$key" "$rid" "$att" "$shd" "$ev" "$sha" "$ref" "$dat" "$ngates" \
-    "$jobs" "$parallel" "$rowms" "$gdig" >>"$TMP/runs.tsv"
+    "$jobs" "$parallel" "$rowms" "$gdig" "$jobwall" >>"$TMP/runs.tsv"
   # name / ms, for the gates that actually PASSED. The RUN this sample came
   # from rides along as a fourth column (FR-1, #2222 review S0-1): it is
   # already in hand here, and discarding it is what forced the reader to infer
@@ -434,8 +460,9 @@ BEGIN {
     # with the same optionality: it is what makes a same-COUNT gate-set SWAP
     # visible to `balCalibStaleness`, which a count alone cannot see.
     digv  = (f[13] == "" ? "null" : f[13] + 0)
-    runjson[k] = sprintf("    {\"key\": \"%s\", \"runId\": \"%s\", \"runAttempt\": \"%s\", \"shard\": \"%s\", \"event\": \"%s\", \"sha\": \"%s\", \"ref\": \"%s\", \"date\": \"%s\", \"jobs\": %s, \"parallel\": %s, \"rowElapsedMs\": %s, \"gates\": %s, \"gatesDigest\": %s}",
-                         jesc(f[1]), jesc(f[2]), jesc(f[3]), jesc(f[4]), jesc(f[5]), jesc(f[6]), jesc(f[7]), jesc(f[8]), jobsv, parv, remv, f[9] + 0, digv)
+    jwv   = (f[14] == "" ? "null" : f[14] + 0)
+    runjson[k] = sprintf("    {\"key\": \"%s\", \"runId\": \"%s\", \"runAttempt\": \"%s\", \"shard\": \"%s\", \"event\": \"%s\", \"sha\": \"%s\", \"ref\": \"%s\", \"date\": \"%s\", \"jobs\": %s, \"parallel\": %s, \"rowElapsedMs\": %s, \"jobWallMs\": %s, \"gates\": %s, \"gatesDigest\": %s}",
+                         jesc(f[1]), jesc(f[2]), jesc(f[3]), jesc(f[4]), jesc(f[5]), jesc(f[6]), jesc(f[7]), jesc(f[8]), jobsv, parv, remv, jwv, f[9] + 0, digv)
     accepted[k] = 1; nacc++
   }
   close(runsf)

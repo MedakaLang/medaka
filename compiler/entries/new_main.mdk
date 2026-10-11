@@ -7,10 +7,14 @@
 
 import tools.new_cmd.{newProject}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   [name] =>
     let code = newProject name
     if code == 0 then () else exit code
   _ =>
     let _ = ePutStrLn "Usage: medaka new <name>"
     exit 2
+
+main = oracleMain ()

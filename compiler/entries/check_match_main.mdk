@@ -17,7 +17,9 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{checkOneMatchToLines}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   [runtimePath, targetPath] => withFiles runtimePath targetPath
   _ =>
     ePutStrLn
@@ -36,3 +38,5 @@ withTarget rsrc targetPath = match readFile targetPath
 runCheckMatch : String -> String -> String
 runCheckMatch rsrc tsrc =
   checkOneMatchToLines (desugar (parse rsrc)) (desugar (parse tsrc))
+
+main = oracleMain ()

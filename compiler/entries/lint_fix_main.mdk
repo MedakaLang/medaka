@@ -10,7 +10,9 @@
 import frontend.parser.{parseWithPositions}
 import tools.lint.{applyFixes}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   [targetPath] => withTarget targetPath
   _ =>
     ePutStrLn "usage: medaka run compiler/entries/lint_fix_main.mdk <file.mdk>"
@@ -22,3 +24,5 @@ withTarget targetPath = match readFile targetPath
     let (newSrc, _) = applyFixes [] [] targetSrc decls pos
     putStr newSrc
   Err msg => ePutStrLn msg
+
+main = oracleMain ()

@@ -24,7 +24,9 @@ import eval.eval.{ffiExternNamesRef}
 import support.util.{isEmptyL, isNonEmptyL}
 import entries.entry_support.{rootsOrDefault}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   coreP :: "--ffi-reset-control" :: externEntry :: pureEntry :: roots =>
     runFfiResetControl
       coreP
@@ -77,3 +79,5 @@ runFfiResetControl coreP externEntry pureEntry roots = match readFile coreP
         else
           panic
             "core_ir modules: FFI extern-name state was not seeded and reset"
+
+main = oracleMain ()

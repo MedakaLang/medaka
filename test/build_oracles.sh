@@ -46,6 +46,19 @@
 #                                              # DERIVE ONLY: print the oracle names
 #                                              # a pattern resolves to; build nothing,
 #                                              # touch no clang/libgc/medaka (#832)
+#          sh test/build_oracles.sh --build-multicall  # build (if stale) the
+#                                              # multicall oracle and hardlink every
+#                                              # name it covers (see "The multicall
+#                                              # oracle" below)
+#          sh test/build_oracles.sh --link-multicall   # hardlink the names to an
+#                                              # existing test/bin/oracle_multicall
+#                                              # (CI: after downloading it); builds nothing
+#          sh test/build_oracles.sh --multicall-names  # print the names the
+#                                              # multicall covers; builds nothing
+#          ORACLE_MULTICALL_PROVIDED=1 sh test/build_oracles.sh --for '<pat>' …
+#                                              # build only the SINGLE oracles the
+#                                              # pattern needs; the multicall names must
+#                                              # already be linked (fails if not)
 #
 # NOTE: gate REGISTRATION (which gates exist, their shard) now lives in
 # test/gates.toml, the registry of record — read/verify/explain it with
@@ -150,6 +163,9 @@ if [ "${1:-}" = "--build-one" ]; then
   # SECOND, misleading error (`tail: cannot open ... buildlog`) hid the real cause.
   # Reported by two separate agents who each lost time to it.
   mkdir -p "$BINDIR"
+  # test/bin/<e> may be a hardlink to the multicall oracle; unlink it so this
+  # build makes a new file instead of writing through every linked name.
+  rm -f "$out"
   printf 'building    %s ...\n' "$e"
   _t0=$(_now_ms)
   # The two profilers are read by test/diff_compiler_stage_ir_scaling.sh through
@@ -308,6 +324,66 @@ if [ "${1:-}" = "--list" ]; then
   exit 0
 fi
 
+# ── The multicall oracle ───────────────────────────────────────────────────────
+# Every ENTRIES oracle except MULTICALL_SINGLES is served by ONE binary,
+# test/bin/oracle_multicall (compiler/entries/oracle_multicall.mdk), hardlinked as
+# test/bin/<entry>; it dispatches on the name it was run by.  One build costs about
+# twice the largest single entry, so the default and `--for` paths build it
+# whenever any covered name is missing or stale, and CI builds it once per run in
+# ci.yml's `oracles` job; gate rows only link it (`--link-multicall`).
+#
+# The singles are built alone: the two profilers link without LTO so callgrind
+# can attribute symbols (see --build-one).
+#
+# Links are HARDLINKS: the dispatcher reads executablePath (), which resolves a
+# symlink to oracle_multicall.  Every name shares one inode and one mtime, so
+# run_gates.sh's stale check sees the whole set go stale together.  A name is
+# unlinked before anything is written to it (`--build-one` does the same), since
+# writing through a hardlink would rewrite every name.
+#
+# compiler/entries/oracle_multicall.mdk's arms must equal `--multicall-names`;
+# test/check_build_oracles_for_consistency.sh fails when they differ.
+MULTICALL=oracle_multicall
+MULTICALL_SINGLES="profile_main profile_modules_main"
+# --for and --build-multicall narrow ENTRIES; the multicall always covers all.
+ALL_ENTRIES="$ENTRIES"
+
+_multicall_names() {
+  for _e in $ALL_ENTRIES; do
+    case " $MULTICALL_SINGLES " in *" $_e "*) ;; *) echo "$_e" ;; esac
+  done
+}
+
+_is_multicall() {
+  case " $MULTICALL_SINGLES " in *" $1 "*) return 1 ;; esac
+  case " $ALL_ENTRIES " in *" $1 "*) return 0 ;; esac
+  return 1
+}
+
+_link_multicall() {
+  [ -x "$BINDIR/$MULTICALL" ] || {
+    echo "FAIL: $BINDIR/$MULTICALL is missing, so there is nothing to link" >&2; return 1; }
+  _nl=0
+  for _e in $(_multicall_names); do
+    rm -f "$BINDIR/$_e"
+    ln -f "$BINDIR/$MULTICALL" "$BINDIR/$_e" || {
+      echo "FAIL: could not hardlink $BINDIR/$_e to $MULTICALL" >&2; return 1; }
+    _nl=$((_nl + 1))
+  done
+  printf 'linked      %s oracle names -> %s\n' "$_nl" "$MULTICALL"
+}
+
+if [ "${1:-}" = "--multicall-names" ]; then
+  _multicall_names
+  exit 0
+fi
+
+if [ "${1:-}" = "--link-multicall" ]; then
+  mkdir -p "$BINDIR"
+  _link_multicall || exit 1
+  exit 0
+fi
+
 # ── --deps <entry> : print the entry's transitive .mdk import closure ──────────
 # (#1534) `--build-one`/`FORCE=1` answer "did a rebuild happen", not "does this
 # entry's import graph actually reach file Y" — `FORCE=1` rebuilds
@@ -363,10 +439,11 @@ fi
 # $1 are unset/empty (build-all — must stay that way) or `--for` (falls
 # through on purpose to the block that consumes it).
 case "${1:-}" in
-  ''|--for) ;;
+  ''|--for|--build-multicall) ;;
   *)
     echo "FAIL: unknown argument: ${1:-}" >&2
-    echo "usage: $0 [--list | --build-one <entry> | --deps <entry> | --for ['--list'] '<gate-pattern>' ...]" >&2
+    echo "usage: $0 [--list | --build-one <entry> | --deps <entry> | --for ['--list'] '<gate-pattern>' ... |" >&2
+    echo "          --build-multicall | --link-multicall | --multicall-names]" >&2
     echo "       (no args = build all $(printf '%s\n' $ENTRIES | grep -vc '^$') oracles)" >&2
     exit 1
     ;;
@@ -434,22 +511,31 @@ fi
 
 # ── `--for <gate-pattern>...` : build ONLY the oracles those gates actually read ──
 #
-# Building all 54 oracles is 54 × (medaka build + clang). That is the single most
-# expensive thing in the whole test system: measured at ~34s on a 12-core box but
-# **18+ minutes on a 2-core CI runner**, where it was 93% of the build job (the
-# cold bootstrap from seed, by contrast, is only 80s).
+# A bare build is one multicall binary linked under the 51 names `--multicall-names`
+# prints, plus one build per single-build oracle (profile_main, profile_modules_main).
+# Before the multicall it was one medaka build + clang per oracle, which on a 2-core
+# CI runner took 18+ minutes.
 #
-# But no gate needs all 54. A gate names its oracle as `test/bin/<name>`, so the
-# set is derivable from the gate scripts themselves — no hand-maintained mapping to
-# drift. Per-shard need: engines 2, frontend 14, types 10, eval 19, backend 6,
-# tools 6. So CI shards build ~19 max, concurrently, instead of 54 serially; and
-# `test/preflight.sh` uses the same derivation so an agent touching the parser
-# builds 9, not 54.
+# But no gate needs every oracle. A gate names its oracle as `test/bin/<name>`, so
+# the set is derivable from the gate scripts themselves — no hand-maintained mapping
+# to drift. In CI the `oracles` job builds the multicall once and a row downloads it
+# (ORACLE_MULTICALL_PROVIDED=1), so a row builds only the single-build oracles its
+# gates read. A local `--for` builds the whole multicall plus those singles, because
+# the multicall is one binary and not divisible. `test/preflight.sh` uses the same
+# derivation.
 #
 #   sh test/build_oracles.sh --for 'diff_compiler_parse*' 'diff_compiler_fmt'
 #
 # The derivation is intentionally shared with preflight.sh and the CI matrix: ONE
 # source of truth for "which oracle does this gate read".
+# `--build-multicall`: the default build path over exactly the multicall names,
+# which builds (if stale) the one binary and links them all.
+if [ "${1:-}" = "--build-multicall" ]; then
+  [ "${ORACLE_MULTICALL_PROVIDED:-0}" != 1 ] || {
+    echo "FAIL: --build-multicall with ORACLE_MULTICALL_PROVIDED=1 asks to build what it says is provided" >&2; exit 1; }
+  ENTRIES="$(_multicall_names)"
+fi
+
 if [ "${1:-}" = "--for" ]; then
   shift
   # Consume the optional `--list` sub-flag detected above (as `_for_list_mode`)
@@ -610,12 +696,35 @@ fi
 # The probe entries are COMPILER internals (compiler/entries/*) whose graphs use
 # the internal-only array-kernel externs (arrayGetUnsafe, …); the worker passes
 # --allow-internal so the resolve-phase guard trusts them (part of this project).
+#
+# A multicall name is never a work item of its own: if any is missing or stale,
+# the one multicall binary is (re)built when it is itself stale, and every name
+# is relinked after the pool.  Under ORACLE_MULTICALL_PROVIDED=1 (a CI row that
+# downloaded the multicall and ran `--link-multicall`) they are skipped
+# outright: a row must not decide from mtimes, which artifact extraction sets.
 worklist=""
 uptodate=0
+provided=0
+_mc_need=0
 for e in $ENTRIES; do
   src="$ROOT/compiler/entries/$e.mdk"
   out="$BINDIR/$e"
   [ -f "$src" ] || { echo "FAIL: missing entry $src"; exit 1; }
+  if _is_multicall "$e"; then
+    if [ "${ORACLE_MULTICALL_PROVIDED:-0}" = 1 ]; then
+      [ -x "$out" ] || {
+        echo "FAIL: ORACLE_MULTICALL_PROVIDED=1 but $out is not linked; run --link-multicall first"; exit 1; }
+      provided=$((provided+1)); printf 'provided    %s\n' "$e"; continue
+    fi
+    if [ "${FORCE:-0}" != "1" ] && [ -x "$out" ]; then
+      bm=$(stat -c %Y "$out" 2>/dev/null || stat -f %m "$out" 2>/dev/null)
+      if [ "$bm" -ge "$newest_src" ]; then
+        uptodate=$((uptodate+1)); printf 'up-to-date  %s\n' "$e"; continue
+      fi
+    fi
+    _mc_need=1
+    continue
+  fi
   if [ "${FORCE:-0}" != "1" ] && [ -x "$out" ]; then
     bm=$(stat -c %Y "$out" 2>/dev/null || stat -f %m "$out" 2>/dev/null)
     if [ "$bm" -ge "$newest_src" ]; then
@@ -624,6 +733,15 @@ for e in $ENTRIES; do
   fi
   worklist="$worklist $e"
 done
+if [ "$_mc_need" = 1 ]; then
+  _mc_bin="$BINDIR/$MULTICALL"
+  _mc_fresh=0
+  if [ "${FORCE:-0}" != "1" ] && [ -x "$_mc_bin" ]; then
+    bm=$(stat -c %Y "$_mc_bin" 2>/dev/null || stat -f %m "$_mc_bin" 2>/dev/null)
+    [ "$bm" -ge "$newest_src" ] && _mc_fresh=1
+  fi
+  [ "$_mc_fresh" = 1 ] || worklist="$MULTICALL $worklist"
+fi
 
 # ── CI FAST PATH: precompile the C runtime object ONCE ─────────────────────────
 # Every --build-one worker otherwise recompiles the byte-identical
@@ -673,5 +791,8 @@ if [ -n "$worklist" ]; then
     || rc=$?
 fi
 [ "$rc" = 0 ] || { echo "FAIL: one or more oracle builds failed (see FAIL lines above)"; exit 1; }
+if [ "$_mc_need" = 1 ]; then
+  _link_multicall || exit 1
+fi
 
-printf '\noracles ready in %s (%d built, %d up-to-date, JOBS=%s)\n' "$BINDIR" "$built" "$uptodate" "$JOBS"
+printf '\noracles ready in %s (%d built, %d up-to-date, %d provided, JOBS=%s)\n' "$BINDIR" "$built" "$uptodate" "$provided" "$JOBS"

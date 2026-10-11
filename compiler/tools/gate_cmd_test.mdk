@@ -27,7 +27,7 @@ import tools.gate_cost.{
 }
 import tools.gate_cmd.{
   ImportTarget(..), gradeViolations, duplicateBaselineKeyViolations,
-  verifyClasses
+  verifyClasses, staleBannerLines
 }
 import tools.gate_registry.{Gate, parseRegistry, renderJson}
 import string.{contains}
@@ -581,7 +581,15 @@ packRun : String ->
   String ->
   List (String, List String) ->
   Result String (String, String)
-packRun reg base orcs = balNewText "reg.toml" reg base orcs packEntries
+packRun reg base orcs = balNewText "reg.toml" reg base orcs packEntries []
+
+-- `packRun` with `mc` as the names the multicall oracle serves.
+packRunMc : List String ->
+  String ->
+  String ->
+  List (String, List String) ->
+  Result String (String, String)
+packRunMc mc reg base orcs = balNewText "reg.toml" reg base orcs packEntries mc
 
 shardIn : String -> String -> Option String
 shardIn name regText = match parseRegistry regText
@@ -684,4 +692,118 @@ test "a row's predicted load is fixed + wasm + oracle makespan + gate makespan" 
       ]) [
       ("g1", ["ox", "oy"]),
       ("g2", ["oz"]),
+    ])
+
+-- ── the multicall oracle (#3965) ────────────────────────────────────────────
+--
+-- g1 reads ox and oy; the multicall serves ox, so the row builds only oy, and
+-- the `oracles` job's own build is reported from its oracles[] row.
+test "a multicall-served oracle is charged to no row, and the oracle job is priced" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "oracles 40.0s (1 built)",
+          "oracle job: 'oracle_multicall' serves 1 oracles no row builds; one build before every row starts, 90.0s\n",
+        ]
+        head)
+    (packRunMc
+      ["ox"]
+      (packReg [("g1", "a", "")] [("a", False)])
+      (packBase
+        [("g1", 100)]
+        [("ox", 30, 1), ("oy", 40, 1), ("oracle_multicall", 90, 1)])
+      [("g1", ["ox", "oy"])])
+
+-- No oracle_multicall sample yet: twice the dearest sampled entry, said so.
+test "an unsampled multicall oracle is priced at the stated default" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "one build before every row starts, 100.0s (DEFAULT: no sample recorded; twice the dearest sampled oracle)",
+        ]
+        head)
+    (packRunMc
+      ["ox"]
+      (packReg [("g1", "a", "")] [("a", False)])
+      (packBase [("g1", 100)] [("ox", 30, 1), ("oy", 50, 1)])
+      [("g1", ["ox", "oy"])])
+
+-- Stale multicall-served names collapse into one multicall rebuild; a single
+-- is still rebuilt by name.
+test "the stale banner rebuilds the multicall once and each single by name" =
+  expectEqual
+    [
+      "    FORCE=1 sh test/build_oracles.sh --build-multicall   # 2 multicall-served name(s)",
+      "    FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one c",
+    ]
+    (staleBannerLines ["a", "b"] ["a", "c", "b"])
+
+-- ── the job-wall grade (#3950) ──────────────────────────────────────────────
+--
+-- One row `a` with one 100s gate and no oracles[]: the setup is not modelled, so
+-- the row's predicted job wall (`rload`) is its 100.0s gate makespan.  The
+-- baseline's single run for `a` carries `runExtra` among its fields.
+jobWallBase : String -> String
+jobWallBase = jobWallBaseG 1
+
+jobWallBaseG : Int -> String -> String
+jobWallBaseG n runExtra =
+  "{\"schema\": \"gate-cost-baseline/1\", \"runs\": [{\"key\": \"9:1:a\", \"runId\": \"9\", \"runAttempt\": \"1\", \"shard\": \"a\", \"event\": \"push\", \"sha\": \"s\", \"ref\": \"r\", \"date\": \"d\", \"jobs\": 1, \"parallel\": true, \"rowElapsedMs\": 90000, \"gates\": \{intToString n}\{runExtra}}], \"gates\": [{\"name\": \"g1\", \"medianMs\": 100000, \"samples\": 1, \"ms\": [100000]}]}"
+
+jobWallRun : String -> Result String (String, String)
+jobWallRun runExtra = packRun (packReg
+  [("g1", "a", "")]
+  [("a", False)]) (jobWallBase runExtra) [
+  ("g1", []),
+]
+
+test "a measured job wall is graded: predicted, measured, signed %, verdict" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "job wall predicted    100.0s   measured     95.0s      +5%  within ±15%",
+          "job-wall calibration (predicted rload vs Actions job duration, bar ±15%): 1 within, 0 outside, 0 not gradeable of 1 rows",
+        ]
+        head)
+    (jobWallRun ", \"jobWallMs\": 95000")
+
+test "a prediction more than 15% off the measured job wall is OUTSIDE the bar" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "measured     60.0s     +66%  OUTSIDE ±15%",
+          "0 within, 1 outside, 0 not gradeable of 1 rows",
+        ]
+        head)
+    (jobWallRun ", \"jobWallMs\": 60000")
+
+test "a baseline run without jobWallMs is not gradeable, never within the band" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "job wall predicted    100.0s   not gradeable (run 9 recorded no jobWallMs)",
+          "0 within, 0 outside, 1 not gradeable of 1 rows",
+        ]
+        head)
+    (jobWallRun "")
+
+test "a job wall recorded for a different gate set is not gradeable, never within or outside" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "[STALE: 1 gates now, 3 when recorded]",
+          "job wall predicted    100.0s   not gradeable (run 9 is for a different gate set)",
+          "0 within, 0 outside, 1 not gradeable of 1 rows",
+        ]
+        head)
+    (packRun (packReg [("g1", "a", "")] [("a", False)]) (jobWallBaseG
+      3
+      ", \"jobWallMs\": 95000") [
+      ("g1", []),
     ])

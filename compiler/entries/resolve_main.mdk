@@ -12,7 +12,9 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveToLines}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   [runtimePath, preludePath, targetPath] =>
     withRuntime runtimePath preludePath targetPath
   _ =>
@@ -38,3 +40,5 @@ withTarget runtimeSrc preludeSrc targetPath = match readFile targetPath
         (parse preludeSrc)
         (desugar (parse targetSrc)))
   Err msg => ePutStrLn msg
+
+main = oracleMain ()

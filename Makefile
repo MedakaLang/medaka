@@ -68,7 +68,7 @@ check-self:
 ## preflight — THE AGENT LOOP. Build + run only what your DIFF touches.
 ##             Derives the gate set from `git diff --name-only`, derives the ORACLE
 ##             set from those gates, and builds only those (an agent touching
-##             parser.mdk builds 9 oracles, not 54). Skips the expensive gates —
+##             parser.mdk builds the multicall plus the singles its gates read, not every entry). Skips the expensive gates —
 ##             the 3-engine differential (346 fixtures × clang) and the fixpoint
 ##             (unless you touched the backend, where it IS the decisive gate).
 ##             ⚠️ A FILTER, NOT AN AUTHORITY. It runs a SUBSET and prints what it
@@ -365,7 +365,7 @@ inlang-compiler-module-roster-test:
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:
-##             sh test/build_oracles.sh                    # all 54
+##             sh test/build_oracles.sh                    # the multicall (51 names) + 2 singles
 ##             sh test/build_oracles.sh --for '<pattern>'  # only what a gate reads
 ##           A gate whose oracle is missing now FAILS (not a silent skip), and the
 ##           runner hard-fails if 0 gates passed — so a fresh clone can no longer

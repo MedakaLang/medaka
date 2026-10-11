@@ -125,3 +125,41 @@ fi
 
 n="$(printf '%s\n' $broad | grep -vc '^$')"
 echo "PASS: 'diff_compiler_*' derives exactly the $n-oracle union of its $checked gates."
+
+# ── The multicall dispatcher covers exactly the multicall names ──────────────
+# build_oracles.sh hardlinks every `--multicall-names` name to the multicall
+# oracle, which dispatches on that name.  A name with no arm exits 125 at gate
+# time, and an arm with no name is never linked, so both directions are checked
+# here, for the arms and for the imports that bind them, rather than left to a
+# gate that happens to run the missing name.
+mc_src="$ROOT/compiler/entries/oracle_multicall.mdk"
+[ -f "$mc_src" ] || { echo "FAIL: $mc_src is missing" >&2; exit 1; }
+mc_names="$(sh "$ROOT/test/build_oracles.sh" --multicall-names | sort)"
+mc_arms="$(sed -n 's/^  "\([a-z_0-9]*\)" => \([a-z_0-9]*\) ()$/\1 \2/p' "$mc_src" \
+  | awk '$1 == $2 { print $1 } $1 != $2 { print "MISMATCH:" $1 }' | sort)"
+# `medaka fmt` breaks a long import over three lines, so imports are read from
+# the file joined onto one line.
+mc_imports="$(tr '\n' ' ' <"$mc_src" \
+  | grep -oE 'import entries\.[a-z_0-9]+\.\{ *oracleMain as [a-z_0-9]+ *\}' \
+  | sed -E 's/^import entries\.([a-z_0-9]+)\.\{ *oracleMain as ([a-z_0-9]+) *\}$/\1 \2/' \
+  | awk '$1 == $2 { print $1 } $1 != $2 { print "MISMATCH:" $1 }' | sort)"
+if [ -z "$mc_names" ]; then
+  echo "FAIL: build_oracles.sh --multicall-names printed nothing; the comparison below would be empty" >&2
+  exit 1
+fi
+mc_bad=0
+for _what in arms imports; do
+  if [ "$_what" = arms ]; then _got="$mc_arms"; else _got="$mc_imports"; fi
+  if [ "$_got" != "$mc_names" ]; then
+    mc_bad=1
+    echo "FAIL: compiler/entries/oracle_multicall.mdk's $_what differ from build_oracles.sh --multicall-names" >&2
+    echo "      (< in --multicall-names only, > in the dispatcher only; MISMATCH: an arm calling another entry):" >&2
+    _d="$(mktemp -d)"
+    printf '%s\n' "$mc_names" >"$_d/names"
+    printf '%s\n' "$_got" >"$_d/got"
+    diff "$_d/names" "$_d/got" | grep '^[<>]' >&2
+    rm -rf "$_d"
+  fi
+done
+[ "$mc_bad" -eq 0 ] || exit 1
+echo "PASS: oracle_multicall.mdk dispatches exactly the $(printf '%s\n' "$mc_names" | grep -vc '^$') --multicall-names oracles."

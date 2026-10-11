@@ -541,8 +541,13 @@ costHashMod = 2147483647
 -- against a gate set which no longer exists.  The digest is `gateSetDigest`
 -- over that row's baseline keys at ingest time, and it catches the swap.
 --
--- `jobs` (via `balJobsFor`/`balJobsIsFallback`) and `rowElapsedMs` (via
--- `balCalibLine`) ARE consumed by the balancer today; `parallel`, `gates` and
+-- `jobWallMs` is the Actions job's own started_at -> completed_at for that
+-- shard's matrix job, which `run_gates.sh` cannot measure from inside it; the
+-- collector adds it from the Actions API.  It is optional for the same reason
+-- as the rest, and absent reads as "not gradeable", never as a 0 ms job.
+--
+-- `jobs` (via `balJobsFor`/`balJobsIsFallback`) and `rowElapsedMs` and
+-- `jobWallMs` (via `balCalibLine`) ARE consumed by the balancer today; `parallel`, `gates` and
 -- `gatesDigest` are read but only for the calibration/staleness report, never
 -- the score itself.  See `test/gate_cost_baseline.json`'s own header note and the
 -- module's own doc-comment above for why the file exists at all.
@@ -555,6 +560,7 @@ public export data RunRecord = RunRecord {
   jobs : Option Int,
   parallel : Option Bool,
   rowElapsedMs : Option Int,
+  jobWallMs : Option Int,
   gates : Option Int,
   gatesDigest : Option Int,
 }
@@ -578,6 +584,7 @@ runEntry i e = match asString (orNull (get "key" e))
         jobs = asInt (orNull (get "jobs" e)),
         parallel = asBool (orNull (get "parallel" e)),
         rowElapsedMs = asInt (orNull (get "rowElapsedMs" e)),
+        jobWallMs = asInt (orNull (get "jobWallMs" e)),
         gates = asInt (orNull (get "gates" e)),
         gatesDigest = asInt (orNull (get "gatesDigest" e)),
       }

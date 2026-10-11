@@ -71,8 +71,9 @@ srcNameFromArgs : List String -> String
 srcNameFromArgs (_ :: _ :: entry :: _) = entry
 srcNameFromArgs _ = ""
 
-main : <IO> Unit
-main = driveEmitLocated emitTail
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = driveEmitLocated emitTail
 
 -- COMPOSITE-MAIN AUTO-PRINT: the shared elaborate+auto-print-wrap+mangle glue
 -- (design §10) lives once in entry_support.runEmitWith, parameterized by this
@@ -191,3 +192,5 @@ emitTail mods runtimeDecls coreD modules1 =
 -- (the result is discarded) — the real arg-/return-position dict-passing happens
 -- INSIDE elaborateModules above (E4 landed; runs unconditionally).  Kept for
 -- parity with the single-file typed driver.
+
+main = oracleMain ()

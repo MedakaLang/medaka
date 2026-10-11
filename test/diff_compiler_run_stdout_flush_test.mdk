@@ -47,14 +47,16 @@
 import compiler_cli_test_support.{
   Agreement(..),
   EngineDeath(..),
+  binaryRanClean,
   RuntimeOutcome(..),
-  checkRunBuild,
+  checkRunBuildAll,
   fatalOutcomeSweep,
   rosterAgreement,
 }
 import io.{runVerb}
+import list.{somes, zipWith}
 import string.{trim}
-import test.{Expectation, expectEach, expectEqual, fail}
+import test.{Expectation, expectAll, expectEach, expectEqual, fail}
 import test_process.{medakaRoot}
 
 corpus : <IO> String
@@ -126,24 +128,49 @@ orderRows = [
   ("panic", "(panic \"after the block\" : Unit)", 1),
 ]
 
-orderRow : String ->
+-- The `(entry, binPath)` one row's program is written to and built from.
+orderPaths : String -> (String, String, Int) -> (String, String)
+orderPaths dir (name, _, _) = ("\{dir}/\{name}.mdk", "\{dir}/\{name}.bin")
+
+-- Writes one row's program, or names the row when it could not be written.
+orderWriteFailure : String ->
   (String, String, Int) ->
-  <Exec, FileWrite, IO> (String, Expectation)
-orderRow dir (name, ending, code) =
-  let entry = "\{dir}/\{name}.mdk"
+  <FileWrite> Option (String, Expectation)
+orderWriteFailure dir (name, ending, code) =
+  let (entry, _) = orderPaths dir (name, ending, code)
   match writeFile entry (orderSource ending)
-    Err e => (name, fail "could not write \{entry}: \{e}")
-    Ok _ => match checkRunBuild entry "\{dir}/\{name}.bin"
-      Err e => (name, fail e)
-      Ok a => (
-        name,
-        expectEqual
-          [(code, "ABC"), (code, "ABC")]
-          [(a.runCode, a.runOut), (a.binCode, a.binOut)],
-      )
+    Err e => Some (name, fail "could not write \{entry}: \{e}")
+    Ok _ => None
+
+gradeOrderRow : (String, String, Int) ->
+  Result String Agreement ->
+  (String, Expectation)
+gradeOrderRow (name, _, _) (Err e) = (name, fail e)
+gradeOrderRow (name, _, code) (Ok a) = (
+  name,
+  expectAll
+    [
+      expectEqual
+        [(code, "ABC"), (code, "ABC")]
+        [(a.runCode, a.runOut), (a.binCode, a.binOut)],
+      -- Only the zero-exit rows leave the binary clean: a nonzero exit and a
+      -- panic both fail `binaryRanClean`.
+      expectEqual (code == 0) (binaryRanClean a),
+    ],
+)
+
+-- Every row's program written first, then all of them run side by side.
+orderExpectations : String -> <Exec, FileWrite, IO> List (String, Expectation)
+orderExpectations dir = match somes (map (orderWriteFailure dir) orderRows)
+  [] =>
+    zipWith
+      gradeOrderRow
+      orderRows
+      (checkRunBuildAll (map (orderPaths dir) orderRows))
+  unwritten => unwritten
 
 -- A directory of this test's own.  Not `test_process.scratchDir`: that is one
--- value for the whole process, and the fixture sweep above removes it when it
+-- value for the whole process, and a sweep that reads it removes it when it
 -- finishes.
 orderDir : Unit -> <Exec> Result String String
 orderDir _ = match runVerb "mktemp" ["-d"]
@@ -155,6 +182,6 @@ test "run and build+exec print text and writeStdoutBytes in program order on eve
   match orderDir ()
     Err e => fail "no scratch directory: \{e}"
     Ok dir =>
-      let result = expectEach (map (orderRow dir) orderRows)
+      let result = expectEach (orderExpectations dir)
       let _ = runVerb "rm" ["-rf", dir]
       result

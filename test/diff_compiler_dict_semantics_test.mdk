@@ -66,22 +66,19 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  Agreement(..), binaryRanClean, checkRunBuild, runMedaka, summarizeSweep,
-  sweepUnits, verdictOf
+  Agreement(..), binaryRanClean, runMedaka, summarizeSweep, sweepAgreements,
+  sweepSpawn, sweepSpawns, verdictOf
 }
 import fs.{expectUnitCount, fixtureDirs}
-import io.{runVerb}
 import json.{Json(..), get, parse}
-import list.{somes, sort}
+import list.{indexed, somes, sort}
 import path.{basename}
 import regex.{Regex, compile, find, findAll, isMatch, mustCompile}
 import string.{
-  contains, endsWith, lines, padRight, replaceAll, stripSuffix, trim, unwords
+  contains, endsWith, lines, padRight, replaceAll, stripSuffix, unwords
 }
 import test.{Expectation, fail, pass}
-import test_process.{
-  boundedVerb, medakaBin, medakaRoot, testAssertionCount, unrosteredUnits
-}
+import test_process.{medakaBin, medakaRoot, testAssertionCount, unrosteredUnits}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -4743,44 +4740,45 @@ codeFailures cs entrypath = match runMedaka ["check", "--json", entrypath]
   Err e => Err "could not run `medaka check --json`: \{e}"
   Ok (_, json) => Ok (somes (map (codeProblem json) cs))
 
-gradeOne : String -> Row -> <Exec, FileRead, IO> Graded
-gradeOne scratch r =
+planOne : String -> Row -> <FileRead, IO> Result Graded (String, String)
+planOne scratch r =
   let entrypath = "\{corpus}/\{r.entry}"
-  let binPath = "\{scratch}/\{binName r.entry}.bin"
   match readFile entrypath
-    Err e => structuralRow r.entry "missing fixture file: \{e}"
-    Ok _ => match checkRunBuild entrypath binPath
-      Err e => structuralRow r.entry e
-      Ok a => match codeFailures r.codes entrypath
-        Err e => structuralRow r.entry e
-        Ok codeNotes =>
-          let checkV = verdictOf a.checkCode
-          let runV = verdictOf a.runCode
-          -- A `build` ACCEPT must have produced a binary: exit 0 alone
-          -- would let a `NoValue` row pin ACCEPT over a build that
-          -- emitted nothing.
-          let buildV =
-            if a.buildCode == 0 && fileExists binPath then
-              "ACCEPT"
-            else
-              "REJECT"
-          let grade = gradeValue r.mode r.pinned a
-          Graded {
-            entry = r.entry,
-            checkV = checkV,
-            runV = runV,
-            buildV = buildV,
-            grade = grade,
-            ok =
-              checkV == r.expCheck
-                && runV == r.expRun
-                && buildV == r.expBuild
-                && gradePasses grade
-                && codeNotes == [],
-            note = match codeNotes
-              [] => ""
-              _ => " codes=\{unwords codeNotes}",
-          }
+    Err e => Err (structuralRow r.entry "missing fixture file: \{e}")
+    Ok _ => Ok (entrypath, "\{scratch}/\{binName r.entry}.bin")
+
+gradeOne : Row ->
+  (String, String) ->
+  Result String Agreement ->
+  <Exec, FileRead, IO> Graded
+gradeOne r _ (Err e) = structuralRow r.entry e
+gradeOne r (entrypath, binPath) (Ok a) = match codeFailures r.codes entrypath
+  Err e => structuralRow r.entry e
+  Ok codeNotes =>
+    let checkV = verdictOf a.checkCode
+    let runV = verdictOf a.runCode
+    -- A `build` ACCEPT must have produced a binary: exit 0 alone
+    -- would let a `NoValue` row pin ACCEPT over a build that
+    -- emitted nothing.
+    let buildV =
+      if a.buildCode == 0 && fileExists binPath then "ACCEPT" else "REJECT"
+    let grade = gradeValue r.mode r.pinned a
+    Graded {
+      entry = r.entry,
+      checkV = checkV,
+      runV = runV,
+      buildV = buildV,
+      grade = grade,
+      ok =
+        checkV == r.expCheck
+          && runV == r.expRun
+          && buildV == r.expBuild
+          && gradePasses grade
+          && codeNotes == [],
+      note = match codeNotes
+        [] => ""
+        _ => " codes=\{unwords codeNotes}",
+    }
 
 rowFailure : Graded -> Option String
 rowFailure g =
@@ -4803,7 +4801,7 @@ summarize graded failures =
     summarizeSweep graded failures
 
 sweep : <Exec, FileRead, IO> Expectation
-sweep = sweepUnits table gradeOne rowFailure summarize
+sweep = sweepAgreements table planOne gradeOne rowFailure summarize
 
 -- A row may name a secondary entry point inside a fixture directory
 -- (`<dir>/control.mdk`), which grades that directory a second way; only
@@ -5709,29 +5707,35 @@ simpleFailure g =
 
 -- # Section 2 grading
 
-gradeScheme : String -> SchemeRow -> <Exec, FileRead, IO> SimpleGraded
-gradeScheme _ r = match boundedVerb medakaBin ["check", "\{corpus}/\{r.entry}"]
-  Err e => SimpleGraded {
-    sentry = r.entry,
-    sok = False,
-    snote = " could not run `medaka check`: \{e}",
-  }
-  Ok (code, out, _) =>
-    if code /= 0 then
-      SimpleGraded {
-        sentry = r.entry,
-        sok = False,
-        snote =
-          " `medaka check` exited \{intToString code}, want 0 (every scheme row is an ACCEPT fixture)",
-      }
-    else if elem r.want (lines out) then
-      SimpleGraded { sentry = r.entry, sok = True, snote = "" }
-    else
-      SimpleGraded {
-        sentry = r.entry,
-        sok = False,
-        snote = " want exactly line \{debug r.want} -- not in stdout",
-      }
+-- The one spawn every Section 2 and Section 6 row grades.
+checkSpawn : String -> <IO> (String, List String)
+checkSpawn entry = (medakaBin, ["check", "\{corpus}/\{entry}"])
+
+schemeSpawn : String -> SchemeRow -> <IO> (String, List String)
+schemeSpawn _ r = checkSpawn r.entry
+
+gradeScheme : SchemeRow -> Result String (Int, String, String) -> SimpleGraded
+gradeScheme r (Err e) = SimpleGraded {
+  sentry = r.entry,
+  sok = False,
+  snote = " could not run `medaka check`: \{e}",
+}
+gradeScheme r (Ok (code, out, _)) =
+  if code /= 0 then
+    SimpleGraded {
+      sentry = r.entry,
+      sok = False,
+      snote =
+        " `medaka check` exited \{intToString code}, want 0 (every scheme row is an ACCEPT fixture)",
+    }
+  else if elem r.want (lines out) then
+    SimpleGraded { sentry = r.entry, sok = True, snote = "" }
+  else
+    SimpleGraded {
+      sentry = r.entry,
+      sok = False,
+      snote = " want exactly line \{debug r.want} -- not in stdout",
+    }
 
 summarizeSchemes : Int -> List String -> Expectation
 summarizeSchemes graded failures =
@@ -5744,47 +5748,29 @@ summarizeSchemes graded failures =
     summarizeSweep graded failures
 
 schemeSweep : <Exec, FileRead, IO> Expectation
-schemeSweep = sweepUnits schemeTable gradeScheme simpleFailure summarizeSchemes
+schemeSweep =
+  sweepSpawn schemeTable schemeSpawn gradeScheme simpleFailure summarizeSchemes
 
 -- # Section 5 grading
 
-spawnVerb : String ->
-  String ->
-  String ->
-  <Exec, IO> Result String (Int, String, String)
-spawnVerb _ "check" entrypath = boundedVerb medakaBin ["check", entrypath]
-spawnVerb _ "run" entrypath = boundedVerb medakaBin ["run", entrypath]
-spawnVerb _ "run-json" entrypath =
-  boundedVerb medakaBin ["run", "--json", entrypath]
--- A `build` row grades only the SPAWN's stderr -- it never runs or re-reads
--- the binary -- so it mints and removes its OWN scratch dir around the one
--- call rather than sharing `sweepUnits`'s outer one, which this section's
--- other three verbs never touch at all. It mints that directory through
--- `freshScratchDir` (below), NOT the stdlib `scratchDir` -- `scratchDir` is a
--- nullary top-level binding, so under Medaka's lazy-toplevel-nullary rule its
--- one `mktemp -d` runs ONCE and every later reference (including one already
--- forced and removed by an earlier sweep in this same process) replays that
--- same, since-deleted path.
-spawnVerb _ "build" entrypath = match freshScratchDir entrypath
-  Err e => Err "could not make a scratch directory: \{e}"
-  Ok own =>
-    let r =
-      boundedVerb medakaBin ["build", entrypath, "-o", "\{own}/probe.vbin"]
-    let _ = runVerb "rm" ["-rf", own]
-    r
-spawnVerb _ v _ = Err "unknown verb \{v}"
-
--- `scratchDir` (`test_process.mdk`) is a nullary top-level binding, memoized
--- after its first force for the rest of the process -- fine for every
--- existing caller, which fetches it exactly ONCE per sweep. A `build` row
--- needs a FRESH directory per call, so it goes around that binding through a
--- 1-argument twin instead (the argument only defeats the no-argument
--- memoization rule; the value itself is unused).
-freshScratchDir : String -> <Exec> Result String String
-freshScratchDir _ = match runVerb "mktemp" ["-d"]
-  Err e => Err e
-  Ok (0, out, _) => Ok (trim out)
-  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
+-- The spawn one row grades, or none for a verb this section does not know.
+-- A `build` row grades only the spawn's stderr, never the binary, so its
+-- output only has to be a path no other row of the batch writes: the row's
+-- own index under the sweep's scratch directory.
+verbSpawns : String -> (Int, VerbRow) -> <IO> List (String, List String)
+verbSpawns scratch (i, r) =
+  let entrypath = "\{corpus}/\{r.ventry}"
+  match r.verb
+    "check" => [(medakaBin, ["check", entrypath])]
+    "run" => [(medakaBin, ["run", entrypath])]
+    "run-json" => [(medakaBin, ["run", "--json", entrypath])]
+    "build" => [
+      (
+        medakaBin,
+        ["build", entrypath, "-o", "\{scratch}/\{intToString i}.vbin"],
+      ),
+    ]
+    _ => []
 
 -- Grading an assertion against one verb's STDERR. `>= 2` from a malformed
 -- pattern is graded FAIL rather than read as "0 matches" -- the same
@@ -5846,22 +5832,21 @@ diagCode d = match get "code" d
   Some (JString c) => Some c
   _ => None
 
-gradeVerbRow : String -> VerbRow -> <Exec, IO> SimpleGraded
-gradeVerbRow scratch r =
-  let entrypath = "\{corpus}/\{r.ventry}"
-  match spawnVerb scratch r.verb entrypath
-    Err e => SimpleGraded {
-      sentry = "\{r.ventry} [\{r.verb}]",
-      sok = False,
-      snote = " could not run `medaka \{r.verb}`: \{e}",
-    }
-    Ok (_, _, err) =>
-      let (ok, note) = gradeAssertion r.assertion err
-      SimpleGraded {
-        sentry = "\{r.ventry} [\{r.verb}]",
-        sok = ok,
-        snote = note,
-      }
+gradeVerbRow : (Int, VerbRow) ->
+  List (Result String (Int, String, String)) ->
+  SimpleGraded
+gradeVerbRow (_, r) [Ok (_, _, err)] =
+  let (ok, note) = gradeAssertion r.assertion err
+  SimpleGraded { sentry = "\{r.ventry} [\{r.verb}]", sok = ok, snote = note }
+gradeVerbRow (_, r) [Err e] = verbNotRun r e
+gradeVerbRow (_, r) _ = verbNotRun r "unknown verb \{r.verb}"
+
+verbNotRun : VerbRow -> String -> SimpleGraded
+verbNotRun r e = SimpleGraded {
+  sentry = "\{r.ventry} [\{r.verb}]",
+  sok = False,
+  snote = " could not run `medaka \{r.verb}`: \{e}",
+}
 
 summarizeVerbs : Int -> List String -> Expectation
 summarizeVerbs graded failures =
@@ -5874,7 +5859,13 @@ summarizeVerbs graded failures =
     summarizeSweep graded failures
 
 verbSweep : <Exec, FileRead, IO> Expectation
-verbSweep = sweepUnits verbTable gradeVerbRow simpleFailure summarizeVerbs
+verbSweep =
+  sweepSpawns
+    (indexed verbTable)
+    verbSpawns
+    gradeVerbRow
+    simpleFailure
+    summarizeVerbs
 
 -- # Section 6 grading
 
@@ -5888,31 +5879,33 @@ firstSpan out = match find spanRe out
     _ => "(no located diagnostic)"
   None => "(no located diagnostic)"
 
-gradeSpan : String -> SpanRow -> <Exec, IO> SimpleGraded
-gradeSpan _ r = match boundedVerb medakaBin ["check", "\{corpus}/\{r.entry}"]
-  Err e => SimpleGraded {
-    sentry = r.entry,
-    sok = False,
-    snote = " could not run `medaka check`: \{e}",
-  }
-  Ok (code, out, err) =>
-    if code == 0 then
+spanSpawn : String -> SpanRow -> <IO> (String, List String)
+spanSpawn _ r = checkSpawn r.entry
+
+gradeSpan : SpanRow -> Result String (Int, String, String) -> SimpleGraded
+gradeSpan r (Err e) = SimpleGraded {
+  sentry = r.entry,
+  sok = False,
+  snote = " could not run `medaka check`: \{e}",
+}
+gradeSpan r (Ok (code, out, err)) =
+  if code == 0 then
+    SimpleGraded {
+      sentry = r.entry,
+      sok = False,
+      snote =
+        " `medaka check` exited 0, want nonzero (every span row is a REJECT fixture)",
+    }
+  else
+    let got = firstSpan (out ++ err)
+    if got == r.want then
+      SimpleGraded { sentry = r.entry, sok = True, snote = "" }
+    else
       SimpleGraded {
         sentry = r.entry,
         sok = False,
-        snote =
-          " `medaka check` exited 0, want nonzero (every span row is a REJECT fixture)",
+        snote = " want \{r.want}, got \{got}",
       }
-    else
-      let got = firstSpan (out ++ err)
-      if got == r.want then
-        SimpleGraded { sentry = r.entry, sok = True, snote = "" }
-      else
-        SimpleGraded {
-          sentry = r.entry,
-          sok = False,
-          snote = " want \{r.want}, got \{got}",
-        }
 
 summarizeSpans : Int -> List String -> Expectation
 summarizeSpans graded failures =
@@ -5925,7 +5918,8 @@ summarizeSpans graded failures =
     summarizeSweep graded failures
 
 spanSweep : <Exec, FileRead, IO> Expectation
-spanSweep = sweepUnits spanTable gradeSpan simpleFailure summarizeSpans
+spanSweep =
+  sweepSpawn spanTable spanSpawn gradeSpan simpleFailure summarizeSpans
 
 test "medaka check prints every pinned scheme line verbatim" = schemeSweep
 
