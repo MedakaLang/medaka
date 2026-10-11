@@ -41,6 +41,7 @@ import backend.private_mangle.{mangleUnitsEv}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir.{
   CProgram(..),
+  noDeclFacts,
   CBind(..),
   CClause(..),
   CExpr(..),
@@ -142,7 +143,9 @@ cprogram : List CBind ->
 cprogram groups ctorArs ctorTypes impls =
   markTailSites
     (stampCallModes
-      (stampImplSymbols [] (CProgram groups ctorArs ctorTypes impls [])))
+      (stampImplSymbols
+        []
+        (CProgram groups ctorArs ctorTypes impls [] noDeclFacts)))
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
@@ -880,7 +883,7 @@ leafRuntimeProgram groups =
   cprogram (groups ++ [synthBind "main" [CClause [] (CLit (LInt 0))]]) [] [] []
 
 leafRuntimeCensus : CProgram -> String -> String -> CProgram
-leafRuntimeCensus (CProgram groups ctorArs ctorTypes impls _) bindName missingName =
+leafRuntimeCensus (CProgram groups ctorArs ctorTypes impls _ _) bindName missingName =
   cprogram
     (groups
       ++ [
@@ -1181,7 +1184,13 @@ trapStateProgram =
 
 trapStateControlProgram : CProgram
 trapStateControlProgram =
-  CProgram [synthBind "main" [CClause [] (CLit (LInt 29))]] [] [] [] []
+  CProgram
+    [synthBind "main" [CClause [] (CLit (LInt 29))]]
+    []
+    []
+    []
+    []
+    noDeclFacts
 
 trapStateCensusProgram : CProgram
 trapStateCensusProgram =
@@ -1282,7 +1291,7 @@ implSelfProgram tag base depth =
   let n = CVar "n" (ALocal 0 1)
   let recurse = mkApp (mkApp (CMethod
     "walk"
-    (MethodEvidence "" 2 (RKey tag [] []) [] [])) [
+    (MethodEvidence tag 2 (RKey tag [] []) [] [])) [
     self,
   ]) [
     CBinPrim "-" n (CLit (LInt 1)) "Int" noDeclLoc,
@@ -1312,7 +1321,7 @@ implSelfProgram tag base depth =
     ]
 
 implSelfCensusProgram : CProgram -> CProgram
-implSelfCensusProgram (CProgram groups ctorArs ctorTypes impls _) =
+implSelfCensusProgram (CProgram groups ctorArs ctorTypes impls _ _) =
   cprogram
     (groups
       ++ [

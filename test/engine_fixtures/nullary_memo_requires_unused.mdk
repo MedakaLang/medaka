@@ -1,0 +1,35 @@
+-- A nullary return-position impl of a requires-bearing instance whose body does not
+-- read its prerequisite binds no dictionary, so it is a per-instance CAF like any
+-- other: its effect runs once however many occurrences force it.  Reached here
+-- through a runtime dictionary (`useTwice : HasUnit a =>`), twice per instance, so a
+-- per-occurrence call would print `[wrap] ` twice.  Every engine prints
+-- `[box] [wrap] BB00`.
+interface HasUnit a where
+  theUnit : <Stdout> a
+
+data Box = Box String
+
+data Wrap a = Wrap (List a)
+
+impl HasUnit Box where
+  theUnit =
+    let _ = putStr "[box] "
+    Box "B"
+
+impl HasUnit (Wrap a) requires HasUnit a where
+  theUnit =
+    let _ = putStr "[wrap] "
+    Wrap []
+
+wrapLen : Wrap a -> Int
+wrapLen (Wrap xs) = length xs
+
+unBox : Box -> String
+unBox (Box s) = s
+
+useTwice : HasUnit a => (a -> String) -> <Stdout> String
+useTwice un = un theUnit ++ un theUnit
+
+main =
+  putStrLn
+    (useTwice unBox ++ useTwice (w => intToString (wrapLen (w : Wrap Box))))

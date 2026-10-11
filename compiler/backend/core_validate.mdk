@@ -34,10 +34,16 @@
 -- dictionaries its callee binds.  Every given dictionary a route names is bound
 -- where the occurrence sits; a projection reads a given; a head instance key has
 -- an impl entry; a `CDict` of a top-level function supplies exactly the leading
--- `$dict` parameters that function takes, none of them `RNone`; and no route is
--- a scalar tag.  This reads routes as `core_ir_lower` published them, so it runs
--- on the emit path only: the default sexp printer drops an `RKey`'s prerequisite
--- and super routes, so a program parsed back from a dump would be refused.
+-- `$dict` parameters that function takes, none of them `RNone`; no route is a
+-- scalar tag; a dictionary built at the site from an instance carries exactly as
+-- many super and prerequisite dictionaries as the program's declaration facts
+-- give; and an occurrence answered by a dictionary names its interface.  A head
+-- instance is not held to its supers, which ride along only when the selected
+-- entry needs a receiver, nor to its prerequisites, which dict-passing drops from
+-- an entry whose body does not read them.  This reads routes and facts as
+-- `core_ir_lower` published them on the emit path, so it runs there only: the
+-- default sexp printer drops an `RKey`'s prerequisite and super routes, so a
+-- program parsed back from a dump would be refused.
 --
 -- The extern check: a runtime extern whose catalog row gives the backend no
 -- lowering (`NotProvided`) is refused wherever the program references it
@@ -60,6 +66,7 @@ import ir.core_ir.{
   ImplSym(..),
   MethodEvidence(..),
   CProgram(..),
+  DeclFacts(..),
   CallMode(..),
   CallSite(..),
 }
@@ -165,7 +172,7 @@ renderRecordRefusal bad = joinWith "\n" bad
 -- program order; empty for a well-stamped program.
 export
 validateCalls : CProgram -> List String
-validateCalls (prog@(CProgram _ _ _ impls _)) =
+validateCalls (prog@(CProgram _ _ _ impls _ _)) =
   match walkProgram LlvmBackend prog
     Walk _ _ _ bad _ _ => reverseL bad ++ splitGroupFaults impls omEmpty []
 
@@ -192,7 +199,7 @@ splitGroupFaults ((ent@(CImplEntry method _ _ body)) :: rest) seen acc =
 -- the method's declared context (see the header), in program order.
 export
 validateMethodContexts : CProgram -> List String
-validateMethodContexts (prog@(CProgram _ _ _ impls mctx)) =
+validateMethodContexts (prog@(CProgram _ _ _ impls mctx _)) =
   match walkProgram LlvmBackend prog
     Walk _ _ _ _ bad _ =>
       reverseL bad
@@ -238,7 +245,7 @@ leadingMethodDicts _ k _ = k
 -- nothing.
 export
 validateImplSymbols : CProgram -> List String
-validateImplSymbols (CProgram _ _ _ impls _) = flatMap implSymbolFaults impls
+validateImplSymbols (CProgram _ _ _ impls _ _) = flatMap implSymbolFaults impls
 
 implSymbolFaults : CImplEntry -> List String
 implSymbolFaults (CImplEntry method _ _ (CImplTagged tag key iface (ImplSym sym _ _) _ _ _)) =
@@ -331,12 +338,17 @@ noFindings : Walk
 noFindings = Walk omEmpty [] [] [] [] []
 
 -- The backend, the program's own names, its defined arities, its method-context
--- table, the leading `$dict` parameter count of each top-level binding, and the
--- top-level binding being read.
-data Ctx = Ctx Backend (OrdMap Unit) ArityEnv (OrdMap Int) (OrdMap Int) String
+-- table, the leading `$dict` parameter count of each top-level binding, the
+-- dictionary facts, and the top-level binding being read.
+data Ctx =
+  | Ctx Backend (OrdMap Unit) ArityEnv (OrdMap Int) (OrdMap Int) EvFacts String
+
+-- What a dictionary built at a site is held to (`DeclFacts`): each instance's
+-- `requires` count and each interface's super count.
+data EvFacts = EvFacts { efRequires : OrdMap Int, efSupers : OrdMap Int }
 
 walkProgram : Backend -> CProgram -> Walk
-walkProgram backend (prog@(CProgram groups ctors _ impls mctx)) =
+walkProgram backend (prog@(CProgram groups ctors _ impls mctx facts)) =
   let top = programNames groups ctors omEmpty
   let env = programArities prog
   let ctx =
@@ -346,6 +358,10 @@ walkProgram backend (prog@(CProgram groups ctors _ impls mctx)) =
       env
       (omFromPairs mctx omEmpty)
       (dictParamCounts groups omEmpty)
+      EvFacts {
+        efRequires = omFromPairs facts.factRequires omEmpty,
+        efSupers = omFromPairs facts.factSupers omEmpty,
+      }
       ""
   walkImpls ctx impls (walkBinds ctx groups noFindings)
 
@@ -360,11 +376,11 @@ walkImpls ctx ((CImplEntry method _ _ body) :: rest) w =
   walkImpls ctx rest (walkImplBody (inBinding ctx "impl \{method}") body w)
 
 inBinding : Ctx -> String -> Ctx
-inBinding (Ctx backend top env mctx dcounts _) binding =
-  Ctx backend top env mctx dcounts binding
+inBinding (Ctx backend top env mctx dcounts facts _) binding =
+  Ctx backend top env mctx dcounts facts binding
 
 ctxBinding : Ctx -> String
-ctxBinding (Ctx _ _ _ _ _ binding) = binding
+ctxBinding (Ctx _ _ _ _ _ _ binding) = binding
 
 walkImplBody : Ctx -> CImplBody -> Walk -> Walk
 walkImplBody ctx (CImplTagged tag _ _ _ _ pats body) w =
@@ -457,8 +473,8 @@ dictParamCounts ((CBind name ((CClause pats _) :: _) _) :: rest) acc =
 dictParamCounts (_ :: rest) acc = dictParamCounts rest acc
 
 noteEvidence : Ctx -> CallScope -> CExpr -> Walk -> Walk
-noteEvidence (Ctx _ _ env _ dcounts binding) scope node (Walk seen found bad calls ctxs evs) =
-  let why = evidenceFaults env dcounts scope node
+noteEvidence (Ctx _ _ env _ dcounts facts binding) scope node (Walk seen found bad calls ctxs evs) =
+  let why = evidenceFaults env dcounts facts scope node
   Walk
     seen
     found
@@ -471,8 +487,13 @@ noteEvidence (Ctx _ _ env _ dcounts binding) scope node (Walk seen found bad cal
           why)
       ++ evs)
 
-evidenceFaults : ArityEnv -> OrdMap Int -> CallScope -> CExpr -> List String
-evidenceFaults env _ scope (node@(CMethod name (MethodEvidence _ _ route prereqs meths))) =
+evidenceFaults : ArityEnv ->
+  OrdMap Int ->
+  EvFacts ->
+  CallScope ->
+  CExpr ->
+  List String
+evidenceFaults env _ facts scope (node@(CMethod name (MethodEvidence iface _ route prereqs meths))) =
   let routes = route :: prereqs ++ meths
   unboundFaults scope routes
     ++ flatMap routeShapeFaults routes
@@ -481,9 +502,12 @@ evidenceFaults env _ scope (node@(CMethod name (MethodEvidence _ _ route prereqs
         Some _ => []
         None => ["names instance `\{key}` that has no entry for `\{name}`"]
       _ => [])
-evidenceFaults _ dcounts scope (CDict f routes) =
+    ++ flatMap (builtDictFaults facts) (headParts route ++ prereqs ++ meths)
+    ++ ifaceWordFaults iface route
+evidenceFaults _ dcounts facts scope (CDict f routes) =
   unboundFaults scope routes
     ++ flatMap routeShapeFaults routes
+    ++ flatMap (builtDictFaults facts) routes
     ++ flatMap noRouteFault routes
     ++ (if omHasKey f scope then
       []
@@ -496,7 +520,50 @@ evidenceFaults _ dcounts scope (CDict f routes) =
             "supplies \{intToString (listLen routes)} dictionaries, `\{f}` takes \{intToString k}",
           ]
       None => [])
-evidenceFaults _ _ _ _ = []
+evidenceFaults _ _ _ _ _ = []
+
+-- The routes a dispatch answer is built from.  A head instance's own super routes
+-- ride along only when its entry needs a receiver, so the head is not held to its
+-- interface's super count; what it is built from is.
+headParts : Route -> List Route
+headParts (RKey _ reqs sups) = reqs ++ sups
+headParts (RLocal _ ds) = ds
+headParts (RProj r _) = [r]
+headParts _ = []
+
+-- A dictionary built at a site holds its interface's supers, then its instance's
+-- `requires`, so it carries exactly as many of each as the declarations give.  An
+-- instance or interface the program does not declare (a built-in dictionary of a
+-- prelude-free program) stores none, as the emitters lay it out.
+builtDictFaults : EvFacts -> Route -> List String
+builtDictFaults facts (RKey key reqs sups) =
+  let n = optionOr 0 (omLookup key facts.efRequires)
+  let word = ifaceWordOfKey key
+  let k = optionOr 0 (omLookup word facts.efSupers)
+  (if listLen reqs == n then
+      []
+    else
+      [
+        "builds instance `\{key}` from \{intToString (listLen reqs)} prerequisite dictionaries, it requires \{intToString n}",
+      ])
+    ++ (if listLen sups == k then
+      []
+    else
+      [
+        "builds instance `\{key}` with \{intToString (listLen sups)} super dictionaries, `\{word}` has \{intToString k}",
+      ])
+    ++ flatMap (builtDictFaults facts) (reqs ++ sups)
+builtDictFaults facts (RLocal _ ds) = flatMap (builtDictFaults facts) ds
+builtDictFaults facts (RProj r _) = builtDictFaults facts r
+builtDictFaults _ _ = []
+
+-- An occurrence answered by a dictionary names the interface whose method it is.
+ifaceWordFaults : String -> Route -> List String
+ifaceWordFaults "" (RKey _ _ _) = ["dispatches with no interface word"]
+ifaceWordFaults "" (RDict _) = ["dispatches with no interface word"]
+ifaceWordFaults "" (RDictFwd _) = ["dispatches with no interface word"]
+ifaceWordFaults "" (RProj _ _) = ["dispatches with no interface word"]
+ifaceWordFaults _ _ = []
 
 noRouteFault : Route -> List String
 noRouteFault RNone = ["has a dictionary slot with no route"]
@@ -540,7 +607,7 @@ givenRooted _ = False
 
 -- A method occurrence supplies one route per slot of its declared context.
 noteMethodContext : Ctx -> String -> String -> Int -> Walk -> Walk
-noteMethodContext (Ctx _ _ _ mctx _ binding) name iface n (w@(Walk seen found bad calls ctxs evs)) =
+noteMethodContext (Ctx _ _ _ mctx _ _ binding) name iface n (w@(Walk seen found bad calls ctxs evs)) =
   match omLookup (ifaceMethodArityKey iface name) mctx
     Some k =>
       if n == k then
@@ -602,7 +669,7 @@ fieldOrdinalText : CField -> String
 fieldOrdinalText (CField k o _) = "\{k}@\{intToString o}"
 
 noteRecordBad : Ctx -> String -> String -> Walk -> Walk
-noteRecordBad (Ctx _ _ _ _ _ binding) node why (Walk seen found bad calls ctxs evs) =
+noteRecordBad (Ctx _ _ _ _ _ _ binding) node why (Walk seen found bad calls ctxs evs) =
   Walk
     seen
     found
@@ -616,7 +683,7 @@ noteCall : Ctx -> CallScope -> CExpr -> List CExpr -> CallSite -> Walk -> Walk
 noteCall ctx _ _ [] _ w = noteCallBad ctx "application with no arguments" w
 noteCall ctx _ (CApp _ _ _) _ _ w =
   noteCallBad ctx "application whose head is an application" w
-noteCall (ctx@(Ctx _ _ env _ _ _)) scope hd args (CallSite mode _) w =
+noteCall (ctx@(Ctx _ _ env _ _ _ _)) scope hd args (CallSite mode _) w =
   let n = listLen args
   let arity = definedArityOf env scope hd
   if sameMode (callModeFor arity n) mode then
@@ -641,7 +708,7 @@ sameMode CallDynamic CallDynamic = True
 sameMode _ _ = False
 
 noteCallBad : Ctx -> String -> Walk -> Walk
-noteCallBad (Ctx _ _ _ _ _ binding) why (Walk seen found bad calls ctxs evs) =
+noteCallBad (Ctx _ _ _ _ _ _ binding) why (Walk seen found bad calls ctxs evs) =
   Walk seen found bad ("call: \{why} [in \{binding}]" :: calls) ctxs evs
 
 headText : CExpr -> String
@@ -652,7 +719,7 @@ headText (CLam _ _) = "a lambda"
 headText _ = "an expression"
 
 noteVar : Ctx -> CallScope -> String -> Walk -> Walk
-noteVar (Ctx backend top _ _ _ binding) scope x (w@(Walk seen found bad calls ctxs evs)) =
+noteVar (Ctx backend top _ _ _ _ binding) scope x (w@(Walk seen found bad calls ctxs evs)) =
   if omHasKey x scope || omHasKey x seen then
     w
   else match unprovidedOn backend x
@@ -721,7 +788,7 @@ walkStmts ctx scope ((CSAssign _ e) :: rest) w =
 -- statement of a block.
 export
 validateTails : CProgram -> List String
-validateTails (CProgram groups _ _ impls _) =
+validateTails (CProgram groups _ _ impls _ _) =
   reverseL (tailImpls impls (tailBinds groups []))
 
 export

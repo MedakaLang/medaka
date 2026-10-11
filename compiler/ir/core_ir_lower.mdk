@@ -64,6 +64,8 @@ import ir.core_ir.{
   ImplSym(..),
   noImplSym,
   CProgram(..),
+  DeclFacts(..),
+  noDeclFacts,
   CallMode(..),
   CallSite(..),
   mkApp,
@@ -78,6 +80,7 @@ import frontend.marker.{localBoundNames}
 import types.disposition.{
   DispositionTable,
   InstanceShape(..),
+  emptyDispositionTable,
   ifaceSuperCount,
   inheritorsOf,
   installedDispositions,
@@ -99,6 +102,8 @@ import support.ordmap.{
   omHasKey,
   omLookup,
   omFromPairs,
+  omFromNames,
+  omKeys,
 }
 -- `hashName`/`dictTag` are the two dict-witness tag mints, imported (not copied)
 -- so `dictWitnessTagGuard` checks the tag space the backends actually emit.
@@ -810,7 +815,8 @@ lowerProgramWith dispositions pins prog =
         (declaredMethodArities prog)
         dispositions
         prog)
-      (methodContextSlotCounts prog))
+      (methodContextSlotCounts prog)
+      noDeclFacts)
 
 -- ── which refutable lets keep their decision (see `letDecision`) ─────────────
 -- Only the native backend tests a refutable `let` through its decision; every
@@ -874,13 +880,14 @@ letDecisionSite t = match treeFailSiteOpt t
   _ => None
 
 refoldProgram : (Pat -> Bool) -> CProgram -> CProgram
-refoldProgram keep (CProgram groups ctorArs ctorTypes implEntries mctx) =
+refoldProgram keep (CProgram groups ctorArs ctorTypes implEntries mctx facts) =
   CProgram
     (map (refoldBind keep) groups)
     ctorArs
     ctorTypes
     (map (refoldImpl keep) implEntries)
     mctx
+    facts
 
 refoldBind : (Pat -> Bool) -> CBind -> CBind
 refoldBind keep (CBind n clauses site) =
@@ -1048,7 +1055,11 @@ lowerProgramEmitPinned target pins prog =
   let sited = match target
     TargetBothUnknown => prog
     _ => siteTrapCalls prog
-  let raw = lowerProgramWith (installedDispositionsOpt ()) pins sited
+  let dispositions = installedDispositionsOpt ()
+  let raw =
+    withDeclFacts
+      (emitDeclFacts dispositions sited)
+      (lowerProgramWith dispositions pins sited)
   -- #1950: refuse a program whose impls collide on ONE emitted symbol, here rather
   -- than letting clang report it unlocated.  Both backends reach this seam.
   let _ = implSymbolCollisionGuard raw
@@ -1066,8 +1077,26 @@ lowerProgramEmitPinned target pins prog =
             (patCanMiss (siblingTable (cprogramCtorTypes raw)))
             rewritten))
 
+-- The declaration facts an emitting lowering publishes (see `DeclFacts`): every
+-- instance's `requires` count, and the super count of each of their interfaces.
+-- Without a published table an interface has no supers, as the emitters lay a
+-- dictionary out (`llvm_emit.entrySuperCount`).
+emitDeclFacts : Option DispositionTable -> List Decl -> DeclFacts
+emitDeclFacts dispositions decls =
+  let reqs = instanceReqCounts decls
+  let table = optionOr emptyDispositionTable dispositions
+  let words = omKeys (omFromNames (map ifaceWordOfKey (omKeys reqs)) omEmpty)
+  DeclFacts {
+    factRequires = map (k => (k, optionOr 0 (omLookup k reqs))) (omKeys reqs),
+    factSupers = map (w => (w, ifaceSuperCount w table)) words,
+  }
+
+withDeclFacts : DeclFacts -> CProgram -> CProgram
+withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
+  CProgram groups ctorArs ctorTypes impls mctx facts
+
 cprogramCtorTypes : CProgram -> List (String, String)
-cprogramCtorTypes (CProgram _ _ ctorTypes _ _) = ctorTypes
+cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
 
 -- ── call modes: every application is read against its head's defined arity ────
 -- A head's defined arity is the parameter count of the clause the lowering
@@ -1095,7 +1124,7 @@ export type CallScope = OrdMap (Option Int)
 
 export
 programArities : CProgram -> ArityEnv
-programArities (CProgram groups ctors _ impls _) =
+programArities (CProgram groups ctors _ impls _ _) =
   ArityEnv
     (omFromPairs (map bindArityRow groups) omEmpty)
     (omFromPairs ctors omEmpty)
@@ -1240,7 +1269,7 @@ bindGroupScope ((CBind name clauses _) :: rest) s =
 -- (`mergeTailLambda`), and when even that leaves them different, none of them is
 -- expanded.
 etaSaturateProgram : CProgram -> CProgram
-etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls mctx)) =
+etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls mctx facts)) =
   let env = programArities prog
   let expanded = map (ent => (ent, etaEntry env ent)) impls
   let split = splitEntryGroups (map snd expanded) omEmpty omEmpty
@@ -1252,6 +1281,7 @@ etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls mctx)) =
     ctorTypes
     (map (keepWholeGroup stillSplit) merged)
     mctx
+    facts
 
 -- An entry of a split group, paired with its lambda-merged expansion.
 pickMerged : ArityEnv ->
@@ -1410,7 +1440,7 @@ applyAtTail body args = mkApp body args
 -- in scope itself: a local named like a top-level function is not that function.
 export
 stampCallModes : CProgram -> CProgram
-stampCallModes (prog@(CProgram groups ctors ctorTypes impls mctx)) =
+stampCallModes (prog@(CProgram groups ctors ctorTypes impls mctx facts)) =
   let env = programArities prog
   CProgram
     (map (callsBind env omEmpty) groups)
@@ -1418,6 +1448,7 @@ stampCallModes (prog@(CProgram groups ctors ctorTypes impls mctx)) =
     ctorTypes
     (map (callsEntry env) impls)
     mctx
+    facts
 
 callsBind : ArityEnv -> CallScope -> CBind -> CBind
 callsBind env scope (CBind name clauses site) =
@@ -1586,8 +1617,14 @@ callsField env scope (CField k o e) = CField k o (callsExpr env scope e)
 -- arm: a new expression form must decide whether it passes tail position on.
 export
 markTailSites : CProgram -> CProgram
-markTailSites (CProgram groups ctors ctorTypes impls mctx) =
-  CProgram (map tailBind groups) ctors ctorTypes (map tailEntry impls) mctx
+markTailSites (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram
+    (map tailBind groups)
+    ctors
+    ctorTypes
+    (map tailEntry impls)
+    mctx
+    facts
 
 tailBind : CBind -> CBind
 tailBind (CBind name clauses site) = CBind name (map tailClause clauses) site
@@ -1904,7 +1941,7 @@ rewriteRecPatField _ (RecPatField l fl None) = RecPatField l fl None
 -- built from the original PRec arms, which canonPat wildcarded; the rewritten PCon
 -- arms compile to a proper constructor switch with no needs-guard fall-through).
 rewriteProgramRecPats : List (String, List String) -> CProgram -> CProgram
-rewriteProgramRecPats fo0 (CProgram groups ctorArs ctorTypes implEntries mctx) =
+rewriteProgramRecPats fo0 (CProgram groups ctorArs ctorTypes implEntries mctx facts) =
   let fo = recOrdersOf fo0
   CProgram
     (map (rewriteBindRP fo) groups)
@@ -1912,6 +1949,7 @@ rewriteProgramRecPats fo0 (CProgram groups ctorArs ctorTypes implEntries mctx) =
     ctorTypes
     (map (rewriteImplRP fo) implEntries)
     mctx
+    facts
 
 rewriteBindRP : RecOrders -> CBind -> CBind
 rewriteBindRP fo (CBind n clauses site) =
@@ -2283,7 +2321,7 @@ memoSelectorOf ((m2, k2, sel) :: rest) m key =
 -- occurrence would name and is hoistable identically.  A method with ≥2 impls needs
 -- the RUNTIME-resolved tag (not statically hoistable) and is left per-call — the
 -- residual multi-impl RDict case tracked separately.  Subset of `keys` (already
--- nullary/return-position/no-requires), so it never over-memoises past eval.
+-- nullary/return-position/dictionary-free), so it never over-memoises past eval.
 soleMemoKeys : List CImplEntry ->
   List (String, String, String) ->
   List (String, (String, String))
@@ -2325,7 +2363,7 @@ distinctImplKeysL (_ :: rest) method cap acc =
 -- riding alongside it, so no walk function gained an argument.
 --
 --   • `memoKeysAll` — #747: ALL (method, key, selector) memo rows of the program
---     (nullary/return-position/no-requires impls), computed once in
+--     (nullary/return-position/dictionary-free impls), computed once in
 --     `hoistNullaryMemo`.  This is one value serving what would otherwise be two: the
 --     `keys` parameter the walk threaded (read by `hoistExpr`'s `memoSelectorOf` gate)
 --     and `allMemoKeysRef`, which `hoistNullaryMemo` always assigned that same
@@ -2404,10 +2442,10 @@ recordMultiImplMemoGo st name ((m, key, sel) :: rest)
 -- then prepend one synthesized CAF value-bind per referenced instance.  A no-op (the
 -- byte-identical old program) when the program defines no memoisable nullary method.
 hoistNullaryMemo : CProgram -> CProgram
-hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries mctx) =
+hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries mctx facts) =
   let keys = memoKeys implEntries
   if isEmptyL keys then
-    CProgram groups ctorArs ctorTypes implEntries mctx
+    CProgram groups ctorArs ctorTypes implEntries mctx facts
   else
     let st = LowerState {
       memoKeysAll = keys,
@@ -2417,13 +2455,29 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries mctx) =
     let groups2 = map (hoistBind st) groups
     let impls2 = map (hoistImpl st) implEntries
     let refs = dedupPairs (reverseL !st.memoRefs)
-    CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2 mctx
+    CProgram
+      (map memoCafBind refs ++ groups2)
+      ctorArs
+      ctorTypes
+      impls2
+      mctx
+      facts
 
+-- The CAF is the selected instance's method, under the interface word its key
+-- opens with.  It supplies no prerequisites: a memoised entry binds no parameters,
+-- dictionaries included (`memoKeysGo`'s `pats == []`; dict-passing prepends a
+-- `requires` dictionary only when the body reads it).
 memoCafBind : (String, String, String) -> CBind
 memoCafBind (sel, key, method) =
   CBind
     (memoBindName sel method)
-    [CClause [] (CMethod method (MethodEvidence "" 0 (RKey key [] []) [] []))]
+    [
+      CClause
+        []
+        (CMethod
+          method
+          (MethodEvidence (ifaceWordOfKey key) 0 (RKey key [] []) [] [])),
+    ]
     noDeclLoc
 
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
@@ -2725,10 +2779,16 @@ ifaceImplHeadEntries _ = []
 -- must not rename a symbol `prelude.o` already exports.
 export
 stampImplSymbols : List (String, String, String) -> CProgram -> CProgram
-stampImplSymbols pins (CProgram groups ctorArs ctorTypes impls mctx) =
+stampImplSymbols pins (CProgram groups ctorArs ctorTypes impls mctx facts) =
   let collide = collidingHeads (map implEntryRow impls) omEmpty omEmpty
   let pinned = pinTable pins omEmpty
-  CProgram groups ctorArs ctorTypes (map (stampEntry collide pinned) impls) mctx
+  CProgram
+    groups
+    ctorArs
+    ctorTypes
+    (map (stampEntry collide pinned) impls)
+    mctx
+    facts
 
 -- (method, head tag, canonical key) of an entry of either kind
 implEntryRow : CImplEntry -> (String, String, String)
@@ -2825,7 +2885,7 @@ implHeadKey m tag = "\{m}\n\{tag}"
 -- (`lowerProgramEmit`).  An entry carries no source location, so the message names
 -- the canonical dispatch keys, `<module>::<Interface>|<type arguments>|`.
 implSymbolCollisionGuard : CProgram -> Unit
-implSymbolCollisionGuard (CProgram _ _ _ impls _) =
+implSymbolCollisionGuard (CProgram _ _ _ impls _ _) =
   checkImplSymbolsInjective
     (dedupImplSymRows (flatMap taggedImplSymRow impls) omEmpty)
     omEmpty

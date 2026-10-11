@@ -231,7 +231,7 @@ evRoutesOf (EvMethod _ _ _ _ _) =
 -- `requires` dicts and the method's own `=>` dicts.  The arity is fixed from the selected scheme before application can
 -- specialize its result.
 --
--- Unlike `evDictRoutes`, a miss here is LOUD on every arm.  The typechecker mints
+-- As with `evDictRoutes`, a miss here is LOUD on every arm.  The typechecker mints
 -- one entry per `EMethodAt` node at the moment it constructs the node and
 -- publishes every one of them, so an id with no entry can only mean the table
 -- installed is not the one this node's elaboration published — the install-

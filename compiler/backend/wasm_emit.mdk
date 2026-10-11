@@ -198,6 +198,7 @@ import frontend.ast.{
 }
 import ir.core_ir.{
   CProgram(..),
+  noDeclFacts,
   CBind(..),
   CClause(..),
   CExpr(..),
@@ -892,7 +893,8 @@ makeWasmProgramIndexWithLazy groups ctorArs ctorTypes impls fnNames valNames laz
     fnImpl = WasmFnImplIndex {
       fnNames = fnIndex,
       valNames = valIndex,
-      arities = programArities (CProgram groups ctorArs ctorTypes impls []),
+      arities =
+        programArities (CProgram groups ctorArs ctorTypes impls [] noDeclFacts),
       implBuckets = groupImplsByMethodW impls,
       lazyGlobals = omFromNames lazyNames omEmpty,
     },
@@ -1374,7 +1376,7 @@ refuseUnprovidedExternsW emit input cp =
           findings
 
 emitProgramCore : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls _)) =
+emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls _ _)) =
   let _ = refuseUnprovidedExternsW emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
@@ -1570,13 +1572,13 @@ checkCalledNamesW defined (name :: rest) =
 -- so a recorded gap is attributed to its source binding.
 export
 emitProgramGaps : WasmEmitInput -> CProgram -> List String
-emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx) =
+emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx facts) =
   let emit = freshWasmEmit WGapRecord
   let _ =
     refuseUnprovidedExternsW
       emit
       input
-      (CProgram groups ctorArs ctorTypes impls mctx)
+      (CProgram groups ctorArs ctorTypes impls mctx facts)
   let _ = setRef emit.useStr (programUsesStr groups)
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
@@ -4852,7 +4854,7 @@ emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args end =
     CallTailW => chain ++ ["unreachable"]
 
 -- #747: the call instruction(s) a matched dispatch arm emits after its dictionaries
--- and arguments.  A nullary/return-position/no-requires impl (nArgs == 0 and a
+-- and arguments.  A nullary/return-position/dictionary-free impl (nArgs == 0 and a
 -- `$memo_<symTag>_<method>` LAZY value global synthesized by core_ir_lower —
 -- isLazyGlobalW confirms it exists) is a per-instance CAF: FORCE its shared CAF
 -- (`call $force_<memo>`, which memoises into `$<memo>` and black-holes a cyclic

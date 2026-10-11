@@ -1,5 +1,5 @@
 # META
-source_lines=284
+source_lines=285
 stages=DESUGAR,MARK
 # SOURCE
 -- DISPATCH-ROOTED REACHABILITY for the WasmGC MODULES emit path (#2359 / #2377).
@@ -100,7 +100,7 @@ import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 -- carry no code.
 export
 wasmReachFilter : CProgram -> CProgram
-wasmReachFilter (CProgram groups ctorArs ctorTypes impls mctx) =
+wasmReachFilter (CProgram groups ctorArs ctorTypes impls mctx facts) =
   let reach = reachKeys groups impls
   CProgram
     (filterList (b => has (bindKey b) reach) groups)
@@ -108,6 +108,7 @@ wasmReachFilter (CProgram groups ctorArs ctorTypes impls mctx) =
     ctorTypes
     (filterList (e => has (implKey e) reach) impls)
     mctx
+    facts
 
 -- local peer of wasm_emit's forEachU (module-private there); the HashMap builders
 -- below are effectful folds, not value folds.
@@ -292,7 +293,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "wasmReachFilter" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "wasmReachFilter" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx"))) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachKeys") (EVar "groups")) (EVar "impls"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "has") (EApp (EVar "bindKey") (EVar "b"))) (EVar "reach")))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "has") (EApp (EVar "implKey") (EVar "e"))) (EVar "reach")))) (EVar "impls"))) (EVar "mctx")))))
+(DFunDef false "wasmReachFilter" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachKeys") (EVar "groups")) (EVar "impls"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "has") (EApp (EVar "bindKey") (EVar "b"))) (EVar "reach")))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "has") (EApp (EVar "implKey") (EVar "e"))) (EVar "reach")))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
 (DTypeSig false "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
 (DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))
@@ -381,7 +382,7 @@ refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "wasmReachFilter" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "wasmReachFilter" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx"))) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachKeys") (EVar "groups")) (EVar "impls"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "has") (EApp (EVar "bindKey") (EVar "b"))) (EVar "reach")))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "has") (EApp (EVar "implKey") (EVar "e"))) (EVar "reach")))) (EVar "impls"))) (EVar "mctx")))))
+(DFunDef false "wasmReachFilter" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachKeys") (EVar "groups")) (EVar "impls"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "has") (EApp (EVar "bindKey") (EVar "b"))) (EVar "reach")))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "has") (EApp (EVar "implKey") (EVar "e"))) (EVar "reach")))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
 (DTypeSig false "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
 (DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))

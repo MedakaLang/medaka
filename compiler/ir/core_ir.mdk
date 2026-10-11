@@ -379,8 +379,8 @@ noImplSym = ImplSym "" "" ""
 -- A lowered program: top-level function groups (coalesced multi-clause), the
 -- constructor table (name → arity, for building VCon makers), the ctor→type map
 -- eval needs for runtime type tags, (slice 5) the lowered typeclass
--- impl/default entries, and the method-context table.  Slice-1 programs carry an
--- empty impl list.
+-- impl/default entries, the method-context table and the declaration facts.
+-- Slice-1 programs carry an empty impl list.
 -- The method-context table: per interface method of the lowered declarations whose
 -- own `=>` context has a slot, keyed by `core_ir_lower.ifaceMethodArityKey`, the
 -- number of constraints in that context that mention a type variable.  It is read
@@ -388,4 +388,20 @@ noImplSym = ImplSym "" "" ""
 -- `core_validate.validateMethodContexts` can hold a `CMethod`'s method routes and an
 -- impl entry's leading dictionaries to it.
 public export data CProgram =
-  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int))
+  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
+
+-- The declaration facts a dictionary built at a site is held to
+-- (`core_validate.validateDispatchEvidence`): each instance's `requires` count,
+-- keyed by its canonical key word (`core_ir_lower.instanceReqCounts`), and each of
+-- those instances' interfaces' direct superinterface count, keyed by interface
+-- word (`disposition.ifaceSuperCount`).  A dictionary stores the supers, then the
+-- requires.  Only an emitting lowering fills them; every other lowering carries
+-- `noDeclFacts`.
+public export data DeclFacts = DeclFacts {
+  factRequires : List (String, Int),
+  factSupers : List (String, Int),
+}
+
+export
+noDeclFacts : DeclFacts
+noDeclFacts = DeclFacts { factRequires = [], factSupers = [] }
