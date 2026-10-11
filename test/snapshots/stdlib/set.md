@@ -44,7 +44,7 @@ import core.{
   Option,
   FromEntries,
 }
-import string.{join}
+import list.{intersperse}
 
 {- | The set type.
 
@@ -485,10 +485,10 @@ export impl Debug (Set a) requires Debug a where
   debug s = "fromList \{debug (toList s)}"
 
 -- Comma-joined elements for `Display (Set a)`; renders via `display` (unquoted).
--- One `join` over the rendered elements; the recursive form copied the whole
+-- One `stringConcat` over the rendered elements; the recursive form copied the whole
 -- remaining string at every element, which is quadratic in the set's size.
 displaySetItems : Display a => List a -> String
-displaySetItems xs = join ", " (map display xs)
+displaySetItems xs = stringConcat (intersperse ", " (map display xs))
 
 {- | `display` renders a set in its literal syntax, `Set { x, ... }`.
 
@@ -683,7 +683,7 @@ prop "display of a one-element set has no separator" (x : Int) =
   display (singleton x) == "Set { \{x} }"
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false))))
-(DUse false (UseGroup ("string") ((mem "join" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false))))
 (DData Public "Set" ("a") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "a") (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "bin" ((PVar "x") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "r")))
@@ -794,7 +794,7 @@ prop "display of a one-element set has no separator" (x : Int) =
 (DImpl true "Ord" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "toList") (EVar "a"))) (EApp (EVar "toList") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "toList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displaySetItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displaySetItems" ((PVar "xs")) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "display")) (EVar "xs"))))
+(DFunDef false "displaySetItems" ((PVar "xs")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "intersperse") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "display")) (EVar "xs")))))
 (DImpl true "Display" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "toList") (EVar "s")) (arm (PList) () (ELit (LString "Set {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "Set { ")) (EApp (EVar "display") (EApp (EVar "displaySetItems") (EVar "xs")))) (ELit (LString " }"))))))))
 (DImpl true "Semigroup" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "union") (EVar "a")) (EVar "b")))))
 (DImpl true "FromEntries" ((TyApp (TyCon "Set") (TyVar "a")) (TyVar "a")) ((req "Ord" ((TyVar "a")))) ((im "fromEntries" ((PVar "es")) (EApp (EVar "fromList") (EVar "es")))))
@@ -847,7 +847,7 @@ prop "display of a one-element set has no separator" (x : Int) =
 (DProp false "display of a one-element set has no separator" ((pp "x" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "display") (EApp (EVar "singleton") (EVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Set { ")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " }")))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false))))
-(DUse false (UseGroup ("string") ((mem "join" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false))))
 (DData Public "Set" ("a") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "a") (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyFun (TyApp (TyCon "Set") (TyVar "a")) (TyApp (TyCon "Set") (TyVar "a"))))))
 (DFunDef false "bin" ((PVar "x") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "x")) (EVar "l")) (EVar "r")))
@@ -958,7 +958,7 @@ prop "display of a one-element set has no separator" (x : Int) =
 (DImpl true "Ord" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EMethodRef "toList") (EVar "a"))) (EApp (EMethodRef "toList") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EMethodRef "toList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displaySetItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displaySetItems" ((PVar "xs")) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EMethodRef "display")) (EVar "xs"))))
+(DFunDef false "displaySetItems" ((PVar "xs")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "intersperse") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EMethodRef "display")) (EVar "xs")))))
 (DImpl true "Display" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EMethodRef "toList") (EVar "s")) (arm (PList) () (ELit (LString "Set {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "Set { ")) (EApp (EMethodRef "display") (EApp (EDictApp "displaySetItems") (EVar "xs")))) (ELit (LString " }"))))))))
 (DImpl true "Semigroup" ((TyApp (TyCon "Set") (TyVar "a"))) ((req "Ord" ((TyVar "a")))) ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EDictApp "union") (EVar "a")) (EVar "b")))))
 (DImpl true "FromEntries" ((TyApp (TyCon "Set") (TyVar "a")) (TyVar "a")) ((req "Ord" ((TyVar "a")))) ((im "fromEntries" ((PVar "es")) (EApp (EDictApp "fromList") (EVar "es")))))

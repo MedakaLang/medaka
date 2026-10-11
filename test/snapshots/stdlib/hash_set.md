@@ -1,5 +1,5 @@
 # META
-source_lines=296
+source_lines=295
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable set of distinct elements, keyed by hash.
@@ -27,7 +27,6 @@ stages=DESUGAR,MARK
 
 import core.{Ordering(..), Ord, Debug, Display, Foldable, Hashable}
 import list as L
-import string.{join}
 
 {- | The hash set type. Its fields are the bucket array and the element
    count, both mutable. -}
@@ -255,10 +254,10 @@ export impl Debug (HashSet a) requires Debug a where
 -- `display s == display (fromList (toList s))`.  The sort is `list.sort`: one
 -- ordering routine for the whole stdlib.
 
--- One `join` over the rendered elements; the recursive form copied the whole
+-- One `stringConcat` over the rendered elements; the recursive form copied the whole
 -- remaining string at every element, which is quadratic in the set's size.
 displayItems : Display a => List a -> String
-displayItems xs = join ", " (map display xs)
+displayItems xs = stringConcat (L.intersperse ", " (map display xs))
 
 {- | `display` renders a set as `HashSet { x, ... }` with the elements in
    ascending order, so the text depends only on the elements.
@@ -301,7 +300,6 @@ prop "display of a one-element HashSet has no separator" (x : Int) =
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
 (DUse false (UseAlias ("list") "L"))
-(DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "HashSet" ("a") ((variant "HashSet" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
 (DFunDef false "initialCapacity" () (ELit (LInt 8)))
@@ -360,7 +358,7 @@ prop "display of a one-element HashSet has no separator" (x : Int) =
 (DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displayItems" ((PVar "xs")) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "display")) (EVar "xs"))))
+(DFunDef false "displayItems" ((PVar "xs")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "L.intersperse") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "display")) (EVar "xs")))))
 (DImpl true "Display" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Display" ((TyVar "a"))) (req "Ord" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "s"))) (arm (PList) () (ELit (LString "HashSet {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EVar "display") (EApp (EVar "displayItems") (EVar "xs")))) (ELit (LString " }"))))))))
 (DTypeSig false "ascendingL" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "ascendingL" ((PList)) (EVar "True"))
@@ -372,7 +370,6 @@ prop "display of a one-element HashSet has no separator" (x : Int) =
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
 (DUse false (UseAlias ("list") "L"))
-(DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "HashSet" ("a") ((variant "HashSet" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
 (DFunDef false "initialCapacity" () (ELit (LInt 8)))
@@ -431,7 +428,7 @@ prop "display of a one-element HashSet has no separator" (x : Int) =
 (DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EDictApp "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displayItems" ((PVar "xs")) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EMethodRef "display")) (EVar "xs"))))
+(DFunDef false "displayItems" ((PVar "xs")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "L.intersperse") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EMethodRef "display")) (EVar "xs")))))
 (DImpl true "Display" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Display" ((TyVar "a"))) (req "Ord" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "s"))) (arm (PList) () (ELit (LString "HashSet {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EMethodRef "display") (EApp (EDictApp "displayItems") (EVar "xs")))) (ELit (LString " }"))))))))
 (DTypeSig false "ascendingL" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "ascendingL" ((PList)) (EVar "True"))

@@ -23,7 +23,6 @@
 
 import core.{Ordering(..), Ord, Debug, Display, Foldable, Hashable}
 import list as L
-import string.{join}
 
 {- | The hash set type. Its fields are the bucket array and the element
    count, both mutable. -}
@@ -251,10 +250,10 @@ export impl Debug (HashSet a) requires Debug a where
 -- `display s == display (fromList (toList s))`.  The sort is `list.sort`: one
 -- ordering routine for the whole stdlib.
 
--- One `join` over the rendered elements; the recursive form copied the whole
+-- One `stringConcat` over the rendered elements; the recursive form copied the whole
 -- remaining string at every element, which is quadratic in the set's size.
 displayItems : Display a => List a -> String
-displayItems xs = join ", " (map display xs)
+displayItems xs = stringConcat (L.intersperse ", " (map display xs))
 
 {- | `display` renders a set as `HashSet { x, ... }` with the elements in
    ascending order, so the text depends only on the elements.

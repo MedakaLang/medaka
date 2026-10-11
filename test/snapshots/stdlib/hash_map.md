@@ -34,7 +34,6 @@ import core.{
   Ordering(..), Ord, Debug, Display, Option, Mappable, Hashable, Index
 }
 import list as L
-import string.{join}
 
 {- | The hash table type. Its fields are the bucket array and the entry
    count, both mutable. -}
@@ -331,10 +330,11 @@ export impl Debug (HashMap k v) requires Debug k, Debug v where
 -- `list.sortOn fst`: one ordering routine for the whole stdlib.
 
 -- Comma-joined `k => v` entries, mirroring `map.mdk`'s `displayMapEntries`.
--- One `join` over the rendered entries; the recursive form copied the whole
+-- One `stringConcat` over the rendered entries; the recursive form copied the whole
 -- remaining string at every entry, which is quadratic in the table's size.
 displayEntries : (Display k, Display v) => List (k, v) -> String
-displayEntries es = join ", " (map ((k, v) => "\{k} => \{v}") es)
+displayEntries es =
+  stringConcat (L.intersperse ", " (map ((k, v) => "\{k} => \{v}") es))
 
 {- | `display` renders a table as `HashMap { k => v, ... }` with the entries
    in ascending key order, so the text depends only on the entries.
@@ -399,7 +399,6 @@ prop "display of a one-entry HashMap has no separator" (k : Int) (v : Int) =
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Mappable" false) (mem "Hashable" false) (mem "Index" false))))
 (DUse false (UseAlias ("list") "L"))
-(DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "HashMap" ("k" "v") ((variant "HashMap" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
 (DFunDef false "initialCapacity" () (ELit (LInt 8)))
@@ -465,7 +464,7 @@ prop "display of a one-entry HashMap has no separator" (k : Int) (v : Int) =
 (DImpl true "Eq" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Eq" ((TyVar "k"))) (req "Eq" ((TyVar "v"))) (req "Hashable" ((TyVar "k")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "allEntriesIn") (EApp (EVar "entries") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Debug" ((TyVar "k"))) (req "Debug" ((TyVar "v")))) ((im "debug" ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "entries") (EVar "m"))))) (ELit (LString ""))))))
 (DTypeSig false "displayEntries" (TyConstrained ((cstr "Display" (TyVar "k")) (cstr "Display" (TyVar "v"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "String"))))
-(DFunDef false "displayEntries" ((PVar "es")) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ""))))) (EVar "es"))))
+(DFunDef false "displayEntries" ((PVar "es")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "L.intersperse") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ""))))) (EVar "es")))))
 (DImpl true "Display" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Display" ((TyVar "k"))) (req "Display" ((TyVar "v"))) (req "Ord" ((TyVar "k")))) ((im "display" ((PVar "m")) (EMatch (EApp (EApp (EVar "L.sortOn") (EVar "fst")) (EApp (EVar "entries") (EVar "m"))) (arm (PList) () (ELit (LString "HashMap {}"))) (arm (PVar "es") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashMap { ")) (EApp (EVar "display") (EApp (EVar "displayEntries") (EVar "es")))) (ELit (LString " }"))))))))
 (DImpl true "Index" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyVar "k") (TyVar "v")) ((req "Eq" ((TyVar "k"))) (req "Hashable" ((TyVar "k"))) (req "Debug" ((TyVar "k")))) ((im "index" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "key not found: ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "k")))) (ELit (LString "")))))))))
 (DProp false "Display HashMap is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "display") (EVar "m")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "entries") (EVar "m"))))) (EBinOp "==" (EApp (EVar "display") (EVar "m")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EApp (EVar "entries") (EVar "m"))))))))))
@@ -479,7 +478,6 @@ prop "display of a one-entry HashMap has no separator" (k : Int) (v : Int) =
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Mappable" false) (mem "Hashable" false) (mem "Index" false))))
 (DUse false (UseAlias ("list") "L"))
-(DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "HashMap" ("k" "v") ((variant "HashMap" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
 (DFunDef false "initialCapacity" () (ELit (LInt 8)))
@@ -545,7 +543,7 @@ prop "display of a one-entry HashMap has no separator" (k : Int) (v : Int) =
 (DImpl true "Eq" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Eq" ((TyVar "k"))) (req "Eq" ((TyVar "v"))) (req "Hashable" ((TyVar "k")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EDictApp "allEntriesIn") (EApp (EVar "entries") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Debug" ((TyVar "k"))) (req "Debug" ((TyVar "v")))) ((im "debug" ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "entries") (EVar "m"))))) (ELit (LString ""))))))
 (DTypeSig false "displayEntries" (TyConstrained ((cstr "Display" (TyVar "k")) (cstr "Display" (TyVar "v"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "String"))))
-(DFunDef false "displayEntries" ((PVar "es")) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ""))))) (EVar "es"))))
+(DFunDef false "displayEntries" ((PVar "es")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "L.intersperse") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ""))))) (EVar "es")))))
 (DImpl true "Display" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v"))) ((req "Display" ((TyVar "k"))) (req "Display" ((TyVar "v"))) (req "Ord" ((TyVar "k")))) ((im "display" ((PVar "m")) (EMatch (EApp (EApp (EVar "L.sortOn") (EVar "fst")) (EApp (EVar "entries") (EVar "m"))) (arm (PList) () (ELit (LString "HashMap {}"))) (arm (PVar "es") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashMap { ")) (EApp (EMethodRef "display") (EApp (EDictApp "displayEntries") (EVar "es")))) (ELit (LString " }"))))))))
 (DImpl true "Index" ((TyApp (TyApp (TyCon "HashMap") (TyVar "k")) (TyVar "v")) (TyVar "k") (TyVar "v")) ((req "Eq" ((TyVar "k"))) (req "Hashable" ((TyVar "k"))) (req "Debug" ((TyVar "k")))) ((im "index" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "key not found: ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "k")))) (ELit (LString "")))))))))
 (DProp false "Display HashMap is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "display") (EVar "m")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EVar "entries") (EVar "m"))))) (EBinOp "==" (EApp (EMethodRef "display") (EVar "m")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EVar "L.reverse") (EApp (EVar "entries") (EVar "m"))))))))))
