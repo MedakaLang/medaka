@@ -12276,7 +12276,7 @@ routeWalkMemoized : String ->
   List Route
 routeWalkMemoized encl useScope goals row walk follow =
   let memo = reqWalkMemo walk
-  let iface = ieRowIface row
+  let iface = first3 (ieRowTriple row)
   let key = enteredGoalKey walk
   let entries = optionOr [] (omLookup key memo.wmRoutes.value)
   match routeWalkRecorded iface goals row encl useScope entries
@@ -32780,7 +32780,7 @@ implDictRoutesForRow encl useScope goals row =
         useScope
         subst
         reqs
-        (reqWalkSeed (ieRowIface row) goals)
+        (reqWalkSeed (first3 (ieRowTriple row)) goals)
     None => []
 
 -- Missing predicate-vector metadata keeps the scalar result-head match used by
@@ -32796,7 +32796,7 @@ legacyReturnReqRoutesForRow encl useScope resultMono row =
             useScope
             subst
             reqs
-            (reqWalkSeed (ieRowIface row) [resultMono])
+            (reqWalkSeed (first3 (ieRowTriple row)) [resultMono])
         None => []
     None => []
 
@@ -33046,8 +33046,8 @@ data Undetermined = KeepNone | CountImpls IfaceRef
 --     return-position (name∈rpNames), else RDict; EKNestedTop routes RDict.
 --   * inst: EKReturn selects one row for its canonical key and element routes;
 --     EKNestedTop stamps the
---     canonical key of the min⊑ winner + `argImplRequiresRoutesForRow`-packed requires (with
---     the W2 depth fuse).
+--     canonical key of the min⊑ winner + `argImplRequiresRoutesForRow`-packed requires (under
+--     the shared W2 measure, `reqWalkEnter`).
 --   * fallback: EKReturn → RNone; EKNestedTop → the caller-supplied `Undetermined` policy.
 -- #156 S3c wired arg-position + operator sites in (EKArg / EKOp below).
 data EntailKind =
@@ -33710,9 +33710,11 @@ ambiguousImplMsg iface =
 -- one every solving walk uses: a step to a strictly smaller goal is free, so a ground
 -- chain like `impl Tag (Wrap a) requires Tag a` at `Wrap^34 Int` routes at any depth
 -- its type needs (#1576); a non-shrinking step spends fuel; a repeated goal is a cycle.
--- The solving walks follow the same goals under that measure and reject a cycle or a
--- spent walk at the goal's site, so this walk reaches either outcome only on a
--- rejected program (`requiresRouteWalkCut`).
+-- This walk also enters each super of a goal beside it (`superRoutesAt`) and follows
+-- that super instance's `requires`.  The solving walks follow the same goals under that
+-- measure, the super goals included (`checkSuperContext`, entered beside the goal the
+-- same way), and reject a cycle or a spent walk at the goal's site, so this walk
+-- reaches either outcome only on a rejected program (`requiresRouteWalkCut`).
 --
 -- The caller supplies the selected row, so the route word and the context it
 -- discharges name the same impl (§6 C2) by construction.
@@ -33724,7 +33726,7 @@ argImplRequiresRoutesForRow : String ->
   ImplRow ->
   List Route
 argImplRequiresRoutesForRow encl useScope m goals walk row =
-  match reqWalkEnter walk (ieRowIface row) goals
+  match reqWalkEnter walk (first3 (ieRowTriple row)) goals
     ReqOn next => routeWalkMemoized
       encl
       useScope
@@ -33742,8 +33744,9 @@ argImplRequiresRoutesForRow encl useScope m goals walk row =
       requiresRouteWalkCut cut
 
 -- A route walk that met a cycle or ran out of fuel.  The solving walks share its
--- measure and reject the same goal at its site, so this is reached only on a program
--- that already carries a type error, and its routes are never emitted.  With no error
+-- measure and follow the same goals, a super instance's `requires` included
+-- (`checkSuperContext`), and reject the goal at its site, so this is reached only on a
+-- program that already carries a type error, and its routes are never emitted.  With no error
 -- recorded it is a compiler invariant failure, never a silent `[]` (#1910).
 requiresRouteWalkCut : ReqStep -> List Route
 requiresRouteWalkCut _ =
@@ -38560,9 +38563,6 @@ ieRowOfIface iface (ImplRow _ _ ir _ _ _) = ieRowIfaceMatches ir iface
 ieRowTys : ImplRow -> List Ty
 ieRowTys (ImplRow _ _ _ tys _ _) = tys
 
-ieRowIface : ImplRow -> IfaceRef
-ieRowIface (ImplRow _ _ iface _ _ _) = iface
-
 rowHeadMatches : List Mono -> ImplRow -> Bool
 rowHeadMatches args row = isSome (implHeadSubst (ieRowTys row) args)
 
@@ -38636,7 +38636,8 @@ monoIsFunction m = match normalize m
 -- (empty) requires and accepts, so `(5, "hi")` / `[1,2,3]` still build.
 -- The recursion is bounded by the shared `requires` measure: [walk] is the path that
 -- reached (iface, args), and a repeated or non-shrinking-past-fuel goal is reported at
--- [loc] (#1575, #2120).
+-- [loc] (#1575, #2120).  The goal's dictionary also carries its supers', so each super
+-- instance's `requires` is checked too (`checkSuperContext`).
 checkNestedReqs : ImplUniverse ->
   ReqWalk ->
   IfaceRef ->
@@ -38652,9 +38653,50 @@ checkNestedReqs univ walk iface args loc scope =
     -- repeat a push.  It leaves `goalSiteLoc` as a full check would.
     Some next if walkGoalDischarged next iface args => goalSiteLoc := None
     Some next =>
-      let (erred, _) =
-        erredDuring (_ => checkEnteredReqs univ next iface args loc scope)
+      let (erred, _) = erredDuring (_ =>
+        let _ = checkEnteredReqs univ next iface args loc scope
+        fold
+          (_ sg => checkSuperContext univ walk sg loc scope)
+          ()
+          (superGoalClosure iface args))
       if erred then () else noteWalkGoalDischarged next iface args
+
+-- A dictionary for a goal carries one for each of its interface's supers at the same
+-- arguments (DICT-SEMANTICS §2), built by the instance each of those selects, so that
+-- instance's `requires` is part of the goal's.  A super goal is entered beside the
+-- goal, on the walk that reached it, as the route walk enters it (`superRoutesAt`).  A
+-- super with no instance is the impl declaration's error (`checkSuperImpls`).
+checkSuperContext : ImplUniverse ->
+  ReqWalk ->
+  (IfaceRef, List Mono) ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+checkSuperContext univ walk (iface, args) loc scope
+  | not (allConcreteHeads args && implMatchesU univ iface args) = ()
+  | otherwise = match reqWalkReported loc (reqWalkEnter walk iface args)
+    Some next => checkEnteredReqs univ next iface args loc scope
+    None => ()
+
+-- The goals of [iface]'s supers at [args], transitively, each interface once, so a
+-- cyclic super graph (rejected by W1) still ends.
+superGoalClosure : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+superGoalClosure iface args = superGoalClosureGo [(iface, args)] [iface] []
+
+superGoalClosureGo : List (IfaceRef, List Mono) ->
+  List IfaceRef ->
+  List (IfaceRef, List Mono) ->
+  List (IfaceRef, List Mono)
+superGoalClosureGo [] _ acc = reverseL acc
+superGoalClosureGo ((iface, args) :: rest) seen acc =
+  let step =
+    st sg => match sg
+      (sup, Some supArgs) if not (anyList (sameIfaceDecl sup) (fst st)) =>
+        (sup :: fst st, (sup, supArgs) :: snd st)
+      _ => st
+  let (seen2, found) = fold step (seen, []) (directSuperGoals iface args)
+  let fresh = reverseL found
+  superGoalClosureGo (rest ++ fresh) seen2 (found ++ acc)
 
 -- `checkNestedReqs` below a goal [walk] has just entered.
 checkEnteredReqs : ImplUniverse ->
@@ -45797,17 +45839,25 @@ residualPredsOf chosen walk iface args
 
 -- Whether every use of the binder selects the instance the goal matches now
 -- (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or among the
--- instance heads that unify with it, those variables free and every other one rigid,
--- one matches it and is ⊑ every other (`goalReach`'s stable minimum).
+-- instance heads that unify with it, one matches it and is ⊑ every other
+-- (`goalReach`'s stable minimum).  Only a variable some binder declared
+-- (`declaredSigVarIds`) is held rigid in that unification: an enclosing binder's
+-- variable that is not generalized yet can still become a type another instance
+-- head needs.
 residualSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
 residualSelectionStable chosen iface args =
   let goalIds = dedupI (flatMap monoUnboundIds args)
   if not (anyIn goalIds chosen) then
     True
   else
+    let declared = perRun.value.declaredSigVarIds.value
     let rigidIds =
       omFromNames
-        (map intToString (filterList (i => not (containsI i chosen)) goalIds))
+        (map
+          intToString
+          (filterList
+            (i => not (containsI i chosen) && omHasKey (intToString i) declared)
+            goalIds))
         omEmpty
     let cands =
       filterList

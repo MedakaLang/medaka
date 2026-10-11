@@ -511,6 +511,7 @@ checkSigsFixedByExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List 
 checkSigsOverExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List (String, Ty, List (String, Mono)) -> Unit
 checkSigsTooGeneral : List (String, Ty, List (String, Mono)) -> Unit
 checkStmtNotDiscarded : List UObligation -> Mono -> Expr -> Unit
+checkSuperContext : ImplUniverse -> ReqWalk -> (IfaceRef, List Mono) -> Option Loc -> ScopeId -> Unit
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
 checkSuperKinds : List Decl -> String -> List String -> List (Option KindAnn) -> List IfaceMethod -> List Super -> Unit
 checkSurvivorCallObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
@@ -1439,7 +1440,6 @@ ieRowAdmittedBy : IfaceRef -> Option (List IfaceRef) -> Bool
 ieRowAnswersMethod : ImplRow -> List String -> String -> Option (List IfaceRef) -> Bool
 ieRowHeadMatches : List Ty -> List Mono -> Bool
 ieRowHeadTriple : Option ImplRow -> Option (Ty, List Ty, List Require)
-ieRowIface : ImplRow -> IfaceRef
 ieRowIfaceMatches : IfaceRef -> IfaceRef -> Bool
 ieRowInheritsDefault : ImplRow -> String -> Bool
 ieRowInst : ImplRow -> InstRef
@@ -3048,6 +3048,8 @@ substituteIndex : Ref Authvar -> Authority -> Unit
 substituteIndexLinked : Ref Authvar -> Authority -> Unit
 suggestField : String -> List String -> Option String
 summaryEscape : Bool -> List Atom -> List Atom -> List Atom
+superGoalClosure : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+superGoalClosureGo : List (IfaceRef, List Mono) -> List IfaceRef -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
 superImplMsgsOf : ClassEnv -> Int -> List ImplRow -> Decl -> List String
 superLookup : IfaceRef -> Option (List String, List Super)
