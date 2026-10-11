@@ -628,3 +628,57 @@ test "(q) the impl entries of one method and route word take one arity" = expect
           (widenFirstEntry "foo" (typedLowered i2078Prelude mixedGroupSrc))),
     ),
   ]
+
+-- An impl group whose first clause returns a lambda literal: that clause takes
+-- the lambda's parameter, so both entries take two.  When a `let` stands before
+-- the lambda, the clause keeps its one parameter and the group is refused.
+lamGroupSrc : String
+lamGroupSrc =
+  "interface Foo a where\n  foo : a -> Int -> Int\ndata T = A | B\nimpl Foo T where\n  foo A = (y => y + 1)\n  foo B y = y - 3\nmain = foo A 5"
+
+letLamGroupSrc : String
+letLamGroupSrc =
+  "interface Foo a where\n  foo : a -> Int -> Int\ndata T = A | B\nimpl Foo T where\n  foo A = let z = 1 + 0 in (y => y + z)\n  foo B y = y - 3\nmain = foo A 5"
+
+test "(r) an impl clause returning a lambda literal takes the lambda's parameters" = expectEach
+  [
+    (
+      "the group then takes one arity and validates clean",
+      expectEqual [] (validateCalls (typedLowered i2078Prelude lamGroupSrc)),
+    ),
+    (
+      "a clause with a `let` before its lambda keeps its arity and is refused",
+      expectEqual
+        [
+          "call: impl entry takes 2 value parameters, the first entry of its group 1 [in impl foo@calls.T]",
+        ]
+        (validateCalls (typedLowered i2078Prelude letLamGroupSrc)),
+    ),
+  ]
+
+-- ── the `Ref` read ──────────────────────────────────────────────────────────
+
+-- A record that declares a field `value`, beside a `Ref` read `!r`.
+refValueSrc : String
+refValueSrc =
+  "data Entry = Entry { name : String, value : Int }\nmain =\n  let e = Entry { name = \"k\", value = 42 }\n  let r = e\n  !r"
+
+test "(s) `.value` is the Ref read, never a record field" = expectEach [
+  (
+    "lowering leaves `!r` unstamped though a record declares `value`",
+    expectAll [
+      labelFail
+        "native"
+        (expectEqual [] (recordFindings TargetNative refValueSrc)),
+      labelFail "wasm" (expectEqual [] (recordFindings TargetWasm refValueSrc)),
+    ],
+  ),
+  (
+    "a `.value` read stamped with a record ordinal is refused",
+    expectEqual
+      [
+        "record: CFieldAccess Entry.value: a Ref read stamped with field ordinal 1 [in main]",
+      ]
+      (validateRecords (unstamped (CFieldAccess zero "value" "Entry" 1))),
+  ),
+]

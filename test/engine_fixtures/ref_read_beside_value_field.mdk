@@ -1,0 +1,18 @@
+-- A `Ref` read `!r` in a program where a record declares a field named `value`:
+-- the read is the cell's contents, never that record's field.
+-- Read with no engine in the loop: the record's `value` is 42, the cell holds
+-- 7, then 7 + 1 = 8, and the record's `name` is "k".
+
+data Entry = Entry { name : String, value : Int }
+
+valueOf : Entry -> Int
+valueOf (Entry { value = v }) = v
+
+main =
+  let e = Entry { name = "k", value = 42 }
+  let r = Ref 7
+  println (valueOf e)
+  println !r
+  r := !r + 1
+  println !r
+  println e.name

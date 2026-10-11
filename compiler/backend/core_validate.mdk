@@ -329,10 +329,21 @@ walkE ctx scope (CBlock stmts) w = walkStmts ctx scope stmts w
 walkE _ _ (CMethod _ _ _ _ _ _) w = w
 walkE _ _ (CDict _ _) w = w
 
--- A field access is stamped, or reads a `Ref` cell through `.value`.
+-- A field access is stamped, or reads a `Ref` cell through `.value`, which is
+-- never stamped: an emitter reading a stamped `.value` as a record field would
+-- cast the cell to whichever record declares a field `value`.
 noteAccess : Ctx -> String -> String -> Int -> Walk -> Walk
+noteAccess ctx "value" name ord w =
+  if ord == -1 then
+    w
+  else
+    noteRecordBad
+      ctx
+      "CFieldAccess"
+      "\{name}.value: a Ref read stamped with field ordinal \{intToString ord}"
+      w
 noteAccess ctx label name ord w =
-  if ord >= 0 || label == "value" then
+  if ord >= 0 then
     w
   else
     noteRecordBad

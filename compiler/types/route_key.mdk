@@ -345,6 +345,12 @@ export
 numIntWord : String
 numIntWord = "core::Num|Int|"
 
+-- The dictionary word of the prelude's `Num Float` instance, whose `fromInt`
+-- cannot fail.
+export
+numFloatWord : String
+numFloatWord = "core::Num|Float|"
+
 -- ── the type-head word (#1397) ───────────────────────────────────────────
 -- The word a type head contributes to every impl tag, route word, dictionary
 -- word and runtime type tag: the prelude's and the language's types by their
@@ -491,6 +497,10 @@ rkTyBool : Ty
 rkTyBool =
   TyCon { tyConName = "Bool", tyConLoc = None, tyConOrigin = OriginUnresolved }
 
+rkTyFloat : Ty
+rkTyFloat =
+  TyCon { tyConName = "Float", tyConLoc = None, tyConOrigin = OriginUnresolved }
+
 rkTyIntM : Ty
 rkTyIntM =
   TyCon { tyConName = "Int", tyConLoc = None, tyConOrigin = OriginModule "m" }
@@ -552,6 +562,8 @@ rkTyList =
 
 -- `numIntWord` is `implRouteKeyWord`'s word for the prelude's `Num Int`.
 -- > numIntWord == implRouteKeyWord (OriginModule "core") "Num" [rkTyInt] None
+-- True
+-- > numFloatWord == implRouteKeyWord (OriginModule "core") "Num" [rkTyFloat] None
 -- True
 
 -- `implRouteKeyWord`, origin PRESENT: the #1047/#1265 route-word substitution

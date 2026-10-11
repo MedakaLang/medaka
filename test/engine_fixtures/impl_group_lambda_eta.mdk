@@ -1,0 +1,23 @@
+-- Two clauses of one impl method of different arities: `foo A` returns a lambda
+-- literal, `foo B` takes the method's second parameter itself.  They are one
+-- define, so both take the same parameters.
+-- Read with no engine in the loop: `foo A 5` is 5 + 1 = 6, `foo B 5` is
+-- 5 - 3 = 2, `map (foo B) [1, 2]` is [1 - 3, 2 - 3] = [-2, -1], and
+-- `map (foo A) [1, 2]` is [2, 3].
+
+interface Foo a where
+  foo : a -> Int -> Int
+
+data T = A | B
+
+-- The lambda literal is the shape under test.
+-- lint-disable-next-line rule-lambda-section
+impl Foo T where
+  foo A = y => y + 1
+  foo B y = y - 3
+
+main =
+  println (foo A 5)
+  println (foo B 5)
+  println (map (foo B) [1, 2])
+  println (map (foo A) [1, 2])

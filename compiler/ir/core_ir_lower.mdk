@@ -42,7 +42,12 @@ import frontend.ast.{
 -- both sides of the dict-word seam call `route_key.implRouteKeyWord` with the
 -- impl's own `implOrigin`.
 import types.route_key.{
-  implRouteKeyWord, ifaceWordOf, evDictRoutes, evMethodRoutes
+  implRouteKeyWord,
+  ifaceWordOf,
+  evDictRoutes,
+  evMethodRoutes,
+  numIntWord,
+  numFloatWord,
 }
 import ir.core_ir.{
   CExpr(..),
@@ -1043,7 +1048,7 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
 -- occurrence supplies), a constructor's field count.  Each public lowering ends
 -- with `finishLowering`: one eta pass, which may lengthen a clause, then
 -- `stampCallModes`, which writes the mode into every application from the
--- clauses as they now are.  `core_validate.validateCalls` reads the same
+-- clauses the eta pass produced.  `core_validate.validateCalls` reads the same
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
 finishLowering : CProgram -> CProgram
@@ -1202,21 +1207,64 @@ bindGroupScope ((CBind name clauses _) :: rest) s =
 -- entry never grows past its method's declared arity.  Applies to top-level
 -- bindings of one clause and to impl entries.  The entries of one method and
 -- route word are the clauses of one define, so they are expanded together: when
--- the pass would leave them taking different arities, none of them is expanded.
+-- the pass would leave them taking different arities, each entry of the group
+-- whose body is a lambda literal first takes that lambda's parameters
+-- (`mergeTailLambda`), and when even that leaves them different, none of them is
+-- expanded.
 etaSaturateProgram : CProgram -> CProgram
 etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls)) =
   let env = programArities prog
   let expanded = map (ent => (ent, etaEntry env ent)) impls
   let split = splitEntryGroups (map snd expanded) omEmpty omEmpty
+  let merged = map (pickMerged env split) expanded
+  let stillSplit = splitEntryGroups (map snd merged) omEmpty omEmpty
   CProgram
     (map (etaBind env) groups)
     ctors
     ctorTypes
-    (map (keepWholeGroup split) expanded)
+    (map (keepWholeGroup stillSplit) merged)
+
+-- An entry of a split group, paired with its lambda-merged expansion.
+pickMerged : ArityEnv ->
+  OrdMap Unit ->
+  (CImplEntry, CImplEntry) ->
+  (CImplEntry, CImplEntry)
+pickMerged env split (before, after) =
+  if omHasKey (fst (entryArityRow before)) split then
+    (before, etaEntry env (mergeEntryLambda before))
+  else
+    (before, after)
 
 keepWholeGroup : OrdMap Unit -> (CImplEntry, CImplEntry) -> CImplEntry
 keepWholeGroup split (before, after) =
   if omHasKey (fst (entryArityRow before)) split then before else after
+
+mergeEntryLambda : CImplEntry -> CImplEntry
+mergeEntryLambda (CImplEntry m s declared (CImplTagged tag key iface pos pats body)) =
+  let (pats2, body2) = mergeTailLambda declared pats body
+  CImplEntry m s declared (CImplTagged tag key iface pos pats2 body2)
+mergeEntryLambda (CImplEntry m s declared (CImplDefault w tag key pos pats body)) =
+  let (pats2, body2) = mergeTailLambda declared pats body
+  CImplEntry m s declared (CImplDefault w tag key pos pats2 body2)
+
+-- A clause whose body is a lambda literal takes the lambda's parameters as its
+-- own, up to [declared] value parameters.  Building a closure runs nothing, so
+-- no one can tell the two apart, provided each lambda parameter is a plain
+-- variable (a refutable one would fall through to the next clause instead of
+-- failing) that no clause parameter already binds.
+mergeTailLambda : Int -> List Pat -> CExpr -> (List Pat, CExpr)
+mergeTailLambda declared pats (body@(CLam (lamPats@(_ :: _)) inner)) =
+  let bound = bindPatsScope pats omEmpty
+  if valueArity pats + listLen lamPats <= declared
+    && allList (isFreshVarPat bound) lamPats then
+    mergeTailLambda declared (pats ++ lamPats) inner
+  else
+    (pats, body)
+mergeTailLambda _ pats body = (pats, body)
+
+isFreshVarPat : CallScope -> Pat -> Bool
+isFreshVarPat bound (PVar x _) = not (omHasKey x bound)
+isFreshVarPat _ _ = False
 
 -- The (method, route word) groups whose entries take more than one value arity,
 -- keyed as `entryArityKey`.
@@ -1295,15 +1343,18 @@ spineOf (CApp f args _) =
   (hd, inner ++ args)
 spineOf e = (e, [])
 
--- an argument whose evaluation has no effect and does no work worth delaying
+-- an argument whose evaluation has no effect and does no work worth delaying.  A
+-- literal's `fromInt` is one only through the prelude's `Num` at `Int` and
+-- `Float`, whose conversions cannot fail: any other impl may panic (a range
+-- check), and delaying it would move or drop the panic.
 isAtomicArg : CExpr -> Bool
 isAtomicArg (CVar _ _) = True
 isAtomicArg (CLit _) = True
 isAtomicArg (CLam _ _) = True
 isAtomicArg (CMethod _ _ _ _ _ _) = True
 isAtomicArg (CDict _ _) = True
-isAtomicArg (CApp (CMethod name _ _ (RKey _ _ _) _ _) [CLit _] _) =
-  name == "fromInt" || name == "fromFloat"
+isAtomicArg (CApp (CMethod "fromInt" _ _ (RKey key _ _) _ _) [CLit _] _) =
+  key == numIntWord || key == numFloatWord
 isAtomicArg _ = False
 
 isFunctionBind : CBind -> Bool
@@ -2025,7 +2076,10 @@ labelOrdinalFrom _ _ [] = -1
 labelOrdinalFrom i label (l :: rest) =
   if l == label then i else labelOrdinalFrom (i + 1) label rest
 
+-- `.value` is always the `Ref` read (the typechecker refuses it on a record), so
+-- it stays unstamped even when some record declares a field `value`.
 stampFieldAccess : RecOrders -> CExpr -> String -> String -> CExpr
+stampFieldAccess _ ex "value" n = CFieldAccess ex "value" n (-1)
 stampFieldAccess fo ex f n = match resolveRecord fo n f
   Some (name, labels) => CFieldAccess ex f name (labelOrdinal f labels)
   None => CFieldAccess ex f n (-1)
