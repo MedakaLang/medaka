@@ -60,7 +60,8 @@ import list.{sort}
 import path.{basename}
 import string.{contains, endsWith, padRight, replaceAll, stripSuffix, unlines}
 import test.{
-  Expectation, expectAll, expectEqual, expectLineContainsAll, fail, pass
+  Expectation, expectAll, expectEqual, expectLineContainsAll, expectTrue, fail,
+  pass
 }
 import test_process.{
   boundedVerbSeconds,
@@ -1502,29 +1503,51 @@ test "binaryRanClean distinguishes a panicking binary from a clean one" =
 
 -- # Spawning a sweep side by side
 
+-- Whether a spawn exited with `want` and wrote exactly `errText` to stderr.
+exitedWith : Int -> String -> Result String (Int, String, String) -> Bool
+exitedWith want errText (Ok (code, _, err)) = code == want && err == errText
+exitedWith _ _ (Err _) = False
+
 test "boundedVerbsSeconds answers each row as boundedVerbSeconds does, in order" =
   let rows = [
     ("sh", ["-c", "sleep 0.3; printf first"]),
     ("sh", ["-c", "printf second >&2; exit 3"]),
     ("medaka-no-such-command", []),
   ]
-  expectEqual
-    (map ((cmd, args) => boundedVerbSeconds 5 cmd args) rows)
-    (boundedVerbsSeconds 5 rows)
+  let answers = boundedVerbsSeconds 5 rows
+  match answers
+    [first, second, _] => expectAll [
+      expectEqual
+        (map ((cmd, args) => boundedVerbSeconds 5 cmd args) rows)
+        answers,
+      expectTrue (exitedWith 0 "" first),
+      expectTrue (exitedWith 3 "second" second),
+    ]
+    _ => fail "expected one answer per row, got \{debug answers}"
 
 -- 142 is 128 + SIGALRM, the signal the alarm kills a hanging spawn with.
 test "a hanging row of a batch is killed by its alarm and the others still answer" =
-  expectEqual
-    [Ok (0, "before", ""), Ok (142, "", ""), Ok (0, "after", "")]
-    (boundedVerbsSeconds 1 [
-      ("sh", ["-c", "printf before"]),
-      ("sleep", ["30"]),
-      ("sh", ["-c", "printf after"]),
-    ])
+  let answers = boundedVerbsSeconds 1 [
+    ("sh", ["-c", "printf before"]),
+    ("sleep", ["30"]),
+    ("sh", ["-c", "printf after"]),
+  ]
+  match answers
+    [before, hung, after] => expectAll [
+      expectEqual
+        [Ok (0, "before", ""), Ok (142, "", ""), Ok (0, "after", "")]
+        answers,
+      expectTrue (exitedWith 0 "" before),
+      expectTrue (exitedWith 142 "" hung),
+      expectTrue (exitedWith 0 "" after),
+    ]
+    _ => fail "expected one answer per row, got \{debug answers}"
 
 -- What a result says, short of an `Agreement`, which has no `Eq`.
-spawnedOutputs : Result String Agreement -> Result String (String, String)
-spawnedOutputs r = map (a => (a.runOut, a.binOut)) r
+spawnedOutputs : Result String Agreement ->
+  Result String (String, String, String, Bool)
+spawnedOutputs r =
+  map (a => (a.runOut, a.binOut, verdictOf a.runCode, binaryRanClean a)) r
 
 test "two fixtures planned onto one binary path are refused, and neither spawns" =
   expectEqual
@@ -1542,7 +1565,7 @@ test "two fixtures planned onto one binary path are refused, and neither spawns"
 -- Two fixtures that share a basename in different directories, each built
 -- to the path `binName` derives from its whole entry path.
 sameBasenameOutputs : String ->
-  <Exec, FileRead, FileWrite, IO> Result String (List (Result String (String, String)))
+  <Exec, FileRead, FileWrite, IO> Result String (List (Result String (String, String, String, Bool)))
 sameBasenameOutputs dir = do
   _ <- mkdirAll "\{dir}/x"
   _ <- mkdirAll "\{dir}/y"
@@ -1556,7 +1579,9 @@ sameBasenameOutputs dir = do
 
 test "fixtures sharing a basename in different directories grade independently" = withScratchDir
   (dir =>
-    expectEqual (Ok [Ok ("x", "x"), Ok ("y", "y")]) (sameBasenameOutputs dir))
+    expectEqual
+      (Ok [Ok ("x", "x", "ACCEPT", True), Ok ("y", "y", "ACCEPT", True)])
+      (sameBasenameOutputs dir))
 
 -- `warnChecks` is looked up by `find (warnCheckFor r.entry) warnChecks` while
 -- sweeping `table` (`gradeOne`), so an entry naming no row is never visited

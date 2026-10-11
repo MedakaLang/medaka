@@ -47,6 +47,7 @@
 import compiler_cli_test_support.{
   Agreement(..),
   EngineDeath(..),
+  binaryRanClean,
   RuntimeOutcome(..),
   checkRunBuildAll,
   fatalOutcomeSweep,
@@ -55,7 +56,7 @@ import compiler_cli_test_support.{
 import io.{runVerb}
 import list.{somes, zipWith}
 import string.{trim}
-import test.{Expectation, expectEach, expectEqual, fail}
+import test.{Expectation, expectAll, expectEach, expectEqual, fail}
 import test_process.{medakaRoot}
 
 corpus : <IO> String
@@ -147,9 +148,15 @@ gradeOrderRow : (String, String, Int) ->
 gradeOrderRow (name, _, _) (Err e) = (name, fail e)
 gradeOrderRow (name, _, code) (Ok a) = (
   name,
-  expectEqual
-    [(code, "ABC"), (code, "ABC")]
-    [(a.runCode, a.runOut), (a.binCode, a.binOut)],
+  expectAll
+    [
+      expectEqual
+        [(code, "ABC"), (code, "ABC")]
+        [(a.runCode, a.runOut), (a.binCode, a.binOut)],
+      -- Only the zero-exit rows leave the binary clean: a nonzero exit and a
+      -- panic both fail `binaryRanClean`.
+      expectEqual (code == 0) (binaryRanClean a),
+    ],
 )
 
 -- Every row's program written first, then all of them run side by side.
