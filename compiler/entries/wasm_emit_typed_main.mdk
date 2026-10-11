@@ -52,6 +52,7 @@ import ir.core_ir.{
 }
 import ir.core_ir_lower.{
   lowerProgramEmit,
+  markTailSites,
   stampCallModes,
   EmitTarget(..),
   declSigTypeNames,
@@ -128,14 +129,15 @@ typedInput runtimeDecls preludeDecls userDecls =
     (declaredRecordFieldOrders mangled)
     []
 
--- A hand-built program, its applications stamped as a lowering's are.
+-- A hand-built program, its applications stamped and tail-flagged as a
+-- lowering's are.
 cprogram : List CBind ->
   List (String, Int) ->
   List (String, String) ->
   List CImplEntry ->
   CProgram
 cprogram groups ctorArs ctorTypes impls =
-  stampCallModes (CProgram groups ctorArs ctorTypes impls)
+  markTailSites (stampCallModes (CProgram groups ctorArs ctorTypes impls))
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =

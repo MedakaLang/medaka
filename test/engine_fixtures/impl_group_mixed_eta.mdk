@@ -1,0 +1,25 @@
+-- Two clauses of one impl method whose tails are short of the method's two
+-- parameters: `foo A = add 1` is point-free, `foo B = sub (3 + 0)` computes its
+-- argument first.  They are one define, so both take the same parameters.
+-- Read with no engine in the loop: `foo A 5` is `add 1 5` = 6, `foo B 5` is
+-- `sub 3 5` = -2, and `map (foo B) [1, 2]` is [3 - 1, 3 - 2] = [2, 1].
+
+add : Int -> Int -> Int
+add a b = a + b
+
+sub : Int -> Int -> Int
+sub a b = a - b
+
+interface Foo a where
+  foo : a -> Int -> Int
+
+data T = A | B
+
+impl Foo T where
+  foo A = add 1
+  foo B = sub (3 + 0)
+
+main =
+  println (foo A 5)
+  println (foo B 5)
+  println (map (foo B) [1, 2])

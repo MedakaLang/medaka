@@ -1,5 +1,5 @@
 # META
-source_lines=3837
+source_lines=3873
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1060,8 +1060,8 @@ public export data ArityEnv =
   | ArityEnv (OrdMap Int) (OrdMap Int) (OrdMap Int) (OrdMap Int)
 
 -- The local binders in scope: `Some k` for a let-group function whose clauses
--- take k parameters, `None` for any other binder.  A local shadows a top-level
--- name of the same spelling.
+-- take k parameters or a `let` of a k-parameter lambda, `None` for any other
+-- binder.  A local shadows a top-level name of the same spelling.
 export type CallScope = OrdMap (Option Int)
 
 export
@@ -1080,6 +1080,8 @@ clausesArity : List CClause -> Int
 clausesArity ((CClause pats _) :: _) = listLen pats
 clausesArity [] = 0
 
+-- An entry's group key (`entryArityKey`) and value arity.
+export
 entryArityRow : CImplEntry -> (String, Int)
 entryArityRow (CImplEntry m _ _ (CImplTagged _ key _ _ pats _)) =
   (entryArityKey m key, valueArity pats)
@@ -1149,6 +1151,14 @@ callModeFor (Some k) n =
   else
     CallOver (n - k)
 
+-- The scope after `let pat = rhs`: a variable bound to a lambda is a function
+-- local of the lambda's parameter count, any other binder a non-function local.
+export
+bindLetScope : Pat -> CExpr -> CallScope -> CallScope
+bindLetScope (PVar x _) (CLam (ps@(_ :: _)) _) s =
+  omInsert x (Some (listLen ps)) s
+bindLetScope pat _ s = bindPatScope pat s
+
 -- The scope after a pattern: each variable it binds is a non-function local.
 export
 bindPatScope : Pat -> CallScope -> CallScope
@@ -1194,11 +1204,34 @@ bindGroupScope ((CBind name clauses _) :: rest) s =
 -- the head's defined arity, read before the pass lengthens anything; through a
 -- runtime dictionary it is the least arity of any entry of the method.  An impl
 -- entry never grows past its method's declared arity.  Applies to top-level
--- bindings of one clause and to impl entries.
+-- bindings of one clause and to impl entries.  The entries of one method and
+-- route word are the clauses of one define, so they are expanded together: when
+-- the pass would leave them taking different arities, none of them is expanded.
 etaSaturateProgram : CProgram -> CProgram
 etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls)) =
   let env = programArities prog
-  CProgram (map (etaBind env) groups) ctors ctorTypes (map (etaEntry env) impls)
+  let expanded = map (ent => (ent, etaEntry env ent)) impls
+  let split = splitEntryGroups (map snd expanded) omEmpty omEmpty
+  CProgram
+    (map (etaBind env) groups)
+    ctors
+    ctorTypes
+    (map (keepWholeGroup split) expanded)
+
+keepWholeGroup : OrdMap Unit -> (CImplEntry, CImplEntry) -> CImplEntry
+keepWholeGroup split (before, after) =
+  if omHasKey (fst (entryArityRow before)) split then before else after
+
+-- The (method, route word) groups whose entries take more than one value arity,
+-- keyed as `entryArityKey`.
+splitEntryGroups : List CImplEntry -> OrdMap Int -> OrdMap Unit -> OrdMap Unit
+splitEntryGroups [] _ split = split
+splitEntryGroups (ent :: rest) seen split =
+  let (key, n) = entryArityRow ent
+  let split2 = match omLookup key seen
+    Some k => if k == n then split else omInsert key () split
+    None => split
+  splitEntryGroups rest (omInsert key n seen) split2
 
 etaBind : ArityEnv -> CBind -> CBind
 etaBind env (b@(CBind name [CClause pats body] site)) =
@@ -1228,7 +1261,10 @@ etaEntryClause env declared pats body =
 -- the parameters the clause's tail is short of, 0 when it may not be expanded
 etaMissing : ArityEnv -> CallScope -> CExpr -> Int
 etaMissing env scope (CLet _ pat rhs body) =
-  if isAtomicArg rhs then etaMissing env (bindPatScope pat scope) body else 0
+  if isAtomicArg rhs then
+    etaMissing env (bindLetScope pat rhs scope) body
+  else
+    0
 etaMissing env scope (CLetGroup binds body) =
   if allList isFunctionBind binds then
     etaMissing env (bindGroupScope binds scope) body
@@ -1359,7 +1395,7 @@ callsExpr _ _ (CVar x addr) = CVar x addr
 callsExpr env scope (CLam pats body) =
   CLam pats (callsExpr env (bindPatsScope pats scope) body)
 callsExpr env scope (CLet recF pat rhs body) =
-  let inner = bindPatScope pat scope
+  let inner = bindLetScope pat rhs scope
   CLet
     recF
     pat
@@ -1458,7 +1494,7 @@ callsStmts _ _ [] = []
 callsStmts env scope ((CSExpr e) :: rest) =
   CSExpr (callsExpr env scope e) :: callsStmts env scope rest
 callsStmts env scope ((CSLet recF pat e) :: rest) =
-  let inner = bindPatScope pat scope
+  let inner = bindLetScope pat e scope
   CSLet recF pat (callsExpr env (if recF then inner else scope) e)
     :: callsStmts env inner rest
 callsStmts env scope ((CSAssign x e) :: rest) =
@@ -4215,7 +4251,7 @@ nodeTag _ = "?"
 (DTypeSig false "clausesArity" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Int")))
 (DFunDef false "clausesArity" ((PCons (PCon "CClause" (PVar "pats") PWild) PWild)) (EApp (EVar "listLen") (EVar "pats")))
 (DFunDef false "clausesArity" ((PList)) (ELit (LInt 0)))
-(DTypeSig false "entryArityRow" (TyFun (TyCon "CImplEntry") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DTypeSig true "entryArityRow" (TyFun (TyCon "CImplEntry") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "entryArityRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild (PVar "pats") PWild))) (ETuple (EApp (EApp (EVar "entryArityKey") (EVar "m")) (EVar "key")) (EApp (EVar "valueArity") (EVar "pats"))))
 (DFunDef false "entryArityRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplDefault" PWild PWild (PVar "key") PWild (PVar "pats") PWild))) (ETuple (EApp (EApp (EVar "entryArityKey") (EVar "m")) (EVar "key")) (EApp (EVar "valueArity") (EVar "pats"))))
 (DTypeSig false "entryArityKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -4243,6 +4279,9 @@ nodeTag _ = "?"
 (DTypeSig true "callModeFor" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "CallMode"))))
 (DFunDef false "callModeFor" ((PCon "None") PWild) (EVar "CallDynamic"))
 (DFunDef false "callModeFor" ((PCon "Some" (PVar "k")) (PVar "n")) (EIf (EBinOp "==" (EVar "n") (EVar "k")) (EVar "CallExact") (EIf (EBinOp "<" (EVar "n") (EVar "k")) (EApp (EVar "CallPartial") (EBinOp "-" (EVar "k") (EVar "n"))) (EApp (EVar "CallOver") (EBinOp "-" (EVar "n") (EVar "k"))))))
+(DTypeSig true "bindLetScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyCon "CallScope") (TyCon "CallScope")))))
+(DFunDef false "bindLetScope" ((PCon "PVar" (PVar "x") PWild) (PCon "CLam" (PAs "ps" (PCons PWild PWild)) PWild) (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EApp (EVar "Some") (EApp (EVar "listLen") (EVar "ps")))) (EVar "s")))
+(DFunDef false "bindLetScope" ((PVar "pat") PWild (PVar "s")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "s")))
 (DTypeSig true "bindPatScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
 (DFunDef false "bindPatScope" ((PCon "PVar" (PVar "x") PWild) (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EVar "None")) (EVar "s")))
 (DFunDef false "bindPatScope" ((PCon "PWild") (PVar "s")) (EVar "s"))
@@ -4265,7 +4304,12 @@ nodeTag _ = "?"
 (DFunDef false "bindGroupScope" ((PList) (PVar "s")) (EVar "s"))
 (DFunDef false "bindGroupScope" ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindGroupScope") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EApp (EVar "Some") (EApp (EVar "clausesArity") (EVar "clauses")))) (EVar "s"))))
 (DTypeSig false "etaSaturateProgram" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "etaSaturateProgram" ((PAs "prog" (PCon "CProgram" (PVar "groups") (PVar "ctors") (PVar "ctorTypes") (PVar "impls")))) (EBlock (DoLet false false (PVar "env") (EApp (EVar "programArities") (EVar "prog"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EVar "etaBind") (EVar "env"))) (EVar "groups"))) (EVar "ctors")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EApp (EVar "etaEntry") (EVar "env"))) (EVar "impls"))))))
+(DFunDef false "etaSaturateProgram" ((PAs "prog" (PCon "CProgram" (PVar "groups") (PVar "ctors") (PVar "ctorTypes") (PVar "impls")))) (EBlock (DoLet false false (PVar "env") (EApp (EVar "programArities") (EVar "prog"))) (DoLet false false (PVar "expanded") (EApp (EApp (EVar "map") (ELam ((PVar "ent")) (ETuple (EVar "ent") (EApp (EApp (EVar "etaEntry") (EVar "env")) (EVar "ent"))))) (EVar "impls"))) (DoLet false false (PVar "split") (EApp (EApp (EApp (EVar "splitEntryGroups") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "expanded"))) (EVar "omEmpty")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EVar "etaBind") (EVar "env"))) (EVar "groups"))) (EVar "ctors")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EApp (EVar "keepWholeGroup") (EVar "split"))) (EVar "expanded"))))))
+(DTypeSig false "keepWholeGroup" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "CImplEntry") (TyCon "CImplEntry")) (TyCon "CImplEntry"))))
+(DFunDef false "keepWholeGroup" ((PVar "split") (PTuple (PVar "before") (PVar "after"))) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EApp (EVar "entryArityRow") (EVar "before")))) (EVar "split")) (EVar "before") (EVar "after")))
+(DTypeSig false "splitEntryGroups" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "splitEntryGroups" ((PList) PWild (PVar "split")) (EVar "split"))
+(DFunDef false "splitEntryGroups" ((PCons (PVar "ent") (PVar "rest")) (PVar "seen") (PVar "split")) (EBlock (DoLet false false (PTuple (PVar "key") (PVar "n")) (EApp (EVar "entryArityRow") (EVar "ent"))) (DoLet false false (PVar "split2") (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "seen")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EVar "split") (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (ELit LUnit)) (EVar "split")))) (arm (PCon "None") () (EVar "split")))) (DoExpr (EApp (EApp (EApp (EVar "splitEntryGroups") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "n")) (EVar "seen"))) (EVar "split2")))))
 (DTypeSig false "etaBind" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CBind") (TyCon "CBind"))))
 (DFunDef false "etaBind" ((PVar "env") (PAs "b" (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PVar "pats") (PVar "body"))) (PVar "site")))) (EBlock (DoLet false false (PVar "missing") (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body"))) (DoExpr (EIf (EBinOp ">" (EVar "missing") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EListLit (EApp (EApp (EApp (EVar "etaClause") (EVar "missing")) (EVar "pats")) (EVar "body")))) (EVar "site")) (EVar "b")))))
 (DFunDef false "etaBind" (PWild (PVar "b")) (EVar "b"))
@@ -4275,7 +4319,7 @@ nodeTag _ = "?"
 (DTypeSig false "etaEntryClause" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "CClause")))))))
 (DFunDef false "etaEntryClause" ((PVar "env") (PVar "declared") (PVar "pats") (PVar "body")) (EBlock (DoLet false false (PVar "room") (EBinOp "-" (EVar "declared") (EApp (EVar "valueArity") (EVar "pats")))) (DoLet false false (PVar "wanted") (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body"))) (DoLet false false (PVar "missing") (EApp (EApp (EVar "min") (EVar "room")) (EVar "wanted"))) (DoExpr (EIf (EBinOp ">" (EVar "missing") (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "etaClause") (EVar "missing")) (EVar "pats")) (EVar "body"))) (EVar "None")))))
 (DTypeSig false "etaMissing" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CExpr") (TyCon "Int")))))
-(DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PCon "CLet" PWild (PVar "pat") (PVar "rhs") (PVar "body"))) (EIf (EApp (EVar "isAtomicArg") (EVar "rhs")) (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "body")) (ELit (LInt 0))))
+(DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PCon "CLet" PWild (PVar "pat") (PVar "rhs") (PVar "body"))) (EIf (EApp (EVar "isAtomicArg") (EVar "rhs")) (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "rhs")) (EVar "scope"))) (EVar "body")) (ELit (LInt 0))))
 (DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EIf (EApp (EApp (EVar "allList") (EVar "isFunctionBind")) (EVar "binds")) (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindGroupScope") (EVar "binds")) (EVar "scope"))) (EVar "body")) (ELit (LInt 0))))
 (DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PVar "tailE")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EVar "spineOf") (EVar "tailE"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isAtomicArg")) (EVar "args")) (EMatch (EApp (EApp (EApp (EVar "etaTargetArity") (EVar "env")) (EVar "scope")) (EVar "hd")) (arm (PCon "Some" (PVar "k")) () (EBinOp "-" (EVar "k") (EApp (EVar "listLen") (EVar "args")))) (arm (PCon "None") () (ELit (LInt 0)))) (ELit (LInt 0))))))
 (DTypeSig false "etaTargetArity" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -4325,7 +4369,7 @@ nodeTag _ = "?"
 (DFunDef false "callsExpr" (PWild PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "callsExpr" (PWild PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
 (DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
-(DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "rhs"))) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
+(DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "rhs")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "rhs"))) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindGroupScope") (EVar "binds")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EApp (EApp (EVar "callsBind") (EVar "env")) (EVar "inner"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "callsArm") (EVar "env")) (EVar "scope"))) (EVar "arms"))))
 (DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EApp (EVar "callsArm") (EVar "env")) (EVar "scope"))) (EVar "arms"))) (EVar "tree")))
@@ -4361,7 +4405,7 @@ nodeTag _ = "?"
 (DTypeSig false "callsStmts" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "CStmt"))))))
 (DFunDef false "callsStmts" (PWild PWild (PList)) (EListLit))
 (DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "CSExpr") (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "scope")) (EVar "rest"))))
-(DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "inner")) (EVar "rest"))))))
+(DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "e")) (EVar "scope"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "inner")) (EVar "rest"))))))
 (DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "scope")) (EVar "rest"))))
 (DTypeSig false "callsField" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CField") (TyCon "CField")))))
 (DFunDef false "callsField" ((PVar "env") (PVar "scope") (PCon "CField" (PVar "k") (PVar "o") (PVar "e"))) (EApp (EApp (EApp (EVar "CField") (EVar "k")) (EVar "o")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))))
@@ -5475,7 +5519,7 @@ nodeTag _ = "?"
 (DTypeSig false "clausesArity" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Int")))
 (DFunDef false "clausesArity" ((PCons (PCon "CClause" (PVar "pats") PWild) PWild)) (EApp (EVar "listLen") (EVar "pats")))
 (DFunDef false "clausesArity" ((PList)) (ELit (LInt 0)))
-(DTypeSig false "entryArityRow" (TyFun (TyCon "CImplEntry") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DTypeSig true "entryArityRow" (TyFun (TyCon "CImplEntry") (TyTuple (TyCon "String") (TyCon "Int"))))
 (DFunDef false "entryArityRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplTagged" PWild (PVar "key") PWild PWild (PVar "pats") PWild))) (ETuple (EApp (EApp (EVar "entryArityKey") (EVar "m")) (EVar "key")) (EApp (EVar "valueArity") (EVar "pats"))))
 (DFunDef false "entryArityRow" ((PCon "CImplEntry" (PVar "m") PWild PWild (PCon "CImplDefault" PWild PWild (PVar "key") PWild (PVar "pats") PWild))) (ETuple (EApp (EApp (EVar "entryArityKey") (EVar "m")) (EVar "key")) (EApp (EVar "valueArity") (EVar "pats"))))
 (DTypeSig false "entryArityKey" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
@@ -5503,6 +5547,9 @@ nodeTag _ = "?"
 (DTypeSig true "callModeFor" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyCon "Int") (TyCon "CallMode"))))
 (DFunDef false "callModeFor" ((PCon "None") PWild) (EVar "CallDynamic"))
 (DFunDef false "callModeFor" ((PCon "Some" (PVar "k")) (PVar "n")) (EIf (EBinOp "==" (EVar "n") (EVar "k")) (EVar "CallExact") (EIf (EBinOp "<" (EVar "n") (EVar "k")) (EApp (EVar "CallPartial") (EBinOp "-" (EVar "k") (EVar "n"))) (EApp (EVar "CallOver") (EBinOp "-" (EVar "n") (EVar "k"))))))
+(DTypeSig true "bindLetScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CExpr") (TyFun (TyCon "CallScope") (TyCon "CallScope")))))
+(DFunDef false "bindLetScope" ((PCon "PVar" (PVar "x") PWild) (PCon "CLam" (PAs "ps" (PCons PWild PWild)) PWild) (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EApp (EVar "Some") (EApp (EVar "listLen") (EVar "ps")))) (EVar "s")))
+(DFunDef false "bindLetScope" ((PVar "pat") PWild (PVar "s")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "s")))
 (DTypeSig true "bindPatScope" (TyFun (TyCon "Pat") (TyFun (TyCon "CallScope") (TyCon "CallScope"))))
 (DFunDef false "bindPatScope" ((PCon "PVar" (PVar "x") PWild) (PVar "s")) (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (EVar "None")) (EVar "s")))
 (DFunDef false "bindPatScope" ((PCon "PWild") (PVar "s")) (EVar "s"))
@@ -5525,7 +5572,12 @@ nodeTag _ = "?"
 (DFunDef false "bindGroupScope" ((PList) (PVar "s")) (EVar "s"))
 (DFunDef false "bindGroupScope" ((PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild) (PVar "rest")) (PVar "s")) (EApp (EApp (EVar "bindGroupScope") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (EApp (EVar "Some") (EApp (EVar "clausesArity") (EVar "clauses")))) (EVar "s"))))
 (DTypeSig false "etaSaturateProgram" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "etaSaturateProgram" ((PAs "prog" (PCon "CProgram" (PVar "groups") (PVar "ctors") (PVar "ctorTypes") (PVar "impls")))) (EBlock (DoLet false false (PVar "env") (EApp (EVar "programArities") (EVar "prog"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EVar "etaBind") (EVar "env"))) (EVar "groups"))) (EVar "ctors")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EApp (EVar "etaEntry") (EVar "env"))) (EVar "impls"))))))
+(DFunDef false "etaSaturateProgram" ((PAs "prog" (PCon "CProgram" (PVar "groups") (PVar "ctors") (PVar "ctorTypes") (PVar "impls")))) (EBlock (DoLet false false (PVar "env") (EApp (EVar "programArities") (EVar "prog"))) (DoLet false false (PVar "expanded") (EApp (EApp (EMethodRef "map") (ELam ((PVar "ent")) (ETuple (EVar "ent") (EApp (EApp (EVar "etaEntry") (EVar "env")) (EVar "ent"))))) (EVar "impls"))) (DoLet false false (PVar "split") (EApp (EApp (EApp (EVar "splitEntryGroups") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "expanded"))) (EVar "omEmpty")) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EVar "etaBind") (EVar "env"))) (EVar "groups"))) (EVar "ctors")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EApp (EVar "keepWholeGroup") (EVar "split"))) (EVar "expanded"))))))
+(DTypeSig false "keepWholeGroup" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyTuple (TyCon "CImplEntry") (TyCon "CImplEntry")) (TyCon "CImplEntry"))))
+(DFunDef false "keepWholeGroup" ((PVar "split") (PTuple (PVar "before") (PVar "after"))) (EIf (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EApp (EVar "entryArityRow") (EVar "before")))) (EVar "split")) (EVar "before") (EVar "after")))
+(DTypeSig false "splitEntryGroups" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "splitEntryGroups" ((PList) PWild (PVar "split")) (EVar "split"))
+(DFunDef false "splitEntryGroups" ((PCons (PVar "ent") (PVar "rest")) (PVar "seen") (PVar "split")) (EBlock (DoLet false false (PTuple (PVar "key") (PVar "n")) (EApp (EVar "entryArityRow") (EVar "ent"))) (DoLet false false (PVar "split2") (EMatch (EApp (EApp (EVar "omLookup") (EVar "key")) (EVar "seen")) (arm (PCon "Some" (PVar "k")) () (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EVar "split") (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (ELit LUnit)) (EVar "split")))) (arm (PCon "None") () (EVar "split")))) (DoExpr (EApp (EApp (EApp (EVar "splitEntryGroups") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (EVar "n")) (EVar "seen"))) (EVar "split2")))))
 (DTypeSig false "etaBind" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CBind") (TyCon "CBind"))))
 (DFunDef false "etaBind" ((PVar "env") (PAs "b" (PCon "CBind" (PVar "name") (PList (PCon "CClause" (PVar "pats") (PVar "body"))) (PVar "site")))) (EBlock (DoLet false false (PVar "missing") (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body"))) (DoExpr (EIf (EBinOp ">" (EVar "missing") (ELit (LInt 0))) (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EListLit (EApp (EApp (EApp (EVar "etaClause") (EVar "missing")) (EVar "pats")) (EVar "body")))) (EVar "site")) (EVar "b")))))
 (DFunDef false "etaBind" (PWild (PVar "b")) (EVar "b"))
@@ -5535,7 +5587,7 @@ nodeTag _ = "?"
 (DTypeSig false "etaEntryClause" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "CClause")))))))
 (DFunDef false "etaEntryClause" ((PVar "env") (PVar "declared") (PVar "pats") (PVar "body")) (EBlock (DoLet false false (PVar "room") (EBinOp "-" (EVar "declared") (EApp (EVar "valueArity") (EVar "pats")))) (DoLet false false (PVar "wanted") (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "omEmpty"))) (EVar "body"))) (DoLet false false (PVar "missing") (EApp (EApp (EMethodRef "min") (EVar "room")) (EVar "wanted"))) (DoExpr (EIf (EBinOp ">" (EVar "missing") (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "etaClause") (EVar "missing")) (EVar "pats")) (EVar "body"))) (EVar "None")))))
 (DTypeSig false "etaMissing" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CExpr") (TyCon "Int")))))
-(DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PCon "CLet" PWild (PVar "pat") (PVar "rhs") (PVar "body"))) (EIf (EApp (EVar "isAtomicArg") (EVar "rhs")) (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (EVar "body")) (ELit (LInt 0))))
+(DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PCon "CLet" PWild (PVar "pat") (PVar "rhs") (PVar "body"))) (EIf (EApp (EVar "isAtomicArg") (EVar "rhs")) (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "rhs")) (EVar "scope"))) (EVar "body")) (ELit (LInt 0))))
 (DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EIf (EApp (EApp (EVar "allList") (EVar "isFunctionBind")) (EVar "binds")) (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindGroupScope") (EVar "binds")) (EVar "scope"))) (EVar "body")) (ELit (LInt 0))))
 (DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PVar "tailE")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EVar "spineOf") (EVar "tailE"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isAtomicArg")) (EVar "args")) (EMatch (EApp (EApp (EApp (EVar "etaTargetArity") (EVar "env")) (EVar "scope")) (EVar "hd")) (arm (PCon "Some" (PVar "k")) () (EBinOp "-" (EVar "k") (EApp (EVar "listLen") (EVar "args")))) (arm (PCon "None") () (ELit (LInt 0)))) (ELit (LInt 0))))))
 (DTypeSig false "etaTargetArity" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -5585,7 +5637,7 @@ nodeTag _ = "?"
 (DFunDef false "callsExpr" (PWild PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "callsExpr" (PWild PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
 (DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EApp (EApp (EVar "bindPatsScope") (EVar "pats")) (EVar "scope"))) (EVar "body"))))
-(DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "rhs"))) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
+(DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "rhs") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "rhs")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "rhs"))) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindGroupScope") (EVar "binds")) (EVar "scope"))) (DoExpr (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "callsBind") (EVar "env")) (EVar "inner"))) (EVar "binds"))) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "inner")) (EVar "body"))))))
 (DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "callsArm") (EVar "env")) (EVar "scope"))) (EVar "arms"))))
 (DFunDef false "callsExpr" ((PVar "env") (PVar "scope") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "callsArm") (EVar "env")) (EVar "scope"))) (EVar "arms"))) (EVar "tree")))
@@ -5621,7 +5673,7 @@ nodeTag _ = "?"
 (DTypeSig false "callsStmts" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "CStmt"))))))
 (DFunDef false "callsStmts" (PWild PWild (PList)) (EListLit))
 (DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSExpr" (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EVar "CSExpr") (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "scope")) (EVar "rest"))))
-(DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EVar "bindPatScope") (EVar "pat")) (EVar "scope"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "inner")) (EVar "rest"))))))
+(DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e")) (PVar "rest"))) (EBlock (DoLet false false (PVar "inner") (EApp (EApp (EApp (EVar "bindLetScope") (EVar "pat")) (EVar "e")) (EVar "scope"))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "CSLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EIf (EVar "recF") (EVar "inner") (EVar "scope"))) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "inner")) (EVar "rest"))))))
 (DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "scope")) (EVar "rest"))))
 (DTypeSig false "callsField" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CField") (TyCon "CField")))))
 (DFunDef false "callsField" ((PVar "env") (PVar "scope") (PCon "CField" (PVar "k") (PVar "o") (PVar "e"))) (EApp (EApp (EApp (EVar "CField") (EVar "k")) (EVar "o")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))))
