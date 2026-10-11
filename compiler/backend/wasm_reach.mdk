@@ -118,7 +118,7 @@ bindKey : CBind -> String
 bindKey (CBind name _ _) = name
 
 implKey : CImplEntry -> String
-implKey (CImplEntry method _ _) = method
+implKey (CImplEntry method _ _ _) = method
 
 -- ── reachability ───────────────────────────────────────────────────────────
 reachKeys : List CBind -> List CImplEntry -> HashMap String Unit
@@ -181,7 +181,7 @@ addImplEdges : HashMap String Unit ->
   HashMap String (List String) ->
   CImplEntry ->
   Unit
-addImplEdges defined g (CImplEntry method _ body) =
+addImplEdges defined g (CImplEntry method _ _ body) =
   addEdges defined g method (refsImplBody body)
 
 addEdges : HashMap String Unit ->
@@ -212,7 +212,7 @@ closure graph seen (w :: work)
 refsE : CExpr -> List String
 refsE (CLit _) = []
 refsE (CVar x _) = [x]
-refsE (CApp f a) = refsE f ++ refsE a
+refsE (CApp f args _) = refsE f ++ flatMap refsE args
 refsE (CLam _ body) = refsE body
 refsE (CLet _ _ e1 e2) = refsE e1 ++ refsE e2
 refsE (CLetGroup binds body) = flatMap refsBind binds ++ refsE body

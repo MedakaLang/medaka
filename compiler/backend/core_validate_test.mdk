@@ -16,13 +16,16 @@ import test.{
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
-import types.typecheck.{grantWholeDomain}
+import types.typecheck.{elaborateOne, grantWholeDomain}
 import ir.core_ir.{
   CBind(..),
   CClause(..),
   CExpr(..),
   CField(..),
   CProgram(..),
+  CStmt(..),
+  CallMode(..),
+  CallSite(..),
 }
 import frontend.ast.{Lit(..), noDeclLoc}
 import ir.core_ir_lower.{
@@ -39,6 +42,7 @@ import backend.core_validate.{
   missingCatalogRows,
   missingRowsMessage,
   renderExternFinding,
+  validateCalls,
   validateExterns,
   validateRecords,
 }
@@ -321,3 +325,136 @@ test "(j) ordinals out of declared position are refused" = expectEach [
           (CRecordUpdate "P" zero [CField "b" 1 zero, CField "a" 0 zero]))),
   ),
 ]
+
+-- ── call modes ───────────────────────────────────────────────────────────────
+
+-- #2078's program: `mk n = add n` names a user `add` that shares its spelling
+-- with an interface method, so the reference lowers as a method occurrence
+-- routed to the user's binding, and the eta pass gives `mk` that binding's two
+-- parameters.  Typechecked against a two-method prelude, as a build would.
+i2078Prelude : String
+i2078Prelude =
+  "interface Num a where\n  fromInt : Int -> a\n  add : a -> a -> a\nimpl Num Int where\n  fromInt n = n\n  add a b = a"
+
+i2078Src : String
+i2078Src =
+  "add : Int -> Int -> Int\nadd a b = a\nmk : Int -> Int -> Int\nmk n = add n\napply1 : (Int -> Int) -> Int -> Int\napply1 f x = f x\nmain = apply1 (mk 1) 2"
+
+typedLowered : String -> String -> CProgram
+typedLowered preludeSrc src =
+  lowerProgramEmit
+    TargetNative
+    (elaborateOne [] (desugar (parse preludeSrc)) (
+      "calls",
+      grantWholeDomain (desugar (parse src)),
+    ))
+
+-- [prog] with every application whose head is the variable [name] re-stamped
+-- [mode], in top-level bindings.
+restamp : String -> CallMode -> CProgram -> CProgram
+restamp name mode (CProgram groups ctors ctorTypes impls) =
+  CProgram (map (restampBind name mode) groups) ctors ctorTypes impls
+
+restampBind : String -> CallMode -> CBind -> CBind
+restampBind name mode (CBind n clauses site) =
+  CBind n (map (restampClause name mode) clauses) site
+
+restampClause : String -> CallMode -> CClause -> CClause
+restampClause name mode (CClause pats body) =
+  CClause pats (restampExpr name mode body)
+
+restampExpr : String -> CallMode -> CExpr -> CExpr
+restampExpr name mode (CApp hd args (CallSite old tailPos)) =
+  let args2 = map (restampExpr name mode) args
+  match hd
+    CVar x _ =>
+      if x == name then
+        CApp hd args2 (CallSite mode tailPos)
+      else
+        CApp hd args2 (CallSite old tailPos)
+    _ => CApp (restampExpr name mode hd) args2 (CallSite old tailPos)
+restampExpr name mode (CLet r pat rhs body) =
+  CLet r pat (restampExpr name mode rhs) (restampExpr name mode body)
+restampExpr name mode (CBlock stmts) =
+  CBlock (map (restampStmt name mode) stmts)
+restampExpr _ _ e = e
+
+restampStmt : String -> CallMode -> CStmt -> CStmt
+restampStmt name mode (CSExpr e) = CSExpr (restampExpr name mode e)
+restampStmt name mode (CSLet r pat e) = CSLet r pat (restampExpr name mode e)
+restampStmt _ _ s = s
+
+shadowSrc : String
+shadowSrc = "eq a b = a\npickEq eq x y = eq x y\nmain = pickEq eq 1 2"
+
+overSrc : String
+overSrc = "pre n = x => n + x\nmain = pre 1 2"
+
+test "(k) lowering stamps every application, so a lowered program validates clean" = expectEach
+  [
+    (
+      "#2078's point-free wrapper, typed",
+      expectEqual [] (validateCalls (typedLowered i2078Prelude i2078Src)),
+    ),
+    (
+      "a local named like a global",
+      expectEqual [] (validateCalls (lowered TargetNative shadowSrc)),
+    ),
+    (
+      "an over-application",
+      expectEqual [] (validateCalls (lowered TargetWasm overSrc)),
+    ),
+  ]
+
+test "(l) an application stamped against the wrong arity is refused, naming head, counts and binding" = expectEach
+  [
+    (
+      "#2078: the wrapper's call stamped exact against its one source parameter",
+      expectEqual
+        ["call: mk applied to 1 of 2, stamped CallExact [in main]"]
+        (validateCalls
+          (restamp "mk" CallExact (typedLowered i2078Prelude i2078Src))),
+    ),
+    (
+      "a known head stamped dynamic",
+      expectEqual
+        ["call: pickEq applied to 3 of 3, stamped CallDynamic [in main]"]
+        (validateCalls
+          (restamp "pickEq" CallDynamic (lowered TargetNative shadowSrc))),
+    ),
+    (
+      "an over-application with the wrong surplus",
+      expectEqual
+        ["call: pre applied to 2 of 1, stamped (CallOver 2) [in main]"]
+        (validateCalls
+          (restamp "pre" (CallOver 2) (lowered TargetWasm overSrc))),
+    ),
+    (
+      "a local `eq` stamped against the global `eq`'s two parameters",
+      expectEqual
+        ["call: eq has no static arity, stamped CallExact [in pickEq]"]
+        (validateCalls
+          (restamp "eq" CallExact (lowered TargetNative shadowSrc))),
+    ),
+  ]
+
+test "(m) an application with no arguments, or whose head is an application, is refused" = expectEach
+  [
+    (
+      "no arguments",
+      expectEqual
+        ["call: application with no arguments [in main]"]
+        (validateCalls (unstamped (CApp zero [] (CallSite CallDynamic False)))),
+    ),
+    (
+      "a nested head",
+      expectEqual
+        ["call: application whose head is an application [in main]"]
+        (validateCalls
+          (unstamped
+            (CApp
+              (CApp zero [zero] (CallSite CallDynamic False))
+              [zero]
+              (CallSite CallDynamic False)))),
+    ),
+  ]

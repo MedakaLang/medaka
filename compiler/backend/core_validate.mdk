@@ -9,6 +9,15 @@
 -- its positions, or an update whose ordinals are not strictly ascending is
 -- refused: the emitters keep no field-order table to fall back on.
 --
+-- The call check: every application carries the mode its head's defined arity
+-- gives it (`core_ir_lower.definedArityOf`, the helper the lowering's stamp
+-- reads).  A known head's defined arity is the pattern count of the clause it
+-- names (a top-level or let-group binding, the entry an `RKey` route selects,
+-- the binding an `RLocal` route or a `CDict` names, less the dictionaries the
+-- occurrence supplies) or a constructor's field count; any other head is
+-- dynamic.  An application with no arguments, or whose head is itself an
+-- application, is refused too: a spine is one node.
+--
 -- The extern check: a runtime extern whose catalog row gives the backend no
 -- lowering (`NotProvided`) is refused wherever the program references it
 -- freely.  A reference is free when no local binder in scope and no top-level
@@ -28,8 +37,20 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   CProgram(..),
+  CallMode(..),
+  CallSite(..),
 }
-import frontend.ast.{Pat(..), RecPatField(..)}
+import ir.core_ir_lower.{
+  ArityEnv,
+  CallScope,
+  bindGroupScope,
+  bindPatScope,
+  bindPatsScope,
+  callModeFor,
+  definedArityOf,
+  programArities,
+}
+import ir.core_ir_sexp.{callModeSexp}
 import backend.extern_catalog.{
   Disposition(..),
   GapKind,
@@ -39,7 +60,7 @@ import backend.extern_catalog.{
   rowWasm,
 }
 import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
-import support.util.{joinWith, reverseL}
+import support.util.{joinWith, listLen, reverseL}
 
 public export data Backend = LlvmBackend | WasmBackend
 
@@ -88,32 +109,32 @@ isUnprovidedOn backend name = isSome (unprovidedOn backend name)
 -- error, raised before the program is read.
 export
 validateExterns : Backend -> List String -> CProgram -> List ExternFinding
-validateExterns backend runtimeExterns (CProgram groups ctors _ impls) =
+validateExterns backend runtimeExterns prog =
   let _ = refuseMissingRows runtimeExterns
-  let top = programNames groups ctors omEmpty
-  let walked =
-    walkImpls backend top impls (walkBinds backend top groups noFindings)
-  match walked
-    Walk _ found _ => reverseL found
+  match walkProgram backend prog
+    Walk _ found _ _ => reverseL found
 
 -- One line per record node whose ordinals the emitters cannot trust, in
 -- program order; empty for a well-stamped program.
 export
 validateRecords : CProgram -> List String
-validateRecords (CProgram groups ctors _ impls) =
-  let top = programNames groups ctors omEmpty
-  let walked =
-    walkImpls
-      LlvmBackend
-      top
-      impls
-      (walkBinds LlvmBackend top groups noFindings)
-  match walked
-    Walk _ _ bad => reverseL bad
+validateRecords prog = match walkProgram LlvmBackend prog
+  Walk _ _ bad _ => reverseL bad
 
 export
 renderRecordRefusal : List String -> String
 renderRecordRefusal bad = joinWith "\n" bad
+
+-- One line per application whose mode its head's defined arity contradicts, in
+-- program order; empty for a well-stamped program.
+export
+validateCalls : CProgram -> List String
+validateCalls prog = match walkProgram LlvmBackend prog
+  Walk _ _ _ bad => reverseL bad
+
+export
+renderCallRefusal : List String -> String
+renderCallRefusal bad = joinWith "\n" bad
 
 -- The names in `names` that have no extern catalog row.
 export
@@ -167,53 +188,81 @@ programNames ((CBind name _ _) :: rest) ctors acc =
 isProgramName : OrdMap Unit -> String -> Bool
 isProgramName top x = omHasKey x top || omHasKey ("core__" ++ x) top
 
--- The walk's state: the externs already found, and the findings, newest first.
--- and the record nodes with untrustworthy ordinals, newest first.
-data Walk = Walk (OrdMap Unit) (List ExternFinding) (List String)
+-- The walk's state: the externs already found, the extern findings, the record
+-- nodes with untrustworthy ordinals, and the applications with a wrong mode,
+-- each newest first.
+data Walk = Walk (OrdMap Unit) (List ExternFinding) (List String) (List String)
 
 noFindings : Walk
-noFindings = Walk omEmpty [] []
+noFindings = Walk omEmpty [] [] []
 
--- The backend, the program's own names, and the top-level binding being read.
-data Ctx = Ctx Backend (OrdMap Unit) String
+-- The backend, the program's own names, its defined arities, and the top-level
+-- binding being read.
+data Ctx = Ctx Backend (OrdMap Unit) ArityEnv String
 
-walkBinds : Backend -> OrdMap Unit -> List CBind -> Walk -> Walk
-walkBinds _ _ [] w = w
-walkBinds backend top ((CBind name clauses _) :: rest) w =
+walkProgram : Backend -> CProgram -> Walk
+walkProgram backend (prog@(CProgram groups ctors _ impls)) =
+  let top = programNames groups ctors omEmpty
+  let env = programArities prog
+  walkImpls backend top env impls (walkBinds backend top env groups noFindings)
+
+walkBinds : Backend -> OrdMap Unit -> ArityEnv -> List CBind -> Walk -> Walk
+walkBinds _ _ _ [] w = w
+walkBinds backend top env ((CBind name clauses _) :: rest) w =
   walkBinds
     backend
     top
+    env
     rest
-    (walkClauses (Ctx backend top name) omEmpty clauses w)
+    (walkClauses (Ctx backend top env name) omEmpty clauses w)
 
-walkImpls : Backend -> OrdMap Unit -> List CImplEntry -> Walk -> Walk
-walkImpls _ _ [] w = w
-walkImpls backend top ((CImplEntry method _ body) :: rest) w =
-  walkImpls backend top rest (walkImplBody backend top method body w)
+walkImpls : Backend ->
+  OrdMap Unit ->
+  ArityEnv ->
+  List CImplEntry ->
+  Walk ->
+  Walk
+walkImpls _ _ _ [] w = w
+walkImpls backend top env ((CImplEntry method _ _ body) :: rest) w =
+  walkImpls
+    backend
+    top
+    env
+    rest
+    (walkImplBody (Ctx backend top env "impl \{method}") body w)
 
-walkImplBody : Backend -> OrdMap Unit -> String -> CImplBody -> Walk -> Walk
-walkImplBody backend top method (CImplTagged tag _ _ _ pats body) w =
-  walkE (Ctx backend top "impl \{method}@\{tag}") (bindPats pats omEmpty) body w
-walkImplBody backend top method (CImplDefault _ tag _ _ pats body) w =
-  walkE (Ctx backend top "impl \{method}@\{tag}") (bindPats pats omEmpty) body w
+walkImplBody : Ctx -> CImplBody -> Walk -> Walk
+walkImplBody (Ctx backend top env binding) (CImplTagged tag _ _ _ pats body) w =
+  walkE
+    (Ctx backend top env "\{binding}@\{tag}")
+    (bindPatsScope pats omEmpty)
+    body
+    w
+walkImplBody (Ctx backend top env binding) (CImplDefault _ tag _ _ pats body) w =
+  walkE
+    (Ctx backend top env "\{binding}@\{tag}")
+    (bindPatsScope pats omEmpty)
+    body
+    w
 
-walkClauses : Ctx -> OrdMap Unit -> List CClause -> Walk -> Walk
+walkClauses : Ctx -> CallScope -> List CClause -> Walk -> Walk
 walkClauses _ _ [] w = w
 walkClauses ctx scope ((CClause pats body) :: rest) w =
-  walkClauses ctx scope rest (walkE ctx (bindPats pats scope) body w)
+  walkClauses ctx scope rest (walkE ctx (bindPatsScope pats scope) body w)
 
 -- Every constructor is listed, with no catch-all arm, so a new expression form
 -- must decide where its binders scope.
-walkE : Ctx -> OrdMap Unit -> CExpr -> Walk -> Walk
+walkE : Ctx -> CallScope -> CExpr -> Walk -> Walk
 walkE ctx scope (CVar x _) w = noteVar ctx scope x w
 walkE _ _ (CLit _) w = w
-walkE ctx scope (CApp f a) w = walkE ctx scope a (walkE ctx scope f w)
-walkE ctx scope (CLam pats body) w = walkE ctx (bindPats pats scope) body w
+walkE ctx scope (CApp f args site) w =
+  walkList ctx scope args (walkE ctx scope f (noteCall ctx scope f args site w))
+walkE ctx scope (CLam pats body) w = walkE ctx (bindPatsScope pats scope) body w
 walkE ctx scope (CLet recF pat rhs body) w =
-  let inner = bindPat pat scope
+  let inner = bindPatScope pat scope
   walkE ctx inner body (walkE ctx (if recF then inner else scope) rhs w)
 walkE ctx scope (CLetGroup binds body) w =
-  let inner = bindNames binds scope
+  let inner = bindGroupScope binds scope
   walkE ctx inner body (walkLocalBinds ctx inner binds w)
 walkE ctx scope (CMatch scrut arms) w =
   walkArms ctx scope arms (walkE ctx scope scrut w)
@@ -288,11 +337,51 @@ fieldOrdinalText : CField -> String
 fieldOrdinalText (CField k o _) = "\{k}@\{intToString o}"
 
 noteRecordBad : Ctx -> String -> String -> Walk -> Walk
-noteRecordBad (Ctx _ _ binding) node why (Walk seen found bad) =
-  Walk seen found ("record: \{node} \{why} [in \{binding}]" :: bad)
+noteRecordBad (Ctx _ _ _ binding) node why (Walk seen found bad calls) =
+  Walk seen found ("record: \{node} \{why} [in \{binding}]" :: bad) calls
 
-noteVar : Ctx -> OrdMap Unit -> String -> Walk -> Walk
-noteVar (Ctx backend top binding) scope x (w@(Walk seen found bad)) =
+-- The mode the head's defined arity gives the arguments, or the shape fault.
+noteCall : Ctx -> CallScope -> CExpr -> List CExpr -> CallSite -> Walk -> Walk
+noteCall ctx _ _ [] _ w = noteCallBad ctx "application with no arguments" w
+noteCall ctx _ (CApp _ _ _) _ _ w =
+  noteCallBad ctx "application whose head is an application" w
+noteCall (ctx@(Ctx _ _ env _)) scope hd args (CallSite mode _) w =
+  let n = listLen args
+  let arity = definedArityOf env scope hd
+  if sameMode (callModeFor arity n) mode then
+    w
+  else match arity
+    Some k =>
+      noteCallBad
+        ctx
+        "\{headText hd} applied to \{intToString n} of \{intToString k}, stamped \{callModeSexp mode}"
+        w
+    None =>
+      noteCallBad
+        ctx
+        "\{headText hd} has no static arity, stamped \{callModeSexp mode}"
+        w
+
+sameMode : CallMode -> CallMode -> Bool
+sameMode CallExact CallExact = True
+sameMode (CallPartial a) (CallPartial b) = a == b
+sameMode (CallOver a) (CallOver b) = a == b
+sameMode CallDynamic CallDynamic = True
+sameMode _ _ = False
+
+noteCallBad : Ctx -> String -> Walk -> Walk
+noteCallBad (Ctx _ _ _ binding) why (Walk seen found bad calls) =
+  Walk seen found bad ("call: \{why} [in \{binding}]" :: calls)
+
+headText : CExpr -> String
+headText (CVar x _) = x
+headText (CMethod name _ _ _ _ _) = "method \{name}"
+headText (CDict name _) = "\{name} (constrained)"
+headText (CLam _ _) = "a lambda"
+headText _ = "an expression"
+
+noteVar : Ctx -> CallScope -> String -> Walk -> Walk
+noteVar (Ctx backend top _ binding) scope x (w@(Walk seen found bad calls)) =
   if omHasKey x scope || omHasKey x seen then
     w
   else match unprovidedOn backend x
@@ -305,69 +394,46 @@ noteVar (Ctx backend top binding) scope x (w@(Walk seen found bad)) =
           (omInsert x () seen)
           (ExternFinding x backend kind why binding :: found)
           bad
+          calls
 
-walkList : Ctx -> OrdMap Unit -> List CExpr -> Walk -> Walk
+walkList : Ctx -> CallScope -> List CExpr -> Walk -> Walk
 walkList _ _ [] w = w
 walkList ctx scope (e :: rest) w = walkList ctx scope rest (walkE ctx scope e w)
 
-walkFields : Ctx -> OrdMap Unit -> List CField -> Walk -> Walk
+walkFields : Ctx -> CallScope -> List CField -> Walk -> Walk
 walkFields _ _ [] w = w
 walkFields ctx scope ((CField _ _ e) :: rest) w =
   walkFields ctx scope rest (walkE ctx scope e w)
 
-walkLocalBinds : Ctx -> OrdMap Unit -> List CBind -> Walk -> Walk
+walkLocalBinds : Ctx -> CallScope -> List CBind -> Walk -> Walk
 walkLocalBinds _ _ [] w = w
 walkLocalBinds ctx scope ((CBind _ clauses _) :: rest) w =
   walkLocalBinds ctx scope rest (walkClauses ctx scope clauses w)
 
 -- An arm's pattern scopes over its guards and body; a `Pat <- e` guard's
 -- pattern scopes over the guards after it and the body.
-walkArms : Ctx -> OrdMap Unit -> List CArm -> Walk -> Walk
+walkArms : Ctx -> CallScope -> List CArm -> Walk -> Walk
 walkArms _ _ [] w = w
 walkArms ctx scope ((CArm pat guards body) :: rest) w =
-  walkArms ctx scope rest (walkGuarded ctx (bindPat pat scope) guards body w)
+  walkArms
+    ctx
+    scope
+    rest
+    (walkGuarded ctx (bindPatScope pat scope) guards body w)
 
-walkGuarded : Ctx -> OrdMap Unit -> List CGuard -> CExpr -> Walk -> Walk
+walkGuarded : Ctx -> CallScope -> List CGuard -> CExpr -> Walk -> Walk
 walkGuarded ctx scope [] body w = walkE ctx scope body w
 walkGuarded ctx scope ((CGBool c) :: rest) body w =
   walkGuarded ctx scope rest body (walkE ctx scope c w)
 walkGuarded ctx scope ((CGBind pat e) :: rest) body w =
-  walkGuarded ctx (bindPat pat scope) rest body (walkE ctx scope e w)
+  walkGuarded ctx (bindPatScope pat scope) rest body (walkE ctx scope e w)
 
-walkStmts : Ctx -> OrdMap Unit -> List CStmt -> Walk -> Walk
+walkStmts : Ctx -> CallScope -> List CStmt -> Walk -> Walk
 walkStmts _ _ [] w = w
 walkStmts ctx scope ((CSExpr e) :: rest) w =
   walkStmts ctx scope rest (walkE ctx scope e w)
 walkStmts ctx scope ((CSLet recF pat e) :: rest) w =
-  let inner = bindPat pat scope
+  let inner = bindPatScope pat scope
   walkStmts ctx inner rest (walkE ctx (if recF then inner else scope) e w)
 walkStmts ctx scope ((CSAssign _ e) :: rest) w =
   walkStmts ctx scope rest (walkE ctx scope e w)
-
-bindNames : List CBind -> OrdMap Unit -> OrdMap Unit
-bindNames [] s = s
-bindNames ((CBind name _ _) :: rest) s = bindNames rest (omInsert name () s)
-
-bindPats : List Pat -> OrdMap Unit -> OrdMap Unit
-bindPats [] s = s
-bindPats (p :: rest) s = bindPats rest (bindPat p s)
-
-bindPat : Pat -> OrdMap Unit -> OrdMap Unit
-bindPat (PVar x _) s = omInsert x () s
-bindPat PWild s = s
-bindPat (PLit _) s = s
-bindPat (PCon _ ps) s = bindPats ps s
-bindPat (PCons h t) s = bindPat t (bindPat h s)
-bindPat (PTuple ps) s = bindPats ps s
-bindPat (PList ps) s = bindPats ps s
-bindPat (PAs x _ p) s = bindPat p (omInsert x () s)
-bindPat (PRng _ _ _) s = s
-bindPat (PRec _ fields _) s = bindRecFields fields s
-
--- A punned field `{x}` binds the field's own name.
-bindRecFields : List RecPatField -> OrdMap Unit -> OrdMap Unit
-bindRecFields [] s = s
-bindRecFields ((RecPatField f _ None) :: rest) s =
-  bindRecFields rest (omInsert f () s)
-bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
-  bindRecFields rest (bindPat p s)

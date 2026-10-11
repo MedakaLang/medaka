@@ -1649,14 +1649,7 @@ eval env (EMethodAt name _ ev) = evalMethodAtEv env name (evMethodRoutes ev)
 
 eval env (EDictAt name ev) =
   applyDicts env (lookupEnv env name) (evDictRoutes ev)
--- The application's own start is marked after its operands ran, so a trap raised
--- by a primitive callee (`panic`, an index bound check reached through a prelude
--- impl, whose locations are placeholders) names this call site.
-eval env (app@(EApp f x)) =
-  let fv = eval env f
-  let xv = eval env x
-  let _ = markTrapSite app
-  apply fv xv
+eval env (app@(EApp _ _)) = evalApp env app
 eval env (ELam pats body) = VClosure env pats body noTrapLoc
 eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
 eval env (ELet site _ pat e1 e2) = evalLet site env pat e1 e2
@@ -1712,6 +1705,41 @@ eval env (ELoc l e) =
   eval env e
 eval env (EDoOrigin _ e) = eval env e
 eval _ _ = panic "eval: unsupported node"
+
+-- An application spine `f a1 … an` evaluates its head and every argument, left
+-- to right, before it applies any of them, so a function applied to more
+-- arguments than it takes runs its body after all of them, as every engine does.
+-- Each application's own start is marked after its operands ran, so a trap raised
+-- by a primitive callee (`panic`, an index bound check reached through a prelude
+-- impl, whose locations are placeholders) names this call site.
+evalApp : EvalEnv (Value e) -> Expr -> <e> Value e
+evalApp env app =
+  let (hd, nodes) = appSpine app []
+  let fv = eval env hd
+  applySpine fv nodes (evalSpineArgs env nodes)
+
+-- The head of an application spine and its application nodes, innermost first.
+-- A located spine in head position is part of the spine: `(f a) b` is `f a b`;
+-- its location is current while the head evaluates, as when it was its own node.
+appSpine : Expr -> List Expr -> (Expr, List Expr)
+appSpine (node@(EApp f _)) acc = appSpine f (node :: acc)
+appSpine (ELoc l (inner@(EApp _ _))) acc =
+  let _ = updateEvalLoc l
+  appSpine inner acc
+appSpine hd acc = (hd, acc)
+
+evalSpineArgs : EvalEnv (Value e) -> List Expr -> <e> List (Value e)
+evalSpineArgs _ [] = []
+evalSpineArgs env ((EApp _ x) :: rest) =
+  let v = eval env x
+  v :: evalSpineArgs env rest
+evalSpineArgs env (_ :: rest) = evalSpineArgs env rest
+
+applySpine : Value e -> List Expr -> List (Value e) -> <e> Value e
+applySpine f (node :: nodes) (v :: vs) =
+  let _ = markTrapSite node
+  applySpine (apply f v) nodes vs
+applySpine f _ _ = f
 
 -- C5: an RLocal route is NOT a method dispatch — the typechecker found no impl
 -- of this interface for the concrete receiver but the name has an explicitly-

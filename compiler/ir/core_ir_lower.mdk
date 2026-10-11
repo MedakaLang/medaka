@@ -55,6 +55,9 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   CProgram(..),
+  CallMode(..),
+  CallSite(..),
+  mkApp,
   CTree(..),
   CTBranch(..),
   CHead(..),
@@ -133,7 +136,7 @@ lower (EVar x) = CVar x AGlobal
 -- #837: strip the resolve-only binding-id tag; lower exactly as bare EVar.
 lower (EVarId x _) = CVar x AGlobal
 lower (EVarAt x addr) = CVar x addr
-lower (EApp f x) = CApp (lower f) (lower x)
+lower (EApp f x) = mkApp (lower f) [lower x]
 lower (ELam pats body) = CLam pats (lower body)
 lower (ELet site False pat e1 e2)
   | patMayFail pat = letDecision site pat (lower e1) (lower e2)
@@ -142,7 +145,7 @@ lower (ELetGroup binds body) = CLetGroup (map lowerBind binds) (lower body)
 lower (EMatch scrut arms) = lowerMatch noDeclLoc (lower scrut) arms
 lower (EIf c t e) = CIf (lower c) (lower t) (lower e)
 lower (EBinOp op l r route) = lowerBinop op l r (scalarTagOfRoute !route)
-lower (EInfix op l r) = CApp (CApp (CVar op AGlobal) (lower l)) (lower r)
+lower (EInfix op l r) = mkApp (CVar op AGlobal) [lower l, lower r]
 -- #1739 half A: `!x` lowers to the SAME Core IR node `x.value` does, rather than a
 -- `CUnOp "!"` both backends would then need a new arm for.  `CFieldAccess _ "value"`
 -- already carries Ref-read end-to-end (core_ir_eval, llvm_emit, wasm_emit), so the
@@ -218,7 +221,7 @@ scalarTagOfRoute _ = ""
 lowerBinop : String -> Expr -> Expr -> String -> CExpr
 lowerBinop "&&" l r _ = CIf (lower l) (lower r) (CLit (LBool False))
 lowerBinop "||" l r _ = CIf (lower l) (CLit (LBool True)) (lower r)
-lowerBinop "|>" l r _ = CApp (lower r) (lower l)
+lowerBinop "|>" l r _ = mkApp (lower r) [lower l]
 lowerBinop ">>" l r _ = composeLam (lower l) (lower r)
 lowerBinop "<<" l r _ = composeLam (lower r) (lower l)
 lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag (exprStartLoc l)
@@ -228,7 +231,7 @@ composeLam : CExpr -> CExpr -> CExpr
 composeLam first second =
   CLam
     [PVar composeVar (Loc "" 0 0 0 0)]
-    (CApp second (CApp first (CVar composeVar AGlobal)))
+    (mkApp second [mkApp first [CVar composeVar AGlobal]])
 
 lowerArm : Arm -> CArm
 lowerArm (Arm pat guards body) = CArm pat (map lowerGuard guards) (lower body)
@@ -764,20 +767,23 @@ lowerStmt _ = panic "core_ir lower: unsupported block statement"
 -- driver that typechecks lowers through `lowerTypedProgram`.
 export
 lowerProgram : List Decl -> CProgram
-lowerProgram prog = refoldProgram noLetCheck (lowerProgramWith None prog)
+lowerProgram prog =
+  finishLowering (refoldProgram noLetCheck (lowerProgramWith None prog))
 
 -- Lowering after an elaboration, against the table it published.  Refuses (panics)
 -- when none was published instead of silently lowering every inherited default away.
 export
 lowerTypedProgram : List Decl -> CProgram
 lowerTypedProgram prog =
-  refoldProgram
-    noLetCheck
-    (lowerProgramWith (Some (installedDispositions ())) prog)
+  finishLowering
+    (refoldProgram
+      noLetCheck
+      (lowerProgramWith (Some (installedDispositions ())) prog))
 
 -- [dispositions] is the typechecker's table for [prog] (`None` for an untyped
 -- probe; see `lowerProgram`).  Refutable lets are still one-arm decisions here
--- (`letDecision`); each public lowering decides which of them to keep.
+-- (`letDecision`); each public lowering decides which of them to keep, and ends
+-- with `finishLowering`.
 lowerProgramWith : Option DispositionTable -> List Decl -> CProgram
 lowerProgramWith dispositions prog =
   CProgram
@@ -787,6 +793,7 @@ lowerProgramWith dispositions prog =
     (lowerImplsRaw
       (installDispatchTables prog)
       (instanceReqCounts prog)
+      (declaredMethodArities prog)
       dispositions
       prog)
 
@@ -867,10 +874,10 @@ refoldClause : (Pat -> Bool) -> CClause -> CClause
 refoldClause keep (CClause pats body) = CClause pats (refoldExpr keep body)
 
 refoldImpl : (Pat -> Bool) -> CImplEntry -> CImplEntry
-refoldImpl keep (CImplEntry n s (CImplTagged tag key iface ps pats body)) =
-  CImplEntry n s (CImplTagged tag key iface ps pats (refoldExpr keep body))
-refoldImpl keep (CImplEntry n s (CImplDefault ifaceId tag key ps pats body)) =
-  CImplEntry n s (CImplDefault ifaceId tag key ps pats (refoldExpr keep body))
+refoldImpl keep (CImplEntry n s d (CImplTagged tag key iface ps pats body)) =
+  CImplEntry n s d (CImplTagged tag key iface ps pats (refoldExpr keep body))
+refoldImpl keep (CImplEntry n s d (CImplDefault ifaceId tag key ps pats body)) =
+  CImplEntry n s d (CImplDefault ifaceId tag key ps pats (refoldExpr keep body))
 
 refoldExpr : (Pat -> Bool) -> CExpr -> CExpr
 refoldExpr keep (CDecision scrut [CArm pat [] body] tree)
@@ -880,7 +887,8 @@ refoldExpr keep (CDecision scrut arms tree) =
   CDecision (refoldExpr keep scrut) (map (refoldArm keep) arms) tree
 refoldExpr _ (CLit l) = CLit l
 refoldExpr _ (CVar x addr) = CVar x addr
-refoldExpr keep (CApp f x) = CApp (refoldExpr keep f) (refoldExpr keep x)
+refoldExpr keep (CApp f xs site) =
+  CApp (refoldExpr keep f) (map (refoldExpr keep) xs) site
 refoldExpr keep (CLam pats body) = CLam pats (refoldExpr keep body)
 refoldExpr keep (CLet r pat e1 e2) =
   CLet r pat (refoldExpr keep e1) (refoldExpr keep e2)
@@ -1012,20 +1020,448 @@ lowerProgramEmit target prog =
     _ => siteTrapCalls prog
   let raw = lowerProgramWith (installedDispositionsOpt ()) sited
   let fo = declaredRecordFieldOrders prog
-  hoistNullaryMemo
-    (match target
-      -- the let decisions are refolded after the record-pattern rewrite, which
-      -- resolves the record patterns `patCanMiss` reads
-      TargetBothUnknown =>
-        rewriteProgramRecPats fo (refoldProgram noLetCheck raw)
-      _ =>
-        let rewritten = rewriteProgramRecPats fo raw
-        refoldProgram
-          (patCanMiss (siblingTable (cprogramCtorTypes raw)))
-          rewritten)
+  finishLowering
+    (hoistNullaryMemo
+      (match target
+        -- the let decisions are refolded after the record-pattern rewrite, which
+        -- resolves the record patterns `patCanMiss` reads
+        TargetBothUnknown =>
+          rewriteProgramRecPats fo (refoldProgram noLetCheck raw)
+        _ =>
+          let rewritten = rewriteProgramRecPats fo raw
+          refoldProgram
+            (patCanMiss (siblingTable (cprogramCtorTypes raw)))
+            rewritten))
 
 cprogramCtorTypes : CProgram -> List (String, String)
 cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
+
+-- ── call modes: every application is read against its head's defined arity ────
+-- A head's defined arity is the parameter count of the clause the lowering
+-- emits for it: a binding's clause, the impl entry an `RKey` route selects, the
+-- binding an `RLocal` route or a `CDict` names (less the dictionaries the
+-- occurrence supplies), a constructor's field count.  Each public lowering ends
+-- with `finishLowering`: one eta pass, which may lengthen a clause, then
+-- `stampCallModes`, which writes the mode into every application from the
+-- clauses as they now are.  `core_validate.validateCalls` reads the same
+-- `definedArityOf`, so the stamp and the check cannot disagree about a table.
+
+finishLowering : CProgram -> CProgram
+finishLowering prog = stampCallModes (etaSaturateProgram prog)
+
+-- A program's defined arities: each top-level binding's clause pattern count,
+-- each constructor's field count, each impl entry's value arity by method and
+-- route word (`entryArityKey`), and each method's least entry value arity.
+public export data ArityEnv =
+  | ArityEnv (OrdMap Int) (OrdMap Int) (OrdMap Int) (OrdMap Int)
+
+-- The local binders in scope: `Some k` for a let-group function whose clauses
+-- take k parameters, `None` for any other binder.  A local shadows a top-level
+-- name of the same spelling.
+export type CallScope = OrdMap (Option Int)
+
+export
+programArities : CProgram -> ArityEnv
+programArities (CProgram groups ctors _ impls) =
+  ArityEnv
+    (omFromPairs (map bindArityRow groups) omEmpty)
+    (omFromPairs ctors omEmpty)
+    (omFromPairs (map entryArityRow impls) omEmpty)
+    (leastEntryArities impls omEmpty)
+
+bindArityRow : CBind -> (String, Int)
+bindArityRow (CBind name clauses _) = (name, clausesArity clauses)
+
+clausesArity : List CClause -> Int
+clausesArity ((CClause pats _) :: _) = listLen pats
+clausesArity [] = 0
+
+entryArityRow : CImplEntry -> (String, Int)
+entryArityRow (CImplEntry m _ _ (CImplTagged _ key _ _ pats _)) =
+  (entryArityKey m key, valueArity pats)
+entryArityRow (CImplEntry m _ _ (CImplDefault _ _ key _ pats _)) =
+  (entryArityKey m key, valueArity pats)
+
+entryArityKey : String -> String -> String
+entryArityKey method key = lenKey method ++ key
+
+-- the parameters an entry or binding takes after its leading dictionaries
+valueArity : List Pat -> Int
+valueArity pats = listLen pats - leadingDictParams pats
+
+leastEntryArities : List CImplEntry -> OrdMap Int -> OrdMap Int
+leastEntryArities [] acc = acc
+leastEntryArities (ent :: rest) acc =
+  let (_, n) = entryArityRow ent
+  let m = implEntryMethodName ent
+  let least = match omLookup m acc
+    Some k => min k n
+    None => n
+  leastEntryArities rest (omInsert m least acc)
+
+implEntryMethodName : CImplEntry -> String
+implEntryMethodName (CImplEntry m _ _ _) = m
+
+-- The defined arity of an application head, or None when it has none statically:
+-- a local closure, a lambda, an extern, a method reached through a runtime
+-- dictionary or through no route, an application's result.
+export
+definedArityOf : ArityEnv -> CallScope -> CExpr -> Option Int
+definedArityOf env scope (CVar x _) = match omLookup x scope
+  Some local => local
+  None => globalArityOf env x
+definedArityOf (ArityEnv _ _ entries _) _ (CMethod name _ _ (RKey key _ _) _ _) =
+  omLookup (entryArityKey name key) entries
+definedArityOf env _ (CMethod name _ _ (RLocal sym dicts) _ _) =
+  lessDicts (listLen dicts) (topArityOf env (if sym == "" then name else sym))
+definedArityOf env scope (CDict name routes) =
+  lessDicts (listLen routes) (definedArityOf env scope (CVar name AGlobal))
+definedArityOf _ _ _ = None
+
+lessDicts : Int -> Option Int -> Option Int
+lessDicts n (Some k) = Some (k - n)
+lessDicts _ None = None
+
+-- A top-level binding, then a constructor, then the `core__` binding a bare
+-- prelude reference resolves to in both emitters.
+globalArityOf : ArityEnv -> String -> Option Int
+globalArityOf (env@(ArityEnv _ ctors _ _)) x =
+  orElse
+    (orElse (topArityOf env x) (omLookup x ctors))
+    (topArityOf env ("core__" ++ x))
+
+topArityOf : ArityEnv -> String -> Option Int
+topArityOf (ArityEnv top _ _ _) x = omLookup x top
+
+-- The mode of n arguments applied to a head of defined arity [arity].
+export
+callModeFor : Option Int -> Int -> CallMode
+callModeFor None _ = CallDynamic
+callModeFor (Some k) n =
+  if n == k then
+    CallExact
+  else if n < k then
+    CallPartial (k - n)
+  else
+    CallOver (n - k)
+
+-- The scope after a pattern: each variable it binds is a non-function local.
+export
+bindPatScope : Pat -> CallScope -> CallScope
+bindPatScope (PVar x _) s = omInsert x None s
+bindPatScope PWild s = s
+bindPatScope (PLit _) s = s
+bindPatScope (PCon _ ps) s = bindPatsScope ps s
+bindPatScope (PCons h t) s = bindPatScope t (bindPatScope h s)
+bindPatScope (PTuple ps) s = bindPatsScope ps s
+bindPatScope (PList ps) s = bindPatsScope ps s
+bindPatScope (PAs x _ p) s = bindPatScope p (omInsert x None s)
+bindPatScope (PRng _ _ _) s = s
+bindPatScope (PRec _ fields _) s = bindRecFieldsScope fields s
+
+export
+bindPatsScope : List Pat -> CallScope -> CallScope
+bindPatsScope [] s = s
+bindPatsScope (p :: rest) s = bindPatsScope rest (bindPatScope p s)
+
+-- A punned field `{x}` binds the field's own name.
+bindRecFieldsScope : List RecPatField -> CallScope -> CallScope
+bindRecFieldsScope [] s = s
+bindRecFieldsScope ((RecPatField f _ None) :: rest) s =
+  bindRecFieldsScope rest (omInsert f None s)
+bindRecFieldsScope ((RecPatField _ _ (Some p)) :: rest) s =
+  bindRecFieldsScope rest (bindPatScope p s)
+
+-- A let group's functions, each at its clause pattern count.
+export
+bindGroupScope : List CBind -> CallScope -> CallScope
+bindGroupScope [] s = s
+bindGroupScope ((CBind name clauses _) :: rest) s =
+  bindGroupScope rest (omInsert name (Some (clausesArity clauses)) s)
+
+-- ── the eta pass ──────────────────────────────────────────────────────────────
+-- A clause whose tail applies a method or a constrained function to fewer
+-- arguments than that head is defined with takes the missing parameters itself,
+-- and its tail applies them.  Only where nothing could tell the difference: every
+-- argument of the tail is atomic, every `let` on the way to it binds an atomic
+-- value, and every let-group binding on the way is a function, so delaying the
+-- clause's work until its last parameter arrives runs nothing early or late.  A
+-- clause with an effect before its result keeps its own arity.  The target is
+-- the head's defined arity, read before the pass lengthens anything; through a
+-- runtime dictionary it is the least arity of any entry of the method.  An impl
+-- entry never grows past its method's declared arity.  Applies to top-level
+-- bindings of one clause and to impl entries.
+etaSaturateProgram : CProgram -> CProgram
+etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls)) =
+  let env = programArities prog
+  CProgram (map (etaBind env) groups) ctors ctorTypes (map (etaEntry env) impls)
+
+etaBind : ArityEnv -> CBind -> CBind
+etaBind env (b@(CBind name [CClause pats body] site)) =
+  let missing = etaMissing env (bindPatsScope pats omEmpty) body
+  if missing > 0 then CBind name [etaClause missing pats body] site else b
+etaBind _ b = b
+
+etaEntry : ArityEnv -> CImplEntry -> CImplEntry
+etaEntry env (ent@(CImplEntry m s declared (CImplTagged tag key iface pos pats body))) =
+  match etaEntryClause env declared pats body
+    Some (CClause pats2 body2) =>
+      CImplEntry m s declared (CImplTagged tag key iface pos pats2 body2)
+    None => ent
+etaEntry env (ent@(CImplEntry m s declared (CImplDefault w tag key pos pats body))) =
+  match etaEntryClause env declared pats body
+    Some (CClause pats2 body2) =>
+      CImplEntry m s declared (CImplDefault w tag key pos pats2 body2)
+    None => ent
+
+etaEntryClause : ArityEnv -> Int -> List Pat -> CExpr -> Option CClause
+etaEntryClause env declared pats body =
+  let room = declared - valueArity pats
+  let wanted = etaMissing env (bindPatsScope pats omEmpty) body
+  let missing = min room wanted
+  if missing > 0 then Some (etaClause missing pats body) else None
+
+-- the parameters the clause's tail is short of, 0 when it may not be expanded
+etaMissing : ArityEnv -> CallScope -> CExpr -> Int
+etaMissing env scope (CLet _ pat rhs body) =
+  if isAtomicArg rhs then etaMissing env (bindPatScope pat scope) body else 0
+etaMissing env scope (CLetGroup binds body) =
+  if allList isFunctionBind binds then
+    etaMissing env (bindGroupScope binds scope) body
+  else
+    0
+etaMissing env scope tailE =
+  let (hd, args) = spineOf tailE
+  if allList isAtomicArg args then match etaTargetArity env scope hd
+    Some k => k - listLen args
+    None => 0
+  else
+    0
+
+-- the defined arity of a method or constrained-function head; through a runtime
+-- dictionary, the least over the method's entries
+etaTargetArity : ArityEnv -> CallScope -> CExpr -> Option Int
+etaTargetArity (ArityEnv _ _ _ least) _ (CMethod name _ _ route _ _)
+  | isRuntimeDictRoute route = omLookup name least
+etaTargetArity env scope (h@(CMethod _ _ _ _ _ _)) = definedArityOf env scope h
+etaTargetArity env scope (h@(CDict _ _)) = definedArityOf env scope h
+etaTargetArity _ _ _ = None
+
+isRuntimeDictRoute : Route -> Bool
+isRuntimeDictRoute (RDict _) = True
+isRuntimeDictRoute (RDictFwd _) = True
+isRuntimeDictRoute (RProj _ _) = True
+isRuntimeDictRoute _ = False
+
+spineOf : CExpr -> (CExpr, List CExpr)
+spineOf (CApp f args _) =
+  let (hd, inner) = spineOf f
+  (hd, inner ++ args)
+spineOf e = (e, [])
+
+-- an argument whose evaluation has no effect and does no work worth delaying
+isAtomicArg : CExpr -> Bool
+isAtomicArg (CVar _ _) = True
+isAtomicArg (CLit _) = True
+isAtomicArg (CLam _ _) = True
+isAtomicArg (CMethod _ _ _ _ _ _) = True
+isAtomicArg (CDict _ _) = True
+isAtomicArg (CApp (CMethod name _ _ (RKey _ _ _) _ _) [CLit _] _) =
+  name == "fromInt" || name == "fromFloat"
+isAtomicArg _ = False
+
+isFunctionBind : CBind -> Bool
+isFunctionBind (CBind _ clauses _) = allList clauseHasParams clauses
+
+clauseHasParams : CClause -> Bool
+clauseHasParams (CClause pats _) = isNonEmptyL pats
+
+-- [missing] fresh parameters after [pats], applied at the body's tail
+etaClause : Int -> List Pat -> CExpr -> CClause
+etaClause missing pats body =
+  let fresh = map etaParamName (range (listLen pats) (listLen pats + missing))
+  CClause
+    (pats ++ map (x => PVar x noDeclLoc) fresh)
+    (applyAtTail body (map (x => CVar x AGlobal) fresh))
+
+etaParamName : Int -> String
+etaParamName i = "$eta_" ++ intToString i
+
+applyAtTail : CExpr -> List CExpr -> CExpr
+applyAtTail (CLet r pat rhs body) args = CLet r pat rhs (applyAtTail body args)
+applyAtTail (CLetGroup binds body) args =
+  CLetGroup binds (applyAtTail body args)
+applyAtTail body args = mkApp body args
+
+-- ── the stamp ─────────────────────────────────────────────────────────────────
+-- Writes every application's mode from the program's defined arities, merging a
+-- head that is itself an application into its spine.  A `CVar` carries no
+-- address that tells a parameter from a global, so the walk tracks the binders
+-- in scope itself: a local named like a top-level function is not that function.
+export
+stampCallModes : CProgram -> CProgram
+stampCallModes (prog@(CProgram groups ctors ctorTypes impls)) =
+  let env = programArities prog
+  CProgram
+    (map (callsBind env omEmpty) groups)
+    ctors
+    ctorTypes
+    (map (callsEntry env) impls)
+
+callsBind : ArityEnv -> CallScope -> CBind -> CBind
+callsBind env scope (CBind name clauses site) =
+  CBind name (map (callsClause env scope) clauses) site
+
+callsClause : ArityEnv -> CallScope -> CClause -> CClause
+callsClause env scope (CClause pats body) =
+  CClause pats (callsExpr env (bindPatsScope pats scope) body)
+
+callsEntry : ArityEnv -> CImplEntry -> CImplEntry
+callsEntry env (CImplEntry m s d (CImplTagged tag key iface pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplTagged
+      tag
+      key
+      iface
+      pos
+      pats
+      (callsExpr env (bindPatsScope pats omEmpty) body))
+callsEntry env (CImplEntry m s d (CImplDefault w tag key pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplDefault
+      w
+      tag
+      key
+      pos
+      pats
+      (callsExpr env (bindPatsScope pats omEmpty) body))
+
+-- Every constructor is listed, with no catch-all arm, so a new expression form
+-- must decide where its binders scope.
+callsExpr : ArityEnv -> CallScope -> CExpr -> CExpr
+callsExpr env scope (CApp f args (CallSite _ tailPos)) =
+  let args2 = map (callsExpr env scope) args
+  match callsExpr env scope f
+    CApp hd inner _ => callsApp env scope hd (inner ++ args2) tailPos
+    hd => callsApp env scope hd args2 tailPos
+callsExpr _ _ (CLit l) = CLit l
+callsExpr _ _ (CVar x addr) = CVar x addr
+callsExpr env scope (CLam pats body) =
+  CLam pats (callsExpr env (bindPatsScope pats scope) body)
+callsExpr env scope (CLet recF pat rhs body) =
+  let inner = bindPatScope pat scope
+  CLet
+    recF
+    pat
+    (callsExpr env (if recF then inner else scope) rhs)
+    (callsExpr env inner body)
+callsExpr env scope (CLetGroup binds body) =
+  let inner = bindGroupScope binds scope
+  CLetGroup (map (callsBind env inner) binds) (callsExpr env inner body)
+callsExpr env scope (CMatch scrut arms) =
+  CMatch (callsExpr env scope scrut) (map (callsArm env scope) arms)
+callsExpr env scope (CDecision scrut arms tree) =
+  CDecision (callsExpr env scope scrut) (map (callsArm env scope) arms) tree
+callsExpr env scope (CIf c t e) =
+  CIf (callsExpr env scope c) (callsExpr env scope t) (callsExpr env scope e)
+callsExpr env scope (CBinPrim op l r tag site) =
+  CBinPrim op (callsExpr env scope l) (callsExpr env scope r) tag site
+callsExpr env scope (CUnOp op x) = CUnOp op (callsExpr env scope x)
+callsExpr env scope (CTuple es) = CTuple (map (callsExpr env scope) es)
+callsExpr env scope (CList es) = CList (map (callsExpr env scope) es)
+callsExpr env scope (CRecord name fields) =
+  CRecord name (map (callsField env scope) fields)
+callsExpr env scope (CFieldAccess x label name ord) =
+  CFieldAccess (callsExpr env scope x) label name ord
+callsExpr env scope (CRecordUpdate name base fields) =
+  CRecordUpdate
+    name
+    (callsExpr env scope base)
+    (map (callsField env scope) fields)
+callsExpr env scope (CVariantUpdate con base fields) =
+  CVariantUpdate
+    con
+    (callsExpr env scope base)
+    (map (callsField env scope) fields)
+callsExpr env scope (CArray es) = CArray (map (callsExpr env scope) es)
+callsExpr env scope (CRangeList lo hi incl) =
+  CRangeList (callsExpr env scope lo) (callsExpr env scope hi) incl
+callsExpr env scope (CRangeArray lo hi incl) =
+  CRangeArray (callsExpr env scope lo) (callsExpr env scope hi) incl
+callsExpr env scope (CIndex a i) =
+  CIndex (callsExpr env scope a) (callsExpr env scope i)
+callsExpr env scope (CSlice a lo hi incl) =
+  CSlice
+    (callsExpr env scope a)
+    (callsExpr env scope lo)
+    (callsExpr env scope hi)
+    incl
+callsExpr env scope (CStringIndex a i) =
+  CStringIndex (callsExpr env scope a) (callsExpr env scope i)
+callsExpr env scope (CStringSlice a lo hi incl) =
+  CStringSlice
+    (callsExpr env scope a)
+    (callsExpr env scope lo)
+    (callsExpr env scope hi)
+    incl
+callsExpr env scope (CListIndex a i) =
+  CListIndex (callsExpr env scope a) (callsExpr env scope i)
+callsExpr env scope (CListSlice a lo hi incl) =
+  CListSlice
+    (callsExpr env scope a)
+    (callsExpr env scope lo)
+    (callsExpr env scope hi)
+    incl
+callsExpr env scope (CBlock stmts) = CBlock (callsStmts env scope stmts)
+callsExpr _ _ (CMethod name iface arity r ir mr) =
+  CMethod name iface arity r ir mr
+callsExpr _ _ (CDict name rs) = CDict name rs
+
+callsApp : ArityEnv -> CallScope -> CExpr -> List CExpr -> Bool -> CExpr
+callsApp env scope hd args tailPos =
+  CApp
+    hd
+    args
+    (CallSite
+      (callModeFor (definedArityOf env scope hd) (listLen args))
+      tailPos)
+
+-- An arm's pattern scopes over its guards and body; a `Pat <- e` guard's
+-- pattern scopes over the guards after it and the body.
+callsArm : ArityEnv -> CallScope -> CArm -> CArm
+callsArm env scope (CArm pat guards body) =
+  let inner = bindPatScope pat scope
+  let (guards2, bodyScope) = callsGuards env inner guards
+  CArm pat guards2 (callsExpr env bodyScope body)
+
+callsGuards : ArityEnv -> CallScope -> List CGuard -> (List CGuard, CallScope)
+callsGuards _ scope [] = ([], scope)
+callsGuards env scope ((CGBool c) :: rest) =
+  let (rest2, out) = callsGuards env scope rest
+  (CGBool (callsExpr env scope c) :: rest2, out)
+callsGuards env scope ((CGBind pat e) :: rest) =
+  let (rest2, out) = callsGuards env (bindPatScope pat scope) rest
+  (CGBind pat (callsExpr env scope e) :: rest2, out)
+
+callsStmts : ArityEnv -> CallScope -> List CStmt -> List CStmt
+callsStmts _ _ [] = []
+callsStmts env scope ((CSExpr e) :: rest) =
+  CSExpr (callsExpr env scope e) :: callsStmts env scope rest
+callsStmts env scope ((CSLet recF pat e) :: rest) =
+  let inner = bindPatScope pat scope
+  CSLet recF pat (callsExpr env (if recF then inner else scope) e)
+    :: callsStmts env inner rest
+callsStmts env scope ((CSAssign x e) :: rest) =
+  CSAssign x (callsExpr env scope e) :: callsStmts env scope rest
+
+callsField : ArityEnv -> CallScope -> CField -> CField
+callsField env scope (CField k o e) = CField k o (callsExpr env scope e)
 
 -- ── located `panic` and `xs[i]` (native and wasm backends) ─────────────────────────────
 -- A saturated `panic m` and an `xs[i]` that reads one of the prelude's own
@@ -1260,10 +1696,11 @@ rewriteClauseRP fo (CClause pats body) =
   CClause (map (rewritePat fo) pats) (rewriteExprRP fo body)
 
 rewriteImplRP : RecOrders -> CImplEntry -> CImplEntry
-rewriteImplRP fo (CImplEntry n s (CImplTagged tag key iface ps pats body)) =
+rewriteImplRP fo (CImplEntry n s d (CImplTagged tag key iface ps pats body)) =
   CImplEntry
     n
     s
+    d
     (CImplTagged
       tag
       key
@@ -1271,10 +1708,11 @@ rewriteImplRP fo (CImplEntry n s (CImplTagged tag key iface ps pats body)) =
       ps
       (map (rewritePat fo) pats)
       (rewriteExprRP fo body))
-rewriteImplRP fo (CImplEntry n s (CImplDefault ifaceId tag key ps pats body)) =
+rewriteImplRP fo (CImplEntry n s d (CImplDefault ifaceId tag key ps pats body)) =
   CImplEntry
     n
     s
+    d
     (CImplDefault
       ifaceId
       tag
@@ -1286,7 +1724,8 @@ rewriteImplRP fo (CImplEntry n s (CImplDefault ifaceId tag key ps pats body)) =
 rewriteExprRP : RecOrders -> CExpr -> CExpr
 rewriteExprRP _ (CLit l) = CLit l
 rewriteExprRP _ (CVar x addr) = CVar x addr
-rewriteExprRP fo (CApp f x) = CApp (rewriteExprRP fo f) (rewriteExprRP fo x)
+rewriteExprRP fo (CApp f xs site) =
+  CApp (rewriteExprRP fo f) (map (rewriteExprRP fo) xs) site
 rewriteExprRP fo (CLam pats body) =
   CLam (map (rewritePat fo) pats) (rewriteExprRP fo body)
 rewriteExprRP fo (CLet r pat e1 e2) =
@@ -1591,10 +2030,10 @@ memoKeys entries = memoKeysGo entries entries
 
 memoKeysGo : List CImplEntry -> List CImplEntry -> List (String, String, String)
 memoKeysGo _ [] = []
-memoKeysGo all ((CImplEntry m _ (CImplTagged tag key _ positions pats _)) :: rest)
+memoKeysGo all ((CImplEntry m _ _ (CImplTagged tag key _ positions pats _)) :: rest)
   | isEmptyL positions && isEmptyL pats =
     (m, key, memoSelector all m tag key) :: memoKeysGo all rest
-memoKeysGo all ((CImplEntry m _ (CImplDefault _ tag key positions pats _)) :: rest)
+memoKeysGo all ((CImplEntry m _ _ (CImplDefault _ tag key positions pats _)) :: rest)
   | isEmptyL positions && isEmptyL pats =
     (m, key, memoSelector all m tag key) :: memoKeysGo all rest
 memoKeysGo all (_ :: rest) = memoKeysGo all rest
@@ -1619,11 +2058,11 @@ distinctKeysAtHeadL : List CImplEntry ->
   List String ->
   List String
 distinctKeysAtHeadL [] _ _ acc = acc
-distinctKeysAtHeadL ((CImplEntry n _ (CImplTagged t k _ _ _ _)) :: rest) method tag acc
+distinctKeysAtHeadL ((CImplEntry n _ _ (CImplTagged t k _ _ _ _)) :: rest) method tag acc
   | n == method && t == tag && not (contains k acc) =
     distinctKeysAtHeadL rest method tag (k :: acc)
   | otherwise = distinctKeysAtHeadL rest method tag acc
-distinctKeysAtHeadL ((CImplEntry n _ (CImplDefault _ t k _ _ _)) :: rest) method tag acc
+distinctKeysAtHeadL ((CImplEntry n _ _ (CImplDefault _ t k _ _ _)) :: rest) method tag acc
   | n == method && t == tag && not (contains k acc) =
     distinctKeysAtHeadL rest method tag (k :: acc)
   | otherwise = distinctKeysAtHeadL rest method tag acc
@@ -1671,11 +2110,11 @@ distinctImplKeysL : List CImplEntry ->
 distinctImplKeysL [] _ _ acc = acc
 distinctImplKeysL _ _ cap acc
   | listLen acc > cap = acc
-distinctImplKeysL ((CImplEntry n _ (CImplTagged _ k _ _ _ _)) :: rest) method cap acc
+distinctImplKeysL ((CImplEntry n _ _ (CImplTagged _ k _ _ _ _)) :: rest) method cap acc
   | n == method && not (contains k acc) =
     distinctImplKeysL rest method cap (k :: acc)
   | otherwise = distinctImplKeysL rest method cap acc
-distinctImplKeysL ((CImplEntry n _ (CImplDefault _ _ k _ _ _)) :: rest) method cap acc
+distinctImplKeysL ((CImplEntry n _ _ (CImplDefault _ _ k _ _ _)) :: rest) method cap acc
   | n == method && not (contains k acc) =
     distinctImplKeysL rest method cap (k :: acc)
   | otherwise = distinctImplKeysL rest method cap acc
@@ -1818,10 +2257,10 @@ hoistClause : LowerState -> CClause -> CClause
 hoistClause st (CClause pats body) = CClause pats (hoistExpr st body)
 
 hoistImpl : LowerState -> CImplEntry -> CImplEntry
-hoistImpl st (CImplEntry n s (CImplTagged tag key iface pos pats body)) =
-  CImplEntry n s (CImplTagged tag key iface pos pats (hoistExpr st body))
-hoistImpl st (CImplEntry n s (CImplDefault ifaceId tag key pos pats body)) =
-  CImplEntry n s (CImplDefault ifaceId tag key pos pats (hoistExpr st body))
+hoistImpl st (CImplEntry n s d (CImplTagged tag key iface pos pats body)) =
+  CImplEntry n s d (CImplTagged tag key iface pos pats (hoistExpr st body))
+hoistImpl st (CImplEntry n s d (CImplDefault ifaceId tag key pos pats body)) =
+  CImplEntry n s d (CImplDefault ifaceId tag key pos pats (hoistExpr st body))
 
 -- the structural walk (mirrors rewriteExprRP), rewriting ONLY the gated CMethod
 -- occurrence; everything else recurses unchanged.
@@ -1849,7 +2288,8 @@ hoistExpr _ (CMethod name iface arity r ir mr) =
   CMethod name iface arity r ir mr
 hoistExpr _ (CLit l) = CLit l
 hoistExpr _ (CVar x addr) = CVar x addr
-hoistExpr st (CApp f x) = CApp (hoistExpr st f) (hoistExpr st x)
+hoistExpr st (CApp f xs site) =
+  CApp (hoistExpr st f) (map (hoistExpr st) xs) site
 hoistExpr st (CLam pats body) = CLam pats (hoistExpr st body)
 hoistExpr st (CLet r pat e1 e2) = CLet r pat (hoistExpr st e1) (hoistExpr st e2)
 hoistExpr st (CLetGroup binds body) =
@@ -2417,24 +2857,31 @@ checkDictTagsInjective space hash ((m, w, owner) :: rest) seen =
 -- one `disp` from all modules' decls jointly (an impl in module B for an interface
 -- in the prelude needs the prelude's dispatch positions), then lowers each
 -- module's impls against it.
+-- [arities] is `declaredMethodArities` of every module's decls, built jointly for
+-- the same reason.
 export
 lowerImplsWith : List ((String, String, String), List Int) ->
   OrdMap Int ->
-  Option DispositionTable ->
-  List Decl ->
-  List CImplEntry
-lowerImplsWith disp reqCounts dispositions prog =
-  map (refoldImpl noLetCheck) (lowerImplsRaw disp reqCounts dispositions prog)
-
-lowerImplsRaw : List ((String, String, String), List Int) ->
   OrdMap Int ->
   Option DispositionTable ->
   List Decl ->
   List CImplEntry
-lowerImplsRaw disp reqCounts dispositions prog =
-  flatMap (lowerDeclImpl disp reqCounts dispositions) prog
+lowerImplsWith disp reqCounts arities dispositions prog =
+  map
+    (refoldImpl noLetCheck)
+    (lowerImplsRaw disp reqCounts arities dispositions prog)
+
+lowerImplsRaw : List ((String, String, String), List Int) ->
+  OrdMap Int ->
+  OrdMap Int ->
+  Option DispositionTable ->
+  List Decl ->
+  List CImplEntry
+lowerImplsRaw disp reqCounts arities dispositions prog =
+  flatMap (lowerDeclImpl disp reqCounts arities dispositions) prog
 
 lowerDeclImpl : List ((String, String, String), List Int) ->
+  OrdMap Int ->
   OrdMap Int ->
   Option DispositionTable ->
   Decl ->
@@ -2446,31 +2893,32 @@ lowerDeclImpl : List ((String, String, String), List Int) ->
 -- from the program's impl set.  Native then had an impl-less interface-with-default
 -- and SIGSEGV'd through #948's arm-less dispatcher; eval's `declImplEntries` has the
 -- same shape and silently answered from the interface default instead.
-lowerDeclImpl disp reqCounts dt (DAttrib _ d) =
-  lowerDeclImpl disp reqCounts dt d
+lowerDeclImpl disp reqCounts arities dt (DAttrib _ d) =
+  lowerDeclImpl disp reqCounts arities dt d
 -- B-2.2-e: `implOrigin` is bound here purely to reach `lowerImplMethod`'s route
 -- word (the definition side of the identity-bearing key `keyForSite` stamps at the
 -- call site).  Matched arm-for-arm by `eval.declImplEntries`, which threads the
 -- same field for the same reason.
-lowerDeclImpl disp _ _ (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
-  map (lowerImplMethod disp o ifaceName typeArgs) methods
+lowerDeclImpl disp _ arities _ (DImpl { iface = ifaceName, implOrigin = o, tys = typeArgs, methods, ... }) =
+  map (lowerImplMethod disp arities o ifaceName typeArgs) methods
 -- An interface lowers one entry for each default per instance the table says
 -- inherits it — lowered HERE, beside the interface's other code, because the body
 -- is the interface module's (its names resolve there).  Every inherited slot
 -- therefore has its own entry, and no engine is left to choose a default.  The interface word is read straight off `DInterface.ifaceOrigin`
 -- (resolve stamps it in `elaborateModules`' preamble — `stampGraphTyOrigins`), the
 -- same spelling the table's producer keys the slot by.
-lowerDeclImpl disp reqCounts (Some dt) (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
-  flatMap (lowerInheritedDefault disp reqCounts dt o ifaceName) methods
-lowerDeclImpl _ _ _ _ = []
+lowerDeclImpl disp reqCounts arities (Some dt) (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  flatMap (lowerInheritedDefault disp reqCounts arities dt o ifaceName) methods
+lowerDeclImpl _ _ _ _ _ = []
 
 lowerImplMethod : List ((String, String, String), List Int) ->
+  OrdMap Int ->
   TyConOrigin ->
   String ->
   List Ty ->
   ImplMethod ->
   CImplEntry
-lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
+lowerImplMethod disp arities o ifaceName typeArgs (ImplMethod mname pats body) =
   let tag = optionOr noneHeadTag (headTyconHead typeArgs)
   let key = implRouteKeyWord o ifaceName typeArgs None
   -- #1113 Phase 4: identity-keyed admissibility lookup — the LOCKSTEP peer of
@@ -2482,17 +2930,19 @@ lowerImplMethod disp o ifaceName typeArgs (ImplMethod mname pats body) =
   CImplEntry
     mname
     (tyvarsInArgs typeArgs)
+    (declaredArityOr arities (ifaceWordOfKey key) mname pats)
     (CImplTagged tag key ifaceName positions pats (lower body))
 
 lowerInheritedDefault : List ((String, String, String), List Int) ->
+  OrdMap Int ->
   OrdMap Int ->
   DispositionTable ->
   TyConOrigin ->
   String ->
   IfaceMethod ->
   List CImplEntry
-lowerInheritedDefault _ _ _ _ _ (IfaceMethod _ _ None _) = []
-lowerInheritedDefault disp reqCounts dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
+lowerInheritedDefault _ _ _ _ _ _ (IfaceMethod _ _ None _) = []
+lowerInheritedDefault disp reqCounts arities dt o ifaceName (IfaceMethod mname _ (Some (MethodDefault pats body)) _) =
   let ifaceWord = ifaceWordOf o ifaceName
   let positions =
     lookupPositions (ifaceIdentity o ifaceName) ifaceName mname disp
@@ -2522,6 +2972,7 @@ lowerInheritedDefault disp reqCounts dt o ifaceName (IfaceMethod mname _ (Some (
       CImplEntry
         mname
         (tyvarsInArgs shape.isTys)
+        (declaredArityOr arities ifaceWord mname params)
         (CImplDefault
           ifaceWord
           (optionOr noneHeadTag (headTyconHead shape.isTys))
@@ -2590,7 +3041,8 @@ specializeRow row (CDict name routes) =
 specializeRow row (CVar x addr) =
   if x == row.drSelf then CVar row.drReceiver addr else CVar x addr
 specializeRow _ (CLit l) = CLit l
-specializeRow row (CApp f x) = CApp (specializeRow row f) (specializeRow row x)
+specializeRow row (CApp f xs site) =
+  CApp (specializeRow row f) (map (specializeRow row) xs) site
 specializeRow row (CLam pats body) = CLam pats (specializeRow row body)
 specializeRow row (CLet r pat e1 e2) =
   CLet r pat (specializeRow row e1) (specializeRow row e2)
@@ -2715,6 +3167,25 @@ underLam : Expr -> Expr
 underLam (ELoc _ e) = underLam e
 underLam (ELam _ b) = b
 underLam e = e
+
+-- An interface method's declared value arity, keyed by `ifaceMethodArityKey`.
+export
+declaredMethodArities : List Decl -> OrdMap Int
+declaredMethodArities prog =
+  omFromPairs (map declaredArityRow (methodIfaceTable prog)) omEmpty
+
+declaredArityRow : (String, (String, String, Int)) -> (String, Int)
+declaredArityRow (mname, (_, ifaceWord, arity)) =
+  (ifaceMethodArityKey ifaceWord mname, arity)
+
+-- The declared value arity of [mname] in the interface [ifaceWord] names, or the
+-- value arity of the entry's own parameters [pats] when the lowered declarations
+-- do not include that interface.
+declaredArityOr : OrdMap Int -> String -> String -> List Pat -> Int
+declaredArityOr arities ifaceWord mname pats =
+  match omLookup (ifaceMethodArityKey ifaceWord mname) arities
+    Some n => n
+    None => listLen pats - leadingDictParams pats
 
 -- the leading `$dict_*` parameters dict-passing prepended to a default's clause
 leadingDictParams : List Pat -> Int

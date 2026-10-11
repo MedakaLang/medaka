@@ -1,5 +1,5 @@
 # META
-source_lines=5383
+source_lines=5411
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -1653,14 +1653,7 @@ eval env (EMethodAt name _ ev) = evalMethodAtEv env name (evMethodRoutes ev)
 
 eval env (EDictAt name ev) =
   applyDicts env (lookupEnv env name) (evDictRoutes ev)
--- The application's own start is marked after its operands ran, so a trap raised
--- by a primitive callee (`panic`, an index bound check reached through a prelude
--- impl, whose locations are placeholders) names this call site.
-eval env (app@(EApp f x)) =
-  let fv = eval env f
-  let xv = eval env x
-  let _ = markTrapSite app
-  apply fv xv
+eval env (app@(EApp _ _)) = evalApp env app
 eval env (ELam pats body) = VClosure env pats body noTrapLoc
 eval env (ELet _ True (PVar f _) e1 e2) = evalRecLet env f e1 e2
 eval env (ELet site _ pat e1 e2) = evalLet site env pat e1 e2
@@ -1716,6 +1709,41 @@ eval env (ELoc l e) =
   eval env e
 eval env (EDoOrigin _ e) = eval env e
 eval _ _ = panic "eval: unsupported node"
+
+-- An application spine `f a1 … an` evaluates its head and every argument, left
+-- to right, before it applies any of them, so a function applied to more
+-- arguments than it takes runs its body after all of them, as every engine does.
+-- Each application's own start is marked after its operands ran, so a trap raised
+-- by a primitive callee (`panic`, an index bound check reached through a prelude
+-- impl, whose locations are placeholders) names this call site.
+evalApp : EvalEnv (Value e) -> Expr -> <e> Value e
+evalApp env app =
+  let (hd, nodes) = appSpine app []
+  let fv = eval env hd
+  applySpine fv nodes (evalSpineArgs env nodes)
+
+-- The head of an application spine and its application nodes, innermost first.
+-- A located spine in head position is part of the spine: `(f a) b` is `f a b`;
+-- its location is current while the head evaluates, as when it was its own node.
+appSpine : Expr -> List Expr -> (Expr, List Expr)
+appSpine (node@(EApp f _)) acc = appSpine f (node :: acc)
+appSpine (ELoc l (inner@(EApp _ _))) acc =
+  let _ = updateEvalLoc l
+  appSpine inner acc
+appSpine hd acc = (hd, acc)
+
+evalSpineArgs : EvalEnv (Value e) -> List Expr -> <e> List (Value e)
+evalSpineArgs _ [] = []
+evalSpineArgs env ((EApp _ x) :: rest) =
+  let v = eval env x
+  v :: evalSpineArgs env rest
+evalSpineArgs env (_ :: rest) = evalSpineArgs env rest
+
+applySpine : Value e -> List Expr -> List (Value e) -> <e> Value e
+applySpine f (node :: nodes) (v :: vs) =
+  let _ = markTrapSite node
+  applySpine (apply f v) nodes vs
+applySpine f _ _ = f
 
 -- C5: an RLocal route is NOT a method dispatch — the typechecker found no impl
 -- of this interface for the concrete receiver but the name has an explicitly-
@@ -5969,7 +5997,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "EVarAt" (PVar "x") (PVar "addr"))) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EApp (EVar "lookupAtAddr") (EVar "env")) (EVar "x")) (EVar "addr"))))
 (DFunDef false "eval" ((PVar "env") (PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EApp (EVar "evalMethodAtEv") (EVar "env")) (EVar "name")) (EApp (EVar "evMethodRoutes") (EVar "ev"))))
 (DFunDef false "eval" ((PVar "env") (PCon "EDictAt" (PVar "name") (PVar "ev"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name"))) (EApp (EVar "evDictRoutes") (EVar "ev"))))
-(DFunDef false "eval" ((PVar "env") (PAs "app" (PCon "EApp" (PVar "f") (PVar "x")))) (EBlock (DoLet false false (PVar "fv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "f"))) (DoLet false false (PVar "xv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))) (DoLet false false PWild (EApp (EVar "markTrapSite") (EVar "app"))) (DoExpr (EApp (EApp (EVar "apply") (EVar "fv")) (EVar "xv")))))
+(DFunDef false "eval" ((PVar "env") (PAs "app" (PCon "EApp" PWild PWild))) (EApp (EApp (EVar "evalApp") (EVar "env")) (EVar "app")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "noTrapLoc")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELet" (PVar "site") PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "site")) (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
@@ -5997,6 +6025,19 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))))
 (DFunDef false "eval" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
 (DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node"))))
+(DTypeSig false "evalApp" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "evalApp" ((PVar "env") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "nodes")) (EApp (EApp (EVar "appSpine") (EVar "app")) (EListLit))) (DoLet false false (PVar "fv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hd"))) (DoExpr (EApp (EApp (EApp (EVar "applySpine") (EVar "fv")) (EVar "nodes")) (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "nodes"))))))
+(DTypeSig false "appSpine" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
+(DFunDef false "appSpine" ((PAs "node" (PCon "EApp" (PVar "f") PWild)) (PVar "acc")) (EApp (EApp (EVar "appSpine") (EVar "f")) (EBinOp "::" (EVar "node") (EVar "acc"))))
+(DFunDef false "appSpine" ((PCon "ELoc" (PVar "l") (PAs "inner" (PCon "EApp" PWild PWild))) (PVar "acc")) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")))))
+(DFunDef false "appSpine" ((PVar "hd") (PVar "acc")) (ETuple (EVar "hd") (EVar "acc")))
+(DTypeSig false "evalSpineArgs" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "evalSpineArgs" (PWild (PList)) (EListLit))
+(DFunDef false "evalSpineArgs" ((PVar "env") (PCons (PCon "EApp" PWild (PVar "x")) (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))) (DoExpr (EBinOp "::" (EVar "v") (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "rest"))))))
+(DFunDef false "evalSpineArgs" ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "rest")))
+(DTypeSig false "applySpine" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "applySpine" ((PVar "f") (PCons (PVar "node") (PVar "nodes")) (PCons (PVar "v") (PVar "vs"))) (EBlock (DoLet false false PWild (EApp (EVar "markTrapSite") (EVar "node"))) (DoExpr (EApp (EApp (EApp (EVar "applySpine") (EApp (EApp (EVar "apply") (EVar "f")) (EVar "v"))) (EVar "nodes")) (EVar "vs")))))
+(DFunDef false "applySpine" ((PVar "f") PWild PWild) (EVar "f"))
 (DTypeSig false "evalMethodAt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DTypeSig false "evalMethodAtEv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "evalMethodAtEv" ((PVar "env") (PVar "name") (PTuple (PVar "iface") PWild (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "evalMethodAt") (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes")))
@@ -7737,7 +7778,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "EVarAt" (PVar "x") (PVar "addr"))) (EIf (EApp (EVar "startsWithAt") (EVar "x")) (EVar "VUnit") (EApp (EApp (EApp (EVar "lookupAtAddr") (EVar "env")) (EVar "x")) (EVar "addr"))))
 (DFunDef false "eval" ((PVar "env") (PCon "EMethodAt" (PVar "name") PWild (PVar "ev"))) (EApp (EApp (EApp (EVar "evalMethodAtEv") (EVar "env")) (EVar "name")) (EApp (EVar "evMethodRoutes") (EVar "ev"))))
 (DFunDef false "eval" ((PVar "env") (PCon "EDictAt" (PVar "name") (PVar "ev"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name"))) (EApp (EVar "evDictRoutes") (EVar "ev"))))
-(DFunDef false "eval" ((PVar "env") (PAs "app" (PCon "EApp" (PVar "f") (PVar "x")))) (EBlock (DoLet false false (PVar "fv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "f"))) (DoLet false false (PVar "xv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))) (DoLet false false PWild (EApp (EVar "markTrapSite") (EVar "app"))) (DoExpr (EApp (EApp (EVar "apply") (EVar "fv")) (EVar "xv")))))
+(DFunDef false "eval" ((PVar "env") (PAs "app" (PCon "EApp" PWild PWild))) (EApp (EApp (EVar "evalApp") (EVar "env")) (EVar "app")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELam" (PVar "pats") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "VClosure") (EVar "env")) (EVar "pats")) (EVar "body")) (EVar "noTrapLoc")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELet" PWild (PCon "True") (PCon "PVar" (PVar "f") PWild) (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EVar "evalRecLet") (EVar "env")) (EVar "f")) (EVar "e1")) (EVar "e2")))
 (DFunDef false "eval" ((PVar "env") (PCon "ELet" (PVar "site") PWild (PVar "pat") (PVar "e1") (PVar "e2"))) (EApp (EApp (EApp (EApp (EApp (EVar "evalLet") (EVar "site")) (EVar "env")) (EVar "pat")) (EVar "e1")) (EVar "e2")))
@@ -7765,6 +7806,19 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "eval" ((PVar "env") (PCon "ELoc" (PVar "l") (PVar "e"))) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))))
 (DFunDef false "eval" ((PVar "env") (PCon "EDoOrigin" PWild (PVar "e"))) (EApp (EApp (EVar "eval") (EVar "env")) (EVar "e")))
 (DFunDef false "eval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "eval: unsupported node"))))
+(DTypeSig false "evalApp" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "Expr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
+(DFunDef false "evalApp" ((PVar "env") (PVar "app")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "nodes")) (EApp (EApp (EVar "appSpine") (EVar "app")) (EListLit))) (DoLet false false (PVar "fv") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "hd"))) (DoExpr (EApp (EApp (EApp (EVar "applySpine") (EVar "fv")) (EVar "nodes")) (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "nodes"))))))
+(DTypeSig false "appSpine" (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyTuple (TyCon "Expr") (TyApp (TyCon "List") (TyCon "Expr"))))))
+(DFunDef false "appSpine" ((PAs "node" (PCon "EApp" (PVar "f") PWild)) (PVar "acc")) (EApp (EApp (EVar "appSpine") (EVar "f")) (EBinOp "::" (EVar "node") (EVar "acc"))))
+(DFunDef false "appSpine" ((PCon "ELoc" (PVar "l") (PAs "inner" (PCon "EApp" PWild PWild))) (PVar "acc")) (EBlock (DoLet false false PWild (EApp (EVar "updateEvalLoc") (EVar "l"))) (DoExpr (EApp (EApp (EVar "appSpine") (EVar "inner")) (EVar "acc")))))
+(DFunDef false "appSpine" ((PVar "hd") (PVar "acc")) (ETuple (EVar "hd") (EVar "acc")))
+(DTypeSig false "evalSpineArgs" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "evalSpineArgs" (PWild (PList)) (EListLit))
+(DFunDef false "evalSpineArgs" ((PVar "env") (PCons (PCon "EApp" PWild (PVar "x")) (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "eval") (EVar "env")) (EVar "x"))) (DoExpr (EBinOp "::" (EVar "v") (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "rest"))))))
+(DFunDef false "evalSpineArgs" ((PVar "env") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "evalSpineArgs") (EVar "env")) (EVar "rest")))
+(DTypeSig false "applySpine" (TyFun (TyApp (TyCon "Value") (TyVar "e")) (TyFun (TyApp (TyCon "List") (TyCon "Expr")) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Value") (TyVar "e"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
+(DFunDef false "applySpine" ((PVar "f") (PCons (PVar "node") (PVar "nodes")) (PCons (PVar "v") (PVar "vs"))) (EBlock (DoLet false false PWild (EApp (EVar "markTrapSite") (EVar "node"))) (DoExpr (EApp (EApp (EApp (EVar "applySpine") (EApp (EApp (EVar "apply") (EVar "f")) (EVar "v"))) (EVar "nodes")) (EVar "vs")))))
+(DFunDef false "applySpine" ((PVar "f") PWild PWild) (EVar "f"))
 (DTypeSig false "evalMethodAt" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))))))
 (DTypeSig false "evalMethodAtEv" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyTuple (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route"))) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "evalMethodAtEv" ((PVar "env") (PVar "name") (PTuple (PVar "iface") PWild (PVar "route") (PVar "implRoutes") (PVar "methodRoutes"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "evalMethodAt") (EVar "env")) (EVar "name")) (EVar "iface")) (EVar "route")) (EVar "implRoutes")) (EVar "methodRoutes")))

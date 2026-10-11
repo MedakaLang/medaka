@@ -1331,7 +1331,7 @@ wrappedReturnSource hasInt hasBox =
       ])
 
 returnMethodRoutes : CExpr -> Option (List String)
-returnMethodRoutes (CApp fn _) = returnMethodRoutes fn
+returnMethodRoutes (CApp fn _ _) = returnMethodRoutes fn
 returnMethodRoutes (CMethod "produce" _ _ _ prerequisites _) =
   Some (map numericRouteView prerequisites)
 returnMethodRoutes _ = None
@@ -2372,7 +2372,7 @@ methodHeadArity : String -> CExpr -> Option Int
 methodHeadArity target (CMethod name _ arity _ _ _)
   | name == target = Some arity
   | otherwise = None
-methodHeadArity target (CApp f _) = methodHeadArity target f
+methodHeadArity target (CApp f _ _) = methodHeadArity target f
 methodHeadArity _ _ = None
 
 bindMethodArity : String -> String -> List CBind -> Option Int
@@ -2494,8 +2494,11 @@ mergeLocalCoreFacts (LocalCoreFacts shapeA addA fromIntA primA) (LocalCoreFacts 
     (primA + primB)
 
 localCoreExprFacts : CExpr -> LocalCoreFacts
-localCoreExprFacts (CApp f x) =
-  mergeLocalCoreFacts (localCoreExprFacts f) (localCoreExprFacts x)
+localCoreExprFacts (CApp f args _) =
+  fold
+    (facts a => mergeLocalCoreFacts facts (localCoreExprFacts a))
+    (localCoreExprFacts f)
+    args
 localCoreExprFacts (CLam _ body) = localCoreExprFacts body
 localCoreExprFacts (CLet _ _ rhs body) =
   mergeLocalCoreFacts (localCoreExprFacts rhs) (localCoreExprFacts body)
@@ -2517,7 +2520,7 @@ localCoreExprFacts (CMethod "fromInt" _ _ route _ _) = match route
 localCoreExprFacts _ = emptyLocalCoreFacts
 
 blockRecValueFacts : CBind -> LocalCoreFacts
-blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet True _ (CLam _ localBody), CSExpr (CApp _ _)])] _) =
+blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet True _ (CLam _ localBody), CSExpr (CApp _ _ _)])] _) =
   let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
     localCoreExprFacts localBody
   LocalCoreFacts True addRoutes fromIntRoutes primCount
@@ -2559,7 +2562,7 @@ lamThenGroupSource = joinNl [
 ]
 
 lamThenGroupBindFacts : CBind -> LocalCoreFacts
-lamThenGroupBindFacts (CBind "lamThenGroup" [CClause _ (CLet _ _ (CLam _ (CLetGroup [CBind _ [CClause _ gBody] _] (CApp _ _))) (CApp _ _))] _) =
+lamThenGroupBindFacts (CBind "lamThenGroup" [CClause _ (CLet _ _ (CLam _ (CLetGroup [CBind _ [CClause _ gBody] _] (CApp _ _ _))) (CApp _ _ _))] _) =
   let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
     localCoreExprFacts gBody
   LocalCoreFacts True addRoutes fromIntRoutes primCount

@@ -203,6 +203,7 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   FailSite(..),
+  mkApp,
   siteSentinelName,
 }
 import ir.core_ir_lower.{
@@ -238,6 +239,8 @@ import backend.core_validate.{
   renderExternFinding,
   renderExternRefusal,
   renderRecordRefusal,
+  renderCallRefusal,
+  validateCalls,
   validateRecords,
   unrefusedExternMessage,
   validateExterns,
@@ -600,9 +603,9 @@ methodArityOfIface e ifaceWord method =
 -- the word a `CMethod` occurrence carries for the interface it resolved to, so the
 -- two compare with `==` (`narrowImplsByIface`).
 implEntryIfaceWord : CImplEntry -> String
-implEntryIfaceWord (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) =
+implEntryIfaceWord (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _)) =
   ifaceWordOfKey key
-implEntryIfaceWord (CImplEntry _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
+implEntryIfaceWord (CImplEntry _ _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
   ifaceWord
 
 -- #1034: the SOURCE value arity of a TAGGED impl's method clause -- its pattern
@@ -1463,7 +1466,7 @@ implEntriesOf e = !e.implEntries
 
 -- the interface method an impl entry implements (field 0).
 implEntryMethodOf : CImplEntry -> String
-implEntryMethodOf (CImplEntry n _ _) = n
+implEntryMethodOf (CImplEntry n _ _ _) = n
 
 orEmptyEntries : Option (List CImplEntry) -> List CImplEntry
 orEmptyEntries (Some xs) = xs
@@ -1515,9 +1518,9 @@ dedupImplEntries xs = reverseL (dedupBy implEntryDedupKey (reverseL xs))
 -- identity a dispatch arm carries, so two entries collide here only when
 -- they are genuinely the same impl.
 implEntryDedupKey : CImplEntry -> String
-implEntryDedupKey (CImplEntry _ _ (CImplTagged tag key iface _ _ _)) =
+implEntryDedupKey (CImplEntry _ _ _ (CImplTagged tag key iface _ _ _)) =
   lenKey tag ++ lenKey key ++ iface
-implEntryDedupKey (CImplEntry _ _ (CImplDefault ifaceWord tag key _ _ _)) =
+implEntryDedupKey (CImplEntry _ _ _ (CImplDefault ifaceWord tag key _ _ _)) =
   "\{lenKey tag}\{lenKey key}default \{ifaceWord}"
 
 filterTagged : String -> List CImplEntry -> List CImplEntry
@@ -1658,7 +1661,7 @@ preludeImplCollisions : List CImplEntry ->
   OrdMap Unit ->
   OrdMap Unit
 preludeImplCollisions [] _ collisions = collisions
-preludeImplCollisions ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) firstKeys collisions =
+preludeImplCollisions ((CImplEntry method _ _ (CImplTagged tag key _ _ _ _)) :: rest) firstKeys collisions =
   let headKey = preludeImplPairKey method tag
   match omLookup headKey firstKeys
     None =>
@@ -1677,7 +1680,7 @@ preludeImplSymbolsGo : OrdMap Unit ->
   OrdMap Unit ->
   List (String, String, String)
 preludeImplSymbolsGo _ [] _ _ = []
-preludeImplSymbolsGo own ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) collisions seen =
+preludeImplSymbolsGo own ((CImplEntry method _ _ (CImplTagged tag key _ _ _ _)) :: rest) collisions seen =
   let implKey = preludeImplPairKey method key
   if omHasKey implKey seen then
     preludeImplSymbolsGo own rest collisions seen
@@ -1691,7 +1694,7 @@ preludeImplSymbolsGo own ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) ::
       :: preludeImplSymbolsGo own rest collisions (omInsert implKey () seen)
 -- an inherited default's entry is named by its interface and instance key, never by
 -- a symbol tag, so the tag it records is only its head
-preludeImplSymbolsGo own ((CImplEntry method _ (CImplDefault _ tag key _ _ _)) :: rest) collisions seen =
+preludeImplSymbolsGo own ((CImplEntry method _ _ (CImplDefault _ tag key _ _ _)) :: rest) collisions seen =
   let implKey = preludeImplPairKey method key
   if omHasKey implKey seen || not (omHasKey key own) then
     preludeImplSymbolsGo own rest collisions seen
@@ -1742,9 +1745,9 @@ implFnSymE e method ent =
 -- the lifted define an entry's calls target: `mdk_impl_<symTag>_<method>` for a
 -- supplied method, `defaultFnName` for an inherited default's per-instance body.
 implEntryFnName : Emit -> String -> CImplEntry -> String
-implEntryFnName e method (ent@(CImplEntry _ _ (CImplTagged _ _ _ _ _ _))) =
+implEntryFnName e method (ent@(CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _))) =
   implFnName (implFnSymE e method ent) method
-implEntryFnName _ method (CImplEntry _ _ (CImplDefault ifaceWord _ key _ _ _)) =
+implEntryFnName _ method (CImplEntry _ _ _ (CImplDefault ifaceWord _ key _ _ _)) =
   defaultFnName ifaceWord method key
 
 implFnSymForKey : Emit ->
@@ -1789,17 +1792,17 @@ isImplMethod e name = match !e.implMethodSet
 
 -- the parameter patterns + body of an impl entry (CImplTagged or CImplDefault).
 implPats : CImplEntry -> List Pat
-implPats (CImplEntry _ _ (CImplTagged _ _ _ _ pats _)) = pats
-implPats (CImplEntry _ _ (CImplDefault _ _ _ _ pats _)) = pats
+implPats (CImplEntry _ _ _ (CImplTagged _ _ _ _ pats _)) = pats
+implPats (CImplEntry _ _ _ (CImplDefault _ _ _ _ pats _)) = pats
 
 implBody : CImplEntry -> CExpr
-implBody (CImplEntry _ _ (CImplTagged _ _ _ _ _ body)) = body
-implBody (CImplEntry _ _ (CImplDefault _ _ _ _ _ body)) = body
+implBody (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ body)) = body
+implBody (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ body)) = body
 
 implEntryPositions : CImplEntry -> List Int
-implEntryPositions (CImplEntry _ _ (CImplTagged _ _ _ positions _ _)) =
+implEntryPositions (CImplEntry _ _ _ (CImplTagged _ _ _ positions _ _)) =
   positions
-implEntryPositions (CImplEntry _ _ (CImplDefault _ _ _ positions _ _)) =
+implEntryPositions (CImplEntry _ _ _ (CImplDefault _ _ _ positions _ _)) =
   positions
 
 -- #747: is this a nullary/return-position/no-requires impl — the exact shape
@@ -1811,13 +1814,13 @@ implEntryMemoisable ent =
   isEmptyL (implEntryPositions ent) && isEmptyL (implPats ent)
 
 implEntryTag : CImplEntry -> String
-implEntryTag (CImplEntry _ _ (CImplTagged tag _ _ _ _ _)) = tag
-implEntryTag (CImplEntry _ _ (CImplDefault _ tag _ _ _ _)) = tag
+implEntryTag (CImplEntry _ _ _ (CImplTagged tag _ _ _ _ _)) = tag
+implEntryTag (CImplEntry _ _ _ (CImplDefault _ tag _ _ _ _)) = tag
 
 -- the canonical full-type key the entry's instance is filed under
 implEntryKey : CImplEntry -> String
-implEntryKey (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) = key
-implEntryKey (CImplEntry _ _ (CImplDefault _ _ key _ _ _)) = key
+implEntryKey (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _)) = key
+implEntryKey (CImplEntry _ _ _ (CImplDefault _ _ key _ _ _)) = key
 
 -- ── ctor→type map ─────────────────────────────────────────────────
 -- the program's constructor→type-name map (CProgram's 3rd field).  An arg-tag
@@ -2080,7 +2083,7 @@ emitExpr e env (CIf c t f) = emitIf e env c t f
 emitExpr e env (CLet recF pat e1 e2) = emitLet e env recF pat e1 e2
 emitExpr e env (CLetGroup binds body) = emitLetGroup e env binds body
 emitExpr e env (CBlock stmts) = emitBlock e env stmts
-emitExpr e env (CApp f a) = emitApp e env (CApp f a)
+emitExpr e env (app@(CApp _ _ _)) = emitApp e env app
 emitExpr e env (CLam pats body) = emitLam e env pats body
 emitExpr e env (CDecision scrut arms tree) = emitDecision e env scrut arms tree
 emitExpr e env (CTuple es) = emitTuple e env es
@@ -4262,7 +4265,7 @@ coreSizeGo (x :: rest) n =
 coreChildren : CExpr -> Option (List CExpr)
 coreChildren (CLit _) = Some []
 coreChildren (CVar _ _) = Some []
-coreChildren (CApp f a) = Some [f, a]
+coreChildren (CApp f args _) = Some (f :: args)
 coreChildren (CBinPrim _ l r _ _) = Some [l, r]
 coreChildren (CUnOp _ x) = Some [x]
 coreChildren (CIf c t f) = Some [c, t, f]
@@ -4535,7 +4538,7 @@ u64AliasBody ps body _ = match u64KernelApplied ps body
 -- `fromInt` application the typechecker routed to `Num Int`.
 intLitOf : CExpr -> Option Int
 intLitOf (CLit (LInt n)) = Some n
-intLitOf (CApp (CMethod "fromInt" _ _ (RKey word _ _) _ _) (CLit (LInt n)))
+intLitOf (CApp (CMethod "fromInt" _ _ (RKey word _ _) _ _) [CLit (LInt n)] _)
   | word == numIntWord = Some n
 intLitOf _ = None
 
@@ -6652,8 +6655,8 @@ emitGroupBind e env (CBind name clauses site) direct =
 satOnlyUses : String -> Int -> CExpr -> Bool
 satOnlyUses _ _ (CLit _) = True
 satOnlyUses name _ (CVar x _) = x /= name
-satOnlyUses name arity (CApp f a) =
-  let (hd, args) = flattenApp (CApp f a) []
+satOnlyUses name arity (app@(CApp _ _ _)) =
+  let (hd, args) = flattenApp app []
   match hd
     CVar n _ =>
       if n == name && lengthS args /= arity then
@@ -7744,7 +7747,7 @@ receiverRoute route _ = route
 
 -- an inherited default's per-instance entry
 isInheritedEntry : CImplEntry -> Bool
-isInheritedEntry (CImplEntry _ _ (CImplDefault _ _ _ _ _ _)) = True
+isInheritedEntry (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _)) = True
 isInheritedEntry _ = False
 
 -- a direct call to a statically-resolved impl fn (RKey).  Nullary (argOps == [])
@@ -7973,8 +7976,8 @@ emitPapDefineIndirect e papName supplied remaining =
 -- the BARE interface name a resolved impl entry belongs to (for the returns-self
 -- lookup and the declared-impl head table, both keyed by spelling).
 implEntryIface : CImplEntry -> String
-implEntryIface (CImplEntry _ _ (CImplTagged _ _ iface _ _ _)) = iface
-implEntryIface (CImplEntry _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
+implEntryIface (CImplEntry _ _ _ (CImplTagged _ _ iface _ _ _)) = iface
+implEntryIface (CImplEntry _ _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
   ifaceNameOfWord ifaceWord
 
 -- a runtime method dispatch (RDict/RDictFwd/RProj): the dictionary [dict] denotes
@@ -9280,7 +9283,7 @@ etaExpand pats body arity have
     let name = "$eta" ++ intToString have
     etaExpand
       (pats ++ [PVar name (Loc "" 0 0 0 0)])
-      (CApp body (CVar name AGlobal))
+      (mkApp body [CVar name AGlobal])
       arity
       (have + 1)
 
@@ -9578,7 +9581,7 @@ distinctImplKeys : List CImplEntry ->
   List (String, String) ->
   List (String, String)
 distinctImplKeys [] seen = reverseL seen
-distinctImplKeys ((CImplEntry method _ body) :: rest) seen =
+distinctImplKeys ((CImplEntry method _ _ body) :: rest) seen =
   let key = implBodyKey body
   if keySeen method key seen then
     distinctImplKeys rest seen
@@ -9661,9 +9664,9 @@ firstEntryFor method key (ent :: rest)
 
 -- [implEntryFnName] with the symbol tag already decided (inside `gatherGroup`)
 implEntryFnNameAt : CImplEntry -> String -> String -> String
-implEntryFnNameAt (CImplEntry _ _ (CImplTagged _ _ _ _ _ _)) method symTag =
+implEntryFnNameAt (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _)) method symTag =
   implFnName symTag method
-implEntryFnNameAt (CImplEntry _ _ (CImplDefault ifaceWord _ key _ _ _)) method _ =
+implEntryFnNameAt (CImplEntry _ _ _ (CImplDefault ifaceWord _ key _ _ _)) method _ =
   defaultFnName ifaceWord method key
 
 -- eta-expand one impl clause's (pats, body) to `arity` (no-op when already there).
@@ -12145,7 +12148,7 @@ applyEtaArgsTail body fresh = applyEtaArgs body fresh
 applyEtaArgs : CExpr -> List Pat -> CExpr
 applyEtaArgs body [] = body
 applyEtaArgs body ((PVar x _) :: rest) =
-  applyEtaArgs (CApp body (CVar x AGlobal)) rest
+  applyEtaArgs (mkApp body [CVar x AGlobal]) rest
 applyEtaArgs body (_ :: rest) = applyEtaArgs body rest
 
 -- E1a — multi-clause / patterned top-level fns.  Route ordinary fn-binds whose
@@ -15706,11 +15709,13 @@ emitProgramMode gapMode input (cp@(CProgram groups ctorArs ctorTypes implEntries
 unprovidedExterns : GapMode -> EmitInput -> CProgram -> List ExternFinding
 unprovidedExterns Strict input cp =
   let _ = refuseUnstampedRecords cp
+  let _ = refuseUnstampedCalls cp
   match validateExterns LlvmBackend input.runtimeExterns cp
     [] => []
     found => panic (renderExternRefusal found)
 unprovidedExterns Record input cp =
   let _ = refuseUnstampedRecords cp
+  let _ = refuseUnstampedCalls cp
   validateExterns LlvmBackend input.runtimeExterns cp
 
 -- A record node without its declared field ordinal is an internal error: the
@@ -15719,6 +15724,13 @@ refuseUnstampedRecords : CProgram -> Unit
 refuseUnstampedRecords cp = match validateRecords cp
   [] => ()
   bad => panic ("internal error: " ++ renderRecordRefusal bad)
+
+-- An application whose mode its head's defined arity contradicts is an internal
+-- error: the lowering's stamp and the validator read one helper.
+refuseUnstampedCalls : CProgram -> Unit
+refuseUnstampedCalls cp = match validateCalls cp
+  [] => ()
+  bad => panic ("internal error: " ++ renderCallRefusal bad)
 
 -- Record mode's one gap event per refused extern.  The emitter's own
 -- fallthrough for such a name then records nothing (`unprovidedExtern`).
@@ -15981,7 +15993,7 @@ mainBody e (_ :: rest) = mainBody e rest
 -- a readable tag for the unsupported-node panic (only the nodes a slice-1
 -- fixture could hit if it strayed out of scope).
 ctag : CExpr -> String
-ctag (CApp _ _) = "CApp (function application)"
+ctag (CApp _ _ _) = "CApp (function application)"
 ctag (CLam _ _) = "CLam (lambda)"
 ctag (CMatch _ _) = "CMatch"
 ctag (CDecision _ _ _) = "CDecision (match)"

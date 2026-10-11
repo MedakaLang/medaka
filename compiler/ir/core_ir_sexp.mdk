@@ -21,6 +21,8 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   CProgram(..),
+  CallMode(..),
+  CallSite(..),
   CTree(..),
   CTBranch(..),
   CHead(..),
@@ -100,10 +102,22 @@ routeSexp m (RProj r path) =
 -- ── CExpr ─────────────────────────────────────────────────────────────────────
 
 export
+callModeSexp : CallMode -> String
+callModeSexp CallExact = "CallExact"
+callModeSexp (CallPartial n) = node "CallPartial" [intToString n]
+callModeSexp (CallOver n) = node "CallOver" [intToString n]
+callModeSexp CallDynamic = "CallDynamic"
+
+export
 cexprSexp : SexpMode -> CExpr -> String
 cexprSexp m (CLit l) = node "CLit" [litSexp l]
 cexprSexp m (CVar x addr) = node "CVar" [escStr x, addrSexp addr]
-cexprSexp m (CApp f x) = node "CApp" [cexprSexp m f, cexprSexp m x]
+cexprSexp m (CApp f args (CallSite mode tailPos)) = node "CApp" [
+  cexprSexp m f,
+  slist (map (cexprSexp m) args),
+  callModeSexp mode,
+  boolStr tailPos,
+]
 cexprSexp m (CLam pats body) =
   node "CLam" [slist (map patSexp pats), cexprSexp m body]
 cexprSexp m (CLet isRec pat e1 e2) =
@@ -269,8 +283,12 @@ cimplBodySexp m (CImplDefault ifaceId tag key positions pats body) = node
 
 export
 cimplEntrySexp : SexpMode -> CImplEntry -> String
-cimplEntrySexp m (CImplEntry name score body) =
-  node "CImplEntry" [escStr name, intToString score, cimplBodySexp m body]
+cimplEntrySexp m (CImplEntry name score declared body) = node "CImplEntry" [
+  escStr name,
+  intToString score,
+  intToString declared,
+  cimplBodySexp m body,
+]
 
 -- ── CProgram ─────────────────────────────────────────────────────────────────
 
