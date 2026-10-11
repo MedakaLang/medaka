@@ -1,5 +1,5 @@
 # META
-source_lines=632
+source_lines=629
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -79,30 +79,24 @@ import support.util.{joinWith, escStr}
 -- before the next elaboration installs: `test_cmd`'s `prepareMulti` / `prepareSingle` /
 -- `runChosen` phases, `elaborateRun`'s async and plain arms, `runEmitWith`,
 -- `emitModulesWith`, `eval_autoprint_main.runElab` and `playground_main.runEmit` each
--- elaborate, install, and finish reading before the next elaboration begins.  THAT
--- INSTALL ORDERING IS THE PROTECTION, because only one of the three ways a lookup can
--- miss is loud:
+-- elaborate, install, and finish reading before the next elaboration begins.  A lookup
+-- that cannot be answered is a panic on every arm:
 --
 --   no table installed  -> panic.  `evidenceRef` holding `None` means no elaboration
---                          has run; a driver that grew an `EDictAt` without one would
---                          otherwise dispatch on an empty route list, wrong in silence.
---   ordinal >= length   -> `[]`, silent.
---   in-bounds `None`    -> `[]`, silent.  The legitimate #739 arm `evDictRoutes` below
---                          documents.
+--                          has run.
+--   ordinal >= length   -> panic.
+--   in-bounds `None`    -> panic.
 --
--- Neither silent arm can be made loud without rejecting correct programs.  The array
--- is sized `max(ordinal)+1` over the CURRENT elaboration's entries, so a legitimately
--- unsolved `EDictAt` lands out of bounds when its id is the highest minted and lands
--- in-bounds `None` when it is lower: a #739 miss and a stale read are indistinguishable
--- by ordinal on both arms.
+-- This holds because the typechecker publishes an entry for EVERY `EDictAt` it mints,
+-- including an application of zero dictionaries (`EvMany []`, the #739 arm of
+-- `inferDictAtFound`), so "no entry" can only mean a missing or stale table.
 --
--- The cost of that is what a future reader needs to know.  A read that escaped the
--- install ordering is NOT caught here.  Ordinals are monotone across the whole process
--- while each install sizes the array to the CURRENT maximum, so such a read lands on a
--- `None` slot (silent `[]`) or, where the ordinal ranges overlap under the same module
--- id, on ANOTHER GOAL'S ROUTES — silently wrong, at exit 0.  Out of bounds is the least
--- likely of the three, which is the opposite of what a bare `[]` there suggests.  One
--- change to when a driver installs is all that separates this from an S0.
+-- What the panic does NOT catch: a read that escaped the install ordering and landed
+-- on an in-range ordinal.  Ordinals are monotone across the whole process while each
+-- install sizes the array to the CURRENT maximum, so such a read can land on ANOTHER
+-- GOAL'S ROUTES — silently wrong, at exit 0.  The module half of the id, compared on
+-- every hit, is the only tripwire for that, and it cannot fire for today's consumer.
+-- The install ordering above is the protection.
 --
 -- The index is an ARRAY over the id's ordinal, not a scan of the spine: the table
 -- has one entry per solver goal (838 on a four-file fixture), so a per-site linear
@@ -200,10 +194,10 @@ fillEvidence arr ((e@(EvEntry (EvId m i) _)) :: rest) =
 
 -- The dictionary routes solved for [ev], slot-ordered.
 --
--- An id with NO entry is EMPTY, not an error: a constrained-function occurrence
--- whose callee turns out to need no dict routing records no goal at all (the #739
--- bare-name-collision arm of `inferDictAtFound` returns without pushing one), and
--- the cell scheme answered that case with the untouched `Ref []` this returns.
+-- Every `EDictAt` has an entry; an application that needs no routing (the #739
+-- bare-name-collision arm of `inferDictAtFound`) is published as `EvMany []`.  An id
+-- with no entry therefore means the installed table is not the one this node's
+-- elaboration published, and it panics, as `evMethodRoutes` does.
 export
 evDictRoutes : EvId -> List Route
 evDictRoutes (EvId m i) = match !evidenceRef
@@ -212,9 +206,12 @@ evDictRoutes (EvId m i) = match !evidenceRef
       "evidence table: no elaboration has published one (looking up \{m}#\{intToString i})"
   Some arr =>
     if i >= arrayLength arr then
-      []
+      panic
+        "evidence table: dictionary application \{m}#\{intToString i} was never published"
     else match arrayGetUnsafe i arr
-      None => []
+      None =>
+        panic
+          "evidence table: dictionary application \{m}#\{intToString i} was never published"
       Some (EvEntry (EvId m2 _) v) =>
         if m2 == m then
           evRoutesOf v
@@ -658,7 +655,7 @@ rkTyList =
 (DFunDef false "fillEvidence" (PWild (PList)) (ELit LUnit))
 (DFunDef false "fillEvidence" ((PVar "arr") (PCons (PAs "e" (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild)) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EVar "e"))) (EVar "arr"))) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: two goals published under ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))))) (DoExpr (EApp (EApp (EVar "fillEvidence") (EVar "arr")) (EVar "rest")))))
 (DTypeSig true "evDictRoutes" (TyFun (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Route"))))
-(DFunDef false "evDictRoutes" ((PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "arr")) () (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EListLit) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "evRoutesOf") (EVar "v")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString "")))))))))))
+(DFunDef false "evDictRoutes" ((PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "arr")) () (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: dictionary application ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: dictionary application ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published"))))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "evRoutesOf") (EVar "v")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EVar "display") (EVar "m2"))) (ELit (LString "")))))))))))
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))
 (DFunDef false "evRoutesOf" ((PCon "EvMany" (PVar "rs"))) (EVar "rs"))
 (DFunDef false "evRoutesOf" ((PCon "EvOne" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application solved to a single route"))))
@@ -751,7 +748,7 @@ rkTyList =
 (DFunDef false "fillEvidence" (PWild (PList)) (ELit LUnit))
 (DFunDef false "fillEvidence" ((PVar "arr") (PCons (PAs "e" (PCon "EvEntry" (PCon "EvId" (PVar "m") (PVar "i")) PWild)) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EApp (EApp (EVar "arraySetUnsafe") (EVar "i")) (EApp (EVar "Some") (EVar "e"))) (EVar "arr"))) (arm (PCon "Some" PWild) () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: two goals published under ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))))) (DoExpr (EApp (EApp (EVar "fillEvidence") (EVar "arr")) (EVar "rest")))))
 (DTypeSig true "evDictRoutes" (TyFun (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Route"))))
-(DFunDef false "evDictRoutes" ((PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "arr")) () (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EListLit) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "evRoutesOf") (EVar "v")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString "")))))))))))
+(DFunDef false "evDictRoutes" ((PCon "EvId" (PVar "m") (PVar "i"))) (EMatch (EUnOp "!" (EVar "evidenceRef")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: no elaboration has published one (looking up ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ")"))))) (arm (PCon "Some" (PVar "arr")) () (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: dictionary application ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published")))) (EMatch (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: dictionary application ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " was never published"))))) (arm (PCon "Some" (PCon "EvEntry" (PCon "EvId" (PVar "m2") PWild) (PVar "v"))) () (EIf (EBinOp "==" (EVar "m2") (EVar "m")) (EApp (EVar "evRoutesOf") (EVar "v")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "evidence table: ")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString " answered by module "))) (EApp (EMethodRef "display") (EVar "m2"))) (ELit (LString "")))))))))))
 (DTypeSig false "evRoutesOf" (TyFun (TyCon "EvVal") (TyApp (TyCon "List") (TyCon "Route"))))
 (DFunDef false "evRoutesOf" ((PCon "EvMany" (PVar "rs"))) (EVar "rs"))
 (DFunDef false "evRoutesOf" ((PCon "EvOne" PWild)) (EApp (EVar "panic") (ELit (LString "evidence table: a dictionary application solved to a single route"))))
