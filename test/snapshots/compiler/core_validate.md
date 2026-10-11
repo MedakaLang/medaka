@@ -1,11 +1,17 @@
 # META
-source_lines=298
+source_lines=373
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
 -- check reads only the `CProgram` the emitter received and the extern catalog,
 -- so every build entry reports a refusal from one place, and before either
 -- emitter has produced text.
+--
+-- The record check: every record node carries each field's declared ordinal,
+-- stamped by `core_ir_lower`, and an emitter stores and loads by it.  A node
+-- with an unstamped (negative) ordinal, a record literal whose ordinals are not
+-- its positions, or an update whose ordinals are not strictly ascending is
+-- refused: the emitters keep no field-order table to fall back on.
 --
 -- The extern check: a runtime extern whose catalog row gives the backend no
 -- lowering (`NotProvided`) is refused wherever the program references it
@@ -92,7 +98,26 @@ validateExterns backend runtimeExterns (CProgram groups ctors _ impls) =
   let walked =
     walkImpls backend top impls (walkBinds backend top groups noFindings)
   match walked
-    Walk _ found => reverseL found
+    Walk _ found _ => reverseL found
+
+-- One line per record node whose ordinals the emitters cannot trust, in
+-- program order; empty for a well-stamped program.
+export
+validateRecords : CProgram -> List String
+validateRecords (CProgram groups ctors _ impls) =
+  let top = programNames groups ctors omEmpty
+  let walked =
+    walkImpls
+      LlvmBackend
+      top
+      impls
+      (walkBinds LlvmBackend top groups noFindings)
+  match walked
+    Walk _ _ bad => reverseL bad
+
+export
+renderRecordRefusal : List String -> String
+renderRecordRefusal bad = joinWith "\n" bad
 
 -- The names in `names` that have no extern catalog row.
 export
@@ -147,10 +172,11 @@ isProgramName : OrdMap Unit -> String -> Bool
 isProgramName top x = omHasKey x top || omHasKey ("core__" ++ x) top
 
 -- The walk's state: the externs already found, and the findings, newest first.
-data Walk = Walk (OrdMap Unit) (List ExternFinding)
+-- and the record nodes with untrustworthy ordinals, newest first.
+data Walk = Walk (OrdMap Unit) (List ExternFinding) (List String)
 
 noFindings : Walk
-noFindings = Walk omEmpty []
+noFindings = Walk omEmpty [] []
 
 -- The backend, the program's own names, and the top-level binding being read.
 data Ctx = Ctx Backend (OrdMap Unit) String
@@ -202,12 +228,22 @@ walkE ctx scope (CBinPrim _ l r _ _) w = walkList ctx scope [l, r] w
 walkE ctx scope (CUnOp _ x) w = walkE ctx scope x w
 walkE ctx scope (CTuple es) w = walkList ctx scope es w
 walkE ctx scope (CList es) w = walkList ctx scope es w
-walkE ctx scope (CRecord _ fields) w = walkFields ctx scope fields w
-walkE ctx scope (CFieldAccess x _ _) w = walkE ctx scope x w
-walkE ctx scope (CRecordUpdate _ base fields) w =
-  walkFields ctx scope fields (walkE ctx scope base w)
-walkE ctx scope (CVariantUpdate _ base fields) w =
-  walkFields ctx scope fields (walkE ctx scope base w)
+walkE ctx scope (CRecord name fields) w =
+  walkFields ctx scope fields (noteRecord ctx "CRecord" name True fields w)
+walkE ctx scope (CFieldAccess x label name ord) w =
+  walkE ctx scope x (noteAccess ctx label name ord w)
+walkE ctx scope (CRecordUpdate name base fields) w =
+  walkFields
+    ctx
+    scope
+    fields
+    (walkE ctx scope base (noteRecord ctx "CRecordUpdate" name False fields w))
+walkE ctx scope (CVariantUpdate con base fields) w =
+  walkFields
+    ctx
+    scope
+    fields
+    (walkE ctx scope base (noteRecord ctx "CVariantUpdate" con False fields w))
 walkE ctx scope (CArray es) w = walkList ctx scope es w
 walkE ctx scope (CRangeList lo hi _) w = walkList ctx scope [lo, hi] w
 walkE ctx scope (CRangeArray lo hi _) w = walkList ctx scope [lo, hi] w
@@ -221,8 +257,46 @@ walkE ctx scope (CBlock stmts) w = walkStmts ctx scope stmts w
 walkE _ _ (CMethod _ _ _ _ _ _) w = w
 walkE _ _ (CDict _ _) w = w
 
+-- A field access is stamped, or reads a `Ref` cell through `.value`.
+noteAccess : Ctx -> String -> String -> Int -> Walk -> Walk
+noteAccess ctx label name ord w =
+  if ord >= 0 || label == "value" then
+    w
+  else
+    noteRecordBad
+      ctx
+      "CFieldAccess"
+      "\{name}.\{label}: unstamped field ordinal"
+      w
+
+-- `literal`: the ordinals must be the field positions (declared order).
+noteRecord : Ctx -> String -> String -> Bool -> List CField -> Walk -> Walk
+noteRecord ctx node name literal fields w =
+  if ordinalsOk literal 0 (-1) fields then
+    w
+  else
+    noteRecordBad
+      ctx
+      node
+      "\{name}: field ordinals [\{joinWith ", " (map fieldOrdinalText fields)}] are not \{if literal then "the declared positions" else "strictly ascending"}"
+      w
+
+ordinalsOk : Bool -> Int -> Int -> List CField -> Bool
+ordinalsOk _ _ _ [] = True
+ordinalsOk literal pos prev ((CField _ o _) :: rest) =
+  o >= 0
+    && (if literal then o == pos else o > prev)
+    && ordinalsOk literal (pos + 1) o rest
+
+fieldOrdinalText : CField -> String
+fieldOrdinalText (CField k o _) = "\{k}@\{intToString o}"
+
+noteRecordBad : Ctx -> String -> String -> Walk -> Walk
+noteRecordBad (Ctx _ _ binding) node why (Walk seen found bad) =
+  Walk seen found ("record: \{node} \{why} [in \{binding}]" :: bad)
+
 noteVar : Ctx -> OrdMap Unit -> String -> Walk -> Walk
-noteVar (Ctx backend top binding) scope x (w@(Walk seen found)) =
+noteVar (Ctx backend top binding) scope x (w@(Walk seen found bad)) =
   if omHasKey x scope || omHasKey x seen then
     w
   else match unprovidedOn backend x
@@ -234,6 +308,7 @@ noteVar (Ctx backend top binding) scope x (w@(Walk seen found)) =
         Walk
           (omInsert x () seen)
           (ExternFinding x backend kind why binding :: found)
+          bad
 
 walkList : Ctx -> OrdMap Unit -> List CExpr -> Walk -> Walk
 walkList _ _ [] w = w
@@ -241,7 +316,7 @@ walkList ctx scope (e :: rest) w = walkList ctx scope rest (walkE ctx scope e w)
 
 walkFields : Ctx -> OrdMap Unit -> List CField -> Walk -> Walk
 walkFields _ _ [] w = w
-walkFields ctx scope ((CField _ e) :: rest) w =
+walkFields ctx scope ((CField _ _ e) :: rest) w =
   walkFields ctx scope rest (walkE ctx scope e w)
 
 walkLocalBinds : Ctx -> OrdMap Unit -> List CBind -> Walk -> Walk
@@ -324,7 +399,11 @@ bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
 (DTypeSig true "isUnprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isUnprovidedOn" ((PVar "backend") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "name"))))
 (DTypeSig true "validateExterns" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding"))))))
-(DFunDef false "validateExterns" ((PVar "backend") (PVar "runtimeExterns") (PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls"))) (EBlock (DoLet false false PWild (EApp (EVar "refuseMissingRows") (EVar "runtimeExterns"))) (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "walked") (EApp (EApp (EApp (EApp (EVar "walkImpls") (EVar "backend")) (EVar "top")) (EVar "impls")) (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "backend")) (EVar "top")) (EVar "groups")) (EVar "noFindings")))) (DoExpr (EMatch (EVar "walked") (arm (PCon "Walk" PWild (PVar "found")) () (EApp (EVar "reverseL") (EVar "found")))))))
+(DFunDef false "validateExterns" ((PVar "backend") (PVar "runtimeExterns") (PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls"))) (EBlock (DoLet false false PWild (EApp (EVar "refuseMissingRows") (EVar "runtimeExterns"))) (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "walked") (EApp (EApp (EApp (EApp (EVar "walkImpls") (EVar "backend")) (EVar "top")) (EVar "impls")) (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "backend")) (EVar "top")) (EVar "groups")) (EVar "noFindings")))) (DoExpr (EMatch (EVar "walked") (arm (PCon "Walk" PWild (PVar "found") PWild) () (EApp (EVar "reverseL") (EVar "found")))))))
+(DTypeSig true "validateRecords" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "validateRecords" ((PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls"))) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "walked") (EApp (EApp (EApp (EApp (EVar "walkImpls") (EVar "LlvmBackend")) (EVar "top")) (EVar "impls")) (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "LlvmBackend")) (EVar "top")) (EVar "groups")) (EVar "noFindings")))) (DoExpr (EMatch (EVar "walked") (arm (PCon "Walk" PWild PWild (PVar "bad")) () (EApp (EVar "reverseL") (EVar "bad")))))))
+(DTypeSig true "renderRecordRefusal" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "renderRecordRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
 (DTypeSig true "missingCatalogRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "missingCatalogRows" ((PVar "names")) (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EVar "isNone") (EApp (EVar "catalogRow") (EVar "n"))))) (EVar "names")))
 (DTypeSig true "missingRowsMessage" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -345,9 +424,9 @@ bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
 (DFunDef false "programNames" ((PCons (PCon "CBind" (PVar "name") PWild PWild) (PVar "rest")) (PVar "ctors") (PVar "acc")) (EApp (EApp (EApp (EVar "programNames") (EVar "rest")) (EVar "ctors")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "acc"))))
 (DTypeSig false "isProgramName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isProgramName" ((PVar "top") (PVar "x")) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "top")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EVar "top"))))
-(DData Private "Walk" () ((variant "Walk" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "ExternFinding"))))) ())
+(DData Private "Walk" () ((variant "Walk" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig false "noFindings" (TyCon "Walk"))
-(DFunDef false "noFindings" () (EApp (EApp (EVar "Walk") (EVar "omEmpty")) (EListLit)))
+(DFunDef false "noFindings" () (EApp (EApp (EApp (EVar "Walk") (EVar "omEmpty")) (EListLit)) (EListLit)))
 (DData Private "Ctx" () ((variant "Ctx" (ConPos (TyCon "Backend") (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "String")))) ())
 (DTypeSig false "walkBinds" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkBinds" (PWild PWild (PList) (PVar "w")) (EVar "w"))
@@ -375,10 +454,10 @@ bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CUnOp" PWild (PVar "x")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "x")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CTuple" (PVar "es")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "es")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CList" (PVar "es")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "es")) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRecord" PWild (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CFieldAccess" (PVar "x") PWild PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "x")) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "base")) (EVar "w"))))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "base")) (EVar "w"))))
+(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRecord" (PVar "name") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteRecord") (EVar "ctx")) (ELit (LString "CRecord"))) (EVar "name")) (EVar "True")) (EVar "fields")) (EVar "w"))))
+(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CFieldAccess" (PVar "x") (PVar "label") (PVar "name") (PVar "ord")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "noteAccess") (EVar "ctx")) (EVar "label")) (EVar "name")) (EVar "ord")) (EVar "w"))))
+(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "base")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteRecord") (EVar "ctx")) (ELit (LString "CRecordUpdate"))) (EVar "name")) (EVar "False")) (EVar "fields")) (EVar "w")))))
+(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "base")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteRecord") (EVar "ctx")) (ELit (LString "CVariantUpdate"))) (EVar "con")) (EVar "False")) (EVar "fields")) (EVar "w")))))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CArray" (PVar "es")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "es")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "w")))
@@ -391,14 +470,25 @@ bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CBlock" (PVar "stmts")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "stmts")) (EVar "w")))
 (DFunDef false "walkE" (PWild PWild (PCon "CMethod" PWild PWild PWild PWild PWild PWild) (PVar "w")) (EVar "w"))
 (DFunDef false "walkE" (PWild PWild (PCon "CDict" PWild PWild) (PVar "w")) (EVar "w"))
+(DTypeSig false "noteAccess" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
+(DFunDef false "noteAccess" ((PVar "ctx") (PVar "label") (PVar "name") (PVar "ord") (PVar "w")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "ord") (ELit (LInt 0))) (EBinOp "==" (EVar "label") (ELit (LString "value")))) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (ELit (LString "CFieldAccess"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "label"))) (ELit (LString ": unstamped field ordinal")))) (EVar "w"))))
+(DTypeSig false "noteRecord" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
+(DFunDef false "noteRecord" ((PVar "ctx") (PVar "node") (PVar "name") (PVar "literal") (PVar "fields") (PVar "w")) (EIf (EApp (EApp (EApp (EApp (EVar "ordinalsOk") (EVar "literal")) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EVar "fields")) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (EVar "node")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ": field ordinals ["))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "fieldOrdinalText")) (EVar "fields"))))) (ELit (LString "] are not "))) (EApp (EVar "display") (EIf (EVar "literal") (ELit (LString "the declared positions")) (ELit (LString "strictly ascending"))))) (ELit (LString "")))) (EVar "w"))))
+(DTypeSig false "ordinalsOk" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool"))))))
+(DFunDef false "ordinalsOk" (PWild PWild PWild (PList)) (EVar "True"))
+(DFunDef false "ordinalsOk" ((PVar "literal") (PVar "pos") (PVar "prev") (PCons (PCon "CField" PWild (PVar "o") PWild) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "o") (ELit (LInt 0))) (EIf (EVar "literal") (EBinOp "==" (EVar "o") (EVar "pos")) (EBinOp ">" (EVar "o") (EVar "prev")))) (EApp (EApp (EApp (EApp (EVar "ordinalsOk") (EVar "literal")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "o")) (EVar "rest"))))
+(DTypeSig false "fieldOrdinalText" (TyFun (TyCon "CField") (TyCon "String")))
+(DFunDef false "fieldOrdinalText" ((PCon "CField" (PVar "k") (PVar "o") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "k"))) (ELit (LString "@"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "o")))) (ELit (LString ""))))
+(DTypeSig false "noteRecordBad" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
+(DFunDef false "noteRecordBad" ((PCon "Ctx" PWild PWild (PVar "binding")) (PVar "node") (PVar "why") (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad"))) (EApp (EApp (EApp (EVar "Walk") (EVar "seen")) (EVar "found")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "record: ")) (EApp (EVar "display") (EVar "node"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString " [in "))) (EApp (EVar "display") (EVar "binding"))) (ELit (LString "]"))) (EVar "bad"))))
 (DTypeSig false "noteVar" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") (PVar "binding")) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "x")) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EVar "x")) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))))))))
+(DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") (PVar "binding")) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "x")) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EVar "x")) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))) (EVar "bad")))))))
 (DTypeSig false "walkList" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkList" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkList" ((PVar "ctx") (PVar "scope") (PCons (PVar "e") (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DTypeSig false "walkFields" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkFields" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkFields" ((PVar "ctx") (PVar "scope") (PCons (PCon "CField" PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
+(DFunDef false "walkFields" ((PVar "ctx") (PVar "scope") (PCons (PCon "CField" PWild PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DTypeSig false "walkLocalBinds" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkLocalBinds" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkLocalBinds" ((PVar "ctx") (PVar "scope") (PCons (PCon "CBind" PWild (PVar "clauses") PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkLocalBinds") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "ctx")) (EVar "scope")) (EVar "clauses")) (EVar "w"))))
@@ -459,7 +549,11 @@ bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
 (DTypeSig true "isUnprovidedOn" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isUnprovidedOn" ((PVar "backend") (PVar "name")) (EApp (EVar "isSome") (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "name"))))
 (DTypeSig true "validateExterns" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding"))))))
-(DFunDef false "validateExterns" ((PVar "backend") (PVar "runtimeExterns") (PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls"))) (EBlock (DoLet false false PWild (EApp (EVar "refuseMissingRows") (EVar "runtimeExterns"))) (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "walked") (EApp (EApp (EApp (EApp (EVar "walkImpls") (EVar "backend")) (EVar "top")) (EVar "impls")) (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "backend")) (EVar "top")) (EVar "groups")) (EVar "noFindings")))) (DoExpr (EMatch (EVar "walked") (arm (PCon "Walk" PWild (PVar "found")) () (EApp (EVar "reverseL") (EVar "found")))))))
+(DFunDef false "validateExterns" ((PVar "backend") (PVar "runtimeExterns") (PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls"))) (EBlock (DoLet false false PWild (EApp (EVar "refuseMissingRows") (EVar "runtimeExterns"))) (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "walked") (EApp (EApp (EApp (EApp (EVar "walkImpls") (EVar "backend")) (EVar "top")) (EVar "impls")) (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "backend")) (EVar "top")) (EVar "groups")) (EVar "noFindings")))) (DoExpr (EMatch (EVar "walked") (arm (PCon "Walk" PWild (PVar "found") PWild) () (EApp (EVar "reverseL") (EVar "found")))))))
+(DTypeSig true "validateRecords" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "validateRecords" ((PCon "CProgram" (PVar "groups") (PVar "ctors") PWild (PVar "impls"))) (EBlock (DoLet false false (PVar "top") (EApp (EApp (EApp (EVar "programNames") (EVar "groups")) (EVar "ctors")) (EVar "omEmpty"))) (DoLet false false (PVar "walked") (EApp (EApp (EApp (EApp (EVar "walkImpls") (EVar "LlvmBackend")) (EVar "top")) (EVar "impls")) (EApp (EApp (EApp (EApp (EVar "walkBinds") (EVar "LlvmBackend")) (EVar "top")) (EVar "groups")) (EVar "noFindings")))) (DoExpr (EMatch (EVar "walked") (arm (PCon "Walk" PWild PWild (PVar "bad")) () (EApp (EVar "reverseL") (EVar "bad")))))))
+(DTypeSig true "renderRecordRefusal" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "renderRecordRefusal" ((PVar "bad")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EVar "bad")))
 (DTypeSig true "missingCatalogRows" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "missingCatalogRows" ((PVar "names")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EVar "isNone") (EApp (EVar "catalogRow") (EVar "n"))))) (EVar "names")))
 (DTypeSig true "missingRowsMessage" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -480,9 +574,9 @@ bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
 (DFunDef false "programNames" ((PCons (PCon "CBind" (PVar "name") PWild PWild) (PVar "rest")) (PVar "ctors") (PVar "acc")) (EApp (EApp (EApp (EVar "programNames") (EVar "rest")) (EVar "ctors")) (EApp (EApp (EApp (EVar "omInsert") (EVar "name")) (ELit LUnit)) (EVar "acc"))))
 (DTypeSig false "isProgramName" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isProgramName" ((PVar "top") (PVar "x")) (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "top")) (EApp (EApp (EVar "omHasKey") (EBinOp "++" (ELit (LString "core__")) (EVar "x"))) (EVar "top"))))
-(DData Private "Walk" () ((variant "Walk" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "ExternFinding"))))) ())
+(DData Private "Walk" () ((variant "Walk" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DTypeSig false "noFindings" (TyCon "Walk"))
-(DFunDef false "noFindings" () (EApp (EApp (EVar "Walk") (EVar "omEmpty")) (EListLit)))
+(DFunDef false "noFindings" () (EApp (EApp (EApp (EVar "Walk") (EVar "omEmpty")) (EListLit)) (EListLit)))
 (DData Private "Ctx" () ((variant "Ctx" (ConPos (TyCon "Backend") (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyCon "String")))) ())
 (DTypeSig false "walkBinds" (TyFun (TyCon "Backend") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkBinds" (PWild PWild (PList) (PVar "w")) (EVar "w"))
@@ -510,10 +604,10 @@ bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CUnOp" PWild (PVar "x")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "x")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CTuple" (PVar "es")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "es")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CList" (PVar "es")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "es")) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRecord" PWild (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CFieldAccess" (PVar "x") PWild PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "x")) (EVar "w")))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "base")) (EVar "w"))))
-(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "base")) (EVar "w"))))
+(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRecord" (PVar "name") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteRecord") (EVar "ctx")) (ELit (LString "CRecord"))) (EVar "name")) (EVar "True")) (EVar "fields")) (EVar "w"))))
+(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CFieldAccess" (PVar "x") (PVar "label") (PVar "name") (PVar "ord")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "x")) (EApp (EApp (EApp (EApp (EApp (EVar "noteAccess") (EVar "ctx")) (EVar "label")) (EVar "name")) (EVar "ord")) (EVar "w"))))
+(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "base")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteRecord") (EVar "ctx")) (ELit (LString "CRecordUpdate"))) (EVar "name")) (EVar "False")) (EVar "fields")) (EVar "w")))))
+(DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "fields")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "base")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteRecord") (EVar "ctx")) (ELit (LString "CVariantUpdate"))) (EVar "con")) (EVar "False")) (EVar "fields")) (EVar "w")))))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CArray" (PVar "es")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "es")) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "w")))
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EListLit (EVar "lo") (EVar "hi"))) (EVar "w")))
@@ -526,14 +620,25 @@ bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
 (DFunDef false "walkE" ((PVar "ctx") (PVar "scope") (PCon "CBlock" (PVar "stmts")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkStmts") (EVar "ctx")) (EVar "scope")) (EVar "stmts")) (EVar "w")))
 (DFunDef false "walkE" (PWild PWild (PCon "CMethod" PWild PWild PWild PWild PWild PWild) (PVar "w")) (EVar "w"))
 (DFunDef false "walkE" (PWild PWild (PCon "CDict" PWild PWild) (PVar "w")) (EVar "w"))
+(DTypeSig false "noteAccess" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Walk") (TyCon "Walk")))))))
+(DFunDef false "noteAccess" ((PVar "ctx") (PVar "label") (PVar "name") (PVar "ord") (PVar "w")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "ord") (ELit (LInt 0))) (EBinOp "==" (EVar "label") (ELit (LString "value")))) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (ELit (LString "CFieldAccess"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString ": unstamped field ordinal")))) (EVar "w"))))
+(DTypeSig false "noteRecord" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))))
+(DFunDef false "noteRecord" ((PVar "ctx") (PVar "node") (PVar "name") (PVar "literal") (PVar "fields") (PVar "w")) (EIf (EApp (EApp (EApp (EApp (EVar "ordinalsOk") (EVar "literal")) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EVar "fields")) (EVar "w") (EApp (EApp (EApp (EApp (EVar "noteRecordBad") (EVar "ctx")) (EVar "node")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ": field ordinals ["))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "fieldOrdinalText")) (EVar "fields"))))) (ELit (LString "] are not "))) (EApp (EMethodRef "display") (EIf (EVar "literal") (ELit (LString "the declared positions")) (ELit (LString "strictly ascending"))))) (ELit (LString "")))) (EVar "w"))))
+(DTypeSig false "ordinalsOk" (TyFun (TyCon "Bool") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool"))))))
+(DFunDef false "ordinalsOk" (PWild PWild PWild (PList)) (EVar "True"))
+(DFunDef false "ordinalsOk" ((PVar "literal") (PVar "pos") (PVar "prev") (PCons (PCon "CField" PWild (PVar "o") PWild) (PVar "rest"))) (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "o") (ELit (LInt 0))) (EIf (EVar "literal") (EBinOp "==" (EVar "o") (EVar "pos")) (EBinOp ">" (EVar "o") (EVar "prev")))) (EApp (EApp (EApp (EApp (EVar "ordinalsOk") (EVar "literal")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "o")) (EVar "rest"))))
+(DTypeSig false "fieldOrdinalText" (TyFun (TyCon "CField") (TyCon "String")))
+(DFunDef false "fieldOrdinalText" ((PCon "CField" (PVar "k") (PVar "o") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString "@"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "o")))) (ELit (LString ""))))
+(DTypeSig false "noteRecordBad" (TyFun (TyCon "Ctx") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
+(DFunDef false "noteRecordBad" ((PCon "Ctx" PWild PWild (PVar "binding")) (PVar "node") (PVar "why") (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad"))) (EApp (EApp (EApp (EVar "Walk") (EVar "seen")) (EVar "found")) (EBinOp "::" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "record: ")) (EApp (EMethodRef "display") (EVar "node"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString " [in "))) (EApp (EMethodRef "display") (EVar "binding"))) (ELit (LString "]"))) (EVar "bad"))))
 (DTypeSig false "noteVar" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "String") (TyFun (TyCon "Walk") (TyCon "Walk"))))))
-(DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") (PVar "binding")) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "x")) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EVar "x")) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))))))))
+(DFunDef false "noteVar" ((PCon "Ctx" (PVar "backend") (PVar "top") (PVar "binding")) (PVar "scope") (PVar "x") (PAs "w" (PCon "Walk" (PVar "seen") (PVar "found") (PVar "bad")))) (EIf (EBinOp "||" (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "scope")) (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "seen"))) (EVar "w") (EMatch (EApp (EApp (EVar "unprovidedOn") (EVar "backend")) (EVar "x")) (arm (PCon "None") () (EVar "w")) (arm (PCon "Some" (PTuple (PVar "kind") (PVar "why"))) () (EIf (EApp (EApp (EVar "isProgramName") (EVar "top")) (EVar "x")) (EVar "w") (EApp (EApp (EApp (EVar "Walk") (EApp (EApp (EApp (EVar "omInsert") (EVar "x")) (ELit LUnit)) (EVar "seen"))) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "ExternFinding") (EVar "x")) (EVar "backend")) (EVar "kind")) (EVar "why")) (EVar "binding")) (EVar "found"))) (EVar "bad")))))))
 (DTypeSig false "walkList" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkList" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkList" ((PVar "ctx") (PVar "scope") (PCons (PVar "e") (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkList") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DTypeSig false "walkFields" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkFields" (PWild PWild (PList) (PVar "w")) (EVar "w"))
-(DFunDef false "walkFields" ((PVar "ctx") (PVar "scope") (PCons (PCon "CField" PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
+(DFunDef false "walkFields" ((PVar "ctx") (PVar "scope") (PCons (PCon "CField" PWild PWild (PVar "e")) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkFields") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkE") (EVar "ctx")) (EVar "scope")) (EVar "e")) (EVar "w"))))
 (DTypeSig false "walkLocalBinds" (TyFun (TyCon "Ctx") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "Walk") (TyCon "Walk"))))))
 (DFunDef false "walkLocalBinds" (PWild PWild (PList) (PVar "w")) (EVar "w"))
 (DFunDef false "walkLocalBinds" ((PVar "ctx") (PVar "scope") (PCons (PCon "CBind" PWild (PVar "clauses") PWild) (PVar "rest")) (PVar "w")) (EApp (EApp (EApp (EApp (EVar "walkLocalBinds") (EVar "ctx")) (EVar "scope")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "walkClauses") (EVar "ctx")) (EVar "scope")) (EVar "clauses")) (EVar "w"))))

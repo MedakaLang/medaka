@@ -1,0 +1,59 @@
+-- #1518, #1401 (record ordinals): a record literal, update, variant update and
+-- field access all index a record cell by the field's DECLARED position, while the
+-- field expressions run once each in WRITTEN order, base first.  The two records
+-- share the labels `p` and `r` at different positions (A: p@0 r@2, B: r@0 p@1), so
+-- a lookup by label alone answers for the wrong record.
+--
+-- EXPECTED OUTPUT, HAND-DERIVED from this source before any engine was run --
+-- pinned at test/engine_value_pins/engine/record_ordinals_written_vs_declared.pin.
+-- Effect lines first, in written order, one per `bump`/`pass` call:
+--   a.r a.p a.q        the literal `a`, written r, p, q
+--   b.p b.r            the literal `b`, written p, r
+--   u.r u.p            `a2`, the update of `a`, written r, p
+--   u2.p               `b2`
+--   v.ez v.ex          `e2`, the variant update, written ez, ex
+--   base w.q w.p       `a3`: its base `pass "base" a` first, then q, p
+-- then the values: a2 = {p=10 q=2 r=30}, b2 = {r=20 p=77}, e2 = {ex=8 ey=2 ez=9},
+-- a3 = {p=4 q=5 r=3}.
+
+data A = A { p : Int, q : Int, r : Int }
+
+data B = B { r : Int, p : Int }
+
+data E = Click { ex : Int, ey : Int, ez : Int } | Scroll { sz : Int }
+
+bump : String -> Int -> <IO> Int
+bump tag n =
+  println tag
+  n
+
+pass : String -> A -> <IO> A
+pass tag v =
+  println tag
+  v
+
+showE : E -> <IO> Unit
+showE (Click { ex = x, ey = y, ez = z }) =
+  println x
+  println y
+  println z
+showE (Scroll { sz = n }) = println n
+
+main : <IO> Unit
+main =
+  let a = A { r = bump "a.r" 3, p = bump "a.p" 1, q = bump "a.q" 2 }
+  let b = B { p = bump "b.p" 10, r = bump "b.r" 20 }
+  let a2 = { a | r = bump "u.r" 30, p = bump "u.p" 10 }
+  let b2 = { b | p = bump "u2.p" 77 }
+  let e = Click { ex = 1, ey = 2, ez = 3 }
+  let e2 = Click { e | ez = bump "v.ez" 9, ex = bump "v.ex" 8 }
+  let a3 = { pass "base" a | q = bump "w.q" 5, p = bump "w.p" 4 }
+  println a2.p
+  println a2.q
+  println a2.r
+  println b2.r
+  println b2.p
+  showE e2
+  println a3.p
+  println a3.q
+  println a3.r

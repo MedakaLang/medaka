@@ -79,8 +79,15 @@ import eval.eval.{
   headTyconHead,
   exprStartLoc,
 }
-import list.{replicate, take, drop, range}
-import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey, omLookup}
+import list.{replicate, take, drop, range, sortBy}
+import support.ordmap.{
+  OrdMap,
+  omEmpty,
+  omInsert,
+  omHasKey,
+  omLookup,
+  omFromPairs,
+}
 -- `hashName`/`dictTag` are the two dict-witness tag mints, imported (not copied)
 -- so `dictWitnessTagGuard` checks the tag space the backends actually emit.
 import backend.private_mangle.{dictTag, hashName, injectiveIdent}
@@ -142,7 +149,7 @@ lower (EInfix op l r) = CApp (CApp (CVar op AGlobal) (lower l)) (lower r)
 -- repurpose costs zero emitter work — and cannot make the two spellings diverge.
 -- The empty record-name stamp matches what `EFieldAccess e "value"` lowers with:
 -- `inferValueField` never stamps the ref, because a Ref is not a record.
-lower (EUnOp "!" e _) = CFieldAccess (lower e) "value" ""
+lower (EUnOp "!" e _) = CFieldAccess (lower e) "value" "" (-1)
 lower (EUnOp op e _) = CUnOp op (lower e)
 lower (ETuple es) = CTuple (map lower es)
 lower (EListLit es) = CList (map lower es)
@@ -163,7 +170,7 @@ lower (ESlice a lo hi incl r) =
     CListSlice (lower a) (lower lo) (lower hi) incl
   else
     CSlice (lower a) (lower lo) (lower hi) incl
-lower (EFieldAccess e f r) = CFieldAccess (lower e) f !r
+lower (EFieldAccess e f r) = CFieldAccess (lower e) f !r (-1)
 lower (ERecordCreate name fields) = CRecord name (map lowerField fields)
 lower (ERecordUpdate base fields r) =
   CRecordUpdate !r (lower base) (map lowerField fields)
@@ -728,7 +735,7 @@ defRow _ = None
 -- ── small local helpers ────────────────────────────────────────────────────
 
 lowerField : FieldAssign -> CField
-lowerField (FieldAssign k e) = CField k (lower e)
+lowerField (FieldAssign k e) = CField k (-1) (lower e)
 
 lowerBind : LetBind -> CBind
 lowerBind (LetBind name clauses site) =
@@ -890,7 +897,8 @@ refoldExpr keep (CTuple es) = CTuple (map (refoldExpr keep) es)
 refoldExpr keep (CList es) = CList (map (refoldExpr keep) es)
 refoldExpr keep (CRecord name fields) =
   CRecord name (map (refoldField keep) fields)
-refoldExpr keep (CFieldAccess ex f n) = CFieldAccess (refoldExpr keep ex) f n
+refoldExpr keep (CFieldAccess ex f n o) =
+  CFieldAccess (refoldExpr keep ex) f n o
 refoldExpr keep (CRecordUpdate name base fields) =
   CRecordUpdate name (refoldExpr keep base) (map (refoldField keep) fields)
 refoldExpr keep (CVariantUpdate con base fields) =
@@ -950,7 +958,7 @@ refoldGuard keep (CGBool e) = CGBool (refoldExpr keep e)
 refoldGuard keep (CGBind p e) = CGBind p (refoldExpr keep e)
 
 refoldField : (Pat -> Bool) -> CField -> CField
-refoldField keep (CField k e) = CField k (refoldExpr keep e)
+refoldField keep (CField k o e) = CField k o (refoldExpr keep e)
 
 isSomeLoc : Option Loc -> Bool
 isSomeLoc (Some _) = True
@@ -987,8 +995,8 @@ public export data EmitTarget = TargetNative | TargetWasm | TargetBothUnknown
 -- in `lowerProgramEmit` — which the LLVM emit drivers call — NOT in the shared
 -- `lowerProgram` that core_ir_main / core_ir_eval use.  The field-order map is
 -- DECLARED order (DData named-field variants), the same order
--- the emitter's record cell layout / recFieldTable use, so the positional indices
--- line up with the cell's stored field offsets (verified by the fixture byte-diff).
+-- the emitters' record cell layout uses (each `CField` carries its ordinal), so
+-- the positional indices line up with the cell's stored field offsets (verified by the fixture byte-diff).
 export
 lowerProgramEmit : EmitTarget -> List Decl -> CProgram
 lowerProgramEmit target prog =
@@ -1195,8 +1203,8 @@ fieldLabel (Field n _) = n
 
 -- the single pattern rewrite: a record pattern becomes a positional constructor
 -- pattern over the type's declared field order; recurse into EVERY nested form.
-rewritePat : List (String, List String) -> Pat -> Pat
-rewritePat fo (PRec name recFields _) = match lookupAssoc name fo
+rewritePat : RecOrders -> Pat -> Pat
+rewritePat fo (PRec name recFields _) = match recLabelsOf fo name
   Some labels => PCon name (map (recPatForLabel fo recFields) labels)
   None => PRec name (map (rewriteRecPatField fo) recFields) False
 -- no declared order found (e.g. an anonymous record with no `data`): leave the
@@ -1212,7 +1220,7 @@ rewritePat _ p = p
 -- the sub-pattern bound to declared field `label`: the named field's sub-pattern
 -- (recursively rewritten), `PVar label` for a pun, or `PWild` when the field is
 -- not named in the pattern (open `..` / subset).
-recPatForLabel : List (String, List String) -> List RecPatField -> String -> Pat
+recPatForLabel : RecOrders -> List RecPatField -> String -> Pat
 recPatForLabel fo recFields label = match findRecField label recFields
   Some (RecPatField _ fl (Some sub)) => rewritePat fo sub
   Some (RecPatField _ fl None) => PVar label fl
@@ -1224,7 +1232,7 @@ findRecField label ((RecPatField l fl sub) :: rest)
   | l == label = Some (RecPatField l fl sub)
   | otherwise = findRecField label rest
 
-rewriteRecPatField : List (String, List String) -> RecPatField -> RecPatField
+rewriteRecPatField : RecOrders -> RecPatField -> RecPatField
 rewriteRecPatField fo (RecPatField l fl (Some sub)) =
   RecPatField l fl (Some (rewritePat fo sub))
 rewriteRecPatField _ (RecPatField l fl None) = RecPatField l fl None
@@ -1235,22 +1243,23 @@ rewriteRecPatField _ (RecPatField l fl None) = RecPatField l fl None
 -- built from the original PRec arms, which canonPat wildcarded; the rewritten PCon
 -- arms compile to a proper constructor switch with no needs-guard fall-through).
 rewriteProgramRecPats : List (String, List String) -> CProgram -> CProgram
-rewriteProgramRecPats fo (CProgram groups ctorArs ctorTypes implEntries) =
+rewriteProgramRecPats fo0 (CProgram groups ctorArs ctorTypes implEntries) =
+  let fo = recOrdersOf fo0
   CProgram
     (map (rewriteBindRP fo) groups)
     ctorArs
     ctorTypes
     (map (rewriteImplRP fo) implEntries)
 
-rewriteBindRP : List (String, List String) -> CBind -> CBind
+rewriteBindRP : RecOrders -> CBind -> CBind
 rewriteBindRP fo (CBind n clauses site) =
   CBind n (map (rewriteClauseRP fo) clauses) site
 
-rewriteClauseRP : List (String, List String) -> CClause -> CClause
+rewriteClauseRP : RecOrders -> CClause -> CClause
 rewriteClauseRP fo (CClause pats body) =
   CClause (map (rewritePat fo) pats) (rewriteExprRP fo body)
 
-rewriteImplRP : List (String, List String) -> CImplEntry -> CImplEntry
+rewriteImplRP : RecOrders -> CImplEntry -> CImplEntry
 rewriteImplRP fo (CImplEntry n s (CImplTagged tag key iface ps pats body)) =
   CImplEntry
     n
@@ -1274,7 +1283,7 @@ rewriteImplRP fo (CImplEntry n s (CImplDefault ifaceId tag key ps pats body)) =
       (map (rewritePat fo) pats)
       (rewriteExprRP fo body))
 
-rewriteExprRP : List (String, List String) -> CExpr -> CExpr
+rewriteExprRP : RecOrders -> CExpr -> CExpr
 rewriteExprRP _ (CLit l) = CLit l
 rewriteExprRP _ (CVar x addr) = CVar x addr
 rewriteExprRP fo (CApp f x) = CApp (rewriteExprRP fo f) (rewriteExprRP fo x)
@@ -1301,11 +1310,20 @@ rewriteExprRP fo (CTuple es) = CTuple (map (rewriteExprRP fo) es)
 rewriteExprRP fo (CList es) = CList (map (rewriteExprRP fo) es)
 rewriteExprRP fo (CRecord name fields) =
   normalizeRecordOrder fo name (map (rewriteFieldRP fo) fields)
-rewriteExprRP fo (CFieldAccess ex f n) = CFieldAccess (rewriteExprRP fo ex) f n
+rewriteExprRP fo (CFieldAccess ex f n _) =
+  stampFieldAccess fo (rewriteExprRP fo ex) f n
 rewriteExprRP fo (CRecordUpdate name base fields) =
-  CRecordUpdate name (rewriteExprRP fo base) (map (rewriteFieldRP fo) fields)
+  normalizeRecordUpdate
+    fo
+    name
+    (rewriteExprRP fo base)
+    (map (rewriteFieldRP fo) fields)
 rewriteExprRP fo (CVariantUpdate con base fields) =
-  CVariantUpdate con (rewriteExprRP fo base) (map (rewriteFieldRP fo) fields)
+  normalizeVariantUpdate
+    fo
+    con
+    (rewriteExprRP fo base)
+    (map (rewriteFieldRP fo) fields)
 rewriteExprRP fo (CArray es) = CArray (map (rewriteExprRP fo) es)
 rewriteExprRP fo (CRangeList lo hi incl) =
   CRangeList (rewriteExprRP fo lo) (rewriteExprRP fo hi) incl
@@ -1335,64 +1353,155 @@ rewriteExprRP _ (CMethod name iface arity r ir mr) =
   CMethod name iface arity r ir mr
 rewriteExprRP _ (CDict name rs) = CDict name rs
 
-rewriteArmRP : List (String, List String) -> CArm -> CArm
+rewriteArmRP : RecOrders -> CArm -> CArm
 rewriteArmRP fo (CArm pat guards body) =
   CArm
     (rewritePat fo pat)
     (map (rewriteGuardRP fo) guards)
     (rewriteExprRP fo body)
 
-rewriteGuardRP : List (String, List String) -> CGuard -> CGuard
+rewriteGuardRP : RecOrders -> CGuard -> CGuard
 rewriteGuardRP fo (CGBool e) = CGBool (rewriteExprRP fo e)
 rewriteGuardRP fo (CGBind p e) = CGBind (rewritePat fo p) (rewriteExprRP fo e)
 
-rewriteStmtRP : List (String, List String) -> CStmt -> CStmt
+rewriteStmtRP : RecOrders -> CStmt -> CStmt
 rewriteStmtRP fo (CSExpr e) = CSExpr (rewriteExprRP fo e)
 rewriteStmtRP fo (CSLet r pat e) =
   CSLet r (rewritePat fo pat) (rewriteExprRP fo e)
 rewriteStmtRP fo (CSAssign x e) = CSAssign x (rewriteExprRP fo e)
 
-rewriteFieldRP : List (String, List String) -> CField -> CField
-rewriteFieldRP fo (CField k e) = CField k (rewriteExprRP fo e)
+rewriteFieldRP : RecOrders -> CField -> CField
+rewriteFieldRP fo (CField k o e) = CField k o (rewriteExprRP fo e)
 
--- ── #1513: a record literal is laid out in DECLARED order, not written order ──
--- Both emit backends store a record cell POSITIONALLY, in the order the `CRecord`
--- node lists its fields, while every READER (`CFieldAccess`, `CRecordUpdate`, the
--- `PRec`→`PCon` rewrite above) indexes by the DECLARED order.  Their in-source
--- comments already assert the two coincide — "CRecord carries fields in DECLARED
--- order (lowering preserves it)", wasm_emit `emitRecordRef` — but nothing
--- established it: no pass reordered a literal, so `R { g = …, f = … }` built the
--- cell `[g, f]` and `r.f` read slot 1.  MEASURED on `main` before this change: a
--- program with `R { g = 20, f = 10 }` and `R { f = 30, g = 40 }` printed the
--- correct `10 30` under `medaka run` and a silent `10 40` from the built binary.
+-- ── #1513, #1518: every record node carries each field's declared ordinal ────
+-- A record cell is stored POSITIONALLY in the DECLARED field order, and every
+-- reader (field access, update, variant update, the `PRec`->`PCon` rewrite above)
+-- indexes by it.  This pass is where that order is decided, once: it stamps the
+-- ordinal on every `CField` of `CRecord`/`CRecordUpdate`/`CVariantUpdate` and on
+-- every `CFieldAccess`, and resolves the record a node belongs to.  Both emitters
+-- read the ordinal and keep no field-order table of their own.  An ordinal of -1
+-- is an unstamped node (`core_validate` refuses it).
 --
--- The rewrite makes the asserted invariant TRUE at the one point every emit driver
--- funnels through, so BOTH backends inherit it.  Field expressions are bound to
--- temporaries IN WRITTEN ORDER first and the `CRecord` then refers to those
--- temporaries, so an effectful field expression still runs when the source says it
--- does — reordering the *nodes* would have made `run` and `build` disagree about
--- evaluation order, trading one silent divergence for another.
---
--- Untouched, and byte-identical IR, when the literal is already in declared order
--- (the overwhelmingly common case) or when the labels cannot be matched up against
--- the declaration exactly once each — an anonymous record with no `data`, or a
--- malformed literal that a diagnostic elsewhere owns.  It is not this pass's job to
--- start dropping or duplicating fields on a shape it does not recognise.
-normalizeRecordOrder : List (String, List String) ->
-  String ->
-  List CField ->
-  CExpr
-normalizeRecordOrder fo name fields = match lookupAssoc name fo
+-- Field expressions are never reordered as NODES: a literal or update written out
+-- of declared order binds each expression to a temporary in written order first and
+-- the record node then refers to the temporaries in declared order, so a field
+-- expression with an effect still runs when the source says (language-design.md,
+-- written order, exactly once).  A node already in declared order is rebuilt
+-- byte-identically apart from the ordinals.  A node whose labels cannot be matched
+-- against the declaration is left unstamped rather than guessed at.
+
+-- (record name -> declared labels) first entry wins; (label -> owning record and
+-- its labels) is the FIRST record in declaration order that owns the label.
+data RecOrders = RecOrders (OrdMap (List String)) (OrdMap (String, List String))
+
+recOrdersOf : List (String, List String) -> RecOrders
+recOrdersOf fo =
+  let rev = reverseL fo
+  RecOrders (omFromPairs rev omEmpty) (recLabelOwners rev omEmpty)
+
+recLabelOwners : List (String, List String) ->
+  OrdMap (String, List String) ->
+  OrdMap (String, List String)
+recLabelOwners [] acc = acc
+recLabelOwners ((name, labels) :: rest) acc =
+  recLabelOwners rest (insertOwner (name, labels) labels acc)
+
+insertOwner : (String, List String) ->
+  List String ->
+  OrdMap (String, List String) ->
+  OrdMap (String, List String)
+insertOwner _ [] acc = acc
+insertOwner owner (l :: rest) acc =
+  insertOwner owner rest (omInsert l owner acc)
+
+recLabelsOf : RecOrders -> String -> Option (List String)
+recLabelsOf (RecOrders byName _) name = omLookup name byName
+
+recOwnerOfLabel : RecOrders -> String -> Option (String, List String)
+recOwnerOfLabel (RecOrders _ byLabel) label = omLookup label byLabel
+
+-- the record a node names when that record is declared and owns `label`; else the
+-- first record that owns `label`.
+resolveRecord : RecOrders -> String -> String -> Option (String, List String)
+resolveRecord fo name label = match recLabelsOf fo name
+  Some labels =>
+    if contains label labels then
+      Some (name, labels)
+    else
+      recOwnerOfLabel fo label
+  None => recOwnerOfLabel fo label
+
+labelOrdinal : String -> List String -> Int
+labelOrdinal label labels = labelOrdinalFrom 0 label labels
+
+labelOrdinalFrom : Int -> String -> List String -> Int
+labelOrdinalFrom _ _ [] = -1
+labelOrdinalFrom i label (l :: rest) =
+  if l == label then i else labelOrdinalFrom (i + 1) label rest
+
+stampFieldAccess : RecOrders -> CExpr -> String -> String -> CExpr
+stampFieldAccess fo ex f n = match resolveRecord fo n f
+  Some (name, labels) => CFieldAccess ex f name (labelOrdinal f labels)
+  None => CFieldAccess ex f n (-1)
+
+normalizeRecordOrder : RecOrders -> String -> List CField -> CExpr
+normalizeRecordOrder fo name fields = match recLabelsOf fo name
   None => CRecord name fields
   Some labels =>
     let written = map cFieldLabel fields
-    if written == labels || not (isPermutationOf written labels) then
+    if not (isPermutationOf written labels) then
       CRecord name fields
+    else if written == labels then
+      CRecord name (map (stampField labels) fields)
     else
-      bindFieldTemps fields (CRecord name (map recTempField labels))
+      bindFieldTemps fields (CRecord name (map (recTempField labels) labels))
+
+-- An update: the record is resolved like a field access (by the first written
+-- label); `base` is bound first, then the overrides in written order, when the
+-- written order is not the declared order.
+normalizeRecordUpdate : RecOrders -> String -> CExpr -> List CField -> CExpr
+normalizeRecordUpdate _ name base [] = CRecordUpdate name base []
+normalizeRecordUpdate fo name base (fields@((CField k0 _ _) :: _)) =
+  match resolveRecord fo name k0
+    None => CRecordUpdate name base fields
+    Some (rname, labels) => stampUpdate (CRecordUpdate rname) labels base fields
+
+normalizeVariantUpdate : RecOrders -> String -> CExpr -> List CField -> CExpr
+normalizeVariantUpdate fo con base fields = match recLabelsOf fo con
+  None => CVariantUpdate con base fields
+  Some labels => stampUpdate (CVariantUpdate con) labels base fields
+
+stampUpdate : (CExpr -> List CField -> CExpr) ->
+  List String ->
+  CExpr ->
+  List CField ->
+  CExpr
+stampUpdate mk labels base fields =
+  let stamped = map (stampField labels) fields
+  if anyList (f => cFieldOrdinal f < 0) stamped then
+    mk base fields
+  else if ascendingOrdinals stamped then
+    mk base stamped
+  else
+    bindUpdateTemps
+      stamped
+      (mk
+        (CVar updateBaseTemp AGlobal)
+        (map recTempFieldOf (sortByOrdinal stamped)))
+      base
+
+ascendingOrdinals : List CField -> Bool
+ascendingOrdinals [] = True
+ascendingOrdinals [_] = True
+ascendingOrdinals (a :: b :: rest) =
+  cFieldOrdinal a < cFieldOrdinal b && ascendingOrdinals (b :: rest)
+
+sortByOrdinal : List CField -> List CField
+sortByOrdinal fs =
+  sortBy (a b => compare (cFieldOrdinal a) (cFieldOrdinal b)) fs
 
 -- every declared label appears exactly once among the written ones, and vice versa.
--- Lengths equal + every declared label written ⇒ a permutation, because the
+-- Lengths equal + every declared label written => a permutation, because the
 -- typechecker already rejects a literal that names the same field twice
 -- (T-DUPLICATE-FIELD) or one the record does not declare (T-UNKNOWN-FIELD).
 isPermutationOf : List String -> List String -> Bool
@@ -1400,26 +1509,47 @@ isPermutationOf written labels =
   listLen written == listLen labels && allList (l => contains l written) labels
 
 cFieldLabel : CField -> String
-cFieldLabel (CField k _) = k
+cFieldLabel (CField k _ _) = k
+
+cFieldOrdinal : CField -> Int
+cFieldOrdinal (CField _ o _) = o
+
+stampField : List String -> CField -> CField
+stampField labels (CField k _ e) = CField k (labelOrdinal k labels) e
 
 -- `$rf$<label>` cannot collide with a user binder (`$` is not an identifier
--- character) and is unique within one literal because its labels are.  A nested
--- literal's temporaries shadow only inside the field expression that contains it,
--- which is closed before the outer `CRecord` reads its own temporaries back.
+-- character) and is unique within one node because its labels are.  A nested
+-- node's temporaries shadow only inside the field expression that contains it,
+-- which is closed before the outer node reads its own temporaries back.
 recTempName : String -> String
 recTempName label = "$rf$" ++ label
 
-recTempField : String -> CField
-recTempField label = CField label (CVar (recTempName label) AGlobal)
+updateBaseTemp : String
+updateBaseTemp = "$rf$base"
+
+recTempField : List String -> String -> CField
+recTempField labels label =
+  CField label (labelOrdinal label labels) (CVar (recTempName label) AGlobal)
+
+recTempFieldOf : CField -> CField
+recTempFieldOf (CField k o _) = CField k o (CVar (recTempName k) AGlobal)
 
 bindFieldTemps : List CField -> CExpr -> CExpr
 bindFieldTemps [] body = body
-bindFieldTemps ((CField k ex) :: rest) body =
+bindFieldTemps ((CField k _ ex) :: rest) body =
   CLet
     False
     (PVar (recTempName k) (Loc "" 0 0 0 0))
     ex
     (bindFieldTemps rest body)
+
+bindUpdateTemps : List CField -> CExpr -> CExpr -> CExpr
+bindUpdateTemps fields body base =
+  CLet
+    False
+    (PVar updateBaseTemp (Loc "" 0 0 0 0))
+    base
+    (bindFieldTemps fields body)
 
 -- ── #719: nullary return-position impl-method CAF memoisation (emit backends) ──
 -- A point-free (nullary) RETURN-POSITION impl method at a fixed concrete type
@@ -1736,7 +1866,7 @@ hoistExpr st (CUnOp op x) = CUnOp op (hoistExpr st x)
 hoistExpr st (CTuple es) = CTuple (map (hoistExpr st) es)
 hoistExpr st (CList es) = CList (map (hoistExpr st) es)
 hoistExpr st (CRecord name fields) = CRecord name (map (hoistField st) fields)
-hoistExpr st (CFieldAccess ex f n) = CFieldAccess (hoistExpr st ex) f n
+hoistExpr st (CFieldAccess ex f n o) = CFieldAccess (hoistExpr st ex) f n o
 hoistExpr st (CRecordUpdate name base fields) =
   CRecordUpdate name (hoistExpr st base) (map (hoistField st) fields)
 hoistExpr st (CVariantUpdate con base fields) =
@@ -1772,7 +1902,7 @@ hoistStmt st (CSLet r pat e) = CSLet r pat (hoistExpr st e)
 hoistStmt st (CSAssign x e) = CSAssign x (hoistExpr st e)
 
 hoistField : LowerState -> CField -> CField
-hoistField st (CField k e) = CField k (hoistExpr st e)
+hoistField st (CField k o e) = CField k o (hoistExpr st e)
 
 -- recompile a CDecision's tree from rewritten arms (same call lowerMatch makes).
 compileArmsC : FailSite -> List CArm -> CTree
@@ -2479,8 +2609,8 @@ specializeRow row (CTuple es) = CTuple (map (specializeRow row) es)
 specializeRow row (CList es) = CList (map (specializeRow row) es)
 specializeRow row (CRecord name fields) =
   CRecord name (map (specializeField row) fields)
-specializeRow row (CFieldAccess ex f n) =
-  CFieldAccess (specializeRow row ex) f n
+specializeRow row (CFieldAccess ex f n o) =
+  CFieldAccess (specializeRow row ex) f n o
 specializeRow row (CRecordUpdate name base fields) =
   CRecordUpdate name (specializeRow row base) (map (specializeField row) fields)
 specializeRow row (CVariantUpdate con base fields) =
@@ -2537,7 +2667,7 @@ specializeStmt row (CSLet r pat e) = CSLet r pat (specializeRow row e)
 specializeStmt row (CSAssign x e) = CSAssign x (specializeRow row e)
 
 specializeField : DefaultRow -> CField -> CField
-specializeField row (CField k e) = CField k (specializeRow row e)
+specializeField row (CField k o e) = CField k o (specializeRow row e)
 
 -- the receiver itself, not a projection of it
 isReceiverRoute : DefaultRow -> Route -> Bool

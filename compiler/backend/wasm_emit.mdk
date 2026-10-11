@@ -227,6 +227,8 @@ import backend.core_validate.{
   isUnprovidedOn,
   renderExternFinding,
   renderExternRefusal,
+  renderRecordRefusal,
+  validateRecords,
   unrefusedExternMessage,
   validateExterns,
 }
@@ -536,7 +538,7 @@ freshWasmEmit mode = WasmEmit {
 -- table is required; indexes preserve lookupAssoc's first-match result.  The
 -- last field is the `stdlib/runtime.mdk` extern names (`withRuntimeExternsW`).
 data WasmEmitInputData =
-  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (List (String, List String)) (OrdMap (List String)) (OrdMap (String, List String)) (OrdMap Int) (OrdMap (List String, String)) Bool (List String)
+  | WasmEmitInputData (List (String, (String, Int))) (OrdMap (String, Int)) (List (String, (List String, String))) (OrdMap (List String, String)) (List (String, List String)) (OrdMap (List Int)) Bool (OrdMap Int) (OrdMap (List String, String)) Bool (List String)
 
 export type WasmEmitInput = WasmEmitInputData
 
@@ -589,9 +591,6 @@ makeWasmEmitInputFull methodIfaces declSigTypes ctorFieldTypes mainIsFloat mainI
     ctorFieldTypes
     (omFromPairs (reverseL (map ctorToFloatIdxs ctorFieldTypes)) omEmpty)
     mainIsFloat
-    recordFieldOrders
-    (omFromPairs (reverseL recordFieldOrders) omEmpty)
-    (recordLabelIndex recordFieldOrders omEmpty)
     (omFromPairs (reverseL (map ifaceIdArityRowW methodIfaces)) omEmpty)
     (omFromPairs (reverseL ffiExternTypes) omEmpty)
     mainIsUnit
@@ -602,11 +601,11 @@ makeWasmEmitInputFull methodIfaces declSigTypes ctorFieldTypes mainIsFloat mainI
 -- has no catalog row; an input built without them checks none.
 export
 withRuntimeExternsW : List String -> WasmEmitInput -> WasmEmitInput
-withRuntimeExternsW names (WasmEmitInputData a b c d e f g h i j k l m _) =
-  WasmEmitInputData a b c d e f g h i j k l m names
+withRuntimeExternsW names (WasmEmitInputData a b c d e f g k l m _) =
+  WasmEmitInputData a b c d e f g k l m names
 
 inputRuntimeExternsW : WasmEmitInput -> List String
-inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ _ _ names) = names
+inputRuntimeExternsW (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ names) = names
 
 -- #1450/#1668 -- the two PROJECTIONS of a `methodIfaceTable` row (mirror of
 -- llvm_emit's `bareIfaceArityRow`/`ifaceIdArityRow`).  The bare projection
@@ -623,31 +622,12 @@ ifaceIdArityRowW (m, (_, ifaceWord, arity)) =
   (ifaceMethodArityKey ifaceWord m, arity)
 
 inputMainIsFloat : WasmEmitInput -> Bool
-inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _ _ _ _ _) = isFloat
+inputMainIsFloat (WasmEmitInputData _ _ _ _ _ _ isFloat _ _ _ _) = isFloat
 
 -- The typechecker's verdict that `main` is Unit; False when the entry has no
 -- typechecked program to ask, leaving the structural `mainBodyIsUnit` guess.
 inputMainIsUnit : WasmEmitInput -> Bool
-inputMainIsUnit (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ _ isUnit _) = isUnit
-
-recordLabelIndex : List (String, List String) ->
-  OrdMap (String, List String) ->
-  OrdMap (String, List String)
-recordLabelIndex [] m = m
-recordLabelIndex ((ctor, labels) :: rest) m =
-  recordLabelIndex rest (recordLabelIndexOne ctor labels labels m)
-
-recordLabelIndexOne : String ->
-  List String ->
-  List String ->
-  OrdMap (String, List String) ->
-  OrdMap (String, List String)
-recordLabelIndexOne _ _ [] m = m
-recordLabelIndexOne ctor allLabels (label :: rest) m = recordLabelIndexOne
-  ctor
-  allLabels
-  rest
-  (if omHasKey label m then m else omInsert label (ctor, allLabels) m)
+inputMainIsUnit (WasmEmitInputData _ _ _ _ _ _ _ _ _ isUnit _) = isUnit
 
 -- ── program info threaded through the ref-mode emitter ───────────────────────
 -- WasmProgramIndex owns the declaration-derived function, value, constructor,
@@ -662,10 +642,7 @@ data WasmFnImplIndex = WasmFnImplIndex {
   lazyGlobals : OrdMap Unit,
 }
 
-data WasmRecordValueIndex = WasmRecordValueIndex {
-  fallbackRecordFields : List (String, List String),
-  fnValues : OrdMap Unit,
-}
+data WasmRecordValueIndex = WasmRecordValueIndex { fnValues : OrdMap Unit }
 
 data WasmCtorIndex = WasmCtorIndex {
   arities : OrdMap Int,
@@ -717,9 +694,6 @@ indexImplsByMethodW index = index.fnImpl.implBuckets
 indexLazyGlobalsW : WasmProgramIndex -> OrdMap Unit
 indexLazyGlobalsW index = index.fnImpl.lazyGlobals
 
-indexRecFieldsW : WasmProgramIndex -> List (String, List String)
-indexRecFieldsW index = index.recordValue.fallbackRecordFields
-
 indexFnsUsedAsValuesW : WasmProgramIndex -> OrdMap Unit
 indexFnsUsedAsValuesW index = index.recordValue.fnValues
 
@@ -754,7 +728,7 @@ methodArityOfW prog name = match progInput prog
   input => methodArityOfInput input name
 
 methodArityOfInput : WasmEmitInput -> String -> Int
-methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _ _) name =
+methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _) name =
   match omLookup name methodIndex
     Some (_, arity) => arity
     None => 0
@@ -773,7 +747,7 @@ methodArityOfInput (WasmEmitInputData _ methodIndex _ _ _ _ _ _ _ _ _ _ _ _) nam
 -- PR #1346's E4 result and re-opens CLOSED S0 #1277.  A miss on the identity key
 -- falls back to the bare table, so collision-free programs emit unchanged.
 inputMethodIfaceIdIndex : WasmEmitInput -> OrdMap Int
-inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ _ _ _ idIndex _ _ _) =
+inputMethodIfaceIdIndex (WasmEmitInputData _ _ _ _ _ _ _ idIndex _ _ _) =
   idIndex
 
 methodArityOfIfaceInput : WasmEmitInput -> String -> String -> Int
@@ -841,8 +815,7 @@ methodArityOfTagW prog method tag =
 -- Declared parameter/return type heads drive Unit-main and Float recovery.
 declRetLookupW : Prog -> String -> Option (List String, String)
 declRetLookupW prog name = match progInput prog
-  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ _ _ _ =>
-    omLookup name declIndex
+  WasmEmitInputData _ _ _ declIndex _ _ _ _ _ _ _ => omLookup name declIndex
 
 -- #2076: the wasm peer of `llvm_emit.mdk`'s `ffiSigOf`/`isFfiExtern` — is `name`
 -- a USER-declared FFI extern?  Built from `makeWasmEmitInputFull`'s
@@ -854,7 +827,7 @@ declRetLookupW prog name = match progInput prog
 -- a generic unbound-variable panic.
 ffiSigOfW : Prog -> String -> Option (List String, String)
 ffiSigOfW prog name = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ _ _ ffiIndex _ _ => omLookup name ffiIndex
+  WasmEmitInputData _ _ _ _ _ _ _ _ ffiIndex _ _ => omLookup name ffiIndex
 
 isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = match ffiSigOfW prog name
@@ -997,7 +970,6 @@ makeWasmProgramIndexWithLazy groups ctorArs ctorTypes impls fnNames valNames fnA
       lazyGlobals = omFromNames lazyNames omEmpty,
     },
     recordValue = WasmRecordValueIndex {
-      fallbackRecordFields = collectRecFields groups,
       fnValues = omFromNames usedFns omEmpty,
     },
     ctor = WasmCtorIndex {
@@ -1266,7 +1238,7 @@ floatFieldIndices (_ :: rest) i = floatFieldIndices rest (i + 1)
 -- true iff the ctor's field at the given 0-based index has declared type Float.
 isFloatCtorField : Prog -> String -> Int -> Bool
 isFloatCtorField prog ctor idx = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ =>
     match omLookup ctor ctorFloatIndex
       Some idxs => containsInt idx idxs
       None => False
@@ -1287,26 +1259,6 @@ containsInt : Int -> List Int -> Bool
 -- lint-disable-next-line rule-duplicate-body
 containsInt _ [] = False
 containsInt x (y :: ys) = x == y || containsInt x ys
-
--- #1513: the declaration-sourced half of the table above comes from
--- WasmEmitInput.recordFieldOrders.  The physical construction scan remains its
--- fallback for entries that intentionally omit declaration facts.
---
--- Why wasm needs it too, given its miss is LOUD.  A record absent from the scan
--- makes `recByName` fall through to `findRecByField`, which answers with a DIFFERENT
--- record that owns the label; on this backend that is a `ref.cast` to the other
--- record's struct, so the module builds at exit 0 and TRAPS at instantiation
--- ("illegal cast") instead of printing a wrong number.  That is a better failure than
--- the native one, but it is still a legal program that does not run, and the *loud*
--- half of #1513 — `gapL "CFieldAccess on unknown field"` on a record that is simply
--- never constructed — is a legal program that does not BUILD.  Neither is acceptable
--- because the native arm happens to be worse, and leaving the two backends' tables
--- built from different authorities is how they drift apart again.
--- Empty (never installed, e.g. the prelude-free W2/W5 entries) ⇒ the scan alone ⇒
--- byte-identical WAT to the pre-#1513 behaviour.
--- `recordFieldsOf` and `recordByField` consult declaration indexes first and the
--- construction scan second. A declared record is answered by its declaration; an
--- undeclared anonymous shape, or a probe with empty input, still uses the scan.
 
 -- intern a literal's bytes as a fresh passive data segment; returns its index.
 freshStrSeg : WasmEmit -> List Int -> Int
@@ -1459,6 +1411,9 @@ emitProgramWith emit input cp =
 -- records nothing (`unprovidedExternW`).
 refuseUnprovidedExternsW : WasmEmit -> WasmEmitInput -> CProgram -> Unit
 refuseUnprovidedExternsW emit input cp =
+  let _ = match validateRecords cp
+    [] => ()
+    bad => panic ("internal error: " ++ renderRecordRefusal bad)
   match validateExterns WasmBackend (inputRuntimeExternsW input) cp
     [] => ()
     findings => match emit.gapMode
@@ -2157,7 +2112,7 @@ scanExprW7 emit (CSlice a lo hi _) =
       let _ = scanExprW7 emit lo in scanExprW7 emit hi
 scanExprW7 emit (CRecord _ fields) =
   forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
-scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex
+scanExprW7 emit (CFieldAccess ex _ _ _) = scanExprW7 emit ex
 scanExprW7 emit (CRecordUpdate _ base fields) =
   let _ = scanExprW7 emit base in
     forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
@@ -2316,71 +2271,7 @@ scanHeadW7 emit (HTuple n) = noteTupleArity emit n
 scanHeadW7 _ _ = ()
 
 cFieldExpr : CField -> CExpr
-cFieldExpr (CField _ e) = e
-
-cFieldName : CField -> String
-cFieldName (CField k _) = k
-
--- ── W7: record field-order table (ctor → declared field labels) ──────────────
--- A named-field record/variant ctor IS a user ctor (in the W3 ctor table); we only
--- need its field ORDER to compute a CFieldAccess struct index + a record-update's
--- unchanged-field copy.  Recover it from CRecord nodes (which carry fields in
--- declared order — `core_ir_lower.normalizeRecordOrder` now makes that true rather
--- than merely asserting it), peer to llvm_emit.collectRecords.
---
--- #1513: this scan is the fallback behind WasmEmitInput, no longer the whole
--- table, and its arms are deliberately not exhaustive — a record reached only
--- through `CLetGroup`, a slice bound, or a match-arm guard is invisible here, which
--- is exactly why the declarations go in front of it.  Do not "fix" the class by
--- adding arms; any arm added later can be forgotten again.
-collectRecFields : List CBind -> List (String, List String)
-collectRecFields groups = dedupRecEntries (flatMap collectRecFieldsBind groups)
-
-collectRecFieldsBind : CBind -> List (String, List String)
-collectRecFieldsBind (CBind _ clauses _) =
-  flatMap (c => scanRecFields (clauseBodyOf c)) clauses
-
-scanRecFields : CExpr -> List (String, List String)
-scanRecFields (CRecord name fields) =
-  (name, map cFieldName fields)
-    :: flatMap (f => scanRecFields (cFieldExpr f)) fields
-scanRecFields (CFieldAccess ex _ _) = scanRecFields ex
-scanRecFields (CRecordUpdate _ base fields) =
-  scanRecFields base ++ flatMap (f => scanRecFields (cFieldExpr f)) fields
-scanRecFields (CVariantUpdate _ base fields) =
-  scanRecFields base ++ flatMap (f => scanRecFields (cFieldExpr f)) fields
-scanRecFields (CTuple es) = flatMap scanRecFields es
-scanRecFields (CList es) = flatMap scanRecFields es
-scanRecFields (CArray es) = flatMap scanRecFields es
-scanRecFields (CApp f a) = scanRecFields f ++ scanRecFields a
-scanRecFields (CLam _ b) = scanRecFields b
-scanRecFields (CBinPrim _ l r _ _) = scanRecFields l ++ scanRecFields r
-scanRecFields (CUnOp _ x) = scanRecFields x
-scanRecFields (CIf c t f) =
-  scanRecFields c ++ scanRecFields t ++ scanRecFields f
-scanRecFields (CLet _ _ a b) = scanRecFields a ++ scanRecFields b
-scanRecFields (CBlock stmts) = flatMap scanRecFieldsStmt stmts
-scanRecFields (CDecision scrut arms _) =
-  scanRecFields scrut ++ flatMap (a => scanRecFields (armBody a)) arms
-scanRecFields (CMatch scrut arms) =
-  scanRecFields scrut ++ flatMap (a => scanRecFields (armBody a)) arms
-scanRecFields (CRangeList lo hi _) = scanRecFields lo ++ scanRecFields hi
-scanRecFields (CRangeArray lo hi _) = scanRecFields lo ++ scanRecFields hi
-scanRecFields (CIndex a i) = scanRecFields a ++ scanRecFields i
-scanRecFields (CSlice a lo hi _) =
-  scanRecFields a ++ scanRecFields lo ++ scanRecFields hi
-scanRecFields _ = []
-
-scanRecFieldsStmt : CStmt -> List (String, List String)
-scanRecFieldsStmt (CSExpr e) = scanRecFields e
-scanRecFieldsStmt (CSLet _ _ e) = scanRecFields e
-scanRecFieldsStmt _ = []
-
--- dedup by ctor name (first entry wins; all entries for one ctor agree).
--- #242: the ctor name is already a String, so this is the canonical
--- `support.util.dedupBy` verbatim (was an O(n²) lookupAssoc + rescan).
-dedupRecEntries : List (String, List String) -> List (String, List String)
-dedupRecEntries entries = dedupBy fst entries
+cFieldExpr (CField _ _ e) = e
 
 bindUsesClosures : OrdMap Unit ->
   OrdMap Int ->
@@ -2529,7 +2420,7 @@ scanExprValueUses fnNames fnArs ctorArs (CArray xs) =
   flatMap (scanExprValueUses fnNames fnArs ctorArs) xs
 scanExprValueUses fnNames fnArs ctorArs (CRecord _ fs) =
   flatMap (fd => scanExprValueUses fnNames fnArs ctorArs (cFieldExpr fd)) fs
-scanExprValueUses fnNames fnArs ctorArs (CFieldAccess r _ _) =
+scanExprValueUses fnNames fnArs ctorArs (CFieldAccess r _ _ _) =
   scanExprValueUses fnNames fnArs ctorArs r
 scanExprValueUses fnNames fnArs ctorArs (CRecordUpdate _ r fs) =
   scanExprValueUses fnNames fnArs ctorArs r
@@ -6203,8 +6094,8 @@ emitRefExpr prog env d (CSlice a lo hi incl) =
   emitSliceRef prog env d a lo hi incl
 emitRefExpr prog env d (CRecord name fields) =
   emitRecordRef prog env d name fields
-emitRefExpr prog env d (CFieldAccess ex label recName) =
-  emitFieldAccessRef prog env d ex label recName
+emitRefExpr prog env d (CFieldAccess ex label recName ord) =
+  emitFieldAccessRef prog env d ex label recName ord
 emitRefExpr prog env d (CRecordUpdate recName base fields) =
   emitRecordUpdateRef prog env d recName base fields
 emitRefExpr prog env d (CVariantUpdate con base fields) =
@@ -7154,11 +7045,8 @@ cexprIsFloat prog env (CApp f a) = match appHead (CApp f a)
 -- Look up the record ctor that owns `label` (by the stamped record name when
 -- available, else by label) and check if that field's 0-based index is in
 -- WasmEmitInput's constructor-Float index.
-cexprIsFloat prog env (CFieldAccess _ label recName) =
-  match recByName prog recName label
-    Some (ctor, labels) =>
-      isFloatCtorField prog ctor (orZeroIdx (indexOfL label labels))
-    None => False
+cexprIsFloat prog env (CFieldAccess _ _ recName ord) =
+  ord >= 0 && isFloatCtorField prog recName ord
 cexprIsFloat prog env _ = False
 
 isArithOp : String -> Bool
@@ -7172,7 +7060,7 @@ isArithOp op = contains op ["+", "-", "*", "/", "%"]
 -- PVar.  Used by emitLeafRef/emitGuardArmRef to seed floatLocals for the arm body.
 ctorPatFloatBinders : Prog -> Pat -> List String
 ctorPatFloatBinders prog (PCon c args) = match progInput prog
-  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ _ _ _ =>
+  WasmEmitInputData _ _ _ _ _ ctorFloatIndex _ _ _ _ _ =>
     match omLookup c ctorFloatIndex
       Some floatIdxs => ctorPatFloatBindersGo c floatIdxs args 0
       None => []
@@ -10537,7 +10425,7 @@ freeVarsExpr bound (CTuple es) = flatMap (freeVarsExpr bound) es
 freeVarsExpr bound (CList es) = flatMap (freeVarsExpr bound) es
 freeVarsExpr bound (CArray es) = flatMap (freeVarsExpr bound) es
 freeVarsExpr bound (CRecord _ fields) = flatMap (freeVarsField bound) fields
-freeVarsExpr bound (CFieldAccess e _ _) = freeVarsExpr bound e
+freeVarsExpr bound (CFieldAccess e _ _ _) = freeVarsExpr bound e
 freeVarsExpr bound (CRecordUpdate _ e fields) =
   freeVarsExpr bound e ++ flatMap (freeVarsField bound) fields
 freeVarsExpr bound (CVariantUpdate _ e fields) =
@@ -10610,7 +10498,7 @@ freeVarsGuard bound (CGBool g) = freeVarsExpr bound g
 freeVarsGuard bound (CGBind p e) = freeVarsExpr bound e
 
 freeVarsField : List String -> CField -> List String
-freeVarsField bound (CField _ e) = freeVarsExpr bound e
+freeVarsField bound (CField _ _ e) = freeVarsExpr bound e
 
 -- ── ADT construction (§3.4) ──────────────────────────────────────────────────
 -- A NULLARY ctor → an `i31ref` carrying its PER-TYPE dense ordinal (the same value
@@ -10962,40 +10850,37 @@ emitRecordRef prog env d name fields =
   tagField ++ argInstrs ++ ["struct.new $" ++ ctorStructName name]
 
 -- field access `r.label`: cast to the record's ctor struct and struct.get the field
--- at index (1 + its declared position).  The record ctor + its field order come from
--- WasmEmitInput's declared indexes, with the construction scan built in
--- emitProgram as fallback (#1513).
+-- at index (1 + its declared ordinal), both stamped by `core_ir_lower`.
 emitFieldAccessRef : Prog ->
   List String ->
   Int ->
   CExpr ->
   String ->
   String ->
+  Int ->
   List String
-emitFieldAccessRef prog env d ex label recName =
-  match recByName prog recName label
-    Some (ctor, labels) =>
-      let idx = orZeroIdx (indexOfL label labels)
-      emitRefExpr prog env d ex
-        ++ [
-          "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
-          "struct.get $\{ctorStructName ctor} \{intToString (idx + 1)}",
-        ]
+emitFieldAccessRef prog env d ex label recName ord =
+  if ord >= 0 then
+    emitRefExpr prog env d ex
+      ++ [
+        "ref.cast (ref $" ++ ctorStructName recName ++ ")",
+        "struct.get $\{ctorStructName recName} \{intToString (ord + 1)}",
+      ]
+  else if label == "value" then
     -- `r.value` on a Ref: no record ctor owns the field `value`, so this is a
     -- $refbox read — cast to $refbox and read the mutable field at slot 0.
-    None =>
-      if label == "value" then
-        emitRefExpr prog env d ex
-          ++ ["ref.cast (ref $refbox)", "struct.get $refbox 0"]
-      else
-        gapLP
-          prog
-          ("ref-mode: CFieldAccess on unknown field '"
-            ++ label
-            ++ "' (no record ctor in the field-order table)")
+
+    emitRefExpr prog env d ex
+      ++ ["ref.cast (ref $refbox)", "struct.get $refbox 0"]
+  else
+    gapLP
+      prog
+      ("ref-mode: CFieldAccess on unknown field '"
+        ++ label
+        ++ "' (no record ctor in the field-order table)")
 
 -- functional update `{ base | f = v … }`: copy the base's struct, overriding the
--- named fields.  The record type is recovered from the first update field's label.
+-- fields at the stamped ordinals.
 emitRecordUpdateRef : Prog ->
   List String ->
   Int ->
@@ -11004,36 +10889,7 @@ emitRecordUpdateRef : Prog ->
   List CField ->
   List String
 emitRecordUpdateRef prog env d recName base fields =
-  match firstFieldLabel fields
-    None => gapLP prog "ref-mode: empty record update"
-    Some k0 => match recByName prog recName k0
-      Some (ctor, labels) => emitUpdateCopy prog env d ctor labels base fields
-      None =>
-        gapLP prog ("ref-mode: CRecordUpdate on unknown field '" ++ k0 ++ "'")
-
--- Resolve a record by the typecheck-stamped record name (carried on
--- CFieldAccess / CRecordUpdate) when it is usable — non-empty, in the
--- field-order table, and actually owning `label` — else fall back to the
--- label-only search.  Two records sharing a field name at DIFFERENT slot indices
--- are indistinguishable from the label alone, so the label-only guess picked the
--- wrong ctor: a `ref.cast` to the other record's struct (instantiation-time
--- "illegal cast") and, where the cast happened to pass, the wrong slot written
--- (bug #38, peer of the LLVM backend's recordByName).
-recByName : Prog -> String -> String -> Option (String, List String)
-recByName prog recName label =
-  if recName == "" then
-    recordByField prog label
-  else match recordFieldsOf prog recName
-    Some labels =>
-      if indexOfL label labels >= 0 then
-        Some (recName, labels)
-      else
-        recordByField prog label
-    None => recordByField prog label
-
-firstFieldLabel : List CField -> Option String
-firstFieldLabel [] = None
-firstFieldLabel ((CField k _) :: _) = Some k
+  emitUpdateCopy prog env d recName base fields
 
 -- named-field variant update `Con { base | f = v … }`: same copy, ctor known.
 emitVariantUpdateRef : Prog ->
@@ -11043,25 +10899,20 @@ emitVariantUpdateRef : Prog ->
   CExpr ->
   List CField ->
   List String
-emitVariantUpdateRef prog env d con base fields = match recordFieldsOf prog con
-  Some labels => emitUpdateCopy prog env d con labels base fields
-  None =>
-    gapLP
-      prog
-      ("ref-mode: CVariantUpdate on unknown constructor '" ++ con ++ "'")
+emitVariantUpdateRef prog env d con base fields =
+  emitUpdateCopy prog env d con base fields
 
 -- the shared copy-with-overrides: stash the base into a scratch local, then build a
--- struct.new whose tag is the ctor ordinal and whose fields are, per declared label,
--- the override expr (if present) or a struct.get of the stashed base.
+-- struct.new whose tag is the ctor ordinal and whose fields are, per ordinal, the
+-- override expr (if present) or a struct.get of the stashed base.
 emitUpdateCopy : Prog ->
   List String ->
   Int ->
   String ->
-  List String ->
   CExpr ->
   List CField ->
   List String
-emitUpdateCopy prog env d ctor labels base fields =
+emitUpdateCopy prog env d ctor base fields =
   let sfx = intToString d
   let bL = w7Local (progEmit prog) "__rub" sfx
   let baseI =
@@ -11070,26 +10921,10 @@ emitUpdateCopy prog env d ctor labels base fields =
   let tagField = ["i32.const " ++ intToString (ctorOrdinal prog ctor)]
   baseI
     ++ tagField
-    ++ fieldInstrsWithLabels prog env d ctor bL labels fields
+    ++ flatMap
+      (idx => oneUpdateField prog env d ctor bL fields idx)
+      (rangeList 0 (ctorArity prog ctor))
     ++ ["struct.new $" ++ ctorStructName ctor]
-
--- per declared label index, emit the override expr or the base's struct.get.
-fieldInstrsWithLabels : Prog ->
-  List String ->
-  Int ->
-  String ->
-  String ->
-  List String ->
-  List CField ->
-  List String
-fieldInstrsWithLabels prog env d ctor bL labels fields =
-  flatMap
-    (lab => oneUpdateField prog env d ctor bL fields lab)
-    (idxZip labels 0)
-
-idxZip : List String -> Int -> List (Int, String)
-idxZip [] _ = []
-idxZip (x :: xs) i = (i, x) :: idxZip xs (i + 1)
 
 oneUpdateField : Prog ->
   List String ->
@@ -11097,46 +10932,20 @@ oneUpdateField : Prog ->
   String ->
   String ->
   List CField ->
-  (Int, String) ->
+  Int ->
   List String
-oneUpdateField prog env d ctor bL fields (idx, label) =
-  match findUpdateExpr label fields
-    Some ex => emitRefExpr prog env d ex
-    None => [
-      "local.get " ++ bL,
-      "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
-      "struct.get $\{ctorStructName ctor} \{intToString (idx + 1)}",
-    ]
+oneUpdateField prog env d ctor bL fields idx = match findUpdateExpr idx fields
+  Some ex => emitRefExpr prog env d ex
+  None => [
+    "local.get " ++ bL,
+    "ref.cast (ref $" ++ ctorStructName ctor ++ ")",
+    "struct.get $\{ctorStructName ctor} \{intToString (idx + 1)}",
+  ]
 
-findUpdateExpr : String -> List CField -> Option CExpr
+findUpdateExpr : Int -> List CField -> Option CExpr
 findUpdateExpr _ [] = None
-findUpdateExpr label ((CField k ex) :: rest) =
-  if k == label then Some ex else findUpdateExpr label rest
-
--- the (ctor, labels) of the record whose declared fields contain `label`.
-findRecByField : List (String, List String) ->
-  String ->
-  Option (String, List String)
-findRecByField [] _ = None
-findRecByField ((ctor, labels) :: rest) label =
-  if contains label labels then
-    Some (ctor, labels)
-  else
-    findRecByField rest label
-
-recordFieldsOf : Prog -> String -> Option (List String)
-recordFieldsOf prog ctor = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ recordIndex _ _ _ _ _ =>
-    match omLookup ctor recordIndex
-      Some labels => Some labels
-      None => lookupAssoc ctor (indexRecFieldsW (progIndex prog))
-
-recordByField : Prog -> String -> Option (String, List String)
-recordByField prog label = match progInput prog
-  WasmEmitInputData _ _ _ _ _ _ _ _ _ labelIndex _ _ _ _ =>
-    match omLookup label labelIndex
-      Some entry => Some entry
-      None => findRecByField (indexRecFieldsW (progIndex prog)) label
+findUpdateExpr idx ((CField _ o ex) :: rest) =
+  if o == idx then Some ex else findUpdateExpr idx rest
 
 -- ── match lowering: CDecision → discriminant + br_table + field extraction ───
 -- The scrutinee is a (ref eq).  The decision tree (CTree) is walked into a nest of
@@ -11860,7 +11669,7 @@ collectExprLocals (CTuple items) = flatMap collectExprLocals items
 collectExprLocals (CList items) = flatMap collectExprLocals items
 collectExprLocals (CArray items) = flatMap collectExprLocals items
 collectExprLocals (CRecord _ fields) = flatMap collectFieldLocals fields
-collectExprLocals (CFieldAccess base _ _) = collectExprLocals base
+collectExprLocals (CFieldAccess base _ _ _) = collectExprLocals base
 collectExprLocals (CRecordUpdate _ base fields) =
   collectExprLocals base ++ flatMap collectFieldLocals fields
 collectExprLocals (CVariantUpdate _ base fields) =
@@ -11893,7 +11702,7 @@ collectExprLocals (CMethod _ _ _ (RProj r path) _ _) = [projLocalName r path]
 collectExprLocals _ = []
 
 collectFieldLocals : CField -> List String
-collectFieldLocals (CField _ value) = collectExprLocals value
+collectFieldLocals (CField _ _ value) = collectExprLocals value
 
 -- P1: the inline-emitted locals of a group's nullary VALUE member (none for a function
 -- member — that one is lifted).
@@ -12522,7 +12331,7 @@ maxIndexAt (CVariantUpdate _ b fields) d =
     (maxI
       (maxIndexAt b d)
       (foldMaxI (map (x => maxIndexAt (cFieldExpr x) d) fields)))
-maxIndexAt (CFieldAccess e1 _ _) d = maxIndexAt e1 d
+maxIndexAt (CFieldAccess e1 _ _ _) d = maxIndexAt e1 d
 -- These four nodes each allocate depth-`d` scratch locals ($__rl*/$__ra*/$__ix*/
 -- $__sl* at suffix `d`) at their OWN emit site, so they must contribute `d` even
 -- when their subexpressions are leaves (which report d-1).  Omitting the `maxI d`
@@ -12721,17 +12530,6 @@ nthArm : List CArm -> Int -> Option CArm
 nthArm [] _ = None
 nthArm (a :: rest) i = if i == 0 then Some a else nthArm rest (i - 1)
 
--- the index of `x` in a String list, or -1.
-indexOfL : String -> List String -> Int
-indexOfL x xs = indexOfGo x xs 0
-
-indexOfGo : String -> List String -> Int -> Int
-indexOfGo _ [] _ = -1
-indexOfGo x (y :: ys) i = if x == y then i else indexOfGo x ys (i + 1)
-
-orZeroIdx : Int -> Int
-orZeroIdx i = if i < 0 then 0 else i
-
 -- a readable tag for the unsupported-node gap message.
 ctag : CExpr -> String
 ctag (CApp _ _) = "CApp (application)"
@@ -12742,7 +12540,7 @@ ctag (CTuple _) = "CTuple (W7)"
 ctag (CList _) = "CList (W7)"
 ctag (CArray _) = "CArray (W7)"
 ctag (CRecord _ _) = "CRecord (W7)"
-ctag (CFieldAccess _ _ _) = "CFieldAccess (W7)"
+ctag (CFieldAccess _ _ _ _) = "CFieldAccess (W7)"
 ctag (CRecordUpdate _ _ _) = "CRecordUpdate (W7)"
 ctag (CVariantUpdate _ _ _) = "CVariantUpdate (W7)"
 ctag (CRangeList _ _ _) = "CRangeList (W7)"

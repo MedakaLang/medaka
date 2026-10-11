@@ -86,7 +86,7 @@ eagerVars b (CTuple es) = eagerVarsList b es
 eagerVars b (CList es) = eagerVarsList b es
 eagerVars b (CRangeList lo hi _) = eagerVars b lo ++ eagerVars b hi
 eagerVars b (CRecord _ fields) = eagerVarsFields b fields
-eagerVars b (CFieldAccess ex _ _) = eagerVars b ex
+eagerVars b (CFieldAccess ex _ _ _) = eagerVars b ex
 eagerVars b (CRecordUpdate _ base updates) =
   eagerVars b base ++ eagerVarsFields b updates
 eagerVars b (CVariantUpdate _ base updates) =
@@ -131,7 +131,7 @@ eagerVarsGuarded b ((CGBind pat e) :: rest) body =
 
 eagerVarsFields : OrdMap Unit -> List CField -> List String
 eagerVarsFields _ [] = []
-eagerVarsFields b ((CField _ ex) :: rest) =
+eagerVarsFields b ((CField _ _ ex) :: rest) =
   eagerVars b ex ++ eagerVarsFields b rest
 
 eagerVarsStmts : OrdMap Unit -> List CStmt -> List String
@@ -401,7 +401,7 @@ eagerHasMethod (CList es) = listHaveMethod es
 eagerHasMethod (CRangeList lo hi _) = eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod (CRangeArray lo hi _) = eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod (CRecord _ fields) = fieldsHaveMethod fields
-eagerHasMethod (CFieldAccess ex _ _) = eagerHasMethod ex
+eagerHasMethod (CFieldAccess ex _ _ _) = eagerHasMethod ex
 eagerHasMethod (CRecordUpdate _ base updates) =
   eagerHasMethod base || fieldsHaveMethod updates
 eagerHasMethod (CVariantUpdate _ base updates) =
@@ -454,7 +454,7 @@ guardsHaveMethod ((CGBind _ e) :: rest) =
 
 fieldsHaveMethod : List CField -> Bool
 fieldsHaveMethod [] = False
-fieldsHaveMethod ((CField _ ex) :: rest) =
+fieldsHaveMethod ((CField _ _ ex) :: rest) =
   eagerHasMethod ex || fieldsHaveMethod rest
 
 -- a binding is DIRECTLY method-tainted if any of its clause bodies dispatches

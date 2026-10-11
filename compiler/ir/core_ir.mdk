@@ -92,16 +92,17 @@ public export data CExpr =
   | CTuple (List CExpr)
   | CList (List CExpr)
   -- record create / field access / update (slice 3)
+  -- Every record node carries each field's DECLARED ordinal, stamped by
+  -- `core_ir_lower`; an emitter stores and loads by it and keeps no field-order
+  -- table.  A `CRecord`'s fields are listed in declared order (ordinal = position).
   | CRecord String (List CField)
-  -- field access `r.f`; 3rd = resolved record name ("" = unknown) so emit can
-  -- resolve the field index by (recName, label) instead of label alone.
-  | CFieldAccess CExpr String String
+  -- field access `r.f`; 3rd = the resolved record name ("" = unknown), 4th = the
+  -- field's declared ordinal (-1 = unstamped, valid only for the `Ref` read `.value`).
+  | CFieldAccess CExpr String String Int
   -- functional record update `{ base | f = v … }`.  1st = the receiver's record
-  -- name, stamped by typecheck onto ERecordUpdate and carried through lowering —
-  -- WITHOUT it an emitter has to guess the record from the first update label,
-  -- which silently writes the wrong slot when two records share a field name at
-  -- different indices (bug #38).  Same discipline as CVariantUpdate's ctor name.
-  -- ("" = unstamped/synthesized → emitters fall back to the label search.)
+  -- name, resolved by `core_ir_lower`.  The overrides are listed in strictly
+  -- ascending ordinal order; one written out of declared order is bound to
+  -- temporaries in written order first, so each override runs once, as written.
   | CRecordUpdate String CExpr (List CField)
   -- named-field variant (constructor) update: `Con { base | f = v … }` (§2.3)
   | CVariantUpdate String CExpr (List CField)
@@ -139,8 +140,8 @@ public export data CExpr =
   | CMethod String String Int Route (List Route) (List Route)
   | CDict String (List Route)
 
--- a record field assignment `field = expr`
-public export data CField = CField String CExpr
+-- a record field assignment `field = expr`: label, declared ordinal (-1 = unstamped), expr
+public export data CField = CField String Int CExpr
 
 -- a match arm: pattern, guard qualifiers (fall through to next arm), body
 public export data CArm = CArm Pat (List CGuard) CExpr

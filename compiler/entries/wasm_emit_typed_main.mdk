@@ -528,14 +528,14 @@ featureStateArg = PVar "x" featureStateLoc
 
 featureStateRecord : CExpr
 featureStateRecord = CRecord "FeatureRecord" [
-  CField "left" (CLit (LInt 1)),
-  CField "right" (CLit (LInt 2)),
+  CField "left" 0 (CLit (LInt 1)),
+  CField "right" 1 (CLit (LInt 2)),
 ]
 
 featureStateVariant : CExpr
 featureStateVariant = CRecord "FeatureVariant" [
-  CField "left" (CLit (LInt 3)),
-  CField "right" (CLit (LInt 4)),
+  CField "left" 0 (CLit (LInt 3)),
+  CField "right" 1 (CLit (LInt 4)),
 ]
 
 featureStateBinds : List CBind
@@ -554,14 +554,14 @@ featureStateBinds = [
     CClause
       [featureStateArg]
       (CRecordUpdate "FeatureRecord" featureStateRecord [
-        CField "left" (CLit (LInt 5)),
+        CField "left" 0 (CLit (LInt 5)),
       ]),
   ],
   synthBind "featureVariantUpdate" [
     CClause
       [featureStateArg]
       (CVariantUpdate "FeatureVariant" featureStateVariant [
-        CField "right" (CLit (LInt 6)),
+        CField "right" 1 (CLit (LInt 6)),
       ]),
   ],
   synthBind "featureRandomInt" [
@@ -1116,7 +1116,7 @@ featureStateControlProgram =
       synthBind "featurePlainAccess" [
         CClause
           [featureStateArg]
-          (CFieldAccess featureStateRecord "left" "FeatureRecord"),
+          (CFieldAccess featureStateRecord "left" "FeatureRecord" 0),
       ],
       synthBind "featureControl" [CClause [featureStateArg] (CLit (LInt 29))],
       synthBind "main" [CClause [] (CLit (LInt 0))],

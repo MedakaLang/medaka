@@ -129,8 +129,8 @@ cexprSexp m (CTuple es) = node "CTuple" (map (cexprSexp m) es)
 cexprSexp m (CList es) = node "CList" (map (cexprSexp m) es)
 cexprSexp m (CRecord name fields) =
   node "CRecord" (escStr name :: map (cfieldSexp m) fields)
-cexprSexp m (CFieldAccess e f n) =
-  node "CFieldAccess" [cexprSexp m e, escStr f, escStr n]
+cexprSexp m (CFieldAccess e f n o) =
+  node "CFieldAccess" [cexprSexp m e, escStr f, escStr n, intToString o]
 cexprSexp m (CRecordUpdate name base fields) =
   node
     "CRecordUpdate"
@@ -180,7 +180,8 @@ cexprSexp m (CDict name routes) =
 
 export
 cfieldSexp : SexpMode -> CField -> String
-cfieldSexp m (CField name e) = node "cf" [escStr name, cexprSexp m e]
+cfieldSexp m (CField name o e) =
+  node "cf" [escStr name, intToString o, cexprSexp m e]
 
 -- ── CArm, CGuard ─────────────────────────────────────────────────────────────
 
