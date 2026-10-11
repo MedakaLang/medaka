@@ -1,5 +1,5 @@
 # META
-source_lines=658
+source_lines=679
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -19,6 +19,9 @@ import ir.core_ir.{
   CStmt(..),
   CArm(..),
   CGuard(..),
+  CallMode(..),
+  CallSite(..),
+  CImplEntry(..),
 }
 import frontend.ast.{Lit(..), Pat}
 import backend.trmc_analysis.{patVars, bindNames, bindName}
@@ -660,8 +663,26 @@ rngBound : Lit -> Int
 rngBound (LInt n) = n
 rngBound (LChar c) = charCode (arrayGetUnsafe 0 (stringToChars c))
 rngBound _ = 0
+
+-- ── call modes ───────────────────────────────────────────────────────────────
+-- An application's head, arguments and stamped mode; any other expression is a
+-- head applied to nothing.
+export
+appParts : CExpr -> (CExpr, List CExpr, CallMode)
+appParts (CApp hd args (CallSite mode _)) = (hd, args, mode)
+appParts other = (other, [], CallDynamic)
+
+export
+isExactCall : CallMode -> Bool
+isExactCall CallExact = True
+isExactCall _ = False
+
+-- An impl entry's declared value arity: the arrows of its interface signature.
+export
+implEntryDeclaredArity : CImplEntry -> Int
+implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 # DESUGAR
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
@@ -879,8 +900,16 @@ rngBound _ = 0
 (DFunDef false "rngBound" ((PCon "LInt" (PVar "n"))) (EVar "n"))
 (DFunDef false "rngBound" ((PCon "LChar" (PVar "c"))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))
 (DFunDef false "rngBound" (PWild) (ELit (LInt 0)))
+(DTypeSig true "appParts" (TyFun (TyCon "CExpr") (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallMode"))))
+(DFunDef false "appParts" ((PCon "CApp" (PVar "hd") (PVar "args") (PCon "CallSite" (PVar "mode") PWild))) (ETuple (EVar "hd") (EVar "args") (EVar "mode")))
+(DFunDef false "appParts" ((PVar "other")) (ETuple (EVar "other") (EListLit) (EVar "CallDynamic")))
+(DTypeSig true "isExactCall" (TyFun (TyCon "CallMode") (TyCon "Bool")))
+(DFunDef false "isExactCall" ((PCon "CallExact")) (EVar "True"))
+(DFunDef false "isExactCall" (PWild) (EVar "False"))
+(DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
+(DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))
 # MARK
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
@@ -1098,3 +1127,11 @@ rngBound _ = 0
 (DFunDef false "rngBound" ((PCon "LInt" (PVar "n"))) (EVar "n"))
 (DFunDef false "rngBound" ((PCon "LChar" (PVar "c"))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))
 (DFunDef false "rngBound" (PWild) (ELit (LInt 0)))
+(DTypeSig true "appParts" (TyFun (TyCon "CExpr") (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallMode"))))
+(DFunDef false "appParts" ((PCon "CApp" (PVar "hd") (PVar "args") (PCon "CallSite" (PVar "mode") PWild))) (ETuple (EVar "hd") (EVar "args") (EVar "mode")))
+(DFunDef false "appParts" ((PVar "other")) (ETuple (EVar "other") (EListLit) (EVar "CallDynamic")))
+(DTypeSig true "isExactCall" (TyFun (TyCon "CallMode") (TyCon "Bool")))
+(DFunDef false "isExactCall" ((PCon "CallExact")) (EVar "True"))
+(DFunDef false "isExactCall" (PWild) (EVar "False"))
+(DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
+(DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))
