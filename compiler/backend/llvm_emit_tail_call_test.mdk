@@ -3,8 +3,10 @@
 -- leaf, so the recursion is a jump at every clang optimization level, not only
 -- where clang's own tail-call pass happens to run.  The tail position reaches
 -- through `if`, `match` arms, clause bodies, `let`, `where` groups and blocks,
--- in top-level functions and in impl and default interface methods.  Each case
--- recurses deep enough that a call which is not a jump exhausts the stack.
+-- in top-level functions, `where` workers, and impl and default interface
+-- methods.  A `where` worker calls itself through its own closure, which the
+-- emitter turns into a direct call of the worker's define.  Each case recurses
+-- deep enough that a call which is not a jump exhausts the stack.
 --
 -- Run it under both probe profiles (-O0 without LTO is the default):
 --   medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
@@ -103,6 +105,37 @@ sumWhereClause acc n = sumWhereClause next (n - 1)
     plus x y = x + y
     next = plus acc n
 
+isZ : Int -> Bool
+isZ k = k == 0
+
+addI : Int -> Int -> Int
+addI a b = a + b
+
+-- A capture-free `where` worker.  It is unannotated, so it is generalized over
+-- its arithmetic and its define takes dictionary words ahead of its three
+-- parameters: more words than x86-64 passes in registers.
+whereFree : Int -> Int
+whereFree n = go 1 0 n
+  where
+    go b acc k = if k == 0 then acc else go b (acc + b) (k - 1)
+
+-- A `where` worker that captures `bias` and takes six parameters, all `Int`
+-- through the helpers: with its closure, seven words.
+whereCapture6 : Int -> Int -> Int
+whereCapture6 bias n = go 0 0 0 0 0 n
+  where
+    go a b c d acc k =
+      if isZ k then
+        addI acc (addI a (addI b (addI c d)))
+      else
+        go a b c d (addI acc bias) (addI k (-1))
+
+-- A `where` worker that captures `bias` and takes two parameters.
+whereCapture2 : Int -> Int -> Int
+whereCapture2 bias n = go 0 n
+  where
+    go acc k = if k == 0 then acc else go (acc + bias) (k - 1)
+
 interface SumDown a where
   sumDown : Int -> a -> Int
 
@@ -189,6 +222,15 @@ test "self tail call under a where group, match arm" =
 
 test "self tail call under a where group, clause body" =
   expectEqual triangle (sumWhereClause 0 depth)
+
+test "where worker self tail call, capture-free and dictionary-generalized" =
+  expectEqual depth (whereFree depth)
+
+test "where worker self tail call, capturing, six parameters" =
+  expectEqual depth (whereCapture6 1 depth)
+
+test "where worker self tail call, capturing, two parameters" =
+  expectEqual depth (whereCapture2 1 depth)
 
 test "impl method self tail call, clause spelling" =
   expectEqual triangle (sumDown 0 depth)

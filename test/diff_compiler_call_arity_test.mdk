@@ -284,12 +284,22 @@ shapeRow name ir ok msg = match bodyOf name ir
   Err e => fail e
   Ok b => if ok b then pass else fail msg
 
-exactOk : String -> Bool
-exactOk b = S.contains adderCall b && not (S.contains "@__mdk_apply" b)
+-- adder3's define: the dictionary and `a`; `b => c => …` is its returned lambda.
+adderDefine : String
+adderDefine = "define i64 @\{dictPrefix}adder3(i64 %arg0, i64 %arg1) {"
 
-underOk : String -> Bool
-underOk b =
-  S.contains "@mdk_pap_\{dictPrefix}adder3" b && not (S.contains adderCall b)
+defineOk : String -> Expectation
+defineOk ir =
+  if S.contains adderDefine ir then
+    pass
+  else
+    fail "adder3's define does not bind exactly the dictionary and a"
+
+exactOk : String -> Bool
+exactOk b =
+  S.contains adderCall b
+    && not (S.contains "@__mdk_apply" b)
+    && not (S.contains "@mdk_pap_" b)
 
 overOk : String -> Bool
 overOk b = S.contains adderCall b && S.contains "call i64 @__mdk_apply" b
@@ -328,21 +338,22 @@ shapesCDict : String -> <Exec, IO, FileRead, FileWrite> Expectation
 shapesCDict work = match buildIR work dictStem
   Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
   Ok ir => expectEach [
+    ("(10) adder3's define binds the dictionary and a", defineOk ir),
     (
-      "(10) exactPrefix is one direct adder3 call, no __mdk_apply",
-      shapeRow
-        "exactPrefix"
-        ir
-        exactOk
-        "exact prefix is not one direct constrained call",
-    ),
-    (
-      "(11) underPrefix builds a constrained PAP, no direct adder3 call",
+      "(10) underPrefix supplies exactly the define's words: one direct adder3 call, no __mdk_apply",
       shapeRow
         "underPrefix"
         ir
-        underOk
-        "under-application did not build a constrained PAP, or emitted a direct constrained call",
+        exactOk
+        "an exact constrained call is not one direct call",
+    ),
+    (
+      "(11) exactPrefix over-applies the define by one: direct prefix call plus __mdk_apply",
+      shapeRow
+        "exactPrefix"
+        ir
+        overOk
+        "over-application by one lacks direct prefix call plus closure apply",
     ),
     (
       "(12) cross has a direct prefix call plus __mdk_apply",

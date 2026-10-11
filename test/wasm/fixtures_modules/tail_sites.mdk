@@ -1,0 +1,86 @@
+-- Tail calls the lowering flags, run deep enough that a call which does not
+-- replace its frame exhausts the stack: native (the -O2 build this gate
+-- compares against) and wasm must both finish.  One line per case:
+--   `do` through `Result` (a non-self `andThen` method call)  do=0
+--   capturing `where` worker                                   30000000
+--   capture-free `where` worker (dictionary-generalized)       30000000
+--   top-level self call                                        30000000
+--   mutual recursion, evenDown 30000000                        True
+--   tail call from a match arm after a `let`                   30000000
+--   tail call in a `where` group's body: 1 + … + 30000000      450000015000000
+--   tail call through a function argument                      30000000
+--   `andThen` through a runtime dictionary                     rdict=0
+
+depth : Int
+depth = 30000000
+
+countDown : Int -> Result String Int
+countDown n
+  | n <= 0 = Ok 0
+  | otherwise = do
+    m <- Ok (n - 1)
+    countDown m
+
+loopCapture : Int -> Int -> Int
+loopCapture bias n = go 0 n
+  where
+    go acc k = if k == 0 then acc else go (acc + bias) (k - 1)
+
+loopFree : Int -> Int -> Int
+loopFree bias n = go bias 0 n
+  where
+    go b acc k = if k == 0 then acc else go b (acc + b) (k - 1)
+
+loopTop : Int -> Int -> Int -> Int
+loopTop b acc k = if k == 0 then acc else loopTop b (acc + b) (k - 1)
+
+evenDown : Int -> Bool
+evenDown n = if n == 0 then True else oddDown (n - 1)
+
+oddDown : Int -> Bool
+oddDown n = if n == 0 then False else evenDown (n - 1)
+
+step : Int -> Int -> Int
+-- The match on a parameter is the shape under test, so it stays a match.
+-- lint-disable-next-line rule-match-on-param
+step acc n = match n
+  0 => acc
+  k =>
+    let next = acc + 1
+    hop next (k - 1)
+
+hop : Int -> Int -> Int
+hop acc n = step acc n
+
+sumWhereIf : Int -> Int -> Int
+sumWhereIf acc n = if n == 0 then acc else sumWhereIf next (n - 1)
+  where
+    next = acc + n
+
+apply : (Int -> Int -> Int) -> Int -> Int -> Int
+apply f a n = f a n
+
+spin : Int -> Int -> Int
+spin acc n = if n == 0 then acc else apply spin (acc + 1) (n - 1)
+
+loopM : Thenable m => (Int -> m Int) -> Int -> m Int
+loopM ret n = if n <= 0 then ret 0 else andThen (ret (n - 1)) (m => loopM ret m)
+
+okI : Int -> Result String Int
+okI x = Ok x
+
+main : <IO> Unit
+main =
+  match countDown depth
+    Ok v => println "do=\{v}"
+    Err e => println "err=\{e}"
+  println (loopCapture 1 depth)
+  println (loopFree 1 depth)
+  println (loopTop 1 0 depth)
+  println (evenDown depth)
+  println (step 0 depth)
+  println (sumWhereIf 0 depth)
+  println (spin 0 depth)
+  match loopM okI depth
+    Ok v => println "rdict=\{v}"
+    Err e => println "err=\{e}"

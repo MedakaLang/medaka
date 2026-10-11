@@ -430,7 +430,7 @@ loweredDefaultRowKeys (CProgram _ _ _ impls) =
   sortUniqS (flatMap defaultEntryRowKey impls)
 
 defaultEntryRowKey : CImplEntry -> List String
-defaultEntryRowKey (CImplEntry method _ (CImplDefault ifaceWord _ key _ _ _)) =
+defaultEntryRowKey (CImplEntry method _ _ (CImplDefault ifaceWord _ key _ _ _)) =
   ["\{slotKey ifaceWord method}\n\{key}"]
 defaultEntryRowKey _ = []
 
@@ -755,7 +755,7 @@ draftSemanticProgramToSexp (DraftSemanticProgram runtimeD coreD modules legacyCo
 (DTypeSig false "loweredDefaultRowKeys" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "loweredDefaultRowKeys" ((PCon "CProgram" PWild PWild PWild (PVar "impls"))) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "flatMap") (EVar "defaultEntryRowKey")) (EVar "impls"))))
 (DTypeSig false "defaultEntryRowKey" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "defaultEntryRowKey" ((PCon "CImplEntry" (PVar "method") PWild (PCon "CImplDefault" (PVar "ifaceWord") PWild (PVar "key") PWild PWild PWild))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "slotKey") (EVar "ifaceWord")) (EVar "method")))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "")))))
+(DFunDef false "defaultEntryRowKey" ((PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplDefault" (PVar "ifaceWord") PWild (PVar "key") PWild PWild PWild))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "slotKey") (EVar "ifaceWord")) (EVar "method")))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "key"))) (ELit (LString "")))))
 (DFunDef false "defaultEntryRowKey" (PWild) (EListLit))
 (DTypeSig false "slotRowKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "slotRowKeys" ((PVar "rows")) (EApp (EVar "sortUniqS") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "slot") (PVar "word"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "slot"))) (ELit (LString "\n"))) (EApp (EVar "display") (EVar "word"))) (ELit (LString ""))))) (EVar "rows"))))
@@ -924,7 +924,7 @@ draftSemanticProgramToSexp (DraftSemanticProgram runtimeD coreD modules legacyCo
 (DTypeSig false "loweredDefaultRowKeys" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "loweredDefaultRowKeys" ((PCon "CProgram" PWild PWild PWild (PVar "impls"))) (EApp (EVar "sortUniqS") (EApp (EApp (EDictApp "flatMap") (EVar "defaultEntryRowKey")) (EVar "impls"))))
 (DTypeSig false "defaultEntryRowKey" (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "defaultEntryRowKey" ((PCon "CImplEntry" (PVar "method") PWild (PCon "CImplDefault" (PVar "ifaceWord") PWild (PVar "key") PWild PWild PWild))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "slotKey") (EVar "ifaceWord")) (EVar "method")))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "")))))
+(DFunDef false "defaultEntryRowKey" ((PCon "CImplEntry" (PVar "method") PWild PWild (PCon "CImplDefault" (PVar "ifaceWord") PWild (PVar "key") PWild PWild PWild))) (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "slotKey") (EVar "ifaceWord")) (EVar "method")))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "")))))
 (DFunDef false "defaultEntryRowKey" (PWild) (EListLit))
 (DTypeSig false "slotRowKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "slotRowKeys" ((PVar "rows")) (EApp (EVar "sortUniqS") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "slot") (PVar "word"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "slot"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EVar "word"))) (ELit (LString ""))))) (EVar "rows"))))

@@ -698,7 +698,7 @@ else
 fi
 _new="$(git -C "$CT" rev-parse --abbrev-ref HEAD)"
 if grep -q '^close 41 ' "$TMP/gh.log" && grep -q "$_new" "$TMP/gh.log" \
-   && ! grep -q '42' "$TMP/gh.log" && [ "$(grep -c '^close' "$TMP/gh.log")" = "1" ]; then
+   && ! grep -Eq '(^|[^0-9])42([^0-9]|$)' "$TMP/gh.log" && [ "$(grep -c '^close' "$TMP/gh.log")" = "1" ]; then
   ok "collector closes only its own cost-baseline-autoadvance-* PR, comment names the replacement"
 else
   bad "collector close behaviour wrong (expected exactly: close 41, naming $_new)"

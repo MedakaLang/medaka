@@ -37,12 +37,18 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   CProgram(..),
+  mkApp,
   CTree(..),
   CTBranch(..),
   CHead(..),
   FailSite(..),
 }
-import ir.core_ir_lower.{lowerGroups, lowerImplsWith, instanceReqCounts}
+import ir.core_ir_lower.{
+  lowerGroups,
+  lowerImplsWith,
+  instanceReqCounts,
+  declaredMethodArities,
+}
 import types.disposition.{DispositionTable, installedDispositionsOpt}
 import support.util.{isEmptyL, dedup, contains, filterList}
 import support.ordmap.{OrdMap}
@@ -54,7 +60,6 @@ import eval.eval.{
   extendEnv,
   pushFrame,
   findCell,
-  applyValue,
   matchPat,
   force,
   startsWithAt,
@@ -113,7 +118,12 @@ export
 ceval : EvalEnv (Value e) -> CExpr -> <e> Value e
 ceval _ (CLit l) = litValue l
 ceval env (CVar x _) = if startsWithAt x then VUnit else lookupEnv env x
-ceval env (CApp f x) = applyValue (ceval env f) (ceval env x)
+-- The head and every argument are evaluated, left to right, before the head is
+-- applied to any of them, whatever the call's mode: an over-applied function's
+-- body runs after all its arguments.
+ceval env (CApp f args _) =
+  let fv = ceval env f
+  applyValues fv (cevalArgs env args)
 ceval env (CLam pats body) = VClosureF env pats (e => ceval e body)
 ceval env (CLet True (PVar f _) e1 e2) = cevalRecLet env f e1 e2
 ceval env (CLet _ pat e1 e2) = cevalLet env pat e1 e2
@@ -140,8 +150,8 @@ ceval env (CRecordUpdate _ base fields) =
   evalRecordUpdate (ceval env base) (map (cevalField env) fields)
 ceval env (CVariantUpdate con base fields) =
   evalVariantUpdate con (ceval env base) (map (cevalField env) fields)
-ceval env (CFieldAccess e "value" _) = evalValueField (ceval env e)
-ceval env (CFieldAccess e field _) = evalField (ceval env e) field
+ceval env (CFieldAccess e "value" _ _) = evalValueField (ceval env e)
+ceval env (CFieldAccess e field _ _) = evalField (ceval env e) field
 ceval env (CIndex a i) = evalIndex (ceval env a) (ceval env i)
 ceval env (CSlice a lo hi incl) =
   evalSlice (ceval env a) (ceval env lo) (ceval env hi) incl
@@ -168,7 +178,7 @@ ceval env (CDict name routes) = applyDicts env (lookupEnv env name) routes
 ceval _ _ = panic "core_ir ceval: unsupported node"
 
 cevalField : EvalEnv (Value e) -> CField -> <e> (String, Value e)
-cevalField env (CField k e) = (k, ceval env e)
+cevalField env (CField k _ e) = (k, ceval env e)
 
 litValue : Lit -> Value e
 litValue (LInt n) = VInt n
@@ -493,12 +503,12 @@ cImplMethodNames : List CImplEntry -> List String
 cImplMethodNames entries = dedup (flatMap cImplEntryNames entries)
 
 cImplEntryNames : CImplEntry -> List String
-cImplEntryNames (CImplEntry n _ _) = [n]
+cImplEntryNames (CImplEntry n _ _ _) = [n]
 
 -- An inherited default's per-instance entry installs exactly as a supplied method
 -- does: tagged with the instance's head and key, so dispatch reaches it the same way.
 cImplEntryValue : EvalEnv (Value e) -> CImplEntry -> (String, (Int, Value e))
-cImplEntryValue env (CImplEntry name score body) =
+cImplEntryValue env (CImplEntry name score _ body) =
   (name, (score, cImplBodyValue env body))
 
 cImplEntryValues : EvalEnv (Value e) ->
@@ -522,8 +532,14 @@ cImplMethodValue env positions [] body
     VClosureF
       env
       [PVar "$eta" (Loc "" 0 0 0 0)]
-      (e => ceval e (CApp body (CVar "$eta" AGlobal)))
+      (e => ceval e (mkApp body [CVar "$eta" AGlobal]))
 cImplMethodValue env _ pats body = VClosureF env pats (e => ceval e body)
+
+cevalArgs : EvalEnv (Value e) -> List CExpr -> <e> List (Value e)
+cevalArgs _ [] = []
+cevalArgs env (a :: rest) =
+  let v = ceval env a
+  v :: cevalArgs env rest
 
 cBindName : CBind -> String
 cBindName (CBind n _ _) = n
@@ -630,9 +646,11 @@ cevalModules preludeDecls0 modules0 =
   let ctors = collectCtors allDecls
   let externs = externBindings ()
   let reqCounts = instanceReqCounts allDecls
+  let arities = declaredMethodArities allDecls
   let preludeGroups = lowerGroups preludeDecls
   let dispositions = installedDispositionsOpt ()
-  let preludeImpls = lowerImplsWith disp reqCounts dispositions preludeDecls
+  let preludeImpls =
+    lowerImplsWith disp reqCounts arities dispositions preludeDecls
   -- S1-PRELUDE (a), #1497/#1492 — the Core-IR half of the evalModules/cevalModules
   -- lockstep pair; the mechanism and the frame-count caveat are written out once, on
   -- eval.mdk's `preludeShadowNames`.
@@ -656,6 +674,7 @@ cevalModules preludeDecls0 modules0 =
     cBuildModInfos
       disp
       reqCounts
+      arities
       dispositions
       globalCells
       runtimeCells
@@ -681,6 +700,7 @@ cevalModules preludeDecls0 modules0 =
 -- `coreImportExports` there.
 cBuildModInfos : List ((String, String, String), List Int) ->
   OrdMap Int ->
+  OrdMap Int ->
   Option DispositionTable ->
   List (String, Ref (Value e)) ->
   List (String, Ref (Value e)) ->
@@ -688,10 +708,10 @@ cBuildModInfos : List ((String, String, String), List Int) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (CModInfo (Value e))
-cBuildModInfos _ _ _ _ _ _ _ [] = []
-cBuildModInfos disp reqCounts dispositions globalCells runtimeCells coreExports exportsMap ((mid, decls) :: rest) =
+cBuildModInfos _ _ _ _ _ _ _ _ [] = []
+cBuildModInfos disp reqCounts arities dispositions globalCells runtimeCells coreExports exportsMap ((mid, decls) :: rest) =
   let cbinds = lowerGroups decls
-  let cimpls = lowerImplsWith disp reqCounts dispositions decls
+  let cimpls = lowerImplsWith disp reqCounts arities dispositions decls
   -- P0-9 (Core-IR port of the eval.mdk fix): each module's OWN constructors ALSO
   -- live in its LOCAL frame — they stay in the shared global too (see
   -- cevalModules) for by-name / `Type(..)` cross-module ctor imports.  The local
@@ -726,6 +746,7 @@ cBuildModInfos disp reqCounts dispositions globalCells runtimeCells coreExports 
     :: cBuildModInfos
       disp
       reqCounts
+      arities
       dispositions
       globalCells
       runtimeCells

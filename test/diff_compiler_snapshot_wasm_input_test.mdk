@@ -1,6 +1,7 @@
 {- | Gate for the snapshot Wasm arm's explicit input: a WASM-only render must equal
    the WASM section of a combined LLVM,WASM render, the Score impl must be
-   eta-expanded to its receiver arity, and the WasmEmitInput API must be exported
+   defined at its own clause's arity (no receiver parameter: the clause binds
+   none, and `score U` over-applies it), and the WasmEmitInput API must be exported
    with no legacy semantic hooks left behind. Replaces
    diff_compiler_snapshot_wasm_input.sh.
 
@@ -146,7 +147,7 @@ isScoreImpl l = match split "mdk_impl_" l
   _ :: parts => any (part => contains "_score" part) parts
 
 scoreFuncLine : String
-scoreFuncLine = "(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_U_score (param"
+scoreFuncLine = "(func $mdk_impl_zZ_5f__5f_user_5f__5f__2e_U_score (result"
 
 wasmCheck : <Exec, IO, FileRead, FileWrite> Expectation
 wasmCheck = withScratchDir (work => wasmCheckIn work)
@@ -166,7 +167,7 @@ wasmCheckIn work = match prepare work
           "FAIL: snapshot WAT did not emit Score implementations",
         check
           (any (l => contains scoreFuncLine l) onlyWat)
-          "FAIL: snapshot WAT did not eta-expand Score to its declared receiver arity",
+          "FAIL: snapshot WAT did not define Score at its clause's arity (no parameter)",
       ]
 
 prepare : String -> <FileWrite, Exec> Result String String
@@ -185,5 +186,5 @@ renderBoth work = do
   combined <- readFile "\{work}/combined/wasm_snapshot_input.md"
   Ok (only, combined)
 
-test "snapshot_wasm_input: WASM-only equals combined; Score receiver arity explicit; WasmEmitInput API and no legacy hooks" =
+test "snapshot_wasm_input: WASM-only equals combined; Score defined at its clause arity; WasmEmitInput API and no legacy hooks" =
   expectAll [apiCheck, legacyCheck, wasmCheck]

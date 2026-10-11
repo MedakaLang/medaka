@@ -325,8 +325,7 @@ apslow30:
   br label %apend30
 apend30:
   %t40 = load i64, ptr %t31
-  store i64 %t40, ptr %t0
-  br label %decend1
+  ret i64 %t40
 connext20:
   call void @mdk_nonexhaustive_match()
   unreachable

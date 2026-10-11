@@ -6,7 +6,7 @@
 # of a generic "unbound variable" panic for the value-position/bare-reference shapes.
 #
 # The saturated-call shape was already correct before #2129's fix (emitAppRef /
-# emitAppTail's isFfiExternW arms); the value-position and bare-reference shapes
+# emitTailCallW's isFfiExternW arms); the value-position and bare-reference shapes
 # both fell through emitVarRefPlain's ladder to the generic gapUnboundLP fallback
 # until this gate's companion fix added an isFfiExternW arm there too (mirrors the
 # LLVM emitter's own emitExternEtaClosure treatment of value-position externs).

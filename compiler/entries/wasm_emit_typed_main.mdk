@@ -47,10 +47,13 @@ import ir.core_ir.{
   CField(..),
   CImplEntry(..),
   CImplBody(..),
+  mkApp,
   synthBind,
 }
 import ir.core_ir_lower.{
   lowerProgramEmit,
+  markTailSites,
+  stampCallModes,
   EmitTarget(..),
   declSigTypeNames,
   ctorFieldTypeNames,
@@ -125,6 +128,16 @@ typedInput runtimeDecls preludeDecls userDecls =
     False
     (declaredRecordFieldOrders mangled)
     []
+
+-- A hand-built program, its applications stamped and tail-flagged as a
+-- lowering's are.
+cprogram : List CBind ->
+  List (String, Int) ->
+  List (String, String) ->
+  List CImplEntry ->
+  CProgram
+cprogram groups ctorArs ctorTypes impls =
+  markTailSites (stampCallModes (CProgram groups ctorArs ctorTypes impls))
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
@@ -314,13 +327,13 @@ trmcStateProgram : String -> Int -> CProgram
 trmcStateProgram name marker =
   let n = CVar "n" (ALocal 0 0)
   let recursive =
-    CApp (CVar name AGlobal) (CBinPrim "-" n (CLit (LInt 1)) "Int" noDeclLoc)
+    mkApp (CVar name AGlobal) [CBinPrim "-" n (CLit (LInt 1)) "Int" noDeclLoc]
   let body =
     CIf
       (CBinPrim "==" n (CLit (LInt 0)) "Int" noDeclLoc)
       (CList [])
       (CBinPrim "::" (CLit (LInt marker)) recursive "" noDeclLoc)
-  CProgram
+  cprogram
     [
       synthBind name [CClause [PVar "n" trmcStateLoc] body],
       synthBind "main" [
@@ -329,7 +342,7 @@ trmcStateProgram name marker =
           (CLet
             False
             (PCons (PVar "head" trmcStateLoc) PWild)
-            (CApp (CVar name AGlobal) (CLit (LInt 2000000)))
+            (mkApp (CVar name AGlobal) [CLit (LInt 2000000)])
             (CVar "head" (ALocal 0 0))),
       ],
     ]
@@ -339,7 +352,7 @@ trmcStateProgram name marker =
 
 trmcStateCensusProgram : CProgram
 trmcStateCensusProgram =
-  CProgram
+  cprogram
     [
       synthBind "pTrmc" [
         CClause
@@ -355,14 +368,14 @@ trmcStateCensusProgram =
             (CBinPrim
               "::"
               (CLit (LInt 17))
-              (CApp
-                (CVar "pTrmc" AGlobal)
-                (CBinPrim
+              (mkApp (CVar "pTrmc" AGlobal) [
+                CBinPrim
                   "-"
                   (CVar "n" (ALocal 0 0))
                   (CLit (LInt 1))
                   "Int"
-                  noDeclLoc))
+                  noDeclLoc,
+              ])
               ""
               noDeclLoc)),
       ],
@@ -416,14 +429,14 @@ lambdaStateProgram result =
   let nestedName = PVar "nested" lambdaStateLoc
   let identity = CLam [arg] (CVar "arg" (ALocal 0 0))
   let nested =
-    CLam [arg] (CApp (CVar "local" (ALocal 0 0)) (CVar "arg" (ALocal 0 0)))
+    CLam [arg] (mkApp (CVar "local" (ALocal 0 0)) [CVar "arg" (ALocal 0 0)])
   let lambdaBody =
     if result == 17 then
       CLet
         False
         local
         identity
-        (CApp (CVar "local" (ALocal 0 0)) (CLit (LInt result)))
+        (mkApp (CVar "local" (ALocal 0 0)) [CLit (LInt result)])
     else
       CLet
         False
@@ -433,14 +446,14 @@ lambdaStateProgram result =
           False
           nestedName
           nested
-          (CApp (CVar "nested" (ALocal 0 0)) (CLit (LInt result))))
+          (mkApp (CVar "nested" (ALocal 0 0)) [CLit (LInt result)]))
   let body =
     CLet
       False
       PWild
       (CVar "Pair" AGlobal)
       (CLet False PWild (CVar "Pair" AGlobal) lambdaBody)
-  CProgram
+  cprogram
     [synthBind "main" [CClause [] body]]
     [("Pair", 2)]
     [("Pair", "Pair")]
@@ -448,7 +461,7 @@ lambdaStateProgram result =
 
 lambdaStateCensusProgram : CProgram
 lambdaStateCensusProgram =
-  CProgram
+  cprogram
     [
       synthBind "lambdaCensus" [
         CClause [] (CLam [PVar "x" lambdaStateLoc] (CVar "x" (ALocal 0 0))),
@@ -528,14 +541,14 @@ featureStateArg = PVar "x" featureStateLoc
 
 featureStateRecord : CExpr
 featureStateRecord = CRecord "FeatureRecord" [
-  CField "left" (CLit (LInt 1)),
-  CField "right" (CLit (LInt 2)),
+  CField "left" 0 (CLit (LInt 1)),
+  CField "right" 1 (CLit (LInt 2)),
 ]
 
 featureStateVariant : CExpr
 featureStateVariant = CRecord "FeatureVariant" [
-  CField "left" (CLit (LInt 3)),
-  CField "right" (CLit (LInt 4)),
+  CField "left" 0 (CLit (LInt 3)),
+  CField "right" 1 (CLit (LInt 4)),
 ]
 
 featureStateBinds : List CBind
@@ -554,35 +567,35 @@ featureStateBinds = [
     CClause
       [featureStateArg]
       (CRecordUpdate "FeatureRecord" featureStateRecord [
-        CField "left" (CLit (LInt 5)),
+        CField "left" 0 (CLit (LInt 5)),
       ]),
   ],
   synthBind "featureVariantUpdate" [
     CClause
       [featureStateArg]
       (CVariantUpdate "FeatureVariant" featureStateVariant [
-        CField "right" (CLit (LInt 6)),
+        CField "right" 1 (CLit (LInt 6)),
       ]),
   ],
   synthBind "featureRandomInt" [
     CClause
       [featureStateArg]
-      (CApp (CApp (CVar "randomInt" AGlobal) (CLit (LInt 0))) (CLit (LInt 1))),
+      (mkApp (mkApp (CVar "randomInt" AGlobal) [CLit (LInt 0)]) [CLit (LInt 1)]),
   ],
   synthBind "featureHashInt" [
     CClause
       [featureStateArg]
-      (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0))),
+      (mkApp (CVar "hashInt" AGlobal) [CVar "x" (ALocal 0 0)]),
   ],
   synthBind "featureEPut" [
     CClause
       [featureStateArg]
-      (CApp (CVar "ePutStr" AGlobal) (CLit (LString "feature ePut"))),
+      (mkApp (CVar "ePutStr" AGlobal) [CLit (LString "feature ePut")]),
   ],
   synthBind "featurePanic" [
     CClause
       [featureStateArg]
-      (CApp (CVar "panic" AGlobal) (CLit (LString "feature panic"))),
+      (mkApp (CVar "panic" AGlobal) [CLit (LString "feature panic")]),
   ],
 ]
 
@@ -595,7 +608,7 @@ featureStateCtorTypes =
 
 featureStateProgram : CProgram
 featureStateProgram =
-  CProgram
+  cprogram
     (featureStateBinds ++ [synthBind "main" [CClause [] (CLit (LInt 0))]])
     featureStateCtorArities
     featureStateCtorTypes
@@ -609,12 +622,12 @@ featureHashIntOnlyInput = makeWasmEmitInput [] [] [] False []
 
 featureHashIntOnlyProgram : CProgram
 featureHashIntOnlyProgram =
-  CProgram
+  cprogram
     [
       synthBind "featureHashIntOnly" [
         CClause
           [featureStateArg]
-          (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0))),
+          (mkApp (CVar "hashInt" AGlobal) [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -630,12 +643,12 @@ featureHashFloatInput = makeWasmEmitInput [] [] [] False []
 
 featureHashFloatProgram : CProgram
 featureHashFloatProgram =
-  CProgram
+  cprogram
     [
       synthBind "featureHashFloat" [
         CClause
           [featureStateArg]
-          (CApp (CVar "hashFloat" AGlobal) (CLit (LFloat 3.14))),
+          (mkApp (CVar "hashFloat" AGlobal) [CLit (LFloat 3.14)]),
       ],
       synthBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -645,17 +658,17 @@ featureHashFloatProgram =
 
 featureHashFloatRecordUProgram : CProgram
 featureHashFloatRecordUProgram =
-  CProgram
+  cprogram
     [
       synthBind "featureHashFloatNearestFloat" [
         CClause
           [featureStateArg]
-          (CApp (CVar "intToFloat" AGlobal) (CVar "x" (ALocal 0 0))),
+          (mkApp (CVar "intToFloat" AGlobal) [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "featureHashFloatNearestHashInt" [
         CClause
           [featureStateArg]
-          (CApp (CVar "hashInt" AGlobal) (CVar "x" (ALocal 0 0))),
+          (mkApp (CVar "hashInt" AGlobal) [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -665,12 +678,12 @@ featureHashFloatRecordUProgram =
 
 featureHashFloatCensusProgram : CProgram
 featureHashFloatCensusProgram =
-  CProgram
+  cprogram
     [
       synthBind "featureHashFloat" [
         CClause
           [featureStateArg]
-          (CApp (CVar "hashFloat" AGlobal) (CLit (LFloat 3.14))),
+          (mkApp (CVar "hashFloat" AGlobal) [CLit (LFloat 3.14)]),
       ],
       synthBind "featureHashFloatIntentionalGap" [
         CClause [featureStateArg] (CVar "missingFeatureHashFloatCensus" AGlobal),
@@ -704,12 +717,12 @@ charFromCodeStateInput = makeWasmEmitInput [] [] [] False []
 
 charFromCodeStateProgram : CProgram
 charFromCodeStateProgram =
-  CProgram
+  cprogram
     [
       synthBind "charFromCodeApplied" [
         CClause
           [featureStateArg]
-          (CApp (CVar "charFromCode" AGlobal) (CVar "x" (ALocal 0 0))),
+          (mkApp (CVar "charFromCode" AGlobal) [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "charFromCodePointFree" [
         CClause
@@ -724,12 +737,12 @@ charFromCodeStateProgram =
 
 charFromCodeStateControlProgram : CProgram
 charFromCodeStateControlProgram =
-  CProgram
+  cprogram
     [
       synthBind "charFromCodeNearestChar" [
         CClause
           [featureStateArg]
-          (CApp (CVar "charToStr" AGlobal) (CLit (LChar "A"))),
+          (mkApp (CVar "charToStr" AGlobal) [CLit (LChar "A")]),
       ],
       synthBind "charFromCodeNearestString" [
         CClause [featureStateArg] (CLit (LString "char-neighborhood")),
@@ -742,12 +755,12 @@ charFromCodeStateControlProgram =
 
 charFromCodeStateCensusProgram : CProgram
 charFromCodeStateCensusProgram =
-  CProgram
+  cprogram
     [
       synthBind "charFromCodeApplied" [
         CClause
           [featureStateArg]
-          (CApp (CVar "charFromCode" AGlobal) (CVar "x" (ALocal 0 0))),
+          (mkApp (CVar "charFromCode" AGlobal) [CVar "x" (ALocal 0 0)]),
       ],
       synthBind "charFromCodePointFree" [
         CClause
@@ -859,11 +872,11 @@ leafRuntimeArg = PVar "x" leafRuntimeLoc
 
 leafRuntimeProgram : List CBind -> CProgram
 leafRuntimeProgram groups =
-  CProgram (groups ++ [synthBind "main" [CClause [] (CLit (LInt 0))]]) [] [] []
+  cprogram (groups ++ [synthBind "main" [CClause [] (CLit (LInt 0))]]) [] [] []
 
 leafRuntimeCensus : CProgram -> String -> String -> CProgram
 leafRuntimeCensus (CProgram groups ctorArs ctorTypes impls) bindName missingName =
-  CProgram
+  cprogram
     (groups
       ++ [
         synthBind bindName [CClause [leafRuntimeArg] (CVar missingName AGlobal)],
@@ -877,7 +890,7 @@ leafCharClassP = leafRuntimeProgram [
   synthBind "leafCharClass" [
     CClause
       [leafRuntimeArg]
-      (CApp (CVar "charIsAlpha" AGlobal) (CLit (LChar "a"))),
+      (mkApp (CVar "charIsAlpha" AGlobal) [CLit (LChar "a")]),
   ],
 ]
 
@@ -886,7 +899,7 @@ leafCharClassU = leafRuntimeProgram [
   synthBind "leafCharClassNearestCode" [
     CClause
       [leafRuntimeArg]
-      (CApp (CVar "charFromCode" AGlobal) (CLit (LInt 65))),
+      (mkApp (CVar "charFromCode" AGlobal) [CLit (LInt 65)]),
   ],
   synthBind "leafCharClassNearestString" [
     CClause
@@ -898,7 +911,7 @@ leafCharClassU = leafRuntimeProgram [
 leafFloatRngP : CProgram
 leafFloatRngP = leafRuntimeProgram [
   synthBind "leafFloatRng" [
-    CClause [leafRuntimeArg] (CApp (CVar "randomFloat" AGlobal) (CLit LUnit)),
+    CClause [leafRuntimeArg] (mkApp (CVar "randomFloat" AGlobal) [CLit LUnit]),
   ],
 ]
 
@@ -907,10 +920,10 @@ leafFloatRngU = leafRuntimeProgram [
   synthBind "leafFloatRngNearestInt" [
     CClause
       [leafRuntimeArg]
-      (CApp (CApp (CVar "randomInt" AGlobal) (CLit (LInt 0))) (CLit (LInt 1))),
+      (mkApp (mkApp (CVar "randomInt" AGlobal) [CLit (LInt 0)]) [CLit (LInt 1)]),
   ],
   synthBind "leafFloatRngNearestFloat" [
-    CClause [leafRuntimeArg] (CApp (CVar "intToFloat" AGlobal) (CLit (LInt 0))),
+    CClause [leafRuntimeArg] (mkApp (CVar "intToFloat" AGlobal) [CLit (LInt 0)]),
   ],
 ]
 
@@ -919,7 +932,7 @@ leafStrCodecP = leafRuntimeProgram [
   synthBind "leafStrCodec" [
     CClause
       [leafRuntimeArg]
-      (CApp (CVar "stringToChars" AGlobal) (CLit (LString "héllo"))),
+      (mkApp (CVar "stringToChars" AGlobal) [CLit (LString "héllo")]),
   ],
 ]
 
@@ -928,7 +941,7 @@ leafStrCodecU = leafRuntimeProgram [
   synthBind "leafStrCodecNearestChar" [
     CClause
       [leafRuntimeArg]
-      (CApp (CVar "charToStr" AGlobal) (CLit (LChar "A"))),
+      (mkApp (CVar "charToStr" AGlobal) [CLit (LChar "A")]),
   ],
   synthBind "leafStrCodecNearestArray" [
     CClause [leafRuntimeArg] (CArray [CLit (LInt 1)]),
@@ -964,9 +977,9 @@ leafValueCmpU = leafRuntimeProgram [
   synthBind "leafValueCmpNearestStringCompare" [
     CClause
       [leafRuntimeArg]
-      (CApp
-        (CApp (CVar "stringCompare" AGlobal) (CLit (LString "medaka")))
-        (CLit (LString "medaka"))),
+      (mkApp (mkApp (CVar "stringCompare" AGlobal) [CLit (LString "medaka")]) [
+        CLit (LString "medaka"),
+      ]),
   ],
 ]
 
@@ -982,7 +995,7 @@ leafFloatStrP = leafRuntimeProgram [
   synthBind "leafFloatStr" [
     CClause
       [leafRuntimeArg]
-      (CApp (CVar "stringToFloat" AGlobal) (CLit (LString "3.14"))),
+      (mkApp (CVar "stringToFloat" AGlobal) [CLit (LString "3.14")]),
   ],
 ]
 
@@ -991,14 +1004,16 @@ leafFloatStrU = leafRuntimeProgram [
   synthBind "leafFloatStrNearestFloat" [
     CClause
       [leafRuntimeArg]
-      (CApp (CVar "intToFloat" AGlobal) (CVar "x" (ALocal 0 0))),
+      (mkApp (CVar "intToFloat" AGlobal) [CVar "x" (ALocal 0 0)]),
   ],
   synthBind "leafFloatStrNearestStringIo" [
     CClause
       [leafRuntimeArg]
-      (CApp
-        (CApp (CVar "readFile" AGlobal) (CLit (LString "floatstr-nearest")))
-        wholeDomain),
+      (mkApp (mkApp (CVar "readFile" AGlobal) [
+        CLit (LString "floatstr-nearest"),
+      ]) [
+        wholeDomain,
+      ]),
   ],
 ]
 
@@ -1007,7 +1022,7 @@ leafFloatStrU = leafRuntimeProgram [
 leafArgsP : CProgram
 leafArgsP = leafRuntimeProgram [
   synthBind "leafArgs" [
-    CClause [leafRuntimeArg] (CApp (CVar "args" AGlobal) (CLit LUnit)),
+    CClause [leafRuntimeArg] (mkApp (CVar "args" AGlobal) [CLit LUnit]),
   ],
 ]
 
@@ -1016,9 +1031,9 @@ leafArgsU = leafRuntimeProgram [
   synthBind "leafArgsNearestIo" [
     CClause
       [leafRuntimeArg]
-      (CApp
-        (CApp (CVar "readFile" AGlobal) (CLit (LString "args-nearest")))
-        wholeDomain),
+      (mkApp (mkApp (CVar "readFile" AGlobal) [CLit (LString "args-nearest")]) [
+        wholeDomain,
+      ]),
   ],
   synthBind "leafArgsNearestList" [
     CClause [leafRuntimeArg] (CList [CLit (LString "args-nearest")]),
@@ -1033,11 +1048,11 @@ leafFileBytesReadP = leafRuntimeProgram [
   synthBind "leafFileBytesRead" [
     CClause
       [leafRuntimeArg]
-      (CApp
-        (CApp
-          (CVar "readFileBytes" AGlobal)
-          (CLit (LString "filebytes-read-inert")))
-        wholeDomain),
+      (mkApp (mkApp (CVar "readFileBytes" AGlobal) [
+        CLit (LString "filebytes-read-inert"),
+      ]) [
+        wholeDomain,
+      ]),
   ],
 ]
 
@@ -1046,13 +1061,13 @@ leafFileBytesWriteP = leafRuntimeProgram [
   synthBind "leafFileBytesWrite" [
     CClause
       [leafRuntimeArg]
-      (CApp
-        (CApp
-          (CApp
-            (CVar "writeFileBytes" AGlobal)
-            (CLit (LString "filebytes-write-inert")))
-          (CArray [CLit (LInt 1)]))
-        wholeDomain),
+      (mkApp (mkApp (mkApp (CVar "writeFileBytes" AGlobal) [
+        CLit (LString "filebytes-write-inert"),
+      ]) [
+        CArray [CLit (LInt 1)],
+      ]) [
+        wholeDomain,
+      ]),
   ],
 ]
 
@@ -1061,9 +1076,11 @@ leafFileBytesU = leafRuntimeProgram [
   synthBind "leafFileBytesNearestIoString" [
     CClause
       [leafRuntimeArg]
-      (CApp
-        (CApp (CVar "readFile" AGlobal) (CLit (LString "filebytes-nearest")))
-        wholeDomain),
+      (mkApp (mkApp (CVar "readFile" AGlobal) [
+        CLit (LString "filebytes-nearest"),
+      ]) [
+        wholeDomain,
+      ]),
   ],
   synthBind "leafFileBytesNearestArray" [
     CClause [leafRuntimeArg] (CArray [CLit (LInt 1)]),
@@ -1073,14 +1090,14 @@ leafFileBytesU = leafRuntimeProgram [
 leafMathP : CProgram
 leafMathP = leafRuntimeProgram [
   synthBind "leafMath" [
-    CClause [leafRuntimeArg] (CApp (CVar "sin" AGlobal) (CLit (LFloat 0.0))),
+    CClause [leafRuntimeArg] (mkApp (CVar "sin" AGlobal) [CLit (LFloat 0.0)]),
   ],
 ]
 
 leafMathU : CProgram
 leafMathU = leafRuntimeProgram [
   synthBind "leafMathNearestSqrt" [
-    CClause [leafRuntimeArg] (CApp (CVar "sqrt" AGlobal) (CLit (LFloat 4.0))),
+    CClause [leafRuntimeArg] (mkApp (CVar "sqrt" AGlobal) [CLit (LFloat 4.0)]),
   ],
 ]
 
@@ -1088,7 +1105,7 @@ leafMathU = leafRuntimeProgram [
 -- local: a function declares only the W7 locals its body references.
 featureFloatDivProgram : CProgram
 featureFloatDivProgram =
-  CProgram
+  cprogram
     [
       synthBind "featureFloatDiv" [
         CClause
@@ -1108,7 +1125,7 @@ featureFloatDivProgram =
 
 featureStateControlProgram : CProgram
 featureStateControlProgram =
-  CProgram
+  cprogram
     [
       synthBind "featurePlainRecord" [
         CClause [featureStateArg] featureStateRecord,
@@ -1116,7 +1133,7 @@ featureStateControlProgram =
       synthBind "featurePlainAccess" [
         CClause
           [featureStateArg]
-          (CFieldAccess featureStateRecord "left" "FeatureRecord"),
+          (CFieldAccess featureStateRecord "left" "FeatureRecord" 0),
       ],
       synthBind "featureControl" [CClause [featureStateArg] (CLit (LInt 29))],
       synthBind "main" [CClause [] (CLit (LInt 0))],
@@ -1127,7 +1144,7 @@ featureStateControlProgram =
 
 featureStateCensusProgram : CProgram
 featureStateCensusProgram =
-  CProgram
+  cprogram
     (featureStateBinds
       ++ [
         synthBind "featureIntentionalGap" [
@@ -1144,7 +1161,7 @@ trapStateInput = makeWasmEmitInput [] [] [] False []
 
 trapStateProgram : CProgram
 trapStateProgram =
-  CProgram
+  cprogram
     [
       synthBind "trapRoute" [
         CClause
@@ -1163,7 +1180,7 @@ trapStateControlProgram =
 
 trapStateCensusProgram : CProgram
 trapStateCensusProgram =
-  CProgram
+  cprogram
     [
       synthBind "trapCensusRoute" [
         CClause
@@ -1180,7 +1197,7 @@ trapStateCensusProgram =
 
 trapStateAbortProgram : CProgram
 trapStateAbortProgram =
-  CProgram
+  cprogram
     [
       synthBind "main" [
         CClause
@@ -1213,7 +1230,7 @@ refTrapCtorTypes = [("TrapToken", "TrapToken")]
 
 refTrapStateProgram : CProgram
 refTrapStateProgram =
-  CProgram
+  cprogram
     [
       synthBind "refTrapRoute" [
         CClause
@@ -1228,7 +1245,7 @@ refTrapStateProgram =
 
 refTrapStateControlProgram : CProgram
 refTrapStateControlProgram =
-  CProgram
+  cprogram
     [synthBind "main" [CClause [] (CLit (LInt 29))]]
     refTrapCtorArities
     refTrapCtorTypes
@@ -1236,7 +1253,7 @@ refTrapStateControlProgram =
 
 refTrapStateAbortProgram : CProgram
 refTrapStateAbortProgram =
-  CProgram
+  cprogram
     [
       synthBind "main" [
         CClause
@@ -1258,16 +1275,17 @@ implSelfProgram : String -> Int -> Int -> CProgram
 implSelfProgram tag base depth =
   let self = CVar "self" (ALocal 0 0)
   let n = CVar "n" (ALocal 0 1)
-  let recurse =
-    CApp
-      (CApp (CMethod "walk" "" 2 (RKey tag [] []) [] []) self)
-      (CBinPrim "-" n (CLit (LInt 1)) "Int" noDeclLoc)
+  let recurse = mkApp (mkApp (CMethod "walk" "" 2 (RKey tag [] []) [] []) [
+    self,
+  ]) [
+    CBinPrim "-" n (CLit (LInt 1)) "Int" noDeclLoc,
+  ]
   let body =
     CIf
       (CBinPrim "==" n (CLit (LInt 0)) "Int" noDeclLoc)
       (CLit (LInt base))
       recurse
-  CProgram
+  cprogram
     [synthBind "main" [CClause [] (CLit (LInt depth))]]
     [(tag, 0)]
     [(tag, tag)]
@@ -1275,6 +1293,7 @@ implSelfProgram tag base depth =
       CImplEntry
         "walk"
         0
+        2
         (CImplTagged
           tag
           tag
@@ -1286,7 +1305,7 @@ implSelfProgram tag base depth =
 
 implSelfCensusProgram : CProgram -> CProgram
 implSelfCensusProgram (CProgram groups ctorArs ctorTypes impls) =
-  CProgram
+  cprogram
     (groups
       ++ [
         synthBind "implSelfIntentionalGap" [
@@ -1399,20 +1418,19 @@ defaultStateInputU =
     []
 
 defaultStateCall : String -> CExpr
-defaultStateCall tag =
-  CApp
-    (CMethod
-      "synthDefault"
-      "DefaultFace"
-      1
-      (RKey "DefaultFace|\{tag}|" [] [])
-      []
-      [])
-    (CLit LUnit)
+defaultStateCall tag = mkApp (CMethod
+  "synthDefault"
+  "DefaultFace"
+  1
+  (RKey "DefaultFace|\{tag}|" [] [])
+  []
+  []) [
+  CLit LUnit,
+]
 
 defaultStateProgram : String -> Int -> CProgram
 defaultStateProgram tag bodyConstant =
-  CProgram
+  cprogram
     [
       synthBind "defaultRequestOne" [
         CClause [PVar "one" defaultStateLoc] (defaultStateCall tag),
@@ -1428,6 +1446,7 @@ defaultStateProgram tag bodyConstant =
       CImplEntry
         "synthDefault"
         0
+        1
         (CImplDefault
           "DefaultFace"
           tag
@@ -1445,7 +1464,7 @@ defaultStateProgramU = defaultStateProgram "UDefault" 29
 
 defaultStateCensusProgramU : CProgram
 defaultStateCensusProgramU =
-  CProgram
+  cprogram
     [
       synthBind "defaultRequestOne" [
         CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault"),
@@ -1464,6 +1483,7 @@ defaultStateCensusProgramU =
       CImplEntry
         "synthDefault"
         0
+        1
         (CImplDefault
           "DefaultFace"
           "UDefault"
@@ -1503,7 +1523,7 @@ bindingRefCtorTypes = [("CurrentBindingForceRef", "CurrentBindingForceRef")]
 -- The dummy constructor table selects ref-mode without placing a constructor
 -- expression in a row; the row's sensitive reader is therefore the Core gap.
 bindingProgram : List CBind -> CProgram
-bindingProgram groups = CProgram groups bindingRefCtorArs bindingRefCtorTypes []
+bindingProgram groups = cprogram groups bindingRefCtorArs bindingRefCtorTypes []
 
 bindingSensitiveProgram : String -> CProgram
 bindingSensitiveProgram name = bindingProgram [
@@ -1549,7 +1569,7 @@ captureCurrentBinding "lifted" =
         [PVar "x" bindingLoc]
         (CLetGroup
           [synthBind "P" [CClause [PVar "y" bindingLoc] bindingSensitiveExpr]]
-          (CApp (CVar "P" (ALocal 0 0)) (CLit (LInt 0)))),
+          (mkApp (CVar "P" (ALocal 0 0)) [CLit (LInt 0)])),
     ],
     bindingMain,
   ]
@@ -1577,7 +1597,7 @@ captureCurrentBinding "post-lift" =
               CClause [PVar "y" bindingLoc] (CVar "y" (ALocal 0 0)),
             ],
           ]
-          (CApp (CVar "L" (ALocal 0 0)) bindingSensitiveExpr)),
+          (mkApp (CVar "L" (ALocal 0 0)) [bindingSensitiveExpr])),
     ],
     bindingMain,
   ]
@@ -1624,7 +1644,7 @@ gapStateInput = makeWasmEmitInput [] [] [] False []
 
 gapStateProgram : CProgram
 gapStateProgram =
-  CProgram
+  cprogram
     [
       synthBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],
       synthBind "gapB" [CClause [] (CVar "missingGapB" AGlobal)],
@@ -1636,7 +1656,7 @@ gapStateProgram =
 
 stringCensusProgram : CProgram
 stringCensusProgram =
-  CProgram
+  cprogram
     [
       synthBind "censusString" [CClause [] (CLit (LString "census-string"))],
       synthBind "gapA" [CClause [] (CVar "missingGapA" AGlobal)],

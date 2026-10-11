@@ -1,5 +1,5 @@
 # META
-source_lines=654
+source_lines=686
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -19,6 +19,9 @@ import ir.core_ir.{
   CStmt(..),
   CArm(..),
   CGuard(..),
+  CallMode(..),
+  CallSite(..),
+  CImplEntry(..),
 }
 import frontend.ast.{Lit(..), Pat}
 import backend.trmc_analysis.{patVars, bindNames, bindName}
@@ -30,6 +33,7 @@ import support.util.{
   dedup,
   filterList,
   reverseL,
+  anyList,
 }
 import support.ordmap.{
   OrdMap,
@@ -72,7 +76,7 @@ eagerVars : OrdMap Unit -> CExpr -> List String
 eagerVars _ (CLam _ _) = []
 eagerVars b (CVar x _) = if omHasKey x b then [] else [x]
 eagerVars _ (CLit _) = []
-eagerVars b (CApp f a) = eagerVars b f ++ eagerVars b a
+eagerVars b (CApp f args _) = eagerVars b f ++ flatMap (eagerVars b) args
 eagerVars b (CLet recF pat e1 e2) =
   let b2 = omFromNames (patVars pat) b
   let fe1 = if recF then eagerVars b2 e1 else eagerVars b e1
@@ -90,7 +94,7 @@ eagerVars b (CTuple es) = eagerVarsList b es
 eagerVars b (CList es) = eagerVarsList b es
 eagerVars b (CRangeList lo hi _) = eagerVars b lo ++ eagerVars b hi
 eagerVars b (CRecord _ fields) = eagerVarsFields b fields
-eagerVars b (CFieldAccess ex _ _) = eagerVars b ex
+eagerVars b (CFieldAccess ex _ _ _) = eagerVars b ex
 eagerVars b (CRecordUpdate _ base updates) =
   eagerVars b base ++ eagerVarsFields b updates
 eagerVars b (CVariantUpdate _ base updates) =
@@ -135,7 +139,7 @@ eagerVarsGuarded b ((CGBind pat e) :: rest) body =
 
 eagerVarsFields : OrdMap Unit -> List CField -> List String
 eagerVarsFields _ [] = []
-eagerVarsFields b ((CField _ ex) :: rest) =
+eagerVarsFields b ((CField _ _ ex) :: rest) =
   eagerVars b ex ++ eagerVarsFields b rest
 
 eagerVarsStmts : OrdMap Unit -> List CStmt -> List String
@@ -388,7 +392,7 @@ eagerHasMethod (CMethod _ _ _ _ _ _) = True
 eagerHasMethod (CDict _ _) = False
 eagerHasMethod (CVar _ _) = False
 eagerHasMethod (CLit _) = False
-eagerHasMethod (CApp f a) = eagerHasMethod f || eagerHasMethod a
+eagerHasMethod (CApp f args _) = eagerHasMethod f || anyList eagerHasMethod args
 eagerHasMethod (CLet _ _ e1 e2) = eagerHasMethod e1 || eagerHasMethod e2
 eagerHasMethod (CLetGroup binds body) =
   bindsHaveMethod binds || eagerHasMethod body
@@ -405,7 +409,7 @@ eagerHasMethod (CList es) = listHaveMethod es
 eagerHasMethod (CRangeList lo hi _) = eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod (CRangeArray lo hi _) = eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod (CRecord _ fields) = fieldsHaveMethod fields
-eagerHasMethod (CFieldAccess ex _ _) = eagerHasMethod ex
+eagerHasMethod (CFieldAccess ex _ _ _) = eagerHasMethod ex
 eagerHasMethod (CRecordUpdate _ base updates) =
   eagerHasMethod base || fieldsHaveMethod updates
 eagerHasMethod (CVariantUpdate _ base updates) =
@@ -458,7 +462,7 @@ guardsHaveMethod ((CGBind _ e) :: rest) =
 
 fieldsHaveMethod : List CField -> Bool
 fieldsHaveMethod [] = False
-fieldsHaveMethod ((CField _ ex) :: rest) =
+fieldsHaveMethod ((CField _ _ ex) :: rest) =
   eagerHasMethod ex || fieldsHaveMethod rest
 
 -- a binding is DIRECTLY method-tainted if any of its clause bodies dispatches
@@ -605,8 +609,11 @@ export
 labelFallthrough : CExpr -> String -> CExpr
 labelFallthrough (e@(CVar x r)) label =
   if x == fallthroughName then CVar (ftPrefix ++ label) r else e
-labelFallthrough (CApp f a) label =
-  CApp (labelFallthrough f label) (labelFallthrough a label)
+labelFallthrough (CApp f args site) label =
+  CApp
+    (labelFallthrough f label)
+    (map (a => labelFallthrough a label) args)
+    site
 labelFallthrough (CIf c t f) label =
   CIf
     (labelFallthrough c label)
@@ -656,18 +663,43 @@ rngBound : Lit -> Int
 rngBound (LInt n) = n
 rngBound (LChar c) = charCode (arrayGetUnsafe 0 (stringToChars c))
 rngBound _ = 0
+
+-- ── call modes ───────────────────────────────────────────────────────────────
+-- An application's head, arguments and stamped mode; any other expression is a
+-- head applied to nothing.
+export
+appParts : CExpr -> (CExpr, List CExpr, CallMode)
+appParts (CApp hd args (CallSite mode _)) = (hd, args, mode)
+appParts other = (other, [], CallDynamic)
+
+export
+isExactCall : CallMode -> Bool
+isExactCall CallExact = True
+isExactCall _ = False
+
+-- Whether an expression is the tail call of its function: an application the
+-- lowering flagged from its position (`core_ir_lower.markTailSites`).
+export
+isTailCall : CExpr -> Bool
+isTailCall (CApp _ _ (CallSite _ flag)) = flag
+isTailCall _ = False
+
+-- An impl entry's declared value arity: the arrows of its interface signature.
+export
+implEntryDeclaredArity : CImplEntry -> Int
+implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 # DESUGAR
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
 (DFunDef false "eagerVars" (PWild (PCon "CLit" PWild)) (EListLit))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "flatMap") (EApp (EVar "eagerVars") (EVar "b"))) (EVar "args"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e2"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "stmts")))
@@ -680,7 +712,7 @@ rngBound _ = 0
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "fields")))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild)) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
@@ -705,7 +737,7 @@ rngBound _ = 0
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest")) (EVar "body"))))
 (DTypeSig false "eagerVarsFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsFields" (PWild (PList)) (EListLit))
-(DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
+(DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "eagerVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest"))))
@@ -769,7 +801,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CDict" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CVar" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CLit" PWild)) (EVar "False"))
-(DFunDef false "eagerHasMethod" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "f")) (EApp (EVar "eagerHasMethod") (EVar "a"))))
+(DFunDef false "eagerHasMethod" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "f")) (EApp (EApp (EVar "anyList") (EVar "eagerHasMethod")) (EVar "args"))))
 (DFunDef false "eagerHasMethod" ((PCon "CLet" PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "e1")) (EApp (EVar "eagerHasMethod") (EVar "e2"))))
 (DFunDef false "eagerHasMethod" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "||" (EApp (EVar "bindsHaveMethod") (EVar "binds")) (EApp (EVar "eagerHasMethod") (EVar "body"))))
 (DFunDef false "eagerHasMethod" ((PCon "CBlock" (PVar "stmts"))) (EApp (EVar "stmtsHaveMethod") (EVar "stmts")))
@@ -783,7 +815,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "lo")) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "lo")) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EVar "fieldsHaveMethod") (EVar "fields")))
-(DFunDef false "eagerHasMethod" ((PCon "CFieldAccess" (PVar "ex") PWild PWild)) (EApp (EVar "eagerHasMethod") (EVar "ex")))
+(DFunDef false "eagerHasMethod" ((PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EVar "eagerHasMethod") (EVar "ex")))
 (DFunDef false "eagerHasMethod" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CArray" (PVar "es"))) (EApp (EVar "listHaveMethod") (EVar "es")))
@@ -816,7 +848,7 @@ rngBound _ = 0
 (DFunDef false "guardsHaveMethod" ((PCons (PCon "CGBind" PWild (PVar "e")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "e")) (EApp (EVar "guardsHaveMethod") (EVar "rest"))))
 (DTypeSig false "fieldsHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool")))
 (DFunDef false "fieldsHaveMethod" ((PList)) (EVar "False"))
-(DFunDef false "fieldsHaveMethod" ((PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "ex")) (EApp (EVar "fieldsHaveMethod") (EVar "rest"))))
+(DFunDef false "fieldsHaveMethod" ((PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "ex")) (EApp (EVar "fieldsHaveMethod") (EVar "rest"))))
 (DTypeSig false "bindDirectMethod" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "bindDirectMethod" ((PCon "CBind" PWild (PVar "clauses") PWild)) (EApp (EVar "clausesHaveMethod") (EVar "clauses")))
 (DTypeSig false "clausesHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
@@ -855,7 +887,7 @@ rngBound _ = 0
 (DFunDef false "ftLabelOf" ((PVar "x")) (EIf (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "ftPrefix"))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x"))) (EVar "None")))
 (DTypeSig true "labelFallthrough" (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyCon "CExpr"))))
 (DFunDef false "labelFallthrough" ((PAs "e" (PCon "CVar" (PVar "x") (PVar "r"))) (PVar "label")) (EIf (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "CVar") (EBinOp "++" (EVar "ftPrefix") (EVar "label"))) (EVar "r")) (EVar "e")))
-(DFunDef false "labelFallthrough" ((PCon "CApp" (PVar "f") (PVar "a")) (PVar "label")) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "a")) (EVar "label"))))
+(DFunDef false "labelFallthrough" ((PCon "CApp" (PVar "f") (PVar "args") (PVar "site")) (PVar "label")) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "labelFallthrough") (EVar "a")) (EVar "label")))) (EVar "args"))) (EVar "site")))
 (DFunDef false "labelFallthrough" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f")) (PVar "label")) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "labelFallthrough") (EVar "c")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "t")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CLet" (PVar "rf") (PVar "p") (PVar "e1") (PVar "e2")) (PVar "label")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "rf")) (EVar "p")) (EApp (EApp (EVar "labelFallthrough") (EVar "e1")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "e2")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CLetGroup" (PVar "binds") (PVar "b")) (PVar "label")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EApp (EApp (EVar "labelFallthrough") (EVar "b")) (EVar "label"))))
@@ -875,18 +907,29 @@ rngBound _ = 0
 (DFunDef false "rngBound" ((PCon "LInt" (PVar "n"))) (EVar "n"))
 (DFunDef false "rngBound" ((PCon "LChar" (PVar "c"))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))
 (DFunDef false "rngBound" (PWild) (ELit (LInt 0)))
+(DTypeSig true "appParts" (TyFun (TyCon "CExpr") (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallMode"))))
+(DFunDef false "appParts" ((PCon "CApp" (PVar "hd") (PVar "args") (PCon "CallSite" (PVar "mode") PWild))) (ETuple (EVar "hd") (EVar "args") (EVar "mode")))
+(DFunDef false "appParts" ((PVar "other")) (ETuple (EVar "other") (EListLit) (EVar "CallDynamic")))
+(DTypeSig true "isExactCall" (TyFun (TyCon "CallMode") (TyCon "Bool")))
+(DFunDef false "isExactCall" ((PCon "CallExact")) (EVar "True"))
+(DFunDef false "isExactCall" (PWild) (EVar "False"))
+(DTypeSig true "isTailCall" (TyFun (TyCon "CExpr") (TyCon "Bool")))
+(DFunDef false "isTailCall" ((PCon "CApp" PWild PWild (PCon "CallSite" PWild (PVar "flag")))) (EVar "flag"))
+(DFunDef false "isTailCall" (PWild) (EVar "False"))
+(DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
+(DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))
 # MARK
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CImplEntry" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
 (DFunDef false "eagerVars" (PWild (PCon "CLit" PWild)) (EListLit))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "eagerVars") (EVar "b"))) (EVar "args"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e2"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "stmts")))
@@ -899,7 +942,7 @@ rngBound _ = 0
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "fields")))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild)) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
@@ -924,7 +967,7 @@ rngBound _ = 0
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest")) (EVar "body"))))
 (DTypeSig false "eagerVarsFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsFields" (PWild (PList)) (EListLit))
-(DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
+(DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "eagerVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest"))))
@@ -988,7 +1031,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CDict" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CVar" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CLit" PWild)) (EVar "False"))
-(DFunDef false "eagerHasMethod" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "f")) (EApp (EVar "eagerHasMethod") (EVar "a"))))
+(DFunDef false "eagerHasMethod" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "f")) (EApp (EApp (EVar "anyList") (EVar "eagerHasMethod")) (EVar "args"))))
 (DFunDef false "eagerHasMethod" ((PCon "CLet" PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "e1")) (EApp (EVar "eagerHasMethod") (EVar "e2"))))
 (DFunDef false "eagerHasMethod" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "||" (EApp (EVar "bindsHaveMethod") (EVar "binds")) (EApp (EVar "eagerHasMethod") (EVar "body"))))
 (DFunDef false "eagerHasMethod" ((PCon "CBlock" (PVar "stmts"))) (EApp (EVar "stmtsHaveMethod") (EVar "stmts")))
@@ -1002,7 +1045,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "lo")) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "lo")) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EVar "fieldsHaveMethod") (EVar "fields")))
-(DFunDef false "eagerHasMethod" ((PCon "CFieldAccess" (PVar "ex") PWild PWild)) (EApp (EVar "eagerHasMethod") (EVar "ex")))
+(DFunDef false "eagerHasMethod" ((PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EVar "eagerHasMethod") (EVar "ex")))
 (DFunDef false "eagerHasMethod" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CArray" (PVar "es"))) (EApp (EVar "listHaveMethod") (EVar "es")))
@@ -1035,7 +1078,7 @@ rngBound _ = 0
 (DFunDef false "guardsHaveMethod" ((PCons (PCon "CGBind" PWild (PVar "e")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "e")) (EApp (EVar "guardsHaveMethod") (EVar "rest"))))
 (DTypeSig false "fieldsHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool")))
 (DFunDef false "fieldsHaveMethod" ((PList)) (EVar "False"))
-(DFunDef false "fieldsHaveMethod" ((PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "ex")) (EApp (EVar "fieldsHaveMethod") (EVar "rest"))))
+(DFunDef false "fieldsHaveMethod" ((PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "ex")) (EApp (EVar "fieldsHaveMethod") (EVar "rest"))))
 (DTypeSig false "bindDirectMethod" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "bindDirectMethod" ((PCon "CBind" PWild (PVar "clauses") PWild)) (EApp (EVar "clausesHaveMethod") (EVar "clauses")))
 (DTypeSig false "clausesHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
@@ -1074,7 +1117,7 @@ rngBound _ = 0
 (DFunDef false "ftLabelOf" ((PVar "x")) (EIf (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "ftPrefix"))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x"))) (EVar "None")))
 (DTypeSig true "labelFallthrough" (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyCon "CExpr"))))
 (DFunDef false "labelFallthrough" ((PAs "e" (PCon "CVar" (PVar "x") (PVar "r"))) (PVar "label")) (EIf (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "CVar") (EBinOp "++" (EVar "ftPrefix") (EVar "label"))) (EVar "r")) (EVar "e")))
-(DFunDef false "labelFallthrough" ((PCon "CApp" (PVar "f") (PVar "a")) (PVar "label")) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "a")) (EVar "label"))))
+(DFunDef false "labelFallthrough" ((PCon "CApp" (PVar "f") (PVar "args") (PVar "site")) (PVar "label")) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "labelFallthrough") (EVar "a")) (EVar "label")))) (EVar "args"))) (EVar "site")))
 (DFunDef false "labelFallthrough" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f")) (PVar "label")) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "labelFallthrough") (EVar "c")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "t")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CLet" (PVar "rf") (PVar "p") (PVar "e1") (PVar "e2")) (PVar "label")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "rf")) (EVar "p")) (EApp (EApp (EVar "labelFallthrough") (EVar "e1")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "e2")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CLetGroup" (PVar "binds") (PVar "b")) (PVar "label")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EApp (EApp (EVar "labelFallthrough") (EVar "b")) (EVar "label"))))
@@ -1094,3 +1137,14 @@ rngBound _ = 0
 (DFunDef false "rngBound" ((PCon "LInt" (PVar "n"))) (EVar "n"))
 (DFunDef false "rngBound" ((PCon "LChar" (PVar "c"))) (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EVar "c")))))
 (DFunDef false "rngBound" (PWild) (ELit (LInt 0)))
+(DTypeSig true "appParts" (TyFun (TyCon "CExpr") (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallMode"))))
+(DFunDef false "appParts" ((PCon "CApp" (PVar "hd") (PVar "args") (PCon "CallSite" (PVar "mode") PWild))) (ETuple (EVar "hd") (EVar "args") (EVar "mode")))
+(DFunDef false "appParts" ((PVar "other")) (ETuple (EVar "other") (EListLit) (EVar "CallDynamic")))
+(DTypeSig true "isExactCall" (TyFun (TyCon "CallMode") (TyCon "Bool")))
+(DFunDef false "isExactCall" ((PCon "CallExact")) (EVar "True"))
+(DFunDef false "isExactCall" (PWild) (EVar "False"))
+(DTypeSig true "isTailCall" (TyFun (TyCon "CExpr") (TyCon "Bool")))
+(DFunDef false "isTailCall" ((PCon "CApp" PWild PWild (PCon "CallSite" PWild (PVar "flag")))) (EVar "flag"))
+(DFunDef false "isTailCall" (PWild) (EVar "False"))
+(DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
+(DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))

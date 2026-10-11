@@ -96,7 +96,7 @@ if [ "${1:-}" = "--check-one" ]; then
     *'`let mut` has been removed'*) printf 'TIER1\t%s\tlet_mut\n' "$f"; exit 0 ;;
     *'`record` is not a keyword'*) printf 'TIER1\t%s\trecord_keyword\n' "$f"; exit 0 ;;
     *'`function` is not a keyword'*) printf 'TIER1\t%s\tfunction_keyword\n' "$f"; exit 0 ;;
-    *'backtick infix application'*) printf 'TIER1\t%s\tbacktick_infix\n' "$f"; exit 0 ;;
+    *'Medaka has no infix backticks'*) printf 'TIER1\t%s\tbacktick_infix\n' "$f"; exit 0 ;;
     *'`default impl` has been removed'*) printf 'TIER1\t%s\tdefault_impl\n' "$f"; exit 0 ;;
     *'named impls (`impl name of Iface`) have been removed'*) printf 'TIER1\t%s\tnamed_impl\n' "$f"; exit 0 ;;
     *'`bench` has been removed'*) printf 'TIER1\t%s\tbench_keyword\n' "$f"; exit 0 ;;

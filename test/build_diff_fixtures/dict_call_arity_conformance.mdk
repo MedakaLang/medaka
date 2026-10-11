@@ -1,7 +1,7 @@
 -- Constrained-call arity conformance. The emitted define for adder3 binds the
--- dictionary, a, and b; c is supplied by the returned lambda. Calls with fewer,
--- exactly as many, or more words than that define must respectively build a PAP,
--- call it directly, or apply the surplus to its returned closure.
+-- dictionary and a; b and c go to the returned lambda. underPrefix's call takes
+-- exactly that define's words and calls it directly; exactPrefix and cross take
+-- more, so they call it directly and apply the surplus to its returned closure.
 adder3 : Num a => a -> a -> a -> a
 -- lint-disable-next-line rule-lambda-section
 adder3 a = b => c => a + b + c

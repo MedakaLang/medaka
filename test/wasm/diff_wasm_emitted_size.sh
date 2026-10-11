@@ -102,8 +102,13 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    bytes.  The bytes include each program's trap-site file table, which
 #    spells the fixture and core.mdk paths as given, i.e. absolute, so they
 #    depend on the checkout root (#3879).
-MODULES_BYTES_CEIL=3105616
-MODULES_FUNCS_CEIL=5716
+#    Re-baselined to the measured 3206970 B / 5858 funcs (F1-floor ratio 3859),
+#    with no headroom, for one new fixture: `tail_sites.mdk` (the tail-call
+#    shapes of #1349 and #2577 at a depth that needs constant stack) is 101544 B
+#    and 142 funcs on its own; the other 59 programs measure 3105426 B and 5716
+#    funcs, inside the previous ceilings.
+MODULES_BYTES_CEIL=3206970
+MODULES_FUNCS_CEIL=5858
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
@@ -119,7 +124,7 @@ TYPED_FUNCS_CEIL=145
 # every ceiling above still improves (fewer bytes/funcs/ratio look like a win
 # when they're actually fixtures dropping out). A gap appearing at all here is
 # itself the regression signal this gate exists to catch.
-MODULES_OK_EXACT=59
+MODULES_OK_EXACT=60
 PLAIN_OK_EXACT=167
 TYPED_OK_EXACT=9
 
@@ -132,7 +137,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=3765  # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
+MODULES_F1_RATIO_CEIL_X1000=3859  # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node

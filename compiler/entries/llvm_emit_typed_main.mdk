@@ -15,7 +15,7 @@
 -- The mangle step is not optional decoration: typecheck stamps a receiver's
 -- record head with the name the MANGLED program will carry, so an emitter side
 -- table keyed off the unmangled decls misses every stamped lookup and
--- `llvm_emit.recordByName` degrades to a bare-label first-match guess (the
+-- `core_ir_lower` resolves the record by a bare-label first-match guess (the
 -- wrong-slot behaviour issue #38 closed).  Elaborate, mangle, then key every
 -- table off the mangled decls — the order `entry_support.emitModulesWith` runs.
 import frontend.ast.{Decl, Lit(..), noDeclLoc}

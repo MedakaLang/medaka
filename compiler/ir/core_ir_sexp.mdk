@@ -21,6 +21,8 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   CProgram(..),
+  CallMode(..),
+  CallSite(..),
   CTree(..),
   CTBranch(..),
   CHead(..),
@@ -100,10 +102,22 @@ routeSexp m (RProj r path) =
 -- ── CExpr ─────────────────────────────────────────────────────────────────────
 
 export
+callModeSexp : CallMode -> String
+callModeSexp CallExact = "CallExact"
+callModeSexp (CallPartial n) = node "CallPartial" [intToString n]
+callModeSexp (CallOver n) = node "CallOver" [intToString n]
+callModeSexp CallDynamic = "CallDynamic"
+
+export
 cexprSexp : SexpMode -> CExpr -> String
 cexprSexp m (CLit l) = node "CLit" [litSexp l]
 cexprSexp m (CVar x addr) = node "CVar" [escStr x, addrSexp addr]
-cexprSexp m (CApp f x) = node "CApp" [cexprSexp m f, cexprSexp m x]
+cexprSexp m (CApp f args (CallSite mode tailPos)) = node "CApp" [
+  cexprSexp m f,
+  slist (map (cexprSexp m) args),
+  callModeSexp mode,
+  boolStr tailPos,
+]
 cexprSexp m (CLam pats body) =
   node "CLam" [slist (map patSexp pats), cexprSexp m body]
 cexprSexp m (CLet isRec pat e1 e2) =
@@ -129,8 +143,8 @@ cexprSexp m (CTuple es) = node "CTuple" (map (cexprSexp m) es)
 cexprSexp m (CList es) = node "CList" (map (cexprSexp m) es)
 cexprSexp m (CRecord name fields) =
   node "CRecord" (escStr name :: map (cfieldSexp m) fields)
-cexprSexp m (CFieldAccess e f n) =
-  node "CFieldAccess" [cexprSexp m e, escStr f, escStr n]
+cexprSexp m (CFieldAccess e f n o) =
+  node "CFieldAccess" [cexprSexp m e, escStr f, escStr n, intToString o]
 cexprSexp m (CRecordUpdate name base fields) =
   node
     "CRecordUpdate"
@@ -180,7 +194,8 @@ cexprSexp m (CDict name routes) =
 
 export
 cfieldSexp : SexpMode -> CField -> String
-cfieldSexp m (CField name e) = node "cf" [escStr name, cexprSexp m e]
+cfieldSexp m (CField name o e) =
+  node "cf" [escStr name, intToString o, cexprSexp m e]
 
 -- ── CArm, CGuard ─────────────────────────────────────────────────────────────
 
@@ -268,8 +283,12 @@ cimplBodySexp m (CImplDefault ifaceId tag key positions pats body) = node
 
 export
 cimplEntrySexp : SexpMode -> CImplEntry -> String
-cimplEntrySexp m (CImplEntry name score body) =
-  node "CImplEntry" [escStr name, intToString score, cimplBodySexp m body]
+cimplEntrySexp m (CImplEntry name score declared body) = node "CImplEntry" [
+  escStr name,
+  intToString score,
+  intToString declared,
+  cimplBodySexp m body,
+]
 
 -- ── CProgram ─────────────────────────────────────────────────────────────────
 
