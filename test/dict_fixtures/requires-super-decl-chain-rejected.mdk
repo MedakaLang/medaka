@@ -1,0 +1,41 @@
+-- §3 R-SUPER-DECL, the context two supers up: `Sub2 requires Sub`, `Sub requires Sup`.
+-- `impl Sub (Box a)` is the impl that does not entail `Show2 a` (the context of
+-- `impl Sup (Box a)`), and it is the one rejected: T-IMPL-MISSING-REQUIRES at line 24,
+-- once.  `impl Sub2 (Box a)` (line 33) entails the context of `impl Sub (Box a)`,
+-- which is empty, so it is not reported a second time for the same `Show2 a`.  It used
+-- to be accepted and print `supis2` for `k True`.
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+interface Sup a where
+  sup : a -> String
+
+interface Sub a requires Sup a where
+  sub : a -> String
+
+data Box a = Box a
+
+impl Sup (Box a) requires Show2 a where
+  sup (Box x) = "sup" ++ show2 x
+
+impl Sub (Box a) where
+  sub _ = "sub"
+
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+
+interface Sub2 a requires Sub a where
+  sub2 : a -> String
+
+impl Sub2 (Box a) where
+  sub2 _ = "s2"
+
+use2 : Sub2 a => a -> String
+use2 x = sup x ++ sub2 x
+
+k x = use2 (Box x)
+
+main = println (k True)

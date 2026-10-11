@@ -30189,9 +30189,155 @@ cohPushSoft (Some (msg, loc)) = pushCoherenceWarning loc msg
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
 checkSuperImpls userDecls ce ie cur =
   let rows = ieRowsVisibleAt cur ie
-  foreachUnit
-    (pushTypeError "T-MISSING-SUPER-IMPL")
-    (flatMap (superImplMsgsOf ce cur rows) userDecls)
+  let _ =
+    foreachUnit
+      (pushTypeError "T-MISSING-SUPER-IMPL")
+      (flatMap (superImplMsgsOf ce cur rows) userDecls)
+  foreachUnit (checkImplSuperContexts ce cur) userDecls
+
+-- DICT-SEMANTICS §3, the declaration rule for supers: a dictionary for `C ts` carries
+-- one for each direct super `D` of `C` at the same arguments, built by the instance
+-- `D ts` selects, so that instance's `requires` is part of what `C ts` owes.  The impl
+-- must entail it from its own `requires` (with their supers), at its head with the
+-- head variables rigid, or every binder that reduces `C ts` drops it.  A goal of the
+-- selected instance's context is reduced through the instances as W3-inst's are; a
+-- leaf that is no given is reported at the impl.  The super goal itself is not
+-- reduced here when no instance selects it: that is `superImplMsgsOf`'s existence
+-- question.  Direct supers suffice because every impl is checked, the super's own
+-- impl included.
+checkImplSuperContexts : ClassEnv -> Int -> Decl -> Unit
+checkImplSuperContexts ce cur (DAttrib _ d) = checkImplSuperContexts ce cur d
+checkImplSuperContexts ce cur (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = loc, ... }) =
+  match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
+    Some r if listLen (ceRowTyparams r) == listLen tys =>
+      let (implTvMap, headMonos) = implHeadMonos tys
+      let roots = implHeadTypeVarRoots implTvMap
+      let headIds = omFromNames (map (p => intToString (snd p)) roots) omEmpty
+      let declared = map (requirePredicateSlot implTvMap) reqs
+      let givens =
+        declared ++ flatMap (s => map fst (predicateSlotKnownSupers s)) declared
+      let subject = "impl \{iface} \{joinWith " " (map ppTyAtom tys)}"
+      let argsOf =
+        sup =>
+          mapAll
+            (p => lookupPos p (ceRowTyparams r) headMonos)
+            (superParamsOf sup)
+      fold
+        (_ sup => match argsOf sup
+          Some supArgs =>
+            checkSuperInstanceContext
+              subject
+              roots
+              headIds
+              givens
+              loc
+              (superIfaceRef sup)
+              supArgs
+          None => ())
+        ()
+        (ceRowSupers r)
+    _ => ()
+checkImplSuperContexts _ _ _ = ()
+
+checkSuperInstanceContext : String ->
+  List (String, Int) ->
+  OrdMap Unit ->
+  List PredicateSlot ->
+  Option Loc ->
+  IfaceRef ->
+  List Mono ->
+  Unit
+checkSuperInstanceContext subject roots headIds givens loc sup supArgs
+  | anyList (givenAnswers sup supArgs) givens = ()
+  | otherwise = match rigidHeadInstanceContext headIds sup supArgs
+    None => ()
+    Some ctx =>
+      let walk = reqWalkStart ()
+      let leaves =
+        flatMap
+          (g => superContextLeaves walk headIds givens loc (fst g) (snd g))
+          ctx
+      fold
+        (_ leaf => reportSuperContextLeaf subject roots loc sup supArgs leaf)
+        ()
+        leaves
+
+-- The context of the instance [iface] [args] selects with the head variables
+-- [headIds] held rigid (`sigRigidBindings`), as goals over those variables again.
+rigidHeadInstanceContext : OrdMap Unit ->
+  IfaceRef ->
+  List Mono ->
+  Option (List (IfaceRef, List Mono))
+rigidHeadInstanceContext headIds iface args =
+  let cells = sigCellsOf headIds (flatMap monoVarCells args)
+  let toRigid = sigRigidBindings headIds cells
+  map
+    (m =>
+      map
+        (r => match reqToObligation (fst m) r
+          (ri, rargs) => (ri, map (unrigidSig cells) rargs))
+        (snd m))
+    (findMatchingImplReqsU
+      perRun.value.residualUnivRef.value
+      iface
+      (map (substMono toRigid [] []) args))
+
+-- The goals below [iface] [args] that no given answers: a goal over variables alone,
+-- or one no instance selects with the head variables rigid.  Bounded by the shared
+-- `requires` measure, a cycle or a runaway chain reported at [loc].
+superContextLeaves : ReqWalk ->
+  OrdMap Unit ->
+  List PredicateSlot ->
+  Option Loc ->
+  IfaceRef ->
+  List Mono ->
+  List (IfaceRef, List Mono)
+superContextLeaves walk headIds givens loc iface args
+  | anyList (givenAnswers iface args) givens = []
+  | not (anyConcreteHead args) = [(iface, args)]
+  | otherwise = match reqWalkReported loc (reqWalkEnter walk iface args)
+    None => []
+    Some next => match rigidHeadInstanceContext headIds iface args
+      None => [(iface, args)]
+      Some ctx =>
+        flatMap
+          (g => superContextLeaves next headIds givens loc (fst g) (snd g))
+          ctx
+
+-- A leaf over head variables names the `requires` to add; a ground one names the
+-- missing instance.  A leaf mentioning a variable the head does not bind has no
+-- `requires` to name and is left to the goal's use.
+reportSuperContextLeaf : String ->
+  List (String, Int) ->
+  Option Loc ->
+  IfaceRef ->
+  List Mono ->
+  (IfaceRef, List Mono) ->
+  Unit
+reportSuperContextLeaf subject roots loc sup supArgs (iface, args) =
+  let ids = flatMap monoUnboundIds args
+  let named = Ref (map (p => (snd p, fst p)) roots)
+  let superGoal =
+    "\{sup.irName} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
+  let pred = "\{iface.irName} \{joinWith " " (ppEach named (Ref 0) 3 args)}"
+  if isEmptyL ids then
+    pushTypeErrorOnceAt
+      "T-NO-IMPL"
+      loc
+      (superContextNoImplMsg subject superGoal pred)
+  else if allList (i => containsI i (map snd roots)) ids then
+    pushTypeErrorOnceAt
+      "T-IMPL-MISSING-REQUIRES"
+      loc
+      (superContextUndeclaredMsg subject superGoal pred)
+
+superContextUndeclaredMsg : String -> String -> String -> String
+superContextUndeclaredMsg subject superGoal pred =
+  "`\{subject}` must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, which the impl does not declare; add `requires \{pred}` to the impl"
+
+superContextNoImplMsg : String -> String -> String -> String
+superContextNoImplMsg subject superGoal pred =
+  "`\{subject}` must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, and no impl provides it; add `impl \{pred}`"
 
 foreachUnit : (a -> Unit) -> List a -> Unit
 foreachUnit _ [] = ()
@@ -38666,6 +38812,10 @@ checkNestedReqs univ walk iface args loc scope =
 -- instance's `requires` is part of the goal's.  A super goal is entered beside the
 -- goal, on the walk that reached it, as the route walk enters it (`superRoutesAt`).  A
 -- super with no instance is the impl declaration's error (`checkSuperImpls`).
+-- The declaration also entails the context of the super instance its head selects
+-- (`checkImplSuperContexts`), but a ground goal can select a more specific super
+-- instance (DICT-SEMANTICS §6.1.4), whose context that check never saw, so this walk
+-- is what rejects it (`test/dict_fixtures/requires-super-overlap-context-rejected.mdk`).
 checkSuperContext : ImplUniverse ->
   ReqWalk ->
   (IfaceRef, List Mono) ->
