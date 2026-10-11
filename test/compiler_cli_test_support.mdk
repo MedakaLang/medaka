@@ -439,7 +439,7 @@ gradeEach grade ((u, Ok pair) :: rest) [] =
    units makes them. The scratch directory is made fresh for each sweep. -}
 export
 sweepSpawns : List unit ->
-  (String -> unit -> <IO> List (String, List String)) ->
+  (String -> unit -> <FileRead, IO> List (String, List String)) ->
   (unit -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> row) ->
   (row -> Option String) ->
   (Int -> List String -> Expectation) ->
@@ -471,7 +471,7 @@ soleResult [r] = r
 soleResult rs =
   Err "the batch returned \{intToString (length rs)} results for one spawn"
 
-gradeSpawned : (unit -> <IO> List (String, List String)) ->
+gradeSpawned : (unit -> <FileRead, IO> List (String, List String)) ->
   (unit -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> row) ->
   List unit ->
   <Exec, FileRead, IO> List row
