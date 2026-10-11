@@ -1,5 +1,5 @@
 # META
-source_lines=2344
+source_lines=2349
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -384,12 +384,14 @@ export impl Debug String where
 export impl Debug Char where
   debug c = debugCharLit c
 
--- Comma-joined element rendering for `Debug (List a)`: a top-level recursive
--- constrained helper.  Its self-call forwards the `Debug a` dictionary and the
--- impl body forwards its own `requires Debug a` dict into it.
+-- Comma-joined element rendering for `Debug (List a)`.  `debugListPieces` is a
+-- top-level recursive constrained helper: its self-call forwards the
+-- `Debug a` dictionary, and the impl body forwards its own `requires Debug a`
+-- dict into `debugListItems`.
 debugListItems : Debug a => List a -> String
 debugListItems xs = stringConcat (debugListPieces xs)
 
+-- The rendered elements with `, ` between them, ready to concatenate.
 debugListPieces : Debug a => List a -> List String
 debugListPieces [] = []
 debugListPieces [x] = [debug x]
@@ -403,7 +405,8 @@ export impl Debug (List a) requires Debug a where
 debugArrayItems : Debug a => Array a -> Int -> Int -> String
 debugArrayItems arr i n = stringConcat (debugArrayPieces arr i (n - 1) [])
 
--- The pieces for elements `lo..j`, built from the back onto `acc`.
+-- The rendered elements `lo..j` with `, ` between them, prepended to `acc`
+-- from the back.
 debugArrayPieces : Debug a =>
   Array a ->
   Int ->
@@ -565,11 +568,12 @@ export impl Display Char where
   display c = charToStr c
 
 -- Comma-joined element rendering for `Display (List a)`, mirroring
--- `debugListItems`: a top-level recursive constrained helper that forwards its
--- `Display a` dictionary on the self-call.
+-- `debugListItems`: `displayListPieces` is a top-level recursive constrained
+-- helper that forwards its `Display a` dictionary on the self-call.
 displayListItems : Display a => List a -> String
 displayListItems xs = stringConcat (displayListPieces xs)
 
+-- The displayed elements with `, ` between them, ready to concatenate.
 displayListPieces : Display a => List a -> List String
 displayListPieces [] = []
 displayListPieces [x] = [display x]
@@ -582,6 +586,7 @@ export impl Display (List a) requires Display a where
 displayArrayItems : Display a => Array a -> Int -> Int -> String
 displayArrayItems arr i n = stringConcat (displayArrayPieces arr i (n - 1) [])
 
+-- Display counterpart of `debugArrayPieces`.
 displayArrayPieces : Display a =>
   Array a ->
   Int ->
