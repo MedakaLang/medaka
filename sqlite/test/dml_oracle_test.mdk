@@ -40,11 +40,11 @@
 -- native-grading clause now follows a gate's project-local imports one hop
 -- (`gateReaches`/`relaysFor`), so a spawn routed through that shared module
 -- is graded via the importing gate rather than invisible to it.
--- `rowScratch` stays local — a fourth byte-identical copy with
--- `writer_oracle_test.mdk`.
+-- `rowScratch` and the batched build (`buildBatch`) are `test.oracle_support`'s
+-- shared helpers too.
 import io.{runVerb}
-import list.{indexed, lookup, replicate, zipWith3}
-import string.{contains, join, startsWith, trim, unwords}
+import list.{lookup, replicate}
+import string.{contains, join, startsWith, trim}
 import test.{
   Expectation(..),
   expectAll,
@@ -54,9 +54,10 @@ import test.{
   labelFail,
 }
 import test.oracle_support.{
-  Seed(..), flatLines, outLines, seedDb, spawnEnv, spawnOut, spawnRaw
+  Seed(..), buildBatch, buildFor, flatLines, outLines, rowScratch, seedDb,
+  spawnOut, spawnRaw
 }
-import test_process.{medakaBin, scratchDir, testJobs, underRoot}
+import test_process.{underRoot}
 
 -- # Spawning
 --
@@ -64,57 +65,15 @@ import test_process.{medakaBin, scratchDir, testJobs, underRoot}
 -- This file needs the TOLERANT form (`spawnRaw`) too, for the `dml_oracle`
 -- sections, which legitimately expect either engine to REFUSE a statement —
 -- a non-zero exit there is data, not a spawn failure.
-buildTimeoutSeconds : Int
-buildTimeoutSeconds = 600
-
 queryTimeoutSeconds : Int
 queryTimeoutSeconds = 120
 
 -- # Small process-backed primitives every row below is built from.
 
-rowScratch : String -> <Exec> Result String String
--- deliberate copy of writer_oracle_test.mdk's own, see the header note
--- above the imports
--- lint-disable-next-line rule-duplicate-body
-rowScratch name = match scratchDir
-  Err e => Err "\{name}: \{e}"
-  Ok dir => Ok "\{dir}/\{name}"
-
--- The batched-build helpers below are a deliberate copy of the same helpers in
--- oracle_test.mdk: both files are test siblings with no shared module of
--- their own, and moving them into oracle_support.mdk is the consolidation.
--- lint-disable-file rule-duplicate-body
-buildArgs : List String -> String -> String -> <IO> List String
-buildArgs flags entry bin = ["build"] ++ flags ++ [underRoot entry, "-o", bin]
-
--- The argv `spawnOut buildTimeoutSeconds medakaBin args` runs: `boundedVerbSeconds`
--- wrapped around `env`, which sets the two spawn variables and runs the build.
-perlArgs : List String -> <IO> List String
-perlArgs args =
-  ["-e", "alarm \{intToString buildTimeoutSeconds}; exec @ARGV", "env", "env"]
-    ++ spawnEnv
-    ++ (medakaBin :: args)
-
--- Grades one batched build exactly as `spawnRaw` and `spawnOut` grade a single
--- one: a run that never started, or exit 127, is a spawn failure; any exit but
--- 0 is a named failure.
-gradeBuild : List String ->
-  Result String (Int, String, String) ->
-  <IO> Result String Unit
-gradeBuild args (Err e) =
-  Err "spawn failed: could not start `\{unwords (medakaBin :: args)}`: \{e}"
-gradeBuild _ (Ok (0, _, _)) = Ok ()
-gradeBuild _ (Ok (127, _, err)) =
-  Err "spawn failed: \{medakaBin} not found on PATH: \{trim err}"
-gradeBuild args (Ok (code, out, err)) =
-  Err
-    "`\{unwords (medakaBin :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
-
--- Every demo this file runs, built together in ONE batch (`testJobs` builds at
--- a time, serially under `MEDAKA_TEST_JOBS=1`) into the shared scratch
--- directory. A top-level nullary is evaluated once per process, so the batch
--- runs once. No row writes to a binary after its build, and no row's cleanup
--- list names one.
+-- Every demo this file runs, built together in ONE batch by
+-- `test.oracle_support.buildBatch`. A top-level nullary is evaluated once per
+-- process, so the batch runs once. No row writes to a binary after its build,
+-- and no row's cleanup list names one.
 sharedDemos : List (String, List String)
 sharedDemos = [
   ("sqlite/main.mdk", []),
@@ -125,29 +84,11 @@ sharedDemos = [
 ]
 
 sharedBuilds : <Exec, IO> List (String, Result String String)
-sharedBuilds = match scratchDir
-  Err e => map ((entry, _) => (entry, Err e)) sharedDemos
-  Ok dir =>
-    let plans =
-      map
-        ((i, (entry, flags)) =>
-          (entry, flags, "\{dir}/shared-\{intToString i}"))
-        (indexed sharedDemos)
-    let argvs = map ((entry, flags, bin) => buildArgs flags entry bin) plans
-    let spawned = runCommandBatch "perl" testJobs (map perlArgs argvs)
-    zipWith3
-      ((entry, _, bin) args run => (
-        entry,
-        map (_ => bin) (gradeBuild args (mapErr (e => "perl: \{e}") run)),
-      ))
-      plans
-      argvs
-      spawned
+sharedBuilds =
+  buildBatch (map ((entry, flags) => (entry, entry, flags)) sharedDemos)
 
 sharedBin : String -> <Exec, IO> Result String String
-sharedBin entry = match lookup entry sharedBuilds
-  Some r => r
-  None => Err "no shared build for \{entry}"
+sharedBin = buildFor sharedBuilds
 
 mainBin : <Exec, IO> Result String String
 mainBin = sharedBin "sqlite/main.mdk"
