@@ -14,17 +14,17 @@ running doctests in stdlib/vector.mdk
   ok   stdlib/vector.mdk:216: let v = fromList [1, 2, 3] in let _ = swap 0 2 v in toList v
   ok   stdlib/vector.mdk:231: let v = fromList [1, 2, 3] in let _ = clear v in length v
   ok   stdlib/vector.mdk:246: let v = fromList [1, 2, 3] in let _ = mapInPlace (x => x * 10) v in toList v
-  ok   stdlib/vector.mdk:281: let v = fromList [1, 2, 3] in let _ = insertAtInPlace 1 9 v in toList v
-  ok   stdlib/vector.mdk:287: let v = fromList [1, 2] in let _ = insertAtInPlace 7 9 v in toList v
-  ok   stdlib/vector.mdk:294: let v = fromList [1, 2, 3] in let _ = removeAtInPlace 1 v in toList v
-  ok   stdlib/vector.mdk:300: let v = fromList [1, 2] in let _ = removeAtInPlace 7 v in toList v
-  ok   stdlib/vector.mdk:308: let v = fromList [3, 1, 4, 1, 5] in let _ = sortInPlaceBy compare v in toList v
-  ok   stdlib/vector.mdk:318: let v = fromList [3, 1, 2] in let _ = sortInPlace v in toList v
-  ok   stdlib/vector.mdk:341: sum (fromList [1, 2, 3, 4])
-  ok   stdlib/vector.mdk:350: length (fromList [9, 8, 7])
-  ok   stdlib/vector.mdk:356: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:363: debug (fromList [1, 2, 3])
-  ok   stdlib/vector.mdk:371: display (fromList ["a", "b"])
+  ok   stdlib/vector.mdk:287: let v = fromList [1, 2, 3] in let _ = insertAtInPlace 1 9 v in toList v
+  ok   stdlib/vector.mdk:299: let v = fromList [1, 2] in let _ = insertAtInPlace 7 9 v in toList v
+  ok   stdlib/vector.mdk:306: let v = fromList [1, 2, 3] in let _ = removeAtInPlace 1 v in toList v
+  ok   stdlib/vector.mdk:316: let v = fromList [1, 2] in let _ = removeAtInPlace 7 v in toList v
+  ok   stdlib/vector.mdk:324: let v = fromList [3, 1, 4, 1, 5] in let _ = sortInPlaceBy compare v in toList v
+  ok   stdlib/vector.mdk:336: let v = fromList [3, 1, 2] in let _ = sortInPlace v in toList v
+  ok   stdlib/vector.mdk:359: sum (fromList [1, 2, 3, 4])
+  ok   stdlib/vector.mdk:368: length (fromList [9, 8, 7])
+  ok   stdlib/vector.mdk:374: eq (fromList [1, 2, 3]) (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:381: debug (fromList [1, 2, 3])
+  ok   stdlib/vector.mdk:389: display (fromList ["a", "b"])
 
 stdlib/vector.mdk: 26/26 passed
 Testing "sortInPlace agrees with an independent insertion sortInPlace" [eval] ... OK (100 tests passed)
@@ -32,4 +32,5 @@ Testing "sortInPlace is idempotent" [eval] ... OK (100 tests passed)
 Testing "sortInPlaceBy is stable on ties" [eval] ... OK (100 tests passed)
 Testing "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" [eval] ... OK (100 tests passed)
 Testing "removeAtInPlace out of range is a no-op" [eval] ... OK (100 tests passed)
+Testing "insertAtInPlace and removeAtInPlace shift elements exactly as their list specs" [eval] ... OK (100 tests passed)
 Testing "Display Vector shows only the live range and agrees with Eq" [eval] ... OK (100 tests passed)

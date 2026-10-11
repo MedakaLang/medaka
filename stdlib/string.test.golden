@@ -41,40 +41,42 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:369: indexOf "z" "hello"
   ok   stdlib/string.mdk:381: lastIndexOf "l" "hello"
   ok   stdlib/string.mdk:383: lastIndexOf "z" "hello"
-  ok   stdlib/string.mdk:403: countOccurrences "l" "hello"
-  ok   stdlib/string.mdk:405: countOccurrences "ll" "lllll"
-  ok   stdlib/string.mdk:427: prepend "un" "do"
-  ok   stdlib/string.mdk:435: concat ["a", "bc", "d"]
-  ok   stdlib/string.mdk:443: join ", " ["a", "b", "c"]
-  ok   stdlib/string.mdk:459: repeat 3 "ab"
-  ok   stdlib/string.mdk:465: repeat 0 "ab"
-  ok   stdlib/string.mdk:467: repeat (0 - 1) "ab"
-  ok   stdlib/string.mdk:469: stringLength (repeat 30000 "x")
-  ok   stdlib/string.mdk:494: reverse "abc"
-  ok   stdlib/string.mdk:507: trimLeft "  hi  "
-  ok   stdlib/string.mdk:517: trimRight "  hi  "
-  ok   stdlib/string.mdk:527: trim "  hi  "
-  ok   stdlib/string.mdk:558: toUpper "Straße"
-  ok   stdlib/string.mdk:568: toLower "HÉLLO"
-  ok   stdlib/string.mdk:576: capitalize "hello"
-  ok   stdlib/string.mdk:592: replace "l" "L" "hello"
-  ok   stdlib/string.mdk:612: replaceAll "l" "L" "hello"
-  ok   stdlib/string.mdk:638: sliceClamped 1 4 "hello"
-  ok   stdlib/string.mdk:644: sliceClamped 0 100 "abc"
-  ok   stdlib/string.mdk:647: take 100 "abc"
-  ok   stdlib/string.mdk:652: take 3 "hello"
-  ok   stdlib/string.mdk:660: drop 3 "hello"
-  ok   stdlib/string.mdk:668: splitAt 2 "hello"
-  ok   stdlib/string.mdk:679: split "," "a,b,c"
-  ok   stdlib/string.mdk:681: split "," "abc"
-  ok   stdlib/string.mdk:724: lines "a\nb\nc"
-  ok   stdlib/string.mdk:734: stripCR "ab\r"
-  ok   stdlib/string.mdk:736: stripCR "ab"
-  ok   stdlib/string.mdk:750: words "  hello   world "
-  ok   stdlib/string.mdk:769: unlines ["a", "b"]
-  ok   stdlib/string.mdk:784: unwords ["a", "b", "c"]
-  ok   stdlib/string.mdk:796: padLeft 5 '.' "ab"
-  ok   stdlib/string.mdk:810: padRight 5 '.' "ab"
-  ok   stdlib/string.mdk:825: center 5 '.' "ab"
+  ok   stdlib/string.mdk:412: countOccurrences "l" "hello"
+  ok   stdlib/string.mdk:414: countOccurrences "ll" "lllll"
+  ok   stdlib/string.mdk:435: prepend "un" "do"
+  ok   stdlib/string.mdk:443: concat ["a", "bc", "d"]
+  ok   stdlib/string.mdk:451: join ", " ["a", "b", "c"]
+  ok   stdlib/string.mdk:467: repeat 3 "ab"
+  ok   stdlib/string.mdk:473: repeat 0 "ab"
+  ok   stdlib/string.mdk:475: repeat (0 - 1) "ab"
+  ok   stdlib/string.mdk:477: stringLength (repeat 30000 "x")
+  ok   stdlib/string.mdk:502: reverse "abc"
+  ok   stdlib/string.mdk:515: trimLeft "  hi  "
+  ok   stdlib/string.mdk:525: trimRight "  hi  "
+  ok   stdlib/string.mdk:535: trim "  hi  "
+  ok   stdlib/string.mdk:566: toUpper "Straße"
+  ok   stdlib/string.mdk:576: toLower "HÉLLO"
+  ok   stdlib/string.mdk:584: capitalize "hello"
+  ok   stdlib/string.mdk:599: replace "l" "L" "hello"
+  ok   stdlib/string.mdk:619: replaceAll "l" "L" "hello"
+  ok   stdlib/string.mdk:673: sliceClamped 1 4 "hello"
+  ok   stdlib/string.mdk:679: sliceClamped 0 100 "abc"
+  ok   stdlib/string.mdk:682: take 100 "abc"
+  ok   stdlib/string.mdk:687: take 3 "hello"
+  ok   stdlib/string.mdk:695: drop 3 "hello"
+  ok   stdlib/string.mdk:703: splitAt 2 "hello"
+  ok   stdlib/string.mdk:714: split "," "a,b,c"
+  ok   stdlib/string.mdk:716: split "," "abc"
+  ok   stdlib/string.mdk:759: lines "a\nb\nc"
+  ok   stdlib/string.mdk:769: stripCR "ab\r"
+  ok   stdlib/string.mdk:771: stripCR "ab"
+  ok   stdlib/string.mdk:785: words "  hello   world "
+  ok   stdlib/string.mdk:804: unlines ["a", "b"]
+  ok   stdlib/string.mdk:819: unwords ["a", "b", "c"]
+  ok   stdlib/string.mdk:831: padLeft 5 '.' "ab"
+  ok   stdlib/string.mdk:845: padRight 5 '.' "ab"
+  ok   stdlib/string.mdk:860: center 5 '.' "ab"
 
 stdlib/string.mdk: 77/77 passed
+Testing "countOccurrences agrees with replaceAll on the removed length" [eval] ... OK (100 tests passed)
+Testing "lastIndexOf hit is an occurrence and no later one exists" [eval] ... OK (100 tests passed)

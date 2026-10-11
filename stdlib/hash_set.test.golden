@@ -14,3 +14,4 @@ running doctests in stdlib/hash_set.mdk
 stdlib/hash_set.mdk: 11/11 passed
 Testing "Display HashSet is layout-independent" [eval] ... OK (100 tests passed)
 Testing "Display HashSet agrees with Eq and lists elements ascending" [eval] ... OK (100 tests passed)
+Testing "display of a one-element HashSet has no separator" [eval] ... OK (100 tests passed)

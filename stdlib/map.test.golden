@@ -50,9 +50,9 @@ running doctests in stdlib/map.mdk
   ok   stdlib/map.mdk:705: eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
   ok   stdlib/map.mdk:712: compare (fromList [(1, 10)]) (fromList [(1, 20)])
   ok   stdlib/map.mdk:719: debug (fromList [(1, 10), (2, 20)])
-  ok   stdlib/map.mdk:733: display (fromList [(1, 10), (2, 20)])
-  ok   stdlib/map.mdk:735: display (empty : Map Int Int)
-  ok   stdlib/map.mdk:755: isEmpty (empty : Map Int Int)
+  ok   stdlib/map.mdk:734: display (fromList [(1, 10), (2, 20)])
+  ok   stdlib/map.mdk:736: display (empty : Map Int Int)
+  ok   stdlib/map.mdk:756: isEmpty (empty : Map Int Int)
 
 stdlib/map.mdk: 54/54 passed
 Testing "fromList builds a well-formed tree" [eval] ... OK (100 tests passed)
@@ -77,3 +77,4 @@ Testing "link rebuilds a well-formed map from a split" [eval] ... OK (100 tests 
 Testing "link2 rejoins a split without its key" [eval] ... OK (100 tests passed)
 Testing "entriesFrom is the limited run of entries from the start key" [eval] ... OK (100 tests passed)
 Testing "entriesFrom bounded on one side only still agrees with entries" [eval] ... OK (100 tests passed)
+Testing "display of a one-entry map has no separator" [eval] ... OK (100 tests passed)

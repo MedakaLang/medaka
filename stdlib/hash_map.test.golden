@@ -17,11 +17,12 @@ running doctests in stdlib/hash_map.mdk
   ok   stdlib/hash_map.mdk:290: elem 20 (fromList [(1, 10), (2, 20)])
   ok   stdlib/hash_map.mdk:292: sum (fromList [(1, 10), (2, 20)])
   ok   stdlib/hash_map.mdk:310: eq (fromList [(1, 10), (2, 20)]) (fromList [(2, 20), (1, 10)])
-  ok   stdlib/hash_map.mdk:337: display (fromList [(2, 20), (1, 10)])
-  ok   stdlib/hash_map.mdk:339: display (new () : HashMap Int Int)
-  ok   stdlib/hash_map.mdk:351: (fromList [(1, 10), (2, 20)])[2]
+  ok   stdlib/hash_map.mdk:338: display (fromList [(2, 20), (1, 10)])
+  ok   stdlib/hash_map.mdk:340: display (new () : HashMap Int Int)
+  ok   stdlib/hash_map.mdk:352: (fromList [(1, 10), (2, 20)])[2]
 
 stdlib/hash_map.mdk: 21/21 passed
 Testing "Display HashMap is layout-independent" [eval] ... OK (100 tests passed)
 Testing "Display HashMap agrees with Eq and lists keys ascending" [eval] ... OK (100 tests passed)
 Testing "Index HashMap agrees with get on present keys" [eval] ... OK (100 tests passed)
+Testing "display of a one-entry HashMap has no separator" [eval] ... OK (100 tests passed)
