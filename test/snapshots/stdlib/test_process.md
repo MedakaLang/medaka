@@ -432,7 +432,7 @@ testAssertionCounts rows =
 {- | How many `medaka test` runs start at once, in `testAssertionCounts` and
    for the per-file children of `medaka test <dir>`:
    `MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
-   processors available to the process (`nproc`, else `getconf`), or 4 when
+   processors available to the process (nproc, else getconf), or 4 when
    that cannot be read.
 
    > testJobs > 0
