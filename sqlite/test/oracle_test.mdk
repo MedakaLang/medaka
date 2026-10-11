@@ -68,6 +68,11 @@ data RowOutput = RowOutput { actual : List String, expected : List String }
 
 -- # Building the demos
 
+-- The batched-build helpers below are a deliberate copy of the same helpers in
+-- dml_oracle_test.mdk (test siblings with no shared module of their own; moving
+-- them into oracle_support.mdk is the consolidation).
+-- lint-disable-file rule-duplicate-body
+
 -- The key a build is shared under: its entry and its flags. Several rows run
 -- one demo (`sqlite/sql_demo.mdk` backs two), so a build is per key, not per
 -- row.
