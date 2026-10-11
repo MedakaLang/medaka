@@ -1,0 +1,691 @@
+{- | DICT-SEMANTICS section 3: emitted LLVM structure, over test/dict_fixtures.
+   Replaces diff_compiler_dict_semantics_ir.sh. The corpus, the discipline and
+   the known-divergence ledger live in test/dict_fixtures/README.md.
+
+   Each distinct fixture entry is built once with `medaka build --keep-ir`
+   (bounded to 60s), and the kept .ll is graded line by line with a POSIX
+   extended regex (regex.isMatch on each line, as grep -cE counts lines):
+     HAS      at least one line matches
+     LACKS    no line matches
+     COUNT=n  exactly n lines match
+   A missing .ll, a failed build, or an invalid regex fails its row; a LACKS
+   row can never pass on a broken pattern.
+
+   Proves: dictionary-parameter arity of emitted definitions (the dead-slot and
+   arity-skew bugs that behaviour cannot see), which dictionary or impl each
+   call site passes (positional identity, cross-module, #1128 three-site drain,
+   #1403 one-word-per-arm), and the canonical dictionary-word constants.
+   Does NOT prove: runtime behaviour (sections 1 and 2 cover values), or any
+   optimisation level (the IR is emitted before clang runs).
+
+   Usage: medaka test <this file>. Needs clang for the builds. -}
+
+import test_process.{medakaBin, underRoot, withScratchDir}
+import compiler_cli_test_support.{boundedInTree}
+import test.{Expectation, expectAll, expectAtLeast, fail, pass}
+import string as S
+import regex as R
+import list as L
+
+fixtures : <IO> String
+fixtures = underRoot "test/dict_fixtures"
+
+data Kind = Has | Lacks | Count Int
+
+-- entry, label, kind, extended regex. One row per assertion of the old table.
+rows : List (String, String, Kind, String)
+rows = [
+  (
+    "s4-gen-sig-declared-context-kept.mdk",
+    "§4 gen: declared-unused constraint still abstracts its dict, arity 2",
+    Has,
+    "^define i64 @mdk_s4_gen_sig_declared_context_kept__sz2\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s3-implreq-nonlead-positional-identity.mdk",
+    "#1981 SHAPE 1/2: conditional Sz impl takes two dicts plus W",
+    Has,
+    "^define i64 @mdk_impl_zZs3_2d_implreq_2d_nonlead_2d_positional_2d_identity_2e_W_sz\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s3-implreq-nonlead-positional-identity.mdk",
+    "#1981 ROUTE 2a/3: first method call reads dict parameter 0",
+    Has,
+    "call i64 @mdk_disp_ix_0_3\\(i64 %arg0,",
+  ),
+  (
+    "s3-implreq-nonlead-positional-identity.mdk",
+    "#1981 ROUTE 2b/3: second method call reads dict parameter 1",
+    Has,
+    "call i64 @mdk_disp_ix_0_3\\(i64 %arg1,",
+  ),
+  (
+    "s3-implreq-nonlead-positional-identity-swapped.mdk",
+    "#1981 ORDER SHAPE: swapped requires keep three-argument definition",
+    Has,
+    "^define i64 @mdk_impl_zZs3_2d_implreq_2d_nonlead_2d_positional_2d_identity_2d_swapped_2e_W_sz\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s3-implreq-nested-positional-identity.mdk",
+    "NESTED IMPL-REQUIRES SHAPE: two nested predicates give two dicts plus W",
+    Has,
+    "^define i64 @mdk_impl_zZs3_2d_implreq_2d_nested_2d_positional_2d_identity_2e_W_sz\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s3-implreq-nested-positional-identity.mdk",
+    "NESTED IMPL-REQUIRES ROUTE 1/2: first nested predicate reads dict 0",
+    Has,
+    "call i64 @mdk_disp_ix_0_2\\(i64 %arg0,",
+  ),
+  (
+    "s3-implreq-nested-positional-identity.mdk",
+    "NESTED IMPL-REQUIRES ROUTE 2/2: second nested predicate reads dict 1",
+    Has,
+    "call i64 @mdk_disp_ix_0_2\\(i64 %arg1,",
+  ),
+  (
+    "s3-implreq-nested-positional-identity-swapped.mdk",
+    "NESTED IMPL-REQUIRES SWAP SHAPE: predicate order changes no cardinality",
+    Has,
+    "^define i64 @mdk_impl_zZs3_2d_implreq_2d_nested_2d_positional_2d_identity_2d_swapped_2e_W_sz\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s3-implreq-nested-positional-identity-swapped.mdk",
+    "NESTED IMPL-REQUIRES SWAP ROUTE 1/2: first call reads its exact slot",
+    Has,
+    "call i64 @mdk_disp_ix_0_2\\(i64 %arg0,",
+  ),
+  (
+    "s3-implreq-nested-positional-identity-swapped.mdk",
+    "NESTED IMPL-REQUIRES SWAP ROUTE 2/2: second call reads the other slot",
+    Has,
+    "call i64 @mdk_disp_ix_0_2\\(i64 %arg1,",
+  ),
+  (
+    "s-nested-encl-positional-identity.mdk",
+    "NESTED DECLARED SHAPE: two nested predicates plus three values give arity five",
+    Has,
+    "^define i64 @mdk_s_nested_encl_positional_identity__f\\(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3, i64 %arg4\\)",
+  ),
+  (
+    "s-nested-encl-positional-identity.mdk",
+    "NESTED DECLARED ROUTE 1/2: first occurrence reads dict 0",
+    Has,
+    "call i64 @mdk_disp_ix_0_2\\(i64 %arg0,",
+  ),
+  (
+    "s-nested-encl-positional-identity.mdk",
+    "NESTED DECLARED ROUTE 2/2: second occurrence reads dict 1",
+    Has,
+    "call i64 @mdk_disp_ix_0_2\\(i64 %arg1,",
+  ),
+  (
+    "s-nested-encl-positional-identity-swapped.mdk",
+    "NESTED DECLARED SWAP SHAPE: exchanging predicates keeps arity five",
+    Has,
+    "^define i64 @mdk_s_nested_encl_positional_identity_swapped__f\\(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3, i64 %arg4\\)",
+  ),
+  (
+    "s-nested-encl-positional-identity-swapped.mdk",
+    "NESTED DECLARED SWAP ROUTE 1/2: first occurrence reads its slot",
+    Has,
+    "call i64 @mdk_disp_ix_0_2\\(i64 %arg0,",
+  ),
+  (
+    "s-nested-encl-positional-identity-swapped.mdk",
+    "NESTED DECLARED SWAP ROUTE 2/2: second occurrence reads the other slot",
+    Has,
+    "call i64 @mdk_disp_ix_0_2\\(i64 %arg1,",
+  ),
+  (
+    "s4-joint-residual-rdict-native.mdk",
+    "#1560 SHAPE 1/2: one joint Conv a b residual yields one dict plus two values",
+    Has,
+    "^define i64 @mdk_s4_joint_residual_rdict_native__f\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s4-joint-residual-rdict-native.mdk",
+    "#1560 RDict 2/2: f forwards its leading dict as the element dict of Wrap conv",
+    Has,
+    "call i64 @mdk_impl_zZs4_2d_joint_2d_residual_2d_rdict_2d_native_2e_Wrap_conv\\(i64 %arg0, i64 %t[0-9]+, i64 %arg2\\)",
+  ),
+  (
+    "s4-gen-rec-nary-one-predicate-slot.mdk",
+    "RECURSIVE CARDINALITY 1/2: one n-ary Ix predicate gives one dict plus three values",
+    Has,
+    "^define i64 @mdk_s4_gen_rec_nary_one_predicate_slot__countDown\\(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3\\)",
+  ),
+  (
+    "s4-gen-rec-nary-one-predicate-slot.mdk",
+    "RECURSIVE FORWARDING 2/2: self-call forwards exactly the one leading dict",
+    Has,
+    "call i64 @mdk_s4_gen_rec_nary_one_predicate_slot__countDown\\(i64 %arg0,",
+  ),
+  (
+    "s4-gen-residual-inferred-context.mdk",
+    "ISSUE 1549 MECHANISM PIN 1/3: gen abstracts a residual dict, nest is arity 2",
+    Has,
+    "^define i64 @mdk_s4_gen_residual_inferred_context__nest\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s4-gen-residual-inferred-context.mdk",
+    "ISSUE 1549 MECHANISM PIN 2/3: abstracted dict is forwarded to the conditional impl",
+    Has,
+    "call i64 @mdk_impl_zZs4_2d_gen_2d_residual_2d_inferred_2d_context_2e_Wrap_tagOf\\(i64 %arg0,",
+  ),
+  (
+    "s4-gen-residual-inferred-context.mdk",
+    "ISSUE 1549 MECHANISM PIN 3/3: the call site supplies that dict as a ptrtoint",
+    Has,
+    "call i64 @mdk_s4_gen_residual_inferred_context__nest\\(i64 ptrtoint",
+  ),
+  (
+    "s4-gen-residual-xmod/main.mdk",
+    "ISSUE 1549 CROSS-MODULE PIN: nest from nest.mdk is emitted at arity 2",
+    Has,
+    "^define i64 @mdk_nest__nest\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s3-assum-inst-precedence-xmod/main.mdk",
+    "#2548 ASSUM MECHANISM PIN: mix from mix.mdk is emitted at arity 2",
+    Has,
+    "^define i64 @mdk_mix__mix\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s3-assum-inst-precedence-xmod/main.mdk",
+    "#2548 ASSUM ROUTE: tagn x dispatches through the forwarded caller dict %arg0",
+    Has,
+    "call i64 @mdk_disp_tagn_0_1\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s3-assum-inst-precedence-xmod/main.mdk",
+    "#2548 INST ROUTE: tagn (True : Bool) is a direct call with no dict argument",
+    Has,
+    "call i64 @mdk_impl_Bool_tagn\\(i64 3\\)",
+  ),
+  (
+    "s4-gen-residual-mixed-vector-accepted.mdk",
+    "ISSUE 1560 MECHANISM PIN 1/2: mixed-vector residual abstracted, f is arity 3",
+    Has,
+    "^define i64 @mdk_s4_gen_residual_mixed_vector_accepted__f\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s4-gen-residual-mixed-vector-accepted.mdk",
+    "ISSUE 1560 MECHANISM PIN 2/2: the call site supplies that dict as a ptrtoint",
+    Has,
+    "call i64 @mdk_s4_gen_residual_mixed_vector_accepted__f\\(i64 ptrtoint",
+  ),
+  (
+    "s4-gen-residual-mixed-no-requires-control.mdk",
+    "ISSUE 1560 CONTROL: with no requires no dict is abstracted, f stays arity 2",
+    Has,
+    "^define i64 @mdk_s4_gen_residual_mixed_no_requires_control__f\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s8-i1-samename-independent-dict-arity/main.mdk",
+    "§8 I1: constrained same-named binding abstracts one dict, arity 2",
+    Has,
+    "^define i64 @mdk_lefty__widget\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s8-i1-samename-independent-dict-arity/main.mdk",
+    "§8 I1: unconstrained same-named binding abstracts none, arity 1",
+    Has,
+    "^define i64 @mdk_righty__widget\\(i64 %arg0\\)",
+  ),
+  (
+    "s8-i1-samename-unconstrained-poly-callee/main.mdk",
+    "§8 I1: polymorphic unconstrained same-named binding abstracts no dict, arity 1",
+    Has,
+    "^define i64 @mdk_umod__pick\\(i64 %arg0\\)",
+  ),
+  (
+    "s8-i1-samename-wildcard-import-callee/main.mdk",
+    "§8 I1: wildcard-imported unconstrained binding abstracts no dict, arity 1",
+    Has,
+    "^define i64 @mdk_umod__pick\\(i64 %arg0\\)",
+  ),
+  (
+    "s3-xe-one-word-per-arm/main.mdk",
+    "#1403 EXIT (a) 1/5: Speak default for Dog is its own symbol",
+    Has,
+    "^define i64 @mdk_default_zZifa_3a__3a_Speak_speak_zZifa_3a__3a_Speak_7c_pets_2e_Dog_7c_\\(",
+  ),
+  (
+    "s3-xe-one-word-per-arm/main.mdk",
+    "#1403 EXIT (a) 2/5: Greet default for the same spelling is a second symbol",
+    Has,
+    "^define i64 @mdk_default_zZifb_3a__3a_Greet_speak_zZifb_3a__3a_Greet_7c_pets_2e_Dog_7c_\\(",
+  ),
+  (
+    "s3-xe-one-word-per-arm/main.mdk",
+    "#1403 EXIT (a) 3/5: no dispatcher arm ORs two words (whole program)",
+    Lacks,
+    "or i1",
+  ),
+  (
+    "s3-xe-one-word-per-arm/main.mdk",
+    "#1403 EXIT (a) 4/5: Speak Dog arm compares the canonical key exactly once",
+    Count 1,
+    "icmp eq i64 %t[0-9]+, -2751636177751982951$",
+  ),
+  (
+    "s3-xe-one-word-per-arm/main.mdk",
+    "#1403 EXIT (a) 5/5: bare head word pets.Dog is compared nowhere",
+    Lacks,
+    "icmp eq i64 %t[0-9]+, 7572793156450537$",
+  ),
+  (
+    "s3-min-subsumes.mdk",
+    "§3 the ground goal resolves statically to the specific impl, a direct call",
+    Has,
+    "call i64 @mdk_impl_Int_dflt\\(",
+  ),
+  (
+    "s3-min-fully-general-sibling.mdk",
+    "#1128 MECHANISM PIN 1/3: the general impl is emitted, not DCE'd",
+    Has,
+    "define i64 @mdk_impl___none___tag\\(",
+  ),
+  (
+    "s3-min-fully-general-sibling.mdk",
+    "#1128 MECHANISM PIN 2/3: general impl called at exactly the two sites it alone matches",
+    Count 2,
+    "call i64 @mdk_impl___none___tag\\(",
+  ),
+  (
+    "s3-min-fully-general-sibling.mdk",
+    "#1128 MECHANISM PIN 3/3: exactly one site calls the Box Int impl",
+    Count 1,
+    "call i64 @mdk_impl_zZs3_2d_min_2d_fully_2d_general_2d_sibling_2e_Box_tag\\(",
+  ),
+  (
+    "s8-i1-dict-param-order.mdk",
+    "§8 I1 ORDER: a two-predicate binding abstracts four parameters",
+    Has,
+    "^define i64 @mdk_s8_i1_dict_param_order__pair2\\(i64 %arg0, i64 %arg1, i64 %arg2, i64 %arg3\\)",
+  ),
+  (
+    "s1-nary-predicate-scheme-kept.mdk",
+    "S-dict-arity-contract: twoParam has one dict slot, three parameters not four",
+    Has,
+    "^define i64 @mdk_s1_nary_predicate_scheme_kept__twoParam\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s3-nary-sig-constraint-goal-vector.mdk",
+    "#1161 ARITY-NEUTRALITY: Ix a Char => a -> Int stays one dict, arity 2",
+    Has,
+    "^define i64 @mdk_s3_nary_sig_constraint_goal_vector__useIx\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "b1-xmod-default-inherited-tag/main.mdk",
+    "INHERITED DEFAULT, CROSS-MODULE: per-instance entry keyed on interface and instance",
+    Has,
+    "call i64 @mdk_default_zZiface_3a__3a_Sz_sz_zZiface_3a__3a_Sz_7c_main_2e_Box_7c_\\(",
+  ),
+  (
+    "b1-xmod-default-inherited-tag/main.mdk",
+    "INHERITED DEFAULT, SAME-MODULE: same route wherever the impl lives",
+    Has,
+    "call i64 @mdk_default_zZiface_3a__3a_Sz_sz_zZiface_3a__3a_Sz_7c_iface_2e_Cup_7c_\\(",
+  ),
+  (
+    "b1-xmod-default-inherited-tag/main.mdk",
+    "INHERITED DEFAULT, THE WORD: receiver carries the canonical key hashName iface::Sz|main.Box",
+    Has,
+    "^@mdk_dc\\.program\\.0 = internal constant \\[1 x i64\\] \\[i64 2985281297046949042\\]",
+  ),
+  (
+    "b1-p4-super-slot-unique-heads/main.mdk",
+    "P4 PC2 (#993): both takes one dict param for its one predicate, arity 2",
+    Has,
+    "^define i64 @mdk_main__both\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "b1-p4-super-slot-unique-heads/main.mdk",
+    "P4 TRIPWIRE (#993): the call passes one constant, dc.program.1, super is a field",
+    Has,
+    "call i64 @mdk_main__both\\(i64 ptrtoint \\(ptr @mdk_dc\\.program\\.1 to i64\\),",
+  ),
+  (
+    "b1-p4-super-slot-unique-heads/main.mdk",
+    "P4 SUPER SEGMENT (#1403): Deriv T cell is two words, the Deriv key then the Base cell",
+    Has,
+    "^@mdk_dc\\.program\\.1 = internal constant \\[2 x i64\\] \\[i64 2273834402390250523, i64 ptrtoint \\(ptr @mdk_dc\\.program\\.0 to i64\\)\\]",
+  ),
+  (
+    "b1-p4-super-slot-unique-heads/main.mdk",
+    "P4 SUPER CELL: one word, the Base T canonical key -3295422983077920291",
+    Has,
+    "^@mdk_dc\\.program\\.0 = internal constant \\[1 x i64\\] \\[i64 -3295422983077920291\\]",
+  ),
+  (
+    "b1-p4-super-slot-unique-heads/main.mdk",
+    "P4 UNIQUE-HEAD CONTROL: one impl at a head gives the bare tag symbol",
+    Has,
+    "call i64 @mdk_impl_zZt_2e_T_btag\\(",
+  ),
+  (
+    "b1-p4-super-slot-colliding-heads/main.mdk",
+    "B-2.2-b1 HEADLINE: route key keeps the declaring module's interface identity (base::Base)",
+    Has,
+    "@mdk_impl_zZbase_3a__3a_Base_7c__28_t_2e_Box_20_Int_29__7c__btag\\(",
+  ),
+  (
+    "b1-p4-super-slot-colliding-heads/main.mdk",
+    "B-2.2-b1 NEGATIVE: the pre-bite identity-free spelling is gone (historical)",
+    Lacks,
+    "@mdk_impl_Base__Box_Int___btag\\(",
+  ),
+  (
+    "b1-p4-super-slot-colliding-heads/main.mdk",
+    "B-2.2-b1 SLOT-WORD SPLIT: the sub cell is the Deriv (Box Int) key with Base as field 1",
+    Has,
+    "^@mdk_dc\\.program\\.1 = internal constant \\[2 x i64\\] \\[i64 -2515820251573694772, i64 ptrtoint \\(ptr @mdk_dc\\.program\\.0 to i64\\)\\]",
+  ),
+  (
+    "b1-p4-super-slot-colliding-heads/main.mdk",
+    "B-2.2-b1 SLOT-WORD SPLIT: the super cell word is its identity-bearing Base key",
+    Has,
+    "^@mdk_dc\\.program\\.0 = internal constant \\[1 x i64\\] \\[i64 -2615642343577690482\\]",
+  ),
+  (
+    "b1-p4-super-slot-colliding-heads/main.mdk",
+    "B-2.2-b1 SLOT-WORD SPLIT: the call receives that one constant",
+    Has,
+    "call i64 @mdk_main__both\\(i64 ptrtoint \\(ptr @mdk_dc\\.program\\.1 to i64\\),",
+  ),
+  (
+    "b1-xmod-same-spelled-iface-impl-selection/main.mdk",
+    "ISSUE 1514: amods impl Same Blob occupies its own module-qualified symbol",
+    Has,
+    "^define i64 @mdk_impl_zZamod_2e_Blob_sizeOf\\(",
+  ),
+  (
+    "b1-xmod-same-spelled-iface-constrained-wrapper/main.mdk",
+    "THE SEGFAULT ASSERTION 1/3: amods generic call handed dict constant amod.0",
+    Has,
+    "call i64 @mdk_amod__aWrap\\(i64 ptrtoint \\(ptr @mdk_dc\\.amod\\.0 to i64\\),",
+  ),
+  (
+    "b1-xmod-same-spelled-iface-constrained-wrapper/main.mdk",
+    "THE SEGFAULT ASSERTION 2/3: zmods generic call handed a different constant, zmod.0",
+    Has,
+    "call i64 @mdk_zmod__zWrap\\(i64 ptrtoint \\(ptr @mdk_dc\\.zmod\\.0 to i64\\),",
+  ),
+  (
+    "b1-xmod-same-spelled-iface-constrained-wrapper/main.mdk",
+    "THE SEGFAULT ASSERTION 3/3: shared dispatcher has an arm reaching zmods impl",
+    Has,
+    "call i64 @mdk_impl_zZzmod_2e_ZBlob_sizeOf\\(",
+  ),
+  (
+    "b1-xmod-same-spelled-iface-impl-selection/main.mdk",
+    "ISSUE 1514 SEPARATION: zmods impl Same Blob is a different symbol from amods",
+    Has,
+    "^define i64 @mdk_impl_zZzmod_2e_Blob_sizeOf\\(",
+  ),
+  (
+    "b4bii-xmod-req-route-leg-still-spelling/main.mdk",
+    "B-4b-ii ROUTE-LEG: the constrained standalone reaches zmods method, not amods",
+    Has,
+    "^  %t0 = call i64 @mdk_impl_zZshared_2e_Box_foo\\(i64 %arg1\\)$",
+  ),
+  (
+    "b4bii-xmod-req-route-leg-still-spelling/main.mdk",
+    "B-4b-ii ROUTE-LEG ARITY: useIt abstracts one dict plus one value",
+    Has,
+    "^define i64 @mdk_zmod__useIt\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s3-nary-sig-constraint-structured-arg.mdk",
+    "#1161 ARITY-NEUTRALITY structured: Ix a (List b) is one slot, arity 3",
+    Has,
+    "^define i64 @mdk_s3_nary_sig_constraint_structured_arg__useIx\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s8-xmod-reexport-alias-unconstrained/main.mdk",
+    "ISSUE 1472 MECHANISM PIN 1/2: println receives a real dict constant, not null",
+    Has,
+    "call i64 @mdk_core__println\\(i64 ptrtoint \\(ptr @mdk_dc\\.[A-Za-z0-9_]+\\.[0-9]+ to i64\\),",
+  ),
+  (
+    "s8-xmod-reexport-alias-unconstrained/main.mdk",
+    "ISSUE 1472 MECHANISM PIN 2/2 (negative): the null-dict operand is absent",
+    Lacks,
+    "call i64 @mdk_core__println\\(i64 0,",
+  ),
+  (
+    "s8-xmod-reexport-alias-unconstrained/main.mdk",
+    "ISSUE 1472 IDENTITY PIN: alias R.g resolves to the definer symbol lib_plain__g",
+    Has,
+    "call i64 @mdk_lib_plain__g\\(",
+  ),
+  (
+    "s8-xmod-reexport-selective-unconstrained-control/main.mdk",
+    "CONTROL: the selective spelling emits the same definer symbol and dict operand",
+    Has,
+    "call i64 @mdk_lib_plain__g\\(",
+  ),
+  (
+    "s8-xmod-reexport-alias-constrained/main.mdk",
+    "ISSUE 1427 MECHANISM PIN: constrained re-exported callee at arity 2 under the definer symbol",
+    Has,
+    "call i64 @mdk_lib_decl__f\\(i64 ptrtoint \\(ptr @mdk_dc\\.[A-Za-z0-9_]+\\.[0-9]+ to i64\\),",
+  ),
+  (
+    "s8-xmod-reexport-alias-wildcard-twoimpl/main.mdk",
+    "RUN-XMOD-070 F1 1/2: wildcard Sz Int call handed dict constant program.0",
+    Has,
+    "call i64 @mdk_lib_decl__f\\(i64 ptrtoint \\(ptr @mdk_dc\\.program\\.0 to i64\\),",
+  ),
+  (
+    "s8-xmod-reexport-alias-wildcard-twoimpl/main.mdk",
+    "RUN-XMOD-070 F1 2/2: same site's Sz String call handed a different dict, program.3",
+    Has,
+    "call i64 @mdk_lib_decl__f\\(i64 ptrtoint \\(ptr @mdk_dc\\.program\\.3 to i64\\),",
+  ),
+  (
+    "s8-xmod-reexport-alias-perm-ab/main.mdk",
+    "#1337 PERMUTATION ORDER 1/2 HALF 1: definer A symbol lib_pa__ga is called",
+    Has,
+    "call i64 @mdk_lib_pa__ga\\(",
+  ),
+  (
+    "s8-xmod-reexport-alias-perm-ab/main.mdk",
+    "#1337 PERMUTATION ORDER 1/2 HALF 2: definer B symbol lib_pb__gb is called",
+    Has,
+    "call i64 @mdk_lib_pb__gb\\(",
+  ),
+  (
+    "s8-xmod-reexport-alias-perm-ba/main.mdk",
+    "#1337 PERMUTATION ORDER 2/2 HALF 1: definer A symbol from the exchanged order",
+    Has,
+    "call i64 @mdk_lib_pa__ga\\(",
+  ),
+  (
+    "s8-xmod-reexport-alias-perm-ba/main.mdk",
+    "#1337 PERMUTATION ORDER 2/2 HALF 2: definer B symbol from the exchanged order",
+    Has,
+    "call i64 @mdk_lib_pb__gb\\(",
+  ),
+  (
+    "s-cardinality-same-iface2.mdk",
+    "S-cardinality (#1866): (Ix a Char, Ix a Bool) => abstracts two dicts, arity 3",
+    Has,
+    "^define i64 @mdk_s_cardinality_same_iface2__useIx\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s-cardinality-inferred.mdk",
+    "S-cardinality (#1869) inferred useIx: one dict slot, arity 3",
+    Has,
+    "^define i64 @mdk_s_cardinality_inferred__useIx\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s-cardinality-inferred.mdk",
+    "S-cardinality (#1869) inferred useJx: one dict slot, arity 3",
+    Has,
+    "^define i64 @mdk_s_cardinality_inferred__useJx\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s-cardinality-inferred-swapped.mdk",
+    "S-cardinality (#1869) swapped order: useIx arity 3",
+    Has,
+    "^define i64 @mdk_s_cardinality_inferred_swapped__useIx\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s-cardinality-inferred-swapped.mdk",
+    "S-cardinality (#1869) swapped order: useJx arity 3",
+    Has,
+    "^define i64 @mdk_s_cardinality_inferred_swapped__useJx\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s-cardinality-signatured.mdk",
+    "S-cardinality (#1869) signatured oracle: useIx arity 3, same as inferred",
+    Has,
+    "^define i64 @mdk_s_cardinality_signatured__useIx\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s-cardinality-signatured.mdk",
+    "S-cardinality (#1869) signatured oracle: useJx arity 3",
+    Has,
+    "^define i64 @mdk_s_cardinality_signatured__useJx\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s-cardinality-xmod-accept/main.mdk",
+    "S-cardinality (#1868) cross-module: lib useIx abstracts arity 3",
+    Has,
+    "^define i64 @mdk_lib__useIx\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s-shadow-standalone-vector-arity.mdk",
+    "FIX-shadow-arity-skew SHADOW half: definer-shadowed size is arity 3, two dicts",
+    Has,
+    "^define i64 @mdk_s_shadow_standalone_vector_arity__size\\(i64 %arg0, i64 %arg1, i64 %arg2\\)",
+  ),
+  (
+    "s-shadow-standalone-vector-arity.mdk",
+    "FIX-shadow-arity-skew UNRELATED half: plain keeps exactly one dict, arity 2",
+    Has,
+    "^define i64 @mdk_s_shadow_standalone_vector_arity__plain\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s2-super-declared-single-level.mdk",
+    "#679/#993 DECLARED ARITY: useHi takes its declared one dict plus one value",
+    Has,
+    "^define i64 @mdk_s2_super_declared_single_level__useHi\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s2-super-chain3.mdk",
+    "#679/#993 DECLARED ARITY: three-level super chain reached through one Top dict",
+    Has,
+    "^define i64 @mdk_s2_super_chain3__useTop\\(i64 %arg0, i64 %arg1\\)",
+  ),
+  (
+    "s2-requires-super-projected.mdk",
+    "#679/#993 DECLARED ARITY: impl with requires Hi a takes one requires-dict plus one value",
+    Has,
+    "^define i64 @mdk_impl_zZs2_2d_requires_2d_super_2d_projected_2e_Box_hi\\(i64 %arg0, i64 %arg1\\)",
+  ),
+]
+
+entryOf : (String, String, Kind, String) -> String
+entryOf (e, _, _, _) = e
+
+rowName : (String, String, Kind, String) -> String
+rowName (e, label, _, _) = "\{e} | \{label}"
+
+-- Distinct entries, first occurrence order, so each fixture builds once.
+distinct : List String -> List String
+distinct [] = []
+distinct (x :: r) = x :: distinct (L.filter (/= x) r)
+
+-- Output stem for an entry: `/` and `.` become `_`, so the kept IR is
+-- `<work>/<stem>.ir.ll`.
+irName : String -> String
+irName e = S.replaceAll "/" "_" (S.replaceAll "." "_" e)
+
+-- Build one fixture with its kept IR, and return the IR text.
+buildOne : String -> String -> <Exec, IO, FileRead> Result String String
+buildOne work entry = match boundedInTree 60 medakaBin [
+  "build",
+  "--keep-ir",
+  "\{fixtures}/\{entry}",
+  "-o",
+  "\{work}/\{irName entry}.ir",
+]
+  Err e => Err "could not spawn build: \{e}"
+  Ok (code, _, _) =>
+    if code /= 0 then
+      Err "build exited \{intToString code}"
+    else
+      readFile "\{work}/\{irName entry}.ir.ll"
+
+buildEach : String ->
+  List String ->
+  <Exec, IO, FileRead> List (String, Result String String)
+buildEach _ [] = []
+buildEach work (e :: r) = (e, buildOne work e) :: buildEach work r
+
+irFor : String ->
+  List (String, Result String String) ->
+  Option (Result String String)
+irFor _ [] = None
+irFor e ((k, v) :: r) = if k == e then Some v else irFor e r
+
+-- Number of IR lines the regex matches (grep -c semantics).
+hitCount : String -> String -> Int
+hitCount pat ir = match R.compile pat
+  Err _ => -1
+  Ok re => length (L.filter (l => R.isMatch re l) (S.lines ir))
+
+-- Each verdict returns "" when the row is green, else its failure message.
+verdict : String -> Kind -> Int -> String
+verdict label Has n = if n > 0 then "" else "HAS not found: \{label}"
+verdict label Lacks n =
+  if n == 0 then "" else "LACKS found \{intToString n} line(s): \{label}"
+verdict label (Count want) n =
+  if n == want then
+    ""
+  else
+    "COUNT=\{intToString want} but found \{intToString n}: \{label}"
+
+-- Problem text for one row, "" when green. Every row is evaluated, so a
+-- single run names every red row.
+rowProblem : List (String, Result String String) ->
+  (String, String, Kind, String) ->
+  String
+rowProblem irs (entry, label, kind, pat) = match irFor entry irs
+  None => "\{entry}: no build was attempted"
+  Some (Err e) => "\{entry}: no kept IR (build failed or .ll missing): \{e}"
+  Some (Ok ir) =>
+    if hitCount pat ir == -1 then
+      "invalid regex: \{pat}"
+    else
+      verdict label kind (hitCount pat ir)
+
+-- Problem line for a row: "" when green, else "<entry> | <label>: <why>".
+rowLine : List (String, Result String String) ->
+  (String, String, Kind, String) ->
+  String
+rowLine irs r = match rowProblem irs r
+  "" => ""
+  msg => "\{rowName r} :: \{msg}"
+
+section3 : String -> <Exec, IO, FileRead, FileWrite> Expectation
+section3 work =
+  let irs = buildEach work (distinct (map entryOf rows))
+  let red = filter (/= "") (map (r => rowLine irs r) rows)
+  expectAll [
+    expectAtLeast 92 (length rows),
+    reportRed red,
+  ]
+
+-- One failure naming every red row, or pass when none is red.
+reportRed : List String -> Expectation
+reportRed [] = pass
+reportRed red =
+  fail "\{intToString (length red)} red row(s):\n\{S.join "\n" red}"
+
+test "diff_compiler_dict_semantics_ir (section 3): emitted LLVM dict arity and impl routing" =
+  withScratchDir section3
