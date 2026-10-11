@@ -45,6 +45,7 @@ import core.{
   Index,
 }
 import list.{reverse, take}
+import string.{join}
 
 {- | The map type.
 
@@ -723,10 +724,10 @@ export impl Debug (Map k v) requires Debug k, Debug v where
 
 -- Comma-joined `k => v` entries for `Display (Map k v)`; keys/values render via
 -- `display` (unquoted), the Display convention.  `entries` gives ascending pairs.
+-- One `join` over the rendered entries: the recursive form copied the whole
+-- remaining string at every entry, which is quadratic in the map's size.
 displayMapEntries : (Display k, Display v) => List (k, v) -> String
-displayMapEntries [] = ""
-displayMapEntries [(k, v)] = "\{k} => \{v}"
-displayMapEntries ((k, v) :: rest) = "\{k} => \{v}, \{displayMapEntries rest}"
+displayMapEntries es = join ", " (map ((k, v) => "\{k} => \{v}") es)
 
 {- | `display` renders a map in its literal syntax, `Map { k => v, ... }`.
 
@@ -949,3 +950,7 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
     && eq
       (entriesFrom (Some k) None m)
       (filter ((key, _) => gte key k) (entries m))
+
+-- The separator joins entries, so a one-entry map has none.
+prop "display of a one-entry map has no separator" (k : Int) (v : Int) =
+  display (singleton k v) == "Map { \{k} => \{v} }"

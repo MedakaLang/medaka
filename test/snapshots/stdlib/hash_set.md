@@ -1,5 +1,5 @@
 # META
-source_lines=291
+source_lines=296
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable set of distinct elements, keyed by hash.
@@ -27,6 +27,7 @@ stages=DESUGAR,MARK
 
 import core.{Ordering(..), Ord, Debug, Display, Foldable, Hashable}
 import list as L
+import string.{join}
 
 {- | The hash set type. Its fields are the bucket array and the element
    count, both mutable. -}
@@ -254,10 +255,10 @@ export impl Debug (HashSet a) requires Debug a where
 -- `display s == display (fromList (toList s))`.  The sort is `list.sort`: one
 -- ordering routine for the whole stdlib.
 
+-- One `join` over the rendered elements; the recursive form copied the whole
+-- remaining string at every element, which is quadratic in the set's size.
 displayItems : Display a => List a -> String
-displayItems [] = ""
-displayItems [x] = "\{x}"
-displayItems (y :: rest) = "\{y}, \{displayItems rest}"
+displayItems xs = join ", " (map display xs)
 
 {- | `display` renders a set as `HashSet { x, ... }` with the elements in
    ascending order, so the text depends only on the elements.
@@ -293,9 +294,14 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
   let a = fromList xs
   let b = fromList (L.reverse xs)
   ascendingL (L.sort (elemList a)) && eq a b == (display a == display b)
+
+-- The separator joins elements, so a one-element set has none.
+prop "display of a one-element HashSet has no separator" (x : Int) =
+  display (fromList [x]) == "HashSet { \{x} }"
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
 (DUse false (UseAlias ("list") "L"))
+(DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "HashSet" ("a") ((variant "HashSet" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
 (DFunDef false "initialCapacity" () (ELit (LInt 8)))
@@ -354,9 +360,7 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displayItems" ((PList)) (ELit (LString "")))
-(DFunDef false "displayItems" ((PList (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString ""))))
-(DFunDef false "displayItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "y"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "displayItems") (EVar "rest")))) (ELit (LString ""))))
+(DFunDef false "displayItems" ((PVar "xs")) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "display")) (EVar "xs"))))
 (DImpl true "Display" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Display" ((TyVar "a"))) (req "Ord" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "s"))) (arm (PList) () (ELit (LString "HashSet {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EVar "display") (EApp (EVar "displayItems") (EVar "xs")))) (ELit (LString " }"))))))))
 (DTypeSig false "ascendingL" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "ascendingL" ((PList)) (EVar "True"))
@@ -364,9 +368,11 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DFunDef false "ascendingL" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest")))) (EBinOp "&&" (EApp (EApp (EVar "lte") (EVar "x")) (EVar "y")) (EApp (EVar "ascendingL") (EBinOp "::" (EVar "y") (EVar "rest")))))
 (DProp false "Display HashSet is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "display") (EVar "s")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "toList") (EVar "s"))))) (EBinOp "==" (EApp (EVar "display") (EVar "s")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EApp (EVar "toList") (EVar "s"))))))))))
 (DProp false "Display HashSet agrees with Eq and lists elements ascending" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EVar "ascendingL") (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "a")))) (EBinOp "==" (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b")) (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "b"))))))))
+(DProp false "display of a one-element HashSet has no separator" ((pp "x" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "display") (EApp (EVar "fromList") (EListLit (EVar "x")))) (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " }")))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
 (DUse false (UseAlias ("list") "L"))
+(DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "HashSet" ("a") ((variant "HashSet" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
 (DFunDef false "initialCapacity" () (ELit (LInt 8)))
@@ -425,9 +431,7 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EDictApp "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displayItems" ((PList)) (ELit (LString "")))
-(DFunDef false "displayItems" ((PList (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString ""))))
-(DFunDef false "displayItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "y"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EDictApp "displayItems") (EVar "rest")))) (ELit (LString ""))))
+(DFunDef false "displayItems" ((PVar "xs")) (EApp (EApp (EVar "join") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EMethodRef "display")) (EVar "xs"))))
 (DImpl true "Display" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Display" ((TyVar "a"))) (req "Ord" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "s"))) (arm (PList) () (ELit (LString "HashSet {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EMethodRef "display") (EApp (EDictApp "displayItems") (EVar "xs")))) (ELit (LString " }"))))))))
 (DTypeSig false "ascendingL" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "ascendingL" ((PList)) (EVar "True"))
@@ -435,3 +439,4 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DFunDef false "ascendingL" ((PCons (PVar "x") (PCons (PVar "y") (PVar "rest")))) (EBinOp "&&" (EApp (EApp (EMethodRef "lte") (EVar "x")) (EVar "y")) (EApp (EDictApp "ascendingL") (EBinOp "::" (EVar "y") (EVar "rest")))))
 (DProp false "Display HashSet is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EMethodRef "display") (EVar "s")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EMethodRef "toList") (EVar "s"))))) (EBinOp "==" (EApp (EMethodRef "display") (EVar "s")) (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EApp (EVar "L.reverse") (EApp (EMethodRef "toList") (EVar "s"))))))))))
 (DProp false "Display HashSet agrees with Eq and lists elements ascending" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EDictApp "fromList") (EApp (EVar "L.reverse") (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EDictApp "ascendingL") (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "a")))) (EBinOp "==" (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "b")) (EBinOp "==" (EApp (EMethodRef "display") (EVar "a")) (EApp (EMethodRef "display") (EVar "b"))))))))
+(DProp false "display of a one-element HashSet has no separator" ((pp "x" (TyCon "Int"))) (EBinOp "==" (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EListLit (EVar "x")))) (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " }")))))

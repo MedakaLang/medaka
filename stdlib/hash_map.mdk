@@ -30,6 +30,7 @@ import core.{
   Ordering(..), Ord, Debug, Display, Option, Mappable, Hashable, Index
 }
 import list as L
+import string.{join}
 
 {- | The hash table type. Its fields are the bucket array and the entry
    count, both mutable. -}
@@ -326,10 +327,10 @@ export impl Debug (HashMap k v) requires Debug k, Debug v where
 -- `list.sortOn fst`: one ordering routine for the whole stdlib.
 
 -- Comma-joined `k => v` entries, mirroring `map.mdk`'s `displayMapEntries`.
+-- One `join` over the rendered entries; the recursive form copied the whole
+-- remaining string at every entry, which is quadratic in the table's size.
 displayEntries : (Display k, Display v) => List (k, v) -> String
-displayEntries [] = ""
-displayEntries [(k, v)] = "\{k} => \{v}"
-displayEntries ((k, v) :: rest) = "\{k} => \{v}, \{displayEntries rest}"
+displayEntries es = join ", " (map ((k, v) => "\{k} => \{v}") es)
 
 {- | `display` renders a table as `HashMap { k => v, ... }` with the entries
    in ascending key order, so the text depends only on the entries.
@@ -387,3 +388,7 @@ ascendingKeys ((k1, _) :: (k2, v2) :: rest) =
 prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
   let m = fromList xs
   all (k => eq (Some m[k]) (get k m)) (keys m)
+
+-- The separator joins entries, so a one-entry table has none.
+prop "display of a one-entry HashMap has no separator" (k : Int) (v : Int) =
+  display (fromList [(k, v)]) == "HashMap { \{k} => \{v} }"
