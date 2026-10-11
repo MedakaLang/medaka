@@ -55,7 +55,16 @@
 #   --base-branch B    branch the new landing branch is cut FROM and the one
 #                       the human-merge command above targets (default: the
 #                       current branch's upstream, else "main")
+#   --job-walls RUN_ID [ATTEMPT]
+#                       read-only: print "<job name> <ms>" for each completed job of
+#                       that run (Actions started_at -> completed_at), then exit.
 #   --stale-threshold N  accepted and ignored (retired with the staleness guard).
+#
+# JOB WALL: each shard report is handed to the ingest with a `"jobWallMs"` line
+# added beside `rowElapsedMs`, read from `gh api .../runs/<id>/attempts/<n>/jobs`
+# (the matrix job is named after the shard). run_gates.sh runs INSIDE the job and
+# cannot measure its own wall (runner queue and setup/post steps included). A shard
+# with no completed job of that name gets NO line, and the ingest refuses it.
 #
 # SUPERSEDE (replaces the old staleness guard, which refused forever once its
 # own advance PR failed CI: 2026-10-08, PR #3896 drifted 396 files and wedged
@@ -80,6 +89,8 @@ DRY=0
 REMOTE="origin"
 BASE_BRANCH=""
 STALE_THRESHOLD=20
+JW_RUN=""
+JW_ATT=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -89,8 +100,10 @@ while [ "$#" -gt 0 ]; do
     --push-remote)    REMOTE="$2"; shift 2 ;;
     --base-branch)    BASE_BRANCH="$2"; shift 2 ;;
     --stale-threshold) STALE_THRESHOLD="$2"; shift 2 ;;
+    --job-walls)      JW_RUN="$2"; shift 2
+                      case "${1:-}" in ''|-*) ;; *) JW_ATT="$1"; shift ;; esac ;;
     -h|--help)
-      sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) echo "gate_cost_collect: unknown argument: $1"; exit 1 ;;
@@ -98,6 +111,44 @@ while [ "$#" -gt 0 ]; do
 done
 
 command -v gh >/dev/null 2>&1 || { echo "gate_cost_collect: needs 'gh' on PATH"; exit 1; }
+
+# Job walls of one run attempt as "<job name> <ms>" lines; completed jobs only.
+# Prints nothing (and succeeds) when the API call fails: the caller treats a
+# missing job as "no wall", which the ingest then refuses by name.
+_job_walls() { # $1 = run id, $2 = attempt (empty -> latest)
+  if [ -n "${2:-}" ]; then _path="attempts/$2/jobs"; else _path="jobs"; fi
+  gh api "repos/$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)/actions/runs/$1/$_path?per_page=100" 2>/dev/null \
+    | python3 -c '
+import json, sys
+from datetime import datetime
+def t(s): return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ")
+try:
+    jobs = json.load(sys.stdin).get("jobs", [])
+except Exception:
+    jobs = []
+for j in jobs:
+    if j.get("started_at") and j.get("completed_at"):
+        print(j["name"], int((t(j["completed_at"]) - t(j["started_at"])).total_seconds() * 1000))
+'
+}
+
+if [ -n "$JW_RUN" ]; then
+  command -v gh >/dev/null 2>&1 || { echo "gate_cost_collect: needs 'gh' on PATH"; exit 1; }
+  _job_walls "$JW_RUN" "$JW_ATT"
+  exit 0
+fi
+
+# Add `"jobWallMs": N,` after the `rowElapsedMs` line of a gate-cost/1 report
+# whose shard has a job in the run. Oracle reports and shards without a job are
+# left untouched.
+_inject_job_wall() { # $1 = report, $2 = job-walls file for its run attempt
+  grep -q '^  "schema": "gate-cost/1",$' "$1" || return 0
+  grep -q '^  "jobWallMs": ' "$1" && return 0
+  _shard="$(sed -n 's/^    "shard": "\(.*\)",\{0,1\}$/\1/p' "$1" | head -n 1)"
+  _ms="$(awk -v n="$_shard" '$1 == n { print $2; exit }' "$2")"
+  [ -n "$_shard" ] && [ -n "$_ms" ] || { echo "gate_cost_collect: $1 — no completed job named '$_shard' in the run's jobs (no jobWallMs added)"; return 0; }
+  awk -v ms="$_ms" '{ print } /^  "rowElapsedMs": / { printf "  \"jobWallMs\": %s,\n", ms }' "$1" >"$1.jw" && mv "$1.jw" "$1"
+}
 
 if [ -z "$BASE_BRANCH" ]; then
   BASE_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
@@ -164,6 +215,15 @@ if [ "$found_any" = "0" ]; then
   echo "gate_cost_collect: zero admissible runs carried gate-timings artifacts — nothing to ingest (clean skip)."
   exit 0
 fi
+
+for rep in $(find "$WORK" -name '*.json'); do
+  _att="$(sed -n 's/^    "runAttempt": "\(.*\)",\{0,1\}$/\1/p' "$rep" | head -n 1)"
+  _rid="$(sed -n 's/^    "runId": "\(.*\)",\{0,1\}$/\1/p' "$rep" | head -n 1)"
+  [ -n "$_rid" ] || continue
+  _jw="$WORK/jobwalls-$_rid-$_att"
+  [ -f "$_jw" ] || _job_walls "$_rid" "$_att" >"$_jw"
+  _inject_job_wall "$rep" "$_jw"
+done
 
 reports="$(find "$WORK" -name '*.json')"
 

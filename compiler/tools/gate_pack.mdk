@@ -1579,7 +1579,7 @@ balDefaultTag False = ""
    wall clock (`rowElapsedMs`, S-1/#2208) beside this model's GATE makespan for
    the COMMITTED assignment, and the residual between them.  `rowElapsedMs`
    spans `run_gates.sh` alone, so it is graded against `rgateMs`, never the
-   setup-inclusive `rload`; `balCalibJob` prints the job wall beside it.
+   setup-inclusive `rload`; `balJobLine` grades that against `jobWallMs`.
 
    READ THE CAVEAT BEFORE READING THE NUMBERS.  A residual is only meaningful
    while the recorded run and the committed assignment describe the SAME gate
@@ -1680,10 +1680,10 @@ balRowKeys rn (c :: cs)
 
 balCalibLine : List Cand -> Row -> List RunRecord -> String
 balCalibLine cands r runs = match latestRunForShard r.rname runs
-  None => "    \{balPadR 10 r.rname} (no recorded run)"
+  None => "    \{balPadR 10 r.rname} (no recorded run)\{balJobLine r runs}"
   Some rr => match rr.rowElapsedMs
     None =>
-      "    \{balPadR 10 r.rname} (run \{rr.runId} recorded no rowElapsedMs)"
+      "    \{balPadR 10 r.rname} (run \{rr.runId} recorded no rowElapsedMs)\{balJobLine r runs}"
     Some e =>
       let g = r.rgateMs
       let d = e - g
@@ -1694,17 +1694,59 @@ balCalibLine cands r runs = match latestRunForShard r.rname runs
           rr.gates
           (balRowDigest r.rname cands)
           rr.gatesDigest
-      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs g)}   residual \{balPadL 9 (balDelta d)}\{pct}\{balCalibJob r}\{stale}"
+      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs g)}   residual \{balPadL 9 (balDelta d)}\{pct}\{stale}\{balJobLine r runs}"
 
--- The predicted JOB wall beside the gate-wall comparison.  `runs[]` records
--- only the gate wall (`rowElapsedMs`), so the job wall has nothing recorded to
--- be graded against here; it is printed for comparison with the Actions job
--- duration, which is where the setup it adds is measured.
-balCalibJob : Row -> String
-balCalibJob r
-  | r.rload == r.rgateMs = ""
+-- The job-wall grade of one row: the model's predicted job wall (`rload`,
+-- setup-inclusive) against the Actions job duration the row's latest recorded
+-- run carries (`jobWallMs`).  A run without one, or a row without a run, is
+-- `JobUngradeable`: it is neither within the band nor a 0% error.
+data JobGrade = JobUngradeable String | JobGraded Int Int Bool
+
+-- The contract's bar for the predicted job wall, in percent of the measured.
+balJobBandPct : Int
+balJobBandPct = 15
+
+balJobGrade : Row -> List RunRecord -> JobGrade
+balJobGrade r runs = match latestRunForShard r.rname runs
+  None => JobUngradeable "no recorded run"
+  Some rr => match rr.jobWallMs
+    None => JobUngradeable "run \{rr.runId} recorded no jobWallMs"
+    Some m => balJobGraded r rr m
+
+balJobGraded : Row -> RunRecord -> Int -> JobGrade
+balJobGraded r rr m
+  | m <= 0 = JobUngradeable "run \{rr.runId} recorded a non-positive jobWallMs"
   | otherwise =
-    "   job wall predicted \{balPadL 9 (balSecs r.rload)} (setup \{balSecs (r.rload - r.rgateMs)})"
+    let d = r.rload - m
+    JobGraded m d ((if d < 0 then 0 - d else d) * 100 <= balJobBandPct * m)
+
+balSignedPct : Int -> Int -> String
+balSignedPct d m
+  | d < 0 = "-\{intToString (0 - d * 100 / m)}%"
+  | otherwise = "+\{intToString (d * 100 / m)}%"
+
+balJobLine : Row -> List RunRecord -> String
+balJobLine r runs = match balJobGrade r runs
+  JobUngradeable why =>
+    "\n    \{balPadR 10 ""} job wall predicted \{balPadL 9 (balSecs r.rload)}   not gradeable (\{why})"
+  JobGraded m d within =>
+    let verdict = if within then "within" else "OUTSIDE"
+    "\n    \{balPadR 10 ""} job wall predicted \{balPadL 9 (balSecs r.rload)}   measured \{balPadL 9 (balSecs m)}   \{balPadL 6 (balSignedPct d m)}  \{verdict} ±\{intToString balJobBandPct}%"
+
+-- Counts over the rows: (within, outside, not gradeable).
+balJobTally : List Row -> List RunRecord -> (Int, Int, Int)
+balJobTally [] _ = (0, 0, 0)
+balJobTally (r :: rs) runs =
+  let (w, o, u) = balJobTally rs runs
+  match balJobGrade r runs
+    JobUngradeable _ => (w, o, u + 1)
+    JobGraded _ _ True => (w + 1, o, u)
+    JobGraded _ _ False => (w, o + 1, u)
+
+balJobSummary : List Row -> List RunRecord -> String
+balJobSummary rows runs =
+  let (w, o, u) = balJobTally rows runs
+  "  job-wall calibration (predicted rload vs Actions job duration, bar ±\{intToString balJobBandPct}%): \{intToString w} within, \{intToString o} outside, \{intToString u} not gradeable of \{intToString (listLen rows)} rows\n"
 
 {- | What the incumbent preference bought, and what it cost — on EVERY run, in
    ordinary output, derived rather than asserted.
@@ -2400,11 +2442,12 @@ balCompute regPath setup gates shs base runs regSrc =
           -- would grade the model against a gate set that has never run.
           "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n",
           if setup.modelled then
-            "  (recorded and predicted are the GATE wall, rowElapsedMs; runs[] records no job wall, so the predicted job wall is printed for comparison with the Actions job duration)\n"
+            "  (recorded and predicted are the GATE wall, rowElapsedMs; the job-wall line under each row grades the predicted job wall against jobWallMs, the Actions job duration)\n"
           else
             "",
           joinNl (balCalibLines cs curRows runs),
           "\n",
+          balJobSummary curRows runs,
         ]
       match balEnforce cs rows
         Some m => Err "\{head}\{m}"
