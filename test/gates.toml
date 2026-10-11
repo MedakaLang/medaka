@@ -424,6 +424,95 @@ corpus = []
 toolchain = []
 
 [[gate]]
+name = "pds/nightly/inlang_eval_engine"
+area = "engines"
+shard = "other-job"
+project = "pds"
+tiers = ["nightly"]
+# 15 of the 16 inlang suites on the eval interpreter (http alone is 155s there,
+# 2.5s native); ratelimit_test stays on eval in the PR-path gate, where native
+# fails its allocation-scaling test (#3653). Reachability is the
+# `pds-eval-engines` job in .github/workflows/nightly.yml, a
+# `medaka test --native` step.
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "pds/nightly/inlang_eval_engine_test.mdk"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pds/nightly/mst_vectors_eval_engine"
+area = "engines"
+shard = "other-job"
+project = "pds"
+tiers = ["nightly"]
+# The MST vector corpora on the eval interpreter against native (~61s).
+# Reachability: the `pds-eval-engines` job in .github/workflows/nightly.yml.
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "pds/nightly/mst_vectors_eval_engine_test.mdk"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pds/nightly/read_routes_eval_engine"
+area = "engines"
+shard = "other-job"
+project = "pds"
+tiers = ["nightly"]
+# The read-routes transcript on the eval interpreter against native (~52s).
+# Reachability: the `pds-eval-engines` job in .github/workflows/nightly.yml.
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "pds/nightly/read_routes_eval_engine_test.mdk"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pds/nightly/did_key_eval_engine"
+area = "engines"
+shard = "other-job"
+project = "pds"
+tiers = ["nightly"]
+# The did:key vectors on the eval interpreter against native (~67s).
+# Reachability: the `pds-eval-engines` job in .github/workflows/nightly.yml.
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "pds/nightly/did_key_eval_engine_test.mdk"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
+name = "pds/nightly/secp256k1_point_eval_engine"
+area = "engines"
+shard = "other-job"
+project = "pds"
+tiers = ["nightly"]
+# The secp256k1 point-vector sample (rows 17, 19, 25) on the eval interpreter;
+# row 17 is the 256-round ladder, ~45s there and 0.07s native.
+# Reachability: the `pds-eval-engines` job in .github/workflows/nightly.yml.
+cost = "cheap"
+kind = "native"
+migration = "done"
+run = "pds/nightly/secp256k1_point_eval_engine_test.mdk"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/test/atsyntax_vectors"
 area = "engines"
 shard = "gates_5"
@@ -536,8 +625,9 @@ corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
 # Two unrelated sections (#2592, #2595), two `test` blocks in one module. One
-# is a three-engine value differential over a ledgered corpus, a
-# pds/test/vector_runner.mdk row. The other is a MUTATION self-test: it copies
+# is a native == Wasm value differential over a ledgered corpus, a
+# pds/test/vector_runner.mdk row (its eval arm is
+# pds/nightly/did_key_eval_engine). The other is a MUTATION self-test: it copies
 # the pds tree, replaces one anchor in pds/lib/did_key.mdk or in the driver,
 # and requires the rebuilt driver to FAIL carrying a named witness. That
 # section grades this gate's own assertions rather than the implementation,
@@ -722,8 +812,9 @@ sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
-# The same pair of sections as pds/test/protocol_all_engines: a three-engine
-# value differential over hand-authored cells, and a mutation self-test that
+# The same pair of sections as pds/test/protocol_all_engines: a native == Wasm
+# value differential over hand-authored cells (its eval arm is
+# pds/nightly/read_routes_eval_engine), and a mutation self-test that
 # rewrites one line of pds/test/read_routes_all_engines_main.mdk at a time and
 # requires the rebuilt driver to fail with that mutation's named witness.
 [[gate]]
@@ -733,7 +824,8 @@ shard = "gates_1"
 project = "pds"
 tiers = ["merge"]
 # Repository-free by construction (see the test's module doc): no signing, so
-# the eval arm is seconds, not the >10-minute band #2181 removed from this project.
+# the native and Wasm arms are seconds, not the >10-minute band #2181 removed
+# from this project.
 cost = "medium"
 kind = "native"
 migration = "done"

@@ -1,0 +1,31 @@
+{- | The named malformed `did:key` cells and the substrings a passing driver
+   run must print, shared by `pds/test/did_key_all_engines_test.mdk` and
+   `pds/nightly/did_key_eval_engine_test.mdk`.
+
+   Each cell name is printed by the driver as `MALFORMED <name> PASS`, so the
+   needle list grades every cell by name, not only the count of them. -}
+
+export
+malformedCells : List String
+malformedCells = [
+  "wrong-method",
+  "wrong-method-case",
+  "missing-multibase",
+  "invalid-multibase",
+  "invalid-base58",
+  "wrong-codec",
+  "nonminimal-codec",
+  "empty-payload",
+  "short-payload",
+  "long-payload",
+  "trailing-payload",
+  "invalid-sec1-prefix",
+  "invalid-sec1-x",
+  "invalid-sec1-nonsquare",
+]
+
+export
+didKeyNeedles : List String
+didKeyNeedles =
+  ["external: 16/16 official-PDS rows", "malformed: 14/14 rejected"]
+    ++ map (l => "MALFORMED \{l} PASS") malformedCells

@@ -1,0 +1,46 @@
+{- | The eval interpreter runs the MST vector driver over the same two
+   ledgered corpora, and must print the same substrings, as the merge-tier
+   `pds/test/mst_vectors` row grades natively and on Wasm. The row also
+   requires the interpreter's stdout to match the native arm's byte for byte.
+
+   It runs nightly, not in the merge queue: the cost is the interpreter, not
+   the assertions. The corpora and substrings are shared with the merge-tier
+   row through `pds/test/mst_vectors_support.mdk`. -}
+
+import test.mst_vectors_support.{mstCorpora, routeNeeds}
+import test.vector_runner.{
+  Arm(..),
+  Bound(..),
+  Corpus(..),
+  Engine(..),
+  Row(..),
+  expectRow,
+}
+
+gate : String
+gate = "pds/nightly/mst_vectors_eval_engine"
+
+arm : Engine -> List String -> Arm
+arm e needs = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = needs,
+  lastLine = Some "TOTAL: PASS",
+  exactStdout = None,
+}
+
+row : Row
+row = Row {
+  gate = gate,
+  driver = "pds/test/mst_vectors_main.mdk",
+  corpus = Explicit mstCorpora,
+  corpusCount = Exactly 2,
+  sourceShapes = [],
+  oracle = None,
+  arms = [arm NativeEngine routeNeeds, arm EvalEngine routeNeeds],
+  parity = True,
+}
+
+test "MST: the eval interpreter prints the native binary's bytes and every named MST route" =
+  expectRow row

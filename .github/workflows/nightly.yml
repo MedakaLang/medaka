@@ -581,6 +581,68 @@ jobs:
           gate-label: "pds repo_vectors_eval_engine"
 
   # Charter clause: N1 (docs/ops/CI-ARCHITECTURE.md §3.6 — cost above threshold — irreducible wall-clock cost would pole a merge-tier shard).
+  pds-eval-engines:
+    name: "pds/nightly/*_eval_engine_test.mdk (eval interp == native: inlang suites, MST, read routes, did:key, secp256k1)"
+    runs-on: ubuntu-latest
+    # Interpreter time dominates: the 15 inlang suites are ~3 min and the four
+    # vector arms add ~5 min. Checkout/toolchain/build come on top.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
+
+      # MOVED HERE FROM the pds gates in the PR/queue tiers: each is a
+      # `medaka run`/`--engines eval` arm that cost 45-640s on the interpreter
+      # for routes the native and Wasm arms grade byte-exact in seconds. What
+      # runs here is the interpreter's own agreement, a BREADTH arm. Every step
+      # runs even when an earlier one failed, so one red arm does not hide the
+      # others. PLAIN pass/fail: a deterministic engine differential, so a red
+      # run is a genuine regression.
+      - name: Inlang suites on the eval interpreter
+        env:
+          MEDAKA_ROOT: ${{ github.workspace }}
+        run: ./medaka test --native pds/nightly/inlang_eval_engine_test.mdk
+
+      - name: MST vectors, eval interpreter vs native
+        if: success() || failure()
+        env:
+          MEDAKA_ROOT: ${{ github.workspace }}
+        run: ./medaka test --native pds/nightly/mst_vectors_eval_engine_test.mdk
+
+      - name: Read routes, eval interpreter vs native
+        if: success() || failure()
+        env:
+          MEDAKA_ROOT: ${{ github.workspace }}
+        run: ./medaka test --native pds/nightly/read_routes_eval_engine_test.mdk
+
+      - name: did:key vectors, eval interpreter vs native
+        if: success() || failure()
+        env:
+          MEDAKA_ROOT: ${{ github.workspace }}
+        run: ./medaka test --native pds/nightly/did_key_eval_engine_test.mdk
+
+      - name: secp256k1 point vectors, eval interpreter sample
+        if: success() || failure()
+        env:
+          MEDAKA_ROOT: ${{ github.workspace }}
+        run: ./medaka test --native pds/nightly/secp256k1_point_eval_engine_test.mdk
+
+      - name: File or update the known-red issue on failure
+        if: failure() || cancelled()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "pds/nightly/*_eval_engine_test.mdk (eval interp == native: inlang suites, MST, read routes, did:key, secp256k1)"
+          gate-label: "pds eval engines"
+
+  # Charter clause: N1 (docs/ops/CI-ARCHITECTURE.md §3.6 — cost above threshold — irreducible wall-clock cost would pole a merge-tier shard).
   pds-signing-parity:
     name: "pds/test/signing_parity_test.mdk SIGNING_DEEP=1 (the eval and interpreted-WasmGC arms — #1962)"
     runs-on: ubuntu-latest

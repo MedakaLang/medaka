@@ -1,0 +1,13 @@
+{- | The secp256k1 point-vector driver and corpus, shared by the merge-tier
+   `pds/test/secp256k1_point_vectors_test.mdk` (native, every row) and the
+   nightly `pds/nightly/secp256k1_point_eval_engine_test.mdk` (eval, a
+   sample). Both name the same ledgered file, so the sample is drawn from
+   the corpus the native row sweeps. -}
+
+export
+driver : String
+driver = "pds/test/secp256k1_point_vectors_main.mdk"
+
+export
+corpusFile : String
+corpusFile = "pds/test/vectors/point_public_key_corpus.txt"

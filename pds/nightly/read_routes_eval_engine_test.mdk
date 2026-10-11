@@ -1,0 +1,48 @@
+{- | The eval interpreter prints the hand-authored read-routes transcript,
+   byte for byte: the transcript that the PR-path
+   `pds/test/read_routes_all_engines_test.mdk` grades native and Wasm against.
+
+   It runs nightly, not in the merge queue. The PR-path gate already holds
+   native and Wasm to the transcript, so this arm adds only the interpreter's
+   own agreement.
+
+   The transcript and its constants live in `pds/test/read_routes_support.mdk`,
+   which both files import. Both arms are graded against that transcript
+   exactly, so a failing native arm is named by this gate as well.
+
+   Runs under `medaka test --native`, as the nightly job's
+   `pds/nightly/*_eval_engine_test.mdk` step does. -}
+
+import test.read_routes_support.{transcript}
+import test.vector_runner.{
+  Bound(..),
+  Corpus(..),
+  Engine(..),
+  Row(..),
+  expectRow,
+  transcriptArm,
+}
+
+gate : String
+gate = "pds/nightly/read_routes_eval_engine"
+
+driver : String
+driver = "pds/test/read_routes_all_engines_main.mdk"
+
+corpusFile : String
+corpusFile = "pds/test/vectors/pds_protected_methods_corpus.txt"
+
+row : Row
+row = Row {
+  gate = gate,
+  driver = driver,
+  corpus = Explicit [corpusFile],
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = map (transcriptArm transcript) [EvalEngine, NativeEngine],
+  parity = True,
+}
+
+test "read routes: the eval interpreter prints the 64-cell transcript byte for byte" =
+  expectRow row

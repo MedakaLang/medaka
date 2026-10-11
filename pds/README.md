@@ -321,8 +321,9 @@ emitter, Node, and `wasm-tools` and refuses to degrade to two engines:
 ### Data model
 
 The four data-model vector gates grade external answer corpora on all production
-engines. DAG-CBOR/CID, MST, and CAR run the same full checks on eval, native,
-and Wasm. Repository signing is intentionally split to fit required CI: eval
+engines. DAG-CBOR/CID and CAR run the same full checks on eval, native, and
+Wasm; MST runs them on native and Wasm in the merge tier and on eval in the
+nightly `pds-eval-engines` job. Repository signing is intentionally split to fit required CI: eval
 grades an exact initialization plus first CREATE transition—including commit
 and CAR bytes—and all semantic boundary controls; native and Wasm grade the
 complete five-operation official-reference transcript. The dedicated `pds` CI
@@ -450,10 +451,11 @@ newline.
 `pds/test/read_routes_all_engines_test.mdk` grades the repository-FREE half of all of
 this — both well-knowns as a `did:key` account answers them, `resolveHandle` in
 full, every read's unconfigured-store `RepoNotFound` refusal, and the non-XRPC
-404 control — as named cells on eval, native, and real Wasm, with direct-red
-mutations. It is repository-free deliberately: nothing in it signs,
-which is what makes an eval arm affordable at all (see "The Store is
-secret-bearing" for the 600s measurement). The `did:web` arm of
+404 control — as named cells on native and real Wasm (the eval arm runs in the
+nightly `pds-eval-engines` job), with direct-red mutations. It is
+repository-free deliberately: nothing in it signs, which is what makes an eval
+arm affordable at all (see "The Store is secret-bearing" for the 600s
+measurement). The `did:web` arm of
 `/.well-known/did.json` publishes the repository's signing key, so it is graded
 where a repository exists: `pds/test/read_handlers_main.mdk`, under
 `pds/test/repo_vectors_test.mdk`.
