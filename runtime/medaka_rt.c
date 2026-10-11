@@ -1655,8 +1655,14 @@ long long mdk_string_slice(long long lo_t, long long hi_t, long long s) {
   long long lo = lo_t >> 1, hi = hi_t >> 1;
   if (lo < 0) lo = 0; else if (lo > cp_count) lo = cp_count;
   if (hi < lo) hi = lo; else if (hi > cp_count) hi = cp_count;
-  long long blo = mdk_utf8_byte_offset(bytes, byte_len, lo);
-  long long bhi = mdk_utf8_byte_offset(bytes, byte_len, hi);
+  /* A cell whose codepoint count equals its byte length is all ASCII, so a
+   * codepoint index is its byte offset. */
+  long long blo, bhi;
+  if (cp_count == byte_len) { blo = lo; bhi = hi; }
+  else {
+    blo = mdk_utf8_byte_offset(bytes, byte_len, lo);
+    bhi = mdk_utf8_byte_offset(bytes, byte_len, hi);
+  }
   return mdk_str_lit(bytes + blo, bhi - blo);
 }
 
