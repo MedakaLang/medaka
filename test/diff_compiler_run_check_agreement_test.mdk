@@ -47,19 +47,19 @@ import compiler_cli_test_support.{
   Agreement(..),
   RuntimeOutcome(..),
   binaryRanClean,
-  checkRunBuild,
   fatalOutcomeSweep,
   fixtureStems,
   summarizeSweep,
-  sweepUnits,
+  sweepAgreements,
+  sweepSpawns,
   verdictOf,
 }
-import fs.{expectUnitCount, fixtureFiles, mkdirAll}
-import list.{somes, sort}
+import fs.{expectUnitCount, fixtureFiles}
+import list.{somes, sort, zipWith}
 import path.{dirname, stem}
 import string.{contains, endsWith, join, lines, padRight, trim, unlines}
 import test.{Expectation, expectEqual, fail, pass}
-import test_process.{boundedVerb, medakaBin, medakaRoot, scratchDir}
+import test_process.{medakaBin, medakaRoot}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -122,34 +122,43 @@ structuralRow base note = Row {
   note = note,
 }
 
-gradeOne : String -> String -> <Exec, FileRead, IO> Row
-gradeOne scratch path =
+planOne : String -> String -> <FileRead, IO> Result Row (String, String)
+planOne scratch path =
+  let base = stem path
+  match readFile "\{corpus}/\{base}.expected"
+    Err e => Err (structuralRow base "no readable .expected file: \{e}")
+    Ok _ => Ok (path, "\{scratch}/\{base}.bin")
+
+gradeOne : String ->
+  (String, String) ->
+  Result String Agreement ->
+  <FileRead, IO> Row
+gradeOne path _ spawned =
   let base = stem path
   let sibling = "\{corpus}/\{base}"
-  match readFile "\{sibling}.expected"
-    Err e => structuralRow base "no readable .expected file: \{e}"
-    Ok raw => match checkRunBuild path "\{scratch}/\{base}.bin"
-      Err e => structuralRow base e
-      Ok a =>
-        let expected = trim raw
-        let value = valueColumn expected a (readFile "\{sibling}.out")
-        let checkV = verdictOf a.checkCode
-        let runV = verdictOf a.runCode
-        let buildV = verdictOf a.buildCode
-        Row {
-          base = base,
-          expected = expected,
-          checkV = checkV,
-          runV = runV,
-          buildV = buildV,
-          grade = value,
-          ok =
-            checkV == expected
-              && runV == expected
-              && buildV == expected
-              && not (elem value badValues),
-          note = "",
-        }
+  match (spawned, readFile "\{sibling}.expected")
+    (Err e, _) => structuralRow base e
+    (_, Err e) => structuralRow base "no readable .expected file: \{e}"
+    (Ok a, Ok raw) =>
+      let expected = trim raw
+      let value = valueColumn expected a (readFile "\{sibling}.out")
+      let checkV = verdictOf a.checkCode
+      let runV = verdictOf a.runCode
+      let buildV = verdictOf a.buildCode
+      Row {
+        base = base,
+        expected = expected,
+        checkV = checkV,
+        runV = runV,
+        buildV = buildV,
+        grade = value,
+        ok =
+          checkV == expected
+            && runV == expected
+            && buildV == expected
+            && not (elem value badValues),
+        note = "",
+      }
 
 agreementRowFailure : Row -> Option String
 agreementRowFailure r =
@@ -170,8 +179,9 @@ summarizeAgreement what graded failures =
 
 sweep : List String -> <Exec, FileRead, IO> Expectation
 sweep entries =
-  sweepUnits
+  sweepAgreements
     entries
+    planOne
     gradeOne
     agreementRowFailure
     (summarizeAgreement "disagree with their pinned verdict or value")
@@ -384,30 +394,39 @@ runtimeRefusals = [
 
 -- Why one verb's handling of a compile-time row is wrong, or `None`.
 verbRefusalFailure : List String ->
-  (String, List String) ->
-  <Exec, IO> Option String
-verbRefusalFailure needles (verb, args) = match boundedVerb medakaBin args
-  Err e => Some "\{verb}: could not spawn: \{e}"
-  Ok (code, out, err) =>
-    let said = out ++ err
-    let carried = any (l => all (n => contains n l) needles) (lines said)
-    if code == 1 && carried && not (contains "E-PANIC" said) then
-      None
-    else
-      Some
-        "\{verb} exit=\{intToString code} output=\{debug said}; want exit 1 and one diagnostic line carrying \{debug needles}, no E-PANIC"
+  String ->
+  Result String (Int, String, String) ->
+  Option String
+verbRefusalFailure _ verb (Err e) = Some "\{verb}: could not spawn: \{e}"
+verbRefusalFailure needles verb (Ok (code, out, err)) =
+  let said = out ++ err
+  let carried = any (l => all (n => contains n l) needles) (lines said)
+  if code == 1 && carried && not (contains "E-PANIC" said) then
+    None
+  else
+    Some
+      "\{verb} exit=\{intToString code} output=\{debug said}; want exit 1 and one diagnostic line carrying \{debug needles}, no E-PANIC"
 
-compileRefusalFailure : String ->
+refusalVerbs : List String
+refusalVerbs = ["check", "run", "build"]
+
+-- The spawns of one compile-time row, one per verb of `refusalVerbs`.
+refusalSpawns : String ->
   (String, List String) ->
-  <Exec, IO> Option String
-compileRefusalFailure scratch (name, needles) =
+  <IO> List (String, List String)
+refusalSpawns scratch (name, _) =
   let entry = "\{refusalCorpus}/\{name}.mdk"
-  let verbs = [
-    ("check", ["check", entry]),
-    ("run", ["run", entry]),
-    ("build", ["build", entry, "-o", "\{scratch}/\{name}.bin"]),
+  [
+    (medakaBin, ["check", entry]),
+    (medakaBin, ["run", entry]),
+    (medakaBin, ["build", entry, "-o", "\{scratch}/\{name}.bin"]),
   ]
-  match somes (map (verbRefusalFailure needles) verbs)
+
+compileRefusalFailure : (String, List String) ->
+  List (Result String (Int, String, String)) ->
+  Option String
+compileRefusalFailure (name, needles) spawned =
+  match somes (zipWith (verbRefusalFailure needles) refusalVerbs spawned)
     [] => None
     whys => Some "  \{padRight 26 ' ' name} \{join "; " whys}"
 
@@ -419,23 +438,13 @@ test "every fixed-width refusal fixture has a row, and every row a fixture" =
         (sort (map fst compileRefusals ++ map fst runtimeRefusals))
         found
 
-{- | `sweep` with the scratch directory made again first.
+test "an out-of-range fixed-width literal is refused by check, run and build" =
+  sweepSpawns
+    compileRefusals
+    refusalSpawns
+    compileRefusalFailure
+    (r => r)
+    summarizeSweep
 
-   `test_process.scratchDir` is a top-level nullary, evaluated once per
-   process, and every sweep removes it when it finishes, so each sweep after
-   the module's first would be handed a path that no longer exists. -}
-afterRemadeScratch : (Unit -> <Exec, FileRead, IO> Expectation) ->
-  <Exec, FileRead, FileWrite, IO> Expectation
-afterRemadeScratch sweep = match scratchDir
-  Err e => fail "could not make a scratch directory: \{e}"
-  Ok dir => match mkdirAll dir
-    Err e => fail "could not remake \{dir}: \{e}"
-    Ok () => sweep ()
-
-test "an out-of-range fixed-width literal is refused by check, run and build" = afterRemadeScratch
-  (_ =>
-    sweepUnits compileRefusals compileRefusalFailure (r => r) summarizeSweep)
-
-test "a computed out-of-range fixed-width value panics on run and build, never stored" = afterRemadeScratch
-  (_ =>
-    fatalOutcomeSweep refusalCorpus (length runtimeRefusals) runtimeRefusals)
+test "a computed out-of-range fixed-width value panics on run and build, never stored" =
+  fatalOutcomeSweep refusalCorpus (length runtimeRefusals) runtimeRefusals
