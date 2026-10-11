@@ -11,11 +11,13 @@
    Runs under `medaka test --native`: it spawns the binary once per probe and reads
    compiler/ sources, neither of which the interpreter binds. -}
 
-import test_process.{medakaBin, medakaRoot, boundedVerb, withScratchDir}
+import test_process.{
+  medakaBin, medakaRoot, boundedVerb, scratchDir, withScratchDir
+}
 import test.{Expectation, expectAll, expectAtLeast, fail, pass}
 import string as S
 import regex as R
-import list.{reverse, take}
+import list.{lookup, reverse, take}
 import fs.{fixtureFiles}
 
 -- ── constants ────────────────────────────────────────────────────────────────
@@ -150,6 +152,54 @@ verbsOf : String -> <Exec, IO, FileRead, FileWrite> List String
 verbsOf dir =
   uniq (filter (/= "") (map (l => capture usageRe l) (S.lines (helpOut dir))))
 
+-- ── probes, made once per process ───────────────────────────────────────────
+
+-- The one workspace the memoized probes below run from: `scratchDir` is a
+-- value, so every caller gets the same directory, and nothing writes to it
+-- after this. `None` when it cannot be made; the callers then probe their own
+-- test directory, exactly as they did before any memoizing.
+memoWork : <Exec, IO, FileRead, FileWrite> Option String
+memoWork = match scratchDir
+  Err _ => None
+  Ok dir => match writeFile "\{dir}/ok.mdk" "main = println 1\n"
+    Err _ => None
+    Ok _ => Some dir
+
+-- The verbs `medaka help` lists, from the memoized workspace.
+memoHelp : <Exec, IO, FileRead, FileWrite> Option (List String)
+memoHelp = map verbsOf memoWork
+
+verbsFor : String -> <Exec, IO, FileRead, FileWrite> List String
+verbsFor dir = match memoHelp
+  Some vs => vs
+  None => verbsOf dir
+
+-- The verbs the compiler sources hand to `requireArgs`, read once.
+sourceVerbsNow : <Exec, IO, FileRead, FileWrite> List String
+sourceVerbsNow = match compilerFiles "\{medakaRoot}/compiler"
+  Err _ => []
+  Ok files => sourceVerbs files
+
+-- The `bare` and `withfile` probe of every verb any section looks at: the
+-- usage block's, the exempt list, and the source-covered set. R, R' and K each
+-- read these instead of running the same binary again.
+memoShapes : <Exec, IO, FileRead, FileWrite> List (String, ((String, String, Int, String), (String, String, Int, String)))
+memoShapes = match memoWork
+  None => []
+  Some dir =>
+    map
+      (v => (v, (shapeProbe dir v "bare", shapeProbe dir v "withfile")))
+      (uniq (verbsOf dir ++ exempt ++ sourceVerbsNow))
+
+-- A verb's two probes: from `memoShapes`, or probed in `dir` when it is not
+-- there (the workspace could not be made, or a verb appeared since).
+shapesOf : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> ((String, String, Int, String), (String, String, Int, String))
+shapesOf dir v = match lookup v memoShapes
+  Some pair => pair
+  None => (shapeProbe dir v "bare", shapeProbe dir v "withfile")
+
 -- Every file under compiler/, as its lines. Unreadable files contribute nothing.
 linesOfFile : String -> <Exec, IO, FileRead, FileWrite> List String
 linesOfFile path = match readFile path
@@ -269,8 +319,8 @@ rVerbFails v shapes =
   rVerbOf v shapes (filter (/= "") (map (rShapeFail v) shapes))
 
 rFailsFor : String -> String -> <Exec, IO, FileRead, FileWrite> List String
-rFailsFor dir v =
-  rVerbFails v [shapeProbe dir v "bare", shapeProbe dir v "withfile"]
+rFailsFor dir v = match shapesOf dir v
+  (bare, withf) => rVerbFails v [bare, withf]
 
 rFails : String -> List String -> <Exec, IO, FileRead, FileWrite> List String
 rFails dir verbs =
@@ -281,11 +331,8 @@ rPrimeOne : String ->
   List String ->
   String ->
   <Exec, IO, FileRead, FileWrite> List String
-rPrimeOne dir verbs v =
-  rPrimeIn
-    v
-    (elem v verbs)
-    (any isRejects [shapeProbe dir v "bare", shapeProbe dir v "withfile"])
+rPrimeOne dir verbs v = match shapesOf dir v
+  (bare, withf) => rPrimeIn v (elem v verbs) (any isRejects [bare, withf])
 
 rPrimeIn : String -> Bool -> Bool -> List String
 rPrimeIn v False _ = [
@@ -303,7 +350,8 @@ rPrimeFails dir verbs = fold (acc v => acc ++ rPrimeOne dir verbs v) [] exempt
 
 -- K: every source-covered verb prints a `(known: …)` roster on a bare rejection.
 kOne : String -> String -> <Exec, IO, FileRead, FileWrite> List String
-kOne dir v = kOneOf v (shapeProbe dir v "bare")
+kOne dir v = match shapesOf dir v
+  (bare, _) => kOneOf v bare
 
 kOneOf : String -> (String, String, Int, String) -> List String
 kOneOf v (_, verdict, rc, full) =
@@ -348,26 +396,26 @@ test "cli reject floor D: every requireArgs spec resolves to a verb" = withWork
 
 test "cli reject floor R: every non-exempt verb rejects an unknown flag with rc 1" = withWork
   (dir => expectAll [
-    expectAtLeast 16 (length (verbsOf dir)),
-    verdictOf (rFails dir (verbsOf dir)),
+    expectAtLeast 16 (length (verbsFor dir)),
+    verdictOf (rFails dir (verbsFor dir)),
   ])
 
 test "cli reject floor R': declared exemptions are still necessary" = withWork
   (dir => expectAll [
-    expectAtLeast 16 (length (verbsOf dir)),
-    verdictOf (rPrimeFails dir (verbsOf dir)),
+    expectAtLeast 16 (length (verbsFor dir)),
+    verdictOf (rPrimeFails dir (verbsFor dir)),
   ])
 
 test "cli reject floor K: every requireArgs verb prints a (known: …) roster" = withWork
   (dir => withFiles (files => expectAll [
-    expectAtLeast 16 (length (verbsOf dir)),
+    expectAtLeast 16 (length (verbsFor dir)),
     verdictOf (kFails dir (sourceVerbs files)),
   ]))
 
 test "cli reject floor S: every covered verb appears in the usage block" = withWork
   (dir => withFiles (files => expectAll [
-    expectAtLeast 16 (length (verbsOf dir)),
-    verdictOf (sFails (verbsOf dir) (sourceVerbs files)),
+    expectAtLeast 16 (length (verbsFor dir)),
+    verdictOf (sFails (verbsFor dir) (sourceVerbs files)),
   ]))
 
 -- ── U: every flag-literal argv arm outside stdlib/args.mdk is routed or exempt ─
