@@ -24,7 +24,7 @@ main =
   -- Ref-mutating instantiation vs pure instantiation (e = {})
   (runTwice (bump r) 0, runTwice square 3, r.value)
 # CORE_IR
-(CProgram ((CBind "runTwice" (CClause ((PVar "f") (PVar "x")) (CApp (CVar "f" (ALocal 1 0)) ((CApp (CVar "f" (ALocal 1 0)) ((CVar "x" (ALocal 0 0))) CallDynamic false)) CallDynamic false)))
+(CProgram ((CBind "runTwice" (CClause ((PVar "f") (PVar "x")) (CApp (CVar "f" (ALocal 1 0)) ((CApp (CVar "f" (ALocal 1 0)) ((CVar "x" (ALocal 0 0))) CallDynamic false)) CallDynamic true)))
 (CBind "bump" (CClause ((PVar "r") (PVar "u")) (CBlock (CSLet false PWild (CApp (CVar "setRef" AGlobal) ((CVar "r" (ALocal 1 0)) (CBinPrim "+" (CFieldAccess (CVar "r" (ALocal 1 0)) "value" "" -1) (CLit (LInt 1)))) CallDynamic false)) (CSExpr (CFieldAccess (CVar "r" (ALocal 2 0)) "value" "" -1)))))
 (CBind "square" (CClause ((PVar "x")) (CBinPrim "*" (CVar "x" (ALocal 0 0)) (CVar "x" (ALocal 0 0)))))
 (CBind "main" (CClause () (CBlock (CSLet false (PVar "r") (CApp (CVar "Ref" AGlobal) ((CLit (LInt 7))) CallDynamic false)) (CSExpr (CTuple (CApp (CVar "runTwice" AGlobal) ((CApp (CVar "bump" AGlobal) ((CVar "r" (ALocal 0 0))) (CallPartial 1) false) (CLit (LInt 0))) CallExact false) (CApp (CVar "runTwice" AGlobal) ((CVar "square" AGlobal) (CLit (LInt 3))) CallExact false) (CFieldAccess (CVar "r" (ALocal 0 0)) "value" "" -1))))))) () () ())

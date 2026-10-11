@@ -19,8 +19,8 @@ sumTo n = if n == 0 then 0 else n + sumTo (n - 1)
 
 main = (countDown 5, isEven 4, isOdd 4, sumTo 5)
 # CORE_IR
-(CProgram ((CBind "countDown" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CLit (LInt 0)) (CApp (CVar "countDown" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact false))))
-(CBind "isEven" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "True" AGlobal) (CApp (CVar "isOdd" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact false))))
-(CBind "isOdd" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "False" AGlobal) (CApp (CVar "isEven" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact false))))
+(CProgram ((CBind "countDown" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CLit (LInt 0)) (CApp (CVar "countDown" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact true))))
+(CBind "isEven" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "True" AGlobal) (CApp (CVar "isOdd" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact true))))
+(CBind "isOdd" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CVar "False" AGlobal) (CApp (CVar "isEven" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact true))))
 (CBind "sumTo" (CClause ((PVar "n")) (CIf (CBinPrim "==" (CVar "n" (ALocal 0 0)) (CLit (LInt 0))) (CLit (LInt 0)) (CBinPrim "+" (CVar "n" (ALocal 0 0)) (CApp (CVar "sumTo" AGlobal) ((CBinPrim "-" (CVar "n" (ALocal 0 0)) (CLit (LInt 1)))) CallExact false)))))
 (CBind "main" (CClause () (CTuple (CApp (CVar "countDown" AGlobal) ((CLit (LInt 5))) CallExact false) (CApp (CVar "isEven" AGlobal) ((CLit (LInt 4))) CallExact false) (CApp (CVar "isOdd" AGlobal) ((CLit (LInt 4))) CallExact false) (CApp (CVar "sumTo" AGlobal) ((CLit (LInt 5))) CallExact false))))) () () ())

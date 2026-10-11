@@ -1,5 +1,5 @@
 # META
-source_lines=314
+source_lines=318
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -162,8 +162,12 @@ public export data CallMode =
   -- through a runtime dictionary, a field read, an extern
   | CallDynamic
 
--- An application's mode and whether it is in tail position.  No pass sets the
--- tail flag yet; it is False everywhere.
+-- An application's mode and its tail flag.  `core_ir_lower.markTailSites` sets
+-- the flag on an application in tail position that is not a partial one, and
+-- `core_validate.validateTails` refuses a program that disagrees.  For
+-- `CallOver` the flag means the final application of the result is the tail
+-- call.  The flag is positional only: whether an emitter turns it into a jump
+-- is the emitter's decision.
 public export data CallSite = CallSite CallMode Bool
 
 -- An application whose mode is not decided yet.  A lowering's `stampCallModes`

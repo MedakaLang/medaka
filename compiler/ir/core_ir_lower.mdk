@@ -1047,7 +1047,7 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
 finishLowering : CProgram -> CProgram
-finishLowering prog = stampCallModes (etaSaturateProgram prog)
+finishLowering prog = markTailSites (stampCallModes (etaSaturateProgram prog))
 
 -- A program's defined arities: each top-level binding's clause pattern count,
 -- each constructor's field count, each impl entry's value arity by method and
@@ -1462,6 +1462,115 @@ callsStmts env scope ((CSAssign x e) :: rest) =
 
 callsField : ArityEnv -> CallScope -> CField -> CField
 callsField env scope (CField k o e) = CField k o (callsExpr env scope e)
+
+-- ── the tail flag ─────────────────────────────────────────────────────────────
+-- Sets every application's tail flag from its position.  A clause with a
+-- parameter and a lambda start a tail context; it passes through the branches
+-- of an `if`, the arms of a match, the body of a `let` or let-group and the last
+-- statement of a block.  A condition, scrutinee, guard, right-hand side,
+-- argument, head or operand is never in tail position.  A partial application
+-- allocates a closure and is never a call, so it is never flagged.  No catch-all
+-- arm: a new expression form must decide whether it passes tail position on.
+export
+markTailSites : CProgram -> CProgram
+markTailSites (CProgram groups ctors ctorTypes impls) =
+  CProgram (map tailBind groups) ctors ctorTypes (map tailEntry impls)
+
+tailBind : CBind -> CBind
+tailBind (CBind name clauses site) = CBind name (map tailClause clauses) site
+
+tailClause : CClause -> CClause
+tailClause (CClause pats body) = CClause pats (tailExpr (isNonEmptyL pats) body)
+
+tailEntry : CImplEntry -> CImplEntry
+tailEntry (CImplEntry m s d (CImplTagged tag key iface pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplTagged tag key iface pos pats (tailExpr (isNonEmptyL pats) body))
+tailEntry (CImplEntry m s d (CImplDefault w tag key pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplDefault w tag key pos pats (tailExpr (isNonEmptyL pats) body))
+
+tailExpr : Bool -> CExpr -> CExpr
+tailExpr tl (CApp f args (CallSite mode _)) =
+  CApp
+    (tailExpr False f)
+    (map (tailExpr False) args)
+    (CallSite mode (tl && not (isPartialMode mode)))
+tailExpr _ (CLit l) = CLit l
+tailExpr _ (CVar x addr) = CVar x addr
+tailExpr _ (CLam pats body) = CLam pats (tailExpr True body)
+tailExpr tl (CLet recF pat rhs body) =
+  CLet recF pat (tailExpr False rhs) (tailExpr tl body)
+tailExpr tl (CLetGroup binds body) =
+  CLetGroup (map tailBind binds) (tailExpr tl body)
+tailExpr tl (CMatch scrut arms) =
+  CMatch (tailExpr False scrut) (map (tailArm tl) arms)
+tailExpr tl (CDecision scrut arms tree) =
+  CDecision (tailExpr False scrut) (map (tailArm tl) arms) tree
+tailExpr tl (CIf c t e) = CIf (tailExpr False c) (tailExpr tl t) (tailExpr tl e)
+tailExpr _ (CBinPrim op l r tag site) =
+  CBinPrim op (tailExpr False l) (tailExpr False r) tag site
+tailExpr _ (CUnOp op x) = CUnOp op (tailExpr False x)
+tailExpr _ (CTuple es) = CTuple (map (tailExpr False) es)
+tailExpr _ (CList es) = CList (map (tailExpr False) es)
+tailExpr _ (CRecord name fields) = CRecord name (map tailField fields)
+tailExpr _ (CFieldAccess x label name ord) =
+  CFieldAccess (tailExpr False x) label name ord
+tailExpr _ (CRecordUpdate name base fields) =
+  CRecordUpdate name (tailExpr False base) (map tailField fields)
+tailExpr _ (CVariantUpdate con base fields) =
+  CVariantUpdate con (tailExpr False base) (map tailField fields)
+tailExpr _ (CArray es) = CArray (map (tailExpr False) es)
+tailExpr _ (CRangeList lo hi incl) =
+  CRangeList (tailExpr False lo) (tailExpr False hi) incl
+tailExpr _ (CRangeArray lo hi incl) =
+  CRangeArray (tailExpr False lo) (tailExpr False hi) incl
+tailExpr _ (CIndex a i) = CIndex (tailExpr False a) (tailExpr False i)
+tailExpr _ (CSlice a lo hi incl) =
+  CSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
+tailExpr _ (CStringIndex a i) =
+  CStringIndex (tailExpr False a) (tailExpr False i)
+tailExpr _ (CStringSlice a lo hi incl) =
+  CStringSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
+tailExpr _ (CListIndex a i) = CListIndex (tailExpr False a) (tailExpr False i)
+tailExpr _ (CListSlice a lo hi incl) =
+  CListSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
+tailExpr tl (CBlock stmts) = CBlock (tailStmts tl stmts)
+tailExpr _ (CMethod name iface arity r ir mr) = CMethod name iface arity r ir mr
+tailExpr _ (CDict name rs) = CDict name rs
+
+isPartialMode : CallMode -> Bool
+isPartialMode (CallPartial _) = True
+isPartialMode CallExact = False
+isPartialMode (CallOver _) = False
+isPartialMode CallDynamic = False
+
+tailArm : Bool -> CArm -> CArm
+tailArm tl (CArm pat guards body) =
+  CArm pat (map tailGuard guards) (tailExpr tl body)
+
+tailGuard : CGuard -> CGuard
+tailGuard (CGBool c) = CGBool (tailExpr False c)
+tailGuard (CGBind pat e) = CGBind pat (tailExpr False e)
+
+tailStmts : Bool -> List CStmt -> List CStmt
+tailStmts _ [] = []
+tailStmts tl [CSExpr e] = [CSExpr (tailExpr tl e)]
+tailStmts tl (st :: rest) = tailStmt st :: tailStmts tl rest
+
+tailStmt : CStmt -> CStmt
+tailStmt (CSExpr e) = CSExpr (tailExpr False e)
+tailStmt (CSLet recF pat e) = CSLet recF pat (tailExpr False e)
+tailStmt (CSAssign x e) = CSAssign x (tailExpr False e)
+
+tailField : CField -> CField
+tailField (CField k o e) = CField k o (tailExpr False e)
 
 -- ── located `panic` and `xs[i]` (native and wasm backends) ─────────────────────────────
 -- A saturated `panic m` and an `xs[i]` that reads one of the prelude's own

@@ -1,5 +1,5 @@
 # META
-source_lines=15619
+source_lines=15630
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -248,7 +248,9 @@ import backend.core_validate.{
   renderExternRefusal,
   renderRecordRefusal,
   renderCallRefusal,
+  renderTailRefusal,
   validateCalls,
+  validateTails,
   validateRecords,
   unrefusedExternMessage,
   validateExterns,
@@ -15259,12 +15261,14 @@ unprovidedExterns : GapMode -> EmitInput -> CProgram -> List ExternFinding
 unprovidedExterns Strict input cp =
   let _ = refuseUnstampedRecords cp
   let _ = refuseUnstampedCalls cp
+  let _ = refuseUnflaggedTails cp
   match validateExterns LlvmBackend input.runtimeExterns cp
     [] => []
     found => panic (renderExternRefusal found)
 unprovidedExterns Record input cp =
   let _ = refuseUnstampedRecords cp
   let _ = refuseUnstampedCalls cp
+  let _ = refuseUnflaggedTails cp
   validateExterns LlvmBackend input.runtimeExterns cp
 
 -- A record node without its declared field ordinal is an internal error: the
@@ -15280,6 +15284,13 @@ refuseUnstampedCalls : CProgram -> Unit
 refuseUnstampedCalls cp = match validateCalls cp
   [] => ()
   bad => panic ("internal error: " ++ renderCallRefusal bad)
+
+-- An application whose tail flag disagrees with its position is an internal
+-- error: the lowering's flag pass and the validator state the rules separately.
+refuseUnflaggedTails : CProgram -> Unit
+refuseUnflaggedTails cp = match validateTails cp
+  [] => ()
+  bad => panic ("internal error: " ++ renderTailRefusal bad)
 
 -- Record mode's one gap event per refused extern.  The emitter's own
 -- fallthrough for such a name then records nothing (`unprovidedExtern`).
@@ -15628,7 +15639,7 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "LlvmFamily" true) (mem "llvmFamily" false) (mem "isLlvmExternFamily" false))))
-(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "validateCalls" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
+(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "validateCalls" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "routeDictNames" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dictUniformPairs" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
@@ -18390,12 +18401,14 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DTypeSig false "emitProgramMode" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "CProgram") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitProgramMode" ((PVar "gapMode") (PVar "input") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries")))) (EBlock (DoLet false false (PVar "found") (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "gapMode")) (EVar "input")) (EVar "cp"))) (DoLet false false (PVar "cfg") (EApp (EApp (EApp (EVar "programEmitConfig") (EVar "gapMode")) (EVar "input")) (EVar "groups"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries"))) (DoLet false false PWild (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "found"))) (DoLet false false (PVar "text") (EApp (EApp (EApp (EApp (EVar "runStrictEmission") (EVar "e")) (EVar "input")) (EVar "groups")) (EVar "implEntries"))) (DoExpr (ETuple (EVar "text") (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog")))))))
 (DTypeSig false "unprovidedExterns" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding"))))))
-(DFunDef false "unprovidedExterns" ((PCon "Strict") (PVar "input") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "refuseUnstampedRecords") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnstampedCalls") (EVar "cp"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "validateExterns") (EVar "LlvmBackend")) (EFieldAccess (EVar "input") "runtimeExterns")) (EVar "cp")) (arm (PList) () (EListLit)) (arm (PVar "found") () (EApp (EVar "panic") (EApp (EVar "renderExternRefusal") (EVar "found"))))))))
-(DFunDef false "unprovidedExterns" ((PCon "Record") (PVar "input") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "refuseUnstampedRecords") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnstampedCalls") (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "validateExterns") (EVar "LlvmBackend")) (EFieldAccess (EVar "input") "runtimeExterns")) (EVar "cp")))))
+(DFunDef false "unprovidedExterns" ((PCon "Strict") (PVar "input") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "refuseUnstampedRecords") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnstampedCalls") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnflaggedTails") (EVar "cp"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "validateExterns") (EVar "LlvmBackend")) (EFieldAccess (EVar "input") "runtimeExterns")) (EVar "cp")) (arm (PList) () (EListLit)) (arm (PVar "found") () (EApp (EVar "panic") (EApp (EVar "renderExternRefusal") (EVar "found"))))))))
+(DFunDef false "unprovidedExterns" ((PCon "Record") (PVar "input") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "refuseUnstampedRecords") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnstampedCalls") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnflaggedTails") (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "validateExterns") (EVar "LlvmBackend")) (EFieldAccess (EVar "input") "runtimeExterns")) (EVar "cp")))))
 (DTypeSig false "refuseUnstampedRecords" (TyFun (TyCon "CProgram") (TyCon "Unit")))
 (DFunDef false "refuseUnstampedRecords" ((PVar "cp")) (EMatch (EApp (EVar "validateRecords") (EVar "cp")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EVar "renderRecordRefusal") (EVar "bad")))))))
 (DTypeSig false "refuseUnstampedCalls" (TyFun (TyCon "CProgram") (TyCon "Unit")))
 (DFunDef false "refuseUnstampedCalls" ((PVar "cp")) (EMatch (EApp (EVar "validateCalls") (EVar "cp")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EVar "renderCallRefusal") (EVar "bad")))))))
+(DTypeSig false "refuseUnflaggedTails" (TyFun (TyCon "CProgram") (TyCon "Unit")))
+(DFunDef false "refuseUnflaggedTails" ((PVar "cp")) (EMatch (EApp (EVar "validateTails") (EVar "cp")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EVar "renderTailRefusal") (EVar "bad")))))))
 (DTypeSig false "noteUnprovidedExterns" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyCon "Unit"))))
 (DFunDef false "noteUnprovidedExterns" (PWild (PList)) (ELit LUnit))
 (DFunDef false "noteUnprovidedExterns" ((PVar "e") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "noteGapAt") (EVar "e")) (EApp (EVar "findingBinding") (EVar "f"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (DoExpr (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "rest")))))
@@ -18488,7 +18501,7 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinNl" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "isNonEmptyL" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("backend" "llvm_preamble") ((mem "preambleLines" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "LlvmFamily" true) (mem "llvmFamily" false) (mem "isLlvmExternFamily" false))))
-(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "validateCalls" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
+(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "ExternFinding" false) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "validateCalls" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omEmpty" false) (mem "omKeys" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "flattenApp" false) (mem "lengthS" false) (mem "freeVars" false) (mem "routeDictNames" false) (mem "bindName" false) (mem "bindNames" false) (mem "patVars" false) (mem "patVarsList" false) (mem "patVarNames" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "splitLastF" false) (mem "selfFree" false) (mem "mentionsSelfMethod" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dictUniformPairs" false) (mem "dropFirstN" false) (mem "clauseArityOf" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "hashName" false) (mem "injectiveIdent" false))))
@@ -21250,12 +21263,14 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DTypeSig false "emitProgramMode" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "CProgram") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "emitProgramMode" ((PVar "gapMode") (PVar "input") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries")))) (EBlock (DoLet false false (PVar "found") (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "gapMode")) (EVar "input")) (EVar "cp"))) (DoLet false false (PVar "cfg") (EApp (EApp (EApp (EVar "programEmitConfig") (EVar "gapMode")) (EVar "input")) (EVar "groups"))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries"))) (DoLet false false PWild (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "found"))) (DoLet false false (PVar "text") (EApp (EApp (EApp (EApp (EVar "runStrictEmission") (EVar "e")) (EVar "input")) (EVar "groups")) (EVar "implEntries"))) (DoExpr (ETuple (EVar "text") (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog")))))))
 (DTypeSig false "unprovidedExterns" (TyFun (TyCon "GapMode") (TyFun (TyCon "EmitInput") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "ExternFinding"))))))
-(DFunDef false "unprovidedExterns" ((PCon "Strict") (PVar "input") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "refuseUnstampedRecords") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnstampedCalls") (EVar "cp"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "validateExterns") (EVar "LlvmBackend")) (EFieldAccess (EVar "input") "runtimeExterns")) (EVar "cp")) (arm (PList) () (EListLit)) (arm (PVar "found") () (EApp (EVar "panic") (EApp (EVar "renderExternRefusal") (EVar "found"))))))))
-(DFunDef false "unprovidedExterns" ((PCon "Record") (PVar "input") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "refuseUnstampedRecords") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnstampedCalls") (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "validateExterns") (EVar "LlvmBackend")) (EFieldAccess (EVar "input") "runtimeExterns")) (EVar "cp")))))
+(DFunDef false "unprovidedExterns" ((PCon "Strict") (PVar "input") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "refuseUnstampedRecords") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnstampedCalls") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnflaggedTails") (EVar "cp"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "validateExterns") (EVar "LlvmBackend")) (EFieldAccess (EVar "input") "runtimeExterns")) (EVar "cp")) (arm (PList) () (EListLit)) (arm (PVar "found") () (EApp (EVar "panic") (EApp (EVar "renderExternRefusal") (EVar "found"))))))))
+(DFunDef false "unprovidedExterns" ((PCon "Record") (PVar "input") (PVar "cp")) (EBlock (DoLet false false PWild (EApp (EVar "refuseUnstampedRecords") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnstampedCalls") (EVar "cp"))) (DoLet false false PWild (EApp (EVar "refuseUnflaggedTails") (EVar "cp"))) (DoExpr (EApp (EApp (EApp (EVar "validateExterns") (EVar "LlvmBackend")) (EFieldAccess (EVar "input") "runtimeExterns")) (EVar "cp")))))
 (DTypeSig false "refuseUnstampedRecords" (TyFun (TyCon "CProgram") (TyCon "Unit")))
 (DFunDef false "refuseUnstampedRecords" ((PVar "cp")) (EMatch (EApp (EVar "validateRecords") (EVar "cp")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EVar "renderRecordRefusal") (EVar "bad")))))))
 (DTypeSig false "refuseUnstampedCalls" (TyFun (TyCon "CProgram") (TyCon "Unit")))
 (DFunDef false "refuseUnstampedCalls" ((PVar "cp")) (EMatch (EApp (EVar "validateCalls") (EVar "cp")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EVar "renderCallRefusal") (EVar "bad")))))))
+(DTypeSig false "refuseUnflaggedTails" (TyFun (TyCon "CProgram") (TyCon "Unit")))
+(DFunDef false "refuseUnflaggedTails" ((PVar "cp")) (EMatch (EApp (EVar "validateTails") (EVar "cp")) (arm (PList) () (ELit LUnit)) (arm (PVar "bad") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "internal error: ")) (EApp (EVar "renderTailRefusal") (EVar "bad")))))))
 (DTypeSig false "noteUnprovidedExterns" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyCon "ExternFinding")) (TyCon "Unit"))))
 (DFunDef false "noteUnprovidedExterns" (PWild (PList)) (ELit LUnit))
 (DFunDef false "noteUnprovidedExterns" ((PVar "e") (PCons (PVar "f") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "noteGapAt") (EVar "e")) (EApp (EVar "findingBinding") (EVar "f"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (DoExpr (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EVar "rest")))))
