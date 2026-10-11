@@ -58,7 +58,6 @@
     {"name": "eval_run_main", "medianMs": 31480, "samples": 2, "ms": [37100, 31480], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},
     {"name": "eval_typed_batch", "medianMs": 41132, "samples": 2, "ms": [49288, 41132], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},
     {"name": "eval_typed_modules_main", "medianMs": 40477, "samples": 4, "ms": [43230, 47257, 32207, 40477], "sampleRuns": ["37970116792", "37970116792", "38112454485", "38112454485"], "jobs": [4, 4, 4, 4]},
-    {"name": "exhaust_main", "medianMs": 9237, "samples": 2, "ms": [9275, 9237], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},
     {"name": "fmt_main", "medianMs": 8137, "samples": 4, "ms": [11542, 6330, 11147, 8137], "sampleRuns": ["37970116792", "37970116792", "38112454485", "38112454485"], "jobs": [4, 4, 4, 4]},
     {"name": "lex_main", "medianMs": 3679, "samples": 4, "ms": [3679, 4367, 3583, 5348], "sampleRuns": ["37970116792", "37970116792", "37970116792", "38112454485"], "jobs": [4, 4, 4, 4]},
     {"name": "lint_fix_main", "medianMs": 39465, "samples": 2, "ms": [39485, 39465], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},

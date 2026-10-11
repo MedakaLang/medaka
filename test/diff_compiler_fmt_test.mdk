@@ -11,7 +11,7 @@
    | retired gate | probe | corpus | golden |
    |---|---|---|---|
    | `diff_compiler_diagnostics` | `diagnostics_main` | `resolve`/`exhaust`/`check_match` fixtures | `.analyze.golden` |
-   | `diff_compiler_exhaust` | `exhaust_main` | `test/exhaust_fixtures` | `.expected` |
+   | `diff_compiler_exhaust` | (in-process: `compiler/frontend/exhaust_test.mdk`) | `test/exhaust_fixtures` | `.expected` |
    | `diff_compiler_fmt` | `fmt_main` | `test/fmt_fixtures` + `test/parse_fixtures` | `.fmt.golden` |
    | `diff_compiler_lex_files` | `lex_main` | the lexer and twelve stdlib modules | `.lextok.golden` |
    | `diff_compiler_lint` | `lint_main` | `test/lint_fixtures` | `.expected` |
@@ -146,16 +146,6 @@ rows = [
     sorted = True,
     stripUnit = True,
     fixtures = 42,
-  },
-  Row {
-    gate = "diff_compiler_exhaust",
-    probe = "test/bin/exhaust_main",
-    corpus = ["test/exhaust_fixtures"],
-    prelude = [],
-    goldenSuffix = ".expected",
-    sorted = True,
-    stripUnit = True,
-    fixtures = 6,
   },
   Row {
     gate = "diff_compiler_fmt",
