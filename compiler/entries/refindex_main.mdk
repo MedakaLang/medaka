@@ -38,8 +38,9 @@ usage : String
 usage =
   "usage: medaka run refindex_main.mdk [--dump] <runtime.mdk> <core.mdk> <entry.mdk> [root ...]\n       medaka run refindex_main.mdk --project <runtime.mdk> <core.mdk> <projectRoot> <queryFile>"
 
-main : <IO> Unit
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   "--dump" :: rest => dispatch True rest
   "--project" :: rest => dispatchProject rest
   rest => dispatch False rest
@@ -110,3 +111,5 @@ showLoc (Loc _ sl sc _ _) = "\{intToString sl}:\{intToString sc}"
 
 showKey : String -> String
 showKey k = joinWith "|" (splitOnChar '\t' k)
+
+main = oracleMain ()

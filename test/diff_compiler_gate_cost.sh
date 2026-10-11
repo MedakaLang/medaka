@@ -193,6 +193,7 @@ _synth() { # $1 = out, $2 = runId, $3.. = "name:ms" pairs
     echo '  "jobs": 2,'
     echo '  "parallel": true,'
     echo '  "rowElapsedMs": 999,'
+    echo '  "jobWallMs": 1234,'
     echo '  "ok": 1,'
     echo '  "failing": 0,'
     echo '  "provenance": {'
@@ -288,6 +289,28 @@ case "$_run5001" in
   *)
     bad "runs[] entry for runId 5001 is missing jobs/parallel/rowElapsedMs: $_run5001" ;;
 esac
+
+# jobWallMs: a NEW report lacking it is REFUSED by name (fail closed); an
+# old-shape baseline row lacking it still parses and ingests on top of.
+grep -v '"jobWallMs"' "$TMP/s1.json" >"$TMP/nojw.json"
+if sh "$INGEST" --dry-run --baseline "$TMP/none.json" "$TMP/nojw.json" >"$TMP/nojw.out" 2>&1; then
+  bad "ingest admitted a gate report with no jobWallMs"
+elif grep -q 'REFUSED.*carries no jobWallMs' "$TMP/nojw.out"; then
+  ok "a gate report with no jobWallMs is REFUSED, naming the missing field"
+else
+  bad "no-jobWallMs refusal did not name the field"; cat "$TMP/nojw.out"
+fi
+BJ="$TMP/basejw.json"
+rm -f "$BJ"
+sh "$INGEST" --baseline "$BJ" --allow-missing-job-wall "$TMP/nojw.json" >/dev/null 2>&1 \
+  && sh "$INGEST" --baseline "$BJ" "$TMP/s2.json" >/dev/null 2>&1 \
+  || bad "ingest failed folding a report onto an old-shape (no jobWallMs) baseline row"
+if grep '"runId": "5001"' "$BJ" | grep -q '"jobWallMs": null' \
+   && grep '"runId": "5002"' "$BJ" | grep -q '"jobWallMs": 1234'; then
+  ok "an old-shape runs[] row stays readable (jobWallMs null); a new one records jobWallMs"
+else
+  bad "runs[] jobWallMs not recorded as expected"; grep '"key"' "$BJ"
+fi
 
 # even count -> LOWER median. 100 200 300 400 -> 200
 B2="$TMP/base2.json"
@@ -615,6 +638,7 @@ case "$1 $2" in
     while [ $# -gt 0 ]; do case "$1" in --head) head="$2"; shift 2 ;; *) shift ;; esac; done
     awk -v h="$head" '$1 == h { print $2 }' "$GH_PRS" ;;
   "pr close") echo "close $3 :: $*" >>"$GH_LOG" ;;
+  api*) cat "$GH_JOBS" ;;
   *) echo "unexpected gh $*" >>"$GH_LOG" ;;
 esac
 GHSTUB
@@ -632,8 +656,9 @@ for old in cost-baseline-autoadvance-20200101000000 other-feature-branch; do
 done
 printf 'cost-baseline-autoadvance-20200101000000 41\nother-feature-branch 42\n' >"$TMP/prs.txt"
 : >"$TMP/gh.log"
+printf '{"jobs": [{"name": "synth", "started_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:12:00Z"}]}\n' >"$TMP/jobs.json"
 _collect() {
-  env PATH="$CT/stubbin:$PATH" GH_PRS="$TMP/prs.txt" GH_LOG="$TMP/gh.log" GH_REPORT="$TMP/c1.json" \
+  env PATH="$CT/stubbin:$PATH" GH_PRS="$TMP/prs.txt" GH_LOG="$TMP/gh.log" GH_REPORT="${COLLECT_REPORT:-$TMP/c1.json}" GH_JOBS="$TMP/jobs.json" \
     sh "$CT/test/gate_cost_collect.sh" --base-branch main "$@"
 }
 _collect --dry-run >"$TMP/col_dry.out" 2>&1
@@ -645,6 +670,17 @@ else
   cat "$TMP/col_dry.out" "$TMP/gh.log"
 fi
 cp "$CT/test/gate_cost_baseline.json" "$TMP/col_dry_baseline.json"
+git -C "$CT" checkout -q -- test/gate_cost_baseline.json
+# The collector adds the shard's Actions job wall (12 min = 720000 ms here) to a
+# report that lacks it, and the ingest records it.
+_synth "$TMP/c2.json" 7002 "gate_a:130:true"
+grep -v '"jobWallMs"' "$TMP/c2.json" >"$TMP/c2n.json"
+COLLECT_REPORT="$TMP/c2n.json" _collect --dry-run >"$TMP/col_jw.out" 2>&1
+if grep '"runId": "7002"' "$CT/test/gate_cost_baseline.json" | grep -q '"jobWallMs": 720000'; then
+  ok "collector adds the Actions job wall (started_at -> completed_at) before the ingest"
+else
+  bad "collector did not record the job wall"; cat "$TMP/col_jw.out"
+fi
 git -C "$CT" checkout -q -- test/gate_cost_baseline.json
 _collect >"$TMP/col.out" 2>&1
 if grep -q '"name": "gate_orphan"' "$CT/test/gate_cost_baseline.json" 2>/dev/null; then

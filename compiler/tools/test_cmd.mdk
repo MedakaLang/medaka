@@ -4112,26 +4112,19 @@ testFilesGo engines _ _ _ cases filterOpt seedOpt files acc =
   let medaka = envOr "MEDAKA" (executablePath ())
   let childArgvs = map (testChildArgs engines cases filterOpt seedOpt) files
   let jobs = testJobs
-  let prefix = childJobsPrefix (isSome (getEnv "MEDAKA_TEST_JOBS")) jobs jobs
-  let program = if prefix == [] then medaka else "env"
-  let argvs =
-    if prefix == [] then
-      childArgvs
-    else
-      map (prefix ++ [medaka] ++ _) childArgvs
+  let prefix = childJobsPrefix (min jobs (length files)) jobs
+  let argvs = map (prefix ++ [medaka] ++ _) childArgvs
   if jobs <= 1 then
-    testFilesSerial program files argvs acc
+    testFilesSerial "env" files argvs acc
   else
-    testFilesReport files (runCommandBatch program jobs argvs) acc
+    testFilesReport files (runCommandBatch "env" jobs argvs) acc
 
--- The `env` assignment that splits the core budget between `outer` concurrent
--- children and what each child fans out to itself. An explicit
--- MEDAKA_TEST_JOBS is inherited untouched; unset, a child would otherwise
--- default to every core and `outer` of them would multiply it.
+-- The `env` assignment that splits the core budget (an explicit
+-- MEDAKA_TEST_JOBS, else every core) between the `outer` children that run at
+-- once, so what each child fans out to itself does not multiply it.
 export
-childJobsPrefix : Bool -> Int -> Int -> List String
-childJobsPrefix True _ _ = []
-childJobsPrefix False outer budget =
+childJobsPrefix : Int -> Int -> List String
+childJobsPrefix outer budget =
   ["MEDAKA_TEST_JOBS=\{intToString (max 1 (budget / max 1 outer))}"]
 
 -- One child at a time, each file's result printed as it completes, so a hang

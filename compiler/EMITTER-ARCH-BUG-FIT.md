@@ -77,7 +77,7 @@ ones, mapped to the target document's R4 fact ledger:
 | F3 identity on dispatch nodes | emitted-symbol half of #1397; #1619; #2055; #1852; #1973; the symbol-keying half of #1265; #2575/#2576 (where-bound local shadowing a prelude or top-level name, native only: `CVar` local-versus-global identity, same family) |
 | F4 tail sites | #1349, #2577 |
 | F5 runtime types | #2545 (`paramUseTy` ignores shadowed binders, native segfault) |
-| F6 evidence and dispositions (blocked on #2549, #993) | #1068, #1020, #1046, the route half of #1265 |
+| F6 evidence and dispositions (#3966; unblocked 2026-10-10) | none open: #1068, #1020, #1046 and the route half of #1265 closed 2026-09-27 (M-EVIDENCE, PR #3480) |
 | F7 capability manifest | #2426 (`sleepMs` has no WasmGC host import, bare trap) |
 | R5 plan record | #2312 (needs-repro; the two topo-sort dedups), #1030/#1061-class reach and index duplication |
 | Physical residual, no fact | #1469 (WasmGC illegal cast through a multi-constructor record field; the interpreter is correct, both backends are not: #1465), #1359 (mangler has no re-export arm; a `private_mangle` fix pending ruling 3) |

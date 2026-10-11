@@ -674,10 +674,13 @@ intOr s d = match toInt s
   Some n => n
   None => d
 
-main : <IO, Rand> Unit
-main = match parseOpts (args ()) (Opts 0 2 1 False)
+export
+oracleMain : Unit -> <IO, Rand> Unit
+oracleMain () = match parseOpts (args ()) (Opts 0 2 1 False)
   Opts seedVal tier batch noTuple =>
     let _ = setSeed seedVal
     let ctx = Ctx tier noTuple (Ref []) (Ref []) (Ref 0)
     let prog = genProgram ctx (maxI 1 batch)
     putStr (programToString prog)
+
+main = oracleMain ()

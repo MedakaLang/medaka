@@ -37,6 +37,8 @@ import tools.gate_cost.{
 }
 import support.util.{
   contains,
+  filterList,
+  isEmptyL,
   isNonEmptyL,
   joinNl,
   listLen,
@@ -189,9 +191,14 @@ timeoutFor override cost
 --
 -- A CI row's job wall is not its gate makespan.  Before `run_gates.sh` starts,
 -- the row checks out, installs the toolchain (`balFixedSetupMs`), COLD-builds
--- every test oracle its gates read (`test/build_oracles.sh --for`, the oracle
--- cache being keyed per row and per compiler content hash), and on a
--- `wasm_arm` row also builds the Wasm emitter oracle.  So a row's load is
+-- every SINGLE test oracle its gates read (`test/build_oracles.sh --for`, the
+-- oracle cache being keyed per row and per compiler content hash), and on a
+-- `wasm_arm` row also builds the Wasm emitter oracle.  The oracles the
+-- multicall serves (`build_oracles.sh --multicall-names`) are built once per
+-- run by ci.yml's `oracles` job, which every row waits for; a row only links
+-- them, so they are never charged to a row.  That job's wall is priced
+-- separately (`Setup.multicallMs`) and reported, since it delays every row
+-- alike and so moves no placement.  So a row's load is
 --
 --   fixed setup + Wasm oracle (wasm_arm rows whose gates need it)
 --     + makespan of the UNION of its gates' oracle builds over the build JOBS
@@ -228,8 +235,9 @@ data Price = Price { fixedMs : Int, wasmMs : Int, buildJobs : Int }
 {- | How setup is priced on this run, and where each price came from — kept so
    the report can state every default it used instead of hiding one.
 
-   `gateOrcs` is each schedulable gate's scraped `test/bin/<name>` set and
-   `entries` the names `build_oracles.sh` builds; both are read by `gate_cmd`,
+   `gateOrcs` is each schedulable gate's scraped `test/bin/<name>` set,
+   `entries` the names `build_oracles.sh` builds, and `multicall` the ones of
+   those the multicall oracle serves; all three are read by `gate_cmd`,
    because this module reads no files. -}
 data Setup = Setup {
   modelled : Bool,
@@ -242,6 +250,9 @@ data Setup = Setup {
   prices : List (String, Int),
   gateOrcs : List (String, List String),
   entries : List String,
+  multicall : List String,
+  multicallMs : Int,
+  multicallDefaulted : Bool,
 }
 
 -- One matrix row, with the load accumulated onto it so far.
@@ -420,6 +431,11 @@ balFixedSetupMs = 20000
 balWasmOracle : String
 balWasmOracle = "wasm_emit_modules_main"
 
+-- The multicall oracle ci.yml's `oracles` job builds, as its oracles[] row
+-- names it (`build_oracles.sh --build-multicall`).
+balMulticallOracle : String
+balMulticallOracle = "oracle_multicall"
+
 {- | The setup prices, from the baseline's `oracles[]` plus the scrape.
 
    No section, no model.  A baseline without `oracles[]` (an old one, or a
@@ -435,12 +451,17 @@ balWasmOracle = "wasm_emit_modules_main"
 
    The build JOBS is the SMALLEST recorded across the entries' samples: fewer
    workers over-states a build makespan, which is `balJobsFor`'s fail-closed
-   direction. -}
+   direction.
+
+   The multicall oracle, before its first sample, is priced at twice the
+   dearest sampled entry: its cost follows the union of the entries' imports,
+   and one build of all of them costs about twice the dearest single. -}
 balSetup : List OracleCost ->
   List (String, List String) ->
   List String ->
+  List String ->
   Result String Setup
-balSetup [] gateOrcs entries = Ok Setup {
+balSetup [] gateOrcs entries multicall = Ok Setup {
   modelled = False,
   price = Price { fixedMs = 0, wasmMs = 0, buildJobs = 1 },
   sampled = 0,
@@ -451,8 +472,11 @@ balSetup [] gateOrcs entries = Ok Setup {
   prices = [],
   gateOrcs = gateOrcs,
   entries = entries,
+  multicall = multicall,
+  multicallMs = 0,
+  multicallDefaulted = False,
 }
-balSetup ocs gateOrcs entries =
+balSetup ocs gateOrcs entries multicall =
   let ps = balEntryPrices ocs entries
   match ps
     [] =>
@@ -462,6 +486,7 @@ balSetup ocs gateOrcs entries =
       let dflt = packStat (map ((_, ms) => ms) ps)
       let js = balEntryJobs ocs entries
       let wasm = balOracleMs balWasmOracle ocs
+      let mcMs = balOracleMs balMulticallOracle ocs
       Ok Setup {
         modelled = True,
         price = Price {
@@ -475,7 +500,12 @@ balSetup ocs gateOrcs entries =
         },
         sampled = listLen ps,
         defaultMs = dflt,
-        defaulted = balUnsampled ps entries gateOrcs [],
+        defaulted =
+          balUnsampled
+            ps
+            (filterList (n => not (contains n multicall)) entries)
+            gateOrcs
+            [],
         wasmDefaulted = match wasm
           Some _ => False
           None => True,
@@ -485,6 +515,13 @@ balSetup ocs gateOrcs entries =
         prices = ps,
         gateOrcs = gateOrcs,
         entries = entries,
+        multicall = multicall,
+        multicallMs = match mcMs
+          Some ms => ms
+          None => 2 * balMaxL (map ((_, ms) => ms) ps),
+        multicallDefaulted = match mcMs
+          Some _ => False
+          None => True,
       }
 
 balEntryPrices : List OracleCost -> List String -> List (String, Int)
@@ -536,7 +573,8 @@ balAddMissing ps es (n :: ns) acc
     None => balAddMissing ps es ns (n :: acc)
 
 -- The oracles one gate's row must build for it, priced: its scrape kept to
--- what `build_oracles.sh` builds (`--for`'s own filter), sampled or defaulted.
+-- what `build_oracles.sh` builds (`--for`'s own filter) and the multicall does
+-- not serve, sampled or defaulted.
 balGateOrcs : Setup -> String -> List (String, Int)
 balGateOrcs s n
   | not s.modelled = []
@@ -548,6 +586,7 @@ balPriceAll : Setup -> List String -> List (String, Int)
 balPriceAll _ [] = []
 balPriceAll s (n :: ns)
   | not (contains n s.entries) = balPriceAll s ns
+  | contains n s.multicall = balPriceAll s ns
   | otherwise = match lookupAssoc n s.prices
     Some ms => (n, ms) :: balPriceAll s ns
     None => (n, s.defaultMs) :: balPriceAll s ns
@@ -1511,14 +1550,25 @@ balSetupLines : Setup -> String
 balSetupLines s
   | not s.modelled =
     "  setup: not modelled — the cost baseline carries no oracles[] section, so each row is priced at its gate makespan alone\n"
-  | otherwise = stringConcat [
-    "  setup: fixed \{balSecs s.price.fixedMs} per row (checkout + setup-medaka); oracle builds priced from \{intToString s.sampled} oracles[] rows, as the makespan of each row's union over \{intToString s.price.buildJobs} build workers\{balDefaultTag s.jobsDefaulted}; Wasm oracle '\{balWasmOracle}' \{balSecs s.price.wasmMs}\{balDefaultTag s.wasmDefaulted} on a wasm_arm row whose gates need it\n",
-    match s.defaulted
-      [] =>
-        "  setup: every oracle the scheduled gates read has an oracles[] sample\n"
-      ds =>
-        "  setup DEFAULT: \{intToString (listLen ds)} oracle(s) the gates read have no oracles[] sample and are priced at \{balSecs s.defaultMs}, the median of the sampled ones: \{joinSpace ds}\n",
-  ]
+  | otherwise =
+    stringConcat [
+        "  setup: fixed \{balSecs s.price.fixedMs} per row (checkout + setup-medaka); oracle builds priced from \{intToString s.sampled} oracles[] rows, as the makespan of each row's union over \{intToString s.price.buildJobs} build workers\{balDefaultTag s.jobsDefaulted}; Wasm oracle '\{balWasmOracle}' \{balSecs s.price.wasmMs}\{balDefaultTag s.wasmDefaulted} on a wasm_arm row whose gates need it\n",
+        match s.defaulted
+          [] =>
+            "  setup: every oracle the scheduled gates read has an oracles[] sample\n"
+          ds =>
+            "  setup DEFAULT: \{intToString (listLen ds)} oracle(s) the gates read have no oracles[] sample and are priced at \{balSecs s.defaultMs}, the median of the sampled ones: \{joinSpace ds}\n",
+      ]
+      ++ balMulticallLine s
+
+-- The `oracles` job's wall, which every row waits for before it starts.
+balMulticallLine : Setup -> String
+balMulticallLine s
+  | isEmptyL s.multicall = ""
+  | s.multicallDefaulted =
+    "  oracle job: '\{balMulticallOracle}' serves \{intToString (listLen s.multicall)} oracles no row builds; one build before every row starts, \{balSecs s.multicallMs} (DEFAULT: no sample recorded; twice the dearest sampled oracle)\n"
+  | otherwise =
+    "  oracle job: '\{balMulticallOracle}' serves \{intToString (listLen s.multicall)} oracles no row builds; one build before every row starts, \{balSecs s.multicallMs}\n"
 
 balDefaultTag : Bool -> String
 balDefaultTag True = " (DEFAULT: no sample recorded)"
@@ -1528,7 +1578,7 @@ balDefaultTag False = ""
    wall clock (`rowElapsedMs`, S-1/#2208) beside this model's GATE makespan for
    the COMMITTED assignment, and the residual between them.  `rowElapsedMs`
    spans `run_gates.sh` alone, so it is graded against `rgateMs`, never the
-   setup-inclusive `rload`; `balCalibJob` prints the job wall beside it.
+   setup-inclusive `rload`; `balJobLine` grades that against `jobWallMs`.
 
    READ THE CAVEAT BEFORE READING THE NUMBERS.  A residual is only meaningful
    while the recorded run and the committed assignment describe the SAME gate
@@ -1629,10 +1679,11 @@ balRowKeys rn (c :: cs)
 
 balCalibLine : List Cand -> Row -> List RunRecord -> String
 balCalibLine cands r runs = match latestRunForShard r.rname runs
-  None => "    \{balPadR 10 r.rname} (no recorded run)"
+  None =>
+    "    \{balPadR 10 r.rname} (no recorded run)\{balJobLine cands r runs}"
   Some rr => match rr.rowElapsedMs
     None =>
-      "    \{balPadR 10 r.rname} (run \{rr.runId} recorded no rowElapsedMs)"
+      "    \{balPadR 10 r.rname} (run \{rr.runId} recorded no rowElapsedMs)\{balJobLine cands r runs}"
     Some e =>
       let g = r.rgateMs
       let d = e - g
@@ -1643,17 +1694,68 @@ balCalibLine cands r runs = match latestRunForShard r.rname runs
           rr.gates
           (balRowDigest r.rname cands)
           rr.gatesDigest
-      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs g)}   residual \{balPadL 9 (balDelta d)}\{pct}\{balCalibJob r}\{stale}"
+      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs g)}   residual \{balPadL 9 (balDelta d)}\{pct}\{stale}\{balJobLine cands r runs}"
 
--- The predicted JOB wall beside the gate-wall comparison.  `runs[]` records
--- only the gate wall (`rowElapsedMs`), so the job wall has nothing recorded to
--- be graded against here; it is printed for comparison with the Actions job
--- duration, which is where the setup it adds is measured.
-balCalibJob : Row -> String
-balCalibJob r
-  | r.rload == r.rgateMs = ""
+-- The job-wall grade of one row: the model's predicted job wall (`rload`,
+-- setup-inclusive) against the Actions job duration the row's latest recorded
+-- run carries (`jobWallMs`).  A run without one, or a row without a run, is
+-- `JobUngradeable`: it is neither within the band nor a 0% error.
+data JobGrade = JobUngradeable String | JobGraded Int Int Bool
+
+-- The contract's bar for the predicted job wall, in percent of the measured.
+balJobBandPct : Int
+balJobBandPct = 15
+
+balJobGrade : List Cand -> Row -> List RunRecord -> JobGrade
+balJobGrade cands r runs = match latestRunForShard r.rname runs
+  None => JobUngradeable "no recorded run"
+  Some rr => match rr.jobWallMs
+    None => JobUngradeable "run \{rr.runId} recorded no jobWallMs"
+    Some m =>
+      if balCalibStaleness
+          r.rcount
+          rr.gates
+          (balRowDigest r.rname cands)
+          rr.gatesDigest
+        /= "" then
+        JobUngradeable "run \{rr.runId} is for a different gate set"
+      else
+        balJobGraded r rr m
+
+balJobGraded : Row -> RunRecord -> Int -> JobGrade
+balJobGraded r rr m
+  | m <= 0 = JobUngradeable "run \{rr.runId} recorded a non-positive jobWallMs"
   | otherwise =
-    "   job wall predicted \{balPadL 9 (balSecs r.rload)} (setup \{balSecs (r.rload - r.rgateMs)})"
+    let d = r.rload - m
+    JobGraded m d ((if d < 0 then 0 - d else d) * 100 <= balJobBandPct * m)
+
+balSignedPct : Int -> Int -> String
+balSignedPct d m
+  | d < 0 = "-\{intToString (0 - d * 100 / m)}%"
+  | otherwise = "+\{intToString (d * 100 / m)}%"
+
+balJobLine : List Cand -> Row -> List RunRecord -> String
+balJobLine cands r runs = match balJobGrade cands r runs
+  JobUngradeable why =>
+    "\n    \{balPadR 10 ""} job wall predicted \{balPadL 9 (balSecs r.rload)}   not gradeable (\{why})"
+  JobGraded m d within =>
+    let verdict = if within then "within" else "OUTSIDE"
+    "\n    \{balPadR 10 ""} job wall predicted \{balPadL 9 (balSecs r.rload)}   measured \{balPadL 9 (balSecs m)}   \{balPadL 6 (balSignedPct d m)}  \{verdict} ±\{intToString balJobBandPct}%"
+
+-- Counts over the rows: (within, outside, not gradeable).
+balJobTally : List Cand -> List Row -> List RunRecord -> (Int, Int, Int)
+balJobTally _ [] _ = (0, 0, 0)
+balJobTally cands (r :: rs) runs =
+  let (w, o, u) = balJobTally cands rs runs
+  match balJobGrade cands r runs
+    JobUngradeable _ => (w, o, u + 1)
+    JobGraded _ _ True => (w + 1, o, u)
+    JobGraded _ _ False => (w, o + 1, u)
+
+balJobSummary : List Cand -> List Row -> List RunRecord -> String
+balJobSummary cands rows runs =
+  let (w, o, u) = balJobTally cands rows runs
+  "  job-wall calibration (predicted rload vs Actions job duration, bar ±\{intToString balJobBandPct}%): \{intToString w} within, \{intToString o} outside, \{intToString u} not gradeable of \{intToString (listLen rows)} rows\n"
 
 {- | What the incumbent preference bought, and what it cost — on EVERY run, in
    ordinary output, derived rather than asserted.
@@ -2241,51 +2343,53 @@ balNewText : String ->
   String ->
   List (String, List String) ->
   List String ->
+  List String ->
   Result String (String, String)
-balNewText regPath regSrc baseSrc gateOrcs entries = match parseRegistry regSrc
-  Err m => Err "medaka gate balance: \{m}"
-  Ok gates => match parseShards regSrc
+balNewText regPath regSrc baseSrc gateOrcs entries multicall =
+  match parseRegistry regSrc
     Err m => Err "medaka gate balance: \{m}"
-    Ok shs => match parseCostBaseline baseSrc
+    Ok gates => match parseShards regSrc
       Err m => Err "medaka gate balance: \{m}"
-      -- `runs[]` (#2208: jobs/parallel/rowElapsedMs) is LOAD-BEARING as of
-      -- this slice: `jobs` is the width of the worker pool each row's makespan
-      -- is computed over, and `rowElapsedMs` is what that prediction is
-      -- calibrated against.  S-1 landed the read; this is what consumes it.
-      Ok base => match parseCostRuns baseSrc
+      Ok shs => match parseCostBaseline baseSrc
         Err m => Err "medaka gate balance: \{m}"
-        Ok runsRead => match balSetupOf baseSrc gateOrcs entries
+        -- `runs[]` (#2208: jobs/parallel/rowElapsedMs) is LOAD-BEARING as of
+        -- this slice: `jobs` is the width of the worker pool each row's makespan
+        -- is computed over, and `rowElapsedMs` is what that prediction is
+        -- calibrated against.  S-1 landed the read; this is what consumes it.
+        Ok base => match parseCostRuns baseSrc
           Err m => Err "medaka gate balance: \{m}"
-          Ok setup => match balUnknownRows shs gates
-            b :: bs =>
-              Err
-                "medaka gate balance: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (b :: bs)}"
-            [] => match balUncosted base gates
-              u :: us =>
+          Ok runsRead => match balSetupOf baseSrc gateOrcs entries multicall
+            Err m => Err "medaka gate balance: \{m}"
+            Ok setup => match balUnknownRows shs gates
+              b :: bs =>
                 Err
-                  (stringConcat [
-                    "medaka gate balance: \{intToString (listLen (u :: us))} schedulable gate(s) have no row in the cost baseline:\n",
-                    joinNl (balIndent (u :: us)),
-                    "\n  Refusing to pack: a missing cost is not a cheap gate, it is an\n",
-                    "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
-                    "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
-                  ])
-              [] => match balPinErrors gates shs
-                e :: es =>
+                  "medaka gate balance: \{regPath}: gate(s) name a shard with no [[shard]] row: \{joinSpace (b :: bs)}"
+              [] => match balUncosted base gates
+                u :: us =>
                   Err
                     (stringConcat [
-                      "medaka gate balance: \{regPath}: a closed row's membership does not match its declared `pinned_gates`:\n",
-                      joinNl (balIndent (e :: es)),
-                      "\n  A `full_cores` row is CLOSED: the packer moves nothing onto it and\n",
-                      "  nothing off it, so its members are the one `shard` value no cost\n",
-                      "  measurement derives.  They are DECLARED in that [[shard]] row's\n",
-                      "  `pinned_gates` and checked against the registry in both directions,\n",
-                      "  so a hand-moved `shard` cannot be adopted as the new pin.\n",
-                      "  Repair the gate's `shard`; change `pinned_gates` only when the row's\n",
-                      "  membership is genuinely meant to differ, and say why in its rationale\n",
-                      "  file (docs/ops/GATE-REGISTRY-DESIGN.md §2).\n",
+                      "medaka gate balance: \{intToString (listLen (u :: us))} schedulable gate(s) have no row in the cost baseline:\n",
+                      joinNl (balIndent (u :: us)),
+                      "\n  Refusing to pack: a missing cost is not a cheap gate, it is an\n",
+                      "  unknown one, and treating it as 0 would pile it onto the lightest row.\n",
+                      "  Re-ingest the baseline (test/gate_cost_ingest.sh) or fix the gate's `run`.\n",
                     ])
-                [] => balCompute regPath setup gates shs base runsRead regSrc
+                [] => match balPinErrors gates shs
+                  e :: es =>
+                    Err
+                      (stringConcat [
+                        "medaka gate balance: \{regPath}: a closed row's membership does not match its declared `pinned_gates`:\n",
+                        joinNl (balIndent (e :: es)),
+                        "\n  A `full_cores` row is CLOSED: the packer moves nothing onto it and\n",
+                        "  nothing off it, so its members are the one `shard` value no cost\n",
+                        "  measurement derives.  They are DECLARED in that [[shard]] row's\n",
+                        "  `pinned_gates` and checked against the registry in both directions,\n",
+                        "  so a hand-moved `shard` cannot be adopted as the new pin.\n",
+                        "  Repair the gate's `shard`; change `pinned_gates` only when the row's\n",
+                        "  membership is genuinely meant to differ, and say why in its rationale\n",
+                        "  file (docs/ops/GATE-REGISTRY-DESIGN.md §2).\n",
+                      ])
+                  [] => balCompute regPath setup gates shs base runsRead regSrc
 
 balIndent : List String -> List String
 balIndent [] = []
@@ -2294,10 +2398,11 @@ balIndent (x :: xs) = "    \{x}" :: balIndent xs
 balSetupOf : String ->
   List (String, List String) ->
   List String ->
+  List String ->
   Result String Setup
-balSetupOf baseSrc gateOrcs entries = match parseOracleCosts baseSrc
+balSetupOf baseSrc gateOrcs entries multicall = match parseOracleCosts baseSrc
   Err m => Err m
-  Ok ocs => balSetup ocs gateOrcs entries
+  Ok ocs => balSetup ocs gateOrcs entries multicall
 
 balCompute : String ->
   Setup ->
@@ -2346,11 +2451,12 @@ balCompute regPath setup gates shs base runs regSrc =
           -- would grade the model against a gate set that has never run.
           "  calibration — last recorded CI wall clock vs this model's prediction for the COMMITTED assignment:\n",
           if setup.modelled then
-            "  (recorded and predicted are the GATE wall, rowElapsedMs; runs[] records no job wall, so the predicted job wall is printed for comparison with the Actions job duration)\n"
+            "  (recorded and predicted are the GATE wall, rowElapsedMs; the job-wall line under each row grades the predicted job wall against jobWallMs, the Actions job duration)\n"
           else
             "",
           joinNl (balCalibLines cs curRows runs),
           "\n",
+          balJobSummary cs curRows runs,
         ]
       match balEnforce cs rows
         Some m => Err "\{head}\{m}"
@@ -2668,17 +2774,18 @@ budgetReport base commitMessage uncosted overClass poleFactorOpt orphans =
     Err
       "\{body}medaka gate budget: FAIL — \{intToString unacked} of \{intToString total} violation(s) not acknowledged. Paste the `Gate-Budget-Override:` trailer(s) shown above onto your commit message to accept them on purpose.\n"
 
--- `gateOrcs`/`entries` as for `balNewText`, so clause (c) prices the same
--- setup `gate balance --check` does.
+-- `gateOrcs`/`entries`/`multicall` as for `balNewText`, so clause (c) prices
+-- the same setup `gate balance --check` does.
 export
 budgetOutput : String ->
   String ->
   String ->
   List (String, List String) ->
   List String ->
+  List String ->
   String ->
   Result String String
-budgetOutput regPath regSrc baseSrc gateOrcs entries commitMessage =
+budgetOutput regPath regSrc baseSrc gateOrcs entries multicall commitMessage =
   match parseRegistry regSrc
     Err m => Err "medaka gate budget: \{m}"
     Ok gates => match parseShards regSrc
@@ -2695,7 +2802,7 @@ budgetOutput regPath regSrc baseSrc gateOrcs entries commitMessage =
               let uncosted = budgetUncosted base gates
               let overClass = budgetOverClassGates base gates
               let orphans = budgetOrphanNames base gates
-              let factor = match balSetupOf baseSrc gateOrcs entries
+              let factor = match balSetupOf baseSrc gateOrcs entries multicall
                 Err m => Err m
                 Ok setup => budgetPoleFactor setup gates shs base runs
               match factor

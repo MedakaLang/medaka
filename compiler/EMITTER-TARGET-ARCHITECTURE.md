@@ -154,7 +154,7 @@ open-bug pressure, not by layer.
 | F3 | Interface and type identity on dispatch nodes | the existing `ifaceIdentity` string (`module::Iface`) on `CImplDefault`, extended to `CMethod`, `CDict`, `CImplEntry`, `CImplTagged`; the head type carries its owner module the same way | `core_ir_lower` from declaration identity (`Ident` is already in the AST) | bare-spelling keys in `defaultFnName`/`defaultFnNameW`, `implFnSym`, `distinctKeysAtHead`, `headTagUniqueW` | #1619 (#1397 drained: `route_key.typeTagOf` puts the owner module in the head type's tag); #2055; #1973; the symbol-keying half of #1265 | none for the string form; SC-1 (#2563) upgrades it to the typed key |
 | F4 | Semantic tail sites. **Landed 2026-10-10** (sprint lowering-says-it-once) | tail flag on `CApp`/`CMethod` in tail position, computed once | `core_ir_lower` (the position is syntactic) | per-backend tail rediscovery in `emitAppTail` and its Wasm peer | #1349, #2577 | none |
 | F5 | Runtime types on binders, parameters, and returns | `RTInt`/`RTFloat`/`RTValue` (never `LTy`, never `(ref eq)`) on `CLam` params, `CLet` binders, `CBind` clauses | the #353 plan, unchanged: stamp what typecheck knew at lower time | `inferSigs`, `typeOf`, `paramUseTy`, `staticIsFloat`, `bodyFloatRet`, Wasm `cexprIsFloat`/`refMainKind` | #2545 and the N8 family (EMITTER-SEMANTICS section 9) | none; #353 is adopted as written |
-| F6 | Explicit evidence and complete method dispositions | evidence terms on `CMethod`/`CDict` replacing `Route` recipes; a complete `(instance, method)` disposition table | typechecker M2 (#2549) for evidence; B-1 (#993) for default-body evidence | route-word hedges, `emitDefaultRKey` (DELETED, s4-identity-keyed-defaults), the LLVM/Wasm superset-OR arms and `implEntryRouteKeyW`/`implEntryRouteKey(E)` recomputation (DELETED, #1403 X-E.C: a dict word is always the identity-qualified canonical row key, one word per dispatcher arm), default synthesis | #1068, #1020, the route half of #1265 (FIXED, s4), #1046 | STILL BLOCKED on M2 and #993 overall (no evidence terms on `CMethod`/`CDict` yet), but the ONE sanctioned `RNone` exception this row named — the default-body sibling/super-call guard — is already RETIRED (#1082, ahead of #993): every engine now selects a default through `compiler/types/disposition.mdk`'s table, not `emitDefaultRKey`'s lookup. X-E.C (#1403) landed canonical one-word-per-arm dispatch on LLVM/Wasm/eval; X-E is still the consumer issue for the remaining CMethod/CDict evidence terms and does nothing before M2 |
+| F6 | Explicit evidence and complete method dispositions | evidence terms on `CMethod`/`CDict` replacing `Route` recipes; a complete `(instance, method)` disposition table | the per-occurrence evidence table M2 (#2549) publishes (`evMethodRoutes`/`evDictRoutes`, `compiler/types/route_key.mdk`); the disposition table `compiler/types/disposition.mdk` (#993, #1403) | route-word hedges, `emitDefaultRKey` (DELETED, s4-identity-keyed-defaults), the LLVM/Wasm superset-OR arms and `implEntryRouteKeyW`/`implEntryRouteKey(E)` recomputation (DELETED, #1403 X-E.C: a dict word is always the identity-qualified canonical row key, one word per dispatcher arm), default synthesis; still owed: the route fields of `CMethod`/`CDict` | #1068, #1020, #1046 and the route half of #1265, all CLOSED by M-EVIDENCE (PR #3480) and X-E.C (PR #3542); no open issue left in this column | none (re-derived 2026-10-10): the disposition table and X-E.C landed, and the evidence F6 reads is published. One producer fix rides with the row: `evDictRoutes` answers `[]` for a missing entry, so the #739 no-goal arm must be published as an explicit empty application before a miss can be loud. #3966 owns the row. The rest of #2549 (M1, M3, M4, `CheckedProgram`, M-CACHE) is not an F6 input |
 | F7 | Capability manifest | a Core-level manifest field extracted before row erasure | effects checker | the reachable-extern approximation of the manifest | #2426's class (missing host import must be a named rejection) | the effects manifest producer (EFFECTS sections 7-8) |
 
 **F5 and the N5 scalar slice (2026-09-26).** N5 of the integer epic (#3428)
@@ -216,7 +216,7 @@ warn-first policy, which governs user-program type errors reaching
 | X-I | #1401 | Re-scoped to F1 and F3. `private_mangle` keeps its binding-set responsibility until ruling 3 decides whether the emitter process runs resolve. |
 | X-T | #353 | Adopted unchanged as F5. |
 | X-C | #1402 | Re-scoped to F2. |
-| X-E | #1403 | Kept as the consumer of F6, blocked on #2549 and #993. Its charter also absorbs the reconciliation of `RNone` (ruling 4) with L1: `RNone` is a validated, pinned optimization datum until #993, and a fresh site that reaches it is a bug. |
+| X-E | #1403 | CLOSED 2026-09-28: X-E.C (PR #3542) made every engine read the published dispositions and canonical dictionary words. The F6 Core carrier passes to #3966. `RNone` (ruling 4) stays a validated, pinned optimization datum, and a fresh site that reaches it is a bug. |
 | X-G | #1404 | Re-scoped to F4 plus the globals and TRMC fields of R5. |
 | X-L | #1405 | X-L.H landed (injectivity guards). Abstract `LinkId` retired; the linkage field of R5 and the validator arms in R6 are what remains. |
 | X-N | #1406 | X-N.H complete. X-N.C (validated LLVM plan plus pure renderer) retired; the prototype check and duplicate-define refusal it promised move into R6. |
@@ -232,12 +232,12 @@ Section 3's producer table, re-derived 2026-09-03 against the live tracker and
 |---|---|---|---|
 | Qualified `Ident` everywhere | #1110-#1112, #1115 | #1110, #1115 closed; #1112 open | cross-module half is SC-1 (#2563), step 8 of the typechecker order |
 | Whole-graph declaration/instance environments | #1112 (K/A-3) | open | no step; SA-2/SA-3 measured the route table as topological-prefix scoped, widening at #2548 with an acceptance delta |
-| Structured superclass evidence | #993 (B-1) | open | no step; ruling 4 defers it |
+| Structured superclass evidence | #993 (B-1) | closed 2026-09-28 | landed with M-EVIDENCE: a superclass is a projection of the evidence DAG (`SuperclassEvidence`, `compiler/types/evidence.mdk`) |
 | Evidence references, frozen admissibility | #1113 (B-2) | closed | B-2.4 cut to X-E.C by the 2026-08-14 ruling; B-2 delivered conjunct 2 only |
 | One slot per predicate | #1318 (G-10) | open | folded into #2547 unit 3 |
-| Dict abstraction at local binders | #1082 (F-1) | open | no step; #1986 is its 0.1.0-sized half |
-| Source arity and call convention | #1137 after #1318 | open | class drained by PR #2061 (emitter arc); falls out of M2 (#2549) as E-5 |
-| Complete method disposition | #1112/A-3 with #993 | open | no step |
+| Dict abstraction at local binders | #1082 (F-1) | closed 2026-09-27 | landed with M-EVIDENCE |
+| Source arity and call convention | #1137 after #1318 | closed 2026-10-03 | class drained by PR #2061 (emitter arc); successors are emitter-side (#2078, #2085, #2086) |
+| Complete method disposition | #1112/A-3 with #993 | landed 2026-09-27 | `compiler/types/disposition.mdk` publishes one `Supplied`/`InheritedDefault` row per accepted (instance, method) (PR #3480); #1112 stays open for the rest of A-3 |
 | Semantic runtime types | #353 | open | not in the typechecker plan; owned here as F5 |
 | Capability manifest | effects sections 7-8 | - | unchanged |
 
@@ -246,16 +246,15 @@ Three facts this arc must carry that the old sections did not know:
 1. **The emitter binary does not run resolve.** `medaka build` shells out to
    `medaka_emitter`, whose pipeline is `driveModules -> runEmitWith ->
    mangleUnits -> elaborateModules`; resolve's resolution pass is DCE'd out of
-   that binary (`compiler/frontend/resolve.mdk`, SA-1). Whether that changes is
-   ruling 3, deferred until after M2. Until then every identity fact in R4 is
-   produced by lowering from the elaborated AST, which is what both build
-   processes have.
+   that binary (`compiler/frontend/resolve.mdk`, SA-1). Ruling 3 landed as
+   shape (a) (PR #2871, 2026-09-11): the parent runs resolve and the emitter
+   child runs build's single typecheck. Every identity fact in R4 is therefore
+   produced by lowering from the elaborated AST inside the child.
 2. **`RNone` is a ruled-in optimization** (ruling 4), realized as
-   `narrowUnrouted` in `eval.mdk` and, historically, `emitDefaultRKey` in
+   `methodAtNarrow`'s `RNone` arm in `eval.mdk` and, historically, `emitDefaultRKey` in
    `llvm_emit.mdk` — the latter is deleted (#1082, disposition table). L1
-   still holds for every other missing fact; F6 records the one sanctioned
-   exception, now retired for default bodies specifically, and its expiry (#993)
-   for the rest.
+   still holds for every other missing fact. The default-body exception F6
+   once recorded is retired; arg-tag `RNone` remains the one ruled-in case.
 3. **Route answers and build-path acceptance move under the typechecker plan**
    (#2546 acceptance delta, #2548 route-table widening, #2549 node-arity change
    on `EMethodAt`). No comparison carrier in this arc may certify a fact against
@@ -281,7 +280,9 @@ links back here.
 3. **R5 plan record** (no dependency; can run beside F1).
 4. **F1, F3, F2, F4, F5** in that order, one row per PR series, each with its
    R6 validator arm and L7 fixture.
-5. **F6** when #2549 lands; **F7** when the manifest producer exists.
+5. **F6** (#3966) needs nothing more from #2549 (re-derived 2026-10-10; see
+   its R4 row) and can run beside F1-F5. **F7** waits for the manifest
+   producer.
 
 Compiler-source landing stays serialized through the one-PR golden lane and
 interleaves with the typechecker's steps; high-severity fixes keep priority

@@ -1,7 +1,10 @@
 -- Thin driver for the composed self-hosted front-end (compiler/tools/check.mdk).
--- The `main` + readFile plumbing was split out of check.mdk (Phase C Slice 0)
--- so check.mdk is LOGIC-ONLY (exports runCheck) and its `main` no longer
--- collides with the native CLI dispatcher's `main` under private_mangle.
+-- The `main` + readFile plumbing lives here, not in check.mdk, so check.mdk
+-- stays logic-only (exports runCheck) and composes into other programs: a
+-- module's private `main` cannot be imported, and an exported value `main`
+-- would initialise eagerly in every program that references it.  For the same
+-- reason this file's body is the exported function `oracleMain`, which the
+-- multicall oracle (oracle_multicall.mdk) calls.
 --
 --   medaka run compiler/entries/check_main.mdk <runtime.mdk> <core.mdk> <source.mdk>
 --
@@ -15,7 +18,9 @@
 
 import tools.check.{runCheck}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   [runtimePath, corePath, targetPath] =>
     withFiles runtimePath corePath targetPath
   _ =>
@@ -40,3 +45,5 @@ withTarget : String -> String -> String -> <IO> Unit
 withTarget rsrc csrc targetPath = match readFile targetPath
   Ok tsrc => putStr (runCheck rsrc csrc tsrc)
   Err msg => ePutStrLn msg
+
+main = oracleMain ()

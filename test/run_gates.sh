@@ -42,7 +42,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Keep the build/test write-storm OUT OF RAM (/tmp is a RAM-backed tmpfs).
 . "$ROOT/test/lib_scratch.sh"
 mdk_warn_if_tmp_full
-NCPU="$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
+# `nproc` first: it honours affinity masks and cgroup quotas, which the machine-wide
+# counts (hw.logicalcpu, _NPROCESSORS_ONLN) do not. macOS has no nproc.
+NCPU="$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)"
 # Outer pool: how many gates run at once. Inner pool (INNER_JOBS, exported as JOBS
 # to each gate): a heavy gate's own fixture fan-out. Nesting the two naively gives
 # OUTER×INNER concurrent processes and oversubscribes; but the gates are latency-
@@ -58,17 +60,6 @@ _default_jobs=$(( (NCPU * 3 + 2) / 5 ))
 [ "$_default_jobs" -ge 2 ] 2>/dev/null || _default_jobs=2
 JOBS="${JOBS:-$_default_jobs}"
 INNER_JOBS="${INNER_JOBS:-3}"
-# How many `medaka test` children a roster gate-test runs at once
-# (test_process.testAssertionCounts). Its own default is every core, which
-# JOBS concurrent gates would multiply, so split the cores between them.
-if [ -z "${MEDAKA_TEST_JOBS:-}" ]; then
-  MEDAKA_TEST_JOBS=1
-  if [ "$JOBS" -ge 1 ] 2>/dev/null && [ "$NCPU" -gt "$JOBS" ] 2>/dev/null; then
-    MEDAKA_TEST_JOBS=$(( NCPU / JOBS ))
-  fi
-fi
-export MEDAKA_TEST_JOBS
-
 # ── PER-GATE COST TRANSPORT (#2178, S-1-S-cost-record) ────────────────────────
 #
 # `GATE_TIMING_JSON=<path>` makes this run ALSO write a machine-readable per-gate
@@ -464,8 +455,23 @@ if [ -z "${NO_STALE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ -d "$ROOT/test/bin" ]; 
     # The banner won, because it is right there in the terminal and the ban is only in
     # prose. It has ALWAYS known which probes are stale ($stale_all) — it just printed
     # the blunt instrument instead of the narrow one it could already derive.
-    echo "Rebuild ONLY what is stale — one probe per command:"
+    # Names the multicall oracle serves share one binary, so they go stale
+    # together and one multicall rebuild refreshes them all; a single oracle
+    # is rebuilt by name.
+    mc_names=" $(sh "$ROOT/test/build_oracles.sh" --multicall-names 2>/dev/null | tr '\n' ' ')"
+    mc_stale=0
+    singles_stale=""
     for o in $stale_all; do
+      case "$mc_names" in
+        *" $o "*) mc_stale=$((mc_stale + 1)) ;;
+        *) singles_stale="$singles_stale $o" ;;
+      esac
+    done
+    echo "Rebuild ONLY what is stale:"
+    if [ "$mc_stale" -gt 0 ]; then
+      echo "    FORCE=1 sh test/build_oracles.sh --build-multicall   # $mc_stale multicall-served name(s)"
+    fi
+    for o in $singles_stale; do
       echo "    FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $o"
     done
     echo
@@ -473,7 +479,7 @@ if [ -z "${NO_STALE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ -d "$ROOT/test/bin" ]; 
     echo "    FORCE=1 sh test/build_oracles.sh --for '<gate>'"
     echo
     echo "⚠️  NOT 'FORCE=1 sh test/build_oracles.sh' with no --for/--build-one: that"
-    echo "    rebuilds ALL 54 probes via an xargs -P pool that outlives an agent's turn"
+    echo "    rebuilds EVERY probe via an xargs -P pool that outlives an agent's turn"
     echo "    and gets respawned by the harness. It has killed several agent sessions"
     echo "    and held this shared box at load 40 for hours."
     echo
@@ -534,6 +540,30 @@ done | awk -v base="$ROOT/test/gate_cost_baseline.json" '
   { if ($1 in cost) printf "1 %d %s %s\n", cost[$1], $1, $2
     else            printf "0 0 %s %s\n", $1, $2 }
 ' | sort -k1,1n -k2,2nr -k3,3 | cut -d' ' -f4 >"$_order"
+
+# How many `medaka test` children a roster gate-test runs at once
+# (test_process.testAssertionCounts) and how wide each fixture sweep in
+# test/compiler_cli_test_support.mdk batches; both read test_process.testJobs.
+# Its own default is every core, so an UNSET knob is divided between the gates
+# that can run at once: min(JOBS, selected gates), which is read here because it
+# is only known after selection. A one-gate row hands its gate every core. A SET
+# value is handed to each gate unchanged. A MEDAKA_TEST_JOBS that is not a
+# positive integer reads as unset.
+case "${MEDAKA_TEST_JOBS:-}" in
+  ''|*[!0-9]*) MEDAKA_TEST_JOBS="" ;;
+  *) [ "$MEDAKA_TEST_JOBS" -ge 1 ] || MEDAKA_TEST_JOBS="" ;;
+esac
+_nsel=$(grep -c . "$_order")
+_conc="$JOBS"
+[ "$_nsel" -ge 1 ] 2>/dev/null && [ "$_nsel" -lt "$_conc" ] && _conc="$_nsel"
+if [ -z "$MEDAKA_TEST_JOBS" ]; then
+  MEDAKA_TEST_JOBS=1
+  if [ "$_conc" -ge 1 ] 2>/dev/null && [ "$NCPU" -gt "$_conc" ] 2>/dev/null; then
+    MEDAKA_TEST_JOBS=$(( NCPU / _conc ))
+  fi
+fi
+export MEDAKA_TEST_JOBS
+echo "run_gates: nproc=$(nproc 2>/dev/null || echo n/a) nproc-all=$(nproc --all 2>/dev/null || echo n/a) NCPU=$NCPU JOBS=$JOBS INNER_JOBS=$INNER_JOBS gates=$_nsel MEDAKA_TEST_JOBS=$MEDAKA_TEST_JOBS"
 
 # Wall clock spanning the whole fan-out (#2208): "from before the xargs -P
 # $JOBS pool starts to after it drains" — the row's own total elapsed time,
@@ -627,7 +657,8 @@ FAIL: none of these gates could run — their oracle binaries are not built.
       clone or worktree has no oracles.
 
       Build them:  sh test/build_oracles.sh --for 'diff_compiler_*'
-                   (52 oracles, ~2 min, foreground — the safe recipe)
+                   (the multicall oracle plus the few singles those gates
+                    read, ~1-2 min, foreground — the safe recipe)
 
       Or just what you need:
                    sh test/preflight.sh          # derives them from your diff

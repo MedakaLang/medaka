@@ -11,7 +11,11 @@ import eval.eval.{evalOutputWith}
 import frontend.ast.{Decl}
 import entries.entry_support.{drivePrelude}
 
-main = drivePrelude emit
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = drivePrelude emit
 
 emit : List Decl -> List Decl -> <IO> Unit
 emit preludeDecls userDecls = putStr (evalOutputWith preludeDecls userDecls)
+
+main = oracleMain ()

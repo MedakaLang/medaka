@@ -8,7 +8,9 @@
 
 import driver.diagnostics.{analyzeToLines}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   [runtimePath, corePath, targetPath] =>
     withFiles runtimePath corePath targetPath
   _ =>
@@ -33,3 +35,5 @@ withTarget : String -> String -> String -> <IO> Unit
 withTarget rsrc csrc targetPath = match readFile targetPath
   Ok tsrc => putStr (analyzeToLines rsrc csrc tsrc)
   Err msg => ePutStrLn msg
+
+main = oracleMain ()

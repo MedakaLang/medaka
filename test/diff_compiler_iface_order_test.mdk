@@ -13,7 +13,7 @@
    case is ledgered in test/IFACE-ORDER-LEDGER.txt.
 
    The axis is new. test/diff_compiler_import_order.sh permutes import clauses,
-   test/diff_compiler_dict_semantics_permute.sh permutes impl blocks, and
+   test/diff_compiler_dict_semantics_permute_test.mdk permutes impl blocks, and
    test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/ spends
    its control slot on impl-block order. None of them moves interface declarations.
    This gate moves only interface declarations, among their own slots; impls,

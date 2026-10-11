@@ -56,8 +56,13 @@ which takes its own settings:
   that object is ThinLTO bitcode. At `-O0` some tail-recursive shapes overflow
   the stack; `compiler/AGENTS.md` lists the ceilings.
 - `MEDAKA_TEST_JOBS=<n>` caps how many `medaka test` runs
-  `testAssertionCounts` (`stdlib/test_process.mdk`) starts at once. It defaults
-  to the number of online processors, or 4 when that cannot be read.
+  `testAssertionCounts` (`stdlib/test_process.mdk`) starts at once, and the
+  batch width of every fixture sweep in `test/compiler_cli_test_support.mdk`.
+  It defaults to the number of processors available to the process (`nproc`,
+  else `getconf`), or 4 when that cannot be read. `medaka test <dir>` divides it
+  across the per-file children it runs at once. `test/run_gates.sh` gives a set
+  value to each gate unchanged and divides the cores between the gates only
+  when it is unset.
 
 ## Projects and `medaka.toml`
 

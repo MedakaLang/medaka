@@ -50,7 +50,10 @@ report "child" = renderMint (invalidInput "child")
 report "empty-path" = renderMint (invalidInput "")
 report _ = node "stable-node-ids" (map renderMint canonicalInputs)
 
-main : <IO> Unit
-main = match getEnv "MEDAKA_ANF_IDENTITY_MUTATION"
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match getEnv "MEDAKA_ANF_IDENTITY_MUTATION"
   Some mutation => putStrLn (report mutation)
   None => putStrLn (report "")
+
+main = oracleMain ()

@@ -590,14 +590,30 @@ indentedNames : List String -> List String
 indentedNames [] = []
 indentedNames (o :: os) = "  \{o}" :: indentedNames os
 
-staleBannerLines : List String -> List String
-staleBannerLines [] = []
-staleBannerLines (o :: os) =
-  "    FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one \{o}"
-    :: staleBannerLines os
+-- The rebuild commands for the stale names, `mc` being the names the multicall
+-- oracle serves: they share one binary, so one multicall rebuild refreshes all
+-- of them, and every other name is rebuilt alone.
+export
+staleBannerLines : List String -> List String -> List String
+staleBannerLines mc stale =
+  let served = filterList (o => contains o mc) stale
+  let multi =
+    if isEmptyStrs served then
+      []
+    else
+      [
+        "    FORCE=1 sh test/build_oracles.sh --build-multicall   # \{intToString (listLen served)} multicall-served name(s)",
+      ]
+  multi ++ staleSingleLines (filterList (o => not (contains o mc)) stale)
 
-staleBanner : List String -> String
-staleBanner stale =
+staleSingleLines : List String -> List String
+staleSingleLines [] = []
+staleSingleLines (o :: os) =
+  "    FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one \{o}"
+    :: staleSingleLines os
+
+staleBanner : List String -> List String -> String
+staleBanner mc stale =
   joinNl
     ([
         "════════════════════════════════════════════════════════════════════",
@@ -610,9 +626,9 @@ staleBanner stale =
         "reports an ordinary-looking FAIL that is INDISTINGUISHABLE from a real",
         "regression.",
         "",
-        "Rebuild ONLY what is stale — one probe per command:",
+        "Rebuild ONLY what is stale:",
       ]
-      ++ staleBannerLines stale
+      ++ staleBannerLines mc stale
       ++ [
         "",
         "(Override with NO_STALE_CHECK=1, --no-stale-check, or CI=1 only if you",
@@ -636,7 +652,7 @@ staleRefusal False root gs =
     let newest = newestSourceMtime root
     match staleOf root newest names
       [] => None
-      stale => Some (staleBanner stale)
+      stale => Some (staleBanner (multicallOracles root) stale)
 
 -- ── running one gate ────────────────────────────────────────────────────────
 
@@ -1272,6 +1288,14 @@ runTargetViolations root (g :: gs) =
 knownOracles : String -> <IO> List String
 knownOracles root =
   match runCommand "sh" ["\{root}/test/build_oracles.sh", "--list"]
+    Err _ => []
+    Ok (_, out, _) => filterList nonBlank (splitNl out)
+
+-- The ENTRIES names the multicall oracle serves (`--multicall-names`): no CI
+-- row builds them, and one rebuild refreshes them all.
+multicallOracles : String -> <IO> List String
+multicallOracles root =
+  match runCommand "sh" ["\{root}/test/build_oracles.sh", "--multicall-names"]
     Err _ => []
     Ok (_, out, _) => filterList nonBlank (splitNl out)
 
@@ -3652,7 +3676,9 @@ balCmdBody argv = match parseBalArgs argv BalArgs {
               "medaka gate balance: cannot read cost baseline \{basePath}: \{m}")
         Ok baseSrc =>
           let orcs = balGateOracles root regSrc
-          match balNewText regPath regSrc baseSrc orcs (knownOracles root)
+          let known = knownOracles root
+          let mc = multicallOracles root
+          match balNewText regPath regSrc baseSrc orcs known mc
             Err m => emit (Err m)
             Ok (head, out) =>
               if a.check then
@@ -3726,4 +3752,5 @@ budgetCmdBody argv = match parseBudgetArgs argv
               baseSrc
               (balGateOracles root regSrc)
               (knownOracles root)
+              (multicallOracles root)
               a.commitMessage)

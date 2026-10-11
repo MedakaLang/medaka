@@ -11,7 +11,9 @@
 import frontend.parser.{parse}
 import frontend.exhaust.{exhaustToLines}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   [targetPath] => withTarget targetPath
   _ =>
     ePutStrLn "usage: medaka run compiler/entries/exhaust_main.mdk <file.mdk>"
@@ -20,3 +22,5 @@ withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
   Ok targetSrc => putStr (exhaustToLines (parse targetSrc))
   Err msg => ePutStrLn msg
+
+main = oracleMain ()

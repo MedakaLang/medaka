@@ -460,8 +460,12 @@ own place in the bootstrap, for no gain — §5's circularity is unchanged eithe
   default (the median of the sampled ones); a baseline with no `oracles[]`
   section is reported as "setup: not modelled" and packed on gate cost alone
   (`balSetup`). The calibration lines still grade the GATE part against
-  `rowElapsedMs`; `runs[]` records no job wall, so the predicted job wall is
-  printed for comparison with the Actions job duration.
+  `rowElapsedMs`. `runs[]` also records `jobWallMs`, the matrix job's Actions
+  started_at to completed_at, which `test/gate_cost_collect.sh` adds to each
+  report from the Actions API (`run_gates.sh` runs inside the job and cannot
+  measure it) and `test/gate_cost_ingest.sh` refuses to ingest a new report
+  without. The predicted job wall (`rload`) is graded against it per row, with
+  the contract's +-15% bar as the verdict; a run lacking it is "not gradeable".
 
   The tier axis (`merge` | `nightly` | `ondemand`) is the other lever on the
   pole besides re-ingesting: a gate whose failure is a breadth check rather
