@@ -1,8 +1,15 @@
--- #2435 shadow: same names and types as stdlib list's lookup/reverse/sortOn,
--- but sortOn sorts DESCENDING.
+-- #2435 shadow: same names and types as the stdlib list functions hash_map
+-- uses (lookup/reverse/intersperse/sortOn), but sortOn sorts DESCENDING.
 export
 reverse : List a -> List a
 reverse xs = revGo xs []
+
+export
+intersperse : a -> List a -> List a
+intersperse sep xs = match xs
+  [] => []
+  (y :: []) => [y]
+  (y :: ys) => y :: sep :: intersperse sep ys
 
 revGo : List a -> List a -> List a
 revGo xs acc = match xs

@@ -1,0 +1,51 @@
+-- Tests for the substring search and replace functions in `stdlib/string.mdk`.
+--
+-- Positions are codepoint indices, so the multibyte cases below are where a
+-- byte offset would show.
+
+import string.{countOccurrences, indexOf, lastIndexOf, replaceAll}
+import test.{expectEqual}
+
+-- # Fixed cases
+
+test "lastIndexOf finds overlapping occurrences" =
+  expectEqual (Some 1) (lastIndexOf "aa" "aaa")
+
+test "lastIndexOf counts codepoints, not bytes" =
+  expectEqual (Some 2) (lastIndexOf "é" "éaé")
+
+test "lastIndexOf of an empty needle is the end of the string" =
+  expectEqual (Some 5) (lastIndexOf "" "héllo")
+
+test "lastIndexOf of an absent needle is None" =
+  expectEqual None (lastIndexOf "z" "hello")
+
+test "countOccurrences does not count overlaps" =
+  expectEqual 2 (countOccurrences "aa" "aaaaa")
+
+test "countOccurrences of an absent needle is 0" =
+  expectEqual 0 (countOccurrences "z" "hello")
+
+test "replaceAll replaces non-overlapping occurrences left to right" =
+  expectEqual "bba" (replaceAll "aa" "b" "aaaaa")
+
+test "replaceAll handles multibyte needles" =
+  expectEqual "-a-" (replaceAll "日" "-" "日a日")
+
+test "replaceAll with an absent needle leaves the string alone" =
+  expectEqual "hello" (replaceAll "z" "y" "hello")
+
+test "replaceAll can delete" = expectEqual "hllo" (replaceAll "e" "" "hello")
+
+-- # Properties
+
+prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
+  stringLength s - stringLength (replaceAll "ab" "" s)
+    == 2 * countOccurrences "ab" s
+
+prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
+  match lastIndexOf "ab" s
+    None => countOccurrences "ab" s == 0
+    Some i =>
+      stringSlice i (i + 2) s == "ab"
+        && indexOf "ab" (stringSlice (i + 1) (stringLength s) s) == None

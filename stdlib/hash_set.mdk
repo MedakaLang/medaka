@@ -251,9 +251,7 @@ export impl Debug (HashSet a) requires Debug a where
 -- ordering routine for the whole stdlib.
 
 displayItems : Display a => List a -> String
-displayItems [] = ""
-displayItems [x] = "\{x}"
-displayItems (y :: rest) = "\{y}, \{displayItems rest}"
+displayItems xs = stringConcat (L.intersperse ", " (map display xs))
 
 {- | `display` renders a set as `HashSet { x, ... }` with the elements in
    ascending order, so the text depends only on the elements.

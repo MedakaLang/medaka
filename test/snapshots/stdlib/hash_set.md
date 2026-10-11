@@ -1,5 +1,5 @@
 # META
-source_lines=291
+source_lines=289
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable set of distinct elements, keyed by hash.
@@ -255,9 +255,7 @@ export impl Debug (HashSet a) requires Debug a where
 -- ordering routine for the whole stdlib.
 
 displayItems : Display a => List a -> String
-displayItems [] = ""
-displayItems [x] = "\{x}"
-displayItems (y :: rest) = "\{y}, \{displayItems rest}"
+displayItems xs = stringConcat (L.intersperse ", " (map display xs))
 
 {- | `display` renders a set as `HashSet { x, ... }` with the elements in
    ascending order, so the text depends only on the elements.
@@ -354,9 +352,7 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EVar "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displayItems" ((PList)) (ELit (LString "")))
-(DFunDef false "displayItems" ((PList (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString ""))))
-(DFunDef false "displayItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "y"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "displayItems") (EVar "rest")))) (ELit (LString ""))))
+(DFunDef false "displayItems" ((PVar "xs")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "L.intersperse") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "display")) (EVar "xs")))))
 (DImpl true "Display" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Display" ((TyVar "a"))) (req "Ord" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "s"))) (arm (PList) () (ELit (LString "HashSet {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EVar "display") (EApp (EVar "displayItems") (EVar "xs")))) (ELit (LString " }"))))))))
 (DTypeSig false "ascendingL" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "ascendingL" ((PList)) (EVar "True"))
@@ -425,9 +421,7 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DImpl true "Eq" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Eq" ((TyVar "a"))) (req "Hashable" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "size") (EVar "a")) (EApp (EVar "size") (EVar "b"))) (EVar "False") (EApp (EApp (EDictApp "allIn") (EApp (EVar "elemList") (EVar "a"))) (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "s")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "elemList") (EVar "s"))))) (ELit (LString ""))))))
 (DTypeSig false "displayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displayItems" ((PList)) (ELit (LString "")))
-(DFunDef false "displayItems" ((PList (PVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString ""))))
-(DFunDef false "displayItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "y"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EDictApp "displayItems") (EVar "rest")))) (ELit (LString ""))))
+(DFunDef false "displayItems" ((PVar "xs")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "L.intersperse") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EMethodRef "display")) (EVar "xs")))))
 (DImpl true "Display" ((TyApp (TyCon "HashSet") (TyVar "a"))) ((req "Display" ((TyVar "a"))) (req "Ord" ((TyVar "a")))) ((im "display" ((PVar "s")) (EMatch (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "s"))) (arm (PList) () (ELit (LString "HashSet {}"))) (arm (PVar "xs") () (EBinOp "++" (EBinOp "++" (ELit (LString "HashSet { ")) (EApp (EMethodRef "display") (EApp (EDictApp "displayItems") (EVar "xs")))) (ELit (LString " }"))))))))
 (DTypeSig false "ascendingL" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "ascendingL" ((PList)) (EVar "True"))

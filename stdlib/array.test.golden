@@ -26,21 +26,21 @@ running doctests in stdlib/array.mdk
   ok   stdlib/array.mdk:400: let arr = fromList [3, 1, 2] in let _ = sortInPlaceBy compare arr in toList arr
   ok   stdlib/array.mdk:412: let arr = fromList [3, 1, 2] in let _ = sortInPlace arr in toList arr
   ok   stdlib/array.mdk:423: toList (sortBy (x y => compare y x) (fromList [3, 1, 2]))
-  ok   stdlib/array.mdk:437: toList (sortBy compare (fromList [3, 1, 4, 1, 5]))
-  ok   stdlib/array.mdk:444: toList (sort (fromList [3, 1, 4, 1, 5]))
-  ok   stdlib/array.mdk:455: toList (sortOn (x => 0 - x) (fromList [1, 3, 2]))
-  ok   stdlib/array.mdk:518: find (x => x > 1) (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:535: findIndex (x => x > 2) (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:556: elem 2 (fromList [1, 2, 3])
-  ok   stdlib/array.mdk:558: sum (fromList [1, 2, 3, 4])
-  ok   stdlib/array.mdk:560: product (fromList [1, 2, 3, 4])
-  ok   stdlib/array.mdk:567: maximum (fromList [3, 1, 2])
-  ok   stdlib/array.mdk:569: minimum (fromList [3, 1, 2])
-  ok   stdlib/array.mdk:584: foldWithIndex (acc i x => acc + i * x) 0 (fromList [10, 20, 30])
-  ok   stdlib/array.mdk:590: foldWithIndex (acc i x => (i, x) :: acc) [] (fromList ([] : List Int))
-  ok   stdlib/array.mdk:607: let acc = Ref [] in let _ = forEachWithIndex (i x => acc := (i, x) :: !acc) (fromList [7, 8, 9]) in !acc
-  ok   stdlib/array.mdk:623: toList (mapWithIndex (i x => i * x) (fromList [1, 2, 3]))
-  ok   stdlib/array.mdk:630: toList (mapWithIndex (i x => i + x) (fromList ([] : List Int)))
+  ok   stdlib/array.mdk:434: toList (sortBy compare (fromList [3, 1, 4, 1, 5]))
+  ok   stdlib/array.mdk:441: toList (sort (fromList [3, 1, 4, 1, 5]))
+  ok   stdlib/array.mdk:452: toList (sortOn (x => 0 - x) (fromList [1, 3, 2]))
+  ok   stdlib/array.mdk:552: find (x => x > 1) (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:569: findIndex (x => x > 2) (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:590: elem 2 (fromList [1, 2, 3])
+  ok   stdlib/array.mdk:592: sum (fromList [1, 2, 3, 4])
+  ok   stdlib/array.mdk:594: product (fromList [1, 2, 3, 4])
+  ok   stdlib/array.mdk:601: maximum (fromList [3, 1, 2])
+  ok   stdlib/array.mdk:603: minimum (fromList [3, 1, 2])
+  ok   stdlib/array.mdk:618: foldWithIndex (acc i x => acc + i * x) 0 (fromList [10, 20, 30])
+  ok   stdlib/array.mdk:624: foldWithIndex (acc i x => (i, x) :: acc) [] (fromList ([] : List Int))
+  ok   stdlib/array.mdk:641: let acc = Ref [] in let _ = forEachWithIndex (i x => acc := (i, x) :: !acc) (fromList [7, 8, 9]) in !acc
+  ok   stdlib/array.mdk:657: toList (mapWithIndex (i x => i * x) (fromList [1, 2, 3]))
+  ok   stdlib/array.mdk:664: toList (mapWithIndex (i x => i + x) (fromList ([] : List Int)))
 
 stdlib/array.mdk: 42/42 passed
 Testing "sortBy ascending and length-preserving" [eval] ... OK (100 tests passed)

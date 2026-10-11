@@ -210,8 +210,10 @@ suites = [
   ("path", (34, EvalAndNative)),
   ("random_state_test", (3, EvalAndNative)),
   ("regex", (94, EvalAndNative)),
+  ("regex_test", (10, EvalAndNative)),
   ("runtime", (4, NativeCapability)),
   ("set", (64, EvalAndNative)),
+  ("string_test", (12, EvalAndNative)),
   -- The assertion library every `*_test.mdk` in the tree imports, whose own
   -- doctests and props importing it never runs. Neither of the two vehicles
   -- named in the header reaches this module either.
@@ -228,6 +230,7 @@ suites = [
   ("u8", (29, EvalAndNative)),
   ("validation", (20, EvalAndNative)),
   ("vector", (32, EvalAndNative)),
+  ("vector_test", (7, EvalAndNative)),
 ]
 
 rosterNames : List String
@@ -488,9 +491,15 @@ test "stdlib/random_state_test.mdk executed >= 3 assertions" =
 
 test "stdlib/regex.mdk executed >= 94 assertions" = floorExpectation "regex"
 
+test "stdlib/regex_test.mdk executed >= 10 assertions" =
+  floorExpectation "regex_test"
+
 test "stdlib/runtime.mdk executed >= 4 assertions" = floorExpectation "runtime"
 
 test "stdlib/set.mdk executed >= 64 assertions" = floorExpectation "set"
+
+test "stdlib/string_test.mdk executed >= 12 assertions" =
+  floorExpectation "string_test"
 
 test "stdlib/test.mdk executed >= 72 assertions" = floorExpectation "test"
 
@@ -513,6 +522,9 @@ test "stdlib/validation.mdk executed >= 20 assertions" =
   floorExpectation "validation"
 
 test "stdlib/vector.mdk executed >= 32 assertions" = floorExpectation "vector"
+
+test "stdlib/vector_test.mdk executed >= 7 assertions" =
+  floorExpectation "vector_test"
 
 -- # The zero-assertion pins
 
