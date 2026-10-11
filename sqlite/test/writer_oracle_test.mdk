@@ -46,11 +46,18 @@
 -- `rowScratch` stays local — a fourth byte-identical copy with
 -- `dml_oracle_test.mdk`.
 import io.{runVerb}
-import list.{drop}
-import string.{join, split, trim}
+import list.{drop, indexed, lookup, zipWith3}
+import string.{join, split, trim, unwords}
 import test.{Expectation(..), expectEqual, expectEqualLines}
-import test.oracle_support.{Seed(..), flatLines, outLines, seedDb, spawnOut}
-import test_process.{medakaBin, scratchDir, underRoot}
+import test.oracle_support.{
+  Seed(..),
+  flatLines,
+  outLines,
+  seedDb,
+  spawnEnv,
+  spawnOut,
+}
+import test_process.{medakaBin, scratchDir, testJobs, underRoot}
 
 -- # Spawning
 --
@@ -71,25 +78,93 @@ rowScratch name = match scratchDir
   Err e => Err "\{name}: \{e}"
   Ok dir => Ok "\{dir}/\{name}"
 
-buildBin : String -> String -> <Exec, IO> Result String Unit
-buildBin entry bin =
-  map
-    (_ => ())
-    (spawnOut buildTimeoutSeconds medakaBin [
-      "build",
-      underRoot entry,
-      "-o",
-      bin,
-    ])
+-- The batched-build helpers below are a deliberate copy of the same helpers in
+-- dml_oracle_test.mdk and oracle_test.mdk (test siblings with no shared module
+-- of their own; moving them into oracle_support.mdk is the consolidation).
+-- lint-disable-file rule-duplicate-body
+buildArgs : String -> String -> <IO> List String
+buildArgs entry bin = ["build", underRoot entry, "-o", bin]
 
--- Every row reads its database with the same `sqlite/main.mdk` build, so it
--- is built once per process: a top-level nullary is evaluated once, and the
--- binary lives under the shared scratch root, outside every row's own
--- cleanup list.
+-- The argv `spawnOut buildTimeoutSeconds medakaBin args` runs: `boundedVerbSeconds`
+-- wrapped around `env`, which sets the two spawn variables and runs the build.
+perlArgs : List String -> <IO> List String
+perlArgs args =
+  ["-e", "alarm \{intToString buildTimeoutSeconds}; exec @ARGV", "env", "env"]
+    ++ spawnEnv
+    ++ (medakaBin :: args)
+
+-- Grades one batched build exactly as `spawnRaw` and `spawnOut` grade a single
+-- one: a run that never started, or exit 127, is a spawn failure; any exit but
+-- 0 is a named failure.
+gradeBuild : List String ->
+  Result String (Int, String, String) ->
+  <IO> Result String Unit
+gradeBuild args (Err e) =
+  Err "spawn failed: could not start `\{unwords (medakaBin :: args)}`: \{e}"
+gradeBuild _ (Ok (0, _, _)) = Ok ()
+gradeBuild _ (Ok (127, _, err)) =
+  Err "spawn failed: \{medakaBin} not found on PATH: \{trim err}"
+gradeBuild args (Ok (code, out, err)) =
+  Err
+    "`\{unwords (medakaBin :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
+
+-- Every demo this file runs, built together in ONE batch (`testJobs` builds at
+-- a time, serially under `MEDAKA_TEST_JOBS=1`) into the shared scratch
+-- directory. A top-level nullary is evaluated once per process, so the batch
+-- runs once. No row writes to a binary after its build, and no row's cleanup
+-- list names one.
+sharedDemos : List (String, List String)
+sharedDemos = [
+  ("sqlite/main.mdk", []),
+  ("sqlite/writer_demo.mdk", []),
+  ("sqlite/writer_api_demo.mdk", []),
+  ("sqlite/multipage_write_demo.mdk", []),
+  ("sqlite/multitable_write_demo.mdk", []),
+  ("sqlite/rowid_roundtrip_demo.mdk", []),
+]
+
+sharedBuilds : <Exec, IO> List (String, Result String String)
+sharedBuilds = match scratchDir
+  Err e => map ((entry, _) => (entry, Err e)) sharedDemos
+  Ok dir =>
+    let plans =
+      map
+        ((i, (entry, _)) => (entry, "\{dir}/shared-\{intToString i}"))
+        (indexed sharedDemos)
+    let argvs = map ((entry, bin) => buildArgs entry bin) plans
+    let spawned = runCommandBatch "perl" testJobs (map perlArgs argvs)
+    zipWith3
+      ((entry, bin) args run => (
+        entry,
+        map (_ => bin) (gradeBuild args (mapErr (e => "perl: \{e}") run)),
+      ))
+      plans
+      argvs
+      spawned
+
+sharedBin : String -> <Exec, IO> Result String String
+sharedBin entry = match lookup entry sharedBuilds
+  Some r => r
+  None => Err "no shared build for \{entry}"
+
+-- Every row reads its database with the same `sqlite/main.mdk` build.
 readerBin : <Exec, IO> Result String String
-readerBin = match rowScratch "shared-reader"
-  Err e => Err e
-  Ok bin => map (_ => bin) (buildBin "sqlite/main.mdk" bin)
+readerBin = sharedBin "sqlite/main.mdk"
+
+writerDemoBin : <Exec, IO> Result String String
+writerDemoBin = sharedBin "sqlite/writer_demo.mdk"
+
+writerApiDemoBin : <Exec, IO> Result String String
+writerApiDemoBin = sharedBin "sqlite/writer_api_demo.mdk"
+
+multipageWriteDemoBin : <Exec, IO> Result String String
+multipageWriteDemoBin = sharedBin "sqlite/multipage_write_demo.mdk"
+
+multitableWriteDemoBin : <Exec, IO> Result String String
+multitableWriteDemoBin = sharedBin "sqlite/multitable_write_demo.mdk"
+
+rowidRoundtripDemoBin : <Exec, IO> Result String String
+rowidRoundtripDemoBin = sharedBin "sqlite/rowid_roundtrip_demo.mdk"
 
 sqlite3Query : String -> String -> <Exec, IO> Result String String
 sqlite3Query db sql = spawnOut queryTimeoutSeconds "sqlite3" [db, sql]
@@ -200,14 +275,13 @@ writerResult = match rowScratch "writer"
   Err e => Err e
   Ok prefix =>
     let db = "\{prefix}.db"
-    let writer = "\{prefix}-writer"
-    let out = runWriter db writer
-    let _ = runVerb "rm" ["-rf", db, writer]
+    let out = runWriter db
+    let _ = runVerb "rm" ["-rf", db]
     out
 
-runWriter : String -> String -> <Exec, IO> Result String WriterRun
-runWriter db writer = do
-  _ <- buildBin "sqlite/writer_demo.mdk" writer
+runWriter : String -> <Exec, IO> Result String WriterRun
+runWriter db = do
+  writer <- writerDemoBin
   reader <- readerBin
   _ <- spawnOut queryTimeoutSeconds writer [db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
@@ -387,23 +461,21 @@ writerApiResult : <Exec, IO> Result String WriterApiRun
 writerApiResult = match rowScratch "writer-api"
   Err e => Err e
   Ok prefix =>
-    let writer = "\{prefix}-writer"
     let dbUsers = "\{prefix}-users.db"
     let dbKv = "\{prefix}-kv.db"
     let dbBlob = "\{prefix}-blob.db"
     let dbReals = "\{prefix}-reals.db"
-    let out = runWriterApi writer dbUsers dbKv dbBlob dbReals
-    let _ = runVerb "rm" ["-rf", writer, dbUsers, dbKv, dbBlob, dbReals]
+    let out = runWriterApi dbUsers dbKv dbBlob dbReals
+    let _ = runVerb "rm" ["-rf", dbUsers, dbKv, dbBlob, dbReals]
     out
 
 runWriterApi : String ->
   String ->
   String ->
   String ->
-  String ->
   <Exec, IO> Result String WriterApiRun
-runWriterApi writer dbUsers dbKv dbBlob dbReals = do
-  _ <- buildBin "sqlite/writer_api_demo.mdk" writer
+runWriterApi dbUsers dbKv dbBlob dbReals = do
+  writer <- writerApiDemoBin
   reader <- readerBin
   users <- runApiSchema
     writer
@@ -553,14 +625,13 @@ multipageResult = match rowScratch "multipage-write"
   Err e => Err e
   Ok prefix =>
     let db = "\{prefix}.db"
-    let writer = "\{prefix}-writer"
-    let out = runMultipage db writer
-    let _ = runVerb "rm" ["-rf", db, writer]
+    let out = runMultipage db
+    let _ = runVerb "rm" ["-rf", db]
     out
 
-runMultipage : String -> String -> <Exec, IO> Result String MultipageRun
-runMultipage db writer = do
-  _ <- buildBin "sqlite/multipage_write_demo.mdk" writer
+runMultipage : String -> <Exec, IO> Result String MultipageRun
+runMultipage db = do
+  writer <- multipageWriteDemoBin
   reader <- readerBin
   _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
@@ -724,14 +795,13 @@ multitableResult = match rowScratch "multitable-write"
   Err e => Err e
   Ok prefix =>
     let db = "\{prefix}.db"
-    let writer = "\{prefix}-writer"
-    let out = runMultitable db writer
-    let _ = runVerb "rm" ["-rf", db, writer]
+    let out = runMultitable db
+    let _ = runVerb "rm" ["-rf", db]
     out
 
-runMultitable : String -> String -> <Exec, IO> Result String MultitableRun
-runMultitable db writer = do
-  _ <- buildBin "sqlite/multitable_write_demo.mdk" writer
+runMultitable : String -> <Exec, IO> Result String MultitableRun
+runMultitable db = do
+  writer <- multitableWriteDemoBin
   reader <- readerBin
   _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
@@ -915,14 +985,13 @@ rowidResult = match rowScratch "rowid-roundtrip"
   Ok prefix =>
     let src = "\{prefix}-src.db"
     let dst = "\{prefix}-dst.db"
-    let probe = "\{prefix}-probe"
-    let out = runRowid src dst probe
-    let _ = runVerb "rm" ["-rf", src, dst, probe]
+    let out = runRowid src dst
+    let _ = runVerb "rm" ["-rf", src, dst]
     out
 
-runRowid : String -> String -> String -> <Exec, IO> Result String RowidRun
-runRowid src dst probe = do
-  _ <- buildBin "sqlite/rowid_roundtrip_demo.mdk" probe
+runRowid : String -> String -> <Exec, IO> Result String RowidRun
+runRowid src dst = do
+  probe <- rowidRoundtripDemoBin
   reader <- readerBin
   _ <- seedDb src [SeedSql rowidSeedSql]
   srcKvRowids <- sqlite3Lines src "SELECT rowid FROM kv ORDER BY rowid;"
