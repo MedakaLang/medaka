@@ -23,7 +23,9 @@ import fs.{fixtureFiles, isFile}
 import path.{stem}
 import string.{endsWith, stripSuffix}
 import list.{sort}
-import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEach, expectEqual, fail, pass
+}
 
 fixDir : <IO> String
 fixDir = underRoot "test/construct_fixtures"
@@ -135,8 +137,12 @@ check dir = match fixtureFiles fixDir
     let runs =
       runCommandBatch "sh" testJobs (map (l => runArgv (binOf dir l)) labels)
     let table = rows fixDir labels builds runs
+    -- A batch that returns a different number of results than fixtures would
+    -- make `rows` truncate silently; these equalities make that a hard FAIL.
     expectAll [
       expectAtLeast 146 (length labels),
+      expectEqual (length labels) (length builds),
+      expectEqual (length labels) (length runs),
       expectAtLeast 146 (length table),
       expectEach table,
     ]
