@@ -2373,10 +2373,14 @@ polMul : Polarity -> Polarity -> Polarity
 polaritiesEq : List Polarity -> List Polarity -> Bool
 polarityAt : List Polarity -> Int -> Polarity
 polarityAtOr : Option (List Polarity) -> Int -> Polarity
+polarityDeclHeadAndTys : Decl -> (String, List Ty)
+polarityDeclInfo : Decl -> Option (String, List Ty)
+polarityDependencyOrder : List Decl -> List (Int, Decl)
 polarityEntriesEq : List (TabKey, List Polarity) -> List (TabKey, List Polarity) -> Bool
 polarityEntriesPublicOnly : List Decl -> List (TabKey, List Polarity) -> List (TabKey, List Polarity)
 polarityEq : Polarity -> Polarity -> Bool
 polarityPublicKeys : List Decl -> List TabKey
+polarityTyConNames : Ty -> List String -> List String
 popMarkedClause : Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr)) -> String -> ((List Pat, Expr), Map String (List (List Pat, Expr)))
 populateEffectDomainsGraph : List Decl -> List (String, List Decl) -> Unit
 populateGo : List Decl -> Unit

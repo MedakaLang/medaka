@@ -1,5 +1,5 @@
 # META
-source_lines=54829
+source_lines=54896
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -403,7 +403,7 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop, take, elemIndex, indexed}
+import list.{replicate, drop, take, elemIndex, indexed, sortOn}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -5152,12 +5152,79 @@ declEnvPolarityEntriesFix : List (TabKey, List Polarity) ->
   List Decl ->
   List (TabKey, List Polarity)
 declEnvPolarityEntriesFix base ds =
-  let first = declEnvPolarityEntries base ds
+  let ordered = polarityDependencyOrder ds
+  let odecls = map snd ordered
+  let first = declEnvPolarityEntries base odecls
   let bottom = map (e => (fst e, map (_ => PPhantom) (snd e))) first
   let height = 3 * fold (n e => n + listLen (snd e)) 0 first + 3
+  let settled = declEnvPolarityFixGo base odecls height bottom
   map
-    (e => (fst e, map publishedPolarity (snd e)))
-    (declEnvPolarityFixGo base ds height bottom)
+    (ie => (fst (snd ie), map publishedPolarity (snd (snd ie))))
+    (sortOn fst (zipL (map fst ordered) settled))
+
+-- The declarations of [ds] that carry a polarity row, each tagged with its
+-- position among them, reordered so a declaration comes after the types it
+-- names (a cycle keeps its members together).  A round reads the previous
+-- round's rows for everything declared later, so a wrapper chain declared
+-- top-down needs one round per link in source order and one in this order.
+polarityDependencyOrder : List Decl -> List (Int, Decl)
+polarityDependencyOrder ds =
+  let named =
+    filterList (ide => isSome (polarityDeclInfo (snd ide))) (indexed ds)
+  let names = map (ide => fst (polarityDeclHeadAndTys (snd ide))) named
+  let known = omFromNames names omEmpty
+  let adj =
+    fold
+      (acc ide =>
+        let ht = polarityDeclHeadAndTys (snd ide)
+        omInsert
+          (fst ht)
+          (filterList
+              (n => omHasKey n known)
+              (fold (a t => polarityTyConNames t a) [] (snd ht))
+            ++ optionOr [] (omLookup (fst ht) acc))
+          acc)
+      omEmpty
+      named
+  let buckets =
+    fold
+      (acc ide =>
+        let n = fst (polarityDeclHeadAndTys (snd ide))
+        omInsert n (ide :: optionOr [] (omLookup n acc)) acc)
+      omEmpty
+      (reverseL named)
+  flatMap
+    (n => optionOr [] (omLookup n buckets))
+    (flatMap (scc => scc) (tarjanSCCs names adj))
+
+polarityDeclInfo : Decl -> Option (String, List Ty)
+polarityDeclInfo (DAttrib _ d) = polarityDeclInfo d
+polarityDeclInfo (DData { dataName = n, dataCtors = vs }) =
+  Some (n, flatMap (v => payloadAstTypes (variantPayload v)) vs)
+polarityDeclInfo (DNewtype { newtypeName = n, newtypeFieldTy = fty }) =
+  Some (n, [fty])
+polarityDeclInfo (DTypeAlias { tyAliasName = n, tyAliasRhs = rhs }) =
+  Some (n, [rhs])
+polarityDeclInfo _ = None
+
+polarityDeclHeadAndTys : Decl -> (String, List Ty)
+polarityDeclHeadAndTys d = optionOr ("", []) (polarityDeclInfo d)
+
+-- Every type constructor name written in [t], prepended onto [acc].  Only the
+-- ORDER of the fixpoint reads this, so a row's contents are skipped.
+polarityTyConNames : Ty -> List String -> List String
+polarityTyConNames (TyCon { tyConName = n }) acc = n :: acc
+polarityTyConNames (TyApp a b) acc =
+  polarityTyConNames a (polarityTyConNames b acc)
+polarityTyConNames (TyFun a b) acc =
+  polarityTyConNames a (polarityTyConNames b acc)
+polarityTyConNames (TyTuple ts) acc =
+  fold (a t => polarityTyConNames t a) acc ts
+polarityTyConNames (TyEffect _ _ t) acc = polarityTyConNames t acc
+polarityTyConNames (TyConstrained _ t) acc = polarityTyConNames t acc
+polarityTyConNames (TyNamed _ t _) acc = polarityTyConNames t acc
+polarityTyConNames (TyQual t _ _) acc = polarityTyConNames t acc
+polarityTyConNames _ acc = acc
 
 declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   List Decl ->
@@ -54859,7 +54926,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omDelete" false))))
-(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false) (mem "indexed" false))))
+(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false) (mem "indexed" false) (mem "sortOn" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
@@ -55673,7 +55740,27 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tabKeyElem" ((PList) PWild) (EVar "False"))
 (DFunDef false "tabKeyElem" ((PCons (PVar "k") (PVar "rest")) (PVar "key")) (EBinOp "||" (EApp (EApp (EVar "tabKeyEq") (EVar "k")) (EVar "key")) (EApp (EApp (EVar "tabKeyElem") (EVar "rest")) (EVar "key"))))
 (DTypeSig false "declEnvPolarityEntriesFix" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))
-(DFunDef false "declEnvPolarityEntriesFix" ((PVar "base") (PVar "ds")) (EBlock (DoLet false false (PVar "first") (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "base")) (EVar "ds"))) (DoLet false false (PVar "bottom") (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "PPhantom"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "first"))) (DoLet false false (PVar "height") (EBinOp "+" (EBinOp "*" (ELit (LInt 3)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "e")) (EBinOp "+" (EVar "n") (EApp (EVar "listLen") (EApp (EVar "snd") (EVar "e")))))) (ELit (LInt 0))) (EVar "first"))) (ELit (LInt 3)))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EVar "map") (EVar "publishedPolarity")) (EApp (EVar "snd") (EVar "e")))))) (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EVar "height")) (EVar "bottom"))))))
+(DFunDef false "declEnvPolarityEntriesFix" ((PVar "base") (PVar "ds")) (EBlock (DoLet false false (PVar "ordered") (EApp (EVar "polarityDependencyOrder") (EVar "ds"))) (DoLet false false (PVar "odecls") (EApp (EApp (EVar "map") (EVar "snd")) (EVar "ordered"))) (DoLet false false (PVar "first") (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "base")) (EVar "odecls"))) (DoLet false false (PVar "bottom") (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "PPhantom"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "first"))) (DoLet false false (PVar "height") (EBinOp "+" (EBinOp "*" (ELit (LInt 3)) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "n") (PVar "e")) (EBinOp "+" (EVar "n") (EApp (EVar "listLen") (EApp (EVar "snd") (EVar "e")))))) (ELit (LInt 0))) (EVar "first"))) (ELit (LInt 3)))) (DoLet false false (PVar "settled") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "odecls")) (EVar "height")) (EVar "bottom"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "ie")) (ETuple (EApp (EVar "fst") (EApp (EVar "snd") (EVar "ie"))) (EApp (EApp (EVar "map") (EVar "publishedPolarity")) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "ie"))))))) (EApp (EApp (EVar "sortOn") (EVar "fst")) (EApp (EApp (EVar "zipL") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "ordered"))) (EVar "settled")))))))
+(DTypeSig false "polarityDependencyOrder" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Decl")))))
+(DFunDef false "polarityDependencyOrder" ((PVar "ds")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EVar "filterList") (ELam ((PVar "ide")) (EApp (EVar "isSome") (EApp (EVar "polarityDeclInfo") (EApp (EVar "snd") (EVar "ide")))))) (EApp (EVar "indexed") (EVar "ds")))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (ELam ((PVar "ide")) (EApp (EVar "fst") (EApp (EVar "polarityDeclHeadAndTys") (EApp (EVar "snd") (EVar "ide")))))) (EVar "named"))) (DoLet false false (PVar "known") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "ide")) (EBlock (DoLet false false (PVar "ht") (EApp (EVar "polarityDeclHeadAndTys") (EApp (EVar "snd") (EVar "ide")))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "fst") (EVar "ht"))) (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "known")))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "a") (PVar "t")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "a")))) (EListLit)) (EApp (EVar "snd") (EVar "ht")))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "fst") (EVar "ht"))) (EVar "acc"))))) (EVar "acc")))))) (EVar "omEmpty")) (EVar "named"))) (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "ide")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "fst") (EApp (EVar "polarityDeclHeadAndTys") (EApp (EVar "snd") (EVar "ide"))))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EBinOp "::" (EVar "ide") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "acc"))))) (EVar "acc")))))) (EVar "omEmpty")) (EApp (EVar "reverseL") (EVar "named")))) (DoExpr (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "buckets"))))) (EApp (EApp (EVar "flatMap") (ELam ((PVar "scc")) (EVar "scc"))) (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EVar "adj")))))))
+(DTypeSig false "polarityDeclInfo" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))))
+(DFunDef false "polarityDeclInfo" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "polarityDeclInfo") (EVar "d")))
+(DFunDef false "polarityDeclInfo" ((PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) false)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EApp (EVar "flatMap") (ELam ((PVar "v")) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v"))))) (EVar "vs")))))
+(DFunDef false "polarityDeclInfo" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EApp (EVar "Some") (ETuple (EVar "n") (EListLit (EVar "fty")))))
+(DFunDef false "polarityDeclInfo" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EApp (EVar "Some") (ETuple (EVar "n") (EListLit (EVar "rhs")))))
+(DFunDef false "polarityDeclInfo" (PWild) (EVar "None"))
+(DTypeSig false "polarityDeclHeadAndTys" (TyFun (TyCon "Decl") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty")))))
+(DFunDef false "polarityDeclHeadAndTys" ((PVar "d")) (EApp (EApp (EVar "optionOr") (ETuple (ELit (LString "")) (EListLit))) (EApp (EVar "polarityDeclInfo") (EVar "d"))))
+(DTypeSig false "polarityTyConNames" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "polarityTyConNames" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) (PVar "acc")) (EBinOp "::" (EVar "n") (EVar "acc")))
+(DFunDef false "polarityTyConNames" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "a")) (EApp (EApp (EVar "polarityTyConNames") (EVar "b")) (EVar "acc"))))
+(DFunDef false "polarityTyConNames" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "a")) (EApp (EApp (EVar "polarityTyConNames") (EVar "b")) (EVar "acc"))))
+(DFunDef false "polarityTyConNames" ((PCon "TyTuple" (PVar "ts")) (PVar "acc")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "a") (PVar "t")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "a")))) (EVar "acc")) (EVar "ts")))
+(DFunDef false "polarityTyConNames" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
+(DFunDef false "polarityTyConNames" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
+(DFunDef false "polarityTyConNames" ((PCon "TyNamed" PWild (PVar "t") PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
+(DFunDef false "polarityTyConNames" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
+(DFunDef false "polarityTyConNames" (PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
 (DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EVar "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
 (DTypeSig false "publishedPolarity" (TyFun (TyCon "Polarity") (TyCon "Polarity")))
@@ -63985,7 +64072,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "isReservedCtor" false) (mem "mangledName" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omMapValues" false) (mem "omSize" false) (mem "omDelete" false))))
-(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false) (mem "indexed" false))))
+(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "drop" false) (mem "take" false) (mem "elemIndex" false) (mem "indexed" false) (mem "sortOn" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false) (mem "u64HalvesHex" false) (mem "i64HalvesLiteral" false) (mem "int64Halves" false) (mem "listLen" false) (mem "matchingStepPrefix" false) (mem "lookupAssoc" false) (mem "contains" false) (mem "endsWith" false) (mem "reverseL" false) (mem "joinWith" false) (mem "joinNl" false) (mem "joinDot" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "initList" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "minI" false) (mem "maxI" false) (mem "isSome" false) (mem "orElseOpt" false) (mem "zipL" false) (mem "dedup" false) (mem "dedupBy" false) (mem "lenKey" false) (mem "sortUniqS" false) (mem "startsWith" false) (mem "escStr" false) (mem "editDistance" false))))
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
@@ -64799,7 +64886,27 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tabKeyElem" ((PList) PWild) (EVar "False"))
 (DFunDef false "tabKeyElem" ((PCons (PVar "k") (PVar "rest")) (PVar "key")) (EBinOp "||" (EApp (EApp (EVar "tabKeyEq") (EVar "k")) (EVar "key")) (EApp (EApp (EVar "tabKeyElem") (EVar "rest")) (EVar "key"))))
 (DTypeSig false "declEnvPolarityEntriesFix" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))
-(DFunDef false "declEnvPolarityEntriesFix" ((PVar "base") (PVar "ds")) (EBlock (DoLet false false (PVar "first") (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "base")) (EVar "ds"))) (DoLet false false (PVar "bottom") (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "PPhantom"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "first"))) (DoLet false false (PVar "height") (EBinOp "+" (EBinOp "*" (ELit (LInt 3)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "e")) (EBinOp "+" (EVar "n") (EApp (EVar "listLen") (EApp (EVar "snd") (EVar "e")))))) (ELit (LInt 0))) (EVar "first"))) (ELit (LInt 3)))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EMethodRef "map") (EVar "publishedPolarity")) (EApp (EVar "snd") (EVar "e")))))) (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EVar "height")) (EVar "bottom"))))))
+(DFunDef false "declEnvPolarityEntriesFix" ((PVar "base") (PVar "ds")) (EBlock (DoLet false false (PVar "ordered") (EApp (EVar "polarityDependencyOrder") (EVar "ds"))) (DoLet false false (PVar "odecls") (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "ordered"))) (DoLet false false (PVar "first") (EApp (EApp (EVar "declEnvPolarityEntries") (EVar "base")) (EVar "odecls"))) (DoLet false false (PVar "bottom") (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "PPhantom"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "first"))) (DoLet false false (PVar "height") (EBinOp "+" (EBinOp "*" (ELit (LInt 3)) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "n") (PVar "e")) (EBinOp "+" (EVar "n") (EApp (EVar "listLen") (EApp (EVar "snd") (EVar "e")))))) (ELit (LInt 0))) (EVar "first"))) (ELit (LInt 3)))) (DoLet false false (PVar "settled") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "odecls")) (EVar "height")) (EVar "bottom"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "ie")) (ETuple (EApp (EVar "fst") (EApp (EVar "snd") (EVar "ie"))) (EApp (EApp (EMethodRef "map") (EVar "publishedPolarity")) (EApp (EVar "snd") (EApp (EVar "snd") (EVar "ie"))))))) (EApp (EApp (EVar "sortOn") (EVar "fst")) (EApp (EApp (EVar "zipL") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "ordered"))) (EVar "settled")))))))
+(DTypeSig false "polarityDependencyOrder" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Decl")))))
+(DFunDef false "polarityDependencyOrder" ((PVar "ds")) (EBlock (DoLet false false (PVar "named") (EApp (EApp (EVar "filterList") (ELam ((PVar "ide")) (EApp (EVar "isSome") (EApp (EVar "polarityDeclInfo") (EApp (EVar "snd") (EVar "ide")))))) (EApp (EVar "indexed") (EVar "ds")))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (ELam ((PVar "ide")) (EApp (EVar "fst") (EApp (EVar "polarityDeclHeadAndTys") (EApp (EVar "snd") (EVar "ide")))))) (EVar "named"))) (DoLet false false (PVar "known") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (DoLet false false (PVar "adj") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "ide")) (EBlock (DoLet false false (PVar "ht") (EApp (EVar "polarityDeclHeadAndTys") (EApp (EVar "snd") (EVar "ide")))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "fst") (EVar "ht"))) (EBinOp "++" (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "known")))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "a") (PVar "t")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "a")))) (EListLit)) (EApp (EVar "snd") (EVar "ht")))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EApp (EVar "fst") (EVar "ht"))) (EVar "acc"))))) (EVar "acc")))))) (EVar "omEmpty")) (EVar "named"))) (DoLet false false (PVar "buckets") (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "ide")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "fst") (EApp (EVar "polarityDeclHeadAndTys") (EApp (EVar "snd") (EVar "ide"))))) (DoExpr (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (EBinOp "::" (EVar "ide") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "acc"))))) (EVar "acc")))))) (EVar "omEmpty")) (EApp (EVar "reverseL") (EVar "named")))) (DoExpr (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "n")) (EVar "buckets"))))) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "scc")) (EVar "scc"))) (EApp (EApp (EVar "tarjanSCCs") (EVar "names")) (EVar "adj")))))))
+(DTypeSig false "polarityDeclInfo" (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty"))))))
+(DFunDef false "polarityDeclInfo" ((PCon "DAttrib" PWild (PVar "d"))) (EApp (EVar "polarityDeclInfo") (EVar "d")))
+(DFunDef false "polarityDeclInfo" ((PRec "DData" ((rf "dataName" (PVar "n")) (rf "dataCtors" (PVar "vs"))) false)) (EApp (EVar "Some") (ETuple (EVar "n") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "v")) (EApp (EVar "payloadAstTypes") (EApp (EVar "variantPayload") (EVar "v"))))) (EVar "vs")))))
+(DFunDef false "polarityDeclInfo" ((PRec "DNewtype" ((rf "newtypeName" (PVar "n")) (rf "newtypeFieldTy" (PVar "fty"))) false)) (EApp (EVar "Some") (ETuple (EVar "n") (EListLit (EVar "fty")))))
+(DFunDef false "polarityDeclInfo" ((PRec "DTypeAlias" ((rf "tyAliasName" (PVar "n")) (rf "tyAliasRhs" (PVar "rhs"))) false)) (EApp (EVar "Some") (ETuple (EVar "n") (EListLit (EVar "rhs")))))
+(DFunDef false "polarityDeclInfo" (PWild) (EVar "None"))
+(DTypeSig false "polarityDeclHeadAndTys" (TyFun (TyCon "Decl") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Ty")))))
+(DFunDef false "polarityDeclHeadAndTys" ((PVar "d")) (EApp (EApp (EVar "optionOr") (ETuple (ELit (LString "")) (EListLit))) (EApp (EVar "polarityDeclInfo") (EVar "d"))))
+(DTypeSig false "polarityTyConNames" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "polarityTyConNames" ((PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) (PVar "acc")) (EBinOp "::" (EVar "n") (EVar "acc")))
+(DFunDef false "polarityTyConNames" ((PCon "TyApp" (PVar "a") (PVar "b")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "a")) (EApp (EApp (EVar "polarityTyConNames") (EVar "b")) (EVar "acc"))))
+(DFunDef false "polarityTyConNames" ((PCon "TyFun" (PVar "a") (PVar "b")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "a")) (EApp (EApp (EVar "polarityTyConNames") (EVar "b")) (EVar "acc"))))
+(DFunDef false "polarityTyConNames" ((PCon "TyTuple" (PVar "ts")) (PVar "acc")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "a") (PVar "t")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "a")))) (EVar "acc")) (EVar "ts")))
+(DFunDef false "polarityTyConNames" ((PCon "TyEffect" PWild PWild (PVar "t")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
+(DFunDef false "polarityTyConNames" ((PCon "TyConstrained" PWild (PVar "t")) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
+(DFunDef false "polarityTyConNames" ((PCon "TyNamed" PWild (PVar "t") PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
+(DFunDef false "polarityTyConNames" ((PCon "TyQual" (PVar "t") PWild PWild) (PVar "acc")) (EApp (EApp (EVar "polarityTyConNames") (EVar "t")) (EVar "acc")))
+(DFunDef false "polarityTyConNames" (PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "declEnvPolarityFixGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))) (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyApp (TyCon "List") (TyCon "Polarity")))))))))
 (DFunDef false "declEnvPolarityFixGo" ((PVar "base") (PVar "ds") (PVar "fuel") (PVar "prev")) (EIf (EBinOp "<=" (EVar "fuel") (ELit (LInt 0))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "fst") (EVar "e")) (EApp (EApp (EMethodRef "map") (ELam (PWild) (EVar "PInv"))) (EApp (EVar "snd") (EVar "e")))))) (EVar "prev")) (EBlock (DoLet false false (PVar "next") (EApp (EApp (EVar "declEnvPolarityEntries") (EBinOp "++" (EVar "prev") (EVar "base"))) (EVar "ds"))) (DoExpr (EIf (EApp (EApp (EVar "polarityEntriesEq") (EVar "prev")) (EVar "next")) (EVar "prev") (EApp (EApp (EApp (EApp (EVar "declEnvPolarityFixGo") (EVar "base")) (EVar "ds")) (EBinOp "-" (EVar "fuel") (ELit (LInt 1)))) (EVar "next")))))))
 (DTypeSig false "publishedPolarity" (TyFun (TyCon "Polarity") (TyCon "Polarity")))

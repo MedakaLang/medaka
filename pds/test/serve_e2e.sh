@@ -2976,7 +2976,9 @@ VERSION_LINE=$("$WORK/pdsd" --version) \
 printf '%s\n' "$VERSION_LINE" \
   | grep -Eq '^pdsd 0\.1\.0 \(.*built [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$' \
   || fail "case 59: pdsd --version carries no build stamp: $VERSION_LINE"
-STAMP_COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)
+# Seven characters, not `--short`: git widens the abbreviation when the object
+# store makes seven ambiguous, and the stamp and this check can disagree on that.
+STAMP_COMMIT=$(git -C "$ROOT" rev-parse HEAD 2>/dev/null | cut -c1-7 || true)
 if [ -n "$STAMP_COMMIT" ]; then
   # Substring, not equality: a modified tree stamps `<short>-dirty`.
   printf '%s\n' "$VERSION_LINE" | grep -Fq "$STAMP_COMMIT" \

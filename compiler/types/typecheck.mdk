@@ -399,7 +399,7 @@ import support.ordmap.{
   omSize,
   omDelete,
 }
-import list.{replicate, drop, take, elemIndex, indexed}
+import list.{replicate, drop, take, elemIndex, indexed, sortOn}
 import support.util.{
   splitOnChar,
   u64HalvesHex,
@@ -5148,12 +5148,79 @@ declEnvPolarityEntriesFix : List (TabKey, List Polarity) ->
   List Decl ->
   List (TabKey, List Polarity)
 declEnvPolarityEntriesFix base ds =
-  let first = declEnvPolarityEntries base ds
+  let ordered = polarityDependencyOrder ds
+  let odecls = map snd ordered
+  let first = declEnvPolarityEntries base odecls
   let bottom = map (e => (fst e, map (_ => PPhantom) (snd e))) first
   let height = 3 * fold (n e => n + listLen (snd e)) 0 first + 3
+  let settled = declEnvPolarityFixGo base odecls height bottom
   map
-    (e => (fst e, map publishedPolarity (snd e)))
-    (declEnvPolarityFixGo base ds height bottom)
+    (ie => (fst (snd ie), map publishedPolarity (snd (snd ie))))
+    (sortOn fst (zipL (map fst ordered) settled))
+
+-- The declarations of [ds] that carry a polarity row, each tagged with its
+-- position among them, reordered so a declaration comes after the types it
+-- names (a cycle keeps its members together).  A round reads the previous
+-- round's rows for everything declared later, so a wrapper chain declared
+-- top-down needs one round per link in source order and one in this order.
+polarityDependencyOrder : List Decl -> List (Int, Decl)
+polarityDependencyOrder ds =
+  let named =
+    filterList (ide => isSome (polarityDeclInfo (snd ide))) (indexed ds)
+  let names = map (ide => fst (polarityDeclHeadAndTys (snd ide))) named
+  let known = omFromNames names omEmpty
+  let adj =
+    fold
+      (acc ide =>
+        let ht = polarityDeclHeadAndTys (snd ide)
+        omInsert
+          (fst ht)
+          (filterList
+              (n => omHasKey n known)
+              (fold (a t => polarityTyConNames t a) [] (snd ht))
+            ++ optionOr [] (omLookup (fst ht) acc))
+          acc)
+      omEmpty
+      named
+  let buckets =
+    fold
+      (acc ide =>
+        let n = fst (polarityDeclHeadAndTys (snd ide))
+        omInsert n (ide :: optionOr [] (omLookup n acc)) acc)
+      omEmpty
+      (reverseL named)
+  flatMap
+    (n => optionOr [] (omLookup n buckets))
+    (flatMap (scc => scc) (tarjanSCCs names adj))
+
+polarityDeclInfo : Decl -> Option (String, List Ty)
+polarityDeclInfo (DAttrib _ d) = polarityDeclInfo d
+polarityDeclInfo (DData { dataName = n, dataCtors = vs }) =
+  Some (n, flatMap (v => payloadAstTypes (variantPayload v)) vs)
+polarityDeclInfo (DNewtype { newtypeName = n, newtypeFieldTy = fty }) =
+  Some (n, [fty])
+polarityDeclInfo (DTypeAlias { tyAliasName = n, tyAliasRhs = rhs }) =
+  Some (n, [rhs])
+polarityDeclInfo _ = None
+
+polarityDeclHeadAndTys : Decl -> (String, List Ty)
+polarityDeclHeadAndTys d = optionOr ("", []) (polarityDeclInfo d)
+
+-- Every type constructor name written in [t], prepended onto [acc].  Only the
+-- ORDER of the fixpoint reads this, so a row's contents are skipped.
+polarityTyConNames : Ty -> List String -> List String
+polarityTyConNames (TyCon { tyConName = n }) acc = n :: acc
+polarityTyConNames (TyApp a b) acc =
+  polarityTyConNames a (polarityTyConNames b acc)
+polarityTyConNames (TyFun a b) acc =
+  polarityTyConNames a (polarityTyConNames b acc)
+polarityTyConNames (TyTuple ts) acc =
+  fold (a t => polarityTyConNames t a) acc ts
+polarityTyConNames (TyEffect _ _ t) acc = polarityTyConNames t acc
+polarityTyConNames (TyConstrained _ t) acc = polarityTyConNames t acc
+polarityTyConNames (TyNamed _ t _) acc = polarityTyConNames t acc
+polarityTyConNames (TyQual t _ _) acc = polarityTyConNames t acc
+polarityTyConNames _ acc = acc
 
 declEnvPolarityFixGo : List (TabKey, List Polarity) ->
   List Decl ->
