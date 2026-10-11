@@ -228,7 +228,7 @@ refsE (CUnOp _ x) = refsE x
 refsE (CTuple es) = flatMap refsE es
 refsE (CList es) = flatMap refsE es
 refsE (CRecord _ fields) = flatMap refsField fields
-refsE (CFieldAccess e _ _) = refsE e
+refsE (CFieldAccess e _ _ _) = refsE e
 refsE (CRecordUpdate _ base updates) = refsE base ++ flatMap refsField updates
 refsE (CVariantUpdate _ base updates) = refsE base ++ flatMap refsField updates
 refsE (CArray es) = flatMap refsE es
@@ -279,7 +279,7 @@ refsStmt (CSLet _ _ e) = refsE e
 refsStmt (CSAssign _ e) = refsE e
 
 refsField : CField -> List String
-refsField (CField _ e) = refsE e
+refsField (CField _ _ e) = refsE e
 
 refsImplBody : CImplBody -> List String
 refsImplBody (CImplTagged _ _ _ _ _ body) = refsE body
@@ -332,7 +332,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CTuple" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "refsE")) (EVar "es")))
 (DFunDef false "refsE" ((PCon "CList" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "refsE")) (EVar "es")))
 (DFunDef false "refsE" ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "flatMap") (EVar "refsField")) (EVar "fields")))
-(DFunDef false "refsE" ((PCon "CFieldAccess" (PVar "e") PWild PWild)) (EApp (EVar "refsE") (EVar "e")))
+(DFunDef false "refsE" ((PCon "CFieldAccess" (PVar "e") PWild PWild PWild)) (EApp (EVar "refsE") (EVar "e")))
 (DFunDef false "refsE" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "base")) (EApp (EApp (EVar "flatMap") (EVar "refsField")) (EVar "updates"))))
 (DFunDef false "refsE" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "base")) (EApp (EApp (EVar "flatMap") (EVar "refsField")) (EVar "updates"))))
 (DFunDef false "refsE" ((PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "flatMap") (EVar "refsE")) (EVar "es")))
@@ -369,7 +369,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsStmt" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DFunDef false "refsStmt" ((PCon "CSAssign" PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DTypeSig false "refsField" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "refsField" ((PCon "CField" PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
+(DFunDef false "refsField" ((PCon "CField" PWild PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DTypeSig false "refsImplBody" (TyFun (TyCon "CImplBody") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 (DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
@@ -421,7 +421,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CTuple" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsE")) (EVar "es")))
 (DFunDef false "refsE" ((PCon "CList" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsE")) (EVar "es")))
 (DFunDef false "refsE" ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsField")) (EVar "fields")))
-(DFunDef false "refsE" ((PCon "CFieldAccess" (PVar "e") PWild PWild)) (EApp (EVar "refsE") (EVar "e")))
+(DFunDef false "refsE" ((PCon "CFieldAccess" (PVar "e") PWild PWild PWild)) (EApp (EVar "refsE") (EVar "e")))
 (DFunDef false "refsE" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "base")) (EApp (EApp (EDictApp "flatMap") (EVar "refsField")) (EVar "updates"))))
 (DFunDef false "refsE" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "base")) (EApp (EApp (EDictApp "flatMap") (EVar "refsField")) (EVar "updates"))))
 (DFunDef false "refsE" ((PCon "CArray" (PVar "es"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsE")) (EVar "es")))
@@ -458,7 +458,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsStmt" ((PCon "CSLet" PWild PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DFunDef false "refsStmt" ((PCon "CSAssign" PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DTypeSig false "refsField" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "refsField" ((PCon "CField" PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
+(DFunDef false "refsField" ((PCon "CField" PWild PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DTypeSig false "refsImplBody" (TyFun (TyCon "CImplBody") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 (DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))

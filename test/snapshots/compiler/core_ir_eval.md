@@ -144,8 +144,8 @@ ceval env (CRecordUpdate _ base fields) =
   evalRecordUpdate (ceval env base) (map (cevalField env) fields)
 ceval env (CVariantUpdate con base fields) =
   evalVariantUpdate con (ceval env base) (map (cevalField env) fields)
-ceval env (CFieldAccess e "value" _) = evalValueField (ceval env e)
-ceval env (CFieldAccess e field _) = evalField (ceval env e) field
+ceval env (CFieldAccess e "value" _ _) = evalValueField (ceval env e)
+ceval env (CFieldAccess e field _ _) = evalField (ceval env e) field
 ceval env (CIndex a i) = evalIndex (ceval env a) (ceval env i)
 ceval env (CSlice a lo hi incl) =
   evalSlice (ceval env a) (ceval env lo) (ceval env hi) incl
@@ -172,7 +172,7 @@ ceval env (CDict name routes) = applyDicts env (lookupEnv env name) routes
 ceval _ _ = panic "core_ir ceval: unsupported node"
 
 cevalField : EvalEnv (Value e) -> CField -> <e> (String, Value e)
-cevalField env (CField k e) = (k, ceval env e)
+cevalField env (CField k _ e) = (k, ceval env e)
 
 litValue : Lit -> Value e
 litValue (LInt n) = VInt n
@@ -798,8 +798,8 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "VRecord") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "cevalField") (EVar "env"))) (EVar "fields"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EVar "evalRecordUpdate") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "cevalField") (EVar "env"))) (EVar "fields"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "evalVariantUpdate") (EVar "con")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "base"))) (EApp (EApp (EVar "map") (EApp (EVar "cevalField") (EVar "env"))) (EVar "fields"))))
-(DFunDef false "ceval" ((PVar "env") (PCon "CFieldAccess" (PVar "e") (PLit (LString "value")) PWild)) (EApp (EVar "evalValueField") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
-(DFunDef false "ceval" ((PVar "env") (PCon "CFieldAccess" (PVar "e") (PVar "field") PWild)) (EApp (EApp (EVar "evalField") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (EVar "field")))
+(DFunDef false "ceval" ((PVar "env") (PCon "CFieldAccess" (PVar "e") (PLit (LString "value")) PWild PWild)) (EApp (EVar "evalValueField") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
+(DFunDef false "ceval" ((PVar "env") (PCon "CFieldAccess" (PVar "e") (PVar "field") PWild PWild)) (EApp (EApp (EVar "evalField") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (EVar "field")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "evalIndex") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "i"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalSlice") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "evalIndex") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "i"))))
@@ -812,7 +812,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CDict" (PVar "name") (PVar "routes"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name"))) (EVar "routes")))
 (DFunDef false "ceval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "core_ir ceval: unsupported node"))))
 (DTypeSig false "cevalField" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CField") (TyEffect () (Some "e") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "cevalField" ((PVar "env") (PCon "CField" (PVar "k") (PVar "e"))) (ETuple (EVar "k") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
+(DFunDef false "cevalField" ((PVar "env") (PCon "CField" (PVar "k") PWild (PVar "e"))) (ETuple (EVar "k") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
 (DTypeSig false "litValue" (TyFun (TyCon "Lit") (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "litValue" ((PCon "LInt" (PVar "n"))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "litValue" ((PCon "LFloat" (PVar "f"))) (EApp (EVar "VFloat") (EVar "f")))
@@ -996,8 +996,8 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "VRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "cevalField") (EVar "env"))) (EVar "fields"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "fields"))) (EApp (EApp (EVar "evalRecordUpdate") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "cevalField") (EVar "env"))) (EVar "fields"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "evalVariantUpdate") (EVar "con")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "cevalField") (EVar "env"))) (EVar "fields"))))
-(DFunDef false "ceval" ((PVar "env") (PCon "CFieldAccess" (PVar "e") (PLit (LString "value")) PWild)) (EApp (EVar "evalValueField") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
-(DFunDef false "ceval" ((PVar "env") (PCon "CFieldAccess" (PVar "e") (PVar "field") PWild)) (EApp (EApp (EVar "evalField") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (EVar "field")))
+(DFunDef false "ceval" ((PVar "env") (PCon "CFieldAccess" (PVar "e") (PLit (LString "value")) PWild PWild)) (EApp (EVar "evalValueField") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
+(DFunDef false "ceval" ((PVar "env") (PCon "CFieldAccess" (PVar "e") (PVar "field") PWild PWild)) (EApp (EApp (EVar "evalField") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))) (EVar "field")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "evalIndex") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "i"))))
 (DFunDef false "ceval" ((PVar "env") (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "evalSlice") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "lo"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "hi"))) (EVar "incl")))
 (DFunDef false "ceval" ((PVar "env") (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "evalIndex") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "i"))))
@@ -1010,7 +1010,7 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "ceval" ((PVar "env") (PCon "CDict" (PVar "name") (PVar "routes"))) (EApp (EApp (EApp (EVar "applyDicts") (EVar "env")) (EApp (EApp (EVar "lookupEnv") (EVar "env")) (EVar "name"))) (EVar "routes")))
 (DFunDef false "ceval" (PWild PWild) (EApp (EVar "panic") (ELit (LString "core_ir ceval: unsupported node"))))
 (DTypeSig false "cevalField" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyCon "CField") (TyEffect () (Some "e") (TyTuple (TyCon "String") (TyApp (TyCon "Value") (TyVar "e")))))))
-(DFunDef false "cevalField" ((PVar "env") (PCon "CField" (PVar "k") (PVar "e"))) (ETuple (EVar "k") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
+(DFunDef false "cevalField" ((PVar "env") (PCon "CField" (PVar "k") PWild (PVar "e"))) (ETuple (EVar "k") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "e"))))
 (DTypeSig false "litValue" (TyFun (TyCon "Lit") (TyApp (TyCon "Value") (TyVar "e"))))
 (DFunDef false "litValue" ((PCon "LInt" (PVar "n"))) (EApp (EVar "VInt") (EVar "n")))
 (DFunDef false "litValue" ((PCon "LFloat" (PVar "f"))) (EApp (EVar "VFloat") (EVar "f")))

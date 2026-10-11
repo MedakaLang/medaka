@@ -140,8 +140,8 @@ ceval env (CRecordUpdate _ base fields) =
   evalRecordUpdate (ceval env base) (map (cevalField env) fields)
 ceval env (CVariantUpdate con base fields) =
   evalVariantUpdate con (ceval env base) (map (cevalField env) fields)
-ceval env (CFieldAccess e "value" _) = evalValueField (ceval env e)
-ceval env (CFieldAccess e field _) = evalField (ceval env e) field
+ceval env (CFieldAccess e "value" _ _) = evalValueField (ceval env e)
+ceval env (CFieldAccess e field _ _) = evalField (ceval env e) field
 ceval env (CIndex a i) = evalIndex (ceval env a) (ceval env i)
 ceval env (CSlice a lo hi incl) =
   evalSlice (ceval env a) (ceval env lo) (ceval env hi) incl
@@ -168,7 +168,7 @@ ceval env (CDict name routes) = applyDicts env (lookupEnv env name) routes
 ceval _ _ = panic "core_ir ceval: unsupported node"
 
 cevalField : EvalEnv (Value e) -> CField -> <e> (String, Value e)
-cevalField env (CField k e) = (k, ceval env e)
+cevalField env (CField k _ e) = (k, ceval env e)
 
 litValue : Lit -> Value e
 litValue (LInt n) = VInt n

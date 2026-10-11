@@ -90,7 +90,7 @@ eagerVars b (CTuple es) = eagerVarsList b es
 eagerVars b (CList es) = eagerVarsList b es
 eagerVars b (CRangeList lo hi _) = eagerVars b lo ++ eagerVars b hi
 eagerVars b (CRecord _ fields) = eagerVarsFields b fields
-eagerVars b (CFieldAccess ex _ _) = eagerVars b ex
+eagerVars b (CFieldAccess ex _ _ _) = eagerVars b ex
 eagerVars b (CRecordUpdate _ base updates) =
   eagerVars b base ++ eagerVarsFields b updates
 eagerVars b (CVariantUpdate _ base updates) =
@@ -135,7 +135,7 @@ eagerVarsGuarded b ((CGBind pat e) :: rest) body =
 
 eagerVarsFields : OrdMap Unit -> List CField -> List String
 eagerVarsFields _ [] = []
-eagerVarsFields b ((CField _ ex) :: rest) =
+eagerVarsFields b ((CField _ _ ex) :: rest) =
   eagerVars b ex ++ eagerVarsFields b rest
 
 eagerVarsStmts : OrdMap Unit -> List CStmt -> List String
@@ -405,7 +405,7 @@ eagerHasMethod (CList es) = listHaveMethod es
 eagerHasMethod (CRangeList lo hi _) = eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod (CRangeArray lo hi _) = eagerHasMethod lo || eagerHasMethod hi
 eagerHasMethod (CRecord _ fields) = fieldsHaveMethod fields
-eagerHasMethod (CFieldAccess ex _ _) = eagerHasMethod ex
+eagerHasMethod (CFieldAccess ex _ _ _) = eagerHasMethod ex
 eagerHasMethod (CRecordUpdate _ base updates) =
   eagerHasMethod base || fieldsHaveMethod updates
 eagerHasMethod (CVariantUpdate _ base updates) =
@@ -458,7 +458,7 @@ guardsHaveMethod ((CGBind _ e) :: rest) =
 
 fieldsHaveMethod : List CField -> Bool
 fieldsHaveMethod [] = False
-fieldsHaveMethod ((CField _ ex) :: rest) =
+fieldsHaveMethod ((CField _ _ ex) :: rest) =
   eagerHasMethod ex || fieldsHaveMethod rest
 
 -- a binding is DIRECTLY method-tainted if any of its clause bodies dispatches
@@ -680,7 +680,7 @@ rngBound _ = 0
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "fields")))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild)) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
@@ -705,7 +705,7 @@ rngBound _ = 0
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest")) (EVar "body"))))
 (DTypeSig false "eagerVarsFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsFields" (PWild (PList)) (EListLit))
-(DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
+(DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "eagerVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest"))))
@@ -783,7 +783,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "lo")) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "lo")) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EVar "fieldsHaveMethod") (EVar "fields")))
-(DFunDef false "eagerHasMethod" ((PCon "CFieldAccess" (PVar "ex") PWild PWild)) (EApp (EVar "eagerHasMethod") (EVar "ex")))
+(DFunDef false "eagerHasMethod" ((PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EVar "eagerHasMethod") (EVar "ex")))
 (DFunDef false "eagerHasMethod" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CArray" (PVar "es"))) (EApp (EVar "listHaveMethod") (EVar "es")))
@@ -816,7 +816,7 @@ rngBound _ = 0
 (DFunDef false "guardsHaveMethod" ((PCons (PCon "CGBind" PWild (PVar "e")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "e")) (EApp (EVar "guardsHaveMethod") (EVar "rest"))))
 (DTypeSig false "fieldsHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool")))
 (DFunDef false "fieldsHaveMethod" ((PList)) (EVar "False"))
-(DFunDef false "fieldsHaveMethod" ((PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "ex")) (EApp (EVar "fieldsHaveMethod") (EVar "rest"))))
+(DFunDef false "fieldsHaveMethod" ((PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "ex")) (EApp (EVar "fieldsHaveMethod") (EVar "rest"))))
 (DTypeSig false "bindDirectMethod" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "bindDirectMethod" ((PCon "CBind" PWild (PVar "clauses") PWild)) (EApp (EVar "clausesHaveMethod") (EVar "clauses")))
 (DTypeSig false "clausesHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))
@@ -899,7 +899,7 @@ rngBound _ = 0
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CList" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "lo")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRecord" PWild (PVar "fields"))) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "fields")))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild)) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "base")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "updates"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CArray" (PVar "es"))) (EApp (EApp (EVar "eagerVarsList") (EVar "b")) (EVar "es")))
@@ -924,7 +924,7 @@ rngBound _ = 0
 (DFunDef false "eagerVarsGuarded" ((PVar "b") (PCons (PCon "CGBind" (PVar "pat") (PVar "e")) (PVar "rest")) (PVar "body")) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e")) (EApp (EApp (EApp (EVar "eagerVarsGuarded") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (EVar "rest")) (EVar "body"))))
 (DTypeSig false "eagerVarsFields" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsFields" (PWild (PList)) (EListLit))
-(DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
+(DFunDef false "eagerVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsFields") (EVar "b")) (EVar "rest"))))
 (DTypeSig false "eagerVarsStmts" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVarsStmts" (PWild (PList)) (EListLit))
 (DFunDef false "eagerVarsStmts" ((PVar "b") (PCons (PCon "CSExpr" (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "rest"))))
@@ -1002,7 +1002,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CRangeList" (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "lo")) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" ((PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "lo")) (EApp (EVar "eagerHasMethod") (EVar "hi"))))
 (DFunDef false "eagerHasMethod" ((PCon "CRecord" PWild (PVar "fields"))) (EApp (EVar "fieldsHaveMethod") (EVar "fields")))
-(DFunDef false "eagerHasMethod" ((PCon "CFieldAccess" (PVar "ex") PWild PWild)) (EApp (EVar "eagerHasMethod") (EVar "ex")))
+(DFunDef false "eagerHasMethod" ((PCon "CFieldAccess" (PVar "ex") PWild PWild PWild)) (EApp (EVar "eagerHasMethod") (EVar "ex")))
 (DFunDef false "eagerHasMethod" ((PCon "CRecordUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CVariantUpdate" PWild (PVar "base") (PVar "updates"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "base")) (EApp (EVar "fieldsHaveMethod") (EVar "updates"))))
 (DFunDef false "eagerHasMethod" ((PCon "CArray" (PVar "es"))) (EApp (EVar "listHaveMethod") (EVar "es")))
@@ -1035,7 +1035,7 @@ rngBound _ = 0
 (DFunDef false "guardsHaveMethod" ((PCons (PCon "CGBind" PWild (PVar "e")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "e")) (EApp (EVar "guardsHaveMethod") (EVar "rest"))))
 (DTypeSig false "fieldsHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyCon "Bool")))
 (DFunDef false "fieldsHaveMethod" ((PList)) (EVar "False"))
-(DFunDef false "fieldsHaveMethod" ((PCons (PCon "CField" PWild (PVar "ex")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "ex")) (EApp (EVar "fieldsHaveMethod") (EVar "rest"))))
+(DFunDef false "fieldsHaveMethod" ((PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "ex")) (EApp (EVar "fieldsHaveMethod") (EVar "rest"))))
 (DTypeSig false "bindDirectMethod" (TyFun (TyCon "CBind") (TyCon "Bool")))
 (DFunDef false "bindDirectMethod" ((PCon "CBind" PWild (PVar "clauses") PWild)) (EApp (EVar "clausesHaveMethod") (EVar "clauses")))
 (DTypeSig false "clausesHaveMethod" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Bool")))

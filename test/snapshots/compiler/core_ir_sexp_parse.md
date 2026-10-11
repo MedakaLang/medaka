@@ -1,5 +1,5 @@
 # META
-source_lines=438
+source_lines=439
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -265,7 +265,8 @@ toRoute (SList ((SAtom "RProj") :: r :: path)) =
 toRoute other = panic ("core_ir_sexp_parse: bad Route: " ++ sexprToStr other)
 
 toCField : SExp -> CField
-toCField (SList ((SAtom "cf") :: [name, e])) = CField (toStr name) (toCExpr e)
+toCField (SList ((SAtom "cf") :: [name, o, e])) =
+  CField (toStr name) (toInt o) (toCExpr e)
 toCField other = panic ("core_ir_sexp_parse: bad CField: " ++ sexprToStr other)
 
 toCGuard : SExp -> CGuard
@@ -337,8 +338,8 @@ toCExpr (SList ((SAtom "CTuple") :: es)) = CTuple (map toCExpr es)
 toCExpr (SList ((SAtom "CList") :: es)) = CList (map toCExpr es)
 toCExpr (SList ((SAtom "CRecord") :: name :: fields)) =
   CRecord (toStr name) (map toCField fields)
-toCExpr (SList ((SAtom "CFieldAccess") :: [e, f, n])) =
-  CFieldAccess (toCExpr e) (toStr f) (toStr n)
+toCExpr (SList ((SAtom "CFieldAccess") :: [e, f, n, o])) =
+  CFieldAccess (toCExpr e) (toStr f) (toStr n) (toInt o)
 toCExpr (SList ((SAtom "CRecordUpdate") :: name :: base :: fields)) =
   CRecordUpdate (toStr name) (toCExpr base) (map toCField fields)
 toCExpr (SList ((SAtom "CVariantUpdate") :: con :: base :: fields)) =
@@ -547,7 +548,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toRoute" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "RProj"))) (PCons (PVar "r") (PVar "path"))))) (EApp (EApp (EVar "RProj") (EApp (EVar "toRoute") (EVar "r"))) (EApp (EApp (EVar "map") (EVar "toInt")) (EVar "path"))))
 (DFunDef false "toRoute" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad Route: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCField" (TyFun (TyCon "SExp") (TyCon "CField")))
-(DFunDef false "toCField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "cf"))) (PList (PVar "name") (PVar "e"))))) (EApp (EApp (EVar "CField") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toCExpr") (EVar "e"))))
+(DFunDef false "toCField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "cf"))) (PList (PVar "name") (PVar "o") (PVar "e"))))) (EApp (EApp (EApp (EVar "CField") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toInt") (EVar "o"))) (EApp (EVar "toCExpr") (EVar "e"))))
 (DFunDef false "toCField" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CField: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCGuard" (TyFun (TyCon "SExp") (TyCon "CGuard")))
 (DFunDef false "toCGuard" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CGBool"))) (PList (PVar "e"))))) (EApp (EVar "CGBool") (EApp (EVar "toCExpr") (EVar "e"))))
@@ -595,7 +596,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTuple"))) (PVar "es")))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EVar "toCExpr")) (EVar "es"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CList"))) (PVar "es")))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EVar "toCExpr")) (EVar "es"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CRecord"))) (PCons (PVar "name") (PVar "fields"))))) (EApp (EApp (EVar "CRecord") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EVar "map") (EVar "toCField")) (EVar "fields"))))
-(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CFieldAccess"))) (PList (PVar "e") (PVar "f") (PVar "n"))))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "toCExpr") (EVar "e"))) (EApp (EVar "toStr") (EVar "f"))) (EApp (EVar "toStr") (EVar "n"))))
+(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CFieldAccess"))) (PList (PVar "e") (PVar "f") (PVar "n") (PVar "o"))))) (EApp (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "toCExpr") (EVar "e"))) (EApp (EVar "toStr") (EVar "f"))) (EApp (EVar "toStr") (EVar "n"))) (EApp (EVar "toInt") (EVar "o"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CRecordUpdate"))) (PCons (PVar "name") (PCons (PVar "base") (PVar "fields")))))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toCExpr") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "toCField")) (EVar "fields"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CVariantUpdate"))) (PCons (PVar "con") (PCons (PVar "base") (PVar "fields")))))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EApp (EVar "toStr") (EVar "con"))) (EApp (EVar "toCExpr") (EVar "base"))) (EApp (EApp (EVar "map") (EVar "toCField")) (EVar "fields"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CArray"))) (PVar "es")))) (EApp (EVar "CArray") (EApp (EApp (EVar "map") (EVar "toCExpr")) (EVar "es"))))
@@ -746,7 +747,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toRoute" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "RProj"))) (PCons (PVar "r") (PVar "path"))))) (EApp (EApp (EVar "RProj") (EApp (EVar "toRoute") (EVar "r"))) (EApp (EApp (EMethodRef "map") (EVar "toInt")) (EVar "path"))))
 (DFunDef false "toRoute" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad Route: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCField" (TyFun (TyCon "SExp") (TyCon "CField")))
-(DFunDef false "toCField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "cf"))) (PList (PVar "name") (PVar "e"))))) (EApp (EApp (EVar "CField") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toCExpr") (EVar "e"))))
+(DFunDef false "toCField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "cf"))) (PList (PVar "name") (PVar "o") (PVar "e"))))) (EApp (EApp (EApp (EVar "CField") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toInt") (EVar "o"))) (EApp (EVar "toCExpr") (EVar "e"))))
 (DFunDef false "toCField" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CField: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCGuard" (TyFun (TyCon "SExp") (TyCon "CGuard")))
 (DFunDef false "toCGuard" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CGBool"))) (PList (PVar "e"))))) (EApp (EVar "CGBool") (EApp (EVar "toCExpr") (EVar "e"))))
@@ -794,7 +795,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CTuple"))) (PVar "es")))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EVar "toCExpr")) (EVar "es"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CList"))) (PVar "es")))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EVar "toCExpr")) (EVar "es"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CRecord"))) (PCons (PVar "name") (PVar "fields"))))) (EApp (EApp (EVar "CRecord") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EMethodRef "map") (EVar "toCField")) (EVar "fields"))))
-(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CFieldAccess"))) (PList (PVar "e") (PVar "f") (PVar "n"))))) (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "toCExpr") (EVar "e"))) (EApp (EVar "toStr") (EVar "f"))) (EApp (EVar "toStr") (EVar "n"))))
+(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CFieldAccess"))) (PList (PVar "e") (PVar "f") (PVar "n") (PVar "o"))))) (EApp (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EVar "toCExpr") (EVar "e"))) (EApp (EVar "toStr") (EVar "f"))) (EApp (EVar "toStr") (EVar "n"))) (EApp (EVar "toInt") (EVar "o"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CRecordUpdate"))) (PCons (PVar "name") (PCons (PVar "base") (PVar "fields")))))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toCExpr") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "toCField")) (EVar "fields"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CVariantUpdate"))) (PCons (PVar "con") (PCons (PVar "base") (PVar "fields")))))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EApp (EVar "toStr") (EVar "con"))) (EApp (EVar "toCExpr") (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "toCField")) (EVar "fields"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CArray"))) (PVar "es")))) (EApp (EVar "CArray") (EApp (EApp (EMethodRef "map") (EVar "toCExpr")) (EVar "es"))))

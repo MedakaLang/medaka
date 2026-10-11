@@ -261,7 +261,8 @@ toRoute (SList ((SAtom "RProj") :: r :: path)) =
 toRoute other = panic ("core_ir_sexp_parse: bad Route: " ++ sexprToStr other)
 
 toCField : SExp -> CField
-toCField (SList ((SAtom "cf") :: [name, e])) = CField (toStr name) (toCExpr e)
+toCField (SList ((SAtom "cf") :: [name, o, e])) =
+  CField (toStr name) (toInt o) (toCExpr e)
 toCField other = panic ("core_ir_sexp_parse: bad CField: " ++ sexprToStr other)
 
 toCGuard : SExp -> CGuard
@@ -333,8 +334,8 @@ toCExpr (SList ((SAtom "CTuple") :: es)) = CTuple (map toCExpr es)
 toCExpr (SList ((SAtom "CList") :: es)) = CList (map toCExpr es)
 toCExpr (SList ((SAtom "CRecord") :: name :: fields)) =
   CRecord (toStr name) (map toCField fields)
-toCExpr (SList ((SAtom "CFieldAccess") :: [e, f, n])) =
-  CFieldAccess (toCExpr e) (toStr f) (toStr n)
+toCExpr (SList ((SAtom "CFieldAccess") :: [e, f, n, o])) =
+  CFieldAccess (toCExpr e) (toStr f) (toStr n) (toInt o)
 toCExpr (SList ((SAtom "CRecordUpdate") :: name :: base :: fields)) =
   CRecordUpdate (toStr name) (toCExpr base) (map toCField fields)
 toCExpr (SList ((SAtom "CVariantUpdate") :: con :: base :: fields)) =

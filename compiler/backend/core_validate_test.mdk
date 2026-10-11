@@ -17,7 +17,14 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
 import types.typecheck.{grantWholeDomain}
-import ir.core_ir.{CProgram}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CField(..),
+  CProgram(..),
+}
+import frontend.ast.{Lit(..), noDeclLoc}
 import ir.core_ir_lower.{
   EmitTarget(..),
   ctorFieldTypeNames,
@@ -33,6 +40,7 @@ import backend.core_validate.{
   missingRowsMessage,
   renderExternFinding,
   validateExterns,
+  validateRecords,
 }
 import backend.wasm_emit.{
   emitProgramGaps,
@@ -224,3 +232,92 @@ test "(g) a runtime extern with no catalog row is an internal error naming it" =
       ["internal error", "'zzNoSuchExtern'", "extern catalog"]
       (missingRowsMessage missing),
   ]
+
+-- ── record ordinals ──────────────────────────────────────────────────────────
+
+-- Record nodes written out of declared order, for a record, a named-field
+-- variant, and a label two records share at different positions.
+recordOrderSrc : String
+recordOrderSrc =
+  "data P = P { a : Int, b : Int }\ndata Q = Q { b : Int, a : Int }\ndata V = V { x : Int, y : Int, z : Int } | W { y : Int }\nmain =\n  let p = P { b = 1, a = 2 }\n  let q = { p | b = 3, a = 4 }\n  let v = V { z = 1, y = 2, x = 3 }\n  let w = V { v | z = 5, x = 6 }\n  p.b + q.a + w.y"
+
+recordFindings : EmitTarget -> String -> List String
+recordFindings target src = validateRecords (lowered target src)
+
+unstamped : CExpr -> CProgram
+unstamped body = CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] []
+
+zero : CExpr
+zero = CLit (LInt 0)
+
+test "(h) lowering stamps every record node, so a permuted program validates clean" = expectAll
+  [
+    labelFail
+      "native"
+      (expectEqual [] (recordFindings TargetNative recordOrderSrc)),
+    labelFail "wasm" (expectEqual [] (recordFindings TargetWasm recordOrderSrc)),
+  ]
+
+test "(i) a record node the lowering did not stamp is refused, naming the node and binding" = expectEach
+  [
+    (
+      "literal",
+      expectEqual
+        [
+          "record: CRecord P: field ordinals [a@-1] are not the declared positions [in main]",
+        ]
+        (validateRecords (unstamped (CRecord "P" [CField "a" (-1) zero]))),
+    ),
+    (
+      "access",
+      expectEqual
+        ["record: CFieldAccess P.a: unstamped field ordinal [in main]"]
+        (validateRecords (unstamped (CFieldAccess zero "a" "P" (-1)))),
+    ),
+    (
+      "update",
+      expectEqual
+        [
+          "record: CRecordUpdate P: field ordinals [a@-1] are not strictly ascending [in main]",
+        ]
+        (validateRecords
+          (unstamped (CRecordUpdate "P" zero [CField "a" (-1) zero]))),
+    ),
+    (
+      "variant update",
+      expectEqual
+        [
+          "record: CVariantUpdate V: field ordinals [x@-1] are not strictly ascending [in main]",
+        ]
+        (validateRecords
+          (unstamped (CVariantUpdate "V" zero [CField "x" (-1) zero]))),
+    ),
+    (
+      "the Ref `.value` read needs no ordinal",
+      expectEqual
+        []
+        (validateRecords (unstamped (CFieldAccess zero "value" "" (-1)))),
+    ),
+  ]
+
+test "(j) ordinals out of declared position are refused" = expectEach [
+  (
+    "literal in written order",
+    expectEqual
+      [
+        "record: CRecord P: field ordinals [b@1, a@0] are not the declared positions [in main]",
+      ]
+      (validateRecords
+        (unstamped (CRecord "P" [CField "b" 1 zero, CField "a" 0 zero]))),
+  ),
+  (
+    "update in descending order",
+    expectEqual
+      [
+        "record: CRecordUpdate P: field ordinals [b@1, a@0] are not strictly ascending [in main]",
+      ]
+      (validateRecords
+        (unstamped
+          (CRecordUpdate "P" zero [CField "b" 1 zero, CField "a" 0 zero]))),
+  ),
+]

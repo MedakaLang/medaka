@@ -224,7 +224,7 @@ refsE (CUnOp _ x) = refsE x
 refsE (CTuple es) = flatMap refsE es
 refsE (CList es) = flatMap refsE es
 refsE (CRecord _ fields) = flatMap refsField fields
-refsE (CFieldAccess e _ _) = refsE e
+refsE (CFieldAccess e _ _ _) = refsE e
 refsE (CRecordUpdate _ base updates) = refsE base ++ flatMap refsField updates
 refsE (CVariantUpdate _ base updates) = refsE base ++ flatMap refsField updates
 refsE (CArray es) = flatMap refsE es
@@ -275,7 +275,7 @@ refsStmt (CSLet _ _ e) = refsE e
 refsStmt (CSAssign _ e) = refsE e
 
 refsField : CField -> List String
-refsField (CField _ e) = refsE e
+refsField (CField _ _ e) = refsE e
 
 refsImplBody : CImplBody -> List String
 refsImplBody (CImplTagged _ _ _ _ _ body) = refsE body
