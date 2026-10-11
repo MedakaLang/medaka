@@ -65,7 +65,7 @@ deletion, references = orchestrator (`test-conversion-orchestrator`).
 - Port the header's "proves / does NOT prove" into the test header.
 - `CAPTURE=1`/`--write` modes: no native equivalent; report, don't invent.
 - `xargs -P` worklist (one program, many argvs): `runCommandBatch prog jobs argvs` (extern,
-  `stdlib/runtime.mdk`; results in input order; `test_process.testJobs` = `MEDAKA_TEST_JOBS`).
+  `stdlib/runtime.mdk`; results in input order; job count from env `MEDAKA_TEST_JOBS`).
   Check `length results == length rows` before zipping, and report every failing row, not the first.
 - `BLOCKED:` on `&`+`wait`, daemons, interactive handles, or `node`/`wasm-tools`/`valgrind`.
 - A scenario needing a new repo file or symlink: argue it, or use scratch state (e.g. a temp
