@@ -1,5 +1,5 @@
 # META
-source_lines=318
+source_lines=301
 stages=DESUGAR,MARK
 # SOURCE
 {- | Manipulation of `/`-separated paths as text.
@@ -19,7 +19,7 @@ stages=DESUGAR,MARK
 -- for its own bootstrap path.
 
 import list.{reverse}
-import string.{split, startsWith, endsWith, contains}
+import string.{split, startsWith, endsWith, contains, lastIndexOf}
 
 -- # Components
 
@@ -36,16 +36,11 @@ import string.{split, startsWith, endsWith, contains}
    "." -}
 export
 dirname : String -> String
-dirname path = dirnameGo path (stringLength path)
-
-dirnameGo : String -> Int -> String
-dirnameGo _ 0 = "."
-dirnameGo path i =
-  if stringSlice (i - 1) i path == "/" then
-    let head = stringSlice 0 (i - 1) path
+dirname path = match lastIndexOf "/" path
+  None => "."
+  Some i =>
+    let head = stringSlice 0 i path
     if head == "" then "/" else head
-  else
-    dirnameGo path (i - 1)
 
 {- | The last component of a path: everything after the last `/`.
 
@@ -58,18 +53,12 @@ dirnameGo path i =
    "" -}
 export
 basename : String -> String
-basename path = basenameGo path (stringLength path) (stringLength path)
+basename path = match lastIndexOf "/" path
+  None => path
+  Some i => stringSlice (i + 1) (stringLength path) path
 
 -- > basename "c.txt"
 -- "c.txt"
-
-basenameGo : String -> Int -> Int -> String
-basenameGo path end 0 = stringSlice 0 end path
-basenameGo path end i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice i end path
-  else
-    basenameGo path end (i - 1)
 
 {- | The extension of the last component, with its dot.
 
@@ -84,18 +73,12 @@ export
 extname : String -> String
 extname path =
   let b = basename path
-  extnameGo b (stringLength b)
+  match lastIndexOf "." b
+    None => ""
+    Some j => if j == 0 then "" else stringSlice j (stringLength b) b
 
 -- > extname "README"
 -- ""
-
-extnameGo : String -> Int -> String
-extnameGo _ 0 = ""
-extnameGo b i =
-  if stringSlice (i - 1) i b == "." then
-    if i - 1 == 0 then "" else stringSlice (i - 1) (stringLength b) b
-  else
-    extnameGo b (i - 1)
 
 {- | The last component without its extension.
 
@@ -322,22 +305,13 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
     normalize (joinPath (dirname p) (basename p)) == normalize p
 # DESUGAR
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false) (mem "lastIndexOf" false))))
 (DTypeSig true "dirname" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dirname" ((PVar "path")) (EApp (EApp (EVar "dirnameGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "dirnameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "dirnameGo" (PWild (PLit (LInt 0))) (ELit (LString ".")))
-(DFunDef false "dirnameGo" ((PVar "path") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EBlock (DoLet false false (PVar "head") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "/")) (EVar "head")))) (EApp (EApp (EVar "dirnameGo") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "dirname" ((PVar "path")) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "None") () (ELit (LString "."))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "head") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "/")) (EVar "head")))))))
 (DTypeSig true "basename" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "basename" ((PVar "path")) (EApp (EApp (EApp (EVar "basenameGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "basenameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "basenameGo" ((PVar "path") (PVar "end") (PLit (LInt 0))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "end")) (EVar "path")))
-(DFunDef false "basenameGo" ((PVar "path") (PVar "end") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "end")) (EVar "path")) (EApp (EApp (EApp (EVar "basenameGo") (EVar "path")) (EVar "end")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "basename" ((PVar "path")) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "None") () (EVar "path")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path")))))
 (DTypeSig true "extname" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "extname" ((PVar "path")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "basename") (EVar "path"))) (DoExpr (EApp (EApp (EVar "extnameGo") (EVar "b")) (EApp (EVar "stringLength") (EVar "b"))))))
-(DTypeSig false "extnameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "extnameGo" (PWild (PLit (LInt 0))) (ELit (LString "")))
-(DFunDef false "extnameGo" ((PVar "b") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "b")) (ELit (LString "."))) (EIf (EBinOp "==" (EBinOp "-" (EVar "i") (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "b"))) (EVar "b"))) (EApp (EApp (EVar "extnameGo") (EVar "b")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "extname" ((PVar "path")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "basename") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "."))) (EVar "b")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "j")) () (EIf (EBinOp "==" (EVar "j") (ELit (LInt 0))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "j")) (EApp (EVar "stringLength") (EVar "b"))) (EVar "b"))))))))
 (DTypeSig true "stem" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stem" ((PVar "path")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "basename") (EVar "path"))) (DoLet false false (PVar "e") (EApp (EVar "extname") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "e") (ELit (LString ""))) (EVar "b") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "b")) (EApp (EVar "stringLength") (EVar "e")))) (EVar "b"))))))
 (DTypeSig true "hasExtension" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -380,22 +354,13 @@ prop "dirname ++ / ++ basename normalizes back to the original absolute path" (p
 (DProp false "dirname ++ / ++ basename normalizes back to the original absolute path" ((pp "p" (TyCon "String"))) (EIf (EBinOp "||" (EBinOp "==" (EVar "p") (ELit (LString ""))) (EApp (EVar "not") (EApp (EVar "isAbsolute") (EVar "p")))) (EVar "True") (EBinOp "==" (EApp (EVar "normalize") (EApp (EApp (EVar "joinPath") (EApp (EVar "dirname") (EVar "p"))) (EApp (EVar "basename") (EVar "p")))) (EApp (EVar "normalize") (EVar "p")))))
 # MARK
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
-(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false))))
+(DUse false (UseGroup ("string") ((mem "split" false) (mem "startsWith" false) (mem "endsWith" false) (mem "contains" false) (mem "lastIndexOf" false))))
 (DTypeSig true "dirname" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "dirname" ((PVar "path")) (EApp (EApp (EVar "dirnameGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "dirnameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "dirnameGo" (PWild (PLit (LInt 0))) (ELit (LString ".")))
-(DFunDef false "dirnameGo" ((PVar "path") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EBlock (DoLet false false (PVar "head") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "/")) (EVar "head")))) (EApp (EApp (EVar "dirnameGo") (EVar "path")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "dirname" ((PVar "path")) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "None") () (ELit (LString "."))) (arm (PCon "Some" (PVar "i")) () (EBlock (DoLet false false (PVar "head") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "i")) (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "/")) (EVar "head")))))))
 (DTypeSig true "basename" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "basename" ((PVar "path")) (EApp (EApp (EApp (EVar "basenameGo") (EVar "path")) (EApp (EVar "stringLength") (EVar "path"))) (EApp (EVar "stringLength") (EVar "path"))))
-(DTypeSig false "basenameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "basenameGo" ((PVar "path") (PVar "end") (PLit (LInt 0))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "end")) (EVar "path")))
-(DFunDef false "basenameGo" ((PVar "path") (PVar "end") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "path")) (ELit (LString "/"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "end")) (EVar "path")) (EApp (EApp (EApp (EVar "basenameGo") (EVar "path")) (EVar "end")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "basename" ((PVar "path")) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "/"))) (EVar "path")) (arm (PCon "None") () (EVar "path")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "path"))) (EVar "path")))))
 (DTypeSig true "extname" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "extname" ((PVar "path")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "basename") (EVar "path"))) (DoExpr (EApp (EApp (EVar "extnameGo") (EVar "b")) (EApp (EVar "stringLength") (EVar "b"))))))
-(DTypeSig false "extnameGo" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "extnameGo" (PWild (PLit (LInt 0))) (ELit (LString "")))
-(DFunDef false "extnameGo" ((PVar "b") (PVar "i")) (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "i")) (EVar "b")) (ELit (LString "."))) (EIf (EBinOp "==" (EBinOp "-" (EVar "i") (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "b"))) (EVar "b"))) (EApp (EApp (EVar "extnameGo") (EVar "b")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
+(DFunDef false "extname" ((PVar "path")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "basename") (EVar "path"))) (DoExpr (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "."))) (EVar "b")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "j")) () (EIf (EBinOp "==" (EVar "j") (ELit (LInt 0))) (ELit (LString "")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "j")) (EApp (EVar "stringLength") (EVar "b"))) (EVar "b"))))))))
 (DTypeSig true "stem" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "stem" ((PVar "path")) (EBlock (DoLet false false (PVar "b") (EApp (EVar "basename") (EVar "path"))) (DoLet false false (PVar "e") (EApp (EVar "extname") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "e") (ELit (LString ""))) (EVar "b") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "b")) (EApp (EVar "stringLength") (EVar "e")))) (EVar "b"))))))
 (DTypeSig true "hasExtension" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))

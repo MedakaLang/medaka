@@ -386,15 +386,24 @@ export
 lastIndexOf : String -> String -> Option Int
 lastIndexOf needle haystack
   | needle == "" = Some (stringLength haystack)
-  | otherwise = lastIndexOfGo needle haystack 0 None
+  | otherwise =
+    let a = toChars haystack
+    let nA = toChars needle
+    lastIndexOfGo a (arrayLength a) nA (arrayLength nA) 0 None
 
 -- Walks forward from each hit, advancing one codepoint so overlapping
--- matches still count, and keeps the latest.
-lastIndexOfGo : String -> String -> Int -> Option Int -> Option Int
-lastIndexOfGo needle haystack from acc =
-  match indexOf needle (stringSlice from (stringLength haystack) haystack)
-    None => acc
-    Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
+-- matches still count, and keeps the latest.  Hit positions are absolute in
+-- the decoded haystack, so no tail is re-sliced per hit.
+lastIndexOfGo : Array Char ->
+  Int ->
+  Array Char ->
+  Int ->
+  Int ->
+  Option Int ->
+  Option Int
+lastIndexOfGo a n nA nl from acc = match sepFrom a n nA nl from
+  None => acc
+  Some i => lastIndexOfGo a n nA nl (i + 1) (Some i)
 
 {- | The number of non-overlapping occurrences of `needle` in `haystack`.
 
@@ -408,17 +417,16 @@ export
 countOccurrences : String -> String -> Int
 countOccurrences needle haystack
   | needle == "" = 0
-  | otherwise = countGo needle (stringLength needle) haystack 0
+  | otherwise =
+    let a = toChars haystack
+    let nA = toChars needle
+    countGo a (arrayLength a) nA (arrayLength nA) 0 0
 
-countGo : String -> Int -> String -> Int -> Int
-countGo needle nlen haystack acc = match indexOf needle haystack
+-- Non-overlapping: each hit resumes just past its own end.
+countGo : Array Char -> Int -> Array Char -> Int -> Int -> Int -> Int
+countGo a n nA nl from acc = match sepFrom a n nA nl from
   None => acc
-  Some i =>
-    countGo
-      needle
-      nlen
-      (stringSlice (i + nlen) (stringLength haystack) haystack)
-      (acc + 1)
+  Some i => countGo a n nA nl (i + nl) (acc + 1)
 
 -- # Building
 
@@ -578,11 +586,10 @@ toLower s = stringToLower s
 export
 capitalize : String -> String
 capitalize s =
-  let a = toChars s
-  if arrayLength a == 0 then
+  if s == "" then
     ""
   else
-    charToStr (charToUpper (arrayGetUnsafe 0 a))
+    charToStr (charToUpper (arrayGetUnsafe 0 (toChars (stringSlice 0 1 s))))
       ++ stringSlice 1 (stringLength s) s
 
 {- | The string with the first occurrence of `old` replaced by `new`.
@@ -613,20 +620,48 @@ spliceAt i oldLen new s =
    "heLLo" -}
 export
 replaceAll : String -> String -> String -> String
-replaceAll old new s =
-  if old == "" then s else replaceAllGo (stringLength old) old new s
+replaceAll old new s = if old == "" then s else replaceAllGo old new s
 
-replaceAllGo : Int -> String -> String -> String -> String
-replaceAllGo oldLen old new s = match indexOf old s
-  None => s
+-- Decodes both operands once, collects the pieces between hits and the
+-- replacement in reverse, then joins them with one `stringConcat`.
+replaceAllGo : String -> String -> String -> String
+replaceAllGo old new s =
+  let a = toChars s
+  let n = arrayLength a
+  let oA = toChars old
+  let ol = arrayLength oA
+  stringConcat (replaceAllGoFrom a n oA ol new 0 0 [])
+
+-- `acc` holds the pieces so far, latest first. Tail-recursive, so the call
+-- depth does not grow with the number of replacements.
+replaceAllGoFrom : Array Char ->
+  Int ->
+  Array Char ->
+  Int ->
+  String ->
+  Int ->
+  Int ->
+  List String ->
+  List String
+replaceAllGoFrom a n oA ol new start from acc = match sepFrom a n oA ol from
+  None => reverseStrings (subChars a start n :: acc)
   Some i =>
-    stringSlice 0 i s
-      ++ new
-      ++ replaceAllGo
-        oldLen
-        old
-        new
-        (stringSlice (i + oldLen) (stringLength s) s)
+    replaceAllGoFrom
+      a
+      n
+      oA
+      ol
+      new
+      (i + ol)
+      (i + ol)
+      (new :: subChars a start i :: acc)
+
+reverseStrings : List String -> List String
+reverseStrings xs = reverseStringsGo xs []
+
+reverseStringsGo : List String -> List String -> List String
+reverseStringsGo [] acc = acc
+reverseStringsGo (x :: rest) acc = reverseStringsGo rest (x :: acc)
 
 -- # Slicing and splitting
 
@@ -754,15 +789,15 @@ words : String -> List String
 words s =
   let a = toChars s
   let n = arrayLength a
-  wordsFrom a n s (firstNonSpace a 0 n)
+  wordsFrom a n (firstNonSpace a 0 n)
 
-wordsFrom : Array Char -> Int -> String -> Int -> List String
-wordsFrom a n s start =
-  if start >= n then [] else wordsEmit a n s start (firstSpace a start n)
+wordsFrom : Array Char -> Int -> Int -> List String
+wordsFrom a n start =
+  if start >= n then [] else wordsEmit a n start (firstSpace a start n)
 
-wordsEmit : Array Char -> Int -> String -> Int -> Int -> List String
-wordsEmit a n s start e =
-  stringSlice start e s :: wordsFrom a n s (firstNonSpace a e n)
+wordsEmit : Array Char -> Int -> Int -> Int -> List String
+wordsEmit a n start e =
+  subChars a start e :: wordsFrom a n (firstNonSpace a e n)
 
 {- | The lines joined with `\n`, with a newline after each one.
 
@@ -844,3 +879,16 @@ centerPad l r c s =
 
 half : Int -> Int
 half k = if k <= 1 then 0 else 1 + half (k - 2)
+
+-- ── Properties ──────────────────────────────────────────────────────────────
+
+prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
+  stringLength s - stringLength (replaceAll "ab" "" s)
+    == 2 * countOccurrences "ab" s
+
+prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
+  match lastIndexOf "ab" s
+    None => countOccurrences "ab" s == 0
+    Some i =>
+      stringSlice i (i + 2) s == "ab"
+        && indexOf "ab" (stringSlice (i + 1) (stringLength s) s) == None

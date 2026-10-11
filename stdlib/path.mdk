@@ -15,7 +15,7 @@
 -- for its own bootstrap path.
 
 import list.{reverse}
-import string.{split, startsWith, endsWith, contains}
+import string.{split, startsWith, endsWith, contains, lastIndexOf}
 
 -- # Components
 
@@ -32,16 +32,11 @@ import string.{split, startsWith, endsWith, contains}
    "." -}
 export
 dirname : String -> String
-dirname path = dirnameGo path (stringLength path)
-
-dirnameGo : String -> Int -> String
-dirnameGo _ 0 = "."
-dirnameGo path i =
-  if stringSlice (i - 1) i path == "/" then
-    let head = stringSlice 0 (i - 1) path
+dirname path = match lastIndexOf "/" path
+  None => "."
+  Some i =>
+    let head = stringSlice 0 i path
     if head == "" then "/" else head
-  else
-    dirnameGo path (i - 1)
 
 {- | The last component of a path: everything after the last `/`.
 
@@ -54,18 +49,12 @@ dirnameGo path i =
    "" -}
 export
 basename : String -> String
-basename path = basenameGo path (stringLength path) (stringLength path)
+basename path = match lastIndexOf "/" path
+  None => path
+  Some i => stringSlice (i + 1) (stringLength path) path
 
 -- > basename "c.txt"
 -- "c.txt"
-
-basenameGo : String -> Int -> Int -> String
-basenameGo path end 0 = stringSlice 0 end path
-basenameGo path end i =
-  if stringSlice (i - 1) i path == "/" then
-    stringSlice i end path
-  else
-    basenameGo path end (i - 1)
 
 {- | The extension of the last component, with its dot.
 
@@ -80,18 +69,12 @@ export
 extname : String -> String
 extname path =
   let b = basename path
-  extnameGo b (stringLength b)
+  match lastIndexOf "." b
+    None => ""
+    Some j => if j == 0 then "" else stringSlice j (stringLength b) b
 
 -- > extname "README"
 -- ""
-
-extnameGo : String -> Int -> String
-extnameGo _ 0 = ""
-extnameGo b i =
-  if stringSlice (i - 1) i b == "." then
-    if i - 1 == 0 then "" else stringSlice (i - 1) (stringLength b) b
-  else
-    extnameGo b (i - 1)
 
 {- | The last component without its extension.
 
