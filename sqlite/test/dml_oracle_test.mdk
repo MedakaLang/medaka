@@ -43,8 +43,8 @@
 -- `rowScratch` stays local — a fourth byte-identical copy with
 -- `writer_oracle_test.mdk`.
 import io.{runVerb}
-import list.{replicate}
-import string.{contains, join, startsWith, trim}
+import list.{indexed, lookup, replicate, zipWith3}
+import string.{contains, join, startsWith, trim, unwords}
 import test.{
   Expectation(..),
   expectAll,
@@ -54,9 +54,9 @@ import test.{
   labelFail,
 }
 import test.oracle_support.{
-  Seed(..), flatLines, outLines, seedDb, spawnOut, spawnRaw
+  Seed(..), flatLines, outLines, seedDb, spawnEnv, spawnOut, spawnRaw
 }
-import test_process.{medakaBin, scratchDir, underRoot}
+import test_process.{medakaBin, scratchDir, testJobs, underRoot}
 
 -- # Spawning
 --
@@ -80,27 +80,89 @@ rowScratch name = match scratchDir
   Err e => Err "\{name}: \{e}"
   Ok dir => Ok "\{dir}/\{name}"
 
-buildBin : List String -> String -> String -> <Exec, IO> Result String Unit
-buildBin flags entry bin =
-  map
-    (_ => ())
-    (spawnOut
-      buildTimeoutSeconds
-      medakaBin
-      (["build"] ++ flags ++ [underRoot entry, "-o", bin]))
+-- The batched-build helpers below are a deliberate copy of the same helpers in
+-- oracle_test.mdk: both files are test siblings with no shared module of
+-- their own, and moving them into oracle_support.mdk is the consolidation.
+-- lint-disable-file rule-duplicate-body
+buildArgs : List String -> String -> String -> <IO> List String
+buildArgs flags entry bin = ["build"] ++ flags ++ [underRoot entry, "-o", bin]
 
--- Rows that read or write through the same build share it: a top-level
--- nullary is evaluated once per process, and the binary lives under the
--- shared scratch root, outside every row's own cleanup list.
+-- The argv `spawnOut buildTimeoutSeconds medakaBin args` runs: `boundedVerbSeconds`
+-- wrapped around `env`, which sets the two spawn variables and runs the build.
+perlArgs : List String -> <IO> List String
+perlArgs args =
+  ["-e", "alarm \{intToString buildTimeoutSeconds}; exec @ARGV", "env", "env"]
+    ++ spawnEnv
+    ++ (medakaBin :: args)
+
+-- Grades one batched build exactly as `spawnRaw` and `spawnOut` grade a single
+-- one: a run that never started, or exit 127, is a spawn failure; any exit but
+-- 0 is a named failure.
+gradeBuild : List String ->
+  Result String (Int, String, String) ->
+  <IO> Result String Unit
+gradeBuild args (Err e) =
+  Err "spawn failed: could not start `\{unwords (medakaBin :: args)}`: \{e}"
+gradeBuild _ (Ok (0, _, _)) = Ok ()
+gradeBuild _ (Ok (127, _, err)) =
+  Err "spawn failed: \{medakaBin} not found on PATH: \{trim err}"
+gradeBuild args (Ok (code, out, err)) =
+  Err
+    "`\{unwords (medakaBin :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
+
+-- Every demo this file runs, built together in ONE batch (`testJobs` builds at
+-- a time, serially under `MEDAKA_TEST_JOBS=1`) into the shared scratch
+-- directory. A top-level nullary is evaluated once per process, so the batch
+-- runs once. No row writes to a binary after its build, and no row's cleanup
+-- list names one.
+sharedDemos : List (String, List String)
+sharedDemos = [
+  ("sqlite/main.mdk", []),
+  ("sqlite/delete_demo.mdk", []),
+  ("sqlite/update_demo.mdk", []),
+  ("sqlite/update_expr_demo.mdk", ["--allow-internal"]),
+  ("sqlite/dml_probe.mdk", []),
+]
+
+sharedBuilds : <Exec, IO> List (String, Result String String)
+sharedBuilds = match scratchDir
+  Err e => map ((entry, _) => (entry, Err e)) sharedDemos
+  Ok dir =>
+    let plans =
+      map
+        ((i, (entry, flags)) =>
+          (entry, flags, "\{dir}/shared-\{intToString i}"))
+        (indexed sharedDemos)
+    let argvs = map ((entry, flags, bin) => buildArgs flags entry bin) plans
+    let spawned = runCommandBatch "perl" testJobs (map perlArgs argvs)
+    zipWith3
+      ((entry, _, bin) args run => (
+        entry,
+        map (_ => bin) (gradeBuild args (mapErr (e => "perl: \{e}") run)),
+      ))
+      plans
+      argvs
+      spawned
+
+sharedBin : String -> <Exec, IO> Result String String
+sharedBin entry = match lookup entry sharedBuilds
+  Some r => r
+  None => Err "no shared build for \{entry}"
+
 mainBin : <Exec, IO> Result String String
-mainBin = match rowScratch "shared-main"
-  Err e => Err e
-  Ok bin => map (_ => bin) (buildBin [] "sqlite/main.mdk" bin)
+mainBin = sharedBin "sqlite/main.mdk"
 
 deleteDemoBin : <Exec, IO> Result String String
-deleteDemoBin = match rowScratch "shared-delete-demo"
-  Err e => Err e
-  Ok bin => map (_ => bin) (buildBin [] "sqlite/delete_demo.mdk" bin)
+deleteDemoBin = sharedBin "sqlite/delete_demo.mdk"
+
+updateDemoBin : <Exec, IO> Result String String
+updateDemoBin = sharedBin "sqlite/update_demo.mdk"
+
+updateExprDemoBin : <Exec, IO> Result String String
+updateExprDemoBin = sharedBin "sqlite/update_expr_demo.mdk"
+
+dmlProbeBin : <Exec, IO> Result String String
+dmlProbeBin = sharedBin "sqlite/dml_probe.mdk"
 
 copyFile : String -> String -> <Exec, IO> Result String Unit
 copyFile src dst = map (_ => ()) (spawnOut queryTimeoutSeconds "cp" [src, dst])
@@ -382,20 +444,16 @@ updateResult = match rowScratch "dml-update"
   Ok prefix =>
     let db = "\{prefix}.db"
     let dbIpk = "\{prefix}-ipk.db"
-    let updater = "\{prefix}-updater"
-    let out = runUpdate db dbIpk updater
-    let _ = runVerb "rm" ["-rf", db, dbIpk, updater]
+    let out = runUpdate db dbIpk
+    let _ = runVerb "rm" ["-rf", db, dbIpk]
     out
 
-runUpdate : String ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Result String UpdateRun
-runUpdate db dbIpk updater = do
+runUpdate : String -> String -> <Exec, FileRead, IO> Result String UpdateRun
+runUpdate db dbIpk = do
+  updater <- updateDemoBin
   let usersArgs = [db, "users", "age", "int", "99", "age", "ge", "30"]
   let kvArgs = [db, "kv", "v", "int", "0", "v", "gt", "25"]
   let ipkArgs = [dbIpk, "users", "id", "int", "999", "age", "ge", "0"]
-  _ <- buildBin [] "sqlite/update_demo.mdk" updater
   _ <- seedDb db [SeedSql updateSeedSql]
   usersOut <- spawnOut queryTimeoutSeconds updater usersArgs
   kvOut <- spawnOut queryTimeoutSeconds updater kvArgs
@@ -479,17 +537,15 @@ updateExprResult = match rowScratch "dml-update-expr"
   Ok prefix =>
     let dbm = "\{prefix}-m.db"
     let dbs = "\{prefix}-s.db"
-    let probe = "\{prefix}-probe"
-    let out = runUpdateExpr dbm dbs probe
-    let _ = runVerb "rm" ["-rf", dbm, dbs, probe]
+    let out = runUpdateExpr dbm dbs
+    let _ = runVerb "rm" ["-rf", dbm, dbs]
     out
 
 runUpdateExpr : String ->
   String ->
-  String ->
   <Exec, FileRead, IO> Result String UpdateExprRun
-runUpdateExpr dbm dbs probe = do
-  _ <- buildBin ["--allow-internal"] "sqlite/update_expr_demo.mdk" probe
+runUpdateExpr dbm dbs = do
+  probe <- updateExprDemoBin
   _ <- seedDb dbm [SeedSql updateExprSeedSql]
   _ <- copyFile dbm dbs
   probeOut <- spawnOut queryTimeoutSeconds probe [dbm]
@@ -987,7 +1043,7 @@ dmlOutcome = match rowScratch "dml"
 
 runDmlOutcome : String -> <Exec, FileRead, IO> Result String DmlOutcome
 runDmlOutcome prefix = do
-  let probe = "\{prefix}-probe"
+  probe <- dmlProbeBin
   let m1 = "\{prefix}-m1.db"
   let s1 = "\{prefix}-s1.db"
   let m2 = "\{prefix}-m2.db"
@@ -1008,7 +1064,6 @@ runDmlOutcome prefix = do
     "DELETE FROM docs WHERE id = 1",
   ]
   cli <- mainBin
-  _ <- buildBin [] "sqlite/dml_probe.mdk" probe
   e1 <- runCorpusSection cli "dml corpus" m1 s1 dmlCorpus
   _ <- seedDb m2 [SeedSql dmlAuthoredSeedSql]
   _ <- seedDb s2 [SeedSql dmlAuthoredSeedSql]
@@ -1041,7 +1096,7 @@ runDmlOutcome prefix = do
     m7
     "INSERT INTO t VALUES (2, 'y')"
   eProbe <- parseProbeExpectation probe
-  let _ = runVerb "rm" ["-rf", probe, m1, s1, m2, s2, m3, s3, m5, m6, m7]
+  let _ = runVerb "rm" ["-rf", m1, s1, m2, s2, m3, s3, m5, m6, m7]
   Ok DmlOutcome {
     corpusAuthoredOverflow = expectAll [e1, e2, e3, e3b],
     cliSelect = eSelect,
