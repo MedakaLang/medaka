@@ -13,7 +13,7 @@
    each fixture and reads the kept IR, neither of which the interpreter binds. -}
 
 import test_process.{
-  medakaBin, medakaRoot, underRoot, boundedVerb, withScratchDir
+  medakaBin, medakaRoot, underRoot, boundedVerb, scratchDir, withScratchDir
 }
 import compiler_cli_test_support.{boundedInTree, fixtureStems}
 import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
@@ -311,15 +311,23 @@ nonTailOk b =
 tailOk : String -> Bool
 tailOk b = S.contains "musttail call i64 @\{dictPrefix}tail(" b
 
-skewCDict : String -> <Exec, IO, FileRead, FileWrite> Expectation
-skewCDict work = match buildIR work dictStem
+-- The CDict fixture is built ONCE per process, with its kept IR, into the
+-- shared scratch directory: three tests below read the same IR. Nothing reads
+-- the build for anything but its text, so no test changes what another sees.
+cdictIR : <Exec, IO, FileRead> Result String String
+cdictIR = match scratchDir
+  Err e => Err e
+  Ok dir => buildIR dir dictStem
+
+skewCDict : <Exec, IO, FileRead> Expectation
+skewCDict = match cdictIR
   Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
   Ok ir => match irSkews ir
     [] => pass
     skews => fail "\{dictStem}: call/define arity skew: \{S.join "; " skews}"
 
 test "diff_compiler_call_arity (8): the CDict fixture has no call/define arity skew" =
-  withScratchDir skewCDict
+  skewCDict
 
 test "diff_compiler_call_arity (9): the CDict fixture is present in the corpus" =
   match fixtureStems fixtures
@@ -330,8 +338,8 @@ test "diff_compiler_call_arity (9): the CDict fixture is present in the corpus" 
       else
         fail "the CDict fixture is MISSING from the corpus"
 
-shapesCDict : String -> <Exec, IO, FileRead, FileWrite> Expectation
-shapesCDict work = match buildIR work dictStem
+shapesCDict : <Exec, IO, FileRead> Expectation
+shapesCDict = match cdictIR
   Err e => fail "\{dictStem}: failed to build or read IR: \{e}"
   Ok ir => expectEach [
     ("(10) adder3's define binds the dictionary and a", defineOk ir),
@@ -394,15 +402,15 @@ shapesCDict work = match buildIR work dictStem
   ]
 
 test "diff_compiler_call_arity (10)-(15): CDict call shapes reach their intended lowering" =
-  withScratchDir shapesCDict
+  shapesCDict
 
-buildCDict : String -> <Exec, IO, FileRead, FileWrite> Expectation
-buildCDict work = match buildIR work dictStem
+buildCDict : <Exec, IO, FileRead> Expectation
+buildCDict = match cdictIR
   Err e => fail "\{dictStem}: did not build or produce kept IR: \{e}"
   Ok _ => pass
 
 test "diff_compiler_call_arity (16): the CDict fixture builds and produces kept IR" =
-  withScratchDir buildCDict
+  buildCDict
 
 -- The skew scanner must be able to fire: a define of arity 2 called with 1 arg.
 synthetic : String
