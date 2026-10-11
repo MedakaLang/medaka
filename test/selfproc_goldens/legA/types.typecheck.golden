@@ -831,6 +831,8 @@ dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List Predicat
 dedupPredicateSlotsTable : Unit -> Unit
 dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
 dedupVecObls : List VecObl -> List VecObl
+dedupWalkGoals : List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+dedupWalkGoalsGo : List (IfaceRef, List Mono) -> Map String (List (IfaceRef, List Mono)) -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 defaultAbsentNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> List Mono -> Unit
 defaultAmbiguousNumWith : Option Int -> ArmedGuard -> Map String Unit -> List UObligation -> Mono -> Unit
 defaultBodyBinderNamesProbe : Unit -> List String
@@ -1210,6 +1212,8 @@ foldAppKinds : SigVars -> List (String, Mono) -> Mono -> List Kind -> List Ty ->
 foldModules : Bool -> Bool -> (String -> ModuleSeed -> List Decl -> List Decl -> List Decl -> (ModuleBindings, a)) -> (Bool -> String -> a -> b -> b) -> b -> List (String, Scheme) -> List (String, ExportBinding) -> List (String, List (String, ExportBinding)) -> List Decl -> List Decl -> List (String, List Decl) -> b
 foldRowSlotArgs : SigVars -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldrFun : List Mono -> Mono -> Mono
+followRequireGoal : Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
+followRequireLevel : Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation -> List (List (UObligation, ReqWalk)) -> (List UObligation, List (UObligation, ReqWalk))
 forceInstantiation : String -> MethodTrackedInstantiation -> Mono
 foreachUnit : (a -> Unit) -> List a -> Unit
 forgetLocalAbs : String -> Unit
@@ -2168,6 +2172,7 @@ monoIsBareTyvar : Mono -> Bool
 monoIsBool : Mono -> Bool
 monoIsFunction : Mono -> Bool
 monoIsTyvarId : Mono -> Int -> Bool
+monoMintedBefore : Int -> Int -> Mono -> Bool
 monoRootIdSet : List Mono -> Map String Unit
 monoSameGiven : Mono -> Mono -> Bool
 monoScheme : Mono -> Scheme
@@ -2208,6 +2213,7 @@ negatedI32Lit : Expr -> Option Int
 negatedInI32 : Int -> Option Int
 nestedRequireGoals : Map String Unit -> Map String Unit -> List UObligation -> List UObligation
 nestedRequireGoalsGo : Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
+nestedRequireGoalsOnce : Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
 newWalkMemo : Unit -> WalkMemo
@@ -2238,6 +2244,7 @@ noteNumlitCtx : Mono -> Mono -> JoinContext -> Unit
 noteRouteWalkCut : ReqWalk -> Unit
 noteTypeErrorDetected : Unit -> Unit
 noteWalkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Unit
+noteWalkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Unit
 nthArgMono : Int -> Mono -> Option Mono
 nthFunDomain : Int -> Mono -> Option Mono
 nthInt : Int -> List Int -> Int
@@ -2443,6 +2450,7 @@ prependPredicateSlots : List PredicateSlot -> List PredicateSlot -> List Predica
 prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
 prerequisiteObligation : PrerequisiteEvidence -> (IfaceRef, List Mono)
 prerequisiteOnWalk : ReqWalk -> UObligation -> List (UObligation, ReqWalk)
+prerequisiteUnreported : ReqWalk -> UObligation -> List (UObligation, ReqWalk)
 preunifySigsEx : List (String, Ty) -> List ScopedMember -> (List ConstraintReg, List (String, Ty, List (String, Mono)))
 primaryLiteralProblems : List (String, Param) -> String -> List String
 processLetGroup : TcEnv -> List LetBind -> TcEnv
@@ -2741,6 +2749,8 @@ reqWalkSeed : IfaceRef -> List Mono -> ReqWalk
 reqWalkStart : Unit -> ReqWalk
 requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
 requireGoalAt : UObligation -> List Int -> (IfaceRef, List Mono) -> List UObligation
+requireGoalSeeds : List UObligation -> List (UObligation, ReqWalk)
+requireGoalsBelow : (ReqWalk -> UObligation -> List (UObligation, ReqWalk)) -> Map String Unit -> Map String Unit -> (UObligation, ReqWalk) -> List (UObligation, ReqWalk)
 requirePredicateSlot : List (String, Mono) -> Require -> PredicateSlot
 requiredMethodNames : List IfaceMethod -> List String
 requiresCycleMsg : IfaceRef -> List Mono -> IfaceRef -> List Mono -> String
@@ -2851,6 +2861,7 @@ rowHeadSubstRigid : Map String Unit -> List Mono -> ImplRow -> Option (List (Int
 rowHeadUnifies : List Mono -> ImplRow -> Bool
 rowInto : Bool -> EffRow -> EffRow -> Unit
 rowKindMismatchMsg : List EffAtomTy -> List String -> String
+rowMintedBefore : Int -> EffRow -> Bool
 rowOfMembers : List Atom -> List (Ref Effvar) -> EffRow
 rowPrefixSubstRigid : Map String Unit -> List Mono -> ImplRow -> Option (List (Int, Mono))
 rowRouteKey : ImplRow -> String
@@ -2989,6 +3000,8 @@ solveExactReturn : MethodReturnRequest -> MethodReturnResolution
 solveExactReturnInstance : MethodReturnRequest -> Wanted -> List Mono -> MethodReturnResolution
 solveExactReturnOnce : MethodReturnRequest -> MethodReturnResolution
 solveFlexibleUpper : Authority -> Authority -> Bool
+solvedCleanly : (a -> List Mono) -> (Unit -> a) -> (Bool, a)
+solvedOnWalk : ReqWalk -> IfaceRef -> List Mono -> (Unit -> List (IfaceRef, List Mono)) -> List (IfaceRef, List Mono)
 solvedUpper : Option Authority -> Bool
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
@@ -3152,6 +3165,7 @@ tyvarLevel : Ref Tyvar -> Int
 u64LiteralFits : Route -> Int -> Bool
 u64RangeText : String
 uOblArgs : UObligation -> List Mono
+uOblGoalArgs : UObligation -> List Mono
 uOblIsDecidableNow : UObligation -> Bool
 unannotatedGradedParamMsg : String -> String -> List Kind -> String
 unannotatedRowParamMsg : String -> String -> String
@@ -3262,6 +3276,11 @@ wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
 walkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Bool
+walkGoalFollowed : ReqWalk -> IfaceRef -> List Mono -> Bool
+walkGoalSame : IfaceRef -> List Mono -> IfaceRef -> List Mono -> Bool
+walkGoalSameProbe : Unit -> List Bool
+walkMonoSame : Mono -> Mono -> Bool
+walkMonosSame : List Mono -> List Mono -> Bool
 wantAuthority : Authority -> Authority -> Unit
 wantAuthorityFrom : Option String -> Bool -> Authority -> Authority -> Unit
 wantAuthorityOne : Option String -> Bool -> Bool -> Authority -> Authority -> Unit
