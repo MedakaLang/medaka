@@ -2251,7 +2251,11 @@ KNOWN_TCEIL_xref_emit="5.6";          KNOWN_TFIXED_xref_emit="2.60"
 # 3.37-3.92 band above no longer describes the CI runner. Like `modules:typecheck`, TFIXED
 # is set against the observed floor with ~10% margin, so this arm still catches WORSENING
 # (the ceiling) and only drains on a genuinely linear stage (AT OR UNDER ~2.0).
-KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="2.20"
+#
+# TFIXED IS 1.9, NOT 2.20 (floor re-measured on CI, same band): consecutive gates_6 runs of
+# unrelated trees read r2 2.10 and 2.19, under the 2.20 line, so the row PROMOTED while
+# nothing in `lint` had changed. 1.9 sits ~10% under the new floor (2.10).
+KNOWN_TCEIL_xref_lint="5.6";          KNOWN_TFIXED_xref_lint="1.9"
 # modules:typecheck (TIME) — see the block above KNOWN_SLOW_TIME for the sample band.
 # Ceiling 4.2 clears its top (3.21) by ~31%.
 #
