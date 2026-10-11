@@ -442,10 +442,27 @@ run time (§6 "uniform resolution", §7).
 **Well-formedness (for entailment to be a single-valued function).** Beyond
 at-most-one most-specific match (§6 C1), resolution is decidable only if (W1) the
 **superclass relation is acyclic** — otherwise `super`-search loops — and (W2)
-**instance resolution terminates** — each `inst` premise `πᵢ ∈ φ(Q)` (the
-context of the *selected* instance) must be structurally smaller than the goal
-(a Paterson/coverage-style condition), otherwise the recursive discharge of
-`Q` diverges. Most-specific selection itself adds no termination risk:
+**instance resolution terminates**. W2 is a rule on each *walk* through instance
+contexts, not a static condition on declarations. Every walk that follows the
+context `Q` of a selected instance — solving a goal (`inst`), checking an impl
+body's goals (W3-inst), judging a boundary's prerequisites, checking a ground
+obligation's nested `requires`, or building a dictionary's route — measures
+each step by the structural size of the goal's whole argument vector, and all of
+them use the one measure:
+- a step to a premise `πᵢ ∈ φ(Q)` **strictly smaller** than its parent goal is
+  free;
+- any other step spends one unit of a fixed fuel (32);
+- a premise **equal** to a goal already on the current walk (the same interface
+  declaration, pointwise-identical arguments) is a **cycle**.
+
+A cycle is rejected with `T-REQUIRES-CYCLE`, naming the instance whose context
+repeats the goal; spent fuel is rejected with `T-REQUIRES-DEPTH`. Both are
+located at the goal's site and reach every verb. Between two spending steps the
+size strictly decreases, so every walk is finite, and because only a step that
+does not shrink its goal spends fuel, a shrinking chain resolves at any depth its
+types need. No declaration is rejected for its shape alone: an equal-size
+context across classes (`impl U (List a) requires S (List a)`) is legal, and
+only a walk that actually repeats or keeps growing a goal is reported. Most-specific selection itself adds no termination risk:
 `match(IE, π)` is a finite subset of a finite `IE`, membership is one
 one-sided matching problem per instance, and `⊑` between two heads is one
 more — so `min⊑` is computed by finitely many decidable comparisons, before
@@ -569,9 +586,10 @@ One rule, two rejections:
   are all type variables is never reduced by an instance, exactly as in a
   signature's body: it is its own residual, so a blanket `impl Describe a` does not
   answer `Describe c` for a head variable `c`, and only a given does. The
-  reduction follows at most 32 `requires` steps; a goal still unreduced after them
-  is rejected at its site with `T-REQUIRES-DEPTH`, as on the signature path, even
-  when a given would have ended the chain further down (#3802). A residual over
+  reduction is bounded by W2's measure, as on the signature path: a step that
+  shrinks the goal is free, so a given that ends a shrinking chain is reached at
+  any depth, and a cycle or spent fuel is rejected at the goal's site
+  (`T-REQUIRES-CYCLE`, `T-REQUIRES-DEPTH`). A residual over
   `c̄` that no given answers is rejected at the goal's site with
   `T-IMPL-MISSING-REQUIRES`, naming the `requires` to add (#2721). Without the
   check such a residual was deferred forever: the impl obligation channel defers a
@@ -1516,7 +1534,11 @@ program.
   ⚠️ **Exit (ii) is not decoration, and a gloss that omits it over-includes by a whole
   class.** A residual predicate over a **generalizable** variable is deferred by `gen`
   and becomes a dict parameter (§4's `P'`; §6.1.3's *second* sentence says so outright) —
-  it is never posed to `inst`, and C1 has nothing to say about it. Without exit (ii)
+  it is never posed to `inst` as an open choice, and C1 has nothing to say about it.
+  `gen` reduces such a predicate through an instance first only in the case §6.1.3
+  states, where every other unifying instance head is ⊒ the matching one; there the
+  matching instance is the matching set's minimum at every instantiation, so the
+  reduction raises no C1 question either. Without exit (ii)
   a reader gets the opposite: an *inferred* binding whose residual predicate is
   `C (T a Int Int)`, against `⊑`-incomparable `C (T a b Int)` and `C (T a Int b)`, would
   be rejected **at its definition with no goal having reached `inst`** — the same fault
@@ -1788,7 +1810,22 @@ to it later is a semantics change, not a bug fix.
    (specialization is not retroactive).** `inst` fires on the goal *as it
    stands where it is resolved*. A goal over **generalizable** variables is
    deferred by §4 `gen` (abstracted as a dict parameter) — standard, and it
-   preserves the caller's ability to supply most-specific evidence. But a
+   preserves the caller's ability to supply most-specific evidence.
+   **When `gen` reduces such a goal first (R-STABLE, 2026-10-10).** A goal over
+   generalizable variables whose head is concrete (`Tag (Wrap a)`) may be reduced
+   at the generalizing binder through the instance it matches, so that instance's
+   context, not the goal, enters `P'` (`impl Tag (Wrap a) requires Show2 a` turns
+   it into `Show2 a`). It is reduced **only when every other instance head that
+   unifies with it** — the generalizable variables free, every other variable
+   rigid — **is ⊒ the matching one**: then every instantiation of those variables
+   still selects the matching instance, and reducing early changes no use's
+   answer. Otherwise the goal enters `P'` **as written**, and each use selects at
+   its own instantiation: with `impl Tag (Wrap Bool)` declared beside that general
+   instance, `nest x = tagOf (Wrap x)` has scheme `Tag (Wrap a) ⇒ a → String`, and
+   `nest True` selects `impl Tag (Wrap Bool)` (#1579). This is GHC's overlap rule.
+   A blanket `impl Tag a` beside the general instance does not block the
+   reduction: it is ⊒ `Tag (Wrap a)`. A goal over a rigid variable is not
+   generalizable, and the rest of this point governs it unchanged. But a
    goal over a **rigid** (signature-bound) variable — e.g. `Default (List a)`
    inside `f : ∀a. Default a ⇒ …` — matches only the general instance and is
    discharged there, once, when `f` is elaborated. If `f` is later used at
@@ -1881,6 +1918,13 @@ an implementation matter.
   closed at their group's end, by T2's last paragraph — so committing them there
   would make instance selection a function of where a group boundary happened to
   fall, which §3 forbids in as many words.
+  A goal over a variable the scheme just produced quantifies is closed but is not
+  decided by `inst` there: it enters the scheme's `P'`. `gen` reduces it through the
+  instance it matches, and puts that instance's context in `P'` instead, exactly when
+  every other instance head that unifies with it is ⊒ the matching one (§6.1.3);
+  otherwise `P'` holds the goal as written and each use decides it at its own
+  instantiation. A goal over a rigid (declared) variable commits where it stands
+  (§6.1.3).
 
 - **T4 — Quiescence.** Route resolution, `inst` commitment for goals not closed at
   their group's end, and numeric-literal defaulting for the same (§6.3) run as
@@ -2979,11 +3023,11 @@ not this paragraph.
 | §3 `inst` | `entailInst`, `compiler/types/typecheck.mdk:11941-11991`, via `keyForSite:11386`/`keyForSiteByIface:11608` → `matchedEntry:11416` → `pickMostSpecificEntry` | fresh dictionary construction at the `min⊑` instance, recursively discharging its own context | goal keyed by `ifaceParamMonos`'s **full param-mono vector** (the #609 fix, code comment 11971-11978) — shares ONE binding between the method route and its own `requires`-context routes so both arms pick the same impl (closes the C2 "same-impl" hazard) |
 | §3 precedence (`assum`/`super` before `inst`) | `entail`, `compiler/types/typecheck.mdk:11892-11896` | in-scope evidence wins over instance construction | tries `entailAssum` first, falls to `entailInst` only on `None` |
 | §3 **W1** (superclass acyclic) | `ifaceDfsCycle:11076-11101`, invoked at `:11062` pushing `T-CYCLIC-SUPERINTERFACE` (`compiler/types/typecheck.mdk`) | rejects a cyclic `requires` chain | DFS keyed on **bare interface name** (`String`), not module-qualified — not independently re-verified for a same-named-interface cross-module collision here |
-| §3 **W2** (instance-context termination / Paterson coverage) | `routeOfD:12863` (`compiler/types/typecheck.mdk`), the depth-carrying core of `routeOf:12852`, threaded through `argImplRequiresRoutesForRow` → `argImplReqRoutes:13144` → `argReqRoute` → back to `routeOfD` — the #217 "WS-4b fuse" | ⚠️ **NOT the spec's W2.** W2 is a *static, declaration-time* condition (reject an instance whose context isn't structurally smaller than the goal). What exists is a **dynamic, resolution-time cutoff** inside `argImplRequiresRoutesForRow`, which since **#1576** is a *shrinking test* rather than a flat depth counter: a `requires` sub-goal whose whole argument vector is structurally SMALLER (`monoSizes`) than the goal that spawned it costs nothing, and only a NON-shrinking step spends one unit of `requiresNonShrinkingFuel` (32). So a non-shrinking context (`impl C (T a) requires C (T (T a))`) still *terminates* by silently returning no further requires-routes — it grows its goal every step, so it exhausts the fuel almost immediately — rather than being *rejected* at declaration. The program is accepted either way; only route resolution stops recursing | 🟢 **the flat `if depth >= 32 then []` this row used to describe was itself an S0** (#1576/#1836): it truncated the dict witness of a perfectly valid GROUND chain (`impl Tag (Wrap a) requires Tag a` at `Wrap^34 Int`) one level early, and the built binary read the missing cell and segfaulted at exit 0 from `check` and `build`. The old text's "a legitimately-deep-but-terminating context presumably degrades identically to a genuinely non-terminating one at depth 33" was exactly right about the hazard and exactly wrong about it being harmless. The shrinking test separates the two populations: a shrinking chain now compiles at ANY depth its type needs (measured to `Wrap^202`), and the fuel bounds only the divergent shape it was written for. Still no *diagnostic* on the fuse arm — a `pushTypeErrorOnceAt` from the `resolve*` stamp passes is discarded on `check`, `run` and `build` alike (**#1910**), which is what a loud reject here is blocked on |
+| §3 **W2** (instance-context termination) | `ReqWalk` / `reqWalkEnter` beside `monoSizes` (`compiler/types/typecheck.mdk`), the one measure every `requires` walk calls: `residualPredsOf` (generalizing binder), `implGoalResiduals` (W3-inst), `checkNestedReqs` (the end-of-body obligation checker's nested `requires`, and through `checkSuperContext` each super instance's `requires`), `nestedRequireGoals` (a boundary's prerequisites) and the route walk `argImplRequiresRoutesForRow` (reached through `routeOfD` → `entail` (EKNestedTop) and `argImplReqRoutes` → `argReqRoute`) | a step to a strictly smaller goal vector (`monoSizes`) is free; any other step spends one unit of `requiresNonShrinkingFuel` (32); a goal equal to one on the walk's path (`sameIfaceDecl` + `monoVecSameGiven`) is a cycle; each walk's `WalkMemo` follows a goal reached along many paths once, keyed on the whole goal and the fuel left after entering it, and records no subtree that met an error or a cut (#1924) | ✅ **CONFORMANT (R-W2, 2026-10-10).** W2 is the dynamic rule §3 states. The solving walks report through `reqWalkReported`: `T-REQUIRES-CYCLE` or `T-REQUIRES-DEPTH` at the goal's site, on every verb. The route walk shares the measure and enters each super of a goal beside it (`superRoutesAt`); the obligation checker follows the same super goals the same way (`checkSuperContext`), so the route walk's cut (`requiresRouteWalkCut`) is reached only on a program a solving walk already rejected, and on any other it is a compiler panic, never a silent `[]` (#1910). Until the obligation checker followed supers, a cycle reached only through a super instance's `requires` (`impl Sup (Box a) requires Sup (Box a)` under `interface Sub a requires Sup a`) passed every solving walk and hit that panic. `monoSize` counts an effect row as one node: under-counting a child only makes a step look shrinking (free), and the size stays a natural number, so the measure is still well-founded. History: the route walk's flat `depth >= 32` cutoff truncated valid ground chains (#1576/#1836); the solving walks' flat 32-step fuel false-rejected shrinking chains (#3802); the end-of-body obligation checker had no bound at all and overflowed the compiler's stack on a self-naming or growing context (#1575, #3801, #2120) |
 | §3 **W3** (method-scheme fidelity / rigidity) | `checkMethodRigidityCore`, `checkMethodEffVarRigidity`, `checkImplEffVarRigidity` (all `compiler/types/typecheck.mdk`) | an impl/default body may not pin a non-head quantified variable (type *or* effect) to a concrete shape | run by the one method-body driver `inferMethodBody` for both kinds (`MethodBodyKind`); a default body's rigidity reads the same instantiation as its body |
 | §3 **W3-inst** (instance-head rigidity) | `checkImplHeadRigidity`, `checkImplHeadPrerequisites` (`compiler/types/typecheck.mdk`) | an impl body may not pin or identify a head variable, and every predicate it leaves on one is entailed by the impl's `requires` (with superinterfaces), the method's `=>` context or the head itself | impl bodies only, at the same boundary as W3, before body-local defaulting; a pin is reported by the body that introduced it; a goal an instance answers only by fixing a head variable is reported whatever other variables it mentions (#3798, #3817) |
 | §4 `var` | `instantiate:3630`; per-residual entailment via `entail:11892`; obligation discharge `checkCallObligationsU:13793`/`checkOneCallObligation:13814` | instantiation + per-predicate entailment at each use | — |
-| §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates |
+| §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates. A concrete-headed residual is reduced by `residualPredsOf` only when `residualSelectionStable` holds (every other unifying head ⊒ the matching one, §6.1.3, R-STABLE); otherwise it is deferred as written (`test/dict_fixtures/r-stable-overlap-goal-quantified.mdk`, #1579). The signed path (`checkSigConstraintOne`) commits as written |
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |
 | §4 `gen-sig` (#619) | `checkSigConstraintCoverage:16344`/`checkSigConstraintOne:16350` (`compiler/types/typecheck.mdk`) | `Q_sig ⊩ P'ᵢ` — inferred body context must be entailed by the declared one, not merged | — |
 | §4.1 **G1** (uniform dict abstraction at a local binder) | **CONFORMANT (#1082).** `openLocalScopeIf`/`registerLocalAbs` (`compiler/types/typecheck.mdk:14756-14780`) mint a scope and abstract one dictionary parameter per predicate for every candidate local, keyed by that binder's OWN scope identity, never the bare name; `localAbsCandidate` (`:23761-23795`) decides candidacy over the same ctor-app-spine shapes `isNonexpansive` (`:11806-11838`) uses for the value restriction, so the two judgments agree on which locals generalize. Every use site is an `EDictAt`/`pushLocalDictApp` (`:14814-14820`) applying that binder's own params, per G1's `var` clause | — | the all-or-nothing pin (`pinLocalIfDictForwarded`, `MEDAKA_ARGTAG_UNPIN`, `T-LOCAL-CONSTRAINED-MONO`) that used to decline generalization for a dict-forwarding local is DELETED tree-wide (owner ruling D1, 2026-09-26, on a 3-engine green spike over eval/native/wasm); `let` and `where` share `localAbsCandidate`'s one candidacy test, so the two spellings' behavioural fork this row used to report no longer has a mechanism to fork on |
@@ -3032,13 +3076,12 @@ not this paragraph.
 | §8 **I7** ⚠️2 (identity fixed ⇏ dictionary discharged) — an operator satisfied by a user instance must dispatch through it | `evalArith:1852` (`compiler/eval/eval.mdk`), the arithmetic fallthrough: `panic ("unknown op '" ++ op ++ "'")` | 🔴 **DIVERGENT, and it is the distinct §5 defect the clause's second trap names.** The `Num` obligation for `+ - * / %` is recorded and correctly discharged against a user `impl Num T`, and then no dictionary is projected. **MEASURED at `adb789ca`:** a complete `impl Num Money` with `Money 3 + Money 4` gives `check` exit 0, `run` exit 1 `E-PANIC: unknown op '+'`, `build` exit **0**, and the built binary **segfaults**, `E-FATAL-SIGNAL`, exit **139** — on both the flat and the module arm. ⚠️ **The three other operator classes do NOT share this**: `==` (`Eq`), `<` (`Ord`) and `++` (`Semigroup`) each dispatch to the user's impl correctly and print the right answer on both engines, measured on the same binary. The gap is arithmetic-only | — (a §5 dispatch gap, not a keying one; recorded here because I7's identity ruling is what makes it visible as a *separate* defect rather than a consequence) |
 | §9 soundness statements (type preservation, semantic adequacy, coherence, evaluator interchangeability, `gen-sig` authority) | composite of every row above | explicitly "targets for a later proof/audit" (§9's own header) — not independently implemented checks | — |
 
-**Partial enforcement found (NOT "unimplemented"):** §3 W2 (instance-context
-termination/Paterson coverage) has no *static, declaration-time* check, but a *dynamic,
-resolution-time* cutoff does exist — `routeOfD`/`argImplRequiresRoutesForRow`, the
-#217 "WS-4b fuse", which since #1576 fires on NON-SHRINKING steps
-(`requiresNonShrinkingFuel`, 32 of them) rather than on raw depth. See the W2 row above
-for why that is not equivalent to the spec's condition: a non-shrinking context
-terminates but is never rejected, and the cutoff carries no diagnostic.
+**W2 is enforced as §3 states it (2026-10-10, R-W2).** It used to read as a static,
+declaration-time Paterson condition that the tree never checked, while five walks
+carried separate dynamic cutoffs and a sixth had none. §3 now states the dynamic
+rule, and one helper (`reqWalkEnter`) enforces it on every walk; see the W2 row above.
+A static check was measured and declined: it would have rejected impls in 14 test
+fixtures, an acceptance narrowing.
 
 **Prominent divergence found — and CLOSED, 2026-08-01 (F-3d, #614/#311). Kept here
 because the reasoning that resolved it is what a future reader needs, not the

@@ -1,0 +1,29 @@
+-- §3 W2, a cross-class cycle reached only through a super.  `Sub (Box Int)` carries a
+-- `Sup (Box Int)` dictionary; `impl Sup (Box a) requires D (Box a)` poses
+-- `D (Box Int)`, and `impl D (Box a) requires D (Box a)` repeats it.  No finite
+-- dictionary exists: `T-REQUIRES-CYCLE` naming `impl D (Box a)`, located at
+-- `useSup (Box 1)`, on every verb.  It used to stop every verb on a compiler `E-PANIC`.
+interface Sup a where
+  sup : a -> Int
+
+interface Sub a requires Sup a where
+  sub : a -> Int
+
+interface D a where
+  d : a -> Int
+
+data Box a = Box a
+
+impl D (Box a) requires D (Box a) where
+  d _ = 7
+
+impl Sup (Box a) requires D (Box a) where
+  sup _ = 1
+
+impl Sub (Box a) where
+  sub _ = 2
+
+useSup : Sub a => a -> Int
+useSup x = sup x + sub x
+
+main = println (useSup (Box (1 : Int)))

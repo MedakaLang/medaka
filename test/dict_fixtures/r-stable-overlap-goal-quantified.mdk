@@ -1,0 +1,34 @@
+-- DICT-SEMANTICS §6.1.3 (R-STABLE), issue 1579: a generalizing binder keeps a
+-- goal that a more specific overlapping head also unifies with.
+--
+-- `nest x = tagOf (Wrap x)` generalizes over `x`'s type `a` and leaves the goal
+-- `Tag (Wrap a)`.  It matches only `impl Tag (Wrap a) requires Show2 a`, but
+-- `impl Tag (Wrap Bool)` also unifies with it and is not ⊒ the matching head, so
+-- reducing the goal to `Show2 a` would commit every use to an instance a use at
+-- `Bool` does not select.  The goal therefore stays in the scheme as written:
+-- `nest : Tag (Wrap a) => a -> String`.
+--
+-- SPEC ANSWER (hand-derived): `nest True` poses `Tag (Wrap Bool)`, whose most
+-- specific match is `impl Tag (Wrap Bool)`, which needs no `Show2 Bool`.  ACCEPT
+-- on check, run and build, printing `specificW`.  Before R-STABLE every verb
+-- rejected it with `no impl of Show2 for Bool`.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+impl Tag (Wrap a) requires Show2 a where
+  tagOf (Wrap x) = "genericW\{show2 x}"
+
+impl Tag (Wrap Bool) where
+  tagOf _ = "specificW"
+
+nest x = tagOf (Wrap x)
+
+main = println (nest True)

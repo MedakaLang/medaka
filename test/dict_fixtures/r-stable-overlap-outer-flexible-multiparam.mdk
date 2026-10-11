@@ -1,0 +1,44 @@
+-- DICT-SEMANTICS §6.1.3 (R-STABLE), the two-parameter twin of
+-- r-stable-overlap-outer-flexible.mdk.  At the local `nest`, the goal
+-- `Conv (Wrap a) y` mentions `outer`'s still-open `y`; `impl Conv (Wrap Bool) Int`
+-- unifies with it and is not more general than the matching
+-- `impl Conv (Wrap a) b requires Show2 a`, so the goal stays in the schemes:
+-- `outer : Conv (Wrap Bool) a => a -> String`.
+--
+-- SPEC ANSWER (hand-derived): each call through `outer` or `top` selects what the
+-- direct call selects.  `outer (1 : Int)` and `conv (Wrap True) (1 : Int)` select
+-- `impl Conv (Wrap Bool) Int` (`specificW`); `outer "s"` selects the general
+-- instance with `impl Show2 Bool` (`genericWb`); `top True (1 : Int)` is `specificW`
+-- and `top True "s"` is `genericWb`.  `outer (1 : Int)` used to print `genericWb`.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+impl Show2 Bool where
+  show2 _ = "b"
+
+impl Conv (Wrap a) b requires Show2 a where
+  conv (Wrap x) _ = "genericW\{show2 x}"
+
+impl Conv (Wrap Bool) Int where
+  conv _ _ = "specificW"
+
+outer y =
+  let nest x = conv (Wrap x) y
+  nest True
+
+top x y = conv (Wrap x) y
+
+main =
+  println (outer (1 : Int))
+  println (conv (Wrap True) (1 : Int))
+  println (outer "s")
+  println (top True (1 : Int))
+  println (top True "s")

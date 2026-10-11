@@ -1,23 +1,19 @@
--- §3 `inst` REDUCTION DEPTH -- THE ISSUE 1562 DRAIN, reject half.
+-- §3 `inst` reduction past the old depth bound, at a generalizing binder (issue 1562's
+-- shape, re-derived under §3 W2).
 --
--- `deep` nests `Wrap` 33 deep, so discharging `Tag (Wrap^33 t)` needs 33 `requires`
--- steps and the reducer's bound (`residualReduceFuel` = 32) is crossed.
+-- `deep` nests `Wrap` 33 deep, so discharging `Tag (Wrap^33 t)` takes 33 `requires`
+-- steps through `impl Tag (Wrap a) requires Tag a`.  Every step is one `Wrap` smaller
+-- than its parent, so under W2's measure no step spends fuel: the chain shrinks to the
+-- residual `Tag t`, which `gen` abstracts (`deep : Tag a => a -> String`).  ACCEPT on
+-- every verb; `deep 5` prints one `w` per `Wrap` and then `int`:
+--     wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwint
+-- (33 `w`s, hand-counted from the nesting depth).
 --
--- WHAT WAS WRONG (issue 1562, S0): exhaustion was SILENT.  `residualPredsOf` returned
--- `[]` -- the same value it returns for the legitimate "no matching impl" case -- so the
--- predicate was dropped from the inferred context AND from the `lambda d-bar` prefix, and
--- the program landed back in issue 1549's exact defect: `check --types` printed
--- `deep : a -> String` at exit 0, `build` exited 0, and the BUILT BINARY SEGFAULTED at
--- 139.  Crossing the bound was indistinguishable from correctness at the CLI.
---
--- THE CORRECT BEHAVIOUR is to say so: a bound the compiler cannot see past is a REJECT
--- (`T-REQUIRES-DEPTH`), located at the call site that posed the goal.  Raising the
--- constant would not have been a fix -- any finite fuel has the same cliff, one deeper.
--- The at-limit sibling (`…-at-limit-control.mdk`, depth 32) is the row that keeps this
--- from being satisfied by rejecting EVERY residual, and it is built and EXECUTED.
---
--- ⚠️ The reject fires on all three verbs because they share the front end.  It is graded
--- on the CODE, and its SPAN is pinned in section 6 -- a moved caret is a real regression
+-- History: this file was a REJECT (`T-REQUIRES-DEPTH`) while the reducer counted every
+-- step against a flat bound of 32.  Before that it was issue 1562's S0: exhaustion was
+-- silent, the predicate was dropped from the scheme and the dict prefix, and the built
+-- binary segfaulted.  A chain that does not shrink is still a located reject:
+-- requires-growing-context-depth-rejected.mdk.
 -- that a code assertion cannot see (see that section's header).
 data Wrap a = Wrap a
 

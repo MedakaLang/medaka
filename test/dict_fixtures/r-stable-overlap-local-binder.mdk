@@ -1,0 +1,32 @@
+-- DICT-SEMANTICS §6.1.3 (R-STABLE) at a generalized LOCAL binder (§4.1).
+--
+-- The `let`-bound `nest` generalizes exactly as the top-level one in
+-- r-stable-overlap-goal-quantified.mdk does, and its goal `Tag (Wrap a)` is kept
+-- in its scheme as written for the same reason: `impl Tag (Wrap Bool)` unifies
+-- with it and is not ⊒ the matching `impl Tag (Wrap a) requires Show2 a`.
+--
+-- SPEC ANSWER (hand-derived): `nest True` selects `impl Tag (Wrap Bool)`
+-- (`specificW`); `nest (1 : Int)` selects the general instance with
+-- `impl Show2 Int` (`genericWi`).  ACCEPT on check, run and build.  Before
+-- R-STABLE every verb rejected it with `no impl of Show2 for Bool`.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+impl Tag (Wrap a) requires Show2 a where
+  tagOf (Wrap x) = "genericW\{show2 x}"
+
+impl Tag (Wrap Bool) where
+  tagOf _ = "specificW"
+
+main =
+  let nest x = tagOf (Wrap x)
+  println (nest True)
+  println (nest (1 : Int))
