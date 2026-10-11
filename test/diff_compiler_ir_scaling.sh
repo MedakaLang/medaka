@@ -274,7 +274,7 @@ fi
 # single-arm gate, so [B-STRICT-TWO-ARM] does not apply; assert it here and NOT
 # on the measured runs, where the extra fingerprint work would be counted.
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK" ${UNIT_DIRS:-}' EXIT
 printf 'main = println 1\n' > "$WORK/freshness.mdk"
 # OBSERVED RED (#2160 phase 2, this box, 2026-08-29). A fake MEDAKA_ROOT makes
 # the baked-in source fingerprint unmatchable, which is exactly the state
@@ -1143,16 +1143,87 @@ grade_shape() {
   return 0
 }
 
+# ── fan-out: shapes graded INNER_JOBS wide ───────────────────────────────────
+#
+# Each shape runs in a subshell with its OWN $WORK subdirectory, so the fixed
+# scratch names `ir_of` and `assert_clean` write (cg.out, vg.err, chk.out) cannot
+# collide between shapes. That isolation is the precondition for the fan-out, and
+# it is sufficient for the numbers: Ir is a count of what cachegrind emulates, not
+# of how the host schedules it. Nothing on the `medaka check` path reads a clock or
+# a timeout, writes to disk, or consults a cache a sibling could warm (the object
+# cache is `build`-only), and the GC heap is pinned. Each shape's transcript is
+# buffered and replayed in the original shape order, so the output and the verdict
+# read exactly as they did when the shapes ran one after another.
+#
+# The pool is a sliding window over PIDs: at most INNER_JOBS subshells in flight,
+# and a new one starts as soon as the oldest in flight is reaped. The copy of this
+# helper in test/diff_compiler_stage_ir_scaling.sh is the same code.
+UNITS_OUT="$WORK/units"
+mkdir -p "$UNITS_OUT"
+PAR="${INNER_JOBS:-3}"
+case "$PAR" in ''|*[!0-9]*|0) PAR=3 ;; esac
+PIDS=""
+NRUN=0
+UNITS=""
+UNIT_DIRS=""
+known="${known:-0}"
+
+fan_wait_slot() {
+  while [ "$NRUN" -ge "$PAR" ]; do
+    set -- $PIDS
+    wait "$1"
+    shift
+    PIDS="$*"
+    NRUN=$((NRUN - 1))
+  done
+}
+
+# fan_out NAME CMD [ARGS...] — run CMD in its own subshell and WORK subdirectory.
+fan_out() {
+  _fname="$1"; shift
+  fan_wait_slot
+  UNITS="$UNITS $_fname"
+  # Each unit gets its own top-level mktemp directory, not a subdirectory of $WORK:
+  # the fixture and cachegrind paths handed to ./medaka then have the same depth
+  # and length as in the serial gate, so the measured Ir is the same byte-for-byte.
+  _fdir="$(mktemp -d)"
+  UNIT_DIRS="$UNIT_DIRS $_fdir"
+  (
+    trap - EXIT
+    WORK="$_fdir"
+    "$@"
+    echo "$fail $graded ${known:-0}" >"$UNITS_OUT/$_fname.st"
+  ) >"$UNITS_OUT/$_fname.out" 2>&1 &
+  PIDS="$PIDS $!"
+  NRUN=$((NRUN + 1))
+}
+
+# fan_join — wait for every unit, replay transcripts in launch order, fold counts.
+fan_join() {
+  wait
+  for _u in $UNITS; do
+    cat "$UNITS_OUT/$_u.out"
+    if [ -r "$UNITS_OUT/$_u.st" ]; then
+      read -r _uf _ug _uk <"$UNITS_OUT/$_u.st"
+      fail=$((fail + _uf)); graded=$((graded + _ug)); known=$((known + _uk))
+    else
+      echo "FAIL $_u: the unit never reported a result — it did not run to completion."
+      fail=$((fail + 1))
+    fi
+  done
+}
+
 echo "── Ir scaling (Cachegrind instruction counts, net of a per-shape floor) ──"
 echo "medaka: $MEDAKA"
 valgrind --version
 
-grade_shape xref "$XREF_N" clean
-grade_shape manyifaces "$MANYIFACES_N" clean
-grade_shape errs "$ERRS_N" diags
-grade_shape scoperefs "$SCOPEREFS_N" clean
-grade_shape diagbucket "$DIAGBUCKET_N" diags
-grade_shape noimpl "$NOIMPL_N" diags
+fan_out xref grade_shape xref "$XREF_N" clean
+fan_out manyifaces grade_shape manyifaces "$MANYIFACES_N" clean
+fan_out errs grade_shape errs "$ERRS_N" diags
+fan_out scoperefs grade_shape scoperefs "$SCOPEREFS_N" clean
+fan_out diagbucket grade_shape diagbucket "$DIAGBUCKET_N" diags
+fan_out noimpl grade_shape noimpl "$NOIMPL_N" diags
+fan_join
 
 echo
 # A gate that grades nothing must never report success — the invariant

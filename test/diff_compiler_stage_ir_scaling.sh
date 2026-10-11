@@ -302,7 +302,7 @@ need_valgrind valgrind "Callgrind instruction counts"
 need_valgrind callgrind_annotate "Callgrind instruction counts (it ships with valgrind)"
 
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK" ${UNIT_DIRS:-}' EXIT
 
 THRESH="${STAGE_IR_THRESH:-3.0}"
 IR_HEAP="${STAGE_IR_HEAP:-2147483648}"
@@ -1585,14 +1585,79 @@ echo "profiler (multi-module): $PROFILE_MODULES"
 valgrind --version
 echo
 
-grade_shape match "$MATCH_N"
-grade_shape xref "$XREF_N"
-grade_shape vchain "$VCHAIN_N"
-grade_shape constrained "$CONSTR_N"
-grade_shape wideiface "$WIDEIFACE_N"
-grade_shape guardwild "$GUARDWILD_N"
-grade_shape scoperefs "$SCOPEREFS_N"
-grade_modules
+# ── fan-out: units graded INNER_JOBS wide ────────────────────────────────────
+#
+# Each unit runs in a subshell with its OWN top-level mktemp directory, so the
+# fixed scratch names run_profile and stage_ir read or write (prof.out, prof.err,
+# ann_*.txt) cannot collide, and the fixture and profile paths keep the depth and
+# length they have in the serial gate. Callgrind is pure emulation: the Ir of a
+# unit depends on the program it measures, not on what else the host is running.
+# Nothing on this path reads a clock or a timeout. Each unit's transcript is
+# buffered and replayed in the original unit order, and the counts are folded back
+# in, so the verdict line and the exit code are computed exactly as before.
+#
+# The pool is a sliding window over PIDs: at most INNER_JOBS subshells in flight.
+# The copy of this helper in test/diff_compiler_ir_scaling.sh is the same code.
+UNITS_OUT="$WORK/units"
+mkdir -p "$UNITS_OUT"
+PAR="${INNER_JOBS:-3}"
+case "$PAR" in ''|*[!0-9]*|0) PAR=3 ;; esac
+PIDS=""
+NRUN=0
+UNITS=""
+UNIT_DIRS=""
+
+fan_wait_slot() {
+  while [ "$NRUN" -ge "$PAR" ]; do
+    set -- $PIDS
+    wait "$1"
+    shift
+    PIDS="$*"
+    NRUN=$((NRUN - 1))
+  done
+}
+
+# fan_out NAME CMD [ARGS...] — run CMD in its own subshell and mktemp directory.
+fan_out() {
+  _fname="$1"; shift
+  fan_wait_slot
+  UNITS="$UNITS $_fname"
+  _fdir="$(mktemp -d)"
+  UNIT_DIRS="$UNIT_DIRS $_fdir"
+  (
+    trap - EXIT
+    WORK="$_fdir"
+    "$@"
+    echo "$fail $graded ${known:-0}" >"$UNITS_OUT/$_fname.st"
+  ) >"$UNITS_OUT/$_fname.out" 2>&1 &
+  PIDS="$PIDS $!"
+  NRUN=$((NRUN + 1))
+}
+
+# fan_join — wait for every unit, replay transcripts in launch order, fold counts.
+fan_join() {
+  wait
+  for _u in $UNITS; do
+    cat "$UNITS_OUT/$_u.out"
+    if [ -r "$UNITS_OUT/$_u.st" ]; then
+      read -r _uf _ug _uk <"$UNITS_OUT/$_u.st"
+      fail=$((fail + _uf)); graded=$((graded + _ug)); known=$((known + _uk))
+    else
+      echo "FAIL $_u: the unit never reported a result — it did not run to completion."
+      fail=$((fail + 1))
+    fi
+  done
+}
+
+fan_out match grade_shape match "$MATCH_N"
+fan_out xref grade_shape xref "$XREF_N"
+fan_out vchain grade_shape vchain "$VCHAIN_N"
+fan_out constrained grade_shape constrained "$CONSTR_N"
+fan_out wideiface grade_shape wideiface "$WIDEIFACE_N"
+fan_out guardwild grade_shape guardwild "$GUARDWILD_N"
+fan_out scoperefs grade_shape scoperefs "$SCOPEREFS_N"
+fan_out modules grade_modules
+fan_join
 
 # ⚠️ ZERO GRADED IS A FAILURE UNDER NARROWING TOO. This guard USED TO be SKIPPED
 # when STAGE_IR_ONLY was set, on the reasoning that grading nothing is "scope, not
