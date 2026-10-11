@@ -144,8 +144,8 @@ remapEvidenceGo f arr i n
       Some e => arraySetUnsafe i (Some (f e)) arr
     remapEvidenceGo f arr (i + 1) n
 
--- Every installed entry, in ordinal order: the draft carrier's copy of the table
--- (`ir/draft_semantic_program.mdk`).  Empty when no elaboration has published one.
+-- Every installed entry, in ordinal order: the table of installed entries.
+-- Empty when no elaboration has published one.
 export
 installedEvidenceEntries : Unit -> List EvEntry
 installedEvidenceEntries _ = match !evidenceRef

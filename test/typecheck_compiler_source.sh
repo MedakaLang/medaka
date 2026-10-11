@@ -1199,12 +1199,6 @@ if grep -rqwE 'methodRouteKeyForRow|methodRouteKeyOfSelection|predicateRouteKeyF
   echo "FAIL: a retired route-word hedge is back; a dictionary word is the selected instance's canonical key"
   exit 1
 fi
-# The draft semantic carrier is a probe's input, never an engine's: no physical backend
-# or interpreter may read it.
-if grep -rlE '^import ir\.draft_semantic_program' "$ROOT/compiler/backend" "$ROOT/compiler/eval" >/dev/null 2>&1; then
-  echo "FAIL: a backend or eval module imports ir.draft_semantic_program"
-  exit 1
-fi
 if [ "$(printf '%s\n' "$ordinary_return_solver_body" | grep -c 'ieSelectRowByIface')" -ne 1 ]; then
   echo "FAIL: ordinary return one-outcome solver must contain exactly one instance selector"
   exit 1

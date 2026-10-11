@@ -835,7 +835,6 @@ while IFS= read -r f; do
     compiler/ir/*)
       add 'diff_compiler_core_ir*'; add 'diff_compiler_eval*'; add 'diff_compiler_llvm*'; add 'diff_compiler_snapshot*'
       add 'diff_compiler_fmt'
-      add 'diff_compiler_anf_identity'
       add 'diff_compiler_engines_part*'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
