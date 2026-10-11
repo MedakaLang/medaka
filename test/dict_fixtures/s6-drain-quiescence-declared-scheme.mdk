@@ -1,5 +1,5 @@
 -- §6.3 quiescence drain, DECLARED-scheme half of #3031
--- (`compiler/types/typecheck.mdk`, `reportAmbiguousImpl`).
+-- (`compiler/types/typecheck.mdk`, `routeUndeterminedTop`).
 --
 -- The twin of `s6-drain-quiescence-inferred-scheme.mdk`: here the receiver is
 -- quantified by a WRITTEN signature (`nonlead`'s `(Ixd a b, Shb b) => …`) rather

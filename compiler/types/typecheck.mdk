@@ -2064,7 +2064,10 @@ checkAuthorityKindLabel : KindAnn -> Unit
 checkAuthorityKindLabel (KindAuthority l o pat loc) =
   match dtopFor (EffLabel l o)
     PUnit =>
-      pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (authorityAtomicLabelMsg l)
+      pushTypeErrorOncePerSite
+        "T-AUTHORITY-KIND"
+        loc
+        (authorityAtomicLabelMsg l)
     top =>
       if pat && not (domainHasPatterns top) then
         pushTypeErrorOncePerSite
@@ -2998,7 +3001,7 @@ checkGradedImplHead iface t want = match tyAppSpine t
   -- and `TyVar` carries none either, so `impl I (a, b)` genuinely has no span to point at
   -- and reports unlocated.  Fabricating a nearby one would be worse than saying nothing.
   (TyTuple ts, _) =>
-    pushTypeErrorOnceAt
+    pushTypeErrorOncePerSite
       "T-IMPL-KIND-MISMATCH"
       (firstTyLocList ts)
       (implTupleHeadKindMsg iface (listLen ts) want)
@@ -3051,7 +3054,7 @@ checkGradedImplHeadKinds : String ->
 checkGradedImplHeadKinds iface n loc nApplied want got
   | kindsEq got want = ()
   | otherwise =
-    pushTypeErrorOnceAt
+    pushTypeErrorOncePerSite
       "T-IMPL-KIND-MISMATCH"
       loc
       (implKindMismatchMsg iface n nApplied want got)
@@ -12539,14 +12542,17 @@ reqWalkReported : Option Loc -> ReqStep -> Option ReqWalk
 reqWalkReported _ (ReqOn walk) = Some walk
 reqWalkReported loc (ReqCycle parentIface parentArgs iface args) =
   let _ =
-    pushTypeErrorOnceAt
+    pushTypeErrorOncePerSite
       "T-REQUIRES-CYCLE"
       loc
       (requiresCycleMsg parentIface parentArgs iface args)
   None
 reqWalkReported loc (ReqDeep iface args) =
   let _ =
-    pushTypeErrorOnceAt "T-REQUIRES-DEPTH" loc (requiresDepthMsg iface args)
+    pushTypeErrorOncePerSite
+      "T-REQUIRES-DEPTH"
+      loc
+      (requiresDepthMsg iface args)
   None
 
 tyvarId : Ref Tyvar -> Int
@@ -14932,7 +14938,8 @@ fromAstTypeE etbl tvs (TyVar n) = match lookupAssoc n tvs
 -- A written authority term reached an ordinary (`Type`) slot: only an
 -- `Authority`-kinded argument slot consumes one (`kindArgMono`).
 fromAstTypeE _ _ (TyAuth p loc) =
-  let _ = pushTypeErrorOnceAt "T-AUTHORITY-KIND" loc (authorityTermAsTypeMsg p)
+  let _ =
+    pushTypeErrorOncePerSite "T-AUTHORITY-KIND" loc (authorityTermAsTypeMsg p)
   tconBuiltin "Unit"
 fromAstTypeE etbl tvs (TyApp a b) = match tyAppSpine (TyApp a b)
   (TyCon { tyConName = n, tyConOrigin = o }, args) =>
@@ -14966,7 +14973,7 @@ fromAstTypeE etbl tvs (TyQual t ps loc) =
 -- can keep going, not a value anything should rely on.
 fromAstTypeE etbl tvs (TyRow labels tail loc) =
   let _ =
-    pushTypeErrorOnceAt
+    pushTypeErrorOncePerSite
       "T-EFFECT-KIND-MISMATCH"
       loc
       (rowKindMismatchMsg labels tail)
@@ -15016,7 +15023,7 @@ qualifyByTerms etbl ps loc t =
         let _ =
           fold
             (_ why =>
-              pushTypeErrorOnceAt
+              pushTypeErrorOncePerSite
                 "T-EFFECT-PARAM"
                 loc
                 "invalid authority in the qualifier `\{src}`: \{why}")
@@ -15385,7 +15392,7 @@ authArgOf etbl tvs l pat (TyAuth ps loc) =
   let _ =
     fold
       (_ why =>
-        pushTypeErrorOnceAt
+        pushTypeErrorOncePerSite
           "T-EFFECT-PARAM"
           loc
           (effectParamMsg (effLabelName l) why))
@@ -15417,7 +15424,7 @@ authArgOf etbl _ l pat ty =
         (firstTyLoc ty)
         (ordinaryInPatternSlotMsg n (effLabelName l))
     None =>
-      pushTypeErrorOnceAt
+      pushTypeErrorOncePerSite
         "T-AUTHORITY-KIND"
         (firstTyLoc ty)
         (typeAsAuthorityMsg (ppTy ty) (effLabelName l ++ patternMark pat))
@@ -15502,19 +15509,15 @@ rowArgOf etbl (TyRow labels tail _) =
 -- row-arm fixes" (§6, line 2765 -- a bolded bullet, not a heading).
 rowArgOf _ ty =
   let _ =
-    pushTypeErrorOnceAt
+    pushTypeErrorOncePerSite
       "T-EFFECT-KIND-MISMATCH"
       (firstTyLoc ty)
       (typeInRowSlotMsg ty)
   pureRow
 
--- Names the offending type, so a signature elaborated twice folds into one diagnostic.
--- ⚠️ `pushTypeErrorOnceAt` keys on the MESSAGE TEXT ALONE — the loc is NOT part of the
--- key (see its body).  So two different bad slots holding the SAME offending type
--- (`weird : Box Int Int` and `alsoWeird : Box Int Unit`) collapse to ONE diagnostic and
--- the second is silently unreported.  That is the behaviour of both shipped
--- `T-EFFECT-KIND-MISMATCH` sites, matched here on purpose rather than fixed in passing —
--- but do not read the type name in the message as making the key per-slot.
+-- Names the offending type.  The report is per site (`pushTypeErrorOncePerSite`): a
+-- signature elaborated twice folds into one diagnostic, while two bad slots holding the
+-- same offending type (`weird : Box Int Int`, `alsoWeird : Box Int Unit`) are two.
 typeInRowSlotMsg : Ty -> String
 typeInRowSlotMsg ty =
   "the type `\{ppTy ty}` is written at a row-kinded type-argument position; write an effect row here, such as `<>`, `<Stdout>` or `<IO | e>`"
@@ -15560,7 +15563,7 @@ qualifiedArgumentKinds loc scope (kinds :: restKinds) ((TyVar name) :: restArgs)
         if kindsEq previous kinds then
           ()
         else
-          pushTypeErrorOnceAt
+          pushTypeErrorOncePerSite
             "T-EFFECT-KIND-MISMATCH"
             loc
             "signature parameter `\{name}` has incompatible required kinds `\{renderKindArrow previous}` and `\{renderKindArrow kinds}`; use separate parameters, or constraints requiring one kind"
@@ -29561,7 +29564,7 @@ checkImplHeadIndices (TyApp a b) = match tyAppSpine (TyApp a b)
         fold
           (_ ka => match ka
             (KAuth _ _, TyAuth ps loc) =>
-              pushTypeErrorOnceAt
+              pushTypeErrorOncePerSite
                 "T-AUTHORITY-KIND"
                 loc
                 (implHeadIndexMsg n (ppTy (TyAuth ps loc)))
@@ -32257,32 +32260,9 @@ implKeyTc iface tys = implRouteKeyWord OriginUnresolved iface tys None
 -- instance -- a static call through it is an emit gap on both emitters, and the
 -- interpreter leaves the method to arg-tag dispatch.
 --
--- THIS FUNCTION IS ELABORATE-ONLY, AND `medaka check` CANNOT SEE ANY DIAGNOSTIC
--- PUSHED FROM HERE.  Nothing is pushed from here today, so nothing is currently hidden
--- — but the split is STRUCTURAL and unfixed, so a future diagnostic added here would be
--- silently invisible to `check`.  Derived rather than guessed, two independent reasons,
--- either alone sufficient:
---  1. `keyForSite` is reached ONLY from the five `resolve*` stamp passes, and those now
---     run during the graph-end drain (`drainStampQueue` / `runStampCtxs`, #2548), itself
---     reached only from inside `elaborateModules`.  `medaka check` on a multi-module
---     project goes `analyzeProject` → `typecheckPassFull` → `checkModulesDiags` →
---     `checkModuleFullDiags`, which typechecks and never stamps a route.  (Door 4's two
---     guards DO reach `check` because they fire during typecheck proper, in the
---     obligation channel.)
---  2. Even given the pass, there would be nothing to stamp: the pending route sites are
---     recorded by `inferMethodAt`, which only ever sees an `EMethodAt` node — and those
---     are minted by the MARK pass (`markModules`/`prePassDict`), also called only from
---     `elaborateModules`.  The check driver's method occurrences go through
---     `inferVarPlainId`, so `pendingSites`/`pendingArgStamps` are EMPTY on that path.
---     An audit at the tail of `checkBodyImpl` (the one function both drivers share) was
---     written, built and measured for exactly this: it is INERT, for this reason, and
---     was removed rather than left in place claiming to do something.
--- ⚠️ The check route DOES run `elaborateModules` once — inside `mainShapeWarnings`
--- (`driver/medaka_cli.mdk`, the `checkRoute` multi-module arm) — and DISCARDS its type
--- errors, keeping only warnings.  That is the same family as #1362, and it is the
--- cheapest-looking fix and the wrong one for a single bite: surfacing every
--- elaborate-only type error on the `check` route narrows acceptance for every program in
--- the tree.
+-- Route stamping runs on `check` as well as `run` and `build`, so a diagnostic pushed
+-- from here would reach all three.  None is: an ambiguous goal is reported by the
+-- boundary verdict (`goalReach` at quiescence), not at the route.
 -- The site's route word and the row it names, selected once: a caller that also
 -- needs the row (`selectedCallSupers`) must not select a second time.
 keyForSite : String -> List Mono -> (Option String, Option ImplRow)
@@ -33882,7 +33862,7 @@ undeterminedRoute scope (CountImpls iface) goal =
 --   • one, or a stable minimum → stamp that instance's RKey (deterministic
 --                    dispatch on both run and build);
 --   • two or more otherwise → genuinely ambiguous → `T-AMBIGUOUS-INSTANCE`, unless a
---                    scheme quantifies the goal (`reportAmbiguousImpl`);
+--                    scheme quantifies the goal (no route; the boundary verdict reports it);
 --   • none         → keep RNone (existing no-impl behaviour/error).
 -- #1161 (F-3a-ii): the vector-aware form.  Slot COUNT, slot ORDER and the number of
 -- Routes produced are IDENTICAL to routesOfMonosTop's — the ONLY difference is the
@@ -33978,11 +33958,13 @@ routeUndeterminedTop scope ifaceRef goal
   | otherwise =
     match goalReach goal (goalCandidates omEmpty goal (goalRows ifaceRef goal))
       ReachNone => RNone
-      -- A goal on a scheme-quantified variable is the caller's (`reportAmbiguousImpl`):
-      -- the one instance it reaches is not chosen for it.
+      -- A goal on a scheme-quantified variable is the caller's: the one instance it
+      -- reaches is not chosen for it.
       ReachOne _ if not (monoVectorClosed goal) && goalsClosed goal => RNone
       ReachOne row => undeterminedRowRoute scope ifaceRef goal row
-      ReachMany => reportAmbiguousImpl ifaceRef.irName goal
+      -- No route and no diagnostic: the boundary verdict (`goalReach` at quiescence)
+      -- owns an ambiguous goal and reports it once at its own site.
+      ReachMany => RNone
 
 -- The route of the one instance [row] an undetermined goal reaches: its canonical
 -- word, its prerequisites answered at the goal, and each super of [ifaceRef], which
@@ -33996,18 +33978,6 @@ undeterminedRowRoute scope ifaceRef (m :: rest) row =
     (map
       ((superIface, _) => routeUndeterminedTop scope superIface (m :: rest))
       (directSuperGoals ifaceRef []))
-
--- A goal every free variable of which some generalized scheme quantifies is the
--- caller's to decide (§6.2 T3, the `goalsClosed` test): the scheme carries the
--- constraint, so it is deferred, not ambiguous.  Any other goal is reported at its
--- own site (`goalSiteLoc`), not at whichever declaration was inferred last.
-reportAmbiguousImpl : String -> List Mono -> Route
-reportAmbiguousImpl iface goal =
-  if goalsClosed goal then
-    RNone
-  else
-    let _ = pushAmbiguityAt False !goalSiteLoc (ambiguousImplMsg iface)
-    RNone
 
 ambiguousImplMsg : String -> String
 ambiguousImplMsg iface =
@@ -34785,7 +34755,7 @@ unsettledFileRow upper lower =
 checkFileValueFlow : (Option Loc, Mono, Mono) -> Unit
 checkFileValueFlow (loc, upper, lower) =
   if changesPackedFileBound False upper lower then
-    pushTypeErrorOnceAt
+    pushTypeErrorOncePerSite
       "T-FILE-BOUND-VALUE"
       loc
       ("a function's file bound cannot change inside a container: "
@@ -39271,7 +39241,7 @@ reqTyToMono sub (TyConstrained _ t) = reqTyToMono sub t
 -- silence too.
 reqTyToMono _ (TyRow labels tail loc) =
   let _ =
-    pushTypeErrorOnceAt
+    pushTypeErrorOncePerSite
       "T-EFFECT-KIND-MISMATCH"
       loc
       (rowKindMismatchMsg labels tail)
