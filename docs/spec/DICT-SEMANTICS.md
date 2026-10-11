@@ -1534,7 +1534,11 @@ program.
   ⚠️ **Exit (ii) is not decoration, and a gloss that omits it over-includes by a whole
   class.** A residual predicate over a **generalizable** variable is deferred by `gen`
   and becomes a dict parameter (§4's `P'`; §6.1.3's *second* sentence says so outright) —
-  it is never posed to `inst`, and C1 has nothing to say about it. Without exit (ii)
+  it is never posed to `inst` as an open choice, and C1 has nothing to say about it.
+  `gen` reduces such a predicate through an instance first only in the case §6.1.3
+  states, where every other unifying instance head is ⊒ the matching one; there the
+  matching instance is the matching set's minimum at every instantiation, so the
+  reduction raises no C1 question either. Without exit (ii)
   a reader gets the opposite: an *inferred* binding whose residual predicate is
   `C (T a Int Int)`, against `⊑`-incomparable `C (T a b Int)` and `C (T a Int b)`, would
   be rejected **at its definition with no goal having reached `inst`** — the same fault
@@ -1806,7 +1810,22 @@ to it later is a semantics change, not a bug fix.
    (specialization is not retroactive).** `inst` fires on the goal *as it
    stands where it is resolved*. A goal over **generalizable** variables is
    deferred by §4 `gen` (abstracted as a dict parameter) — standard, and it
-   preserves the caller's ability to supply most-specific evidence. But a
+   preserves the caller's ability to supply most-specific evidence.
+   **When `gen` reduces such a goal first (R-STABLE, 2026-10-10).** A goal over
+   generalizable variables whose head is concrete (`Tag (Wrap a)`) may be reduced
+   at the generalizing binder through the instance it matches, so that instance's
+   context, not the goal, enters `P'` (`impl Tag (Wrap a) requires Show2 a` turns
+   it into `Show2 a`). It is reduced **only when every other instance head that
+   unifies with it** — the generalizable variables free, every other variable
+   rigid — **is ⊒ the matching one**: then every instantiation of those variables
+   still selects the matching instance, and reducing early changes no use's
+   answer. Otherwise the goal enters `P'` **as written**, and each use selects at
+   its own instantiation: with `impl Tag (Wrap Bool)` declared beside that general
+   instance, `nest x = tagOf (Wrap x)` has scheme `Tag (Wrap a) ⇒ a → String`, and
+   `nest True` selects `impl Tag (Wrap Bool)` (#1579). This is GHC's overlap rule.
+   A blanket `impl Tag a` beside the general instance does not block the
+   reduction: it is ⊒ `Tag (Wrap a)`. A goal over a rigid variable is not
+   generalizable, and the rest of this point governs it unchanged. But a
    goal over a **rigid** (signature-bound) variable — e.g. `Default (List a)`
    inside `f : ∀a. Default a ⇒ …` — matches only the general instance and is
    discharged there, once, when `f` is elaborated. If `f` is later used at
@@ -1899,6 +1918,13 @@ an implementation matter.
   closed at their group's end, by T2's last paragraph — so committing them there
   would make instance selection a function of where a group boundary happened to
   fall, which §3 forbids in as many words.
+  A goal over a variable the scheme just produced quantifies is closed but is not
+  decided by `inst` there: it enters the scheme's `P'`. `gen` reduces it through the
+  instance it matches, and puts that instance's context in `P'` instead, exactly when
+  every other instance head that unifies with it is ⊒ the matching one (§6.1.3);
+  otherwise `P'` holds the goal as written and each use decides it at its own
+  instantiation. A goal over a rigid (declared) variable commits where it stands
+  (§6.1.3).
 
 - **T4 — Quiescence.** Route resolution, `inst` commitment for goals not closed at
   their group's end, and numeric-literal defaulting for the same (§6.3) run as
@@ -3001,7 +3027,7 @@ not this paragraph.
 | §3 **W3** (method-scheme fidelity / rigidity) | `checkMethodRigidityCore`, `checkMethodEffVarRigidity`, `checkImplEffVarRigidity` (all `compiler/types/typecheck.mdk`) | an impl/default body may not pin a non-head quantified variable (type *or* effect) to a concrete shape | run by the one method-body driver `inferMethodBody` for both kinds (`MethodBodyKind`); a default body's rigidity reads the same instantiation as its body |
 | §3 **W3-inst** (instance-head rigidity) | `checkImplHeadRigidity`, `checkImplHeadPrerequisites` (`compiler/types/typecheck.mdk`) | an impl body may not pin or identify a head variable, and every predicate it leaves on one is entailed by the impl's `requires` (with superinterfaces), the method's `=>` context or the head itself | impl bodies only, at the same boundary as W3, before body-local defaulting; a pin is reported by the body that introduced it; a goal an instance answers only by fixing a head variable is reported whatever other variables it mentions (#3798, #3817) |
 | §4 `var` | `instantiate:3630`; per-residual entailment via `entail:11892`; obligation discharge `checkCallObligationsU:13793`/`checkOneCallObligation:13814` | instantiation + per-predicate entailment at each use | — |
-| §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates |
+| §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates. A concrete-headed residual is reduced by `residualPredsOf` only when `residualSelectionStable` holds (every other unifying head ⊒ the matching one, §6.1.3, R-STABLE); otherwise it is deferred as written (`test/dict_fixtures/r-stable-overlap-goal-quantified.mdk`, #1579). The signed path (`checkSigConstraintOne`) commits as written |
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |
 | §4 `gen-sig` (#619) | `checkSigConstraintCoverage:16344`/`checkSigConstraintOne:16350` (`compiler/types/typecheck.mdk`) | `Q_sig ⊩ P'ᵢ` — inferred body context must be entailed by the declared one, not merged | — |
 | §4.1 **G1** (uniform dict abstraction at a local binder) | **CONFORMANT (#1082).** `openLocalScopeIf`/`registerLocalAbs` (`compiler/types/typecheck.mdk:14756-14780`) mint a scope and abstract one dictionary parameter per predicate for every candidate local, keyed by that binder's OWN scope identity, never the bare name; `localAbsCandidate` (`:23761-23795`) decides candidacy over the same ctor-app-spine shapes `isNonexpansive` (`:11806-11838`) uses for the value restriction, so the two judgments agree on which locals generalize. Every use site is an `EDictAt`/`pushLocalDictApp` (`:14814-14820`) applying that binder's own params, per G1's `var` clause | — | the all-or-nothing pin (`pinLocalIfDictForwarded`, `MEDAKA_ARGTAG_UNPIN`, `T-LOCAL-CONSTRAINED-MONO`) that used to decline generalization for a dict-forwarding local is DELETED tree-wide (owner ruling D1, 2026-09-26, on a 3-engine green spike over eval/native/wasm); `let` and `where` share `localAbsCandidate`'s one candidacy test, so the two spellings' behavioural fork this row used to report no longer has a mechanism to fork on |

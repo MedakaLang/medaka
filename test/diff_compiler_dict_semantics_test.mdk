@@ -2359,7 +2359,7 @@ table = [
   Row {
     entry = "s-instantiated-reselect-inferred.mdk",
     label =
-      "§3/OD6(a) the INFERRED twin of the row above -- byte-for-byte that fixture with the SIGNATURE LINE DELETED, so OD6(a) (a declared context and the identical inferred one adjudicate the same way) forces the same answer: boolW/intW. 🚨 A SEPARATE ROW BECAUSE IT IS A SEPARATE WRITER: the declared context is registered by `registerMember`, the inferred one by `registerInferredFor`, and BOTH were ids-only -- patching one leaves the other statically committed at exit 0 with the pair silently disagreeing, the shape #1869 and #1161 both landed in. MEASURED at base `bffced42`: `boolW/boolW` on check, run and build, identical to its declared twin. ⚠️ THE OBVIOUS INFERRED PROBE IS MIS-SCOPED AND MUST NOT REPLACE THIS ONE: add a general `impl Tag (Wrap a)` (what #1909`s own inferred repro does) and the residual `Tag (Wrap t)` is DISCHARGED by residual reduction at generalization time -- the binding retains no predicate, gets no dict slot under ANY #1909 fix, and `check --types` prints `nest : a -> String` on the unmodified base binary. The general impl has to be ABSENT for the inferred binding to keep a predicate at all. ⚠️ TWO `impl Tag` blocks, so Section 4 derives a permutation pair; at base the two orders printed `boolW/boolW` and `intW/intW` here too",
+      "§3/OD6(a) the INFERRED twin of the row above -- byte-for-byte that fixture with the SIGNATURE LINE DELETED, so OD6(a) (a declared context and the identical inferred one adjudicate the same way) forces the same answer: boolW/intW. 🚨 A SEPARATE ROW BECAUSE IT IS A SEPARATE WRITER: the declared context is registered by `registerMember`, the inferred one by `registerInferredFor`, and BOTH were ids-only -- patching one leaves the other statically committed at exit 0 with the pair silently disagreeing, the shape #1869 and #1161 both landed in. MEASURED at base `bffced42`: `boolW/boolW` on check, run and build, identical to its declared twin. ⚠️ THE GENERAL IMPL STAYS ABSENT HERE: adding `impl Tag (Wrap a)` (what #1909`s own inferred repro does) used to DISCHARGE the residual `Tag (Wrap t)` at generalization (`nest : a -> String`, no dict slot), which is why this row was written without it. Since R-STABLE (DICT §6.1.3) the more specific heads keep that goal in the scheme as written, and the `r-stable-*` rows pin that case; this row stays the no-general-impl shape it was derived for. ⚠️ TWO `impl Tag` blocks, so Section 4 derives a permutation pair; at base the two orders printed `boolW/boolW` and `intW/intW` here too",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -4708,6 +4708,50 @@ table = [
     pinned = "",
     codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-NO-IMPL"],
   },
+  Row {
+    entry = "r-stable-overlap-goal-quantified.mdk",
+    label =
+      "§6.1.3 R-STABLE, THE #1579 DRAIN (re-pointed from the must_fail pin `1579-residual-commits-general-impl-requires`): `nest`s goal `Tag (Wrap a)` matches only the general `impl Tag (Wrap a) requires Show2 a`, but `impl Tag (Wrap Bool)` also unifies with it and is not more general, so the goal stays in the scheme as written (section 2 pins `nest : Tag (Wrap a) => a -> String`) and `nest True` selects the specific instance. Hand-derived: ACCEPT, `specificW`. Was `no impl of Show2 for Bool` on every verb",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "specificW\n",
+    codes = [Absent "T-NO-IMPL"],
+  },
+  Row {
+    entry = "r-stable-blanket-more-general-reduces.mdk",
+    label =
+      "§6.1.3 R-STABLE control: the only other head unifying with `Tag (Wrap a)` is the blanket `impl Tag a`, which is more general than the matching `impl Tag (Wrap a) requires Show2 a`, so the goal is still reduced to `Show2 a` (section 2 pins the scheme). Hand-derived: ACCEPT, `genericWi`; the same answer before R-STABLE",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "genericWi\n",
+    codes = [],
+  },
+  Row {
+    entry = "r-stable-overlap-both-satisfiable.mdk",
+    label =
+      "§6.1.3 R-STABLE, the value half: with `impl Show2 Bool` present the early reduction also compiled, and `nest True` printed `genericWb` while the direct `tagOf (Wrap True)` printed `specificW`. The goal now stays in `nest`s scheme, so the call through `nest` selects what the direct call selects. Hand-derived: specificW / genericWi / specificW",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "specificW\ngenericWi\nspecificW\n",
+    codes = [],
+  },
+  Row {
+    entry = "r-stable-overlap-local-binder.mdk",
+    label =
+      "§6.1.3 R-STABLE at a generalized local (§4.1): the `let`-bound `nest` keeps `Tag (Wrap a)` in its scheme exactly as the top-level one does. Hand-derived: ACCEPT, specificW / genericWi. Was `no impl of Show2 for Bool` on every verb",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "specificW\ngenericWi\n",
+    codes = [Absent "T-NO-IMPL"],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -4719,7 +4763,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 416
+tableRows = 420
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4952,7 +4996,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 25
+schemeRows = 28
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -5104,6 +5148,24 @@ schemeTable = [
     label =
       "§6.3 D3 clause 2 at a local `let` (#3821): the same body through a `let` gets the top-level control's scheme, with no `Index` goal of the `let`'s own",
     want = "g : (Index a Int b, Num b) => a -> b",
+  },
+  SchemeRow {
+    entry = "r-stable-overlap-goal-quantified.mdk",
+    label =
+      "§6.1.3 R-STABLE (#1579): `impl Tag (Wrap Bool)` unifies with `Tag (Wrap a)` and is not more general than the matching instance, so the goal is kept as written (was `nest : Show2 a => a -> String`)",
+    want = "nest : Tag (Wrap a) => a -> String",
+  },
+  SchemeRow {
+    entry = "r-stable-blanket-more-general-reduces.mdk",
+    label =
+      "§6.1.3 R-STABLE control: a blanket `impl Tag a` is more general than the matching `impl Tag (Wrap a)`, so the goal is reduced to that instance's `requires`",
+    want = "nest : Show2 a => a -> String",
+  },
+  SchemeRow {
+    entry = "r-stable-overlap-both-satisfiable.mdk",
+    label =
+      "§6.1.3 R-STABLE: the goal is kept as written even though reducing it would also have compiled here",
+    want = "nest : Tag (Wrap a) => a -> String",
   },
 ]
 

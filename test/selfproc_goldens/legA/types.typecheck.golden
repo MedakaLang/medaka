@@ -1209,7 +1209,7 @@ forceInstantiation : String -> MethodTrackedInstantiation -> Mono
 foreachUnit : (a -> Unit) -> List a -> Unit
 forgetLocalAbs : String -> Unit
 formBareLocals : UsePath -> BareLocals -> BareLocals
-forwardedVecObls : List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
+forwardedVecObls : Bool -> List Int -> List (IfaceRef, List Mono, Option Loc) -> List VecObl
 freeArmEVars : Map String Unit -> Arm -> List String
 freeAuthorityNames : List String -> List EffAtomTy -> List String
 freeAuthvars : Mono -> List Int
@@ -2745,15 +2745,16 @@ resetCrossModuleState : Unit -> Unit
 resetGraphState : Unit -> Unit
 resetState : Unit -> Unit
 resetTypeErrorsSticky : Unit -> Unit
-residualBoundPreds : List Int -> IfaceRef -> List Mono -> Option Loc -> List (IfaceRef, List Int, List Mono)
+residualBoundPreds : Bool -> List Int -> IfaceRef -> List Mono -> Option Loc -> List (IfaceRef, List Int, List Mono)
 residualFailureMsg : String -> String -> String -> String
 residualInferredPredOf : List Int -> (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
 residualInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List (IfaceRef, Int, List Mono)
 residualMixedPred : List Int -> IfaceRef -> List Mono -> List (IfaceRef, List Int, List Mono)
 residualOblArgs : List Int -> List Mono -> List Mono
-residualPredsOf : ReqWalk -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+residualPredsOf : List Int -> ReqWalk -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualRefutableNow : IfaceRef -> List Mono -> Bool
-residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
+residualSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
+residualVecObls : Bool -> List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
 residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
 resolveAliasMethodSpellings : (String, List Decl) -> (String, List Decl)
 resolveArgStamp : String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
@@ -2869,7 +2870,7 @@ schemeIds : Scheme -> List Int
 schemeLines : List (String, Scheme) -> List String
 schemeMono : Scheme -> Mono
 schemeOblEntriesFor : String -> UsePath -> List ((String, String), List VecObl) -> List (String, List VecObl)
-schemeObligationsOf : List Int -> List UObligation -> List VecObl
+schemeObligationsOf : Bool -> List Int -> List UObligation -> List VecObl
 schemeOblsForMember : List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> Scheme -> List VecObl
 schemesAgree : Option Ty -> Ty -> Bool
 scopeFileBoundModule : Unit -> String
@@ -3227,7 +3228,7 @@ variantNamed : String -> List Variant -> Bool
 variantPayload : Variant -> ConPayload
 vecOblKey : VecObl -> String
 vecOblOfNode : SuperNode (List Int, List Mono) -> VecObl
-vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
+vecOblOfPred : Bool -> List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
 vecOblsOfSlotVecs : List (CSlot, List Mono) -> List VecObl
 vectorGoal : IfaceRef -> List Mono -> Option (Mono, List Mono)
 verdictCandidates : GoalWindow -> List Mono -> List (ImplRow, List (Int, Mono)) -> List (ImplRow, List (Int, Mono))
