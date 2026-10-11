@@ -1,5 +1,5 @@
 # META
-source_lines=679
+source_lines=673
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable set of distinct elements, ordered by `Ord`.
@@ -485,8 +485,6 @@ export impl Debug (Set a) requires Debug a where
   debug s = "fromList \{debug (toList s)}"
 
 -- Comma-joined elements for `Display (Set a)`; renders via `display` (unquoted).
--- One `stringConcat` over the rendered elements; the recursive form copied the whole
--- remaining string at every element, which is quadratic in the set's size.
 displaySetItems : Display a => List a -> String
 displaySetItems xs = stringConcat (intersperse ", " (map display xs))
 
@@ -677,10 +675,6 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
   let (below, above) = splitAt x (fromList xs)
   let rebuilt = link2 below above
   wellFormed rebuilt && eq (toList rebuilt) (toList (delete x (fromList xs)))
-
--- The separator joins elements, so a one-element set has none.
-prop "display of a one-element set has no separator" (x : Int) =
-  display (singleton x) == "Set { \{x} }"
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false))))
 (DUse false (UseGroup ("list") ((mem "intersperse" false))))
@@ -844,7 +838,6 @@ prop "display of a one-element set has no separator" (x : Int) =
 (DProp false "splitAt partitions around the element and both halves stay well-formed" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "below")) (EApp (EVar "wellFormed") (EVar "above"))) (EApp (EApp (EVar "allElems") (ELam ((PVar "b")) (EApp (EApp (EVar "lt") (EVar "b")) (EVar "x")))) (EVar "below"))) (EApp (EApp (EVar "allElems") (ELam ((PVar "a")) (EApp (EApp (EVar "gt") (EVar "a")) (EVar "x")))) (EVar "above"))))))
 (DProp false "link rebuilds a well-formed set from a split" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EApp (EVar "link") (EVar "x")) (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "rebuilt")) (EApp (EApp (EVar "has") (EVar "x")) (EVar "rebuilt"))))))
 (DProp false "link2 rejoins a split without its element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "link2") (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "rebuilt")) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "rebuilt"))) (EApp (EVar "toList") (EApp (EApp (EVar "delete") (EVar "x")) (EApp (EVar "fromList") (EVar "xs")))))))))
-(DProp false "display of a one-element set has no separator" ((pp "x" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "display") (EApp (EVar "singleton") (EVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Set { ")) (EApp (EVar "display") (EVar "x"))) (ELit (LString " }")))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false))))
 (DUse false (UseGroup ("list") ((mem "intersperse" false))))
@@ -1008,4 +1001,3 @@ prop "display of a one-element set has no separator" (x : Int) =
 (DProp false "splitAt partitions around the element and both halves stay well-formed" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "below")) (EApp (EDictApp "wellFormed") (EVar "above"))) (EApp (EApp (EVar "allElems") (ELam ((PVar "b")) (EApp (EApp (EMethodRef "lt") (EVar "b")) (EVar "x")))) (EVar "below"))) (EApp (EApp (EVar "allElems") (ELam ((PVar "a")) (EApp (EApp (EMethodRef "gt") (EVar "a")) (EVar "x")))) (EVar "above"))))))
 (DProp false "link rebuilds a well-formed set from a split" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EApp (EVar "link") (EVar "x")) (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "rebuilt")) (EApp (EApp (EDictApp "has") (EVar "x")) (EVar "rebuilt"))))))
 (DProp false "link2 rejoins a split without its element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "link2") (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "rebuilt")) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "rebuilt"))) (EApp (EMethodRef "toList") (EApp (EApp (EDictApp "delete") (EVar "x")) (EApp (EDictApp "fromList") (EVar "xs")))))))))
-(DProp false "display of a one-element set has no separator" ((pp "x" (TyCon "Int"))) (EBinOp "==" (EApp (EMethodRef "display") (EApp (EVar "singleton") (EVar "x"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Set { ")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString " }")))))

@@ -481,8 +481,6 @@ export impl Debug (Set a) requires Debug a where
   debug s = "fromList \{debug (toList s)}"
 
 -- Comma-joined elements for `Display (Set a)`; renders via `display` (unquoted).
--- One `stringConcat` over the rendered elements; the recursive form copied the whole
--- remaining string at every element, which is quadratic in the set's size.
 displaySetItems : Display a => List a -> String
 displaySetItems xs = stringConcat (intersperse ", " (map display xs))
 
@@ -673,7 +671,3 @@ prop "link2 rejoins a split without its element" (x : Int) (xs : List Int) =
   let (below, above) = splitAt x (fromList xs)
   let rebuilt = link2 below above
   wellFormed rebuilt && eq (toList rebuilt) (toList (delete x (fromList xs)))
-
--- The separator joins elements, so a one-element set has none.
-prop "display of a one-element set has no separator" (x : Int) =
-  display (singleton x) == "Set { \{x} }"

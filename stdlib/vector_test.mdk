@@ -1,0 +1,67 @@
+-- Tests for `insertAtInPlace` and `removeAtInPlace` in `stdlib/vector.mdk`.
+--
+-- The reference answers are written on lists, apart from the vector, so the
+-- shifts are checked element for element rather than only by round trip.
+
+import test.{expectEqual}
+import vector.{fromList, insertAtInPlace, push, removeAtInPlace}
+
+-- # The reference reading
+
+insertSpec : Int -> a -> List a -> List a
+insertSpec _ x [] = [x]
+insertSpec i x (y :: ys) =
+  if i <= 0 then x :: y :: ys else y :: insertSpec (i - 1) x ys
+
+removeSpec : Int -> List a -> List a
+removeSpec _ [] = []
+removeSpec i (y :: ys) =
+  if i < 0 then y :: ys else if i == 0 then ys else y :: removeSpec (i - 1) ys
+
+-- # Fixed cases
+
+test "insertAtInPlace before the start clamps to the front" =
+  let v = fromList [1, 2, 3]
+  insertAtInPlace (0 - 4) 9 v
+  expectEqual [9, 1, 2, 3] (toList v)
+
+test "insertAtInPlace past the end appends" =
+  let v = fromList [1, 2, 3]
+  insertAtInPlace 10 9 v
+  expectEqual [1, 2, 3, 9] (toList v)
+
+test "insertAtInPlace into an empty vector" =
+  let v = fromList []
+  insertAtInPlace 0 9 v
+  expectEqual [9] (toList v)
+
+test "insertAtInPlace keeps working once the backing array must grow" =
+  let v = fromList [1, 2]
+  insertAtInPlace 1 0 v
+  push 7 v
+  push 8 v
+  push 9 v
+  insertAtInPlace 0 5 v
+  expectEqual [5, 1, 0, 2, 7, 8, 9] (toList v)
+
+test "removeAtInPlace past the end is a no-op" =
+  let v = fromList [1, 2, 3]
+  removeAtInPlace 3 v
+  expectEqual [1, 2, 3] (toList v)
+
+test "removeAtInPlace of the last element" =
+  let v = fromList [1, 2, 3]
+  removeAtInPlace 2 v
+  expectEqual [1, 2] (toList v)
+
+-- # Properties
+
+prop "insertAtInPlace and removeAtInPlace shift elements exactly as their list specs" (xs : List Int) (n : Int) (x : Int) =
+  let ma = fromList xs
+  insertAtInPlace n x ma
+  let inserted = toList ma == insertSpec n x xs
+  removeAtInPlace n ma
+  let removed = toList ma == removeSpec n (insertSpec n x xs)
+  let mb = fromList xs
+  removeAtInPlace n mb
+  inserted && removed && toList mb == removeSpec n xs

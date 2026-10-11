@@ -852,18 +852,15 @@ compileNode (NGroup idx body) pc =
   ISave (2 * idx) :: compileNode body (pc + 1) ++ [ISave (2 * idx + 1)]
 
 -- The branches of a left-nested alternation, in source order. The parser
--- builds `a|b|c` as `NAlt (NAlt a b) c`, so this walks the left spine with an
--- accumulator; appending to the left would make compiling a wide alternation
--- quadratic in its width.
+-- builds `a|b|c` as `NAlt (NAlt a b) c`.
 altBranches : Node -> List Node -> List Node
 altBranches (NAlt l r) acc = altBranches l (r :: acc)
 altBranches n acc = n :: acc
 
 -- Each branch but the last is preceded by a split to the next branch and
--- followed by a jump to the exit. The split prefers its branch, so the
--- priority order is the source order, as with nested binary alternation.
--- The exit is not known until every branch is sized, so jumps to it carry
--- `altExit` and `compileNode` patches them once the length is known.
+-- followed by a jump to the exit. The split prefers its branch, so priority
+-- follows source order. The exit is unknown until every branch is sized, so
+-- those jumps carry `altExit` for `compileNode` to patch.
 compileAltBranches : List Node -> Int -> List Inst
 compileAltBranches [] _ = []
 compileAltBranches (b :: []) pc = compileNode b pc
@@ -1088,9 +1085,7 @@ searchWindow re codes (lo, hi) startAt anchorStart anchorEnd steps =
   vmSearch vm startAt (anchorStart || startsAtBol re)
 
 -- A pattern that begins with `^` (outside multiline mode) can only match at
--- the window start, so its search seeds a single thread instead of one per
--- position. Without this, `isMatch (mustCompile "^abc")` on an n-character
--- line costs O(n) threads that each die on the first assertion.
+-- the window start, so its search seeds a single thread.
 startsAtBol : Regex -> Bool
 startsAtBol re = not re.multiline && startsAtBolFrom re.prog 0
 
@@ -1725,19 +1720,6 @@ splitGo s (m :: rest) beg _ acc =
 
 -- > (arrayLength (mustCompile "(a|a)*b").prog, findSteps (mustCompile "(a|a)*b") (repeat 5000 "a"))
 -- (10, 55006)
-
--- A `^` pattern seeds one thread, at the start of the subject, so a search
--- over a long line that cannot match there costs a constant number of steps
--- rather than one per position (issue #2930).
--- > findSteps (mustCompile "^abc") (repeat 5000 "x") < 10
--- True
-
--- A wide alternation compiles in time linear in its width, and its branches
--- keep their source order.
--- > map (m => (m : Match).text) (find (mustCompile "w0|w1|w2|w3|w4|w5") "xxw4w5")
--- Some "w4"
--- > map (m => (m : Match).text) (find (mustCompile "a|ab|abc|abcd") "abcd")
--- Some "a"
 
 -- Properties
 

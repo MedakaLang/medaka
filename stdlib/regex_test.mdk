@@ -1,0 +1,46 @@
+-- Tests for the `^` anchor and alternation in `stdlib/regex.mdk`.
+--
+-- A `^` that is not on every path through the pattern must not restrict the
+-- search to the start of the subject, and alternation branches keep their
+-- source order.
+
+import regex.{Match, find, mustCompile}
+import test.{expectEqual}
+
+foundText : String -> String -> Option String
+foundText pattern subject =
+  map (m => (m : Match).text) (find (mustCompile pattern) subject)
+
+-- # Anchors
+
+test "a leading ^ matches at the start" =
+  expectEqual (Some "abc") (foundText "^abc" "abcabc")
+
+test "a leading ^ does not match later in the subject" =
+  expectEqual None (foundText "^abc" "xabc")
+
+test "^ in one alternative leaves the other alternative unanchored" =
+  expectEqual (Some "b") (foundText "^a|b" "xb")
+
+test "^ inside a group in one alternative leaves the other unanchored" =
+  expectEqual (Some "b") (foundText "(^a|b)" "xb")
+
+test "a grouped ^ before an alternation leaves the other branch unanchored" =
+  expectEqual (Some "b") (foundText "(^a)|b" "xb")
+
+test "(?m)^ matches at a later line start" =
+  expectEqual (Some "b") (foundText "(?m)^b" "a\nb")
+
+-- # Alternation
+
+test "alternation prefers the earlier branch" =
+  expectEqual (Some "a") (foundText "a|ab|abc|abcd" "abcd")
+
+test "a wide alternation finds its branch in source order" =
+  expectEqual (Some "w4") (foundText "w0|w1|w2|w3|w4|w5" "xxw4w5")
+
+test "a nested alternation keeps source priority" =
+  expectEqual (Some "a") (foundText "(a|ab)|abc" "abc")
+
+test "an empty last branch matches the empty string" =
+  expectEqual (Some "") (foundText "a|b|" "x")

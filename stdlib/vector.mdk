@@ -527,29 +527,6 @@ prop "removeAtInPlace out of range is a no-op" (xs : List Int) =
   removeAtInPlace (0 - 1) ma
   eq (toList ma) xs
 
--- The element order an insert or remove must produce, written on lists from
--- first principles. The shifts in `insertAtInPlace` and `removeAtInPlace` are
--- checked against these element for element, not only by round trip.
-insertSpec : Int -> a -> List a -> List a
-insertSpec _ x [] = [x]
-insertSpec i x (y :: ys) =
-  if i <= 0 then x :: y :: ys else y :: insertSpec (i - 1) x ys
-
-removeSpec : Int -> List a -> List a
-removeSpec _ [] = []
-removeSpec i (y :: ys) =
-  if i < 0 then y :: ys else if i == 0 then ys else y :: removeSpec (i - 1) ys
-
-prop "insertAtInPlace and removeAtInPlace shift elements exactly as their list specs" (xs : List Int) (n : Int) (x : Int) =
-  let ma = fromList xs
-  insertAtInPlace n x ma
-  let inserted = eq (toList ma) (insertSpec n x xs)
-  removeAtInPlace n ma
-  let removed = eq (toList ma) (removeSpec n (insertSpec n x xs))
-  let mb = fromList xs
-  removeAtInPlace n mb
-  inserted && removed && eq (toList mb) (removeSpec n xs)
-
 -- LAW: `Display (Vector a)` renders the LIVE range in the same
 -- `fromList [...]` shape as `Debug`, and agrees with `Eq` -- equal vectors
 -- render identically, unequal ones do not.  The `push`-then-`pop` clause is

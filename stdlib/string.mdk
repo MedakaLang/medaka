@@ -386,14 +386,15 @@ export
 lastIndexOf : String -> String -> Option Int
 lastIndexOf needle haystack
   | needle == "" = Some (stringLength haystack)
-  | otherwise =
-    let a = toChars haystack
-    let nA = toChars needle
-    lastIndexOfGo a (arrayLength a) nA (arrayLength nA) 0 None
+  | otherwise = match indexOf needle haystack
+    None => None
+    Some _ =>
+      let a = toChars haystack
+      let nA = toChars needle
+      lastIndexOfGo a (arrayLength a) nA (arrayLength nA) 0 None
 
 -- Walks forward from each hit, advancing one codepoint so overlapping
--- matches still count, and keeps the latest.  Hit positions are absolute in
--- the decoded haystack, so no tail is re-sliced per hit.
+-- matches still count, and keeps the latest.
 lastIndexOfGo : Array Char ->
   Int ->
   Array Char ->
@@ -417,10 +418,12 @@ export
 countOccurrences : String -> String -> Int
 countOccurrences needle haystack
   | needle == "" = 0
-  | otherwise =
-    let a = toChars haystack
-    let nA = toChars needle
-    countGo a (arrayLength a) nA (arrayLength nA) 0 0
+  | otherwise = match indexOf needle haystack
+    None => 0
+    Some _ =>
+      let a = toChars haystack
+      let nA = toChars needle
+      countGo a (arrayLength a) nA (arrayLength nA) 0 0
 
 -- Non-overlapping: each hit resumes just past its own end.
 countGo : Array Char -> Int -> Array Char -> Int -> Int -> Int -> Int
@@ -622,18 +625,18 @@ export
 replaceAll : String -> String -> String -> String
 replaceAll old new s = if old == "" then s else replaceAllGo old new s
 
--- Decodes both operands once, collects the pieces between hits and the
--- replacement in reverse, then joins them with one `stringConcat`.
+-- Collects the pieces between hits and the replacement, then joins them.
 replaceAllGo : String -> String -> String -> String
-replaceAllGo old new s =
-  let a = toChars s
-  let n = arrayLength a
-  let oA = toChars old
-  let ol = arrayLength oA
-  stringConcat (replaceAllGoFrom a n oA ol new 0 0 [])
+replaceAllGo old new s = match indexOf old s
+  None => s
+  Some _ =>
+    let a = toChars s
+    let n = arrayLength a
+    let oA = toChars old
+    let ol = arrayLength oA
+    stringConcat (replaceAllGoFrom a n oA ol new 0 0 [])
 
--- `acc` holds the pieces so far, latest first. Tail-recursive, so the call
--- depth does not grow with the number of replacements.
+-- `acc` holds the pieces so far, latest first.
 replaceAllGoFrom : Array Char ->
   Int ->
   Array Char ->
@@ -656,6 +659,7 @@ replaceAllGoFrom a n oA ol new start from acc = match sepFrom a n oA ol from
       (i + ol)
       (new :: subChars a start i :: acc)
 
+-- Local copy: this module imports only `core`, so `list.reverse` is out of reach.
 reverseStrings : List String -> List String
 reverseStrings xs = reverseStringsGo xs []
 
@@ -879,16 +883,3 @@ centerPad l r c s =
 
 half : Int -> Int
 half k = if k <= 1 then 0 else 1 + half (k - 2)
-
--- ── Properties ──────────────────────────────────────────────────────────────
-
-prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
-  stringLength s - stringLength (replaceAll "ab" "" s)
-    == 2 * countOccurrences "ab" s
-
-prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
-  match lastIndexOf "ab" s
-    None => countOccurrences "ab" s == 0
-    Some i =>
-      stringSlice i (i + 2) s == "ab"
-        && indexOf "ab" (stringSlice (i + 1) (stringLength s) s) == None

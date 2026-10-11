@@ -29,7 +29,9 @@ import string.{split, startsWith, endsWith, contains, lastIndexOf}
    > dirname "a/b/c.txt"
    "a/b"
    > dirname "c.txt"
-   "." -}
+   "."
+   > dirname "/a"
+   "/" -}
 export
 dirname : String -> String
 dirname path = match lastIndexOf "/" path

@@ -1,5 +1,5 @@
 # META
-source_lines=783
+source_lines=781
 stages=DESUGAR,MARK
 # SOURCE
 {- | A JSON value type with a parser and a serializer.
@@ -133,10 +133,8 @@ escapeString s =
   let pieces = escapeGo arr (arrayLength arr - 1) []
   stringConcat (["\""] ++ pieces ++ ["\""])
 
--- The text of a value, as pieces pushed onto `acc` in reverse order. Each
--- nested value appends to the same piece list, so the whole document is
--- joined once. Joining each child into its own string and then copying it
--- into its parent costs O(depth * size) on a deeply nested value.
+-- The text of a value, as pieces pushed onto `acc` in reverse order and
+-- joined once by the caller.
 stringifyInto : Json -> List String -> List String
 stringifyInto JNull acc = "null" :: acc
 stringifyInto (JBool True) acc = "true" :: acc

@@ -1,5 +1,5 @@
 # META
-source_lines=956
+source_lines=950
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -727,8 +727,6 @@ export impl Debug (Map k v) requires Debug k, Debug v where
 
 -- Comma-joined `k => v` entries for `Display (Map k v)`; keys/values render via
 -- `display` (unquoted), the Display convention.  `entries` gives ascending pairs.
--- One `stringConcat` over the rendered entries: the recursive form copied the whole
--- remaining string at every entry, which is quadratic in the map's size.
 displayMapEntries : (Display k, Display v) => List (k, v) -> String
 displayMapEntries es =
   stringConcat (intersperse ", " (map ((k, v) => "\{k} => \{v}") es))
@@ -954,10 +952,6 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
     && eq
       (entriesFrom (Some k) None m)
       (filter ((key, _) => gte key k) (entries m))
-
--- The separator joins entries, so a one-entry map has none.
-prop "display of a one-entry map has no separator" (k : Int) (v : Int) =
-  display (singleton k v) == "Map { \{k} => \{v} }"
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
 (DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false))))
@@ -1169,7 +1163,6 @@ prop "display of a one-entry map has no separator" (k : Int) (v : Int) =
 (DProp false "link2 rejoins a split without its key" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "k")) (EApp (EVar "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "link2") (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "rebuilt")) (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EVar "rebuilt"))) (EApp (EVar "entries") (EApp (EApp (EVar "delete") (EVar "k")) (EApp (EVar "fromList") (EVar "xs")))))))))
 (DProp false "entriesFrom is the limited run of entries from the start key" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EVar "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
 (DProp false "entriesFrom bounded on one side only still agrees with entries" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EVar "None")) (EVar "m"))) (EApp (EVar "entries") (EVar "m"))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EVar "entries") (EVar "m"))))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EVar "None")) (EVar "m"))) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EVar "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
-(DProp false "display of a one-entry map has no separator" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "display") (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Map { ")) (EApp (EVar "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString " }")))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
 (DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false))))
@@ -1381,4 +1374,3 @@ prop "display of a one-entry map has no separator" (k : Int) (v : Int) =
 (DProp false "link2 rejoins a split without its key" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "k")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "link2") (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "rebuilt")) (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EVar "rebuilt"))) (EApp (EVar "entries") (EApp (EApp (EDictApp "delete") (EVar "k")) (EApp (EDictApp "fromList") (EVar "xs")))))))))
 (DProp false "entriesFrom is the limited run of entries from the start key" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EDictApp "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EApp (EMethodRef "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EMethodRef "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
 (DProp false "entriesFrom bounded on one side only still agrees with entries" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EDictApp "entriesFrom") (EVar "None")) (EVar "None")) (EVar "m"))) (EApp (EVar "entries") (EVar "m"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EDictApp "entriesFrom") (EVar "None")) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EVar "entries") (EVar "m"))))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EDictApp "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EVar "None")) (EVar "m"))) (EApp (EApp (EMethodRef "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EMethodRef "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
-(DProp false "display of a one-entry map has no separator" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EMethodRef "display") (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Map { ")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString " }")))))

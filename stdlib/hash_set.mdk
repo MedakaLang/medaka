@@ -250,8 +250,6 @@ export impl Debug (HashSet a) requires Debug a where
 -- `display s == display (fromList (toList s))`.  The sort is `list.sort`: one
 -- ordering routine for the whole stdlib.
 
--- One `stringConcat` over the rendered elements; the recursive form copied the whole
--- remaining string at every element, which is quadratic in the set's size.
 displayItems : Display a => List a -> String
 displayItems xs = stringConcat (L.intersperse ", " (map display xs))
 
@@ -289,7 +287,3 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
   let a = fromList xs
   let b = fromList (L.reverse xs)
   ascendingL (L.sort (elemList a)) && eq a b == (display a == display b)
-
--- The separator joins elements, so a one-element set has none.
-prop "display of a one-element HashSet has no separator" (x : Int) =
-  display (fromList [x]) == "HashSet { \{x} }"

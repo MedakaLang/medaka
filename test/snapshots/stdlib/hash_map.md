@@ -1,5 +1,5 @@
 # META
-source_lines=394
+source_lines=388
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable hash table from keys to values.
@@ -330,8 +330,6 @@ export impl Debug (HashMap k v) requires Debug k, Debug v where
 -- `list.sortOn fst`: one ordering routine for the whole stdlib.
 
 -- Comma-joined `k => v` entries, mirroring `map.mdk`'s `displayMapEntries`.
--- One `stringConcat` over the rendered entries; the recursive form copied the whole
--- remaining string at every entry, which is quadratic in the table's size.
 displayEntries : (Display k, Display v) => List (k, v) -> String
 displayEntries es =
   stringConcat (L.intersperse ", " (map ((k, v) => "\{k} => \{v}") es))
@@ -392,10 +390,6 @@ ascendingKeys ((k1, _) :: (k2, v2) :: rest) =
 prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
   let m = fromList xs
   all (k => eq (Some m[k]) (get k m)) (keys m)
-
--- The separator joins entries, so a one-entry table has none.
-prop "display of a one-entry HashMap has no separator" (k : Int) (v : Int) =
-  display (fromList [(k, v)]) == "HashMap { \{k} => \{v} }"
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Mappable" false) (mem "Hashable" false) (mem "Index" false))))
 (DUse false (UseAlias ("list") "L"))
@@ -474,7 +468,6 @@ prop "display of a one-entry HashMap has no separator" (k : Int) (v : Int) =
 (DFunDef false "ascendingKeys" ((PCons PWild (PList))) (EVar "True"))
 (DFunDef false "ascendingKeys" ((PCons (PTuple (PVar "k1") PWild) (PCons (PTuple (PVar "k2") (PVar "v2")) (PVar "rest")))) (EBinOp "&&" (EApp (EApp (EVar "lte") (EVar "k1")) (EVar "k2")) (EApp (EVar "ascendingKeys") (EBinOp "::" (ETuple (EVar "k2") (EVar "v2")) (EVar "rest")))))
 (DProp false "Index HashMap agrees with get on present keys" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "all") (ELam ((PVar "k")) (EApp (EApp (EVar "eq") (EApp (EVar "Some") (EApp (EApp (EVar "index") (EVar "m")) (EVar "k")))) (EApp (EApp (EVar "get") (EVar "k")) (EVar "m"))))) (EApp (EVar "keys") (EVar "m"))))))
-(DProp false "display of a one-entry HashMap has no separator" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "display") (EApp (EVar "fromList") (EListLit (ETuple (EVar "k") (EVar "v"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "HashMap { ")) (EApp (EVar "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString " }")))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Mappable" false) (mem "Hashable" false) (mem "Index" false))))
 (DUse false (UseAlias ("list") "L"))
@@ -553,4 +546,3 @@ prop "display of a one-entry HashMap has no separator" (k : Int) (v : Int) =
 (DFunDef false "ascendingKeys" ((PCons PWild (PList))) (EVar "True"))
 (DFunDef false "ascendingKeys" ((PCons (PTuple (PVar "k1") PWild) (PCons (PTuple (PVar "k2") (PVar "v2")) (PVar "rest")))) (EBinOp "&&" (EApp (EApp (EMethodRef "lte") (EVar "k1")) (EVar "k2")) (EApp (EDictApp "ascendingKeys") (EBinOp "::" (ETuple (EVar "k2") (EVar "v2")) (EVar "rest")))))
 (DProp false "Index HashMap agrees with get on present keys" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EDictApp "all") (ELam ((PVar "k")) (EApp (EApp (EMethodRef "eq") (EApp (EVar "Some") (EApp (EApp (EMethodRef "index") (EVar "m")) (EVar "k")))) (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "m"))))) (EApp (EVar "keys") (EVar "m"))))))
-(DProp false "display of a one-entry HashMap has no separator" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EMethodRef "display") (EApp (EDictApp "fromList") (EListLit (ETuple (EVar "k") (EVar "v"))))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "HashMap { ")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString " }")))))

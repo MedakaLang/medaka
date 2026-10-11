@@ -1,5 +1,5 @@
 # META
-source_lines=565
+source_lines=542
 stages=DESUGAR,MARK
 # SOURCE
 {- | A growable, mutable array.
@@ -531,29 +531,6 @@ prop "removeAtInPlace out of range is a no-op" (xs : List Int) =
   removeAtInPlace (0 - 1) ma
   eq (toList ma) xs
 
--- The element order an insert or remove must produce, written on lists from
--- first principles. The shifts in `insertAtInPlace` and `removeAtInPlace` are
--- checked against these element for element, not only by round trip.
-insertSpec : Int -> a -> List a -> List a
-insertSpec _ x [] = [x]
-insertSpec i x (y :: ys) =
-  if i <= 0 then x :: y :: ys else y :: insertSpec (i - 1) x ys
-
-removeSpec : Int -> List a -> List a
-removeSpec _ [] = []
-removeSpec i (y :: ys) =
-  if i < 0 then y :: ys else if i == 0 then ys else y :: removeSpec (i - 1) ys
-
-prop "insertAtInPlace and removeAtInPlace shift elements exactly as their list specs" (xs : List Int) (n : Int) (x : Int) =
-  let ma = fromList xs
-  insertAtInPlace n x ma
-  let inserted = eq (toList ma) (insertSpec n x xs)
-  removeAtInPlace n ma
-  let removed = eq (toList ma) (removeSpec n (insertSpec n x xs))
-  let mb = fromList xs
-  removeAtInPlace n mb
-  inserted && removed && eq (toList mb) (removeSpec n xs)
-
 -- LAW: `Display (Vector a)` renders the LIVE range in the same
 -- `fromList [...]` shape as `Debug`, and agrees with `Eq` -- equal vectors
 -- render identically, unequal ones do not.  The `push`-then-`pop` clause is
@@ -659,13 +636,6 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DProp false "sortInPlaceBy is stable on ties" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EApp (EApp (EVar "tagFrom") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "sortInPlaceBy") (ELam ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "coarseKey") (EVar "a"))) (EApp (EVar "coarseKey") (EVar "b"))))) (EVar "ma"))) (DoExpr (EBinOp "&&" (EApp (EVar "sortedAndStable") (EApp (EVar "toList") (EVar "ma"))) (EBinOp "==" (EApp (EVar "length") (EVar "ma")) (EApp (EVar "length") (EApp (EVar "fromList") (EVar "xs"))))))))
 (DProp false "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "clampIdx") (EVar "n")) (EApp (EVar "length") (EVar "ma")))) (DoExpr (EApp (EApp (EApp (EVar "insertAtInPlace") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "grew") (EBinOp "==" (EApp (EVar "length") (EVar "ma")) (EBinOp "+" (EApp (EVar "length") (EApp (EVar "fromList") (EVar "xs"))) (ELit (LInt 1))))) (DoLet false false (PVar "landed") (EApp (EApp (EVar "eq") (EApp (EApp (EVar "get") (EVar "i")) (EVar "ma"))) (EApp (EVar "Some") (EVar "x")))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EVar "i")) (EVar "ma"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "grew") (EVar "landed")) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "xs"))))))
 (DProp false "removeAtInPlace out of range is a no-op" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EApp (EVar "length") (EVar "ma"))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "xs")))))
-(DTypeSig false "insertSpec" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
-(DFunDef false "insertSpec" (PWild (PVar "x") (PList)) (EListLit (EVar "x")))
-(DFunDef false "insertSpec" ((PVar "i") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "insertSpec") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "x")) (EVar "ys")))))
-(DTypeSig false "removeSpec" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "removeSpec" (PWild (PList)) (EListLit))
-(DFunDef false "removeSpec" ((PVar "i") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp "::" (EVar "y") (EVar "ys")) (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EVar "ys") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "removeSpec") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "ys"))))))
-(DProp false "insertAtInPlace and removeAtInPlace shift elements exactly as their list specs" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EApp (EVar "insertAtInPlace") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "inserted") (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EApp (EApp (EApp (EVar "insertSpec") (EVar "n")) (EVar "x")) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EVar "n")) (EVar "ma"))) (DoLet false false (PVar "removed") (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EApp (EApp (EVar "removeSpec") (EVar "n")) (EApp (EApp (EApp (EVar "insertSpec") (EVar "n")) (EVar "x")) (EVar "xs"))))) (DoLet false false (PVar "mb") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EVar "n")) (EVar "mb"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "inserted") (EVar "removed")) (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "mb"))) (EApp (EApp (EVar "removeSpec") (EVar "n")) (EVar "xs")))))))
 (DProp false "Display Vector shows only the live range and agrees with Eq" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "push") (EVar "y")) (EVar "b"))) (DoLet false false (PVar "differs") (EApp (EVar "not") (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EApp (EVar "display") (EVar "b"))))) (DoLet false false PWild (EApp (EVar "pop") (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "differs") (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EApp (EVar "display") (EVar "b")))) (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "display") (EVar "xs")))) (ELit (LString ""))))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
@@ -759,11 +729,4 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DProp false "sortInPlaceBy is stable on ties" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EApp (EApp (EVar "tagFrom") (ELit (LInt 0))) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "sortInPlaceBy") (ELam ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EVar "coarseKey") (EVar "a"))) (EApp (EVar "coarseKey") (EVar "b"))))) (EVar "ma"))) (DoExpr (EBinOp "&&" (EApp (EVar "sortedAndStable") (EApp (EMethodRef "toList") (EVar "ma"))) (EBinOp "==" (EApp (EMethodRef "length") (EVar "ma")) (EApp (EMethodRef "length") (EApp (EVar "fromList") (EVar "xs"))))))))
 (DProp false "insertAtInPlace lands at the clamped index and removeAtInPlace undoes it" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "i") (EApp (EApp (EVar "clampIdx") (EVar "n")) (EApp (EMethodRef "length") (EVar "ma")))) (DoExpr (EApp (EApp (EApp (EVar "insertAtInPlace") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "grew") (EBinOp "==" (EApp (EMethodRef "length") (EVar "ma")) (EBinOp "+" (EApp (EMethodRef "length") (EApp (EVar "fromList") (EVar "xs"))) (ELit (LInt 1))))) (DoLet false false (PVar "landed") (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "get") (EVar "i")) (EVar "ma"))) (EApp (EVar "Some") (EVar "x")))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EVar "i")) (EVar "ma"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "grew") (EVar "landed")) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "xs"))))))
 (DProp false "removeAtInPlace out of range is a no-op" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EApp (EMethodRef "length") (EVar "ma"))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "ma"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EVar "xs")))))
-(DTypeSig false "insertSpec" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
-(DFunDef false "insertSpec" (PWild (PVar "x") (PList)) (EListLit (EVar "x")))
-(DFunDef false "insertSpec" ((PVar "i") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "insertSpec") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "x")) (EVar "ys")))))
-(DTypeSig false "removeSpec" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
-(DFunDef false "removeSpec" (PWild (PList)) (EListLit))
-(DFunDef false "removeSpec" ((PVar "i") (PCons (PVar "y") (PVar "ys"))) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp "::" (EVar "y") (EVar "ys")) (EIf (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EVar "ys") (EBinOp "::" (EVar "y") (EApp (EApp (EVar "removeSpec") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "ys"))))))
-(DProp false "insertAtInPlace and removeAtInPlace shift elements exactly as their list specs" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "n" (TyCon "Int")) (pp "x" (TyCon "Int"))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EApp (EVar "insertAtInPlace") (EVar "n")) (EVar "x")) (EVar "ma"))) (DoLet false false (PVar "inserted") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EApp (EApp (EApp (EVar "insertSpec") (EVar "n")) (EVar "x")) (EVar "xs")))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EVar "n")) (EVar "ma"))) (DoLet false false (PVar "removed") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "ma"))) (EApp (EApp (EVar "removeSpec") (EVar "n")) (EApp (EApp (EApp (EVar "insertSpec") (EVar "n")) (EVar "x")) (EVar "xs"))))) (DoLet false false (PVar "mb") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EVar "n")) (EVar "mb"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "inserted") (EVar "removed")) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "toList") (EVar "mb"))) (EApp (EApp (EVar "removeSpec") (EVar "n")) (EVar "xs")))))))
 (DProp false "Display Vector shows only the live range and agrees with Eq" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "push") (EVar "y")) (EVar "b"))) (DoLet false false (PVar "differs") (EApp (EVar "not") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "display") (EVar "a"))) (EApp (EMethodRef "display") (EVar "b"))))) (DoLet false false PWild (EApp (EVar "pop") (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "differs") (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "display") (EVar "a"))) (EApp (EMethodRef "display") (EVar "b")))) (EApp (EApp (EMethodRef "eq") (EApp (EMethodRef "display") (EVar "a"))) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "display") (EVar "xs")))) (ELit (LString ""))))))))

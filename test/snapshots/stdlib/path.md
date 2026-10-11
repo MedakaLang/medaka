@@ -1,5 +1,5 @@
 # META
-source_lines=301
+source_lines=303
 stages=DESUGAR,MARK
 # SOURCE
 {- | Manipulation of `/`-separated paths as text.
@@ -33,7 +33,9 @@ import string.{split, startsWith, endsWith, contains, lastIndexOf}
    > dirname "a/b/c.txt"
    "a/b"
    > dirname "c.txt"
-   "." -}
+   "."
+   > dirname "/a"
+   "/" -}
 export
 dirname : String -> String
 dirname path = match lastIndexOf "/" path
