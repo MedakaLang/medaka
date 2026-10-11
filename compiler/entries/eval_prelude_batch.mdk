@@ -13,7 +13,9 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import eval.eval.{evalMain}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   corePath :: targets => withCore corePath targets
   _ =>
     ePutStrLn
@@ -35,3 +37,5 @@ emitAll preludeDecls (path :: rest) = match readFile path
       putStr
         "===SELFHOST-FIX=== \{path}\n\{evalMain (preludeDecls ++ desugar (parse src))}\n"
     emitAll preludeDecls rest
+
+main = oracleMain ()

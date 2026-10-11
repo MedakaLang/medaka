@@ -26,7 +26,9 @@ import driver.main_autoprint.{
 }
 import entries.entry_support.{driveModules}
 
-main = driveModules runElab
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = driveModules runElab
 
 -- Elaborate once to learn `main`'s type (populates mainSchemeRef, which
 -- shouldAutoPrintMain reads), wrap a bare non-Unit value main, then elaborate the
@@ -51,3 +53,5 @@ runElab runtimeDecls coreDecls modules =
   let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls coreW modulesW
   putStr (evalModulesOutput coreE modulesE)
+
+main = oracleMain ()

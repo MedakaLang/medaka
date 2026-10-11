@@ -25,7 +25,9 @@ import types.typecheck.{elaborateModules}
 import eval.eval.{evalModulesOutput}
 import entries.entry_support.{rootsOrDefault, desugarPair}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   runtimeP :: coreP :: entry :: roots =>
     run runtimeP coreP entry (rootsOrDefault entry roots)
   _ =>
@@ -50,3 +52,5 @@ runElab runtimeDecls coreDecls modules =
   let (coreE, modulesE, _, _, _, _) =
     elaborateModules runtimeDecls coreDecls modules
   putStr (evalModulesOutput coreE modulesE)
+
+main = oracleMain ()

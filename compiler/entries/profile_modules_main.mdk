@@ -38,8 +38,9 @@ import support.opcount.{setOpCounting, opSnap}
 import support.util.{listLen}
 import entries.entry_support.{rootsOrDefault, desugarPair}
 
-main : <IO> Unit
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   runtimeP :: coreP :: entry :: roots =>
     run runtimeP coreP entry (rootsOrDefault entry roots)
   _ =>
@@ -172,3 +173,5 @@ runStaged on rsrc csrc entry roots =
 -- mark: compute rpNames over full closure, prePassDict each module (RKey-only)
 
 -- typecheck: HM inference over pre-marked modules in dependency order
+
+main = oracleMain ()
