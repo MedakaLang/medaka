@@ -308,8 +308,7 @@ bindsSexp m binds = "(" ++ joinNl (map (cbindSexp m) binds) ++ ")"
 
 -- The default (golden/round-trip) projection — the frozen serialization contract
 -- and the shape every non-probe caller wants.  Unchanged signature: this is the
--- name snapshot.mdk, core_ir_dump_main, core_ir_roundtrip_main and
--- draft_semantic_program call.
+-- name snapshot.mdk, core_ir_dump_main and core_ir_roundtrip_main call.
 export
 cprogramToSexp : CProgram -> String
 cprogramToSexp prog = cprogramToSexpWith defaultSexpMode prog

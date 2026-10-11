@@ -988,7 +988,7 @@ isSomeLoc None = False
 -- — it is the correct, and unchanged, answer for a caller that positively serves
 -- (or cannot rule out serving) BOTH backends from the one lowered program: a
 -- shared debug/structural probe (`snapshot.mdk`'s `emitBoth`, `profile_main.mdk`'s
--- reused `cprog`, `core_ir_typed_modules_dump_main.mdk`, `draft_semantic_program.mdk`)
+-- reused `cprog`, and `core_ir_typed_modules_dump_main.mdk`)
 -- must get the SAME full-width check a genuinely target-unaware caller would, or a
 -- collision that is real under `--target wasm` goes unreported because SOME other
 -- caller in the same binary happened to know `native`.  Only `TargetNative` narrows.
