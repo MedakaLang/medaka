@@ -455,8 +455,7 @@ balMulticallOracle = "oracle_multicall"
 
    The multicall oracle, before its first sample, is priced at twice the
    dearest sampled entry: its cost follows the union of the entries' imports,
-   and one build of all of them measured 47 s against 23 s for the dearest
-   single (#3965). -}
+   and one build of all of them costs about twice the dearest single. -}
 balSetup : List OracleCost ->
   List (String, List String) ->
   List String ->
@@ -1680,10 +1679,11 @@ balRowKeys rn (c :: cs)
 
 balCalibLine : List Cand -> Row -> List RunRecord -> String
 balCalibLine cands r runs = match latestRunForShard r.rname runs
-  None => "    \{balPadR 10 r.rname} (no recorded run)\{balJobLine r runs}"
+  None =>
+    "    \{balPadR 10 r.rname} (no recorded run)\{balJobLine cands r runs}"
   Some rr => match rr.rowElapsedMs
     None =>
-      "    \{balPadR 10 r.rname} (run \{rr.runId} recorded no rowElapsedMs)\{balJobLine r runs}"
+      "    \{balPadR 10 r.rname} (run \{rr.runId} recorded no rowElapsedMs)\{balJobLine cands r runs}"
     Some e =>
       let g = r.rgateMs
       let d = e - g
@@ -1694,7 +1694,7 @@ balCalibLine cands r runs = match latestRunForShard r.rname runs
           rr.gates
           (balRowDigest r.rname cands)
           rr.gatesDigest
-      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs g)}   residual \{balPadL 9 (balDelta d)}\{pct}\{stale}\{balJobLine r runs}"
+      "    \{balPadR 10 r.rname} recorded \{balPadL 9 (balSecs e)}   predicted \{balPadL 9 (balSecs g)}   residual \{balPadL 9 (balDelta d)}\{pct}\{stale}\{balJobLine cands r runs}"
 
 -- The job-wall grade of one row: the model's predicted job wall (`rload`,
 -- setup-inclusive) against the Actions job duration the row's latest recorded
@@ -1706,12 +1706,21 @@ data JobGrade = JobUngradeable String | JobGraded Int Int Bool
 balJobBandPct : Int
 balJobBandPct = 15
 
-balJobGrade : Row -> List RunRecord -> JobGrade
-balJobGrade r runs = match latestRunForShard r.rname runs
+balJobGrade : List Cand -> Row -> List RunRecord -> JobGrade
+balJobGrade cands r runs = match latestRunForShard r.rname runs
   None => JobUngradeable "no recorded run"
   Some rr => match rr.jobWallMs
     None => JobUngradeable "run \{rr.runId} recorded no jobWallMs"
-    Some m => balJobGraded r rr m
+    Some m =>
+      if balCalibStaleness
+          r.rcount
+          rr.gates
+          (balRowDigest r.rname cands)
+          rr.gatesDigest
+        /= "" then
+        JobUngradeable "run \{rr.runId} is for a different gate set"
+      else
+        balJobGraded r rr m
 
 balJobGraded : Row -> RunRecord -> Int -> JobGrade
 balJobGraded r rr m
@@ -1725,8 +1734,8 @@ balSignedPct d m
   | d < 0 = "-\{intToString (0 - d * 100 / m)}%"
   | otherwise = "+\{intToString (d * 100 / m)}%"
 
-balJobLine : Row -> List RunRecord -> String
-balJobLine r runs = match balJobGrade r runs
+balJobLine : List Cand -> Row -> List RunRecord -> String
+balJobLine cands r runs = match balJobGrade cands r runs
   JobUngradeable why =>
     "\n    \{balPadR 10 ""} job wall predicted \{balPadL 9 (balSecs r.rload)}   not gradeable (\{why})"
   JobGraded m d within =>
@@ -1734,18 +1743,18 @@ balJobLine r runs = match balJobGrade r runs
     "\n    \{balPadR 10 ""} job wall predicted \{balPadL 9 (balSecs r.rload)}   measured \{balPadL 9 (balSecs m)}   \{balPadL 6 (balSignedPct d m)}  \{verdict} ±\{intToString balJobBandPct}%"
 
 -- Counts over the rows: (within, outside, not gradeable).
-balJobTally : List Row -> List RunRecord -> (Int, Int, Int)
-balJobTally [] _ = (0, 0, 0)
-balJobTally (r :: rs) runs =
-  let (w, o, u) = balJobTally rs runs
-  match balJobGrade r runs
+balJobTally : List Cand -> List Row -> List RunRecord -> (Int, Int, Int)
+balJobTally _ [] _ = (0, 0, 0)
+balJobTally cands (r :: rs) runs =
+  let (w, o, u) = balJobTally cands rs runs
+  match balJobGrade cands r runs
     JobUngradeable _ => (w, o, u + 1)
     JobGraded _ _ True => (w + 1, o, u)
     JobGraded _ _ False => (w, o + 1, u)
 
-balJobSummary : List Row -> List RunRecord -> String
-balJobSummary rows runs =
-  let (w, o, u) = balJobTally rows runs
+balJobSummary : List Cand -> List Row -> List RunRecord -> String
+balJobSummary cands rows runs =
+  let (w, o, u) = balJobTally cands rows runs
   "  job-wall calibration (predicted rload vs Actions job duration, bar ±\{intToString balJobBandPct}%): \{intToString w} within, \{intToString o} outside, \{intToString u} not gradeable of \{intToString (listLen rows)} rows\n"
 
 {- | What the incumbent preference bought, and what it cost — on EVERY run, in
@@ -2447,7 +2456,7 @@ balCompute regPath setup gates shs base runs regSrc =
             "",
           joinNl (balCalibLines cs curRows runs),
           "\n",
-          balJobSummary curRows runs,
+          balJobSummary cs curRows runs,
         ]
       match balEnforce cs rows
         Some m => Err "\{head}\{m}"
