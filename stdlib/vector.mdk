@@ -29,10 +29,10 @@ import core.{
   IndexMut,
 }
 
--- The list versions of `insertAt`/`removeAt`/`sortBy` define the semantics
--- the in-place mutators transport onto the vector, so delegating is what
--- keeps the two in step.
-import list as L
+-- `sortInPlaceBy` sorts through `array.sortBy` on a copy of the live range,
+-- so the mutators work on the backing array directly rather than round-tripping
+-- through a list.
+import array as A
 
 {- | The vector type. Its fields are the backing array and the element
    count, both mutable. -}
@@ -259,19 +259,25 @@ mapInPlace f (Vector backing len) = mapInPlaceGo f !backing 0 !len
 -- `isEmpty` is deliberately not added here: `impl Foldable Vector` below
 -- already defines it, so a module-level one would shadow the method.
 
--- Push every element of a list, in order.
-pushAll : List a -> Vector a -> Unit
-pushAll [] _ = ()
-pushAll (x :: xs) ma =
-  push x ma
-  pushAll xs ma
+-- Moves `arr[k - 1]` to `arr[k]` for k from `hi` down to `lo + 1`, opening
+-- slot `lo`. Walks downward so no element is read after it is overwritten.
+shiftUpGo : Array a -> Int -> Int -> Unit
+shiftUpGo arr hi lo =
+  if hi <= lo then
+    ()
+  else
+    let _ = arraySetUnsafe hi (arrayGetUnsafe (hi - 1) arr) arr
+    shiftUpGo arr (hi - 1) lo
 
--- Replace the live range with `xs`, in place (same `Ref` cells, so every
--- alias of `ma` observes the edit).  Capacity grows via `push` as needed.
-refill : Vector a -> List a -> Unit
-refill ma xs =
-  clear ma
-  pushAll xs ma
+-- Moves `arr[k + 1]` to `arr[k]` for k from `lo` up to `hi - 1`, closing the
+-- gap left by the removed element.
+shiftDownGo : Array a -> Int -> Int -> Unit
+shiftDownGo arr lo hi =
+  if lo >= hi then
+    ()
+  else
+    let _ = arraySetUnsafe lo (arrayGetUnsafe (lo + 1) arr) arr
+    shiftDownGo arr (lo + 1) hi
 
 {- | Inserts `x` at index `i`, shifting the following elements right.
 
@@ -282,7 +288,13 @@ refill ma xs =
    [1, 9, 2, 3] -}
 export
 insertAtInPlace : Int -> a -> Vector a -> Unit
-insertAtInPlace i x ma = refill ma (L.insertAt i x (elems ma))
+insertAtInPlace i x (Vector backing len) =
+  let n = !len
+  let j = if i < 0 then 0 else min i n
+  push x (Vector backing len)
+  let arr = !backing
+  shiftUpGo arr n j
+  arraySetUnsafe j x arr
 
 -- > let v = fromList [1, 2] in let _ = insertAtInPlace 7 9 v in toList v
 -- [1, 2, 9]
@@ -295,7 +307,11 @@ insertAtInPlace i x ma = refill ma (L.insertAt i x (elems ma))
    [1, 3] -}
 export
 removeAtInPlace : Int -> Vector a -> Unit
-removeAtInPlace i ma = refill ma (L.removeAt i (elems ma))
+removeAtInPlace i (Vector backing len)
+  | i < 0 || i >= !len = ()
+  | otherwise =
+    shiftDownGo !backing i (!len - 1)
+    len := !len - 1
 
 -- > let v = fromList [1, 2] in let _ = removeAtInPlace 7 v in toList v
 -- [1, 2]
@@ -309,7 +325,9 @@ removeAtInPlace i ma = refill ma (L.removeAt i (elems ma))
    [1, 1, 3, 4, 5] -}
 export
 sortInPlaceBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
-sortInPlaceBy cmp ma = refill ma (L.sortBy cmp (elems ma))
+sortInPlaceBy cmp (Vector backing len) =
+  let sorted = A.sortBy cmp (toArray (Vector backing len))
+  arrayBlit sorted 0 !backing 0 !len
 
 {- | Sorts the elements in place in ascending order.
 
@@ -508,6 +526,29 @@ prop "removeAtInPlace out of range is a no-op" (xs : List Int) =
   removeAtInPlace (length ma) ma
   removeAtInPlace (0 - 1) ma
   eq (toList ma) xs
+
+-- The element order an insert or remove must produce, written on lists from
+-- first principles. The shifts in `insertAtInPlace` and `removeAtInPlace` are
+-- checked against these element for element, not only by round trip.
+insertSpec : Int -> a -> List a -> List a
+insertSpec _ x [] = [x]
+insertSpec i x (y :: ys) =
+  if i <= 0 then x :: y :: ys else y :: insertSpec (i - 1) x ys
+
+removeSpec : Int -> List a -> List a
+removeSpec _ [] = []
+removeSpec i (y :: ys) =
+  if i < 0 then y :: ys else if i == 0 then ys else y :: removeSpec (i - 1) ys
+
+prop "insertAtInPlace and removeAtInPlace shift elements exactly as their list specs" (xs : List Int) (n : Int) (x : Int) =
+  let ma = fromList xs
+  insertAtInPlace n x ma
+  let inserted = eq (toList ma) (insertSpec n x xs)
+  removeAtInPlace n ma
+  let removed = eq (toList ma) (removeSpec n (insertSpec n x xs))
+  let mb = fromList xs
+  removeAtInPlace n mb
+  inserted && removed && eq (toList mb) (removeSpec n xs)
 
 -- LAW: `Display (Vector a)` renders the LIVE range in the same
 -- `fromList [...]` shape as `Debug`, and agrees with `Eq` -- equal vectors

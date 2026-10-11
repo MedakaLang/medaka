@@ -429,10 +429,7 @@ sortBy cmp arr =
   if n <= 1 then
     arrayCopy arr
   else
-    let mid = n / 2
-    let left = arrayMakeWith mid (i => arrayGetUnsafe i arr)
-    let right = arrayMakeWith (n - mid) (i => arrayGetUnsafe (mid + i) arr)
-    merge cmp (sortBy cmp left) (sortBy cmp right)
+    mergePasses cmp (arrayCopy arr) (arrayCopy arr) n 1
 
 -- > toList (sortBy compare (fromList [3, 1, 4, 1, 5]))
 -- [1, 1, 3, 4, 5]
@@ -466,30 +463,56 @@ sortOn key arr =
 
 -- ── Merge helpers ─────────────────────────────────────────────────────
 
--- Merge two sorted arrays into a fresh sorted array (stable: equal → left first).
--- No mutation — collects into a list then calls `arrayFromList`.
-merge : (a -> a -> <e> Ordering) -> Array a -> Array a -> <e> Array a
-merge cmp left right =
-  arrayFromList
-    (mergeGo cmp left right 0 0 (arrayLength left) (arrayLength right) [])
+-- Bottom-up merge sort over two equal-length buffers, `src` and `dst`. Each
+-- pass merges adjacent runs of `width` from `src` into `dst`, then the roles
+-- swap and `width` doubles; the buffer that holds the sorted run is returned.
+-- Stable: on ties the left run's element is taken first.
+mergePasses : (a -> a -> <e> Ordering) ->
+  Array a ->
+  Array a ->
+  Int ->
+  Int ->
+  <e> Array a
+mergePasses cmp src dst n width =
+  if width >= n then
+    src
+  else
+    let _ = mergeRuns cmp src dst n width 0
+    mergePasses cmp dst src n (width * 2)
 
--- Accumulates in reverse; flips at the base case via `revList`.
-mergeGo : (a -> a -> <e> Ordering) ->
+mergeRuns : (a -> a -> <e> Ordering) ->
+  Array a ->
+  Array a ->
+  Int ->
+  Int ->
+  Int ->
+  <e> Unit
+mergeRuns cmp src dst n width lo =
+  if lo >= n then
+    ()
+  else
+    let mid = min (lo + width) n
+    let hi = min (lo + width + width) n
+    let _ = mergeRun cmp src dst lo mid mid hi lo
+    mergeRuns cmp src dst n width hi
+
+-- Merges `src[i, iEnd)` and `src[j, jEnd)` into `dst` from index `k` on.
+mergeRun : (a -> a -> <e> Ordering) ->
   Array a ->
   Array a ->
   Int ->
   Int ->
   Int ->
   Int ->
-  List a ->
-  <e> List a
-mergeGo cmp left right il ir nl nr acc
-  | il >= nl && ir >= nr = revList acc []
-  | il >= nl =
-    mergeGo cmp left right il (ir + 1) nl nr (arrayGetUnsafe ir right :: acc)
-  | ir >= nr =
-    mergeGo cmp left right (il + 1) ir nl nr (arrayGetUnsafe il left :: acc)
-  | otherwise = mergeStep cmp left right il ir nl nr acc
+  Int ->
+  <e> Unit
+mergeRun cmp src dst i iEnd j jEnd k =
+  if i >= iEnd then
+    copyRun src dst j jEnd k
+  else if j >= jEnd then
+    copyRun src dst i iEnd k
+  else
+    mergeStep cmp src dst i iEnd j jEnd k
 
 -- Dispatches on comparator result; separated out to avoid match-inside-else.
 mergeStep : (a -> a -> <e> Ordering) ->
@@ -499,14 +522,25 @@ mergeStep : (a -> a -> <e> Ordering) ->
   Int ->
   Int ->
   Int ->
-  List a ->
-  <e> List a
-mergeStep cmp left right il ir nl nr acc =
-  match cmp (arrayGetUnsafe il left) (arrayGetUnsafe ir right)
+  Int ->
+  <e> Unit
+mergeStep cmp src dst i iEnd j jEnd k =
+  match cmp (arrayGetUnsafe i src) (arrayGetUnsafe j src)
     Gt =>
-      mergeGo cmp left right il (ir + 1) nl nr (arrayGetUnsafe ir right :: acc)
+      let _ = arraySetUnsafe k (arrayGetUnsafe j src) dst
+      mergeRun cmp src dst i iEnd (j + 1) jEnd (k + 1)
     _ =>
-      mergeGo cmp left right (il + 1) ir nl nr (arrayGetUnsafe il left :: acc)
+      let _ = arraySetUnsafe k (arrayGetUnsafe i src) dst
+      mergeRun cmp src dst (i + 1) iEnd j jEnd (k + 1)
+
+-- Copies `src[i, iEnd)` into `dst` from index `k` on.
+copyRun : Array a -> Array a -> Int -> Int -> Int -> Unit
+copyRun src dst i iEnd k =
+  if i >= iEnd then
+    ()
+  else
+    let _ = arraySetUnsafe k (arrayGetUnsafe i src) dst
+    copyRun src dst (i + 1) iEnd (k + 1)
 
 -- # Searching
 
