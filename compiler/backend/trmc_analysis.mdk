@@ -1344,9 +1344,9 @@ dispBindHeads cf (CBind _ clauses _) =
 -- every head referenced from a lowered impl/default body (impl bodies are outside
 -- the CBind list but can still call into a group).
 dispImplEntryHeads : (String -> String) -> CImplEntry -> List String
-dispImplEntryHeads cf (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ body)) =
+dispImplEntryHeads cf (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _ body)) =
   allCallHeads cf body
-dispImplEntryHeads cf (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ body)) =
+dispImplEntryHeads cf (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _ body)) =
   allCallHeads cf body
 
 allCallHeadsStmt : (String -> String) -> CStmt -> List String

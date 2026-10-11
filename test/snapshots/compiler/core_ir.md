@@ -1,5 +1,5 @@
 # META
-source_lines=320
+source_lines=335
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -295,8 +295,9 @@ public export data CClause = CClause (List Pat) CExpr
 -- CImplBody:
 --   CImplTagged = a method the impl SUPPLIES (concrete type-head tag, the canonical
 --     full-type impl key [for type-arg-distinct same-head dispatch, mirrors
---     eval.mdk's VTypedImpl `k`], iface, dispatch positions, the clause's
---     patterns, its lowered body).
+--     eval.mdk's VTypedImpl `k`], the interface word (`route_key.ifaceWordOf`, the
+--     same qualified word `CImplDefault` and `CMethod` carry), the emitted-symbol
+--     words, dispatch positions, the clause's patterns, its lowered body).
 --   CImplDefault = a slot the impl INHERITS from its interface's default body, one
 --     entry per `InheritedDefault` row of the disposition table
 --     (`types/disposition.mdk`): the interface word (`route_key.ifaceWordOf`,
@@ -312,8 +313,22 @@ public export data CClause = CClause (List Pat) CExpr
 --     defaults, because every inherited slot has its own entry.
 public export data CImplEntry = CImplEntry String Int Int CImplBody
 public export data CImplBody =
-  | CImplTagged String String String (List Int) (List Pat) CExpr
-  | CImplDefault String String String (List Int) (List Pat) CExpr
+  | CImplTagged String String String ImplSym (List Int) (List Pat) CExpr
+  | CImplDefault String String String ImplSym (List Int) (List Pat) CExpr
+
+-- The emitted-symbol words of an impl entry, stamped once by
+-- `core_ir_lower.stampImplSymbols` and read by both emitters, which only prefix
+-- and join them.  Fields: the symbol tag (the encoded head tag when the entry is
+-- the sole impl of (method, head), else the encoded canonical key -- the `<tag>` of
+-- `mdk_impl_<tag>_<method>` and of `$memo_<tag>_<method>`), then, for an inherited
+-- default only, the encoded interface word and the encoded instance key that
+-- spell `mdk_default_<iface>_<method>_<key>`; both are "" on a supplied method.
+-- `noImplSym` is the unstamped sentinel, which `core_validate` refuses.
+public export data ImplSym = ImplSym String String String
+
+export
+noImplSym : ImplSym
+noImplSym = ImplSym "" "" ""
 
 -- ── programs ───────────────────────────────────────────────────────────────
 -- A lowered program: top-level function groups (coalesced multi-clause), the
@@ -348,7 +363,10 @@ public export data CProgram =
 (DFunDef false "siteSentinelName" () (ELit (LString "__site__")))
 (DData Public "CClause" () ((variant "CClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
 (DData Public "CImplEntry" () ((variant "CImplEntry" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "CImplBody")))) ())
-(DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
+(DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "ImplSym") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "ImplSym") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
+(DData Public "ImplSym" () ((variant "ImplSym" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
+(DTypeSig true "noImplSym" (TyCon "ImplSym"))
+(DFunDef false "noImplSym" () (EApp (EApp (EApp (EVar "ImplSym") (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))))
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" false) (mem "Loc" false) (mem "Pat" false) (mem "Addr" false) (mem "Route" false) (mem "noDeclLoc" false))))
@@ -376,5 +394,8 @@ public export data CProgram =
 (DFunDef false "siteSentinelName" () (ELit (LString "__site__")))
 (DData Public "CClause" () ((variant "CClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
 (DData Public "CImplEntry" () ((variant "CImplEntry" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "CImplBody")))) ())
-(DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
+(DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "ImplSym") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "ImplSym") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
+(DData Public "ImplSym" () ((variant "ImplSym" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
+(DTypeSig true "noImplSym" (TyCon "ImplSym"))
+(DFunDef false "noImplSym" () (EApp (EApp (EApp (EVar "ImplSym") (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))))
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())

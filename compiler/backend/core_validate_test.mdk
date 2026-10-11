@@ -25,6 +25,7 @@ import ir.core_ir.{
   CImplBody(..),
   CImplEntry(..),
   CProgram(..),
+  noImplSym,
   CStmt(..),
   CallMode(..),
   CallSite(..),
@@ -46,6 +47,7 @@ import backend.core_validate.{
   renderExternFinding,
   validateCalls,
   validateExterns,
+  validateImplSymbols,
   validateRecords,
   validateTails,
 }
@@ -607,10 +609,10 @@ widenEntries m ((ent@(CImplEntry n s d body)) :: rest) =
     ent :: widenEntries m rest
 
 widenBody : CImplBody -> CImplBody
-widenBody (CImplTagged tag key iface pos pats body) =
-  CImplTagged tag key iface pos (pats ++ [PVar "w" noDeclLoc]) body
-widenBody (CImplDefault w tag key pos pats body) =
-  CImplDefault w tag key pos (pats ++ [PVar "w" noDeclLoc]) body
+widenBody (CImplTagged tag key iface sym pos pats body) =
+  CImplTagged tag key iface sym pos (pats ++ [PVar "w" noDeclLoc]) body
+widenBody (CImplDefault w tag key sym pos pats body) =
+  CImplDefault w tag key sym pos (pats ++ [PVar "w" noDeclLoc]) body
 
 test "(q) the impl entries of one method and route word take one arity" = expectEach
   [
@@ -626,6 +628,56 @@ test "(q) the impl entries of one method and route word take one arity" = expect
         ]
         (validateCalls
           (widenFirstEntry "foo" (typedLowered i2078Prelude mixedGroupSrc))),
+    ),
+  ]
+
+-- [prog] with every impl entry's stamped symbol cleared, as a lowering that
+-- never stamped would leave it.
+unstampImpls : CProgram -> CProgram
+unstampImpls (CProgram groups ctors ctorTypes impls) =
+  CProgram groups ctors ctorTypes (map unstampEntry impls)
+
+unstampEntry : CImplEntry -> CImplEntry
+unstampEntry (CImplEntry n s d (CImplTagged tag key iface _ pos pats body)) =
+  CImplEntry n s d (CImplTagged tag key iface noImplSym pos pats body)
+unstampEntry (CImplEntry n s d (CImplDefault w tag key _ pos pats body)) =
+  CImplEntry n s d (CImplDefault w tag key noImplSym pos pats body)
+
+-- [prog] with every supplied method's interface word replaced by [word].
+reword : String -> CProgram -> CProgram
+reword word (CProgram groups ctors ctorTypes impls) =
+  CProgram groups ctors ctorTypes (map (rewordEntry word) impls)
+
+rewordEntry : String -> CImplEntry -> CImplEntry
+rewordEntry word (CImplEntry n s d (CImplTagged tag key _ sym pos pats body)) =
+  CImplEntry n s d (CImplTagged tag key word sym pos pats body)
+rewordEntry _ ent = ent
+
+test "(t) every impl entry carries its stamped symbol and its qualified interface word" = expectEach
+  [
+    (
+      "lowering stamps both, so a lowered program validates clean",
+      expectEqual [] (validateImplSymbols (lowered TargetNative mixedGroupSrc)),
+    ),
+    (
+      "an entry with no stamped symbol is refused",
+      expectEqual
+        [
+          "impl symbol: entry has no stamped symbol [in impl foo@T]",
+          "impl symbol: entry has no stamped symbol [in impl foo@T]",
+        ]
+        (validateImplSymbols
+          (unstampImpls (lowered TargetNative mixedGroupSrc))),
+    ),
+    (
+      "an interface word that is not the qualified word of the entry's key is refused",
+      expectEqual
+        [
+          "impl symbol: interface word `Other` is not the qualified word `Foo` of its key [in impl foo@T]",
+          "impl symbol: interface word `Other` is not the qualified word `Foo` of its key [in impl foo@T]",
+        ]
+        (validateImplSymbols
+          (reword "Other" (lowered TargetNative mixedGroupSrc))),
     ),
   ]
 

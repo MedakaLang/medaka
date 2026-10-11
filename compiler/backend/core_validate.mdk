@@ -38,6 +38,7 @@ import ir.core_ir.{
   CClause(..),
   CImplEntry(..),
   CImplBody(..),
+  ImplSym(..),
   CProgram(..),
   CallMode(..),
   CallSite(..),
@@ -53,6 +54,7 @@ import ir.core_ir_lower.{
   definedArityOf,
   entryArityRow,
   programArities,
+  ifaceWordOfKey,
 }
 import ir.core_ir_sexp.{callModeSexp}
 import backend.extern_catalog.{
@@ -155,9 +157,38 @@ splitGroupFaults ((ent@(CImplEntry method _ _ body)) :: rest) seen acc =
             :: acc)
     None => splitGroupFaults rest (omInsert key n seen) acc
 
+-- The impl-symbol check: every impl entry carries the symbol words
+-- `core_ir_lower.stampImplSymbols` wrote, and a supplied method's interface word
+-- is the qualified word its canonical key opens with.  The emitters only prefix
+-- and join the stamp, so an entry with none would define a symbol named after
+-- nothing.
+export
+validateImplSymbols : CProgram -> List String
+validateImplSymbols (CProgram _ _ _ impls) = flatMap implSymbolFaults impls
+
+implSymbolFaults : CImplEntry -> List String
+implSymbolFaults (CImplEntry method _ _ (CImplTagged tag key iface (ImplSym sym _ _) _ _ _)) =
+  (if sym == "" then
+      ["impl symbol: entry has no stamped symbol [in impl \{method}@\{tag}]"]
+    else
+      [])
+    ++ (if iface == ifaceWordOfKey key then
+      []
+    else
+      [
+        "impl symbol: interface word `\{iface}` is not the qualified word `\{ifaceWordOfKey key}` of its key [in impl \{method}@\{tag}]",
+      ])
+implSymbolFaults (CImplEntry method _ _ (CImplDefault _ tag _ (ImplSym sym ifaceTag keyTag) _ _ _)) =
+  if sym == "" || ifaceTag == "" || keyTag == "" then
+    [
+      "impl symbol: default entry has no stamped symbol [in impl \{method}@\{tag}]",
+    ]
+  else
+    []
+
 implBodyTag : CImplBody -> String
-implBodyTag (CImplTagged tag _ _ _ _ _) = tag
-implBodyTag (CImplDefault _ tag _ _ _ _) = tag
+implBodyTag (CImplTagged tag _ _ _ _ _ _) = tag
+implBodyTag (CImplDefault _ tag _ _ _ _ _) = tag
 
 export
 renderCallRefusal : List String -> String
@@ -259,13 +290,13 @@ walkImpls backend top env ((CImplEntry method _ _ body) :: rest) w =
     (walkImplBody (Ctx backend top env "impl \{method}") body w)
 
 walkImplBody : Ctx -> CImplBody -> Walk -> Walk
-walkImplBody (Ctx backend top env binding) (CImplTagged tag _ _ _ pats body) w =
+walkImplBody (Ctx backend top env binding) (CImplTagged tag _ _ _ _ pats body) w =
   walkE
     (Ctx backend top env "\{binding}@\{tag}")
     (bindPatsScope pats omEmpty)
     body
     w
-walkImplBody (Ctx backend top env binding) (CImplDefault _ tag _ _ pats body) w =
+walkImplBody (Ctx backend top env binding) (CImplDefault _ tag _ _ _ pats body) w =
   walkE
     (Ctx backend top env "\{binding}@\{tag}")
     (bindPatsScope pats omEmpty)
@@ -509,9 +540,9 @@ tailImpls ((CImplEntry method _ _ body) :: rest) acc =
   tailImpls rest (tailImplBody "impl \{method}" body acc)
 
 tailImplBody : String -> CImplBody -> List String -> List String
-tailImplBody b (CImplTagged tag _ _ _ pats body) acc =
+tailImplBody b (CImplTagged tag _ _ _ _ pats body) acc =
   tailE "\{b}@\{tag}" (isNonEmptyL pats) body acc
-tailImplBody b (CImplDefault _ tag _ _ pats body) acc =
+tailImplBody b (CImplDefault _ tag _ _ _ pats body) acc =
   tailE "\{b}@\{tag}" (isNonEmptyL pats) body acc
 
 -- `b` is the top-level binding being read; `tl` is whether `e` is in tail

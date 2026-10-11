@@ -517,9 +517,9 @@ cImplEntryValues : EvalEnv (Value e) ->
 cImplEntryValues env ent = [cImplEntryValue env ent]
 
 cImplBodyValue : EvalEnv (Value e) -> CImplBody -> Value e
-cImplBodyValue env (CImplTagged tag key _ positions pats body) =
+cImplBodyValue env (CImplTagged tag key _ _ positions pats body) =
   VTypedImpl tag key positions 0 (cImplMethodValue env positions pats body)
-cImplBodyValue env (CImplDefault _ tag key positions pats body) =
+cImplBodyValue env (CImplDefault _ tag key _ positions pats body) =
   VTypedImpl tag key positions 0 (cImplMethodValue env positions pats body)
 
 -- A point-free (no-param) impl/default body: defer a return-position method as a

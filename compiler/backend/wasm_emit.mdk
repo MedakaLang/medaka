@@ -209,6 +209,7 @@ import ir.core_ir.{
   CHead(..),
   CImplEntry(..),
   CImplBody(..),
+  ImplSym(..),
   CField(..),
   FailSite(..),
   CallMode(..),
@@ -233,6 +234,7 @@ import backend.core_validate.{
   renderCallRefusal,
   renderTailRefusal,
   validateCalls,
+  validateImplSymbols,
   validateTails,
   validateRecords,
   unrefusedExternMessage,
@@ -274,7 +276,6 @@ import ir.core_ir_lower.{
   callModeFor,
   isPartialMode,
   definedArityOf,
-  ifaceWordOfKey,
   programArities,
 }
 import backend.trmc_analysis.{
@@ -712,23 +713,22 @@ indexTypeCtorsW index = index.ctor.typeCtors
 -- of its route key, an inherited default directly as `CImplDefault`'s first field —
 -- the same `ifaceWordOf` word a `CMethod` occurrence carries (`narrowByIfaceW`).
 implEntryIfaceWordW : CImplEntry -> String
-implEntryIfaceWordW (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _)) =
-  ifaceWordOfKey key
-implEntryIfaceWordW (CImplEntry _ _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
+implEntryIfaceWordW (CImplEntry _ _ _ (CImplTagged _ _ iface _ _ _ _)) = iface
+implEntryIfaceWordW (CImplEntry _ _ _ (CImplDefault ifaceWord _ _ _ _ _ _)) =
   ifaceWord
 
 -- the head tag / canonical key / clause of any per-instance entry
 implEntryTagW : CImplEntry -> String
-implEntryTagW (CImplEntry _ _ _ (CImplTagged t _ _ _ _ _)) = t
-implEntryTagW (CImplEntry _ _ _ (CImplDefault _ t _ _ _ _)) = t
+implEntryTagW (CImplEntry _ _ _ (CImplTagged t _ _ _ _ _ _)) = t
+implEntryTagW (CImplEntry _ _ _ (CImplDefault _ t _ _ _ _ _)) = t
 
 implEntryKeyW : CImplEntry -> String
-implEntryKeyW (CImplEntry _ _ _ (CImplTagged _ k _ _ _ _)) = k
-implEntryKeyW (CImplEntry _ _ _ (CImplDefault _ _ k _ _ _)) = k
+implEntryKeyW (CImplEntry _ _ _ (CImplTagged _ k _ _ _ _ _)) = k
+implEntryKeyW (CImplEntry _ _ _ (CImplDefault _ _ k _ _ _ _)) = k
 
 implEntryPatsW : CImplEntry -> List Pat
-implEntryPatsW (CImplEntry _ _ _ (CImplTagged _ _ _ _ pats _)) = pats
-implEntryPatsW (CImplEntry _ _ _ (CImplDefault _ _ _ _ pats _)) = pats
+implEntryPatsW (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ pats _)) = pats
+implEntryPatsW (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ pats _)) = pats
 
 implEntryMethodW : CImplEntry -> String
 implEntryMethodW (CImplEntry m _ _ _) = m
@@ -1347,7 +1347,7 @@ refuseUnprovidedExternsW emit input cp =
   let _ = match validateRecords cp
     [] => ()
     bad => panic ("internal error: " ++ renderRecordRefusal bad)
-  let _ = match validateCalls cp
+  let _ = match validateCalls cp ++ validateImplSymbols cp
     [] => ()
     bad => panic ("internal error: " ++ renderCallRefusal bad)
   let _ = match validateTails cp
@@ -1971,9 +1971,9 @@ scanImplsW7 emit impls = forEachU (entry => scanImplEntryW7 emit entry) impls
 
 scanImplEntryW7 : WasmEmit -> CImplEntry -> Unit
 scanImplEntryW7 emit (CImplEntry _ _ _ body) = match body
-  CImplTagged _ _ _ _ pats b =>
+  CImplTagged _ _ _ _ _ pats b =>
     let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
-  CImplDefault _ _ _ _ pats b =>
+  CImplDefault _ _ _ _ _ pats b =>
     let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
 
 forEachU : (a -> Unit) -> List a -> Unit
@@ -2221,8 +2221,8 @@ scanImplEntryValueUses : OrdMap Unit ->
   CImplEntry ->
   List String
 scanImplEntryValueUses fnNames ctorArs (CImplEntry _ _ _ body) = match body
-  CImplTagged _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
-  CImplDefault _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
+  CImplTagged _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
+  CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
 
 scanBindValueUses : OrdMap Unit -> List (String, Int) -> CBind -> List String
 scanBindValueUses fnNames ctorArs (CBind _ clauses _) =
@@ -3942,8 +3942,8 @@ implBodiesForW fn ((CImplEntry name _ _ body) :: rest) =
     implBodiesForW fn rest
 
 implBodyExprW : CImplBody -> CExpr
-implBodyExprW (CImplTagged _ _ _ _ _ e) = e
-implBodyExprW (CImplDefault _ _ _ _ _ e) = e
+implBodyExprW (CImplTagged _ _ _ _ _ _ e) = e
+implBodyExprW (CImplDefault _ _ _ _ _ _ e) = e
 
 allWBoolW : Prog -> List CExpr -> Bool
 allWBoolW _ [] = True
@@ -4738,7 +4738,7 @@ emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoute
         flatMap
           (routeWitness prog env d)
           (staticEntryDictRoutesW entry route methRoutes implRoutes)
-      keptWords ++ argInstrs ++ [callInstrW end (implEntrySymW prog name entry)]
+      keptWords ++ argInstrs ++ [callInstrW end (implEntrySymW name entry)]
     None =>
       gapLP
           prog
@@ -4770,7 +4770,7 @@ routeKeyWordW _ = ""
 
 -- an inherited default's per-instance entry
 isInheritedEntryW : CImplEntry -> Bool
-isInheritedEntryW (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _)) = True
+isInheritedEntryW (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _ _)) = True
 isInheritedEntryW _ = False
 
 -- A dispatch site's method-level dictionaries: the instructions that push their
@@ -5247,83 +5247,25 @@ stampedAppW prog hd args =
   let mode = callModeFor (definedArityW prog hd) (listLen args)
   CApp hd args (CallSite mode (not (isPartialMode mode)))
 
--- the impl-function symbol: $mdk_impl_<symTag>_<method>.  [tag] is a RAW dispatch
--- tag — the bare head tycon (the common case: a sole impl per head) OR the canonical
--- full-type key stamped into an overlapping-instance route (`Default|(Box a)|`).
--- #324 (wasm half of DICT-SEMANTICS §6): resolve it to the SYMBOL tag the same way
--- llvm_emit does (implFnSymTag) — the bare head when that head has a single impl (so
--- every existing symbol stays byte-identical / fixpoint-safe), else the SANITIZED
--- canonical key, byte-distinct per overlapping impl.  Resolution is identical at the
--- func DEFINITION (emitImplGroup passes the group's key) and every call/reference
--- site (they pass the route tag), so def and ref always agree.
--- A site-qualified lookup already selected one entry.  Derive the symbol from that
--- exact entry so a second bare tag lookup cannot switch interfaces: a supplied
--- method's `mdk_impl_<symTag>_<method>`, or an inherited default's per-instance
--- `defaultFnNameW` body.
-implEntrySymW : Prog -> String -> CImplEntry -> String
-implEntrySymW prog method (ent@(CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _))) =
-  implFnSymOfTag
-    (implFnSymTagW
-      (methodEntriesW prog method)
-      method
-      (implEntryTagW ent)
-      (implEntryKeyW ent))
-    method
-implEntrySymW _ method (CImplEntry _ _ _ (CImplDefault ifaceWord _ key _ _ _)) =
-  defaultFnNameW ifaceWord method key
+-- the stamped symbol tag of an entry of either kind
+implEntrySymTagW : CImplEntry -> String
+implEntrySymTagW (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) _ _ _)) =
+  tag
+implEntrySymTagW (CImplEntry _ _ _ (CImplDefault _ _ _ (ImplSym tag _ _) _ _ _)) =
+  tag
 
--- the wasm name of an inherited default's per-instance body (the peer of
--- llvm_emit's `defaultFnName`): keyed by the interface that declared the default and
--- the instance that inherits it, so two interfaces' defaults for one method spelling
--- at one type (#1265) are two functions.
-defaultFnNameW : String -> String -> String -> String
-defaultFnNameW ifaceWord method key =
-  "mdk_default_\{injectiveIdent ifaceWord}_\{gname method}_\{injectiveIdent key}"
+-- The function symbol of one exact entry, composed from its stamp
+-- (`core_ir_lower.stampImplSymbols`): a supplied method's `mdk_impl_<symTag>_<method>`,
+-- or an inherited default's per-instance `mdk_default_<iface>_<method>_<key>`.
+implEntrySymW : String -> CImplEntry -> String
+implEntrySymW method (CImplEntry _ _ _ (CImplTagged _ _ _ (ImplSym tag _ _) _ _ _)) =
+  implFnSymOfTag tag method
+implEntrySymW method (CImplEntry _ _ _ (CImplDefault _ _ _ (ImplSym _ ifaceTag keyTag) _ _ _)) =
+  "mdk_default_\{ifaceTag}_\{gname method}_\{keyTag}"
 
--- build the symbol from an ALREADY-RESOLVED symbol tag (a bare head, or an
--- injectively encoded canonical key) — used where the caller already computed the
--- symTag (the RDict dispatch chain, via methodImpls) so it need not re-resolve
--- through findByKeyArityW.
+-- build the symbol from an entry's stamped symbol tag
 implFnSymOfTag : String -> String -> String
 implFnSymOfTag symTag method = "mdk_impl_\{symTag}_\{gname method}"
-
--- TYPECHECK-AUDIT C7 (wasm peer of llvm_emit's implFnSymTag): the SYMBOL tag a
--- same-head-tycon impl is emitted/dispatched under.  Sole impl of (method, head) ⇒
--- the head tag through `injectiveIdent` (the identity on a prelude or builtin
--- head; a module-qualified head is escaped, #1397); a genuine C7 collision (≥2 distinct
--- canonical keys at one head) ⇒ the INJECTIVELY encoded canonical key, byte-distinct
--- per impl.  #1950: this arm used the MANY-TO-ONE `sanitizeId`, so two keys differing
--- only in `[^A-Za-z0-9_]` positions collapsed onto one wasm function — the same
--- defect the LLVM peer carried, independently.  `private_mangle.injectiveIdent` is
--- the one shared definition, so both backends and `core_ir_lower`'s injectivity
--- guard agree on the emitted symbol.
-implFnSymTagW : List CImplEntry -> String -> String -> String -> String
-implFnSymTagW entries method tag key =
-  if headTagUniqueW entries method tag then
-    injectiveIdent tag
-  else
-    injectiveIdent key
-
--- does the head tycon [tag] of [method] have a single impl, or several distinct ones
--- (C7 collision)?  Count DISTINCT canonical keys at this head — a multi-clause impl
--- contributes several entries sharing ONE key, and the joint prelude+module list
--- duplicates prelude impls; a real collision is ≥2 DIFFERENT keys at (method, head).
-headTagUniqueW : List CImplEntry -> String -> String -> Bool
-headTagUniqueW entries method tag =
-  listLen (distinctKeysAtHeadW entries method tag []) <= 1
-
-distinctKeysAtHeadW : List CImplEntry ->
-  String ->
-  String ->
-  List String ->
-  List String
-distinctKeysAtHeadW [] _ _ acc = acc
-distinctKeysAtHeadW (ent :: rest) method tag acc
-  | implEntryMethodW ent == method
-    && implEntryTagW ent == tag
-    && not (contains (implEntryKeyW ent) acc) =
-    distinctKeysAtHeadW rest method tag (implEntryKeyW ent :: acc)
-  | otherwise = distinctKeysAtHeadW rest method tag acc
 
 -- the head tycon of the impl whose canonical key is [key] (mirror of llvm_emit's
 -- headTagForKey) — the group's dispatch/self/Float tag, distinct from its symbol tag.
@@ -5350,9 +5292,9 @@ emitImplFns prog =
 -- (method, tag, arity, clauses) per distinct impl key, in first-seen order.
 -- (method, headTag, key, arity, clauses) per distinct canonical impl key.  #324:
 -- headTag drives dispatch/self-recursion/Float-param decisions (mirror of llvm_emit's
--- ImplGroup `tag`), while [key] drives the SYMBOL (via implFnSym) and clause selection
+-- ImplGroup `tag`), while [key] drives the SYMBOL (via the stamp) and clause selection
 -- (mirror of `symTag`/`key`).  For a sole impl per head the two coincide in effect
--- (headTagUniqueW ⇒ symbol == headTag), so existing output is byte-identical.
+-- (a sole impl's symbol tag is its head tag), so existing output is byte-identical.
 data ImplG = ImplG String String String Int (List CClause) String
 
 implGroups : Prog -> List CImplEntry -> List ImplG
@@ -5419,8 +5361,8 @@ gatherImplGroup prog entries (m, key) =
   -- the define takes exactly its clauses' parameters: a call site's mode was read
   -- against that same count, so nothing here may lengthen a clause
   let fnName = match firstEntryForKeyW m key mEntries
-    Some ent => implEntrySymW prog m ent
-    None => implFnSymOfTag (injectiveIdent key) m
+    Some ent => implEntrySymW m ent
+    None => panic "wasm: impl group without an entry (internal error)"
   ImplG m headTag key (implGroupArity clauses) clauses fnName
 
 -- count of leading `$dict_…` param patterns the dict-pass prepends ahead of the
@@ -5658,18 +5600,15 @@ methodImpls prog method iface =
   let mEntries = methodEntriesW prog method
   dedupArmsW
     (map
-      (methodImplArm prog mEntries method)
+      (methodImplArm method)
       (filterList
         (ent => implEntryMethodW ent == method)
         (narrowByIfaceW iface mEntries)))
     omEmpty
 
-methodImplArm : Prog -> List CImplEntry -> String -> CImplEntry -> ImplArmW
-methodImplArm prog entries method ent =
-  ImplArmW
-    (implFnSymTagW entries method (implEntryTagW ent) (implEntryKeyW ent))
-    (implEntrySymW prog method ent)
-    ent
+methodImplArm : String -> CImplEntry -> ImplArmW
+methodImplArm method ent =
+  ImplArmW (implEntrySymTagW ent) (implEntrySymW method ent) ent
 
 -- one arm per called function, first-seen order
 dedupArmsW : List ImplArmW -> OrdMap Unit -> List ImplArmW

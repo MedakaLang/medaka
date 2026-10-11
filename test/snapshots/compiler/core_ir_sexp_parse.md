@@ -1,5 +1,5 @@
 # META
-source_lines=454
+source_lines=463
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -31,6 +31,7 @@ import ir.core_ir.{
   CClause(..),
   CImplEntry(..),
   CImplBody(..),
+  ImplSym(..),
   CProgram(..),
   CallMode(..),
   CallSite(..),
@@ -399,20 +400,28 @@ toCBind (SList ((SAtom "CBind") :: name :: clauses)) =
   CBind (toStr name) (map toCClause clauses) noDeclLoc
 toCBind other = panic ("core_ir_sexp_parse: bad CBind: " ++ sexprToStr other)
 
+toImplSym : SExp -> ImplSym
+toImplSym (SList [tag, ifaceTag, keyTag]) =
+  ImplSym (toStr tag) (toStr ifaceTag) (toStr keyTag)
+toImplSym other =
+  panic ("core_ir_sexp_parse: bad ImplSym: " ++ sexprToStr other)
+
 toCImplBody : SExp -> CImplBody
-toCImplBody (SList ((SAtom "CImplTagged") :: [tag, key, iface, SList positions, SList pats, body])) =
+toCImplBody (SList ((SAtom "CImplTagged") :: [tag, key, iface, sym, SList positions, SList pats, body])) =
   CImplTagged
     (toStr tag)
     (toStr key)
     (toStr iface)
+    (toImplSym sym)
     (map toInt positions)
     (map toPat pats)
     (toCExpr body)
-toCImplBody (SList ((SAtom "CImplDefault") :: [ifaceId, tag, key, SList positions, SList pats, body])) =
+toCImplBody (SList ((SAtom "CImplDefault") :: [ifaceId, tag, key, sym, SList positions, SList pats, body])) =
   CImplDefault
     (toStr ifaceId)
     (toStr tag)
     (toStr key)
+    (toImplSym sym)
     (map toInt positions)
     (map toPat pats)
     (toCExpr body)
@@ -458,7 +467,7 @@ joinSexps [x] = sexprToStr x
 joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
 (DTypeSig false "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "SToken"))))
@@ -639,9 +648,12 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DTypeSig false "toCBind" (TyFun (TyCon "SExp") (TyCon "CBind")))
 (DFunDef false "toCBind" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBind"))) (PCons (PVar "name") (PVar "clauses"))))) (EApp (EApp (EApp (EVar "CBind") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EVar "map") (EVar "toCClause")) (EVar "clauses"))) (EVar "noDeclLoc")))
 (DFunDef false "toCBind" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CBind: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
+(DTypeSig false "toImplSym" (TyFun (TyCon "SExp") (TyCon "ImplSym")))
+(DFunDef false "toImplSym" ((PCon "SList" (PList (PVar "tag") (PVar "ifaceTag") (PVar "keyTag")))) (EApp (EApp (EApp (EVar "ImplSym") (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "ifaceTag"))) (EApp (EVar "toStr") (EVar "keyTag"))))
+(DFunDef false "toImplSym" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad ImplSym: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCImplBody" (TyFun (TyCon "SExp") (TyCon "CImplBody")))
-(DFunDef false "toCImplBody" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplTagged"))) (PList (PVar "tag") (PVar "key") (PVar "iface") (PCon "SList" (PVar "positions")) (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "key"))) (EApp (EVar "toStr") (EVar "iface"))) (EApp (EApp (EVar "map") (EVar "toInt")) (EVar "positions"))) (EApp (EApp (EVar "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
-(DFunDef false "toCImplBody" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplDefault"))) (PList (PVar "ifaceId") (PVar "tag") (PVar "key") (PCon "SList" (PVar "positions")) (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EApp (EVar "toStr") (EVar "ifaceId"))) (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "key"))) (EApp (EApp (EVar "map") (EVar "toInt")) (EVar "positions"))) (EApp (EApp (EVar "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
+(DFunDef false "toCImplBody" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplTagged"))) (PList (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PCon "SList" (PVar "positions")) (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "key"))) (EApp (EVar "toStr") (EVar "iface"))) (EApp (EVar "toImplSym") (EVar "sym"))) (EApp (EApp (EVar "map") (EVar "toInt")) (EVar "positions"))) (EApp (EApp (EVar "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
+(DFunDef false "toCImplBody" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplDefault"))) (PList (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PCon "SList" (PVar "positions")) (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EApp (EVar "toStr") (EVar "ifaceId"))) (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "key"))) (EApp (EVar "toImplSym") (EVar "sym"))) (EApp (EApp (EVar "map") (EVar "toInt")) (EVar "positions"))) (EApp (EApp (EVar "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
 (DFunDef false "toCImplBody" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CImplBody: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCImplEntry" (TyFun (TyCon "SExp") (TyCon "CImplEntry")))
 (DFunDef false "toCImplEntry" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplEntry"))) (PList (PVar "name") (PVar "score") (PVar "declared") (PVar "body"))))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toInt") (EVar "score"))) (EApp (EVar "toInt") (EVar "declared"))) (EApp (EVar "toCImplBody") (EVar "body"))))
@@ -663,7 +675,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
 (DTypeSig false "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "SToken"))))
@@ -844,9 +856,12 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DTypeSig false "toCBind" (TyFun (TyCon "SExp") (TyCon "CBind")))
 (DFunDef false "toCBind" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBind"))) (PCons (PVar "name") (PVar "clauses"))))) (EApp (EApp (EApp (EVar "CBind") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EMethodRef "map") (EVar "toCClause")) (EVar "clauses"))) (EVar "noDeclLoc")))
 (DFunDef false "toCBind" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CBind: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
+(DTypeSig false "toImplSym" (TyFun (TyCon "SExp") (TyCon "ImplSym")))
+(DFunDef false "toImplSym" ((PCon "SList" (PList (PVar "tag") (PVar "ifaceTag") (PVar "keyTag")))) (EApp (EApp (EApp (EVar "ImplSym") (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "ifaceTag"))) (EApp (EVar "toStr") (EVar "keyTag"))))
+(DFunDef false "toImplSym" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad ImplSym: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCImplBody" (TyFun (TyCon "SExp") (TyCon "CImplBody")))
-(DFunDef false "toCImplBody" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplTagged"))) (PList (PVar "tag") (PVar "key") (PVar "iface") (PCon "SList" (PVar "positions")) (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "key"))) (EApp (EVar "toStr") (EVar "iface"))) (EApp (EApp (EMethodRef "map") (EVar "toInt")) (EVar "positions"))) (EApp (EApp (EMethodRef "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
-(DFunDef false "toCImplBody" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplDefault"))) (PList (PVar "ifaceId") (PVar "tag") (PVar "key") (PCon "SList" (PVar "positions")) (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EApp (EVar "toStr") (EVar "ifaceId"))) (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "key"))) (EApp (EApp (EMethodRef "map") (EVar "toInt")) (EVar "positions"))) (EApp (EApp (EMethodRef "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
+(DFunDef false "toCImplBody" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplTagged"))) (PList (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PCon "SList" (PVar "positions")) (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "key"))) (EApp (EVar "toStr") (EVar "iface"))) (EApp (EVar "toImplSym") (EVar "sym"))) (EApp (EApp (EMethodRef "map") (EVar "toInt")) (EVar "positions"))) (EApp (EApp (EMethodRef "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
+(DFunDef false "toCImplBody" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplDefault"))) (PList (PVar "ifaceId") (PVar "tag") (PVar "key") (PVar "sym") (PCon "SList" (PVar "positions")) (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EApp (EVar "toStr") (EVar "ifaceId"))) (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "key"))) (EApp (EVar "toImplSym") (EVar "sym"))) (EApp (EApp (EMethodRef "map") (EVar "toInt")) (EVar "positions"))) (EApp (EApp (EMethodRef "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
 (DFunDef false "toCImplBody" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CImplBody: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCImplEntry" (TyFun (TyCon "SExp") (TyCon "CImplEntry")))
 (DFunDef false "toCImplEntry" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CImplEntry"))) (PList (PVar "name") (PVar "score") (PVar "declared") (PVar "body"))))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toInt") (EVar "score"))) (EApp (EVar "toInt") (EVar "declared"))) (EApp (EVar "toCImplBody") (EVar "body"))))

@@ -40,6 +40,7 @@ import ir.core_ir_lower.{
   ifaceImplHeadTable,
   declaredRecordFieldOrders,
   lowerProgramEmit,
+  lowerProgramEmitPinned,
   EmitTarget(..),
   returnsSelfTable,
   selfFnParamTable,
@@ -169,11 +170,16 @@ emitTail mods runtimeDecls coreD modules1 =
   let statsOn = statsEnabled ()
   if statsOn then
     let (text, stats) =
-      emitProgramWithStats input (lowerProgramEmit TargetNative allDecls)
+      emitProgramWithStats
+        input
+        (lowerProgramEmitPinned TargetNative preludeImpls allDecls)
     let _ = emitStats statsOn stats
     putStr text
   else
-    putStr (emitProgram input (lowerProgramEmit TargetNative allDecls))
+    putStr
+      (emitProgram
+        input
+        (lowerProgramEmitPinned TargetNative preludeImpls allDecls))
 -- Module-qualify module-PRIVATE top-level functions whose bare name collides
 -- across units, AFTER elaborateModules and over its output (#2809) — same
 -- flat-emit @mdk_<name> collision risk the bootstrap driver fixes.  The gate

@@ -1,0 +1,10 @@
+-- Module B: an unrelated `Shape` with a same-named `mk` at the same head type,
+-- whose result is an Int, not the receiver's type.
+export interface Shape x where
+  mk : x -> Int
+
+impl Shape String where
+  mk s = stringLength s
+
+export useB : String -> Int
+useB s = mk s + 1

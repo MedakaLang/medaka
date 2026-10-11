@@ -27,6 +27,7 @@ import ir.core_ir.{
   CClause(..),
   CImplEntry(..),
   CImplBody(..),
+  ImplSym(..),
   CProgram(..),
   CallMode(..),
   CallSite(..),
@@ -395,20 +396,28 @@ toCBind (SList ((SAtom "CBind") :: name :: clauses)) =
   CBind (toStr name) (map toCClause clauses) noDeclLoc
 toCBind other = panic ("core_ir_sexp_parse: bad CBind: " ++ sexprToStr other)
 
+toImplSym : SExp -> ImplSym
+toImplSym (SList [tag, ifaceTag, keyTag]) =
+  ImplSym (toStr tag) (toStr ifaceTag) (toStr keyTag)
+toImplSym other =
+  panic ("core_ir_sexp_parse: bad ImplSym: " ++ sexprToStr other)
+
 toCImplBody : SExp -> CImplBody
-toCImplBody (SList ((SAtom "CImplTagged") :: [tag, key, iface, SList positions, SList pats, body])) =
+toCImplBody (SList ((SAtom "CImplTagged") :: [tag, key, iface, sym, SList positions, SList pats, body])) =
   CImplTagged
     (toStr tag)
     (toStr key)
     (toStr iface)
+    (toImplSym sym)
     (map toInt positions)
     (map toPat pats)
     (toCExpr body)
-toCImplBody (SList ((SAtom "CImplDefault") :: [ifaceId, tag, key, SList positions, SList pats, body])) =
+toCImplBody (SList ((SAtom "CImplDefault") :: [ifaceId, tag, key, sym, SList positions, SList pats, body])) =
   CImplDefault
     (toStr ifaceId)
     (toStr tag)
     (toStr key)
+    (toImplSym sym)
     (map toInt positions)
     (map toPat pats)
     (toCExpr body)

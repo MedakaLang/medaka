@@ -47,6 +47,7 @@ import ir.core_ir.{
   CField(..),
   CImplEntry(..),
   CImplBody(..),
+  noImplSym,
   mkApp,
   synthBind,
 }
@@ -54,6 +55,7 @@ import ir.core_ir_lower.{
   lowerProgramEmit,
   markTailSites,
   stampCallModes,
+  stampImplSymbols,
   EmitTarget(..),
   declSigTypeNames,
   ctorFieldTypeNames,
@@ -137,7 +139,9 @@ cprogram : List CBind ->
   List CImplEntry ->
   CProgram
 cprogram groups ctorArs ctorTypes impls =
-  markTailSites (stampCallModes (CProgram groups ctorArs ctorTypes impls))
+  markTailSites
+    (stampCallModes
+      (stampImplSymbols [] (CProgram groups ctorArs ctorTypes impls)))
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
@@ -1297,7 +1301,8 @@ implSelfProgram tag base depth =
         (CImplTagged
           tag
           tag
-          "Loop"
+          tag
+          noImplSym
           [0]
           [PVar "self" implSelfLoc, PVar "n" implSelfLoc]
           body),
@@ -1451,6 +1456,7 @@ defaultStateProgram tag bodyConstant =
           "DefaultFace"
           tag
           "DefaultFace|\{tag}|"
+          noImplSym
           []
           [PVar "value" defaultStateLoc]
           (CLit (LInt bodyConstant))),
@@ -1488,6 +1494,7 @@ defaultStateCensusProgramU =
           "DefaultFace"
           "UDefault"
           "DefaultFace|UDefault|"
+          noImplSym
           []
           [PVar "value" defaultStateLoc]
           (CLit (LInt 29))),

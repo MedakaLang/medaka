@@ -20,6 +20,7 @@ import ir.core_ir.{
   CClause(..),
   CImplEntry(..),
   CImplBody(..),
+  ImplSym(..),
   CProgram(..),
   CallMode(..),
   CallSite(..),
@@ -258,24 +259,30 @@ cclauseSexp m (CClause pats body) =
 
 -- ── CImplEntry, CImplBody ─────────────────────────────────────────────────────
 
+implSymSexp : ImplSym -> String
+implSymSexp (ImplSym tag ifaceTag keyTag) =
+  slist [escStr tag, escStr ifaceTag, escStr keyTag]
+
 export
 cimplBodySexp : SexpMode -> CImplBody -> String
-cimplBodySexp m (CImplTagged tag key iface positions pats body) = node
+cimplBodySexp m (CImplTagged tag key iface sym positions pats body) = node
   "CImplTagged"
   [
     escStr tag,
     escStr key,
     escStr iface,
+    implSymSexp sym,
     slist (map intToString positions),
     slist (map patSexp pats),
     cexprSexp m body,
   ]
-cimplBodySexp m (CImplDefault ifaceId tag key positions pats body) = node
+cimplBodySexp m (CImplDefault ifaceId tag key sym positions pats body) = node
   "CImplDefault"
   [
     escStr ifaceId,
     escStr tag,
     escStr key,
+    implSymSexp sym,
     slist (map intToString positions),
     slist (map patSexp pats),
     cexprSexp m body,
