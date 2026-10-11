@@ -1,5 +1,5 @@
 # META
-source_lines=3726
+source_lines=3835
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1051,7 +1051,7 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
 finishLowering : CProgram -> CProgram
-finishLowering prog = stampCallModes (etaSaturateProgram prog)
+finishLowering prog = markTailSites (stampCallModes (etaSaturateProgram prog))
 
 -- A program's defined arities: each top-level binding's clause pattern count,
 -- each constructor's field count, each impl entry's value arity by method and
@@ -1466,6 +1466,115 @@ callsStmts env scope ((CSAssign x e) :: rest) =
 
 callsField : ArityEnv -> CallScope -> CField -> CField
 callsField env scope (CField k o e) = CField k o (callsExpr env scope e)
+
+-- ── the tail flag ─────────────────────────────────────────────────────────────
+-- Sets every application's tail flag from its position.  A clause with a
+-- parameter and a lambda start a tail context; it passes through the branches
+-- of an `if`, the arms of a match, the body of a `let` or let-group and the last
+-- statement of a block.  A condition, scrutinee, guard, right-hand side,
+-- argument, head or operand is never in tail position.  A partial application
+-- allocates a closure and is never a call, so it is never flagged.  No catch-all
+-- arm: a new expression form must decide whether it passes tail position on.
+export
+markTailSites : CProgram -> CProgram
+markTailSites (CProgram groups ctors ctorTypes impls) =
+  CProgram (map tailBind groups) ctors ctorTypes (map tailEntry impls)
+
+tailBind : CBind -> CBind
+tailBind (CBind name clauses site) = CBind name (map tailClause clauses) site
+
+tailClause : CClause -> CClause
+tailClause (CClause pats body) = CClause pats (tailExpr (isNonEmptyL pats) body)
+
+tailEntry : CImplEntry -> CImplEntry
+tailEntry (CImplEntry m s d (CImplTagged tag key iface pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplTagged tag key iface pos pats (tailExpr (isNonEmptyL pats) body))
+tailEntry (CImplEntry m s d (CImplDefault w tag key pos pats body)) =
+  CImplEntry
+    m
+    s
+    d
+    (CImplDefault w tag key pos pats (tailExpr (isNonEmptyL pats) body))
+
+tailExpr : Bool -> CExpr -> CExpr
+tailExpr tl (CApp f args (CallSite mode _)) =
+  CApp
+    (tailExpr False f)
+    (map (tailExpr False) args)
+    (CallSite mode (tl && not (isPartialMode mode)))
+tailExpr _ (CLit l) = CLit l
+tailExpr _ (CVar x addr) = CVar x addr
+tailExpr _ (CLam pats body) = CLam pats (tailExpr True body)
+tailExpr tl (CLet recF pat rhs body) =
+  CLet recF pat (tailExpr False rhs) (tailExpr tl body)
+tailExpr tl (CLetGroup binds body) =
+  CLetGroup (map tailBind binds) (tailExpr tl body)
+tailExpr tl (CMatch scrut arms) =
+  CMatch (tailExpr False scrut) (map (tailArm tl) arms)
+tailExpr tl (CDecision scrut arms tree) =
+  CDecision (tailExpr False scrut) (map (tailArm tl) arms) tree
+tailExpr tl (CIf c t e) = CIf (tailExpr False c) (tailExpr tl t) (tailExpr tl e)
+tailExpr _ (CBinPrim op l r tag site) =
+  CBinPrim op (tailExpr False l) (tailExpr False r) tag site
+tailExpr _ (CUnOp op x) = CUnOp op (tailExpr False x)
+tailExpr _ (CTuple es) = CTuple (map (tailExpr False) es)
+tailExpr _ (CList es) = CList (map (tailExpr False) es)
+tailExpr _ (CRecord name fields) = CRecord name (map tailField fields)
+tailExpr _ (CFieldAccess x label name ord) =
+  CFieldAccess (tailExpr False x) label name ord
+tailExpr _ (CRecordUpdate name base fields) =
+  CRecordUpdate name (tailExpr False base) (map tailField fields)
+tailExpr _ (CVariantUpdate con base fields) =
+  CVariantUpdate con (tailExpr False base) (map tailField fields)
+tailExpr _ (CArray es) = CArray (map (tailExpr False) es)
+tailExpr _ (CRangeList lo hi incl) =
+  CRangeList (tailExpr False lo) (tailExpr False hi) incl
+tailExpr _ (CRangeArray lo hi incl) =
+  CRangeArray (tailExpr False lo) (tailExpr False hi) incl
+tailExpr _ (CIndex a i) = CIndex (tailExpr False a) (tailExpr False i)
+tailExpr _ (CSlice a lo hi incl) =
+  CSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
+tailExpr _ (CStringIndex a i) =
+  CStringIndex (tailExpr False a) (tailExpr False i)
+tailExpr _ (CStringSlice a lo hi incl) =
+  CStringSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
+tailExpr _ (CListIndex a i) = CListIndex (tailExpr False a) (tailExpr False i)
+tailExpr _ (CListSlice a lo hi incl) =
+  CListSlice (tailExpr False a) (tailExpr False lo) (tailExpr False hi) incl
+tailExpr tl (CBlock stmts) = CBlock (tailStmts tl stmts)
+tailExpr _ (CMethod name iface arity r ir mr) = CMethod name iface arity r ir mr
+tailExpr _ (CDict name rs) = CDict name rs
+
+isPartialMode : CallMode -> Bool
+isPartialMode (CallPartial _) = True
+isPartialMode CallExact = False
+isPartialMode (CallOver _) = False
+isPartialMode CallDynamic = False
+
+tailArm : Bool -> CArm -> CArm
+tailArm tl (CArm pat guards body) =
+  CArm pat (map tailGuard guards) (tailExpr tl body)
+
+tailGuard : CGuard -> CGuard
+tailGuard (CGBool c) = CGBool (tailExpr False c)
+tailGuard (CGBind pat e) = CGBind pat (tailExpr False e)
+
+tailStmts : Bool -> List CStmt -> List CStmt
+tailStmts _ [] = []
+tailStmts tl [CSExpr e] = [CSExpr (tailExpr tl e)]
+tailStmts tl (st :: rest) = tailStmt st :: tailStmts tl rest
+
+tailStmt : CStmt -> CStmt
+tailStmt (CSExpr e) = CSExpr (tailExpr False e)
+tailStmt (CSLet recF pat e) = CSLet recF pat (tailExpr False e)
+tailStmt (CSAssign x e) = CSAssign x (tailExpr False e)
+
+tailField : CField -> CField
+tailField (CField k o e) = CField k o (tailExpr False e)
 
 -- ── located `panic` and `xs[i]` (native and wasm backends) ─────────────────────────────
 -- A saturated `panic m` and an `xs[i]` that reads one of the prelude's own
@@ -4094,7 +4203,7 @@ nodeTag _ = "?"
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild)) (EVar "ctorTypes"))
 (DTypeSig false "finishLowering" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "finishLowering" ((PVar "prog")) (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog"))))
+(DFunDef false "finishLowering" ((PVar "prog")) (EApp (EVar "markTailSites") (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog")))))
 (DData Public "ArityEnv" () ((variant "ArityEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))) ())
 (DTypeAlias true "CallScope" () (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DTypeSig true "programArities" (TyFun (TyCon "CProgram") (TyCon "ArityEnv")))
@@ -4254,6 +4363,65 @@ nodeTag _ = "?"
 (DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "scope")) (EVar "rest"))))
 (DTypeSig false "callsField" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CField") (TyCon "CField")))))
 (DFunDef false "callsField" ((PVar "env") (PVar "scope") (PCon "CField" (PVar "k") (PVar "o") (PVar "e"))) (EApp (EApp (EApp (EVar "CField") (EVar "k")) (EVar "o")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))))
+(DTypeSig true "markTailSites" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
+(DFunDef false "markTailSites" ((PCon "CProgram" (PVar "groups") (PVar "ctors") (PVar "ctorTypes") (PVar "impls"))) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EVar "tailBind")) (EVar "groups"))) (EVar "ctors")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EVar "tailEntry")) (EVar "impls"))))
+(DTypeSig false "tailBind" (TyFun (TyCon "CBind") (TyCon "CBind")))
+(DFunDef false "tailBind" ((PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EApp (EApp (EVar "map") (EVar "tailClause")) (EVar "clauses"))) (EVar "site")))
+(DTypeSig false "tailClause" (TyFun (TyCon "CClause") (TyCon "CClause")))
+(DFunDef false "tailClause" ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "tailExpr") (EApp (EVar "isNonEmptyL") (EVar "pats"))) (EVar "body"))))
+(DTypeSig false "tailEntry" (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry")))
+(DFunDef false "tailEntry" ((PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "tailExpr") (EApp (EVar "isNonEmptyL") (EVar "pats"))) (EVar "body")))))
+(DFunDef false "tailEntry" ((PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "w") (PVar "tag") (PVar "key") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "w")) (EVar "tag")) (EVar "key")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "tailExpr") (EApp (EVar "isNonEmptyL") (EVar "pats"))) (EVar "body")))))
+(DTypeSig false "tailExpr" (TyFun (TyCon "Bool") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CApp" (PVar "f") (PVar "args") (PCon "CallSite" (PVar "mode") PWild))) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "f"))) (EApp (EApp (EVar "map") (EApp (EVar "tailExpr") (EVar "False"))) (EVar "args"))) (EApp (EApp (EVar "CallSite") (EVar "mode")) (EBinOp "&&" (EVar "tl") (EApp (EVar "not") (EApp (EVar "isPartialMode") (EVar "mode")))))))
+(DFunDef false "tailExpr" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
+(DFunDef false "tailExpr" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
+(DFunDef false "tailExpr" (PWild (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EVar "tailExpr") (EVar "True")) (EVar "body"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "rhs") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "rhs"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "body"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EVar "map") (EVar "tailBind")) (EVar "binds"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "body"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "tailArm") (EVar "tl"))) (EVar "arms"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "scrut"))) (EApp (EApp (EVar "map") (EApp (EVar "tailArm") (EVar "tl"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "c"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "t"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "e"))))
+(DFunDef false "tailExpr" (PWild (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "l"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "r"))) (EVar "tag")) (EVar "site")))
+(DFunDef false "tailExpr" (PWild (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "x"))))
+(DFunDef false "tailExpr" (PWild (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EVar "map") (EApp (EVar "tailExpr") (EVar "False"))) (EVar "es"))))
+(DFunDef false "tailExpr" (PWild (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EVar "map") (EApp (EVar "tailExpr") (EVar "False"))) (EVar "es"))))
+(DFunDef false "tailExpr" (PWild (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EVar "map") (EVar "tailField")) (EVar "fields"))))
+(DFunDef false "tailExpr" (PWild (PCon "CFieldAccess" (PVar "x") (PVar "label") (PVar "name") (PVar "ord"))) (EApp (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "x"))) (EVar "label")) (EVar "name")) (EVar "ord")))
+(DFunDef false "tailExpr" (PWild (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "base"))) (EApp (EApp (EVar "map") (EVar "tailField")) (EVar "fields"))))
+(DFunDef false "tailExpr" (PWild (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "base"))) (EApp (EApp (EVar "map") (EVar "tailField")) (EVar "fields"))))
+(DFunDef false "tailExpr" (PWild (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EVar "map") (EApp (EVar "tailExpr") (EVar "False"))) (EVar "es"))))
+(DFunDef false "tailExpr" (PWild (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" (PWild (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" (PWild (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "i"))))
+(DFunDef false "tailExpr" (PWild (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" (PWild (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "i"))))
+(DFunDef false "tailExpr" (PWild (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" (PWild (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "i"))))
+(DFunDef false "tailExpr" (PWild (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "tailStmts") (EVar "tl")) (EVar "stmts"))))
+(DFunDef false "tailExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr")))
+(DFunDef false "tailExpr" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
+(DTypeSig false "isPartialMode" (TyFun (TyCon "CallMode") (TyCon "Bool")))
+(DFunDef false "isPartialMode" ((PCon "CallPartial" PWild)) (EVar "True"))
+(DFunDef false "isPartialMode" ((PCon "CallExact")) (EVar "False"))
+(DFunDef false "isPartialMode" ((PCon "CallOver" PWild)) (EVar "False"))
+(DFunDef false "isPartialMode" ((PCon "CallDynamic")) (EVar "False"))
+(DTypeSig false "tailArm" (TyFun (TyCon "Bool") (TyFun (TyCon "CArm") (TyCon "CArm"))))
+(DFunDef false "tailArm" ((PVar "tl") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EApp (EApp (EVar "map") (EVar "tailGuard")) (EVar "guards"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "body"))))
+(DTypeSig false "tailGuard" (TyFun (TyCon "CGuard") (TyCon "CGuard")))
+(DFunDef false "tailGuard" ((PCon "CGBool" (PVar "c"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "c"))))
+(DFunDef false "tailGuard" ((PCon "CGBind" (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "pat")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
+(DTypeSig false "tailStmts" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "CStmt")))))
+(DFunDef false "tailStmts" (PWild (PList)) (EListLit))
+(DFunDef false "tailStmts" ((PVar "tl") (PList (PCon "CSExpr" (PVar "e")))) (EListLit (EApp (EVar "CSExpr") (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "e")))))
+(DFunDef false "tailStmts" ((PVar "tl") (PCons (PVar "st") (PVar "rest"))) (EBinOp "::" (EApp (EVar "tailStmt") (EVar "st")) (EApp (EApp (EVar "tailStmts") (EVar "tl")) (EVar "rest"))))
+(DTypeSig false "tailStmt" (TyFun (TyCon "CStmt") (TyCon "CStmt")))
+(DFunDef false "tailStmt" ((PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
+(DFunDef false "tailStmt" ((PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
+(DFunDef false "tailStmt" ((PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
+(DTypeSig false "tailField" (TyFun (TyCon "CField") (TyCon "CField")))
+(DFunDef false "tailField" ((PCon "CField" (PVar "k") (PVar "o") (PVar "e"))) (EApp (EApp (EApp (EVar "CField") (EVar "k")) (EVar "o")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
 (DTypeSig false "siteTrapCalls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "siteTrapCalls" ((PVar "prog")) (EBlock (DoLet false false (PVar "twins") (EApp (EVar "indexTwins") (EApp (EApp (EVar "topFunNames") (EVar "prog")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "map") (EApp (EVar "siteTrapDecl") (EVar "twins"))) (EVar "prog")))))
 (DTypeSig false "siteTrapDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))
@@ -5295,7 +5463,7 @@ nodeTag _ = "?"
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild)) (EVar "ctorTypes"))
 (DTypeSig false "finishLowering" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "finishLowering" ((PVar "prog")) (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog"))))
+(DFunDef false "finishLowering" ((PVar "prog")) (EApp (EVar "markTailSites") (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog")))))
 (DData Public "ArityEnv" () ((variant "ArityEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))) ())
 (DTypeAlias true "CallScope" () (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DTypeSig true "programArities" (TyFun (TyCon "CProgram") (TyCon "ArityEnv")))
@@ -5455,6 +5623,65 @@ nodeTag _ = "?"
 (DFunDef false "callsStmts" ((PVar "env") (PVar "scope") (PCons (PCon "CSAssign" (PVar "x") (PVar "e")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))) (EApp (EApp (EApp (EVar "callsStmts") (EVar "env")) (EVar "scope")) (EVar "rest"))))
 (DTypeSig false "callsField" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CField") (TyCon "CField")))))
 (DFunDef false "callsField" ((PVar "env") (PVar "scope") (PCon "CField" (PVar "k") (PVar "o") (PVar "e"))) (EApp (EApp (EApp (EVar "CField") (EVar "k")) (EVar "o")) (EApp (EApp (EApp (EVar "callsExpr") (EVar "env")) (EVar "scope")) (EVar "e"))))
+(DTypeSig true "markTailSites" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
+(DFunDef false "markTailSites" ((PCon "CProgram" (PVar "groups") (PVar "ctors") (PVar "ctorTypes") (PVar "impls"))) (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EVar "tailBind")) (EVar "groups"))) (EVar "ctors")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EVar "tailEntry")) (EVar "impls"))))
+(DTypeSig false "tailBind" (TyFun (TyCon "CBind") (TyCon "CBind")))
+(DFunDef false "tailBind" ((PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "tailClause")) (EVar "clauses"))) (EVar "site")))
+(DTypeSig false "tailClause" (TyFun (TyCon "CClause") (TyCon "CClause")))
+(DFunDef false "tailClause" ((PCon "CClause" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CClause") (EVar "pats")) (EApp (EApp (EVar "tailExpr") (EApp (EVar "isNonEmptyL") (EVar "pats"))) (EVar "body"))))
+(DTypeSig false "tailEntry" (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry")))
+(DFunDef false "tailEntry" ((PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "tailExpr") (EApp (EVar "isNonEmptyL") (EVar "pats"))) (EVar "body")))))
+(DFunDef false "tailEntry" ((PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "w") (PVar "tag") (PVar "key") (PVar "pos") (PVar "pats") (PVar "body")))) (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "w")) (EVar "tag")) (EVar "key")) (EVar "pos")) (EVar "pats")) (EApp (EApp (EVar "tailExpr") (EApp (EVar "isNonEmptyL") (EVar "pats"))) (EVar "body")))))
+(DTypeSig false "tailExpr" (TyFun (TyCon "Bool") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CApp" (PVar "f") (PVar "args") (PCon "CallSite" (PVar "mode") PWild))) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "f"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "tailExpr") (EVar "False"))) (EVar "args"))) (EApp (EApp (EVar "CallSite") (EVar "mode")) (EBinOp "&&" (EVar "tl") (EApp (EVar "not") (EApp (EVar "isPartialMode") (EVar "mode")))))))
+(DFunDef false "tailExpr" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
+(DFunDef false "tailExpr" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
+(DFunDef false "tailExpr" (PWild (PCon "CLam" (PVar "pats") (PVar "body"))) (EApp (EApp (EVar "CLam") (EVar "pats")) (EApp (EApp (EVar "tailExpr") (EVar "True")) (EVar "body"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "rhs") (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "rhs"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "body"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EApp (EApp (EVar "CLetGroup") (EApp (EApp (EMethodRef "map") (EVar "tailBind")) (EVar "binds"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "body"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CMatch" (PVar "scrut") (PVar "arms"))) (EApp (EApp (EVar "CMatch") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "tailArm") (EVar "tl"))) (EVar "arms"))))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CDecision" (PVar "scrut") (PVar "arms") (PVar "tree"))) (EApp (EApp (EApp (EVar "CDecision") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "scrut"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "tailArm") (EVar "tl"))) (EVar "arms"))) (EVar "tree")))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CIf" (PVar "c") (PVar "t") (PVar "e"))) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "c"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "t"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "e"))))
+(DFunDef false "tailExpr" (PWild (PCon "CBinPrim" (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site"))) (EApp (EApp (EApp (EApp (EApp (EVar "CBinPrim") (EVar "op")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "l"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "r"))) (EVar "tag")) (EVar "site")))
+(DFunDef false "tailExpr" (PWild (PCon "CUnOp" (PVar "op") (PVar "x"))) (EApp (EApp (EVar "CUnOp") (EVar "op")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "x"))))
+(DFunDef false "tailExpr" (PWild (PCon "CTuple" (PVar "es"))) (EApp (EVar "CTuple") (EApp (EApp (EMethodRef "map") (EApp (EVar "tailExpr") (EVar "False"))) (EVar "es"))))
+(DFunDef false "tailExpr" (PWild (PCon "CList" (PVar "es"))) (EApp (EVar "CList") (EApp (EApp (EMethodRef "map") (EApp (EVar "tailExpr") (EVar "False"))) (EVar "es"))))
+(DFunDef false "tailExpr" (PWild (PCon "CRecord" (PVar "name") (PVar "fields"))) (EApp (EApp (EVar "CRecord") (EVar "name")) (EApp (EApp (EMethodRef "map") (EVar "tailField")) (EVar "fields"))))
+(DFunDef false "tailExpr" (PWild (PCon "CFieldAccess" (PVar "x") (PVar "label") (PVar "name") (PVar "ord"))) (EApp (EApp (EApp (EApp (EVar "CFieldAccess") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "x"))) (EVar "label")) (EVar "name")) (EVar "ord")))
+(DFunDef false "tailExpr" (PWild (PCon "CRecordUpdate" (PVar "name") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CRecordUpdate") (EVar "name")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "tailField")) (EVar "fields"))))
+(DFunDef false "tailExpr" (PWild (PCon "CVariantUpdate" (PVar "con") (PVar "base") (PVar "fields"))) (EApp (EApp (EApp (EVar "CVariantUpdate") (EVar "con")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "base"))) (EApp (EApp (EMethodRef "map") (EVar "tailField")) (EVar "fields"))))
+(DFunDef false "tailExpr" (PWild (PCon "CArray" (PVar "es"))) (EApp (EVar "CArray") (EApp (EApp (EMethodRef "map") (EApp (EVar "tailExpr") (EVar "False"))) (EVar "es"))))
+(DFunDef false "tailExpr" (PWild (PCon "CRangeList" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeList") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" (PWild (PCon "CRangeArray" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "CRangeArray") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" (PWild (PCon "CIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CIndex") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "i"))))
+(DFunDef false "tailExpr" (PWild (PCon "CSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CSlice") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" (PWild (PCon "CStringIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CStringIndex") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "i"))))
+(DFunDef false "tailExpr" (PWild (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CStringSlice") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" (PWild (PCon "CListIndex" (PVar "a") (PVar "i"))) (EApp (EApp (EVar "CListIndex") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "i"))))
+(DFunDef false "tailExpr" (PWild (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "a"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "lo"))) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "hi"))) (EVar "incl")))
+(DFunDef false "tailExpr" ((PVar "tl") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "tailStmts") (EVar "tl")) (EVar "stmts"))))
+(DFunDef false "tailExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr")))
+(DFunDef false "tailExpr" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
+(DTypeSig false "isPartialMode" (TyFun (TyCon "CallMode") (TyCon "Bool")))
+(DFunDef false "isPartialMode" ((PCon "CallPartial" PWild)) (EVar "True"))
+(DFunDef false "isPartialMode" ((PCon "CallExact")) (EVar "False"))
+(DFunDef false "isPartialMode" ((PCon "CallOver" PWild)) (EVar "False"))
+(DFunDef false "isPartialMode" ((PCon "CallDynamic")) (EVar "False"))
+(DTypeSig false "tailArm" (TyFun (TyCon "Bool") (TyFun (TyCon "CArm") (TyCon "CArm"))))
+(DFunDef false "tailArm" ((PVar "tl") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EApp (EApp (EApp (EVar "CArm") (EVar "pat")) (EApp (EApp (EMethodRef "map") (EVar "tailGuard")) (EVar "guards"))) (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "body"))))
+(DTypeSig false "tailGuard" (TyFun (TyCon "CGuard") (TyCon "CGuard")))
+(DFunDef false "tailGuard" ((PCon "CGBool" (PVar "c"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "c"))))
+(DFunDef false "tailGuard" ((PCon "CGBind" (PVar "pat") (PVar "e"))) (EApp (EApp (EVar "CGBind") (EVar "pat")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
+(DTypeSig false "tailStmts" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "CStmt")) (TyApp (TyCon "List") (TyCon "CStmt")))))
+(DFunDef false "tailStmts" (PWild (PList)) (EListLit))
+(DFunDef false "tailStmts" ((PVar "tl") (PList (PCon "CSExpr" (PVar "e")))) (EListLit (EApp (EVar "CSExpr") (EApp (EApp (EVar "tailExpr") (EVar "tl")) (EVar "e")))))
+(DFunDef false "tailStmts" ((PVar "tl") (PCons (PVar "st") (PVar "rest"))) (EBinOp "::" (EApp (EVar "tailStmt") (EVar "st")) (EApp (EApp (EVar "tailStmts") (EVar "tl")) (EVar "rest"))))
+(DTypeSig false "tailStmt" (TyFun (TyCon "CStmt") (TyCon "CStmt")))
+(DFunDef false "tailStmt" ((PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
+(DFunDef false "tailStmt" ((PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e"))) (EApp (EApp (EApp (EVar "CSLet") (EVar "recF")) (EVar "pat")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
+(DFunDef false "tailStmt" ((PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
+(DTypeSig false "tailField" (TyFun (TyCon "CField") (TyCon "CField")))
+(DFunDef false "tailField" ((PCon "CField" (PVar "k") (PVar "o") (PVar "e"))) (EApp (EApp (EApp (EVar "CField") (EVar "k")) (EVar "o")) (EApp (EApp (EVar "tailExpr") (EVar "False")) (EVar "e"))))
 (DTypeSig false "siteTrapCalls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "siteTrapCalls" ((PVar "prog")) (EBlock (DoLet false false (PVar "twins") (EApp (EVar "indexTwins") (EApp (EApp (EVar "topFunNames") (EVar "prog")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EVar "siteTrapDecl") (EVar "twins"))) (EVar "prog")))))
 (DTypeSig false "siteTrapDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl"))))

@@ -244,7 +244,9 @@ import backend.core_validate.{
   renderExternRefusal,
   renderRecordRefusal,
   renderCallRefusal,
+  renderTailRefusal,
   validateCalls,
+  validateTails,
   validateRecords,
   unrefusedExternMessage,
   validateExterns,
@@ -15255,12 +15257,14 @@ unprovidedExterns : GapMode -> EmitInput -> CProgram -> List ExternFinding
 unprovidedExterns Strict input cp =
   let _ = refuseUnstampedRecords cp
   let _ = refuseUnstampedCalls cp
+  let _ = refuseUnflaggedTails cp
   match validateExterns LlvmBackend input.runtimeExterns cp
     [] => []
     found => panic (renderExternRefusal found)
 unprovidedExterns Record input cp =
   let _ = refuseUnstampedRecords cp
   let _ = refuseUnstampedCalls cp
+  let _ = refuseUnflaggedTails cp
   validateExterns LlvmBackend input.runtimeExterns cp
 
 -- A record node without its declared field ordinal is an internal error: the
@@ -15276,6 +15280,13 @@ refuseUnstampedCalls : CProgram -> Unit
 refuseUnstampedCalls cp = match validateCalls cp
   [] => ()
   bad => panic ("internal error: " ++ renderCallRefusal bad)
+
+-- An application whose tail flag disagrees with its position is an internal
+-- error: the lowering's flag pass and the validator state the rules separately.
+refuseUnflaggedTails : CProgram -> Unit
+refuseUnflaggedTails cp = match validateTails cp
+  [] => ()
+  bad => panic ("internal error: " ++ renderTailRefusal bad)
 
 -- Record mode's one gap event per refused extern.  The emitter's own
 -- fallthrough for such a name then records nothing (`unprovidedExtern`).

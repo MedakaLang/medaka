@@ -231,7 +231,9 @@ import backend.core_validate.{
   renderExternRefusal,
   renderRecordRefusal,
   renderCallRefusal,
+  renderTailRefusal,
   validateCalls,
+  validateTails,
   validateRecords,
   unrefusedExternMessage,
   validateExterns,
@@ -1351,6 +1353,9 @@ refuseUnprovidedExternsW emit input cp =
   let _ = match validateCalls cp
     [] => ()
     bad => panic ("internal error: " ++ renderCallRefusal bad)
+  let _ = match validateTails cp
+    [] => ()
+    bad => panic ("internal error: " ++ renderTailRefusal bad)
   match validateExterns WasmBackend (inputRuntimeExternsW input) cp
     [] => ()
     findings => match emit.gapMode

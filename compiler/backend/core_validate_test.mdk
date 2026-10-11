@@ -45,6 +45,7 @@ import backend.core_validate.{
   validateCalls,
   validateExterns,
   validateRecords,
+  validateTails,
 }
 import backend.wasm_emit.{
   emitProgramGaps,
@@ -456,5 +457,90 @@ test "(m) an application with no arguments, or whose head is an application, is 
               (CApp zero [zero] (CallSite CallDynamic False))
               [zero]
               (CallSite CallDynamic False)))),
+    ),
+  ]
+
+-- ── tail flags ───────────────────────────────────────────────────────────────
+
+-- [prog] with the tail flag of every application whose head is the variable
+-- [name] set to [flag], in top-level bindings.
+reflag : String -> Bool -> CProgram -> CProgram
+reflag name flag (CProgram groups ctors ctorTypes impls) =
+  CProgram (map (reflagBind name flag) groups) ctors ctorTypes impls
+
+reflagBind : String -> Bool -> CBind -> CBind
+reflagBind name flag (CBind n clauses site) =
+  CBind n (map (reflagClause name flag) clauses) site
+
+reflagClause : String -> Bool -> CClause -> CClause
+reflagClause name flag (CClause pats body) =
+  CClause pats (reflagExpr name flag body)
+
+reflagExpr : String -> Bool -> CExpr -> CExpr
+reflagExpr name flag (CApp hd args (CallSite mode old)) =
+  let args2 = map (reflagExpr name flag) args
+  match hd
+    CVar x _ =>
+      if x == name then
+        CApp hd args2 (CallSite mode flag)
+      else
+        CApp hd args2 (CallSite mode old)
+    _ => CApp (reflagExpr name flag hd) args2 (CallSite mode old)
+reflagExpr name flag (CLet r pat rhs body) =
+  CLet r pat (reflagExpr name flag rhs) (reflagExpr name flag body)
+reflagExpr name flag (CIf c t e) =
+  CIf (reflagExpr name flag c) (reflagExpr name flag t) (reflagExpr name flag e)
+reflagExpr _ _ e = e
+
+tailSrc : String
+tailSrc = "g x = x\nf x = g x\nmain = f 1"
+
+tailShapesSrc : String
+tailShapesSrc =
+  "g x = x\nh x = if x == 0 then g x else g (g x)\nm x = match x\n  0 => g 1\n  n => let y = g n in g y\nw x = go x\n  where\n    go n = if n == 0 then g n else go (n - 1)\nmain = h 1 + m 2 + w 3"
+
+test "(n) lowering flags every tail call, so a lowered program's tails validate clean" = expectEach
+  [
+    (
+      "a call in a clause body",
+      expectEqual [] (validateTails (lowered TargetNative tailSrc)),
+    ),
+    (
+      "if, match, let and where bodies",
+      expectEqual [] (validateTails (lowered TargetNative tailShapesSrc)),
+    ),
+    (
+      "wasm lowering",
+      expectEqual [] (validateTails (lowered TargetWasm tailShapesSrc)),
+    ),
+  ]
+
+test "(o) a tail flag against the position is refused, naming head and binding" = expectEach
+  [
+    (
+      "flagged outside tail position",
+      expectEqual
+        ["tail: f is flagged as a tail call outside tail position [in main]"]
+        (validateTails (reflag "f" True (lowered TargetNative tailSrc))),
+    ),
+    (
+      "flagged but partial",
+      expectEqual
+        [
+          "tail: g is flagged as a tail call but is a partial application (CallPartial 1) [in f]",
+        ]
+        (validateTails
+          (reflag
+            "g"
+            True
+            (restamp "g" (CallPartial 1) (lowered TargetNative tailSrc)))),
+    ),
+    (
+      "in tail position but not flagged",
+      expectEqual
+        [
+          "tail: g is in tail position, stamped CallExact, but not flagged [in f]",
+        ]
+        (validateTails (reflag "g" False (lowered TargetNative tailSrc))),
     ),
   ]
