@@ -7,9 +7,10 @@ import frontend.parser.{parse}
 import tools.doctest.{Engine(..)}
 import tools.test_cmd.{treesUnread, childJobsPrefix}
 import io.{runVerb}
-import string.{contains, indexOf}
+import string.{contains, indexOf, toInt, trim}
 import test.{
-  expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue, fail
+  Expectation, expectAll, expectEqual, expectFalse, expectNotEqual, expectTrue,
+  fail
 }
 import test_process.{medakaBin, withScratchDir}
 
@@ -124,13 +125,19 @@ test "children split the budget with the outer fan-out" = expectAll [
 ]
 
 dirWithKnobProbe : String -> <FileWrite> Result String Unit
-dirWithKnobProbe dir = match writeFile (probeFile dir "a") knobProbeSource
+dirWithKnobProbe dir = dirWithKnobProbeFor dir knobProbeSource
+
+dirWithKnobProbeFor : String -> String -> <FileWrite> Result String Unit
+dirWithKnobProbeFor dir src = match writeFile (probeFile dir "a") src
   Err e => Err e
-  Ok () => writeFile (probeFile dir "b") knobProbeSource
+  Ok () => writeFile (probeFile dir "b") src
 
 knobProbeSource : String
-knobProbeSource =
-  "import test.{expectEqual}\n\ntest \"knob\" = expectEqual (getEnv \"MEDAKA_TEST_JOBS\") (Some \"2\")\n"
+knobProbeSource = knobProbeSourceFor 2
+
+knobProbeSourceFor : Int -> String
+knobProbeSourceFor n =
+  "import test.{expectEqual}\n\ntest \"knob\" = expectEqual (getEnv \"MEDAKA_TEST_JOBS\") (Some \"\{intToString n}\")\n"
 
 probeFile : String -> String -> String
 probeFile dir name = "\{dir}/\{name}_knob_test.mdk"
@@ -170,3 +177,22 @@ test "a directory run reads an invalid knob as unset" = withScratchDir
         expectEqual 0 cx,
       ]
       _ => fail "could not spawn medaka test")
+
+-- With the knob unset the outer fan-out is every core, capped by the two
+-- files, so each child is handed the cores divided by min(cores, 2).
+test "a directory run hands each child the divided budget when the knob is unset" = withScratchDir
+  (dir => match runVerb "nproc" []
+    Ok (0, out, _) => unsetKnobRun dir (toInt (trim out))
+    _ => fail "could not run nproc")
+
+unsetKnobRun : String -> Option Int -> <Exec, FileWrite, IO> Expectation
+unsetKnobRun _ None = fail "nproc printed no count"
+unsetKnobRun dir (Some cores) =
+  match (dirWithKnobProbeFor
+    dir
+    (knobProbeSourceFor (max 1 (cores / min cores 2))))
+    Err e => fail e
+    Ok () =>
+      match runVerb "env" ["-u", "MEDAKA_TEST_JOBS", medakaBin, "test", dir]
+        Ok (c, _, _) => expectEqual 0 c
+        _ => fail "could not spawn medaka test"

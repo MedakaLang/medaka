@@ -542,11 +542,13 @@ done | awk -v base="$ROOT/test/gate_cost_baseline.json" '
 ' | sort -k1,1n -k2,2nr -k3,3 | cut -d' ' -f4 >"$_order"
 
 # How many `medaka test` children a roster gate-test runs at once
-# (test_process.testAssertionCounts). Its own default is every core, so the cores
-# are split between the gates that can run at once: min(JOBS, selected gates),
-# which is read here because it is only known after selection. A one-gate row
-# hands its gate every core. A MEDAKA_TEST_JOBS that is not a positive integer
-# reads as unset.
+# (test_process.testAssertionCounts) and how wide each fixture sweep in
+# test/compiler_cli_test_support.mdk batches; both read test_process.testJobs.
+# Its own default is every core, so an UNSET knob is divided between the gates
+# that can run at once: min(JOBS, selected gates), which is read here because it
+# is only known after selection. A one-gate row hands its gate every core. A SET
+# value is handed to each gate unchanged. A MEDAKA_TEST_JOBS that is not a
+# positive integer reads as unset.
 case "${MEDAKA_TEST_JOBS:-}" in
   ''|*[!0-9]*) MEDAKA_TEST_JOBS="" ;;
   *) [ "$MEDAKA_TEST_JOBS" -ge 1 ] || MEDAKA_TEST_JOBS="" ;;

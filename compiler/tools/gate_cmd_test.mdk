@@ -746,8 +746,11 @@ test "the stale banner rebuilds the multicall once and each single by name" =
 -- the row's predicted job wall (`rload`) is its 100.0s gate makespan.  The
 -- baseline's single run for `a` carries `runExtra` among its fields.
 jobWallBase : String -> String
-jobWallBase runExtra =
-  "{\"schema\": \"gate-cost-baseline/1\", \"runs\": [{\"key\": \"9:1:a\", \"runId\": \"9\", \"runAttempt\": \"1\", \"shard\": \"a\", \"event\": \"push\", \"sha\": \"s\", \"ref\": \"r\", \"date\": \"d\", \"jobs\": 1, \"parallel\": true, \"rowElapsedMs\": 90000, \"gates\": 1\{runExtra}}], \"gates\": [{\"name\": \"g1\", \"medianMs\": 100000, \"samples\": 1, \"ms\": [100000]}]}"
+jobWallBase = jobWallBaseG 1
+
+jobWallBaseG : Int -> String -> String
+jobWallBaseG n runExtra =
+  "{\"schema\": \"gate-cost-baseline/1\", \"runs\": [{\"key\": \"9:1:a\", \"runId\": \"9\", \"runAttempt\": \"1\", \"shard\": \"a\", \"event\": \"push\", \"sha\": \"s\", \"ref\": \"r\", \"date\": \"d\", \"jobs\": 1, \"parallel\": true, \"rowElapsedMs\": 90000, \"gates\": \{intToString n}\{runExtra}}], \"gates\": [{\"name\": \"g1\", \"medianMs\": 100000, \"samples\": 1, \"ms\": [100000]}]}"
 
 jobWallRun : String -> Result String (String, String)
 jobWallRun runExtra = packRun (packReg
@@ -788,3 +791,19 @@ test "a baseline run without jobWallMs is not gradeable, never within the band" 
         ]
         head)
     (jobWallRun "")
+
+test "a job wall recorded for a different gate set is not gradeable, never within or outside" =
+  expectOkThen
+    ((head, _) =>
+      expectTextContainsAll
+        [
+          "[STALE: 1 gates now, 3 when recorded]",
+          "job wall predicted    100.0s   not gradeable (run 9 is for a different gate set)",
+          "0 within, 0 outside, 1 not gradeable of 1 rows",
+        ]
+        head)
+    (packRun (packReg [("g1", "a", "")] [("a", False)]) (jobWallBaseG
+      3
+      ", \"jobWallMs\": 95000") [
+      ("g1", []),
+    ])

@@ -511,17 +511,18 @@ fi
 
 # ── `--for <gate-pattern>...` : build ONLY the oracles those gates actually read ──
 #
-# Building all 54 oracles is 54 × (medaka build + clang). That is the single most
-# expensive thing in the whole test system: measured at ~34s on a 12-core box but
-# **18+ minutes on a 2-core CI runner**, where it was 93% of the build job (the
-# cold bootstrap from seed, by contrast, is only 80s).
+# A bare build is one multicall binary linked under the 51 names `--multicall-names`
+# prints, plus one build per single-build oracle (profile_main, profile_modules_main).
+# Before the multicall it was one medaka build + clang per oracle, which on a 2-core
+# CI runner took 18+ minutes.
 #
-# But no gate needs all 54. A gate names its oracle as `test/bin/<name>`, so the
-# set is derivable from the gate scripts themselves — no hand-maintained mapping to
-# drift. Per-shard need: engines 2, frontend 14, types 10, eval 19, backend 6,
-# tools 6. So CI shards build ~19 max, concurrently, instead of 54 serially; and
-# `test/preflight.sh` uses the same derivation so an agent touching the parser
-# builds 9, not 54.
+# But no gate needs every oracle. A gate names its oracle as `test/bin/<name>`, so
+# the set is derivable from the gate scripts themselves — no hand-maintained mapping
+# to drift. In CI the `oracles` job builds the multicall once and a row downloads it
+# (ORACLE_MULTICALL_PROVIDED=1), so a row builds only the single-build oracles its
+# gates read. A local `--for` builds the whole multicall plus those singles, because
+# the multicall is one binary and not divisible. `test/preflight.sh` uses the same
+# derivation.
 #
 #   sh test/build_oracles.sh --for 'diff_compiler_parse*' 'diff_compiler_fmt'
 #
