@@ -14,3 +14,6 @@ f : Int -> Int
 f x = x
 
 main = println (compare (Pair f f) (Pair f f))
+
+impl Eq (Pair a) where
+  eq _ _ = True

@@ -1,0 +1,13 @@
+export interface Sup a where
+  sup : a -> String
+
+export interface Sub a requires Sup a where
+  sub : a -> String
+
+public export data Box a = Box a
+
+export impl Sub (Box Int) where
+  sub _ = "sub"
+
+export useSup : Sub a => a -> String
+useSup x = sup x ++ sub x

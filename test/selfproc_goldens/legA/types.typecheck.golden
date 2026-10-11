@@ -449,7 +449,7 @@ checkImplHeadNumIds : String -> List (String, Mono) -> List Require -> Map Strin
 checkImplHeadNumObligations : String -> List (String, Mono) -> List Require -> Map String Unit -> List UObligation -> Unit
 checkImplHeadPrerequisites : String -> IfaceRef -> ImplBodySite -> List (String, Mono) -> Ty -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Unit
 checkImplHeadRigidity : String -> String -> ImplBodySite -> List (String, HeadVarRoot) -> Option Loc -> Unit
-checkImplSuperContexts : List Decl -> ClassEnv -> Int -> Decl -> Unit
+checkImplSuperContexts : List Decl -> ClassEnv -> Int -> List ImplRow -> Decl -> Unit
 checkIndexOnlyEffVarsOpen : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkIndexOnlyGo : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkInterfaceCycles : ClassEnv -> Int -> Unit
@@ -514,7 +514,7 @@ checkSigsTooGeneral : List (String, Ty, List (String, Mono)) -> Unit
 checkStmtNotDiscarded : List UObligation -> Mono -> Expr -> Unit
 checkSuperContext : ImplUniverse -> ReqWalk -> (IfaceRef, List Mono) -> Option Loc -> ScopeId -> Unit
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
-checkSuperInstanceContext : String -> List (String, Int) -> Map String Unit -> List PredicateSlot -> Option Loc -> Bool -> IfaceRef -> List Mono -> Unit
+checkSuperInstanceContext : String -> List (String, Int) -> Map String Unit -> List PredicateSlot -> Option Loc -> Bool -> IfaceRef -> List Mono -> Bool -> Unit
 checkSuperKinds : List Decl -> String -> List String -> List (Option KindAnn) -> List IfaceMethod -> List Super -> Unit
 checkSurvivorCallObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkSurvivorDispatchMonos : String -> String -> List String -> Ty -> List (String, Mono) -> String -> List Mono -> Option Loc -> Unit
@@ -2728,6 +2728,7 @@ reportBinderDomains : Ty -> List (String, Param) -> Unit
 reportEffectSummaryFailures : List (SummaryFailure ObligationSite) -> Unit
 reportImplHeadResidual : String -> List (String, Int) -> Option Loc -> (IfaceRef, List Mono) -> Unit
 reportIndexFailure : Bool -> Option Loc -> Authority -> Authority -> Unit
+reportMissingSuperImpl : String -> List (String, Int) -> Option Loc -> Bool -> IfaceRef -> List Mono -> Unit
 reportMixedGoalAmbiguity : Map String Unit -> GoalWindow -> IfaceRef -> List Mono -> Option Loc -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportOverlapForIface : String -> List Mono -> List KeyEntry -> Unit
@@ -3078,6 +3079,7 @@ superMsgFor : List ImplRow -> String -> List Ty -> List (String, Ty) -> Super ->
 superParamsOf : Super -> List String
 superRouteAt : String -> ScopeId -> ReqWalk -> (IfaceRef, Option (List Mono)) -> Route
 superRoutesAt : IfaceRef -> String -> ScopeId -> List Mono -> ReqWalk -> List Route
+superRowExists : List ImplRow -> List (String, Ty) -> Super -> Bool
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 survivorNameOf : Mono -> List (String, Mono) -> Option String
 survivorNameOfId : Int -> List (String, Mono) -> Option String

@@ -1,0 +1,10 @@
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data W2 a = W2 a
+impl Sub (W2 a) where
+  sub _ = "sub"
+useSub : Sub a => a -> String
+useSub x = sub x
+main = println (useSub (W2 (1 : Int)))
