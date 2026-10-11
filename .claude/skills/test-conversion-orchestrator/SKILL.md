@@ -66,7 +66,8 @@ of any helper it runs whose logic must be ported (`.py`, sourced `.sh`): catch_a
 | ≤~150 lines of logic to port | one converter (113–142 measured at 41–50k) |
 | ~150–250 | one converter, expect 80–100k; facts in the packet matter most here |
 | >~250 (script + ported helper) | serial parts at section boundaries; part 1 writes helpers + `-- CONTINUE: next section starts at script line N (<name>)`; part k appends |
-| `xargs -P`, `&`/`wait`, daemons, interactive | don't dispatch; `blocked:*` |
+| `xargs -P` over one program | dispatch; packet names `runCommandBatch` (2 gates, 47-51k each, wave 3) |
+| `&`/`wait`, daemons, interactive | don't dispatch; `blocked:*` |
 
 Packet carries every fact the worker would otherwise search for (search = Haiku tokens).
 
