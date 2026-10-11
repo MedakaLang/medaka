@@ -1,5 +1,5 @@
 # META
-source_lines=3835
+source_lines=3837
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -1549,6 +1549,8 @@ tailExpr tl (CBlock stmts) = CBlock (tailStmts tl stmts)
 tailExpr _ (CMethod name iface arity r ir mr) = CMethod name iface arity r ir mr
 tailExpr _ (CDict name rs) = CDict name rs
 
+-- A partial application builds a closure; it is never a call, so never a tail call.
+export
 isPartialMode : CallMode -> Bool
 isPartialMode (CallPartial _) = True
 isPartialMode CallExact = False
@@ -4402,7 +4404,7 @@ nodeTag _ = "?"
 (DFunDef false "tailExpr" ((PVar "tl") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "tailStmts") (EVar "tl")) (EVar "stmts"))))
 (DFunDef false "tailExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr")))
 (DFunDef false "tailExpr" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
-(DTypeSig false "isPartialMode" (TyFun (TyCon "CallMode") (TyCon "Bool")))
+(DTypeSig true "isPartialMode" (TyFun (TyCon "CallMode") (TyCon "Bool")))
 (DFunDef false "isPartialMode" ((PCon "CallPartial" PWild)) (EVar "True"))
 (DFunDef false "isPartialMode" ((PCon "CallExact")) (EVar "False"))
 (DFunDef false "isPartialMode" ((PCon "CallOver" PWild)) (EVar "False"))
@@ -5662,7 +5664,7 @@ nodeTag _ = "?"
 (DFunDef false "tailExpr" ((PVar "tl") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "tailStmts") (EVar "tl")) (EVar "stmts"))))
 (DFunDef false "tailExpr" (PWild (PCon "CMethod" (PVar "name") (PVar "iface") (PVar "arity") (PVar "r") (PVar "ir") (PVar "mr"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "iface")) (EVar "arity")) (EVar "r")) (EVar "ir")) (EVar "mr")))
 (DFunDef false "tailExpr" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
-(DTypeSig false "isPartialMode" (TyFun (TyCon "CallMode") (TyCon "Bool")))
+(DTypeSig true "isPartialMode" (TyFun (TyCon "CallMode") (TyCon "Bool")))
 (DFunDef false "isPartialMode" ((PCon "CallPartial" PWild)) (EVar "True"))
 (DFunDef false "isPartialMode" ((PCon "CallExact")) (EVar "False"))
 (DFunDef false "isPartialMode" ((PCon "CallOver" PWild)) (EVar "False"))

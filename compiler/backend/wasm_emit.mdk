@@ -92,7 +92,7 @@
 --   * Refutable pattern guards (`p <- e`) in a match arm — STILL a gap (both
 --     tail and non-tail arms `gapL`, ~line 6494/7310/7318; ledgered live as
 --     `llvm/guard_refut_ctor` in test/engine_divergence.txt).
---   * A CLetGroup — CLOSED, W9 (`emitLetGroupRef`, ~line 6736).
+--   * A CLetGroup — CLOSED, W9 (`emitLetGroupWith`).
 --
 -- ── W7 SCOPE (collections) ─────────────────────────────────────────
 -- List / Tuple / Array / Record / Ref, ranges, index/slice (§3.3 heap aggregates +
@@ -272,6 +272,7 @@ import support.util.{
 import ir.core_ir_lower.{
   ArityEnv,
   callModeFor,
+  isPartialMode,
   definedArityOf,
   ifaceWordOfKey,
   programArities,
@@ -282,7 +283,6 @@ import backend.trmc_analysis.{
   trmcEligible,
   isCtorTail,
   isSelfSatApp,
-  isSelfHead,
   consTailArgs,
   ctorTailName,
   ctorTailIsCons,
@@ -316,6 +316,7 @@ import backend.emit_support.{
   rngBound,
   appParts,
   isExactCall,
+  isTailCall,
   implEntryDeclaredArity,
 }
 import backend.wasm_preamble.{
@@ -377,8 +378,6 @@ data WTy = WInt | WBool | WUnit | WStr | WRef | WChar | WFloat
 -- continues with placeholders while preserving first-observed event order.
 data WGapMode = WGapStrict | WGapRecord
 
-data ImplSelfCtx = ImplSelfOff | ImplSelfOn String String String String Int
-
 -- Destination-passing TMC context. It is owned by a fresh WasmEmit so nested
 -- and independent emission routes cannot leak loop-local authority.
 data WTrmcCtx =
@@ -400,7 +399,6 @@ data WasmEmit = WasmEmit {
   currentBinding : Ref String,
   stringSegments : Ref (List (Int, List Int)),
   nextStringSegmentId : Ref Int,
-  implSelfCtx : Ref ImplSelfCtx,
   trmcCtx : Ref WTrmcCtx,
   nextLambdaId : Ref Int,
   liftedDefinitions : Ref (List (List String)),
@@ -471,7 +469,7 @@ data WasmEmit = WasmEmit {
   wDispGroups : Ref (List DispGroup),
   -- FUNCTION-lifetime dynamic contexts, seeded and restored around each body
   -- (emitRefFnBind, emitImplGroup, emitLamDefine, seedArmNumEnv/…).  They live
-  -- here for the same reason implSelfCtx / trmcCtx do: a fresh WasmEmit bounds
+  -- here for the same reason trmcCtx does: a fresh WasmEmit bounds
   -- them to ONE emission, while the existing save/restore discipline keeps
   -- their narrower per-body scope.
   floatLocals : Ref (List String),
@@ -490,7 +488,6 @@ freshWasmEmit mode = WasmEmit {
   currentBinding = Ref "?",
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
-  implSelfCtx = Ref ImplSelfOff,
   trmcCtx = Ref WTrmcOff,
   nextLambdaId = Ref 0,
   liftedDefinitions = Ref [],
@@ -757,7 +754,7 @@ declRetLookupW prog name = match progInput prog
 -- a USER-declared FFI extern?  Built from `makeWasmEmitInputFull`'s
 -- `ffiExternTypes` (empty for every other caller of `makeWasmEmitInput`, so this
 -- always answers False for the ~25 single-file test-harness entries that never
--- pass one).  Consulted by `emitAppRef`/`emitAppTail`'s CVar-head ladder, ahead
+-- pass one).  Consulted by `emitAppRef`/`emitTailCallW`'s CVar-head ladder, ahead
 -- of the runtime extern families, so a call reaching this identifier gets a
 -- specific "wasm: FFI extern is native-only" gap instead of falling through to
 -- a generic unbound-variable panic.
@@ -2347,7 +2344,7 @@ clauseUsesClosures fnNames ctorArs (CClause pats body) =
 -- a bare CVar referencing a top-level fn in NON-call (value) position.
 -- `locals` = the in-scope LOCALLY-BOUND names (clause params, let/lambda binders).
 -- A CVar matching a local SHADOWS any same-named top-level fn / ctor, so applying it
--- is an INDIRECT (closure) call — the analysis MUST agree with emitAppRef/emitAppTail's
+-- is an INDIRECT (closure) call — the analysis MUST agree with emitAppRef/emitTailCallW's
 -- `contains f0 env`-first guard, else a shadowing-local call (`applyEq eq x y = eq x y`
 -- with a top-level `eq` in scope) is mis-judged "saturated direct call, no closure" and
 -- the closure types are never emitted though emit uses them (parse/validate failure).
@@ -2610,8 +2607,8 @@ emitScalarFnBind emit _ _ (CBind name _ _) =
       ++ "' is multi-clause or pattern-matching (decision-tree match needs ADT mode)")
 
 -- scalar (i32) TAIL-position emitter (§4.2 TCO for the monomorphic-Int fast path).
--- Descends into if-branches; a saturated direct call to a known top-level fn at the
--- tail → `return_call` (guaranteed constant-stack); any other tail leaf → its value +
+-- Descends into if-branches; a call of a known top-level fn flagged as the tail call
+-- → `return_call` (guaranteed constant-stack); any other tail leaf → its value +
 -- `return`.  This is what lets a deep scalar tail-recursion (the 5M `loop`) run in
 -- bounded stack.  Non-recursive / shallow fns are unaffected (still correct).
 emitScalarTail : WasmEmit ->
@@ -2654,7 +2651,7 @@ emitScalarAppTail emit fnNames valNames env app =
   let (hd, args) = flattenApp app []
   match hd
     CVar f _ =>
-      if contains f fnNames then
+      if contains f fnNames && isTailCall app then
         let argInstrs =
           flatMap (a => fst (emitScalarExpr emit fnNames valNames env a)) args
         argInstrs ++ ["return_call $" ++ gname f]
@@ -4535,12 +4532,12 @@ needsClosWrapper prog name =
 emitFnClosWrapper : Prog -> String -> Int -> List String
 emitFnClosWrapper prog name arity =
   let _ = noteFuncRef (progEmit prog) ("$mdk_w_" ++ name)
-  closWrapperLines ("$mdk_w_" ++ name) ("call $" ++ gname name) arity
+  closWrapperLines ("$mdk_w_" ++ name) (gname name) arity
 
 -- A `$codety` function [wrapper] that loads [arity] arguments out of its argument
--- array and runs [call] on them.
+-- array and tail-calls `$<target>` on them.
 closWrapperLines : String -> String -> Int -> List String
-closWrapperLines wrapper call arity =
+closWrapperLines wrapper target arity =
   let argLoads =
     flatMap
       (i => [
@@ -4555,7 +4552,7 @@ closWrapperLines wrapper call arity =
         ++ wrapper
         ++ " (type $codety) (param $self (ref eq)) (param $args (ref $argarr)) (result (ref eq))",
     ]
-    ++ indent (argLoads ++ [call])
+    ++ indent (argLoads ++ ["return_call $" ++ target])
     ++ ["  )"]
 
 paramDeclRef : String -> String
@@ -4602,6 +4599,7 @@ emitMethodRef : Prog ->
   List Route ->
   List CExpr ->
   CallMode ->
+  CallEndW ->
   List String
 -- An RKey route is a STATIC direct call, legal only when the application is exact:
 -- the selected entry's define takes exactly the supplied value arguments after its
@@ -4610,7 +4608,7 @@ emitMethodRef : Prog ->
 -- under-application arm makes the residual PAP and whose over-application arm applies
 -- the surplus to the call's result -- after every argument is evaluated.  A dynamic
 -- mode names no selected entry's arity, and keeps the direct call.
-emitMethodRef prog env d name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes args mode =
+emitMethodRef prog env d name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes args mode end =
   if missesArity mode then
     emitMethodValueRef
         prog
@@ -4623,7 +4621,7 @@ emitMethodRef prog env d name iface siteArity (route@(RKey tag _ _)) implRoutes 
         implRoutes
         methRoutes
       ++ emitArgsArray prog env d args
-      ++ ["call $__mdk_apply"]
+      ++ [callInstrW end "__mdk_apply"]
   else
     emitMethodRKeyCallRef
       prog
@@ -4636,15 +4634,16 @@ emitMethodRef prog env d name iface siteArity (route@(RKey tag _ _)) implRoutes 
       implRoutes
       methRoutes
       args
+      end
 -- A runtime dictionary selects the entry, so the site cannot know its arity: every
 -- argument goes to the dispatch, whose arms each apply them to their own entry.
-emitMethodRef prog env d name iface siteArity (RDict dpar) _ methRoutes args _ =
-  emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args
-emitMethodRef prog env d name iface siteArity (RDictFwd dpar) _ methRoutes args _ =
-  emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args
+emitMethodRef prog env d name iface siteArity (RDict dpar) _ methRoutes args _ end =
+  emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args end
+emitMethodRef prog env d name iface siteArity (RDictFwd dpar) _ methRoutes args _ end =
+  emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args end
 -- A projected super dictionary is read into its own local (`projLocalName`,
 -- declared by `collectExprLocals`) and dispatched on exactly as a dict parameter.
-emitMethodRef prog env d name iface siteArity (route@(RProj r path)) _ methRoutes args _ =
+emitMethodRef prog env d name iface siteArity (route@(RProj r path)) _ methRoutes args _ end =
   let local = projLocalName r path
   routeWitness prog env d route
     ++ ["local.set $" ++ gname local]
@@ -4658,10 +4657,12 @@ emitMethodRef prog env d name iface siteArity (route@(RProj r path)) _ methRoute
       local
       methRoutes
       args
-emitMethodRef prog env d name _ _ RNone implRoutes methRoutes args _ =
+      end
+emitMethodRef prog env d name _ _ RNone implRoutes methRoutes args _ end =
   gapLP
-    prog
-    ("wasm W5: RNone arg-tag dispatch for '" ++ name ++ "' is out of slice")
+      prog
+      ("wasm W5: RNone arg-tag dispatch for '" ++ name ++ "' is out of slice")
+    ++ endValueW end
 -- P0-18 (wasm peer of llvm_emit's emitMethod RLocal arm): NOT a method dispatch —
 -- the receiver has no impl of this interface but a local/imported standalone shadows
 -- the method name.  Emit a DIRECT call to that standalone top-level fn, exactly as a
@@ -4680,20 +4681,21 @@ emitMethodRef prog env d name _ _ RNone implRoutes methRoutes args _ =
 -- "<mid>__add")` and it arrives HERE rather than at the CVar arm.  A non-exact call
 -- goes through emitIndirectApp: it builds the fn's closure and applies via
 -- $__mdk_apply, whose under-app arm makes the residual PAP.
-emitMethodRef prog env d name _ _ (RLocal sym dicts) implRoutes methRoutes args mode =
+emitMethodRef prog env d name _ _ (RLocal sym dicts) implRoutes methRoutes args mode end =
   let target = if sym == "" then name else sym
   if isEmpty dicts then
     if progFnMemberW prog target && not (isExactCall mode) then
-      emitIndirectApp prog env d (CVar target AGlobal) args
+      emitIndirectApp prog env d (CVar target AGlobal) args end
     else
       let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-      argInstrs ++ ["call $" ++ gname target]
+      argInstrs ++ [callInstrW end (gname target)]
   else
-    emitDictRef prog env d target dicts args mode
-emitMethodRef prog env d name _ _ (RScalar _) implRoutes methRoutes args _ =
+    emitDictRef prog env d target dicts args mode end
+emitMethodRef prog env d name _ _ (RScalar _) implRoutes methRoutes args _ end =
   gapLP
-    prog
-    ("wasm W5: RScalar route for method '" ++ name ++ "' is out of slice")
+      prog
+      ("wasm W5: RScalar route for method '" ++ name ++ "' is out of slice")
+    ++ endValueW end
 
 -- a partial or an over application: its arguments do not fill a known arity
 missesArity : CallMode -> Bool
@@ -4712,8 +4714,9 @@ emitMethodRKeyCallRef : Prog ->
   List Route ->
   List Route ->
   List CExpr ->
+  CallEndW ->
   List String
-emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoutes args =
+emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoutes args end =
   let tag = routeKeyWordW route
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
   -- `RKey tag` selects a STATIC impl (peer of llvm_emit's emitMethod RKey arm): the
@@ -4735,11 +4738,12 @@ emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoute
         flatMap
           (routeWitness prog env d)
           (staticEntryDictRoutesW entry route methRoutes implRoutes)
-      keptWords ++ argInstrs ++ ["call $" ++ implEntrySymW prog name entry]
+      keptWords ++ argInstrs ++ [callInstrW end (implEntrySymW prog name entry)]
     None =>
       gapLP
-        prog
-        "wasm layer-15: no impl of method '\{name}' for instance '\{tag}'"
+          prog
+          "wasm layer-15: no impl of method '\{name}' for instance '\{tag}'"
+        ++ endValueW end
 
 -- The leading dictionaries a static call to [ent] passes after its method-level
 -- ones (llvm_emit's `staticEntryDictRoutes`): a supplied method's kept `requires`,
@@ -4798,7 +4802,8 @@ armDictCountW ent nMeth =
 -- RDict/RDictFwd: the dict param `$dpar` is an i31 carrying hashName(tag).  Unbox
 -- it, then if-chain over the method's candidate impls comparing the loaded tag
 -- against each impl's hashName(routeKey); on a match call $mdk_impl_<symTag>_<m>.
--- The chain runs inside a result block; each arm `br`s out with its value.
+-- For a value the chain runs inside a result block and each arm `br`s out with its
+-- value; for a tail call each arm `return_call`s and no block is needed.
 emitMethodDispatchRef : Prog ->
   List String ->
   Int ->
@@ -4808,8 +4813,9 @@ emitMethodDispatchRef : Prog ->
   String ->
   List Route ->
   List CExpr ->
+  CallEndW ->
   List String
-emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args =
+emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args end =
   -- the occurrence's interface's candidates (#1265, #1619), and (#1852, LOCKSTEP with
   -- llvm_emit's `narrowImplsByArity`) only those whose own declared arity is the
   -- arity this site supplies.
@@ -4833,10 +4839,14 @@ emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args =
       MethodDictsW { mdInstrs = methInstrs, mdCount = listLen methRoutes }
       argInstrs
       (listLen args)
+      end
       0
-  ["block " ++ blk ++ " (result (ref eq))"]
-    ++ indent chain
-    ++ ["unreachable", "end"]
+  match end
+    CallValueW =>
+      ["block " ++ blk ++ " (result (ref eq))"]
+        ++ indent chain
+        ++ ["unreachable", "end"]
+    CallTailW => chain ++ ["unreachable"]
 
 -- #747: the call instruction(s) a matched dispatch arm emits after its dictionaries
 -- and arguments.  A nullary/return-position/no-requires impl (nArgs == 0 and a
@@ -4847,13 +4857,13 @@ emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args =
 -- runs once and is shared across every occurrence at that tag (matching eval's
 -- per-VTypedImpl memoThunk).  Each tag owns its own `$memo` CAF ⇒ distinct tags
 -- memoise independently.  Otherwise the ordinary impl call.
-dispatchCallSeqW : Prog -> ImplArmW -> String -> Int -> List String
-dispatchCallSeqW prog arm name nArgs =
+dispatchCallSeqW : Prog -> ImplArmW -> String -> Int -> CallEndW -> List String
+dispatchCallSeqW prog arm name nArgs end =
   let memoName = "$memo_\{armSymTagW arm}_\{name}"
   if nArgs == 0 && isLazyGlobalW prog memoName then
-    ["call $force_" ++ gname memoName]
+    [callInstrW end ("force_" ++ gname memoName)]
   else
-    ["call $" ++ armFnSymW arm]
+    [callInstrW end (armFnSymW arm)]
 
 -- F10 (#1450/#1668 follow-on): a dispatch site pushes exactly the arguments THAT
 -- SITE saw, and the entry a runtime dictionary selects need not take that many: two
@@ -4876,9 +4886,7 @@ armClosureW prog arm =
   let wrapper = "$mdk_lam" ++ intToString (freshLamId (progEmit prog))
   let _ = noteFuncRef (progEmit prog) wrapper
   let _ =
-    addLifted
-      (progEmit prog)
-      (closWrapperLines wrapper ("call $" ++ armFnSymW arm) arity)
+    addLifted (progEmit prog) (closWrapperLines wrapper (armFnSymW arm) arity)
   wConstClos (progEmit prog) wrapper arity
 
 -- one comparison + call per candidate impl group.  loaded tag (i32) == dictTag
@@ -4898,10 +4906,11 @@ emitDispatchChain : Prog ->
   MethodDictsW ->
   List String ->
   Int ->
+  CallEndW ->
   Int ->
   List String
-emitDispatchChain _ _ [] _ _ _ _ _ _ _ = []
-emitDispatchChain prog name (arm :: rest) blk tagRead dpar meth argInstrs nArgs idt =
+emitDispatchChain _ _ [] _ _ _ _ _ _ _ _ = []
+emitDispatchChain prog name (arm :: rest) blk tagRead dpar meth argInstrs nArgs end idt =
   -- W5: a `requires`-bearing impl (e.g. `Debug (a,b) requires Debug a, Debug b`) compiles
   -- to a fn whose leading params are the forwarded `requires` dicts BEFORE the method args.
   -- The dispatch site holds the dict param ($dpar): when this impl is constrained, the dict
@@ -4920,14 +4929,17 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar meth argInstrs nArgs 
               (meth.mdCount
                 + armDictCountW (armEntryW arm) meth.mdCount
                 + nArgs),
-          "call $__mdk_apply",
+          callInstrW end "__mdk_apply",
         ]
     else if meth.mdCount > 0 then
-      pushed ++ ["call $" ++ armFnSymW arm]
+      pushed ++ [callInstrW end (armFnSymW arm)]
     else
-      pushed ++ dispatchCallSeqW prog arm name nArgs
+      pushed ++ dispatchCallSeqW prog arm name nArgs end
+  let armExit = match end
+    CallValueW => ["br " ++ blk]
+    CallTailW => []
   indentBy idt (dispatchKeyTestW arm tagRead ++ ["if"])
-    ++ indentBy (idt + 1) (armBody ++ ["br " ++ blk])
+    ++ indentBy (idt + 1) (armBody ++ armExit)
     ++ indentBy idt ["else"]
     ++ emitDispatchChain
       prog
@@ -4939,6 +4951,7 @@ emitDispatchChain prog name (arm :: rest) blk tagRead dpar meth argInstrs nArgs 
       meth
       argInstrs
       nArgs
+      end
       (idt + 1)
     ++ indentBy idt ["end"]
 
@@ -5085,10 +5098,11 @@ emitDictRef : Prog ->
   List Route ->
   List CExpr ->
   CallMode ->
+  CallEndW ->
   List String
-emitDictRef prog env d name routes args mode =
+emitDictRef prog env d name routes args mode end =
   if contains name env then
-    emitLocalDictRef prog env d name routes args
+    emitLocalDictRef prog env d name routes args end
   else if progFnMemberW prog name then
     -- P2 (over/under-application, #729): the direct `call` is only legal when the
     -- application is exact.  A point-free dict-passed fn keeps a TRAILING CLam, so its
@@ -5101,11 +5115,12 @@ emitDictRef prog env d name routes args mode =
     if isExactCall mode then
       let dictWords = flatMap (routeWitness prog env d) routes
       let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-      dictWords ++ argInstrs ++ ["call $" ++ gname name]
+      dictWords ++ argInstrs ++ [callInstrW end (gname name)]
     else
-      emitIndirectApp prog env d (CDict name routes) args
+      emitIndirectApp prog env d (CDict name routes) args end
   else
     gapLP prog ("wasm W5: CDict over unknown function '" ++ name ++ "'")
+      ++ endValueW end
 
 -- A dictionary-abstracted LOCAL binding is a closure whose leading parameters are
 -- its dictionaries: apply it to the dict witnesses, then the arguments.
@@ -5115,8 +5130,9 @@ emitLocalDictRef : Prog ->
   String ->
   List Route ->
   List CExpr ->
+  CallEndW ->
   List String
-emitLocalDictRef prog env d name routes args =
+emitLocalDictRef prog env d name routes args end =
   let dictWords = flatMap (routeWitness prog env d) routes
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
   emitVarRef prog env d name
@@ -5124,7 +5140,7 @@ emitLocalDictRef prog env d name routes args =
     ++ argInstrs
     ++ [
       "array.new_fixed $argarr " ++ intToString (listLen routes + listLen args),
-      "call $__mdk_apply",
+      callInstrW end "__mdk_apply",
     ]
 
 -- ── EMITTER-GAPS E23 (wasm peer): CMethod / CDict in VALUE position ───────────
@@ -5174,6 +5190,7 @@ emitMethodValueRef prog env d name iface siteArity route implRoutes methRoutes =
       methRoutes
       []
       (callModeFor (definedArityW prog node) 0)
+      CallValueW
   else
     let names = etaValNames arity
     let ps = map (n => PVar n (Loc "" 0 0 0 0)) names
@@ -5203,11 +5220,11 @@ emitDictValueRef : Prog ->
   List String
 emitDictValueRef prog env d name routes =
   if contains name env then
-    emitLocalDictRef prog env d name routes []
+    emitLocalDictRef prog env d name routes [] CallValueW
   else if progFnMemberW prog name then
     let valArity = optionOr 0 (definedArityW prog (CDict name routes))
     if valArity <= 0 then
-      emitDictRef prog env d name routes [] CallExact
+      emitDictRef prog env d name routes [] CallExact CallValueW
     else
       let names = etaValNames valArity
       let ps = map (n => PVar n (Loc "" 0 0 0 0)) names
@@ -5223,13 +5240,12 @@ etaValNames : Int -> List String
 etaValNames n = map (i => "$hov" ++ intToString i) (rangeList 0 n)
 
 -- [hd] applied to [args], stamped with the mode `core_ir_lower.stampCallModes` would
--- give it: the application an eta-value closure's body makes.
+-- give it: the application an eta-value closure's body makes.  It is that body's
+-- tail call, so it is flagged as one unless it is a partial application.
 stampedAppW : Prog -> CExpr -> List CExpr -> CExpr
 stampedAppW prog hd args =
-  CApp
-    hd
-    args
-    (CallSite (callModeFor (definedArityW prog hd) (listLen args)) False)
+  let mode = callModeFor (definedArityW prog hd) (listLen args)
+  CApp hd args (CallSite mode (not (isPartialMode mode)))
 
 -- the impl-function symbol: $mdk_impl_<symTag>_<method>.  [tag] is a RAW dispatch
 -- tag — the bare head tycon (the common case: a sole impl per head) OR the canonical
@@ -5452,19 +5468,8 @@ emitImplGroup prog (ImplG method headTag key arity clauses fnName) =
         (if headTag == "Float" then flatMap clausePatVars clauses else [])
       -- A1: impl-method params are concrete-typed (the impl tag), never poly-`Num`; reset.
       let _ = setRef (progEmit prog).numPolyLocals []
-      -- layer-18: arm the plain-tail impl-method return_call context for THIS impl, so a
-      -- saturated tail-position self-call (`fold f (f z x) xs` → `CMethod "fold" (RKey
-      -- "List")`) lowers to `return_call $mdk_impl_List_fold` (constant stack) rather than a
-      -- recursive `call`.  Disarmed immediately after (everything else must NOT see
-      -- it).
-      let savedImplSelf = (progEmit prog).implSelfCtx.value
-      let _ =
-        setRef
-          (progEmit prog).implSelfCtx
-          (ImplSelfOn method headTag key fnName arity)
       let w7Outer = w7ScopeOpen (progEmit prog)
       let bodyLines = emitClausesImpl prog fnName params arity clauses
-      let _ = setRef (progEmit prog).implSelfCtx savedImplSelf
       let _ = setRef (progEmit prog).floatLocals []
       let allLocals = clauseLocals clauses
       let extraLocals = filterList (notIn params) (dedupKeep allLocals)
@@ -5746,9 +5751,9 @@ emitRefExpr prog env d (CBinPrim op l r tag loc) =
 emitRefExpr prog env d (CUnOp op x) = emitUnRef prog env d op x
 emitRefExpr prog env d (CIf c t f) = emitIfRef prog env d c t f
 emitRefExpr prog env d (CLet recF pat e1 e2) =
-  emitLetRef prog env d recF pat e1 e2
+  emitLetWith prog env d (env2 b => emitRefExpr prog env2 d b) recF pat e1 e2
 emitRefExpr prog env d (CLetGroup binds body) =
-  emitLetGroupRef prog env d binds body
+  emitLetGroupWith prog env d (env2 b => emitRefExpr prog env2 d b) binds body
 emitRefExpr prog env d (CBlock stmts) = emitBlockRef prog env d stmts
 emitRefExpr prog env d (app@(CApp _ _ _)) = emitAppRef prog env d app
 emitRefExpr prog env d (CDecision scrut arms tree) =
@@ -6013,7 +6018,7 @@ emitVarRefPlain prog env d x =
   else if isFfiExternW prog x then
     -- #2129: an FFI extern referenced in VALUE position (passed to a HOF, or a bare
     -- nullary top-level reference) must get the same located capability-gap message
-    -- the saturated-call arms (emitAppRef/emitAppTail) already give, not the generic
+    -- the saturated-call arms (emitAppRef/emitTailCallW) already give, not the generic
     -- unbound-variable fallback below — wasm still can't call it either way, but the
     -- diagnostic should say "exists but unsupported here", not "no such thing".
     gapLP
@@ -6836,25 +6841,29 @@ emitDestructureLet prog env d pat e1 =
   let (binds, env2) = bindPatRef prog env pat ["local.get $" ++ sv]
   (rhs ++ binds, env2)
 
-emitLetRef : Prog ->
+-- A `let`: its binding, then `e2` emitted by `body` in the env the binding
+-- extends.  The value path passes `emitRefExpr`; a let in tail position passes
+-- `emitRefTail`, so the let's body stays in tail position whatever its pattern.
+emitLetWith : Prog ->
   List String ->
   Int ->
+  (List String -> CExpr -> List String) ->
   Bool ->
   Pat ->
   CExpr ->
   CExpr ->
   List String
-emitLetRef prog env d False (PVar x _) e1 e2 =
+emitLetWith prog env d body False (PVar x _) e1 e2 =
   let i1 = emitRefExpr prog env d e1
-  let i2 = emitRefExpr prog (x :: env) d e2
+  let i2 = body (x :: env) e2
   i1 ++ ["local.set $" ++ gname x] ++ i2
-emitLetRef prog env d False PWild e1 e2 =
+emitLetWith prog env d body False PWild e1 e2 =
   let i1 = emitRefExpr prog env d e1
-  let i2 = emitRefExpr prog env d e2
+  let i2 = body env e2
   i1 ++ ["drop"] ++ i2
-emitLetRef prog env d False pat e1 e2 =
+emitLetWith prog env d body False pat e1 e2 =
   let (binds, env2) = emitDestructureLet prog env d pat e1
-  binds ++ emitRefExpr prog env2 d e2
+  binds ++ body env2 e2
 -- #379: a recursive function-`let` in EXPRESSION position (`let go i = … in e2` →
 -- CLet True (PVar go) (CLam …)).  The block-statement form already routed here via
 -- emitBlockRef; the `let..in` form fell to the catch-all gap below — that asymmetry
@@ -6864,13 +6873,13 @@ emitLetRef prog env d False pat e1 e2 =
 -- the self-call resolves), rebuild `go`'s closure into local `$go`, then emit `e2`
 -- with `go` bound.  `collectExprLocals` already declares `$go` (its CLet clause
 -- wildcards the rec flag), so no locals change is needed.
-emitLetRef prog env d True (PVar x _) (CLam pats body) e2 =
-  emitSelfRecLocalBind prog env x pats body ++ emitRefExpr prog (x :: env) d e2
+emitLetWith prog env _ body True (PVar x _) (CLam pats lamBody) e2 =
+  emitSelfRecLocalBind prog env x pats lamBody ++ body (x :: env) e2
 -- a recursive NON-function `let` (`let x = … x … in e2`) is a value knot that no
 -- backend ties: the native emitter's rec clause likewise matches only `(PVar f)
 -- (CLam …)` and has no `True`/non-CLam clause at all.  We keep a named gap here
 -- rather than inherit its non-exhaustive trap.
-emitLetRef prog _ _ _ _ _ _ =
+emitLetWith prog _ _ _ _ _ _ _ =
   gapLP prog "ref-mode: recursive non-function `let` binding (value knot)"
 
 emitBlockRef : Prog -> List String -> Int -> List CStmt -> List String
@@ -6928,7 +6937,7 @@ emitAppRef prog env d app =
         -- fn ran instead of the param), while `medaka run` and the LLVM build were always
         -- correct.  Mirrors emitVarRefPlain's `contains x env`-first priority for the bare
         -- VALUE reference, and the LLVM emitApp E24 `isLocal`-first guard.
-        emitIndirectApp prog env d hd args
+        emitIndirectApp prog env d hd args CallValueW
       else if isCtor prog f then
         emitCtorApp prog env d f args
       else if f == "Ref" then
@@ -6951,7 +6960,7 @@ emitAppRef prog env d app =
             let argInstrs = flatMap (a => emitRefExpr prog env d a) args
             argInstrs ++ ["call $" ++ gname f]
           else
-            emitIndirectApp prog env d hd args
+            emitIndirectApp prog env d hd args CallValueW
     -- W5: a method occurrence applied to its args (the common return-/arg-position
     -- dispatch shape — a CMethod head under a CApp).  Dispatch on the route.
     CMethod name iface arity route implRoutes methRoutes =>
@@ -6967,10 +6976,11 @@ emitAppRef prog env d app =
         methRoutes
         args
         mode
+        CallValueW
     -- W5: a constrained-function occurrence applied to its real args.  The dict
     -- witnesses (from `routes`) are PREPENDED to the args at the call.
-    CDict name routes => emitDictRef prog env d name routes args mode
-    _ => emitIndirectApp prog env d hd args
+    CDict name routes => emitDictRef prog env d name routes args mode CallValueW
+    _ => emitIndirectApp prog env d hd args CallValueW
 
 -- ── W6 string / IO externs ───────────────────────────────────────────────────
 -- `intToString` : i31 Int → unbox → i64 → $mdk_int_to_str → (ref $str) (an (ref eq)).
@@ -8101,11 +8111,26 @@ emitIndirectApp : Prog ->
   Int ->
   CExpr ->
   List CExpr ->
+  CallEndW ->
   List String
-emitIndirectApp prog env d hd args =
+emitIndirectApp prog env d hd args end =
   let hi = emitRefExpr prog env d hd
   let arr = emitArgsArray prog env d args
-  hi ++ arr ++ ["call $__mdk_apply"]
+  hi ++ arr ++ [callInstrW end "__mdk_apply"]
+
+-- How an application's final call is made: for its value, which the code after it
+-- consumes, or as the tail call that replaces the enclosing function's frame.
+data CallEndW = CallValueW | CallTailW
+
+-- the instruction that makes a call of `$<target>`
+callInstrW : CallEndW -> String -> String
+callInstrW CallValueW target = "call $" ++ target
+callInstrW CallTailW target = "return_call $" ++ target
+
+-- what follows a value an application computes without a call to end on
+endValueW : CallEndW -> List String
+endValueW CallValueW = []
+endValueW CallTailW = ["return"]
 
 -- build an $argarr holding the emitted args, in order.  `array.new_fixed` takes the
 -- element values from the stack — so emit all args (each leaves a (ref eq)) then one
@@ -8142,17 +8167,6 @@ emitArgsArray prog env d args =
 -- the built-in `h :: t` (→ reserved `$C_Cons`) vs a user ctor named `Cons`
 -- (→ `$CU_Cons`).  Homogeneous per fn, so the base leaf's parent-link
 -- (emitWasmTrmcBase) reads it from here rather than re-deriving from the ctor name.
--- layer-18: the PLAIN-tail impl-method `return_call` context.  Set to `Some (method,
--- tag, arity)` ONLY while emitting an ordinary (non-TMC) impl body in
--- `emitImplGroup` — a supplied method's or an inherited default's; off everywhere
--- else (top-level fns, dispatch chains).  Consulted by `emitAppTail`'s CMethod arm: a SATURATED tail-position
--- self-call `CMethod method (RKey tag) …` matching THIS (method, tag) is rewritten
--- from `call $mdk_impl_<tag>_<method>` to `return_call $mdk_impl_<tag>_<method>` — the
--- impl-method analog of the top-level plain-tail return_call (so `fold`/`length`/`ap`/
--- any accumulator-recursive impl method runs in constant wasm stack).  The TMC cons-tail
--- case is handled separately by wTrmcImplTry (it never reaches this path); a NON-tail
--- self-call never reaches emitAppTail (it goes through emitRefExpr), so it stays a plain
--- `call` — the safety net.
 -- the loop-local names used by the destination-passing emit.  `$__tmc_head` holds the
 -- first cell (the result returned at exit); `$__tmc_dest` holds the cell whose recursive
 -- slot the NEXT leaf must fill; `$__tmc_first` is 1 until the first cell is built.
@@ -8269,12 +8283,24 @@ emitRefTailWrap prog env arity (CIf c t f) =
   let ti = emitRefTail prog env arity t
   let fi = emitRefTail prog env arity f
   ci ++ ["if"] ++ indent ti ++ ["else"] ++ indent fi ++ ["end", "unreachable"]
-emitRefTailWrap prog env arity (CLet False (PVar x _) e1 e2) =
-  emitRefExpr prog env 0 e1
-    ++ ["local.set $" ++ gname x]
-    ++ emitRefTail prog (x :: env) arity e2
-emitRefTailWrap prog env arity (CLet False PWild e1 e2) =
-  emitRefExpr prog env 0 e1 ++ ["drop"] ++ emitRefTail prog env arity e2
+emitRefTailWrap prog env arity (CLet recF pat e1 e2) =
+  emitLetWith
+    prog
+    env
+    0
+    (env2 b => emitRefTail prog env2 arity b)
+    recF
+    pat
+    e1
+    e2
+emitRefTailWrap prog env arity (CLetGroup binds body) =
+  emitLetGroupWith
+    prog
+    env
+    0
+    (env2 b => emitRefTail prog env2 arity b)
+    binds
+    body
 emitRefTailWrap prog env arity (CBlock stmts) =
   emitBlockTail prog env arity stmts
 emitRefTailWrap prog env arity (CDecision scrut arms tree) =
@@ -8293,8 +8319,9 @@ emitRefTailWrap prog env arity other =
   emitRefExpr prog env 0 other ++ ["return"]
 
 -- a structural tail WRAPPER (if/let/block/decision) whose tail descends to leaves —
--- vs a LEAF (cons/ctor/self-call/base) that TMC redirects.  Mirrors emitRefTailWrap's
--- own wrapper arms so the TMC guard descends exactly what the ordinary path descends.
+-- vs a LEAF (cons/ctor/self-call/base) that TMC redirects.  These are emitRefTailWrap's
+-- wrapper arms less a let-group and a recursive or destructuring let, which TMC
+-- takes as a base leaf: computed as a value and stored into the destination.
 isWTrmcWrapper : CExpr -> Bool
 isWTrmcWrapper (CIf _ _ _) = True
 isWTrmcWrapper (CLet False (PVar _ _) _ _) = True
@@ -9137,62 +9164,15 @@ emitWDispBase prog env root e =
     ++ ["end"]
     ++ ["global.get " ++ wDispHeadL root, "ref.as_non_null", "return"]
 
--- layer-18: the plain-tail impl-method return_call rewrite (helper for emitAppTail's
--- CMethod arm).  Some instrs ⇒ this tail CMethod application is a saturated self-call to
--- the impl `(method, tag)` we are currently emitting, lowered to `return_call` of
--- that exact group's interface-qualified symbol (the args + forwarded dict words,
--- exactly as the ordinary RKey `call` arm builds them, but tail).  None ⇒ not a
--- self-call (or no impl-self context) ⇒
--- the caller keeps the ordinary `call … ; return`.  Gated on BOTH the impl-self context
--- AND `isSelfSatApp (SelfByMethod …)`: a different-method/tag, unsaturated, or non-self
--- call fails the gate and stays ordinary; a non-tail self-call never reaches here.
-implSelfReturnCall : Prog ->
-  List String ->
-  String ->
-  String ->
-  Int ->
-  Route ->
-  List Route ->
-  List Route ->
-  CExpr ->
-  List CExpr ->
-  Option (List String)
-implSelfReturnCall prog env name iface siteArity route methRoutes implRoutes app args =
-  match (progEmit prog).implSelfCtx.value
-    ImplSelfOff => None
-    ImplSelfOn method _ key fnName arity =>
-      if name == method
-        && isSelfHead (SelfByMethod method key 0) (appHead app) then match route
-        RKey rtag _ _ => match implForWSite prog name iface rtag siteArity
-          Some entry =>
-            -- the define's arity counts its leading dictionaries (an inherited
-            -- default's receiver among them), so the call is saturated when those
-            -- and the value arguments fill it
-            let dictRoutes =
-              staticEntryDictRoutesW entry route methRoutes implRoutes
-            let saturated = listLen dictRoutes + listLen args == arity
-            if implEntryKeyW entry == key then
-              if saturated then
-                let dictWords = flatMap (routeWitness prog env 0) dictRoutes
-                let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
-                Some (dictWords ++ argInstrs ++ ["return_call $" ++ fnName])
-              else
-                None
-            else
-              None
-          None => None
-        _ => None
-      else
-        None
-
--- a tail application: exact direct known-fn → return_call; ctor → value+return;
--- everything else → indirect via return_call $__mdk_apply.
+-- A tail-position application.  A file bound and a fall-through sentinel are
+-- control, not calls, and keep their own lowering.  An application the lowering
+-- flagged as the tail call (`isTailCall`) replaces this function's frame
+-- (`emitTailCallW`); any other is computed and returned.
 emitAppTail : Prog -> List String -> Int -> CExpr -> List String
 emitAppTail prog env arity app =
-  let (hd, args, mode) = appParts app
+  let (hd, args, _) = appParts app
   match hd
     CVar f0 _ =>
-      let f = canonFn prog f0
       -- tail-position `__fallthrough__ ()` / `__ft__<label> ()`: lower the sentinel
       -- (a `br`, NOT a `return` — control leaves the clause, not the function).
       if f0 == "$withFileReadBound"
@@ -9202,16 +9182,35 @@ emitAppTail prog env arity app =
         _ => gapLP prog "wasm: a file bound requires a grant and a thunk"
       else if isFtSentinel f0 then
         ftSentinelInstrs f0
-      else if contains f0 env then
+      else
+        emitFlaggedAppW prog env app
+    _ => emitFlaggedAppW prog env app
+
+emitFlaggedAppW : Prog -> List String -> CExpr -> List String
+emitFlaggedAppW prog env app =
+  if isTailCall app then
+    emitTailCallW prog env app
+  else
+    emitAppRef prog env 0 app ++ ["return"]
+
+-- The tail call itself: the call `emitAppRef` would make, as a `return_call`.  A
+-- constructor, `Ref`/`setRef` and an extern compute a value and return it.  An
+-- indirect call returns through `$__mdk_apply`, which `return_call_ref`s the
+-- closure's code, so every shape is constant-stack.
+emitTailCallW : Prog -> List String -> CExpr -> List String
+emitTailCallW prog env app =
+  let (hd, args, mode) = appParts app
+  match hd
+    CVar f0 _ =>
+      let f = canonFn prog f0
+      if contains f0 env then
         -- E24 (wasm peer): a LOCALLY-BOUND name shadows any same-named ctor / known top-level
         -- fn / extern — applying it is an INDIRECT tail call (`return_call $__mdk_apply`), never a
         -- direct `return_call $<toplevel>`.  Same guard as emitAppRef's CVar arm; without it a
         -- method-named HOF param colliding with a top-level fn (`pickEq eq x y = eq x y`) tail-
         -- called the WRONG callee.  Mirrors emitVarRefPlain's `contains x env`-first priority.
 
-        let hi = emitRefExpr prog env 0 hd
-        let arr = emitArgsArray prog env 0 args
-        hi ++ arr ++ ["return_call $__mdk_apply"]
+        emitIndirectApp prog env 0 hd args CallTailW
       else if isCtor prog f then
         emitRefExpr prog env 0 app ++ ["return"]
       else if isFfiExternW prog f then
@@ -9226,75 +9225,31 @@ emitAppTail prog env arity app =
         flatMap (a => emitRefExpr prog env 0 a) args
           ++ ["return_call $" ++ gname f]
       else
-        let hi = emitRefExpr prog env 0 hd
-        let arr = emitArgsArray prog env 0 args
-        hi ++ arr ++ ["return_call $__mdk_apply"]
-    -- W5: a dispatched method/constrained-fn in tail position.  Compute the
-    -- dispatch result via the value emitter (an RKey direct call, an RDict
-    -- if-chain, or a CDict dict-prepended call) and `return` it.  (return_call
-    -- specialization of the RKey direct call is deferred; the dispatch fixtures
-    -- here are not deep-recursive through a method, so a plain return is sound.)
+        emitIndirectApp prog env 0 hd args CallTailW
+    -- #1349: a dispatched method in tail position.  An RKey route return_calls the
+    -- selected entry (an impl method calling itself among them); a runtime
+    -- dictionary return_calls the entry each dispatch arm selects.
     CMethod name iface arity route implRoutes methRoutes =>
-      match (implSelfReturnCall
+      emitMethodRef
         prog
         env
+        0
         name
         iface
         arity
         route
-        methRoutes
         implRoutes
-        app
-        args)
-        -- layer-18: a PLAIN-tail impl-method self-call.  When we are emitting impl
-        -- `(method, tag)`'s ordinary body and THIS tail application is a saturated self-call
-        -- to exactly that `CMethod method (RKey tag)` (`isSelfSatApp (SelfByMethod …)`), emit
-        -- the recomputed args + `return_call $mdk_impl_<tag>_<method>` (a real tail call, zero
-        -- stack growth) instead of `call … ; return`.  This is the impl-method analog of the
-        -- top-level plain-tail return_call.  SAFETY NET: gated on the saturated-self-call
-        -- detection AND on being in tail position (only emitAppTail reaches here); a NON-tail
-        -- self-call goes through emitRefExpr/emitMethodRef and stays a plain `call`.  A
-        -- self-call to a DIFFERENT method/tag, or an unsaturated one, fails the gate and stays
-        -- ordinary.  (A cons-tail impl is already diverted to wTrmcImplTry's TMC loop and never
-        -- reaches this path.)
-
-        Some retInstrs => retInstrs
-        None =>
-          emitMethodRef
-              prog
-              env
-              0
-              name
-              iface
-              arity
-              route
-              implRoutes
-              methRoutes
-              args
-              mode
-            ++ ["return"]
-    -- P0-7: a `=>`-constrained NAMED function (`CDict`) in tail position.  The
-    -- un-annotated self-tail-recursive `Num a` loop (`loop acc n = … loop (acc+n) (n-1)`)
-    -- lowers its recursive call to a `CDict loop [<Num route>]` head — the dict-pass
-    -- widened `$loop` with a leading dict param, so its call is `dictWords ++ argInstrs
-    -- ++ call $loop`.  Without a `return_call` specialization this stayed a plain `call`
-    -- + `return`, so the un-annotated wasm loop grew the stack and overflowed V8 (the
-    -- annotated monomorphic version already tail-called via the CVar arm).  When the
-    -- constrained-fn call is exact, the dict words + args exactly fill `$name`'s
-    -- params, so it is a genuine tail call: emit `dictWords ++ argInstrs ++
-    -- return_call $name` (the impl-fn analog of the CVar arm's return_call).  Any other
-    -- CDict tail app keeps the ordinary `call`+`return`.
-    CDict name routes =>
-      if progFnMemberW prog name && isExactCall mode then
-        let dictWords = flatMap (routeWitness prog env 0) routes
-        let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
-        dictWords ++ argInstrs ++ ["return_call $" ++ gname name]
-      else
-        emitDictRef prog env 0 name routes args mode ++ ["return"]
-    _ =>
-      let hi = emitRefExpr prog env 0 hd
-      let arr = emitArgsArray prog env 0 args
-      hi ++ arr ++ ["return_call $__mdk_apply"]
+        methRoutes
+        args
+        mode
+        CallTailW
+    -- P0-7 / #2577: a `=>`-constrained function in tail position.  The un-annotated
+    -- `Num a` loop (`loop acc n = … loop (acc+n) (n-1)`) lowers its recursive call
+    -- to a `CDict loop [<Num route>]` head: dict words + args + `return_call $loop`
+    -- for a top-level one, and `return_call $__mdk_apply` for a local
+    -- (`where`-bound) one.
+    CDict name routes => emitDictRef prog env 0 name routes args mode CallTailW
+    _ => emitIndirectApp prog env 0 hd args CallTailW
 
 -- a block in tail position: the last CSExpr is the tail; everything before is a
 -- statement (effect/let).  (W4 blocks in tail position only appear via desugared
@@ -9871,13 +9826,16 @@ emitSelfRecLocalBind prog env x pats body =
   -- forward reference — the knot is tied inside the lifted prologue, not here.
   useSiteRebuilds prog gid groupCaps [bind]
 
-emitLetGroupRef : Prog ->
+-- A let-group: its members, then `body` emitted by `emitBody` with every member
+-- bound (`emitLetWith`'s contract).
+emitLetGroupWith : Prog ->
   List String ->
   Int ->
+  (List String -> CExpr -> List String) ->
   List CBind ->
   CExpr ->
   List String
-emitLetGroupRef prog env d binds body =
+emitLetGroupWith prog env d emitBody binds body =
   let gid = freshLamId (progEmit prog)
   let valBinds = filterList isLgValBind binds
   let fnBinds = filterList (b => not (isLgValBind b)) binds
@@ -9906,7 +9864,7 @@ emitLetGroupRef prog env d binds body =
     -- next), rebuild every FUNCTION member's closure, then emit the body with all bound.
     let valInit = emitLgValBinds prog env d valBinds
     let rebuilds = useSiteRebuilds prog gid groupCaps fnBinds
-    valInit ++ rebuilds ++ emitRefTail2 prog (names ++ valNames ++ env) d body
+    valInit ++ rebuilds ++ emitBody (names ++ valNames ++ env) body
 
 -- S-4: the USE-SITE closure rebuilds for a let-group.  A member whose group capture
 -- set is EMPTY and which does not FORWARD-reference a later sibling builds a `$clos`
@@ -9977,12 +9935,6 @@ emitLgValBinds prog env d (_ :: rest) = emitLgValBinds prog env d rest
 -- P1: does any name in `xs` occur in `ys`?
 anyOfList : List String -> List String -> Bool
 anyOfList xs ys = anyList (x => contains x ys) xs
-
--- when a group body is in NON-tail position we still want to evaluate it leaving a
--- value on the stack; emitRefExpr handles every node, so use it directly (the body
--- closures are already bound as locals above).
-emitRefTail2 : Prog -> List String -> Int -> CExpr -> List String
-emitRefTail2 prog env d body = emitRefExpr prog env d body
 
 -- params of a CLetGroup binding (the first clause's pattern arity → synthetic names).
 lgBindParams : CBind -> List String

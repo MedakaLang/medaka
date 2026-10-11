@@ -673,6 +673,13 @@ isExactCall : CallMode -> Bool
 isExactCall CallExact = True
 isExactCall _ = False
 
+-- Whether an expression is the tail call of its function: an application the
+-- lowering flagged from its position (`core_ir_lower.markTailSites`).
+export
+isTailCall : CExpr -> Bool
+isTailCall (CApp _ _ (CallSite _ flag)) = flag
+isTailCall _ = False
+
 -- An impl entry's declared value arity: the arrows of its interface signature.
 export
 implEntryDeclaredArity : CImplEntry -> Int

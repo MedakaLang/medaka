@@ -314,6 +314,7 @@ import backend.emit_support.{
   rngBound,
   appParts,
   isExactCall,
+  isTailCall,
   implEntryDeclaredArity,
 }
 
@@ -919,6 +920,12 @@ preludeImplIndexOf ((method, key, symTag) :: rest) acc =
 bareIfaceArityRow : (String, (String, String, Int)) -> (String, (String, Int))
 bareIfaceArityRow (m, (ifaceName, _, arity)) = (m, (ifaceName, arity))
 
+-- A define whose body is emitted in tail position: its emitted symbol (`mdk_…`),
+-- how many words it takes after its closure word, and whether it takes its own
+-- closure word `%clos` first.  A tail call of it is a `musttail call` exactly when
+-- its operands fill those parameters, which the emitter checks from this record.
+data TailDefine = TailDefine String Int Bool
+
 data Emit = Emit {
   input : EmitInput,
   -- the gensym id every per-scope counter starts from (`EmitStateConfig.counter0`
@@ -948,10 +955,10 @@ data Emit = Emit {
   trmcCtx : Ref TrmcCtx,
   gDispCtx : Ref GDispCtx,
   -- The define whose match leaves are in function tail position (a clause chain,
-  -- or a body-level match `emitFnBody` reached): a leaf that is a saturated call
-  -- of it returns as `musttail call` + `ret` (`emitArmBody`).  Saved and cleared
+  -- or a body-level match `emitFnBody` reached): a leaf flagged as the tail call
+  -- returns its result straight from the leaf (`emitArmBody`).  Saved and cleared
   -- at the same places as `trmcCtx`, and read after it and `gDispCtx`.
-  selfTailCtx : Ref (Option String),
+  selfTailCtx : Ref (Option TailDefine),
   gDispGroups : Ref (List DispGroup),
   gDispBinds : Ref (List CBind),
   gDispBindMap : Ref (OrdMap CBind),
@@ -1144,7 +1151,7 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 --
 -- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  | DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option String)
+  | DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine)
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -6678,8 +6685,9 @@ satOnlyClauses name arity ((CClause pats b) :: rest) =
 -- emit the lifted multi-clause `define` for a let-group local function into the
 -- SIDE buffer (same swap discipline as emitPatLamDefine).  Captures load from
 -- `%clos` fields 1.., the self name binds to `%clos` (recursive self-call
--- re-enters the same cell), and `emitClauseTree` lowers the clauses over the
--- `%argK` words (arity ≥1 here — nullary values take the fast path above).
+-- re-enters the same cell), and `emitTailClauseTree` lowers the clauses over the
+-- `%argK` words (arity ≥1 here — nullary values take the fast path above) with
+-- their bodies in the define's tail position.
 emitGroupBindDefine : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -6698,14 +6706,14 @@ emitGroupBindDefine e env lamName name arity clauses captured site =
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let _ =
-    emitClauseTree
+    emitTailClauseTree
       e
       (envMergeL
         (omInsert name ("%clos", LTClosure) cenv)
         (implParamEnv arity 0))
+      (TailDefine lamName arity True)
       arity
       (clauseList clauses)
-      ""
       site
   let _ = emit e "}"
   let _ = emit e ""
@@ -6718,9 +6726,9 @@ emitGroupBindDefine e env lamName name arity clauses captured site =
 -- function's leftover next-clause label.  Without this the lifted `go`'s final
 -- clause would `br label %clauseN` to a block defined in the PARENT function —
 -- invalid LLVM once functions are concatenated in the multi-module output
--- (issue #53).  Hence the explicit "" outer argument to emitClauseTree — which since
--- issue #354 is a parameter, so a fresh define states its own contract instead of
--- depending on nulling ambient state.
+-- (issue #53).  Hence the "" outer argument `emitTailClauseTree` passes to
+-- emitClauseTree — which since issue #354 is a parameter, so a fresh define states
+-- its own contract instead of depending on nulling ambient state.
 
 clauseList : List CClause -> List (List Pat, CExpr)
 clauseList [] = []
@@ -9191,7 +9199,8 @@ emitGroupBody : Emit ->
   Int ->
   List (List Pat, CExpr) ->
   Unit
-emitGroupBody e fname _ _ 0 [([], body)] = emitFnBody e omEmpty fname body
+emitGroupBody e fname _ _ 0 [([], body)] =
+  emitFnBody e omEmpty (TailDefine fname 0 False) body
 emitGroupBody e fname _ _ 0 _ =
   gapU e "nullary impl group with more than one clause"
 -- Fast path: single-clause all-PVar impl (e.g. `append xs ys = xs ++ ys`).
@@ -9211,12 +9220,12 @@ emitGroupBody e fname tag positions arity (clauses@[(pats, body)]) =
   if allPVar pats then
     let tyList = patPosTys tag positions (listLen pats) 0
     let env = paramEnvByPos pats tyList 0
-    emitFnBody e env fname body
+    emitFnBody e env (TailDefine fname arity False) body
   else
     emitTailClauseTree
       e
       (implParamEnvByPos tag positions arity 0)
-      fname
+      (TailDefine fname arity False)
       arity
       clauses
       noDeclLoc
@@ -9224,7 +9233,7 @@ emitGroupBody e fname tag positions arity clauses =
   emitTailClauseTree
     e
     (implParamEnvByPos tag positions arity 0)
-    fname
+    (TailDefine fname arity False)
     arity
     clauses
     noDeclLoc
@@ -9709,7 +9718,7 @@ emitRecLamDefine e env lamName f pats captured body =
     emitFnBody
       e
       (envMergeL (omInsert f ("%clos", LTClosure) cenv) penv)
-      lamName
+      (TailDefine lamName (listLen pats) True)
       body
   let _ = emit e "}"
   let _ = emit e ""
@@ -9900,7 +9909,12 @@ emitLamDefine e env lamName pats captured body =
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let penv = paramEnv pats (inferParamTys (sigMapOf e) pats body) 0
-  let _ = emitFnBody e (envMergeL cenv penv) lamName body
+  let _ =
+    emitFnBody
+      e
+      (envMergeL cenv penv)
+      (TailDefine lamName (listLen pats) True)
+      body
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
@@ -10682,10 +10696,11 @@ emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty =
 
 -- A matched arm's body.  It normally computes its value into the match's result
 -- `slot` and joins at `endL`.  When the match is in the tail position of the
--- define named by `e.selfTailCtx`, the body is descended instead: a saturated
--- call of that define is emitted as `musttail call` + `ret` straight from the
--- leaf, so the recursion does not grow the stack even where clang does not turn
--- the call into a jump (-O0).  Every other leaf still stores and joins.
+-- define named by `e.selfTailCtx`, the body is descended instead: a leaf flagged
+-- as the tail call returns straight from the leaf (`emitTailLeaf`), so a call of
+-- that define itself is a `musttail call` that does not grow the stack even
+-- where clang does not turn the call into a jump (-O0).  Every other leaf still
+-- stores and joins.
 emitArmBody : Emit ->
   OrdMap (String, LTy) ->
   CExpr ->
@@ -10714,16 +10729,15 @@ emitArmWord e (bv, bty) slot endL rty =
   let _ = emit e "  store i64 \{bv}, ptr \{slot}"
   emit e ("  br label %" ++ endL)
 
--- An arm body in the tail position of the define `self` (its emitted symbol).
--- `if`, `let`, a `let`/`where` group, a block and a nested match pass tail
--- position on (the nested match's arms join at the same `endL`, `e.selfTailCtx`
--- left live as `emitTrmcBody` leaves `trmcCtx`; a let, group or block emits its
--- bindings as the value path does); a saturated call of `self` is returned
--- with `musttail`, the calling-convention proof `emitFnBody` relies on;
--- anything else stores into `slot` and joins.
+-- An arm body in the tail position of the define `self`.  `if`, `let`, a
+-- `let`/`where` group, a block and a nested match pass tail position on (the
+-- nested match's arms join at the same `endL`, `e.selfTailCtx` left live as
+-- `emitTrmcBody` leaves `trmcCtx`; a let, group or block emits its bindings as
+-- the value path does); a leaf is `emitTailLeaf`'s, and one that is not a
+-- flagged tail call stores into `slot` and joins.
 emitSelfTailArm : Emit ->
   OrdMap (String, LTy) ->
-  String ->
+  TailDefine ->
   CExpr ->
   String ->
   String ->
@@ -10753,10 +10767,7 @@ emitSelfTailArm e env self (CBlock stmts) slot endL rty =
       emitSelfTailArm e (emitBlockInit e env stmts) self last slot endL rty
     None => emitArmValue e env (CBlock stmts) slot endL rty
 emitSelfTailArm e env self body slot endL rty =
-  if directTailCallee e body == Some self then
-    emitTailCallRet e env self body
-  else
-    emitArmValue e env body slot endL rty
+  emitTailLeaf e env self body (_ => emitArmValue e env body slot endL rty)
 
 -- emit the guard tests left-to-right: a `CGBool` tests a Bool (`True` = the word
 -- 3) and branches to `failL` on failure, falling through on success; a
@@ -11749,7 +11760,14 @@ emitMultiClauseFn e name clauses site =
   let _ = beginDefine e
   let _ = emit e "define i64 @mdk_\{name}(\{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
-  let _ = emitTailClauseTree e env ("mdk_" ++ name) arity clauses site
+  let _ =
+    emitTailClauseTree
+      e
+      env
+      (TailDefine ("mdk_" ++ name) arity False)
+      arity
+      clauses
+      site
   let _ = emit e "}"
   emit e ""
 
@@ -13143,7 +13161,8 @@ emitFnClauseW e name pats ptys body =
   let _ = beginDefine e
   let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
   let _ = emit e "entry:"
-  let _ = emitFnBody e env ("mdk_" ++ name) body
+  let _ =
+    emitFnBody e env (TailDefine ("mdk_" ++ name) (listLen pats) False) body
   let _ = emit e "}"
   emit e ""
 
@@ -13198,13 +13217,12 @@ paramEnv _ _ _ = panic "llvm: function parameters must be plain variables"
 -- An `if` recurses into both arms (each arm is itself in tail position and rets);
 -- a `let`, a `let`/`where` group or a block emits its bindings as the value
 -- path does and passes tail position to its body; a `match` puts its arms in
--- tail position (`emitTailDecision`); a SATURATED tail call to a known function
--- emits `[musttail] call` + `ret`; anything else is computed as a value and
--- returned.  `self` is the emitted symbol of the enclosing define (`mdk_…`), the
--- namespace `directTailCallee` answers in.  A `musttail` callee must not receive
--- a pointer into the caller's frame: every closure a let or group binds is an
--- `@mdk_alloc` cell or a constant global, never an `alloca`, so this is sound.
-emitFnBody : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
+-- tail position (`emitTailDecision`); a leaf is `emitTailLeaf`'s, and one that is
+-- not a flagged tail call is computed as a value and returned.  `self` is the
+-- enclosing define.  A `musttail` callee must not receive a pointer into the
+-- caller's frame: every closure a let or group binds is an `@mdk_alloc` cell or
+-- a constant global, never an `alloca`, so this is sound.
+emitFnBody : Emit -> OrdMap (String, LTy) -> TailDefine -> CExpr -> Unit
 emitFnBody e env self (CIf c t f) =
   let (thenL, elseL) = emitTailIfHead e env c
   let _ = emit e (thenL ++ ":")
@@ -13227,9 +13245,8 @@ emitFnBody e env self (CLetGroup binds body) =
 emitFnBody e env self (CBlock stmts) = match lastStmtExpr stmts
   Some last => emitFnBody e (emitBlockInit e env stmts) self last
   None => emitValueRet e env (CBlock stmts)
-emitFnBody e env self other = match directTailCallee e other
-  Some _ => emitTailCallRet e env self other
-  None => emitValueRet e env other
+emitFnBody e env self other =
+  emitTailLeaf e env self other (_ => emitValueRet e env other)
 
 -- emit every statement of a block but the last, exactly as `emitBlock` does
 -- (each one's scope is the rest of the block, the last statement included), and
@@ -13259,10 +13276,10 @@ emitTailIfHead e env c =
 
 -- a `match` in the tail position of the define `self`: `emitDecision`'s shape
 -- (result slot, join block, load + `ret`), with the arms descended under
--- `e.selfTailCtx` so a saturated self call returns from its own leaf.
+-- `e.selfTailCtx` so a flagged tail call returns from its own leaf.
 emitTailDecision : Emit ->
   OrdMap (String, LTy) ->
-  String ->
+  TailDefine ->
   CExpr ->
   List CArm ->
   CTree ->
@@ -13286,7 +13303,7 @@ emitTailDecision e env self scrut arms tree =
 -- leaves are descended under `e.selfTailCtx` (see `emitArmBody`).
 emitTailClauseTree : Emit ->
   OrdMap (String, LTy) ->
-  String ->
+  TailDefine ->
   Int ->
   List (List Pat, CExpr) ->
   Loc ->
@@ -13297,126 +13314,136 @@ emitTailClauseTree e env self arity clauses site =
   let _ = emitClauseTree e env arity clauses "" site
   e.selfTailCtx := saved
 
--- The emitted symbol (`mdk_…`, the name the IR `call`s) of `ex`'s callee when
--- `ex` is a SATURATED call of a known function that a tail position lowers to a
--- direct `call` + `ret` (`emitTailCallRet`), else None.  Emits nothing.
+-- A leaf in the tail position of the define `self`.  An application the
+-- lowering flagged as the tail call (`isTailCall`) returns its result from the
+-- leaf: an exact call of a statically known define calls it directly
+-- (`directCallOperands`), a call of `self` through its own closure word calls
+-- `self` directly (`ownClosureOperands`), and any other is computed and
+-- returned at once.  `emitDirectTailCall` decides between `musttail call` and
+-- `call`; a `call` followed by `ret` becomes a jump only where clang's calling
+-- convention allows.  A leaf that is not flagged is `orValue`'s.
+emitTailLeaf : Emit ->
+  OrdMap (String, LTy) ->
+  TailDefine ->
+  CExpr ->
+  (Unit -> Unit) ->
+  Unit
+emitTailLeaf e env self ex orValue =
+  if isTailCall ex then match directCallOperands e env ex
+    Some (sym, ops) => emitDirectTailCall e self sym ops
+    None => match ownClosureOperands e env self ex
+      Some ops =>
+        emitDirectTailCall e self (tailDefineSym self) ("%clos" :: ops)
+      None => emitValueRet e env ex
+  else
+    orValue ()
+
+-- The callee symbol and operand words of an exact application whose head is
+-- statically known: a top-level function (one with no raw worker or `u64`
+-- kernel for this call, which `emitApp` emits instead), a constrained one (its
+-- dictionary words lead), or the impl entry an `RKey` route selects
+-- (`emitMethod`'s choice, not the `fromInt` identity it folds away).  None for
+-- any other application, emitting nothing.
 --
--- #1101: an UNSATURATED (over- or under-applied) tail call must not be emitted as
--- a direct call — passing every flattened argument to a define with fewer params
--- silently dropped the surplus and never invoked the returned closure.  Only an
--- application stamped `CallExact` is accepted; any other returns None, so it is
--- emitted as a value through `emitApp` in its own mode, the same correct shape an
--- application in `main`'s own body already gets.  A `u64` kernel wrapper
--- (`u64KernelAlias`) goes through `emitApp`, which emits the kernel inline.
---
--- A constrained call carries its leading dictionary words in the CDict head,
--- outside `args`; a bare occurrence is a call of its dictionaries alone, exact when
--- the function takes no value parameter.  A statically routed method call
--- (`CMethod` with an `RKey` route, an impl method calling itself among them) is
--- accepted on `emitMethod`'s own terms (`tailMethodEntry`).
-directTailCallee : Emit -> CExpr -> Option String
-directTailCallee e ex =
+-- #1101: only an application stamped `CallExact` passes every argument to the
+-- define; an over- or under-application goes through `emitApp` in its own mode.
+directCallOperands : Emit ->
+  OrdMap (String, LTy) ->
+  CExpr ->
+  Option (String, List String)
+directCallOperands e env ex =
   let (hd, args, mode) = appParts ex
-  match hd
+  if not (isExactCall mode) then
+    None
+  else match hd
     CVar fname0 _ =>
       let fname = canonFnName e fname0
       if isKnownFn e fname
         && hasArgs args
-        && isExactCall mode
         && isNone (u64KernelAlias e fname0 args)
         && isNone (rawWorkerCall e fname (lengthS args)) then
-        Some ("mdk_" ++ fname)
+        Some ("mdk_" ++ fname, emitArgs e env args)
       else
         None
     CDict fname routes =>
-      if isKnownFn e fname
-        && listLen routes + lengthS args > 0
-        && tailCallExact e ex then
-        Some ("mdk_" ++ fname)
+      if isKnownFn e fname && listLen routes + lengthS args > 0 then
+        let dictWords = dictWordsOf e env routes
+        Some ("mdk_" ++ fname, dictWords ++ emitArgs e env args)
       else
         None
-    CMethod name iface siteArity route implRoutes methRoutes =>
-      let entry =
-        tailMethodEntry
-          e
-          name
-          iface
-          siteArity
-          route
-          implRoutes
-          methRoutes
-          args
-          mode
-      map (implEntryFnName e name) entry
-    _ => None
-
--- Does a tail expression call its head with exactly the head's parameters?
-tailCallExact : Emit -> CExpr -> Bool
-tailCallExact _ (CApp _ _ (CallSite mode _)) = isExactCall mode
-tailCallExact e hd = match definedArity e hd
-  Some 0 => True
-  _ => False
-
--- The impl entry a statically routed method call selects, when `emitApp` would
--- lower the call to a direct call of that entry's define: an `RKey` route, not the
--- `fromInt` identity `emitApp` folds away, and an exact application.  Any other call
--- is None and keeps `emitMethod`'s PAP/over-application path.  Emits nothing.
-tailMethodEntry : Emit ->
-  String ->
-  String ->
-  Int ->
-  Route ->
-  List Route ->
-  List Route ->
-  List CExpr ->
-  CallMode ->
-  Option CImplEntry
-tailMethodEntry e name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes args mode =
-  let folded = intFromIntIdentityArg name route implRoutes methRoutes args
-  if hasArgs args && isNone folded && isExactCall mode then
-    implForSite e name iface tag siteArity
-  else
-    None
-tailMethodEntry _ _ _ _ _ _ _ _ _ = None
-
--- emit a call `directTailCallee` accepted, then `ret` its result; a call of the
--- enclosing define `self` is a `musttail call` (self recursion means the caller
--- and callee prototypes match, which musttail requires).  Operands are emitted in
--- the order the value path (`emitApp`) emits them.
-emitTailCallRet : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
-emitTailCallRet e env self ex =
-  let (hd, args, mode) = appParts ex
-  let (sym, ops) = match hd
-    CDict f routes =>
-      let dictWords = dictWordsOf e env routes
-      ("mdk_" ++ f, dictWords ++ emitArgs e env args)
-    CVar f0 _ => ("mdk_" ++ canonFnName e f0, emitArgs e env args)
-    CMethod name iface siteArity route implRoutes methRoutes =>
-      let entry =
-        tailMethodEntry
-          e
-          name
-          iface
-          siteArity
-          route
-          implRoutes
-          methRoutes
-          args
-          mode
-      match entry
+    CMethod name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes =>
+      let folded = intFromIntIdentityArg name route implRoutes methRoutes args
+      if hasArgs args
+        && isNone folded then match implForSite e name iface tag siteArity
         Some ent =>
           let argOps = emitArgs e env args
           let dictRoutes =
             staticEntryDictRoutes e name ent route methRoutes implRoutes
           let dictWords = dictWordsOf e env dictRoutes
-          (implEntryFnName e name ent, dictWords ++ argOps)
-        None =>
-          panic "llvm: emitTailCallRet on a call directTailCallee rejected"
-    _ => panic "llvm: emitTailCallRet on a call directTailCallee rejected"
+          Some (implEntryFnName e name ent, dictWords ++ argOps)
+        None => None
+      else
+        None
+    _ => None
+
+-- The operand words, after `%clos`, of an exact call of `self` through its own
+-- closure word: a let-group function or recursive lambda calling itself by
+-- name, which its define binds to `%clos` (`emitGroupBindDefine`,
+-- `emitRecLamDefine`).  The cell's code pointer is `self`, so the call can name
+-- `self` directly.  A constrained local's dictionary words lead its arguments,
+-- as `emitLocalDictApp` passes them.  None for any other application, emitting
+-- nothing.
+ownClosureOperands : Emit ->
+  OrdMap (String, LTy) ->
+  TailDefine ->
+  CExpr ->
+  Option (List String)
+ownClosureOperands e env (TailDefine _ _ True) ex =
+  let (hd, args, mode) = appParts ex
+  if not (isExactCall mode) then
+    None
+  else match hd
+    CVar f _ => if isOwnClosure env f then Some (emitArgs e env args) else None
+    CDict f routes =>
+      if isOwnClosure env f then
+        let argOps = emitArgs e env args
+        Some (dictWordsOf e env routes ++ argOps)
+      else
+        None
+    _ => None
+ownClosureOperands _ _ _ _ = None
+
+isOwnClosure : OrdMap (String, LTy) -> String -> Bool
+isOwnClosure env f = match omLookup f env
+  Some (w, _) => w == "%clos"
+  None => False
+
+tailDefineSym : TailDefine -> String
+tailDefineSym (TailDefine sym _ _) = sym
+
+-- `call` + `ret` of `sym` on `ops`: a `musttail call` when it calls the
+-- enclosing define `self` with operands that fill `self`'s parameters
+-- (`fillsTailDefine`), a plain `call` otherwise.  `musttail` needs caller and
+-- callee prototypes to match, and only a self call guarantees that across
+-- ThinLTO's inlining: a non-recursive callee may be inlined into a caller whose
+-- prototype differs, and the verifier then refuses the module.
+emitDirectTailCall : Emit -> TailDefine -> String -> List String -> Unit
+emitDirectTailCall e self sym ops =
   let r = freshReg e
-  let kw = if sym == self then "musttail call" else "call"
+  let kw = if fillsTailDefine self sym ops then "musttail call" else "call"
   let _ = emit e "  \{r} = \{kw} i64 @\{sym}(\{argDecls ops})"
   emit e ("  ret i64 " ++ r)
+
+-- Does a call of `sym` on `ops` fill the define `self` word for word?  Every
+-- parameter and result is an `i64`, so the operand count is the prototype.  The
+-- check is the emitter's own: an unoptimized build runs no IR verifier, and a
+-- `musttail` with a surplus operand writes over its caller's caller's frame.
+fillsTailDefine : TailDefine -> String -> List String -> Bool
+fillsTailDefine (TailDefine selfSym arity False) sym ops =
+  sym == selfSym && lengthS ops == arity
+fillsTailDefine (TailDefine selfSym arity True) sym ("%clos" :: rest) =
+  sym == selfSym && lengthS rest == arity
+fillsTailDefine _ _ _ = False
 
 emitValueRet : Emit -> OrdMap (String, LTy) -> CExpr -> Unit
 emitValueRet e env ex =
