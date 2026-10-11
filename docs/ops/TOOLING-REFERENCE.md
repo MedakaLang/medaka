@@ -57,7 +57,9 @@ which takes its own settings:
   the stack; `compiler/AGENTS.md` lists the ceilings.
 - `MEDAKA_TEST_JOBS=<n>` caps how many `medaka test` runs
   `testAssertionCounts` (`stdlib/test_process.mdk`) starts at once. It defaults
-  to the number of online processors, or 4 when that cannot be read.
+  to the number of processors available to the process (`nproc`, else
+  `getconf`), or 4 when that cannot be read. `medaka test <dir>` divides it
+  across the per-file children it runs at once.
 
 ## Projects and `medaka.toml`
 

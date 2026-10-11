@@ -1,5 +1,5 @@
 # META
-source_lines=643
+source_lines=652
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -24,7 +24,7 @@ stages=DESUGAR,MARK
 
 import io.{getEnvOr, runVerb}
 import json.{asInt, get, parse}
-import list.{somes, zipWith3}
+import list.{findMap, somes, zipWith3}
 import string.{
   contains,
   drop,
@@ -411,7 +411,7 @@ testAssertionCount path extraArgs =
    Each element is what `testAssertionCount` returns for that row, in the
    same order, with the same error text. At most `MEDAKA_TEST_JOBS` suites
    run at once when that is a positive integer, otherwise at most the number
-   of online processors, or 4 when that cannot be read.
+   of available processors, or 4 when that cannot be read.
 
    > testAssertionCounts [("no-such-suite.mdk", [])] == [testAssertionCount "no-such-suite.mdk" []]
    True -}
@@ -432,7 +432,8 @@ testAssertionCounts rows =
 {- | How many `medaka test` runs start at once, in `testAssertionCounts` and
    for the per-file children of `medaka test <dir>`:
    `MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
-   online processors, or 4 when that cannot be read.
+   processors available to the process (`nproc`, else `getconf`), or 4 when
+   that cannot be read.
 
    > testJobs > 0
    True -}
@@ -442,13 +443,21 @@ testJobs = match getEnv "MEDAKA_TEST_JOBS" |> flatMap toInt
   Some n if n > 0 => n
   _ => onlineProcessors
 
--- The number of online processors, or 4 when it cannot be read.
+-- The processors this process may run on (`nproc` honours affinity masks and
+-- cgroup quotas), else the online count, else 4.
 onlineProcessors : <Exec> Int
-onlineProcessors = match runVerb "getconf" ["_NPROCESSORS_ONLN"]
+onlineProcessors =
+  findMap
+      ((cmd, args) => cpuCountFrom cmd args)
+      [("nproc", []), ("getconf", ["_NPROCESSORS_ONLN"])]
+    |> optionOr 4
+
+cpuCountFrom : String -> List String -> <Exec> Option Int
+cpuCountFrom cmd args = match runVerb cmd args
   Ok (0, out, _) => match toInt (trim out)
-    Some n if n > 0 => n
-    _ => 4
-  _ => 4
+    Some n if n > 0 => Some n
+    _ => None
+  _ => None
 
 -- The `medaka test` arguments that report the suite at `path` as JSON.
 assertionCountArgs : String -> List String -> List String
@@ -648,7 +657,7 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 # DESUGAR
 (DUse false (UseGroup ("io") ((mem "getEnvOr" false) (mem "runVerb" false))))
 (DUse false (UseGroup ("json") ((mem "asInt" false) (mem "get" false) (mem "parse" false))))
-(DUse false (UseGroup ("list") ((mem "somes" false) (mem "zipWith3" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "somes" false) (mem "zipWith3" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "toInt" false) (mem "trim" false) (mem "unwords" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" true) (mem "expectAll" false))))
 (DTypeSig true "medakaRoot" (TyEffect ("IO") None (TyCon "String")))
@@ -696,7 +705,9 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig true "testJobs" (TyEffect ("Exec" "IO") None (TyCon "Int")))
 (DFunDef false "testJobs" () (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EVar "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EVar "onlineProcessors"))))
 (DTypeSig false "onlineProcessors" (TyEffect ("Exec") None (TyCon "Int")))
-(DFunDef false "onlineProcessors" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "getconf"))) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (ELit (LInt 4))))) (arm PWild () (ELit (LInt 4)))))
+(DFunDef false "onlineProcessors" () (EBinOp "|>" (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "cmd") (PVar "args"))) (EApp (EApp (EVar "cpuCountFrom") (EVar "cmd")) (EVar "args")))) (EListLit (ETuple (ELit (LString "nproc")) (EListLit)) (ETuple (ELit (LString "getconf")) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))))) (EApp (EVar "optionOr") (ELit (LInt 4)))))
+(DTypeSig false "cpuCountFrom" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "cpuCountFrom" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runVerb") (EVar "cmd")) (EVar "args")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EApp (EVar "Some") (EVar "n"))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "assertionCountArgs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "assertionCountArgs" ((PVar "path") (PVar "extraArgs")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test"))) (EVar "extraArgs")) (EListLit (EVar "path") (ELit (LString "--json")))))
 (DTypeSig false "gradeAssertionCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
@@ -736,7 +747,7 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 # MARK
 (DUse false (UseGroup ("io") ((mem "getEnvOr" false) (mem "runVerb" false))))
 (DUse false (UseGroup ("json") ((mem "asInt" false) (mem "get" false) (mem "parse" false))))
-(DUse false (UseGroup ("list") ((mem "somes" false) (mem "zipWith3" false))))
+(DUse false (UseGroup ("list") ((mem "findMap" false) (mem "somes" false) (mem "zipWith3" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false) (mem "drop" false) (mem "endsWith" false) (mem "indexOf" false) (mem "lines" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "toInt" false) (mem "trim" false) (mem "unwords" false))))
 (DUse false (UseGroup ("test") ((mem "Expectation" true) (mem "expectAll" false))))
 (DTypeSig true "medakaRoot" (TyEffect ("IO") None (TyCon "String")))
@@ -784,7 +795,9 @@ disagreeingFloorBlocks titlePrefix callOpen sourceLines =
 (DTypeSig true "testJobs" (TyEffect ("Exec" "IO") None (TyCon "Int")))
 (DFunDef false "testJobs" () (EMatch (EBinOp "|>" (EApp (EVar "getEnv") (ELit (LString "MEDAKA_TEST_JOBS"))) (EApp (EDictApp "flatMap") (EVar "toInt"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (EVar "onlineProcessors"))))
 (DTypeSig false "onlineProcessors" (TyEffect ("Exec") None (TyCon "Int")))
-(DFunDef false "onlineProcessors" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "getconf"))) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EVar "n")) (arm PWild () (ELit (LInt 4))))) (arm PWild () (ELit (LInt 4)))))
+(DFunDef false "onlineProcessors" () (EBinOp "|>" (EApp (EApp (EVar "findMap") (ELam ((PTuple (PVar "cmd") (PVar "args"))) (EApp (EApp (EVar "cpuCountFrom") (EVar "cmd")) (EVar "args")))) (EListLit (ETuple (ELit (LString "nproc")) (EListLit)) (ETuple (ELit (LString "getconf")) (EListLit (ELit (LString "_NPROCESSORS_ONLN")))))) (EApp (EVar "optionOr") (ELit (LInt 4)))))
+(DTypeSig false "cpuCountFrom" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("Exec") None (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "cpuCountFrom" ((PVar "cmd") (PVar "args")) (EMatch (EApp (EApp (EVar "runVerb") (EVar "cmd")) (EVar "args")) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EMatch (EApp (EVar "toInt") (EApp (EVar "trim") (EVar "out"))) (arm (PCon "Some" (PVar "n")) ((GBool (EBinOp ">" (EVar "n") (ELit (LInt 0))))) (EApp (EVar "Some") (EVar "n"))) (arm PWild () (EVar "None")))) (arm PWild () (EVar "None"))))
 (DTypeSig false "assertionCountArgs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "assertionCountArgs" ((PVar "path") (PVar "extraArgs")) (EBinOp "++" (EBinOp "++" (EListLit (ELit (LString "test"))) (EVar "extraArgs")) (EListLit (EVar "path") (ELit (LString "--json")))))
 (DTypeSig false "gradeAssertionCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
