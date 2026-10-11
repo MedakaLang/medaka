@@ -1,7 +1,7 @@
 issue: 2435
 what: the loader keys modules by a root-less module id, so a user file named list.mdk
 what: beside the entry is deduped onto the stdlib's `list` module. Here the sibling
-what: list.mdk exports `lookup`, `reverse` and `sortOn` with the stdlib's exact types,
+what: list.mdk exports `lookup`, `reverse`, `intersperse` and `sortOn` with the stdlib's exact types,
 what: but its `sortOn` sorts DESCENDING, plus an extra `mine`. main.mdk imports
 what: `list.{mine}` and then `hash_map.{fromList}`. The stdlib's hash_map.mdk does
 what: `import list as L` and renders `Display` through `L.sortOn fst`, so it silently
