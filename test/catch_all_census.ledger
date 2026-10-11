@@ -15,6 +15,7 @@ checkDeclAuthorityUsesDecl	Decl	1/14
 checkDeclaredKindsDecl	Decl	3/14
 checkEffectParamsDecl	Decl	3/14
 checkGradedImplHeadDecl	Decl	1/14
+checkImplSuperContexts	Decl	1/14
 checkUndeterminedRetEffVarsDecl	Decl	3/14
 classEnvDeclFact	Decl	2/14
 collectDictSites	Expr	26/42
