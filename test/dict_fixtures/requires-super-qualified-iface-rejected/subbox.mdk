@@ -1,0 +1,5 @@
+import core2.*
+import ys.*
+
+export impl Sub (Box a) requires Show2 a where
+  sub _ = "sub"

@@ -1,0 +1,5 @@
+export interface Show2 t where
+  show2 : t -> String
+
+export impl Show2 Int where
+  show2 n = "x" ++ intToString n

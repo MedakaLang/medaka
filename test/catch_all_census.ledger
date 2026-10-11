@@ -31,6 +31,7 @@ declIsOwnedType	Decl	1/14
 declKindEntry	Decl	1/14
 declMethodIdentsOf	Decl	2/14
 declMethodNamesOf	Decl	3/14
+declNameLocs	Decl	1/14
 declRefNames	Decl	7/14
 definerShadowArgHead	Expr	2/42
 definerShadowVarHead	Expr	3/42

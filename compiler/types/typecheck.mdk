@@ -12279,7 +12279,8 @@ reqWalkEnter (ReqWalk path fuel memo) iface args =
 -- The memo bucket of the goal [walk] has just entered, the head of its path: that
 -- goal's interface spelling and size and the fuel left.  Goals that are one goal by
 -- `sameWalkGoal` share a bucket; a bucket may also hold goals that are not, so every
--- hit is confirmed by `sameIfaceDecl` and `monoVecSameGiven`.
+-- hit is confirmed against the goal itself: `walkGoalSame` for the solved and followed
+-- tables, `sameIfaceDecl` and `monoVecSameGiven` for the rest.
 enteredGoalKey : ReqWalk -> String
 enteredGoalKey (ReqWalk ((iface, _, size) :: _) fuel _) =
   let name = iface.irName
@@ -30369,7 +30370,7 @@ checkSuperImpls userDecls ce ie cur =
     foreachUnit
       (pushTypeError "T-MISSING-SUPER-IMPL")
       (flatMap (superImplMsgsOf ce cur rows) userDecls)
-  foreachUnit (checkImplSuperContexts ce cur) userDecls
+  foreachUnit (checkImplSuperContexts userDecls ce cur) userDecls
 
 -- DICT-SEMANTICS §3, the declaration rule for supers: a dictionary for `C ts` carries
 -- one for each direct super `D` of `C` at the same arguments, built by the instance
@@ -30381,9 +30382,16 @@ checkSuperImpls userDecls ce ie cur =
 -- reduced here when no instance selects it: that is `superImplMsgsOf`'s existence
 -- question.  Direct supers suffice because every impl is checked, the super's own
 -- impl included.
-checkImplSuperContexts : ClassEnv -> Int -> Decl -> Unit
-checkImplSuperContexts ce cur (DAttrib _ d) = checkImplSuperContexts ce cur d
-checkImplSuperContexts ce cur (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = loc, ... }) =
+--
+-- A parsed `impl` always records its interface token's span; a derived one records
+-- none, so it is reported at the `data`/`newtype` declaration that produced it, and
+-- its remedy is the hand-written impl, since a `deriving` clause takes no `requires`.
+checkImplSuperContexts : List Decl -> ClassEnv -> Int -> Decl -> Unit
+checkImplSuperContexts decls ce cur (DAttrib _ d) =
+  checkImplSuperContexts decls ce cur d
+checkImplSuperContexts decls ce cur (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
+  let derived = isNone ifaceLoc
+  let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
   match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
     Some r if listLen (ceRowTyparams r) == listLen tys =>
       let (implTvMap, headMonos) = implHeadMonos tys
@@ -30407,23 +30415,41 @@ checkImplSuperContexts ce cur (DImpl { iface, tys, reqs, implOrigin = o, implIfa
               headIds
               givens
               loc
+              derived
               (superIfaceRef sup)
               supArgs
           None => ())
         ()
         (ceRowSupers r)
     _ => ()
-checkImplSuperContexts _ _ _ = ()
+checkImplSuperContexts _ _ _ _ = ()
+
+-- The span of the `data`/`newtype` declaration a derived impl's head names.
+derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
+derivedImplDeclLoc decls tys = match flatMap tyConNamesInTy tys
+  [n] => match flatMap (declNameLocs n) decls
+    l :: _ => Some l
+    [] => None
+  _ => None
+
+declNameLocs : String -> Decl -> List Loc
+declNameLocs n (DAttrib _ d) = declNameLocs n d
+declNameLocs n (DData { dataName, dataNameLoc = (Some l), ... })
+  | dataName == n = [l]
+declNameLocs n (DNewtype { newtypeName, newtypeNameLoc = (Some l), ... })
+  | newtypeName == n = [l]
+declNameLocs _ _ = []
 
 checkSuperInstanceContext : String ->
   List (String, Int) ->
   OrdMap Unit ->
   List PredicateSlot ->
   Option Loc ->
+  Bool ->
   IfaceRef ->
   List Mono ->
   Unit
-checkSuperInstanceContext subject roots headIds givens loc sup supArgs
+checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs
   | anyList (givenAnswers sup supArgs) givens = ()
   | otherwise = match rigidHeadInstanceContext headIds sup supArgs
     None => ()
@@ -30434,7 +30460,8 @@ checkSuperInstanceContext subject roots headIds givens loc sup supArgs
           (g => superContextLeaves walk headIds givens loc (fst g) (snd g))
           ctx
       fold
-        (_ leaf => reportSuperContextLeaf subject roots loc sup supArgs leaf)
+        (_ leaf =>
+          reportSuperContextLeaf subject roots loc derived sup supArgs leaf)
         ()
         leaves
 
@@ -30492,34 +30519,48 @@ superContextLeaves walk headIds givens loc iface args
 reportSuperContextLeaf : String ->
   List (String, Int) ->
   Option Loc ->
+  Bool ->
   IfaceRef ->
   List Mono ->
   (IfaceRef, List Mono) ->
   Unit
-reportSuperContextLeaf subject roots loc sup supArgs (iface, args) =
+reportSuperContextLeaf subject roots loc derived sup supArgs (iface, args) =
   let ids = flatMap monoUnboundIds args
   let named = Ref (map (p => (snd p, fst p)) roots)
+  let argsText = joinWith " " (ppEach named (Ref 0) 3 args)
   let superGoal =
-    "\{sup.irName} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
-  let pred = "\{iface.irName} \{joinWith " " (ppEach named (Ref 0) 3 args)}"
+    "\{qualifiedIfaceLabel sup} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
+  let pred = "\{qualifiedIfaceLabel iface} \{argsText}"
+  let predBare = "\{iface.irName} \{argsText}"
   if isEmptyL ids then
     pushTypeErrorOnceAt
       "T-NO-IMPL"
       loc
-      (superContextNoImplMsg subject superGoal pred)
+      (superContextNoImplMsg subject derived superGoal pred predBare)
   else if allList (i => containsI i (map snd roots)) ids then
     pushTypeErrorOnceAt
       "T-IMPL-MISSING-REQUIRES"
       loc
-      (superContextUndeclaredMsg subject superGoal pred)
+      (superContextUndeclaredMsg subject derived superGoal pred predBare)
 
-superContextUndeclaredMsg : String -> String -> String -> String
-superContextUndeclaredMsg subject superGoal pred =
-  "`\{subject}` must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, which the impl does not declare; add `requires \{pred}` to the impl"
+superContextUndeclaredMsg : String ->
+  Bool ->
+  String ->
+  String ->
+  String ->
+  String
+superContextUndeclaredMsg subject derived superGoal pred predBare
+  | derived =
+    "`\{subject}` (derived) must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, which the derived impl does not declare; a `deriving` clause takes no `requires`, so write the impl by hand with `requires \{predBare}`"
+  | otherwise =
+    "`\{subject}` must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, which the impl does not declare; add `requires \{predBare}` to the impl"
 
-superContextNoImplMsg : String -> String -> String -> String
-superContextNoImplMsg subject superGoal pred =
-  "`\{subject}` must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, and no impl provides it; add `impl \{pred}`"
+superContextNoImplMsg : String -> Bool -> String -> String -> String -> String
+superContextNoImplMsg subject derived superGoal pred predBare
+  | derived =
+    "`\{subject}` (derived) must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, and no impl provides it; add `impl \{predBare}`, and write the derived impl by hand if its `requires` must change"
+  | otherwise =
+    "`\{subject}` must provide its superinterface `\{superGoal}`, whose instance requires `\{pred}`, and no impl provides it; add `impl \{predBare}`"
 
 foreachUnit : (a -> Unit) -> List a -> Unit
 foreachUnit _ [] = ()
@@ -31873,6 +31914,9 @@ cyclicSuperIfaceMsg path =
 
 -- the missing-superinterface error messages for one user decl (a DImpl, possibly
 -- wrapped in DAttrib); [] for any non-impl decl or when every super impl exists.
+-- Only an impl with a concrete head is asked: at a parametric head the super's
+-- instance is not looked for here, and `checkImplSuperContexts` does not look for it
+-- either (#4011).
 --
 -- OCCURRENCE MINT (#1110/#1111 A-2.4, the `implCompletenessMsgsOfMap` discipline):
 -- `implOrigin` is destructured beside `iface` in the SAME record pattern, so the
@@ -39043,11 +39087,15 @@ checkNestedReqs univ walk iface args loc scope =
 -- arguments (DICT-SEMANTICS §2), built by the instance each of those selects, so that
 -- instance's `requires` is part of the goal's.  A super goal is entered beside the
 -- goal, on the walk that reached it, as the route walk enters it (`superRoutesAt`).  A
--- super with no instance is the impl declaration's error (`checkSuperImpls`).
+-- super with no instance is the impl declaration's error (`checkSuperImpls`) only for
+-- an impl whose head types are all concrete; at a parametric head neither this walk
+-- nor `checkSuperImpls` reports it (#4011).
 -- The declaration also entails the context of the super instance its head selects
 -- (`checkImplSuperContexts`), but a ground goal can select a more specific super
 -- instance (DICT-SEMANTICS §6.1.4), whose context that check never saw, so this walk
 -- is what rejects it (`test/dict_fixtures/requires-super-overlap-context-rejected.mdk`).
+-- That covers ground goals only: a goal with a binder in it, where the overlap is
+-- still open, is not checked (#4010).
 checkSuperContext : ImplUniverse ->
   ReqWalk ->
   (IfaceRef, List Mono) ->

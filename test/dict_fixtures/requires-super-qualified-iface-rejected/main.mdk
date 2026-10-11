@@ -1,0 +1,9 @@
+import core2.*
+import supbox
+import subbox
+
+f x = useSup (Box x)
+
+main =
+  println (f (1 : Int))
+  println (f True)
