@@ -52,16 +52,24 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  Agreement(..), binaryRanClean, checkRunBuild, summarizeSweep, sweepUnits,
-  verdictOf
+  Agreement(..), binaryRanClean, boundedVerbsSeconds, checkRunBuild,
+  checkRunBuildAll, summarizeSweep, sweepAgreements, verdictOf
 }
-import fs.{fixtureDirs}
+import fs.{fixtureDirs, mkdirAll}
 import list.{sort}
 import path.{basename}
 import string.{contains, endsWith, padRight, replaceAll, stripSuffix, unlines}
-import test.{Expectation, expectAll, expectLineContainsAll, fail, pass}
+import test.{
+  Expectation, expectAll, expectEqual, expectLineContainsAll, fail, pass
+}
 import test_process.{
-  expectSpawnFailsAll, medakaBin, medakaRoot, scratchDir, unrosteredUnits
+  boundedVerbSeconds,
+  expectSpawnFailsAll,
+  medakaBin,
+  medakaRoot,
+  scratchDir,
+  unrosteredUnits,
+  withScratchDir,
 }
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
@@ -1364,44 +1372,48 @@ binName entry = replaceAll "/" "_" entry
 gradePasses : String -> Bool
 gradePasses grade = grade == "-" || grade == "ok" || grade == "n/a"
 
-gradeOne : String -> Row -> <Exec, FileRead, IO> Graded
-gradeOne scratch r =
+planOne : String -> Row -> <FileRead, IO> Result Graded (String, String)
+planOne scratch r =
   let entrypath = "\{corpus}/\{r.entry}"
-  let binPath = "\{scratch}/\{binName r.entry}.bin"
   match readFile entrypath
-    Err e => structuralRow r.entry "missing fixture file: \{e}"
-    Ok _ => match checkRunBuild entrypath binPath
-      Err e => structuralRow r.entry e
-      Ok a =>
-        let checkV = verdictOf a.checkCode
-        let runV = verdictOf a.runCode
-        -- A `build` ACCEPT must have produced a binary: exit 0 alone would
-        -- let a `NONE`-mode row pin ACCEPT over a build that emitted nothing.
-        let buildV =
-          if a.buildCode == 0 && fileExists binPath then "ACCEPT" else "REJECT"
-        let grade = gradeValue r.mode r.pinned a
-        let warnNote = match find (warnCheckFor r.entry) warnChecks
-          None => None
-          Some check => warnFailure a check
-        let warnOk = match warnNote
-          None => True
-          Some _ => False
-        Graded {
-          entry = r.entry,
-          checkV = checkV,
-          runV = runV,
-          buildV = buildV,
-          grade = grade,
-          ok =
-            checkV == r.expCheck
-              && runV == r.expRun
-              && buildV == r.expBuild
-              && gradePasses grade
-              && warnOk,
-          note = match warnNote
-            None => ""
-            Some msg => "\n\{msg}",
-        }
+    Err e => Err (structuralRow r.entry "missing fixture file: \{e}")
+    Ok _ => Ok (entrypath, "\{scratch}/\{binName r.entry}.bin")
+
+gradeOne : Row ->
+  (String, String) ->
+  Result String Agreement ->
+  <FileRead, IO> Graded
+gradeOne r _ (Err e) = structuralRow r.entry e
+gradeOne r (_, binPath) (Ok a) =
+  let checkV = verdictOf a.checkCode
+  let runV = verdictOf a.runCode
+  -- A `build` ACCEPT must have produced a binary: exit 0 alone would
+  -- let a `NONE`-mode row pin ACCEPT over a build that emitted nothing.
+  let buildV =
+    if a.buildCode == 0 && fileExists binPath then "ACCEPT" else "REJECT"
+  let grade = gradeValue r.mode r.pinned a
+  let warnNote = match find (warnCheckFor r.entry) warnChecks
+    None => None
+    Some check => warnFailure a check
+  let warnOk = match warnNote
+    None => True
+    Some _ => False
+  Graded {
+    entry = r.entry,
+    checkV = checkV,
+    runV = runV,
+    buildV = buildV,
+    grade = grade,
+    ok =
+      checkV == r.expCheck
+        && runV == r.expRun
+        && buildV == r.expBuild
+        && gradePasses grade
+        && warnOk,
+    note = match warnNote
+      None => ""
+      Some msg => "\n\{msg}",
+  }
 
 cellRowFailure : Graded -> Option String
 cellRowFailure g =
@@ -1412,7 +1424,7 @@ cellRowFailure g =
       "  \{padRight 60 ' ' g.entry} check=\{padRight 7 ' ' g.checkV} run=\{padRight 7 ' ' g.runV} build=\{padRight 7 ' ' g.buildV} value=\{g.grade}\{g.note}"
 
 sweep : <Exec, FileRead, IO> Expectation
-sweep = sweepUnits table gradeOne cellRowFailure summarizeSweep
+sweep = sweepAgreements table planOne gradeOne cellRowFailure summarizeSweep
 
 -- A row may name a secondary entry point inside a fixture directory
 -- (`<dir>/order-swapped.mdk`), which grades that directory a second way;
@@ -1487,6 +1499,64 @@ test "binaryRanClean distinguishes a panicking binary from a clean one" =
                   "expected binaryRanClean True for a clean binary, got False (binCode=\{intToString cleanAgree.binCode} binErr=\{debug cleanAgree.binErr})"
               else
                 pass
+
+-- # Spawning a sweep side by side
+
+test "boundedVerbsSeconds answers each row as boundedVerbSeconds does, in order" =
+  let rows = [
+    ("sh", ["-c", "sleep 0.3; printf first"]),
+    ("sh", ["-c", "printf second >&2; exit 3"]),
+    ("medaka-no-such-command", []),
+  ]
+  expectEqual
+    (map ((cmd, args) => boundedVerbSeconds 5 cmd args) rows)
+    (boundedVerbsSeconds 5 rows)
+
+-- 142 is 128 + SIGALRM, the signal the alarm kills a hanging spawn with.
+test "a hanging row of a batch is killed by its alarm and the others still answer" =
+  expectEqual
+    [Ok (0, "before", ""), Ok (142, "", ""), Ok (0, "after", "")]
+    (boundedVerbsSeconds 1 [
+      ("sh", ["-c", "printf before"]),
+      ("sleep", ["30"]),
+      ("sh", ["-c", "printf after"]),
+    ])
+
+-- What a result says, short of an `Agreement`, which has no `Eq`.
+spawnedOutputs : Result String Agreement -> Result String (String, String)
+spawnedOutputs r = map (a => (a.runOut, a.binOut)) r
+
+test "two fixtures planned onto one binary path are refused, and neither spawns" =
+  expectEqual
+    [
+      Err "a.mdk: another fixture also builds to /no-such-dir/x.bin",
+      Err "b.mdk: another fixture also builds to /no-such-dir/x.bin",
+    ]
+    (map
+      spawnedOutputs
+      (checkRunBuildAll [
+        ("a.mdk", "/no-such-dir/x.bin"),
+        ("b.mdk", "/no-such-dir/x.bin"),
+      ]))
+
+-- Two fixtures that share a basename in different directories, each built
+-- to the path `binName` derives from its whole entry path.
+sameBasenameOutputs : String ->
+  <Exec, FileRead, FileWrite, IO> Result String (List (Result String (String, String)))
+sameBasenameOutputs dir = do
+  _ <- mkdirAll "\{dir}/x"
+  _ <- mkdirAll "\{dir}/y"
+  _ <- writeFile "\{dir}/x/main.mdk" "main = putStr \"x\"\n"
+  _ <- writeFile "\{dir}/y/main.mdk" "main = putStr \"y\"\n"
+  let pairs =
+    map
+      (e => ("\{dir}/\{e}", "\{dir}/\{binName e}.bin"))
+      ["x/main.mdk", "y/main.mdk"]
+  Ok (map spawnedOutputs (checkRunBuildAll pairs))
+
+test "fixtures sharing a basename in different directories grade independently" = withScratchDir
+  (dir =>
+    expectEqual (Ok [Ok ("x", "x"), Ok ("y", "y")]) (sameBasenameOutputs dir))
 
 -- `warnChecks` is looked up by `find (warnCheckFor r.entry) warnChecks` while
 -- sweeping `table` (`gradeOne`), so an entry naming no row is never visited

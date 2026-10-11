@@ -6,21 +6,28 @@
 
 import fs.{expectUnitCount, fixtureFiles}
 import io.{getEnvOr, runVerb}
-import list.{dropWhile, reverse, somes, sort, takeWhile}
+import list.{chunks, dropWhile, group, reverse, somes, sort, splitAt, takeWhile}
 import path.{dirname, stem}
 import string.{
   contains,
   endsWith,
+  join,
   lines,
   padRight,
   startsWith,
   stripSuffix,
   toLower,
+  trim,
   unlines,
 }
 import regex.{Regex, mustCompile, isMatch}
 import test_process.{
-  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, scratchDir
+  boundedVerbSeconds,
+  medakaBin,
+  medakaRoot,
+  scratchDir,
+  spawnTimeoutSeconds,
+  testJobs,
 }
 import test.{
   Expectation,
@@ -71,6 +78,22 @@ boundedInTree secs cmd args =
     secs
     "env"
     (["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_EMITTER=\{emitterBin}", cmd] ++ args)
+
+{- | `boundedVerbSeconds secs cmd args` for every `(cmd, args)` row, at most
+   `testJobs` of them running at once.
+
+   Each element is what `boundedVerbSeconds` returns for its row, in input
+   order and with the same error text, so grading the results in order reads
+   exactly what a loop over `boundedVerbSeconds` would have read. The argv
+   below has to stay the one `boundedVerbSeconds` builds. -}
+export
+boundedVerbsSeconds : Int ->
+  List (String, List String) ->
+  <Exec, IO> List (Result String (Int, String, String))
+boundedVerbsSeconds secs rows =
+  let alarm = "alarm \{intToString secs}; exec @ARGV"
+  let argvs = map ((cmd, args) => ["-e", alarm, "env", cmd] ++ args) rows
+  map (mapErr (e => "perl: \{e}")) (runCommandBatch "perl" testJobs argvs)
 
 rejectionRe : Regex
 rejectionRe = mustCompile "(?i)(type error|parse error)|^error:"
@@ -191,36 +214,137 @@ verdictOf _ = "REJECT"
    writing the build's output to `binPath`, and executes that binary when
    the build succeeded.
 
-   Every spawn is bounded (`boundedVerb`), so one hanging fixture fails its
-   own row rather than the job. When the build did not succeed there is no
-   binary to run, and the three `bin` fields report an empty zero-exit run
-   that every caller reads only after checking `buildCode`. -}
+   Every spawn is bounded (`spawnTimeoutSeconds`), so one hanging fixture
+   fails its own row rather than the job. When the build did not succeed
+   there is no binary to run, and the three `bin` fields report an empty
+   zero-exit run that every caller reads only after checking `buildCode`. -}
 export
 checkRunBuild : String -> String -> <Exec, IO> Result String Agreement
-checkRunBuild entry binPath = match boundedVerb medakaBin ["check", entry]
-  Err e => Err "\{entry}: could not run `medaka check`: \{e}"
-  Ok (checkCode, _, checkErr) => match boundedVerb medakaBin ["run", entry]
-    Err e => Err "\{entry}: could not run `medaka run`: \{e}"
-    Ok (runCode, runOut, runErr) =>
-      match boundedVerb medakaBin ["build", entry, "-o", binPath]
-        Err e => Err "\{entry}: could not run `medaka build`: \{e}"
-        Ok (buildCode, buildOut, buildErr) =>
-          let built =
-            if buildCode == 0 then boundedVerb binPath [] else Ok (0, "", "")
-          match built
-            Err e => Err "\{entry}: could not run the built binary: \{e}"
-            Ok (binCode, binOut, binErr) => Ok Agreement {
-              checkCode = checkCode,
-              checkErr = checkErr,
-              runCode = runCode,
-              runOut = runOut,
-              runErr = runErr,
-              buildCode = buildCode,
-              buildLog = buildOut ++ buildErr,
-              binCode = binCode,
-              binOut = binOut,
-              binErr = binErr,
-            }
+checkRunBuild entry binPath = match checkRunBuildAll [(entry, binPath)]
+  [a] => a
+  _ => Err "\{entry}: checkRunBuildAll did not answer exactly once"
+
+{- | `checkRunBuild` for every `(entry, binPath)` pair, `testJobs` pairs at
+   a time, each verb run over a group's pairs side by side: every `check`,
+   then every `run`, then every `build`, then every binary that built.
+
+   Each element is what `checkRunBuild` returns for its pair, in input
+   order. Groups of `testJobs` keep `MEDAKA_TEST_JOBS=1` spawning in exactly
+   the order a loop over `checkRunBuild` does. A pair whose spawn could not
+   be started stops there and spawns nothing further. Pairs that name the
+   same `binPath` are each an `Err` naming it, and spawn nothing: built at
+   once, one fixture's binary would be graded as the other's. -}
+export
+checkRunBuildAll : List (String, String) ->
+  <Exec, IO> List (Result String Agreement)
+checkRunBuildAll pairs =
+  let shared = sharedPaths (map snd pairs)
+  flatMap (checkRunBuildGroup shared) (chunks testJobs pairs)
+
+checkRunBuildGroup : List String ->
+  List (String, String) ->
+  <Exec, IO> List (Result String Agreement)
+checkRunBuildGroup shared pairs =
+  let bin = medakaBin
+  let start = map (startAgreement shared) pairs
+  let checked =
+    spawnPhase
+      start
+      (((entry, _), _) => Some (bin, ["check", entry]))
+      "`medaka check`"
+      (a (code, _, err) => { a | checkCode = code, checkErr = err })
+  let ran =
+    spawnPhase
+      checked
+      (((entry, _), _) => Some (bin, ["run", entry]))
+      "`medaka run`"
+      (a (code, out, err) => { a | runCode = code, runOut = out, runErr = err })
+  let built =
+    spawnPhase
+      ran
+      (((entry, binPath), _) => Some (bin, ["build", entry, "-o", binPath]))
+      "`medaka build`"
+      (a (code, out, err) => { a | buildCode = code, buildLog = out ++ err })
+  let executed =
+    spawnPhase
+      built
+      (((_, binPath), a) =>
+        if a.buildCode == 0 then Some (binPath, []) else None)
+      "the built binary"
+      (a (code, out, err) => { a | binCode = code, binOut = out, binErr = err })
+  map (map snd) executed
+
+-- The paths that occur more than once in `paths`, each named once.
+sharedPaths : List String -> List String
+sharedPaths paths = flatMap repeated (group (sort paths))
+
+repeated : List String -> List String
+repeated (p :: _ :: _) = [p]
+repeated _ = []
+
+-- A pair's state before any spawn: every field empty, which is also what an
+-- unbuilt binary's fields keep.
+startAgreement : List String ->
+  (String, String) ->
+  Result String ((String, String), Agreement)
+startAgreement shared (entry, binPath) =
+  if elem binPath shared then
+    Err "\{entry}: another fixture also builds to \{binPath}"
+  else
+    Ok ((entry, binPath), emptyAgreement)
+
+emptyAgreement : Agreement
+emptyAgreement = Agreement {
+  checkCode = 0,
+  checkErr = "",
+  runCode = 0,
+  runOut = "",
+  runErr = "",
+  buildCode = 0,
+  buildLog = "",
+  binCode = 0,
+  binOut = "",
+  binErr = "",
+}
+
+-- One verb of `checkRunBuildAll`: the spawn `spawnOf` names for each pair
+-- still standing, all run as one batch, each result folded back by `fill`.
+-- A pair `spawnOf` names no spawn for is carried through unchanged.
+spawnPhase : List (Result String ((String, String), Agreement)) ->
+  (((String, String), Agreement) -> Option (String, List String)) ->
+  String ->
+  (Agreement -> (Int, String, String) -> Agreement) ->
+  <Exec, IO> List (Result String ((String, String), Agreement))
+spawnPhase states spawnOf what fill =
+  let wanted = somes (map (st => flatMap spawnOf (fromResult st)) states)
+  settle
+    spawnOf
+    what
+    fill
+    states
+    (boundedVerbsSeconds spawnTimeoutSeconds wanted)
+
+settle : (((String, String), Agreement) -> Option (String, List String)) ->
+  String ->
+  (Agreement -> (Int, String, String) -> Agreement) ->
+  List (Result String ((String, String), Agreement)) ->
+  List (Result String (Int, String, String)) ->
+  List (Result String ((String, String), Agreement))
+settle _ _ _ [] _ = []
+settle spawnOf what fill ((Err e) :: rest) results =
+  Err e :: settle spawnOf what fill rest results
+settle spawnOf what fill ((Ok s) :: rest) results =
+  let ((entry, _), a) = s
+  match (spawnOf s, results)
+    (None, _) => Ok s :: settle spawnOf what fill rest results
+    (Some _, (Ok r) :: more) =>
+      Ok (fst s, fill a r) :: settle spawnOf what fill rest more
+    (Some _, (Err e) :: more) =>
+      Err "\{entry}: could not run \{what}: \{e}"
+        :: settle spawnOf what fill rest more
+    (Some _, []) =>
+      Err "\{entry}: could not run \{what}: the batch returned no result"
+        :: settle spawnOf what fill rest []
 
 -- | True when the built binary itself proves nothing pinned wrong: it
 -- exited 0 and its stderr carries no runtime panic. Only meaningful after
@@ -254,6 +378,131 @@ sweepUnits units gradeOne rowFailure summarize = match scratchDir
     let failures = somes (map rowFailure graded)
     let _ = runVerb "rm" ["-rf", scratch]
     summarize (length graded) failures
+
+{- | `sweepUnits` for a corpus graded by `checkRunBuild`: `plan` names each
+   unit's `(entry, binPath)` under the scratch directory, or settles its row
+   without spawning anything, and `grade` turns the unit's agreement into
+   its row.
+
+   Units go `testJobs` at a time, each verb of a group running side by side
+   (`checkRunBuildAll`), and each group is graded before the next one
+   spawns, so under `MEDAKA_TEST_JOBS=1` the spawns come in exactly the
+   order a loop over `checkRunBuild` makes them. Units planned onto the same
+   `binPath` fail the sweep before anything spawns. The scratch directory is
+   made fresh for each sweep, so a sweep that follows another in the same
+   process is not handed the one that sweep removed. -}
+export
+sweepAgreements : List unit ->
+  (String -> unit -> <FileRead, IO> Result row (String, String)) ->
+  (unit -> (String, String) -> Result String Agreement -> <Exec, FileRead, IO> row) ->
+  (row -> Option String) ->
+  (Int -> List String -> Expectation) ->
+  <Exec, FileRead, IO> Expectation
+sweepAgreements units plan grade rowFailure summarize = inFreshScratch
+  (scratch =>
+    let plans = map (u => (u, plan scratch u)) units
+    match sharedPaths (map snd (somes (map (p => fromResult (snd p)) plans)))
+      [] =>
+        let graded = flatMap (gradePlanned grade) (chunks testJobs plans)
+        summarize (length graded) (somes (map rowFailure graded))
+      shared =>
+        fail "more than one unit builds to each of: \{join ", " shared}")
+
+gradePlanned : (unit -> (String, String) -> Result String Agreement -> <Exec, FileRead, IO> row) ->
+  List (unit, Result row (String, String)) ->
+  <Exec, FileRead, IO> List row
+gradePlanned grade batch =
+  let spawned = checkRunBuildAll (somes (map (p => fromResult (snd p)) batch))
+  gradeEach grade batch spawned
+
+gradeEach : (unit -> (String, String) -> Result String Agreement -> <Exec, FileRead, IO> row) ->
+  List (unit, Result row (String, String)) ->
+  List (Result String Agreement) ->
+  <Exec, FileRead, IO> List row
+gradeEach _ [] _ = []
+gradeEach grade ((_, Err row) :: rest) results =
+  row :: gradeEach grade rest results
+gradeEach grade ((u, Ok pair) :: rest) (a :: more) =
+  grade u pair a :: gradeEach grade rest more
+gradeEach grade ((u, Ok pair) :: rest) [] =
+  grade u pair (Err "\{fst pair}: no agreement was produced")
+    :: gradeEach grade rest []
+
+{- | `sweepUnits` for a corpus whose rows each grade the spawns `spawnsOf`
+   names, every one bounded by `spawnTimeoutSeconds`: `spawnsOf` is handed
+   the sweep's scratch directory, and `grade` is handed the unit's results in
+   the order its spawns were named.
+
+   Units go `testJobs` at a time, all the spawns of a group running side by
+   side, and each group is graded before the next one spawns, so under
+   `MEDAKA_TEST_JOBS=1` the spawns come in exactly the order a loop over the
+   units makes them. The scratch directory is made fresh for each sweep. -}
+export
+sweepSpawns : List unit ->
+  (String -> unit -> <IO> List (String, List String)) ->
+  (unit -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> row) ->
+  (row -> Option String) ->
+  (Int -> List String -> Expectation) ->
+  <Exec, FileRead, IO> Expectation
+sweepSpawns units spawnsOf grade rowFailure summarize = inFreshScratch
+  (scratch =>
+    let graded =
+      flatMap (gradeSpawned (spawnsOf scratch) grade) (chunks testJobs units)
+    summarize (length graded) (somes (map rowFailure graded)))
+
+-- | `sweepSpawns` for a corpus whose rows each grade exactly one spawn.
+export
+sweepSpawn : List unit ->
+  (String -> unit -> <IO> (String, List String)) ->
+  (unit -> Result String (Int, String, String) -> <Exec, FileRead, IO> row) ->
+  (row -> Option String) ->
+  (Int -> List String -> Expectation) ->
+  <Exec, FileRead, IO> Expectation
+sweepSpawn units spawnOf grade rowFailure summarize =
+  sweepSpawns
+    units
+    (scratch u => [spawnOf scratch u])
+    (u results => grade u (soleResult results))
+    rowFailure
+    summarize
+
+soleResult : List (Result String a) -> Result String a
+soleResult [r] = r
+soleResult rs =
+  Err "the batch returned \{intToString (length rs)} results for one spawn"
+
+gradeSpawned : (unit -> <IO> List (String, List String)) ->
+  (unit -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> row) ->
+  List unit ->
+  <Exec, FileRead, IO> List row
+gradeSpawned spawnsOf grade batch =
+  let named = map spawnsOf batch
+  let results = boundedVerbsSeconds spawnTimeoutSeconds (flatMap (s => s) named)
+  gradeSplit grade batch (map length named) results
+
+gradeSplit : (unit -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> row) ->
+  List unit ->
+  List Int ->
+  List (Result String (Int, String, String)) ->
+  <Exec, FileRead, IO> List row
+gradeSplit grade (u :: us) (n :: ns) results =
+  let (mine, rest) = splitAt n results
+  grade u mine :: gradeSplit grade us ns rest
+gradeSplit _ _ _ _ = []
+
+-- Runs `body` in a scratch directory made for this call, then removes it.
+inFreshScratch : (String -> <Exec, FileRead, IO> Expectation) ->
+  <Exec, FileRead, IO> Expectation
+inFreshScratch body = match runVerb "mktemp" ["-d"]
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok (0, out, _) =>
+    let scratch = trim out
+    let result = body scratch
+    let _ = runVerb "rm" ["-rf", scratch]
+    result
+  Ok (code, _, err) =>
+    fail
+      "could not make a scratch directory: mktemp -d exited \{intToString code}: \{err}"
 
 {- | The `summarize` most `sweepUnits` callers pass: a generic "N of M probe
    rows failed" report, or `pass` when nothing failed.
@@ -542,17 +791,20 @@ rosterAgreement corpus want rows = match fixtureStems corpus
           [] => pass
           problems => fail "\{corpus}:\n\{unlines problems}"
 
-gradeOutcome : String ->
+planOutcome : String ->
   String ->
   (String, RuntimeOutcome) ->
-  <Exec, FileRead, IO> Option String
-gradeOutcome corpus scratch (name, want) =
-  match checkRunBuild "\{corpus}/\{name}.mdk" "\{scratch}/\{name}.bin"
-    Err e => Some "  \{padRight 30 ' ' name} \{e}"
-    Ok a =>
-      map
-        (why => "  \{padRight 30 ' ' name} \{why}")
-        (runtimeOutcomeFailure want a)
+  Result (Option String) (String, String)
+planOutcome corpus scratch (name, _) =
+  Ok ("\{corpus}/\{name}.mdk", "\{scratch}/\{name}.bin")
+
+gradeOutcome : (String, RuntimeOutcome) ->
+  (String, String) ->
+  Result String Agreement ->
+  Option String
+gradeOutcome (name, _) _ (Err e) = Some "  \{padRight 30 ' ' name} \{e}"
+gradeOutcome (name, want) _ (Ok a) =
+  map (why => "  \{padRight 30 ' ' name} \{why}") (runtimeOutcomeFailure want a)
 
 -- The whole disagreeing-fixture table goes into the failure message rather
 -- than to stdout: `medaka test --native` parses a test body's own stdout back
@@ -577,4 +829,9 @@ fatalOutcomeSweep : String ->
   List (String, RuntimeOutcome) ->
   <Exec, FileRead, IO> Expectation
 fatalOutcomeSweep corpus want rows =
-  sweepUnits rows (gradeOutcome corpus) (r => r) (summarizeOutcomes corpus want)
+  sweepAgreements
+    rows
+    (planOutcome corpus)
+    gradeOutcome
+    (r => r)
+    (summarizeOutcomes corpus want)
