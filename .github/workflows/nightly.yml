@@ -167,6 +167,7 @@ jobs:
         uses: ./.github/actions/setup-medaka
         with:
           binary: build
+          valgrind: 'true'
 
       - name: Build the oracles stage_ir_scaling needs
         run: FORCE=1 sh test/build_oracles.sh --for 'diff_compiler_stage_ir_scaling'
