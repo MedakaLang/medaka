@@ -426,7 +426,7 @@ loweredDefaultRowKeys (CProgram _ _ _ impls) =
   sortUniqS (flatMap defaultEntryRowKey impls)
 
 defaultEntryRowKey : CImplEntry -> List String
-defaultEntryRowKey (CImplEntry method _ (CImplDefault ifaceWord _ key _ _ _)) =
+defaultEntryRowKey (CImplEntry method _ _ (CImplDefault ifaceWord _ key _ _ _)) =
   ["\{slotKey ifaceWord method}\n\{key}"]
 defaultEntryRowKey _ = []
 

@@ -1,0 +1,15 @@
+-- An over-application evaluates every argument, left to right, before the head
+-- is applied: `pre` takes one parameter and returns a closure, so `pre 1
+-- (noisy 2)` runs `noisy 2` (printing `arg`) before `pre`'s body (printing
+-- `body`), then applies the closure to 2.
+pre : Int -> <Stdout> (Int -> Int)
+pre n =
+  println "body"
+  x => n + x
+
+noisy : Int -> <Stdout> Int
+noisy n =
+  println "arg"
+  n
+
+main = println (pre 1 (noisy 2))

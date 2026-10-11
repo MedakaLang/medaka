@@ -1,0 +1,22 @@
+-- An over-application evaluates every argument, left to right, before the head
+-- is applied, whatever wraps the head: an annotated head `(pick 1 : T) x` and a
+-- pipe `x |> pick 1` are `pick 1 x`, like the plain spine on the middle line.
+-- `pick` takes one parameter and returns a closure, so each line runs `say`
+-- (printing its label) before `pick`'s body (printing `pick-body`), then
+-- applies the closure to 2: 2 + 1 = 3.
+say : String -> Int -> <Stdout> Int
+say s x =
+  println s
+  x
+
+pick : Int -> <Stdout> (Int -> Int)
+-- The returned lambda literal is the shape under test.
+-- lint-disable-next-line rule-lambda-section
+pick n =
+  println "pick-body"
+  y => y + n
+
+main =
+  println ((pick 1 : Int -> Int) (say "arg1" 2))
+  println (pick 1 (say "arg2" 2))
+  println (say "arg3" 2 |> pick 1)

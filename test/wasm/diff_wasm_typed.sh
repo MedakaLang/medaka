@@ -69,8 +69,8 @@ fi
 for sym in \
   WasmFnImplIndex WasmRecordValueIndex WasmCtorIndex WasmProgramIndex Prog \
   progIndex makeWasmProgramIndex makeWasmProgramIndexGaps makeWasmProgramIndexWithLazy \
-  indexFnNamesW indexValNamesW indexFnAritiesW indexImplsByMethodW indexLazyGlobalsW \
-  indexRecFieldsW indexFnsUsedAsValuesW indexCtorAritiesW indexCtorTypesW \
+  indexFnNamesW indexValNamesW indexAritiesW indexImplsByMethodW indexLazyGlobalsW \
+  indexFnsUsedAsValuesW indexCtorAritiesW indexCtorTypesW \
   indexCtorOrdinalsW indexTypeCtorsW; do
   grep -E "^$sym[[:space:]]*:|^data $sym" "$WASM_SRC" >/dev/null || {
     echo "FAIL wasm typed index ratchet: missing private carrier/accessor $sym"
@@ -198,12 +198,12 @@ for required in \
     exit 1
   }
 done
-[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'freshLamId (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 3 ] || {
-  echo "FAIL H2B7-ROUTES: expected three lambda-id routes"
+[ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'freshLamId (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 4 ] || {
+  echo "FAIL H2B7-ROUTES: expected four lambda-id routes"
   exit 1
 }
 [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'addLiftedNamed (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 2 ] &&
-  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteFuncRef (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 6 ] || {
+  [ "$(printf '%s' "$WASM_FLAT" | grep -o -F 'noteFuncRef (progEmit prog)' | wc -l | tr -d '[:space:]')" -eq 7 ] || {
   echo "FAIL H2B7-ROUTES: named lifts or function-reference routes changed"
   exit 1
 }
@@ -331,7 +331,7 @@ done
   echo "FAIL H2B9-DIV-AUTHORITY: expected ten W7 scope brackets (one per function emitter)"
   exit 1
 }
-has_wasm_pin 'scanExprW7 emit (CFieldAccess ex _ _) = scanExprW7 emit ex' &&
+has_wasm_pin 'scanExprW7 emit (CFieldAccess ex _ _ _) = scanExprW7 emit ex' &&
   ! grep -A 1 -F 'scanExprW7 emit (CRecord _ fields) =' "$WASM_SRC" | grep -F 'useRecUpdate' >/dev/null || {
   echo "FAIL H2B9-RECUPDATE-NEAREST-MISS: plain record construction/access changed authority"
   exit 1
@@ -786,13 +786,6 @@ for required in \
   'freshStrSeg : WasmEmit -> List Int -> Int' \
   'emitDataSegs : WasmEmit -> List String' \
   'emitLitRef : WasmEmit -> Lit -> List String' \
-  'implSelfCtx : Ref ImplSelfCtx' \
-  'implSelfCtx = Ref ImplSelfOff' \
-  'let savedImplSelf = (progEmit prog).implSelfCtx.value' \
-  'let _ = setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag key fnName arity)' \
-  'let _ = setRef (progEmit prog).implSelfCtx savedImplSelf' \
-  'implSelfReturnCall prog env name iface siteArity route methRoutes implRoutes app args = match (progEmit prog).implSelfCtx.value' \
-  'if implEntryKeyW entry == key then' \
   'let i = !emit.nextStringSegmentId' \
   'setRef emit.nextStringSegmentId (i + 1)' \
   'setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)' \
@@ -1063,7 +1056,7 @@ done
 # key), and its body goes through the same impl-body path as a supplied method.
 for required in \
   'defaultFnNameW : String -> String -> String -> String' \
-  'implEntrySymW _ method (CImplEntry _ _ (CImplDefault ifaceWord _ key _ _ _)) = defaultFnNameW ifaceWord method key' \
+  'implEntrySymW _ method (CImplEntry _ _ _ (CImplDefault ifaceWord _ key _ _ _)) = defaultFnNameW ifaceWord method key' \
   'implBodyExprW (CImplDefault _ _ _ _ _ e) = e'; do
   has_wasm_pin "$required" || {
     case "$required" in
@@ -1116,7 +1109,7 @@ for required in \
   'synthBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")]' \
   'synthBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)]' \
   'synthBind "main" [CClause [] (CLit (LInt 0))]' \
-  'CImplEntry "synthDefault" 0 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" [] [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
+  'CImplEntry "synthDefault" 0 1 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" [] [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
   has_typed_pin "$required" || {
     echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
     exit 1
@@ -2119,7 +2112,7 @@ REEMIT_OUT="$($EMITBIN --reemit-input "$RUNTIME" "$INPUT_WORK/p.mdk" "$INPUT_WOR
   echo "FAIL wasm typed same-process input harness"
   exit 1
 }
-REEMIT_EXPECTED="$(printf 'P_EQ_PLAST\nP_NE_METHOD\nP_NE_SIG\nP_NE_CTOR\nP_NE_MAIN\nP_NE_RECORD')"
+REEMIT_EXPECTED="$(printf 'P_EQ_PLAST\nP_EQ_METHOD\nP_NE_SIG\nP_NE_CTOR\nP_NE_MAIN\nP_EQ_RECORD')"
 [ "$REEMIT_OUT" = "$REEMIT_EXPECTED" ] || {
   echo "FAIL wasm typed input isolation: an explicit field did not discriminate: $REEMIT_OUT"
   exit 1

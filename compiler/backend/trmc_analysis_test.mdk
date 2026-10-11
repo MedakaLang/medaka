@@ -3,7 +3,7 @@
 
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..), noDeclLoc}
-import ir.core_ir.{CBind(..), CClause(..), CExpr(..), synthBind}
+import ir.core_ir.{CBind(..), CClause(..), CExpr(..), mkApp, synthBind}
 import backend.trmc_analysis.{SelfRef(..), freeVars, trmcEligible}
 
 loc : Loc
@@ -32,7 +32,7 @@ multiClauseGroup =
           ]),
       ],
     ]
-    (CApp (CVar "g" AGlobal) (CVar "after" AGlobal))
+    (mkApp (CVar "g" AGlobal) [CVar "after" AGlobal])
 
 test "freeVars visits every let-group clause with lexical subtraction" = expectAll
   [
@@ -50,7 +50,7 @@ helperBind innerBody = synthBind "helper" [
     [PWild]
     (CLetGroup
       [synthBind "inner" [CClause [PWild] innerBody]]
-      (CApp (CVar "inner" AGlobal) (CLit LUnit))),
+      (mkApp (CVar "inner" AGlobal) [CLit LUnit])),
 ]
 
 trmcBody : CExpr -> CExpr
@@ -60,7 +60,7 @@ trmcBody innerBody =
     (CBinPrim
       "::"
       (CLit (LInt 1))
-      (CApp (CVar "loop" AGlobal) (CVar "xs" AGlobal))
+      (mkApp (CVar "loop" AGlobal) [CVar "xs" AGlobal])
       ""
       noDeclLoc)
 
@@ -77,5 +77,5 @@ test "TRMC rejects a hidden self-call but keeps an ordinary capture eligible" = 
   [
     expectTrue (trmcEligibleWith (CVar "xs" AGlobal)),
     expectFalse
-      (trmcEligibleWith (CApp (CVar "loop" AGlobal) (CVar "xs" AGlobal))),
+      (trmcEligibleWith (mkApp (CVar "loop" AGlobal) [CVar "xs" AGlobal])),
   ]

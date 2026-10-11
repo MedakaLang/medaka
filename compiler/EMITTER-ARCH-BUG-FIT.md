@@ -83,6 +83,17 @@ ones, mapped to the target document's R4 fact ledger:
 | Physical residual, no fact | #1469 (WasmGC illegal cast through a multi-constructor record field; the interpreter is correct, both backends are not: #1465), #1359 (mangler has no re-export arm; a `private_mangle` fix pending ruling 3) |
 | Upstream, out of arc | #2397 (mismatched clause arity accepted by typecheck), #1560, #1575, #1579, #1904, #1944, #1956, #1981, #2028, #2049, #2052, #2054, #2056, #2557 and the rest of the `ws:typecheck` population |
 
+**Re-derived 2026-10-10, after sprint lowering-says-it-once landed R4 rows F1,
+F2 and F4.** This pass reads the tree (fixtures, pins and commit messages), not
+the live tracker, so the S0/S1 counts above are still those of 2026-09-03 and
+only the F1, F2 and F4 rows move:
+
+| Fact | State in the tree on 2026-10-10 |
+|---|---|
+| F1 record ordinals and update order | Landed (slice S-record-ordinals). #1518 is fixed by it; `test/engine_fixtures/record_update_override_order.mdk` and its value pin are the witness. |
+| F2 call mode | Landed (slices S-call-mode-A and -B). #2078 is fixed by it; `test/engine_fixtures/call_mode_arity.mdk` and `call_mode_over_order.mdk` are the witnesses, with `impl_group_mixed_eta.mdk` for the impl-group eta rule. #2396 had already drained before the row landed (witness `test/engine_fixtures/constrained_wrapper_builtin_scalar_2396.mdk`), and #2425's shapes are pinned by `test/engine_fixtures/overapplied_lambda.mdk` and `point_free_map_lambda.mdk`. |
+| F4 tail sites | Landed (slices S-tail-sites-A and -B). #1349 is fixed by it (`test/wasm/diff_gzip.sh` `large_stored` passes as a success case). #2577's where-worker self recursion is constant-stack on both backends at `-O0` and `-O2`; a non-self tail call stays constant-stack natively only through clang's `-O2` sibling calls, which is outside the row. |
+
 ### 0.3 What this ledger is for now
 
 A row in R4 is credited when its fact lands with its validator arm and its
@@ -408,6 +419,11 @@ Wasm physical plan contains `return_call`/`return_call_ref`; a deep fixture and
 WAT shape assertion both fail before the fix and pass after it. The existing
 `test/wasm/diff_gzip.sh` `known_divergence` case is already the self-draining
 behavior pin, as recorded in `test/MUST-FAIL-NOT-PINNABLE.txt`.
+
+**Outcome (2026-10-10).** Fixed by R4 row F4 rather than by an X-stage: the
+lowering flags the tail site, and Wasm `emitMethodRef` `return_call`s the entry
+an `RKey` route selects. The `known_divergence` case became the `large_stored`
+success case, and its `test/MUST-FAIL-NOT-PINNABLE.txt` row is gone.
 
 ## 4. Upstream identity and obligation families
 

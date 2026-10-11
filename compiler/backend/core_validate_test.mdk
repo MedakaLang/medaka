@@ -16,8 +16,20 @@ import test.{
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.annotate.{annotateProgram}
-import types.typecheck.{grantWholeDomain}
-import ir.core_ir.{CProgram}
+import types.typecheck.{elaborateOne, grantWholeDomain}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CField(..),
+  CImplBody(..),
+  CImplEntry(..),
+  CProgram(..),
+  CStmt(..),
+  CallMode(..),
+  CallSite(..),
+}
+import frontend.ast.{Lit(..), Pat(..), noDeclLoc}
 import ir.core_ir_lower.{
   EmitTarget(..),
   ctorFieldTypeNames,
@@ -32,7 +44,10 @@ import backend.core_validate.{
   missingCatalogRows,
   missingRowsMessage,
   renderExternFinding,
+  validateCalls,
   validateExterns,
+  validateRecords,
+  validateTails,
 }
 import backend.wasm_emit.{
   emitProgramGaps,
@@ -224,3 +239,446 @@ test "(g) a runtime extern with no catalog row is an internal error naming it" =
       ["internal error", "'zzNoSuchExtern'", "extern catalog"]
       (missingRowsMessage missing),
   ]
+
+-- ── record ordinals ──────────────────────────────────────────────────────────
+
+-- Record nodes written out of declared order, for a record, a named-field
+-- variant, and a label two records share at different positions.
+recordOrderSrc : String
+recordOrderSrc =
+  "data P = P { a : Int, b : Int }\ndata Q = Q { b : Int, a : Int }\ndata V = V { x : Int, y : Int, z : Int } | W { y : Int }\nmain =\n  let p = P { b = 1, a = 2 }\n  let q = { p | b = 3, a = 4 }\n  let v = V { z = 1, y = 2, x = 3 }\n  let w = V { v | z = 5, x = 6 }\n  p.b + q.a + w.y"
+
+recordFindings : EmitTarget -> String -> List String
+recordFindings target src = validateRecords (lowered target src)
+
+unstamped : CExpr -> CProgram
+unstamped body = CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] []
+
+zero : CExpr
+zero = CLit (LInt 0)
+
+test "(h) lowering stamps every record node, so a permuted program validates clean" = expectAll
+  [
+    labelFail
+      "native"
+      (expectEqual [] (recordFindings TargetNative recordOrderSrc)),
+    labelFail "wasm" (expectEqual [] (recordFindings TargetWasm recordOrderSrc)),
+  ]
+
+test "(i) a record node the lowering did not stamp is refused, naming the node and binding" = expectEach
+  [
+    (
+      "literal",
+      expectEqual
+        [
+          "record: CRecord P: field ordinals [a@-1] are not the declared positions [in main]",
+        ]
+        (validateRecords (unstamped (CRecord "P" [CField "a" (-1) zero]))),
+    ),
+    (
+      "access",
+      expectEqual
+        ["record: CFieldAccess P.a: unstamped field ordinal [in main]"]
+        (validateRecords (unstamped (CFieldAccess zero "a" "P" (-1)))),
+    ),
+    (
+      "update",
+      expectEqual
+        [
+          "record: CRecordUpdate P: field ordinals [a@-1] are not strictly ascending [in main]",
+        ]
+        (validateRecords
+          (unstamped (CRecordUpdate "P" zero [CField "a" (-1) zero]))),
+    ),
+    (
+      "variant update",
+      expectEqual
+        [
+          "record: CVariantUpdate V: field ordinals [x@-1] are not strictly ascending [in main]",
+        ]
+        (validateRecords
+          (unstamped (CVariantUpdate "V" zero [CField "x" (-1) zero]))),
+    ),
+    (
+      "the Ref `.value` read needs no ordinal",
+      expectEqual
+        []
+        (validateRecords (unstamped (CFieldAccess zero "value" "" (-1)))),
+    ),
+  ]
+
+test "(j) ordinals out of declared position are refused" = expectEach [
+  (
+    "literal in written order",
+    expectEqual
+      [
+        "record: CRecord P: field ordinals [b@1, a@0] are not the declared positions [in main]",
+      ]
+      (validateRecords
+        (unstamped (CRecord "P" [CField "b" 1 zero, CField "a" 0 zero]))),
+  ),
+  (
+    "update in descending order",
+    expectEqual
+      [
+        "record: CRecordUpdate P: field ordinals [b@1, a@0] are not strictly ascending [in main]",
+      ]
+      (validateRecords
+        (unstamped
+          (CRecordUpdate "P" zero [CField "b" 1 zero, CField "a" 0 zero]))),
+  ),
+]
+
+-- ── call modes ───────────────────────────────────────────────────────────────
+
+-- #2078's program: `mk n = add n` names a user `add` that shares its spelling
+-- with an interface method, so the reference lowers as a method occurrence
+-- routed to the user's binding, and the eta pass gives `mk` that binding's two
+-- parameters.  Typechecked against a two-method prelude, as a build would.
+i2078Prelude : String
+i2078Prelude =
+  "interface Num a where\n  fromInt : Int -> a\n  add : a -> a -> a\nimpl Num Int where\n  fromInt n = n\n  add a b = a"
+
+i2078Src : String
+i2078Src =
+  "add : Int -> Int -> Int\nadd a b = a\nmk : Int -> Int -> Int\nmk n = add n\napply1 : (Int -> Int) -> Int -> Int\napply1 f x = f x\nmain = apply1 (mk 1) 2"
+
+typedLowered : String -> String -> CProgram
+typedLowered preludeSrc src =
+  lowerProgramEmit
+    TargetNative
+    (elaborateOne [] (desugar (parse preludeSrc)) (
+      "calls",
+      grantWholeDomain (desugar (parse src)),
+    ))
+
+-- [prog] with every application whose head is the variable [name] re-stamped
+-- [mode], in top-level bindings.
+restamp : String -> CallMode -> CProgram -> CProgram
+restamp name mode (CProgram groups ctors ctorTypes impls) =
+  CProgram (map (restampBind name mode) groups) ctors ctorTypes impls
+
+restampBind : String -> CallMode -> CBind -> CBind
+restampBind name mode (CBind n clauses site) =
+  CBind n (map (restampClause name mode) clauses) site
+
+restampClause : String -> CallMode -> CClause -> CClause
+restampClause name mode (CClause pats body) =
+  CClause pats (restampExpr name mode body)
+
+restampExpr : String -> CallMode -> CExpr -> CExpr
+restampExpr name mode (CApp hd args (CallSite old tailPos)) =
+  let args2 = map (restampExpr name mode) args
+  match hd
+    CVar x _ =>
+      if x == name then
+        CApp hd args2 (CallSite mode tailPos)
+      else
+        CApp hd args2 (CallSite old tailPos)
+    _ => CApp (restampExpr name mode hd) args2 (CallSite old tailPos)
+restampExpr name mode (CLet r pat rhs body) =
+  CLet r pat (restampExpr name mode rhs) (restampExpr name mode body)
+restampExpr name mode (CBlock stmts) =
+  CBlock (map (restampStmt name mode) stmts)
+restampExpr _ _ e = e
+
+restampStmt : String -> CallMode -> CStmt -> CStmt
+restampStmt name mode (CSExpr e) = CSExpr (restampExpr name mode e)
+restampStmt name mode (CSLet r pat e) = CSLet r pat (restampExpr name mode e)
+restampStmt _ _ s = s
+
+shadowSrc : String
+shadowSrc = "eq a b = a\npickEq eq x y = eq x y\nmain = pickEq eq 1 2"
+
+overSrc : String
+overSrc = "pre n = x => n + x\nmain = pre 1 2"
+
+test "(k) lowering stamps every application, so a lowered program validates clean" = expectEach
+  [
+    (
+      "#2078's point-free wrapper, typed",
+      expectEqual [] (validateCalls (typedLowered i2078Prelude i2078Src)),
+    ),
+    (
+      "a local named like a global",
+      expectEqual [] (validateCalls (lowered TargetNative shadowSrc)),
+    ),
+    (
+      "an over-application",
+      expectEqual [] (validateCalls (lowered TargetWasm overSrc)),
+    ),
+  ]
+
+test "(l) an application stamped against the wrong arity is refused, naming head, counts and binding" = expectEach
+  [
+    (
+      "#2078: the wrapper's call stamped exact against its one source parameter",
+      expectEqual
+        ["call: mk applied to 1 of 2, stamped CallExact [in main]"]
+        (validateCalls
+          (restamp "mk" CallExact (typedLowered i2078Prelude i2078Src))),
+    ),
+    (
+      "a known head stamped dynamic",
+      expectEqual
+        ["call: pickEq applied to 3 of 3, stamped CallDynamic [in main]"]
+        (validateCalls
+          (restamp "pickEq" CallDynamic (lowered TargetNative shadowSrc))),
+    ),
+    (
+      "an over-application with the wrong surplus",
+      expectEqual
+        ["call: pre applied to 2 of 1, stamped (CallOver 2) [in main]"]
+        (validateCalls
+          (restamp "pre" (CallOver 2) (lowered TargetWasm overSrc))),
+    ),
+    (
+      "a local `eq` stamped against the global `eq`'s two parameters",
+      expectEqual
+        ["call: eq has no static arity, stamped CallExact [in pickEq]"]
+        (validateCalls
+          (restamp "eq" CallExact (lowered TargetNative shadowSrc))),
+    ),
+  ]
+
+test "(m) an application with no arguments, or whose head is an application, is refused" = expectEach
+  [
+    (
+      "no arguments",
+      expectEqual
+        ["call: application with no arguments [in main]"]
+        (validateCalls (unstamped (CApp zero [] (CallSite CallDynamic False)))),
+    ),
+    (
+      "a nested head",
+      expectEqual
+        ["call: application whose head is an application [in main]"]
+        (validateCalls
+          (unstamped
+            (CApp
+              (CApp zero [zero] (CallSite CallDynamic False))
+              [zero]
+              (CallSite CallDynamic False)))),
+    ),
+  ]
+
+-- ── tail flags ───────────────────────────────────────────────────────────────
+
+-- [prog] with the tail flag of every application whose head is the variable
+-- [name] set to [flag], in top-level bindings.
+reflag : String -> Bool -> CProgram -> CProgram
+reflag name flag (CProgram groups ctors ctorTypes impls) =
+  CProgram (map (reflagBind name flag) groups) ctors ctorTypes impls
+
+reflagBind : String -> Bool -> CBind -> CBind
+reflagBind name flag (CBind n clauses site) =
+  CBind n (map (reflagClause name flag) clauses) site
+
+reflagClause : String -> Bool -> CClause -> CClause
+reflagClause name flag (CClause pats body) =
+  CClause pats (reflagExpr name flag body)
+
+reflagExpr : String -> Bool -> CExpr -> CExpr
+reflagExpr name flag (CApp hd args (CallSite mode old)) =
+  let args2 = map (reflagExpr name flag) args
+  match hd
+    CVar x _ =>
+      if x == name then
+        CApp hd args2 (CallSite mode flag)
+      else
+        CApp hd args2 (CallSite mode old)
+    _ => CApp (reflagExpr name flag hd) args2 (CallSite mode old)
+reflagExpr name flag (CLet r pat rhs body) =
+  CLet r pat (reflagExpr name flag rhs) (reflagExpr name flag body)
+reflagExpr name flag (CIf c t e) =
+  CIf (reflagExpr name flag c) (reflagExpr name flag t) (reflagExpr name flag e)
+reflagExpr _ _ e = e
+
+tailSrc : String
+tailSrc = "g x = x\nf x = g x\nmain = f 1"
+
+tailShapesSrc : String
+tailShapesSrc =
+  "g x = x\nh x = if x == 0 then g x else g (g x)\nm x = match x\n  0 => g 1\n  n => let y = g n in g y\nw x = go x\n  where\n    go n = if n == 0 then g n else go (n - 1)\nmain = h 1 + m 2 + w 3"
+
+test "(n) lowering flags every tail call, so a lowered program's tails validate clean" = expectEach
+  [
+    (
+      "a call in a clause body",
+      expectEqual [] (validateTails (lowered TargetNative tailSrc)),
+    ),
+    (
+      "if, match, let and where bodies",
+      expectEqual [] (validateTails (lowered TargetNative tailShapesSrc)),
+    ),
+    (
+      "wasm lowering",
+      expectEqual [] (validateTails (lowered TargetWasm tailShapesSrc)),
+    ),
+  ]
+
+test "(o) a tail flag against the position is refused, naming head and binding" = expectEach
+  [
+    (
+      "flagged outside tail position",
+      expectEqual
+        ["tail: f is flagged as a tail call outside tail position [in main]"]
+        (validateTails (reflag "f" True (lowered TargetNative tailSrc))),
+    ),
+    (
+      "flagged but partial",
+      expectEqual
+        [
+          "tail: g is flagged as a tail call but is a partial application (CallPartial 1) [in f]",
+        ]
+        (validateTails
+          (reflag
+            "g"
+            True
+            (restamp "g" (CallPartial 1) (lowered TargetNative tailSrc)))),
+    ),
+    (
+      "in tail position but not flagged",
+      expectEqual
+        [
+          "tail: g is in tail position, stamped CallExact, but not flagged [in f]",
+        ]
+        (validateTails (reflag "g" False (lowered TargetNative tailSrc))),
+    ),
+  ]
+
+-- ── let-bound lambdas ───────────────────────────────────────────────────────
+
+-- A `let` of a lambda, as a block statement or a `let ... in`, is a function
+-- local of the lambda's parameter count: an exact call of it and an
+-- over-application of a curried one.
+letLamSrc : String
+letLamSrc =
+  "main =\n  let f = x => x + 1\n  let g = x => y => x + y\n  g (f 2) 3"
+
+letInLamSrc : String
+letInLamSrc = "main = let f = x => x + 1 in f 2"
+
+test "(p) a call of a let-bound lambda is read against the lambda's parameters" = expectEach
+  [
+    (
+      "lowering stamps both calls, so the program validates clean",
+      expectEqual [] (validateCalls (lowered TargetNative letLamSrc)),
+    ),
+    (
+      "a `let ... in` of a lambda validates clean",
+      expectEqual [] (validateCalls (lowered TargetNative letInLamSrc)),
+    ),
+    (
+      "an exact call stamped dynamic",
+      expectEqual
+        ["call: f applied to 1 of 1, stamped CallDynamic [in main]"]
+        (validateCalls
+          (restamp "f" CallDynamic (lowered TargetNative letLamSrc))),
+    ),
+    (
+      "an over-application stamped dynamic",
+      expectEqual
+        ["call: g applied to 2 of 1, stamped CallDynamic [in main]"]
+        (validateCalls (restamp "g" CallDynamic (lowered TargetWasm letLamSrc))),
+    ),
+  ]
+
+-- ── impl entry groups ───────────────────────────────────────────────────────
+
+-- Two clauses of one impl method: the eta pass could give `foo A`'s
+-- point-free tail (`add` is a method name routed to the user's binding) a
+-- second parameter, but `foo B`'s tail is not atomic.
+mixedGroupSrc : String
+mixedGroupSrc =
+  "add : Int -> Int -> Int\nadd a b = a + b\nsub : Int -> Int -> Int\nsub a b = a - b\ninterface Foo a where\n  foo : a -> Int -> Int\ndata T = A | B\nimpl Foo T where\n  foo A = add 1\n  foo B = sub (3 + 0)\nmain = foo A 5"
+
+-- [prog] with one more parameter on the first impl entry of method [m].
+widenFirstEntry : String -> CProgram -> CProgram
+widenFirstEntry m (CProgram groups ctors ctorTypes impls) =
+  CProgram groups ctors ctorTypes (widenEntries m impls)
+
+widenEntries : String -> List CImplEntry -> List CImplEntry
+widenEntries _ [] = []
+widenEntries m ((ent@(CImplEntry n s d body)) :: rest) =
+  if n == m then
+    CImplEntry n s d (widenBody body) :: rest
+  else
+    ent :: widenEntries m rest
+
+widenBody : CImplBody -> CImplBody
+widenBody (CImplTagged tag key iface pos pats body) =
+  CImplTagged tag key iface pos (pats ++ [PVar "w" noDeclLoc]) body
+widenBody (CImplDefault w tag key pos pats body) =
+  CImplDefault w tag key pos (pats ++ [PVar "w" noDeclLoc]) body
+
+test "(q) the impl entries of one method and route word take one arity" = expectEach
+  [
+    (
+      "the eta pass expands a group whole or not at all, so it validates clean",
+      expectEqual [] (validateCalls (typedLowered i2078Prelude mixedGroupSrc)),
+    ),
+    (
+      "an entry widened apart from its group is refused",
+      expectEqual
+        [
+          "call: impl entry takes 1 value parameters, the first entry of its group 2 [in impl foo@calls.T]",
+        ]
+        (validateCalls
+          (widenFirstEntry "foo" (typedLowered i2078Prelude mixedGroupSrc))),
+    ),
+  ]
+
+-- An impl group whose first clause returns a lambda literal: that clause takes
+-- the lambda's parameter, so both entries take two.  When a `let` stands before
+-- the lambda, the clause keeps its one parameter and the group is refused.
+lamGroupSrc : String
+lamGroupSrc =
+  "interface Foo a where\n  foo : a -> Int -> Int\ndata T = A | B\nimpl Foo T where\n  foo A = (y => y + 1)\n  foo B y = y - 3\nmain = foo A 5"
+
+letLamGroupSrc : String
+letLamGroupSrc =
+  "interface Foo a where\n  foo : a -> Int -> Int\ndata T = A | B\nimpl Foo T where\n  foo A = let z = 1 + 0 in (y => y + z)\n  foo B y = y - 3\nmain = foo A 5"
+
+test "(r) an impl clause returning a lambda literal takes the lambda's parameters" = expectEach
+  [
+    (
+      "the group then takes one arity and validates clean",
+      expectEqual [] (validateCalls (typedLowered i2078Prelude lamGroupSrc)),
+    ),
+    (
+      "a clause with a `let` before its lambda keeps its arity and is refused",
+      expectEqual
+        [
+          "call: impl entry takes 2 value parameters, the first entry of its group 1 [in impl foo@calls.T]",
+        ]
+        (validateCalls (typedLowered i2078Prelude letLamGroupSrc)),
+    ),
+  ]
+
+-- ── the `Ref` read ──────────────────────────────────────────────────────────
+
+-- A record that declares a field `value`, beside a `Ref` read `!r`.
+refValueSrc : String
+refValueSrc =
+  "data Entry = Entry { name : String, value : Int }\nmain =\n  let e = Entry { name = \"k\", value = 42 }\n  let r = e\n  !r"
+
+test "(s) `.value` is the Ref read, never a record field" = expectEach [
+  (
+    "lowering leaves `!r` unstamped though a record declares `value`",
+    expectAll [
+      labelFail
+        "native"
+        (expectEqual [] (recordFindings TargetNative refValueSrc)),
+      labelFail "wasm" (expectEqual [] (recordFindings TargetWasm refValueSrc)),
+    ],
+  ),
+  (
+    "a `.value` read stamped with a record ordinal is refused",
+    expectEqual
+      [
+        "record: CFieldAccess Entry.value: a Ref read stamped with field ordinal 1 [in main]",
+      ]
+      (validateRecords (unstamped (CFieldAccess zero "value" "Entry" 1))),
+  ),
+]

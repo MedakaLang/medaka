@@ -88,40 +88,7 @@ if [ "${1:-}" = "--one" ]; then
       msg="ok   $name (native rc=$nrc, wasm rc=$wrc, both rejected)"
     fi
   else
-    # known_divergence: a PINNED, self-draining engine divergence — see
-    # docs/design/GZIP-DESIGN.md §"Engine parity" and issue #1349. A stored
-    # (BTYPE=00) DEFLATE block of a few thousand bytes or more decodes via
-    # gzip/lib/bitio.mdk's `getBytesAlignedGo`, which is written via
-    # `do`-notation (desugars to nested `andThen` calls — an interface-method
-    # tail call). compiler/backend/wasm_emit.mdk's `emitAppTail` CMethod arm
-    # only emits `return_call` for a saturated SELF-call to the impl
-    # currently being emitted (`implSelfReturnCall`); any other tail
-    # CMethod call — including this one — stays a plain `call … ; return`,
-    # so the wasm call stack grows one frame per byte and V8 gives up with
-    # "Maximum call stack size exceeded". Native has no such gap and decodes
-    # the SAME input correctly. This is a documented, in-repo-comment-
-    # acknowledged deferral ("the dispatch fixtures here are not
-    # deep-recursive through a method, so a plain return is sound" —
-    # falsified by this real input), not a mystery.
-    #
-    # This case therefore asserts the CURRENT (broken) reality — native
-    # succeeds and decodes correctly, wasm crashes with a stack-depth error
-    # — rather than papering over it. The moment #1349 is fixed this case
-    # will start FAILING (wasm unexpectedly succeeding), which is the
-    # self-drain signal to delete this branch and fold the case back into
-    # the ordinary `success` corpus above.
-    if [ "$nrc" -ne 0 ]; then
-      msg="FAIL $name — native regressed (rc=$nrc); this pin only covers the WASM side of #1349, a native failure is a NEW bug"; st=1
-    elif [ -n "$expected" ] && ! cmp -s "$expected" "$nout"; then
-      msg="FAIL $name — native output differs from the ORIGINAL bytes (a NEW native bug, unrelated to #1349)"; st=1
-    elif [ "$wrc" -eq 0 ]; then
-      msg="FAIL $name — #1349 appears FIXED: wasm now exits 0 where it used to crash. Promote this case out of known_divergence into the ordinary success corpus and close #1349."; st=1
-    elif ! grep -qi "call stack" "$WORKDIR/$name.wasm.log"; then
-      msg="$(printf 'FAIL %s — wasm still fails (rc=%s) but NOT with the #1349 stack-depth signature; something else changed\n  --- wasm log ---\n%s' \
-        "$name" "$wrc" "$(cat "$WORKDIR/$name.wasm.log")")"; st=1
-    else
-      msg="ok   $name (KNOWN DIVERGENCE #1349: native rc=0 correct, wasm rc=$wrc stack-depth crash — pinned, not papered over)"
-    fi
+    msg="FAIL $name — unknown case mode '$mode'"; st=1
   fi
 
   echo "$st" > "$RESULTDIR/$name.status"
@@ -193,12 +160,7 @@ add_case() {
 head -c 200 /dev/urandom > "$WORK/inputs/small_stored.src"
 add_case success small_stored "$WORK/inputs/small_stored.src" 1
 head -c 200000 /dev/urandom > "$WORK/inputs/large_stored.src"
-# known_divergence, not success — see issue #1349 (filed alongside this gate):
-# a multi-block stored (BTYPE=00) DEFLATE stream this large crashes wasm with
-# a stack-depth error that native does not have. Pinned honestly rather than
-# hidden — see the --one worker's known_divergence arm above for the full
-# explanation and the self-drain condition.
-add_case known_divergence large_stored "$WORK/inputs/large_stored.src" 1
+add_case success large_stored "$WORK/inputs/large_stored.src" 1
 
 # fixed-Huffman shapes
 printf 'hello world hello world hello world' > "$WORK/inputs/fixed_small.src"

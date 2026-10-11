@@ -203,14 +203,19 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   FailSite(..),
+  CallMode(..),
+  CallSite(..),
   siteSentinelName,
 }
 import ir.core_ir_lower.{
+  ArityEnv,
+  callModeFor,
   compileTree,
   canonPat,
-  ifaceMethodArityKey,
+  definedArityOf,
   ifaceWordOfKey,
   ifaceNameOfWord,
+  programArities,
 }
 import support.util.{
   reverseL,
@@ -237,6 +242,12 @@ import backend.core_validate.{
   isUnprovidedOn,
   renderExternFinding,
   renderExternRefusal,
+  renderRecordRefusal,
+  renderCallRefusal,
+  renderTailRefusal,
+  validateCalls,
+  validateTails,
+  validateRecords,
   unrefusedExternMessage,
   validateExterns,
 }
@@ -301,6 +312,10 @@ import backend.emit_support.{
   ftLabelOf,
   labelFallthrough,
   rngBound,
+  appParts,
+  isExactCall,
+  isTailCall,
+  implEntryDeclaredArity,
 }
 
 -- ── D4 emitter-completeness inventory (record-and-skip) ──────────────────────
@@ -318,36 +333,16 @@ data GapMode = Strict | Record
 
 -- The CTFail target for a multi-clause function emitted as a CHAIN of single-clause
 
--- compile-time closure-arity table, keyed by the closure cell's WORD — either a
--- per-define `%tN` SSA register (the heap-alloc path, `emitClosureAllocA`) or a
+-- compile-time closure RETURN-TYPE table, keyed by the closure cell's WORD — either a
+-- per-define `%tN` SSA register (the heap-alloc path, `emitClosureAlloc`) or a
 -- `ptrtoint (ptr @mdk_cc_N to i64)` constant naming a module-level global (the
--- capture-free path, `emitConstClosureA` — what `emitLamGo`/`emitLamPat` now use
--- for most user lambdas, since they have no captures to force a heap cell).
--- ⚠️ `%tN` is only unique WITHIN a define (issue #118 restarts the register
+-- capture-free path, `emitConstClosure`).
+-- `%tN` is only unique WITHIN a define (issue #118 restarts the register
 -- counter at each one), so this table is PER-DEFINE: `beginDefine` clears it and
 -- `endDefine` restores the enclosing define's — otherwise `%t5` in one function
--- would answer a lookup for `%t5` in another and the indirect call would
--- saturate with the WRONG arity.  That per-define clearing is what keeps the
--- SSA-register-keyed entries sound.  The constant-global-keyed entries need no
--- such protection on their own: `@mdk_cc_<scope>_N`'s `<scope>_N` comes from
--- `freshId`, which never repeats a (scope, N) pair within an emission (unlike the
--- per-define `%tN` counter, which restarts), so no two
--- closure-construction sites can ever mint the same word regardless of which
--- define reads it — the per-define clearing is redundant safety for this
--- subset, not the reason it's sound.
---   Recorded when a user lambda's closure cell is allocated
--- (emitClosureAllocA / emitConstClosureA); read at an INDIRECT call site (emitIndirect) so a
--- let-bound closure applied to MORE args than its arity (`(g 7) 9` where `g = (x => (y => …))`)
--- saturates with the first `arity` args then applies the surplus to the returned
--- closure (emitApplyAny) — mirroring emitOverApp for known fns.  Without this the
--- indirect call passed ALL args to the arity-1 lifted code → arity mismatch →
--- garbage.  A miss (closure word not a recorded key — e.g. a captured/param
--- closure) falls to emitApplyAny, which reads the closure's RUNTIME arity from the
--- cell header (field 0) and dispatches exact / partial (PAP) / over application via
--- the runtime @mdk_apply — so an opaque under-application no longer miscompiles.
-
--- compile-time closure RETURN-TYPE table, keyed by the closure cell's SSA register.
--- ⚠️ Same `%tN` scoping hazard as `e.closureArity` above — also PER-DEFINE.
+-- would answer a lookup for `%t5` in another.  The constant-global-keyed entries
+-- need no such protection on their own: `@mdk_cc_<scope>_N`'s `<scope>_N` comes
+-- from `freshId`, which never repeats a (scope, N) pair within an emission.
 -- Records LTFloat for a user lambda whose body EVIDENTLY returns a Float (a float
 -- literal or known-float capture flows to the result through arith/if/block — see
 -- bodyFloatRet, conservative).  Read at an indirect call site (indirectRetTy) so a
@@ -357,8 +352,8 @@ data GapMode = Strict | Record
 -- the historical LTInt default → zero blast radius for them.
 
 -- compile-time DIRECT-CALL table for let-group local functions, keyed by the
--- closure cell's word — the same mixed key domain as `e.closureArity` above
--- (`emitGroupBind` calls the very same `emitConstClosureA` / `emitClosureAllocA`
+-- closure cell's word — the same mixed key domain as `e.closureRetTy` above
+-- (`emitGroupBind` calls the very same `emitConstClosure` / `emitClosureAlloc`
 -- to build the cell and reuses the resulting word `w` as this table's key too),
 -- so the same split applies: entries keyed by a
 -- `ptrtoint (ptr @mdk_cc_<scope>_N to i64)`
@@ -465,7 +460,7 @@ data GDispCtx =
   | GDispOn String (List String) (List String) String String
 
 -- the detected (b′) groups (shared detection, backend/trmc_analysis.mdk), the fn
--- binds they were detected over, and the fn-arity table with wasm's `progFnArity`
+-- binds they were detected over, and the fn-arity table with wasm's `fnParamCountW`
 -- contract (clause arity; -1 when not a top-level fn — an 0-when-unknown lookup
 -- would let a 0-arg call "saturate").  Computed once per emitProgram; reset (to
 -- empty) by emitProgramGaps so a prior program's groups can never leak into the
@@ -476,7 +471,7 @@ data GDispCtx =
 -- inside emitProgram) calls `gDispIsFn`/`gDispFnArity` PER referenced fn name, and each
 -- `lookupAssoc` scanned the WHOLE O(fns) list — O(refs·fns) = O(N²) `emit`-stage
 -- OP-COUNT on dispatch-heavy code (the residual LLVM-side emit-op quadratic #986 isolated
--- from methodArityOf, ~3.77×/doubling; #990).  The map returns the SAME first-match value
+-- from the method-arity lookups, ~3.77×/doubling; #990).  The map returns the SAME first-match value
 -- (`omFromPairs (reverseL …)` makes the FIRST pair win on a duplicate name, matching
 -- lookupAssoc), so the TMC grouping — and therefore the emitted IR — is byte-identical.
 -- RUN-EMIT-003: the second `lookupAssoc n !e.gDispArs` path is RETIRED.
@@ -557,40 +552,12 @@ lookupSelfFnParams iface method (((i, m), p) :: rest)
   | otherwise = lookupSelfFnParams iface method rest
 
 -- ── method → declared arity (native backend) ────────────────────────────────
--- The method → (interface, full-arity) table from core_ir_lower's
--- `methodIfaceTable`, keyed by BARE method name: the arity a call site of a method
--- with no identity-keyed row supplies (see `methodArityOfIface` below for the
--- identity-keyed leg, which every entry-holding site uses).
-methodArityOfInput : Emit -> String -> Int
-methodArityOfInput e method = match omLookup method e.input.methodIfaceIndex
-  Some (_, arity) => arity
-  None => 0
-
--- ── ARITY BY DECLARATION (#1450, #1668) ─────────────────────────────────────
--- THE ARITY LEG MOVED; THE `methodIfaceOf` ROUTE LEG DID NOT, and that asymmetry
--- is deliberate, not an oversight.  `methodArityOfInput` above is keyed by the
--- BARE method name, so two modules declaring same-spelled methods on unrelated
--- interfaces (`amod.IA.szK : a -> Int` and `zmod.IZ.szK : b -> Int -> Int`)
--- collapse to one row and whichever declaration the module graph visits last
--- silently supplies BOTH impls' emitted arity -- an under-applied define that
--- SEGFAULTS (#1450) or a saturated source call lowered as a PAP whose closure
--- POINTER is then compared as a value, at exit 0 (#1668).  The helpers below take
--- the arity from the DECLARATION identity of the interface the asking impl entry's
--- own `impl` head names, recovered from that entry's route key (which
--- `route_key.implRouteKeyWord` already mints identity-bearing).
---
--- Why the field stays bare: `CImplTagged`'s third field keeps its current bare
--- contents and its current meaning; `implEntryIface`/`methodReturnsSelf` read it
--- as a bare word, so the identity travels as an ADDITIONAL fact (the
--- `methodIfaceIdIndex` above) rather than by re-purposing the field.  A miss on the identity key falls back to the bare table, so every
--- collision-free program emits byte-identically to before.
-methodArityOfIface : Emit -> String -> String -> Int
-methodArityOfIface e ifaceWord method =
-  match (omLookup
-    (ifaceMethodArityKey ifaceWord method)
-    e.input.methodIfaceIdIndex)
-    Some arity => arity
-    None => methodArityOfInput e method
+-- The declared arity of a method named by a bare head (a `CVar` naming an interface
+-- method, which arg-tag dispatch serves): the declared arity its impl entries carry.
+bareMethodDeclaredArity : Emit -> String -> Int
+bareMethodDeclaredArity e method = match implsOf e method
+  ent :: _ => implEntryDeclaredArity ent
+  [] => 0
 
 -- the DECLARATION word of the interface an impl entry implements.  A supplied method
 -- carries it as the first field of its route key; an inherited default carries it
@@ -598,9 +565,9 @@ methodArityOfIface e ifaceWord method =
 -- the word a `CMethod` occurrence carries for the interface it resolved to, so the
 -- two compare with `==` (`narrowImplsByIface`).
 implEntryIfaceWord : CImplEntry -> String
-implEntryIfaceWord (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) =
+implEntryIfaceWord (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _)) =
   ifaceWordOfKey key
-implEntryIfaceWord (CImplEntry _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
+implEntryIfaceWord (CImplEntry _ _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
   ifaceWord
 
 -- #1034: the SOURCE value arity of a TAGGED impl's method clause -- its pattern
@@ -616,25 +583,6 @@ implSrcValueArity : CImplEntry -> Int
 implSrcValueArity ent =
   let pats = implPats ent
   listLen pats - leadingDictPats pats
-
--- #1034, THE CALL-SITE ARITY.  The declared arity is the answer EXCEPT when the
--- impl's own clause proves a SHORTER source arity; then the clause wins.  This only
--- ever LOWERS -- a clause at or beyond the declared arity, or one with no value
--- pattern at all (`act = someFn`, which carries no arity evidence), keeps the
--- declared answer byte-identically.  Lowering makes a saturated source call (`act
--- Dog`, 1 arg) classify as SATURATED instead of under-applied, so the impl body's
--- strict prefix runs where the source says it does rather than being deferred into a
--- PAP; Medaka is strict and eval already behaves this way.  A call site that passes
--- MORE than the lowered arity is an over-application against the impl's returned
--- closure, which `emitImplCallSat`/`emitKnownFnSat` already lower via `emitOverApp` --
--- the same shape an eta-expansion would hard-code into the define.
--- `gatherGroup`'s define-arity site applies the SAME rule, so define and call sites
--- keep agreeing (that agreement is #1450/#1668 and must not be broken here).
-methodArityOfEntry : Emit -> CImplEntry -> String -> Int
-methodArityOfEntry e ent method =
-  let declared = methodArityOfIface e (implEntryIfaceWord ent) method
-  let src = implSrcValueArity ent
-  if src > 0 && src < declared then src else declared
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
 -- The ctor → declared-field-type-head-name table from core_ir_lower's
@@ -869,8 +817,6 @@ data EmitInputData = EmitInputData {
   returnsSelf : List ((String, String), Bool),
   selfFnParams : List ((String, String), List Int),
   methodIfaces : List (String, (String, Int)),
-  methodIfaceIndex : OrdMap (String, Int),
-  methodIfaceIdIndex : OrdMap Int,
   ctorFieldIndex : OrdMap (List String),
   declSigIndex : OrdMap (List String, String),
   -- #2074: the USER-declared externs only (the runtime catalog's own names are
@@ -924,10 +870,6 @@ makeEmitInput returnsSelf selfFnParams methodIfaces ctorFieldTypes declSigTypes 
   returnsSelf = returnsSelf,
   selfFnParams = selfFnParams,
   methodIfaces = map bareIfaceArityRow methodIfaces,
-  methodIfaceIndex =
-    omFromPairs (reverseL (map bareIfaceArityRow methodIfaces)) omEmpty,
-  methodIfaceIdIndex =
-    omFromPairs (reverseL (map ifaceIdArityRow methodIfaces)) omEmpty,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   declSigIndex = omFromPairs (reverseL declSigTypes) omEmpty,
   ffiExternIndex = omFromPairs (reverseL ffiExternTypes) omEmpty,
@@ -974,20 +916,15 @@ preludeImplIndexOf ((method, key, symTag) :: rest) acc =
   let byKey = optionOr omEmpty (omLookup method acc)
   preludeImplIndexOf rest (omInsert method (omInsert key symTag byKey) acc)
 
--- #1450/#1668 -- the two PROJECTIONS of a `methodIfaceTable` row.
---   * `bareIfaceArityRow` reproduces the row this table has always carried,
---     `(method, (ifaceName, arity))`, so `methodIfaces` and `methodIfaceIndex`
---     -- and every reader of them -- keep their current bare spelling and their
---     current answers, byte for byte.
---   * `ifaceIdArityRow` is the ADDITIVE one: the same arity, re-keyed by the
---     interface's DECLARATION word.  Two modules declaring same-spelled methods
---     on unrelated interfaces occupy ONE slot in the bare index and TWO here.
+-- the bare projection of a `methodIfaceTable` row, `(method, (ifaceName, arity))`
 bareIfaceArityRow : (String, (String, String, Int)) -> (String, (String, Int))
 bareIfaceArityRow (m, (ifaceName, _, arity)) = (m, (ifaceName, arity))
 
-ifaceIdArityRow : (String, (String, String, Int)) -> (String, Int)
-ifaceIdArityRow (m, (_, ifaceWord, arity)) =
-  (ifaceMethodArityKey ifaceWord m, arity)
+-- A define whose body is emitted in tail position: its emitted symbol (`mdk_…`),
+-- how many words it takes after its closure word, and whether it takes its own
+-- closure word `%clos` first.  A tail call of it is a `musttail call` exactly when
+-- its operands fill those parameters, which the emitter checks from this record.
+data TailDefine = TailDefine String Int Bool
 
 data Emit = Emit {
   input : EmitInput,
@@ -1004,23 +941,24 @@ data Emit = Emit {
   fnNames : Ref (List String),
   sigs : Ref (List (String, FnSig)),
   lams : Ref (List String),
-  recFields : Ref (List (String, List String)),
   implEntries : Ref (List CImplEntry),
+  -- the defined arity of every top-level binding, constructor and impl entry of
+  -- the program being emitted (`core_ir_lower.programArities`)
+  arities : ArityEnv,
   globalsReg : Ref (List (String, (Bool, LTy))),
   gapMode : GapMode,
   gapLog : Ref (List String),
   curGapBind : Ref String,
   defineCounter : Ref Int,
-  closureArity : Ref (List (String, Int)),
   closureRetTy : Ref (List (String, LTy)),
   directFn : Ref (List (String, (String, Int))),
   trmcCtx : Ref TrmcCtx,
   gDispCtx : Ref GDispCtx,
   -- The define whose match leaves are in function tail position (a clause chain,
-  -- or a body-level match `emitFnBody` reached): a leaf that is a saturated call
-  -- of it returns as `musttail call` + `ret` (`emitArmBody`).  Saved and cleared
+  -- or a body-level match `emitFnBody` reached): a leaf flagged as the tail call
+  -- returns its result straight from the leaf (`emitArmBody`).  Saved and cleared
   -- at the same places as `trmcCtx`, and read after it and `gDispCtx`.
-  selfTailCtx : Ref (Option String),
+  selfTailCtx : Ref (Option TailDefine),
   gDispGroups : Ref (List DispGroup),
   gDispBinds : Ref (List CBind),
   gDispBindMap : Ref (OrdMap CBind),
@@ -1032,9 +970,6 @@ data Emit = Emit {
   lazyGlobalMap : Ref (Option (OrdMap Unit)),
   ctorMap : Ref (Option (OrdMap Int)),
   sigMap : Ref (Option (OrdMap FnSig)),
-  defArityMap : Ref (Option (OrdMap Int)),
-  recByName : Ref (Option (OrdMap (List String))),
-  recByLabel : Ref (Option (OrdMap (String, List String))),
   implsByMethod : Ref (Option (OrdMap (List CImplEntry))),
   implMethodSet : Ref (Option (OrdMap Unit)),
   ctorTypeMap : Ref (Option (OrdMap String)),
@@ -1202,21 +1137,21 @@ freshReg e = "%t" ++ intToString (freshLocal e)
 
 -- ── the per-define gensym scope (issue #118) ────────────────────────────────
 -- Everything keyed on, or counting, a FUNCTION-SCOPED name: the `%tN`/label
--- counter plus the three tables keyed BY the closure cell's word —
--- `e.closureArity`, `e.closureRetTy` and `e.directFn` (full account: their own
--- doc comments above).  Once `%tN` restarts per define, a register name is only
+-- counter plus the two tables keyed BY the closure cell's word —
+-- `e.closureRetTy` and `e.directFn` (full account: their own doc comments
+-- above).  Once `%tN` restarts per define, a register name is only
 -- unique WITHIN a define, so a table entry keyed by one must be scoped the same
 -- way or `%t5` in one function would answer a lookup for `%t5` in another (a
--- wrong closure arity at an indirect call = silent miscompile).  Not every entry
+-- wrong closure at an indirect call = silent miscompile).  Not every entry
 -- needs this protection — a `ptrtoint (ptr @mdk_cc_N to i64)` constant key is
 -- already globally unique (its `<scope>_N` word is minted once by `freshId`,
 -- which never repeats a pair within an emission) regardless of
 -- scoping — but clearing per define costs nothing on that subset and is load-
--- bearing on the `%tN`-keyed one, so all three tables are scoped uniformly.
+-- bearing on the `%tN`-keyed one, so both tables are scoped uniformly.
 --
 -- Tail contexts contain labels and slots belonging to their own define.
 data DefScope =
-  | DefScope Int (List (String, Int)) (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option String)
+  | DefScope Int (List (String, LTy)) (List (String, (String, Int))) TrmcCtx GDispCtx (Option TailDefine)
 
 -- Start a fresh `define` scope, returning the enclosing one (for `endDefine`).
 --
@@ -1231,7 +1166,6 @@ beginDefine e =
   let saved =
     DefScope
       !e.defineCounter
-      !e.closureArity
       !e.closureRetTy
       !e.directFn
       !e.trmcCtx
@@ -1239,7 +1173,6 @@ beginDefine e =
       !e.selfTailCtx
   let _ = markScope e
   e.defineCounter := 0
-  e.closureArity := []
   e.closureRetTy := []
   e.directFn := []
   e.trmcCtx := TrmcOff
@@ -1250,9 +1183,8 @@ beginDefine e =
 -- restore the enclosing `define` scope (only needed where a define NESTS inside
 -- another's emission, i.e. at each bufRef save/restore swap).
 endDefine : Emit -> DefScope -> Unit
-endDefine e (DefScope n ar rt df trmc gd st) =
+endDefine e (DefScope n rt df trmc gd st) =
   e.defineCounter := n
-  e.closureArity := ar
   e.closureRetTy := rt
   e.directFn := df
   e.trmcCtx := trmc
@@ -1318,7 +1250,7 @@ isLazyGlobal e x = match !e.lazyGlobalMap
 installCtorMap : Emit -> List (String, Int) -> Unit
 installCtorMap e t = e.ctorMap := Some (omFromPairs (reverseL t) omEmpty)
 
--- sig table index — the GLOBAL-`sigs` users (fnRetTy/fnArity) read the Emit's
+-- sig table index — the GLOBAL-`sigs` users (fnRetTy) read the Emit's
 -- `sigs` field. That field is set once at construction and never mutated
 -- (constant), so a memo built from `sigTable e` is byte-identical to the old
 -- `lookupAssoc name sigs.value`.
@@ -1336,32 +1268,11 @@ installSigMap e t = e.sigMap := Some (omFromPairs (reverseL t) omEmpty)
 sigsToMap : List (String, FnSig) -> OrdMap FnSig
 sigsToMap t = omFromPairs (reverseL t) omEmpty
 
--- E22: the EMITTED define arity per top-level fn (post eta-saturate), the truth a
--- CDict call site needs to decide under-application.  Computed by replaying
--- etaSaturateMethodBody (deterministic, side-effect-free reads only) — the
--- SIGNATURE arity is NOT a safe proxy.  A CLam-returning constrained fn is
--- eta-saturated to `nDicts + sigValueArity`; a dynamic-method-tail wrapper retains
--- its dicts plus source clause params so dispatch can precede PAP construction; and
--- another non-CLam body can keep its bare clause arity.  Only the replayed arity
--- tracks the real `@mdk_<fn>` define across those shapes.
-installDefArityMap : Emit -> List CBind -> Unit
-installDefArityMap e binds =
-  e.defArityMap := Some (omFromPairs (map (defArityPair e) binds) omEmpty)
-
-defArityPair : Emit -> CBind -> (String, Int)
-defArityPair e (CBind name [CClause pats body] _) =
-  let (pats2, _) = etaSaturateMethodBody e name pats body
-  (name, listLen pats2)
-defArityPair e (CBind name (c :: rest) _) = (name, clauseArityC (c :: rest))
-defArityPair _ (CBind name [] _) = (name, 0)
-
--- the recorded emitted define arity of `name` (None when the name is absent — fall
--- back to the unconditional direct call).  RUN-EMIT-003: the table is always
--- installed, so an uninstalled read is a broken invariant, not a second answer.
-defArityOf : Emit -> String -> Option Int
-defArityOf e name = match !e.defArityMap
-  Some m => omLookup name m
-  None => panic "llvm: defArityMap read before install (internal error)"
+-- The defined arity of a callee reached outside an application (a value-position
+-- occurrence, a dispatch arm), read from the program as `core_ir_lower.stampCallModes`
+-- reads it for an application.
+definedArity : Emit -> CExpr -> Option Int
+definedArity e hd = definedArityOf e.arities omEmpty hd
 
 isKnownFn : Emit -> String -> Bool
 isKnownFn e name = match !e.knownFnMap
@@ -1434,85 +1345,6 @@ isCtor e name = match !e.ctorMap
     None => False
   None => panic "llvm: ctorMap read before install (internal error)"
 
--- ── record field-order table ─────────────────────────────────────
--- maps record-ctor-name -> [field-names-in-declaration-order].  CFieldAccess uses
--- it to convert a label name to a positional index so the field can be reached by
--- loadField without carrying type information.
---
--- #1513: the table is SEEDED FROM THE DECLARATIONS (`input.recordFieldOrders`,
--- `core_ir_lower.declaredRecordFieldOrders`), and only then extended with the
--- `collectRecords` scan of the program's CRecord nodes — first entry wins, so the
--- declaration always answers for a declared record.  The scan ALONE is silently
--- wrong whenever a record has no construction site in a position
--- the scan happens to walk: `fieldIdxByName` then falls through to `findFieldIdx` →
--- `findRecordByLabel`, which answers with the first OTHER record owning the label
--- and emits ITS index — a wrong offset at exit 0 (MEASURED: `5 99` where `5 7` is
--- correct), or a segfault when the colliding fields are differently typed.
--- Patching the scan cannot close that: the holes are a SET (a match arm's guard
--- qualifiers, `CStringSlice`'s bounds, `CLetGroup` on the wasm side …), and any arm
--- added later reopens it. The declaration is always present, is independent of DCE
--- and of which positions a scan walks, and is the same authority the `PRec`→`PCon`
--- pattern rewrite and the literal-order normalisation in `core_ir_lower` use — so
--- all four record operations agree by construction rather than by coincidence.
--- The scan is RETAINED as a fallback for records with no declaration in `prog`
--- (anonymous/synthesized shapes, and probes that pass no declaration table).
-recFieldTable : Emit -> List (String, List String)
-recFieldTable e = !e.recFields
-
--- ── record field-order INDEX (#352) ──────────────────────────────
--- The table above is CONSTANT for a program (`Ref (collectRecords groups)`, set once
--- at Emit construction), has one entry per record TYPE, and is consulted on EVERY
--- record field op — create/access/update/variant-update — two ways:
---
---   * BY NAME (`lookupAssoc recName (recFieldTable e)`, in `floatFieldRecord`,
---     `fieldIdxByName`, `recordByName`, `emitVariantUpdate`) — O(records) per op;
---   * BY LABEL (`findRecordByLabel`, the unstamped/collision fallback) — worse, a
---     `contains label labels` over EVERY record's label list until one matches.
---
--- Both are O(records) per field op ⇒ O(field-ops × records) = O(N²) on a program of
--- many record types. Measured (profile_main emit stage, prelude constant subtracted,
--- N distinct 2-field records with a create+update+2 accesses each, N=125/250/500):
--- counted-op ratio r1=3.39 r2=3.64 per doubling — quadratic.
---
--- Two maps, both built once at the single install point below:
---   `e.recByName`  recName → labels (first entry wins ⇒ `lookupAssoc` first-match)
---   `e.recByLabel` label → (recName, labels) of the FIRST record in TABLE ORDER
---                   owning that label — exactly `findRecordByLabel`'s answer. Built
---                   by folding the table in REVERSE so an earlier record overwrites
---                   a later one, which is what makes "first in table order" win.
--- RUN-EMIT-003: both readers' scan fallbacks are RETIRED.  `buildEmitState` is the
--- ONE `Emit` construction path and it always installs, so there is no probe that
--- can reach a reader with the index uninstalled.
-installRecFieldIndex : Emit -> List (String, List String) -> Unit
-installRecFieldIndex e t =
-  e.recByName := Some (omFromPairs (reverseL t) omEmpty)
-  e.recByLabel := Some (recLabelIndex (reverseL t) omEmpty)
-
--- fold the (already reversed) table, mapping every label of a record to that record.
--- Later inserts win, and "later" here is EARLIER in the original table.
-recLabelIndex : List (String, List String) ->
-  OrdMap (String, List String) ->
-  OrdMap (String, List String)
-recLabelIndex [] acc = acc
-recLabelIndex ((name, labels) :: rest) acc =
-  recLabelIndex rest (insertLabels (name, labels) labels acc)
-
--- (`owner`, not `rec` — `rec` is a RESERVED WORD and the parse error it produces
--- reads as an unrelated layout complaint two lines away.)
-insertLabels : (String, List String) ->
-  List String ->
-  OrdMap (String, List String) ->
-  OrdMap (String, List String)
-insertLabels _ [] acc = acc
-insertLabels owner (l :: rest) acc =
-  insertLabels owner rest (omInsert l owner acc)
-
--- the record type named `recName`, index-backed (RUN-EMIT-003: no scan fallback).
-recFieldsOfName : Emit -> String -> Option (List String)
-recFieldsOfName e recName = match !e.recByName
-  Some m => omLookup recName m
-  None => panic "llvm: recByName read before install (internal error)"
-
 -- ── impl table ────────────────────────────────────────────────────
 -- the program's CImplEntry list (set once in emitProgram).  A CMethod site reads
 -- it two ways: `implFor` resolves an RKey-narrowed route to the ONE concrete impl
@@ -1535,15 +1367,12 @@ implEntriesOf e = !e.implEntries
 -- first-match / flat-map / distinct-key result, so the emitted IR is byte-for-byte
 -- unchanged (fixpoint C3a/C3b).  `installImplIndex` builds it once in
 -- `buildEmitState`, the ONE `Emit` construction path shared by emitProgram and
--- emitProgramGaps.  RUN-EMIT-003: the "fall back to the full list" second path is
--- RETIRED — it was genuinely reachable (from `installDefArityMap`'s eta replay,
--- before that install was reordered to run AFTER this one), and a live second path
--- that has to agree with the index is the duality this slice removes.  Mirrors
--- wasm_emit's `implsByMethodW`.
+-- emitProgramGaps.  There is no fall-back scan of the full entry list: a second
+-- path would have to agree with the index.  Mirrors wasm_emit's `implsByMethodW`.
 
 -- the interface method an impl entry implements (field 0).
 implEntryMethodOf : CImplEntry -> String
-implEntryMethodOf (CImplEntry n _ _) = n
+implEntryMethodOf (CImplEntry n _ _ _) = n
 
 orEmptyEntries : Option (List CImplEntry) -> List CImplEntry
 orEmptyEntries (Some xs) = xs
@@ -1595,9 +1424,9 @@ dedupImplEntries xs = reverseL (dedupBy implEntryDedupKey (reverseL xs))
 -- identity a dispatch arm carries, so two entries collide here only when
 -- they are genuinely the same impl.
 implEntryDedupKey : CImplEntry -> String
-implEntryDedupKey (CImplEntry _ _ (CImplTagged tag key iface _ _ _)) =
+implEntryDedupKey (CImplEntry _ _ _ (CImplTagged tag key iface _ _ _)) =
   lenKey tag ++ lenKey key ++ iface
-implEntryDedupKey (CImplEntry _ _ (CImplDefault ifaceWord tag key _ _ _)) =
+implEntryDedupKey (CImplEntry _ _ _ (CImplDefault ifaceWord tag key _ _ _)) =
   "\{lenKey tag}\{lenKey key}default \{ifaceWord}"
 
 filterTagged : String -> List CImplEntry -> List CImplEntry
@@ -1626,14 +1455,12 @@ narrowImplsByIface iface impls =
 --
 -- The occurrence's carried site arity is independent of the number of supplied
 -- arguments.  Compare it with each entry's interface DECLARATION arity; the
--- entry's callable `methodArityOfEntry` remains the saturation ruler after the
--- tag selects that entry.  No match stays empty because the occurrence scalar is
+-- entry's own parameter count remains the saturation ruler after the tag selects
+-- that entry.  No match stays empty because the occurrence scalar is
 -- authoritative and restoring the whole bare-name list would re-admit the bug.
 narrowImplsByArity : Emit -> String -> List CImplEntry -> Int -> List CImplEntry
-narrowImplsByArity e method impls siteArity =
-  filterList
-    (ent => methodArityOfIface e (implEntryIfaceWord ent) method == siteArity)
-    impls
+narrowImplsByArity _ _ impls siteArity =
+  filterList (ent => implEntryDeclaredArity ent == siteArity) impls
 
 -- the single entry an RKey route names: the entry of `method` filed under the
 -- route's word, which is always the selected instance's canonical key (a general
@@ -1657,7 +1484,7 @@ findByTagArity : Emit ->
 findByTagArity _ _ _ _ [] = None
 findByTagArity e method tag siteArity (entry :: rest) =
   if implEntryAnswers tag entry
-    && methodArityOfIface e (implEntryIfaceWord entry) method == siteArity then
+    && implEntryDeclaredArity entry == siteArity then
     Some entry
   else
     findByTagArity e method tag siteArity rest
@@ -1738,7 +1565,7 @@ preludeImplCollisions : List CImplEntry ->
   OrdMap Unit ->
   OrdMap Unit
 preludeImplCollisions [] _ collisions = collisions
-preludeImplCollisions ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) firstKeys collisions =
+preludeImplCollisions ((CImplEntry method _ _ (CImplTagged tag key _ _ _ _)) :: rest) firstKeys collisions =
   let headKey = preludeImplPairKey method tag
   match omLookup headKey firstKeys
     None =>
@@ -1757,7 +1584,7 @@ preludeImplSymbolsGo : OrdMap Unit ->
   OrdMap Unit ->
   List (String, String, String)
 preludeImplSymbolsGo _ [] _ _ = []
-preludeImplSymbolsGo own ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) :: rest) collisions seen =
+preludeImplSymbolsGo own ((CImplEntry method _ _ (CImplTagged tag key _ _ _ _)) :: rest) collisions seen =
   let implKey = preludeImplPairKey method key
   if omHasKey implKey seen then
     preludeImplSymbolsGo own rest collisions seen
@@ -1771,7 +1598,7 @@ preludeImplSymbolsGo own ((CImplEntry method _ (CImplTagged tag key _ _ _ _)) ::
       :: preludeImplSymbolsGo own rest collisions (omInsert implKey () seen)
 -- an inherited default's entry is named by its interface and instance key, never by
 -- a symbol tag, so the tag it records is only its head
-preludeImplSymbolsGo own ((CImplEntry method _ (CImplDefault _ tag key _ _ _)) :: rest) collisions seen =
+preludeImplSymbolsGo own ((CImplEntry method _ _ (CImplDefault _ tag key _ _ _)) :: rest) collisions seen =
   let implKey = preludeImplPairKey method key
   if omHasKey implKey seen || not (omHasKey key own) then
     preludeImplSymbolsGo own rest collisions seen
@@ -1822,9 +1649,9 @@ implFnSymE e method ent =
 -- the lifted define an entry's calls target: `mdk_impl_<symTag>_<method>` for a
 -- supplied method, `defaultFnName` for an inherited default's per-instance body.
 implEntryFnName : Emit -> String -> CImplEntry -> String
-implEntryFnName e method (ent@(CImplEntry _ _ (CImplTagged _ _ _ _ _ _))) =
+implEntryFnName e method (ent@(CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _))) =
   implFnName (implFnSymE e method ent) method
-implEntryFnName _ method (CImplEntry _ _ (CImplDefault ifaceWord _ key _ _ _)) =
+implEntryFnName _ method (CImplEntry _ _ _ (CImplDefault ifaceWord _ key _ _ _)) =
   defaultFnName ifaceWord method key
 
 implFnSymForKey : Emit ->
@@ -1869,17 +1696,17 @@ isImplMethod e name = match !e.implMethodSet
 
 -- the parameter patterns + body of an impl entry (CImplTagged or CImplDefault).
 implPats : CImplEntry -> List Pat
-implPats (CImplEntry _ _ (CImplTagged _ _ _ _ pats _)) = pats
-implPats (CImplEntry _ _ (CImplDefault _ _ _ _ pats _)) = pats
+implPats (CImplEntry _ _ _ (CImplTagged _ _ _ _ pats _)) = pats
+implPats (CImplEntry _ _ _ (CImplDefault _ _ _ _ pats _)) = pats
 
 implBody : CImplEntry -> CExpr
-implBody (CImplEntry _ _ (CImplTagged _ _ _ _ _ body)) = body
-implBody (CImplEntry _ _ (CImplDefault _ _ _ _ _ body)) = body
+implBody (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ body)) = body
+implBody (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ body)) = body
 
 implEntryPositions : CImplEntry -> List Int
-implEntryPositions (CImplEntry _ _ (CImplTagged _ _ _ positions _ _)) =
+implEntryPositions (CImplEntry _ _ _ (CImplTagged _ _ _ positions _ _)) =
   positions
-implEntryPositions (CImplEntry _ _ (CImplDefault _ _ _ positions _ _)) =
+implEntryPositions (CImplEntry _ _ _ (CImplDefault _ _ _ positions _ _)) =
   positions
 
 -- #747: is this a nullary/return-position/no-requires impl — the exact shape
@@ -1891,13 +1718,13 @@ implEntryMemoisable ent =
   isEmptyL (implEntryPositions ent) && isEmptyL (implPats ent)
 
 implEntryTag : CImplEntry -> String
-implEntryTag (CImplEntry _ _ (CImplTagged tag _ _ _ _ _)) = tag
-implEntryTag (CImplEntry _ _ (CImplDefault _ tag _ _ _ _)) = tag
+implEntryTag (CImplEntry _ _ _ (CImplTagged tag _ _ _ _ _)) = tag
+implEntryTag (CImplEntry _ _ _ (CImplDefault _ tag _ _ _ _)) = tag
 
 -- the canonical full-type key the entry's instance is filed under
 implEntryKey : CImplEntry -> String
-implEntryKey (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) = key
-implEntryKey (CImplEntry _ _ (CImplDefault _ _ key _ _ _)) = key
+implEntryKey (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _)) = key
+implEntryKey (CImplEntry _ _ _ (CImplDefault _ _ key _ _ _)) = key
 
 -- ── ctor→type map ─────────────────────────────────────────────────
 -- the program's constructor→type-name map (CProgram's 3rd field).  An arg-tag
@@ -1913,7 +1740,7 @@ implEntryKey (CImplEntry _ _ (CImplDefault _ _ key _ _ _)) = key
 -- over the WHOLE O(types) list; `ctorHasSiblings` (refutable-let, per PCon) does the same.
 -- On dispatch-heavy code — many single-ctor data types, one per interface — that is
 -- O(ctors·types) = O(N²) `emit`-stage OP-COUNT (this is the residual LLVM emit-op
--- quadratic #986 measured INDEPENDENT of methodArityOf; #990).  The map returns the SAME
+-- quadratic #986 measured INDEPENDENT of the method-arity lookups; #990).  The map returns the SAME
 -- first-match (`omFromPairs (reverseL …)` = first pair wins on a duplicate ctor name,
 -- matching lookupAssoc), so the composite tag — and the emitted IR — is byte-identical.
 -- Uninstalled (None) it FALLS BACK to the list scan, identical answer either way.
@@ -2160,13 +1987,13 @@ emitExpr e env (CIf c t f) = emitIf e env c t f
 emitExpr e env (CLet recF pat e1 e2) = emitLet e env recF pat e1 e2
 emitExpr e env (CLetGroup binds body) = emitLetGroup e env binds body
 emitExpr e env (CBlock stmts) = emitBlock e env stmts
-emitExpr e env (CApp f a) = emitApp e env (CApp f a)
+emitExpr e env (app@(CApp _ _ _)) = emitApp e env app
 emitExpr e env (CLam pats body) = emitLam e env pats body
 emitExpr e env (CDecision scrut arms tree) = emitDecision e env scrut arms tree
 emitExpr e env (CTuple es) = emitTuple e env es
 emitExpr e env (CRecord name fields) = emitRecordCreate e env name fields
-emitExpr e env (CFieldAccess ex label recName) =
-  emitFieldAccess e env ex label recName
+emitExpr e env (CFieldAccess ex label _ ord) =
+  emitFieldAccess e env ex label ord
 emitExpr e env (CRecordUpdate name base updates) =
   emitRecordUpdate e env name base updates
 emitExpr e env (CVariantUpdate con base updates) =
@@ -4342,7 +4169,7 @@ coreSizeGo (x :: rest) n =
 coreChildren : CExpr -> Option (List CExpr)
 coreChildren (CLit _) = Some []
 coreChildren (CVar _ _) = Some []
-coreChildren (CApp f a) = Some [f, a]
+coreChildren (CApp f args _) = Some (f :: args)
 coreChildren (CBinPrim _ l r _ _) = Some [l, r]
 coreChildren (CUnOp _ x) = Some [x]
 coreChildren (CIf c t f) = Some [c, t, f]
@@ -4615,7 +4442,7 @@ u64AliasBody ps body _ = match u64KernelApplied ps body
 -- `fromInt` application the typechecker routed to `Num Int`.
 intLitOf : CExpr -> Option Int
 intLitOf (CLit (LInt n)) = Some n
-intLitOf (CApp (CMethod "fromInt" _ _ (RKey word _ _) _ _) (CLit (LInt n)))
+intLitOf (CApp (CMethod "fromInt" _ _ (RKey word _ _) _ _) [CLit (LInt n)] _)
   | word == numIntWord = Some n
 intLitOf _ = None
 
@@ -5859,34 +5686,20 @@ emitArithUnsized e env op l r tag site =
 -- to emitFieldAccess's returned LTy), so field accesses flowing elsewhere — e.g.
 -- arg-tag dispatch — keep LTInt and the emitter's own self-compile is unperturbed.
 isFloatFieldAccess : Emit -> CExpr -> Bool
-isFloatFieldAccess e (CFieldAccess _ label recName) =
-  isFloatFieldLabel e recName label
+isFloatFieldAccess e (CFieldAccess _ _ recName ord) =
+  isFloatFieldOrdinal e recName ord
 isFloatFieldAccess _ _ = False
 
-isFloatFieldLabel : Emit -> String -> String -> Bool
-isFloatFieldLabel e recName label = match floatFieldRecord e recName label
-  Some (name, labels) => match indexOfStr label labels
-    Some pos =>
-      let tns = ctorFieldTypeNamesOf e name
-      if pos < listLen tns then nthStr tns pos == "Float" else False
-    None => False
-  None => False
-
--- Pick the record owning `label` for float-ness: by the typecheck-stamped name
--- when known + present, else the label-only search (same fallback rule as
--- fieldIdxByName, so an Int/Float collision on the same field name routes float
--- arithmetic by the receiver's actual record).
-floatFieldRecord : Emit -> String -> String -> Option (String, List String)
-floatFieldRecord e recName label =
-  if recName == "" then
-    findRecordByLabel e label
-  else match recFieldsOfName e recName
-    Some labels =>
-      if contains label labels then
-        Some (recName, labels)
-      else
-        findRecordByLabel e label
-    None => findRecordByLabel e label
+-- Is field `ord` of record `recName` declared Float?  The record and ordinal are
+-- the lowering's stamp, so two records that share a label at different
+-- positions route float arithmetic by the receiver's actual record.
+isFloatFieldOrdinal : Emit -> String -> Int -> Bool
+isFloatFieldOrdinal e recName ord =
+  if ord < 0 then
+    False
+  else
+    let tns = ctorFieldTypeNamesOf e recName
+    ord < listLen tns && nthStr tns ord == "Float"
 
 -- fused statically-Float arithmetic: both operands as unboxed doubles, one float
 -- op, box ONCE (replaces N intermediate boxes with 1).
@@ -6717,11 +6530,11 @@ emitGroupBind e env (CBind name clauses site) direct =
   let (w, ty) = match captureWords
     -- S-1: capture-free ⇒ every cell field is a compile-time constant, so hoist the
     -- cell to an `internal constant` module global instead of allocating a fresh one
-    -- on every entry to the enclosing function (emitConstClosureA).  This is the
+    -- on every entry to the enclosing function (emitConstClosure).  This is the
     -- non-mutual path only — `emitLetGroup` routes forward/mutual runs to
     -- `emitLetGroupKnot`, whose cells are back-patched and must stay heap cells (F9).
-    [] => emitConstClosureA e lamName arity
-    _ => emitClosureAllocA e lamName arity captureWords
+    [] => emitConstClosure e lamName arity
+    _ => emitClosureAlloc e lamName arity captureWords
   let _ = if direct then e.directFn := (w, (lamName, arity)) :: !e.directFn
   (w, ty)
 
@@ -6746,8 +6559,8 @@ emitGroupBind e env (CBind name clauses site) direct =
 satOnlyUses : String -> Int -> CExpr -> Bool
 satOnlyUses _ _ (CLit _) = True
 satOnlyUses name _ (CVar x _) = x /= name
-satOnlyUses name arity (CApp f a) =
-  let (hd, args) = flattenApp (CApp f a) []
+satOnlyUses name arity (app@(CApp _ _ _)) =
+  let (hd, args) = flattenApp app []
   match hd
     CVar n _ =>
       if n == name && lengthS args /= arity then
@@ -6787,7 +6600,7 @@ satOnlyUses name arity (CRangeList lo hi _) =
 satOnlyUses name arity (CRangeArray lo hi _) =
   satOnlyUses name arity lo && satOnlyUses name arity hi
 satOnlyUses name arity (CRecord _ fields) = satOnlyFields name arity fields
-satOnlyUses name arity (CFieldAccess ex _ _) = satOnlyUses name arity ex
+satOnlyUses name arity (CFieldAccess ex _ _ _) = satOnlyUses name arity ex
 satOnlyUses name arity (CRecordUpdate _ base updates) =
   satOnlyUses name arity base && satOnlyFields name arity updates
 satOnlyUses name arity (CVariantUpdate _ base updates) =
@@ -6826,7 +6639,7 @@ satOnlyList name arity (x :: rest) =
 
 satOnlyFields : String -> Int -> List CField -> Bool
 satOnlyFields _ _ [] = True
-satOnlyFields name arity ((CField _ ex) :: rest) =
+satOnlyFields name arity ((CField _ _ ex) :: rest) =
   satOnlyUses name arity ex && satOnlyFields name arity rest
 
 satOnlyArms : String -> Int -> List CArm -> Bool
@@ -6871,8 +6684,9 @@ satOnlyClauses name arity ((CClause pats b) :: rest) =
 -- emit the lifted multi-clause `define` for a let-group local function into the
 -- SIDE buffer (same swap discipline as emitPatLamDefine).  Captures load from
 -- `%clos` fields 1.., the self name binds to `%clos` (recursive self-call
--- re-enters the same cell), and `emitClauseTree` lowers the clauses over the
--- `%argK` words (arity ≥1 here — nullary values take the fast path above).
+-- re-enters the same cell), and `emitTailClauseTree` lowers the clauses over the
+-- `%argK` words (arity ≥1 here — nullary values take the fast path above) with
+-- their bodies in the define's tail position.
 emitGroupBindDefine : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -6891,14 +6705,14 @@ emitGroupBindDefine e env lamName name arity clauses captured site =
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let _ =
-    emitClauseTree
+    emitTailClauseTree
       e
       (envMergeL
         (omInsert name ("%clos", LTClosure) cenv)
         (implParamEnv arity 0))
+      (TailDefine lamName arity True)
       arity
       (clauseList clauses)
-      ""
       site
   let _ = emit e "}"
   let _ = emit e ""
@@ -6911,9 +6725,9 @@ emitGroupBindDefine e env lamName name arity clauses captured site =
 -- function's leftover next-clause label.  Without this the lifted `go`'s final
 -- clause would `br label %clauseN` to a block defined in the PARENT function —
 -- invalid LLVM once functions are concatenated in the multi-module output
--- (issue #53).  Hence the explicit "" outer argument to emitClauseTree — which since
--- issue #354 is a parameter, so a fresh define states its own contract instead of
--- depending on nulling ambient state.
+-- (issue #53).  Hence the "" outer argument `emitTailClauseTree` passes to
+-- emitClauseTree — which since issue #354 is a parameter, so a fresh define states
+-- its own contract instead of depending on nulling ambient state.
 
 clauseList : List CClause -> List (List Pat, CExpr)
 clauseList [] = []
@@ -7177,20 +6991,19 @@ emitRefutableCsLet e env pat sv = match letElseHead pat
   None => bindPattern e env pat sv (CLit (LInt 0))
 
 -- ── function application (slices 2 + 4) ─────────────────────────────────────
--- Three call shapes, by the application spine's head:
---   • a known top-level FUNCTION — saturated direct `call @mdk_<name>`.
+-- Three call shapes, by the application's head:
+--   • a known top-level FUNCTION — a direct `call @mdk_<name>`.
 --   • a CONSTRUCTOR — heap-cell allocation.
 --   • ANYTHING ELSE — a closure-valued head (a parameter, a let-bound
 --     lambda, an immediately-applied `CLam`, or a returned closure): emit the head
 --     to a closure word, load its code_ptr, and INDIRECT-call it passing the
---     closure word as the leading argument.  SATURATED only — the Core IR is
---     type-erased, so the call site cannot see the closure's arity; the spike
---     relies on controlled fixtures applying a closure with exactly its arity in
---     one spine.  Partial application (under-application → a residual closure) and
---     over-application are OUT (the real backend will carry arity in the cell).
+--     closure word as the leading argument.
+-- Whether the call supplies exactly the callee's parameters, fewer (a residual
+-- closure) or more (the rest applied to its result) is the application's stamped
+-- `CallMode`; no arm here measures it again.
 emitApp : Emit -> OrdMap (String, LTy) -> CExpr -> (String, LTy)
 emitApp e env app =
-  let (hd, args) = flattenApp app []
+  let (hd, args, mode) = appParts app
   match hd
     CVar fname _ =>
       if fname == "$withFileReadBound"
@@ -7228,7 +7041,7 @@ emitApp e env app =
         -- emitTagMatch [] slice-7 build reject — while `medaka run` was always
         -- correct (eval treats the param as the local it is).  Mirrors emitVar's
         -- isLocal-first priority for the same name in VALUE position.
-        emitIndirect e env hd args
+        emitIndirect e env hd args mode
       else if isAnyExtern fname && hasArgs args then
         emitExternApplied e env fname args
       else if isSome (u64KernelAlias e fname args) then
@@ -7248,59 +7061,68 @@ emitApp e env app =
       else
         let fname2 = canonFnName e fname
         if isKnownFn e fname2 && hasArgs args then
-          emitKnownFnApp e env fname2 args
+          emitKnownFnApp e env fname2 args mode
         else if isImplMethod e fname && hasArgs args then
           let argOps = emitArgs e env args
-          emitMethodArgDispatch e fname "" (methodArityOfInput e fname) argOps
+          emitMethodArgDispatch
+            e
+            fname
+            ""
+            (bareMethodDeclaredArity e fname)
+            argOps
         else if isFallthroughVar fname then
           emitFallthrough e fname
         else
-          emitIndirect e env hd args
+          emitIndirect e env hd args mode
     CMethod name iface arity route implRoutes methRoutes =>
       match intFromIntIdentityArg name route implRoutes methRoutes args
         Some a => emitExpr e env a
         None =>
           let argOps = emitArgs e env args
-          emitMethod e env name iface arity route implRoutes methRoutes argOps
+          emitMethod
+            e
+            env
+            name
+            iface
+            arity
+            route
+            implRoutes
+            methRoutes
+            argOps
+            mode
     CDict name routes =>
       let argOps = emitArgs e env args
-      emitDictApp e env name routes argOps
-    _ => emitIndirect e env hd args
+      emitDictApp e env name routes argOps mode
+    _ => emitIndirect e env hd args mode
+
 -- A known top-level function applied to arguments: its raw worker when it has one
--- of this arity, else the uniform-ABI call (which handles under- and
--- over-application).
+-- of this arity, else the uniform-ABI call in the application's mode.
 emitKnownFnApp : Emit ->
   OrdMap (String, LTy) ->
   String ->
   List CExpr ->
+  CallMode ->
   (String, LTy)
-emitKnownFnApp e env fname args = match u32Inline e env fname args
+emitKnownFnApp e env fname args mode = match u32Inline e env fname args
   Some (k, pats, body) =>
     (tagW32 e k (emitU32Inlined e env pats body args), LTInt)
   None => match rawWorkerCall e fname (lengthS args)
     Some (sym, w) =>
       let res = emitRawWorkerCallW e env sym w args (fnRetTy e fname)
-      let n = lengthS args
-      let _ = recordFloatClosureResult e fname n n res
+      let _ = recordFloatClosureResult e fname CallExact res
       res
-    None => emitKnownFnCall e env fname args
+    None => emitKnownFnCall e env fname args mode
 
 emitKnownFnCall : Emit ->
   OrdMap (String, LTy) ->
   String ->
   List CExpr ->
+  CallMode ->
   (String, LTy)
-emitKnownFnCall e env fname args =
+emitKnownFnCall e env fname args mode =
   let argOps = emitArgs e env args
-  let res =
-    emitKnownFnSat
-      e
-      ("mdk_" ++ fname)
-      argOps
-      (fnArity e fname)
-      (fnRetTy e fname)
-  let _ =
-    recordFloatClosureResult e fname (lengthS argOps) (fnArity e fname) res
+  let res = emitCallMode e ("mdk_" ++ fname) argOps mode (fnRetTy e fname)
+  let _ = recordFloatClosureResult e fname mode res
   res
 
 -- slice 6: an applied method / constrained-fn occurrence.  The real arguments
@@ -7317,8 +7139,9 @@ emitIndirect : Emit ->
   OrdMap (String, LTy) ->
   CExpr ->
   List CExpr ->
+  CallMode ->
   (String, LTy)
-emitIndirect e env hd args =
+emitIndirect e env hd args mode =
   let (cw, _) = emitExpr e env hd
   let argOps = emitArgs e env args
   match directLamOf e cw (lengthS argOps)
@@ -7335,37 +7158,39 @@ emitIndirect e env hd args =
       let r = freshReg e
       let _ = emit e "  \{r} = call i64 @\{lam}(\{argDecls (cw :: argOps)})"
       (r, indirectRetTy e cw hd)
-    None => emitIndirectArity e cw argOps hd
+    None => emitIndirectMode e cw argOps hd mode
 
 -- the lifted symbol a saturated call through closure word `cw` may target
 -- DIRECTLY: an `e.directFn` entry whose recorded arity is exactly `nargs`.  A
 -- surplus or shortfall is deliberately NOT a hit — over- and under-application
--- must keep flowing through `emitIndirectArity`'s split/PAP paths unchanged.
+-- must keep flowing through `emitIndirectMode`'s split/PAP paths unchanged.
 directLamOf : Emit -> String -> Int -> Option String
 directLamOf e cw nargs = match lookupAssoc cw !e.directFn
   Some (lam, arity) => if arity == nargs then Some lam else None
   None => None
 
--- the historical indirect-call shape: split on the closure's compile-time arity.
-emitIndirectArity : Emit -> String -> List String -> CExpr -> (String, LTy)
-emitIndirectArity e cw argOps hd = match lookupAssoc cw !e.closureArity
-  Some n =>
-    if n > 0 && lengthS argOps > n then
-      -- OVER-APPLICATION of a let-bound closure (`(g 7) 9`): saturate with the
-      -- first `n` args, then apply the surplus to the returned (opaque) value.
-      let r0 = emitIndirectCallWords e cw (takeS n argOps)
-      (emitApplyAny e r0 (dropS n argOps), LTInt)
-    else if n > 0 && lengthS argOps < n then
-      -- UNDER-APPLICATION (`let h = g 7` for arity-2 g): build a residual
-      -- partial-application closure over the inner closure value + supplied args.
-      emitPapClosureIndirect e cw argOps n
-    else
-      (emitIndirectCallWords e cw argOps, indirectRetTy e cw hd)
-  -- OPAQUE head (arity unknown at compile time — e.g. a closure PARAM `f` in
-  -- `map f`, or a closure pulled from a container).  The supplied count may not
-  -- match the closure's runtime arity, so dispatch arity-aware (emitApplyAny):
-  -- exact ⇒ inline call; partial ⇒ runtime PAP; over ⇒ saturate + reapply.
-  None => (emitApplyAny e cw argOps, indirectRetTy e cw hd)
+-- An indirect call through closure word `cw` in the application's mode.  An exact,
+-- partial or over application names a closure of known parameter count (a
+-- let-group function); a dynamic one does not (a parameter, a closure pulled from a
+-- container, a returned closure), so the runtime reads the arity from the cell:
+-- exact ⇒ inline call; partial ⇒ PAP; over ⇒ saturate + reapply.  A callee of no
+-- parameters is a value, so an over-application applies every argument to it.
+emitIndirectMode : Emit ->
+  String ->
+  List String ->
+  CExpr ->
+  CallMode ->
+  (String, LTy)
+emitIndirectMode e cw argOps hd CallExact =
+  (emitIndirectCallWords e cw argOps, indirectRetTy e cw hd)
+emitIndirectMode e cw argOps _ (CallPartial missing) =
+  emitPapClosureIndirect e cw argOps (lengthS argOps + missing)
+emitIndirectMode e cw argOps _ (CallOver surplus) =
+  let k = lengthS argOps - surplus
+  let r0 = if k == 0 then cw else emitIndirectCallWords e cw (takeS k argOps)
+  (emitApplyAny e r0 (dropS k argOps), LTInt)
+emitIndirectMode e cw argOps hd CallDynamic =
+  (emitApplyAny e cw argOps, indirectRetTy e cw hd)
 
 -- the raw indirect call: load the closure's code_ptr (cell field 0) and `call` it
 -- with the closure word as the leading argument followed by `argOps`.
@@ -7491,8 +7316,9 @@ emitMethod : Emit ->
   List Route ->
   List Route ->
   List String ->
+  CallMode ->
   (String, LTy)
-emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes argOps =
+emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes argOps mode =
   match implForSite e name iface tag siteArity
     Some entry =>
       let dictWords =
@@ -7509,38 +7335,39 @@ emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRout
           tagToLTy headTag
         else
           LTInt
-      emitImplCallSat
+      -- the dictionary words count on both sides of the mode, so it holds for the
+      -- call that passes them too
+      emitCallMode
         e
         (implEntryFnName e name entry)
         (dictWords ++ argOps)
-        (methodArityOfEntry e entry name + lengthS dictWords)
+        mode
         resTy
     None => gapE e "no impl of method '\{name}' for instance '\{tag}'"
-emitMethod e env name iface siteArity (RDict d) implRoutes methRoutes argOps =
+emitMethod e env name iface siteArity (RDict d) implRoutes methRoutes argOps _ =
   emitMethodDispatch e env name iface siteArity (RDict d) methRoutes argOps
-emitMethod e env name iface siteArity (RDictFwd d) implRoutes methRoutes argOps =
+emitMethod e env name iface siteArity (RDictFwd d) implRoutes methRoutes argOps _ =
   emitMethodDispatch e env name iface siteArity (RDictFwd d) methRoutes argOps
 -- a projected super dictionary dispatches exactly as a dictionary parameter does
-emitMethod e env name iface siteArity (RProj r path) implRoutes methRoutes argOps =
+emitMethod e env name iface siteArity (RProj r path) implRoutes methRoutes argOps _ =
   emitMethodDispatch e env name iface siteArity (RProj r path) methRoutes argOps
-emitMethod e env name iface siteArity RNone implRoutes methRoutes argOps =
+emitMethod e env name iface siteArity RNone implRoutes methRoutes argOps _ =
   emitMethodArgDispatch e name iface siteArity argOps
 -- S-1: a CONSTRAINED shadowing standalone was given leading dict PARAMS by
 -- dictPassDecl, so its call must supply the matching dict WORDS.  Delegate to
 -- emitDictApp — the SAME tested helper the ordinary CDict path uses (it prepends the
--- dict words and, via defArityOf, builds a residual PAP when genuinely
--- under-applied).  Without this the direct emitKnownFnSat call below supplies one
--- word too few, emitKnownFnSat correctly reads that as under-application, and the
--- program silently prints a PAP heap pointer instead of the answer (the S-1 bug).
+-- dict words and builds a residual PAP when the mode is partial).  Without this the
+-- direct call below supplies one word too few and the program silently prints a PAP
+-- heap pointer instead of the answer (the S-1 bug).
 -- `dicts == []` (every unconstrained standalone, the compiler's own definer shadows
 -- included) keeps the byte-identical pre-S1 direct call ⇒ the self-compile
 -- fixpoint cannot move.
-emitMethod e env name _ _ (RLocal sym dicts) implRoutes methRoutes argOps =
+emitMethod e env name _ _ (RLocal sym dicts) implRoutes methRoutes argOps mode =
   let target = if sym == "" then name else sym
   -- #1430 (S2, row 39): a RETURN-POSITION method (`zed : a`) shadowed by a module-local
   -- standalone routes RLocal to a NULLARY top-level binding, and a nullary binding is a
   -- value GLOBAL, never an `@mdk_<sym>` define — it is read through `@mdk_force_<sym>()`
-  -- (LAZY) or `@mdk_g_<sym>` (eager).  `emitKnownFnSat` below emits `call i64
+  -- (LAZY) or `@mdk_g_<sym>` (eager).  The direct call below emits `call i64
   -- @mdk_<sym>()` unconditionally, which clang rejected with `use of undefined value
   -- '@mdk_main__zed'` — `medaka build` exit 1 on a program `check` and `run` both accept.
   -- `lookupVarG` is the SAME accessor `emitVar` uses for any other reference to that
@@ -7550,14 +7377,9 @@ emitMethod e env name _ _ (RLocal sym dicts) implRoutes methRoutes argOps =
   if isEmpty argOps && not (isKnownFn e target) then
     lookupVarG e env target
   else if isEmpty dicts then
-    emitKnownFnSat
-      e
-      ("mdk_" ++ target)
-      argOps
-      (fnArity e target)
-      (fnRetTy e target)
+    emitCallMode e ("mdk_" ++ target) argOps mode (fnRetTy e target)
   else
-    emitDictApp e env target dicts argOps
+    emitDictApp e env target dicts argOps mode
 -- native backend: a method whose RESULT mentions the interface/self
 -- type variable (map/ap/andThen) returns the CONTAINER; type its
 -- RKey-dispatched result as the impl's own type (tagToLTy tag) so a
@@ -7576,7 +7398,7 @@ emitMethod e env name _ _ (RLocal sym dicts) implRoutes methRoutes argOps =
 -- emitted program and the plain name off the emit path.  The `sym == ""` fallback
 -- below is what a route carrying no symbol at all would take; typecheck mints no such
 -- `RLocal` (`mintMethodCell ""` yields `RNone`).  The compiler's OWN definer shadows
--- reach THIS arm with their mangled symbol; the emitted `emitKnownFnSat` call is
+-- reach THIS arm with their mangled symbol; the emitted direct call is
 -- byte-identical to the pre-P0-18 direct `@mdk_<mid>__name` bare-EVar call (fixpoint
 -- gate).  The membership is derived, not memorised — a module's own top-level function
 -- whose name is also a nameable interface method — and it moves with the tree: `map`'s
@@ -7598,16 +7420,12 @@ emitMethod e env name _ _ (RLocal sym dicts) implRoutes methRoutes argOps =
 -- e.g. `def`) is a plain value — keep the immediate `emitMethod .. []`.
 -- S1-RESIDUAL-A (fixed 2026-07-16, issue #410; SHADOW-SEMANTICS.md §6): a VALUE-position
 -- standalone SHADOW (`map size [1,2,3]`) must not miscompile here.  The arity below is
--- ROUTE-derived (`methValArity`), never name-derived, and that is what keeps it correct:
--- lifting at `methodArityOf name` — the interface METHOD's arity — for a body that calls
--- the STANDALONE, whose value arity need not match, builds a closure that lies.  With the
--- two arities EQUAL the lie is invisible, which is why every pre-#410 probe (and the whole
--- d4/d10 corpus) missed it.  When they differ the closure advertises N args to the HOF but
--- its body forwards them to an M-arg function: N>M makes `emitKnownFnSat` take the
--- `emitOverApp` path (:3941), which calls the target, gets a SCALAR back, and hands that
--- Int to `emitApplyAny`, which reads an arity out of the "cell header" of an integer ⇒ the
--- built binary SEGFAULTs (wasm: `illegal cast`) while `check`/`run` both stay green.  The
--- RLocal arm below already knew the truth via `fnArity e target`.
+-- ROUTE-derived (`methodValueArity`), never name-derived, and that is what keeps it
+-- correct: lifting at the interface METHOD's declared arity for a body that calls the
+-- STANDALONE, whose value arity need not match, builds a closure that lies.  When they
+-- differ the closure advertises N args to the HOF but its body forwards them to an M-arg
+-- function, which over-applies the target's SCALAR result ⇒ the built binary SEGFAULTs
+-- (wasm: `illegal cast`) while `check`/`run` both stay green.
 emitMethodValue : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -7618,9 +7436,20 @@ emitMethodValue : Emit ->
   List Route ->
   (String, LTy)
 emitMethodValue e env name iface siteArity route implRoutes methRoutes =
-  let arity = methValArity e name iface siteArity route
+  let node = CMethod name iface siteArity route implRoutes methRoutes
+  let arity = methodValueArity e node
   if isDynamicMethodRoute route || arity <= 0 then
-    emitMethod e env name iface siteArity route implRoutes methRoutes []
+    emitMethod
+      e
+      env
+      name
+      iface
+      siteArity
+      route
+      implRoutes
+      methRoutes
+      []
+      (callModeFor (definedArity e node) 0)
   else
     -- the lifted body builds the site's impl and method dictionaries too, and
     -- either may read an enclosing dictionary parameter
@@ -7642,46 +7471,23 @@ emitMethodValue e env name iface siteArity route implRoutes methRoutes =
         methRoutes
         arity
         capNames
-    emitClosureAllocA e lamName arity capWords
+    emitClosureAlloc e lamName arity capWords
 
 -- the VALUE arity the lifted method-value closure must advertise to a HOF — i.e. the
 -- number of value args the body it wraps actually consumes, which is a property of the
--- ROUTE, not of the method name (#410).
---
--- RLocal is the definer-shadow route: the body (`emitMethod`'s RLocal arm) forwards to
--- the STANDALONE `mdk_<target>`, so the closure must expose the STANDALONE's value arity.
--- The recorded emitted define arity is authoritative because it is the ruler that
--- target's `emitKnownFnSat`/`emitDictApp` saturation uses.  A declaration signature can
--- exceed a dynamic-method-tail wrapper's source clause arity, so using it here would
--- delay dispatch and overcall the define.  `fnArity` remains the compatibility fallback
--- when the target has no recorded define.
---
--- ⚠️ the `- listLen dicts` is load-bearing and NOT cosmetic: `inferSigs` runs over the
--- LOWERED (post-dict-pass) clauses, so both define and fallback arities are
--- DICT-INCLUSIVE.  A CONSTRAINED shadow therefore counts its leading dict params, but
--- the closure exposes VALUE args only — the dict words are CAPTURED (see
--- `methValDictNames`) and re-prepended inside the body by `emitDictApp`.  Without the
--- subtraction a constrained shadow would advertise nDicts too many and segfault exactly
--- like the unconstrained case it fixes.  `dicts == []` ⇒ subtract 0.
---
--- RKey uses the selected implementation's callable arity.  RNone accepts only enough
--- args to expose its runtime receiver before per-group saturation.  RDict/RDictFwd are
--- dispatched immediately by emitMethodValue and do not allocate this closure.
-methValArity : Emit -> String -> String -> Int -> Route -> Int
-methValArity e name _ siteArity (RLocal sym dicts) =
-  let target = if sym == "" then name else sym
-  match defArityOf e target
-    Some n => maxInt 0 (n - listLen dicts)
-    None =>
-      let a = fnArity e target - listLen dicts
-      if a <= 0 then siteArity else a
-methValArity e name iface siteArity (RKey tag _ _) =
-  match implForSite e name iface tag siteArity
-    Some entry => methodArityOfEntry e entry name
-    None => siteArity
-methValArity e name iface siteArity RNone =
+-- ROUTE, not of the method name (#410): the occurrence's defined arity (the selected
+-- entry's parameters for RKey, the standalone's less the dictionaries it is given for
+-- RLocal).  RNone accepts only enough args to expose its runtime receiver before
+-- per-group saturation.  RDict/RDictFwd are dispatched immediately by emitMethodValue
+-- and do not allocate this closure.
+methodValueArity : Emit -> CExpr -> Int
+methodValueArity e (CMethod name iface siteArity RNone _ _) =
   methodArgDispatchArity e name iface siteArity
-methValArity _ _ _ siteArity _ = siteArity
+methodValueArity e (node@(CMethod _ _ siteArity _ _ _)) =
+  match definedArity e node
+    Some n => maxInt 0 n
+    None => siteArity
+methodValueArity _ _ = 0
 
 -- An RNone value must accept enough arguments to expose the runtime receiver, then
 -- let the selected group decide saturation against its own callable arity.  Using
@@ -7741,8 +7547,24 @@ emitMethodValDefine e env lamName name iface siteArity route implRoutes methRout
   let _ = emit e "entry:"
   let cenv = loadCaptures e env capNames 0
   let synArgs = etaArgOps arity 0
+  let mode =
+    callModeFor
+      (definedArity
+        e
+        (CMethod name iface siteArity route implRoutes methRoutes))
+      arity
   let (r, _) =
-    emitMethod e cenv name iface siteArity route implRoutes methRoutes synArgs
+    emitMethod
+      e
+      cenv
+      name
+      iface
+      siteArity
+      route
+      implRoutes
+      methRoutes
+      synArgs
+      mode
   let _ = emit e ("  ret i64 " ++ r)
   let _ = emit e "}"
   let _ = emit e ""
@@ -7772,18 +7594,16 @@ emitDictValue : Emit ->
   (String, LTy)
 emitDictValue e env name routes =
   if isLocal env name then
-    emitLocalDictApp e env name routes []
+    emitLocalDictApp e env name routes [] CallDynamic
   else if isKnownFn e name then
-    let valArity = match defArityOf e name
-      Some n => maxInt 0 (n - listLen routes)
-      None => fnArity e name - listLen routes
+    let valArity = optionOr 0 (definedArity e (CDict name routes))
     if valArity <= 0 then
-      emitDictApp e env name routes []
+      emitDictApp e env name routes [] CallExact
     else
       let dictWords = dictWordsOf e env routes
       let lamName = "mdk_dictval_\{name}\{mangleScoped e}"
       let _ = emitDictValDefine e lamName name (lengthS dictWords) valArity
-      emitClosureAllocA e lamName valArity dictWords
+      emitClosureAlloc e lamName valArity dictWords
   else
     gapE e ("CDict head '" ++ name ++ "' is not a known top-level function")
 
@@ -7792,9 +7612,8 @@ emitDictValue e env name routes =
 -- fresh `%argK` params, reloads the dict words from %clos fields 1..nDicts, and
 -- calls `@mdk_<name>(dicts.., %arg0.., %arg(valArity-1))` — the same leading-dict-then-
 -- value-arg order emitDictApp / dict_pass use at every direct call site.  valArity
--- comes from the recorded emitted define, so a dynamic-method-tail wrapper that
--- deliberately retains its source clause arity is neither overcalled nor advertised
--- at the larger signature arity.
+-- is the define's own parameter count less its dictionaries, so a wrapper is neither
+-- overcalled nor advertised at a larger signature arity.
 emitDictValDefine : Emit -> String -> String -> Int -> Int -> Unit
 emitDictValDefine e lamName name nDicts valArity =
   let saved = (bufRef e).value
@@ -7838,7 +7657,7 @@ receiverRoute route _ = route
 
 -- an inherited default's per-instance entry
 isInheritedEntry : CImplEntry -> Bool
-isInheritedEntry (CImplEntry _ _ (CImplDefault _ _ _ _ _ _)) = True
+isInheritedEntry (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _)) = True
 isInheritedEntry _ = False
 
 -- a direct call to a statically-resolved impl fn (RKey).  Nullary (argOps == [])
@@ -7852,57 +7671,30 @@ emitImplCall e fname argOps resTy =
   let _ = emit e "  \{r} = call i64 @\{fname}(\{argDecls argOps})"
   (r, resTy)
 
--- a call to a statically-resolved impl fn (RKey / single arg-tag group) that
--- may be UNDER- or OVER-APPLIED.  A point-free prelude binding (`length = fold f
--- 0`) lowers to the impl method applied to FEWER args than the impl fn's full
--- arity: a saturated `emitImplCall` would emit a call missing its trailing
--- parameter(s), which on the native backend reads a garbage register for the
--- missing arg and crashes.  When `lengthS argOps < arity`, build a PARTIAL-
--- APPLICATION closure capturing the supplied words; the residual closure
--- completes the call when the remaining args arrive at an indirect call site.
--- Saturated (`==`) ⇒ the plain direct call, unchanged.
---
--- Over-application CAN arise at an impl call head as of S-emit-arity-by-
--- declaration (#1450/#1668, 7d57ac53): `argOps` is built from the CALL SITE's
--- surface arg count, while `arity` is now the matched entry's OWN declared
--- arity — and those can diverge whenever `implFor`'s same-spelled-interface
--- selection (#1810, untouched here) hands back an entry whose interface
--- declares fewer params than the call site's other same-spelled candidate.
--- Before this branch existed, `lengthS argOps > arity` fell to `otherwise` and
--- silently called the impl fn with its own extra, unread argument — a wrong
--- value at exit 0 with no diagnostic (F17/RUN-METHID-086). Route it through the
--- same `emitOverApp` used by `emitKnownFnSat`, so the excess arg applies against
--- the impl's return value: on the normal (non-#1810-confused) over-application
--- shape that's a legitimate call to a returned closure, and on the #1810
--- selection-confusion shape the return value isn't a closure at all, so the
--- indirect call faults loudly instead of returning a silently-wrong number.
-emitImplCallSat : Emit -> String -> List String -> Int -> LTy -> (String, LTy)
-emitImplCallSat e fname argOps arity resTy
-  | lengthS argOps < arity = emitPapClosure e fname argOps arity
-  | lengthS argOps > arity = emitOverApp e fname argOps arity resTy
-  | otherwise = emitImplCall e fname argOps resTy
+-- A direct call of define `sym` (already `mdk_`-prefixed) in [mode]: exact ⇒ the
+-- plain call; partial ⇒ a residual closure capturing the supplied words, which
+-- completes the call when the rest arrive; over ⇒ the call on the define's own
+-- parameters, its result (a closure) applied to the rest.  A dynamic mode names no
+-- parameter count, and the plain call passes every word.
+emitCallMode : Emit -> String -> List String -> CallMode -> LTy -> (String, LTy)
+emitCallMode e sym argOps (CallPartial missing) _ =
+  emitPapClosure e sym argOps (lengthS argOps + missing)
+emitCallMode e sym argOps (CallOver surplus) resTy =
+  emitOverApp e sym argOps (lengthS argOps - surplus) resTy
+emitCallMode e sym argOps _ resTy = emitImplCall e sym argOps resTy
 
--- a call to a known top-level function (`@<sym>`, sym already mdk-prefixed) that
--- may be UNDER-APPLIED.  A partial application of a named function passed to a
--- higher-order combinator (`map (desugarDottedField e) fields` — 1 of 2 args)
--- lowers to a residual closure capturing the supplied args, not a truncated
--- direct call (which would read garbage for the missing trailing param).
--- Saturated (`==`) ⇒ the plain direct call, unchanged.  fnArity returns 0 for a
--- fn with no recorded signature; then `lengthS argOps >= 0` is always saturated,
--- preserving the old direct-call behaviour for such (signature-less) callees.
-emitKnownFnSat : Emit -> String -> List String -> Int -> LTy -> (String, LTy)
-emitKnownFnSat e sym argOps arity resTy
-  | arity > 0 && lengthS argOps < arity = emitPapClosure e sym argOps arity
-  | arity > 0 && lengthS argOps > arity = emitOverApp e sym argOps arity resTy
-  | otherwise = emitImplCall e sym argOps resTy
+-- A call of define `sym` whose parameter count [arity] is known only here: a
+-- dispatch arm's selected impl, which no application stamp can name.  Its mode is
+-- the one `core_ir_lower.callModeFor` gives every stamped application.
+emitArityCall : Emit -> String -> List String -> Int -> LTy -> (String, LTy)
+emitArityCall e sym argOps arity resTy =
+  emitCallMode e sym argOps (callModeFor (Some arity) (lengthS argOps)) resTy
 
 -- OVER-APPLICATION: a known fn of arity N applied to >N args (`makeAdder 10 5` —
 -- `makeAdder` returns a closure that consumes the extra arg).  Saturate the direct
 -- call with the FIRST N args, then apply the residual VALUE (a closure) to each
 -- remaining arg through an indirect call (the same load-code_ptr / call-(closure,
--- arg) shape as emitIndirect).  Without this the trailing args are silently dropped
--- into @sym (which ignores them) and the returned closure is never applied —
--- garbage result / crash.
+-- arg) shape as emitIndirect).
 emitOverApp : Emit -> String -> List String -> Int -> LTy -> (String, LTy)
 emitOverApp e sym argOps arity resTy =
   let satArgs = takeS arity argOps
@@ -8035,7 +7827,7 @@ emitPapClosureIndirect e cw argOps arity =
   let remaining = arity - supplied
   let papName = "mdk_pap_ind" ++ mangleScoped e
   let _ = emitPapDefineIndirect e papName supplied remaining
-  emitClosureAllocA e papName remaining (cw :: argOps)
+  emitClosureAlloc e papName remaining (cw :: argOps)
 
 -- emit the indirect-PAP forwarder define into the side buffer.  field 1 = the
 -- captured inner closure word; fields 2.. = `supplied` captured arg words; then
@@ -8067,8 +7859,8 @@ emitPapDefineIndirect e papName supplied remaining =
 -- the BARE interface name a resolved impl entry belongs to (for the returns-self
 -- lookup and the declared-impl head table, both keyed by spelling).
 implEntryIface : CImplEntry -> String
-implEntryIface (CImplEntry _ _ (CImplTagged _ _ iface _ _ _)) = iface
-implEntryIface (CImplEntry _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
+implEntryIface (CImplEntry _ _ _ (CImplTagged _ _ iface _ _ _)) = iface
+implEntryIface (CImplEntry _ _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
   ifaceNameOfWord ifaceWord
 
 -- a runtime method dispatch (RDict/RDictFwd/RProj): the dictionary [dict] denotes
@@ -8101,12 +7893,12 @@ emitMethodDispatch e env name iface siteArity dict methRoutes argOps =
       -- dereference null → the run≠build SIGTRAP.  Concrete-grounded callers (a real dict)
       -- are unaffected: the direct call is the same impl the tag-dispatch chain would have
       -- selected.
-      -- F10: saturate against the impl's own callable arity (see emitDispatchArmBody).
-      emitKnownFnSat
+      -- F10: saturate against the impl's own parameters (see emitDispatchArmBody).
+      emitArityCall
         e
         (implEntryFnName e name ent)
         argOps
-        (methodArityOfEntry e ent name)
+        (implSrcValueArity ent)
         LTInt
     _ =>
       emitMethodDispatchChain e env name iface siteArity dict methRoutes argOps
@@ -8452,12 +8244,12 @@ emitDispatcherBody e name iface nmw nargs siteArity =
   match soleImplDirect e name iface siteArity
     Some ent =>
       -- F10: same saturation as emitDispatchArmBody — the selected interface's sole
-      -- impl callable arity can still differ from the occurrence arity.
-      emitKnownFnSat
+      -- impl parameter count can still differ from the occurrence arity.
+      emitArityCall
         e
         (implEntryFnName e name ent)
         (dispWordNames "%arg" nargs 0)
-        (methodArityOfEntry e ent name)
+        (implSrcValueArity ent)
         LTInt
     _ =>
       emitDispatchBody
@@ -8522,21 +8314,10 @@ emitDispatchBody e name iface dictPtr methWords argOps siteArity =
 
 -- the count of leading element-dict params a matched impl's lifted fn expects:
 -- `leadingDictPats` applied to THIS entry's own clause — a DIRECT count of the
--- `$dict_*`-named patterns dict_pass prepended, never a subtraction.  That is the
--- identical ruler `gatherGroup` sizes the define with (`nDicts = leadingDictPats
--- (firstClausePats cls0)`), so caller and callee agree by construction rather than
--- by coincidence.  Exact peer of wasm_emit's `implLeadingDictCountOfEntryW`, which
--- made this same choice for #717.
---
--- ⚠️ The old body was `listLen (implPats ent) - methodArityOfEntry e ent name`.
--- That agrees with the direct count only when the clause's VALUE-pattern count
--- equals `methodArityOfEntry`, which a POINT-FREE (eta-short) impl clause breaks:
--- `impl DictUser (Live a) requires Eq a where dictUser = selfEq` has
--- `pats = [$dict_dictUser_0]`, so `implSrcValueArity` reads `1 - 1 = 0`,
--- `methodArityOfEntry`'s `src > 0` guard never fires and it stays at the declared 1,
--- and the subtraction answered 0 leading dicts against a define that binds 1.  The
--- value argument then landed positionally in the dict slot — SIGSEGV.  The direct
--- count cannot skew that way.
+-- `$dict_*`-named patterns dict_pass prepended, never a subtraction.  Those
+-- patterns are the define's own leading parameters, so caller and callee agree by
+-- construction rather than by coincidence.  Exact peer of wasm_emit's
+-- `implLeadingDictCountOfEntryW`, which made this same choice for #717.
 --
 -- The result is also the number of per-instance `requires` dicts stored in the boxed
 -- dict cell (fields 1..count), so the runtime chain loads exactly that many and
@@ -8560,9 +8341,8 @@ implReqCount _e _name ent = leadingDictPats (implPats ent)
 -- DEFINITION.  #413's comment claims "emit never had this bug"; that is true of the
 -- dispatch chain and false of this static RKey path, which is #1648.  Same formula, so
 -- the three now agree by construction: `implReqCount` counts the entry's own leading
--- `$dict_*` patterns DIRECTLY (`leadingDictPats (implPats ent)`) — the very ruler
--- `gatherGroup` mints the define with (`nDicts = leadingDictPats (firstClausePats
--- cls0)`) — of which the first `lengthS methRoutes` are the METHOD-level dicts,
+-- `$dict_*` patterns DIRECTLY (`leadingDictPats (implPats ent)`) — the define's own
+-- leading parameters — of which the first `lengthS methRoutes` are the METHOD-level dicts,
 -- leaving this impl's own share.  (It was briefly a SUBTRACTION — clause pattern count
 -- less value arity — which is a DIFFERENT quantity for a POINT-FREE clause and reopened
 -- #1648 for exactly that shape; see `implReqCount`'s own comment.)  The `maxInt 0`
@@ -8682,23 +8462,8 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     let _ = emit e "  store i64 \{rv}, ptr \{slot}"
     emit e ("  br label %" ++ endL)
   else
-    -- #1816: CLAMP AT ZERO.  ⚠️ HISTORICAL, now VACUOUS for `implReqCount` itself.
-    -- `implReqCount` USED TO be `listLen (implPats ent) - declared arity`, which went
-    -- NEGATIVE for an ETA-SHORT clause -- exactly what an interface DEFAULT
-    -- specialized into an impl is (`mapFirst f = bimap f identity` binds 1 of
-    -- `mapFirst`'s 2 declared params).  `loadReqDicts` already treated a negative as
-    -- zero, so the operand list was always right; but F10's `armArity` below ADDS this
-    -- number back, and a negative there cancelled the declared arity straight down to
-    -- `listLen (implPats ent)` -- under-applying the define `gatherGroup` mints at
-    -- `maxInt (clauseArity) (declared + nDicts)`.  The arm then called an arity-2
-    -- define with 1 operand and re-applied the rest to whatever came back, which is
-    -- the E-NONEXHAUSTIVE-MATCH of #1816.
-    -- `implReqCount` is now a DIRECT `leadingDictPats` count, which is never negative
-    -- by construction, so it can no longer supply the negative #1816 described; the
-    -- clamp is kept because the `- lengthS methWords` subtraction here is still a
-    -- subtraction, and because #1818's `armArity` is read off the group rather than
-    -- recomputed from `cellCount`.  Byte-identical either way for every shape the
-    -- clamp fires on.
+    -- #1816: `implReqCount` is a direct `leadingDictPats` count and never negative;
+    -- the clamp guards the `- lengthS methWords` subtraction.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
     let superCount = entrySuperCount ent
     -- an inherited default receives the dictionary that selected it
@@ -8707,39 +8472,24 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
         [dictPtr]
       else
         loadReqDicts e dictPtr (superCount + cellCount) superCount
-    -- F10 (#1450/#1668 follow-on): SATURATE AGAINST THIS ARM'S OWN DECLARED ARITY.
-    -- The dispatcher is keyed by BARE method name and its `%argK` count is the arity
-    -- the SITE saw, so on an arity collision (two modules declaring same-spelled
-    -- methods on unrelated interfaces) one arm's impl define -- which
-    -- `gatherGroup` now mints at its interface's DECLARATION arity -- disagrees with
-    -- that count, and a raw `emitImplCall` emitted a call whose argument count
-    -- differed from its callee's parameter count.  That is UB, and it is the
-    -- mismatch between a define minted at the DECLARATION arity and a call site
-    -- reading the bare one.  `emitKnownFnSat` closes the
-    -- gap WITHOUT re-opening which declaration supplies the arity: under-application
-    -- becomes the residual PAP the source `op x` actually denotes, over-application
-    -- the indirect re-apply.  Collision-free programs supply exactly the declared
-    -- count, so this is the plain direct call, byte-identical.
+    -- F10 (#1450/#1668 follow-on): saturate against THIS ARM'S define.  The
+    -- dispatcher is keyed by BARE method name and its `%argK` count is the arity the
+    -- SITE saw, which can differ from the selected impl's own parameter count (an
+    -- arity collision between same-spelled methods of unrelated interfaces, or an
+    -- impl clause that takes fewer parameters than its declaration).  Under-application
+    -- becomes the residual PAP the source `op x` denotes, over-application the
+    -- indirect re-apply.
     --
-    -- #1818: `armArity` is now READ OFF `gatherGroup`'s own minted define-arity
-    -- (`groupArity`, matched by `symTag` -- the exact identity `gatherGroup` used
-    -- to name this same define), not independently recomputed.  Recomputing it as
-    -- `methodArityOfEntry + lengthS methWords + cellCount` is a STRUCTURAL
-    -- duplicate of `gatherGroup`'s `maxInt (clauseArity) (methodArityOfIface + nDicts)`
-    -- -- the two are "coincidentally" equal, and #1816 was exactly the case where a
-    -- negative `cellCount` broke that coincidence.  Consulting the group directly
-    -- makes the two PROVABLY equal instead: this arm's call always saturates
-    -- against the same number the callee's `define` actually has.  Every entry
-    -- reaching this function -- concrete arm or general instance, supplied or
-    -- inherited -- has exactly one group in `groups` (`groupImpls` groups every
-    -- entry), so the fallback below is not expected to fire; it is kept as
-    -- the pre-#1818 formula so a genuine miss degrades to the old (already-correct
-    -- post-#1816) behavior rather than panicking.
+    -- #1818: `armArity` is READ OFF the group's own define arity (`groupArity`,
+    -- matched by `symTag` -- the identity `gatherGroup` named the define with), not
+    -- recomputed.  Every entry reaching this function has exactly one group in
+    -- `groups`, so the fallback (the same count, assembled from the entry) is not
+    -- expected to fire.
     let armArity = match findGroupBySymTag symTag groups
       Some g => groupArity g
-      None => methodArityOfEntry e ent name + lengthS methWords + cellCount
+      None => implSrcValueArity ent + lengthS methWords + cellCount
     let (rv, _) =
-      emitKnownFnSat
+      emitArityCall
         e
         (implEntryFnName e name ent)
         (methWords ++ cellDicts ++ argOps)
@@ -8834,7 +8584,7 @@ emitMethodArgDispatch : Emit ->
 emitMethodArgDispatch e method iface siteArity argOps =
   match implGroupsForMethodArity e method iface siteArity
     [] => emitDefaultArgTag e method argOps
-    [g] => emitImplCallSat e (groupFnName g) argOps (groupArity g) LTInt
+    [g] => emitArityCall e (groupFnName g) argOps (groupArity g) LTInt
     groups =>
       emitArgTagDispatch e method groups argOps (argTagCollidingHeads groups)
 
@@ -8953,7 +8703,7 @@ emitArgDispatchChain e tagReg (g :: rest) argOps colliding slot endL =
     else
       -- F10: saturate against this group's own declared arity, the same answer the
       -- single-group site above already takes (see emitDispatchArmBody).
-      let (rv, _) = emitKnownFnSat e (groupFnName g) argOps (groupArity g) LTInt
+      let (rv, _) = emitArityCall e (groupFnName g) argOps (groupArity g) LTInt
       let _ = emit e "  store i64 \{rv}, ptr \{slot}"
       emit e ("  br label %" ++ endL)
   let _ = emit e (next ++ ":")
@@ -9071,19 +8821,20 @@ emitDictApp : Emit ->
   String ->
   List Route ->
   List String ->
+  CallMode ->
   (String, LTy)
-emitDictApp e env name routes argOps =
+emitDictApp e env name routes argOps mode =
   if isLocal env name then
-    emitLocalDictApp e env name routes argOps
+    emitLocalDictApp e env name routes argOps mode
   else if isKnownFn e name then
     let dictWords = dictWordsOf e env routes
     let allWords = dictWords ++ argOps
-    -- E22: measure a constrained call against the RECORDED define arity.  A short
-    -- call needs a residual PAP; a surplus must apply to the returned closure
-    -- instead of being silently ignored by the fixed-arity LLVM define.
-    match defArityOf e name
-      Some n => emitKnownFnSat e ("mdk_" ++ name) allWords n (fnRetTy e name)
-      None => emitDictAppDirect e name allWords
+    -- A short call needs a residual PAP; a surplus must apply to the returned
+    -- closure instead of being silently ignored by the fixed-arity LLVM define.  The
+    -- dictionary words count on both sides of the mode.
+    match mode
+      CallDynamic => emitDictAppDirect e name allWords
+      _ => emitCallMode e ("mdk_" ++ name) allWords mode (fnRetTy e name)
   else
     gapE e ("CDict head '" ++ name ++ "' is not a known top-level function")
 
@@ -9094,11 +8845,12 @@ emitLocalDictApp : Emit ->
   String ->
   List Route ->
   List String ->
+  CallMode ->
   (String, LTy)
-emitLocalDictApp e env name routes argOps =
+emitLocalDictApp e env name routes argOps mode =
   let (cw, _) = lookupVarG e env name
   let dictWords = dictWordsOf e env routes
-  emitIndirectArity e cw (dictWords ++ argOps) (CVar name AGlobal)
+  emitIndirectMode e cw (dictWords ++ argOps) (CVar name AGlobal) mode
 
 -- the plain direct constrained-fn call: dict words followed by the real arg words,
 -- in the order dict_pass bound `name`'s leading dict params (the historical lowering).
@@ -9365,19 +9117,6 @@ maxInt : Int -> Int -> Int
 -- lint-disable-next-line rule-if-max-min
 maxInt a b = if a >= b then a else b
 
--- eta-expand `pats`/`body` from `have` params to `arity` by appending fresh
--- `$etaK` params and applying the body to each (left-to-right).
-etaExpand : List Pat -> CExpr -> Int -> Int -> (List Pat, CExpr)
-etaExpand pats body arity have
-  | have >= arity = (pats, body)
-  | otherwise =
-    let name = "$eta" ++ intToString have
-    etaExpand
-      (pats ++ [PVar name (Loc "" 0 0 0 0)])
-      (CApp body (CVar name AGlobal))
-      arity
-      (have + 1)
-
 -- the PVar names bound at the self-fn positions, taken from the FIRST clause that
 -- binds a plain variable there (impl callback params are PVars across clauses; a
 -- non-PVar position contributes no name and is simply not typed specially).
@@ -9459,7 +9198,8 @@ emitGroupBody : Emit ->
   Int ->
   List (List Pat, CExpr) ->
   Unit
-emitGroupBody e fname _ _ 0 [([], body)] = emitFnBody e omEmpty fname body
+emitGroupBody e fname _ _ 0 [([], body)] =
+  emitFnBody e omEmpty (TailDefine fname 0 False) body
 emitGroupBody e fname _ _ 0 _ =
   gapU e "nullary impl group with more than one clause"
 -- Fast path: single-clause all-PVar impl (e.g. `append xs ys = xs ++ ys`).
@@ -9479,12 +9219,12 @@ emitGroupBody e fname tag positions arity (clauses@[(pats, body)]) =
   if allPVar pats then
     let tyList = patPosTys tag positions (listLen pats) 0
     let env = paramEnvByPos pats tyList 0
-    emitFnBody e env fname body
+    emitFnBody e env (TailDefine fname arity False) body
   else
     emitTailClauseTree
       e
       (implParamEnvByPos tag positions arity 0)
-      fname
+      (TailDefine fname arity False)
       arity
       clauses
       noDeclLoc
@@ -9492,7 +9232,7 @@ emitGroupBody e fname tag positions arity clauses =
   emitTailClauseTree
     e
     (implParamEnvByPos tag positions arity 0)
-    fname
+    (TailDefine fname arity False)
     arity
     clauses
     noDeclLoc
@@ -9672,7 +9412,7 @@ distinctImplKeys : List CImplEntry ->
   List (String, String) ->
   List (String, String)
 distinctImplKeys [] seen = reverseL seen
-distinctImplKeys ((CImplEntry method _ body) :: rest) seen =
+distinctImplKeys ((CImplEntry method _ _ body) :: rest) seen =
   let key = implBodyKey body
   if keySeen method key seen then
     distinctImplKeys rest seen
@@ -9691,55 +9431,19 @@ keySeen m t ((m2, t2) :: rest) =
 -- build the group for one (method, key) key: head tag + symTag + positions + arity
 -- from the first matching entry, clauses (pats, body) from all matching entries in
 -- order.  The SYMBOL tag (C7) is the head tag when this is the sole impl of the head
--- (byte-identical to the pre-C7 scheme), else the sanitized canonical key.  A
--- POINT-FREE impl (`length = fold f 0` — clauseArity < the method's declared
--- arity) is ETA-EXPANDED to the method's full arity, mirroring emitDefaultDefine:
--- the lifted `@mdk_impl_<symTag>_<method>` then takes every call-site arg, so the
--- RKey/arg-tag call sites (which use methodArityOf) and the define agree.  A
--- multi-clause or already-full-arity impl is unchanged (etaExpand is a no-op when
--- have >= arity).
+-- (byte-identical to the pre-C7 scheme), else the sanitized canonical key.  The
+-- define takes exactly its clauses' parameters: a call site's mode was read against
+-- that same count, so nothing here may lengthen a clause.
 gatherGroup : Emit -> List CImplEntry -> (String, String) -> ImplGroup
 gatherGroup e entries (method, key) =
   let tag = headTagForKey method key entries
   let symTag = implFnSymForKey e entries method tag key
-  let cls0 = gatherClauses method key entries
+  let cls = gatherClauses method key entries
   let positions = groupPositions method key entries
-  -- Eta-expand a point-free / ETA-SHORT impl clause up to the method's FULL arity
-  -- INCLUDING its leading dict params: `methodArityOf` counts only the source value
-  -- params, so a default like `foldMap f = fold (acc x => acc ++ f x) empty`
-  -- (synthesized into an impl, clause `[$dict_foldMap_0, f]`) must expand to
-  -- `dict + f + container`, not stop at `dict + f`.  Adding `nDicts` (the leading
-  -- `$dict_*` params dict_pass prepended) makes the lifted fn take every call-site
-  -- arg (RKey/arg-tag callers use `methodArityOf + dictWords`), so the unapplied PAP
-  -- (container dropped) → SIGSEGV no longer happens.  nDicts = 0 for a concrete impl
-  -- ⇒ identical to the old `maxInt (clauseArity) (methodArityOf)`.
-  let nDicts = leadingDictPats (firstClausePats cls0)
-  -- #1450 / #1668, THE DEFINE-ARITY SITE.  `methodArityOfIface` takes the method's
-  -- declared arity from the DECLARATION identity of the interface this group's own
-  -- `impl` head names (`key`'s first field, minted by `route_key.implRouteKeyWord`)
-  -- instead of from the bare-method-name table, which two modules declaring
-  -- same-spelled methods on unrelated interfaces silently share.  ONLY THE ARITY LEG
-  -- MOVES: `iface` (`CImplTagged` field 3) keeps its bare spelling, because
-  -- `implEntryIface`/`methodReturnsSelf` read it as a bare word.  A miss falls back
-  -- to the bare table, so a collision-free program emits byte-identically to before.
-  -- #1034, THE DEFINE-ARITY MIRROR of `methodArityOfEntry`'s lowering rule.  A clause
-  -- that binds at least one VALUE pattern but fewer than the declared spine proves a
-  -- SHORTER source arity than the type can express, and eta-expanding it to the
-  -- declared arity is what defers the body's strict prefix past the source's call.
-  -- Such a clause is emitted at its own arity; every other shape keeps the previous
-  -- `maxInt (clauseArity) (declared + nDicts)` answer exactly.
-  let declaredTotal = methodArityOfIface e (ifaceWordOfKey key) method + nDicts
-  let srcTotal = clauseArity cls0
-  let arity =
-    if srcTotal > nDicts && srcTotal < declaredTotal then
-      srcTotal
-    else
-      maxInt srcTotal declaredTotal
-  let cls = map (etaExpandClause arity) cls0
   let fnName = match firstEntryFor method key entries
     Some ent => implEntryFnNameAt ent method symTag
     None => implFnName symTag method
-  ImplGroup method tag key symTag positions arity cls fnName
+  ImplGroup method tag key symTag positions (clauseArity cls) cls fnName
 
 -- the head tycon tag of the impl whose (method, key) matches (the first such entry).
 headTagForKey : String -> String -> List CImplEntry -> String
@@ -9755,14 +9459,10 @@ firstEntryFor method key (ent :: rest)
 
 -- [implEntryFnName] with the symbol tag already decided (inside `gatherGroup`)
 implEntryFnNameAt : CImplEntry -> String -> String -> String
-implEntryFnNameAt (CImplEntry _ _ (CImplTagged _ _ _ _ _ _)) method symTag =
+implEntryFnNameAt (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _)) method symTag =
   implFnName symTag method
-implEntryFnNameAt (CImplEntry _ _ (CImplDefault ifaceWord _ key _ _ _)) method _ =
+implEntryFnNameAt (CImplEntry _ _ _ (CImplDefault ifaceWord _ key _ _ _)) method _ =
   defaultFnName ifaceWord method key
-
--- eta-expand one impl clause's (pats, body) to `arity` (no-op when already there).
-etaExpandClause : Int -> (List Pat, CExpr) -> (List Pat, CExpr)
-etaExpandClause arity (pats, body) = etaExpand pats body arity (lengthS pats)
 
 gatherClauses : String -> String -> List CImplEntry -> List (List Pat, CExpr)
 gatherClauses _ _ [] = []
@@ -9836,16 +9536,6 @@ emitClosureCell e hdr fields =
   let _ = emit e "  \{w} = ptrtoint ptr \{p} to i64"
   (w, LTClosure)
 
--- emitClosureAlloc + record the closure's compile-time arity in `e.closureArity`
--- (keyed by its SSA word) so an indirect over-application of this closure value can
--- split saturate+apply-extra.  Used for user lambdas and let-group/method-value
--- closures whose arity is statically known.
-emitClosureAllocA : Emit -> String -> Int -> List String -> (String, LTy)
-emitClosureAllocA e lamName arity captureWords =
-  let (w, lty) = emitClosureAlloc e lamName arity captureWords
-  e.closureArity := (w, arity) :: !e.closureArity
-  (w, lty)
-
 -- ── capture-free closure hoisting (S-1, EMITTER-GAPS #10 allocation half) ───
 -- THE SPRINT'S MECHANISM.  A closure cell whose capture set is EMPTY has fields
 -- that are ALL compile-time constants: the header is the literal arity and field 0
@@ -9892,22 +9582,8 @@ emitConstClosureCell e lamName arity =
       e.closConstCache := (key, gname) :: !e.closConstCache
       "ptrtoint (ptr @" ++ gname ++ " to i64)"
 
--- emitConstClosureCell + the same `e.closureArity` bookkeeping `emitClosureAllocA`
--- does, so an indirect over/under-application of this closure value still splits
--- statically.  The drop-in replacement for `emitClosureAllocA e lam arity []`.
-emitConstClosureA : Emit -> String -> Int -> (String, LTy)
-emitConstClosureA e lamName arity =
-  let w = emitConstClosureCell e lamName arity
-  e.closureArity := (w, arity) :: !e.closureArity
-  (w, LTClosure)
-
--- emitConstClosureCell WITHOUT the `e.closureArity` registration — the drop-in
--- replacement for `emitClosureAlloc e lam arity []` (S-2, EMITTER-GAPS #10
--- allocation half, the five eta-closure call sites below).  Strict parity with
--- those sites' current non-`A` `emitClosureAlloc` call: they do not register
--- `closureArity` today, and this wrapper must not start doing so — that would
--- newly enable a static over/under-application split at these call sites,
--- a separate behavior addition out of this slice's scope.
+-- emitConstClosureCell as a closure value: the drop-in replacement for
+-- `emitClosureAlloc e lam arity []` (S-2, EMITTER-GAPS #10 allocation half).
 emitConstClosure : Emit -> String -> Int -> (String, LTy)
 emitConstClosure e lamName arity =
   (emitConstClosureCell e lamName arity, LTClosure)
@@ -9934,15 +9610,11 @@ emitLamGo e env pats body =
   let _ = emitLamDefine e env lamName pats captured body
   -- S-1-style hoist (mirrors `emitGroupBind`): capture-free ⇒ every cell field
   -- is a compile-time constant, so hoist to an `internal constant` module
-  -- global via `emitConstClosureA` instead of allocating a fresh cell on every
-  -- entry to the enclosing function. `emitConstClosureA` is the documented
-  -- drop-in for `emitClosureAllocA e lam arity []` — it keeps the
-  -- `e.closureArity` registration this call already relies on for static
-  -- over/under-application splitting, unlike the bookkeeping-free
-  -- `emitConstClosure` used by the eta-closure sites.
+  -- global via `emitConstClosure` instead of allocating a fresh cell on every
+  -- entry to the enclosing function.
   let (cw, clty) = match captureWords
-    [] => emitConstClosureA e lamName (listLen pats)
-    _ => emitClosureAllocA e lamName (listLen pats) captureWords
+    [] => emitConstClosure e lamName (listLen pats)
+    _ => emitClosureAlloc e lamName (listLen pats) captureWords
   let _ = recordFloatRet e env cw body
   (cw, clty)
 
@@ -9955,8 +9627,8 @@ emitLamPat e env pats body =
   let _ = emitPatLamDefine e env lamName omEmpty pats captured body
   -- Same S-1-style hoist as `emitLamGo` above; see that comment.
   let (cw, clty) = match captureWords
-    [] => emitConstClosureA e lamName (listLen pats)
-    _ => emitClosureAllocA e lamName (listLen pats) captureWords
+    [] => emitConstClosure e lamName (listLen pats)
+    _ => emitClosureAlloc e lamName (listLen pats) captureWords
   let _ = recordFloatRet e env cw body
   (cw, clty)
 
@@ -9988,7 +9660,7 @@ emitRecLamGo e env f pats body =
   let captured = keepInEnv env (removeStr f (dedupS (freeVars pnames body)))
   let captureWords = capWords e env captured
   let _ = emitRecLamDefine e env lamName f pats captured body
-  let (cw, clty) = emitClosureAllocA e lamName (listLen pats) captureWords
+  let (cw, clty) = emitClosureAlloc e lamName (listLen pats) captureWords
   let _ = recordFloatRet e env cw body
   (cw, clty)
 
@@ -10016,7 +9688,7 @@ emitRecLamPat e env f pats body =
       pats
       captured
       body
-  let (cw, clty) = emitClosureAllocA e lamName (listLen pats) captureWords
+  let (cw, clty) = emitClosureAlloc e lamName (listLen pats) captureWords
   let _ = recordFloatRet e env cw body
   (cw, clty)
 
@@ -10045,7 +9717,7 @@ emitRecLamDefine e env lamName f pats captured body =
     emitFnBody
       e
       (envMergeL (omInsert f ("%clos", LTClosure) cenv) penv)
-      lamName
+      (TailDefine lamName (listLen pats) True)
       body
   let _ = emit e "}"
   let _ = emit e ""
@@ -10104,21 +9776,13 @@ removeStr x (y :: ys) = if x == y then removeStr x ys else y :: removeStr x ys
 
 -- eta-wrap a NAMED top-level function used as a value into a captureless static
 -- closure whose lifted body forwards every argument to `@mdk_<fname>`.  The arity
--- is the function's inferred parameter count (signature table).
+-- is the function's defined parameter count.
 emitEtaClosure : Emit -> String -> (String, LTy)
 emitEtaClosure e fname =
-  let arity = fnArity e fname
+  let arity = optionOr 0 (definedArity e (CVar fname AGlobal))
   let lamName = "mdk_eta_\{fname}\{mangleScoped e}"
   let _ = emitEtaDefine e lamName fname arity
   emitConstClosure e lamName arity
-
--- the inferred arity of a known top-level function (its signature's param count).
-fnArity : Emit -> String -> Int
-fnArity e fname = match !e.sigMap
-  Some m => match omLookup fname m
-    Some (FnSig ptys _) => lengthS ptys
-    None => 0
-  None => panic "llvm: sigMap read before install (internal error)"
 
 -- the declared arity of constructor `name` (its field count, from the ctor table).
 ctorArity : Emit -> String -> Int
@@ -10163,7 +9827,7 @@ emitCtorPap e name argOps arity =
   let remaining = arity - lengthS argOps
   let lamName = "mdk_ctorpap_\{name}\{mangleScoped e}"
   let _ = emitCtorPapDefine e lamName name arity (lengthS argOps)
-  emitClosureAllocA e lamName remaining argOps
+  emitClosureAlloc e lamName remaining argOps
 
 -- emit the under-applied-ctor PAP forwarder.  Closure cell layout: field 0 =
 -- code_ptr, fields 1..S = the S supplied arg words.  The forwarder takes `remaining`
@@ -10244,7 +9908,12 @@ emitLamDefine e env lamName pats captured body =
   let _ = emit e "entry:"
   let cenv = loadCaptures e env captured 0
   let penv = paramEnv pats (inferParamTys (sigMapOf e) pats body) 0
-  let _ = emitFnBody e (envMergeL cenv penv) lamName body
+  let _ =
+    emitFnBody
+      e
+      (envMergeL cenv penv)
+      (TailDefine lamName (listLen pats) True)
+      body
   let _ = emit e "}"
   let _ = emit e ""
   let lamLines = (bufRef e).value
@@ -10295,15 +9964,14 @@ emitExternEtaClosure e name =
 -- on CMethod, not CVar), so dispatch must fall to the runtime arg-tag path.  Eta-
 -- wrap into a captureless closure whose lifted body REPLAYS emitMethodArgDispatch's
 -- applied-form codegen on the incoming `%argK` operands — byte-consistent with the
--- saturated `isImplMethod` call site (emitApp).  Arity = methodArityOf.  A method
--- reached point-free under a `=>` constraint instead becomes a fn-bind with a dict
--- param; a static route can be eta-saturated there, while a dynamic route retains
--- the source wrapper arity and dispatches before constructing a residual PAP.
+-- saturated `isImplMethod` call site (emitApp).  Arity = the method's declared
+-- arity (`bareMethodDeclaredArity`).
 emitMethodEtaClosure : Emit -> String -> (String, LTy)
 emitMethodEtaClosure e name =
   let lamName = "mdk_eta_\{name}\{mangleScoped e}"
-  let _ = emitMethodEtaDefine e lamName name (methodArityOfInput e name)
-  emitConstClosure e lamName (methodArityOfInput e name)
+  let arity = bareMethodDeclaredArity e name
+  let _ = emitMethodEtaDefine e lamName name arity
+  emitConstClosure e lamName arity
 
 -- the captureless method-eta forwarder `@mdk_etaN(i64 %clos, %arg…) { <inline
 -- arg-tag dispatch over %arg0..%arg(N-1)>; ret }` (mirror of emitExternEtaDefine).
@@ -10315,8 +9983,7 @@ emitMethodEtaDefine e lamName name arity =
   let _ = emit e "define i64 @\{lamName}(\{etaParamDecls arity}) {"
   let _ = emit e "entry:"
   let synArgs = etaArgOps arity 0
-  let (r, _) =
-    emitMethodArgDispatch e name "" (methodArityOfInput e name) synArgs
+  let (r, _) = emitMethodArgDispatch e name "" arity synArgs
   let _ = emit e ("  ret i64 " ++ r)
   let _ = emit e "}"
   let _ = emit e ""
@@ -11028,10 +10695,11 @@ emitGuardedArm e env roots arms occs pat guards body fail slot endL ftL rty =
 
 -- A matched arm's body.  It normally computes its value into the match's result
 -- `slot` and joins at `endL`.  When the match is in the tail position of the
--- define named by `e.selfTailCtx`, the body is descended instead: a saturated
--- call of that define is emitted as `musttail call` + `ret` straight from the
--- leaf, so the recursion does not grow the stack even where clang does not turn
--- the call into a jump (-O0).  Every other leaf still stores and joins.
+-- define named by `e.selfTailCtx`, the body is descended instead: a leaf flagged
+-- as the tail call returns straight from the leaf (`emitTailLeaf`), so a call of
+-- that define itself is a `musttail call` that does not grow the stack even
+-- where clang does not turn the call into a jump (-O0).  Every other leaf still
+-- stores and joins.
 emitArmBody : Emit ->
   OrdMap (String, LTy) ->
   CExpr ->
@@ -11060,16 +10728,15 @@ emitArmWord e (bv, bty) slot endL rty =
   let _ = emit e "  store i64 \{bv}, ptr \{slot}"
   emit e ("  br label %" ++ endL)
 
--- An arm body in the tail position of the define `self` (its emitted symbol).
--- `if`, `let`, a `let`/`where` group, a block and a nested match pass tail
--- position on (the nested match's arms join at the same `endL`, `e.selfTailCtx`
--- left live as `emitTrmcBody` leaves `trmcCtx`; a let, group or block emits its
--- bindings as the value path does); a saturated call of `self` is returned
--- with `musttail`, the calling-convention proof `emitFnBody` relies on;
--- anything else stores into `slot` and joins.
+-- An arm body in the tail position of the define `self`.  `if`, `let`, a
+-- `let`/`where` group, a block and a nested match pass tail position on (the
+-- nested match's arms join at the same `endL`, `e.selfTailCtx` left live as
+-- `emitTrmcBody` leaves `trmcCtx`; a let, group or block emits its bindings as
+-- the value path does); a leaf is `emitTailLeaf`'s, and one that is not a
+-- flagged tail call stores into `slot` and joins.
 emitSelfTailArm : Emit ->
   OrdMap (String, LTy) ->
-  String ->
+  TailDefine ->
   CExpr ->
   String ->
   String ->
@@ -11099,10 +10766,7 @@ emitSelfTailArm e env self (CBlock stmts) slot endL rty =
       emitSelfTailArm e (emitBlockInit e env stmts) self last slot endL rty
     None => emitArmValue e env (CBlock stmts) slot endL rty
 emitSelfTailArm e env self body slot endL rty =
-  if directTailCallee e body == Some self then
-    emitTailCallRet e env self body
-  else
-    emitArmValue e env body slot endL rty
+  emitTailLeaf e env self body (_ => emitArmValue e env body slot endL rty)
 
 -- emit the guard tests left-to-right: a `CGBool` tests a Bool (`True` = the word
 -- 3) and branches to `failL` on failure, falling through on success; a
@@ -12027,13 +11691,12 @@ emitFn e (CBind _ [] _) = gapU e "top-level function with no clauses"
 -- a single-clause function with no raw U64 worker.
 emitFnSingle : Emit -> String -> List Pat -> CExpr -> Loc -> Unit
 emitFnSingle e name pats body site =
-  let (pats2, body2) = etaSaturateMethodBody e name pats body
-  if trmcTryFn e name [(pats2, body2)] True site then
+  if trmcTryFn e name [(pats, body)] True site then
     ()
-  else if allPVar pats2 then
-    emitFnClause e name pats2 body2
+  else if allPVar pats then
+    emitFnClause e name pats body
   else
-    emitMultiClauseFn e name [(pats2, body2)] site
+    emitMultiClauseFn e name [(pats, body)] site
 
 -- TRMC branch point (TRMC-DESIGN.md §"Emitter touchpoints" #2): if `name`'s
 -- clauses are TRMC-eligible AND its leading-dict count is uniform across clauses
@@ -12067,86 +11730,6 @@ allClausesPVar : List (List Pat, CExpr) -> Bool
 allClausesPVar [] = True
 allClausesPVar ((pats, _) :: rest) = allPVar pats && allClausesPVar rest
 
--- Gap #50 — eta-SATURATE a point-free constrained binding whose body is an
--- UNDER-APPLIED statically selected interface method (CMethod) or constrained fn
--- (CDict) occurrence.  Static RKey selection already knows the chosen impl's callable
--- arity, so the missing value params can be appended to the wrapper and applied to its
--- body.  CDict similarly has one known define arity.
---
--- A dynamic RDict/RDictFwd occurrence is deliberately excluded.  Its selected
--- declaration arity only narrows candidates; each runtime arm can have a smaller
--- callable arity and must dispatch before deciding whether to return a PAP.  Expanding
--- `forge x = forgeOp x` from one source param to the declaration's two params delays a
--- strict-prefix `forgeOp x = y => ...` until `y`, changing observable effects.  Keep the
--- source wrapper arity: `emitMethodValue` dispatches a bare dynamic method immediately,
--- and the CDict caller's saturation path applies surplus args to the returned closure.
---
--- Gap #12 (3rd wrapper shape — CLam/compose) — a point-free `=>`-constrained binding
--- whose body is a CLOSURE VALUE, not a method spine.  `clamp lo hi = min hi >> max lo`
--- dict-passes to a clause `[$dict, lo, hi]` (arity 3) whose body is the `CLam` compose
--- (`>>`/`<<` desugar to CLam) producing `\x -> max lo (min hi x)`.  The closure is
--- well-formed and dispatches correctly, but the define RETURNS it unapplied (arity 3)
--- while the call site `clamp 0 10 7` passes `$dict + 3 value args` (arity 4) — the
--- extra arg is DROPPED, garbage out (SIGSEGV at -O2).  methodBodyDeficit is 0 (the
--- body is a CLam value, not an under-applied CMethod/CDict head), so the method-spine
--- path can't fire.  The SIGNATURE-arity deficit catches it: a constrained binding's
--- define MUST have arity `dictCount + sigValueArity` (what emitDictApp passes at every
--- call site = leading dict words ++ all declared value args); when the clause binds
--- fewer params (the closure body supplies the rest), append the shortfall as fresh
--- eta params and APPLY them to the body.  applyEtaArgs' `CApp body etaVar` over a CLam
--- body lowers via emitIndirect (closure-alloc → load code_ptr → call), i.e. it applies
--- the returned closure — exactly the missing application.  General for any point-free
--- constrained binding under-applied relative to its declared value arity, whatever the
--- wrapper (bare CLam, or a method/closure spine the method-spine path already covers —
--- both deficits agree there, so the method-spine path is kept as the primary signal).
-etaSaturateMethodBody : Emit -> String -> List Pat -> CExpr -> (List Pat, CExpr)
-etaSaturateMethodBody e name pats body =
-  let mDeficit = methodBodyDeficit e body
-  let deficit = etaDeficit e name pats body mDeficit
-  if deficit <= 0 then
-    (pats, body)
-  else
-    let fresh = etaFreshPats deficit (listLen pats)
-    (pats ++ fresh, applyEtaArgsTail body fresh)
--- method-spine deficit is the primary signal (#50/#11).  When it is 0 the body may
--- still be a CLOSURE VALUE (CLam from compose `>>`/`<<`) that the define returns
--- unapplied while the call site passes more value args (clamp/#12) — recover that
--- shortfall from the SIGNATURE arity, but ONLY when the tail is a CLam (a bare value
--- return is legitimate point-free currying; eta-applying it would corrupt the body).
-
--- the eta deficit: the method-spine count when positive, else the signature-arity
--- shortfall when the body tail is a CLam closure value (#12), else 0.
-etaDeficit : Emit -> String -> List Pat -> CExpr -> Int -> Int
-etaDeficit e name pats body mDeficit
-  | mDeficit > 0 = mDeficit
-  | tailIsLam body = sigArityDeficit e name pats
-  | otherwise = 0
-
--- does the body's TAIL (through where/let wrappers) reduce to a CLam closure value?
--- Mirrors applyEtaArgsTail's CLet/CLetGroup transparency so a compose under a
--- `where` is still recognised.
-tailIsLam : CExpr -> Bool
-tailIsLam (CLet _ _ _ b) = tailIsLam b
-tailIsLam (CLetGroup _ b) = tailIsLam b
-tailIsLam (CLam _ _) = True
-tailIsLam _ = False
-
--- the shortfall between a constrained binding's REQUIRED define arity
--- (`dictCount + sigValueArity` = what every call site passes through emitDictApp)
--- and the clause's actual param count.  0 (or negative) when the clause already
--- binds every dict + value param (the ordinary case) or when no signature is known
--- (fnArity 0 ⇒ no eta-expansion — leave it to the method-spine path).  dictCount is
--- the number of leading `$dict_…` params dict_pass prepended; the remaining pats are
--- the source value params, and a point-free closure body (e.g. compose) makes that
--- count fall short of the declared sigValueArity.
-sigArityDeficit : Emit -> String -> List Pat -> Int
-sigArityDeficit e name pats =
-  let sigArity = fnArity e name
-  if sigArity <= 0 then
-    0
-  else
-    maxInt 0 (leadingDictPats pats + sigArity - listLen pats)
-
 -- count of leading `$dict_…` parameter patterns (the dict witnesses dict_pass
 -- prepends ahead of the source value params).
 leadingDictPats : List Pat -> Int
@@ -12156,91 +11739,6 @@ leadingDictPats _ = 0
 
 -- (`isDictParamName` — a dict-witness parameter name, `$dict_<method>_<slot>` — now
 -- lives in backend/emit_support.mdk: BOTH backends need it, for the same reason.)
-
--- the count of still-unapplied VALUE params of an under-applied method/dict body
--- (0 = saturated / not a method-or-dict head ⇒ no eta-expansion).  A bare CMethod
--- needs its full `methodArityOf`; an applied spine `(CApp.. (CMethod..) a1..ak)`
--- needs `methodArityOf - k`.  A CDict (a `=>`-constrained-function occurrence) head is
--- handled the SAME way (#21 point-free CAF), but its arity needs care: `fnArity name`
--- counts the LEADING DICT params dict_pass prepended as well as the value params, so a
--- CDict's remaining VALUE arity is `fnArity name - <dict count> - <value args applied>`.
--- The dict count is exactly `listLen routes` (the witnesses this occurrence supplies —
--- emitDictApp passes one word per route ahead of the value args).  So a bare
--- `seqp = trav` needs `fnArity trav - routes` eta params and an applied spine
--- `seqp = trav identity` needs `fnArity trav - routes - k` (here 3 - 1 - 1 = 1).  This
--- is the load-bearing case the old "leave CDict alone" rule MISSED: when seqp's define
--- is under-applied (clause `[$dict]`, body `trav identity`) the emitter lowered the body
--- as a DIRECT under-saturated call to trav (emitDictApp forwards only the supplied args)
--- AND gave seqp's define arity 1 (dict only) while the saturated call site `seqp xs`
--- passes dict + xs → the value arg was dropped and trav ran on garbage → SIGSEGV.
--- Appending the deficit as fresh eta params makes BOTH the define arity and the inner
--- trav application saturate, byte-identically to the eta-expanded source form.  (The old
--- comment's "partially-applied CDict passes its supplied args through emitDictApp" is true
--- but does not produce the missing-args closure a point-free define returns — that is the
--- bug.)  A SATURATED clause (`seqp xs = trav identity xs`, deficit 3 - 1 - 2 = 0) is left
--- untouched.
--- A `where`/`let` wrapper (CLet/CLetGroup) is TRANSPARENT to the deficit — the
--- under-applied method may be the let-body TAIL (`maximum = fold step None`
--- desugars its `step` `where`-helper to a CLetGroup around the `fold` spine).  The
--- companion applyEtaArgsTail threads the fresh args into that same tail.
-methodBodyDeficit : Emit -> CExpr -> Int
-methodBodyDeficit e (CLet _ _ _ b) = methodBodyDeficit e b
-methodBodyDeficit e (CLetGroup _ b) = methodBodyDeficit e b
-methodBodyDeficit e (CMethod name iface arity route _ _) =
-  if isDynamicMethodRoute route then
-    0
-  else
-    methodOccurrenceCallableArity e name iface arity route
-methodBodyDeficit e (CDict name routes) =
-  maxInt 0 (fnArity e name - listLen routes)
-methodBodyDeficit e app =
-  let (hd, args) = flattenApp app []
-  match hd
-    CMethod name iface arity route _ _ =>
-      if isDynamicMethodRoute route then
-        0
-      else
-        maxInt
-          0
-          (methodOccurrenceCallableArity e name iface arity route
-            - listLen args)
-    CDict name routes =>
-      maxInt 0 (fnArity e name - listLen routes - listLen args)
-    _ => 0
-
-methodOccurrenceCallableArity : Emit -> String -> String -> Int -> Route -> Int
-methodOccurrenceCallableArity e name iface arity (RKey tag _ _) =
-  match implForSite e name iface tag arity
-    Some entry => methodArityOfEntry e entry name
-    None => arity
-methodOccurrenceCallableArity _ _ _ arity _ = arity
-
--- `n` fresh value-param PVars (`__eta_<i>`) numbered after the existing `start`
--- params so paramEnv/paramDecls index them positionally without clashing.
-etaFreshPats : Int -> Int -> List Pat
-etaFreshPats 0 _ = []
-etaFreshPats n start =
-  PVar ("__eta_" ++ intToString start) (Loc "" 0 0 0 0)
-    :: etaFreshPats (n - 1) (start + 1)
-
--- apply the fresh eta params at the body's TAIL position, threading THROUGH any
--- enclosing `where`/`let` wrappers so the let bindings (e.g. `maximum`'s `step`
--- helper) stay in scope for the now-saturated tail application.  Mirrors
--- methodBodyDeficit's CLet/CLetGroup transparency.
-applyEtaArgsTail : CExpr -> List Pat -> CExpr
-applyEtaArgsTail (CLet r p rhs b) fresh =
-  CLet r p rhs (applyEtaArgsTail b fresh)
-applyEtaArgsTail (CLetGroup bs b) fresh =
-  CLetGroup bs (applyEtaArgsTail b fresh)
-applyEtaArgsTail body fresh = applyEtaArgs body fresh
-
--- apply `body` to each fresh eta param as a CVar (AGlobal — emit resolves a CVar by
--- NAME against the param env, ignoring the Addr), left to right.
-applyEtaArgs : CExpr -> List Pat -> CExpr
-applyEtaArgs body [] = body
-applyEtaArgs body ((PVar x _) :: rest) =
-  applyEtaArgs (CApp body (CVar x AGlobal)) rest
-applyEtaArgs body (_ :: rest) = applyEtaArgs body rest
 
 -- E1a — multi-clause / patterned top-level fns.  Route ordinary fn-binds whose
 -- clauses don't all reduce to plain-variable params through the SAME
@@ -12261,7 +11759,14 @@ emitMultiClauseFn e name clauses site =
   let _ = beginDefine e
   let _ = emit e "define i64 @mdk_\{name}(\{implParamDecls arity 0}) {"
   let _ = emit e "entry:"
-  let _ = emitTailClauseTree e env ("mdk_" ++ name) arity clauses site
+  let _ =
+    emitTailClauseTree
+      e
+      env
+      (TailDefine ("mdk_" ++ name) arity False)
+      arity
+      clauses
+      site
   let _ = emit e "}"
   emit e ""
 
@@ -12951,8 +12456,8 @@ emitGDispEdge e env f args uslots =
   let _ = trmcStoreParamSlots e uslots argOps
   emit e ("  br label %" ++ gDispLabel f)
 
--- the clause-derived fn-arity table (wasm's collectFnArities contract: name →
--- first clause's param count) — the detection's isFn/fa hooks read it.
+-- the clause-derived fn-arity table (name → first clause's param count) — the
+-- detection's isFn/fa hooks read it.
 gDispFnArsOf : List CBind -> List (String, Int)
 gDispFnArsOf [] = []
 gDispFnArsOf ((CBind n cs _) :: rest) =
@@ -12966,29 +12471,6 @@ gDispStage1Claims e name arity clauses =
   arity > 0
     && dictUniformPairs pairs
     && trmcEligible (isCtor e) (ctorArity e) (SelfByVar name) arity pairs
-
--- keep only groups whose every SINGLE-CLAUSE member has eta deficit 0 (the
--- multi-clause emitFn arm never eta-saturates, so multi-clause members are
--- always stable).  A deficit member's ordinary define would gain params
--- (etaSaturateMethodBody), diverging from the group's clause-arity slot
--- protocol — no real group contains one (members are non-dict with cons/call/
--- base tails), but reject deterministically rather than assume.
-gDispKeepEtaStable : Emit -> List CBind -> List DispGroup -> List DispGroup
-gDispKeepEtaStable _ _ [] = []
-gDispKeepEtaStable e binds (g :: rest) =
-  if gDispMembersEtaStable e binds (dispMembersOf g) then
-    g :: gDispKeepEtaStable e binds rest
-  else
-    gDispKeepEtaStable e binds rest
-
-gDispMembersEtaStable : Emit -> List CBind -> List String -> Bool
-gDispMembersEtaStable _ _ [] = True
-gDispMembersEtaStable e binds (m :: rest) = match omLookup m !e.gDispBindMap
-  Some (CBind name [CClause pats body] _) =>
-    etaDeficit e name pats body (methodBodyDeficit e body) == 0
-      && gDispMembersEtaStable e binds rest
-  Some _ => gDispMembersEtaStable e binds rest
-  None => False
 
 -- drop group members from the float worker-wrapper advertisement set.
 gDispDropMembers : Emit ->
@@ -13180,9 +12662,9 @@ isFloatClosureBody e name pats _ = False
 -- after a SATURATED known-fn call whose callee returns a float-returning closure,
 -- record the result word as a float-returning closure (`e.closureRetTy`) so a later
 -- indirect call of it types its result LTFloat.
-recordFloatClosureResult : Emit -> String -> Int -> Int -> (String, LTy) -> Unit
-recordFloatClosureResult e fname argc arity (reg, _) =
-  if argc == arity && contains fname !e.floatClosureFns then
+recordFloatClosureResult : Emit -> String -> CallMode -> (String, LTy) -> Unit
+recordFloatClosureResult e fname mode (reg, _) =
+  if isExactCall mode && contains fname !e.floatClosureFns then
     e.closureRetTy := (reg, LTFloat) :: !e.closureRetTy
 
 -- param decls with `double` at the float positions, `i64` elsewhere.
@@ -13384,8 +12866,7 @@ rawWorkerOf e refine (CBind name [CClause pats body] _) = match declSigOf e name
       && not
         (trmcEligible (isCtor e) (ctorArity e) (SelfByVar name) arity [
           (pats, body),
-        ])
-      && lengthS (fst (etaSaturateMethodBody e name pats body)) == arity then
+        ]) then
       Some (RawWorker arity ks rk)
     else
       None
@@ -13679,7 +13160,8 @@ emitFnClauseW e name pats ptys body =
   let _ = beginDefine e
   let _ = emit e "define i64 @mdk_\{name}(\{paramDecls pats 0}) {"
   let _ = emit e "entry:"
-  let _ = emitFnBody e env ("mdk_" ++ name) body
+  let _ =
+    emitFnBody e env (TailDefine ("mdk_" ++ name) (listLen pats) False) body
   let _ = emit e "}"
   emit e ""
 
@@ -13730,29 +13212,16 @@ paramEnv (PWild :: rest) (_ :: tys) i = paramEnv rest tys (i + 1)
 paramEnv (PWild :: rest) [] i = paramEnv rest [] (i + 1)
 paramEnv _ _ _ = panic "llvm: function parameters must be plain variables"
 
--- #1101: is a tail-position call of `fname` with `n` flattened arguments SATURATED
--- against the callee's EMITTED define arity?  The ruler is `defArityOf` (the
--- replayed post-`etaSaturateMethodBody` param count of the actual `@mdk_<fn>`
--- define), NEVER `fnArity` — the signature/clause arity diverges from the emitted
--- one whenever eta-saturation fires (see installDefArityMap's note above).  `None`
--- (name absent from the table) keeps the unconditional direct call, matching the
--- behaviour that predated this guard for anything not in the table.
-tailCallSaturated : Emit -> String -> Int -> Bool
-tailCallSaturated e fname n = match defArityOf e fname
-  Some a => n == a
-  None => True
-
 -- emit a function body in TAIL position: every control path ends in a `ret`.
 -- An `if` recurses into both arms (each arm is itself in tail position and rets);
 -- a `let`, a `let`/`where` group or a block emits its bindings as the value
 -- path does and passes tail position to its body; a `match` puts its arms in
--- tail position (`emitTailDecision`); a SATURATED tail call to a known function
--- emits `[musttail] call` + `ret`; anything else is computed as a value and
--- returned.  `self` is the emitted symbol of the enclosing define (`mdk_…`), the
--- namespace `directTailCallee` answers in.  A `musttail` callee must not receive
--- a pointer into the caller's frame: every closure a let or group binds is an
--- `@mdk_alloc` cell or a constant global, never an `alloca`, so this is sound.
-emitFnBody : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
+-- tail position (`emitTailDecision`); a leaf is `emitTailLeaf`'s, and one that is
+-- not a flagged tail call is computed as a value and returned.  `self` is the
+-- enclosing define.  A `musttail` callee must not receive a pointer into the
+-- caller's frame: every closure a let or group binds is an `@mdk_alloc` cell or
+-- a constant global, never an `alloca`, so this is sound.
+emitFnBody : Emit -> OrdMap (String, LTy) -> TailDefine -> CExpr -> Unit
 emitFnBody e env self (CIf c t f) =
   let (thenL, elseL) = emitTailIfHead e env c
   let _ = emit e (thenL ++ ":")
@@ -13775,9 +13244,8 @@ emitFnBody e env self (CLetGroup binds body) =
 emitFnBody e env self (CBlock stmts) = match lastStmtExpr stmts
   Some last => emitFnBody e (emitBlockInit e env stmts) self last
   None => emitValueRet e env (CBlock stmts)
-emitFnBody e env self other = match directTailCallee e other
-  Some _ => emitTailCallRet e env self other
-  None => emitValueRet e env other
+emitFnBody e env self other =
+  emitTailLeaf e env self other (_ => emitValueRet e env other)
 
 -- emit every statement of a block but the last, exactly as `emitBlock` does
 -- (each one's scope is the rest of the block, the last statement included), and
@@ -13807,10 +13275,10 @@ emitTailIfHead e env c =
 
 -- a `match` in the tail position of the define `self`: `emitDecision`'s shape
 -- (result slot, join block, load + `ret`), with the arms descended under
--- `e.selfTailCtx` so a saturated self call returns from its own leaf.
+-- `e.selfTailCtx` so a flagged tail call returns from its own leaf.
 emitTailDecision : Emit ->
   OrdMap (String, LTy) ->
-  String ->
+  TailDefine ->
   CExpr ->
   List CArm ->
   CTree ->
@@ -13834,7 +13302,7 @@ emitTailDecision e env self scrut arms tree =
 -- leaves are descended under `e.selfTailCtx` (see `emitArmBody`).
 emitTailClauseTree : Emit ->
   OrdMap (String, LTy) ->
-  String ->
+  TailDefine ->
   Int ->
   List (List Pat, CExpr) ->
   Loc ->
@@ -13845,110 +13313,136 @@ emitTailClauseTree e env self arity clauses site =
   let _ = emitClauseTree e env arity clauses "" site
   e.selfTailCtx := saved
 
--- The emitted symbol (`mdk_…`, the name the IR `call`s) of `ex`'s callee when
--- `ex` is a SATURATED call of a known function that a tail position lowers to a
--- direct `call` + `ret` (`emitTailCallRet`), else None.  Emits nothing.
+-- A leaf in the tail position of the define `self`.  An application the
+-- lowering flagged as the tail call (`isTailCall`) returns its result from the
+-- leaf: an exact call of a statically known define calls it directly
+-- (`directCallOperands`), a call of `self` through its own closure word calls
+-- `self` directly (`ownClosureOperands`), and any other is computed and
+-- returned at once.  `emitDirectTailCall` decides between `musttail call` and
+-- `call`; a `call` followed by `ret` becomes a jump only where clang's calling
+-- convention allows.  A leaf that is not flagged is `orValue`'s.
+emitTailLeaf : Emit ->
+  OrdMap (String, LTy) ->
+  TailDefine ->
+  CExpr ->
+  (Unit -> Unit) ->
+  Unit
+emitTailLeaf e env self ex orValue =
+  if isTailCall ex then match directCallOperands e env ex
+    Some (sym, ops) => emitDirectTailCall e self sym ops
+    None => match ownClosureOperands e env self ex
+      Some ops =>
+        emitDirectTailCall e self (tailDefineSym self) ("%clos" :: ops)
+      None => emitValueRet e env ex
+  else
+    orValue ()
+
+-- The callee symbol and operand words of an exact application whose head is
+-- statically known: a top-level function (one with no raw worker or `u64`
+-- kernel for this call, which `emitApp` emits instead), a constrained one (its
+-- dictionary words lead), or the impl entry an `RKey` route selects
+-- (`emitMethod`'s choice, not the `fromInt` identity it folds away).  None for
+-- any other application, emitting nothing.
 --
--- #1101: an UNSATURATED (over- or under-applied) tail call must not be emitted as
--- a direct call — passing every flattened argument to a define with fewer params
--- silently dropped the surplus and never invoked the returned closure.  Such a
--- call returns None, so it is emitted as a value through `emitApp` ->
--- `emitKnownFnSat` -> `emitOverApp`/`emitPapClosure`, the same correct shape an
--- application in `main`'s own body already gets.  `emitArgs` is 1:1 with `args`,
--- so `lengthS args` is the arg-word count.  A `u64` kernel wrapper
--- (`u64KernelAlias`) goes through `emitApp`, which emits the kernel inline.
---
--- A constrained call carries its leading dictionary words in the CDict head,
--- outside `args`.  Both lists count against the actual emitted define arity;
--- mismatched calls keep the normal PAP/over-application path through
--- emitDictApp.  A statically routed method call (`CMethod` with an `RKey` route,
--- an impl method calling itself among them) is accepted on `emitMethod`'s own
--- saturation rule (`tailMethodEntry`).
-directTailCallee : Emit -> CExpr -> Option String
-directTailCallee e ex =
-  let (hd, args) = flattenApp ex []
-  match hd
+-- #1101: only an application stamped `CallExact` passes every argument to the
+-- define; an over- or under-application goes through `emitApp` in its own mode.
+directCallOperands : Emit ->
+  OrdMap (String, LTy) ->
+  CExpr ->
+  Option (String, List String)
+directCallOperands e env ex =
+  let (hd, args, mode) = appParts ex
+  if not (isExactCall mode) then
+    None
+  else match hd
     CVar fname0 _ =>
       let fname = canonFnName e fname0
       if isKnownFn e fname
         && hasArgs args
-        && tailCallSaturated e fname (lengthS args)
         && isNone (u64KernelAlias e fname0 args)
         && isNone (rawWorkerCall e fname (lengthS args)) then
-        Some ("mdk_" ++ fname)
+        Some ("mdk_" ++ fname, emitArgs e env args)
       else
         None
     CDict fname routes =>
-      let nwords = listLen routes + lengthS args
-      if isKnownFn e fname
-        && nwords > 0
-        && tailCallSaturated e fname nwords then
-        Some ("mdk_" ++ fname)
+      if isKnownFn e fname && listLen routes + lengthS args > 0 then
+        let dictWords = dictWordsOf e env routes
+        Some ("mdk_" ++ fname, dictWords ++ emitArgs e env args)
       else
         None
-    CMethod name iface siteArity route implRoutes methRoutes =>
-      let entry =
-        tailMethodEntry e name iface siteArity route implRoutes methRoutes args
-      map (implEntryFnName e name) entry
-    _ => None
-
--- The impl entry a statically routed method call selects, when `emitApp` would
--- lower the call to a saturated direct call of that entry's define: an `RKey`
--- route, not the `fromInt` identity `emitApp` folds away, and as many arguments
--- as the entry's arity (the leading dict words count on both sides of
--- `emitMethod`'s comparison, so they cancel).  Any other call is None and keeps
--- `emitImplCallSat`'s PAP/over-application path.  Emits nothing.
-tailMethodEntry : Emit ->
-  String ->
-  String ->
-  Int ->
-  Route ->
-  List Route ->
-  List Route ->
-  List CExpr ->
-  Option CImplEntry
-tailMethodEntry e name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes args =
-  let folded = intFromIntIdentityArg name route implRoutes methRoutes args
-  let entry =
-    if hasArgs args && isNone folded then
-      implForSite e name iface tag siteArity
-    else
-      None
-  match entry
-    Some ent =>
-      if lengthS args == methodArityOfEntry e ent name then Some ent else None
-    None => None
-tailMethodEntry _ _ _ _ _ _ _ _ = None
-
--- emit a call `directTailCallee` accepted, then `ret` its result; a call of the
--- enclosing define `self` is a `musttail call` (self recursion means the caller
--- and callee prototypes match, which musttail requires).  Operands are emitted in
--- the order the value path (`emitApp`) emits them.
-emitTailCallRet : Emit -> OrdMap (String, LTy) -> String -> CExpr -> Unit
-emitTailCallRet e env self ex =
-  let (hd, args) = flattenApp ex []
-  let (sym, ops) = match hd
-    CDict f routes =>
-      let dictWords = dictWordsOf e env routes
-      ("mdk_" ++ f, dictWords ++ emitArgs e env args)
-    CVar f0 _ => ("mdk_" ++ canonFnName e f0, emitArgs e env args)
-    CMethod name iface siteArity route implRoutes methRoutes =>
-      let entry =
-        tailMethodEntry e name iface siteArity route implRoutes methRoutes args
-      match entry
+    CMethod name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes =>
+      let folded = intFromIntIdentityArg name route implRoutes methRoutes args
+      if hasArgs args
+        && isNone folded then match implForSite e name iface tag siteArity
         Some ent =>
           let argOps = emitArgs e env args
           let dictRoutes =
             staticEntryDictRoutes e name ent route methRoutes implRoutes
           let dictWords = dictWordsOf e env dictRoutes
-          (implEntryFnName e name ent, dictWords ++ argOps)
-        None =>
-          panic "llvm: emitTailCallRet on a call directTailCallee rejected"
-    _ => panic "llvm: emitTailCallRet on a call directTailCallee rejected"
+          Some (implEntryFnName e name ent, dictWords ++ argOps)
+        None => None
+      else
+        None
+    _ => None
+
+-- The operand words, after `%clos`, of an exact call of `self` through its own
+-- closure word: a let-group function or recursive lambda calling itself by
+-- name, which its define binds to `%clos` (`emitGroupBindDefine`,
+-- `emitRecLamDefine`).  The cell's code pointer is `self`, so the call can name
+-- `self` directly.  A constrained local's dictionary words lead its arguments,
+-- as `emitLocalDictApp` passes them.  None for any other application, emitting
+-- nothing.
+ownClosureOperands : Emit ->
+  OrdMap (String, LTy) ->
+  TailDefine ->
+  CExpr ->
+  Option (List String)
+ownClosureOperands e env (TailDefine _ _ True) ex =
+  let (hd, args, mode) = appParts ex
+  if not (isExactCall mode) then
+    None
+  else match hd
+    CVar f _ => if isOwnClosure env f then Some (emitArgs e env args) else None
+    CDict f routes =>
+      if isOwnClosure env f then
+        let argOps = emitArgs e env args
+        Some (dictWordsOf e env routes ++ argOps)
+      else
+        None
+    _ => None
+ownClosureOperands _ _ _ _ = None
+
+isOwnClosure : OrdMap (String, LTy) -> String -> Bool
+isOwnClosure env f = match omLookup f env
+  Some (w, _) => w == "%clos"
+  None => False
+
+tailDefineSym : TailDefine -> String
+tailDefineSym (TailDefine sym _ _) = sym
+
+-- `call` + `ret` of `sym` on `ops`: a `musttail call` when it calls the
+-- enclosing define `self` with operands that fill `self`'s parameters
+-- (`fillsTailDefine`), a plain `call` otherwise.  `musttail` needs caller and
+-- callee prototypes to match, and only a self call guarantees that across
+-- ThinLTO's inlining: a non-recursive callee may be inlined into a caller whose
+-- prototype differs, and the verifier then refuses the module.
+emitDirectTailCall : Emit -> TailDefine -> String -> List String -> Unit
+emitDirectTailCall e self sym ops =
   let r = freshReg e
-  let kw = if sym == self then "musttail call" else "call"
+  let kw = if fillsTailDefine self sym ops then "musttail call" else "call"
   let _ = emit e "  \{r} = \{kw} i64 @\{sym}(\{argDecls ops})"
   emit e ("  ret i64 " ++ r)
+
+-- Does a call of `sym` on `ops` fill the define `self` word for word?  Every
+-- parameter and result is an `i64`, so the operand count is the prototype.  The
+-- check is the emitter's own: an unoptimized build runs no IR verifier, and a
+-- `musttail` with a surplus operand writes over its caller's caller's frame.
+fillsTailDefine : TailDefine -> String -> List String -> Bool
+fillsTailDefine (TailDefine selfSym arity False) sym ops =
+  sym == selfSym && lengthS ops == arity
+fillsTailDefine (TailDefine selfSym arity True) sym ("%clos" :: rest) =
+  sym == selfSym && lengthS rest == arity
+fillsTailDefine _ _ _ = False
 
 emitValueRet : Emit -> OrdMap (String, LTy) -> CExpr -> Unit
 emitValueRet e env ex =
@@ -14799,34 +14293,16 @@ emitFieldAccess : Emit ->
   OrdMap (String, LTy) ->
   CExpr ->
   String ->
-  String ->
+  Int ->
   (String, LTy)
-emitFieldAccess e env ex label recName =
+emitFieldAccess e env ex label ord =
   let (w, _) = emitExpr e env ex
   if label == "value" then
     let f = loadField e w 0
     (f, LTInt)
   else
-    let idx = fieldIdxByName e recName label
-    let f = loadField e w idx
+    let f = loadField e w ord
     (f, LTInt)
-
--- Resolve a field's positional index by the typecheck-stamped record name when
--- known (recName ≠ "" and that record actually has the label); otherwise fall
--- back to today's label-only search (safety for unstamped / synthesized
--- accesses).  The by-name path is what makes two records sharing a field name at
--- DIFFERENT indices resolve to the correct offset.
--- #352: takes the `Emit` (not the raw table) so the by-name probe can go through the
--- installed index; same answers, same fallbacks.
-fieldIdxByName : Emit -> String -> String -> Int
-fieldIdxByName e recName label =
-  if recName == "" then
-    findFieldIdx e label
-  else match recFieldsOfName e recName
-    Some labels => match indexOfStr label labels
-      Some i => i
-      None => findFieldIdx e label
-    None => findFieldIdx e label
 
 emitRecordUpdate : Emit ->
   OrdMap (String, LTy) ->
@@ -14836,33 +14312,9 @@ emitRecordUpdate : Emit ->
   (String, LTy)
 emitRecordUpdate e env recName base updates =
   let (bw, _) = emitExpr e env base
-  let firstLabel = cFieldFirstLabel updates
-  match recordByName e recName firstLabel
-    None =>
-      gapE
-        e
-        ("CRecordUpdate: unknown record type for field '" ++ firstLabel ++ "'")
-    Some (name, labels) =>
-      let updatePairs = emitUpdatePairs e env updates
-      let words = buildUpdateWords e bw labels updatePairs 0
-      emitCtorAlloc e name words
-
--- Resolve the RECEIVER record of an update by the typecheck-stamped record name
--- (CRecordUpdate's 1st field) when it is usable — non-empty, present in the
--- field-order table, and actually owning the update label — else fall back to
--- today's label-only search (unstamped / synthesized updates).  The by-name path
--- is what makes two records that share a field name at DIFFERENT slot indices
--- update the correct slot; the label-only guess silently wrote the other
--- record's slot (bug #38).  Peer of fieldIdxByName on the access path.
-recordByName : Emit -> String -> String -> Option (String, List String)
-recordByName e recName label =
-  if recName == "" then
-    findRecordByLabel e label
-  else match recFieldsOfName e recName
-    Some labels => match indexOfStr label labels
-      Some _ => Some (recName, labels)
-      None => findRecordByLabel e label
-    None => findRecordByLabel e label
+  let updatePairs = emitUpdatePairs e env updates
+  let words = buildUpdateWords e bw (ctorArity e recName) updatePairs 0
+  emitCtorAlloc e recName words
 
 emitVariantUpdate : Emit ->
   OrdMap (String, LTy) ->
@@ -14872,15 +14324,9 @@ emitVariantUpdate : Emit ->
   (String, LTy)
 emitVariantUpdate e env con base updates =
   let (bw, _) = emitExpr e env base
-  match recFieldsOfName e con
-    None =>
-      gapE
-        e
-        ("CVariantUpdate: unknown variant type for constructor '" ++ con ++ "'")
-    Some labels =>
-      let updatePairs = emitUpdatePairs e env updates
-      let words = buildUpdateWords e bw labels updatePairs 0
-      emitCtorAlloc e con words
+  let updatePairs = emitUpdatePairs e env updates
+  let words = buildUpdateWords e bw (ctorArity e con) updatePairs 0
+  emitCtorAlloc e con words
 
 -- The `LlvmRefCell` family: `Ref` allocates a cell, `setRef` stores into one.
 emitRefCellExtern : Emit ->
@@ -14911,144 +14357,41 @@ emitSetRef e env _ = gapE e "setRef expects exactly 2 arguments"
 
 emitFieldExprs : Emit -> OrdMap (String, LTy) -> List CField -> List String
 emitFieldExprs _ _ [] = []
-emitFieldExprs e env ((CField _ ex) :: rest) =
+emitFieldExprs e env ((CField _ _ ex) :: rest) =
   let (w, _) = emitExpr e env ex
   w :: emitFieldExprs e env rest
 
+-- (ordinal, word) per override, evaluated in list order; `core_ir_lower` has made
+-- that the written order.
 emitUpdatePairs : Emit ->
   OrdMap (String, LTy) ->
   List CField ->
-  List (String, String)
+  List (Int, String)
 emitUpdatePairs _ _ [] = []
-emitUpdatePairs e env ((CField k ex) :: rest) =
+emitUpdatePairs e env ((CField _ ord ex) :: rest) =
   let (w, _) = emitExpr e env ex
-  (k, w) :: emitUpdatePairs e env rest
+  (ord, w) :: emitUpdatePairs e env rest
 
+-- the record's words by ordinal: the override when one targets it, else the base's.
 buildUpdateWords : Emit ->
   String ->
-  List String ->
-  List (String, String) ->
+  Int ->
+  List (Int, String) ->
   Int ->
   List String
-buildUpdateWords _ _ [] _ _ = []
-buildUpdateWords e bw (label :: rest) updates i =
-  let w = match lookupAssoc label updates
-    Some newWord => newWord
-    None => loadField e bw i
-  w :: buildUpdateWords e bw rest updates (i + 1)
+buildUpdateWords e bw n updates i =
+  if i >= n then
+    []
+  else
+    let w = match lookupOrdinal i updates
+      Some newWord => newWord
+      None => loadField e bw i
+    w :: buildUpdateWords e bw n updates (i + 1)
 
-cFieldFirstLabel : List CField -> String
-cFieldFirstLabel [] = panic "llvm: CRecordUpdate: empty update list"
-cFieldFirstLabel ((CField k _) :: _) = k
-
-cFieldLabels : List CField -> List String
-cFieldLabels [] = []
-cFieldLabels ((CField k _) :: rest) = k :: cFieldLabels rest
-
-cFieldExprs : List CField -> List CExpr
-cFieldExprs [] = []
-cFieldExprs ((CField _ ex) :: rest) = ex :: cFieldExprs rest
-
-findFieldIdx : Emit -> String -> Int
-findFieldIdx e label = match findRecordByLabel e label
-  Some (_, labels) => match indexOfStr label labels
-    Some i => i
-    None =>
-      panic
-        ("llvm: field '" ++ label ++ "' not found in record (internal error)")
-  None => panic ("llvm: CFieldAccess: unknown field '" ++ label ++ "'")
-
--- #352: index-backed — `e.recByLabel` already holds, per label, the FIRST record in
--- table order that owns it, which is exactly what a first-match scan returns.
--- RUN-EMIT-003: that scan (`findRecordByLabelIn`) is RETIRED — the index is the
--- only path, and an uninstalled read is a broken invariant.
-findRecordByLabel : Emit -> String -> Option (String, List String)
-findRecordByLabel e label = match !e.recByLabel
-  Some m => omLookup label m
-  None => panic "llvm: recByLabel read before install (internal error)"
-
-indexOfStr : String -> List String -> Option Int
-indexOfStr _ [] = None
-indexOfStr x (y :: rest) =
-  if x == y then Some 0 else map (+ 1) (indexOfStr x rest)
-
-collectRecords : List CBind -> List (String, List String)
-collectRecords [] = []
-collectRecords ((CBind _ clauses _) :: rest) =
-  collectRecordsClauses clauses ++ collectRecords rest
-
-collectRecordsClauses : List CClause -> List (String, List String)
-collectRecordsClauses [] = []
-collectRecordsClauses ((CClause _ body) :: rest) =
-  scanExprRecords body ++ collectRecordsClauses rest
-
-scanExprRecords : CExpr -> List (String, List String)
-scanExprRecords (CRecord name fields) =
-  (name, cFieldLabels fields) :: scanExprsRecords (cFieldExprs fields)
-scanExprRecords (CFieldAccess ex _ _) = scanExprRecords ex
-scanExprRecords (CRecordUpdate _ base updates) =
-  scanExprRecords base ++ scanExprsRecords (cFieldExprs updates)
-scanExprRecords (CVariantUpdate _ base updates) =
-  scanExprRecords base ++ scanExprsRecords (cFieldExprs updates)
-scanExprRecords (CTuple es) = scanExprsRecords es
-scanExprRecords (CApp f a) = scanExprRecords f ++ scanExprRecords a
-scanExprRecords (CLam _ body) = scanExprRecords body
-scanExprRecords (CIf c t f) =
-  scanExprRecords c ++ scanExprRecords t ++ scanExprRecords f
-scanExprRecords (CBinPrim _ l r _ _) = scanExprRecords l ++ scanExprRecords r
-scanExprRecords (CUnOp _ x) = scanExprRecords x
-scanExprRecords (CLet _ _ e1 e2) = scanExprRecords e1 ++ scanExprRecords e2
-scanExprRecords (CLetGroup binds body) =
-  collectRecords binds ++ scanExprRecords body
-scanExprRecords (CBlock stmts) = scanStmtsRecords stmts
-scanExprRecords (CDecision scrut arms _) =
-  scanExprRecords scrut ++ scanArmsRecords arms
-scanExprRecords (CMatch scrut arms) =
-  scanExprRecords scrut ++ scanArmsRecords arms
-scanExprRecords (CArray es) = scanExprsRecords es
-scanExprRecords (CList es) = scanExprsRecords es
-scanExprRecords (CRangeArray lo hi _) = scanExprRecords lo ++ scanExprRecords hi
-scanExprRecords (CRangeList lo hi _) = scanExprRecords lo ++ scanExprRecords hi
-scanExprRecords (CIndex a i) = scanExprRecords a ++ scanExprRecords i
-scanExprRecords (CStringIndex a i) = scanExprRecords a ++ scanExprRecords i
-scanExprRecords (CStringSlice a lo hi _) =
-  scanExprRecords a ++ scanExprRecords lo ++ scanExprRecords hi
-scanExprRecords (CListIndex a i) = scanExprRecords a ++ scanExprRecords i
-scanExprRecords (CListSlice a lo hi _) =
-  scanExprRecords a ++ scanExprRecords lo ++ scanExprRecords hi
-scanExprRecords (CSlice a lo hi _) =
-  scanExprRecords a ++ scanExprRecords lo ++ scanExprRecords hi
-scanExprRecords _ = []
-
-scanExprsRecords : List CExpr -> List (String, List String)
-scanExprsRecords [] = []
-scanExprsRecords (e :: rest) = scanExprRecords e ++ scanExprsRecords rest
-
--- The fallback scan is a BEST EFFORT, not the authority (see the table comment):
--- guard qualifiers and the string-slice bounds are walked because a construction
--- site living there is otherwise invisible, but correctness rests on the
--- declaration seed, not on this walk being complete.
-scanArmsRecords : List CArm -> List (String, List String)
-scanArmsRecords [] = []
-scanArmsRecords ((CArm _ guards body) :: rest) =
-  scanGuardsRecords guards ++ scanExprRecords body ++ scanArmsRecords rest
-
-scanGuardsRecords : List CGuard -> List (String, List String)
-scanGuardsRecords [] = []
-scanGuardsRecords ((CGBool ex) :: rest) =
-  scanExprRecords ex ++ scanGuardsRecords rest
-scanGuardsRecords ((CGBind _ ex) :: rest) =
-  scanExprRecords ex ++ scanGuardsRecords rest
-
-scanStmtsRecords : List CStmt -> List (String, List String)
-scanStmtsRecords [] = []
-scanStmtsRecords ((CSExpr ex) :: rest) =
-  scanExprRecords ex ++ scanStmtsRecords rest
-scanStmtsRecords ((CSLet _ _ ex) :: rest) =
-  scanExprRecords ex ++ scanStmtsRecords rest
-scanStmtsRecords ((CSAssign _ ex) :: rest) =
-  scanExprRecords ex ++ scanStmtsRecords rest
-scanStmtsRecords (_ :: rest) = scanStmtsRecords rest
+lookupOrdinal : Int -> List (Int, String) -> Option String
+lookupOrdinal _ [] = None
+lookupOrdinal i ((o, w) :: rest) =
+  if o == i then Some w else lookupOrdinal i rest
 
 -- ── arrays + ranges ────────────────────────────────────────────────
 -- VALUE REPRESENTATION (RUNTIME-DESIGN.md §8 — see also §2.4a-5 in STAGE2-DESIGN.md):
@@ -15641,7 +14984,6 @@ tableStats : Emit -> List (String, Int)
 tableStats e = [
   ("implEntries", listLen !e.implEntries),
   ("globalsReg", listLen !e.globalsReg),
-  ("recFields", listLen !e.recFields),
   ("ctorType", optOmSize !e.ctorTypeMap),
   ("declSig", omSize e.input.declSigIndex),
   ("knownFnMap", optOmSize !e.knownFnMap),
@@ -15787,13 +15129,9 @@ installDispatchState e runAnalysis groupsAll fnBindsList implEntries =
 
 -- (b′) dispatch-graph TMC: run the SHARED detection (backend/trmc_analysis.mdk)
 -- before any fn emit, so emitFn can route group members/roots. Hooks: the LLVM
--- canonFnName + a clause-derived fn-arity table with wasm's progFnArity contract
+-- canonFnName + a clause-derived fn-arity table with wasm's fnParamCountW contract
 -- (-1 when unknown); v5's stage-1-claims hook is the LLVM Stage-1 gate (no
 -- uniform-ctor condition — the backends' hooks unify when wasm's gate retires).
--- gDispGroupEtaStable then drops any group containing a single-clause member
--- that eta-saturation would re-arity (deficit > 0 — such a member's inlined
--- clause-arity body would diverge from the ordinary define's ABI); dropped
--- groups fall back to ordinary codegen, no transform, no regression.
 installDispatchGroupsFull : Emit ->
   List CBind ->
   List CBind ->
@@ -15820,7 +15158,7 @@ installDispatchGroupsFull e groupsAll fnBindsList implEntries =
       fnBindsList
       groupsAll
       implEntries
-  e.gDispGroups := gDispKeepEtaStable e fnBindsList dispGroups0
+  e.gDispGroups := dispGroups0
 
 -- ONE construction path (RUN-EMIT-002) for the per-emission derived state: the
 -- `Emit` record literal, the nine `install*` calls, and the post-install
@@ -15844,14 +15182,13 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     fnNames = Ref (collectFns groups),
     sigs = Ref (inferSigs input.declSigIndex (fnBinds groups)),
     lams = Ref [],
-    recFields = Ref (input.recordFieldOrders ++ collectRecords groups),
     implEntries = Ref implEntries,
+    arities = programArities (CProgram groups ctorArs ctorTypes implEntries),
     globalsReg = Ref cfg.globalsReg0,
     gapMode = cfg.gapMode,
     gapLog = Ref [],
     curGapBind = Ref "?",
     defineCounter = Ref 0,
-    closureArity = Ref [],
     closureRetTy = Ref [],
     directFn = Ref [],
     trmcCtx = Ref TrmcOff,
@@ -15868,9 +15205,6 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     lazyGlobalMap = Ref None,
     ctorMap = Ref None,
     sigMap = Ref None,
-    defArityMap = Ref None,
-    recByName = Ref None,
-    recByLabel = Ref None,
     implsByMethod = Ref None,
     implMethodSet = Ref None,
     ctorTypeMap = Ref None,
@@ -15902,22 +15236,12 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   -- #990: index the ctor→type table so cellTag's per-ctor ctorTypeId/ctorOrdinal/
   -- ctorHasSiblings lookups are O(log types) not O(types) — reverseL ⇒ first-wins.
   let _ = installCtorTypeMap e ctorTypes
-  -- #352: index the CONSTANT record field-order table (by name and by label) so every
-  -- per-field-op probe is O(log records) not O(records) — same first-match answers.
-  let _ = installRecFieldIndex e (recFieldTable e)
   let _ = installSigMap e (sigTable e)
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
   -- dispatch scan (implsOf/implFnSymE) is O(bucket) not
   -- O(impls) — byte-identical IR, O(N²)→O(N log N) emit on dispatch-heavy code.
-  -- ⚠️ RUN-EMIT-003: these two MUST precede `installDefArityMap`.  That install
-  -- replays `etaSaturateMethodBody` per bind, which reaches `methodBodyDeficit` →
-  -- `methodOccurrenceCallableArity` → `implForSite` → `implsOf` →
-  -- `methodEntries`, i.e. it READS `e.implsByMethod`.  Ordered the other way round
-  -- that read landed on the (now retired) uninstalled-scan branch, which is the one
-  -- place the two paths were both live in a single emission.
   let _ = installImplIndex e implEntries
   let _ = installImplMethodSet e implEntries
-  let _ = installDefArityMap e (fnBinds groups)
   -- a group member must never be ADVERTISED as having a float `__fw` worker (the
   -- group path emits no standalone defines, so a float-context caller would call
   -- a nonexistent symbol; v3/v4 make external float callers impossible anyway —
@@ -15957,11 +15281,38 @@ emitProgramMode gapMode input (cp@(CProgram groups ctorArs ctorTypes implEntries
 -- emitter state is built; record mode returns them for `noteUnprovidedExterns`.
 unprovidedExterns : GapMode -> EmitInput -> CProgram -> List ExternFinding
 unprovidedExterns Strict input cp =
+  let _ = refuseUnstampedRecords cp
+  let _ = refuseUnstampedCalls cp
+  let _ = refuseUnflaggedTails cp
   match validateExterns LlvmBackend input.runtimeExterns cp
     [] => []
     found => panic (renderExternRefusal found)
 unprovidedExterns Record input cp =
+  let _ = refuseUnstampedRecords cp
+  let _ = refuseUnstampedCalls cp
+  let _ = refuseUnflaggedTails cp
   validateExterns LlvmBackend input.runtimeExterns cp
+
+-- A record node without its declared field ordinal is an internal error: the
+-- emitter keeps no field-order table to answer for it.
+refuseUnstampedRecords : CProgram -> Unit
+refuseUnstampedRecords cp = match validateRecords cp
+  [] => ()
+  bad => panic ("internal error: " ++ renderRecordRefusal bad)
+
+-- An application whose mode its head's defined arity contradicts is an internal
+-- error: the lowering's stamp and the validator read one helper.
+refuseUnstampedCalls : CProgram -> Unit
+refuseUnstampedCalls cp = match validateCalls cp
+  [] => ()
+  bad => panic ("internal error: " ++ renderCallRefusal bad)
+
+-- An application whose tail flag disagrees with its position is an internal
+-- error: the lowering's flag pass and the validator state the rules separately.
+refuseUnflaggedTails : CProgram -> Unit
+refuseUnflaggedTails cp = match validateTails cp
+  [] => ()
+  bad => panic ("internal error: " ++ renderTailRefusal bad)
 
 -- Record mode's one gap event per refused extern.  The emitter's own
 -- fallthrough for such a name then records nothing (`unprovidedExtern`).
@@ -16224,7 +15575,7 @@ mainBody e (_ :: rest) = mainBody e rest
 -- a readable tag for the unsupported-node panic (only the nodes a slice-1
 -- fixture could hit if it strayed out of scope).
 ctag : CExpr -> String
-ctag (CApp _ _) = "CApp (function application)"
+ctag (CApp _ _ _) = "CApp (function application)"
 ctag (CLam _ _) = "CLam (lambda)"
 ctag (CMatch _ _) = "CMatch"
 ctag (CDecision _ _ _) = "CDecision (match)"
@@ -16232,7 +15583,7 @@ ctag (CTuple _) = "CTuple"
 ctag (CList _) = "CList"
 ctag (CArray _) = "CArray"
 ctag (CRecord _ _) = "CRecord"
-ctag (CFieldAccess _ _ _) = "CFieldAccess"
+ctag (CFieldAccess _ _ _ _) = "CFieldAccess"
 ctag (CRecordUpdate _ _ _) = "CRecordUpdate"
 ctag (CRangeList _ _ _) = "CRangeList"
 ctag (CRangeArray _ _ _) = "CRangeArray"

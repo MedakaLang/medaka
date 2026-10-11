@@ -2046,7 +2046,7 @@ Line numbers at `cfc4fa5a`.
 | **S2-DECL** receiver argument + impl query | check/run: `methodDispatchIdx` → `recordRLocalSite` → `resolveRLocalSite` → `implExistsForHead`. build: `definerShadowArgHead`'s importer disjunct (`importerShadowOnEmitPath`) → `inferDefinerShadowApp`, which sets `suppressRLocalRecord` and peels the application's FIRST argument | which argument is the receiver, and whose impls answer the query | 🔴 **NON-CONFORMANT on BOTH arms, for DIFFERENT reasons — MEASURED 2026-08-09 ([#1351](https://github.com/MedakaLang/medaka/issues/1351)).** check/run keys the receiver position on the **bare method name** (first-match over a graph-global accumulator, so import-clause order decides) while the occurrence's TYPE comes from `methodIfaceParamsRef` — same key, **opposite** tie-break — so with two colliding declarations the two name different ones by construction (S2-DECL (b), (e)). build reads **no** dispatch-index table at all: the receiver is argument 0, positionally (S2-DECL (a)). `implExistsForHead` is keyed `(method name, head tycon)` with no interface, so it can answer about an impl of a declaration the module cannot name (S2-DECL (c)). ⚠️ **The two arms are independent**: re-deriving either dispatch-index table moves `run` and leaves the built binary where it was — an **S7** violation, not a partial fix |
 | route representation | `compiler/frontend/ast.mdk:69-72` (`RKey`/`RLocal String`); sexp `compiler/ir/core_ir_sexp.mdk:43-44` (`RLocal ""` serializes to the old nullary form) | ONE occurrence needs TWO names: bare `N` for dispatch, `<mid>__N` for the standalone | the mangled standalone symbol is **carried in the route**, stamped at resolve time (Fork-2 carry-in-route) |
 | lowering | `compiler/ir/core_ir_lower.mdk:144` `EMethodAt name … → CMethod name …` | route + both names survive to the backends | `name` is the single bare field; the RLocal symbol rides the route |
-| emit (LLVM) | `compiler/backend/llvm_emit.mdk:3413` `emitMethod … (RKey tag)` → `implFor e name tag`; `:3435` `… (RLocal sym)` → `emitKnownFnSat e ("mdk_" ++ sym)` | S2's two arms at codegen | RKey needs the **bare** method name; RLocal needs the **mangled** symbol |
+| emit (LLVM) | `compiler/backend/llvm_emit.mdk:3413` `emitMethod … (RKey tag)` → `implFor e name tag`; `:3435` `… (RLocal sym)` → a direct call of `"mdk_" ++ sym` | S2's two arms at codegen | RKey needs the **bare** method name; RLocal needs the **mangled** symbol |
 | emit (WasmGC) | `compiler/backend/wasm_emit.mdk:3076` `emitMethodRef … (RLocal sym)` (peer arm, header `:3071`) | same split, second backend | same two-name split |
 | eval | `compiler/eval/eval.mdk` `evalMethodAt … (RLocal sym dicts)` → standalone via env lookup, **then `applyDicts … dicts`** (S9); other routes → arg-tag/dict dispatch (`methodAtNarrow` treats RLocal as not-a-dispatch; `dictOfRoute (RLocal _ _)` is the no-op dict — RLocal's dicts are the call's leading dict ARGS, not a witness FOR the route) | S2 + S9 on the interpreter | run path is UN-mangled: `sym` is `""` and the bare name resolves to the standalone lexically |
 | S9 dicts (typecheck) | `shadowStandaloneDicts` / `shadowStandaloneDictSlotsAt` (slot monos, expanded-supers, from the SIGNATURE's id space) → carried on `pendingRLocalSites` (an `RLocalSite` record) → resolved **inside** `resolveRLocalSites` via `routesOfMonosTop` | the standalone's own `=>` dicts, stamped by the SAME single writer as the route | ⚠️ resolve them **inside the stamp** — `resolveRLocalSites` runs BEFORE `resolveDictApps` in `elabModuleStamp`, so routing them through `pendingDictApps` reads `[]` and reproduces the bug with more code |
@@ -2374,11 +2374,10 @@ closure of `methodArityOf name` — the **interface method's** arity — for a b
 **partial application** back instead of a value: `map size [1,2,3]` produced a list of PAP
 heap pointers and `build` **printed them as Ints at exit 0 with no error**
 (`[70290166652896, …]`) — an S0 *silent wrongness*, worse than the segfault this entry
-originally described. Fixed by making the arity **route-derived**: `methValArity`
-(`llvm_emit.mdk`) and `methodValArity` (`wasm_emit.mdk`) resolve an `RLocal` route's target
-via `fnArity`/`progFnArity` **minus the route's dict count** (both are dict-INCLUSIVE — see
-the `trmcTryFn` note in `llvm_emit.mdk`), and keep the old name-derived arity for every
-non-RLocal route, so the self-compile fixpoint cannot move (C3a/C3b YES). Pinned by
+originally described. Fixed by making the arity **route-derived**: `methodValueArity`
+(`llvm_emit.mdk`) and `methodValueArityW` (`wasm_emit.mdk`) resolve an `RLocal` route's
+target's defined arity **minus the route's dict count** (the define's parameters are
+dict-INCLUSIVE). Pinned by
 `d17`/`d19`/`d20` (**both** arity directions: method>standalone and method<standalone).
 Wasm carried the same lie via an arity helper taking **no Route**; pre-fix its
 symptom was a hard assembly failure (`unknown func: failed to find name $mdk_w_…__size`),
@@ -2397,8 +2396,9 @@ the program correct, which is what isolates (B) from (A). Routes are stamped in
 root as the `#412` structured-requires pre-bake. Ledgered by `d18` (`BUILD_CRASH` —
 self-draining: it goes RED the day (B) is fixed).
 
-*Fix location (A, done):* `compiler/backend/llvm_emit.mdk` `methValArity`;
-`compiler/backend/wasm_emit.mdk` `methodValArity`.
+*Fix location (A, done):* `compiler/backend/llvm_emit.mdk` `methodValueArity`;
+`compiler/backend/wasm_emit.mdk` `methodValueArityW` (since 2026-10-10 both read the
+occurrence's defined arity through `core_ir_lower.definedArityOf`).
 *Fix location (B, open):* `compiler/types/typecheck.mdk` — requirement-route resolution.
 
 > ⚠️ **UPDATE 2026-07-16 (#411): the DEFINER shape above still does not reproduce — but

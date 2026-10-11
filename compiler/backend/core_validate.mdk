@@ -3,6 +3,23 @@
 -- so every build entry reports a refusal from one place, and before either
 -- emitter has produced text.
 --
+-- The record check: every record node carries each field's declared ordinal,
+-- stamped by `core_ir_lower`, and an emitter stores and loads by it.  A node
+-- with an unstamped (negative) ordinal, a record literal whose ordinals are not
+-- its positions, or an update whose ordinals are not strictly ascending is
+-- refused: the emitters keep no field-order table to fall back on.
+--
+-- The call check: every application carries the mode its head's defined arity
+-- gives it (`core_ir_lower.definedArityOf`, the helper the lowering's stamp
+-- reads).  A known head's defined arity is the pattern count of the clause it
+-- names (a top-level or let-group binding, the entry an `RKey` route selects,
+-- the binding an `RLocal` route or a `CDict` names, less the dictionaries the
+-- occurrence supplies) or a constructor's field count; any other head is
+-- dynamic.  An application with no arguments, or whose head is itself an
+-- application, is refused too: a spine is one node.  So are impl entries of
+-- one method and route word that take different value arities: they are the
+-- clauses of one define.
+--
 -- The extern check: a runtime extern whose catalog row gives the backend no
 -- lowering (`NotProvided`) is refused wherever the program references it
 -- freely.  A reference is free when no local binder in scope and no top-level
@@ -22,8 +39,22 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   CProgram(..),
+  CallMode(..),
+  CallSite(..),
 }
-import frontend.ast.{Pat(..), RecPatField(..)}
+import ir.core_ir_lower.{
+  ArityEnv,
+  CallScope,
+  bindGroupScope,
+  bindLetScope,
+  bindPatScope,
+  bindPatsScope,
+  callModeFor,
+  definedArityOf,
+  entryArityRow,
+  programArities,
+}
+import ir.core_ir_sexp.{callModeSexp}
 import backend.extern_catalog.{
   Disposition(..),
   GapKind,
@@ -32,8 +63,8 @@ import backend.extern_catalog.{
   rowLlvm,
   rowWasm,
 }
-import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey}
-import support.util.{joinWith, reverseL}
+import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey, omLookup}
+import support.util.{isNonEmptyL, joinWith, listLen, reverseL}
 
 public export data Backend = LlvmBackend | WasmBackend
 
@@ -82,13 +113,55 @@ isUnprovidedOn backend name = isSome (unprovidedOn backend name)
 -- error, raised before the program is read.
 export
 validateExterns : Backend -> List String -> CProgram -> List ExternFinding
-validateExterns backend runtimeExterns (CProgram groups ctors _ impls) =
+validateExterns backend runtimeExterns prog =
   let _ = refuseMissingRows runtimeExterns
-  let top = programNames groups ctors omEmpty
-  let walked =
-    walkImpls backend top impls (walkBinds backend top groups noFindings)
-  match walked
-    Walk _ found => reverseL found
+  match walkProgram backend prog
+    Walk _ found _ _ => reverseL found
+
+-- One line per record node whose ordinals the emitters cannot trust, in
+-- program order; empty for a well-stamped program.
+export
+validateRecords : CProgram -> List String
+validateRecords prog = match walkProgram LlvmBackend prog
+  Walk _ _ bad _ => reverseL bad
+
+export
+renderRecordRefusal : List String -> String
+renderRecordRefusal bad = joinWith "\n" bad
+
+-- One line per application whose mode its head's defined arity contradicts, in
+-- program order; empty for a well-stamped program.
+export
+validateCalls : CProgram -> List String
+validateCalls (prog@(CProgram _ _ _ impls)) = match walkProgram LlvmBackend prog
+  Walk _ _ _ bad => reverseL bad ++ splitGroupFaults impls omEmpty []
+
+-- The entries of one method and route word are the clauses of one define, which
+-- takes one parameter count, so an entry whose value arity differs from the
+-- first entry of its group is refused.
+splitGroupFaults : List CImplEntry -> OrdMap Int -> List String -> List String
+splitGroupFaults [] _ acc = reverseL acc
+splitGroupFaults ((ent@(CImplEntry method _ _ body)) :: rest) seen acc =
+  let (key, n) = entryArityRow ent
+  match omLookup key seen
+    Some k =>
+      if k == n then
+        splitGroupFaults rest seen acc
+      else
+        splitGroupFaults
+          rest
+          seen
+          ("call: impl entry takes \{intToString n} value parameters, the first entry of its group \{intToString k} [in impl \{method}@\{implBodyTag body}]"
+            :: acc)
+    None => splitGroupFaults rest (omInsert key n seen) acc
+
+implBodyTag : CImplBody -> String
+implBodyTag (CImplTagged tag _ _ _ _ _) = tag
+implBodyTag (CImplDefault _ tag _ _ _ _) = tag
+
+export
+renderCallRefusal : List String -> String
+renderCallRefusal bad = joinWith "\n" bad
 
 -- The names in `names` that have no extern catalog row.
 export
@@ -142,52 +215,81 @@ programNames ((CBind name _ _) :: rest) ctors acc =
 isProgramName : OrdMap Unit -> String -> Bool
 isProgramName top x = omHasKey x top || omHasKey ("core__" ++ x) top
 
--- The walk's state: the externs already found, and the findings, newest first.
-data Walk = Walk (OrdMap Unit) (List ExternFinding)
+-- The walk's state: the externs already found, the extern findings, the record
+-- nodes with untrustworthy ordinals, and the applications with a wrong mode,
+-- each newest first.
+data Walk = Walk (OrdMap Unit) (List ExternFinding) (List String) (List String)
 
 noFindings : Walk
-noFindings = Walk omEmpty []
+noFindings = Walk omEmpty [] [] []
 
--- The backend, the program's own names, and the top-level binding being read.
-data Ctx = Ctx Backend (OrdMap Unit) String
+-- The backend, the program's own names, its defined arities, and the top-level
+-- binding being read.
+data Ctx = Ctx Backend (OrdMap Unit) ArityEnv String
 
-walkBinds : Backend -> OrdMap Unit -> List CBind -> Walk -> Walk
-walkBinds _ _ [] w = w
-walkBinds backend top ((CBind name clauses _) :: rest) w =
+walkProgram : Backend -> CProgram -> Walk
+walkProgram backend (prog@(CProgram groups ctors _ impls)) =
+  let top = programNames groups ctors omEmpty
+  let env = programArities prog
+  walkImpls backend top env impls (walkBinds backend top env groups noFindings)
+
+walkBinds : Backend -> OrdMap Unit -> ArityEnv -> List CBind -> Walk -> Walk
+walkBinds _ _ _ [] w = w
+walkBinds backend top env ((CBind name clauses _) :: rest) w =
   walkBinds
     backend
     top
+    env
     rest
-    (walkClauses (Ctx backend top name) omEmpty clauses w)
+    (walkClauses (Ctx backend top env name) omEmpty clauses w)
 
-walkImpls : Backend -> OrdMap Unit -> List CImplEntry -> Walk -> Walk
-walkImpls _ _ [] w = w
-walkImpls backend top ((CImplEntry method _ body) :: rest) w =
-  walkImpls backend top rest (walkImplBody backend top method body w)
+walkImpls : Backend ->
+  OrdMap Unit ->
+  ArityEnv ->
+  List CImplEntry ->
+  Walk ->
+  Walk
+walkImpls _ _ _ [] w = w
+walkImpls backend top env ((CImplEntry method _ _ body) :: rest) w =
+  walkImpls
+    backend
+    top
+    env
+    rest
+    (walkImplBody (Ctx backend top env "impl \{method}") body w)
 
-walkImplBody : Backend -> OrdMap Unit -> String -> CImplBody -> Walk -> Walk
-walkImplBody backend top method (CImplTagged tag _ _ _ pats body) w =
-  walkE (Ctx backend top "impl \{method}@\{tag}") (bindPats pats omEmpty) body w
-walkImplBody backend top method (CImplDefault _ tag _ _ pats body) w =
-  walkE (Ctx backend top "impl \{method}@\{tag}") (bindPats pats omEmpty) body w
+walkImplBody : Ctx -> CImplBody -> Walk -> Walk
+walkImplBody (Ctx backend top env binding) (CImplTagged tag _ _ _ pats body) w =
+  walkE
+    (Ctx backend top env "\{binding}@\{tag}")
+    (bindPatsScope pats omEmpty)
+    body
+    w
+walkImplBody (Ctx backend top env binding) (CImplDefault _ tag _ _ pats body) w =
+  walkE
+    (Ctx backend top env "\{binding}@\{tag}")
+    (bindPatsScope pats omEmpty)
+    body
+    w
 
-walkClauses : Ctx -> OrdMap Unit -> List CClause -> Walk -> Walk
+walkClauses : Ctx -> CallScope -> List CClause -> Walk -> Walk
 walkClauses _ _ [] w = w
 walkClauses ctx scope ((CClause pats body) :: rest) w =
-  walkClauses ctx scope rest (walkE ctx (bindPats pats scope) body w)
+  walkClauses ctx scope rest (walkE ctx (bindPatsScope pats scope) body w)
 
 -- Every constructor is listed, with no catch-all arm, so a new expression form
 -- must decide where its binders scope.
-walkE : Ctx -> OrdMap Unit -> CExpr -> Walk -> Walk
+walkE : Ctx -> CallScope -> CExpr -> Walk -> Walk
 walkE ctx scope (CVar x _) w = noteVar ctx scope x w
 walkE _ _ (CLit _) w = w
-walkE ctx scope (CApp f a) w = walkE ctx scope a (walkE ctx scope f w)
-walkE ctx scope (CLam pats body) w = walkE ctx (bindPats pats scope) body w
+walkE ctx scope (CApp f args site) w =
+  walkList ctx scope args (walkE ctx scope f (noteCall ctx scope f args site w))
+walkE ctx scope (CLam pats body) w = walkE ctx (bindPatsScope pats scope) body w
 walkE ctx scope (CLet recF pat rhs body) w =
-  let inner = bindPat pat scope
+  let inner = bindLetScope pat rhs scope
   walkE ctx inner body (walkE ctx (if recF then inner else scope) rhs w)
 walkE ctx scope (CLetGroup binds body) w =
-  let inner = bindNames binds scope
+  let inner = bindGroupScope binds scope
   walkE ctx inner body (walkLocalBinds ctx inner binds w)
 walkE ctx scope (CMatch scrut arms) w =
   walkArms ctx scope arms (walkE ctx scope scrut w)
@@ -198,12 +300,22 @@ walkE ctx scope (CBinPrim _ l r _ _) w = walkList ctx scope [l, r] w
 walkE ctx scope (CUnOp _ x) w = walkE ctx scope x w
 walkE ctx scope (CTuple es) w = walkList ctx scope es w
 walkE ctx scope (CList es) w = walkList ctx scope es w
-walkE ctx scope (CRecord _ fields) w = walkFields ctx scope fields w
-walkE ctx scope (CFieldAccess x _ _) w = walkE ctx scope x w
-walkE ctx scope (CRecordUpdate _ base fields) w =
-  walkFields ctx scope fields (walkE ctx scope base w)
-walkE ctx scope (CVariantUpdate _ base fields) w =
-  walkFields ctx scope fields (walkE ctx scope base w)
+walkE ctx scope (CRecord name fields) w =
+  walkFields ctx scope fields (noteRecord ctx "CRecord" name True fields w)
+walkE ctx scope (CFieldAccess x label name ord) w =
+  walkE ctx scope x (noteAccess ctx label name ord w)
+walkE ctx scope (CRecordUpdate name base fields) w =
+  walkFields
+    ctx
+    scope
+    fields
+    (walkE ctx scope base (noteRecord ctx "CRecordUpdate" name False fields w))
+walkE ctx scope (CVariantUpdate con base fields) w =
+  walkFields
+    ctx
+    scope
+    fields
+    (walkE ctx scope base (noteRecord ctx "CVariantUpdate" con False fields w))
 walkE ctx scope (CArray es) w = walkList ctx scope es w
 walkE ctx scope (CRangeList lo hi _) w = walkList ctx scope [lo, hi] w
 walkE ctx scope (CRangeArray lo hi _) w = walkList ctx scope [lo, hi] w
@@ -217,8 +329,97 @@ walkE ctx scope (CBlock stmts) w = walkStmts ctx scope stmts w
 walkE _ _ (CMethod _ _ _ _ _ _) w = w
 walkE _ _ (CDict _ _) w = w
 
-noteVar : Ctx -> OrdMap Unit -> String -> Walk -> Walk
-noteVar (Ctx backend top binding) scope x (w@(Walk seen found)) =
+-- A field access is stamped, or reads a `Ref` cell through `.value`, which is
+-- never stamped: an emitter reading a stamped `.value` as a record field would
+-- cast the cell to whichever record declares a field `value`.
+noteAccess : Ctx -> String -> String -> Int -> Walk -> Walk
+noteAccess ctx "value" name ord w =
+  if ord == -1 then
+    w
+  else
+    noteRecordBad
+      ctx
+      "CFieldAccess"
+      "\{name}.value: a Ref read stamped with field ordinal \{intToString ord}"
+      w
+noteAccess ctx label name ord w =
+  if ord >= 0 then
+    w
+  else
+    noteRecordBad
+      ctx
+      "CFieldAccess"
+      "\{name}.\{label}: unstamped field ordinal"
+      w
+
+-- `literal`: the ordinals must be the field positions (declared order).
+noteRecord : Ctx -> String -> String -> Bool -> List CField -> Walk -> Walk
+noteRecord ctx node name literal fields w =
+  if ordinalsOk literal 0 (-1) fields then
+    w
+  else
+    noteRecordBad
+      ctx
+      node
+      "\{name}: field ordinals [\{joinWith ", " (map fieldOrdinalText fields)}] are not \{if literal then "the declared positions" else "strictly ascending"}"
+      w
+
+ordinalsOk : Bool -> Int -> Int -> List CField -> Bool
+ordinalsOk _ _ _ [] = True
+ordinalsOk literal pos prev ((CField _ o _) :: rest) =
+  o >= 0
+    && (if literal then o == pos else o > prev)
+    && ordinalsOk literal (pos + 1) o rest
+
+fieldOrdinalText : CField -> String
+fieldOrdinalText (CField k o _) = "\{k}@\{intToString o}"
+
+noteRecordBad : Ctx -> String -> String -> Walk -> Walk
+noteRecordBad (Ctx _ _ _ binding) node why (Walk seen found bad calls) =
+  Walk seen found ("record: \{node} \{why} [in \{binding}]" :: bad) calls
+
+-- The mode the head's defined arity gives the arguments, or the shape fault.
+noteCall : Ctx -> CallScope -> CExpr -> List CExpr -> CallSite -> Walk -> Walk
+noteCall ctx _ _ [] _ w = noteCallBad ctx "application with no arguments" w
+noteCall ctx _ (CApp _ _ _) _ _ w =
+  noteCallBad ctx "application whose head is an application" w
+noteCall (ctx@(Ctx _ _ env _)) scope hd args (CallSite mode _) w =
+  let n = listLen args
+  let arity = definedArityOf env scope hd
+  if sameMode (callModeFor arity n) mode then
+    w
+  else match arity
+    Some k =>
+      noteCallBad
+        ctx
+        "\{headText hd} applied to \{intToString n} of \{intToString k}, stamped \{callModeSexp mode}"
+        w
+    None =>
+      noteCallBad
+        ctx
+        "\{headText hd} has no static arity, stamped \{callModeSexp mode}"
+        w
+
+sameMode : CallMode -> CallMode -> Bool
+sameMode CallExact CallExact = True
+sameMode (CallPartial a) (CallPartial b) = a == b
+sameMode (CallOver a) (CallOver b) = a == b
+sameMode CallDynamic CallDynamic = True
+sameMode _ _ = False
+
+noteCallBad : Ctx -> String -> Walk -> Walk
+noteCallBad (Ctx _ _ _ binding) why (Walk seen found bad calls) =
+  Walk seen found bad ("call: \{why} [in \{binding}]" :: calls)
+
+headText : CExpr -> String
+headText (CVar x _) = x
+headText (CMethod name _ _ _ _ _) = "method \{name}"
+headText (CDict name _) = "\{name} (constrained)"
+headText (CLam _ _) = "a lambda"
+headText _ = "an expression"
+
+noteVar : Ctx -> CallScope -> String -> Walk -> Walk
+noteVar (Ctx backend top _ binding) scope x (w@(Walk seen found bad calls)) =
   if omHasKey x scope || omHasKey x seen then
     w
   else match unprovidedOn backend x
@@ -230,69 +431,183 @@ noteVar (Ctx backend top binding) scope x (w@(Walk seen found)) =
         Walk
           (omInsert x () seen)
           (ExternFinding x backend kind why binding :: found)
+          bad
+          calls
 
-walkList : Ctx -> OrdMap Unit -> List CExpr -> Walk -> Walk
+walkList : Ctx -> CallScope -> List CExpr -> Walk -> Walk
 walkList _ _ [] w = w
 walkList ctx scope (e :: rest) w = walkList ctx scope rest (walkE ctx scope e w)
 
-walkFields : Ctx -> OrdMap Unit -> List CField -> Walk -> Walk
+walkFields : Ctx -> CallScope -> List CField -> Walk -> Walk
 walkFields _ _ [] w = w
-walkFields ctx scope ((CField _ e) :: rest) w =
+walkFields ctx scope ((CField _ _ e) :: rest) w =
   walkFields ctx scope rest (walkE ctx scope e w)
 
-walkLocalBinds : Ctx -> OrdMap Unit -> List CBind -> Walk -> Walk
+walkLocalBinds : Ctx -> CallScope -> List CBind -> Walk -> Walk
 walkLocalBinds _ _ [] w = w
 walkLocalBinds ctx scope ((CBind _ clauses _) :: rest) w =
   walkLocalBinds ctx scope rest (walkClauses ctx scope clauses w)
 
 -- An arm's pattern scopes over its guards and body; a `Pat <- e` guard's
 -- pattern scopes over the guards after it and the body.
-walkArms : Ctx -> OrdMap Unit -> List CArm -> Walk -> Walk
+walkArms : Ctx -> CallScope -> List CArm -> Walk -> Walk
 walkArms _ _ [] w = w
 walkArms ctx scope ((CArm pat guards body) :: rest) w =
-  walkArms ctx scope rest (walkGuarded ctx (bindPat pat scope) guards body w)
+  walkArms
+    ctx
+    scope
+    rest
+    (walkGuarded ctx (bindPatScope pat scope) guards body w)
 
-walkGuarded : Ctx -> OrdMap Unit -> List CGuard -> CExpr -> Walk -> Walk
+walkGuarded : Ctx -> CallScope -> List CGuard -> CExpr -> Walk -> Walk
 walkGuarded ctx scope [] body w = walkE ctx scope body w
 walkGuarded ctx scope ((CGBool c) :: rest) body w =
   walkGuarded ctx scope rest body (walkE ctx scope c w)
 walkGuarded ctx scope ((CGBind pat e) :: rest) body w =
-  walkGuarded ctx (bindPat pat scope) rest body (walkE ctx scope e w)
+  walkGuarded ctx (bindPatScope pat scope) rest body (walkE ctx scope e w)
 
-walkStmts : Ctx -> OrdMap Unit -> List CStmt -> Walk -> Walk
+walkStmts : Ctx -> CallScope -> List CStmt -> Walk -> Walk
 walkStmts _ _ [] w = w
 walkStmts ctx scope ((CSExpr e) :: rest) w =
   walkStmts ctx scope rest (walkE ctx scope e w)
 walkStmts ctx scope ((CSLet recF pat e) :: rest) w =
-  let inner = bindPat pat scope
+  let inner = bindLetScope pat e scope
   walkStmts ctx inner rest (walkE ctx (if recF then inner else scope) e w)
 walkStmts ctx scope ((CSAssign _ e) :: rest) w =
   walkStmts ctx scope rest (walkE ctx scope e w)
 
-bindNames : List CBind -> OrdMap Unit -> OrdMap Unit
-bindNames [] s = s
-bindNames ((CBind name _ _) :: rest) s = bindNames rest (omInsert name () s)
+-- ── the tail check ───────────────────────────────────────────────────────────
+-- One line per application whose tail flag disagrees with its position, in
+-- program order; empty for a program `core_ir_lower.markTailSites` flagged.
+-- The walk states the position rules itself rather than calling the pass that
+-- applies them, so the two can disagree.  Tail position starts at the body of a
+-- clause with a parameter and of a lambda, and passes through the branches of
+-- an `if`, the arms of a match, the body of a `let` or let-group and the last
+-- statement of a block.
+export
+validateTails : CProgram -> List String
+validateTails (CProgram groups _ _ impls) =
+  reverseL (tailImpls impls (tailBinds groups []))
 
-bindPats : List Pat -> OrdMap Unit -> OrdMap Unit
-bindPats [] s = s
-bindPats (p :: rest) s = bindPats rest (bindPat p s)
+export
+renderTailRefusal : List String -> String
+renderTailRefusal bad = joinWith "\n" bad
 
-bindPat : Pat -> OrdMap Unit -> OrdMap Unit
-bindPat (PVar x _) s = omInsert x () s
-bindPat PWild s = s
-bindPat (PLit _) s = s
-bindPat (PCon _ ps) s = bindPats ps s
-bindPat (PCons h t) s = bindPat t (bindPat h s)
-bindPat (PTuple ps) s = bindPats ps s
-bindPat (PList ps) s = bindPats ps s
-bindPat (PAs x _ p) s = bindPat p (omInsert x () s)
-bindPat (PRng _ _ _) s = s
-bindPat (PRec _ fields _) s = bindRecFields fields s
+tailBinds : List CBind -> List String -> List String
+tailBinds [] acc = acc
+tailBinds ((CBind name clauses _) :: rest) acc =
+  tailBinds rest (tailClauses name clauses acc)
 
--- A punned field `{x}` binds the field's own name.
-bindRecFields : List RecPatField -> OrdMap Unit -> OrdMap Unit
-bindRecFields [] s = s
-bindRecFields ((RecPatField f _ None) :: rest) s =
-  bindRecFields rest (omInsert f () s)
-bindRecFields ((RecPatField _ _ (Some p)) :: rest) s =
-  bindRecFields rest (bindPat p s)
+tailClauses : String -> List CClause -> List String -> List String
+tailClauses _ [] acc = acc
+tailClauses b ((CClause pats body) :: rest) acc =
+  tailClauses b rest (tailE b (isNonEmptyL pats) body acc)
+
+tailImpls : List CImplEntry -> List String -> List String
+tailImpls [] acc = acc
+tailImpls ((CImplEntry method _ _ body) :: rest) acc =
+  tailImpls rest (tailImplBody "impl \{method}" body acc)
+
+tailImplBody : String -> CImplBody -> List String -> List String
+tailImplBody b (CImplTagged tag _ _ _ pats body) acc =
+  tailE "\{b}@\{tag}" (isNonEmptyL pats) body acc
+tailImplBody b (CImplDefault _ tag _ _ pats body) acc =
+  tailE "\{b}@\{tag}" (isNonEmptyL pats) body acc
+
+-- `b` is the top-level binding being read; `tl` is whether `e` is in tail
+-- position.  No catch-all arm.
+tailE : String -> Bool -> CExpr -> List String -> List String
+tailE b tl (CApp f args (CallSite mode flag)) acc =
+  tailList b args (tailE b False f (tailCallNote b tl f mode flag acc))
+tailE _ _ (CVar _ _) acc = acc
+tailE _ _ (CLit _) acc = acc
+tailE b _ (CLam _ body) acc = tailE b True body acc
+tailE b tl (CLet _ _ rhs body) acc = tailE b tl body (tailE b False rhs acc)
+tailE b tl (CLetGroup binds body) acc =
+  tailE b tl body (tailLocalBinds b binds acc)
+tailE b tl (CMatch scrut arms) acc =
+  tailArms b tl arms (tailE b False scrut acc)
+tailE b tl (CDecision scrut arms _) acc =
+  tailArms b tl arms (tailE b False scrut acc)
+tailE b tl (CIf c t f) acc = tailE b tl f (tailE b tl t (tailE b False c acc))
+tailE b _ (CBinPrim _ l r _ _) acc = tailList b [l, r] acc
+tailE b _ (CUnOp _ x) acc = tailE b False x acc
+tailE b _ (CTuple es) acc = tailList b es acc
+tailE b _ (CList es) acc = tailList b es acc
+tailE b _ (CRecord _ fields) acc = tailFields b fields acc
+tailE b _ (CFieldAccess x _ _ _) acc = tailE b False x acc
+tailE b _ (CRecordUpdate _ base fields) acc =
+  tailFields b fields (tailE b False base acc)
+tailE b _ (CVariantUpdate _ base fields) acc =
+  tailFields b fields (tailE b False base acc)
+tailE b _ (CArray es) acc = tailList b es acc
+tailE b _ (CRangeList lo hi _) acc = tailList b [lo, hi] acc
+tailE b _ (CRangeArray lo hi _) acc = tailList b [lo, hi] acc
+tailE b _ (CIndex a i) acc = tailList b [a, i] acc
+tailE b _ (CSlice a lo hi _) acc = tailList b [a, lo, hi] acc
+tailE b _ (CStringIndex a i) acc = tailList b [a, i] acc
+tailE b _ (CStringSlice a lo hi _) acc = tailList b [a, lo, hi] acc
+tailE b _ (CListIndex a i) acc = tailList b [a, i] acc
+tailE b _ (CListSlice a lo hi _) acc = tailList b [a, lo, hi] acc
+tailE b tl (CBlock stmts) acc = tailStmts b tl stmts acc
+tailE _ _ (CMethod _ _ _ _ _ _) acc = acc
+tailE _ _ (CDict _ _) acc = acc
+
+tailCallNote : String ->
+  Bool ->
+  CExpr ->
+  CallMode ->
+  Bool ->
+  List String ->
+  List String
+tailCallNote b tl hd mode flag acc =
+  if flag && not tl then
+    "tail: \{headText hd} is flagged as a tail call outside tail position [in \{b}]"
+      :: acc
+  else if flag && isPartialCall mode then
+    "tail: \{headText hd} is flagged as a tail call but is a partial application \{callModeSexp mode} [in \{b}]"
+      :: acc
+  else if tl && not flag && not (isPartialCall mode) then
+    "tail: \{headText hd} is in tail position, stamped \{callModeSexp mode}, but not flagged [in \{b}]"
+      :: acc
+  else
+    acc
+
+isPartialCall : CallMode -> Bool
+isPartialCall (CallPartial _) = True
+isPartialCall _ = False
+
+tailList : String -> List CExpr -> List String -> List String
+tailList _ [] acc = acc
+tailList b (e :: rest) acc = tailList b rest (tailE b False e acc)
+
+tailFields : String -> List CField -> List String -> List String
+tailFields _ [] acc = acc
+tailFields b ((CField _ _ e) :: rest) acc =
+  tailFields b rest (tailE b False e acc)
+
+tailLocalBinds : String -> List CBind -> List String -> List String
+tailLocalBinds _ [] acc = acc
+tailLocalBinds b ((CBind _ clauses _) :: rest) acc =
+  tailLocalBinds b rest (tailClauses b clauses acc)
+
+tailArms : String -> Bool -> List CArm -> List String -> List String
+tailArms _ _ [] acc = acc
+tailArms b tl ((CArm _ guards body) :: rest) acc =
+  tailArms b tl rest (tailE b tl body (tailGuards b guards acc))
+
+tailGuards : String -> List CGuard -> List String -> List String
+tailGuards _ [] acc = acc
+tailGuards b ((CGBool c) :: rest) acc = tailGuards b rest (tailE b False c acc)
+tailGuards b ((CGBind _ e) :: rest) acc =
+  tailGuards b rest (tailE b False e acc)
+
+tailStmts : String -> Bool -> List CStmt -> List String -> List String
+tailStmts _ _ [] acc = acc
+tailStmts b tl [CSExpr e] acc = tailE b tl e acc
+tailStmts b tl (st :: rest) acc = tailStmts b tl rest (tailStmt b st acc)
+
+tailStmt : String -> CStmt -> List String -> List String
+tailStmt b (CSExpr e) acc = tailE b False e acc
+tailStmt b (CSLet _ _ e) acc = tailE b False e acc
+tailStmt b (CSAssign _ e) acc = tailE b False e acc
