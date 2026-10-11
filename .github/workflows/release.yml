@@ -34,7 +34,7 @@ on:
     paths:
       - '.github/workflows/release.yml'
       - 'scripts/make_dist.sh'
-      - 'test/dist_install_smoke.sh'
+      - 'test/dist_install_smoke_test.mdk'
 
 jobs:
   # ── linux-x86_64 ─────────────────────────────────────────────────────────
@@ -56,7 +56,7 @@ jobs:
         run: make dist
 
       - name: Smoke-test the produced tarball
-        run: sh test/dist_install_smoke.sh dist/*.tar.gz
+        run: DIST_TARBALL="$PWD/$(ls dist/*.tar.gz)" ./medaka test --native test/dist_install_smoke_test.mdk
 
       - name: Upload tarball
         uses: actions/upload-artifact@v4
@@ -97,7 +97,7 @@ jobs:
         run: make dist
 
       - name: Smoke-test the produced tarball
-        run: sh test/dist_install_smoke.sh dist/*.tar.gz
+        run: DIST_TARBALL="$PWD/$(ls dist/*.tar.gz)" ./medaka test --native test/dist_install_smoke_test.mdk
 
       - name: Upload tarball
         uses: actions/upload-artifact@v4

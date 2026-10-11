@@ -20,7 +20,7 @@ on:
       - 'test/build_native_medaka.sh'
       - 'test/bootstrap_from_seed.sh'
       - 'scripts/make_dist.sh'
-      - 'test/dist_install_smoke.sh'
+      - 'test/dist_install_smoke_test.mdk'
       - '.github/workflows/release.yml'
       - '.github/workflows/macos.yml'
       - '.github/actions/macos-smoke/**'

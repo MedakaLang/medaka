@@ -230,7 +230,7 @@
 | `test/diff_native_cli.sh` | GOLDEN | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL, SECTION-SPLIT | 18657 | 514 | WRAP: spawns ./medaka + diffs, module does the same [clang,python3] |
 | `test/diff_native_stack.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE, EXTERNAL-TOOL | 12975 | 124 | REWRITE: probe/static text becomes library calls [clang] |
 | `test/diff_net.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 2883 | 90 | WRAP: spawns ./medaka + diffs, module does the same [node] |
-| `test/dist_install_smoke.sh` | OTHER | native | N | NO | NATIVE-KIND-RUNNER | 7198 | 92 | WRAP: spawns ./medaka + diffs, module does the same |
+| `dist_install_smoke.sh` → `test/dist_install_smoke_test.mdk` | OTHER | native | N | NO | NATIVE-KIND-RUNNER | 7198 | 92 | WRAP: migrated to native test |
 | `effect_builtin_param_domain.sh` → `test/effect_builtin_param_domain_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 5175 | 249 | WRAP: migrated to native test [clang] |
 | `effect_param_domain.sh` → `test/effect_param_domain_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 716 | 80 | WRAP: migrated to native test |
 | `effect_product_domain.sh` → `test/effect_product_domain_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 1060 | 81 | WRAP: migrated to native test |

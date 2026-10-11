@@ -4,7 +4,7 @@ description: >-
   run a small smoke over it (#2533): `medaka check`, `medaka run` and
   `medaka build` on a few inline programs, the interpreter and the native
   binary compared against fixed expected output, then the relocatable-dist
-  smoke (test/dist_install_smoke.sh). A smoke, not the gate suite: it
+  smoke (test/dist_install_smoke_test.mdk). A smoke, not the gate suite: it
   answers "does the toolchain build and produce working programs on macOS",
   which the all-Linux merge tier cannot.
 
@@ -112,4 +112,4 @@ runs:
 
     - name: Relocatable dist smoke
       shell: bash
-      run: sh test/dist_install_smoke.sh
+      run: ./medaka test --native test/dist_install_smoke_test.mdk

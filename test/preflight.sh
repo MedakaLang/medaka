@@ -1201,7 +1201,7 @@ while IFS= read -r f; do
     # preflight derives its map independently — [W-THIRD-CONSUMER]). Left
     # unmapped, a packaging-only diff ran no gate at all (not even a widened
     # full suite, since preflight's UNMAPPED path only WARNS locally).
-    test/dist_install_smoke.sh)    add 'dist_install_smoke' ;;
+    test/dist_install_smoke_test.mdk) add 'dist_install_smoke' ;;
     scripts/make_dist.sh)          add 'dist_install_smoke' ;;
     # Same shape as F-9 above: `check_fingerprint_parity` also lacks the
     # `diff_compiler_` prefix, and its arm-2 input is a `.awk` file the generic

@@ -1,0 +1,146 @@
+{- | Gate for the distribution tarball's relocatability. Replaces dist_install_smoke.sh.
+   Tarball: env DIST_TARBALL if set and non-empty (release.yml passes the exact
+   file it ships; it must exist), otherwise a fresh scripts/make_dist.sh run whose
+   stdout path must exist.
+   Proves: the tarball unpacks into exactly one top-level dir holding medaka,
+   medaka_emitter, stdlib, runtime/medaka_rt.c, LICENSE and README.md; from a probe
+   dir OUTSIDE the repo with MEDAKA_ROOT unset, `medaka run` prints 12345,
+   `medaka build` exits 0 producing an executable that prints 12345.
+   Does NOT prove: that a fresh make_dist.sh tarball equals the shipped bytes (only
+   the DIST_TARBALL arm does that); anything about platforms other than the host. -}
+
+import io.{getEnvOr}
+import fs.{isDir, isFile, mkdirAll}
+import string.{trimRight}
+import test_process.{underRoot, boundedVerb, withScratchDir}
+import test.{Expectation, fail, pass}
+
+requiredNames : List String
+requiredNames = [
+  "medaka", "medaka_emitter", "stdlib", "runtime/medaka_rt.c", "LICENSE",
+  "README.md"
+]
+
+-- Stat helper: a path counts as present if it is a file or a directory.
+present : String -> <FileRead> Result String Bool
+present p = match isFile p
+  Err e => Err "could not stat \{p}: \{e}"
+  Ok True => Ok True
+  Ok False => isDir p
+
+existingFile : String -> <FileRead> Result String String
+existingFile p = match isFile p
+  Err e => Err "could not stat \{p}: \{e}"
+  Ok True => Ok p
+  Ok False => Err "tarball does not exist: \{p}"
+
+-- Packages a fresh tarball via make_dist.sh; its stdout is the tarball path.
+makeDist : String -> <Exec, IO, FileRead> Result String String
+makeDist distDir =
+  match boundedVerb "sh" [underRoot "scripts/make_dist.sh", distDir]
+    Err e => Err "could not spawn make_dist.sh: \{e}"
+    Ok (code, out, _) =>
+      if code /= 0 then
+        Err
+          "make_dist.sh failed to produce a tarball (exit \{intToString code})"
+      else
+        existingFile (trimRight out)
+
+resolveTarball : String ->
+  <Exec, IO, FileRead, Env "DIST_TARBALL"> Result String String
+resolveTarball distDir = match getEnvOr "DIST_TARBALL" ""
+  "" => makeDist distDir
+  given => existingFile given
+
+-- Names the directory entries (listDir may return bare names or paths).
+dirEntries : String -> List String -> <FileRead> Result String (List String)
+dirEntries _ [] = Ok []
+dirEntries root (e :: rest) = do
+  d <- isDir "\{root}/\{e}"
+  ds <- dirEntries root rest
+  Ok (if d then e :: ds else ds)
+
+topTree : String -> <FileRead> Result String String
+topTree installDir = match listDir installDir
+  Err e => Err "could not list \{installDir}: \{e}"
+  Ok entries => match dirEntries installDir entries
+    Err e => Err e
+    Ok [d] => Ok "\{installDir}/\{d}"
+    Ok ds =>
+      Err
+        "expected exactly one top-level dir under \{installDir}, found \{intToString (length ds)}"
+
+firstMissing : String -> List String -> <FileRead> Result String (Option String)
+firstMissing _ [] = Ok None
+firstMissing tree (f :: rest) = match present "\{tree}/\{f}"
+  Err e => Err e
+  Ok True => firstMissing tree rest
+  Ok False => Ok (Some f)
+
+-- Runs bin args from probe with MEDAKA_ROOT unset; stdout+stderr combined.
+runFrom : String -> String -> List String -> <Exec> Result String String
+runFrom probe bin args =
+  match (boundedVerb
+    "sh"
+    ([
+        "-c", "cd \"$1\" && shift && exec env -u MEDAKA_ROOT \"$@\" 2>&1",
+        "medaka", probe, bin
+      ]
+      ++ args))
+    Err e => Err "could not spawn \{bin}: \{e}"
+    Ok (code, out, _) =>
+      if code /= 0 then
+        Err "\{bin} exited \{intToString code}: \{trimRight out}"
+      else
+        Ok (trimRight out)
+
+isExecutable : String -> <Exec> Result String Unit
+isExecutable path =
+  match boundedVerb "sh" ["-c", "test -x \"$1\"", "test", path]
+    Err e => Err "could not spawn test -x: \{e}"
+    Ok (code, _, _) =>
+      if code /= 0 then
+        Err "build reported success but \{path} is not an executable"
+      else
+        Ok ()
+
+expectOut : String -> String -> Result String Unit
+expectOut want got =
+  if got == want then Ok () else Err "expected \{want}, got: \{got}"
+
+pipeline : String ->
+  <Exec, IO, FileRead, FileWrite, Env "DIST_TARBALL"> Result String Unit
+pipeline scratch = do
+  _ <- mkdirAll (scratch ++ "/dist")
+  _ <- mkdirAll (scratch ++ "/install")
+  probe <- Ok (scratch ++ "/probe")
+  _ <- mkdirAll probe
+  tarball <- resolveTarball (scratch ++ "/dist")
+  (tarCode, _, _) <- boundedVerb "tar" [
+    "-C",
+    scratch ++ "/install",
+    "-xzf",
+    tarball,
+  ]
+  _ <- if tarCode /= 0 then Err "failed to unpack \{tarball}" else Ok ()
+  tree <- topTree (scratch ++ "/install")
+  missing <- firstMissing tree requiredNames
+  _ <- match missing
+    None => Ok ()
+    Some f => Err "unpacked tree missing \{f}"
+  _ <- writeFile (probe ++ "/hello.mdk") "main = println 12345\n"
+  ran <- runFrom probe (tree ++ "/medaka") ["run", "hello.mdk"]
+  _ <- expectOut "12345" ran
+  _ <- runFrom probe (tree ++ "/medaka") [
+    "build", "hello.mdk", "-o", "hello_built"
+  ]
+  _ <- isExecutable (probe ++ "/hello_built")
+  built <- runFrom probe (probe ++ "/hello_built") []
+  expectOut "12345" built
+
+verdict : Result String Unit -> Expectation
+verdict (Err e) = fail "dist_install_smoke: \{e}"
+verdict (Ok _) = pass
+
+test "dist_install_smoke: tarball unpacks to a relocatable tree; run, build and execute with MEDAKA_ROOT unset" =
+  withScratchDir (scratch => verdict (pipeline scratch))
