@@ -3487,11 +3487,11 @@ project = "compiler"
 # `nightly`: nightly.yml's macos-smoke job also runs it, on macOS (#2533).
 tiers = ["merge", "nightly"]
 cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "test/dist_install_smoke.sh"
+kind = "native"
+migration = "done"
+run = "test/dist_install_smoke_test.mdk"
 oracles = []
-sources = ["test/dist_install_smoke.sh", "scripts/make_dist.sh", "Makefile"]
+sources = ["scripts/make_dist.sh", "Makefile"]
 corpus = []
 toolchain = []
 
