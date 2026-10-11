@@ -6,8 +6,8 @@
    (default <root>/medaka_emitter) and MEDAKA_CLANG_OPT=-O0, runs the produced
    binary, and compares its stdout with the committed <fixture>.build.golden.
    Trailing newlines are ignored on both sides, as the script's `$(...)` did.
-   The binary's exit code is not compared and its stderr is dropped.
-   Every spawn's exit and Err are graded.
+   The binary's exit code is ignored, except 126/127 (could not launch), which FAIL.
+   Its stderr is dropped. Every build spawn's exit and Err are graded.
 
    Proves: every fixture builds through the native driver and its binary emits
    the committed golden stdout.
@@ -17,7 +17,9 @@
    MEDAKA_TEST_JOBS at a time. -}
 
 import test_process.{medakaBin, medakaRoot, underRoot, withScratchDir, testJobs}
-import test.{Expectation, expectAll, expectAtLeast, expectNoFindings, fail}
+import test.{
+  Expectation, expectAll, expectAtLeast, expectEqual, expectNoFindings, fail
+}
 import fs.{fixtureFiles}
 import io.{getEnvOr}
 import string.{contains, startsWith, stripSuffix, take, replaceAll}
@@ -120,7 +122,7 @@ runVerdict label want (Ok (rc, out, _)) =
 gate : String ->
   String ->
   List (String, String) ->
-  <Exec, IO, FileRead, FileWrite> List String
+  <Exec, IO, FileRead, FileWrite> Expectation
 gate dir medaka rows =
   let root = medakaRoot
   let emitter = getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
@@ -140,23 +142,27 @@ gate dir medaka rows =
   let withB = zip rows builds
   let withR = zip withB runs
   let withG = zip withR goldens
-  map (((((label, _), b), r), g) => verdict label g b r) withG
+  let n = length rows
+  let verdicts = map (((((label, _), b), r), g) => verdict label g b r) withG
+  let failures = filter (v => not (startsWith "ok " v)) verdicts
+  -- zip truncates to the shortest list; these equalities make a short batch a hard FAIL.
+  expectAll [
+    expectEqual n (length builds),
+    expectEqual n (length runs),
+    expectAtLeast 92 (length verdicts),
+    expectNoFindings
+      "\{intToString (length failures)} of \{intToString (length verdicts)} build_diff fixtures failed (regen: build and review the fixture yourself, then write its .build.golden)"
+      (Ok failures),
+  ]
 
 check : <Exec, IO, FileRead, FileWrite> Expectation
 check = match worklist
   Err e => fail e
-  Ok (tops, sp) => withScratchDir (dir =>
-    let rows = tops ++ sp
-    let verdicts = gate dir medakaBin rows
-    let failures = filter (v => not (startsWith "ok " v)) verdicts
-    expectAll [
-      expectAtLeast 86 (length tops),
-      expectAtLeast 6 (length sp),
-      expectAtLeast 92 (length verdicts),
-      expectNoFindings
-        "build_diff fixtures that failed (regen: build and review the fixture yourself, then write its .build.golden)"
-        (Ok failures),
-    ])
+  Ok (tops, sp) => withScratchDir (dir => expectAll [
+    expectAtLeast 86 (length tops),
+    expectAtLeast 6 (length sp),
+    gate dir medakaBin (tops ++ sp),
+  ])
 
-test "diff_compiler_build.sh: native build of every build_diff fixture matches its golden stdout" =
+test "diff_compiler_build: native build of every build_diff fixture matches its golden stdout" =
   check
