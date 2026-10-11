@@ -191,6 +191,9 @@ import frontend.ast.{
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
+  givenNames,
+  isGivenRooted,
+  receiverEvidence,
   CField(..),
   CBind(..),
   CClause(..),
@@ -276,7 +279,6 @@ import backend.trmc_analysis.{
   flattenApp,
   lengthS,
   freeVars,
-  routeDictNames,
   bindName,
   bindNames,
   patVars,
@@ -6541,9 +6543,9 @@ satOnlyUses name arity (CBlock stmts) = satOnlyStmts name arity stmts
 -- a dict/method occurrence names its captured dict PARAMS, never a local
 -- function binding — but read them anyway rather than assume it.
 satOnlyUses name _ (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
-  not (contains name (routeDictNames [] (route :: implRoutes ++ methRoutes)))
+  not (contains name (flatMap givenNames (route :: implRoutes ++ methRoutes)))
 satOnlyUses name _ (CDict _ routes) =
-  not (contains name (routeDictNames [] routes))
+  not (contains name (flatMap givenNames routes))
 satOnlyUses _ _ _ = False
 
 satOnlyList : String -> Int -> List CExpr -> Bool
@@ -7239,7 +7241,11 @@ emitMethod e env name iface siteArity (route@(RKey tag _ _)) implRoutes methRout
         dictWordsOf
           e
           env
-          (staticEntryDictRoutes e name entry route methRoutes implRoutes)
+          (staticEntryDictRoutes
+            e
+            name
+            entry
+            (MethodEvidence iface siteArity route implRoutes methRoutes))
       -- [tag] is the selected instance's canonical key.  For tagToLTy/returns-self
       -- use the matched entry's head tag; the lifted-fn symbol is the entry's stamp, so
       -- it matches emitGroup's name.
@@ -7353,7 +7359,7 @@ emitMethodValue e env name iface siteArity route implRoutes methRoutes =
   let node =
     CMethod name (MethodEvidence iface siteArity route implRoutes methRoutes)
   let arity = methodValueArity e node
-  if isDynamicMethodRoute route || arity <= 0 then
+  if isGivenRooted route || arity <= 0 then
     emitMethod
       e
       env
@@ -7366,11 +7372,10 @@ emitMethodValue e env name iface siteArity route implRoutes methRoutes =
       []
       (callModeFor (definedArity e node) 0)
   else
-    -- the lifted body builds the site's impl and method dictionaries too, and
-    -- either may read an enclosing dictionary parameter
+    -- the lifted body re-dispatches the occurrence and builds its dictionaries,
+    -- so it reads every given dictionary the evidence names
     let capNames =
-      dedupS
-        (methValDictNames route ++ routeDictNames [] (implRoutes ++ methRoutes))
+      dedupS (flatMap givenNames (route :: implRoutes ++ methRoutes))
     let capWords = capDictWords e env capNames
     let lamName = "mdk_methval_\{name}\{mangleScoped e}"
     let _ =
@@ -7413,27 +7418,6 @@ methodArgDispatchArity e name iface siteArity =
   match implGroupsForMethodArity e name iface siteArity
     [] => siteArity
     groups => headPos (groupPositionsOf (headGroup groups)) + 1
-
-isDynamicMethodRoute : Route -> Bool
-isDynamicMethodRoute (RDict _) = True
-isDynamicMethodRoute (RDictFwd _) = True
-isDynamicMethodRoute (RProj _ _) = True
-isDynamicMethodRoute _ = False
-
--- the dict-witness param name(s) a route reads at runtime (the names whose words the
--- value-closure must capture so the lifted body can rebind them).  Only RDict/
--- RDictFwd name a dict; RKey/RNone/RLocal capture nothing.  (Distinct from the
--- `freeVars` helper `routeDictNames`, which scans a route LIST for free dict vars.)
-methValDictNames : Route -> List String
-methValDictNames (RDict d) = [d]
-methValDictNames (RDictFwd d) = [d]
--- S-1: a VALUE-position constrained shadow (`map size xs`) lifts to a closure, and its
--- RLocal route's dict slots may include an RDict — the enclosing constrained fn's own
--- dict param.  That word must be CAPTURED or the lifted body reads an out-of-scope
--- name.  Empty dicts ⇒ [] ⇒ byte-identical to the pre-S1 catch-all.
-methValDictNames (RLocal _ dicts) = routeDictNames [] dicts
-methValDictNames (RProj r _) = methValDictNames r
-methValDictNames _ = []
 
 -- the operand words for each captured dict name, looked up in the current emit env.
 capDictWords : Emit -> OrdMap (String, LTy) -> List String -> List String
@@ -7558,19 +7542,13 @@ emitDictValDefine e lamName name nDicts valArity =
 staticEntryDictRoutes : Emit ->
   String ->
   CImplEntry ->
-  Route ->
-  List Route ->
-  List Route ->
+  MethodEvidence ->
   List Route
-staticEntryDictRoutes e name ent route methRoutes implRoutes =
+staticEntryDictRoutes e name ent ev =
   if isInheritedEntry ent then
-    methRoutes ++ [receiverRoute route implRoutes]
+    ev.meContext ++ [receiverEvidence ev]
   else
-    methRoutes ++ implRoutesForDefine e name ent methRoutes implRoutes
-
-receiverRoute : Route -> List Route -> Route
-receiverRoute (RKey word _ sups) implRoutes = RKey word implRoutes sups
-receiverRoute route _ = route
+    ev.meContext ++ implRoutesForDefine e name ent ev.meContext ev.mePrereqs
 
 -- an inherited default's per-instance entry
 isInheritedEntry : CImplEntry -> Bool
@@ -13286,7 +13264,11 @@ directCallOperands e env ex =
         Some ent =>
           let argOps = emitArgs e env args
           let dictRoutes =
-            staticEntryDictRoutes e name ent route methRoutes implRoutes
+            staticEntryDictRoutes
+              e
+              name
+              ent
+              (MethodEvidence iface siteArity route implRoutes methRoutes)
           let dictWords = dictWordsOf e env dictRoutes
           Some (implEntryFnName name ent, dictWords ++ argOps)
         None => None

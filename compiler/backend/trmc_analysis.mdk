@@ -11,6 +11,8 @@ import frontend.ast.{Pat(..), Route(..), Addr(..)}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
+  givenNames,
+  instanceWord,
   CField(..),
   CBind(..),
   CClause(..),
@@ -112,36 +114,17 @@ freeVars b (CListIndex a i) = freeVars b a ++ freeVars b i
 freeVars b (CListSlice a lo hi _) =
   freeVars b a ++ freeVars b lo ++ freeVars b hi
 freeVars b (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
-  routeDictNames b (route :: implRoutes ++ methRoutes)
+  freeGivens b (route :: implRoutes ++ methRoutes)
 -- The head names a local closure when a let binder abstracted dictionaries.
 freeVars b (CDict n routes) =
-  (if contains n b then [] else [n]) ++ routeDictNames b routes
+  (if contains n b then [] else [n]) ++ freeGivens b routes
 freeVars _ _ = []
 
--- collect the captured dict-param names (RDict/RDictFwd) from a list of Routes.
--- RKey and RNone carry no captured variable name; only RDict/RDictFwd name a dict
--- parameter that the enclosing closure must capture from its env.
+-- the given dictionary names [routes] read that [b] does not bind
 export
-routeDictNames : List String -> List Route -> List String
-routeDictNames _ [] = []
-routeDictNames b ((RDict d) :: rest) =
-  (if contains d b then [] else [d]) ++ routeDictNames b rest
-routeDictNames b ((RDictFwd d) :: rest) =
-  (if contains d b then [] else [d]) ++ routeDictNames b rest
--- S-1: an RLocal route carries the shadowing standalone's OWN constraint dicts, and
--- one of those slots can be an RDict — a constrained caller forwarding its own dict
--- param into the standalone (`outer : Num a => a -> a; outer v = size v`).  That name
--- is a genuine free local: recurse.  Empty dicts (every unconstrained standalone) ⇒
--- [] ⇒ byte-identical to the pre-S1 catch-all.
-routeDictNames b ((RLocal _ dicts) :: rest) =
-  routeDictNames b dicts ++ routeDictNames b rest
--- A dictionary built at the site nests its requires and supers, and either may
--- forward an enclosing dict parameter; a projection reads the one it projects.
-routeDictNames b ((RKey _ reqs sups) :: rest) =
-  routeDictNames b reqs ++ routeDictNames b sups ++ routeDictNames b rest
-routeDictNames b ((RProj r _) :: rest) =
-  routeDictNames b [r] ++ routeDictNames b rest
-routeDictNames b (_ :: rest) = routeDictNames b rest
+freeGivens : List String -> List Route -> List String
+freeGivens b routes =
+  filterList (d => not (contains d b)) (flatMap givenNames routes)
 
 export
 freeVarsFields : List String -> List CField -> List String
@@ -466,7 +449,7 @@ isSelfHead : SelfRef -> CExpr -> Bool
 isSelfHead (SelfByVar self) (CVar f _) = f == self
 isSelfHead (SelfByVar self) (CDict f _) = f == self
 isSelfHead (SelfByMethod method tag _) (CMethod m (MethodEvidence _ _ route _ _)) =
-  m == method && routeIsKey tag route
+  m == method && instanceWord route == Some tag
 isSelfHead _ _ = False
 
 -- every route is a forwarded dict param (`RDict`/`RDictFwd`) — the only shapes a
@@ -477,13 +460,6 @@ dictRoutesForwarded [] = True
 dictRoutesForwarded ((RDict _) :: rest) = dictRoutesForwarded rest
 dictRoutesForwarded ((RDictFwd _) :: rest) = dictRoutesForwarded rest
 dictRoutesForwarded _ = False
-
--- a route is `RKey tag …` for this tag (the concrete-impl dispatch a dispatched
--- self-recursion carries after restampIface).
-export
-routeIsKey : String -> Route -> Bool
-routeIsKey tag (RKey t _ _) = t == tag
-routeIsKey _ _ = False
 
 -- `ex` contains NO free reference to `self`.  SelfByVar: freeVars (a CVar name)
 -- PLUS the CDict-aware walk — `freeVars (CDict f routes)` returns only the route
@@ -507,7 +483,7 @@ selfFree (SelfByMethod method tag _) ex = not (mentionsSelfMethod method tag ex)
 export
 mentionsSelfMethod : String -> String -> CExpr -> Bool
 mentionsSelfMethod method tag (CMethod m (MethodEvidence _ _ route _ _)) =
-  m == method && routeIsKey tag route
+  m == method && instanceWord route == Some tag
 mentionsSelfMethod method tag (CApp f args _) =
   mentionsSelfMethod method tag f
     || anyList (mentionsSelfMethod method tag) args

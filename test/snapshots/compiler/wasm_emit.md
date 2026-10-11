@@ -1,5 +1,5 @@
 # META
-source_lines=12165
+source_lines=12142
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -206,6 +206,8 @@ import ir.core_ir.{
   CClause(..),
   CExpr(..),
   MethodEvidence(..),
+  instanceWord,
+  receiverEvidence,
   CStmt(..),
   CArm(..),
   CGuard(..),
@@ -288,6 +290,7 @@ import ir.core_ir_lower.{
 import backend.trmc_analysis.{
   SelfRef(..),
   methodSelf,
+  freeGivens,
   trmcEligible,
   isCtorTail,
   isSelfSatApp,
@@ -4729,7 +4732,7 @@ emitMethodRKeyCallRef : Prog ->
   CallEndW ->
   List String
 emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoutes args end =
-  let tag = routeKeyWordW route
+  let tag = optionOr "" (instanceWord route)
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
   -- `RKey tag` selects a STATIC impl (peer of llvm_emit's emitMethod RKey arm): the
   -- entry of the occurrence's interface filed under the instance key [tag] — a
@@ -4749,7 +4752,9 @@ emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoute
       let keptWords =
         flatMap
           (routeWitness prog env d)
-          (staticEntryDictRoutesW entry route methRoutes implRoutes)
+          (staticEntryDictRoutesW
+            entry
+            (MethodEvidence iface siteArity route implRoutes methRoutes))
       keptWords ++ argInstrs ++ [callInstrW end (implEntrySymW name entry)]
     None =>
       gapLP
@@ -4761,24 +4766,14 @@ emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoute
 -- ones (llvm_emit's `staticEntryDictRoutes`): a supplied method's kept `requires`,
 -- or an inherited default's RECEIVER, the selected instance's dictionary built from
 -- the site's word, `requires` routes and the supers the route carries for this case.
-staticEntryDictRoutesW : CImplEntry ->
-  Route ->
-  List Route ->
-  List Route ->
-  List Route
-staticEntryDictRoutesW ent route methRoutes implRoutes =
+staticEntryDictRoutesW : CImplEntry -> MethodEvidence -> List Route
+staticEntryDictRoutesW ent ev =
   if isInheritedEntryW ent then
-    methRoutes ++ [receiverRouteW route implRoutes]
+    ev.meContext ++ [receiverEvidence ev]
   else
-    takeRoutesW (implLeadingDictCountOfEntryW ent) (methRoutes ++ implRoutes)
-
-receiverRouteW : Route -> List Route -> Route
-receiverRouteW (RKey word _ sups) implRoutes = RKey word implRoutes sups
-receiverRouteW route _ = route
-
-routeKeyWordW : Route -> String
-routeKeyWordW (RKey word _ _) = word
-routeKeyWordW _ = ""
+    takeRoutesW
+      (implLeadingDictCountOfEntryW ent)
+      (ev.meContext ++ ev.mePrereqs)
 
 -- an inherited default's per-instance entry
 isInheritedEntryW : CImplEntry -> Bool
@@ -5168,8 +5163,8 @@ emitLocalDictRef prog env d name routes args end =
 --
 -- FIX: ETA-EXPAND the occurrence to a synthetic lambda `\a0..a(k-1) -> head a0..a(k-1)`
 -- and lower it through emitClosure — the universal W4 closure path.  emitClosure (a)
--- captures the route's forwarded dict params (freeVarsExpr surfaces RDict/RDictFwd via
--- freeVarsRoute) into the closure $env, and (b) re-emits the SATURATED dispatch in the
+-- captures the route's forwarded dict params (freeVarsExpr surfaces every given the
+-- evidence names, `core_ir.givenNames`) into the closure $env, and (b) re-emits the SATURATED dispatch in the
 -- lifted body via the CALL-position emitMethodRef/emitDictRef (correct: dicts ++ args ++
 -- call).  The result is a `$clos` struct (code_ptr, arity, $env captures) with the exact
 -- ABI W4 HOFs expect — the working lambda path IS the reference.
@@ -10034,28 +10029,10 @@ freeVarsExpr bound (CSlice e lo hi _) =
 -- capture set → "dict param '$dict_…' not in scope".  (These nodes carry no value
 -- args of their own — args arrive via the surrounding CApp, already handled.)
 freeVarsExpr bound (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
-  flatMap (freeVarsRoute bound) (route :: implRoutes ++ methRoutes)
+  freeGivens bound (route :: implRoutes ++ methRoutes)
 freeVarsExpr bound (CDict name routes) =
-  (if contains name bound then [] else [name])
-    ++ flatMap (freeVarsRoute bound) routes
+  (if contains name bound then [] else [name]) ++ freeGivens bound routes
 freeVarsExpr bound _ = []
-
--- the dict-param names a Route reads: RDict/RDictFwd name a leading dict param (free
--- unless locally bound); RKey recurses into its nested requires-routes; RNone none.
-freeVarsRoute : List String -> Route -> List String
-freeVarsRoute bound (RDict d) = if contains d bound then [] else [d]
-freeVarsRoute bound (RDictFwd d) = if contains d bound then [] else [d]
-freeVarsRoute bound (RKey _ rs sups) =
-  flatMap (freeVarsRoute bound) (rs ++ sups)
-freeVarsRoute bound (RProj r _) = freeVarsRoute bound r
-freeVarsRoute bound RNone = []
--- S-1 (wasm peer of llvm_emit's methValDictNames RLocal arm): an RLocal route's TARGET
--- is a global symbol, but its DICT slots can hold an RDict — the enclosing constrained
--- fn's own dict param, a genuine captured local.  Recurse into them.  Empty dicts (every
--- unconstrained standalone) ⇒ [] ⇒ byte-identical to the pre-S1 arm.  RScalar (a
--- scalar-type tag on a CBinPrim binop) still captures nothing.
-freeVarsRoute bound (RLocal _ dicts) = flatMap (freeVarsRoute bound) dicts
-freeVarsRoute _ (RScalar _) = []
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : List String -> CBind -> List String
@@ -12169,14 +12146,14 @@ gap : String -> a
 gap msg = panic ("wasm_emit gap — " ++ msg)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false) (mem "wasmUses" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "lazyGlobalNames" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false))))
@@ -13046,15 +13023,9 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "missesArity" ((PCon "CallOver" PWild)) (EVar "True"))
 (DFunDef false "missesArity" (PWild) (EVar "False"))
 (DTypeSig false "emitMethodRKeyCallRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "CallEndW") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
-(DFunDef false "emitMethodRKeyCallRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes") (PVar "args") (PVar "end")) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "routeKeyWordW") (EVar "route"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "iface")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "keptWords") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EApp (EApp (EApp (EApp (EVar "staticEntryDictRoutesW") (EVar "entry")) (EVar "route")) (EVar "methRoutes")) (EVar "implRoutes")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "keptWords") (EVar "argInstrs")) (EListLit (EApp (EApp (EVar "callInstrW") (EVar "end")) (EApp (EApp (EVar "implEntrySymW") (EVar "name")) (EVar "entry")))))))) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "wasm layer-15: no impl of method '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' for instance '"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "'")))) (EApp (EVar "endValueW") (EVar "end"))))))))
-(DTypeSig false "staticEntryDictRoutesW" (TyFun (TyCon "CImplEntry") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "staticEntryDictRoutesW" ((PVar "ent") (PVar "route") (PVar "methRoutes") (PVar "implRoutes")) (EIf (EApp (EVar "isInheritedEntryW") (EVar "ent")) (EBinOp "++" (EVar "methRoutes") (EListLit (EApp (EApp (EVar "receiverRouteW") (EVar "route")) (EVar "implRoutes")))) (EApp (EApp (EVar "takeRoutesW") (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "ent"))) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes")))))
-(DTypeSig false "receiverRouteW" (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Route"))))
-(DFunDef false "receiverRouteW" ((PCon "RKey" (PVar "word") PWild (PVar "sups")) (PVar "implRoutes")) (EApp (EApp (EApp (EVar "RKey") (EVar "word")) (EVar "implRoutes")) (EVar "sups")))
-(DFunDef false "receiverRouteW" ((PVar "route") PWild) (EVar "route"))
-(DTypeSig false "routeKeyWordW" (TyFun (TyCon "Route") (TyCon "String")))
-(DFunDef false "routeKeyWordW" ((PCon "RKey" (PVar "word") PWild PWild)) (EVar "word"))
-(DFunDef false "routeKeyWordW" (PWild) (ELit (LString "")))
+(DFunDef false "emitMethodRKeyCallRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes") (PVar "args") (PVar "end")) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "instanceWord") (EVar "route")))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "iface")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "keptWords") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EApp (EApp (EVar "staticEntryDictRoutesW") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "keptWords") (EVar "argInstrs")) (EListLit (EApp (EApp (EVar "callInstrW") (EVar "end")) (EApp (EApp (EVar "implEntrySymW") (EVar "name")) (EVar "entry")))))))) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "wasm layer-15: no impl of method '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' for instance '"))) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "'")))) (EApp (EVar "endValueW") (EVar "end"))))))))
+(DTypeSig false "staticEntryDictRoutesW" (TyFun (TyCon "CImplEntry") (TyFun (TyCon "MethodEvidence") (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "staticEntryDictRoutesW" ((PVar "ent") (PVar "ev")) (EIf (EApp (EVar "isInheritedEntryW") (EVar "ent")) (EBinOp "++" (EFieldAccess (EVar "ev") "meContext") (EListLit (EApp (EVar "receiverEvidence") (EVar "ev")))) (EApp (EApp (EVar "takeRoutesW") (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "ent"))) (EBinOp "++" (EFieldAccess (EVar "ev") "meContext") (EFieldAccess (EVar "ev") "mePrereqs")))))
 (DTypeSig false "isInheritedEntryW" (TyFun (TyCon "CImplEntry") (TyCon "Bool")))
 (DFunDef false "isInheritedEntryW" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild PWild))) (EVar "True"))
 (DFunDef false "isInheritedEntryW" (PWild) (EVar "False"))
@@ -14004,17 +13975,9 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "i"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
-(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsRoute") (EVar "bound"))) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
-(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsRoute") (EVar "bound"))) (EVar "routes"))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EVar "routes"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") PWild) (EListLit))
-(DTypeSig false "freeVarsRoute" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RDict" (PVar "d"))) (EIf (EApp (EApp (EVar "contains") (EVar "d")) (EVar "bound")) (EListLit) (EListLit (EVar "d"))))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RDictFwd" (PVar "d"))) (EIf (EApp (EApp (EVar "contains") (EVar "d")) (EVar "bound")) (EListLit) (EListLit (EVar "d"))))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RKey" PWild (PVar "rs") (PVar "sups"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsRoute") (EVar "bound"))) (EBinOp "++" (EVar "rs") (EVar "sups"))))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RProj" (PVar "r") PWild)) (EApp (EApp (EVar "freeVarsRoute") (EVar "bound")) (EVar "r")))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RNone")) (EListLit))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RLocal" PWild (PVar "dicts"))) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsRoute") (EVar "bound"))) (EVar "dicts")))
-(DFunDef false "freeVarsRoute" (PWild (PCon "RScalar" PWild)) (EListLit))
 (DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" ((PVar "bound") (PCon "CBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EVar "flatMap") (EApp (EVar "freeVarsClause") (EVar "bound"))) (EVar "clauses")))
 (DTypeSig false "freeVarsClause" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String")))))
@@ -14502,14 +14465,14 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "gap" ((PVar "msg")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "wasm_emit gap — ")) (EVar "msg"))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "ifaceIdMatches" false) (mem "isTaggedFixedHead" false) (mem "fixedWidthMask" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false) (mem "wasmUses" false))))
 (DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "validateExterns" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
-(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
+(DUse false (UseGroup ("backend" "trmc_analysis") ((mem "SelfRef" true) (mem "methodSelf" false) (mem "freeGivens" false) (mem "trmcEligible" false) (mem "isCtorTail" false) (mem "isSelfSatApp" false) (mem "consTailArgs" false) (mem "ctorTailName" false) (mem "ctorTailIsCons" false) (mem "ctorTailLeadFields" false) (mem "ctorTailSelfIdx" false) (mem "DispGroup" true) (mem "dispRootOf" false) (mem "dispMembersOf" false) (mem "dispGroupOf" false) (mem "detectDispatchGroups" false) (mem "dispSpineParts" false) (mem "dispIsSatRootCall" false) (mem "dictUniformClauses" false) (mem "dropFirstN" false) (mem "flattenApp" false) (mem "clauseArityOf" false) (mem "clauseBodyOf" false) (mem "armBody" false) (mem "lastStmtExpr" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "dictTag" false) (mem "hashName" false) (mem "injectiveIdent" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "ifaceSuperCount" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("backend" "emit_support") ((mem "eagerReachMap" false) (mem "bindEagerReach" false) (mem "bindNameMap" false) (mem "lazyGlobalNames" false) (mem "isDictParamName" false) (mem "ftPrefix" false) (mem "labelFallthrough" false) (mem "rngBound" false) (mem "appParts" false) (mem "isExactCall" false) (mem "isTailCall" false) (mem "implEntryDeclaredArity" false))))
@@ -15379,15 +15342,9 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "missesArity" ((PCon "CallOver" PWild)) (EVar "True"))
 (DFunDef false "missesArity" (PWild) (EVar "False"))
 (DTypeSig false "emitMethodRKeyCallRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyFun (TyCon "CallEndW") (TyApp (TyCon "List") (TyCon "String"))))))))))))))
-(DFunDef false "emitMethodRKeyCallRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes") (PVar "args") (PVar "end")) (EBlock (DoLet false false (PVar "tag") (EApp (EVar "routeKeyWordW") (EVar "route"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "iface")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "keptWords") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EApp (EApp (EApp (EApp (EVar "staticEntryDictRoutesW") (EVar "entry")) (EVar "route")) (EVar "methRoutes")) (EVar "implRoutes")))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "keptWords") (EVar "argInstrs")) (EListLit (EApp (EApp (EVar "callInstrW") (EVar "end")) (EApp (EApp (EVar "implEntrySymW") (EVar "name")) (EVar "entry")))))))) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "wasm layer-15: no impl of method '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' for instance '"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "'")))) (EApp (EVar "endValueW") (EVar "end"))))))))
-(DTypeSig false "staticEntryDictRoutesW" (TyFun (TyCon "CImplEntry") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))))))
-(DFunDef false "staticEntryDictRoutesW" ((PVar "ent") (PVar "route") (PVar "methRoutes") (PVar "implRoutes")) (EIf (EApp (EVar "isInheritedEntryW") (EVar "ent")) (EBinOp "++" (EVar "methRoutes") (EListLit (EApp (EApp (EVar "receiverRouteW") (EVar "route")) (EVar "implRoutes")))) (EApp (EApp (EVar "takeRoutesW") (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "ent"))) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes")))))
-(DTypeSig false "receiverRouteW" (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Route"))))
-(DFunDef false "receiverRouteW" ((PCon "RKey" (PVar "word") PWild (PVar "sups")) (PVar "implRoutes")) (EApp (EApp (EApp (EVar "RKey") (EVar "word")) (EVar "implRoutes")) (EVar "sups")))
-(DFunDef false "receiverRouteW" ((PVar "route") PWild) (EVar "route"))
-(DTypeSig false "routeKeyWordW" (TyFun (TyCon "Route") (TyCon "String")))
-(DFunDef false "routeKeyWordW" ((PCon "RKey" (PVar "word") PWild PWild)) (EVar "word"))
-(DFunDef false "routeKeyWordW" (PWild) (ELit (LString "")))
+(DFunDef false "emitMethodRKeyCallRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "iface") (PVar "siteArity") (PVar "route") (PVar "implRoutes") (PVar "methRoutes") (PVar "args") (PVar "end")) (EBlock (DoLet false false (PVar "tag") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "instanceWord") (EVar "route")))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "iface")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "keptWords") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EApp (EApp (EVar "staticEntryDictRoutesW") (EVar "entry")) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EVar "iface")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "keptWords") (EVar "argInstrs")) (EListLit (EApp (EApp (EVar "callInstrW") (EVar "end")) (EApp (EApp (EVar "implEntrySymW") (EVar "name")) (EVar "entry")))))))) (arm (PCon "None") () (EBinOp "++" (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "wasm layer-15: no impl of method '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' for instance '"))) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "'")))) (EApp (EVar "endValueW") (EVar "end"))))))))
+(DTypeSig false "staticEntryDictRoutesW" (TyFun (TyCon "CImplEntry") (TyFun (TyCon "MethodEvidence") (TyApp (TyCon "List") (TyCon "Route")))))
+(DFunDef false "staticEntryDictRoutesW" ((PVar "ent") (PVar "ev")) (EIf (EApp (EVar "isInheritedEntryW") (EVar "ent")) (EBinOp "++" (EFieldAccess (EVar "ev") "meContext") (EListLit (EApp (EVar "receiverEvidence") (EVar "ev")))) (EApp (EApp (EVar "takeRoutesW") (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "ent"))) (EBinOp "++" (EFieldAccess (EVar "ev") "meContext") (EFieldAccess (EVar "ev") "mePrereqs")))))
 (DTypeSig false "isInheritedEntryW" (TyFun (TyCon "CImplEntry") (TyCon "Bool")))
 (DFunDef false "isInheritedEntryW" ((PCon "CImplEntry" PWild PWild PWild (PCon "CImplDefault" PWild PWild PWild PWild PWild PWild PWild))) (EVar "True"))
 (DFunDef false "isInheritedEntryW" (PWild) (EVar "False"))
@@ -16337,17 +16294,9 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CRangeArray" (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CIndex" (PVar "e") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "i"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CSlice" (PVar "e") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "e")) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "lo"))) (EApp (EApp (EVar "freeVarsExpr") (EVar "bound")) (EVar "hi"))))
-(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsRoute") (EVar "bound"))) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
-(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsRoute") (EVar "bound"))) (EVar "routes"))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
+(DFunDef false "freeVarsExpr" ((PVar "bound") (PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "bound")) (EListLit) (EListLit (EVar "name"))) (EApp (EApp (EVar "freeGivens") (EVar "bound")) (EVar "routes"))))
 (DFunDef false "freeVarsExpr" ((PVar "bound") PWild) (EListLit))
-(DTypeSig false "freeVarsRoute" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RDict" (PVar "d"))) (EIf (EApp (EApp (EVar "contains") (EVar "d")) (EVar "bound")) (EListLit) (EListLit (EVar "d"))))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RDictFwd" (PVar "d"))) (EIf (EApp (EApp (EVar "contains") (EVar "d")) (EVar "bound")) (EListLit) (EListLit (EVar "d"))))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RKey" PWild (PVar "rs") (PVar "sups"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsRoute") (EVar "bound"))) (EBinOp "++" (EVar "rs") (EVar "sups"))))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RProj" (PVar "r") PWild)) (EApp (EApp (EVar "freeVarsRoute") (EVar "bound")) (EVar "r")))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RNone")) (EListLit))
-(DFunDef false "freeVarsRoute" ((PVar "bound") (PCon "RLocal" PWild (PVar "dicts"))) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsRoute") (EVar "bound"))) (EVar "dicts")))
-(DFunDef false "freeVarsRoute" (PWild (PCon "RScalar" PWild)) (EListLit))
 (DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CBind") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsClauses" ((PVar "bound") (PCon "CBind" PWild (PVar "clauses") PWild)) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "freeVarsClause") (EVar "bound"))) (EVar "clauses")))
 (DTypeSig false "freeVarsClause" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CClause") (TyApp (TyCon "List") (TyCon "String")))))

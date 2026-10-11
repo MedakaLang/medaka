@@ -49,7 +49,7 @@
 -- AST tree-walker over the whole fixture corpus.  Core IR is correct iff
 -- evaluating it matches evaluating the AST.
 
-import frontend.ast.{Lit, Loc, Pat, Addr, Route, noDeclLoc}
+import frontend.ast.{Lit, Loc, Pat, Addr, Route(..), noDeclLoc}
 
 -- ── expressions ────────────────────────────────────────────────────────────
 public export data CExpr =
@@ -151,6 +151,47 @@ public export data MethodEvidence = MethodEvidence {
   mePrereqs : List Route,
   meContext : List Route,
 }
+
+-- Every given dictionary name [r] reads, in order: a given's own name, the givens
+-- a dictionary built at the site nests in its requires and supers, the given a
+-- projection reads, and the givens a shadowing standalone is applied to.
+export
+givenNames : Route -> List String
+givenNames (RDict d) = [d]
+givenNames (RDictFwd d) = [d]
+givenNames (RKey _ reqs sups) = flatMap givenNames (reqs ++ sups)
+givenNames (RProj r _) = givenNames r
+givenNames (RLocal _ dicts) = flatMap givenNames dicts
+givenNames RNone = []
+givenNames (RScalar _) = []
+
+-- [r] is answered by a dictionary that is only known at run time: a given, or a
+-- projection out of one.
+export
+isGivenRooted : Route -> Bool
+isGivenRooted (RDict _) = True
+isGivenRooted (RDictFwd _) = True
+isGivenRooted (RProj _ _) = True
+isGivenRooted (RKey _ _ _) = False
+isGivenRooted (RLocal _ _) = False
+isGivenRooted RNone = False
+isGivenRooted (RScalar _) = False
+
+-- The canonical key of the instance [r] selects statically, if it selects one.
+export
+instanceWord : Route -> Option String
+instanceWord (RKey word _ _) = Some word
+instanceWord _ = None
+
+-- The dictionary of the instance an occurrence selects statically: its word, the
+-- prerequisites the occurrence supplies and the supers its dispatch carries.  An
+-- inherited default receives it as its receiver.  Evidence that selects no
+-- instance statically is its own dispatch answer.
+export
+receiverEvidence : MethodEvidence -> Route
+receiverEvidence (MethodEvidence _ _ (RKey word _ sups) prereqs _) =
+  RKey word prereqs sups
+receiverEvidence ev = ev.meDispatch
 
 -- How an application is made, from its head's defined arity k and its n
 -- arguments.  `core_ir_lower.stampCallModes` decides it for every application a

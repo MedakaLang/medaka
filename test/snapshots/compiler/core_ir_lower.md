@@ -1,5 +1,5 @@
 # META
-source_lines=3938
+source_lines=3933
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -56,6 +56,7 @@ import types.route_key.{
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
+  isGivenRooted,
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -1358,16 +1359,10 @@ etaMissing env scope tailE =
 -- dictionary, the least over the method's entries
 etaTargetArity : ArityEnv -> CallScope -> CExpr -> Option Int
 etaTargetArity (ArityEnv _ _ _ least) _ (CMethod name (MethodEvidence _ _ route _ _))
-  | isRuntimeDictRoute route = omLookup name least
+  | isGivenRooted route = omLookup name least
 etaTargetArity env scope (h@(CMethod _ _)) = definedArityOf env scope h
 etaTargetArity env scope (h@(CDict _ _)) = definedArityOf env scope h
 etaTargetArity _ _ _ = None
-
-isRuntimeDictRoute : Route -> Bool
-isRuntimeDictRoute (RDict _) = True
-isRuntimeDictRoute (RDictFwd _) = True
-isRuntimeDictRoute (RProj _ _) = True
-isRuntimeDictRoute _ = False
 
 spineOf : CExpr -> (CExpr, List CExpr)
 spineOf (CApp f args _) =
@@ -3943,7 +3938,7 @@ nodeTag _ = "?"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false))))
@@ -4401,15 +4396,10 @@ nodeTag _ = "?"
 (DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EIf (EApp (EApp (EVar "allList") (EVar "isFunctionBind")) (EVar "binds")) (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindGroupScope") (EVar "binds")) (EVar "scope"))) (EVar "body")) (ELit (LInt 0))))
 (DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PVar "tailE")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EVar "spineOf") (EVar "tailE"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isAtomicArg")) (EVar "args")) (EMatch (EApp (EApp (EApp (EVar "etaTargetArity") (EVar "env")) (EVar "scope")) (EVar "hd")) (arm (PCon "Some" (PVar "k")) () (EBinOp "-" (EVar "k") (EApp (EVar "listLen") (EVar "args")))) (arm (PCon "None") () (ELit (LInt 0)))) (ELit (LInt 0))))))
 (DTypeSig false "etaTargetArity" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "etaTargetArity" ((PCon "ArityEnv" PWild PWild PWild (PVar "least")) PWild (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EIf (EApp (EVar "isRuntimeDictRoute") (EVar "route")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "least")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "etaTargetArity" ((PCon "ArityEnv" PWild PWild PWild (PVar "least")) PWild (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EIf (EApp (EVar "isGivenRooted") (EVar "route")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "least")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "etaTargetArity" ((PVar "env") (PVar "scope") (PAs "h" (PCon "CMethod" PWild PWild))) (EApp (EApp (EApp (EVar "definedArityOf") (EVar "env")) (EVar "scope")) (EVar "h")))
 (DFunDef false "etaTargetArity" ((PVar "env") (PVar "scope") (PAs "h" (PCon "CDict" PWild PWild))) (EApp (EApp (EApp (EVar "definedArityOf") (EVar "env")) (EVar "scope")) (EVar "h")))
 (DFunDef false "etaTargetArity" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "isRuntimeDictRoute" (TyFun (TyCon "Route") (TyCon "Bool")))
-(DFunDef false "isRuntimeDictRoute" ((PCon "RDict" PWild)) (EVar "True"))
-(DFunDef false "isRuntimeDictRoute" ((PCon "RDictFwd" PWild)) (EVar "True"))
-(DFunDef false "isRuntimeDictRoute" ((PCon "RProj" PWild PWild)) (EVar "True"))
-(DFunDef false "isRuntimeDictRoute" (PWild) (EVar "False"))
 (DTypeSig false "spineOf" (TyFun (TyCon "CExpr") (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")))))
 (DFunDef false "spineOf" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "inner")) (EApp (EVar "spineOf") (EVar "f"))) (DoExpr (ETuple (EVar "hd") (EBinOp "++" (EVar "inner") (EVar "args"))))))
 (DFunDef false "spineOf" ((PVar "e")) (ETuple (EVar "e") (EListLit)))
@@ -5232,7 +5222,7 @@ nodeTag _ = "?"
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false))))
@@ -5690,15 +5680,10 @@ nodeTag _ = "?"
 (DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EIf (EApp (EApp (EVar "allList") (EVar "isFunctionBind")) (EVar "binds")) (EApp (EApp (EApp (EVar "etaMissing") (EVar "env")) (EApp (EApp (EVar "bindGroupScope") (EVar "binds")) (EVar "scope"))) (EVar "body")) (ELit (LInt 0))))
 (DFunDef false "etaMissing" ((PVar "env") (PVar "scope") (PVar "tailE")) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "args")) (EApp (EVar "spineOf") (EVar "tailE"))) (DoExpr (EIf (EApp (EApp (EVar "allList") (EVar "isAtomicArg")) (EVar "args")) (EMatch (EApp (EApp (EApp (EVar "etaTargetArity") (EVar "env")) (EVar "scope")) (EVar "hd")) (arm (PCon "Some" (PVar "k")) () (EBinOp "-" (EVar "k") (EApp (EVar "listLen") (EVar "args")))) (arm (PCon "None") () (ELit (LInt 0)))) (ELit (LInt 0))))))
 (DTypeSig false "etaTargetArity" (TyFun (TyCon "ArityEnv") (TyFun (TyCon "CallScope") (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "etaTargetArity" ((PCon "ArityEnv" PWild PWild PWild (PVar "least")) PWild (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EIf (EApp (EVar "isRuntimeDictRoute") (EVar "route")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "least")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "etaTargetArity" ((PCon "ArityEnv" PWild PWild PWild (PVar "least")) PWild (PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EIf (EApp (EVar "isGivenRooted") (EVar "route")) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "least")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "etaTargetArity" ((PVar "env") (PVar "scope") (PAs "h" (PCon "CMethod" PWild PWild))) (EApp (EApp (EApp (EVar "definedArityOf") (EVar "env")) (EVar "scope")) (EVar "h")))
 (DFunDef false "etaTargetArity" ((PVar "env") (PVar "scope") (PAs "h" (PCon "CDict" PWild PWild))) (EApp (EApp (EApp (EVar "definedArityOf") (EVar "env")) (EVar "scope")) (EVar "h")))
 (DFunDef false "etaTargetArity" (PWild PWild PWild) (EVar "None"))
-(DTypeSig false "isRuntimeDictRoute" (TyFun (TyCon "Route") (TyCon "Bool")))
-(DFunDef false "isRuntimeDictRoute" ((PCon "RDict" PWild)) (EVar "True"))
-(DFunDef false "isRuntimeDictRoute" ((PCon "RDictFwd" PWild)) (EVar "True"))
-(DFunDef false "isRuntimeDictRoute" ((PCon "RProj" PWild PWild)) (EVar "True"))
-(DFunDef false "isRuntimeDictRoute" (PWild) (EVar "False"))
 (DTypeSig false "spineOf" (TyFun (TyCon "CExpr") (TyTuple (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")))))
 (DFunDef false "spineOf" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBlock (DoLet false false (PTuple (PVar "hd") (PVar "inner")) (EApp (EVar "spineOf") (EVar "f"))) (DoExpr (ETuple (EVar "hd") (EBinOp "++" (EVar "inner") (EVar "args"))))))
 (DFunDef false "spineOf" ((PVar "e")) (ETuple (EVar "e") (EListLit)))

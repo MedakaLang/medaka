@@ -52,6 +52,7 @@ import types.route_key.{
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
+  isGivenRooted,
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -1354,16 +1355,10 @@ etaMissing env scope tailE =
 -- dictionary, the least over the method's entries
 etaTargetArity : ArityEnv -> CallScope -> CExpr -> Option Int
 etaTargetArity (ArityEnv _ _ _ least) _ (CMethod name (MethodEvidence _ _ route _ _))
-  | isRuntimeDictRoute route = omLookup name least
+  | isGivenRooted route = omLookup name least
 etaTargetArity env scope (h@(CMethod _ _)) = definedArityOf env scope h
 etaTargetArity env scope (h@(CDict _ _)) = definedArityOf env scope h
 etaTargetArity _ _ _ = None
-
-isRuntimeDictRoute : Route -> Bool
-isRuntimeDictRoute (RDict _) = True
-isRuntimeDictRoute (RDictFwd _) = True
-isRuntimeDictRoute (RProj _ _) = True
-isRuntimeDictRoute _ = False
 
 spineOf : CExpr -> (CExpr, List CExpr)
 spineOf (CApp f args _) =
