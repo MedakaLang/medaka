@@ -52,7 +52,7 @@ the scan never fired). The audit below is organized by these three axes.
 
 | | |
 |---|---|
-| **Gates that actually gate** | `test/diff_compiler_perf_scaling.sh` (alloc + per-stage time; front end + both backends + a multi-module *typecheck* arm), `test/diff_compiler_ir_scaling.sh` (whole-process Cachegrind `Ir` for `medaka check`), `test/diff_compiler_stage_ir_scaling.sh` (PER-STAGE Callgrind `Ir` for the build path), `test/diff_compiler_references_scaling.sh` (refindex op-count + a flat-query invariant), `test/diff_compiler_tmc_parity.sh` (LLVM vs Wasm TMC the same fns) |
+| **Gates that actually gate** | `test/diff_compiler_perf_scaling.sh` (alloc + per-stage time; front end + both backends + a multi-module *typecheck* arm), `test/diff_compiler_ir_scaling.sh` (whole-process Cachegrind `Ir` for `medaka check`), `test/diff_compiler_stage_ir_scaling.sh` (PER-STAGE Callgrind `Ir` for the build path), `test/diff_compiler_references_scaling.sh` (refindex op-count + a flat-query invariant), `test/diff_compiler_tmc_parity_test.mdk` (LLVM vs Wasm TMC the same fns) |
 | **Shapes** | bindings, match, listlit, nesting, xref, comments, manydefs, modules; stage-ir-scaling adds `vchain` (value-global init chain, #1030) |
 | **Graded stages** | parse, exhaust-guards (Ir arm only — waived out of TIME_STAGES/OP_STAGES, #2333), desugar, resolve, mark, typecheck, fmt, lint, lower, emit, wasm-emit, mangle, dce, trmc |
 | **Metrics** | GC allocation (deterministic), per-stage wall-time (min-of-K, heap-pinned), refindex op-count, whole-process `Ir`, per-stage `Ir` |

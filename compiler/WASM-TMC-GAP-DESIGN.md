@@ -169,7 +169,7 @@ change; only the gate that vetoes it.
 
 ## 3. Is the parity gate blind by construction? — Yes, in three distinct ways
 
-`test/diff_compiler_tmc_parity.sh` wraps `test/tmc_census.sh`. Its corpus has two arms:
+`test/diff_compiler_tmc_parity_test.mdk` wraps `test/tmc_census.sh`. Its corpus has two arms:
 
 **Arm A — the fixtures (`test/stack_fixtures/*.mdk`, `test/wasm/fixtures/w_trmc_*.mdk`).**
 Emitted through `test/bin/llvm_emit_main` and `test/bin/wasm_emit_main` — **both
@@ -267,7 +267,7 @@ watch it go red, then fix.
    function is missing from **either** backend's shipping set. This is the piece
    whose absence let the arc ship: parity between two sets that both dropped `upto`
    is vacuous — the same "two empty sets are trivially identical" trap
-   `test/diff_compiler_tmc_parity.sh` already guards against at the *corpus* level
+   `test/diff_compiler_tmc_parity_test.mdk` already guards against at the *corpus* level
    (its `n -eq 0` check) but not at the *function* level.
    Pin at minimum: `upto` on `w_trmc_deep_cons` / `w_deep_append` /
    `upto_deep_single`, and `myMap` on `mymap_deep_multi`.
@@ -365,7 +365,7 @@ which is in the self-host graph — `test/selfcompile_fixpoint.sh` and
 
 ### Gates that must be green at the end
 
-`test/diff_compiler_tmc_parity.sh` (parity **and** the new coverage pins, on the
+`test/diff_compiler_tmc_parity_test.mdk` (parity **and** the new coverage pins, on the
 shipping arm), `test/lib_engines_differential.sh` (the two wasm fixtures print
 `2000000` / `100000`), `test/diff_native_stack.sh`, `test/wasm/diff_wasm.sh`,
 `test/selfcompile_fixpoint.sh` C3a/C3b, `test/typecheck_compiler_source.sh`.

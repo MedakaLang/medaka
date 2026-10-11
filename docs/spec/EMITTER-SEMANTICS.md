@@ -387,7 +387,7 @@ laws bind **all four engines** and every reflective helper (V6).
 - **S2 — TRMC.** A function accepted by the TRMC analysis
   (`compiler/backend/trmc_analysis.mdk`) builds its result in O(1) stack per
   element. The *analysis verdict* is engine-shared: **both backends must
-  TRMC exactly the same functions** (`test/diff_compiler_tmc_parity.sh`), and
+  TRMC exactly the same functions** (`test/diff_compiler_tmc_parity_test.mdk`), and
   the accepted population itself is coverage-gated (EXPECT-TMC pins), because
   a parity gate alone cannot see a shared veto (R2 note).
 - **S3 — What is NOT promised.** General TCO (mutual recursion, arbitrary
