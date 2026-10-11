@@ -59,6 +59,7 @@ import frontend.ast.{
   EvEntry(..),
   EvTable,
   constraintUnresolved,
+  tyConBuiltin,
   ifaceIdentity,
   authTermsSurface,
 }
@@ -502,8 +503,7 @@ rkTyBool =
   TyCon { tyConName = "Bool", tyConLoc = None, tyConOrigin = OriginUnresolved }
 
 rkTyFloat : Ty
-rkTyFloat =
-  TyCon { tyConName = "Float", tyConLoc = None, tyConOrigin = OriginUnresolved }
+rkTyFloat = tyConBuiltin "Float" None
 
 rkTyIntM : Ty
 rkTyIntM =
@@ -635,7 +635,7 @@ rkTyList =
 -- > implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Stdout"] [] rkTyInt] None == implRouteKeyWord OriginUnresolved "A" [TyEffect [effAtomBare "Rand"] [] rkTyInt] None
 -- False
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
 (DTypeSig false "evidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))))))
 (DFunDef false "evidenceRef" () (EApp (EVar "Ref") (EVar "None")))
@@ -722,13 +722,13 @@ rkTyList =
 (DTypeSig false "rkTyBool" (TyCon "Ty"))
 (DFunDef false "rkTyBool" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Bool"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig false "rkTyFloat" (TyCon "Ty"))
-(DFunDef false "rkTyFloat" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Float"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
+(DFunDef false "rkTyFloat" () (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Float"))) (EVar "None")))
 (DTypeSig false "rkTyIntM" (TyCon "Ty"))
 (DFunDef false "rkTyIntM" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Int"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
 (DTypeSig false "rkTyList" (TyCon "Ty"))
 (DFunDef false "rkTyList" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "List"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Ty" true) (mem "Constraint" true) (mem "TyConOrigin" true) (mem "EffAtomTy" true) (mem "qualifierSource" false) (mem "EffParamTy" true) (mem "effAtomSurface" false) (mem "authTermSurface" false) (mem "effAtomBare" false) (mem "effAtomWith" false) (mem "Route" false) (mem "EvId" true) (mem "EvVal" true) (mem "EvEntry" true) (mem "EvTable" false) (mem "constraintUnresolved" false) (mem "tyConBuiltin" false) (mem "ifaceIdentity" false) (mem "authTermsSurface" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "escStr" false))))
 (DTypeSig false "evidenceRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyApp (TyCon "Option") (TyCon "EvEntry"))))))
 (DFunDef false "evidenceRef" () (EApp (EVar "Ref") (EVar "None")))
@@ -815,7 +815,7 @@ rkTyList =
 (DTypeSig false "rkTyBool" (TyCon "Ty"))
 (DFunDef false "rkTyBool" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Bool"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
 (DTypeSig false "rkTyFloat" (TyCon "Ty"))
-(DFunDef false "rkTyFloat" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Float"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EVar "OriginUnresolved")))))
+(DFunDef false "rkTyFloat" () (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Float"))) (EVar "None")))
 (DTypeSig false "rkTyIntM" (TyCon "Ty"))
 (DFunDef false "rkTyIntM" () (ERecordCreate "TyCon" ((fa "tyConName" (ELit (LString "Int"))) (fa "tyConLoc" (EVar "None")) (fa "tyConOrigin" (EApp (EVar "OriginModule") (ELit (LString "m")))))))
 (DTypeSig false "rkTyList" (TyCon "Ty"))

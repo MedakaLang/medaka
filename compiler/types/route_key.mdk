@@ -55,6 +55,7 @@ import frontend.ast.{
   EvEntry(..),
   EvTable,
   constraintUnresolved,
+  tyConBuiltin,
   ifaceIdentity,
   authTermsSurface,
 }
@@ -498,8 +499,7 @@ rkTyBool =
   TyCon { tyConName = "Bool", tyConLoc = None, tyConOrigin = OriginUnresolved }
 
 rkTyFloat : Ty
-rkTyFloat =
-  TyCon { tyConName = "Float", tyConLoc = None, tyConOrigin = OriginUnresolved }
+rkTyFloat = tyConBuiltin "Float" None
 
 rkTyIntM : Ty
 rkTyIntM =
