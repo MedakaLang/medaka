@@ -1,5 +1,5 @@
 # META
-source_lines=350
+source_lines=407
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -53,7 +53,7 @@ stages=DESUGAR,MARK
 -- AST tree-walker over the whole fixture corpus.  Core IR is correct iff
 -- evaluating it matches evaluating the AST.
 
-import frontend.ast.{Lit, Loc, Pat, Addr, Route, noDeclLoc}
+import frontend.ast.{Lit, Loc, Pat, Addr, Route(..), noDeclLoc}
 
 -- ── expressions ────────────────────────────────────────────────────────────
 public export data CExpr =
@@ -155,6 +155,47 @@ public export data MethodEvidence = MethodEvidence {
   mePrereqs : List Route,
   meContext : List Route,
 }
+
+-- Every given dictionary name [r] reads, in order: a given's own name, the givens
+-- a dictionary built at the site nests in its requires and supers, the given a
+-- projection reads, and the givens a shadowing standalone is applied to.
+export
+givenNames : Route -> List String
+givenNames (RDict d) = [d]
+givenNames (RDictFwd d) = [d]
+givenNames (RKey _ reqs sups) = flatMap givenNames (reqs ++ sups)
+givenNames (RProj r _) = givenNames r
+givenNames (RLocal _ dicts) = flatMap givenNames dicts
+givenNames RNone = []
+givenNames (RScalar _) = []
+
+-- [r] is answered by a dictionary that is only known at run time: a given, or a
+-- projection out of one.
+export
+isGivenRooted : Route -> Bool
+isGivenRooted (RDict _) = True
+isGivenRooted (RDictFwd _) = True
+isGivenRooted (RProj _ _) = True
+isGivenRooted (RKey _ _ _) = False
+isGivenRooted (RLocal _ _) = False
+isGivenRooted RNone = False
+isGivenRooted (RScalar _) = False
+
+-- The canonical key of the instance [r] selects statically, if it selects one.
+export
+instanceWord : Route -> Option String
+instanceWord (RKey word _ _) = Some word
+instanceWord _ = None
+
+-- The dictionary of the instance an occurrence selects statically: its word, the
+-- prerequisites the occurrence supplies and the supers its dispatch carries.  An
+-- inherited default receives it as its receiver.  Evidence that selects no
+-- instance statically is its own dispatch answer.
+export
+receiverEvidence : MethodEvidence -> Route
+receiverEvidence (MethodEvidence _ _ (RKey word _ sups) prereqs _) =
+  RKey word prereqs sups
+receiverEvidence ev = ev.meDispatch
 
 -- How an application is made, from its head's defined arity k and its n
 -- arguments.  `core_ir_lower.stampCallModes` decides it for every application a
@@ -342,8 +383,8 @@ noImplSym = ImplSym "" "" ""
 -- A lowered program: top-level function groups (coalesced multi-clause), the
 -- constructor table (name → arity, for building VCon makers), the ctor→type map
 -- eval needs for runtime type tags, (slice 5) the lowered typeclass
--- impl/default entries, and the method-context table.  Slice-1 programs carry an
--- empty impl list.
+-- impl/default entries, the method-context table and the declaration facts.
+-- Slice-1 programs carry an empty impl list.
 -- The method-context table: per interface method of the lowered declarations whose
 -- own `=>` context has a slot, keyed by `core_ir_lower.ifaceMethodArityKey`, the
 -- number of constraints in that context that mention a type variable.  It is read
@@ -351,11 +392,49 @@ noImplSym = ImplSym "" "" ""
 -- `core_validate.validateMethodContexts` can hold a `CMethod`'s method routes and an
 -- impl entry's leading dictionaries to it.
 public export data CProgram =
-  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int))
+  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
+
+-- The declaration facts a dictionary built at a site is held to
+-- (`core_validate.validateDispatchEvidence`): each instance's `requires` count,
+-- keyed by its canonical key word (`core_ir_lower.instanceReqCounts`), and each of
+-- those instances' interfaces' direct superinterface count, keyed by interface
+-- word (`disposition.ifaceSuperCount`).  A dictionary stores the supers, then the
+-- requires.  Only an emitting lowering fills them; every other lowering carries
+-- `noDeclFacts`.
+public export data DeclFacts = DeclFacts {
+  factRequires : List (String, Int),
+  factSupers : List (String, Int),
+}
+
+export
+noDeclFacts : DeclFacts
+noDeclFacts = DeclFacts { factRequires = [], factSupers = [] }
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" false) (mem "Loc" false) (mem "Pat" false) (mem "Addr" false) (mem "Route" false) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" false) (mem "Loc" false) (mem "Pat" false) (mem "Addr" false) (mem "Route" true) (mem "noDeclLoc" false))))
 (DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "MethodEvidence" () ((variant "MethodEvidence" (ConNamed (field "meIface" (TyCon "String")) (field "meArity" (TyCon "Int")) (field "meDispatch" (TyCon "Route")) (field "mePrereqs" (TyApp (TyCon "List") (TyCon "Route"))) (field "meContext" (TyApp (TyCon "List") (TyCon "Route")))))) ())
+(DTypeSig true "givenNames" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "givenNames" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
+(DFunDef false "givenNames" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
+(DFunDef false "givenNames" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
+(DFunDef false "givenNames" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "givenNames") (EVar "r")))
+(DFunDef false "givenNames" ((PCon "RLocal" PWild (PVar "dicts"))) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EVar "dicts")))
+(DFunDef false "givenNames" ((PCon "RNone")) (EListLit))
+(DFunDef false "givenNames" ((PCon "RScalar" PWild)) (EListLit))
+(DTypeSig true "isGivenRooted" (TyFun (TyCon "Route") (TyCon "Bool")))
+(DFunDef false "isGivenRooted" ((PCon "RDict" PWild)) (EVar "True"))
+(DFunDef false "isGivenRooted" ((PCon "RDictFwd" PWild)) (EVar "True"))
+(DFunDef false "isGivenRooted" ((PCon "RProj" PWild PWild)) (EVar "True"))
+(DFunDef false "isGivenRooted" ((PCon "RKey" PWild PWild PWild)) (EVar "False"))
+(DFunDef false "isGivenRooted" ((PCon "RLocal" PWild PWild)) (EVar "False"))
+(DFunDef false "isGivenRooted" ((PCon "RNone")) (EVar "False"))
+(DFunDef false "isGivenRooted" ((PCon "RScalar" PWild)) (EVar "False"))
+(DTypeSig true "instanceWord" (TyFun (TyCon "Route") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "instanceWord" ((PCon "RKey" (PVar "word") PWild PWild)) (EApp (EVar "Some") (EVar "word")))
+(DFunDef false "instanceWord" (PWild) (EVar "None"))
+(DTypeSig true "receiverEvidence" (TyFun (TyCon "MethodEvidence") (TyCon "Route")))
+(DFunDef false "receiverEvidence" ((PCon "MethodEvidence" PWild PWild (PCon "RKey" (PVar "word") PWild (PVar "sups")) (PVar "prereqs") PWild)) (EApp (EApp (EApp (EVar "RKey") (EVar "word")) (EVar "prereqs")) (EVar "sups")))
+(DFunDef false "receiverEvidence" ((PVar "ev")) (EFieldAccess (EVar "ev") "meDispatch"))
 (DData Public "CallMode" () ((variant "CallExact" (ConPos)) (variant "CallPartial" (ConPos (TyCon "Int"))) (variant "CallOver" (ConPos (TyCon "Int"))) (variant "CallDynamic" (ConPos))) ())
 (DData Public "CallSite" () ((variant "CallSite" (ConPos (TyCon "CallMode") (TyCon "Bool")))) ())
 (DTypeSig true "mkApp" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CExpr"))))
@@ -383,11 +462,36 @@ public export data CProgram =
 (DData Public "ImplSym" () ((variant "ImplSym" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig true "noImplSym" (TyCon "ImplSym"))
 (DFunDef false "noImplSym" () (EApp (EApp (EApp (EVar "ImplSym") (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))))
-(DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) ())
+(DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DeclFacts")))) ())
+(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) ())
+(DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
+(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" false) (mem "Loc" false) (mem "Pat" false) (mem "Addr" false) (mem "Route" false) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" false) (mem "Loc" false) (mem "Pat" false) (mem "Addr" false) (mem "Route" true) (mem "noDeclLoc" false))))
 (DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
 (DData Public "MethodEvidence" () ((variant "MethodEvidence" (ConNamed (field "meIface" (TyCon "String")) (field "meArity" (TyCon "Int")) (field "meDispatch" (TyCon "Route")) (field "mePrereqs" (TyApp (TyCon "List") (TyCon "Route"))) (field "meContext" (TyApp (TyCon "List") (TyCon "Route")))))) ())
+(DTypeSig true "givenNames" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "givenNames" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
+(DFunDef false "givenNames" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
+(DFunDef false "givenNames" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
+(DFunDef false "givenNames" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "givenNames") (EVar "r")))
+(DFunDef false "givenNames" ((PCon "RLocal" PWild (PVar "dicts"))) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EVar "dicts")))
+(DFunDef false "givenNames" ((PCon "RNone")) (EListLit))
+(DFunDef false "givenNames" ((PCon "RScalar" PWild)) (EListLit))
+(DTypeSig true "isGivenRooted" (TyFun (TyCon "Route") (TyCon "Bool")))
+(DFunDef false "isGivenRooted" ((PCon "RDict" PWild)) (EVar "True"))
+(DFunDef false "isGivenRooted" ((PCon "RDictFwd" PWild)) (EVar "True"))
+(DFunDef false "isGivenRooted" ((PCon "RProj" PWild PWild)) (EVar "True"))
+(DFunDef false "isGivenRooted" ((PCon "RKey" PWild PWild PWild)) (EVar "False"))
+(DFunDef false "isGivenRooted" ((PCon "RLocal" PWild PWild)) (EVar "False"))
+(DFunDef false "isGivenRooted" ((PCon "RNone")) (EVar "False"))
+(DFunDef false "isGivenRooted" ((PCon "RScalar" PWild)) (EVar "False"))
+(DTypeSig true "instanceWord" (TyFun (TyCon "Route") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "instanceWord" ((PCon "RKey" (PVar "word") PWild PWild)) (EApp (EVar "Some") (EVar "word")))
+(DFunDef false "instanceWord" (PWild) (EVar "None"))
+(DTypeSig true "receiverEvidence" (TyFun (TyCon "MethodEvidence") (TyCon "Route")))
+(DFunDef false "receiverEvidence" ((PCon "MethodEvidence" PWild PWild (PCon "RKey" (PVar "word") PWild (PVar "sups")) (PVar "prereqs") PWild)) (EApp (EApp (EApp (EVar "RKey") (EVar "word")) (EVar "prereqs")) (EVar "sups")))
+(DFunDef false "receiverEvidence" ((PVar "ev")) (EFieldAccess (EVar "ev") "meDispatch"))
 (DData Public "CallMode" () ((variant "CallExact" (ConPos)) (variant "CallPartial" (ConPos (TyCon "Int"))) (variant "CallOver" (ConPos (TyCon "Int"))) (variant "CallDynamic" (ConPos))) ())
 (DData Public "CallSite" () ((variant "CallSite" (ConPos (TyCon "CallMode") (TyCon "Bool")))) ())
 (DTypeSig true "mkApp" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CExpr"))))
@@ -415,4 +519,7 @@ public export data CProgram =
 (DData Public "ImplSym" () ((variant "ImplSym" (ConPos (TyCon "String") (TyCon "String") (TyCon "String")))) ())
 (DTypeSig true "noImplSym" (TyCon "ImplSym"))
 (DFunDef false "noImplSym" () (EApp (EApp (EApp (EVar "ImplSym") (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))))
-(DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))) ())
+(DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyCon "DeclFacts")))) ())
+(DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))) ())
+(DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
+(DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)))))

@@ -26,6 +26,8 @@ import ir.core_ir.{
   CImplEntry(..),
   MethodEvidence(..),
   CProgram(..),
+  DeclFacts(..),
+  noDeclFacts,
   noImplSym,
   CStmt(..),
   CallMode(..),
@@ -257,7 +259,8 @@ recordFindings : EmitTarget -> String -> List String
 recordFindings target src = validateRecords (lowered target src)
 
 unstamped : CExpr -> CProgram
-unstamped body = CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] [] []
+unstamped body =
+  CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] [] [] noDeclFacts
 
 zero : CExpr
 zero = CLit (LInt 0)
@@ -360,8 +363,8 @@ typedLowered preludeSrc src =
 -- [prog] with every application whose head is the variable [name] re-stamped
 -- [mode], in top-level bindings.
 restamp : String -> CallMode -> CProgram -> CProgram
-restamp name mode (CProgram groups ctors ctorTypes impls mctx) =
-  CProgram (map (restampBind name mode) groups) ctors ctorTypes impls mctx
+restamp name mode (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (restampBind name mode) groups) ctors ctorTypes impls mctx facts
 
 restampBind : String -> CallMode -> CBind -> CBind
 restampBind name mode (CBind n clauses site) =
@@ -472,8 +475,8 @@ test "(m) an application with no arguments, or whose head is an application, is 
 -- [prog] with the tail flag of every application whose head is the variable
 -- [name] set to [flag], in top-level bindings.
 reflag : String -> Bool -> CProgram -> CProgram
-reflag name flag (CProgram groups ctors ctorTypes impls mctx) =
-  CProgram (map (reflagBind name flag) groups) ctors ctorTypes impls mctx
+reflag name flag (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (reflagBind name flag) groups) ctors ctorTypes impls mctx facts
 
 reflagBind : String -> Bool -> CBind -> CBind
 reflagBind name flag (CBind n clauses site) =
@@ -600,8 +603,8 @@ mixedGroupSrc =
 
 -- [prog] with one more parameter on the first impl entry of method [m].
 widenFirstEntry : String -> CProgram -> CProgram
-widenFirstEntry m (CProgram groups ctors ctorTypes impls mctx) =
-  CProgram groups ctors ctorTypes (widenEntries m impls) mctx
+widenFirstEntry m (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (widenEntries m impls) mctx facts
 
 widenEntries : String -> List CImplEntry -> List CImplEntry
 widenEntries _ [] = []
@@ -637,8 +640,8 @@ test "(q) the impl entries of one method and route word take one arity" = expect
 -- [prog] with every impl entry's stamped symbol cleared, as a lowering that
 -- never stamped would leave it.
 unstampImpls : CProgram -> CProgram
-unstampImpls (CProgram groups ctors ctorTypes impls mctx) =
-  CProgram groups ctors ctorTypes (map unstampEntry impls) mctx
+unstampImpls (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (map unstampEntry impls) mctx facts
 
 unstampEntry : CImplEntry -> CImplEntry
 unstampEntry (CImplEntry n s d (CImplTagged tag key iface _ pos pats body)) =
@@ -648,8 +651,8 @@ unstampEntry (CImplEntry n s d (CImplDefault w tag key _ pos pats body)) =
 
 -- [prog] with every supplied method's interface word replaced by [word].
 reword : String -> CProgram -> CProgram
-reword word (CProgram groups ctors ctorTypes impls mctx) =
-  CProgram groups ctors ctorTypes (map (rewordEntry word) impls) mctx
+reword word (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (map (rewordEntry word) impls) mctx facts
 
 rewordEntry : String -> CImplEntry -> CImplEntry
 rewordEntry word (CImplEntry n s d (CImplTagged tag key _ sym pos pats body)) =
@@ -695,8 +698,8 @@ paramContextSrc =
 -- [prog] with the method routes of every top-level application of method [name]
 -- dropped, as an elaboration that posed no goal for the context would leave it.
 dropMethodRoutes : String -> CProgram -> CProgram
-dropMethodRoutes name (CProgram groups ctors ctorTypes impls mctx) =
-  CProgram (map (dropRoutesBind name) groups) ctors ctorTypes impls mctx
+dropMethodRoutes name (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (dropRoutesBind name) groups) ctors ctorTypes impls mctx facts
 
 dropRoutesBind : String -> CBind -> CBind
 dropRoutesBind name (CBind n clauses site) =
@@ -715,8 +718,8 @@ dropRoutesExpr _ e = e
 
 -- [prog] with the leading parameter of every impl entry of method [m] dropped.
 dropEntryDict : String -> CProgram -> CProgram
-dropEntryDict m (CProgram groups ctors ctorTypes impls mctx) =
-  CProgram groups ctors ctorTypes (map (dropEntryDictOne m) impls) mctx
+dropEntryDict m (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (map (dropEntryDictOne m) impls) mctx facts
 
 dropEntryDictOne : String -> CImplEntry -> CImplEntry
 dropEntryDictOne m (ent@(CImplEntry n s d body)) =
@@ -757,7 +760,8 @@ test "(u) a method's dictionaries match its declared context" = expectEach [
 ]
 
 -- A program whose `g` takes one dictionary and whose `main` binds `$dict_m_0`,
--- with `body` as main's body.
+-- with `body` as main's body.  Instance `K` requires nothing and its interface has
+-- no supers; instance `S` requires nothing and its interface has one super.
 evidenceProg : CExpr -> CProgram
 evidenceProg body =
   CProgram
@@ -772,6 +776,10 @@ evidenceProg body =
     []
     []
     []
+    DeclFacts {
+      factRequires = [("K", 0), ("S", 0)],
+      factSupers = [("K", 0), ("S", 1)],
+    }
 
 evidenceOf : Route -> CExpr
 evidenceOf route = CMethod "show" (MethodEvidence "I" 1 route [] [])
@@ -841,6 +849,83 @@ test "(v) a dispatch node's evidence denotes dictionaries its callee binds" = ex
           "dispatch evidence: g (constrained) has a dictionary slot with no route [in main]",
         ]
         (validateDispatchEvidence (evidenceProg (CDict "g" [RNone]))),
+    ),
+  ]
+
+-- [prog] with the prerequisite routes of every dictionary built in the method
+-- routes of each top-level occurrence of method [name] dropped.
+dropBuiltPrereqs : String -> CProgram -> CProgram
+dropBuiltPrereqs name (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (dropPrereqsBind name) groups) ctors ctorTypes impls mctx facts
+
+dropPrereqsBind : String -> CBind -> CBind
+dropPrereqsBind name (CBind n clauses site) =
+  CBind n (map (dropPrereqsClause name) clauses) site
+
+dropPrereqsClause : String -> CClause -> CClause
+dropPrereqsClause name (CClause pats body) =
+  CClause pats (dropPrereqsExpr name body)
+
+dropPrereqsExpr : String -> CExpr -> CExpr
+dropPrereqsExpr name (CApp hd args site) =
+  CApp (dropPrereqsExpr name hd) (map (dropPrereqsExpr name) args) site
+dropPrereqsExpr name (m@(CMethod n (MethodEvidence iface arity route impls meths))) =
+  if n == name then
+    CMethod n (MethodEvidence iface arity route impls (map dropReqs meths))
+  else
+    m
+dropPrereqsExpr _ e = e
+
+dropReqs : Route -> Route
+dropReqs (RKey key _ sups) = RKey key [] sups
+dropReqs r = r
+
+test "(w) a built dictionary matches the declarations, and a dispatch names its interface" = expectEach
+  [
+    (
+      "a dictionary built with a prerequisite its instance does not require is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) builds instance `K` from 1 prerequisite dictionaries, it requires 0 [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (CDict "g" [RKey "K" [RDict "$dict_m_0"] []]))),
+    ),
+    (
+      "a dictionary built without its interface's super is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) builds instance `S` with 0 super dictionaries, `S` has 1 [in main]",
+        ]
+        (validateDispatchEvidence (evidenceProg (CDict "g" [RKey "S" [] []]))),
+    ),
+    (
+      "a dictionary of an undeclared instance stores nothing",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) builds instance `Q` from 1 prerequisite dictionaries, it requires 0 [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (CDict "g" [RKey "Q" [RDict "$dict_m_0"] []]))),
+    ),
+    (
+      "a dispatch through a given with no interface word is refused",
+      expectEqual
+        [
+          "dispatch evidence: method show dispatches with no interface word [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg
+            (CMethod "show" (MethodEvidence "" 1 (RDict "$dict_m_0") [] [])))),
+    ),
+    (
+      "a lowered dictionary missing its prerequisite is refused",
+      expectEqual
+        [
+          "dispatch evidence: method desc builds instance `calls::Show2|(calls.Pair b)|` from 0 prerequisite dictionaries, it requires 1 [in main]",
+        ]
+        (validateDispatchEvidence
+          (dropBuiltPrereqs "desc" (typedLowered i2078Prelude paramContextSrc))),
     ),
   ]
 

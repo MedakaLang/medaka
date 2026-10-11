@@ -1,5 +1,5 @@
 # META
-source_lines=1733
+source_lines=1709
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -15,6 +15,8 @@ import frontend.ast.{Pat(..), Route(..), Addr(..)}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
+  givenNames,
+  instanceWord,
   CField(..),
   CBind(..),
   CClause(..),
@@ -116,36 +118,17 @@ freeVars b (CListIndex a i) = freeVars b a ++ freeVars b i
 freeVars b (CListSlice a lo hi _) =
   freeVars b a ++ freeVars b lo ++ freeVars b hi
 freeVars b (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
-  routeDictNames b (route :: implRoutes ++ methRoutes)
+  freeGivens b (route :: implRoutes ++ methRoutes)
 -- The head names a local closure when a let binder abstracted dictionaries.
 freeVars b (CDict n routes) =
-  (if contains n b then [] else [n]) ++ routeDictNames b routes
+  (if contains n b then [] else [n]) ++ freeGivens b routes
 freeVars _ _ = []
 
--- collect the captured dict-param names (RDict/RDictFwd) from a list of Routes.
--- RKey and RNone carry no captured variable name; only RDict/RDictFwd name a dict
--- parameter that the enclosing closure must capture from its env.
+-- the given dictionary names [routes] read that [b] does not bind
 export
-routeDictNames : List String -> List Route -> List String
-routeDictNames _ [] = []
-routeDictNames b ((RDict d) :: rest) =
-  (if contains d b then [] else [d]) ++ routeDictNames b rest
-routeDictNames b ((RDictFwd d) :: rest) =
-  (if contains d b then [] else [d]) ++ routeDictNames b rest
--- S-1: an RLocal route carries the shadowing standalone's OWN constraint dicts, and
--- one of those slots can be an RDict — a constrained caller forwarding its own dict
--- param into the standalone (`outer : Num a => a -> a; outer v = size v`).  That name
--- is a genuine free local: recurse.  Empty dicts (every unconstrained standalone) ⇒
--- [] ⇒ byte-identical to the pre-S1 catch-all.
-routeDictNames b ((RLocal _ dicts) :: rest) =
-  routeDictNames b dicts ++ routeDictNames b rest
--- A dictionary built at the site nests its requires and supers, and either may
--- forward an enclosing dict parameter; a projection reads the one it projects.
-routeDictNames b ((RKey _ reqs sups) :: rest) =
-  routeDictNames b reqs ++ routeDictNames b sups ++ routeDictNames b rest
-routeDictNames b ((RProj r _) :: rest) =
-  routeDictNames b [r] ++ routeDictNames b rest
-routeDictNames b (_ :: rest) = routeDictNames b rest
+freeGivens : List String -> List Route -> List String
+freeGivens b routes =
+  filterList (d => not (contains d b)) (flatMap givenNames routes)
 
 export
 freeVarsFields : List String -> List CField -> List String
@@ -470,7 +453,7 @@ isSelfHead : SelfRef -> CExpr -> Bool
 isSelfHead (SelfByVar self) (CVar f _) = f == self
 isSelfHead (SelfByVar self) (CDict f _) = f == self
 isSelfHead (SelfByMethod method tag _) (CMethod m (MethodEvidence _ _ route _ _)) =
-  m == method && routeIsKey tag route
+  m == method && instanceWord route == Some tag
 isSelfHead _ _ = False
 
 -- every route is a forwarded dict param (`RDict`/`RDictFwd`) — the only shapes a
@@ -481,13 +464,6 @@ dictRoutesForwarded [] = True
 dictRoutesForwarded ((RDict _) :: rest) = dictRoutesForwarded rest
 dictRoutesForwarded ((RDictFwd _) :: rest) = dictRoutesForwarded rest
 dictRoutesForwarded _ = False
-
--- a route is `RKey tag …` for this tag (the concrete-impl dispatch a dispatched
--- self-recursion carries after restampIface).
-export
-routeIsKey : String -> Route -> Bool
-routeIsKey tag (RKey t _ _) = t == tag
-routeIsKey _ _ = False
 
 -- `ex` contains NO free reference to `self`.  SelfByVar: freeVars (a CVar name)
 -- PLUS the CDict-aware walk — `freeVars (CDict f routes)` returns only the route
@@ -511,7 +487,7 @@ selfFree (SelfByMethod method tag _) ex = not (mentionsSelfMethod method tag ex)
 export
 mentionsSelfMethod : String -> String -> CExpr -> Bool
 mentionsSelfMethod method tag (CMethod m (MethodEvidence _ _ route _ _)) =
-  m == method && routeIsKey tag route
+  m == method && instanceWord route == Some tag
 mentionsSelfMethod method tag (CApp f args _) =
   mentionsSelfMethod method tag f
     || anyList (mentionsSelfMethod method tag) args
@@ -1737,7 +1713,7 @@ anyListM p (x :: rest) =
   if h then True else anyListM p rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
@@ -1775,17 +1751,11 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVars" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "routes"))))
+(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
+(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EVar "routes"))))
 (DFunDef false "freeVars" (PWild PWild) (EListLit))
-(DTypeSig true "routeDictNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "routeDictNames" (PWild (PList)) (EListLit))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RDict" (PVar "d")) (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "d")) (EVar "b")) (EListLit) (EListLit (EVar "d"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RDictFwd" (PVar "d")) (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "d")) (EVar "b")) (EListLit) (EListLit (EVar "d"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RLocal" PWild (PVar "dicts")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "dicts")) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RKey" PWild (PVar "reqs") (PVar "sups")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "reqs")) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "sups"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RProj" (PVar "r") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EListLit (EVar "r"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest")))
+(DTypeSig true "freeGivens" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeGivens" ((PVar "b") (PVar "routes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "d")) (EVar "b"))))) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EVar "routes"))))
 (DTypeSig true "freeVarsFields" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsFields" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "rest"))))
@@ -1881,21 +1851,18 @@ anyListM p (x :: rest) =
 (DTypeSig true "isSelfHead" (TyFun (TyCon "SelfRef") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "isSelfHead" ((PCon "SelfByVar" (PVar "self")) (PCon "CVar" (PVar "f") PWild)) (EBinOp "==" (EVar "f") (EVar "self")))
 (DFunDef false "isSelfHead" ((PCon "SelfByVar" (PVar "self")) (PCon "CDict" (PVar "f") PWild)) (EBinOp "==" (EVar "f") (EVar "self")))
-(DFunDef false "isSelfHead" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
+(DFunDef false "isSelfHead" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EBinOp "==" (EApp (EVar "instanceWord") (EVar "route")) (EApp (EVar "Some") (EVar "tag")))))
 (DFunDef false "isSelfHead" (PWild PWild) (EVar "False"))
 (DTypeSig false "dictRoutesForwarded" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Bool")))
 (DFunDef false "dictRoutesForwarded" ((PList)) (EVar "True"))
 (DFunDef false "dictRoutesForwarded" ((PCons (PCon "RDict" PWild) (PVar "rest"))) (EApp (EVar "dictRoutesForwarded") (EVar "rest")))
 (DFunDef false "dictRoutesForwarded" ((PCons (PCon "RDictFwd" PWild) (PVar "rest"))) (EApp (EVar "dictRoutesForwarded") (EVar "rest")))
 (DFunDef false "dictRoutesForwarded" (PWild) (EVar "False"))
-(DTypeSig true "routeIsKey" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "Bool"))))
-(DFunDef false "routeIsKey" ((PVar "tag") (PCon "RKey" (PVar "t") PWild PWild)) (EBinOp "==" (EVar "t") (EVar "tag")))
-(DFunDef false "routeIsKey" (PWild PWild) (EVar "False"))
 (DTypeSig true "selfFree" (TyFun (TyCon "SelfRef") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "selfFree" ((PCon "SelfByVar" (PVar "self")) (PVar "ex")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "self")) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "ex")))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "ex")))))
 (DFunDef false "selfFree" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PVar "ex")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "ex"))))
 (DTypeSig true "mentionsSelfMethod" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
+(DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EBinOp "==" (EApp (EVar "instanceWord") (EVar "route")) (EApp (EVar "Some") (EVar "tag")))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "f")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag"))) (EVar "args"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "b")))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CLet" PWild PWild (PVar "rhs") (PVar "b"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "rhs")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "b"))))
@@ -2209,7 +2176,7 @@ anyListM p (x :: rest) =
 (DFunDef false "anyListM" ((PVar "p") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "h") (EApp (EVar "p") (EVar "x"))) (DoExpr (EIf (EVar "h") (EVar "True") (EApp (EApp (EVar "anyListM") (EVar "p")) (EVar "rest"))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "givenNames" false) (mem "instanceWord" false) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
@@ -2247,17 +2214,11 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVars" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "routes"))))
+(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
+(DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "freeGivens") (EVar "b")) (EVar "routes"))))
 (DFunDef false "freeVars" (PWild PWild) (EListLit))
-(DTypeSig true "routeDictNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "routeDictNames" (PWild (PList)) (EListLit))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RDict" (PVar "d")) (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "d")) (EVar "b")) (EListLit) (EListLit (EVar "d"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RDictFwd" (PVar "d")) (PVar "rest"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "d")) (EVar "b")) (EListLit) (EListLit (EVar "d"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RLocal" PWild (PVar "dicts")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "dicts")) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RKey" PWild (PVar "reqs") (PVar "sups")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "reqs")) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "sups"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons (PCon "RProj" (PVar "r") PWild) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EListLit (EVar "r"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest"))))
-(DFunDef false "routeDictNames" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "rest")))
+(DTypeSig true "freeGivens" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeGivens" ((PVar "b") (PVar "routes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "d")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "d")) (EVar "b"))))) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EVar "routes"))))
 (DTypeSig true "freeVarsFields" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CField")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsFields" (PWild (PList)) (EListLit))
 (DFunDef false "freeVarsFields" ((PVar "b") (PCons (PCon "CField" PWild PWild (PVar "ex")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "ex")) (EApp (EApp (EVar "freeVarsFields") (EVar "b")) (EVar "rest"))))
@@ -2353,21 +2314,18 @@ anyListM p (x :: rest) =
 (DTypeSig true "isSelfHead" (TyFun (TyCon "SelfRef") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "isSelfHead" ((PCon "SelfByVar" (PVar "self")) (PCon "CVar" (PVar "f") PWild)) (EBinOp "==" (EVar "f") (EVar "self")))
 (DFunDef false "isSelfHead" ((PCon "SelfByVar" (PVar "self")) (PCon "CDict" (PVar "f") PWild)) (EBinOp "==" (EVar "f") (EVar "self")))
-(DFunDef false "isSelfHead" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
+(DFunDef false "isSelfHead" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EBinOp "==" (EApp (EVar "instanceWord") (EVar "route")) (EApp (EVar "Some") (EVar "tag")))))
 (DFunDef false "isSelfHead" (PWild PWild) (EVar "False"))
 (DTypeSig false "dictRoutesForwarded" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Bool")))
 (DFunDef false "dictRoutesForwarded" ((PList)) (EVar "True"))
 (DFunDef false "dictRoutesForwarded" ((PCons (PCon "RDict" PWild) (PVar "rest"))) (EApp (EVar "dictRoutesForwarded") (EVar "rest")))
 (DFunDef false "dictRoutesForwarded" ((PCons (PCon "RDictFwd" PWild) (PVar "rest"))) (EApp (EVar "dictRoutesForwarded") (EVar "rest")))
 (DFunDef false "dictRoutesForwarded" (PWild) (EVar "False"))
-(DTypeSig true "routeIsKey" (TyFun (TyCon "String") (TyFun (TyCon "Route") (TyCon "Bool"))))
-(DFunDef false "routeIsKey" ((PVar "tag") (PCon "RKey" (PVar "t") PWild PWild)) (EBinOp "==" (EVar "t") (EVar "tag")))
-(DFunDef false "routeIsKey" (PWild PWild) (EVar "False"))
 (DTypeSig true "selfFree" (TyFun (TyCon "SelfRef") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "selfFree" ((PCon "SelfByVar" (PVar "self")) (PVar "ex")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "self")) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "ex")))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "ex")))))
 (DFunDef false "selfFree" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PVar "ex")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "ex"))))
 (DTypeSig true "mentionsSelfMethod" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
+(DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EBinOp "==" (EApp (EVar "instanceWord") (EVar "route")) (EApp (EVar "Some") (EVar "tag")))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "f")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag"))) (EVar "args"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "b")))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CLet" PWild PWild (PVar "rhs") (PVar "b"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "rhs")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "b"))))

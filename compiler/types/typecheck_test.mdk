@@ -27,7 +27,15 @@ import frontend.ast.{
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import eval.eval.{Value(..), evalOne, force}
-import ir.core_ir.{CBind(..), CClause(..), CExpr(..), CProgram(..), CStmt(..)}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CProgram(..),
+  CStmt(..),
+  MethodEvidence(..),
+  noDeclFacts,
+}
 import ir.core_ir_lower.{
   ifaceMethodArityKey, lowerProgram, methodConstraintIfaces
 }
@@ -1333,7 +1341,7 @@ wrappedReturnSource hasInt hasBox =
 
 returnMethodRoutes : CExpr -> Option (List String)
 returnMethodRoutes (CApp fn _ _) = returnMethodRoutes fn
-returnMethodRoutes (CMethod "produce" _ _ _ prerequisites _) =
+returnMethodRoutes (CMethod "produce" (MethodEvidence _ _ _ prerequisites _)) =
   Some (map numericRouteView prerequisites)
 returnMethodRoutes _ = None
 
@@ -1348,14 +1356,14 @@ wrappedReturnRoutes source =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
   let elaborated = elaborateOne [] core ("wrapped_return", program)
-  let (CProgram binds _ _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
   returnBindRoutes binds
 
 wrappedReturnFlatRoutes : String -> Option (List String)
 wrappedReturnFlatRoutes source =
   let program = desugar (parseLocated "\{numericPreludeSource}\n\{source}")
   let elaborated = elaborateOne [] [] ("wrapped_return_flat", program)
-  let (CProgram binds _ _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
   returnBindRoutes binds
 
 test "wrapped return prerequisites use the class parameter, not the result type" =
@@ -2370,7 +2378,7 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
 
 methodHeadArity : String -> CExpr -> Option Int
-methodHeadArity target (CMethod name _ arity _ _ _)
+methodHeadArity target (CMethod name (MethodEvidence _ arity _ _ _))
   | name == target = Some arity
   | otherwise = None
 methodHeadArity target (CApp f _ _) = methodHeadArity target f
@@ -2389,7 +2397,7 @@ loweredMethodArity source bindName method =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
   let elaborated = elaborateOne [] core ("method_arity", program)
-  let (CProgram binds _ _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
   bindMethodArity bindName method binds
 
 test "method occurrence freezes declared arity before higher-order specialization" =
@@ -2474,13 +2482,19 @@ test "value-position shadow publishes the selected standalone arity" =
 test "Core IR round-trip preserves method occurrence arity" =
   let original =
     CProgram
-      [CBind "main" [CClause [] (CMethod "probe" "" 7 RNone [] [])] noDeclLoc]
+      [
+        CBind
+          "main"
+          [CClause [] (CMethod "probe" (MethodEvidence "" 7 RNone [] []))]
+          noDeclLoc,
+      ]
       []
       []
       []
       []
+      noDeclFacts
   match parseCProgram (cprogramToSexp original)
-    CProgram [CBind "main" [CClause [] (CMethod "probe" "" arity RNone [] [])] _] _ _ _ _ =>
+    CProgram [CBind "main" [CClause [] (CMethod "probe" (MethodEvidence "" arity RNone [] []))] _] _ _ _ _ _ =>
       expectEqual 7 arity
     _ => fail "expected the round-tripped CProgram to keep the same shape"
 
@@ -2513,12 +2527,13 @@ localCoreExprFacts (CBinPrim op lhs rhs _ _) =
     addRoutes
     fromIntRoutes
     (primCount + (if op == "+" then 1 else 0))
-localCoreExprFacts (CMethod "add" _ _ (RDict binder) _ _) =
+localCoreExprFacts (CMethod "add" (MethodEvidence _ _ (RDict binder) _ _)) =
   LocalCoreFacts False [binder] [] 0
-localCoreExprFacts (CMethod "fromInt" _ _ route _ _) = match route
-  RDict binder => LocalCoreFacts False [] [binder] 0
-  RDictFwd binder => LocalCoreFacts False [] [binder] 0
-  _ => emptyLocalCoreFacts
+localCoreExprFacts (CMethod "fromInt" (MethodEvidence _ _ route _ _)) =
+  match route
+    RDict binder => LocalCoreFacts False [] [binder] 0
+    RDictFwd binder => LocalCoreFacts False [] [binder] 0
+    _ => emptyLocalCoreFacts
 localCoreExprFacts _ = emptyLocalCoreFacts
 
 blockRecValueFacts : CBind -> LocalCoreFacts
@@ -2534,7 +2549,7 @@ blockRecCoreFacts =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
   let elaborated = elaborateOne [] core ("block_rec_core", program)
-  let (CProgram binds _ _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
   fold
     (facts bind => mergeLocalCoreFacts facts (blockRecValueFacts bind))
     emptyLocalCoreFacts
@@ -2575,7 +2590,7 @@ lamThenGroupCoreFacts =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated lamThenGroupSource)
   let elaborated = elaborateOne [] core ("lam_then_group_core", program)
-  let (CProgram binds _ _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _ _) = lowerProgram elaborated
   fold
     (facts bind => mergeLocalCoreFacts facts (lamThenGroupBindFacts bind))
     emptyLocalCoreFacts

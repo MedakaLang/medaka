@@ -198,10 +198,13 @@ import frontend.ast.{
 }
 import ir.core_ir.{
   CProgram(..),
+  noDeclFacts,
   CBind(..),
   CClause(..),
   CExpr(..),
   MethodEvidence(..),
+  instanceWord,
+  receiverEvidence,
   CStmt(..),
   CArm(..),
   CGuard(..),
@@ -284,6 +287,7 @@ import ir.core_ir_lower.{
 import backend.trmc_analysis.{
   SelfRef(..),
   methodSelf,
+  freeGivens,
   trmcEligible,
   isCtorTail,
   isSelfSatApp,
@@ -889,7 +893,8 @@ makeWasmProgramIndexWithLazy groups ctorArs ctorTypes impls fnNames valNames laz
     fnImpl = WasmFnImplIndex {
       fnNames = fnIndex,
       valNames = valIndex,
-      arities = programArities (CProgram groups ctorArs ctorTypes impls []),
+      arities =
+        programArities (CProgram groups ctorArs ctorTypes impls [] noDeclFacts),
       implBuckets = groupImplsByMethodW impls,
       lazyGlobals = omFromNames lazyNames omEmpty,
     },
@@ -1371,7 +1376,7 @@ refuseUnprovidedExternsW emit input cp =
           findings
 
 emitProgramCore : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls _)) =
+emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls _ _)) =
   let _ = refuseUnprovidedExternsW emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
@@ -1567,13 +1572,13 @@ checkCalledNamesW defined (name :: rest) =
 -- so a recorded gap is attributed to its source binding.
 export
 emitProgramGaps : WasmEmitInput -> CProgram -> List String
-emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx) =
+emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx facts) =
   let emit = freshWasmEmit WGapRecord
   let _ =
     refuseUnprovidedExternsW
       emit
       input
-      (CProgram groups ctorArs ctorTypes impls mctx)
+      (CProgram groups ctorArs ctorTypes impls mctx facts)
   let _ = setRef emit.useStr (programUsesStr groups)
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls
@@ -4725,7 +4730,7 @@ emitMethodRKeyCallRef : Prog ->
   CallEndW ->
   List String
 emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoutes args end =
-  let tag = routeKeyWordW route
+  let tag = optionOr "" (instanceWord route)
   let argInstrs = flatMap (a => emitRefExpr prog env d a) args
   -- `RKey tag` selects a STATIC impl (peer of llvm_emit's emitMethod RKey arm): the
   -- entry of the occurrence's interface filed under the instance key [tag] — a
@@ -4745,7 +4750,9 @@ emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoute
       let keptWords =
         flatMap
           (routeWitness prog env d)
-          (staticEntryDictRoutesW entry route methRoutes implRoutes)
+          (staticEntryDictRoutesW
+            entry
+            (MethodEvidence iface siteArity route implRoutes methRoutes))
       keptWords ++ argInstrs ++ [callInstrW end (implEntrySymW name entry)]
     None =>
       gapLP
@@ -4757,24 +4764,14 @@ emitMethodRKeyCallRef prog env d name iface siteArity route implRoutes methRoute
 -- ones (llvm_emit's `staticEntryDictRoutes`): a supplied method's kept `requires`,
 -- or an inherited default's RECEIVER, the selected instance's dictionary built from
 -- the site's word, `requires` routes and the supers the route carries for this case.
-staticEntryDictRoutesW : CImplEntry ->
-  Route ->
-  List Route ->
-  List Route ->
-  List Route
-staticEntryDictRoutesW ent route methRoutes implRoutes =
+staticEntryDictRoutesW : CImplEntry -> MethodEvidence -> List Route
+staticEntryDictRoutesW ent ev =
   if isInheritedEntryW ent then
-    methRoutes ++ [receiverRouteW route implRoutes]
+    ev.meContext ++ [receiverEvidence ev]
   else
-    takeRoutesW (implLeadingDictCountOfEntryW ent) (methRoutes ++ implRoutes)
-
-receiverRouteW : Route -> List Route -> Route
-receiverRouteW (RKey word _ sups) implRoutes = RKey word implRoutes sups
-receiverRouteW route _ = route
-
-routeKeyWordW : Route -> String
-routeKeyWordW (RKey word _ _) = word
-routeKeyWordW _ = ""
+    takeRoutesW
+      (implLeadingDictCountOfEntryW ent)
+      (ev.meContext ++ ev.mePrereqs)
 
 -- an inherited default's per-instance entry
 isInheritedEntryW : CImplEntry -> Bool
@@ -4857,7 +4854,7 @@ emitMethodDispatchRef prog env d name iface siteArity dpar methRoutes args end =
     CallTailW => chain ++ ["unreachable"]
 
 -- #747: the call instruction(s) a matched dispatch arm emits after its dictionaries
--- and arguments.  A nullary/return-position/no-requires impl (nArgs == 0 and a
+-- and arguments.  A nullary/return-position/dictionary-free impl (nArgs == 0 and a
 -- `$memo_<symTag>_<method>` LAZY value global synthesized by core_ir_lower —
 -- isLazyGlobalW confirms it exists) is a per-instance CAF: FORCE its shared CAF
 -- (`call $force_<memo>`, which memoises into `$<memo>` and black-holes a cyclic
@@ -5164,8 +5161,8 @@ emitLocalDictRef prog env d name routes args end =
 --
 -- FIX: ETA-EXPAND the occurrence to a synthetic lambda `\a0..a(k-1) -> head a0..a(k-1)`
 -- and lower it through emitClosure — the universal W4 closure path.  emitClosure (a)
--- captures the route's forwarded dict params (freeVarsExpr surfaces RDict/RDictFwd via
--- freeVarsRoute) into the closure $env, and (b) re-emits the SATURATED dispatch in the
+-- captures the route's forwarded dict params (freeVarsExpr surfaces every given the
+-- evidence names, `core_ir.givenNames`) into the closure $env, and (b) re-emits the SATURATED dispatch in the
 -- lifted body via the CALL-position emitMethodRef/emitDictRef (correct: dicts ++ args ++
 -- call).  The result is a `$clos` struct (code_ptr, arity, $env captures) with the exact
 -- ABI W4 HOFs expect — the working lambda path IS the reference.
@@ -10030,28 +10027,10 @@ freeVarsExpr bound (CSlice e lo hi _) =
 -- capture set → "dict param '$dict_…' not in scope".  (These nodes carry no value
 -- args of their own — args arrive via the surrounding CApp, already handled.)
 freeVarsExpr bound (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
-  flatMap (freeVarsRoute bound) (route :: implRoutes ++ methRoutes)
+  freeGivens bound (route :: implRoutes ++ methRoutes)
 freeVarsExpr bound (CDict name routes) =
-  (if contains name bound then [] else [name])
-    ++ flatMap (freeVarsRoute bound) routes
+  (if contains name bound then [] else [name]) ++ freeGivens bound routes
 freeVarsExpr bound _ = []
-
--- the dict-param names a Route reads: RDict/RDictFwd name a leading dict param (free
--- unless locally bound); RKey recurses into its nested requires-routes; RNone none.
-freeVarsRoute : List String -> Route -> List String
-freeVarsRoute bound (RDict d) = if contains d bound then [] else [d]
-freeVarsRoute bound (RDictFwd d) = if contains d bound then [] else [d]
-freeVarsRoute bound (RKey _ rs sups) =
-  flatMap (freeVarsRoute bound) (rs ++ sups)
-freeVarsRoute bound (RProj r _) = freeVarsRoute bound r
-freeVarsRoute bound RNone = []
--- S-1 (wasm peer of llvm_emit's methValDictNames RLocal arm): an RLocal route's TARGET
--- is a global symbol, but its DICT slots can hold an RDict — the enclosing constrained
--- fn's own dict param, a genuine captured local.  Recurse into them.  Empty dicts (every
--- unconstrained standalone) ⇒ [] ⇒ byte-identical to the pre-S1 arm.  RScalar (a
--- scalar-type tag on a CBinPrim binop) still captures nothing.
-freeVarsRoute bound (RLocal _ dicts) = flatMap (freeVarsRoute bound) dicts
-freeVarsRoute _ (RScalar _) = []
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : List String -> CBind -> List String

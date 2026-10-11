@@ -30,6 +30,8 @@ import ir.core_ir.{
   CImplBody(..),
   ImplSym(..),
   CProgram(..),
+  DeclFacts(..),
+  noDeclFacts,
   CallMode(..),
   CallSite(..),
   CTree(..),
@@ -452,6 +454,7 @@ parseCProgram s = match parseAll s
       (map toCtorType ctorTypes)
       (map toCImplEntry impls)
       []
+      noDeclFacts
   SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls, SList mctx]) =>
     CProgram
       (map toCBind binds)
@@ -459,7 +462,33 @@ parseCProgram s = match parseAll s
       (map toCtorType ctorTypes)
       (map toCImplEntry impls)
       (map toMethodContext mctx)
+      noDeclFacts
+  SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls, SList mctx, facts]) =>
+    CProgram
+      (map toCBind binds)
+      (map toCtorArity ctorArities)
+      (map toCtorType ctorTypes)
+      (map toCImplEntry impls)
+      (map toMethodContext mctx)
+      (toDeclFacts facts)
   other => panic ("core_ir_sexp_parse: bad CProgram: " ++ sexprToStr other)
+
+toDeclFacts : SExp -> DeclFacts
+toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
+  factRequires = map (toFactPair "rq") reqs,
+  factSupers = map (toFactPair "sp") sups,
+}
+toDeclFacts other =
+  panic ("core_ir_sexp_parse: bad declaration facts: " ++ sexprToStr other)
+
+toFactPair : String -> SExp -> (String, Int)
+toFactPair tag (row@(SList ((SAtom t) :: [key, n]))) =
+  if t == tag then
+    (toStr key, toInt n)
+  else
+    panic ("core_ir_sexp_parse: bad declaration fact: " ++ sexprToStr row)
+toFactPair _ other =
+  panic ("core_ir_sexp_parse: bad declaration fact: " ++ sexprToStr other)
 
 toMethodContext : SExp -> (String, Int)
 toMethodContext (SList ((SAtom "mc") :: [key, n])) = (toStr key, toInt n)

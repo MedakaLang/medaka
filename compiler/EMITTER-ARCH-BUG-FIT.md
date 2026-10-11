@@ -1,6 +1,6 @@
 # Emitter target architecture - per-bug fit ledger
 
-**Status:** RE-DERIVED 2026-09-03 (section 0) over the 2026-08-07 ledger at
+**Status:** RE-DERIVED 2026-09-03 (section 0; F-rows re-derived 2026-10-10 and 2026-10-11) over the 2026-08-07 ledger at
 `f4fbcd0a` (sections 1-10, retained as history). Fit is now against the
 REVISION block (R4 fact ledger) of
 [`EMITTER-TARGET-ARCHITECTURE.md`](EMITTER-TARGET-ARCHITECTURE.md), not against
@@ -93,6 +93,15 @@ only the F1, F2 and F4 rows move:
 | F1 record ordinals and update order | Landed (slice S-record-ordinals). #1518 is fixed by it; `test/engine_fixtures/record_update_override_order.mdk` and its value pin are the witness. |
 | F2 call mode | Landed (slices S-call-mode-A and -B). #2078 is fixed by it; `test/engine_fixtures/call_mode_arity.mdk` and `call_mode_over_order.mdk` are the witnesses, with `impl_group_mixed_eta.mdk` for the impl-group eta rule. #2396 had already drained before the row landed (witness `test/engine_fixtures/constrained_wrapper_builtin_scalar_2396.mdk`), and #2425's shapes are pinned by `test/engine_fixtures/overapplied_lambda.mdk` and `point_free_map_lambda.mdk`. |
 | F4 tail sites | Landed (slices S-tail-sites-A and -B). #1349 is fixed by it (`test/wasm/diff_gzip.sh` `large_stored` passes as a success case). #2577's where-worker self recursion is constant-stack on both backends at `-O0` and `-O2`; a non-self tail call stays constant-stack natively only through clang's `-O2` sibling calls, which is outside the row. |
+
+**Re-derived 2026-10-11, after sprint dispatch-names-its-target landed R4 rows F3
+and F6.** As on 2026-10-10 this reads the tree, not the live tracker, so the
+S0/S1 counts above are still those of 2026-09-03 and only the F3 and F6 rows move:
+
+| Fact | State in the tree on 2026-10-11 |
+|---|---|
+| F3 identity on dispatch nodes | Landed (slice S-impl-symbol): every impl entry carries its stamped symbol words and qualified interface word, and `core_validate.validateImplSymbols` refuses an entry without them. Witness: `test/llvm_fixtures_modules/iface_returns_self_samename/` (two modules' same-spelled interfaces). The F3 issues in the 2026-09-03 table are not re-read here. |
+| F6 evidence and dispositions | Landed (slices S-dict-miss-loud, S-method-constraint-evidence, S-evidence-carrier-A and -B): `CMethod` carries `MethodEvidence`, `CProgram` carries `DeclFacts`, and `core_validate.validateDispatchEvidence` holds both on the emit path. The column held no open issue. Witnesses: `compiler/backend/core_validate_test.mdk` cases (u), (v) and (w), and `test/engine_fixtures/nullary_memo_requires_unused.mdk` with its value pin (a requires-bearing nullary CAF whose effect runs once on every engine). |
 
 ### 0.3 What this ledger is for now
 

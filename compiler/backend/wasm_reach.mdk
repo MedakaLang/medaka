@@ -96,7 +96,7 @@ import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 -- carry no code.
 export
 wasmReachFilter : CProgram -> CProgram
-wasmReachFilter (CProgram groups ctorArs ctorTypes impls mctx) =
+wasmReachFilter (CProgram groups ctorArs ctorTypes impls mctx facts) =
   let reach = reachKeys groups impls
   CProgram
     (filterList (b => has (bindKey b) reach) groups)
@@ -104,6 +104,7 @@ wasmReachFilter (CProgram groups ctorArs ctorTypes impls mctx) =
     ctorTypes
     (filterList (e => has (implKey e) reach) impls)
     mctx
+    facts
 
 -- local peer of wasm_emit's forEachU (module-private there); the HashMap builders
 -- below are effectful folds, not value folds.

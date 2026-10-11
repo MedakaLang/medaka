@@ -49,7 +49,7 @@
 -- AST tree-walker over the whole fixture corpus.  Core IR is correct iff
 -- evaluating it matches evaluating the AST.
 
-import frontend.ast.{Lit, Loc, Pat, Addr, Route, noDeclLoc}
+import frontend.ast.{Lit, Loc, Pat, Addr, Route(..), noDeclLoc}
 
 -- ── expressions ────────────────────────────────────────────────────────────
 public export data CExpr =
@@ -151,6 +151,47 @@ public export data MethodEvidence = MethodEvidence {
   mePrereqs : List Route,
   meContext : List Route,
 }
+
+-- Every given dictionary name [r] reads, in order: a given's own name, the givens
+-- a dictionary built at the site nests in its requires and supers, the given a
+-- projection reads, and the givens a shadowing standalone is applied to.
+export
+givenNames : Route -> List String
+givenNames (RDict d) = [d]
+givenNames (RDictFwd d) = [d]
+givenNames (RKey _ reqs sups) = flatMap givenNames (reqs ++ sups)
+givenNames (RProj r _) = givenNames r
+givenNames (RLocal _ dicts) = flatMap givenNames dicts
+givenNames RNone = []
+givenNames (RScalar _) = []
+
+-- [r] is answered by a dictionary that is only known at run time: a given, or a
+-- projection out of one.
+export
+isGivenRooted : Route -> Bool
+isGivenRooted (RDict _) = True
+isGivenRooted (RDictFwd _) = True
+isGivenRooted (RProj _ _) = True
+isGivenRooted (RKey _ _ _) = False
+isGivenRooted (RLocal _ _) = False
+isGivenRooted RNone = False
+isGivenRooted (RScalar _) = False
+
+-- The canonical key of the instance [r] selects statically, if it selects one.
+export
+instanceWord : Route -> Option String
+instanceWord (RKey word _ _) = Some word
+instanceWord _ = None
+
+-- The dictionary of the instance an occurrence selects statically: its word, the
+-- prerequisites the occurrence supplies and the supers its dispatch carries.  An
+-- inherited default receives it as its receiver.  Evidence that selects no
+-- instance statically is its own dispatch answer.
+export
+receiverEvidence : MethodEvidence -> Route
+receiverEvidence (MethodEvidence _ _ (RKey word _ sups) prereqs _) =
+  RKey word prereqs sups
+receiverEvidence ev = ev.meDispatch
 
 -- How an application is made, from its head's defined arity k and its n
 -- arguments.  `core_ir_lower.stampCallModes` decides it for every application a
@@ -338,8 +379,8 @@ noImplSym = ImplSym "" "" ""
 -- A lowered program: top-level function groups (coalesced multi-clause), the
 -- constructor table (name → arity, for building VCon makers), the ctor→type map
 -- eval needs for runtime type tags, (slice 5) the lowered typeclass
--- impl/default entries, and the method-context table.  Slice-1 programs carry an
--- empty impl list.
+-- impl/default entries, the method-context table and the declaration facts.
+-- Slice-1 programs carry an empty impl list.
 -- The method-context table: per interface method of the lowered declarations whose
 -- own `=>` context has a slot, keyed by `core_ir_lower.ifaceMethodArityKey`, the
 -- number of constraints in that context that mention a type variable.  It is read
@@ -347,4 +388,20 @@ noImplSym = ImplSym "" "" ""
 -- `core_validate.validateMethodContexts` can hold a `CMethod`'s method routes and an
 -- impl entry's leading dictionaries to it.
 public export data CProgram =
-  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int))
+  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
+
+-- The declaration facts a dictionary built at a site is held to
+-- (`core_validate.validateDispatchEvidence`): each instance's `requires` count,
+-- keyed by its canonical key word (`core_ir_lower.instanceReqCounts`), and each of
+-- those instances' interfaces' direct superinterface count, keyed by interface
+-- word (`disposition.ifaceSuperCount`).  A dictionary stores the supers, then the
+-- requires.  Only an emitting lowering fills them; every other lowering carries
+-- `noDeclFacts`.
+public export data DeclFacts = DeclFacts {
+  factRequires : List (String, Int),
+  factSupers : List (String, Int),
+}
+
+export
+noDeclFacts : DeclFacts
+noDeclFacts = DeclFacts { factRequires = [], factSupers = [] }
