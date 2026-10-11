@@ -650,7 +650,7 @@ effectHoleRejectOuterComputedSrc = unlines [
 {- | Writes `name`.mdk under `scratch` as `src`, then runs `use` on its
    path. `scratch` is shared across every synthesized fixture this test
    needs — `test_process.scratchDir` is a top-level nullary, evaluated ONCE
-   per process (`probe_runner.ownScratch`'s own warning), so a helper that
+   per process, so a helper that
    called `scratchDir` and then `rm -rf`ed it per fixture would delete the
    ONE shared directory out from under every fixture after the first. -}
 withScratchFile : String ->
