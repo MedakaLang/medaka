@@ -1545,6 +1545,8 @@ tailExpr tl (CBlock stmts) = CBlock (tailStmts tl stmts)
 tailExpr _ (CMethod name iface arity r ir mr) = CMethod name iface arity r ir mr
 tailExpr _ (CDict name rs) = CDict name rs
 
+-- A partial application builds a closure; it is never a call, so never a tail call.
+export
 isPartialMode : CallMode -> Bool
 isPartialMode (CallPartial _) = True
 isPartialMode CallExact = False

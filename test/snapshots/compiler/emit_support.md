@@ -1,5 +1,5 @@
 # META
-source_lines=679
+source_lines=686
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -677,6 +677,13 @@ isExactCall : CallMode -> Bool
 isExactCall CallExact = True
 isExactCall _ = False
 
+-- Whether an expression is the tail call of its function: an application the
+-- lowering flagged from its position (`core_ir_lower.markTailSites`).
+export
+isTailCall : CExpr -> Bool
+isTailCall (CApp _ _ (CallSite _ flag)) = flag
+isTailCall _ = False
+
 -- An impl entry's declared value arity: the arrows of its interface signature.
 export
 implEntryDeclaredArity : CImplEntry -> Int
@@ -906,6 +913,9 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DTypeSig true "isExactCall" (TyFun (TyCon "CallMode") (TyCon "Bool")))
 (DFunDef false "isExactCall" ((PCon "CallExact")) (EVar "True"))
 (DFunDef false "isExactCall" (PWild) (EVar "False"))
+(DTypeSig true "isTailCall" (TyFun (TyCon "CExpr") (TyCon "Bool")))
+(DFunDef false "isTailCall" ((PCon "CApp" PWild PWild (PCon "CallSite" PWild (PVar "flag")))) (EVar "flag"))
+(DFunDef false "isTailCall" (PWild) (EVar "False"))
 (DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
 (DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))
 # MARK
@@ -1133,5 +1143,8 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DTypeSig true "isExactCall" (TyFun (TyCon "CallMode") (TyCon "Bool")))
 (DFunDef false "isExactCall" ((PCon "CallExact")) (EVar "True"))
 (DFunDef false "isExactCall" (PWild) (EVar "False"))
+(DTypeSig true "isTailCall" (TyFun (TyCon "CExpr") (TyCon "Bool")))
+(DFunDef false "isTailCall" ((PCon "CApp" PWild PWild (PCon "CallSite" PWild (PVar "flag")))) (EVar "flag"))
+(DFunDef false "isTailCall" (PWild) (EVar "False"))
 (DTypeSig true "implEntryDeclaredArity" (TyFun (TyCon "CImplEntry") (TyCon "Int")))
 (DFunDef false "implEntryDeclaredArity" ((PCon "CImplEntry" PWild PWild (PVar "declared") PWild)) (EVar "declared"))

@@ -259,8 +259,7 @@ conyes8:
   %t13 = getelementptr i8, ptr %t12, i64 8
   %t14 = load i64, ptr %t13
   %t15 = call i64 @mdk_impl_String_display(i64 %t14)
-  store i64 %t15, ptr %t0
-  br label %decend1
+  ret i64 %t15
 connext8:
   call void @mdk_nonexhaustive_match()
   unreachable
