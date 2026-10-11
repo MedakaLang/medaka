@@ -2112,7 +2112,7 @@ REEMIT_OUT="$($EMITBIN --reemit-input "$RUNTIME" "$INPUT_WORK/p.mdk" "$INPUT_WOR
   echo "FAIL wasm typed same-process input harness"
   exit 1
 }
-REEMIT_EXPECTED="$(printf 'P_EQ_PLAST\nP_NE_METHOD\nP_NE_SIG\nP_NE_CTOR\nP_NE_MAIN\nP_NE_RECORD')"
+REEMIT_EXPECTED="$(printf 'P_EQ_PLAST\nP_EQ_METHOD\nP_NE_SIG\nP_NE_CTOR\nP_NE_MAIN\nP_EQ_RECORD')"
 [ "$REEMIT_OUT" = "$REEMIT_EXPECTED" ] || {
   echo "FAIL wasm typed input isolation: an explicit field did not discriminate: $REEMIT_OUT"
   exit 1
