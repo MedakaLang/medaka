@@ -1,0 +1,29 @@
+-- §3 R-SUPER-DECL is a declaration rule: `impl Sub (Box a)` does not entail `Show2 a`,
+-- the context of the `Sup (Box a)` instance its head selects, so it is rejected at the
+-- impl (line 23, T-IMPL-MISSING-REQUIRES) on every verb even though the only use,
+-- `sub (Box 1)`, needs no `Sup` dictionary at a type without `Show2`.  This narrows
+-- acceptance (Val's ruling, #3995): the program used to be accepted and print `sub`.
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+interface Sup a where
+  sup : a -> String
+
+interface Sub a requires Sup a where
+  sub : a -> String
+
+data Box a = Box a
+
+impl Sup (Box a) requires Show2 a where
+  sup (Box x) = "sup" ++ show2 x
+
+impl Sub (Box a) where
+  sub _ = "sub"
+
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+
+main = println (sub (Box (1 : Int)))
