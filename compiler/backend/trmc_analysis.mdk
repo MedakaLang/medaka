@@ -10,6 +10,7 @@
 import frontend.ast.{Pat(..), Route(..), Addr(..)}
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CField(..),
   CBind(..),
   CClause(..),
@@ -110,7 +111,7 @@ freeVars b (CStringSlice a lo hi _) =
 freeVars b (CListIndex a i) = freeVars b a ++ freeVars b i
 freeVars b (CListSlice a lo hi _) =
   freeVars b a ++ freeVars b lo ++ freeVars b hi
-freeVars b (CMethod _ _ _ route implRoutes methRoutes) =
+freeVars b (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
   routeDictNames b (route :: implRoutes ++ methRoutes)
 -- The head names a local closure when a let binder abstracted dictionaries.
 freeVars b (CDict n routes) =
@@ -444,7 +445,7 @@ receiverSaturated _ _ _ _ = False
 -- supers and `requires` are its own fields in order); 0 for any other call, which
 -- no value-arity count then saturates
 receiverDictCount : CExpr -> Int
-receiverDictCount (CMethod _ _ _ (RKey _ _ sups) implRoutes methRoutes) =
+receiverDictCount (CMethod _ (MethodEvidence _ _ (RKey _ _ sups) implRoutes methRoutes)) =
   if dictRoutesForwarded methRoutes && ownFields (sups ++ implRoutes) 0 "" then
     listLen methRoutes + 1
   else
@@ -464,7 +465,7 @@ export
 isSelfHead : SelfRef -> CExpr -> Bool
 isSelfHead (SelfByVar self) (CVar f _) = f == self
 isSelfHead (SelfByVar self) (CDict f _) = f == self
-isSelfHead (SelfByMethod method tag _) (CMethod m _ _ route _ _) =
+isSelfHead (SelfByMethod method tag _) (CMethod m (MethodEvidence _ _ route _ _)) =
   m == method && routeIsKey tag route
 isSelfHead _ _ = False
 
@@ -505,7 +506,7 @@ selfFree (SelfByMethod method tag _) ex = not (mentionsSelfMethod method tag ex)
 -- recursion DROPPED → silent miscompile.  This full structural walk closes that.
 export
 mentionsSelfMethod : String -> String -> CExpr -> Bool
-mentionsSelfMethod method tag (CMethod m _ _ route _ _) =
+mentionsSelfMethod method tag (CMethod m (MethodEvidence _ _ route _ _)) =
   m == method && routeIsKey tag route
 mentionsSelfMethod method tag (CApp f args _) =
   mentionsSelfMethod method tag f

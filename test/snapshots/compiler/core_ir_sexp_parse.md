@@ -1,5 +1,5 @@
 # META
-source_lines=476
+source_lines=478
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -23,6 +23,7 @@ import frontend.ast.{
 }
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -380,11 +381,12 @@ toCExpr (SList ((SAtom "CBlock") :: stmts)) = CBlock (map toCStmt stmts)
 toCExpr (SList ((SAtom "CMethod") :: [name, iface, arity, route, SList implRoutes, SList methRoutes])) =
   CMethod
     (toStr name)
-    (toStr iface)
-    (toInt arity)
-    (toRoute route)
-    (map toRoute implRoutes)
-    (map toRoute methRoutes)
+    (MethodEvidence
+      (toStr iface)
+      (toInt arity)
+      (toRoute route)
+      (map toRoute implRoutes)
+      (map toRoute methRoutes))
 toCExpr (SList ((SAtom "CDict") :: [name, SList routes])) =
   CDict (toStr name) (map toRoute routes)
 toCExpr other = panic ("core_ir_sexp_parse: bad CExpr: " ++ sexprToStr other)
@@ -480,7 +482,7 @@ joinSexps [x] = sexprToStr x
 joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
 (DTypeSig false "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "SToken"))))
@@ -652,7 +654,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CListIndex"))) (PList (PVar "a") (PVar "i"))))) (EApp (EApp (EVar "CListIndex") (EApp (EVar "toCExpr") (EVar "a"))) (EApp (EVar "toCExpr") (EVar "i"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CListSlice"))) (PList (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EVar "toCExpr") (EVar "a"))) (EApp (EVar "toCExpr") (EVar "lo"))) (EApp (EVar "toCExpr") (EVar "hi"))) (EApp (EVar "toBool") (EVar "incl"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBlock"))) (PVar "stmts")))) (EApp (EVar "CBlock") (EApp (EApp (EVar "map") (EVar "toCStmt")) (EVar "stmts"))))
-(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CMethod"))) (PList (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PCon "SList" (PVar "implRoutes")) (PCon "SList" (PVar "methRoutes")))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toStr") (EVar "iface"))) (EApp (EVar "toInt") (EVar "arity"))) (EApp (EVar "toRoute") (EVar "route"))) (EApp (EApp (EVar "map") (EVar "toRoute")) (EVar "implRoutes"))) (EApp (EApp (EVar "map") (EVar "toRoute")) (EVar "methRoutes"))))
+(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CMethod"))) (PList (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PCon "SList" (PVar "implRoutes")) (PCon "SList" (PVar "methRoutes")))))) (EApp (EApp (EVar "CMethod") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EApp (EVar "toStr") (EVar "iface"))) (EApp (EVar "toInt") (EVar "arity"))) (EApp (EVar "toRoute") (EVar "route"))) (EApp (EApp (EVar "map") (EVar "toRoute")) (EVar "implRoutes"))) (EApp (EApp (EVar "map") (EVar "toRoute")) (EVar "methRoutes")))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CDict"))) (PList (PVar "name") (PCon "SList" (PVar "routes")))))) (EApp (EApp (EVar "CDict") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EVar "map") (EVar "toRoute")) (EVar "routes"))))
 (DFunDef false "toCExpr" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CExpr: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCClause" (TyFun (TyCon "SExp") (TyCon "CClause")))
@@ -691,7 +693,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
 (DTypeSig false "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "SToken"))))
@@ -863,7 +865,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CListIndex"))) (PList (PVar "a") (PVar "i"))))) (EApp (EApp (EVar "CListIndex") (EApp (EVar "toCExpr") (EVar "a"))) (EApp (EVar "toCExpr") (EVar "i"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CListSlice"))) (PList (PVar "a") (PVar "lo") (PVar "hi") (PVar "incl"))))) (EApp (EApp (EApp (EApp (EVar "CListSlice") (EApp (EVar "toCExpr") (EVar "a"))) (EApp (EVar "toCExpr") (EVar "lo"))) (EApp (EVar "toCExpr") (EVar "hi"))) (EApp (EVar "toBool") (EVar "incl"))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBlock"))) (PVar "stmts")))) (EApp (EVar "CBlock") (EApp (EApp (EMethodRef "map") (EVar "toCStmt")) (EVar "stmts"))))
-(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CMethod"))) (PList (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PCon "SList" (PVar "implRoutes")) (PCon "SList" (PVar "methRoutes")))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CMethod") (EApp (EVar "toStr") (EVar "name"))) (EApp (EVar "toStr") (EVar "iface"))) (EApp (EVar "toInt") (EVar "arity"))) (EApp (EVar "toRoute") (EVar "route"))) (EApp (EApp (EMethodRef "map") (EVar "toRoute")) (EVar "implRoutes"))) (EApp (EApp (EMethodRef "map") (EVar "toRoute")) (EVar "methRoutes"))))
+(DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CMethod"))) (PList (PVar "name") (PVar "iface") (PVar "arity") (PVar "route") (PCon "SList" (PVar "implRoutes")) (PCon "SList" (PVar "methRoutes")))))) (EApp (EApp (EVar "CMethod") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EApp (EApp (EApp (EVar "MethodEvidence") (EApp (EVar "toStr") (EVar "iface"))) (EApp (EVar "toInt") (EVar "arity"))) (EApp (EVar "toRoute") (EVar "route"))) (EApp (EApp (EMethodRef "map") (EVar "toRoute")) (EVar "implRoutes"))) (EApp (EApp (EMethodRef "map") (EVar "toRoute")) (EVar "methRoutes")))))
 (DFunDef false "toCExpr" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CDict"))) (PList (PVar "name") (PCon "SList" (PVar "routes")))))) (EApp (EApp (EVar "CDict") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EMethodRef "map") (EVar "toRoute")) (EVar "routes"))))
 (DFunDef false "toCExpr" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CExpr: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCClause" (TyFun (TyCon "SExp") (TyCon "CClause")))

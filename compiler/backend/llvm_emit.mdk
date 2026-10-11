@@ -190,6 +190,7 @@ import frontend.ast.{
 }
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CField(..),
   CBind(..),
   CClause(..),
@@ -248,6 +249,7 @@ import backend.core_validate.{
   validateCalls,
   validateImplSymbols,
   validateMethodContexts,
+  validateDispatchEvidence,
   validateTails,
   validateRecords,
   unrefusedExternMessage,
@@ -1910,7 +1912,7 @@ emitExpr e env (CRecordUpdate name base updates) =
   emitRecordUpdate e env name base updates
 emitExpr e env (CVariantUpdate con base updates) =
   emitVariantUpdate e env con base updates
-emitExpr e env (CMethod name iface arity route implRoutes methRoutes) =
+emitExpr e env (CMethod name (MethodEvidence iface arity route implRoutes methRoutes)) =
   emitMethodValue e env name iface arity route implRoutes methRoutes
 emitExpr e env (CDict name routes) = emitDictValue e env name routes
 emitExpr e env (CArray es) = emitArrayCreate e env es
@@ -4089,7 +4091,7 @@ coreChildren (CLet _ _ e1 e2) = Some [e1, e2]
 coreChildren (CBlock stmts) = Some (stmtExprs stmts)
 coreChildren (CIndex a i) = Some [a, i]
 coreChildren (CTuple es) = Some es
-coreChildren (CMethod _ _ _ _ _ _) = Some []
+coreChildren (CMethod _ _) = Some []
 coreChildren (CDict _ _) = Some []
 coreChildren _ = None
 
@@ -4354,7 +4356,7 @@ u64AliasBody ps body _ = match u64KernelApplied ps body
 -- `fromInt` application the typechecker routed to `Num Int`.
 intLitOf : CExpr -> Option Int
 intLitOf (CLit (LInt n)) = Some n
-intLitOf (CApp (CMethod "fromInt" _ _ (RKey word _ _) _ _) [CLit (LInt n)] _)
+intLitOf (CApp (CMethod "fromInt" (MethodEvidence _ _ (RKey word _ _) _ _)) [CLit (LInt n)] _)
   | word == numIntWord = Some n
 intLitOf _ = None
 
@@ -5453,7 +5455,7 @@ intFromIntIdentityArg _ _ _ _ _ = None
 
 headNameIs : CExpr -> String -> Bool
 headNameIs (CVar n _) name = n == name
-headNameIs (CMethod n _ _ _ _ _) name = n == name
+headNameIs (CMethod n _) name = n == name
 headNameIs _ _ = False
 
 -- the unboxed-double register for an LTFloatU let-bound CVar (a float-let kept
@@ -6538,7 +6540,7 @@ satOnlyUses name arity (CListSlice a lo hi _) =
 satOnlyUses name arity (CBlock stmts) = satOnlyStmts name arity stmts
 -- a dict/method occurrence names its captured dict PARAMS, never a local
 -- function binding — but read them anyway rather than assume it.
-satOnlyUses name _ (CMethod _ _ _ route implRoutes methRoutes) =
+satOnlyUses name _ (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
   not (contains name (routeDictNames [] (route :: implRoutes ++ methRoutes)))
 satOnlyUses name _ (CDict _ routes) =
   not (contains name (routeDictNames [] routes))
@@ -6986,7 +6988,7 @@ emitApp e env app =
           emitFallthrough e fname
         else
           emitIndirect e env hd args mode
-    CMethod name iface arity route implRoutes methRoutes =>
+    CMethod name (MethodEvidence iface arity route implRoutes methRoutes) =>
       match intFromIntIdentityArg name route implRoutes methRoutes args
         Some a => emitExpr e env a
         None =>
@@ -7348,7 +7350,8 @@ emitMethodValue : Emit ->
   List Route ->
   (String, LTy)
 emitMethodValue e env name iface siteArity route implRoutes methRoutes =
-  let node = CMethod name iface siteArity route implRoutes methRoutes
+  let node =
+    CMethod name (MethodEvidence iface siteArity route implRoutes methRoutes)
   let arity = methodValueArity e node
   if isDynamicMethodRoute route || arity <= 0 then
     emitMethod
@@ -7393,9 +7396,9 @@ emitMethodValue e env name iface siteArity route implRoutes methRoutes =
 -- per-group saturation.  RDict/RDictFwd are dispatched immediately by emitMethodValue
 -- and do not allocate this closure.
 methodValueArity : Emit -> CExpr -> Int
-methodValueArity e (CMethod name iface siteArity RNone _ _) =
+methodValueArity e (CMethod name (MethodEvidence iface siteArity RNone _ _)) =
   methodArgDispatchArity e name iface siteArity
-methodValueArity e (node@(CMethod _ _ siteArity _ _ _)) =
+methodValueArity e (node@(CMethod _ (MethodEvidence _ siteArity _ _ _))) =
   match definedArity e node
     Some n => maxInt 0 n
     None => siteArity
@@ -7463,7 +7466,9 @@ emitMethodValDefine e env lamName name iface siteArity route implRoutes methRout
     callModeFor
       (definedArity
         e
-        (CMethod name iface siteArity route implRoutes methRoutes))
+        (CMethod
+          name
+          (MethodEvidence iface siteArity route implRoutes methRoutes)))
       arity
   let (r, _) =
     emitMethod
@@ -13274,7 +13279,7 @@ directCallOperands e env ex =
         Some ("mdk_" ++ fname, dictWords ++ emitArgs e env args)
       else
         None
-    CMethod name iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes =>
+    CMethod name (MethodEvidence iface siteArity (route@(RKey tag _ _)) implRoutes methRoutes) =>
       let folded = intFromIntIdentityArg name route implRoutes methRoutes args
       if hasArgs args
         && isNone folded then match implForSite e name iface tag siteArity
@@ -13589,7 +13594,7 @@ typeOf sigs env app =
       else
         LTInt
     CDict fname _ => callRetTy sigs fname
-    CMethod fname _ _ _ _ _ => callRetTy sigs fname
+    CMethod fname _ => callRetTy sigs fname
     _ => LTInt
 
 -- the return type of a known function from the sig table (Int if unknown).
@@ -15209,7 +15214,10 @@ refuseUnstampedRecords cp = match validateRecords cp
 refuseUnstampedCalls : CProgram -> Unit
 refuseUnstampedCalls cp =
   let bad =
-    validateCalls cp ++ validateImplSymbols cp ++ validateMethodContexts cp
+    validateCalls cp
+      ++ validateImplSymbols cp
+      ++ validateMethodContexts cp
+      ++ validateDispatchEvidence cp
   match bad
     [] => ()
     _ => panic ("internal error: " ++ renderCallRefusal bad)
@@ -15500,9 +15508,9 @@ ctag (CStringIndex _ _) = "CStringIndex"
 ctag (CStringSlice _ _ _ _) = "CStringSlice"
 ctag (CListIndex _ _) = "CListIndex"
 ctag (CListSlice _ _ _ _) = "CListSlice"
-ctag (CMethod _ _ _ _ _ _) = "CMethod (typeclass dispatch)"
-ctag (CDict _ _) = "CDict (dictionary)"
-ctag (CVariantUpdate _ _ _) = "CVariantUpdate (named-field variant update)"
+ctag (CMethod _ _) = "CMethod (typeclass dispatch) (MethodEvidence "
+ctag (CDict _ _) = " CDict (dictionary) "
+ctag (CVariantUpdate _ _ _) = " CVariantUpdate) (named-field variant update)"
 ctag _ = "?"
 
 -- ── D4 emitter-completeness inventory entry point ───────────────────────────

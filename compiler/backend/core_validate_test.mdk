@@ -24,13 +24,14 @@ import ir.core_ir.{
   CField(..),
   CImplBody(..),
   CImplEntry(..),
+  MethodEvidence(..),
   CProgram(..),
   noImplSym,
   CStmt(..),
   CallMode(..),
   CallSite(..),
 }
-import frontend.ast.{Lit(..), Pat(..), noDeclLoc}
+import frontend.ast.{Lit(..), Pat(..), Route(..), noDeclLoc}
 import ir.core_ir_lower.{
   EmitTarget(..),
   ctorFieldTypeNames,
@@ -46,6 +47,7 @@ import backend.core_validate.{
   missingRowsMessage,
   renderExternFinding,
   validateCalls,
+  validateDispatchEvidence,
   validateExterns,
   validateImplSymbols,
   validateMethodContexts,
@@ -707,8 +709,8 @@ dropRoutesClause name (CClause pats body) =
 dropRoutesExpr : String -> CExpr -> CExpr
 dropRoutesExpr name (CApp hd args site) =
   CApp (dropRoutesExpr name hd) (map (dropRoutesExpr name) args) site
-dropRoutesExpr name (m@(CMethod n iface arity route impls _)) =
-  if n == name then CMethod n iface arity route impls [] else m
+dropRoutesExpr name (m@(CMethod n (MethodEvidence iface arity route impls _))) =
+  if n == name then CMethod n (MethodEvidence iface arity route impls []) else m
 dropRoutesExpr _ e = e
 
 -- [prog] with the leading parameter of every impl entry of method [m] dropped.
@@ -753,6 +755,94 @@ test "(u) a method's dictionaries match its declared context" = expectEach [
         (dropEntryDict "desc" (typedLowered i2078Prelude paramContextSrc))),
   ),
 ]
+
+-- A program whose `g` takes one dictionary and whose `main` binds `$dict_m_0`,
+-- with `body` as main's body.
+evidenceProg : CExpr -> CProgram
+evidenceProg body =
+  CProgram
+    [
+      CBind
+        "g"
+        [CClause [PVar "$dict_g_0" noDeclLoc] (CLit (LInt 1))]
+        noDeclLoc,
+      CBind "main" [CClause [PVar "$dict_m_0" noDeclLoc] body] noDeclLoc,
+    ]
+    []
+    []
+    []
+    []
+
+evidenceOf : Route -> CExpr
+evidenceOf route = CMethod "show" (MethodEvidence "I" 1 route [] [])
+
+test "(v) a dispatch node's evidence denotes dictionaries its callee binds" = expectEach
+  [
+    (
+      "a lowered program validates clean",
+      expectEqual
+        []
+        (validateDispatchEvidence (typedLowered i2078Prelude paramContextSrc)),
+    ),
+    (
+      "hand-built evidence over a bound given validates clean",
+      expectEqual
+        []
+        (validateDispatchEvidence
+          (evidenceProg (CDict "g" [RProj (RDict "$dict_m_0") [0]]))),
+    ),
+    (
+      "a dictionary the occurrence does not bind is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) reads dictionary `$dict_zz`, which is not bound here [in main]",
+        ]
+        (validateDispatchEvidence (evidenceProg (CDict "g" [RDict "$dict_zz"]))),
+    ),
+    (
+      "a projection over an instance is refused",
+      expectEqual
+        [
+          "dispatch evidence: method show projects from a route that is not a given dictionary [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (evidenceOf (RProj (RKey "K" [] []) [0])))),
+    ),
+    (
+      "a head instance key with no entry is refused",
+      expectEqual
+        [
+          "dispatch evidence: method show names instance `Nope` that has no entry for `show` [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (evidenceOf (RKey "Nope" [] [])))),
+    ),
+    (
+      "a dictionary application with an extra slot is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) supplies 2 dictionaries, `g` takes 1 [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (CDict "g" [RDict "$dict_m_0", RDict "$dict_m_0"]))),
+    ),
+    (
+      "a scalar route in a slot is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) carries scalar route `Int` [in main]",
+        ]
+        (validateDispatchEvidence (evidenceProg (CDict "g" [RScalar "Int"]))),
+    ),
+    (
+      "a dictionary slot with no route is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) has a dictionary slot with no route [in main]",
+        ]
+        (validateDispatchEvidence (evidenceProg (CDict "g" [RNone]))),
+    ),
+  ]
 
 -- An impl group whose first clause returns a lambda literal: that clause takes
 -- the lambda's parameter, so both entries take two.  When a `let` stands before

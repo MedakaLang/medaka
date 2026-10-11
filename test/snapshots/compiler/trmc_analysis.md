@@ -1,5 +1,5 @@
 # META
-source_lines=1732
+source_lines=1733
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -14,6 +14,7 @@ stages=DESUGAR,MARK
 import frontend.ast.{Pat(..), Route(..), Addr(..)}
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CField(..),
   CBind(..),
   CClause(..),
@@ -114,7 +115,7 @@ freeVars b (CStringSlice a lo hi _) =
 freeVars b (CListIndex a i) = freeVars b a ++ freeVars b i
 freeVars b (CListSlice a lo hi _) =
   freeVars b a ++ freeVars b lo ++ freeVars b hi
-freeVars b (CMethod _ _ _ route implRoutes methRoutes) =
+freeVars b (CMethod _ (MethodEvidence _ _ route implRoutes methRoutes)) =
   routeDictNames b (route :: implRoutes ++ methRoutes)
 -- The head names a local closure when a let binder abstracted dictionaries.
 freeVars b (CDict n routes) =
@@ -448,7 +449,7 @@ receiverSaturated _ _ _ _ = False
 -- supers and `requires` are its own fields in order); 0 for any other call, which
 -- no value-arity count then saturates
 receiverDictCount : CExpr -> Int
-receiverDictCount (CMethod _ _ _ (RKey _ _ sups) implRoutes methRoutes) =
+receiverDictCount (CMethod _ (MethodEvidence _ _ (RKey _ _ sups) implRoutes methRoutes)) =
   if dictRoutesForwarded methRoutes && ownFields (sups ++ implRoutes) 0 "" then
     listLen methRoutes + 1
   else
@@ -468,7 +469,7 @@ export
 isSelfHead : SelfRef -> CExpr -> Bool
 isSelfHead (SelfByVar self) (CVar f _) = f == self
 isSelfHead (SelfByVar self) (CDict f _) = f == self
-isSelfHead (SelfByMethod method tag _) (CMethod m _ _ route _ _) =
+isSelfHead (SelfByMethod method tag _) (CMethod m (MethodEvidence _ _ route _ _)) =
   m == method && routeIsKey tag route
 isSelfHead _ _ = False
 
@@ -509,7 +510,7 @@ selfFree (SelfByMethod method tag _) ex = not (mentionsSelfMethod method tag ex)
 -- recursion DROPPED → silent miscompile.  This full structural walk closes that.
 export
 mentionsSelfMethod : String -> String -> CExpr -> Bool
-mentionsSelfMethod method tag (CMethod m _ _ route _ _) =
+mentionsSelfMethod method tag (CMethod m (MethodEvidence _ _ route _ _)) =
   m == method && routeIsKey tag route
 mentionsSelfMethod method tag (CApp f args _) =
   mentionsSelfMethod method tag f
@@ -1736,7 +1737,7 @@ anyListM p (x :: rest) =
   if h then True else anyListM p rest
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
@@ -1774,7 +1775,7 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVars" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
+(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "routes"))))
 (DFunDef false "freeVars" (PWild PWild) (EListLit))
 (DTypeSig true "routeDictNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -1871,7 +1872,7 @@ anyListM p (x :: rest) =
 (DFunDef false "receiverSaturated" ((PCon "SelfByMethod" PWild PWild (PVar "n")) (PVar "arity") (PVar "hd") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EVar "receiverDictCount") (EVar "hd")) (EVar "n"))) (EBinOp "==" (EBinOp "+" (EApp (EVar "listLen") (EVar "args")) (EVar "n")) (EVar "arity"))))
 (DFunDef false "receiverSaturated" (PWild PWild PWild PWild) (EVar "False"))
 (DTypeSig false "receiverDictCount" (TyFun (TyCon "CExpr") (TyCon "Int")))
-(DFunDef false "receiverDictCount" ((PCon "CMethod" PWild PWild PWild (PCon "RKey" PWild PWild (PVar "sups")) (PVar "implRoutes") (PVar "methRoutes"))) (EIf (EBinOp "&&" (EApp (EVar "dictRoutesForwarded") (EVar "methRoutes")) (EApp (EApp (EApp (EVar "ownFields") (EBinOp "++" (EVar "sups") (EVar "implRoutes"))) (ELit (LInt 0))) (ELit (LString "")))) (EBinOp "+" (EApp (EVar "listLen") (EVar "methRoutes")) (ELit (LInt 1))) (ELit (LInt 0))))
+(DFunDef false "receiverDictCount" ((PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PCon "RKey" PWild PWild (PVar "sups")) (PVar "implRoutes") (PVar "methRoutes")))) (EIf (EBinOp "&&" (EApp (EVar "dictRoutesForwarded") (EVar "methRoutes")) (EApp (EApp (EApp (EVar "ownFields") (EBinOp "++" (EVar "sups") (EVar "implRoutes"))) (ELit (LInt 0))) (ELit (LString "")))) (EBinOp "+" (EApp (EVar "listLen") (EVar "methRoutes")) (ELit (LInt 1))) (ELit (LInt 0))))
 (DFunDef false "receiverDictCount" (PWild) (ELit (LInt 0)))
 (DTypeSig false "ownFields" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ownFields" ((PList) PWild PWild) (EVar "True"))
@@ -1880,7 +1881,7 @@ anyListM p (x :: rest) =
 (DTypeSig true "isSelfHead" (TyFun (TyCon "SelfRef") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "isSelfHead" ((PCon "SelfByVar" (PVar "self")) (PCon "CVar" (PVar "f") PWild)) (EBinOp "==" (EVar "f") (EVar "self")))
 (DFunDef false "isSelfHead" ((PCon "SelfByVar" (PVar "self")) (PCon "CDict" (PVar "f") PWild)) (EBinOp "==" (EVar "f") (EVar "self")))
-(DFunDef false "isSelfHead" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PCon "CMethod" (PVar "m") PWild PWild (PVar "route") PWild PWild)) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
+(DFunDef false "isSelfHead" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
 (DFunDef false "isSelfHead" (PWild PWild) (EVar "False"))
 (DTypeSig false "dictRoutesForwarded" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Bool")))
 (DFunDef false "dictRoutesForwarded" ((PList)) (EVar "True"))
@@ -1894,7 +1895,7 @@ anyListM p (x :: rest) =
 (DFunDef false "selfFree" ((PCon "SelfByVar" (PVar "self")) (PVar "ex")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "self")) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "ex")))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "ex")))))
 (DFunDef false "selfFree" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PVar "ex")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "ex"))))
 (DTypeSig true "mentionsSelfMethod" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CMethod" (PVar "m") PWild PWild (PVar "route") PWild PWild)) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
+(DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "f")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag"))) (EVar "args"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "b")))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CLet" PWild PWild (PVar "rhs") (PVar "b"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "rhs")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "b"))))
@@ -2208,7 +2209,7 @@ anyListM p (x :: rest) =
 (DFunDef false "anyListM" ((PVar "p") (PCons (PVar "x") (PVar "rest"))) (EBlock (DoLet false false (PVar "h") (EApp (EVar "p") (EVar "x"))) (DoExpr (EIf (EVar "h") (EVar "True") (EApp (EApp (EVar "anyListM") (EVar "p")) (EVar "rest"))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Addr" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "filterList" false) (mem "reverseL" false) (mem "startsWith" false) (mem "anyList" false) (mem "isNonEmptyL" false) (mem "dedup" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omDelete" false) (mem "omFromNames" false) (mem "omFromPairs" false))))
 (DData Public "SelfRef" () ((variant "SelfByVar" (ConPos (TyCon "String"))) (variant "SelfByMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int")))) ())
@@ -2246,7 +2247,7 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVars" ((PVar "b") (PCon "CStringSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "i"))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "a")) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "lo"))) (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "hi"))))
-(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
+(DFunDef false "freeVars" ((PVar "b") (PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes")))))
 (DFunDef false "freeVars" ((PVar "b") (PCon "CDict" (PVar "n") (PVar "routes"))) (EBinOp "++" (EIf (EApp (EApp (EVar "contains") (EVar "n")) (EVar "b")) (EListLit) (EListLit (EVar "n"))) (EApp (EApp (EVar "routeDictNames") (EVar "b")) (EVar "routes"))))
 (DFunDef false "freeVars" (PWild PWild) (EListLit))
 (DTypeSig true "routeDictNames" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
@@ -2343,7 +2344,7 @@ anyListM p (x :: rest) =
 (DFunDef false "receiverSaturated" ((PCon "SelfByMethod" PWild PWild (PVar "n")) (PVar "arity") (PVar "hd") (PVar "args")) (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EVar "receiverDictCount") (EVar "hd")) (EVar "n"))) (EBinOp "==" (EBinOp "+" (EApp (EVar "listLen") (EVar "args")) (EVar "n")) (EVar "arity"))))
 (DFunDef false "receiverSaturated" (PWild PWild PWild PWild) (EVar "False"))
 (DTypeSig false "receiverDictCount" (TyFun (TyCon "CExpr") (TyCon "Int")))
-(DFunDef false "receiverDictCount" ((PCon "CMethod" PWild PWild PWild (PCon "RKey" PWild PWild (PVar "sups")) (PVar "implRoutes") (PVar "methRoutes"))) (EIf (EBinOp "&&" (EApp (EVar "dictRoutesForwarded") (EVar "methRoutes")) (EApp (EApp (EApp (EVar "ownFields") (EBinOp "++" (EVar "sups") (EVar "implRoutes"))) (ELit (LInt 0))) (ELit (LString "")))) (EBinOp "+" (EApp (EVar "listLen") (EVar "methRoutes")) (ELit (LInt 1))) (ELit (LInt 0))))
+(DFunDef false "receiverDictCount" ((PCon "CMethod" PWild (PCon "MethodEvidence" PWild PWild (PCon "RKey" PWild PWild (PVar "sups")) (PVar "implRoutes") (PVar "methRoutes")))) (EIf (EBinOp "&&" (EApp (EVar "dictRoutesForwarded") (EVar "methRoutes")) (EApp (EApp (EApp (EVar "ownFields") (EBinOp "++" (EVar "sups") (EVar "implRoutes"))) (ELit (LInt 0))) (ELit (LString "")))) (EBinOp "+" (EApp (EVar "listLen") (EVar "methRoutes")) (ELit (LInt 1))) (ELit (LInt 0))))
 (DFunDef false "receiverDictCount" (PWild) (ELit (LInt 0)))
 (DTypeSig false "ownFields" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "ownFields" ((PList) PWild PWild) (EVar "True"))
@@ -2352,7 +2353,7 @@ anyListM p (x :: rest) =
 (DTypeSig true "isSelfHead" (TyFun (TyCon "SelfRef") (TyFun (TyCon "CExpr") (TyCon "Bool"))))
 (DFunDef false "isSelfHead" ((PCon "SelfByVar" (PVar "self")) (PCon "CVar" (PVar "f") PWild)) (EBinOp "==" (EVar "f") (EVar "self")))
 (DFunDef false "isSelfHead" ((PCon "SelfByVar" (PVar "self")) (PCon "CDict" (PVar "f") PWild)) (EBinOp "==" (EVar "f") (EVar "self")))
-(DFunDef false "isSelfHead" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PCon "CMethod" (PVar "m") PWild PWild (PVar "route") PWild PWild)) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
+(DFunDef false "isSelfHead" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
 (DFunDef false "isSelfHead" (PWild PWild) (EVar "False"))
 (DTypeSig false "dictRoutesForwarded" (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Bool")))
 (DFunDef false "dictRoutesForwarded" ((PList)) (EVar "True"))
@@ -2366,7 +2367,7 @@ anyListM p (x :: rest) =
 (DFunDef false "selfFree" ((PCon "SelfByVar" (PVar "self")) (PVar "ex")) (EBinOp "&&" (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "self")) (EApp (EApp (EVar "freeVars") (EListLit)) (EVar "ex")))) (EApp (EVar "not") (EApp (EApp (EVar "mentionsSelfDict") (EVar "self")) (EVar "ex")))))
 (DFunDef false "selfFree" ((PCon "SelfByMethod" (PVar "method") (PVar "tag") PWild) (PVar "ex")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "ex"))))
 (DTypeSig true "mentionsSelfMethod" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyCon "Bool")))))
-(DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CMethod" (PVar "m") PWild PWild (PVar "route") PWild PWild)) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
+(DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CMethod" (PVar "m") (PCon "MethodEvidence" PWild PWild (PVar "route") PWild PWild))) (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "method")) (EApp (EApp (EVar "routeIsKey") (EVar "tag")) (EVar "route"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "f")) (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag"))) (EVar "args"))))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CLam" PWild (PVar "b"))) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "b")))
 (DFunDef false "mentionsSelfMethod" ((PVar "method") (PVar "tag") (PCon "CLet" PWild PWild (PVar "rhs") (PVar "b"))) (EBinOp "||" (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "rhs")) (EApp (EApp (EApp (EVar "mentionsSelfMethod") (EVar "method")) (EVar "tag")) (EVar "b"))))

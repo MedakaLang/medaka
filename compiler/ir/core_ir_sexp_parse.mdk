@@ -19,6 +19,7 @@ import frontend.ast.{
 }
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -376,11 +377,12 @@ toCExpr (SList ((SAtom "CBlock") :: stmts)) = CBlock (map toCStmt stmts)
 toCExpr (SList ((SAtom "CMethod") :: [name, iface, arity, route, SList implRoutes, SList methRoutes])) =
   CMethod
     (toStr name)
-    (toStr iface)
-    (toInt arity)
-    (toRoute route)
-    (map toRoute implRoutes)
-    (map toRoute methRoutes)
+    (MethodEvidence
+      (toStr iface)
+      (toInt arity)
+      (toRoute route)
+      (map toRoute implRoutes)
+      (map toRoute methRoutes))
 toCExpr (SList ((SAtom "CDict") :: [name, SList routes])) =
   CDict (toStr name) (map toRoute routes)
 toCExpr other = panic ("core_ir_sexp_parse: bad CExpr: " ++ sexprToStr other)

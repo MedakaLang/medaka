@@ -44,6 +44,7 @@ import ir.core_ir.{
   CBind(..),
   CClause(..),
   CExpr(..),
+  MethodEvidence(..),
   CField(..),
   CImplEntry(..),
   CImplBody(..),
@@ -1279,7 +1280,9 @@ implSelfProgram : String -> Int -> Int -> CProgram
 implSelfProgram tag base depth =
   let self = CVar "self" (ALocal 0 0)
   let n = CVar "n" (ALocal 0 1)
-  let recurse = mkApp (mkApp (CMethod "walk" "" 2 (RKey tag [] []) [] []) [
+  let recurse = mkApp (mkApp (CMethod
+    "walk"
+    (MethodEvidence "" 2 (RKey tag [] []) [] [])) [
     self,
   ]) [
     CBinPrim "-" n (CLit (LInt 1)) "Int" noDeclLoc,
@@ -1425,11 +1428,7 @@ defaultStateInputU =
 defaultStateCall : String -> CExpr
 defaultStateCall tag = mkApp (CMethod
   "synthDefault"
-  "DefaultFace"
-  1
-  (RKey "DefaultFace|\{tag}|" [] [])
-  []
-  []) [
+  (MethodEvidence "DefaultFace" 1 (RKey "DefaultFace|\{tag}|" [] []) [] [])) [
   CLit LUnit,
 ]
 
