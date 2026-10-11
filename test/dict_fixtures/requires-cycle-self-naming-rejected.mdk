@@ -1,0 +1,19 @@
+-- §3 W2, a cycle (#1575): `impl C (Box a) requires C (Box a)` names its own head, so
+-- following its `requires` from the goal `C (Box a)` at `cm (Box x)` reaches that
+-- same goal again.  No finite chain resolves it: `T-REQUIRES-CYCLE`, located at the
+-- goal's site (`cm` in `g`), on every verb.  It used to abort the compiler with a
+-- stack overflow after ~40 s, with no location.
+data Box a = Box a
+
+interface C t where
+  cm : t -> String
+
+impl C Int where
+  cm _ = "i"
+
+impl C (Box a) requires C (Box a) where
+  cm (Box _) = "box"
+
+g x = cm (Box x)
+
+main = println (g 5)

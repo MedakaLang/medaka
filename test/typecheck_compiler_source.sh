@@ -968,7 +968,7 @@ enclSlotIndex (Some request) target encl =
 implReqDictVarOf : Option PredicateRequest ->
 implReqDictVarOf (Some request) m useScope
 firstPredForEnclAt : GivenScope ->
-entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
+entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ rest) =
 goalMatchesGiven : ScopeId -> IfaceRef -> List Mono -> Bool
 anyGivenMatches : PredicateRequest -> ScopeId -> List GivenEntry -> Bool
 funPredicateSlotsRef : Ref (List (String, List PredicateSlot))

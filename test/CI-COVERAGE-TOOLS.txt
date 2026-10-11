@@ -443,15 +443,15 @@ pds/test/synth_repo_main.mdk   builds a large synthetic repository (thousands of
                                (S-cost-is-gated, #3309) builds its own small/large corpora with this tool to
                                feed cost_curve_main.mdk's doubling-ratio arms. The soak (#2957) also reads
                                a corpus it builds directly.
-pds/test/cost_curve_main.mdk   times one listRecords page, one describeRepo, one listBlobs and one
-                               createRecord against a corpus synth_repo_main.mdk built, through the same
+pds/test/cost_curve_main.mdk   times one listRecords page, one describeRepo and one listBlobs
+                               against a corpus synth_repo_main.mdk built, through the same
                                persistLoad/repoFromBlocks/handleBytes seam pdsd serves it through, and
                                reports microseconds per request; a `persist` mode times shell.server's
                                persistTransition seam directly, with the same store on both sides, so no
                                half moves and only the decision — blobsMoved's comparison included — is
                                measured. The listRecords, listBlobs and persistTransition figures are
                                graded by pds/test/mst_vectors_test.mdk's doubling-ratio arms (S-cost-is-gated,
-                               #3309); describeRepo and createRecord are still read off it by hand.
+                               #3309); describeRepo is still read off it by hand.
 
 # ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
 #    local manual procedure, not a gate) ──

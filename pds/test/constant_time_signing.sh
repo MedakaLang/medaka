@@ -363,15 +363,28 @@ expect_corpus_green() {
   pass "$id leaves the bound cargo authority intact"
 }
 
+# Split once per build: the closure walks look definitions up by name rather
+# than rescanning the whole module for every symbol and every fixpoint pass.
+index_ir_functions() {
+  input=$1
+  IR_INDEX="$WORK/ir-index"
+  rm -rf "$IR_INDEX"
+  mkdir "$IR_INDEX"
+  awk -v dir="$IR_INDEX" '
+    /^define i64 @/ { name = $0; sub(/^define i64 @/, "", name); sub(/\(.*/, "", name); out = dir "/" name ".ll"; inside = 1 }
+    inside { print > out }
+    inside && /^}/ { inside = 0; close(out) }
+  ' "$input"
+}
+
 extract_ir_function() {
-  symbol=$1 input=$2 output=$3
-  awk -v symbol="$symbol" '$0 ~ ("^define i64 @" symbol "\\(") { inside = 1 } inside { print } inside && /^}/ { exit }' "$input" > "$output"
-  [ -s "$output" ] || return 1
+  symbol=$1 output=$2
+  [ -s "$IR_INDEX/$symbol.ll" ] || return 1
+  cp "$IR_INDEX/$symbol.ll" "$output"
 }
 
 is_ir_definition() {
-  symbol=$1
-  grep -F -q "define i64 @$symbol(" "$IR"
+  [ -s "$IR_INDEX/$1.ll" ]
 }
 
 collect_full_closure() {
@@ -382,7 +395,7 @@ collect_full_closure() {
     cp "$WORK/closure.current" "$WORK/closure.next"
     rm -f "$WORK/closure.calls"
     while IFS= read -r symbol; do
-      extract_ir_function "$symbol" "$IR" "$WORK/function.ll" || fail "emitted closure helper $symbol exists"
+      extract_ir_function "$symbol" "$WORK/function.ll" || fail "emitted closure helper $symbol exists"
       sed -n 's/.*call i64 @\(mdk_[^ (]*\).*/\1/p' "$WORK/function.ll" >> "$WORK/closure.calls"
     done < "$WORK/closure.current"
     if [ -f "$WORK/closure.calls" ]; then
@@ -409,7 +422,7 @@ collect_full_closure() {
 # nonzero fold's, and the memcheck arm below reports any key-tainted one.
 write_control_manifest() {
   while IFS= read -r symbol; do
-    extract_ir_function "$symbol" "$IR" "$WORK/function.ll" || exit 1
+    extract_ir_function "$symbol" "$WORK/function.ll" || exit 1
     all_branches=$(grep -c 'br i1' "$WORK/function.ll" || true)
     traps=$(grep -E -c 'br i1 .*label %(intovf|divzero)[0-9]+,' "$WORK/function.ll" || true)
     branches=$((all_branches - traps))
@@ -642,6 +655,7 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 ct_build_ir build "$INTERNAL_SOURCE" -o "$WO
 }
 BIN="$WORK/signing-internal"
 IR="$WORK/signing-internal.ll"
+index_ir_functions "$IR"
 "$BIN" > "$WORK/run.out" 2>&1 || { cat "$WORK/run.out" >&2; fail 'native signing closure carrier runs'; }
 [ "$(tail -1 "$WORK/run.out")" = 'PASS signing-value-carrier' ] || fail 'native signing closure carrier returns expected signature and witnesses'
 pass 'native internal carrier retains the exact signature plus candidate-1/exhaustion and raw rejection witnesses'
@@ -996,6 +1010,7 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 ct_build_ir build "$PUBLIC_SOURCE" -o "$WORK
 }
 BIN="$WORK/signing-public"
 IR="$WORK/signing-public.ll"
+index_ir_functions "$IR"
 "$BIN" > "$WORK/public-run.out" 2>&1 || { cat "$WORK/public-run.out" >&2; fail 'native public signing consumer runs'; }
 [ "$(tail -1 "$WORK/public-run.out")" = 'PASS public-signing-consumer' ] || fail 'public signing consumer returns its distinct PASS'
 pass 'public-only carrier exercises all eight APIs at compressed G, the RFC 6979 compact bytes, and self-verification'

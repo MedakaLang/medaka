@@ -12138,9 +12138,9 @@ anyListM : (a -> Bool) -> List a -> Bool
 anyListM _ [] = False
 anyListM p (x :: xs) = p x || anyListM p xs
 
--- #1576: the structural node count of a monotype.  Its ONLY consumer is the SHRINKING
--- test in `argImplRequiresRoutesForRow` — it is a termination signal, not a semantic one, so
--- nothing here needs to agree with any other notion of type size.
+-- #1576: the structural node count of a monotype.  Its only consumer is the shrinking
+-- test of the `requires` walk measure (`reqWalkEnter`) — it is a termination signal, not
+-- a semantic one, so nothing here needs to agree with any other notion of type size.
 --
 -- Links are followed (`normalize`) so a solved tyvar is measured at what it stands for
 -- rather than as one node; an unbound one is a leaf.  An EFFECT ROW counts as a single
@@ -12163,14 +12163,218 @@ monoSizes : List Mono -> Int
 monoSizes [] = 0
 monoSizes (m :: rest) = monoSize m + monoSizes rest
 
--- How many NON-SHRINKING `requires` steps a route chain may take before the fuse cuts
--- it.  Only a genuinely non-shrinking context (`impl C (T a) requires C (T (T a))`)
--- spends this; a shrinking chain spends one unit at its seed and nothing after, so the
--- constant bounds divergence WITHOUT bounding the depth of any valid program — it is now
--- the ONLY thing standing between a valid program and an unbounded search (#1924).  See
--- `argImplRequiresRoutesForRow`.
+-- How many non-shrinking `requires` steps one walk may take (DICT-SEMANTICS §3 W2).
+-- Only a context that does not shrink its goal (`impl C (T a) requires C (T (T a))`)
+-- spends this, so the constant bounds divergence without bounding the depth of a
+-- shrinking chain.  It is named in `requiresDepthMsg`, so changing it changes
+-- user-visible text.
 requiresNonShrinkingFuel : Int
 requiresNonShrinkingFuel = 32
+
+-- DICT-SEMANTICS §3 W2: the one termination measure every `requires` walk shares.  A
+-- walk is the path from its seed to the goal being resolved, innermost first, each goal
+-- with its `monoSizes`, and the non-shrinking steps it may still take.  A step to a goal
+-- strictly smaller than its parent is free; any other step spends one unit; a goal
+-- equal to one already on the path is a cycle.  Between two spending steps the size
+-- strictly decreases, and the spending steps are bounded, so every walk is finite.  The
+-- path is a value passed down one walk, never shared between walks.  The walk's
+-- `WalkMemo` is the one part every branch of the walk shares.
+data ReqWalk = ReqWalk (List (IfaceRef, List Mono, Int)) Int WalkMemo
+
+-- The goals one walk has already followed, so a goal its `requires` reach along
+-- many paths (`Tag (Wrap a) requires Tag a, Tag2 a` and its twin) is followed once
+-- per walk rather than once per path (#1924).  It is allocated where a walk starts
+-- (`reqWalkStart`, `reqWalkSeed`) and lives only as long as that walk.
+--
+-- An entry is keyed on the whole goal (`sameIfaceDecl` and `monoVecSameGiven`, in a
+-- bucket named by `enteredGoalKey`) and on the fuel left after entering it.  What a walk does below
+-- a goal depends on that goal, that fuel and its path, and the path only decides
+-- cycles.  A cached subtree cannot hide one: a goal X on a later path that the
+-- subtree below G reaches also reaches G, so the first walk below G, with G on its
+-- path, met G again and did not finish clean.  Only a subtree that raised no error
+-- (`erredDuring`) and, on the route walk, met no cut (`wmCuts`) is recorded.
+data WalkMemo = WalkMemo {
+  wmRoutes : Ref (OrdMap (List RouteWalkEntry)),
+  wmDischarged : Ref (OrdMap (List (IfaceRef, List Mono))),
+  wmCuts : Ref Int,
+}
+
+-- The prerequisite routes the route walk built below one goal, with everything they
+-- were built from.
+data RouteWalkEntry = RouteWalkEntry {
+  rweIface : IfaceRef,
+  rweGoals : List Mono,
+  rweRow : ImplRow,
+  rweEncl : String,
+  rweScope : ScopeId,
+  rweRoutes : List Route,
+}
+
+newWalkMemo : Unit -> WalkMemo
+newWalkMemo _ = WalkMemo {
+  wmRoutes = Ref omEmpty,
+  wmDischarged = Ref omEmpty,
+  wmCuts = Ref 0,
+}
+
+-- What entering a goal gives a walk.  A cycle carries the goal whose `requires` posed
+-- the repeat and the repeated goal; running out of fuel carries the goal reached.
+data ReqStep =
+  | ReqOn ReqWalk
+  | ReqCycle IfaceRef (List Mono) IfaceRef (List Mono)
+  | ReqDeep IfaceRef (List Mono)
+
+-- A walk whose seed is the goal [iface] [args].
+reqWalkSeed : IfaceRef -> List Mono -> ReqWalk
+reqWalkSeed iface args =
+  ReqWalk
+    [(iface, args, monoSizes args)]
+    requiresNonShrinkingFuel
+    (newWalkMemo ())
+
+-- A walk with no goal on it yet: the first goal entered is its seed.
+reqWalkStart : Unit -> ReqWalk
+reqWalkStart _ = ReqWalk [] requiresNonShrinkingFuel (newWalkMemo ())
+
+reqWalkEnter : ReqWalk -> IfaceRef -> List Mono -> ReqStep
+reqWalkEnter (ReqWalk path fuel memo) iface args =
+  let size = monoSizes args
+  match path
+    [] => ReqOn (ReqWalk [(iface, args, size)] fuel memo)
+    (parentIface, parentArgs, parentSize) :: _ =>
+      if anyListM (sameWalkGoal iface args size) path then
+        ReqCycle parentIface parentArgs iface args
+      else if size < parentSize then
+        ReqOn (ReqWalk ((iface, args, size) :: path) fuel memo)
+      else if fuel <= 0 then
+        ReqDeep iface args
+      else
+        ReqOn (ReqWalk ((iface, args, size) :: path) (fuel - 1) memo)
+
+-- The memo bucket of the goal [walk] has just entered, the head of its path: that
+-- goal's interface spelling and size and the fuel left.  Goals that are one goal by
+-- `sameWalkGoal` share a bucket; a bucket may also hold goals that are not, so every
+-- hit is confirmed by `sameIfaceDecl` and `monoVecSameGiven`.
+enteredGoalKey : ReqWalk -> String
+enteredGoalKey (ReqWalk ((iface, _, size) :: _) fuel _) =
+  let name = iface.irName
+  "\{name}#\{intToString size}#\{intToString fuel}"
+enteredGoalKey (ReqWalk [] fuel _) = "#\{intToString fuel}"
+
+reqWalkMemo : ReqWalk -> WalkMemo
+reqWalkMemo (ReqWalk _ _ memo) = memo
+
+-- The route walk below the goal [row]'s `requires` discharge at [goals], which [walk]
+-- has just entered: the recorded routes if this walk already built them, otherwise
+-- [follow]'s, recorded when they came out clean.
+routeWalkMemoized : String ->
+  ScopeId ->
+  List Mono ->
+  ImplRow ->
+  ReqWalk ->
+  (Unit -> List Route) ->
+  List Route
+routeWalkMemoized encl useScope goals row walk follow =
+  let memo = reqWalkMemo walk
+  let iface = first3 (ieRowTriple row)
+  let key = enteredGoalKey walk
+  let entries = optionOr [] (omLookup key memo.wmRoutes.value)
+  match routeWalkRecorded iface goals row encl useScope entries
+    Some routes => routes
+    None =>
+      let cutsBefore = memo.wmCuts.value
+      let (erred, routes) = erredDuring follow
+      let _ =
+        if erred || memo.wmCuts.value /= cutsBefore then
+          ()
+        else
+          let entry = RouteWalkEntry {
+            rweIface = iface,
+            rweGoals = goals,
+            rweRow = row,
+            rweEncl = encl,
+            rweScope = useScope,
+            rweRoutes = routes,
+          }
+          memo.wmRoutes :=
+            omInsert
+              key
+              (entry :: optionOr [] (omLookup key memo.wmRoutes.value))
+              memo.wmRoutes.value
+      routes
+
+routeWalkRecorded : IfaceRef ->
+  List Mono ->
+  ImplRow ->
+  String ->
+  ScopeId ->
+  List RouteWalkEntry ->
+  Option (List Route)
+routeWalkRecorded _ _ _ _ _ [] = None
+routeWalkRecorded iface goals row encl useScope (entry :: rest) =
+  if entry.rweEncl == encl
+    && entry.rweScope == useScope
+    && sameIfaceDecl entry.rweIface iface
+    && monoVecSameGiven entry.rweGoals goals
+    && rowRouteKey entry.rweRow == rowRouteKey row then
+    Some entry.rweRoutes
+  else
+    routeWalkRecorded iface goals row encl useScope rest
+
+-- A route walk's cut, counted so no subtree containing one is recorded.
+noteRouteWalkCut : ReqWalk -> Unit
+noteRouteWalkCut walk =
+  let memo = reqWalkMemo walk
+  memo.wmCuts := memo.wmCuts.value + 1
+
+-- Has the obligation walk [walk] already checked goal [iface] [args], entered with
+-- the fuel [walk] has left, without an error?
+walkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Bool
+walkGoalDischarged walk iface args =
+  let memo = reqWalkMemo walk
+  anyListM
+    ((otherIface, otherArgs) =>
+      sameIfaceDecl otherIface iface && monoVecSameGiven otherArgs args)
+    (optionOr [] (omLookup (enteredGoalKey walk) memo.wmDischarged.value))
+
+noteWalkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Unit
+noteWalkGoalDischarged walk iface args =
+  let memo = reqWalkMemo walk
+  let key = enteredGoalKey walk
+  memo.wmDischarged :=
+    omInsert
+      key
+      ((iface, args) :: optionOr [] (omLookup key memo.wmDischarged.value))
+      memo.wmDischarged.value
+
+-- Two goals are one goal when their interface is the same declaration and their
+-- argument vectors are pointwise identical (`monoVecSameGiven`); equal sizes are
+-- necessary, so they are compared first.
+sameWalkGoal : IfaceRef ->
+  List Mono ->
+  Int ->
+  (IfaceRef, List Mono, Int) ->
+  Bool
+sameWalkGoal iface args size (otherIface, otherArgs, otherSize) =
+  otherSize == size
+    && sameIfaceDecl otherIface iface
+    && monoVecSameGiven otherArgs args
+
+-- A solving walk's step, reported at the goal's site when the walk cannot continue:
+-- `T-REQUIRES-CYCLE` for a repeated goal, `T-REQUIRES-DEPTH` for spent fuel.
+reqWalkReported : Option Loc -> ReqStep -> Option ReqWalk
+reqWalkReported _ (ReqOn walk) = Some walk
+reqWalkReported loc (ReqCycle parentIface parentArgs iface args) =
+  let _ =
+    pushTypeErrorOnceAt
+      "T-REQUIRES-CYCLE"
+      loc
+      (requiresCycleMsg parentIface parentArgs iface args)
+  None
+reqWalkReported loc (ReqDeep iface args) =
+  let _ =
+    pushTypeErrorOnceAt "T-REQUIRES-DEPTH" loc (requiresDepthMsg iface args)
+  None
 
 tyvarId : Ref Tyvar -> Int
 tyvarId cell = match !cell
@@ -15195,24 +15399,22 @@ qualifiedArgumentKinds _ scope _ _ = scope
 
 -- [scope] comes from the enclosing interface or the signature's own predicates.
 -- Abstract heads have no ambient name-keyed kind lookup.
+--
+-- The split walk over [a] and [b] runs only when the head has no kinds to read.
+-- Evaluated eagerly beside the kinded walk, it visits every nested argument twice
+-- per level, so `Wrap^25 Int` costs 2^25 visits (#1837).
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
-rowArgNamesIn scope (TyApp a b) = match tyAppSpine (TyApp a b)
-  -- OCCURRENCE MINT (#1110/#1111 A-2.3), same source as `fromAstTypeE`'s.
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    rowArgNamesApp
-      scope
-      o
-      n
-      args
-      (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
-  -- #822: the abstract-head half — an interface typaram of graded kind, in scope.
-  (TyVar h, args) =>
-    rowArgNamesVarApp
-      scope
-      h
-      args
-      (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
-  _ => rowArgNamesIn scope a ++ rowArgNamesIn scope b
+rowArgNamesIn scope (TyApp a b) =
+  let kinded = match tyAppSpine (TyApp a b)
+    -- OCCURRENCE MINT (#1110/#1111 A-2.3), same source as `fromAstTypeE`'s.
+    (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+      rowArgNamesApp scope o n args
+    -- #822: the abstract-head half — an interface typaram of graded kind, in scope.
+    (TyVar h, args) => rowArgNamesVarApp scope h args
+    _ => None
+  match kinded
+    Some names => names
+    None => rowArgNamesIn scope a ++ rowArgNamesIn scope b
 rowArgNamesIn scope (TyFun a b) = rowArgNamesIn scope a ++ rowArgNamesIn scope b
 rowArgNamesIn scope (TyTuple ts) = flatMap (rowArgNamesIn scope) ts
 rowArgNamesIn scope (TyEffect _ _ t) = rowArgNamesIn scope t
@@ -15223,23 +15425,21 @@ rowArgNamesApp : List (String, List Kind) ->
   TyConOrigin ->
   String ->
   List Ty ->
-  List String ->
-  List String
-rowArgNamesApp scope o n args fallback =
+  Option (List String)
+rowArgNamesApp scope o n args =
   match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
     Some kinds if listLen kinds == listLen args =>
-      krowArgVarNames kinds args ++ flatMap (rowArgNamesIn scope) args
-    _ => fallback
+      Some (krowArgVarNames kinds args ++ flatMap (rowArgNamesIn scope) args)
+    _ => None
 
 rowArgNamesVarApp : List (String, List Kind) ->
   String ->
   List Ty ->
-  List String ->
-  List String
-rowArgNamesVarApp scope h args fallback = match lookupAssoc h scope
+  Option (List String)
+rowArgNamesVarApp scope h args = match lookupAssoc h scope
   Some kinds if listLen kinds == listLen args =>
-    krowArgVarNames kinds args ++ flatMap (rowArgNamesIn scope) args
-  _ => fallback
+    Some (krowArgVarNames kinds args ++ flatMap (rowArgNamesIn scope) args)
+  _ => None
 
 krowArgVarNames : List Kind -> List Ty -> List String
 krowArgVarNames [] _ = []
@@ -15277,21 +15477,15 @@ krowArgVarNames (_ :: ks) (_ :: as2) = krowArgVarNames ks as2
 -- An ABSTRACT head (the graded [scope] arm) guarantees nothing and keeps `[]`:
 -- what `f e a` charges depends on the impl, so the declaration cannot say.
 rowArgAtomsIn : List (String, List Kind) -> Ty -> List (String, List Atom)
-rowArgAtomsIn scope (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    rowArgAtomsApp
-      scope
-      o
-      n
-      args
-      (rowArgAtomsIn scope a ++ rowArgAtomsIn scope b)
-  (TyVar h, args) =>
-    rowArgAtomsVarApp
-      scope
-      h
-      args
-      (rowArgAtomsIn scope a ++ rowArgAtomsIn scope b)
-  _ => rowArgAtomsIn scope a ++ rowArgAtomsIn scope b
+rowArgAtomsIn scope (TyApp a b) =
+  let kinded = match tyAppSpine (TyApp a b)
+    (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+      rowArgAtomsApp scope o n args
+    (TyVar h, args) => rowArgAtomsVarApp scope h args
+    _ => None
+  match kinded
+    Some occs => occs
+    None => rowArgAtomsIn scope a ++ rowArgAtomsIn scope b
 rowArgAtomsIn scope (TyFun a b) = rowArgAtomsIn scope a ++ rowArgAtomsIn scope b
 rowArgAtomsIn scope (TyTuple ts) = flatMap (rowArgAtomsIn scope) ts
 rowArgAtomsIn scope (TyEffect _ _ t) = rowArgAtomsIn scope t
@@ -15302,24 +15496,26 @@ rowArgAtomsApp : List (String, List Kind) ->
   TyConOrigin ->
   String ->
   List Ty ->
-  List (String, List Atom) ->
-  List (String, List Atom)
-rowArgAtomsApp scope o n args fallback =
+  Option (List (String, List Atom))
+rowArgAtomsApp scope o n args =
   match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
     Some kinds if listLen kinds == listLen args =>
-      krowArgVarAtoms kinds (optionOr [] (paramRowAtomsOf (tyTabKey o n))) args
-        ++ flatMap (rowArgAtomsIn scope) args
-    _ => fallback
+      Some
+        (krowArgVarAtoms
+            kinds
+            (optionOr [] (paramRowAtomsOf (tyTabKey o n)))
+            args
+          ++ flatMap (rowArgAtomsIn scope) args)
+    _ => None
 
 rowArgAtomsVarApp : List (String, List Kind) ->
   String ->
   List Ty ->
-  List (String, List Atom) ->
-  List (String, List Atom)
-rowArgAtomsVarApp scope h args fallback = match lookupAssoc h scope
+  Option (List (String, List Atom))
+rowArgAtomsVarApp scope h args = match lookupAssoc h scope
   Some kinds if listLen kinds == listLen args =>
-    krowArgVarAtoms kinds [] args ++ flatMap (rowArgAtomsIn scope) args
-  _ => fallback
+    Some (krowArgVarAtoms kinds [] args ++ flatMap (rowArgAtomsIn scope) args)
+  _ => None
 
 -- `krowArgVarNames`' pair-returning twin.  [decls] is the head's per-parameter
 -- guarantee list, walked in lockstep with the kinds and the args; it runs out
@@ -27803,8 +27999,7 @@ methodReturnEvidenceRoute encl scope prerequisite =
         KeepNone
         first
         more
-        0
-        0
+        (reqWalkStart ())
     [] => RNone
 
 resolveNumLitSite : List String ->
@@ -32579,7 +32774,13 @@ headTyconTy t = match headTyNode t
 implDictRoutesForRow : String -> ScopeId -> List Mono -> ImplRow -> List Route
 implDictRoutesForRow encl useScope goals row =
   match selectedRowReqMatch goals row
-    Some (subst, reqs) => argImplReqRoutes encl useScope subst reqs 0 0
+    Some (subst, reqs) =>
+      argImplReqRoutes
+        encl
+        useScope
+        subst
+        reqs
+        (reqWalkSeed (first3 (ieRowTriple row)) goals)
     None => []
 
 -- Missing predicate-vector metadata keeps the scalar result-head match used by
@@ -32589,7 +32790,13 @@ legacyReturnReqRoutesForRow encl useScope resultMono row =
   match ieRowHeadTriple (Some row)
     Some (headTy, implTys, reqs) =>
       match headSubstWithParams headTy implTys resultMono [resultMono]
-        Some subst => argImplReqRoutes encl useScope subst reqs 0 0
+        Some subst =>
+          argImplReqRoutes
+            encl
+            useScope
+            subst
+            reqs
+            (reqWalkSeed (first3 (ieRowTriple row)) [resultMono])
         None => []
     None => []
 
@@ -32795,10 +33002,9 @@ matchStep (TyEffect _ _ t) m = MKids [(t, m)]
 matchStep (TyConstrained _ t) m = MKids [(t, m)]
 matchStep _ _ = MFail
 
--- This recursion is AWARE (constraint-dictionary-routed) and FUSED (WS-4b depth max
--- 32): a mono pinned to a concrete head routes RKey, an in-scope constraint var
--- routes RDict, per DICT-SEMANTICS §3 `assum`. The fuse guards against divergence on
--- a non-shrinking impl context at route-resolution time.
+-- This recursion is aware (constraint-dictionary-routed) and bounded by the shared
+-- `requires` measure (`reqWalkEnter`): a mono pinned to a concrete head routes RKey,
+-- an in-scope constraint var routes RDict, per DICT-SEMANTICS §3 `assum`.
 
 -- fill each constrained-fn call site's routes: one route per constraint mono.  A
 -- mono pinned to a concrete head → RKey; still a constraint variable (a nested
@@ -32840,8 +33046,8 @@ data Undetermined = KeepNone | CountImpls IfaceRef
 --     return-position (name∈rpNames), else RDict; EKNestedTop routes RDict.
 --   * inst: EKReturn selects one row for its canonical key and element routes;
 --     EKNestedTop stamps the
---     canonical key of the min⊑ winner + `argImplRequiresRoutesForRow`-packed requires (with
---     the W2 depth fuse).
+--     canonical key of the min⊑ winner + `argImplRequiresRoutesForRow`-packed requires (under
+--     the shared W2 measure, `reqWalkEnter`).
 --   * fallback: EKReturn → RNone; EKNestedTop → the caller-supplied `Undetermined` policy.
 -- #156 S3c wired arg-position + operator sites in (EKArg / EKOp below).
 data EntailKind =
@@ -32852,21 +33058,15 @@ data EntailKind =
   -- name remains separate because the route-word collision ABI is method-keyed.
   | EKNumReturn ClassPredicate Mono Bool (Option Loc)
   -- nested-element / top-level constrained call: iface, undetermined policy, and the
-  -- `requires`-recursion fuse — which is TWO Ints since #1576, not one depth counter:
-  --   • [prevSize] — the structural size (`monoSizes`) of the goal VECTOR of the
-  --     `argImplRequiresRoutesForRow` level that spawned this sub-goal, or 0 at a seed site
-  --     ("no parent"; a real goal vector always measures ≥ 1, so 0 is unambiguous).
-  --   • [spent]    — how many NON-SHRINKING steps this chain has taken.  Only these
-  --     burn fuel; a step whose goal is structurally smaller than its parent's is
-  --     free, because such a chain is guaranteed to terminate on its own.
-  -- See `argImplRequiresRoutesForRow` for the whole argument.
+  -- `requires` walk that reached this goal (`ReqWalk`, the shared measure; `reqWalkStart`
+  -- at a seed site).  See `argImplRequiresRoutesForRow`.
   -- #1154 (F-3a): the predicate's goal args PAST arg 0.  Arg 0 stays in `entail`'s
   -- own [m] (it keys `assum` and supplies the head tag), so this field holds only the
   -- TAIL — storing the whole vector would duplicate arg 0 and let the two copies
   -- drift.  `[]` at every caller with no vector to offer, which reproduces the
   -- pre-#1154 singleton exactly.  Same pattern as EKReturn/EKArg carrying the
   -- `fullMono` only THEY need.
-  | EKNestedTop IfaceRef Undetermined Int Int (List Mono)
+  | EKNestedTop IfaceRef Undetermined ReqWalk (List Mono)
   -- #156 S3c: arg-position stamp (resolveArgStamp).  assum =
   -- activeDictVarOfEncl → RDict (never RDictFwd; arg-position); inst = same canonical
   -- RKey primary as EKReturn but element routes via argImplDictRoutesForEncl keyed on
@@ -33031,7 +33231,7 @@ goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
   prIface = predicate.predicateInterface,
   prArgs = PSArgsKnown predicate.predicateArguments,
 }
-goalRequestOfKind _ (EKNestedTop _ _ _ _ _) = None
+goalRequestOfKind _ (EKNestedTop _ _ _ _) = None
 
 -- assum: which in-scope dict-param (if any) does [m]'s head constraint var read?  The
 -- genuine/arg kinds prefer the enclosing method's own slot (activeDictVarOfEncl); the
@@ -33055,7 +33255,7 @@ entailAssumVar request m encl _ useScope (EKReturn _ _) =
   activeDictVarOfEncl request m encl useScope
 entailAssumVar request m encl _ useScope (EKNumReturn _ _ _ _) =
   activeDictVarOfEncl request m encl useScope
-entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
+entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ rest) =
   let request =
     PredicateRequest { prIface = iface, prArgs = PSArgsKnown (m :: rest) }
   match activeFunDictPredOf request useScope
@@ -33087,7 +33287,7 @@ entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
 
 -- The interface of the predicate a goal of [kind] discharges, when the kind knows it.
 goalIfaceOfKind : String -> EntailKind -> Option IfaceRef
-goalIfaceOfKind _ (EKNestedTop iface _ _ _ _) =
+goalIfaceOfKind _ (EKNestedTop iface _ _ _) =
   if iface.irName == "" then None else Some iface
 goalIfaceOfKind _ (EKNumReturn predicate _ _ _) =
   Some predicate.predicateInterface
@@ -33100,7 +33300,7 @@ entailAssumRoute dname (EKReturn _ isRp) =
   if isRp then RDictFwd dname else RDict dname
 entailAssumRoute dname (EKNumReturn _ _ isRp _) =
   if isRp then RDictFwd dname else RDict dname
-entailAssumRoute dname (EKNestedTop _ _ _ _ _) = RDict dname
+entailAssumRoute dname (EKNestedTop _ _ _ _) = RDict dname
 entailAssumRoute dname (EKArg _) = RDict dname
 entailAssumRoute dname (EKOp _ _) = RDict dname
 entailAssumRoute dname (EKPredicateOp _ _ _) = RDict dname
@@ -33206,7 +33406,7 @@ entailInst name m encl useScope tag (kind@(EKNumReturn predicate _ _ _)) =
 -- (funConstraintArgsRef). Recording it beside `funConstraintsRef`, not inside it,
 -- keeps per-tyvar dict slots — and hence emitted dict arity — exactly as they were.
 -- #607 punch-list item 3 (dict slot = predicate, which would move arity) stays open.
-entailInst _ m encl useScope tag (EKNestedTop iface _ prevSize spent rest) =
+entailInst _ m encl useScope tag (EKNestedTop iface _ walk rest) =
   -- Select the row once and hand that same value to both the route-word and
   -- prerequisite projections.  This makes §6 C2 structural: the dictionary names
   -- the same impl whose context it discharges.  If selection cannot recover a row,
@@ -33217,12 +33417,11 @@ entailInst _ m encl useScope tag (EKNestedTop iface _ prevSize spent rest) =
     Some (row@(ImplRow _ _ selectedIface _ _ _)) => (
       RKey
         (rowRouteKey row)
-        (argImplRequiresRoutesForRow encl useScope m goals prevSize spent row)
-        (superRoutesAt selectedIface encl useScope goals prevSize spent),
+        (argImplRequiresRoutesForRow encl useScope m goals walk row)
+        (superRoutesAt selectedIface encl useScope goals walk),
       [],
     )
-    None =>
-      (RKey tag [] (superRoutesAt iface encl useScope goals prevSize spent), [])
+    None => (RKey tag [] (superRoutesAt iface encl useScope goals walk), [])
 -- #609: select on the interface's FULL param vector (§5 — the dispatch type is the
 -- instantiated vector `T̄`), not on the discriminating ARGUMENT's mono alone.
 -- [goals] is bound ONCE and fed to BOTH arms: the method route (`routeKey`) and the
@@ -33268,30 +33467,26 @@ entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
 -- A dictionary's super segment at the goal vector [goals]: one route per DIRECT
 -- super of [iface], in declaration order, each solved at that same goal by the whole
 -- ladder (DICT-SEMANTICS §2: supers are resolved per construction goal, `assum`
--- before `inst`).  A super step keeps the goal's size, so it spends none of the
--- `requires` fuel the chain carries; the declared super graph is acyclic (W1), so it
--- cannot recur on its own.
+-- before `inst`).  [walk] is the walk that reached [goals], before [goals] itself was
+-- entered: a super goal is entered beside it, not below it, and the declared super graph
+-- is acyclic (W1), so it cannot recur on its own.
 superRoutesAt : IfaceRef ->
   String ->
   ScopeId ->
   List Mono ->
-  Int ->
-  Int ->
+  ReqWalk ->
   List Route
-superRoutesAt iface encl useScope goals prevSize spent =
-  map (superRouteAt encl useScope prevSize spent) (directSuperGoals iface goals)
+superRoutesAt iface encl useScope goals walk =
+  map (superRouteAt encl useScope walk) (directSuperGoals iface goals)
 
 superRouteAt : String ->
   ScopeId ->
-  Int ->
-  Int ->
+  ReqWalk ->
   (IfaceRef, Option (List Mono)) ->
   Route
-superRouteAt encl useScope prevSize spent (superIface, superArgs) =
-  match superArgs
-    Some (g0 :: gs) =>
-      routeOfD superIface encl useScope KeepNone g0 gs prevSize spent
-    _ => RNone
+superRouteAt encl useScope walk (superIface, superArgs) = match superArgs
+  Some (g0 :: gs) => routeOfD superIface encl useScope KeepNone g0 gs walk
+  _ => RNone
 
 -- The super segment of a method-call primary `RKey`.  A call whose selected instance
 -- supplies [name] only selects it, so the route carries none; a call whose instance
@@ -33308,13 +33503,13 @@ selectedCallSupers name (Some (ImplRow _ _ iface _ _ supplied)) encl useScope go
   if contains name supplied then
     []
   else
-    superRoutesAt iface encl useScope goals 0 0
+    superRoutesAt iface encl useScope goals (reqWalkStart ())
 selectedCallSupers _ None _ _ _ = []
 
 entailFallback : ScopeId -> Mono -> EntailKind -> Route
 entailFallback _ _ (EKReturn _ _) = RNone
 entailFallback _ _ (EKNumReturn _ _ _ _) = RNone
-entailFallback scope m (EKNestedTop _ policy _ _ rest) =
+entailFallback scope m (EKNestedTop _ policy _ rest) =
   undeterminedRoute scope policy (m :: rest)
 entailFallback _ _ (EKArg _) = RNone
 entailFallback _ _ (EKOp _ _) = RNone
@@ -33326,14 +33521,12 @@ entailFallback _ _ (EKPredicateOp _ _ _) = RNone
 -- constraint-var slots.  [policy] decides the undetermined arm (see Undetermined).
 routeOf : IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> Route
 routeOf iface encl useScope policy m =
-  routeOfD iface encl useScope policy m [] 0 0
+  routeOfD iface encl useScope policy m [] (reqWalkStart ())
 
--- #217: fuse-carrying core of routeOf.  [prevSize]/[spent] thread the WS-4b fuse
--- through the aware recursion (routeOfD → argImplRequiresRoutesForRow → argImplReqRoutes
--- → argReqRoute → routeOfD), the guard retained from the removed blind chain so a
--- non-shrinking impl context (`impl C (T a) requires C (T (T a))`) terminates instead of
--- diverging at route-resolution time.  Both are unchanged here; they are recomputed once
--- per impl level in argImplRequiresRoutesForRow, which owns the whole shrinking argument.
+-- #217: the walk-carrying core of routeOf.  [walk] threads the shared `requires`
+-- measure through the aware recursion (routeOfD → argImplRequiresRoutesForRow →
+-- argImplReqRoutes → argReqRoute → routeOfD); the goal is entered in
+-- argImplRequiresRoutesForRow, once per impl level.
 -- #1154 (F-3a): [rest] carries the predicate's goal args past arg 0 (see EKNestedTop).
 routeOfD : IfaceRef ->
   String ->
@@ -33341,16 +33534,15 @@ routeOfD : IfaceRef ->
   Undetermined ->
   Mono ->
   List Mono ->
-  Int ->
-  Int ->
+  ReqWalk ->
   Route
 -- #156 S3b: a thin adapter over `entail` (EKNestedTop kind).  The nested/top ladder
 -- packs its `requires` into the primary RKey, so `snd` is empty and only `fst` is read —
 -- byte-identical to the pre-S3b arm-by-arm body.  The requires recursion still lands back
 -- here via argImplRequiresRoutesForRow → argImplReqRoutes → argReqRoute → routeOfD, with the
--- fuse pair threaded through the EKNestedTop payload.
-routeOfD iface encl useScope policy m rest prevSize spent =
-  fst (entail "" m encl useScope (EKNestedTop iface policy prevSize spent rest))
+-- walk threaded through the EKNestedTop payload.
+routeOfD iface encl useScope policy m rest walk =
+  fst (entail "" m encl useScope (EKNestedTop iface policy walk rest))
 
 undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
 undeterminedRoute _ KeepNone _ = RNone
@@ -33422,7 +33614,8 @@ routesOfMonosTopV encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
 -- `vectorGoal` returning the head separately encodes; the scalar arm keeps [m].
 topRouteV : String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
 topRouteV encl useScope iface m goals = match vectorGoal iface goals
-  Some (g0, gs) => routeOfD iface encl useScope (CountImpls iface) g0 gs 0 0
+  Some (g0, gs) =>
+    routeOfD iface encl useScope (CountImpls iface) g0 gs (reqWalkStart ())
   None => routeOf iface encl useScope (CountImpls iface) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
@@ -33474,7 +33667,7 @@ undeterminedRowRoute _ _ [] _ = RNone
 undeterminedRowRoute scope ifaceRef (m :: rest) row =
   RKey
     (rowRouteKey row)
-    (argImplRequiresRoutesForRow "" scope m (m :: rest) 0 0 row)
+    (argImplRequiresRoutesForRow "" scope m (m :: rest) (reqWalkStart ()) row)
     (map
       ((superIface, _) => routeUndeterminedTop scope superIface (m :: rest))
       (directSuperGoals ifaceRef []))
@@ -33510,61 +33703,18 @@ ambiguousImplMsg iface =
 -- (implDictRoutesIn) routes through here too, no longer through a blind twin.  [encl]
 -- threads the enclosing method so nested element dicts forward its own
 -- `$dict_<encl>_<slot>` params (encl == "" recovers the global routing).
--- #217/WS-4b: the fuse guards a non-shrinking impl context (`impl C (T a) requires C
--- (T (T a))`) — RETAINED from the removed blind chain, now on the aware
--- recursion so unifying the two chains did not import a typecheck hang.  On limit-hit we
--- return [] (RNone element → null cell).  (#1154
--- folded away the depth-0 wrapper `argImplRequiresRoutesRec`: two names for one body,
--- one caller each.  Seed `[] 0 0` at an entry point instead.)
+-- (#1154 folded away the depth-0 wrapper `argImplRequiresRoutesRec`: two names for one
+-- body, one caller each.  Seed `reqWalkStart` at an entry point instead.)
 --
--- 🚨 #1576 REPLACED THE FLAT `depth >= 32` COUNTER WITH A SHRINKING TEST, BECAUSE THE
--- FLAT COUNTER WAS SILENTLY WRONG ON VALID PROGRAMS AND THE OLD COMMENT HERE SAID IT
--- COULD NOT BE.  It claimed "depth 32 is ample for valid programs (real nesting rarely
--- exceeds 3–4 levels)" and "safe because such an impl is ill-formed and never produces a
--- valid concrete instantiation in a well-typed program".  Both halves are false for a
--- GROUND chain: `impl Tag (Wrap a) requires Tag a` applied to `Wrap^34 Int` is perfectly
--- well-formed, reaches this function at depth 34 through the RETURN-position chain
--- (`implDictRoutesForRow` → `argImplReqRoutes` → `argReqRoute` → `routeOfD` → `entail`
--- (EKNestedTop) → here), and the `[]` DROPPED A REAL `requires`.  The emitted witness
--- (`emitConstDictCell`, `backend/llvm_emit.mdk`) then carried a 1-word `Wrap` cell with
--- no nested `Tag a` dict; the innermost `tagOf` read a nonexistent field and the built
--- binary segfaulted, at exit 0 from `check` and `build`.  (Usable ground depth was
--- exactly 33, not 32, only because at 33 the level the fuse cut was terminal — `impl
--- Tag Int`, empty `requires` — so the truncated `[]` was accidentally the right answer.)
---
--- ⚠️ AND A BIGGER CONSTANT IS NOT THE FIX.  `residualPredsOf`'s own header already says
--- it ("any finite fuel has the same cliff; only making the cliff LOUD removes the silent
--- wrongness") and it was measured: 32 → 200 fixes `Wrap^34` and breaks `Wrap^202`.
---
--- THE ACTUAL DISTINCTION, and why this chain differs from `residualPredsOf`'s flat fuel.
--- `residualPredsOf` guards a DEFERRED, possibly-cyclic walk where 32 really is arbitrary.
--- The chain THIS function drives reduces a GOAL, and the interesting population reduces
--- it STRUCTURALLY: each `requires` sub-goal of `impl Tag (Wrap a) requires Tag a` is one
--- `Wrap` layer smaller than the goal that spawned it.  Such a chain terminates by
--- construction, and its natural bound is the SIZE of the goal being reduced — not a
--- constant.  So:
---   • [prevSize] is the parent level's goal-vector size (`monoSizes`), 0 at a seed;
---   • a step whose own goal vector is STRICTLY SMALLER than [prevSize] is SHRINKING and
---     costs no fuel — a shrinking chain therefore compiles at ANY depth its type needs;
---   • every other step (including a seed's first level, which has no parent to compare
---     against) burns one unit of [spent], and 32 of those still trip the fuse.
--- The pathological shape the fuse was written for is caught FASTER than before, not
--- slower: `impl C (T a) requires C (T (T a))` GROWS its goal every step, so every step is
--- non-shrinking and the fuse trips after 32 of them regardless of the type's size.
--- Termination overall: [spent] never decreases and caps at 32, and between two
--- fuel-burning steps every step strictly decreases a natural number, so each shrinking
--- run is finite.
---
--- THE LIMIT-HIT ARM IS STILL SILENT, AND THAT IS NOT AN ENDORSEMENT.  A
--- `pushTypeErrorOnceAt` here is INERT today: this code runs during the graph-end
--- drain (`drainStampQueue` / `runStampCtxs`, #2548), not inside `elabModuleStamp` /
--- `elaborateModules` directly, and `check`, `run` AND `build` all discard type errors
--- pushed from the `resolve*` stamp passes (measured 2026-08-24; see `keyForSite`'s
--- header for the `check` half, which is the only half that was written down).  That
--- severed channel is #1910.  When it is repaired, THIS arm is the first place a
--- `T-REQUIRES-DEPTH` reject
--- belongs — the shrinking test narrows what reaches it to genuinely non-shrinking
--- contexts, which is exactly the population that deserves a loud reject.
+-- Termination is the shared `requires` measure (`reqWalkEnter`, DICT §3 W2), the same
+-- one every solving walk uses: a step to a strictly smaller goal is free, so a ground
+-- chain like `impl Tag (Wrap a) requires Tag a` at `Wrap^34 Int` routes at any depth
+-- its type needs (#1576); a non-shrinking step spends fuel; a repeated goal is a cycle.
+-- This walk also enters each super of a goal beside it (`superRoutesAt`) and follows
+-- that super instance's `requires`.  The solving walks follow the same goals under that
+-- measure, the super goals included (`checkSuperContext`, entered beside the goal the
+-- same way), and reject a cycle or a spent walk at the goal's site, so this walk
+-- reaches either outcome only on a rejected program (`requiresRouteWalkCut`).
 --
 -- The caller supplies the selected row, so the route word and the context it
 -- discharges name the same impl (§6 C2) by construction.
@@ -33572,20 +33722,38 @@ argImplRequiresRoutesForRow : String ->
   ScopeId ->
   Mono ->
   List Mono ->
-  Int ->
-  Int ->
+  ReqWalk ->
   ImplRow ->
   List Route
-argImplRequiresRoutesForRow encl useScope m goals prevSize spent row =
-  let size = monoSizes goals
-  let spentNow = if prevSize > 0 && size < prevSize then spent else spent + 1
-  if spentNow >= requiresNonShrinkingFuel then
+argImplRequiresRoutesForRow encl useScope m goals walk row =
+  match reqWalkEnter walk (first3 (ieRowTriple row)) goals
+    ReqOn next => routeWalkMemoized
+      encl
+      useScope
+      goals
+      row
+      next
+      (_ => match ieRowHeadTriple (Some row)
+        Some (headTy, itys, reqs) =>
+          match headSubstWithParams headTy itys m goals
+            Some subst => argImplReqRoutes encl useScope subst reqs next
+            None => []
+        None => [])
+    cut =>
+      let _ = noteRouteWalkCut walk
+      requiresRouteWalkCut cut
+
+-- A route walk that met a cycle or ran out of fuel.  The solving walks share its
+-- measure and follow the same goals, a super instance's `requires` included
+-- (`checkSuperContext`), and reject the goal at its site, so this is reached only on a
+-- program that already carries a type error, and its routes are never emitted.  With no error
+-- recorded it is a compiler invariant failure, never a silent `[]` (#1910).
+requiresRouteWalkCut : ReqStep -> List Route
+requiresRouteWalkCut _ =
+  if hadTypeErrors () then
     []
-  else match ieRowHeadTriple (Some row)
-    Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
-      Some subst => argImplReqRoutes encl useScope subst reqs size spentNow
-      None => []
-    None => []
+  else
+    panic "requires route walk reached a goal the solving walks did not accept"
 
 -- ── D3b-1: arg-position element-dict routing ────────────────────────────────
 -- The argument-position analogue of implDictRoutesFor.  Same impl-table match +
@@ -33649,28 +33817,25 @@ argImplDictRoutesForEncl encl useScope name _tag mono goals =
     (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name goals))
     Some (headTy, implTys, reqs) =>
       match headSubstWithParams headTy implTys mono goals
-        Some subst => argImplReqRoutes encl useScope subst reqs 0 0
+        Some subst =>
+          argImplReqRoutes encl useScope subst reqs (reqWalkStart ())
         None => []
     None => []
 
--- #217/#1576: [prevSize]/[spent] carry the WS-4b fuse through the aware recursion (see
--- argImplRequiresRoutesForRow, which owns the shrinking argument).  Every entry point seeds
--- `0 0` — arg-position (argImplDictRoutesForEncl), return-position
--- (implDictRoutesForRow), routeOf/topRouteV and routeUndeterminedTop alike: `prevSize
--- == 0` is the "no parent goal yet" sentinel, so a seed's own first level is counted
--- as non-shrinking and costs one unit of fuel.
+-- #217: [walk] carries the shared `requires` measure through the aware recursion (see
+-- argImplRequiresRoutesForRow, where each goal is entered).  An entry point seeds
+-- `reqWalkStart`, or `reqWalkSeed` at the goal whose selected row's `requires` these are.
 argImplReqRoutes : String ->
   ScopeId ->
   List (String, Mono) ->
   List Require ->
-  Int ->
-  Int ->
+  ReqWalk ->
   List Route
-argImplReqRoutes _ _ _ [] _ _ = []
-argImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs, requireOrigin = ro }) :: rest) prevSize spent =
+argImplReqRoutes _ _ _ [] _ = []
+argImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs, requireOrigin = ro }) :: rest) walk =
   let iface = IfaceRef { irName = rIface, irOrigin = ro }
-  argReqRoute iface encl useScope subst rargs prevSize spent
-    :: argImplReqRoutes encl useScope subst rest prevSize spent
+  argReqRoute iface encl useScope subst rargs walk
+    :: argImplReqRoutes encl useScope subst rest walk
 
 -- [iface] is the requirement's resolved interface, origin included: two interfaces
 -- spelled alike (`requires A.Sh a, B.Sh a`) select their impls by declaration, and a
@@ -33680,15 +33845,14 @@ argReqRoute : IfaceRef ->
   ScopeId ->
   List (String, Mono) ->
   List Ty ->
-  Int ->
-  Int ->
+  ReqWalk ->
   Route
-argReqRoute _ _ _ _ [] _ _ = RNone
+argReqRoute _ _ _ _ [] _ = RNone
 -- #1154 (F-3a): `(arg::_)` USED TO DROP every argument past arg 0, so a multi-param
 -- `requires Ix a Char` reached the selector as the singleton `[Int]` and matched every
 -- `Ix Int _` impl.  Keep the whole vector; `routeOfD` threads the tail down the
 -- EKNestedTop leg.  Single-param requires bind `more == []` ⇒ unchanged.
-argReqRoute iface encl useScope subst (arg :: more) prevSize spent =
+argReqRoute iface encl useScope subst (arg :: more) walk =
   routeOfD
     iface
     encl
@@ -33696,8 +33860,7 @@ argReqRoute iface encl useScope subst (arg :: more) prevSize spent =
     KeepNone
     (fromAstType subst arg)
     (map (fromAstType subst) more)
-    prevSize
-    spent
+    walk
 
 -- Phase 69.x-e: fill each method occurrence's method-dicts ref — one route per
 -- method-level constraint, from the instantiated constraint mono.  A concrete head
@@ -33718,7 +33881,8 @@ methodPredicateRoutes encl scope (slot :: rest) =
 
 methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
 methodPredicateRoute encl scope slot = match slot.psArgs
-  PSArgsKnown (g0 :: gs) => routeOfD slot.psIface encl scope KeepNone g0 gs 0 0
+  PSArgsKnown (g0 :: gs) =>
+    routeOfD slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
   _ => RNone
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
@@ -33748,7 +33912,8 @@ recRoutes encl scope mono (slot :: rest) =
 -- (RDict, the slot it sits at); otherwise leave the route unresolved.
 recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
 recRoute encl scope mono slot = match recPredicateArgs mono slot
-  Some (g0 :: gs) => routeOfD slot.psIface encl scope KeepNone g0 gs 0 0
+  Some (g0 :: gs) =>
+    routeOfD slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
   _ => match slot.psBoundIds
     id :: _ => match findTvarInMono mono id
       None => RNone
@@ -33773,10 +33938,13 @@ resolveRecMono : String -> ScopeId -> IfaceRef -> Mono -> Route
 resolveRecMono encl scope iface m = match headTyconMono m
   -- a rigid variable names no instance, so its spelled head is left as it was
   Some (hk@(HkRigid _)) =>
-    RKey (headKeyTag hk) [] (superRoutesAt iface encl scope [m] 0 0)
+    RKey
+      (headKeyTag hk)
+      []
+      (superRoutesAt iface encl scope [m] (reqWalkStart ()))
   -- a concrete head names an instance: select it like any other predicate goal, so
   -- the dictionary carries that instance's word and `requires`
-  Some _ => routeOfD iface encl scope KeepNone m [] 0 0
+  Some _ => routeOfD iface encl scope KeepNone m [] (reqWalkStart ())
   -- the enclosing slot is found by tyvar alone, so it may hold a SUB-interface of
   -- the callee's predicate: read the super out of it
   None => match enclSlot encl m
@@ -37038,6 +37206,9 @@ consumeExactReturnOutcome univ request resolution =
     Solved (InstanceEvidence _ _ prerequisites _) =>
       checkReqObligations
         univ
+        (reqWalkSeed
+          resolution.mrrWanted.predicate.predicateInterface
+          resolution.mrrWanted.predicate.predicateArguments)
         request.mrrLoc
         request.mrrScope
         (map prerequisiteObligation prerequisites)
@@ -37261,7 +37432,7 @@ checkOneCallObligation deferNonGround univ iface occs loc scope =
     -- requires Display a, Display b`) so an unsatisfied element constraint surfaces
     -- (`main = (Red, 5)` → `No impl of Display for Color`) instead of the head-only
     -- match silently accepting (→ null element dict → SIGSEGV at runtime).
-    Some True => checkNestedReqs univ iface args loc scope
+    Some True => checkNestedReqs univ (reqWalkStart ()) iface args loc scope
     Some False => checkOneCallObligationNoImpl iface args loc scope
 
 -- the no-impl tail of `checkOneCallObligation` — reached when the goal is neither a
@@ -37853,39 +38024,35 @@ liveVarIdsOf m =
 -- leaves its prerequisites to the enclosing scope; a closed goal's are closed, and
 -- the obligation gate's.  A goal whose verdict waits for quiescence, on a variable
 -- of [liveIds], is walked there with it (`judgeQuiescentGoals`), after a later
--- group could ground that variable.  Only a prerequisite smaller than its parent
--- is followed further, which bounds a `requires` chain that does not shrink.
+-- group could ground that variable.  Each prerequisite continues its parent's walk
+-- under the shared `requires` measure (`reqWalkEnter`), which bounds a chain that does
+-- not shrink; a repeated or out-of-fuel prerequisite is reported at its site.
 nestedRequireGoals : OrdMap Unit ->
   OrdMap Unit ->
   List UObligation ->
   List UObligation
 nestedRequireGoals rigidIds liveIds obls =
-  nestedRequireGoalsGo rigidIds liveIds requiresNonShrinkingFuel obls
+  nestedRequireGoalsGo
+    rigidIds
+    liveIds
+    (map (o => (o, reqWalkSeed o.pred.iface (map normalize (uOblArgs o)))) obls)
 
 nestedRequireGoalsGo : OrdMap Unit ->
   OrdMap Unit ->
-  Int ->
-  List UObligation ->
+  List (UObligation, ReqWalk) ->
   List UObligation
-nestedRequireGoalsGo rigidIds liveIds fuel obls
-  | fuel <= 0 = []
-  | otherwise = match flatMap (selectedRequireGoals rigidIds liveIds) obls
+nestedRequireGoalsGo rigidIds liveIds walks =
+  match flatMap (selectedRequireGoals rigidIds liveIds) walks
     [] => []
-    derived =>
-      map fst derived
-        ++ nestedRequireGoalsGo
-          rigidIds
-          liveIds
-          (fuel - 1)
-          (map fst (filterList snd derived))
+    derived => map fst derived ++ nestedRequireGoalsGo rigidIds liveIds derived
 
 -- [o]'s prerequisites under the one instance its goal selects as it stands, each
--- paired with whether it is smaller than [o]'s goal.
+-- with the walk that reaches it from [o]'s.
 selectedRequireGoals : OrdMap Unit ->
   OrdMap Unit ->
-  UObligation ->
-  List (UObligation, Bool)
-selectedRequireGoals rigidIds liveIds o =
+  (UObligation, ReqWalk) ->
+  List (UObligation, ReqWalk)
+selectedRequireGoals rigidIds liveIds (o, walk) =
   let args = map normalize (uOblArgs o)
   let iface = o.pred.iface
   let parentIds = flatMap monoUnboundIds args
@@ -37905,13 +38072,12 @@ selectedRequireGoals rigidIds liveIds o =
         goalReach args (goalCandidates rigidIds args rows)
     match reach
       ReachOne row =>
-        let size = monoSizes args
         let goalsOf =
           ids subst reqs =>
             flatMap
               (req =>
-                map
-                  (g => (g, monoSizes g.pred.args < size))
+                flatMap
+                  (prerequisiteOnWalk walk)
                   (requireGoalAt o ids (reqToObligation subst req)))
               reqs
         match selectedRowReqMatch args row
@@ -37920,6 +38086,15 @@ selectedRequireGoals rigidIds liveIds o =
             Some (subst, fresh, reqs) => goalsOf (parentIds ++ fresh) subst reqs
             None => []
       _ => []
+
+-- A prerequisite entered on its parent's walk; a repeated or out-of-fuel one is
+-- reported at its site and is not a goal of the boundary.
+prerequisiteOnWalk : ReqWalk -> UObligation -> List (UObligation, ReqWalk)
+prerequisiteOnWalk walk g =
+  let step = reqWalkEnter walk g.pred.iface (map normalize g.pred.args)
+  match reqWalkReported g.loc step
+    Some next => [(g, next)]
+    None => []
 
 -- The prerequisites of [row] under the unifier of its heads with [args] (every
 -- variable in [rigidIds] held rigid), for a goal the row's head determines without
@@ -38459,20 +38634,87 @@ monoIsFunction m = match normalize m
 -- accepting the unsatisfiable element constraint (→ null element dict → SIGSEGV).
 -- A satisfied requirement (`Display Int`, `Display String`) recurses into ITS own
 -- (empty) requires and accepts, so `(5, "hi")` / `[1,2,3]` still build.
+-- The recursion is bounded by the shared `requires` measure: [walk] is the path that
+-- reached (iface, args), and a repeated or non-shrinking-past-fuel goal is reported at
+-- [loc] (#1575, #2120).  The goal's dictionary also carries its supers', so each super
+-- instance's `requires` is checked too (`checkSuperContext`).
 checkNestedReqs : ImplUniverse ->
+  ReqWalk ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   ScopeId ->
   Unit
-checkNestedReqs univ iface args loc scope =
-  -- #1155: `reqObligationsFor` asks the min⊑ selector WHICH impl matched, so this is
-  -- the one goal-posing site that reaches `pickMostSpecificEntry` from OUTSIDE the
-  -- five resolver drains — publish the obligation's own snapshotted span so the
-  -- ambiguity reject lands on the use site rather than on `currentLoc`'s stale one.
-  -- Restored to None after, per `goalSiteLoc`'s scoping rule.
+checkNestedReqs univ walk iface args loc scope =
+  match reqWalkReported loc (reqWalkEnter walk iface args)
+    None => ()
+    -- A goal this walk already checked clean is not checked again (`WalkMemo`): every
+    -- diagnostic below it is pushed at the walk's one [loc], so a repeat can only
+    -- repeat a push.  It leaves `goalSiteLoc` as a full check would.
+    Some next if walkGoalDischarged next iface args => goalSiteLoc := None
+    Some next =>
+      let (erred, _) = erredDuring (_ =>
+        let _ = checkEnteredReqs univ next iface args loc scope
+        fold
+          (_ sg => checkSuperContext univ walk sg loc scope)
+          ()
+          (superGoalClosure iface args))
+      if erred then () else noteWalkGoalDischarged next iface args
+
+-- A dictionary for a goal carries one for each of its interface's supers at the same
+-- arguments (DICT-SEMANTICS §2), built by the instance each of those selects, so that
+-- instance's `requires` is part of the goal's.  A super goal is entered beside the
+-- goal, on the walk that reached it, as the route walk enters it (`superRoutesAt`).  A
+-- super with no instance is the impl declaration's error (`checkSuperImpls`).
+checkSuperContext : ImplUniverse ->
+  ReqWalk ->
+  (IfaceRef, List Mono) ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+checkSuperContext univ walk (iface, args) loc scope
+  | not (allConcreteHeads args && implMatchesU univ iface args) = ()
+  | otherwise = match reqWalkReported loc (reqWalkEnter walk iface args)
+    Some next => checkEnteredReqs univ next iface args loc scope
+    None => ()
+
+-- The goals of [iface]'s supers at [args], transitively, each interface once, so a
+-- cyclic super graph (rejected by W1) still ends.
+superGoalClosure : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
+superGoalClosure iface args = superGoalClosureGo [(iface, args)] [iface] []
+
+superGoalClosureGo : List (IfaceRef, List Mono) ->
+  List IfaceRef ->
+  List (IfaceRef, List Mono) ->
+  List (IfaceRef, List Mono)
+superGoalClosureGo [] _ acc = reverseL acc
+superGoalClosureGo ((iface, args) :: rest) seen acc =
+  let step =
+    st sg => match sg
+      (sup, Some supArgs) if not (anyList (sameIfaceDecl sup) (fst st)) =>
+        (sup :: fst st, (sup, supArgs) :: snd st)
+      _ => st
+  let (seen2, found) = fold step (seen, []) (directSuperGoals iface args)
+  let fresh = reverseL found
+  superGoalClosureGo (rest ++ fresh) seen2 (found ++ acc)
+
+-- `checkNestedReqs` below a goal [walk] has just entered.
+checkEnteredReqs : ImplUniverse ->
+  ReqWalk ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+checkEnteredReqs univ walk iface args loc scope =
+  -- #1155: `reqObligationsFor` asks the min⊑ selector WHICH impl matched, so this
+  -- is the one goal-posing site that reaches `pickMostSpecificEntry` from OUTSIDE
+  -- the five resolver drains — publish the obligation's own snapshotted span so
+  -- the ambiguity reject lands on the use site rather than on `currentLoc`'s stale
+  -- one.  Restored to None after, per `goalSiteLoc`'s scoping rule.
   goalSiteLoc := loc
-  let _ = checkReqObligations univ loc scope (reqObligationsFor univ iface args)
+  let reqs = reqObligationsFor univ iface args
+  let _ = checkReqObligations univ walk loc scope reqs
   goalSiteLoc := None
 
 -- Impl decls paired with their `requires` (implHeadsOf drops reqs; this keeps them).
@@ -38625,15 +38867,17 @@ reqTyToMono _ (TyRow labels tail loc) =
 
 -- Check each substituted requirement with the SAME accept/reject logic as a
 -- top-level obligation, recursing into a satisfied conditional impl's own reqs.
+-- [walk] is the `requires` walk that posed them (`reqWalkEnter`).
 checkReqObligations : ImplUniverse ->
+  ReqWalk ->
   Option Loc ->
   ScopeId ->
   List (IfaceRef, List Mono) ->
   Unit
-checkReqObligations _ _ _ [] = ()
-checkReqObligations univ loc scope ((ifaceR, monoArgs) :: rest) =
-  let _ = checkReqOne univ ifaceR monoArgs loc scope
-  checkReqObligations univ loc scope rest
+checkReqObligations _ _ _ _ [] = ()
+checkReqObligations univ walk loc scope ((ifaceR, monoArgs) :: rest) =
+  let _ = checkReqOne univ walk ifaceR monoArgs loc scope
+  checkReqObligations univ walk loc scope rest
 
 -- A function-typed requirement arg is fully GROUND yet structurally un-Ord/Eq/etc
 -- (no `impl Ord (a -> b)` exists), so it must REJECT — but its head has no tycon,
@@ -38643,18 +38887,20 @@ checkReqObligations univ loc scope ((ifaceR, monoArgs) :: rest) =
 -- `FromEntries (Map k v) (k, v) requires Ord k` — would DEFER into a silent accept,
 -- and `check` would pass a program `run` rejects at runtime (P0-18).
 checkReqOne : ImplUniverse ->
+  ReqWalk ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   ScopeId ->
   Unit
-checkReqOne univ iface args loc scope
+checkReqOne univ walk iface args loc scope
   | anyListM monoIsFunction args && not (implMatchesU univ iface args) =
     pushNoImplError iface.irName loc args
   -- An open prerequisite is judged at its boundary (`nestedRequireGoals`), where the
   -- impl-head and signature variables it may mention are known to be rigid.
   | not (allConcreteHeads args) = ()
-  | implMatchesU univ iface args = checkNestedReqs univ iface args loc scope
+  | implMatchesU univ iface args =
+    checkNestedReqs univ walk iface args loc scope
   -- #1939 / #1938 (OPEN WORLD): the nested-`requires` twin of
   -- `checkOneCallObligation`'s open-world defer, and it moves WITH it by the same
   -- argument this header already makes about the function-typed reject — the two
@@ -40271,7 +40517,7 @@ checkImplHeadGoal subject roots givens (iface, ds, loc) =
   if anyIn (flatMap monoUnboundIds args) (map snd roots) then
     let headIds = omFromNames (map (r => intToString (snd r)) roots) omEmpty
     goalSiteLoc := loc
-    let leaves = implGoalResiduals residualReduceFuel headIds givens iface args
+    let leaves = implGoalResiduals (reqWalkStart ()) headIds givens iface args
     goalSiteLoc := None
     fold (_ leaf => reportImplHeadResidual subject roots loc leaf) () leaves
 
@@ -40280,45 +40526,44 @@ checkImplHeadGoal subject roots givens (iface, ds, loc) =
 -- instance that accepts the goal only by fixing a head variable does not reduce
 -- it, and the goal itself is the residual.  A goal whose arguments are all type
 -- variables is its own residual, as in a signature's body: no instance reduces it,
--- a blanket one included.  Running out of fuel is `T-REQUIRES-DEPTH`, as in
--- `residualPredsOf`.
-implGoalResiduals : Int ->
+-- a blanket one included.  The walk is bounded by the shared `requires` measure, as
+-- in `residualPredsOf`.
+implGoalResiduals : ReqWalk ->
   OrdMap Unit ->
   List PredicateSlot ->
   IfaceRef ->
   List Mono ->
   List (IfaceRef, List Mono)
-implGoalResiduals fuel headIds givens iface args
+implGoalResiduals walk headIds givens iface args
   | anyList (givenAnswers iface args) givens = []
   | not (anyConcreteHead args) = [(iface, args)]
-  | fuel <= 0 =
-    let _ =
-      pushTypeErrorOnceAt
-        "T-REQUIRES-DEPTH"
-        !goalSiteLoc
-        (requiresDepthMsg iface args)
-    []
   | otherwise =
-    let univ = perRun.value.residualUnivRef.value
-    let cells = sigCellsOf headIds (flatMap monoVarCells args)
-    let toRigid = sigRigidBindings headIds cells
-    match findMatchingImplReqsU univ iface (map (substMono toRigid [] []) args)
-      None =>
-        if implMatchesU univ iface args
-          || answeredOnlyByBindingHead headIds iface args then
-          [(iface, args)]
-        else
-          []
-      Some (subst, reqs) =>
-        flatMap
-          (r =>
-            implGoalResiduals
-              (fuel - 1)
-              headIds
-              givens
-              (fst r)
-              (map (unrigidSig cells) (snd r)))
-          (map (reqToObligation subst) reqs)
+    match reqWalkReported !goalSiteLoc (reqWalkEnter walk iface args)
+      None => []
+      Some next =>
+        let univ = perRun.value.residualUnivRef.value
+        let cells = sigCellsOf headIds (flatMap monoVarCells args)
+        let toRigid = sigRigidBindings headIds cells
+        match (findMatchingImplReqsU
+          univ
+          iface
+          (map (substMono toRigid [] []) args))
+          None =>
+            if implMatchesU univ iface args
+              || answeredOnlyByBindingHead headIds iface args then
+              [(iface, args)]
+            else
+              []
+          Some (subst, reqs) =>
+            flatMap
+              (r =>
+                implGoalResiduals
+                  next
+                  headIds
+                  givens
+                  (fst r)
+                  (map (unrigidSig cells) (snd r)))
+              (map (reqToObligation subst) reqs)
 
 -- An instance answers the goal only by fixing a head variable: some instance head
 -- unifies with it while the head variables are free, and none does while they are
@@ -43634,11 +43879,12 @@ numDictObls (app :: rest) =
 -- (`callPredOf` / `oblPredOf`) and map it through the ONE `vecOblOfPred` — so the
 -- residual reduction §4 `gen` requires cannot be present on one channel and absent
 -- from the other (this file's signature failure mode).
-forwardedVecObls : List Int ->
+forwardedVecObls : Bool ->
+  List Int ->
   List (IfaceRef, List Mono, Option Loc) ->
   List VecObl
-forwardedVecObls boundIds callObls =
-  flatMap (vecOblOfPred boundIds) (flatMap callPredOf callObls)
+forwardedVecObls generalizing boundIds callObls =
+  flatMap (vecOblOfPred generalizing boundIds) (flatMap callPredOf callObls)
 
 -- the (interface, argument-vector) predicate a constrained-callee call-delta entry
 -- carries.  An entry whose interface name is unrecoverable contributes nothing: the
@@ -45086,8 +45332,8 @@ schemeOblsForMember sigTvMaps callObls addedObls m sch =
   match lookupSigTvMap m sigTvMaps
     Some _ => declaredSchemeOblsFor sigTvMaps m (schemeIds sch)
     None =>
-      schemeObligationsOf (schemeIds sch) addedObls
-        ++ forwardedVecObls (schemeIds sch) callObls
+      schemeObligationsOf True (schemeIds sch) addedObls
+        ++ forwardedVecObls True (schemeIds sch) callObls
 
 -- the DECLARED `=>` predicates of signed member [m], each as its argument vector of
 -- scheme-quantified tyvar ids.  A predicate is kept only if EVERY argument is a plain
@@ -45290,9 +45536,9 @@ eqIntList _ _ = False
 
 -- the (iface, var-id VECTOR) entries of the obligations whose discriminating monos are
 -- all quantified ids of this scheme.  Deduped on (iface, ids).
-schemeObligationsOf : List Int -> List UObligation -> List VecObl
-schemeObligationsOf boundIds obls =
-  flatMap (vecOblOfPred boundIds) (flatMap oblPredOf obls)
+schemeObligationsOf : Bool -> List Int -> List UObligation -> List VecObl
+schemeObligationsOf generalizing boundIds obls =
+  flatMap (vecOblOfPred generalizing boundIds) (flatMap oblPredOf obls)
 
 -- #991: the impl-channel arm only — a call-channel obligation is re-instantiated from
 -- `schemeObligationsRef` by its own path and contributes nothing here.
@@ -45328,10 +45574,14 @@ oblPredOf o = match o.oblProj
 -- residual that reduction leaves over this scheme's own quantified vars is deferred
 -- here.  Dropping it outright is what severed `nest x = tagOf (Wrap x)` from its
 -- `Tag a` (DICT-SEMANTICS §4 `gen` / §4.2 OD2).
-vecOblOfPred : List Int -> (IfaceRef, List Mono, Option Loc) -> List VecObl
-vecOblOfPred boundIds (iface, ds, loc) = match boundTyvarIds boundIds ds
-  Some ids => [VecObl { voIface = iface, voIds = ids, voArgs = [] }]
-  None => residualVecObls boundIds iface ds loc
+vecOblOfPred : Bool ->
+  List Int ->
+  (IfaceRef, List Mono, Option Loc) ->
+  List VecObl
+vecOblOfPred generalizing boundIds (iface, ds, loc) =
+  match boundTyvarIds boundIds ds
+    Some ids => [VecObl { voIface = iface, voIds = ids, voArgs = [] }]
+    None => residualVecObls generalizing boundIds iface ds loc
 
 -- ── #1549: residual reduction at `gen` ──────────────────────────────────────
 -- DICT-SEMANTICS §4 `gen` makes a binding's principal context `P'` = "the predicates
@@ -45370,9 +45620,14 @@ vecOblOfPred boundIds (iface, ds, loc) = match boundTyvarIds boundIds ds
 -- So publish the obligation's OWN snapshotted span for the duration of the reduction and
 -- restore `None` after, exactly as `checkNestedReqs` does, per `goalSiteLoc`'s scoping
 -- rule (outside a drain the selector must fall back rather than inherit a stale span).
-residualVecObls : List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
-residualVecObls boundIds iface ds loc =
-  map keepBoundResidual (residualBoundPreds boundIds iface ds loc)
+residualVecObls : Bool ->
+  List Int ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  List VecObl
+residualVecObls generalizing boundIds iface ds loc =
+  map keepBoundResidual (residualBoundPreds generalizing boundIds iface ds loc)
 
 -- S-inferred-vector-supply: the reduction itself, factored out of `residualVecObls` so
 -- the DICT-ABSTRACTION channel can read the residual predicate's ARGUMENT MONOS and not
@@ -45383,17 +45638,20 @@ residualVecObls boundIds iface ds loc =
 -- Each entry is (interface, the residual's bare-tyvar ids IN ORDER, the residual's whole
 -- argument vector); a residual not entirely over this scheme's own quantified vars is
 -- dropped, exactly as `keepBoundResidual` always dropped it.
-residualBoundPreds : List Int ->
+residualBoundPreds : Bool ->
+  List Int ->
   IfaceRef ->
   List Mono ->
   Option Loc ->
   List (IfaceRef, List Int, List Mono)
-residualBoundPreds boundIds iface ds loc
+residualBoundPreds generalizing boundIds iface ds loc
   | isSome (boundTyvarIds boundIds ds) = []
   | not (anyIn (flatMap monoUnboundIds ds) boundIds) = []
   | otherwise =
     goalSiteLoc := loc
-    let preds = residualPredsOf residualReduceFuel iface ds
+    -- A signed binder's variables are rigid in its body, so no use chooses them.
+    let chosen = if generalizing then boundIds else []
+    let preds = residualPredsOf chosen (reqWalkStart ()) iface ds
     goalSiteLoc := None
     flatMap (keepBoundResidualPred boundIds) preds
 
@@ -45492,7 +45750,8 @@ isBareTyvarMono m = match normalize m
 -- concrete-headed one is matched against the impl universe and replaced by that impl's
 -- substituted `requires`, recursively.  No matching impl ⇒ no residual.
 -- ⚠️ This used to add *"and this function must never invent a diagnostic of its own"*.
--- That has NOT been true since #1562 (`T-REQUIRES-DEPTH`, the fuel arm below) and is no
+-- That has NOT been true since #1562 (`T-REQUIRES-DEPTH` and `T-REQUIRES-CYCLE`, through
+-- `reqWalkReported` below) and is no
 -- longer true of the `None` arm either: `unroutedResidual` splits it, and rejects the
 -- half where an impl DOES match but its evidence cannot be routed — see its header.
 -- 🚨 BUT DO NOT READ THE `None` ARM AS "SOMEONE ELSE REPORTS IT".  This comment used to
@@ -45512,11 +45771,15 @@ isBareTyvarMono m = match normalize m
 -- impl anywhere, so `unroutedResidual`'s existence test is False for it and it still
 -- takes the silent `[]`: 1578 is untouched by Door 4, which splits off only the case
 -- where an impl DOES match the goal.
--- ⚠️ A SECOND thing this arm's neighbourhood does NOT own: when the goal IS matched but
--- only the GENERAL member of a specific-vs-general overlap can match a partially-free
--- vector, committing to that impl's `requires` saddles the binding with a constraint its
--- real (more specific, `requires`-free) instance never demanded — a FALSE REJECT, issue
--- 1579, likewise measured byte-identical before and after the `anyConcreteHead` widening.
+-- When the goal IS matched but a more specific instance still unifies with it (only the
+-- GENERAL member of a specific-vs-general overlap can match a partially-free vector),
+-- the matched instance is not the one every use selects, and committing to its
+-- `requires` saddles the binding with a constraint the more specific instance never
+-- demanded (issue 1579's false reject).  At a generalizing binder such a goal is
+-- therefore not reduced: `residualSelectionStable` keeps it in the scheme as written,
+-- and each use selects at its own instantiation (DICT-SEMANTICS §6.1.3).  [chosen] are
+-- the variables the binder's uses choose: the quantified variables of a generalizing
+-- binder, and none at a signed binder, whose goal commits as written.
 -- ⚠️ #1560: the terminal test is `anyConcreteHead`, NOT `allConcreteHeads`, and the
 -- difference is an S0.  `allConcreteHeads` is ALL-OR-NOTHING on the vector, so a MIXED
 -- argument vector — one argument concrete-headed, another a bare tyvar, e.g.
@@ -45544,32 +45807,66 @@ isBareTyvarMono m = match normalize m
 -- `main` faults identically, while the same program with a SINGLE-parameter residual
 -- (`impl Conv (Wrap a) b requires Tag a`) runs correctly on that same binary.  So issue
 -- 1560's pin does not drain on this change and is deliberately retained.
--- ⚠️ The fuel bounds a cyclic instance (`impl C (Box a) requires C (Box a)`), which
--- would otherwise reduce forever.  EXHAUSTING IT USED TO BE SILENT (issue 1562, an S0):
--- `[]` is also what "no matching impl" returns, so the predicate was dropped and the
--- program landed back in 1549's exact defect — MEASURED, depth 31 fixed, depth 32 gave
--- `deep : a -> String`, check exit 0, binary 139.  It is now a located REJECT
--- (`T-REQUIRES-DEPTH`).  Raising the constant would not have been a fix — any finite
--- fuel has the same cliff; only making the cliff LOUD removes the silent wrongness.
--- ⚠️ THE GUARD ORDER IS LOAD-BEARING: the terminal test runs BEFORE the fuel test, so a
--- predicate that is ALREADY fully reduced when the fuel runs out is returned as the
--- residual it is rather than reported as too deep.  Ordering the fuel first would
--- reject a chain whose very next step was the answer.
-residualPredsOf : Int -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
-residualPredsOf fuel iface args
+-- The walk is bounded by the shared `requires` measure (`reqWalkEnter`, DICT §3 W2): a
+-- cyclic instance (`impl C (Box a) requires C (Box a)`) is `T-REQUIRES-CYCLE` and a
+-- context that keeps growing its goal is `T-REQUIRES-DEPTH`, both located at the goal's
+-- site.  Neither may return a silent `[]`: that is also what "no matching impl" returns,
+-- so the predicate would be dropped from the scheme and the dict prefix (issue 1562).
+-- The terminal test runs before the goal is entered, so a predicate that is already
+-- fully reduced is returned as the residual it is, never counted as a step.
+residualPredsOf : List Int ->
+  ReqWalk ->
+  IfaceRef ->
+  List Mono ->
+  List (IfaceRef, List Mono)
+residualPredsOf chosen walk iface args
   | not (anyConcreteHead args) = [(iface, args)]
-  | fuel <= 0 =
-    let _ =
-      pushTypeErrorOnceAt
-        "T-REQUIRES-DEPTH"
-        !goalSiteLoc
-        (requiresDepthMsg iface args)
-    []
   | otherwise =
-    match findMatchingImplReqsU perRun.value.residualUnivRef.value iface args
-      None => unroutedResidual iface args
-      Some (subst, reqs) =>
-        flatMap (residualPredOne fuel) (map (reqToObligation subst) reqs)
+    match reqWalkReported !goalSiteLoc (reqWalkEnter walk iface args)
+      None => []
+      Some next =>
+        match (findMatchingImplReqsU
+          perRun.value.residualUnivRef.value
+          iface
+          args)
+          None => unroutedResidual iface args
+          Some _ if not (residualSelectionStable chosen iface args) =>
+            [(iface, args)]
+          Some (subst, reqs) =>
+            flatMap
+              (r => residualPredsOf chosen next (fst r) (snd r))
+              (map (reqToObligation subst) reqs)
+
+-- Whether every use of the binder selects the instance the goal matches now
+-- (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or among the
+-- instance heads that unify with it, one matches it and is ⊑ every other
+-- (`goalReach`'s stable minimum).  Only a variable some binder declared
+-- (`declaredSigVarIds`) is held rigid in that unification: an enclosing binder's
+-- variable that is not generalized yet can still become a type another instance
+-- head needs.
+residualSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
+residualSelectionStable chosen iface args =
+  let goalIds = dedupI (flatMap monoUnboundIds args)
+  if not (anyIn goalIds chosen) then
+    True
+  else
+    let declared = perRun.value.declaredSigVarIds.value
+    let rigidIds =
+      omFromNames
+        (map
+          intToString
+          (filterList
+            (i => not (containsI i chosen) && omHasKey (intToString i) declared)
+            goalIds))
+        omEmpty
+    let cands =
+      filterList
+        (c => rowCountsFor args (fst c))
+        (goalCandidates rigidIds args (goalRows iface args))
+    match goalReach args cands
+      ReachMany => False
+      ReachOne _ => True
+      ReachNone => True
 
 -- ── #1564 / Stage A "Door 4": the un-plumbed case is a LOUD reject ────────────
 -- `residualPredsOf`'s `None` arm conflates TWO facts, and since the instance axis went
@@ -46922,42 +47219,29 @@ requiresUnroutedMsg iface args =
 anyConcreteHead : List Mono -> Bool
 anyConcreteHead args = anyListM (m => isSome (headTyconNameMono m)) args
 
--- `T-REQUIRES-DEPTH` (issue 1562).  Named in the user's own vocabulary — the thing they
--- wrote is a `requires` clause, not a "residual reduction fuel" — and it states the
--- limit, the goal STILL OUTSTANDING after that many steps, and what to change.  This is
--- a REJECT, not a warning: continuing would drop the predicate from the binding's
--- context AND from its dict prefix, which is the S0 this replaces.
--- ⚠️ It renders the goal AT THE POINT OF EXHAUSTION, not the goal originally posed — at
--- depth 33 that reads `Tag (Wrap a)`, one level, which looks trivially shallow unless
--- the message says what it is.  Hence "still needed … after N steps"; the original goal
--- is not threaded here because doing so re-signs this helper for prose alone.
--- 🚨 ONE SHAPE REACHES THIS, NOT TWO.  An earlier revision (and the codes doc) claimed a
--- `requires` clause NAMING ITS OWN HEAD was a second reaching shape.  MEASURED, it is
--- not: `impl C (Box a) requires C (Box a)` makes `check`/`run`/`build` all abort at exit
--- 134 with `E-STACK-OVERFLOW`, identically on this branch and on its base — something
--- upstream of this fuel-bounded walk diverges first, so this diagnostic never fires for
--- it and advice written for that user is never delivered.  The crash is pre-existing and
--- is filed as issue 1575.  The only shape observed to reach here is genuine nesting
--- deeper than the bound, which is why the message no longer offers the self-naming
--- remedy.
--- ⚠️ Nor does this reject cover every deep chain: a GROUND `requires` chain past the same
--- depth never reaches this reducer at all (it is not deferred over a bound tyvar) and is
--- still silently accepted — issue 1562's shape on the path this fix cannot reach, filed
--- as issue 1576.  "1562 is fixed" means the DEFERRED cell, not every deep chain.
+-- `T-REQUIRES-DEPTH` (issue 1562), worded in the user's vocabulary: the thing they wrote
+-- is a `requires` clause.  It renders the goal reached when the fuel ran out, not the
+-- goal originally posed, hence "still needed … after N steps".  Only a chain whose steps
+-- do not shrink the goal reaches it (`reqWalkEnter`), so the remedy it offers is a
+-- smaller `requires` or a direct impl, never less nesting at the call site.
 requiresDepthMsg : IfaceRef -> List Mono -> String
 requiresDepthMsg iface args =
-  "cannot resolve this constraint: following the `requires` clauses of the matching impls still needed `\{iface.irName} \{ppPredArgsShared args}` after \{intToString residualReduceFuel} steps, the maximum depth; reduce the nesting at this call site or add a direct `impl \{iface.irName} ...` for one of the types in the chain"
+  "cannot resolve this constraint: following the `requires` clauses of the matching impls still needed `\{iface.irName} \{ppPredArgsShared args}` after \{intToString requiresNonShrinkingFuel} steps that did not make the goal smaller, the limit; make the `requires` of the impls in this chain smaller than their heads, or add a direct `impl \{iface.irName} ...` for one of the types in the chain"
 
-residualPredOne : Int -> (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
-residualPredOne fuel (iface, args) = residualPredsOf (fuel - 1) iface args
+-- `T-REQUIRES-CYCLE`: following `requires` from a goal reached that same goal again, so
+-- no finite chain resolves it.  It names the impl whose `requires` posed the repeat (the
+-- one the selector picks for the parent goal), and the repeated goal.
+requiresCycleMsg : IfaceRef -> List Mono -> IfaceRef -> List Mono -> String
+requiresCycleMsg parentIface parentArgs iface args =
+  "cannot resolve this constraint: the `requires` of \{requiringImplLabel parentIface parentArgs} asks for `\{iface.irName} \{ppPredArgsShared args}`, which this chain of `requires` is already resolving, so it never ends; change that `requires` clause so it does not lead back to a goal it resolves"
 
--- reduction depth fuse.  Matches the depth-32 bound the WS-4b entailment fuse (#217)
--- already uses for the same reason; no real instance chain approaches it.  Since #1562
--- crossing it is a REJECT (`T-REQUIRES-DEPTH`, `requiresDepthMsg`), never a silent
--- drop, so this constant is a reported limit rather than a hidden cliff — and it is
--- named in the message, so changing it changes user-visible text.
-residualReduceFuel : Int
-residualReduceFuel = 32
+-- The impl the selector picks for [iface] at [args], as written in its declaration.
+requiringImplLabel : IfaceRef -> List Mono -> String
+requiringImplLabel iface args =
+  match ieSelectRowByIface perRun.value.bodyImplEnvRef.value iface args
+    Some row =>
+      "`impl \{iface.irName} \{joinWith " " (map ppTyAtom (ieRowTys row))}`"
+    None => "the matching `impl \{iface.irName} ...`"
 
 -- the residual predicates a group's recorded deltas leave over [boundIds], for the
 -- DICT-ABSTRACTION channel (`registerInferredFor`). Reads the same two deltas through
@@ -46975,7 +47259,7 @@ residualInferredPredOf : List Int ->
   (IfaceRef, List Mono, Option Loc) ->
   List (IfaceRef, Int, List Mono)
 residualInferredPredOf boundIds (iface, ds, loc) =
-  flatMap leadInferredPred (residualBoundPreds boundIds iface ds loc)
+  flatMap leadInferredPred (residualBoundPreds True boundIds iface ds loc)
 
 -- the DIRECT arm's twin: a predicate every one of whose arguments is already a bound
 -- tyvar IS its own residual (`residualVecObls` returns [] for it by design), so its own
@@ -47077,9 +47361,11 @@ checkSigConstraintOne regs sigs sigTvMaps callObls addedObls m sch =
       let declaredPairs = censusSuperClose (declaredPairsFor m regs)
       let boundIds = schemeIds sch
       let bodyVecs =
-        quantifiedVecObls boundIds (schemeObligationsOf boundIds addedObls)
+        quantifiedVecObls
+          boundIds
+          (schemeObligationsOf False boundIds addedObls)
       let fwdVecs =
-        quantifiedVecObls boundIds (forwardedVecObls boundIds callObls)
+        quantifiedVecObls boundIds (forwardedVecObls False boundIds callObls)
       let inferredB = inferredIfacePairs m boundIds
       let inferred =
         dedupIfacePairs

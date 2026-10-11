@@ -4,14 +4,13 @@
    the same seam a real `pdsd` serves it through — `persistLoad` /
    `repoFromBlocks` / `blobFileRead` for the state, `lib.server_core`'s
    `handleBytes` for every request — and reports microseconds per request for
-   one page of `listRecords`, one `describeRepo`, one `listBlobs`, and one
-   `createRecord` write.
+   one page of `listRecords`, one `describeRepo`, and one `listBlobs`.
 
-   Every request is answered against the SAME loaded store: the write's
-   resulting store is discarded, so each repetition measures one write against
-   a repository of the corpus's size rather than a repository that grows under
-   the measurement. The route answers are printed alongside the timings so a
-   reader can see the probe measured a real 200 and not an error path.
+   Every request is answered against the SAME loaded store, so each repetition
+   measures one request against a repository of the corpus's size rather than
+   a repository that grows under the measurement. The route answers are printed
+   alongside the timings so a reader can see the probe measured a real 200 and
+   not an error path.
 
    A second mode, `persist`, times `shell.server`'s `persistTransition` seam
    directly: it hands the same store as both `before` and `after`, so every
@@ -163,8 +162,7 @@ createRequest =
 -- ── the measurement ─────────────────────────────────────────────────────────
 
 {- | Answer the same request `n` times against the same store, summing each
-   answer's length so no repetition can be discarded unevaluated. The store a
-   write returns is dropped on purpose — see the module header. -}
+   answer's length so no repetition can be discarded unevaluated. -}
 repeatRequest : Server e -> Store -> Bytes -> Int -> Int -> <e> Int
 repeatRequest server store request n acc =
   if n <= 0 then
@@ -216,7 +214,6 @@ run dir collection reps =
       store
       (queryRequest "com.atproto.sync.listBlobs?did=\{corpusDid}&limit=25")
       reps
-  measure "createRecord" server store createRequest reps
 
 mustAccount : Unit -> Account
 mustAccount _ = match makeAccount corpusDid handleText hostText
