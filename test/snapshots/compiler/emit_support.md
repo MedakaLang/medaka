@@ -1,5 +1,5 @@
 # META
-source_lines=654
+source_lines=658
 stages=DESUGAR,MARK
 # SOURCE
 -- BACKEND-NEUTRAL EMIT SUPPORT — helpers shared verbatim by BOTH the LLVM
@@ -30,6 +30,7 @@ import support.util.{
   dedup,
   filterList,
   reverseL,
+  anyList,
 }
 import support.ordmap.{
   OrdMap,
@@ -72,7 +73,7 @@ eagerVars : OrdMap Unit -> CExpr -> List String
 eagerVars _ (CLam _ _) = []
 eagerVars b (CVar x _) = if omHasKey x b then [] else [x]
 eagerVars _ (CLit _) = []
-eagerVars b (CApp f a) = eagerVars b f ++ eagerVars b a
+eagerVars b (CApp f args _) = eagerVars b f ++ flatMap (eagerVars b) args
 eagerVars b (CLet recF pat e1 e2) =
   let b2 = omFromNames (patVars pat) b
   let fe1 = if recF then eagerVars b2 e1 else eagerVars b e1
@@ -388,7 +389,7 @@ eagerHasMethod (CMethod _ _ _ _ _ _) = True
 eagerHasMethod (CDict _ _) = False
 eagerHasMethod (CVar _ _) = False
 eagerHasMethod (CLit _) = False
-eagerHasMethod (CApp f a) = eagerHasMethod f || eagerHasMethod a
+eagerHasMethod (CApp f args _) = eagerHasMethod f || anyList eagerHasMethod args
 eagerHasMethod (CLet _ _ e1 e2) = eagerHasMethod e1 || eagerHasMethod e2
 eagerHasMethod (CLetGroup binds body) =
   bindsHaveMethod binds || eagerHasMethod body
@@ -605,8 +606,11 @@ export
 labelFallthrough : CExpr -> String -> CExpr
 labelFallthrough (e@(CVar x r)) label =
   if x == fallthroughName then CVar (ftPrefix ++ label) r else e
-labelFallthrough (CApp f a) label =
-  CApp (labelFallthrough f label) (labelFallthrough a label)
+labelFallthrough (CApp f args site) label =
+  CApp
+    (labelFallthrough f label)
+    (map (a => labelFallthrough a label) args)
+    site
 labelFallthrough (CIf c t f) label =
   CIf
     (labelFallthrough c label)
@@ -660,14 +664,14 @@ rngBound _ = 0
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
 (DFunDef false "eagerVars" (PWild (PCon "CLit" PWild)) (EListLit))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "flatMap") (EApp (EVar "eagerVars") (EVar "b"))) (EVar "args"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e2"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "stmts")))
@@ -769,7 +773,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CDict" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CVar" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CLit" PWild)) (EVar "False"))
-(DFunDef false "eagerHasMethod" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "f")) (EApp (EVar "eagerHasMethod") (EVar "a"))))
+(DFunDef false "eagerHasMethod" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "f")) (EApp (EApp (EVar "anyList") (EVar "eagerHasMethod")) (EVar "args"))))
 (DFunDef false "eagerHasMethod" ((PCon "CLet" PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "e1")) (EApp (EVar "eagerHasMethod") (EVar "e2"))))
 (DFunDef false "eagerHasMethod" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "||" (EApp (EVar "bindsHaveMethod") (EVar "binds")) (EApp (EVar "eagerHasMethod") (EVar "body"))))
 (DFunDef false "eagerHasMethod" ((PCon "CBlock" (PVar "stmts"))) (EApp (EVar "stmtsHaveMethod") (EVar "stmts")))
@@ -855,7 +859,7 @@ rngBound _ = 0
 (DFunDef false "ftLabelOf" ((PVar "x")) (EIf (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "ftPrefix"))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x"))) (EVar "None")))
 (DTypeSig true "labelFallthrough" (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyCon "CExpr"))))
 (DFunDef false "labelFallthrough" ((PAs "e" (PCon "CVar" (PVar "x") (PVar "r"))) (PVar "label")) (EIf (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "CVar") (EBinOp "++" (EVar "ftPrefix") (EVar "label"))) (EVar "r")) (EVar "e")))
-(DFunDef false "labelFallthrough" ((PCon "CApp" (PVar "f") (PVar "a")) (PVar "label")) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "a")) (EVar "label"))))
+(DFunDef false "labelFallthrough" ((PCon "CApp" (PVar "f") (PVar "args") (PVar "site")) (PVar "label")) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))) (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "labelFallthrough") (EVar "a")) (EVar "label")))) (EVar "args"))) (EVar "site")))
 (DFunDef false "labelFallthrough" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f")) (PVar "label")) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "labelFallthrough") (EVar "c")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "t")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CLet" (PVar "rf") (PVar "p") (PVar "e1") (PVar "e2")) (PVar "label")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "rf")) (EVar "p")) (EApp (EApp (EVar "labelFallthrough") (EVar "e1")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "e2")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CLetGroup" (PVar "binds") (PVar "b")) (PVar "label")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EApp (EApp (EVar "labelFallthrough") (EVar "b")) (EVar "label"))))
@@ -879,14 +883,14 @@ rngBound _ = 0
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" false))))
 (DUse false (UseGroup ("backend" "trmc_analysis") ((mem "patVars" false) (mem "bindNames" false) (mem "bindName" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "lookupAssoc" false) (mem "startsWith" false) (mem "fallthroughName" false) (mem "dedup" false) (mem "filterList" false) (mem "reverseL" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false))))
 (DUse false (UseGroup ("support" "scc") ((mem "tarjanSCCs" false))))
 (DTypeSig true "eagerVars" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "eagerVars" (PWild (PCon "CLam" PWild PWild)) (EListLit))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CVar" (PVar "x") PWild)) (EIf (EApp (EApp (EVar "omHasKey") (EVar "x")) (EVar "b")) (EListLit) (EListLit (EVar "x"))))
 (DFunDef false "eagerVars" (PWild (PCon "CLit" PWild)) (EListLit))
-(DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "a"))))
+(DFunDef false "eagerVars" ((PVar "b") (PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "f")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "eagerVars") (EVar "b"))) (EVar "args"))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLet" (PVar "recF") (PVar "pat") (PVar "e1") (PVar "e2"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "patVars") (EVar "pat"))) (EVar "b"))) (DoLet false false (PVar "fe1") (EIf (EVar "recF") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e1")) (EApp (EApp (EVar "eagerVars") (EVar "b")) (EVar "e1")))) (DoExpr (EBinOp "++" (EVar "fe1") (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "e2"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBlock (DoLet false false (PVar "b2") (EApp (EApp (EVar "omFromNames") (EApp (EVar "bindNames") (EVar "binds"))) (EVar "b"))) (DoExpr (EBinOp "++" (EApp (EApp (EVar "eagerVarsBinds") (EVar "b2")) (EVar "binds")) (EApp (EApp (EVar "eagerVars") (EVar "b2")) (EVar "body"))))))
 (DFunDef false "eagerVars" ((PVar "b") (PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "eagerVarsStmts") (EVar "b")) (EVar "stmts")))
@@ -988,7 +992,7 @@ rngBound _ = 0
 (DFunDef false "eagerHasMethod" ((PCon "CDict" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CVar" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CLit" PWild)) (EVar "False"))
-(DFunDef false "eagerHasMethod" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "f")) (EApp (EVar "eagerHasMethod") (EVar "a"))))
+(DFunDef false "eagerHasMethod" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "f")) (EApp (EApp (EVar "anyList") (EVar "eagerHasMethod")) (EVar "args"))))
 (DFunDef false "eagerHasMethod" ((PCon "CLet" PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "||" (EApp (EVar "eagerHasMethod") (EVar "e1")) (EApp (EVar "eagerHasMethod") (EVar "e2"))))
 (DFunDef false "eagerHasMethod" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "||" (EApp (EVar "bindsHaveMethod") (EVar "binds")) (EApp (EVar "eagerHasMethod") (EVar "body"))))
 (DFunDef false "eagerHasMethod" ((PCon "CBlock" (PVar "stmts"))) (EApp (EVar "stmtsHaveMethod") (EVar "stmts")))
@@ -1074,7 +1078,7 @@ rngBound _ = 0
 (DFunDef false "ftLabelOf" ((PVar "x")) (EIf (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "ftPrefix"))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x"))) (EVar "None")))
 (DTypeSig true "labelFallthrough" (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyCon "CExpr"))))
 (DFunDef false "labelFallthrough" ((PAs "e" (PCon "CVar" (PVar "x") (PVar "r"))) (PVar "label")) (EIf (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "CVar") (EBinOp "++" (EVar "ftPrefix") (EVar "label"))) (EVar "r")) (EVar "e")))
-(DFunDef false "labelFallthrough" ((PCon "CApp" (PVar "f") (PVar "a")) (PVar "label")) (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "a")) (EVar "label"))))
+(DFunDef false "labelFallthrough" ((PCon "CApp" (PVar "f") (PVar "args") (PVar "site")) (PVar "label")) (EApp (EApp (EApp (EVar "CApp") (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "labelFallthrough") (EVar "a")) (EVar "label")))) (EVar "args"))) (EVar "site")))
 (DFunDef false "labelFallthrough" ((PCon "CIf" (PVar "c") (PVar "t") (PVar "f")) (PVar "label")) (EApp (EApp (EApp (EVar "CIf") (EApp (EApp (EVar "labelFallthrough") (EVar "c")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "t")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "f")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CLet" (PVar "rf") (PVar "p") (PVar "e1") (PVar "e2")) (PVar "label")) (EApp (EApp (EApp (EApp (EVar "CLet") (EVar "rf")) (EVar "p")) (EApp (EApp (EVar "labelFallthrough") (EVar "e1")) (EVar "label"))) (EApp (EApp (EVar "labelFallthrough") (EVar "e2")) (EVar "label"))))
 (DFunDef false "labelFallthrough" ((PCon "CLetGroup" (PVar "binds") (PVar "b")) (PVar "label")) (EApp (EApp (EVar "CLetGroup") (EVar "binds")) (EApp (EApp (EVar "labelFallthrough") (EVar "b")) (EVar "label"))))

@@ -122,7 +122,7 @@ bindKey : CBind -> String
 bindKey (CBind name _ _) = name
 
 implKey : CImplEntry -> String
-implKey (CImplEntry method _ _) = method
+implKey (CImplEntry method _ _ _) = method
 
 -- ── reachability ───────────────────────────────────────────────────────────
 reachKeys : List CBind -> List CImplEntry -> HashMap String Unit
@@ -185,7 +185,7 @@ addImplEdges : HashMap String Unit ->
   HashMap String (List String) ->
   CImplEntry ->
   Unit
-addImplEdges defined g (CImplEntry method _ body) =
+addImplEdges defined g (CImplEntry method _ _ body) =
   addEdges defined g method (refsImplBody body)
 
 addEdges : HashMap String Unit ->
@@ -216,7 +216,7 @@ closure graph seen (w :: work)
 refsE : CExpr -> List String
 refsE (CLit _) = []
 refsE (CVar x _) = [x]
-refsE (CApp f a) = refsE f ++ refsE a
+refsE (CApp f args _) = refsE f ++ flatMap refsE args
 refsE (CLam _ body) = refsE body
 refsE (CLet _ _ e1 e2) = refsE e1 ++ refsE e2
 refsE (CLetGroup binds body) = flatMap refsBind binds ++ refsE body
@@ -297,7 +297,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "bindKey" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "bindKey" ((PCon "CBind" (PVar "name") PWild PWild)) (EVar "name"))
 (DTypeSig false "implKey" (TyFun (TyCon "CImplEntry") (TyCon "String")))
-(DFunDef false "implKey" ((PCon "CImplEntry" (PVar "method") PWild PWild)) (EVar "method"))
+(DFunDef false "implKey" ((PCon "CImplEntry" (PVar "method") PWild PWild PWild)) (EVar "method"))
 (DTypeSig false "reachKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "reachKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "definedKeys") (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EVar "refGraph") (EVar "defined")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false (PVar "roots") (EApp (EApp (EVar "map") (EApp (EVar "canonKey") (EVar "defined"))) (EBinOp "::" (ELit (LString "main")) (EApp (EVar "memoRootNames") (EVar "groups"))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "roots"))) (DoExpr (EVar "seen"))))
 (DTypeSig false "definedKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
@@ -311,7 +311,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "addBindEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CBind") (TyCon "Unit")))))
 (DFunDef false "addBindEdges" ((PVar "defined") (PVar "g") (PCon "CBind" (PVar "name") (PVar "clauses") PWild)) (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "defined")) (EVar "g")) (EVar "name")) (EApp (EApp (EVar "flatMap") (EVar "refsClause")) (EVar "clauses"))))
 (DTypeSig false "addImplEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CImplEntry") (TyCon "Unit")))))
-(DFunDef false "addImplEdges" ((PVar "defined") (PVar "g") (PCon "CImplEntry" (PVar "method") PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "defined")) (EVar "g")) (EVar "method")) (EApp (EVar "refsImplBody") (EVar "body"))))
+(DFunDef false "addImplEdges" ((PVar "defined") (PVar "g") (PCon "CImplEntry" (PVar "method") PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "defined")) (EVar "g")) (EVar "method")) (EApp (EVar "refsImplBody") (EVar "body"))))
 (DTypeSig false "addEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "addEdges" ((PVar "defined") (PVar "g") (PVar "key") (PVar "refs")) (EApp (EApp (EApp (EVar "setInPlace") (EVar "key")) (EBinOp "++" (EApp (EApp (EVar "map") (EApp (EVar "canonKey") (EVar "defined"))) (EVar "refs")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "key")) (EVar "g")))) (EVar "g")))
 (DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
@@ -320,7 +320,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "refsE" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsE" ((PCon "CLit" PWild)) (EListLit))
 (DFunDef false "refsE" ((PCon "CVar" (PVar "x") PWild)) (EListLit (EVar "x")))
-(DFunDef false "refsE" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "f")) (EApp (EVar "refsE") (EVar "a"))))
+(DFunDef false "refsE" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "f")) (EApp (EApp (EVar "flatMap") (EVar "refsE")) (EVar "args"))))
 (DFunDef false "refsE" ((PCon "CLam" PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 (DFunDef false "refsE" ((PCon "CLet" PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "e1")) (EApp (EVar "refsE") (EVar "e2"))))
 (DFunDef false "refsE" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "refsBind")) (EVar "binds")) (EApp (EVar "refsE") (EVar "body"))))
@@ -386,7 +386,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "bindKey" (TyFun (TyCon "CBind") (TyCon "String")))
 (DFunDef false "bindKey" ((PCon "CBind" (PVar "name") PWild PWild)) (EVar "name"))
 (DTypeSig false "implKey" (TyFun (TyCon "CImplEntry") (TyCon "String")))
-(DFunDef false "implKey" ((PCon "CImplEntry" (PVar "method") PWild PWild)) (EVar "method"))
+(DFunDef false "implKey" ((PCon "CImplEntry" (PVar "method") PWild PWild PWild)) (EVar "method"))
 (DTypeSig false "reachKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "reachKeys" ((PVar "groups") (PVar "impls")) (EBlock (DoLet false false (PVar "defined") (EApp (EApp (EVar "definedKeys") (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "graph") (EApp (EApp (EApp (EVar "refGraph") (EVar "defined")) (EVar "groups")) (EVar "impls"))) (DoLet false false (PVar "seen") (EApp (EVar "new") (ELit LUnit))) (DoLet false false (PVar "roots") (EApp (EApp (EMethodRef "map") (EApp (EVar "canonKey") (EVar "defined"))) (EBinOp "::" (ELit (LString "main")) (EApp (EVar "memoRootNames") (EVar "groups"))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "closure") (EVar "graph")) (EVar "seen")) (EVar "roots"))) (DoExpr (EVar "seen"))))
 (DTypeSig false "definedKeys" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")))))
@@ -400,7 +400,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "addBindEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CBind") (TyCon "Unit")))))
 (DFunDef false "addBindEdges" ((PVar "defined") (PVar "g") (PCon "CBind" (PVar "name") (PVar "clauses") PWild)) (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "defined")) (EVar "g")) (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EVar "refsClause")) (EVar "clauses"))))
 (DTypeSig false "addImplEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "CImplEntry") (TyCon "Unit")))))
-(DFunDef false "addImplEdges" ((PVar "defined") (PVar "g") (PCon "CImplEntry" (PVar "method") PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "defined")) (EVar "g")) (EVar "method")) (EApp (EVar "refsImplBody") (EVar "body"))))
+(DFunDef false "addImplEdges" ((PVar "defined") (PVar "g") (PCon "CImplEntry" (PVar "method") PWild PWild (PVar "body"))) (EApp (EApp (EApp (EApp (EVar "addEdges") (EVar "defined")) (EVar "g")) (EVar "method")) (EApp (EVar "refsImplBody") (EVar "body"))))
 (DTypeSig false "addEdges" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))))
 (DFunDef false "addEdges" ((PVar "defined") (PVar "g") (PVar "key") (PVar "refs")) (EApp (EApp (EApp (EVar "setInPlace") (EVar "key")) (EBinOp "++" (EApp (EApp (EMethodRef "map") (EApp (EVar "canonKey") (EVar "defined"))) (EVar "refs")) (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "key")) (EVar "g")))) (EVar "g")))
 (DTypeSig false "closure" (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))) (TyFun (TyApp (TyApp (TyCon "HashMap") (TyCon "String")) (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))))
@@ -409,7 +409,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "refsE" (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsE" ((PCon "CLit" PWild)) (EListLit))
 (DFunDef false "refsE" ((PCon "CVar" (PVar "x") PWild)) (EListLit (EVar "x")))
-(DFunDef false "refsE" ((PCon "CApp" (PVar "f") (PVar "a"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "f")) (EApp (EVar "refsE") (EVar "a"))))
+(DFunDef false "refsE" ((PCon "CApp" (PVar "f") (PVar "args") PWild)) (EBinOp "++" (EApp (EVar "refsE") (EVar "f")) (EApp (EApp (EDictApp "flatMap") (EVar "refsE")) (EVar "args"))))
 (DFunDef false "refsE" ((PCon "CLam" PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 (DFunDef false "refsE" ((PCon "CLet" PWild PWild (PVar "e1") (PVar "e2"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "e1")) (EApp (EVar "refsE") (EVar "e2"))))
 (DFunDef false "refsE" ((PCon "CLetGroup" (PVar "binds") (PVar "body"))) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "refsBind")) (EVar "binds")) (EApp (EVar "refsE") (EVar "body"))))

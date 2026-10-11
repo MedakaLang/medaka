@@ -26,6 +26,7 @@ import support.util.{
   dedup,
   filterList,
   reverseL,
+  anyList,
 }
 import support.ordmap.{
   OrdMap,
@@ -68,7 +69,7 @@ eagerVars : OrdMap Unit -> CExpr -> List String
 eagerVars _ (CLam _ _) = []
 eagerVars b (CVar x _) = if omHasKey x b then [] else [x]
 eagerVars _ (CLit _) = []
-eagerVars b (CApp f a) = eagerVars b f ++ eagerVars b a
+eagerVars b (CApp f args _) = eagerVars b f ++ flatMap (eagerVars b) args
 eagerVars b (CLet recF pat e1 e2) =
   let b2 = omFromNames (patVars pat) b
   let fe1 = if recF then eagerVars b2 e1 else eagerVars b e1
@@ -384,7 +385,7 @@ eagerHasMethod (CMethod _ _ _ _ _ _) = True
 eagerHasMethod (CDict _ _) = False
 eagerHasMethod (CVar _ _) = False
 eagerHasMethod (CLit _) = False
-eagerHasMethod (CApp f a) = eagerHasMethod f || eagerHasMethod a
+eagerHasMethod (CApp f args _) = eagerHasMethod f || anyList eagerHasMethod args
 eagerHasMethod (CLet _ _ e1 e2) = eagerHasMethod e1 || eagerHasMethod e2
 eagerHasMethod (CLetGroup binds body) =
   bindsHaveMethod binds || eagerHasMethod body
@@ -601,8 +602,11 @@ export
 labelFallthrough : CExpr -> String -> CExpr
 labelFallthrough (e@(CVar x r)) label =
   if x == fallthroughName then CVar (ftPrefix ++ label) r else e
-labelFallthrough (CApp f a) label =
-  CApp (labelFallthrough f label) (labelFallthrough a label)
+labelFallthrough (CApp f args site) label =
+  CApp
+    (labelFallthrough f label)
+    (map (a => labelFallthrough a label) args)
+    site
 labelFallthrough (CIf c t f) label =
   CIf
     (labelFallthrough c label)

@@ -211,6 +211,7 @@ import ir.core_ir.{
   CImplBody(..),
   CField(..),
   FailSite(..),
+  mkApp,
   siteSentinelName,
 }
 import list.{replicate, take, drop}
@@ -228,6 +229,8 @@ import backend.core_validate.{
   renderExternFinding,
   renderExternRefusal,
   renderRecordRefusal,
+  renderCallRefusal,
+  validateCalls,
   validateRecords,
   unrefusedExternMessage,
   validateExterns,
@@ -767,26 +770,26 @@ methodArityOfIfaceW prog ifaceWord method =
 -- of its route key, an inherited default directly as `CImplDefault`'s first field —
 -- the same `ifaceWordOf` word a `CMethod` occurrence carries (`narrowByIfaceW`).
 implEntryIfaceWordW : CImplEntry -> String
-implEntryIfaceWordW (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) =
+implEntryIfaceWordW (CImplEntry _ _ _ (CImplTagged _ key _ _ _ _)) =
   ifaceWordOfKey key
-implEntryIfaceWordW (CImplEntry _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
+implEntryIfaceWordW (CImplEntry _ _ _ (CImplDefault ifaceWord _ _ _ _ _)) =
   ifaceWord
 
 -- the head tag / canonical key / clause of any per-instance entry
 implEntryTagW : CImplEntry -> String
-implEntryTagW (CImplEntry _ _ (CImplTagged t _ _ _ _ _)) = t
-implEntryTagW (CImplEntry _ _ (CImplDefault _ t _ _ _ _)) = t
+implEntryTagW (CImplEntry _ _ _ (CImplTagged t _ _ _ _ _)) = t
+implEntryTagW (CImplEntry _ _ _ (CImplDefault _ t _ _ _ _)) = t
 
 implEntryKeyW : CImplEntry -> String
-implEntryKeyW (CImplEntry _ _ (CImplTagged _ k _ _ _ _)) = k
-implEntryKeyW (CImplEntry _ _ (CImplDefault _ _ k _ _ _)) = k
+implEntryKeyW (CImplEntry _ _ _ (CImplTagged _ k _ _ _ _)) = k
+implEntryKeyW (CImplEntry _ _ _ (CImplDefault _ _ k _ _ _)) = k
 
 implEntryPatsW : CImplEntry -> List Pat
-implEntryPatsW (CImplEntry _ _ (CImplTagged _ _ _ _ pats _)) = pats
-implEntryPatsW (CImplEntry _ _ (CImplDefault _ _ _ _ pats _)) = pats
+implEntryPatsW (CImplEntry _ _ _ (CImplTagged _ _ _ _ pats _)) = pats
+implEntryPatsW (CImplEntry _ _ _ (CImplDefault _ _ _ _ pats _)) = pats
 
 implEntryMethodW : CImplEntry -> String
-implEntryMethodW (CImplEntry m _ _) = m
+implEntryMethodW (CImplEntry m _ _ _) = m
 
 -- does [entry] answer to the route word [word]?  A word names exactly one instance.
 implEntryAnswersW : String -> CImplEntry -> Bool
@@ -886,7 +889,7 @@ arityOfIndexW fnArs f = match omLookup f fnArs
 -- clause still wins findByKeyW. Every per-method scan below routes through it.
 -- method name of an impl entry (field 1 — the interface method it implements).
 implEntryMethod : CImplEntry -> String
-implEntryMethod (CImplEntry n _ _) = n
+implEntryMethod (CImplEntry n _ _ _) = n
 
 orEmptyEntriesW : Option (List CImplEntry) -> List CImplEntry
 orEmptyEntriesW (Some xs) = xs
@@ -1414,6 +1417,9 @@ refuseUnprovidedExternsW emit input cp =
   let _ = match validateRecords cp
     [] => ()
     bad => panic ("internal error: " ++ renderRecordRefusal bad)
+  let _ = match validateCalls cp
+    [] => ()
+    bad => panic ("internal error: " ++ renderCallRefusal bad)
   match validateExterns WasmBackend (inputRuntimeExternsW input) cp
     [] => ()
     findings => match emit.gapMode
@@ -2024,8 +2030,8 @@ exprUsesStr (CLit (LString _)) = True
 exprUsesStr (CLit (LChar _)) = True
 exprUsesStr (CLit _) = False
 exprUsesStr (CVar x _) = isStrExternFamilyW x
-exprUsesStr (CApp f a) =
-  let (hd, args) = flattenApp (CApp f a) []
+exprUsesStr (app@(CApp _ _ _)) =
+  let (hd, args) = flattenApp app []
   headUsesStr hd || anyList exprUsesStr args
 exprUsesStr (CLam _ b) = exprUsesStr b
 exprUsesStr (CBinPrim _ l r _ _) = exprUsesStr l || exprUsesStr r
@@ -2062,7 +2068,7 @@ scanImplsW7 : WasmEmit -> List CImplEntry -> Unit
 scanImplsW7 emit impls = forEachU (entry => scanImplEntryW7 emit entry) impls
 
 scanImplEntryW7 : WasmEmit -> CImplEntry -> Unit
-scanImplEntryW7 emit (CImplEntry _ _ body) = match body
+scanImplEntryW7 emit (CImplEntry _ _ _ body) = match body
   CImplTagged _ _ _ _ pats b =>
     let _ = forEachU (p => scanPatW7 emit p) pats in scanExprW7 emit b
   CImplDefault _ _ _ _ pats b =>
@@ -2119,8 +2125,8 @@ scanExprW7 emit (CRecordUpdate _ base fields) =
 scanExprW7 emit (CVariantUpdate _ base fields) =
   let _ = scanExprW7 emit base in
     forEachU (f => scanExprW7 emit (cFieldExpr f)) fields
-scanExprW7 emit (CApp f a) =
-  let (hd, args) = flattenApp (CApp f a) []
+scanExprW7 emit (app@(CApp _ _ _)) =
+  let (hd, args) = flattenApp app []
   let _ = scanW7Head emit hd
   forEachU (arg => scanExprW7 emit arg) args
 scanExprW7 emit (CVar x _) =
@@ -2323,9 +2329,10 @@ scanImplEntryValueUses : OrdMap Unit ->
   List (String, Int) ->
   CImplEntry ->
   List String
-scanImplEntryValueUses fnNames fnArs ctorArs (CImplEntry _ _ body) = match body
-  CImplTagged _ _ _ _ _ b => scanExprValueUses fnNames fnArs ctorArs b
-  CImplDefault _ _ _ _ _ b => scanExprValueUses fnNames fnArs ctorArs b
+scanImplEntryValueUses fnNames fnArs ctorArs (CImplEntry _ _ _ body) =
+  match body
+    CImplTagged _ _ _ _ _ b => scanExprValueUses fnNames fnArs ctorArs b
+    CImplDefault _ _ _ _ _ b => scanExprValueUses fnNames fnArs ctorArs b
 
 scanBindValueUses : OrdMap Unit ->
   OrdMap Int ->
@@ -2349,8 +2356,8 @@ scanExprValueUses fnNames fnArs ctorArs (CVar x _) =
     ["core__" ++ x]
   else
     []
-scanExprValueUses fnNames fnArs ctorArs (CApp f a) =
-  let (hd, args) = flattenApp (CApp f a) []
+scanExprValueUses fnNames fnArs ctorArs (app@(CApp _ _ _)) =
+  let (hd, args) = flattenApp app []
   let here = match hd
     CVar fn0 _ =>
       let fn =
@@ -2495,8 +2502,8 @@ exprUsesClosures : OrdMap Unit ->
   CExpr ->
   Bool
 exprUsesClosures fnNames fnArs ctorArs locals (CLam _ _) = True
-exprUsesClosures fnNames fnArs ctorArs locals (CApp f a) =
-  appUsesClosures fnNames fnArs ctorArs locals (CApp f a)
+exprUsesClosures fnNames fnArs ctorArs locals (app@(CApp _ _ _)) =
+  appUsesClosures fnNames fnArs ctorArs locals app
 exprUsesClosures fnNames fnArs ctorArs locals (CVar x _) =
   not (contains x locals) && fnMemberIndexW fnNames x
 exprUsesClosures fnNames fnArs ctorArs locals (CLit _) = False
@@ -2594,7 +2601,8 @@ exprHasDecision (CIf c t f) =
 exprHasDecision (CLet _ _ a b) = exprHasDecision a || exprHasDecision b
 exprHasDecision (CBinPrim _ a b _ _) = exprHasDecision a || exprHasDecision b
 exprHasDecision (CUnOp _ a) = exprHasDecision a
-exprHasDecision (CApp f a) = exprHasDecision f || exprHasDecision a
+exprHasDecision (CApp f args _) =
+  exprHasDecision f || anyList exprHasDecision args
 exprHasDecision (CBlock stmts) = anyList stmtHasDecision stmts
 exprHasDecision _ = False
 
@@ -2781,8 +2789,8 @@ emitScalarTail emit fnNames valNames env (CLet False (PVar x _) e1 e2) =
 emitScalarTail emit fnNames valNames env (CLet False PWild e1 e2) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env e1
   i1 ++ ["drop"] ++ emitScalarTail emit fnNames valNames env e2
-emitScalarTail emit fnNames valNames env (CApp f a) =
-  emitScalarAppTail emit fnNames valNames env (CApp f a)
+emitScalarTail emit fnNames valNames env (app@(CApp _ _ _)) =
+  emitScalarAppTail emit fnNames valNames env app
 emitScalarTail emit fnNames valNames env other =
   let (i, _) = emitScalarExpr emit fnNames valNames env other
   i ++ ["return"]
@@ -2833,8 +2841,8 @@ emitScalarExpr emit fnNames valNames env (CLet recF pat e1 e2) =
   emitLetI32 emit fnNames valNames env recF pat e1 e2
 emitScalarExpr emit fnNames valNames env (CBlock stmts) =
   emitBlockI32 emit fnNames valNames env stmts
-emitScalarExpr emit fnNames valNames env (CApp f a) =
-  emitAppI32 emit fnNames valNames env (CApp f a)
+emitScalarExpr emit fnNames valNames env (app@(CApp _ _ _)) =
+  emitAppI32 emit fnNames valNames env app
 emitScalarExpr emit _ _ _ other =
   gapLTy emit ("scalar-mode: unsupported Core IR node " ++ ctag other)
 
@@ -3880,7 +3888,7 @@ emitRefMain prog groups = match findMain (progEmit prog) groups
 -- reference to an unannotated CAF (`go = println "x"; main = go`) is Unit iff that
 -- body is.  Following a CAF removes it from the map, so a cyclic chain ends False.
 mainBodyIsUnit : Prog -> OrdMap CExpr -> CExpr -> Bool
-mainBodyIsUnit prog _ (CApp f _) = match appHead f
+mainBodyIsUnit prog _ (CApp f _ _) = match appHead f
   CVar fn _ => declRetTypeOf prog fn == "Unit"
   -- `println`/`print` are `Display a =>` constrained → the dict-pass rewrites the
   -- head to a CDict (or CMethod) carrying the routes; recover the bare name.
@@ -3968,7 +3976,7 @@ ifKind prog t f =
 -- A body whose head is `panic` or `exit` never yields a value, so it must not
 -- decide main's auto-print kind: skipped by `ifKind` and `refMainKindArms`.
 divergesW : CExpr -> Bool
-divergesW (CApp f _) = match appHead f
+divergesW (CApp f _ _) = match appHead f
   CVar fn _ => fn == "panic" || fn == "exit"
   _ => False
 divergesW _ = False
@@ -4009,7 +4017,7 @@ refMainKind prog (CBlock stmts) = refMainKindBlock prog stmts
 refMainKind prog (CDecision _ arms _) = refMainKindArms prog arms
 refMainKind prog (CMatch _ arms) = refMainKindArms prog arms
 -- a String-returning extern applied to its args (intToString/charToStr/stringConcat).
-refMainKind prog (CApp f a) = match appHead f
+refMainKind prog (CApp f _ _) = match appHead f
   CVar fn _ =>
     if isStrReturningExtern fn then
       WStr
@@ -4081,7 +4089,7 @@ methodReturnsBoolW prog fn = match implBodiesForW fn (methodEntriesW prog fn)
 
 implBodiesForW : String -> List CImplEntry -> List CExpr
 implBodiesForW _ [] = []
-implBodiesForW fn ((CImplEntry name _ body) :: rest) =
+implBodiesForW fn ((CImplEntry name _ _ body) :: rest) =
   if name == fn then
     implBodyExprW body :: implBodiesForW fn rest
   else
@@ -4135,7 +4143,7 @@ refMainKindArms prog ((CArm _ _ body) :: rest) =
   if divergesW body then refMainKindArms prog rest else refMainKind prog body
 
 appHead : CExpr -> CExpr
-appHead (CApp f _) = appHead f
+appHead (CApp f _ _) = appHead f
 appHead e = e
 
 refPrintFor : Prog -> WTy -> List String
@@ -4315,7 +4323,8 @@ emitClausesRefEnv prog baseEnv name params arity clauses =
 -- `__fallthrough__` never appears under a CLam (closures own their own clause scope).
 exprHasFallthrough : CExpr -> Bool
 exprHasFallthrough (CVar x _) = x == "__fallthrough__"
-exprHasFallthrough (CApp f a) = exprHasFallthrough f || exprHasFallthrough a
+exprHasFallthrough (CApp f args _) =
+  exprHasFallthrough f || anyList exprHasFallthrough args
 exprHasFallthrough (CIf c t f) =
   exprHasFallthrough c || exprHasFallthrough t || exprHasFallthrough f
 exprHasFallthrough (CLet _ _ e1 e2) =
@@ -4968,7 +4977,7 @@ routeKeyWordW _ = ""
 
 -- an inherited default's per-instance entry
 isInheritedEntryW : CImplEntry -> Bool
-isInheritedEntryW (CImplEntry _ _ (CImplDefault _ _ _ _ _ _)) = True
+isInheritedEntryW (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ _)) = True
 isInheritedEntryW _ = False
 
 -- A dispatch site's method-level dictionaries: the instructions that push their
@@ -5424,8 +5433,7 @@ etaValNames n = map (i => "$hov" ++ intToString i) (rangeList 0 n)
 
 -- left-fold a head expression over a list of value args into a saturated CApp spine.
 applyArgsC : CExpr -> List CExpr -> CExpr
-applyArgsC hd [] = hd
-applyArgsC hd (a :: rest) = applyArgsC (CApp hd a) rest
+applyArgsC hd args = mkApp hd args
 
 -- the impl-function symbol: $mdk_impl_<symTag>_<method>.  [tag] is a RAW dispatch
 -- tag — the bare head tycon (the common case: a sole impl per head) OR the canonical
@@ -5441,7 +5449,7 @@ applyArgsC hd (a :: rest) = applyArgsC (CApp hd a) rest
 -- method's `mdk_impl_<symTag>_<method>`, or an inherited default's per-instance
 -- `defaultFnNameW` body.
 implEntrySymW : Prog -> String -> CImplEntry -> String
-implEntrySymW prog method (ent@(CImplEntry _ _ (CImplTagged _ _ _ _ _ _))) =
+implEntrySymW prog method (ent@(CImplEntry _ _ _ (CImplTagged _ _ _ _ _ _))) =
   implFnSymOfTag
     (implFnSymTagW
       (methodEntriesW prog method)
@@ -5449,7 +5457,7 @@ implEntrySymW prog method (ent@(CImplEntry _ _ (CImplTagged _ _ _ _ _ _))) =
       (implEntryTagW ent)
       (implEntryKeyW ent))
     method
-implEntrySymW _ method (CImplEntry _ _ (CImplDefault ifaceWord _ key _ _ _)) =
+implEntrySymW _ method (CImplEntry _ _ _ (CImplDefault ifaceWord _ key _ _ _)) =
   defaultFnNameW ifaceWord method key
 
 -- the wasm name of an inherited default's per-instance body (the peer of
@@ -5658,7 +5666,7 @@ etaExpandTo pats body arity have
     let nm = "$eta" ++ intToString have
     etaExpandTo
       (pats ++ [PVar nm (Loc "" 0 0 0 0)])
-      (CApp body (CVar nm AGlobal))
+      (mkApp body [CVar nm AGlobal])
       arity
       (have + 1)
 
@@ -5724,7 +5732,7 @@ applyEtaArgsTailW body fresh = applyEtaArgsW body fresh
 applyEtaArgsW : CExpr -> List Pat -> CExpr
 applyEtaArgsW body [] = body
 applyEtaArgsW body ((PVar x _) :: rest) =
-  applyEtaArgsW (CApp body (CVar x AGlobal)) rest
+  applyEtaArgsW (mkApp body [CVar x AGlobal]) rest
 applyEtaArgsW body (_ :: rest) = applyEtaArgsW body rest
 
 -- the clauses of (method, key): the def-side grouping passes a canonical key, which
@@ -5738,7 +5746,7 @@ implClauseFor m tag ent =
     []
 
 implEntryBodyW : CImplEntry -> CImplBody
-implEntryBodyW (CImplEntry _ _ body) = body
+implEntryBodyW (CImplEntry _ _ _ body) = body
 
 implGroupArity : List CClause -> Int
 implGroupArity ((CClause pats _) :: _) = listLen pats
@@ -5910,8 +5918,8 @@ paramUsedInNumBinop p (CLet _ _ e1 e2) =
   paramUsedInNumBinop p e1 || paramUsedInNumBinop p e2
 paramUsedInNumBinop p (CLetGroup _ b) = paramUsedInNumBinop p b
 paramUsedInNumBinop p (CBlock stmts) = anyNumStmt p stmts
-paramUsedInNumBinop p (CApp f a) =
-  paramUsedInNumBinop p f || paramUsedInNumBinop p a
+paramUsedInNumBinop p (CApp f args _) =
+  paramUsedInNumBinop p f || anyList (paramUsedInNumBinop p) args
 -- match bodies: a param used arithmetically inside an arm (`sumOne acc xs = match xs {…
 -- y::rest => acc + y}`) must be seeded, so walk the scrutinee + every arm body.
 paramUsedInNumBinop p (CMatch scrut arms) =
@@ -6074,7 +6082,7 @@ emitRefExpr prog env d (CLet recF pat e1 e2) =
 emitRefExpr prog env d (CLetGroup binds body) =
   emitLetGroupRef prog env d binds body
 emitRefExpr prog env d (CBlock stmts) = emitBlockRef prog env d stmts
-emitRefExpr prog env d (CApp f a) = emitAppRef prog env d (CApp f a)
+emitRefExpr prog env d (app@(CApp _ _ _)) = emitAppRef prog env d app
 emitRefExpr prog env d (CDecision scrut arms tree) =
   emitDecisionRef prog env d scrut arms tree
 emitRefExpr prog env d (CLam pats body) = emitClosure prog env d pats body
@@ -6789,7 +6797,7 @@ siteRuntimeOf emit =
 -- or any Int expression that carries a site in (the `Index` twins' parameter).
 siteExprInstrs : Prog -> List String -> Int -> CExpr -> List String
 siteExprInstrs prog env d (CLit (LInt 0)) = []
-siteExprInstrs prog env d (e@(CApp _ _)) = match flattenApp e []
+siteExprInstrs prog env d (e@(CApp _ _ _)) = match flattenApp e []
   (CVar v _, [CLit (LString f), CLit (LInt line), CLit (LInt col)]) =>
     if v == siteSentinelName then
       siteLocInstrs
@@ -7036,7 +7044,7 @@ cexprIsFloat prog env (CIf _ t f) =
 -- W-SQLITE-4: a call to a Float-returning extern OR a user fn whose declared
 -- signature returns Float (`cellNumF : Cell -> Float`) — additive over the two
 -- externs, so a co-located literal is no longer required to detect Float arith.
-cexprIsFloat prog env (CApp f a) = match appHead (CApp f a)
+cexprIsFloat prog env (app@(CApp _ _ _)) = match appHead app
   CVar fn _ =>
     not (contains fn env)
       && (contains fn ["intToFloat", "randomFloat"] || fnReturnsFloat prog fn)
@@ -8594,8 +8602,8 @@ emitRefTailWrap prog env arity (CBlock stmts) =
   emitBlockTail prog env arity stmts
 emitRefTailWrap prog env arity (CDecision scrut arms tree) =
   emitDecisionTail prog env arity scrut arms tree
-emitRefTailWrap prog env arity (CApp f a) =
-  emitAppTail prog env arity (CApp f a)
+emitRefTailWrap prog env arity (app@(CApp _ _ _)) =
+  emitAppTail prog env arity app
 -- a bare fall-through sentinel in tail position lowers to its sentinel instrs (a `br`
 -- to the clause label, or a trap) — NOT value+return (the generic CVar arm would
 -- append a dead `return` after an unconditional branch, leaving the stack ill-typed).
@@ -10392,7 +10400,8 @@ zipIdx (x :: xs) i = (x, i) :: zipIdx xs (i + 1)
 -- remain).  Returns names in first-seen order.
 freeVarsExpr : List String -> CExpr -> List String
 freeVarsExpr bound (CVar x _) = if contains x bound then [] else [x]
-freeVarsExpr bound (CApp f a) = freeVarsExpr bound f ++ freeVarsExpr bound a
+freeVarsExpr bound (CApp f args _) =
+  freeVarsExpr bound f ++ flatMap (freeVarsExpr bound) args
 -- A lambda param may be a DESTRUCTURING pattern (tuple/ctor) — e.g. a `do`-bind
 -- with a tuple LHS `(a, b) <- m` desugars to `andThen m (\(a, b) => …)`.  Subtract
 -- ALL its bound vars (patVars, like the CLet case), not `map patName` which only
@@ -11664,7 +11673,8 @@ collectExprLocals (CBinPrim _ l r _ _) =
 collectExprLocals (CUnOp _ x) = collectExprLocals x
 collectExprLocals (CIf c t f) =
   collectExprLocals c ++ collectExprLocals t ++ collectExprLocals f
-collectExprLocals (CApp f a) = collectExprLocals f ++ collectExprLocals a
+collectExprLocals (CApp f args _) =
+  collectExprLocals f ++ flatMap collectExprLocals args
 collectExprLocals (CTuple items) = flatMap collectExprLocals items
 collectExprLocals (CList items) = flatMap collectExprLocals items
 collectExprLocals (CArray items) = flatMap collectExprLocals items
@@ -12301,7 +12311,8 @@ maxIndexAt (CBinPrim op a b _ _) d =
   let sub = maxI (maxIndexAt a d) (maxIndexAt b d)
   if op == "/" || op == "%" then maxI d sub else sub
 maxIndexAt (CUnOp _ a) d = maxIndexAt a d
-maxIndexAt (CApp f a) d = maxI (maxIndexAt f d) (maxIndexAt a d)
+maxIndexAt (CApp f args _) d =
+  foldMaxI (maxIndexAt f d :: map (a => maxIndexAt a d) args)
 maxIndexAt (CBlock stmts) d = foldMaxI (map (s => maxIndexAtStmt s d) stmts)
 -- a let-group's BODY is emitted at this same depth `d` at the use site (its lifted
 -- members carry their own scratch in their own functions); descend into the body so
@@ -12532,7 +12543,7 @@ nthArm (a :: rest) i = if i == 0 then Some a else nthArm rest (i - 1)
 
 -- a readable tag for the unsupported-node gap message.
 ctag : CExpr -> String
-ctag (CApp _ _) = "CApp (application)"
+ctag (CApp _ _ _) = "CApp (application)"
 ctag (CLam _ _) = "CLam (lambda — W4)"
 ctag (CMatch _ _) = "CMatch (ordered-arm match — needs the decision-tree form)"
 ctag (CDecision _ _ _) = "CDecision (match)"

@@ -63,7 +63,7 @@ public export data SelfRef = SelfByVar String | SelfByMethod String String Int
 
 export
 flattenApp : CExpr -> List CExpr -> (CExpr, List CExpr)
-flattenApp (CApp f a) acc = flattenApp f (a :: acc)
+flattenApp (CApp f args _) acc = flattenApp f (args ++ acc)
 flattenApp hd acc = (hd, acc)
 
 -- ── small list helpers ────────────────────────────────────────────
@@ -76,7 +76,7 @@ export
 freeVars : List String -> CExpr -> List String
 freeVars _ (CLit _) = []
 freeVars b (CVar x _) = if contains x b then [] else [x]
-freeVars b (CApp f a) = freeVars b f ++ freeVars b a
+freeVars b (CApp f args _) = freeVars b f ++ flatMap (freeVars b) args
 freeVars b (CLam ps body) = freeVars (patVarNames ps ++ b) body
 freeVars b (CLet recF pat e1 e2) =
   let b2 = patVars pat ++ b
@@ -507,8 +507,9 @@ export
 mentionsSelfMethod : String -> String -> CExpr -> Bool
 mentionsSelfMethod method tag (CMethod m _ _ route _ _) =
   m == method && routeIsKey tag route
-mentionsSelfMethod method tag (CApp f a) =
-  mentionsSelfMethod method tag f || mentionsSelfMethod method tag a
+mentionsSelfMethod method tag (CApp f args _) =
+  mentionsSelfMethod method tag f
+    || anyList (mentionsSelfMethod method tag) args
 mentionsSelfMethod method tag (CLam _ b) = mentionsSelfMethod method tag b
 mentionsSelfMethod method tag (CLet _ _ rhs b) =
   mentionsSelfMethod method tag rhs || mentionsSelfMethod method tag b
@@ -626,8 +627,8 @@ mentionsSelfMethodClauses method tag ((CClause _ body) :: rest) =
 export
 mentionsSelfDict : String -> CExpr -> Bool
 mentionsSelfDict self (CDict f _) = f == self
-mentionsSelfDict self (CApp f a) =
-  mentionsSelfDict self f || mentionsSelfDict self a
+mentionsSelfDict self (CApp f args _) =
+  mentionsSelfDict self f || anyList (mentionsSelfDict self) args
 mentionsSelfDict self (CLam _ b) = mentionsSelfDict self b
 mentionsSelfDict self (CLet _ _ rhs b) =
   mentionsSelfDict self rhs || mentionsSelfDict self b
@@ -1286,7 +1287,8 @@ dispCallsRoot cf root e = contains root (allCallHeads cf e)
 export
 allCallHeads : (String -> String) -> CExpr -> List String
 allCallHeads cf (CVar f _) = [cf f]
-allCallHeads cf (CApp f a) = allCallHeads cf f ++ allCallHeads cf a
+allCallHeads cf (CApp f args _) =
+  allCallHeads cf f ++ flatMap (allCallHeads cf) args
 allCallHeads cf (CLam _ b) = allCallHeads cf b
 allCallHeads cf (CLet _ _ e1 e2) = allCallHeads cf e1 ++ allCallHeads cf e2
 allCallHeads cf (CLetGroup binds b) =
@@ -1342,9 +1344,9 @@ dispBindHeads cf (CBind _ clauses _) =
 -- every head referenced from a lowered impl/default body (impl bodies are outside
 -- the CBind list but can still call into a group).
 dispImplEntryHeads : (String -> String) -> CImplEntry -> List String
-dispImplEntryHeads cf (CImplEntry _ _ (CImplTagged _ _ _ _ _ body)) =
+dispImplEntryHeads cf (CImplEntry _ _ _ (CImplTagged _ _ _ _ _ body)) =
   allCallHeads cf body
-dispImplEntryHeads cf (CImplEntry _ _ (CImplDefault _ _ _ _ _ body)) =
+dispImplEntryHeads cf (CImplEntry _ _ _ (CImplDefault _ _ _ _ _ body)) =
   allCallHeads cf body
 
 allCallHeadsStmt : (String -> String) -> CStmt -> List String

@@ -1,6 +1,7 @@
 addrCell : List (String, Ref (Value a)) -> Int -> String -> Ref (Value a)
 anyAdmits : String -> List String -> <FileRead | a> Bool
 anyTypedImpl : List (Value a) -> Bool
+appSpine : Expr -> List Expr -> (Expr, List Expr)
 appendComponent : String -> String -> String
 appendOutput : String -> <a> Value a
 appendVal : Value a -> Value a -> Value a
@@ -12,6 +13,7 @@ applyDispatch : Value a -> Value a -> <a> Value a
 applyFieldUpdate : List (String, Value a) -> String -> Value a -> Value a
 applyMethodDicts : EvalEnv (Value a) -> String -> Route -> Value a -> List (Value a) -> List Route -> List Route -> <a> Value a
 applyOpt : Value a -> Value a -> <a> Option (Value a)
+applySpine : Value a -> List Expr -> List (Value a) -> <a> Value a
 applyTyped : String -> String -> List Int -> Int -> Value a -> Value a -> <a> Option (Value a)
 applyValue : Value a -> Value a -> <a> Value a
 applyValues : Value a -> List (Value a) -> <a> Value a
@@ -98,6 +100,7 @@ elementAdmits : String -> String -> <FileRead | a> Bool
 entryPresent : String -> String -> <FileRead | a> Bool
 eval : EvalEnv (Value a) -> Expr -> <a> Value a
 evalAnd : EvalEnv (Value a) -> Value a -> Expr -> <a> Value a
+evalApp : EvalEnv (Value a) -> Expr -> <a> Value a
 evalArith : String -> Value a -> Value a -> Value a
 evalArithAt : String -> String -> Value a -> Value a -> Value a
 evalArithI64 : String -> (Int, Int) -> (Int, Int) -> Value a
@@ -137,6 +140,7 @@ evalRecLet : EvalEnv (Value a) -> String -> Expr -> Expr -> <a> Value a
 evalRecordUpdate : Value a -> List (String, Value a) -> Value a
 evalSlice : Value a -> Value a -> Value a -> Bool -> Value a
 evalSliceInt : Value a -> Int -> Int -> Bool -> Value a
+evalSpineArgs : EvalEnv (Value a) -> List Expr -> <a> List (Value a)
 evalUnop : String -> Value a -> Value a
 evalValueField : Value a -> Value a
 evalVariantUpdate : String -> Value a -> List (String, Value a) -> Value a

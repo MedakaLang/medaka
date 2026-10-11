@@ -1,5 +1,5 @@
 # META
-source_lines=277
+source_lines=314
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -61,7 +61,9 @@ public export data CExpr =
   -- a variable, carrying its resolved lexical address (slice-1: by-name lookup,
   -- address unconsumed — see header).  `AGlobal` = top-level / extern / ctor.
   | CVar String Addr
-  | CApp CExpr CExpr
+  -- an application: the head, its arguments (never empty) and how the call is
+  -- made.  A spine is one node: the head is never itself an application.
+  | CApp CExpr (List CExpr) CallSite
   | CLam (List Pat) CExpr
   -- rec? pat = rhs in body
   | CLet Bool Pat CExpr CExpr
@@ -143,6 +145,39 @@ public export data CExpr =
   --   CDict   = a constrained-function occurrence, one Route per `=>` constraint.
   | CMethod String String Int Route (List Route) (List Route)
   | CDict String (List Route)
+
+-- How an application is made, from its head's defined arity k and its n
+-- arguments.  `core_ir_lower.stampCallModes` decides it for every application a
+-- lowering returns, and `core_validate.validateCalls` refuses one that disagrees
+-- with `core_ir_lower.definedArityOf`.  Every argument is evaluated, left to
+-- right, before the head is applied to any of them, whatever the mode.
+public export data CallMode =
+  -- n == k
+  | CallExact
+  -- n < k; the parameters still missing, k - n
+  | CallPartial Int
+  -- n > k; the arguments applied to the head's result, n - k
+  | CallOver Int
+  -- the head has no static arity: a local closure, a lambda, a method reached
+  -- through a runtime dictionary, a field read, an extern
+  | CallDynamic
+
+-- An application's mode and whether it is in tail position.  No pass sets the
+-- tail flag yet; it is False everywhere.
+public export data CallSite = CallSite CallMode Bool
+
+-- An application whose mode is not decided yet.  A lowering's `stampCallModes`
+-- decides every mode it returns, and an emitter's own rewrites read none.  A
+-- head that is an application is merged into the new node, and no arguments
+-- leave the head as it is.
+export
+mkApp : CExpr -> List CExpr -> CExpr
+mkApp f [] = f
+mkApp (CApp f args _) more = CApp f (args ++ more) undecidedCall
+mkApp f args = CApp f args undecidedCall
+
+undecidedCall : CallSite
+undecidedCall = CallSite CallDynamic False
 
 -- a record field assignment `field = expr`: label, declared ordinal (-1 = unstamped), expr
 public export data CField = CField String Int CExpr
@@ -228,8 +263,8 @@ export
 synthBind : String -> List CClause -> CBind
 synthBind name clauses = CBind name clauses noDeclLoc
 
--- The head of a trap-site literal: `CApp (CApp (CApp (CVar siteSentinelName _)
--- (CLit (LString file))) (CLit (LInt line))) (CLit (LInt col))` is the Int a
+-- The head of a trap-site literal: `CApp (CVar siteSentinelName _)
+-- [CLit (LString file), CLit (LInt line), CLit (LInt col)] _` is the Int a
 -- native build packs that site into.  Only the native lowering writes one (as
 -- the site argument of `panicAt` and of an `Index` impl's site-carrying twin),
 -- because the packing numbers the files of the one program being emitted.
@@ -248,7 +283,9 @@ public export data CClause = CClause (List Pat) CExpr
 -- `VMulti` the arg-tag dispatcher (`applyValue`) consumes — identical to the AST
 -- walker.  One entry PER CLAUSE (multi-clause impl methods coalesce into a VMulti
 -- whose clauses fall through, mirroring the AST path).
--- CImplEntry: method name, specificity score, body.
+-- CImplEntry: method name, specificity score, the method's declared value arity
+-- (the arrows of its interface signature; an untyped lowering that cannot see
+-- the interface gives the entry's own value arity), body.
 -- CImplBody:
 --   CImplTagged = a method the impl SUPPLIES (concrete type-head tag, the canonical
 --     full-type impl key [for type-arg-distinct same-head dispatch, mirrors
@@ -267,7 +304,7 @@ public export data CClause = CClause (List Pat) CExpr
 --     `requires` -- then the value arguments.  It dispatches exactly like
 --     the instance's own `CImplTagged` entries; an engine never chooses between two
 --     defaults, because every inherited slot has its own entry.
-public export data CImplEntry = CImplEntry String Int CImplBody
+public export data CImplEntry = CImplEntry String Int Int CImplBody
 public export data CImplBody =
   | CImplTagged String String String (List Int) (List Pat) CExpr
   | CImplDefault String String String (List Int) (List Pat) CExpr
@@ -281,7 +318,15 @@ public export data CProgram =
   | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" false) (mem "Loc" false) (mem "Pat" false) (mem "Addr" false) (mem "Route" false) (mem "noDeclLoc" false))))
-(DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "CallMode" () ((variant "CallExact" (ConPos)) (variant "CallPartial" (ConPos (TyCon "Int"))) (variant "CallOver" (ConPos (TyCon "Int"))) (variant "CallDynamic" (ConPos))) ())
+(DData Public "CallSite" () ((variant "CallSite" (ConPos (TyCon "CallMode") (TyCon "Bool")))) ())
+(DTypeSig true "mkApp" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CExpr"))))
+(DFunDef false "mkApp" ((PVar "f") (PList)) (EVar "f"))
+(DFunDef false "mkApp" ((PCon "CApp" (PVar "f") (PVar "args") PWild) (PVar "more")) (EApp (EApp (EApp (EVar "CApp") (EVar "f")) (EBinOp "++" (EVar "args") (EVar "more"))) (EVar "undecidedCall")))
+(DFunDef false "mkApp" ((PVar "f") (PVar "args")) (EApp (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "args")) (EVar "undecidedCall")))
+(DTypeSig false "undecidedCall" (TyCon "CallSite"))
+(DFunDef false "undecidedCall" () (EApp (EApp (EVar "CallSite") (EVar "CallDynamic")) (EVar "False")))
 (DData Public "CField" () ((variant "CField" (ConPos (TyCon "String") (TyCon "Int") (TyCon "CExpr")))) ())
 (DData Public "CArm" () ((variant "CArm" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr")))) ())
 (DData Public "CGuard" () ((variant "CGBool" (ConPos (TyCon "CExpr"))) (variant "CGBind" (ConPos (TyCon "Pat") (TyCon "CExpr")))) ())
@@ -296,12 +341,20 @@ public export data CProgram =
 (DTypeSig true "siteSentinelName" (TyCon "String"))
 (DFunDef false "siteSentinelName" () (ELit (LString "__site__")))
 (DData Public "CClause" () ((variant "CClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
-(DData Public "CImplEntry" () ((variant "CImplEntry" (ConPos (TyCon "String") (TyCon "Int") (TyCon "CImplBody")))) ())
+(DData Public "CImplEntry" () ((variant "CImplEntry" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "CImplBody")))) ())
 (DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" false) (mem "Loc" false) (mem "Pat" false) (mem "Addr" false) (mem "Route" false) (mem "noDeclLoc" false))))
-(DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "String") (TyCon "Int") (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "Route")))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
+(DData Public "CallMode" () ((variant "CallExact" (ConPos)) (variant "CallPartial" (ConPos (TyCon "Int"))) (variant "CallOver" (ConPos (TyCon "Int"))) (variant "CallDynamic" (ConPos))) ())
+(DData Public "CallSite" () ((variant "CallSite" (ConPos (TyCon "CallMode") (TyCon "Bool")))) ())
+(DTypeSig true "mkApp" (TyFun (TyCon "CExpr") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CExpr"))))
+(DFunDef false "mkApp" ((PVar "f") (PList)) (EVar "f"))
+(DFunDef false "mkApp" ((PCon "CApp" (PVar "f") (PVar "args") PWild) (PVar "more")) (EApp (EApp (EApp (EVar "CApp") (EVar "f")) (EBinOp "++" (EVar "args") (EVar "more"))) (EVar "undecidedCall")))
+(DFunDef false "mkApp" ((PVar "f") (PVar "args")) (EApp (EApp (EApp (EVar "CApp") (EVar "f")) (EVar "args")) (EVar "undecidedCall")))
+(DTypeSig false "undecidedCall" (TyCon "CallSite"))
+(DFunDef false "undecidedCall" () (EApp (EApp (EVar "CallSite") (EVar "CallDynamic")) (EVar "False")))
 (DData Public "CField" () ((variant "CField" (ConPos (TyCon "String") (TyCon "Int") (TyCon "CExpr")))) ())
 (DData Public "CArm" () ((variant "CArm" (ConPos (TyCon "Pat") (TyApp (TyCon "List") (TyCon "CGuard")) (TyCon "CExpr")))) ())
 (DData Public "CGuard" () ((variant "CGBool" (ConPos (TyCon "CExpr"))) (variant "CGBind" (ConPos (TyCon "Pat") (TyCon "CExpr")))) ())
@@ -316,6 +369,6 @@ public export data CProgram =
 (DTypeSig true "siteSentinelName" (TyCon "String"))
 (DFunDef false "siteSentinelName" () (ELit (LString "__site__")))
 (DData Public "CClause" () ((variant "CClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
-(DData Public "CImplEntry" () ((variant "CImplEntry" (ConPos (TyCon "String") (TyCon "Int") (TyCon "CImplBody")))) ())
+(DData Public "CImplEntry" () ((variant "CImplEntry" (ConPos (TyCon "String") (TyCon "Int") (TyCon "Int") (TyCon "CImplBody")))) ())
 (DData Public "CImplBody" () ((variant "CImplTagged" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CImplDefault" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
 (DData Public "CProgram" () ((variant "CProgram" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyCon "CImplEntry"))))) ())

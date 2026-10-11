@@ -5,7 +5,8 @@
 -- The format is fully-parenthesized S-expressions (the same style sexp.mdk
 -- emits for the AST).  Every node is `(Tag fields...)` where fields are
 -- sub-sexps or quoted atoms.  Bare (unparenthesized) atoms are: AGlobal,
--- CTFail, HCons, HNil, HUnit, RNone, true, false, LUnit, PWild.
+-- CTFail, HCons, HNil, HUnit, RNone, true, false, LUnit, PWild, CallExact,
+-- CallDynamic.
 
 import frontend.ast.{
   Lit(..),
@@ -27,6 +28,8 @@ import ir.core_ir.{
   CImplEntry(..),
   CImplBody(..),
   CProgram(..),
+  CallMode(..),
+  CallSite(..),
   CTree(..),
   CTBranch(..),
   CHead(..),
@@ -308,11 +311,23 @@ toCTBranch (SList ((SAtom "CTBranch") :: [head, tree])) =
 toCTBranch other =
   panic ("core_ir_sexp_parse: bad CTBranch: " ++ sexprToStr other)
 
+toCallMode : SExp -> CallMode
+toCallMode (SAtom "CallExact") = CallExact
+toCallMode (SList ((SAtom "CallPartial") :: [n])) = CallPartial (toInt n)
+toCallMode (SList ((SAtom "CallOver") :: [n])) = CallOver (toInt n)
+toCallMode (SAtom "CallDynamic") = CallDynamic
+toCallMode other =
+  panic ("core_ir_sexp_parse: bad CallMode: " ++ sexprToStr other)
+
 toCExpr : SExp -> CExpr
 toCExpr (SList ((SAtom "CLit") :: [l])) = CLit (toLit l)
 toCExpr (SList ((SAtom "CVar") :: [name, addr])) =
   CVar (toStr name) (toAddr addr)
-toCExpr (SList ((SAtom "CApp") :: [f, x])) = CApp (toCExpr f) (toCExpr x)
+toCExpr (SList ((SAtom "CApp") :: [f, SList args, mode, tailPos])) =
+  CApp
+    (toCExpr f)
+    (map toCExpr args)
+    (CallSite (toCallMode mode) (toBool tailPos))
 toCExpr (SList ((SAtom "CLam") :: [SList pats, body])) =
   CLam (map toPat pats) (toCExpr body)
 toCExpr (SList ((SAtom "CLet") :: [isRec, pat, e1, e2])) =
@@ -401,8 +416,8 @@ toCImplBody other =
   panic ("core_ir_sexp_parse: bad CImplBody: " ++ sexprToStr other)
 
 toCImplEntry : SExp -> CImplEntry
-toCImplEntry (SList ((SAtom "CImplEntry") :: [name, score, body])) =
-  CImplEntry (toStr name) (toInt score) (toCImplBody body)
+toCImplEntry (SList ((SAtom "CImplEntry") :: [name, score, declared, body])) =
+  CImplEntry (toStr name) (toInt score) (toInt declared) (toCImplBody body)
 toCImplEntry other =
   panic ("core_ir_sexp_parse: bad CImplEntry: " ++ sexprToStr other)
 
