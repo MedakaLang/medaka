@@ -1841,36 +1841,17 @@ FAT_ARROW
 UPPER "List"
 IDENT "a"
 ARROW
+UPPER "List"
 UPPER "String"
 NEWLINE
 IDENT "debugListItems"
-IDENT "xs"
-EQUAL
-IDENT "stringConcat"
-LPAREN
-IDENT "debugListPieces"
-IDENT "xs"
-RPAREN
-NEWLINE
-IDENT "debugListPieces"
-COLON
-UPPER "Debug"
-IDENT "a"
-FAT_ARROW
-UPPER "List"
-IDENT "a"
-ARROW
-UPPER "List"
-UPPER "String"
-NEWLINE
-IDENT "debugListPieces"
 LBRACKET
 RBRACKET
 EQUAL
 LBRACKET
 RBRACKET
 NEWLINE
-IDENT "debugListPieces"
+IDENT "debugListItems"
 LBRACKET
 IDENT "x"
 RBRACKET
@@ -1880,7 +1861,7 @@ IDENT "debug"
 IDENT "x"
 RBRACKET
 NEWLINE
-IDENT "debugListPieces"
+IDENT "debugListItems"
 LPAREN
 IDENT "y"
 CONS
@@ -1892,7 +1873,7 @@ IDENT "y"
 CONS
 STRING ", "
 CONS
-IDENT "debugListPieces"
+IDENT "debugListItems"
 IDENT "rest"
 NEWLINE
 EXPORT
@@ -1911,8 +1892,11 @@ IDENT "debug"
 IDENT "xs"
 EQUAL
 INTERP_OPEN "["
+IDENT "stringConcat"
+LPAREN
 IDENT "debugListItems"
 IDENT "xs"
+RPAREN
 INTERP_END "]"
 NEWLINE
 DEDENT
@@ -1929,53 +1913,13 @@ UPPER "Int"
 ARROW
 UPPER "Int"
 ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
 UPPER "String"
 NEWLINE
 IDENT "debugArrayItems"
-IDENT "arr"
-IDENT "i"
-IDENT "n"
-EQUAL
-IDENT "stringConcat"
-LPAREN
-IDENT "debugArrayPieces"
-IDENT "arr"
-IDENT "i"
-LPAREN
-IDENT "n"
-MINUS
-INT 1
-RPAREN
-LBRACKET
-RBRACKET
-RPAREN
-NEWLINE
-IDENT "debugArrayPieces"
-COLON
-UPPER "Debug"
-IDENT "a"
-FAT_ARROW
-INDENT
-UPPER "Array"
-IDENT "a"
-ARROW
-NEWLINE
-UPPER "Int"
-ARROW
-NEWLINE
-UPPER "Int"
-ARROW
-NEWLINE
-UPPER "List"
-UPPER "String"
-ARROW
-NEWLINE
-UPPER "List"
-UPPER "String"
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "debugArrayPieces"
 IDENT "arr"
 IDENT "lo"
 IDENT "j"
@@ -2002,7 +1946,7 @@ IDENT "j"
 IDENT "arr"
 RPAREN
 NEWLINE
-IDENT "debugArrayPieces"
+IDENT "debugArrayItems"
 IDENT "arr"
 IDENT "lo"
 LPAREN
@@ -2051,15 +1995,25 @@ INDENT
 IDENT "debug"
 IDENT "arr"
 EQUAL
+INDENT
 INTERP_OPEN "[|"
+IDENT "stringConcat"
+LPAREN
 IDENT "debugArrayItems"
 IDENT "arr"
 INT 0
 LPAREN
 IDENT "arrayLength"
 IDENT "arr"
+MINUS
+INT 1
+RPAREN
+LBRACKET
+RBRACKET
 RPAREN
 INTERP_END "|]"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -2999,36 +2953,17 @@ FAT_ARROW
 UPPER "List"
 IDENT "a"
 ARROW
+UPPER "List"
 UPPER "String"
 NEWLINE
 IDENT "displayListItems"
-IDENT "xs"
-EQUAL
-IDENT "stringConcat"
-LPAREN
-IDENT "displayListPieces"
-IDENT "xs"
-RPAREN
-NEWLINE
-IDENT "displayListPieces"
-COLON
-UPPER "Display"
-IDENT "a"
-FAT_ARROW
-UPPER "List"
-IDENT "a"
-ARROW
-UPPER "List"
-UPPER "String"
-NEWLINE
-IDENT "displayListPieces"
 LBRACKET
 RBRACKET
 EQUAL
 LBRACKET
 RBRACKET
 NEWLINE
-IDENT "displayListPieces"
+IDENT "displayListItems"
 LBRACKET
 IDENT "x"
 RBRACKET
@@ -3038,7 +2973,7 @@ IDENT "display"
 IDENT "x"
 RBRACKET
 NEWLINE
-IDENT "displayListPieces"
+IDENT "displayListItems"
 LPAREN
 IDENT "y"
 CONS
@@ -3050,7 +2985,7 @@ IDENT "y"
 CONS
 STRING ", "
 CONS
-IDENT "displayListPieces"
+IDENT "displayListItems"
 IDENT "rest"
 NEWLINE
 EXPORT
@@ -3069,46 +3004,16 @@ IDENT "display"
 IDENT "xs"
 EQUAL
 INTERP_OPEN "["
+IDENT "stringConcat"
+LPAREN
 IDENT "displayListItems"
 IDENT "xs"
+RPAREN
 INTERP_END "]"
 NEWLINE
 DEDENT
 NEWLINE
 IDENT "displayArrayItems"
-COLON
-UPPER "Display"
-IDENT "a"
-FAT_ARROW
-UPPER "Array"
-IDENT "a"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "String"
-NEWLINE
-IDENT "displayArrayItems"
-IDENT "arr"
-IDENT "i"
-IDENT "n"
-EQUAL
-IDENT "stringConcat"
-LPAREN
-IDENT "displayArrayPieces"
-IDENT "arr"
-IDENT "i"
-LPAREN
-IDENT "n"
-MINUS
-INT 1
-RPAREN
-LBRACKET
-RBRACKET
-RPAREN
-NEWLINE
-IDENT "displayArrayPieces"
 COLON
 UPPER "Display"
 IDENT "a"
@@ -3133,7 +3038,7 @@ UPPER "String"
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "displayArrayPieces"
+IDENT "displayArrayItems"
 IDENT "arr"
 IDENT "lo"
 IDENT "j"
@@ -3160,7 +3065,7 @@ IDENT "j"
 IDENT "arr"
 RPAREN
 NEWLINE
-IDENT "displayArrayPieces"
+IDENT "displayArrayItems"
 IDENT "arr"
 IDENT "lo"
 LPAREN
@@ -3209,15 +3114,25 @@ INDENT
 IDENT "display"
 IDENT "arr"
 EQUAL
+INDENT
 INTERP_OPEN "[|"
+IDENT "stringConcat"
+LPAREN
 IDENT "displayArrayItems"
 IDENT "arr"
 INT 0
 LPAREN
 IDENT "arrayLength"
 IDENT "arr"
+MINUS
+INT 1
+RPAREN
+LBRACKET
+RBRACKET
 RPAREN
 INTERP_END "|]"
+NEWLINE
+DEDENT
 NEWLINE
 DEDENT
 NEWLINE
