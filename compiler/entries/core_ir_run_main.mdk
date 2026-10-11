@@ -22,7 +22,9 @@ import eval.eval.{dropShadowedExp, funNamesOf}
 import frontend.ast.{Decl}
 import entries.entry_support.{drivePrelude}
 
-main = drivePrelude emit
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = drivePrelude emit
 
 emit : List Decl -> List Decl -> <IO> Unit
 emit preludeDecls userDecls =
@@ -30,3 +32,5 @@ emit preludeDecls userDecls =
     annotateProgram
       (dropShadowedExp (funNamesOf userDecls) preludeDecls ++ userDecls)
   putStr (cevalOutputOf decls (lowerProgram decls))
+
+main = oracleMain ()

@@ -455,8 +455,23 @@ if [ -z "${NO_STALE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ -d "$ROOT/test/bin" ]; 
     # The banner won, because it is right there in the terminal and the ban is only in
     # prose. It has ALWAYS known which probes are stale ($stale_all) — it just printed
     # the blunt instrument instead of the narrow one it could already derive.
-    echo "Rebuild ONLY what is stale — one probe per command:"
+    # Names the multicall oracle serves share one binary, so they go stale
+    # together and one multicall rebuild refreshes them all; a single oracle
+    # is rebuilt by name.
+    mc_names=" $(sh "$ROOT/test/build_oracles.sh" --multicall-names 2>/dev/null | tr '\n' ' ')"
+    mc_stale=0
+    singles_stale=""
     for o in $stale_all; do
+      case "$mc_names" in
+        *" $o "*) mc_stale=$((mc_stale + 1)) ;;
+        *) singles_stale="$singles_stale $o" ;;
+      esac
+    done
+    echo "Rebuild ONLY what is stale:"
+    if [ "$mc_stale" -gt 0 ]; then
+      echo "    FORCE=1 sh test/build_oracles.sh --build-multicall   # $mc_stale multicall-served name(s)"
+    fi
+    for o in $singles_stale; do
       echo "    FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one $o"
     done
     echo
@@ -464,7 +479,7 @@ if [ -z "${NO_STALE_CHECK:-}" ] && [ -z "${CI:-}" ] && [ -d "$ROOT/test/bin" ]; 
     echo "    FORCE=1 sh test/build_oracles.sh --for '<gate>'"
     echo
     echo "⚠️  NOT 'FORCE=1 sh test/build_oracles.sh' with no --for/--build-one: that"
-    echo "    rebuilds ALL 54 probes via an xargs -P pool that outlives an agent's turn"
+    echo "    rebuilds EVERY probe via an xargs -P pool that outlives an agent's turn"
     echo "    and gets respawned by the harness. It has killed several agent sessions"
     echo "    and held this shared box at load 40 for hours."
     echo
@@ -640,7 +655,8 @@ FAIL: none of these gates could run — their oracle binaries are not built.
       clone or worktree has no oracles.
 
       Build them:  sh test/build_oracles.sh --for 'diff_compiler_*'
-                   (52 oracles, ~2 min, foreground — the safe recipe)
+                   (the multicall oracle plus the few singles those gates
+                    read, ~1-2 min, foreground — the safe recipe)
 
       Or just what you need:
                    sh test/preflight.sh          # derives them from your diff

@@ -28,7 +28,9 @@ import ir.core_ir_lower.{
 }
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   [targetPath] => withTarget targetPath
   _ =>
     ePutStrLn "usage: medaka run compiler/entries/llvm_emit_main.mdk <file.mdk>"
@@ -67,3 +69,5 @@ emitTarget decls =
         -- index keeps its behaviour exactly what it was.
         [])
       (lowerProgramEmit TargetNative decls))
+
+main = oracleMain ()

@@ -27,6 +27,23 @@ CI job-seconds. It now runs exactly once, in the `build:` job, and the ten consu
 The 18-minute item that made "build once, fan out" untenable was the ORACLE line, never the
 binary line.
 
+## Oracles once, as one multicall binary (#3965)
+
+The paragraph above is superseded for all but a few oracles. Building per shard still cost 67
+builds (50 distinct, 2,468 runner-s) on base run 38064114027, because shards share oracles. A
+build's cost follows the union of its imports, not the entry count: one program linking all 53
+entries took 47 s on the dev box, against 903 s for the 53 singles and 23 s for the dearest
+single. So every ENTRIES oracle except `MULTICALL_SINGLES` (the two profilers, linked without
+LTO for callgrind) is one binary, `test/bin/oracle_multicall`
+(`compiler/entries/oracle_multicall.mdk`). It dispatches on `basename (executablePath ())` and
+is hardlinked under each name. A symlink does not work, because `executablePath` resolves it.
+The `oracles:` job builds it once per run and uploads one file. Each shard downloads it, restores
+the hardlinks and the execute bit (the artifact zip keeps neither) with
+`build_oracles.sh --link-multicall`, and builds only its singles under
+`ORACLE_MULTICALL_PROVIDED=1`, never deciding from mtimes, which extraction sets. Byte-identity
+single vs multicall was checked on 764 recorded gate invocations (spike) and on 180 more over
+16 oracles (the slice). macOS dispatch (`_NSGetExecutablePath` + realpath) has not been run.
+
 ## Why the drift check lives inside each shard
 
 It cannot be a separate job: a fresh checkout in a fresh VM would never see drift caused by gates

@@ -8,9 +8,13 @@ import frontend.resolve.{resolveToLines}
 import frontend.ast.{Decl}
 import entries.entry_support.{driveParseSources}
 
-main = driveParseSources renderAll
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = driveParseSources renderAll
 
 renderAll : List Decl -> List Decl -> List (String, String) -> String
 renderAll runtimeP coreP [] = ""
 renderAll runtimeP coreP ((path, src) :: rest) =
   "===SELFHOST-FIX=== \{path}\n\{resolveToLines runtimeP coreP (desugar (parse src))}\n\{renderAll runtimeP coreP rest}"
+
+main = oracleMain ()

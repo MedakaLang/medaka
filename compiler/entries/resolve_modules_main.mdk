@@ -19,7 +19,9 @@ import frontend.desugar.{desugar}
 import frontend.resolve.{resolveModulesToLines}
 import support.path.{modIdOf}
 
-main = match args ()
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = match args ()
   runtimeP :: coreP :: f :: rest => run runtimeP coreP (f :: rest)
   _ =>
     ePutStrLn
@@ -43,3 +45,5 @@ run runtimeP coreP files = match readFile runtimeP
     Ok csrc => match readModules files
       Err e => ePutStrLn e
       Ok mods => putStr (resolveModulesToLines (parse rsrc) (parse csrc) mods)
+
+main = oracleMain ()
