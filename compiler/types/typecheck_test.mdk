@@ -92,6 +92,7 @@ import types.typecheck.{
   stickyTypeErrorDiags,
   tcCode,
   tcMsg,
+  walkGoalSameProbe,
 }
 import support.util.{contains, joinNl, joinWith, listLen, lookupAssoc}
 
@@ -3932,7 +3933,11 @@ returnChainSource depth = [
 -- Each `Wrap` impl requires both interfaces at the payload, so the goals at
 -- depth k are reached along 2^k paths while only two distinct goals exist there.
 branchingRequiresSource : Int -> List String
-branchingRequiresSource depth = [
+branchingRequiresSource depth =
+  branchingRequiresImpls ++ ["deepv = tagOf (\{nestedWrap depth "5"})"]
+
+branchingRequiresImpls : List String
+branchingRequiresImpls = [
   "data Wrap a = Wrap a",
   "interface Tag t where",
   "  tagOf : t -> String",
@@ -3946,8 +3951,58 @@ branchingRequiresSource depth = [
   "  tag2Of (Wrap x) = \"v\"",
   "impl Tag (Wrap a) requires Tag a, Tag2 a where",
   "  tagOf (Wrap x) = \"w\"",
-  "deepv = tagOf (\{nestedWrap depth "5"})",
 ]
+
+-- The same goal on a variable, reduced to its residual `(Tag a, Tag2 a)` at a
+-- generalizing binder.
+branchingGeneralizedSource : Int -> List String
+branchingGeneralizedSource depth =
+  branchingRequiresImpls ++ ["deep x = tagOf (\{nestedWrap depth "x"})"]
+
+-- The same goal at a signed binder, whose declared context answers the residual.
+branchingSignedSource : Int -> List String
+branchingSignedSource depth =
+  branchingRequiresImpls
+    ++ [
+      "deep : (Tag a, Tag2 a) => a -> String",
+      "deep x = tagOf (\{nestedWrap depth "x"})",
+    ]
+
+-- The same goal in an impl body, on the impl's head variable, whose `requires`
+-- answers the residual.
+branchingImplBodySource : Int -> List String
+branchingImplBodySource depth =
+  branchingRequiresImpls
+    ++ [
+      "interface Desc t where",
+      "  desc : t -> String",
+      "data Q a = Q a",
+      "impl Desc (Q a) requires Tag a, Tag2 a where",
+      "  desc (Q x) = tagOf (\{nestedWrap depth "x"})",
+    ]
+
+-- The same goal on a variable no type determines: the boundary judges the goal and
+-- every prerequisite it selects, and reports `Mk` ambiguous once.
+branchingUndeterminedSource : Int -> List String
+branchingUndeterminedSource depth =
+  branchingRequiresImpls
+    ++ [
+      "interface Mk a where",
+      "  mk : Int -> a",
+      "impl Mk Int where",
+      "  mk n = n",
+      "impl Mk Bool where",
+      "  mk _ = True",
+      "impl Tag Bool where",
+      "  tagOf _ = \"b\"",
+      "impl Tag2 Bool where",
+      "  tag2Of _ = \"b\"",
+      "undetermined = tagOf (\{nestedWrap depth "mk 5"})",
+    ]
+
+ambiguousMkMessage : String
+ambiguousMkMessage =
+  "ambiguous instance for `Mk`: the type here does not determine which impl applies; add a type annotation"
 
 scalingCheckAlloc : List String -> <IO> (Float, List String)
 scalingCheckAlloc body =
@@ -3986,3 +4041,47 @@ test "branching requires check in work linear in the distinct goals" =
     expectGreaterThan 0.0 first,
     expectLessThan (first * 3.0 + 65536.0) second,
   ]
+
+test "branching requires reduce at a generalizing binder in work linear in depth" =
+  let (first, second, errors) = scalingIncrements branchingGeneralizedSource 8 4
+  expectAll [
+    expectEqual [] errors,
+    expectGreaterThan 0.0 first,
+    expectLessThan (first * 3.0 + 65536.0) second,
+  ]
+
+test "branching requires reduce at a signed binder in work linear in depth" =
+  let (first, second, errors) = scalingIncrements branchingSignedSource 8 4
+  expectAll [
+    expectEqual [] errors,
+    expectGreaterThan 0.0 first,
+    expectLessThan (first * 3.0 + 65536.0) second,
+  ]
+
+test "branching requires reduce in an impl body in work linear in depth" =
+  let (first, second, errors) = scalingIncrements branchingImplBodySource 8 4
+  expectAll [
+    expectEqual [] errors,
+    expectGreaterThan 0.0 first,
+    expectLessThan (first * 3.0 + 65536.0) second,
+  ]
+
+test "an undetermined goal's prerequisites are judged in work linear in depth" =
+  let (first, second, errors) =
+    scalingIncrements branchingUndeterminedSource 4 2
+  expectAll [
+    expectEqual
+      [
+        ambiguousMkMessage,
+        ambiguousMkMessage,
+        ambiguousMkMessage,
+      ]
+      errors,
+    expectGreaterThan 0.0 first,
+    expectLessThan (first * 3.0 + 65536.0) second,
+  ]
+
+-- `monoVecSameGiven` equates two arrows that differ only in their effect rows; the
+-- solving walks' memo must not, in either order.
+test "the solving-walk memo keeps goals that differ only in an effect row apart" =
+  expectEqual [True, True, False, False, True] (walkGoalSameProbe ())
