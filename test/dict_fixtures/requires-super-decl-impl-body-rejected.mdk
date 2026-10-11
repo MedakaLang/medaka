@@ -1,0 +1,39 @@
+-- §3 R-SUPER-DECL: `impl Sub (Box a)` does not entail `Show2 a`, the context of the
+-- `Sup (Box a)` instance its head selects: T-IMPL-MISSING-REQUIRES at the impl (line
+-- 23), on every verb.  It used to be accepted: the body of `impl Desc (Q a)` reduced
+-- `Sub (Box a)` without `Show2 a`, so `desc (Q True)` printed `supisub` through the
+-- `Show2 Int` dictionary.
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+interface Sup a where
+  sup : a -> String
+
+interface Sub a requires Sup a where
+  sub : a -> String
+
+data Box a = Box a
+
+impl Sup (Box a) requires Show2 a where
+  sup (Box x) = "sup" ++ show2 x
+
+impl Sub (Box a) where
+  sub _ = "sub"
+
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+
+interface Desc t where
+  desc : t -> String
+
+data Q a = Q a
+
+impl Desc (Q a) where
+  desc (Q x) = useSup (Box x)
+
+main =
+  println (desc (Q (1 : Int)))
+  println (desc (Q True))
