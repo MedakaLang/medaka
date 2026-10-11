@@ -1,0 +1,14 @@
+-- §3 W2, a context that grows its goal (#2120): `impl Tag (Wrap a) requires
+-- Tag (Wrap (Wrap a))` turns `Tag (Wrap Int)` into a strictly larger goal at every
+-- step, never repeating one, so every step spends fuel and the walk runs out:
+-- `T-REQUIRES-DEPTH`, located at the goal's site (`tag (Wrap 1)`), on every verb.  It
+-- used to overflow the compiler's stack after ~50 s.
+data Wrap a = Wrap a
+
+interface Tag a where
+  tag : a -> String
+
+impl Tag (Wrap a) requires Tag (Wrap (Wrap a)) where
+  tag x = "wrapped"
+
+main = println (tag (Wrap 1))

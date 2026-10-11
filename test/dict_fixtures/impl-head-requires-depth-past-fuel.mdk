@@ -1,7 +1,9 @@
--- §3 W3-inst past the requires fuel: the body of `impl Tag (Q a)` poses
--- `Tag (W^33 a)` with no `requires Tag a`.  The reduction runs out of fuel one
--- step before reaching `Tag a`, which is a located T-REQUIRES-DEPTH, never a
--- silent accept (depth 32 reaches `Tag a`: impl-head-requires-depth-at-fuel.mdk).
+-- §3 W3-inst one step deeper than impl-head-requires-depth-at-fuel.mdk: the body of
+-- `impl Tag (Q a)` poses `Tag (W^33 a)` with no `requires Tag a`.  Each reduction
+-- step is one `W` smaller, so under §3 W2's measure none spends fuel, and the chain
+-- reaches the residual `Tag a`, which no given answers: the impl is refused naming the
+-- `requires` to add (`T-IMPL-MISSING-REQUIRES`), exactly as at depth 32.  It used to
+-- stop one step short with `T-REQUIRES-DEPTH` under a flat 32-step bound.
 interface Tag a where
   tag : a -> Int
 
