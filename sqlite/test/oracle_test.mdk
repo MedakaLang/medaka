@@ -65,10 +65,37 @@ queryTimeoutSeconds = 120
 -- One row's two line lists, ready to compare.
 data RowOutput = RowOutput { actual : List String, expected : List String }
 
-buildDemo : OracleRow -> String -> <Exec, IO> Result String Unit
-buildDemo row bin =
-  let args = ["build"] ++ row.buildFlags ++ [underRoot row.entry, "-o", bin]
+buildEntry : List String -> String -> String -> <Exec, IO> Result String Unit
+buildEntry flags entry bin =
+  let args = ["build"] ++ flags ++ [underRoot entry, "-o", bin]
   map (_ => ()) (spawnOut buildTimeoutSeconds medakaBin args)
+
+buildDemo : OracleRow -> String -> <Exec, IO> Result String Unit
+buildDemo row bin = buildEntry row.buildFlags row.entry bin
+
+-- The two builds more than one row runs, each built once per process: a
+-- top-level nullary is memoized, and the binary sits in the shared scratch
+-- directory, outside every row's own cleanup list.
+mainBin : <Exec, IO> Result String String
+mainBin = sharedBuild "shared-main" [] "sqlite/main.mdk"
+
+sqlDemoBin : <Exec, IO> Result String String
+sqlDemoBin = sharedBuild "shared-sql-demo" [] "sqlite/sql_demo.mdk"
+
+sharedBuild : String -> List String -> String -> <Exec, IO> Result String String
+sharedBuild name flags entry = match scratchDir
+  Err e => Err e
+  Ok dir =>
+    let bin = "\{dir}/\{name}"
+    map (_ => bin) (buildEntry flags entry bin)
+
+-- The binary a row runs: a shared build when its entry and flags match one,
+-- otherwise a build into the row's own path.
+demoBinFor : OracleRow -> String -> <Exec, IO> Result String String
+demoBinFor row own = match (row.entry, row.buildFlags)
+  ("sqlite/main.mdk", []) => mainBin
+  ("sqlite/sql_demo.mdk", []) => sqlDemoBin
+  _ => map (_ => own) (buildDemo row own)
 
 pieceLines : String -> String -> Piece -> <Exec, IO> Result String (List String)
 pieceLines _ _ (PLine l) = Ok [l]
@@ -90,11 +117,11 @@ rowOutput : OracleRow ->
   String ->
   String ->
   <Exec, FileRead, IO> Result String RowOutput
-rowOutput row db bin = match seedDb db row.seed
+rowOutput row db own = match seedDb db row.seed
   Err e => Err "\{row.name}: seeding the database: \{e}"
-  Ok _ => match buildDemo row bin
+  Ok _ => match demoBinFor row own
     Err e => Err "\{row.name}: building \{row.entry}: \{e}"
-    Ok _ => match traverse (pieceLines bin db) row.pieces
+    Ok bin => match traverse (pieceLines bin db) row.pieces
       Err e => Err "\{row.name}: running the demo: \{e}"
       Ok got => match traverse (stepLines db) row.expect
         Err e => Err "\{row.name}: asking sqlite3 for the expected rows: \{e}"

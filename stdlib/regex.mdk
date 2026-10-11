@@ -829,11 +829,10 @@ compileNode (NCat a b) pc =
   let ca = compileNode a pc
   ca ++ compileNode b (pc + length ca)
 compileNode (NAlt a b) pc =
-  let ca = compileNode a (pc + 1)
-  let jmpAt = pc + 1 + length ca
-  let cb = compileNode b (jmpAt + 1)
-  let out = jmpAt + 1 + length cb
-  ISplit (pc + 1) (jmpAt + 1) :: ca ++ (IJmp out :: cb)
+  let code = compileAltBranches (altBranches (NAlt a b) []) pc
+  let out = pc + length code
+  map (retargetAltExit out) code
+
 compileNode (NStar greedy body) pc =
   let cb = compileNode body (pc + 1)
   let out = pc + 1 + length cb + 1
@@ -851,6 +850,31 @@ compileNode (NOpt greedy body) pc =
   sp :: cb
 compileNode (NGroup idx body) pc =
   ISave (2 * idx) :: compileNode body (pc + 1) ++ [ISave (2 * idx + 1)]
+
+-- The branches of a left-nested alternation, in source order. The parser
+-- builds `a|b|c` as `NAlt (NAlt a b) c`.
+altBranches : Node -> List Node -> List Node
+altBranches (NAlt l r) acc = altBranches l (r :: acc)
+altBranches n acc = n :: acc
+
+-- Each branch but the last is preceded by a split to the next branch and
+-- followed by a jump to the exit. The split prefers its branch, so priority
+-- follows source order. The exit is unknown until every branch is sized, so
+-- those jumps carry `altExit` for `compileNode` to patch.
+compileAltBranches : List Node -> Int -> List Inst
+compileAltBranches [] _ = []
+compileAltBranches (b :: []) pc = compileNode b pc
+compileAltBranches (b :: rest) pc =
+  let cb = compileNode b (pc + 1)
+  let next = pc + 1 + length cb + 1
+  ISplit (pc + 1) next :: cb ++ (IJmp altExit :: compileAltBranches rest next)
+
+altExit : Int
+altExit = -1
+
+retargetAltExit : Int -> Inst -> Inst
+retargetAltExit out (IJmp x) = if x == altExit then IJmp out else IJmp x
+retargetAltExit _ i = i
 
 -- Pike VM
 
@@ -1058,7 +1082,18 @@ searchWindow re codes (lo, hi) startAt anchorStart anchorEnd steps =
     steps = steps,
     found = Ref None,
   }
-  vmSearch vm startAt anchorStart
+  vmSearch vm startAt (anchorStart || startsAtBol re)
+
+-- A pattern that begins with `^` (outside multiline mode) can only match at
+-- the window start, so its search seeds a single thread.
+startsAtBol : Regex -> Bool
+startsAtBol re = not re.multiline && startsAtBolFrom re.prog 0
+
+startsAtBolFrom : Array Inst -> Int -> Bool
+startsAtBolFrom prog pc = match arrayGetUnsafe pc prog
+  IAssert kind => kind == asStart
+  ISave _ => startsAtBolFrom prog (pc + 1)
+  _ => False
 
 -- `[start, end)` narrowed to a buffer of `n` bytes, with `lo` never past
 -- `hi`, so no caller can read a window outside the buffer.

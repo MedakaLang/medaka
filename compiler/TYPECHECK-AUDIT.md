@@ -282,7 +282,7 @@ green; no S1↔eval interaction (eval untouched). Original finding below.
   (constrained-in-a / unconstrained-in-entry), 2-constraint vs unconstrained, both-
   constrained-different-counts (1 vs 2 dicts), and genuine arg-position dispatch
   (`Eq a => x == y` cross-module). Regression fixture: `l1_twomod` in
-  `test/diff_compiler_build.sh`.
+  `test/diff_compiler_build_test.mdk`.
 - **E4 discrepancy RESOLVED — arg-position joint dict-passing IS active on
   `medaka build`.** The original §L1 / `llvm_emit_modules_main.mdk:17-22,86`
   "Pre-E4 no-op" note is **STALE**. `enableArgStamp ()` sets `argStampEnabled := True`

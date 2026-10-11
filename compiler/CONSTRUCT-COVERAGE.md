@@ -13,7 +13,7 @@ OCaml removal — no live OCaml oracle exists to re-run them against.
 Stage 3 #2b. Tested 2026-06-10 against the compiler LLVM backend (`medaka build`).
 Each construct was exercised with a minimal `main` program, diffed native vs
 `medaka run` (interpreter oracle). Fixture programs live in
-`test/construct_fixtures/`; the gate `test/build_construct_coverage.sh` runs all
+`test/construct_fixtures/`; the gate `test/build_construct_coverage_test.mdk` runs all
 PASS fixtures.
 
 Convention: native appends `()` for `main : <IO*> Unit`; the comparison strips
@@ -23,7 +23,7 @@ that. A result is PASS iff `native_output == oracle_output ++ "\n()"`.
 
 ## Summary
 
-**123+ PASS fixtures** (gate `build_construct_coverage.sh` is the authoritative PASS list; the per-row matrix below may lag — the **§Gaps** sections are authoritative for each gap's closed/open status). Started 114 PASS / 15 GAP; closed F1·H-a·D1·D2·B1·B2 overnight. **2026-06-18 audit** confirmed additional closures: Gap C all residuals (C1/C2/C3/C4/C5b/C6/C7/C8), Gap H entirely (map+set now PASS in `medaka build`), A1/A4/A5/A8/A9/A11 reclassified as by-design or closed. A7 re-classified as a resolve/eval gap. Re-scoped: A2/A3 range patterns = compiler typecheck (`PRng` in `inferPat`), not parser. **2026-07-15 (issue #65 sweep, `e4fff14e`):** A2/A3 EMIT, C7-native same-head dispatch, Gap F Layer 2, and two-level+ nested-dict SIGSEGV all verified CLOSED — no genuine emitter dispatch gaps remain open in this doc.
+**123+ PASS fixtures** (gate `build_construct_coverage_test.mdk` is the authoritative PASS list; the per-row matrix below may lag — the **§Gaps** sections are authoritative for each gap's closed/open status). Started 114 PASS / 15 GAP; closed F1·H-a·D1·D2·B1·B2 overnight. **2026-06-18 audit** confirmed additional closures: Gap C all residuals (C1/C2/C3/C4/C5b/C6/C7/C8), Gap H entirely (map+set now PASS in `medaka build`), A1/A4/A5/A8/A9/A11 reclassified as by-design or closed. A7 re-classified as a resolve/eval gap. Re-scoped: A2/A3 range patterns = compiler typecheck (`PRng` in `inferPat`), not parser. **2026-07-15 (issue #65 sweep, `e4fff14e`):** A2/A3 EMIT, C7-native same-head dispatch, Gap F Layer 2, and two-level+ nested-dict SIGSEGV all verified CLOSED — no genuine emitter dispatch gaps remain open in this doc.
 
 ---
 
@@ -743,7 +743,7 @@ Zebra))` → should be `False`; all three backends give `True`.
 ## Fixture directory
 
 All PASS fixtures: `test/construct_fixtures/*.mdk`
-Gate script: `test/build_construct_coverage.sh`
+Gate script: `test/build_construct_coverage_test.mdk`
 
 ⚠️ This doc is hand-maintained (no generator writes it) and has drifted from the actual
 directory contents twice already (#639, #653). Don't trust a count or listing typed here —

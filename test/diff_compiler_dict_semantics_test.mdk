@@ -66,19 +66,21 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  Agreement(..), binaryRanClean, runMedaka, summarizeSweep, sweepAgreements,
-  sweepSpawn, sweepSpawns, verdictOf
+  Agreement(..), binaryRanClean, summarizeSweep, sweepAgreements, sweepSpawn,
+  sweepSpawns, verdictOf
 }
 import fs.{expectUnitCount, fixtureDirs}
 import json.{Json(..), get, parse}
-import list.{indexed, somes, sort}
+import list.{indexed, lookup, somes, sort, zip}
 import path.{basename}
 import regex.{Regex, compile, find, findAll, isMatch, mustCompile}
 import string.{
   contains, endsWith, lines, padRight, replaceAll, stripSuffix, unwords
 }
 import test.{Expectation, fail, pass}
-import test_process.{medakaBin, medakaRoot, testAssertionCount, unrosteredUnits}
+import test_process.{
+  medakaBin, medakaRoot, testAssertionCount, testJobs, unrosteredUnits
+}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -5006,54 +5008,85 @@ codeProblem json (Absent c) =
    is paid for only where a row asks for it. The exit code is deliberately
    not graded here — `checkRunBuild` already pins `check`'s verdict for
    every row, and grading it twice would make a row that pins a code
-   stricter than the identical row that does not. -}
+   stricter than the identical row that does not. `out` is that row's
+   `check --json` spawn, as `codeOutputs` batched it. -}
 codeFailures : List CodeAssert ->
-  String ->
-  <Exec, IO> Result String (List String)
+  Result String (Int, String) ->
+  Result String (List String)
 codeFailures [] _ = Ok []
-codeFailures cs entrypath = match runMedaka ["check", "--json", entrypath]
-  Err e => Err "could not run `medaka check --json`: \{e}"
-  Ok (_, json) => Ok (somes (map (codeProblem json) cs))
+codeFailures _ (Err e) = Err "could not run `medaka check --json`: \{e}"
+codeFailures cs (Ok (_, json)) = Ok (somes (map (codeProblem json) cs))
+
+entryPath : Row -> <IO> String
+entryPath r = "\{corpus}/\{r.entry}"
+
+hasCodes : Row -> Bool
+hasCodes r = match r.codes
+  [] => False
+  _ => True
+
+{- | The `check --json` spawn for every row that asks for a code, keyed by
+   the entry path `gradeOne` looks it up under. The spawns go `testJobs` at
+   a time, and each one's result is what `runMedaka` returns for it. A row
+   with no code assertion spawns nothing. -}
+codeOutputs : List Row -> <Exec, IO> List (String, Result String (Int, String))
+codeOutputs rows =
+  let coded = filter hasCodes rows
+  let argvs = map (r => ["check", "--json", entryPath r]) coded
+  let outs =
+    map
+      (map ((code, out, err) => (code, out ++ err)))
+      (runCommandBatch medakaBin testJobs argvs)
+  zip (map entryPath coded) outs
+
+codeOutput : List (String, Result String (Int, String)) ->
+  String ->
+  Result String (Int, String)
+codeOutput outs entrypath = match lookup entrypath outs
+  Some out => out
+  None => Err "no check --json spawn was batched for \{entrypath}"
 
 planOne : String -> Row -> <FileRead, IO> Result Graded (String, String)
 planOne scratch r =
-  let entrypath = "\{corpus}/\{r.entry}"
+  let entrypath = entryPath r
   match readFile entrypath
     Err e => Err (structuralRow r.entry "missing fixture file: \{e}")
     Ok _ => Ok (entrypath, "\{scratch}/\{binName r.entry}.bin")
 
-gradeOne : Row ->
+gradeOne : List (String, Result String (Int, String)) ->
+  Row ->
   (String, String) ->
   Result String Agreement ->
   <Exec, FileRead, IO> Graded
-gradeOne r _ (Err e) = structuralRow r.entry e
-gradeOne r (entrypath, binPath) (Ok a) = match codeFailures r.codes entrypath
-  Err e => structuralRow r.entry e
-  Ok codeNotes =>
-    let checkV = verdictOf a.checkCode
-    let runV = verdictOf a.runCode
-    -- A `build` ACCEPT must have produced a binary: exit 0 alone
-    -- would let a `NoValue` row pin ACCEPT over a build that
-    -- emitted nothing.
-    let buildV =
-      if a.buildCode == 0 && fileExists binPath then "ACCEPT" else "REJECT"
-    let grade = gradeValue r.mode r.pinned a
-    Graded {
-      entry = r.entry,
-      checkV = checkV,
-      runV = runV,
-      buildV = buildV,
-      grade = grade,
-      ok =
-        checkV == r.expCheck
-          && runV == r.expRun
-          && buildV == r.expBuild
-          && gradePasses grade
-          && codeNotes == [],
-      note = match codeNotes
-        [] => ""
-        _ => " codes=\{unwords codeNotes}",
-    }
+gradeOne _ r _ (Err e) = structuralRow r.entry e
+gradeOne outs r (entrypath, binPath) (Ok a) =
+  match codeFailures r.codes (codeOutput outs entrypath)
+    Err e => structuralRow r.entry e
+    Ok codeNotes =>
+      let checkV = verdictOf a.checkCode
+      let runV = verdictOf a.runCode
+      -- A `build` ACCEPT must have produced a binary: exit 0 alone
+      -- would let a `NoValue` row pin ACCEPT over a build that
+      -- emitted nothing.
+      let buildV =
+        if a.buildCode == 0 && fileExists binPath then "ACCEPT" else "REJECT"
+      let grade = gradeValue r.mode r.pinned a
+      Graded {
+        entry = r.entry,
+        checkV = checkV,
+        runV = runV,
+        buildV = buildV,
+        grade = grade,
+        ok =
+          checkV == r.expCheck
+            && runV == r.expRun
+            && buildV == r.expBuild
+            && gradePasses grade
+            && codeNotes == [],
+        note = match codeNotes
+          [] => ""
+          _ => " codes=\{unwords codeNotes}",
+      }
 
 rowFailure : Graded -> Option String
 rowFailure g =
@@ -5075,8 +5108,9 @@ summarize graded failures =
   else
     summarizeSweep graded failures
 
-sweep : <Exec, FileRead, IO> Expectation
-sweep = sweepAgreements table planOne gradeOne rowFailure summarize
+sweep : List (String, Result String (Int, String)) ->
+  <Exec, FileRead, IO> Expectation
+sweep outs = sweepAgreements table planOne (gradeOne outs) rowFailure summarize
 
 -- A row may name a secondary entry point inside a fixture directory
 -- (`<dir>/control.mdk`), which grades that directory a second way; only
@@ -5156,7 +5190,7 @@ test "the closed test-body defaulting fixture's own cases run natively" =
         fail "\{cases}: expected 3 passing assertions, got \{intToString n}"
 
 test "check, run and build agree with every row's verdict, value and codes" =
-  sweep
+  sweep (codeOutputs table)
 
 -- # Section 2 -- exact `medaka check` scheme lines
 --

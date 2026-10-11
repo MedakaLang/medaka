@@ -44,7 +44,7 @@ import core.{
   FromEntries,
   Index,
 }
-import list.{reverse, take}
+import list.{intersperse, reverse, take}
 
 {- | The map type.
 
@@ -724,9 +724,8 @@ export impl Debug (Map k v) requires Debug k, Debug v where
 -- Comma-joined `k => v` entries for `Display (Map k v)`; keys/values render via
 -- `display` (unquoted), the Display convention.  `entries` gives ascending pairs.
 displayMapEntries : (Display k, Display v) => List (k, v) -> String
-displayMapEntries [] = ""
-displayMapEntries [(k, v)] = "\{k} => \{v}"
-displayMapEntries ((k, v) :: rest) = "\{k} => \{v}, \{displayMapEntries rest}"
+displayMapEntries es =
+  stringConcat (intersperse ", " (map ((k, v) => "\{k} => \{v}") es))
 
 {- | `display` renders a map in its literal syntax, `Map { k => v, ... }`.
 

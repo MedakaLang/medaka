@@ -89,6 +89,19 @@ buildBin flags entry bin =
       medakaBin
       (["build"] ++ flags ++ [underRoot entry, "-o", bin]))
 
+-- Rows that read or write through the same build share it: a top-level
+-- nullary is evaluated once per process, and the binary lives under the
+-- shared scratch root, outside every row's own cleanup list.
+mainBin : <Exec, IO> Result String String
+mainBin = match rowScratch "shared-main"
+  Err e => Err e
+  Ok bin => map (_ => bin) (buildBin [] "sqlite/main.mdk" bin)
+
+deleteDemoBin : <Exec, IO> Result String String
+deleteDemoBin = match rowScratch "shared-delete-demo"
+  Err e => Err e
+  Ok bin => map (_ => bin) (buildBin [] "sqlite/delete_demo.mdk" bin)
+
 copyFile : String -> String -> <Exec, IO> Result String Unit
 copyFile src dst = map (_ => ()) (spawnOut queryTimeoutSeconds "cp" [src, dst])
 
@@ -171,16 +184,14 @@ deleteResult = match rowScratch "dml-delete"
   Err e => Err e
   Ok prefix =>
     let db = "\{prefix}.db"
-    let deleter = "\{prefix}-deleter"
-    let reader = "\{prefix}-reader"
-    let out = runDelete db deleter reader
-    let _ = runVerb "rm" ["-rf", db, deleter, reader]
+    let out = runDelete db
+    let _ = runVerb "rm" ["-rf", db]
     out
 
-runDelete : String -> String -> String -> <Exec, IO> Result String DeleteRun
-runDelete db deleter reader = do
-  _ <- buildBin [] "sqlite/delete_demo.mdk" deleter
-  _ <- buildBin [] "sqlite/main.mdk" reader
+runDelete : String -> <Exec, IO> Result String DeleteRun
+runDelete db = do
+  deleter <- deleteDemoBin
+  reader <- mainBin
   _ <- seedDb db [SeedSql deleteSeedSql]
   usersOut <- spawnOut queryTimeoutSeconds deleter [
     db, "users", "age", "ge", "30"
@@ -257,14 +268,13 @@ negativeResult = match rowScratch "dml-delete-negative"
   Err e => Err e
   Ok prefix =>
     let db = "\{prefix}.db"
-    let deleter = "\{prefix}-deleter"
-    let out = runNegative db deleter
-    let _ = runVerb "rm" ["-rf", db, deleter]
+    let out = runNegative db
+    let _ = runVerb "rm" ["-rf", db]
     out
 
-runNegative : String -> String -> <Exec, FileRead, IO> Result String NegativeRun
-runNegative db deleter = do
-  _ <- buildBin [] "sqlite/delete_demo.mdk" deleter
+runNegative : String -> <Exec, FileRead, IO> Result String NegativeRun
+runNegative db = do
+  deleter <- deleteDemoBin
   _ <- seedDb db [SeedSql negativeSeedSql]
   before <- readFileBytes db
   delOut <- spawnOut queryTimeoutSeconds deleter [db, "users", "age", "gt", "0"]
@@ -557,14 +567,13 @@ malformedResult = match rowScratch "dml-malformed"
   Err e => Err e
   Ok prefix =>
     let db = "\{prefix}.db"
-    let cli = "\{prefix}-cli"
-    let out = runMalformed db cli
-    let _ = runVerb "rm" ["-rf", db, cli]
+    let out = runMalformed db
+    let _ = runVerb "rm" ["-rf", db]
     out
 
-runMalformed : String -> String -> <Exec, IO> Result String (List String)
-runMalformed db cli = do
-  _ <- buildBin [] "sqlite/main.mdk" cli
+runMalformed : String -> <Exec, IO> Result String (List String)
+runMalformed db = do
+  cli <- mainBin
   _ <- seedDb db [SeedSql malformedSeedSql]
   _ <- spawnOut queryTimeoutSeconds cli [db, "INSERT INTO t VALUES ('new', 3)"]
   _ <- spawnOut queryTimeoutSeconds cli [db, "UPDATE t SET b = 5 WHERE b = 2"]
@@ -613,17 +622,15 @@ schemaNotUtf8Result = match rowScratch "dml-schema-not-utf8"
   Ok prefix =>
     let db = "\{prefix}.db"
     let clean = "\{prefix}-clean.db"
-    let cli = "\{prefix}-cli"
-    let out = runSchemaNotUtf8 db clean cli
-    let _ = runVerb "rm" ["-rf", db, clean, cli]
+    let out = runSchemaNotUtf8 db clean
+    let _ = runVerb "rm" ["-rf", db, clean]
     out
 
 runSchemaNotUtf8 : String ->
   String ->
-  String ->
   <Exec, FileRead, IO> Result String SchemaNotUtf8Run
-runSchemaNotUtf8 db clean cli = do
-  _ <- buildBin [] "sqlite/main.mdk" cli
+runSchemaNotUtf8 db clean = do
+  cli <- mainBin
   _ <- spawnOut queryTimeoutSeconds "sh" [
     "-c",
     "printf 'CREATE TABLE t(a TEXT);\\nCREATE TABLE \"n\\377\"(c TEXT);\\n' | sqlite3 \"$0\"",
@@ -980,7 +987,6 @@ dmlOutcome = match rowScratch "dml"
 
 runDmlOutcome : String -> <Exec, FileRead, IO> Result String DmlOutcome
 runDmlOutcome prefix = do
-  let cli = "\{prefix}-cli"
   let probe = "\{prefix}-probe"
   let m1 = "\{prefix}-m1.db"
   let s1 = "\{prefix}-s1.db"
@@ -1001,7 +1007,7 @@ runDmlOutcome prefix = do
     "INSERT INTO docs (body) VALUES ('\{big}')",
     "DELETE FROM docs WHERE id = 1",
   ]
-  _ <- buildBin [] "sqlite/main.mdk" cli
+  cli <- mainBin
   _ <- buildBin [] "sqlite/dml_probe.mdk" probe
   e1 <- runCorpusSection cli "dml corpus" m1 s1 dmlCorpus
   _ <- seedDb m2 [SeedSql dmlAuthoredSeedSql]
@@ -1035,7 +1041,7 @@ runDmlOutcome prefix = do
     m7
     "INSERT INTO t VALUES (2, 'y')"
   eProbe <- parseProbeExpectation probe
-  let _ = runVerb "rm" ["-rf", cli, probe, m1, s1, m2, s2, m3, s3, m5, m6, m7]
+  let _ = runVerb "rm" ["-rf", probe, m1, s1, m2, s2, m3, s3, m5, m6, m7]
   Ok DmlOutcome {
     corpusAuthoredOverflow = expectAll [e1, e2, e3, e3b],
     cliSelect = eSelect,

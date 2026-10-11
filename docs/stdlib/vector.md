@@ -248,7 +248,7 @@ Replaces every element with `f` applied to it.
 
 ```
 insertAtInPlace : Int -> a -> Vector a -> Unit
-insertAtInPlace i x ma
+insertAtInPlace i x _
 ```
 
 Inserts `x` at index `i`, shifting the following elements right.
@@ -265,7 +265,7 @@ appends.
 
 ```
 removeAtInPlace : Int -> Vector a -> Unit
-removeAtInPlace i ma
+removeAtInPlace i _
 ```
 
 Removes the element at index `i`.
@@ -281,7 +281,7 @@ Nothing happens when `i` is out of range.
 
 ```
 sortInPlaceBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
-sortInPlaceBy cmp ma
+sortInPlaceBy cmp _
 ```
 
 Sorts the elements in place by `cmp`.

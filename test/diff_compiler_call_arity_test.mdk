@@ -216,19 +216,15 @@ buildIR work stem = match boundedInTree 600 medakaBin [
     else
       readFile "\{work}/\{stem}.bin.ll"
 
--- One corpus row. Only the two regression fixtures are graded; the other
--- rows are built and scanned so the census is complete, as the script was.
+-- One corpus row. Only the two regression fixtures are graded, so the other
+-- rows are not built: their verdict is `pass` whatever the build would do.
 censusRow : String -> String -> <Exec, IO, FileRead> Expectation
-censusRow work stem = match buildIR work stem
-  Err e =>
-    if isRegression stem then
-      fail "\{stem}: failed to build or read IR: \{e}"
-    else
-      pass
-  Ok ir =>
-    if not (isRegression stem) then
-      pass
-    else match irSkews ir
+censusRow work stem =
+  if not (isRegression stem) then
+    pass
+  else match buildIR work stem
+    Err e => fail "\{stem}: failed to build or read IR: \{e}"
+    Ok ir => match irSkews ir
       [] => pass
       skews => fail "\{stem}: call/define arity skew: \{S.join "; " skews}"
 

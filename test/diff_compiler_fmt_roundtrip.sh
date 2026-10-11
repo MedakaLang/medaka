@@ -76,6 +76,66 @@ fi
 # source — which is exactly what an earlier version of this gate did, and it is why
 # there is no strip_unit call below.
 
+# --worker mode: the parallel pass below re-invokes this script as
+# `sh "$SELF" --worker "$WORKDIR" <n>` under `xargs -P`. It runs the per-file oracle work
+# for corpus index <n>, leaves its results in $WORKDIR, and prints nothing; the main run
+# replays those results in index order.
+if [ "${1:-}" = "--worker" ]; then
+  WORKDIR="$2"
+  n="$3"
+  f="$(sed -n "${n}p" "$WORKDIR/list")"
+  rel="${f#"$ROOT"/}"
+
+  # Same crash guards as the serial loop used to have, in the same order.
+  before="$("$PARSE" "$f" 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL %s: parse_main crashed (exit %d) on the original source\n' "$rel" "$rc" > "$WORKDIR/$n.msg"
+    printf 'crash\n' > "$WORKDIR/$n.st"
+    exit 0
+  fi
+
+  formatted="$WORKDIR/$n.mdk"
+  "$FMT" "$f" 2>/dev/null > "$formatted"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL %s: fmt_main crashed (exit %d)\n' "$rel" "$rc" > "$WORKDIR/$n.msg"
+    printf 'crash\n' > "$WORKDIR/$n.st"
+    exit 0
+  fi
+
+  after="$("$PARSE" "$formatted" 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL %s: parse_main crashed (exit %d) re-parsing the formatted output\n' "$rel" "$rc" > "$WORKDIR/$n.msg"
+    printf 'crash\n' > "$WORKDIR/$n.st"
+    exit 0
+  fi
+
+  # IDEMPOTENCY: fmt(fmt(x)) must equal fmt(x) byte-for-byte (#2159).
+  twice="$WORKDIR/$n.twice.mdk"
+  "$FMT" "$formatted" 2>/dev/null > "$twice"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf 'FAIL %s: fmt_main crashed (exit %d) re-formatting the formatted output (idempotency pass)\n' "$rel" "$rc" > "$WORKDIR/$n.msg"
+    printf 'crash\n' > "$WORKDIR/$n.st"
+    exit 0
+  fi
+  idem_ok=1
+  cmp -s "$formatted" "$twice" || idem_ok=0
+
+  # NO TRAILING HORIZONTAL WHITESPACE (#2159). [[:blank:]] is space and tab.
+  grep -nE '[[:blank:]]+$' "$formatted" > "$WORKDIR/$n.ws" 2>/dev/null
+  ws_ok=1
+  if [ -s "$WORKDIR/$n.ws" ]; then ws_ok=0; fi
+
+  ast_ok=1
+  [ "$before" = "$after" ] || ast_ok=0
+  if [ "$ast_ok" -eq 0 ]; then
+    printf '%s\n' "$before" > "$WORKDIR/$n.before.sexp"
+    printf '%s\n' "$after" > "$WORKDIR/$n.after.sexp"
+  fi
+
+  printf 'ok %d %d %d\n' "$ast_ok" "$idem_ok" "$ws_ok" > "$WORKDIR/$n.st"
+  exit 0
+fi
+
 # ── KNOWN-DIVERGENCE LEDGER (self-draining ratchet) ──────────────────────────
 # A short checked-in list of fixtures where fmt is KNOWN to change the parse, each
 # with a tracking issue (test/fmt_roundtrip_known_divergence.txt). The ratchet runs
@@ -121,64 +181,60 @@ fi
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT INT TERM
 
+
+# Per-file work fans out over `xargs -P`. Bounded by default to min(4, NCPU/2), at least
+# 1: the box is shared, so never NCPU. FMT_ROUNDTRIP_JOBS overrides.
+NCPU="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+XJOBS=$(( NCPU / 2 ))
+[ "$XJOBS" -gt 4 ] && XJOBS=4
+[ "$XJOBS" -lt 1 ] && XJOBS=1
+XJOBS="${FMT_ROUNDTRIP_JOBS:-$XJOBS}"
+SELF="$ROOT/test/diff_compiler_fmt_roundtrip.sh"
+
+# Pass 1 (serial, cheap): number the files that exist, in corpus order. Index n is the
+# file's position; every per-file artifact is keyed by it, so the replay below prints
+# results in exactly the order the old serial loop did.
+: > "$WORKDIR/list"
+n=0
+for f in $files; do
+  [ -f "$f" ] || continue
+  n=$((n + 1))
+  printf '%s\n' "$f" >> "$WORKDIR/list"
+done
+
+# Pass 2 (parallel): one worker per index, each a re-invocation of this script in
+# --worker mode. Workers print nothing; results land in $WORKDIR/$n.st and friends.
+if [ "$n" -gt 0 ]; then
+  i=1
+  while [ "$i" -le "$n" ]; do
+    printf '%s\n' "$i"
+    i=$((i + 1))
+  done | xargs -P "$XJOBS" -n 1 sh "$SELF" --worker "$WORKDIR"
+fi
+
+# Pass 3 (serial): replay the results in index order. Output, counters and exit status
+# match the old single loop, including stopping at the first oracle crash.
 n=0
 pass=0
 fail=0
 kdiv=0              # ledgered files that STILL diverge (tolerated)
 kdiv_names=""
 seen_known=""      # ledgered files actually encountered this run
-for f in $files; do
-  [ -f "$f" ] || continue
+while IFS= read -r f; do
   n=$((n + 1))
   rel="${f#"$ROOT"/}"
 
-  # An oracle CRASH must never impersonate a result. Without these checks, a
-  # non-zero exit's empty/garbage stdout flows into the AST compare and gets
-  # misdiagnosed as "fmt changed the parse" — or, if BOTH parse calls crash on an
-  # unparseable file, as a clean PASS. This gate exists to stop a crash looking
-  # clean, so a non-zero oracle exit is a hard, labelled failure. ($? right after a
-  # $(...) assignment is that command's status — these stay in the MAIN shell so the
-  # n/fail counters are not lost to a subshell.)
-  before="$("$PARSE" "$f" 2>/dev/null)"; rc=$?
-  if [ "$rc" -ne 0 ]; then
-    printf 'FAIL %s: parse_main crashed (exit %d) on the original source\n' "$rel" "$rc"
+  # An oracle CRASH must never impersonate a result: the worker recorded it as a
+  # labelled failure, and the replay stops here exactly as the serial loop did.
+  if [ ! -f "$WORKDIR/$n.st" ]; then
+    printf 'FAIL %s: parallel worker wrote no result\n' "$rel"
     exit 1
   fi
-
-  formatted="$WORKDIR/$n.mdk"
-  "$FMT" "$f" 2>/dev/null > "$formatted"; rc=$?
-  if [ "$rc" -ne 0 ]; then
-    printf 'FAIL %s: fmt_main crashed (exit %d)\n' "$rel" "$rc"
+  read -r kind ast_ok idem_ok ws_ok < "$WORKDIR/$n.st"
+  if [ "$kind" = crash ]; then
+    cat "$WORKDIR/$n.msg"
     exit 1
   fi
-
-  after="$("$PARSE" "$formatted" 2>/dev/null)"; rc=$?
-  if [ "$rc" -ne 0 ]; then
-    printf 'FAIL %s: parse_main crashed (exit %d) re-parsing the formatted output\n' "$rel" "$rc"
-    exit 1
-  fi
-
-  # IDEMPOTENCY: fmt(fmt(x)) must equal fmt(x) byte-for-byte — a formatter that keeps
-  # reshaping its own output on every re-run never converges, so the pre-commit hook's
-  # forced fmt pass would keep dirtying files that a human already ran fmt on (#2159).
-  twice="$WORKDIR/$n.twice.mdk"
-  "$FMT" "$formatted" 2>/dev/null > "$twice"; rc=$?
-  if [ "$rc" -ne 0 ]; then
-    printf 'FAIL %s: fmt_main crashed (exit %d) re-formatting the formatted output (idempotency pass)\n' "$rel" "$rc"
-    exit 1
-  fi
-  idem_ok=1
-  cmp -s "$formatted" "$twice" || idem_ok=0
-
-  # NO TRAILING HORIZONTAL WHITESPACE: fmt's own canonical output must never end a
-  # line in a space or tab (#2159) — trailing whitespace fmt introduces itself cannot
-  # be blamed on the input.
-  ws_lines="$(grep -nE '[ 	]+$' "$formatted" 2>/dev/null)"
-  ws_ok=1
-  [ -z "$ws_lines" ] || ws_ok=0
-
-  ast_ok=1
-  [ "$before" = "$after" ] || ast_ok=0
 
   if is_known "$rel"; then
     seen_known="$seen_known $rel"
@@ -200,20 +256,18 @@ for f in $files; do
     fail=$((fail + 1))
     if [ "$ast_ok" -eq 0 ]; then
       printf 'FAIL %s (fmt round-trip changed the AST — not in the known-divergence ledger)\n' "$rel"
-      printf '%s\n' "$before" > "$WORKDIR/$n.before.sexp"
-      printf '%s\n' "$after" > "$WORKDIR/$n.after.sexp"
       diff -u "$WORKDIR/$n.before.sexp" "$WORKDIR/$n.after.sexp" | sed 's/^/    /'
     fi
     if [ "$idem_ok" -eq 0 ]; then
       printf 'FAIL %s (fmt is not idempotent: fmt(fmt(x)) != fmt(x) — not in the known-divergence ledger)\n' "$rel"
-      diff -u "$formatted" "$twice" | sed 's/^/    /'
+      diff -u "$WORKDIR/$n.mdk" "$WORKDIR/$n.twice.mdk" | sed 's/^/    /'
     fi
     if [ "$ws_ok" -eq 0 ]; then
       printf 'FAIL %s (fmt output has trailing horizontal whitespace — not in the known-divergence ledger)\n' "$rel"
-      printf '%s\n' "$ws_lines" | sed 's/^/    /'
+      sed 's/^/    /' "$WORKDIR/$n.ws"
     fi
   fi
-done
+done < "$WORKDIR/list"
 
 # In a full-corpus run, a ledger entry that was NEVER encountered is stale (the fixture
 # was renamed or deleted): it can no longer self-drain, so flag it. Skipped for a

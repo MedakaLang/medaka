@@ -1,5 +1,5 @@
 # META
-source_lines=951
+source_lines=950
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -48,7 +48,7 @@ import core.{
   FromEntries,
   Index,
 }
-import list.{reverse, take}
+import list.{intersperse, reverse, take}
 
 {- | The map type.
 
@@ -728,9 +728,8 @@ export impl Debug (Map k v) requires Debug k, Debug v where
 -- Comma-joined `k => v` entries for `Display (Map k v)`; keys/values render via
 -- `display` (unquoted), the Display convention.  `entries` gives ascending pairs.
 displayMapEntries : (Display k, Display v) => List (k, v) -> String
-displayMapEntries [] = ""
-displayMapEntries [(k, v)] = "\{k} => \{v}"
-displayMapEntries ((k, v) :: rest) = "\{k} => \{v}, \{displayMapEntries rest}"
+displayMapEntries es =
+  stringConcat (intersperse ", " (map ((k, v) => "\{k} => \{v}") es))
 
 {- | `display` renders a map in its literal syntax, `Map { k => v, ... }`.
 
@@ -955,7 +954,7 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
       (filter ((key, _) => gte key k) (entries m))
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
-(DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "bin" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))
@@ -1111,9 +1110,7 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DImpl true "Ord" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k"))) (req "Ord" ((TyVar "v")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "compare") (EApp (EVar "entries") (EVar "a"))) (EApp (EVar "entries") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Debug" ((TyVar "k"))) (req "Debug" ((TyVar "v")))) ((im "debug" ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EVar "entries") (EVar "m"))))) (ELit (LString ""))))))
 (DTypeSig false "displayMapEntries" (TyConstrained ((cstr "Display" (TyVar "k")) (cstr "Display" (TyVar "v"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "String"))))
-(DFunDef false "displayMapEntries" ((PList)) (ELit (LString "")))
-(DFunDef false "displayMapEntries" ((PList (PTuple (PVar "k") (PVar "v")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ""))))
-(DFunDef false "displayMapEntries" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "displayMapEntries") (EVar "rest")))) (ELit (LString ""))))
+(DFunDef false "displayMapEntries" ((PVar "es")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "intersperse") (ELit (LString ", "))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ""))))) (EVar "es")))))
 (DImpl true "Display" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Display" ((TyVar "k"))) (req "Display" ((TyVar "v")))) ((im "display" ((PVar "m")) (EMatch (EApp (EVar "entries") (EVar "m")) (arm (PList) () (ELit (LString "Map {}"))) (arm (PVar "es") () (EBinOp "++" (EBinOp "++" (ELit (LString "Map { ")) (EApp (EVar "display") (EApp (EVar "displayMapEntries") (EVar "es")))) (ELit (LString " }"))))))))
 (DImpl true "Semigroup" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "union") (EVar "a")) (EVar "b")))))
 (DImpl true "FromEntries" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyTuple (TyVar "k") (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "fromEntries" ((PVar "es")) (EApp (EVar "fromList") (EVar "es")))))
@@ -1168,7 +1165,7 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DProp false "entriesFrom bounded on one side only still agrees with entries" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EVar "None")) (EVar "m"))) (EApp (EVar "entries") (EVar "m"))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EVar "entries") (EVar "m"))))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EVar "None")) (EVar "m"))) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EVar "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
-(DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "bin" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))
@@ -1324,9 +1321,7 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DImpl true "Ord" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k"))) (req "Ord" ((TyVar "v")))) ((im "compare" ((PVar "a") (PVar "b")) (EApp (EApp (EMethodRef "compare") (EApp (EVar "entries") (EVar "a"))) (EApp (EVar "entries") (EVar "b"))))))
 (DImpl true "Debug" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Debug" ((TyVar "k"))) (req "Debug" ((TyVar "v")))) ((im "debug" ((PVar "m")) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EVar "entries") (EVar "m"))))) (ELit (LString ""))))))
 (DTypeSig false "displayMapEntries" (TyConstrained ((cstr "Display" (TyVar "k")) (cstr "Display" (TyVar "v"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "String"))))
-(DFunDef false "displayMapEntries" ((PList)) (ELit (LString "")))
-(DFunDef false "displayMapEntries" ((PList (PTuple (PVar "k") (PVar "v")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ""))))
-(DFunDef false "displayMapEntries" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EDictApp "displayMapEntries") (EVar "rest")))) (ELit (LString ""))))
+(DFunDef false "displayMapEntries" ((PVar "es")) (EApp (EVar "stringConcat") (EApp (EApp (EVar "intersperse") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "k"))) (ELit (LString " => "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ""))))) (EVar "es")))))
 (DImpl true "Display" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Display" ((TyVar "k"))) (req "Display" ((TyVar "v")))) ((im "display" ((PVar "m")) (EMatch (EApp (EVar "entries") (EVar "m")) (arm (PList) () (ELit (LString "Map {}"))) (arm (PVar "es") () (EBinOp "++" (EBinOp "++" (ELit (LString "Map { ")) (EApp (EMethodRef "display") (EApp (EDictApp "displayMapEntries") (EVar "es")))) (ELit (LString " }"))))))))
 (DImpl true "Semigroup" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "append" ((PVar "a") (PVar "b")) (EApp (EApp (EDictApp "union") (EVar "a")) (EVar "b")))))
 (DImpl true "FromEntries" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyTuple (TyVar "k") (TyVar "v"))) ((req "Ord" ((TyVar "k")))) ((im "fromEntries" ((PVar "es")) (EApp (EDictApp "fromList") (EVar "es")))))

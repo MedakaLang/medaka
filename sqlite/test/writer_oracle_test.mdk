@@ -82,6 +82,15 @@ buildBin entry bin =
       bin,
     ])
 
+-- Every row reads its database with the same `sqlite/main.mdk` build, so it
+-- is built once per process: a top-level nullary is evaluated once, and the
+-- binary lives under the shared scratch root, outside every row's own
+-- cleanup list.
+readerBin : <Exec, IO> Result String String
+readerBin = match rowScratch "shared-reader"
+  Err e => Err e
+  Ok bin => map (_ => bin) (buildBin "sqlite/main.mdk" bin)
+
 sqlite3Query : String -> String -> <Exec, IO> Result String String
 sqlite3Query db sql = spawnOut queryTimeoutSeconds "sqlite3" [db, sql]
 
@@ -192,15 +201,14 @@ writerResult = match rowScratch "writer"
   Ok prefix =>
     let db = "\{prefix}.db"
     let writer = "\{prefix}-writer"
-    let reader = "\{prefix}-reader"
-    let out = runWriter db writer reader
-    let _ = runVerb "rm" ["-rf", db, writer, reader]
+    let out = runWriter db writer
+    let _ = runVerb "rm" ["-rf", db, writer]
     out
 
-runWriter : String -> String -> String -> <Exec, IO> Result String WriterRun
-runWriter db writer reader = do
+runWriter : String -> String -> <Exec, IO> Result String WriterRun
+runWriter db writer = do
   _ <- buildBin "sqlite/writer_demo.mdk" writer
-  _ <- buildBin "sqlite/main.mdk" reader
+  reader <- readerBin
   _ <- spawnOut queryTimeoutSeconds writer [db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
   schema <- sqlite3Lines db "SELECT type, name, rootpage FROM sqlite_master;"
@@ -380,13 +388,12 @@ writerApiResult = match rowScratch "writer-api"
   Err e => Err e
   Ok prefix =>
     let writer = "\{prefix}-writer"
-    let reader = "\{prefix}-reader"
     let dbUsers = "\{prefix}-users.db"
     let dbKv = "\{prefix}-kv.db"
     let dbBlob = "\{prefix}-blob.db"
     let dbReals = "\{prefix}-reals.db"
-    let out = runWriterApi writer reader dbUsers dbKv dbBlob dbReals
-    let _ = runVerb "rm" ["-rf", writer, reader, dbUsers, dbKv, dbBlob, dbReals]
+    let out = runWriterApi writer dbUsers dbKv dbBlob dbReals
+    let _ = runVerb "rm" ["-rf", writer, dbUsers, dbKv, dbBlob, dbReals]
     out
 
 runWriterApi : String ->
@@ -394,11 +401,10 @@ runWriterApi : String ->
   String ->
   String ->
   String ->
-  String ->
   <Exec, IO> Result String WriterApiRun
-runWriterApi writer reader dbUsers dbKv dbBlob dbReals = do
+runWriterApi writer dbUsers dbKv dbBlob dbReals = do
   _ <- buildBin "sqlite/writer_api_demo.mdk" writer
-  _ <- buildBin "sqlite/main.mdk" reader
+  reader <- readerBin
   users <- runApiSchema
     writer
     reader
@@ -548,18 +554,14 @@ multipageResult = match rowScratch "multipage-write"
   Ok prefix =>
     let db = "\{prefix}.db"
     let writer = "\{prefix}-writer"
-    let reader = "\{prefix}-reader"
-    let out = runMultipage db writer reader
-    let _ = runVerb "rm" ["-rf", db, writer, reader]
+    let out = runMultipage db writer
+    let _ = runVerb "rm" ["-rf", db, writer]
     out
 
-runMultipage : String ->
-  String ->
-  String ->
-  <Exec, IO> Result String MultipageRun
-runMultipage db writer reader = do
+runMultipage : String -> String -> <Exec, IO> Result String MultipageRun
+runMultipage db writer = do
   _ <- buildBin "sqlite/multipage_write_demo.mdk" writer
-  _ <- buildBin "sqlite/main.mdk" reader
+  reader <- readerBin
   _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
   schema <- sqlite3Lines db "SELECT type, name, rootpage FROM sqlite_master;"
@@ -723,18 +725,14 @@ multitableResult = match rowScratch "multitable-write"
   Ok prefix =>
     let db = "\{prefix}.db"
     let writer = "\{prefix}-writer"
-    let reader = "\{prefix}-reader"
-    let out = runMultitable db writer reader
-    let _ = runVerb "rm" ["-rf", db, writer, reader]
+    let out = runMultitable db writer
+    let _ = runVerb "rm" ["-rf", db, writer]
     out
 
-runMultitable : String ->
-  String ->
-  String ->
-  <Exec, IO> Result String MultitableRun
-runMultitable db writer reader = do
+runMultitable : String -> String -> <Exec, IO> Result String MultitableRun
+runMultitable db writer = do
   _ <- buildBin "sqlite/multitable_write_demo.mdk" writer
-  _ <- buildBin "sqlite/main.mdk" reader
+  reader <- readerBin
   _ <- spawnOut queryTimeoutSeconds writer [intToString bigTableN, db]
   ic <- sqlite3Query db "PRAGMA integrity_check;"
   schema <- sqlite3Lines
@@ -918,19 +916,14 @@ rowidResult = match rowScratch "rowid-roundtrip"
     let src = "\{prefix}-src.db"
     let dst = "\{prefix}-dst.db"
     let probe = "\{prefix}-probe"
-    let reader = "\{prefix}-reader"
-    let out = runRowid src dst probe reader
-    let _ = runVerb "rm" ["-rf", src, dst, probe, reader]
+    let out = runRowid src dst probe
+    let _ = runVerb "rm" ["-rf", src, dst, probe]
     out
 
-runRowid : String ->
-  String ->
-  String ->
-  String ->
-  <Exec, IO> Result String RowidRun
-runRowid src dst probe reader = do
+runRowid : String -> String -> String -> <Exec, IO> Result String RowidRun
+runRowid src dst probe = do
   _ <- buildBin "sqlite/rowid_roundtrip_demo.mdk" probe
-  _ <- buildBin "sqlite/main.mdk" reader
+  reader <- readerBin
   _ <- seedDb src [SeedSql rowidSeedSql]
   srcKvRowids <- sqlite3Lines src "SELECT rowid FROM kv ORDER BY rowid;"
   srcUsersRowids <- sqlite3Lines src "SELECT rowid FROM users ORDER BY rowid;"
