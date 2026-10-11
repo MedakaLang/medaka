@@ -40,7 +40,7 @@
 
 import test.vector_ledger.{filesForConsumer, validatePaths}
 import io.{getEnvOr}
-import list.{get, last, nub, reverse, somes}
+import list.{get, last, nub, reverse, somes, zipWith}
 import path.{stem}
 import string.{
   contains,
@@ -56,7 +56,7 @@ import string.{
   words,
 }
 import test.{Expectation, expectNoFindings, fail, pass}
-import test_process.{boundedVerbSeconds, medakaBin, medakaRoot}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot, testJobs}
 
 -- # The row
 
@@ -494,6 +494,27 @@ buildNative label driver bin =
       "medaka build"
       (spawn buildSeconds medakaEnv medakaBin ["build", driver, "-o", bin]))
 
+{- | `buildNative` for every `(label, driver, bin)` row, the builds run side
+   by side (at most `testJobs` at once). The findings are those of each
+   `buildNative` in row order. The rows must write distinct `bin` paths. -}
+export
+buildNativeBatch : List (String, String, String) -> <Exec, IO> List String
+buildNativeBatch rows =
+  let envs = medakaEnv
+  let bin = medakaBin
+  let spawned =
+    spawnBatch
+      (map
+        ((_, driver, out) =>
+          (buildSeconds, envs, bin, ["build", driver, "-o", out]))
+        rows)
+  let perBuild =
+    zipWith
+      ((label, _, _) run => snd (spawnFindings label "medaka build" run))
+      rows
+      spawned
+  flatMap (fs => fs) perBuild
+
 wasmStdout : Row ->
   Arm ->
   String ->
@@ -844,54 +865,119 @@ public export data MutationTest = MutationTest {
   mutations : List Mutation,
 }
 
-{- | The findings against one mutation, run in the scratch tree `tree`. The
-   mutated file is put back afterwards, whatever the outcome, so the next
-   mutation starts from an unbroken tree. -}
-export
-mutationFindings : MutationTest ->
-  String ->
-  Mutation ->
-  <Exec, FileRead, FileWrite, IO> List String
-mutationFindings t tree m =
-  let label = "\{t.gate} (mutation \{m.name})"
-  match readFile "\{medakaRoot}/\{m.file}"
-    Err e => ["\{label}: could not read \{m.file}: \{e}"]
-    Ok original =>
-      let anchors = countOccurrences m.anchor original
-      if anchors /= 1 then
-        [
-          "\{label}: the anchor occurs \{intToString anchors} times in \{m.file}, expected once: \{debug m.anchor}",
-        ]
-      else
-        let target = "\{tree}/\{m.file}"
-        let found = match writeFile target (replace m.anchor m.mutant original)
-          Err e => ["\{label}: could not write the mutant: \{e}"]
-          Ok _ => mutantFindings t tree label m
-        match writeFile target original
-          Err e => found ++ ["\{label}: could not restore \{m.file}: \{e}"]
-          Ok _ => found
+-- The label that heads every finding about mutation `m` of `t`.
+labelOf : MutationTest -> Mutation -> String
+labelOf t m = "\{t.gate} (mutation \{m.name})"
 
--- | The mutant must build, then fail, and fail with its own witness.
-export
-mutantFindings : MutationTest ->
-  String ->
-  String ->
+{- | The text mutation `m` makes of its file: the live checkout's text with
+   the single occurrence of its anchor replaced. A mutation whose anchor does
+   not occur exactly once is stopped here, before anything is built. The live
+   checkout is only read. -}
+mutantText : MutationTest ->
   Mutation ->
-  <Exec, IO> List String
-mutantFindings t tree label m =
-  let bin = "\{tree}/mutant"
-  match buildNative label "\{tree}/\{t.driver}" bin
-    [] => match spawn runSeconds [] bin t.args
-      Err e => ["\{label}: could not spawn the mutant: \{e}"]
-      Ok (0, _, _) => ["\{label}: the mutant passed; the gate cannot see it"]
-      Ok (_, out, err) =>
-        if contains m.witness (out ++ err) then
-          []
-        else
-          [
-            "\{label}: the mutant failed without its witness \{debug m.witness}, so for an unrelated reason",
-          ]
-    fs => fs
+  <FileRead, IO> Result (List String) String
+mutantText t m = match readFile "\{medakaRoot}/\{m.file}"
+  Err e => Err ["\{labelOf t m}: could not read \{m.file}: \{e}"]
+  Ok original =>
+    let anchors = countOccurrences m.anchor original
+    if anchors /= 1 then
+      Err [
+        "\{labelOf t m}: the anchor occurs \{intToString anchors} times in \{m.file}, expected once: \{debug m.anchor}",
+      ]
+    else
+      Ok (replace m.anchor m.mutant original)
+
+-- The arguments to `sh` that make the directory `$1` holding a copy of `$2`
+-- as its `pds/`.
+copyArgs : String -> String -> List String
+copyArgs root src =
+  ["-c", "mkdir -p \"$1\" && cp -R \"$2\" \"$1/pds\"", "sh", root, src]
+
+{- | Mutation `i` of the pristine scratch tree `tree`: its own fresh copy of
+   `tree`'s `pds/`, with the mutant written into the copy. The copy is the
+   mutation's alone, so no mutation can see another's edit, and `tree` itself
+   is never written. Yields the copy's root and the mutation, or the findings
+   that stop it. -}
+stageMutation : MutationTest ->
+  String ->
+  Int ->
+  Mutation ->
+  <Exec, FileRead, FileWrite, IO> Result (List String) (String, Mutation)
+stageMutation t tree i m = match mutantText t m
+  Err fs => Err fs
+  Ok text =>
+    let root = "\{tree}/mutant\{intToString i}"
+    match spawn runSeconds [] "sh" (copyArgs root "\{tree}/pds")
+      Ok (0, _, _) => match writeFile "\{root}/\{m.file}" text
+        Err e => Err ["\{labelOf t m}: could not write the mutant: \{e}"]
+        Ok _ => Ok (root, m)
+      Ok (code, _, err) =>
+        Err ["\{labelOf t m}: copying pds/ exited \{intToString code}: \{err}"]
+      Err e => Err ["\{labelOf t m}: could not copy pds/: \{e}"]
+
+-- The `Ok` payloads of `xs`, in order.
+okValues : List (Result e a) -> List a
+okValues [] = []
+okValues ((Err _) :: rest) = okValues rest
+okValues ((Ok x) :: rest) = x :: okValues rest
+
+-- Each `Ok` of `xs` paired with the next of `ys`, in order; each `Err` of
+-- `xs` is kept as it is. `ys` holds one entry per `Ok`, in the same order.
+pairOks : List (Result e a) -> List b -> List (Result e (a, b))
+pairOks [] _ = []
+pairOks ((Err e) :: rest) ys = Err e :: pairOks rest ys
+pairOks ((Ok _) :: rest) [] = pairOks rest []
+pairOks ((Ok x) :: rest) (y :: ys) = Ok (x, y) :: pairOks rest ys
+
+-- `xs` with each element numbered from `i`.
+indexed : Int -> List a -> List (Int, a)
+indexed _ [] = []
+indexed i (x :: xs) = (i, x) :: indexed (i + 1) xs
+
+-- `spawn` for every row, `testJobs` at a time, in row order. Each row is
+-- `spawn`'s own arguments, so each spawn keeps `spawn`'s time limit.
+export
+spawnBatch : List (Int, List String, String, List String) ->
+  <Exec, IO> List (Result String (Int, String, String))
+spawnBatch rows =
+  runCommandBatch
+    "perl"
+    testJobs
+    (map ((secs, envs, cmd, args) => spawnArgv secs envs cmd args) rows)
+
+-- The `perl` arguments that `spawn secs envs cmd args` runs.
+spawnArgv : Int -> List String -> String -> List String -> List String
+spawnArgv secs envs cmd args =
+  ["-e", "alarm \{intToString secs}; exec @ARGV", "env", "env"]
+    ++ envs
+    ++ (cmd :: args)
+
+-- The findings against a mutant's build, and the binary it made when clean.
+buildGraded : MutationTest ->
+  Result (List String) ((String, Mutation), Result String (Int, String, String)) ->
+  Result (List String) (String, Mutation)
+buildGraded _ (Err fs) = Err fs
+buildGraded t (Ok ((root, m), spawned)) =
+  match spawnFindings (labelOf t m) "medaka build" spawned
+    (_, []) => Ok ("\{root}/mutant", m)
+    (_, fs) => Err fs
+
+-- The findings against running a built mutant: it must fail, and fail with
+-- its own witness.
+runGraded : MutationTest ->
+  Result (List String) ((String, Mutation), Result String (Int, String, String)) ->
+  List String
+runGraded _ (Err fs) = fs
+runGraded t (Ok ((_, m), spawned)) = match spawned
+  Err e => ["\{labelOf t m}: could not spawn the mutant: \{e}"]
+  Ok (0, _, _) => ["\{labelOf t m}: the mutant passed; the gate cannot see it"]
+  Ok (_, out, err) =>
+    if contains m.witness (out ++ err) then
+      []
+    else
+      [
+        "\{labelOf t m}: the mutant failed without its witness \{debug m.witness}, so for an unrelated reason",
+      ]
 
 {- | Every mutated file, in the scratch tree and in the live tree, must end
    byte-identical to its text before the first mutation. A scratch copy left
@@ -935,8 +1021,31 @@ pristineOf (rel :: rest) = match readFile "\{medakaRoot}/\{rel}"
   Err e => Err "could not read \{rel}: \{e}"
   Ok text => map ((rel, text) :: _) (pristineOf rest)
 
--- | Every mutation of `t`, run in the scratch tree `tree`, then the
--- restoration check over every file a mutation touched.
+{- | The findings against every mutation of `t`, in mutation order. Each
+   mutation gets its own copy of the pristine tree `tree` (see
+   `stageMutation`); the copies are staged one at a time, then all their
+   builds run `testJobs` at a time, then all their runs. -}
+mutationsFindings : MutationTest ->
+  String ->
+  <Exec, FileRead, FileWrite, IO> List String
+mutationsFindings t tree =
+  let bin = medakaBin
+  let envs = medakaEnv
+  let staged = map ((i, m) => stageMutation t tree i m) (indexed 0 t.mutations)
+  let buildRows =
+    map
+      ((root, _) => (
+        buildSeconds,
+        envs,
+        bin,
+        ["build", "\{root}/\{t.driver}", "-o", "\{root}/mutant"],
+      ))
+      (okValues staged)
+  let built = map (buildGraded t) (pairOks staged (spawnBatch buildRows))
+  let runRows =
+    map ((mutantBin, _) => (runSeconds, [], mutantBin, t.args)) (okValues built)
+  flatMap (runGraded t) (pairOks built (spawnBatch runRows))
+
 export
 allMutationFindings : MutationTest ->
   String ->
@@ -947,8 +1056,7 @@ allMutationFindings t tree =
     Ok pristine =>
       match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
         Ok (0, _, _) =>
-          flatMap (mutationFindings t tree) t.mutations
-            ++ restoredFindings t tree pristine
+          mutationsFindings t tree ++ restoredFindings t tree pristine
         Ok (code, _, err) =>
           ["\{t.gate}: copying pds/ exited \{intToString code}: \{err}"]
         Err e => ["\{t.gate}: could not copy pds/: \{e}"]
