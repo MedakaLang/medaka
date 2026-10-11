@@ -8,6 +8,7 @@ import test.{
   expectEqual,
   expectFalse,
   expectGreaterThan,
+  expectLessThan,
   expectNotEqual,
   expectSatisfies,
   expectTrue,
@@ -3909,3 +3910,79 @@ test "the graph-end drain mints no instance route for a scheme-quantified goal" 
       (filter
         (e => e.eoeGoalKind == "GKDictApp" && e.eoePredicate == Some "a")
         entries))
+
+nestedWrap : Int -> String -> String
+nestedWrap depth leaf =
+  if depth <= 0 then leaf else "Wrap (\{nestedWrap (depth - 1) leaf})"
+
+-- `deep : Wrap^n Int` routes `Mk` at return position through n prerequisites.
+returnChainSource : Int -> List String
+returnChainSource depth = [
+  "data Wrap a = Wrap a",
+  "interface Mk a where",
+  "  mk : Int -> a",
+  "impl Mk Int where",
+  "  mk n = n",
+  "impl Mk (Wrap a) requires Mk a where",
+  "  mk n = Wrap (mk n)",
+  "deep : \{nestedWrap depth "Int"}",
+  "deep = mk 7",
+]
+
+-- Each `Wrap` impl requires both interfaces at the payload, so the goals at
+-- depth k are reached along 2^k paths while only two distinct goals exist there.
+branchingRequiresSource : Int -> List String
+branchingRequiresSource depth = [
+  "data Wrap a = Wrap a",
+  "interface Tag t where",
+  "  tagOf : t -> String",
+  "interface Tag2 t where",
+  "  tag2Of : t -> String",
+  "impl Tag Int where",
+  "  tagOf _ = \"int\"",
+  "impl Tag2 Int where",
+  "  tag2Of _ = \"int2\"",
+  "impl Tag2 (Wrap a) requires Tag2 a, Tag a where",
+  "  tag2Of (Wrap x) = \"v\"",
+  "impl Tag (Wrap a) requires Tag a, Tag2 a where",
+  "  tagOf (Wrap x) = \"w\"",
+  "deepv = tagOf (\{nestedWrap depth "5"})",
+]
+
+scalingCheckAlloc : List String -> <IO> (Float, List String)
+scalingCheckAlloc body =
+  let core = desugar (parse arithmeticPreludeSource)
+  let decls = desugar (parseLocated (joinNl body))
+  let before = allocBytes ()
+  let (errors, _) = checkOneDiags [] core ("requires_scaling", decls)
+  (allocBytes () - before, map tcMsg errors)
+
+-- Checks one family at three evenly spaced sizes and returns the two allocation
+-- increments.  Work linear in the size gives equal increments; a walk that
+-- revisits shared structure once per path multiplies the second by 2^step.
+scalingIncrements : (Int -> List String) ->
+  Int ->
+  Int ->
+  <IO> (Float, Float, List String)
+scalingIncrements family start step =
+  let _ = scalingCheckAlloc (family start)
+  let (small, smallErrors) = scalingCheckAlloc (family start)
+  let (middle, middleErrors) = scalingCheckAlloc (family (start + step))
+  let (large, largeErrors) = scalingCheckAlloc (family (start + 2 * step))
+  (middle - small, large - middle, smallErrors ++ middleErrors ++ largeErrors)
+
+test "a return-position requires chain checks in work linear in its depth" =
+  let (first, second, errors) = scalingIncrements returnChainSource 8 4
+  expectAll [
+    expectEqual [] errors,
+    expectGreaterThan 0.0 first,
+    expectLessThan (first * 3.0 + 65536.0) second,
+  ]
+
+test "branching requires check in work linear in the distinct goals" =
+  let (first, second, errors) = scalingIncrements branchingRequiresSource 6 3
+  expectAll [
+    expectEqual [] errors,
+    expectGreaterThan 0.0 first,
+    expectLessThan (first * 3.0 + 65536.0) second,
+  ]

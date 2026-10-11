@@ -968,18 +968,18 @@ table = [
   Row {
     entry = "s4-requires-depth-exceeded-rejected.mdk",
     label =
-      "§3 `inst` -- ISSUE 1562, the DRAIN. `requires`-nesting 33 deep crosses the reducers depth bound, which used to be SILENT: it returned the same `[]` as \"no matching impl\", the predicate was dropped from both the scheme and the `λ d̄.` prefix, and the program landed back in 1549s S0 (check 0 on `deep : a -> String`, build 0, BINARY 139). It is now a located reject. Its SPAN is pinned in section 6",
-    expCheck = "REJECT",
-    expRun = "REJECT",
-    expBuild = "REJECT",
-    mode = NoValue,
-    pinned = "",
-    codes = [Present "T-REQUIRES-DEPTH"],
+      "§3 W2 at a generalizing binder: `requires`-nesting 33 deep SHRINKS one `Wrap` per step, so no step spends fuel and `deep : Tag a => a -> String` is inferred. Hand-derived: one `w` per `Wrap`, then `int`. Was a T-REQUIRES-DEPTH reject under the flat 32-step bound, and before that issue 1562s silent drop (binary 139); the name is historical",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwint\n",
+    codes = [],
   },
   Row {
     entry = "s4-requires-depth-at-limit-control.mdk",
     label =
-      "THE AT-LIMIT CONTROL for the row above and the false-reject canary for making exhaustion loud: ONE fewer `Wrap` (depth 32, exactly the bound). Built and EXECUTED, so it distinguishes \"the bound is now loud\" from \"the bound moved\" -- a change to `residualReduceFuel` in EITHER direction reds one of these two files. Pre-fix this depth was ALSO silently dropped and its binary segfaulted",
+      "THE CONTROL for the row above: ONE fewer `Wrap` (depth 32, the old flat bound), accepted before and after §3 W2 made shrinking steps free. Built and EXECUTED. Pre-#1562 this depth was silently dropped and its binary segfaulted",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -2359,7 +2359,7 @@ table = [
   Row {
     entry = "s-instantiated-reselect-inferred.mdk",
     label =
-      "§3/OD6(a) the INFERRED twin of the row above -- byte-for-byte that fixture with the SIGNATURE LINE DELETED, so OD6(a) (a declared context and the identical inferred one adjudicate the same way) forces the same answer: boolW/intW. 🚨 A SEPARATE ROW BECAUSE IT IS A SEPARATE WRITER: the declared context is registered by `registerMember`, the inferred one by `registerInferredFor`, and BOTH were ids-only -- patching one leaves the other statically committed at exit 0 with the pair silently disagreeing, the shape #1869 and #1161 both landed in. MEASURED at base `bffced42`: `boolW/boolW` on check, run and build, identical to its declared twin. ⚠️ THE OBVIOUS INFERRED PROBE IS MIS-SCOPED AND MUST NOT REPLACE THIS ONE: add a general `impl Tag (Wrap a)` (what #1909`s own inferred repro does) and the residual `Tag (Wrap t)` is DISCHARGED by residual reduction at generalization time -- the binding retains no predicate, gets no dict slot under ANY #1909 fix, and `check --types` prints `nest : a -> String` on the unmodified base binary. The general impl has to be ABSENT for the inferred binding to keep a predicate at all. ⚠️ TWO `impl Tag` blocks, so Section 4 derives a permutation pair; at base the two orders printed `boolW/boolW` and `intW/intW` here too",
+      "§3/OD6(a) the INFERRED twin of the row above -- byte-for-byte that fixture with the SIGNATURE LINE DELETED, so OD6(a) (a declared context and the identical inferred one adjudicate the same way) forces the same answer: boolW/intW. 🚨 A SEPARATE ROW BECAUSE IT IS A SEPARATE WRITER: the declared context is registered by `registerMember`, the inferred one by `registerInferredFor`, and BOTH were ids-only -- patching one leaves the other statically committed at exit 0 with the pair silently disagreeing, the shape #1869 and #1161 both landed in. MEASURED at base `bffced42`: `boolW/boolW` on check, run and build, identical to its declared twin. ⚠️ THE GENERAL IMPL STAYS ABSENT HERE: adding `impl Tag (Wrap a)` (what #1909`s own inferred repro does) used to DISCHARGE the residual `Tag (Wrap t)` at generalization (`nest : a -> String`, no dict slot), which is why this row was written without it. Since R-STABLE (DICT §6.1.3) the more specific heads keep that goal in the scheme as written, and the `r-stable-*` rows pin that case; this row stays the no-general-impl shape it was derived for. ⚠️ TWO `impl Tag` blocks, so Section 4 derives a permutation pair; at base the two orders printed `boolW/boolW` and `intW/intW` here too",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -3262,13 +3262,68 @@ table = [
   Row {
     entry = "impl-head-requires-depth-past-fuel.mdk",
     label =
-      "§3 W3-inst one step past the requires fuel: `Tag (W^33 a)` exhausts the fuel before reaching `Tag a`, which is a located T-REQUIRES-DEPTH, as on the signature path. Running out of fuel used to return no residual, so `check` accepted the impl, `run` printed 34 and the built binary died with SIGSEGV",
+      "§3 W3-inst one step deeper than the row above: `Tag (W^33 a)` shrinks one `W` per step, so under §3 W2 no step spends fuel and the chain reaches `Tag a`, which no `requires` gives: refused naming `requires Tag a`, as at depth 32. Was a T-REQUIRES-DEPTH under the flat bound; running out of fuel before THAT used to return no residual, so `check` accepted the impl and the built binary died with SIGSEGV",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
     mode = NoValue,
     pinned = "",
-    codes = [Present "T-REQUIRES-DEPTH"],
+    codes = [Present "T-IMPL-MISSING-REQUIRES", Absent "T-REQUIRES-DEPTH"],
+  },
+  Row {
+    entry = "impl-head-requires-shrinking-given-past-fuel.mdk",
+    label =
+      "§3 W2 on the impl-body path (#3802s twin): `Tag (W^40 a)` shrinks to the impls own given `Tag a` in 40 free steps, so the impl is accepted. Hand-derived: `tag` adds one per `W` to 1, so 41. Was T-REQUIRES-DEPTH under the flat 32-step bound",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "41\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-shrinking-given-past-fuel.mdk",
+    label =
+      "§3 W2, #3802 DRAIN: `g : Tag a => a -> Int` poses `Tag (W^40 a)`, which shrinks to the declared given `Tag a` in 40 free steps. Hand-derived: 1 + 40 = 41. Was T-REQUIRES-DEPTH under the flat 32-step bound (a false reject)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "41\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-cycle-self-naming-rejected.mdk",
+    label =
+      "§3 W2, #1575 DRAIN: `impl C (Box a) requires C (Box a)` leads the goal `C (Box a)` back to itself, a cycle: located T-REQUIRES-CYCLE on every verb. Was a compiler stack overflow (exit 134) after ~40 s. `build`s own message is pinned in section 5",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-CYCLE"],
+  },
+  Row {
+    entry = "requires-cycle-impl-body-rejected.mdk",
+    label =
+      "§3 W2, #3801 DRAIN: an impl bodys goal `C (Box a)` meets the self-naming `requires C (Box a)`, a cycle: located T-REQUIRES-CYCLE on every verb. Was a compiler stack overflow",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-CYCLE"],
+  },
+  Row {
+    entry = "requires-growing-context-depth-rejected.mdk",
+    label =
+      "§3 W2, #2120: `impl Tag (Wrap a) requires Tag (Wrap (Wrap a))` grows its goal every step and never repeats one, so the fuel runs out: located T-REQUIRES-DEPTH on every verb. Was a compiler stack overflow after ~50 s",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-DEPTH", Absent "T-REQUIRES-CYCLE"],
   },
   Row {
     entry = "impl-head-deep-requires-control.mdk",
@@ -4653,6 +4708,105 @@ table = [
     pinned = "",
     codes = [Present "T-AMBIGUOUS-INSTANCE", Absent "T-NO-IMPL"],
   },
+  Row {
+    entry = "r-stable-overlap-goal-quantified.mdk",
+    label =
+      "§6.1.3 R-STABLE, THE #1579 DRAIN (re-pointed from the must_fail pin `1579-residual-commits-general-impl-requires`): `nest`s goal `Tag (Wrap a)` matches only the general `impl Tag (Wrap a) requires Show2 a`, but `impl Tag (Wrap Bool)` also unifies with it and is not more general, so the goal stays in the scheme as written (section 2 pins `nest : Tag (Wrap a) => a -> String`) and `nest True` selects the specific instance. Hand-derived: ACCEPT, `specificW`. Was `no impl of Show2 for Bool` on every verb",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "specificW\n",
+    codes = [Absent "T-NO-IMPL"],
+  },
+  Row {
+    entry = "r-stable-blanket-more-general-reduces.mdk",
+    label =
+      "§6.1.3 R-STABLE control: the only other head unifying with `Tag (Wrap a)` is the blanket `impl Tag a`, which is more general than the matching `impl Tag (Wrap a) requires Show2 a`, so the goal is still reduced to `Show2 a` (section 2 pins the scheme). Hand-derived: ACCEPT, `genericWi`; the same answer before R-STABLE",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "genericWi\n",
+    codes = [],
+  },
+  Row {
+    entry = "r-stable-overlap-both-satisfiable.mdk",
+    label =
+      "§6.1.3 R-STABLE, the value half: with `impl Show2 Bool` present the early reduction also compiled, and `nest True` printed `genericWb` while the direct `tagOf (Wrap True)` printed `specificW`. The goal now stays in `nest`s scheme, so the call through `nest` selects what the direct call selects. Hand-derived: specificW / genericWi / specificW",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "specificW\ngenericWi\nspecificW\n",
+    codes = [],
+  },
+  Row {
+    entry = "r-stable-overlap-local-binder.mdk",
+    label =
+      "§6.1.3 R-STABLE at a generalized local (§4.1): the `let`-bound `nest` keeps `Tag (Wrap a)` in its scheme exactly as the top-level one does. Hand-derived: ACCEPT, specificW / genericWi. Was `no impl of Show2 for Bool` on every verb",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "specificW\ngenericWi\n",
+    codes = [Absent "T-NO-IMPL"],
+  },
+  Row {
+    entry = "r-stable-overlap-outer-flexible.mdk",
+    label =
+      "§6.1.3 R-STABLE with an enclosing binder's open variable: at the local `nest`, `impl Tag (Pair Bool Int)` unifies with `Tag (Pair a y)` once `outer`s `y` is free, so the goal stays in both schemes (section 2) and `outer (1 : Int)` selects what the direct call selects. Hand-derived: specific x3. `outer` used to print `genericb`, `y` held rigid at `nest`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "specific\nspecific\nspecific\n",
+    codes = [],
+  },
+  Row {
+    entry = "r-stable-overlap-outer-flexible-multiparam.mdk",
+    label =
+      "§6.1.3 R-STABLE, the two-parameter twin: `Conv (Wrap a) y` at the local `nest` stays in the schemes, so each call through `outer` or `top` selects what the direct call selects. Hand-derived: specificW / specificW / genericWb / specificW / genericWb. `outer (1 : Int)` used to print `genericWb`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "specificW\nspecificW\ngenericWb\nspecificW\ngenericWb\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-cycle-rejected.mdk",
+    label =
+      "§2/§3 W2: `Sub (Box Int)`s dictionary carries `Sup (Box Int)`s, and `impl Sup (Box a) requires Sup (Box a)` repeats that goal, a cycle reached only through the super: located T-REQUIRES-CYCLE on every verb (section 5 pins `build`s message). Was a compiler E-PANIC on every verb, the route walk following a super instance no solving walk followed",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-CYCLE"],
+  },
+  Row {
+    entry = "requires-super-cross-class-cycle-rejected.mdk",
+    label =
+      "§2/§3 W2: the super instance `impl Sup (Box a) requires D (Box a)` poses `D (Box Int)`, which `impl D (Box a) requires D (Box a)` repeats: located T-REQUIRES-CYCLE on every verb. Was a compiler E-PANIC on every verb",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-CYCLE"],
+  },
+  Row {
+    entry = "requires-super-context-unsatisfied-rejected.mdk",
+    label =
+      "§2/§3: `Sub (Box Bool)`s dictionary carries a `Sup (Box Bool)` one, whose only instance requires the missing `Show2 Bool`, so the goal is unsatisfiable exactly as the direct `sup (Box True)` is: located T-NO-IMPL on every verb. Was ACCEPT printing `supisub` through a dictionary of the wrong type",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -4664,7 +4818,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 411
+tableRows = 425
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -4897,7 +5051,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 25
+schemeRows = 30
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -5050,6 +5204,36 @@ schemeTable = [
       "§6.3 D3 clause 2 at a local `let` (#3821): the same body through a `let` gets the top-level control's scheme, with no `Index` goal of the `let`'s own",
     want = "g : (Index a Int b, Num b) => a -> b",
   },
+  SchemeRow {
+    entry = "r-stable-overlap-goal-quantified.mdk",
+    label =
+      "§6.1.3 R-STABLE (#1579): `impl Tag (Wrap Bool)` unifies with `Tag (Wrap a)` and is not more general than the matching instance, so the goal is kept as written (was `nest : Show2 a => a -> String`)",
+    want = "nest : Tag (Wrap a) => a -> String",
+  },
+  SchemeRow {
+    entry = "r-stable-blanket-more-general-reduces.mdk",
+    label =
+      "§6.1.3 R-STABLE control: a blanket `impl Tag a` is more general than the matching `impl Tag (Wrap a)`, so the goal is reduced to that instance's `requires`",
+    want = "nest : Show2 a => a -> String",
+  },
+  SchemeRow {
+    entry = "r-stable-overlap-both-satisfiable.mdk",
+    label =
+      "§6.1.3 R-STABLE: the goal is kept as written even though reducing it would also have compiled here",
+    want = "nest : Tag (Wrap a) => a -> String",
+  },
+  SchemeRow {
+    entry = "r-stable-overlap-outer-flexible.mdk",
+    label =
+      "§6.1.3 R-STABLE: an enclosing binder's open variable is not rigid at the local `nest`, so `outer` keeps the goal and gets `top`s scheme (was `outer : a -> String`)",
+    want = "outer : Tag (Pair Bool a) => a -> String",
+  },
+  SchemeRow {
+    entry = "r-stable-overlap-outer-flexible-multiparam.mdk",
+    label =
+      "§6.1.3 R-STABLE, the two-parameter twin: `outer` keeps `Conv (Wrap Bool) a` (was `outer : a -> String`)",
+    want = "outer : Conv (Wrap Bool) a => a -> String",
+  },
 ]
 
 -- # Section 5 -- the DEMOTED warning reaches every verb, and NOTHING ELSE does
@@ -5094,7 +5278,7 @@ data VerbRow = VerbRow {
 {- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 verbRows : Int
-verbRows = 50
+verbRows = 68
 
 verbTable : List VerbRow
 verbTable = [
@@ -5472,6 +5656,133 @@ verbTable = [
     verb = "build",
     assertion = AEmpty,
   },
+  VerbRow {
+    ventry = "requires-cycle-self-naming-rejected.mdk",
+    vlabel =
+      "§3 W2 (#1575): `build` reports the cycle itself, located, with the impl whose `requires` repeats",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-cycle-self-naming-rejected\\.mdk:17:6: cannot resolve this constraint: the .requires. of .impl C \\(Box a\\). asks for .C \\(Box a\\).",
+  },
+  VerbRow {
+    ventry = "requires-cycle-self-naming-rejected.mdk",
+    vlabel =
+      "§3 W2 (#1575): ...and not as a failed emit. The old pin was drained once by a process boundary alone, when the overflow moved into the emitter child and `build` began reporting `emitter failed`",
+    verb = "build",
+    assertion = ANot "emitter failed",
+  },
+  VerbRow {
+    ventry = "requires-cycle-self-naming-rejected.mdk",
+    vlabel = "§3 W2 (#1575): `run` reports the cycle under its code",
+    verb = "run-json",
+    assertion = AJson "T-REQUIRES-CYCLE",
+  },
+  VerbRow {
+    ventry = "requires-cycle-impl-body-rejected.mdk",
+    vlabel =
+      "§3 W2 (#3801): `build` reports the cycle reached from the impl body, located",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-cycle-impl-body-rejected\\.mdk:16:13: cannot resolve this constraint: the .requires. of .impl C \\(Box a\\). asks for .C \\(Box a\\).",
+  },
+  VerbRow {
+    ventry = "requires-cycle-impl-body-rejected.mdk",
+    vlabel = "§3 W2 (#3801): ...and not as a failed emit",
+    verb = "build",
+    assertion = ANot "emitter failed",
+  },
+  VerbRow {
+    ventry = "requires-cycle-impl-body-rejected.mdk",
+    vlabel = "§3 W2 (#3801): `run` reports the cycle under its code",
+    verb = "run-json",
+    assertion = AJson "T-REQUIRES-CYCLE",
+  },
+  VerbRow {
+    ventry = "requires-growing-context-depth-rejected.mdk",
+    vlabel =
+      "§3 W2 (#2120): `build` reports the spent walk itself, located, naming the fuel",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-growing-context-depth-rejected\\.mdk:14:16: cannot resolve this constraint: following the .requires. clauses .* after 32 steps that did not make the goal smaller",
+  },
+  VerbRow {
+    ventry = "requires-growing-context-depth-rejected.mdk",
+    vlabel = "§3 W2 (#2120): ...and not as a failed emit",
+    verb = "build",
+    assertion = ANot "emitter failed",
+  },
+  VerbRow {
+    ventry = "requires-growing-context-depth-rejected.mdk",
+    vlabel = "§3 W2 (#2120): `run` reports the spent walk under its code",
+    verb = "run-json",
+    assertion = AJson "T-REQUIRES-DEPTH",
+  },
+  VerbRow {
+    ventry = "requires-super-cycle-rejected.mdk",
+    vlabel =
+      "§2/§3 W2: `build` reports the cycle reached through the super, located, with the super instance whose `requires` repeats",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-cycle-rejected\\.mdk:25:16: cannot resolve this constraint: the .requires. of .impl Sup \\(Box a\\). asks for .Sup \\(Box Int\\).",
+  },
+  VerbRow {
+    ventry = "requires-super-cycle-rejected.mdk",
+    vlabel = "§2/§3 W2: ...and not as a failed emit",
+    verb = "build",
+    assertion = ANot "emitter failed",
+  },
+  VerbRow {
+    ventry = "requires-super-cycle-rejected.mdk",
+    vlabel = "§2/§3 W2: `run` reports the cycle under its code",
+    verb = "run-json",
+    assertion = AJson "T-REQUIRES-CYCLE",
+  },
+  VerbRow {
+    ventry = "requires-super-cross-class-cycle-rejected.mdk",
+    vlabel =
+      "§2/§3 W2: `build` reports the cross-class cycle under the super, located, naming `impl D (Box a)`",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-cross-class-cycle-rejected\\.mdk:29:16: cannot resolve this constraint: the .requires. of .impl D \\(Box a\\). asks for .D \\(Box Int\\).",
+  },
+  VerbRow {
+    ventry = "requires-super-cross-class-cycle-rejected.mdk",
+    vlabel = "§2/§3 W2: ...and not as a failed emit",
+    verb = "build",
+    assertion = ANot "emitter failed",
+  },
+  VerbRow {
+    ventry = "requires-super-cross-class-cycle-rejected.mdk",
+    vlabel = "§2/§3 W2: `run` reports the cycle under its code",
+    verb = "run-json",
+    assertion = AJson "T-REQUIRES-CYCLE",
+  },
+  VerbRow {
+    ventry = "requires-super-context-unsatisfied-rejected.mdk",
+    vlabel =
+      "§2/§3: `build` reports the super instance's missing prerequisite at the call",
+    verb = "build",
+    assertion =
+      AHas
+        "requires-super-context-unsatisfied-rejected\\.mdk:31:16: no impl of Show2 for Bool",
+  },
+  VerbRow {
+    ventry = "requires-super-context-unsatisfied-rejected.mdk",
+    vlabel = "§2/§3: ...and not as a failed emit",
+    verb = "build",
+    assertion = ANot "emitter failed",
+  },
+  VerbRow {
+    ventry = "requires-super-context-unsatisfied-rejected.mdk",
+    vlabel = "§2/§3: `run` reports it under its code",
+    verb = "run-json",
+    assertion = AJson "T-NO-IMPL",
+  },
 ]
 
 -- # Section 6 -- diagnostic SPANS
@@ -5493,7 +5804,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 34
+spanRows = 36
 
 spanTable : List SpanRow
 spanTable = [
@@ -5608,10 +5919,22 @@ spanTable = [
     want = "11:10",
   },
   SpanRow {
-    entry = "s4-requires-depth-exceeded-rejected.mdk",
+    entry = "requires-growing-context-depth-rejected.mdk",
     label =
-      "issue 1562: the depth reject is attributed to the METHOD CALL that posed the goal (`tagOf …` in `deep`), through the `goalSiteLoc` the reducer republishes -- NOT to whatever `currentLoc` holds at the generalized groups close, which is the failure mode this whole section exists for",
-    want = "33:9",
+      "§3 W2 (#2120): the depth reject is attributed to the METHOD CALL that posed the goal (`tag (Wrap 1)` in `main`), at the goal's site -- NOT to whatever `currentLoc` holds when the walk runs out, which is the failure mode this whole section exists for",
+    want = "14:16",
+  },
+  SpanRow {
+    entry = "requires-cycle-self-naming-rejected.mdk",
+    label =
+      "§3 W2 (#1575): the cycle reject lands on the method call that posed the repeating goal (`cm` in `g`), not on the impl or on `main`",
+    want = "17:6",
+  },
+  SpanRow {
+    entry = "requires-cycle-impl-body-rejected.mdk",
+    label =
+      "§3 W2 (#3801): the cycle reached from an impl body lands on that bodys goal (`cc (Box x)`), not on the cyclic impl",
+    want = "16:13",
   },
   SpanRow {
     entry = "s4-gen-residual-mixed-vector-rejected.mdk",

@@ -1,0 +1,25 @@
+-- §3 W2, a cycle reached through a super (§2: a dictionary carries its supers').
+-- The goal `Sub (Box Int)` at `useSup (Box 1)` selects `impl Sub (Box a)`, whose
+-- dictionary carries a `Sup (Box Int)` dictionary built by `impl Sup (Box a)`, and
+-- that instance's `requires Sup (Box a)` names its own head.  No finite dictionary
+-- exists: `T-REQUIRES-CYCLE`, located at the goal's site, on every verb.  The route
+-- walk followed the super instance's `requires` while no solving walk did, so every
+-- verb used to stop on a compiler `E-PANIC` instead.
+interface Sup a where
+  sup : a -> Int
+
+interface Sub a requires Sup a where
+  sub : a -> Int
+
+data Box a = Box a
+
+impl Sup (Box a) requires Sup (Box a) where
+  sup _ = 1
+
+impl Sub (Box a) where
+  sub _ = 2
+
+useSup : Sub a => a -> Int
+useSup x = sup x + sub x
+
+main = println (useSup (Box (1 : Int)))

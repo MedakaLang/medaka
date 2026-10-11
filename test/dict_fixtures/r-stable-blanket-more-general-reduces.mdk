@@ -1,0 +1,33 @@
+-- DICT-SEMANTICS §6.1.3 (R-STABLE) control: the other unifying head is MORE
+-- general, so the goal is still reduced.
+--
+-- `nest x = tagOf (Wrap x)` leaves `Tag (Wrap a)`.  It matches
+-- `impl Tag (Wrap a) requires Show2 a`; the only other head that unifies with it
+-- is the blanket `impl Tag a`, which is ⊒ `Tag (Wrap a)`, so every instantiation
+-- of `a` still selects the `Wrap` instance.  The goal is reduced to that
+-- instance's context: `nest : Show2 a => a -> String`.
+--
+-- SPEC ANSWER (hand-derived): `nest (1 : Int)` runs the `Wrap` instance with
+-- `impl Show2 Int`, printing `genericWi`, on check, run and build.  Same answer
+-- before R-STABLE: this row pins that the rule does not quantify a goal whose
+-- only competitor is more general.
+data Wrap a = Wrap a
+
+interface Tag t where
+  tagOf : t -> String
+
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Int where
+  show2 _ = "i"
+
+impl Tag a where
+  tagOf _ = "blanket"
+
+impl Tag (Wrap a) requires Show2 a where
+  tagOf (Wrap x) = "genericW\{show2 x}"
+
+nest x = tagOf (Wrap x)
+
+main = println (nest (1 : Int))

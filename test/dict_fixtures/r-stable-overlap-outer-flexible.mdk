@@ -1,0 +1,39 @@
+-- DICT-SEMANTICS §6.1.3 (R-STABLE) with a variable the enclosing binder has not
+-- generalized yet.  At the local `nest`, the goal `Tag (Pair a y)` mentions `outer`'s
+-- `y`, which `outer`'s callers still choose.  `impl Tag (Pair Bool Int)` unifies
+-- with the goal once `y` is free, and it is not more general than the matching
+-- `impl Tag (Pair a b) requires Show2 a`, so the goal stays in `nest`'s scheme and
+-- then in `outer`'s: `outer : Tag (Pair Bool a) => a -> String`, the same scheme as
+-- `top`'s.
+--
+-- SPEC ANSWER (hand-derived): a call through a binder selects what the direct call
+-- selects.  `outer (1 : Int)`, `top (1 : Int)` and `tagOf (Pair True (1 : Int))`
+-- each select `impl Tag (Pair Bool Int)`: `specific` three times, on every verb.
+-- `outer` used to print `genericb`, because `y` was held rigid at `nest`.
+data Pair a b = Pair a b
+
+interface Tag t where
+  tagOf : t -> String
+
+interface Show2 t where
+  show2 : t -> String
+
+impl Show2 Bool where
+  show2 _ = "b"
+
+impl Tag (Pair a b) requires Show2 a where
+  tagOf (Pair x _) = "generic\{show2 x}"
+
+impl Tag (Pair Bool Int) where
+  tagOf _ = "specific"
+
+outer y =
+  let nest x = tagOf (Pair x y)
+  nest True
+
+top y = tagOf (Pair True y)
+
+main =
+  println (outer (1 : Int))
+  println (top (1 : Int))
+  println (tagOf (Pair True (1 : Int)))
