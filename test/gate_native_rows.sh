@@ -28,7 +28,7 @@
 # callers run at a point in CI where nothing has been built yet.
 _native_rows() {
   awk -F'"' '
-    /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
+    /^\[\[/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
     /^name = "/       { n = $2 }
     /^kind = "/       { k = $2 }
     /^run = "/        { r = $2 }

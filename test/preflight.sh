@@ -1195,14 +1195,11 @@ while IFS= read -r f; do
     test/cli_conformance_lib.sh|test/cli_conformance_census.sh)
                                    add 'diff_compiler_cli_help_conformance'
                                    add 'diff_compiler_cli_reject_floor' ;;
-    # #2514 review F-9: `dist_install_smoke` (name has no `diff_compiler_`
-    # prefix, so the generic gate-script arm above never matches it) and its
-    # own packaging source (declared in its own `sources` in gates.toml, but
-    # preflight derives its map independently — [W-THIRD-CONSUMER]). Left
-    # unmapped, a packaging-only diff ran no gate at all (not even a widened
-    # full suite, since preflight's UNMAPPED path only WARNS locally).
-    test/dist_install_smoke_test.mdk) add 'dist_install_smoke' ;;
-    scripts/make_dist.sh)          add 'dist_install_smoke' ;;
+    # #2514 review F-9: the packaging source of `dist_install_smoke` (declared
+    # in its own `sources` in gates.toml, but preflight derives its map
+    # independently — [W-THIRD-CONSUMER]). Left unmapped, a packaging-only
+    # diff ran no gate at all (preflight's UNMAPPED path only WARNS locally).
+    scripts/make_dist.sh)         add 'dist_install_smoke' ;;
     # Same shape as F-9 above: `check_fingerprint_parity` also lacks the
     # `diff_compiler_` prefix, and its arm-2 input is a `.awk` file the generic
     # gate-script arm cannot match either. The derived `_gates_for_path` scan WOULD

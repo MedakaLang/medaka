@@ -1047,7 +1047,7 @@ jobs:
           # (it reads `shard` from the registry, not this expansion). Proven by
           # `effect_set_domain`, the first migrated row.
           awk -F'"' '
-            /^\[\[gate\]\]/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
+            /^\[\[/ { if (k == "native" && n != "" && r != "") print n, r; n=""; k=""; r="" }
             /^name = "/       { n = $2 }
             /^kind = "/       { k = $2 }
             /^run = "/        { r = $2 }
