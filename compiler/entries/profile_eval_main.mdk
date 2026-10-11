@@ -44,7 +44,7 @@ import support.timer.{perfEnabled, now, emitPhaseAO, emitTotalA, allocSnap}
 import support.opcount.{setOpCounting, opSnap}
 import support.util.{listLen}
 
-main = match args ()
+export oracleMain () = match args ()
   _ :: corePath :: targetPath :: _ => run corePath targetPath
   _ =>
     ePutStrLn
@@ -134,3 +134,5 @@ runStaged on csrc tsrc =
       declsOp
       (opSnap () - oC0)
   emitTotalA on (tC1 - tTotal) (allocSnap () - aTotal)
+
+main = oracleMain ()

@@ -45,7 +45,7 @@ import backend.llvm_emit.{emitProgram, emitProgramRecord, makeEmitInput}
 import entries.entry_support.{driveRuntime, failWith}
 import support.util.{contains}
 
-main = match args ()
+export oracleMain () = match args ()
   ["--isolation", runtimePath, pPath, pPlusUPath] =>
     emitIsolation runtimePath pPath pPlusUPath
   ["--gap-isolation"] => emitGapIsolation
@@ -125,3 +125,5 @@ runEmit runtimeDecls preludeDecls userDecls =
       (declaredRecordFieldOrders mangled)
       (validateFfiExternTypeNames (checkedFfiExternTypeNames mangled))
   emitProgram input (lowerProgramEmit TargetNative mangled)
+
+main = oracleMain ()

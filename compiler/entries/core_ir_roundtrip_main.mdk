@@ -18,7 +18,7 @@ import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import ir.core_ir_eval.{cevalMainOf}
 
-main = match args ()
+export oracleMain () = match args ()
   [targetPath] => withTarget targetPath
   _ =>
     ePutStrLn
@@ -36,3 +36,5 @@ withTarget targetPath = match readFile targetPath
     -- the serialization carries no DData, so it cannot re-derive the table.
     putStrLn (cevalMainOf decls prog2)
   Err msg => ePutStrLn msg
+
+main = oracleMain ()

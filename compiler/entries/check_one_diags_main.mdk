@@ -18,7 +18,7 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{checkOneDiags, tcCode}
 
-main = match args ()
+export oracleMain () = match args ()
   [runtimeP, coreP, targetP] => run runtimeP coreP targetP
   _ =>
     ePutStrLn
@@ -46,3 +46,5 @@ run runtimeP coreP targetP = match readFile runtimeP
           e :: _ =>
             putStrLn "REJECT"
             putStrLn (tcCode e)
+
+main = oracleMain ()

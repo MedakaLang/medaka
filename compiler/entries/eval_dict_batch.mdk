@@ -5,4 +5,6 @@
 
 import entries.entry_support.{driveRuntimeBatch, evalDictString}
 
-main = driveRuntimeBatch "===SELFHOST-FIX=== " evalDictString
+export oracleMain () = driveRuntimeBatch "===SELFHOST-FIX=== " evalDictString
+
+main = oracleMain ()

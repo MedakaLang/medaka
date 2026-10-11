@@ -16,8 +16,9 @@ import ir.draft_semantic_program.{
 }
 import entries.entry_support.{driveModulesLocated, runEmitWith}
 
-main : <IO> Unit
-main = driveModulesLocated (runEmitWith "runAsyncMain" reportDraft)
+export
+oracleMain : Unit -> <IO> Unit
+oracleMain () = driveModulesLocated (runEmitWith "runAsyncMain" reportDraft)
 
 unrelatedModule : List (String, List Decl) -> (String, List Decl)
 unrelatedModule [] = ("__draft_unrelated__", [])
@@ -70,3 +71,5 @@ reportDraft runtimeDecls coreD modules =
       unitHint
       floatHint
   putStrLn (draftSemanticProgramToSexp draft receipts)
+
+main = oracleMain ()

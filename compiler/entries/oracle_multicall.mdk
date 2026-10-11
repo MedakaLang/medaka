@@ -1,0 +1,114 @@
+-- Multicall oracle: ONE binary, hardlinked as test/bin/<entry>; dispatches on the
+-- basename of executablePath () (Linux /proc/self/exe keeps the hardlink name).
+import path.{basename}
+import entries.eval_run_main.{oracleMain as eval_run_main}
+import entries.eval_run_batch.{oracleMain as eval_run_batch}
+import entries.core_ir_run_main.{oracleMain as core_ir_run_main}
+import entries.eval_main.{oracleMain as eval_main}
+import entries.eval_prelude_main.{oracleMain as eval_prelude_main}
+import entries.eval_prelude_batch.{oracleMain as eval_prelude_batch}
+import entries.eval_dict_main.{oracleMain as eval_dict_main}
+import entries.eval_dict_batch.{oracleMain as eval_dict_batch}
+import entries.eval_typed_main.{oracleMain as eval_typed_main}
+import entries.eval_typed_batch.{oracleMain as eval_typed_batch}
+import entries.eval_typed_modules_main.{oracleMain as eval_typed_modules_main}
+import entries.eval_modules_main.{oracleMain as eval_modules_main}
+import entries.eval_autoprint_main.{oracleMain as eval_autoprint_main}
+import entries.core_ir_main.{oracleMain as core_ir_main}
+import entries.core_ir_prelude_main.{oracleMain as core_ir_prelude_main}
+import entries.core_ir_typed_main.{oracleMain as core_ir_typed_main}
+import entries.core_ir_roundtrip_main.{oracleMain as core_ir_roundtrip_main}
+import entries.core_ir_modules_main.{oracleMain as core_ir_modules_main}
+import entries.core_ir_typed_modules_main.{oracleMain as core_ir_typed_modules_main}
+import entries.core_ir_dict_pp_main.{oracleMain as core_ir_dict_pp_main}
+import entries.llvm_emit_main.{oracleMain as llvm_emit_main}
+import entries.llvm_emit_typed_main.{oracleMain as llvm_emit_typed_main}
+import entries.llvm_emit_modules_main.{oracleMain as llvm_emit_modules_main}
+import entries.llvm_bootstrap_lex_main.{oracleMain as llvm_bootstrap_lex_main}
+import entries.lex_main.{oracleMain as lex_main}
+import entries.parse_main.{oracleMain as parse_main}
+import entries.parse_result_main.{oracleMain as parse_result_main}
+import entries.resolve_main.{oracleMain as resolve_main}
+import entries.resolve_batch.{oracleMain as resolve_batch}
+import entries.resolve_modules_main.{oracleMain as resolve_modules_main}
+import entries.draft_semantic_main.{oracleMain as draft_semantic_main}
+import entries.anf_identity_main.{oracleMain as anf_identity_main}
+import entries.typecheck_main.{oracleMain as typecheck_main}
+import entries.check_main.{oracleMain as check_main}
+import entries.check_batch.{oracleMain as check_batch}
+import entries.check_modules_main.{oracleMain as check_modules_main}
+import entries.check_all_main.{oracleMain as check_all_main}
+import entries.check_match_main.{oracleMain as check_match_main}
+import entries.exhaust_main.{oracleMain as exhaust_main}
+import entries.lint_main.{oracleMain as lint_main}
+import entries.lint_fix_main.{oracleMain as lint_fix_main}
+import entries.check_one_diags_main.{oracleMain as check_one_diags_main}
+import entries.diagnostics_main.{oracleMain as diagnostics_main}
+import entries.diagnostics_project_main.{oracleMain as diagnostics_project_main}
+import entries.fmt_main.{oracleMain as fmt_main}
+import entries.new_main.{oracleMain as new_main}
+import entries.test_main.{oracleMain as test_main}
+import entries.repl_main.{oracleMain as repl_main}
+import entries.fuzz_gen_main.{oracleMain as fuzz_gen_main}
+import entries.profile_main.{oracleMain as profile_main}
+import entries.profile_modules_main.{oracleMain as profile_modules_main}
+import entries.profile_eval_main.{oracleMain as profile_eval_main}
+import entries.refindex_main.{oracleMain as refindex_main}
+
+main = match basename (executablePath ())
+  "eval_run_main" => eval_run_main ()
+  "eval_run_batch" => eval_run_batch ()
+  "core_ir_run_main" => core_ir_run_main ()
+  "eval_main" => eval_main ()
+  "eval_prelude_main" => eval_prelude_main ()
+  "eval_prelude_batch" => eval_prelude_batch ()
+  "eval_dict_main" => eval_dict_main ()
+  "eval_dict_batch" => eval_dict_batch ()
+  "eval_typed_main" => eval_typed_main ()
+  "eval_typed_batch" => eval_typed_batch ()
+  "eval_typed_modules_main" => eval_typed_modules_main ()
+  "eval_modules_main" => eval_modules_main ()
+  "eval_autoprint_main" => eval_autoprint_main ()
+  "core_ir_main" => core_ir_main ()
+  "core_ir_prelude_main" => core_ir_prelude_main ()
+  "core_ir_typed_main" => core_ir_typed_main ()
+  "core_ir_roundtrip_main" => core_ir_roundtrip_main ()
+  "core_ir_modules_main" => core_ir_modules_main ()
+  "core_ir_typed_modules_main" => core_ir_typed_modules_main ()
+  "core_ir_dict_pp_main" => core_ir_dict_pp_main ()
+  "llvm_emit_main" => llvm_emit_main ()
+  "llvm_emit_typed_main" => llvm_emit_typed_main ()
+  "llvm_emit_modules_main" => llvm_emit_modules_main ()
+  "llvm_bootstrap_lex_main" => llvm_bootstrap_lex_main ()
+  "lex_main" => lex_main ()
+  "parse_main" => parse_main ()
+  "parse_result_main" => parse_result_main ()
+  "resolve_main" => resolve_main ()
+  "resolve_batch" => resolve_batch ()
+  "resolve_modules_main" => resolve_modules_main ()
+  "draft_semantic_main" => draft_semantic_main ()
+  "anf_identity_main" => anf_identity_main ()
+  "typecheck_main" => typecheck_main ()
+  "check_main" => check_main ()
+  "check_batch" => check_batch ()
+  "check_modules_main" => check_modules_main ()
+  "check_all_main" => check_all_main ()
+  "check_match_main" => check_match_main ()
+  "exhaust_main" => exhaust_main ()
+  "lint_main" => lint_main ()
+  "lint_fix_main" => lint_fix_main ()
+  "check_one_diags_main" => check_one_diags_main ()
+  "diagnostics_main" => diagnostics_main ()
+  "diagnostics_project_main" => diagnostics_project_main ()
+  "fmt_main" => fmt_main ()
+  "new_main" => new_main ()
+  "test_main" => test_main ()
+  "repl_main" => repl_main ()
+  "fuzz_gen_main" => fuzz_gen_main ()
+  "profile_main" => profile_main ()
+  "profile_modules_main" => profile_modules_main ()
+  "profile_eval_main" => profile_eval_main ()
+  "refindex_main" => refindex_main ()
+  n =>
+    let _ = ePutStrLn "oracle_multicall: unknown oracle name \{n}"
+    exit 2

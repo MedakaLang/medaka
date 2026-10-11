@@ -15,7 +15,7 @@
 
 import tools.check.{runCheck}
 
-main = match args ()
+export oracleMain () = match args ()
   [runtimePath, corePath, targetPath] =>
     withFiles runtimePath corePath targetPath
   _ =>
@@ -40,3 +40,5 @@ withTarget : String -> String -> String -> <IO> Unit
 withTarget rsrc csrc targetPath = match readFile targetPath
   Ok tsrc => putStr (runCheck rsrc csrc tsrc)
   Err msg => ePutStrLn msg
+
+main = oracleMain ()

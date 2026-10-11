@@ -25,7 +25,7 @@ renderErr : ParseError -> String
 renderErr pe =
   "parse error \{intToString (parseErrorLine pe)}:\{intToString (parseErrorCol pe)}"
 
-main = match args ()
+export oracleMain () = match args ()
   [path] => match readFile path
     Ok src => match parseResult src
       Ok _ => putStrLn "ok"
@@ -33,3 +33,5 @@ main = match args ()
     Err msg => ePutStrLn msg
   _ =>
     ePutStrLn "usage: medaka run compiler/entries/parse_result_main.mdk <file>"
+
+main = oracleMain ()

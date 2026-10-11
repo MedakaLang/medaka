@@ -11,8 +11,10 @@
 
 import tools.fmt.{formatSource}
 
-main = match args ()
+export oracleMain () = match args ()
   [path] => match readFile path
     Ok src => putStr (formatSource src)
     Err msg => ePutStrLn msg
   _ => ePutStrLn "usage: medaka run compiler/entries/fmt_main.mdk <file>"
+
+main = oracleMain ()

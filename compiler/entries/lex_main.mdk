@@ -31,6 +31,8 @@ emit path = match readFile path
   Ok src => putStr (renderToks (tokenize src))
   Err msg => ePutStrLn msg
 
-main = match args ()
+export oracleMain () = match args ()
   [path] => emit path
   _ => ePutStrLn "usage: medaka run compiler/entries/lex_main.mdk <file>"
+
+main = oracleMain ()

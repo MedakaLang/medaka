@@ -15,7 +15,7 @@ import types.annotate.{annotateProgram}
 import ir.core_ir_lower.{lowerProgram}
 import ir.core_ir_eval.{cevalMainOf}
 
-main = match args ()
+export oracleMain () = match args ()
   [targetPath] => withTarget targetPath
   _ =>
     ePutStrLn "usage: medaka run compiler/entries/core_ir_main.mdk <file.mdk>"
@@ -34,3 +34,5 @@ withTarget targetPath = match readFile targetPath
     let decls = annotateProgram (desugar (parse targetSrc))
     putStrLn (cevalMainOf decls (lowerProgram decls))
   Err msg => ePutStrLn msg
+
+main = oracleMain ()

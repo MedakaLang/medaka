@@ -81,7 +81,7 @@ import support.timer.{
 import support.opcount.{setOpCounting, opSnap}
 import support.util.{listLen}
 
-main = match args ()
+export oracleMain () = match args ()
   runtimePath :: corePath :: targetPath :: _ =>
     run runtimePath corePath targetPath
   _ =>
@@ -533,3 +533,5 @@ wasmStage on True runtimeDecls live cprog declsOp =
 -- emit: LLVM text IR emission from that Core IR
 
 -- wasm-emit: WasmGC text WAT emission from that same Core IR (the second backend)
+
+main = oracleMain ()

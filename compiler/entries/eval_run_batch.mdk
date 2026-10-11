@@ -8,8 +8,10 @@ import frontend.ast.{Decl}
 import eval.eval.{evalOutputWith}
 import entries.entry_support.{driveRuntimeBatch}
 
-main = driveRuntimeBatch "===SELFHOST-FIX=== " render
+export oracleMain () = driveRuntimeBatch "===SELFHOST-FIX=== " render
 
 render : List Decl -> List Decl -> List Decl -> String
 render coreDecls listDecls targetDecls =
   evalOutputWith (coreDecls ++ listDecls) targetDecls
+
+main = oracleMain ()

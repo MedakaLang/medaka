@@ -22,7 +22,7 @@ import ir.core_ir_lower.{lowerTypedProgram}
 import ir.core_ir_eval.{cevalOutputOf}
 import entries.entry_support.{driveRuntime}
 
-main = driveRuntime emit
+export oracleMain () = driveRuntime emit
 
 emit : List Decl -> List Decl -> List Decl -> <IO> Unit
 emit runtimeDecls preludeDecls userDecls =
@@ -33,3 +33,5 @@ runTyped runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
   let decls = elaborateOne runtimeDecls livePrelude ("__user__", userDecls)
   cevalOutputOf decls (lowerTypedProgram decls)
+
+main = oracleMain ()

@@ -24,7 +24,7 @@
 import frontend.parser.{parseWithPositionsLocated}
 import tools.lint.{lintToLines, buildStdlibIndex}
 
-main = match args ()
+export oracleMain () = match args ()
   [targetPath] => withTarget targetPath
   _ => ePutStrLn "usage: MEDAKA_ROOT=<repo> test/bin/lint_main <file.mdk>"
 
@@ -43,3 +43,5 @@ withTarget targetPath = match readFile targetPath
     let idx = buildStdlibIndex
     putStr (lintToLines idx targetSrc targetPath pos decls)
   Err msg => ePutStrLn msg
+
+main = oracleMain ()

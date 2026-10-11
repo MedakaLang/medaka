@@ -1,0 +1,16 @@
+-- Multicall oracle: ONE binary, hardlinked as test/bin/<entry>; dispatches on the
+-- basename of executablePath () (Linux /proc/self/exe keeps the hardlink name).
+import path.{basename}
+import entries.check_main.{oracleMain as check_main}
+import entries.parse_main.{oracleMain as parse_main}
+import entries.eval_typed_modules_main.{oracleMain as eval_typed_modules_main}
+import entries.check_batch.{oracleMain as check_batch}
+
+main = match basename (executablePath ())
+  "check_main" => check_main ()
+  "parse_main" => parse_main ()
+  "eval_typed_modules_main" => eval_typed_modules_main ()
+  "check_batch" => check_batch ()
+  n =>
+    let _ = ePutStrLn "oracle_multicall: unknown oracle name \{n}"
+    exit 2

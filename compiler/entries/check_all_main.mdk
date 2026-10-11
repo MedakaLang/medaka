@@ -14,7 +14,7 @@ import driver.loader.{loadProgram}
 import types.typecheck.{checkModulesAllLines}
 import entries.entry_support.{rootsOrDefault, desugarPair}
 
-main = match args ()
+export oracleMain () = match args ()
   runtimeP :: coreP :: entry :: roots =>
     run runtimeP coreP entry (rootsOrDefault entry roots)
   _ =>
@@ -34,3 +34,5 @@ run runtimeP coreP entry roots = match readFile runtimeP
             (desugar (parse rsrc))
             (desugar (parse csrc))
             (map desugarPair mods))
+
+main = oracleMain ()

@@ -30,7 +30,7 @@ import frontend.exhaust.{exhaustToLinesWith}
 import types.typecheck.{checkOneToLinesWithRuntime, setCoherenceUserDecls}
 import entries.entry_support.{driveParseSources}
 
-main = driveParseSources renderAll
+export oracleMain () = driveParseSources renderAll
 
 renderAll : List Decl -> List Decl -> List (String, String) -> String
 renderAll runtimeP coreP [] = ""
@@ -77,3 +77,5 @@ joinNonEmpty : String -> String -> String
 joinNonEmpty "" b = b
 joinNonEmpty a "" = a
 joinNonEmpty a b = "\{a}\n\{b}"
+
+main = oracleMain ()
