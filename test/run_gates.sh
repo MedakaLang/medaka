@@ -42,7 +42,9 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # Keep the build/test write-storm OUT OF RAM (/tmp is a RAM-backed tmpfs).
 . "$ROOT/test/lib_scratch.sh"
 mdk_warn_if_tmp_full
-NCPU="$(sysctl -n hw.logicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)"
+# `nproc` first: it honours affinity masks and cgroup quotas, which the machine-wide
+# counts (hw.logicalcpu, _NPROCESSORS_ONLN) do not. macOS has no nproc.
+NCPU="$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)"
 # Outer pool: how many gates run at once. Inner pool (INNER_JOBS, exported as JOBS
 # to each gate): a heavy gate's own fixture fan-out. Nesting the two naively gives
 # OUTER×INNER concurrent processes and oversubscribes; but the gates are latency-
@@ -58,17 +60,6 @@ _default_jobs=$(( (NCPU * 3 + 2) / 5 ))
 [ "$_default_jobs" -ge 2 ] 2>/dev/null || _default_jobs=2
 JOBS="${JOBS:-$_default_jobs}"
 INNER_JOBS="${INNER_JOBS:-3}"
-# How many `medaka test` children a roster gate-test runs at once
-# (test_process.testAssertionCounts). Its own default is every core, which
-# JOBS concurrent gates would multiply, so split the cores between them.
-if [ -z "${MEDAKA_TEST_JOBS:-}" ]; then
-  MEDAKA_TEST_JOBS=1
-  if [ "$JOBS" -ge 1 ] 2>/dev/null && [ "$NCPU" -gt "$JOBS" ] 2>/dev/null; then
-    MEDAKA_TEST_JOBS=$(( NCPU / JOBS ))
-  fi
-fi
-export MEDAKA_TEST_JOBS
-
 # ── PER-GATE COST TRANSPORT (#2178, S-1-S-cost-record) ────────────────────────
 #
 # `GATE_TIMING_JSON=<path>` makes this run ALSO write a machine-readable per-gate
@@ -534,6 +525,28 @@ done | awk -v base="$ROOT/test/gate_cost_baseline.json" '
   { if ($1 in cost) printf "1 %d %s %s\n", cost[$1], $1, $2
     else            printf "0 0 %s %s\n", $1, $2 }
 ' | sort -k1,1n -k2,2nr -k3,3 | cut -d' ' -f4 >"$_order"
+
+# How many `medaka test` children a roster gate-test runs at once
+# (test_process.testAssertionCounts). Its own default is every core, so the cores
+# are split between the gates that can run at once: min(JOBS, selected gates),
+# which is read here because it is only known after selection. A one-gate row
+# hands its gate every core. A MEDAKA_TEST_JOBS that is not a positive integer
+# reads as unset.
+case "${MEDAKA_TEST_JOBS:-}" in
+  ''|*[!0-9]*) MEDAKA_TEST_JOBS="" ;;
+  *) [ "$MEDAKA_TEST_JOBS" -ge 1 ] || MEDAKA_TEST_JOBS="" ;;
+esac
+_nsel=$(grep -c . "$_order")
+_conc="$JOBS"
+[ "$_nsel" -ge 1 ] 2>/dev/null && [ "$_nsel" -lt "$_conc" ] && _conc="$_nsel"
+if [ -z "$MEDAKA_TEST_JOBS" ]; then
+  MEDAKA_TEST_JOBS=1
+  if [ "$_conc" -ge 1 ] 2>/dev/null && [ "$NCPU" -gt "$_conc" ] 2>/dev/null; then
+    MEDAKA_TEST_JOBS=$(( NCPU / _conc ))
+  fi
+fi
+export MEDAKA_TEST_JOBS
+echo "run_gates: nproc=$(nproc 2>/dev/null || echo n/a) nproc-all=$(nproc --all 2>/dev/null || echo n/a) NCPU=$NCPU JOBS=$JOBS INNER_JOBS=$INNER_JOBS gates=$_nsel MEDAKA_TEST_JOBS=$MEDAKA_TEST_JOBS"
 
 # Wall clock spanning the whole fan-out (#2208): "from before the xargs -P
 # $JOBS pool starts to after it drains" — the row's own total elapsed time,

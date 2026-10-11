@@ -329,7 +329,7 @@ run side by side.
 Each element is what `testAssertionCount` returns for that row, in the
 same order, with the same error text. At most `MEDAKA_TEST_JOBS` suites
 run at once when that is a positive integer, otherwise at most the number
-of online processors, or 4 when that cannot be read.
+of available processors, or 4 when that cannot be read.
 
 ```medaka
 > testAssertionCounts [("no-such-suite.mdk", [])] == [testAssertionCount "no-such-suite.mdk" []]
@@ -345,7 +345,8 @@ testJobs : <Exec, IO> Int
 How many `medaka test` runs start at once, in `testAssertionCounts` and
 for the per-file children of `medaka test <dir>`:
 `MEDAKA_TEST_JOBS` when it is a positive integer, otherwise the number of
-online processors, or 4 when that cannot be read.
+processors available to the process (`nproc`, else `getconf`), or 4 when
+that cannot be read.
 
 ```medaka
 > testJobs > 0
