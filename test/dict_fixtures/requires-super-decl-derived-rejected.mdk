@@ -1,0 +1,13 @@
+data V a = V a deriving (Ord)
+
+impl Eq (V a) requires Debug a where
+  eq (V x) (V y) = debug x == debug y
+
+data W a = W a deriving (Ord)
+
+impl Eq (W a) requires Debug a where
+  eq (W x) (W y) = debug x == debug y
+
+main =
+  println (debug (compare (V 1) (V 2)))
+  println (debug (compare (W 1) (W 2)))
