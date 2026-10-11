@@ -12177,8 +12177,45 @@ requiresNonShrinkingFuel = 32
 -- strictly smaller than its parent is free; any other step spends one unit; a goal
 -- equal to one already on the path is a cycle.  Between two spending steps the size
 -- strictly decreases, and the spending steps are bounded, so every walk is finite.  The
--- path is a value passed down one walk, never shared between walks.
-data ReqWalk = ReqWalk (List (IfaceRef, List Mono, Int)) Int
+-- path is a value passed down one walk, never shared between walks.  The walk's
+-- `WalkMemo` is the one part every branch of the walk shares.
+data ReqWalk = ReqWalk (List (IfaceRef, List Mono, Int)) Int WalkMemo
+
+-- The goals one walk has already followed, so a goal its `requires` reach along
+-- many paths (`Tag (Wrap a) requires Tag a, Tag2 a` and its twin) is followed once
+-- per walk rather than once per path (#1924).  It is allocated where a walk starts
+-- (`reqWalkStart`, `reqWalkSeed`) and lives only as long as that walk.
+--
+-- An entry is keyed on the whole goal (`sameIfaceDecl` and `monoVecSameGiven`, in a
+-- bucket named by `enteredGoalKey`) and on the fuel left after entering it.  What a walk does below
+-- a goal depends on that goal, that fuel and its path, and the path only decides
+-- cycles.  A cached subtree cannot hide one: a goal X on a later path that the
+-- subtree below G reaches also reaches G, so the first walk below G, with G on its
+-- path, met G again and did not finish clean.  Only a subtree that raised no error
+-- (`erredDuring`) and, on the route walk, met no cut (`wmCuts`) is recorded.
+data WalkMemo = WalkMemo {
+  wmRoutes : Ref (OrdMap (List RouteWalkEntry)),
+  wmDischarged : Ref (OrdMap (List (IfaceRef, List Mono))),
+  wmCuts : Ref Int,
+}
+
+-- The prerequisite routes the route walk built below one goal, with everything they
+-- were built from.
+data RouteWalkEntry = RouteWalkEntry {
+  rweIface : IfaceRef,
+  rweGoals : List Mono,
+  rweRow : ImplRow,
+  rweEncl : String,
+  rweScope : ScopeId,
+  rweRoutes : List Route,
+}
+
+newWalkMemo : Unit -> WalkMemo
+newWalkMemo _ = WalkMemo {
+  wmRoutes = Ref omEmpty,
+  wmDischarged = Ref omEmpty,
+  wmCuts = Ref 0,
+}
 
 -- What entering a goal gives a walk.  A cycle carries the goal whose `requires` posed
 -- the repeat and the repeated goal; running out of fuel carries the goal reached.
@@ -12190,26 +12227,125 @@ data ReqStep =
 -- A walk whose seed is the goal [iface] [args].
 reqWalkSeed : IfaceRef -> List Mono -> ReqWalk
 reqWalkSeed iface args =
-  ReqWalk [(iface, args, monoSizes args)] requiresNonShrinkingFuel
+  ReqWalk
+    [(iface, args, monoSizes args)]
+    requiresNonShrinkingFuel
+    (newWalkMemo ())
 
 -- A walk with no goal on it yet: the first goal entered is its seed.
-reqWalkStart : ReqWalk
-reqWalkStart = ReqWalk [] requiresNonShrinkingFuel
+reqWalkStart : Unit -> ReqWalk
+reqWalkStart _ = ReqWalk [] requiresNonShrinkingFuel (newWalkMemo ())
 
 reqWalkEnter : ReqWalk -> IfaceRef -> List Mono -> ReqStep
-reqWalkEnter (ReqWalk path fuel) iface args =
+reqWalkEnter (ReqWalk path fuel memo) iface args =
   let size = monoSizes args
   match path
-    [] => ReqOn (ReqWalk [(iface, args, size)] fuel)
+    [] => ReqOn (ReqWalk [(iface, args, size)] fuel memo)
     (parentIface, parentArgs, parentSize) :: _ =>
       if anyListM (sameWalkGoal iface args size) path then
         ReqCycle parentIface parentArgs iface args
       else if size < parentSize then
-        ReqOn (ReqWalk ((iface, args, size) :: path) fuel)
+        ReqOn (ReqWalk ((iface, args, size) :: path) fuel memo)
       else if fuel <= 0 then
         ReqDeep iface args
       else
-        ReqOn (ReqWalk ((iface, args, size) :: path) (fuel - 1))
+        ReqOn (ReqWalk ((iface, args, size) :: path) (fuel - 1) memo)
+
+-- The memo bucket of the goal [walk] has just entered, the head of its path: that
+-- goal's interface spelling and size and the fuel left.  Goals that are one goal by
+-- `sameWalkGoal` share a bucket; a bucket may also hold goals that are not, so every
+-- hit is confirmed by `sameIfaceDecl` and `monoVecSameGiven`.
+enteredGoalKey : ReqWalk -> String
+enteredGoalKey (ReqWalk ((iface, _, size) :: _) fuel _) =
+  let name = iface.irName
+  "\{name}#\{intToString size}#\{intToString fuel}"
+enteredGoalKey (ReqWalk [] fuel _) = "#\{intToString fuel}"
+
+reqWalkMemo : ReqWalk -> WalkMemo
+reqWalkMemo (ReqWalk _ _ memo) = memo
+
+-- The route walk below the goal [row]'s `requires` discharge at [goals], which [walk]
+-- has just entered: the recorded routes if this walk already built them, otherwise
+-- [follow]'s, recorded when they came out clean.
+routeWalkMemoized : String ->
+  ScopeId ->
+  List Mono ->
+  ImplRow ->
+  ReqWalk ->
+  (Unit -> List Route) ->
+  List Route
+routeWalkMemoized encl useScope goals row walk follow =
+  let memo = reqWalkMemo walk
+  let iface = ieRowIface row
+  let key = enteredGoalKey walk
+  let entries = optionOr [] (omLookup key memo.wmRoutes.value)
+  match routeWalkRecorded iface goals row encl useScope entries
+    Some routes => routes
+    None =>
+      let cutsBefore = memo.wmCuts.value
+      let (erred, routes) = erredDuring follow
+      let _ =
+        if erred || memo.wmCuts.value /= cutsBefore then
+          ()
+        else
+          let entry = RouteWalkEntry {
+            rweIface = iface,
+            rweGoals = goals,
+            rweRow = row,
+            rweEncl = encl,
+            rweScope = useScope,
+            rweRoutes = routes,
+          }
+          memo.wmRoutes :=
+            omInsert
+              key
+              (entry :: optionOr [] (omLookup key memo.wmRoutes.value))
+              memo.wmRoutes.value
+      routes
+
+routeWalkRecorded : IfaceRef ->
+  List Mono ->
+  ImplRow ->
+  String ->
+  ScopeId ->
+  List RouteWalkEntry ->
+  Option (List Route)
+routeWalkRecorded _ _ _ _ _ [] = None
+routeWalkRecorded iface goals row encl useScope (entry :: rest) =
+  if entry.rweEncl == encl
+    && entry.rweScope == useScope
+    && sameIfaceDecl entry.rweIface iface
+    && monoVecSameGiven entry.rweGoals goals
+    && rowRouteKey entry.rweRow == rowRouteKey row then
+    Some entry.rweRoutes
+  else
+    routeWalkRecorded iface goals row encl useScope rest
+
+-- A route walk's cut, counted so no subtree containing one is recorded.
+noteRouteWalkCut : ReqWalk -> Unit
+noteRouteWalkCut walk =
+  let memo = reqWalkMemo walk
+  memo.wmCuts := memo.wmCuts.value + 1
+
+-- Has the obligation walk [walk] already checked goal [iface] [args], entered with
+-- the fuel [walk] has left, without an error?
+walkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Bool
+walkGoalDischarged walk iface args =
+  let memo = reqWalkMemo walk
+  anyListM
+    ((otherIface, otherArgs) =>
+      sameIfaceDecl otherIface iface && monoVecSameGiven otherArgs args)
+    (optionOr [] (omLookup (enteredGoalKey walk) memo.wmDischarged.value))
+
+noteWalkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Unit
+noteWalkGoalDischarged walk iface args =
+  let memo = reqWalkMemo walk
+  let key = enteredGoalKey walk
+  memo.wmDischarged :=
+    omInsert
+      key
+      ((iface, args) :: optionOr [] (omLookup key memo.wmDischarged.value))
+      memo.wmDischarged.value
 
 -- Two goals are one goal when their interface is the same declaration and their
 -- argument vectors are pointwise identical (`monoVecSameGiven`); equal sizes are
@@ -15263,24 +15399,22 @@ qualifiedArgumentKinds _ scope _ _ = scope
 
 -- [scope] comes from the enclosing interface or the signature's own predicates.
 -- Abstract heads have no ambient name-keyed kind lookup.
+--
+-- The split walk over [a] and [b] runs only when the head has no kinds to read.
+-- Evaluated eagerly beside the kinded walk, it visits every nested argument twice
+-- per level, so `Wrap^25 Int` costs 2^25 visits (#1837).
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
-rowArgNamesIn scope (TyApp a b) = match tyAppSpine (TyApp a b)
-  -- OCCURRENCE MINT (#1110/#1111 A-2.3), same source as `fromAstTypeE`'s.
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    rowArgNamesApp
-      scope
-      o
-      n
-      args
-      (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
-  -- #822: the abstract-head half — an interface typaram of graded kind, in scope.
-  (TyVar h, args) =>
-    rowArgNamesVarApp
-      scope
-      h
-      args
-      (rowArgNamesIn scope a ++ rowArgNamesIn scope b)
-  _ => rowArgNamesIn scope a ++ rowArgNamesIn scope b
+rowArgNamesIn scope (TyApp a b) =
+  let kinded = match tyAppSpine (TyApp a b)
+    -- OCCURRENCE MINT (#1110/#1111 A-2.3), same source as `fromAstTypeE`'s.
+    (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+      rowArgNamesApp scope o n args
+    -- #822: the abstract-head half — an interface typaram of graded kind, in scope.
+    (TyVar h, args) => rowArgNamesVarApp scope h args
+    _ => None
+  match kinded
+    Some names => names
+    None => rowArgNamesIn scope a ++ rowArgNamesIn scope b
 rowArgNamesIn scope (TyFun a b) = rowArgNamesIn scope a ++ rowArgNamesIn scope b
 rowArgNamesIn scope (TyTuple ts) = flatMap (rowArgNamesIn scope) ts
 rowArgNamesIn scope (TyEffect _ _ t) = rowArgNamesIn scope t
@@ -15291,23 +15425,21 @@ rowArgNamesApp : List (String, List Kind) ->
   TyConOrigin ->
   String ->
   List Ty ->
-  List String ->
-  List String
-rowArgNamesApp scope o n args fallback =
+  Option (List String)
+rowArgNamesApp scope o n args =
   match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
     Some kinds if listLen kinds == listLen args =>
-      krowArgVarNames kinds args ++ flatMap (rowArgNamesIn scope) args
-    _ => fallback
+      Some (krowArgVarNames kinds args ++ flatMap (rowArgNamesIn scope) args)
+    _ => None
 
 rowArgNamesVarApp : List (String, List Kind) ->
   String ->
   List Ty ->
-  List String ->
-  List String
-rowArgNamesVarApp scope h args fallback = match lookupAssoc h scope
+  Option (List String)
+rowArgNamesVarApp scope h args = match lookupAssoc h scope
   Some kinds if listLen kinds == listLen args =>
-    krowArgVarNames kinds args ++ flatMap (rowArgNamesIn scope) args
-  _ => fallback
+    Some (krowArgVarNames kinds args ++ flatMap (rowArgNamesIn scope) args)
+  _ => None
 
 krowArgVarNames : List Kind -> List Ty -> List String
 krowArgVarNames [] _ = []
@@ -15345,21 +15477,15 @@ krowArgVarNames (_ :: ks) (_ :: as2) = krowArgVarNames ks as2
 -- An ABSTRACT head (the graded [scope] arm) guarantees nothing and keeps `[]`:
 -- what `f e a` charges depends on the impl, so the declaration cannot say.
 rowArgAtomsIn : List (String, List Kind) -> Ty -> List (String, List Atom)
-rowArgAtomsIn scope (TyApp a b) = match tyAppSpine (TyApp a b)
-  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
-    rowArgAtomsApp
-      scope
-      o
-      n
-      args
-      (rowArgAtomsIn scope a ++ rowArgAtomsIn scope b)
-  (TyVar h, args) =>
-    rowArgAtomsVarApp
-      scope
-      h
-      args
-      (rowArgAtomsIn scope a ++ rowArgAtomsIn scope b)
-  _ => rowArgAtomsIn scope a ++ rowArgAtomsIn scope b
+rowArgAtomsIn scope (TyApp a b) =
+  let kinded = match tyAppSpine (TyApp a b)
+    (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+      rowArgAtomsApp scope o n args
+    (TyVar h, args) => rowArgAtomsVarApp scope h args
+    _ => None
+  match kinded
+    Some occs => occs
+    None => rowArgAtomsIn scope a ++ rowArgAtomsIn scope b
 rowArgAtomsIn scope (TyFun a b) = rowArgAtomsIn scope a ++ rowArgAtomsIn scope b
 rowArgAtomsIn scope (TyTuple ts) = flatMap (rowArgAtomsIn scope) ts
 rowArgAtomsIn scope (TyEffect _ _ t) = rowArgAtomsIn scope t
@@ -15370,24 +15496,26 @@ rowArgAtomsApp : List (String, List Kind) ->
   TyConOrigin ->
   String ->
   List Ty ->
-  List (String, List Atom) ->
-  List (String, List Atom)
-rowArgAtomsApp scope o n args fallback =
+  Option (List (String, List Atom))
+rowArgAtomsApp scope o n args =
   match lookupTab (tyTabKey o n) perRun.value.dataParamKindsRef.value
     Some kinds if listLen kinds == listLen args =>
-      krowArgVarAtoms kinds (optionOr [] (paramRowAtomsOf (tyTabKey o n))) args
-        ++ flatMap (rowArgAtomsIn scope) args
-    _ => fallback
+      Some
+        (krowArgVarAtoms
+            kinds
+            (optionOr [] (paramRowAtomsOf (tyTabKey o n)))
+            args
+          ++ flatMap (rowArgAtomsIn scope) args)
+    _ => None
 
 rowArgAtomsVarApp : List (String, List Kind) ->
   String ->
   List Ty ->
-  List (String, List Atom) ->
-  List (String, List Atom)
-rowArgAtomsVarApp scope h args fallback = match lookupAssoc h scope
+  Option (List (String, List Atom))
+rowArgAtomsVarApp scope h args = match lookupAssoc h scope
   Some kinds if listLen kinds == listLen args =>
-    krowArgVarAtoms kinds [] args ++ flatMap (rowArgAtomsIn scope) args
-  _ => fallback
+    Some (krowArgVarAtoms kinds [] args ++ flatMap (rowArgAtomsIn scope) args)
+  _ => None
 
 -- `krowArgVarNames`' pair-returning twin.  [decls] is the head's per-parameter
 -- guarantee list, walked in lockstep with the kinds and the args; it runs out
@@ -27871,7 +27999,7 @@ methodReturnEvidenceRoute encl scope prerequisite =
         KeepNone
         first
         more
-        reqWalkStart
+        (reqWalkStart ())
     [] => RNone
 
 resolveNumLitSite : List String ->
@@ -33375,7 +33503,7 @@ selectedCallSupers name (Some (ImplRow _ _ iface _ _ supplied)) encl useScope go
   if contains name supplied then
     []
   else
-    superRoutesAt iface encl useScope goals reqWalkStart
+    superRoutesAt iface encl useScope goals (reqWalkStart ())
 selectedCallSupers _ None _ _ _ = []
 
 entailFallback : ScopeId -> Mono -> EntailKind -> Route
@@ -33393,7 +33521,7 @@ entailFallback _ _ (EKPredicateOp _ _ _) = RNone
 -- constraint-var slots.  [policy] decides the undetermined arm (see Undetermined).
 routeOf : IfaceRef -> String -> ScopeId -> Undetermined -> Mono -> Route
 routeOf iface encl useScope policy m =
-  routeOfD iface encl useScope policy m [] reqWalkStart
+  routeOfD iface encl useScope policy m [] (reqWalkStart ())
 
 -- #217: the walk-carrying core of routeOf.  [walk] threads the shared `requires`
 -- measure through the aware recursion (routeOfD → argImplRequiresRoutesForRow →
@@ -33487,7 +33615,7 @@ routesOfMonosTopV encl useScope (m :: rest) (iface :: ifacesRest) (v :: vs) =
 topRouteV : String -> ScopeId -> IfaceRef -> Mono -> List Mono -> Route
 topRouteV encl useScope iface m goals = match vectorGoal iface goals
   Some (g0, gs) =>
-    routeOfD iface encl useScope (CountImpls iface) g0 gs reqWalkStart
+    routeOfD iface encl useScope (CountImpls iface) g0 gs (reqWalkStart ())
   None => routeOf iface encl useScope (CountImpls iface) m
 
 -- `Some (arg0, tail)` exactly when the widening applies: a NON-EMPTY argument vector
@@ -33539,7 +33667,7 @@ undeterminedRowRoute _ _ [] _ = RNone
 undeterminedRowRoute scope ifaceRef (m :: rest) row =
   RKey
     (rowRouteKey row)
-    (argImplRequiresRoutesForRow "" scope m (m :: rest) reqWalkStart row)
+    (argImplRequiresRoutesForRow "" scope m (m :: rest) (reqWalkStart ()) row)
     (map
       ((superIface, _) => routeUndeterminedTop scope superIface (m :: rest))
       (directSuperGoals ifaceRef []))
@@ -33597,12 +33725,21 @@ argImplRequiresRoutesForRow : String ->
   List Route
 argImplRequiresRoutesForRow encl useScope m goals walk row =
   match reqWalkEnter walk (ieRowIface row) goals
-    ReqOn next => match ieRowHeadTriple (Some row)
-      Some (headTy, itys, reqs) => match headSubstWithParams headTy itys m goals
-        Some subst => argImplReqRoutes encl useScope subst reqs next
-        None => []
-      None => []
-    cut => requiresRouteWalkCut cut
+    ReqOn next => routeWalkMemoized
+      encl
+      useScope
+      goals
+      row
+      next
+      (_ => match ieRowHeadTriple (Some row)
+        Some (headTy, itys, reqs) =>
+          match headSubstWithParams headTy itys m goals
+            Some subst => argImplReqRoutes encl useScope subst reqs next
+            None => []
+        None => [])
+    cut =>
+      let _ = noteRouteWalkCut walk
+      requiresRouteWalkCut cut
 
 -- A route walk that met a cycle or ran out of fuel.  The solving walks share its
 -- measure and reject the same goal at its site, so this is reached only on a program
@@ -33677,7 +33814,8 @@ argImplDictRoutesForEncl encl useScope name _tag mono goals =
     (ieSelectRowByMethod perRun.value.bodyImplEnvRef.value name goals))
     Some (headTy, implTys, reqs) =>
       match headSubstWithParams headTy implTys mono goals
-        Some subst => argImplReqRoutes encl useScope subst reqs reqWalkStart
+        Some subst =>
+          argImplReqRoutes encl useScope subst reqs (reqWalkStart ())
         None => []
     None => []
 
@@ -33741,7 +33879,7 @@ methodPredicateRoutes encl scope (slot :: rest) =
 methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
 methodPredicateRoute encl scope slot = match slot.psArgs
   PSArgsKnown (g0 :: gs) =>
-    routeOfD slot.psIface encl scope KeepNone g0 gs reqWalkStart
+    routeOfD slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
   _ => RNone
 
 -- ── recursive dict-app realization (self/mutual recursion) ──────────────────
@@ -33772,7 +33910,7 @@ recRoutes encl scope mono (slot :: rest) =
 recRoute : String -> ScopeId -> Mono -> PredicateSlot -> Route
 recRoute encl scope mono slot = match recPredicateArgs mono slot
   Some (g0 :: gs) =>
-    routeOfD slot.psIface encl scope KeepNone g0 gs reqWalkStart
+    routeOfD slot.psIface encl scope KeepNone g0 gs (reqWalkStart ())
   _ => match slot.psBoundIds
     id :: _ => match findTvarInMono mono id
       None => RNone
@@ -33797,10 +33935,13 @@ resolveRecMono : String -> ScopeId -> IfaceRef -> Mono -> Route
 resolveRecMono encl scope iface m = match headTyconMono m
   -- a rigid variable names no instance, so its spelled head is left as it was
   Some (hk@(HkRigid _)) =>
-    RKey (headKeyTag hk) [] (superRoutesAt iface encl scope [m] reqWalkStart)
+    RKey
+      (headKeyTag hk)
+      []
+      (superRoutesAt iface encl scope [m] (reqWalkStart ()))
   -- a concrete head names an instance: select it like any other predicate goal, so
   -- the dictionary carries that instance's word and `requires`
-  Some _ => routeOfD iface encl scope KeepNone m [] reqWalkStart
+  Some _ => routeOfD iface encl scope KeepNone m [] (reqWalkStart ())
   -- the enclosing slot is found by tyvar alone, so it may hold a SUB-interface of
   -- the callee's predicate: read the super out of it
   None => match enclSlot encl m
@@ -37288,7 +37429,7 @@ checkOneCallObligation deferNonGround univ iface occs loc scope =
     -- requires Display a, Display b`) so an unsatisfied element constraint surfaces
     -- (`main = (Red, 5)` → `No impl of Display for Color`) instead of the head-only
     -- match silently accepting (→ null element dict → SIGSEGV at runtime).
-    Some True => checkNestedReqs univ reqWalkStart iface args loc scope
+    Some True => checkNestedReqs univ (reqWalkStart ()) iface args loc scope
     Some False => checkOneCallObligationNoImpl iface args loc scope
 
 -- the no-impl tail of `checkOneCallObligation` — reached when the goal is neither a
@@ -38506,16 +38647,33 @@ checkNestedReqs : ImplUniverse ->
 checkNestedReqs univ walk iface args loc scope =
   match reqWalkReported loc (reqWalkEnter walk iface args)
     None => ()
+    -- A goal this walk already checked clean is not checked again (`WalkMemo`): every
+    -- diagnostic below it is pushed at the walk's one [loc], so a repeat can only
+    -- repeat a push.  It leaves `goalSiteLoc` as a full check would.
+    Some next if walkGoalDischarged next iface args => goalSiteLoc := None
     Some next =>
-      -- #1155: `reqObligationsFor` asks the min⊑ selector WHICH impl matched, so this
-      -- is the one goal-posing site that reaches `pickMostSpecificEntry` from OUTSIDE
-      -- the five resolver drains — publish the obligation's own snapshotted span so
-      -- the ambiguity reject lands on the use site rather than on `currentLoc`'s stale
-      -- one.  Restored to None after, per `goalSiteLoc`'s scoping rule.
-      goalSiteLoc := loc
-      let reqs = reqObligationsFor univ iface args
-      let _ = checkReqObligations univ next loc scope reqs
-      goalSiteLoc := None
+      let (erred, _) =
+        erredDuring (_ => checkEnteredReqs univ next iface args loc scope)
+      if erred then () else noteWalkGoalDischarged next iface args
+
+-- `checkNestedReqs` below a goal [walk] has just entered.
+checkEnteredReqs : ImplUniverse ->
+  ReqWalk ->
+  IfaceRef ->
+  List Mono ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+checkEnteredReqs univ walk iface args loc scope =
+  -- #1155: `reqObligationsFor` asks the min⊑ selector WHICH impl matched, so this
+  -- is the one goal-posing site that reaches `pickMostSpecificEntry` from OUTSIDE
+  -- the five resolver drains — publish the obligation's own snapshotted span so
+  -- the ambiguity reject lands on the use site rather than on `currentLoc`'s stale
+  -- one.  Restored to None after, per `goalSiteLoc`'s scoping rule.
+  goalSiteLoc := loc
+  let reqs = reqObligationsFor univ iface args
+  let _ = checkReqObligations univ walk loc scope reqs
+  goalSiteLoc := None
 
 -- Impl decls paired with their `requires` (implHeadsOf drops reqs; this keeps them).
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
@@ -40317,7 +40475,7 @@ checkImplHeadGoal subject roots givens (iface, ds, loc) =
   if anyIn (flatMap monoUnboundIds args) (map snd roots) then
     let headIds = omFromNames (map (r => intToString (snd r)) roots) omEmpty
     goalSiteLoc := loc
-    let leaves = implGoalResiduals reqWalkStart headIds givens iface args
+    let leaves = implGoalResiduals (reqWalkStart ()) headIds givens iface args
     goalSiteLoc := None
     fold (_ leaf => reportImplHeadResidual subject roots loc leaf) () leaves
 
@@ -45451,7 +45609,7 @@ residualBoundPreds generalizing boundIds iface ds loc
     goalSiteLoc := loc
     -- A signed binder's variables are rigid in its body, so no use chooses them.
     let chosen = if generalizing then boundIds else []
-    let preds = residualPredsOf chosen reqWalkStart iface ds
+    let preds = residualPredsOf chosen (reqWalkStart ()) iface ds
     goalSiteLoc := None
     flatMap (keepBoundResidualPred boundIds) preds
 
