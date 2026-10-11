@@ -1,0 +1,181 @@
+{- | TMC parity gate: BOTH backends apply TMC (tail-modulo-cons) to the SAME functions.
+   Replaces diff_compiler_tmc_parity.sh (which is deleted by the orchestrator).
+
+   Proves: the LLVM and WasmGC emitters agree on the per-function TMC decision
+   set over the pinned corpus (stack fixtures, wasm TMC fixtures, and the compiler
+   front-end module graph), on both the probe arm and the shipping arm. A DIFF row
+   (wasm entry llvm lacks, a shared fn at a different mode, or any probe-arm
+   difference) fails. A SUBSET row (shipping-arm wasm-⊆-llvm, reachability-pruned
+   by design) counts as compared. Also fails if a `-- EXPECT-TMC:` coverage pin is
+   missing from a backend's SHIPPING set (reported as PINFAIL by the census), and if
+   the census emits nothing (zero comparisons is never a pass).
+
+   Mechanism: this test self-provisions the three emit probes (llvm_emit_main,
+   wasm_emit_main, wasm_emit_modules_main) if missing, runs test/tmc_census.sh into a
+   scratch dir (the census helper stays a shell script, invoked via runCommand), and
+   reads its SUMMARY. Exit-code mapping of the old script: 0 = all items compared
+   and no DIFF (test passes); 1 = DIFF, PINFAIL, or census emit error (test fails,
+   with the offending rows or census log tail in the message); 2 = toolchain missing
+   (a probe still missing after provisioning, or a provision build exiting nonzero)
+   (test fails naming the probe).
+
+   Does NOT prove: that the TMC decisions are CORRECT (only that the two backends
+   agree, plus the pins). Does NOT pin the 12 identical / 13 subset split: that
+   split moves with compiler reachability, so only the corpus floor (25 items) and
+   the zero-DIFF rule are asserted. Does NOT check the census log, only its SUMMARY
+   and (on failure) its tail. Probe builds write artifacts under test/bin
+   (untracked). Slow: it emits the whole compiler front-end through two backends. -}
+
+import test_process.{underRoot, withScratchDir}
+import test.{Expectation, expectAll, expectNoFindings, fail, pass}
+import runtime.{intToString}
+import string.{join, lines, startsWith}
+import list.{drop}
+
+-- The emit probes the census reads. Each is checked and, if missing, provisioned
+-- from its actual producer (build_oracles.sh for llvm_emit_main; build_wasm_oracle.sh
+-- for the two wasm probes).
+probes : <IO> List (String, String)
+probes = [
+  ("llvm_emit_main", underRoot "test/bin/llvm_emit_main"),
+  ("wasm_emit_main", underRoot "test/bin/wasm_emit_main"),
+  ("wasm_emit_modules_main", underRoot "test/bin/wasm_emit_modules_main"),
+]
+
+-- An executable probe is one `test -x` accepts. A spawn error counts as missing;
+-- the re-check then fails the gate naming the probe.
+probeIsExe : String -> <Exec> Bool
+probeIsExe path = match runCommand "test" ["-x", path]
+  Err _ => False
+  Ok (code, _, _) => code == 0
+
+missingProbes : List (String, String) -> <Exec> List String
+missingProbes [] = []
+missingProbes ((name, path) :: rest) =
+  if probeIsExe path then missingProbes rest else name :: missingProbes rest
+
+wantsLlvm : List String -> Bool
+wantsLlvm need = match filter (== "llvm_emit_main") need
+  [] => False
+  _ => True
+
+wantsWasm : List String -> Bool
+wantsWasm need = match filter (startsWith "wasm_emit") need
+  [] => False
+  _ => True
+
+-- Build results are graded: a spawn error or nonzero exit is a toolchain-missing failure.
+exitOk : String -> Result String (Int, String, String) -> Result String Unit
+exitOk what (Err e) = Err "could not spawn \{what}: \{e}"
+exitOk what (Ok (code, _, _)) =
+  if code /= 0 then Err "\{what} exited \{intToString code}" else Ok ()
+
+buildLlvm : List String -> <Exec, IO> Result String (Int, String, String)
+buildLlvm need =
+  if wantsLlvm need then
+    runCommand "env" [
+      "FORCE=1",
+      "JOBS=1",
+      "sh",
+      underRoot "test/build_oracles.sh",
+      "--build-one",
+      "llvm_emit_main",
+    ]
+  else
+    Ok (0, "", "")
+
+buildWasm : List String -> <Exec, IO> Result String (Int, String, String)
+buildWasm need =
+  if wantsWasm need then
+    runCommand "sh" [underRoot "test/wasm/build_wasm_oracle.sh"]
+  else
+    Ok (0, "", "")
+
+buildAll : List String -> <Exec, IO> Result String Unit
+buildAll need = match exitOk "llvm_emit_main build" (buildLlvm need)
+  Err e => Err e
+  Ok _ => exitOk "wasm probe build" (buildWasm need)
+
+-- The last 20 lines of the census output, as the old script's `tail -20 census.log`.
+tailLines : Int -> List String -> List String
+tailLines k ls = if length ls > k then drop (length ls - k) ls else ls
+
+tailText : String -> String
+tailText t = join "\n" (tailLines 20 (lines t))
+
+isRow : String -> Bool
+isRow l = startsWith "same " l || startsWith "SUBSET " l
+
+isDiff : String -> Bool
+isDiff l = startsWith "DIFF " l
+
+isPin : String -> Bool
+isPin l = startsWith "PINFAIL " l
+
+-- Zero (or too few) compared items is never a pass: two empty sets are vacuously identical.
+corpusFloor : Int -> Expectation
+corpusFloor n =
+  if n >= 25 then
+    pass
+  else
+    fail
+      "the TMC parity census compared only \{intToString n} corpus items (floor 25): two empty sets are trivially identical, so this is not a pass. Check the corpus glob in test/tmc_census.sh and its SUMMARY output."
+
+summaryRows : List String -> Expectation
+summaryRows rows = expectAll [
+  expectNoFindings
+    "DIFF rows (the backends TMC different function sets)"
+    (Ok (filter isDiff rows)),
+  corpusFloor (length (filter isRow rows)),
+]
+
+summary : String -> <IO, FileRead> Expectation
+summary out = match readFile (out ++ "/SUMMARY")
+  Err e => fail "could not read the census SUMMARY: \{e}"
+  Ok s => summaryRows (lines s)
+
+-- Census failure: a PINFAIL row is a coverage failure (reported as such), anything
+-- else is a census emit error (tail of its log).
+censusFailed : String -> Int -> String -> <IO, FileRead> Expectation
+censusFailed out code text = match readFile (out ++ "/SUMMARY")
+  Err _ => emitError code text
+  Ok s => pinFailures code text (filter isPin (lines s))
+
+pinFailures : Int -> String -> List String -> Expectation
+pinFailures code text [] = emitError code text
+pinFailures _ _ pins =
+  let body = join "\n" pins
+  fail
+    "FAIL — TMC coverage pins missing from a backend's SHIPPING set:\n\{body}"
+
+emitError : Int -> String -> Expectation
+emitError code text =
+  let body = tailText text
+  fail "FAIL (census emit error, exit \{intToString code}):\n\{body}"
+
+census : String -> <Exec, IO, FileRead, FileWrite> Expectation
+census out = match runCommand "sh" [underRoot "test/tmc_census.sh", out]
+  Err e => fail "could not spawn tmc_census.sh: \{e}"
+  Ok (code, o, err) =>
+    if code /= 0 then censusFailed out code (o ++ err) else summary out
+
+afterBuild : String -> <Exec, IO, FileRead, FileWrite> Expectation
+afterBuild out = match missingProbes probes
+  [] => census out
+  still => stillMissing still
+
+stillMissing : List String -> Expectation
+stillMissing still =
+  let names = join ", " still
+  fail
+    "emit probes still missing after provisioning: \{names} (toolchain missing: exit 2)"
+
+gate : String -> <Exec, IO, FileRead, FileWrite> Expectation
+gate out = match missingProbes probes
+  [] => census out
+  need => match buildAll need
+    Err e => fail "toolchain missing (exit 2): \{e}"
+    Ok _ => afterBuild out
+
+test "diff_compiler_tmc_parity: both backends TMC identical function sets" =
+  withScratchDir (out => gate out)

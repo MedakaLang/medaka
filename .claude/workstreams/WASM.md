@@ -247,7 +247,7 @@ is *also* wrong — it string-matches the sibling corpora `test/wasm/fixtures_ty
 grep -rlE '(^|[^A-Za-z0-9_])wasm/fixtures([^A-Za-z0-9_]|$)' test/
 ```
 then check for one-hop indirect consumers as well — a gate can shell to a helper that reads
-the corpus without naming it itself (`diff_compiler_tmc_parity.sh` → `tmc_census.sh`). Full
+the corpus without naming it itself (`diff_compiler_tmc_parity_test.mdk` → `tmc_census.sh`). Full
 derivation + the same trap on the `llvm_fixtures*` siblings: AGENTS.md's "A FIXTURE
 DIRECTORY IS A SHARED CORPUS" trap. Run **all** of what you find.
 

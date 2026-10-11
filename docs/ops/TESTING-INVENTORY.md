@@ -224,7 +224,7 @@
 | `test/diff_compiler_stdlib_conventions.sh` | RATCHET/LEDGER | none | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 29 | 114 | REWRITE: probe/static text becomes library calls [python3] |
 | `test/diff_compiler_test_native.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 10327 | 278 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_test_typecheck.sh` | CLI-CONTRACT | interpreter | N | NO | NATIVE-KIND-RUNNER | 1756 | 420 | WRAP: spawns ./medaka + diffs, module does the same |
-| `test/diff_compiler_tmc_parity.sh` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE | 149125 | 125 | REWRITE: probe/static text becomes library calls |
+| `test/diff_compiler_tmc_parity_test.mdk` | DIFFERENTIAL | multiple | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE | 149125 | 125 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_fmt_test.mdk` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 10341 | 99 | REWRITE: probe/static text becomes library calls |
 | `test/diff_compiler_wasm_shim_parity.sh` | RATCHET/LEDGER | none | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 146 | 137 | REWRITE: probe/static text becomes library calls [node] |
 | `test/diff_native_cli.sh` | GOLDEN | multiple | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL, SECTION-SPLIT | 18657 | 514 | WRAP: spawns ./medaka + diffs, module does the same [clang,python3] |
@@ -257,7 +257,7 @@
 | `test/check_self.sh` | OTHER | native | OUT | n/a | NOT-A-CHECK | — | 71 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
 | `test/cli_conformance_census.sh` | CLI-CONTRACT | native | OUT | n/a | NOT-A-CHECK | — | 297 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
 | `test/cli_conformance_lib.sh` | OTHER | native | OUT | n/a | NOT-A-CHECK | — | 252 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
-| `test/comment_register_census.sh` | RATCHET/LEDGER | none | OUT | n/a | NOT-A-CHECK | — | 220 | ledgered in CI-COVERAGE-TOOLS.txt. As surveyed: generator/harness/report, no verdict. Since #3034 its `--check` mode IS verdict-bearing (exit 1 on a risen baselined count) and is consumed by `.githooks/pre-commit` check 6b and by `test/diff_compiler_comment_shout_diff.sh`; the default no-flag report still asserts nothing |
+| `test/comment_register_census.sh` | RATCHET/LEDGER | none | OUT | n/a | NOT-A-CHECK | — | 220 | ledgered in CI-COVERAGE-TOOLS.txt. As surveyed: generator/harness/report, no verdict. Since #3034 its `--check` mode IS verdict-bearing (exit 1 on a risen baselined count) and is consumed by `.githooks/pre-commit` check 6b and by `test/diff_compiler_comment_shout_diff_test.mdk`; the default no-flag report still asserts nothing |
 | `test/diag_census.sh` | RATCHET/LEDGER | native | OUT | n/a | NOT-A-CHECK | — | 148 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
 | `test/doctest_shape_census.sh` | RATCHET/LEDGER | none | OUT | n/a | NOT-A-CHECK | — | 197 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
 | `test/error_quality_fixtures/capture.sh` | GOLDEN | multiple (check/run/build) | OUT | n/a | NOT-A-CHECK | — | 107 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |

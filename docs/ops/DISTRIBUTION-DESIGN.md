@@ -208,7 +208,7 @@ the observed case. This is what splits the fix cleanly into two tracks (D2).
     (shared detection in `backend/trmc_analysis.mdk`; the group inlines into the
     root's single define — `compiler/TRMC-DESIGN.md` §Phase 3). The lexer token
     spine is O(1) native stack (2M-deep gate fixture); both backends TMC
-    identical function sets, gated by `test/diff_compiler_tmc_parity.sh`.
+    identical function sets, gated by `test/diff_compiler_tmc_parity_test.mdk`.
     (Note: the §3a speculation that this alone lets self-compile fit an 8 MB
     stack is untestable as shipped — Track 1's 256 MB worker pthread
     self-provisions regardless of ulimit.)

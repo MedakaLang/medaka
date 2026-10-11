@@ -34,7 +34,7 @@ deliberately NOT repeated here, so there is only one copy to drift.
 | `test/lib_engines_differential.sh` | eval == native == wasm. Ledger: `test/engine_divergence.txt` |
 | `test/diff_compiler_perf_scaling.sh` | O(n²) detector: allocation growth N vs 2N (linear ≈2.0×, quadratic ≈4.0×) |
 | `compiler/backend/extern_catalog_gate_test.mdk` | Externs vs engine coverage. Every runtime extern needs a row in `compiler/backend/extern_catalog.mdk` (a gap is a `NotProvided` row); pure externs need a verdict in `test/EXTERN-DOMAIN-LEDGER.txt` or self-drain (#476). Would have caught the `floatToInt` 3-way edge divergence (#346) structurally |
-| `test/diff_compiler_tmc_parity.sh` | Both backends TMC same functions (`sh test/wasm/build_wasm_oracle.sh`) |
+| `test/diff_compiler_tmc_parity_test.mdk` | Both backends TMC same functions (`sh test/wasm/build_wasm_oracle.sh`) |
 | `test/bootstrap_*.sh` | Each native stage == interpreter output |
 | `test/diff_compiler_must_fail.sh` | **[G-MUST-FAIL]** Each `test/must_fail_fixtures/*/` pins an OPEN issue; a fix flips it green and FAILS the gate. RED here is usually GOOD. Runs in `soundness` |
 | `test/check_removed_constructs.sh` | Scan for removed constructs (`JOBS=` knob) |

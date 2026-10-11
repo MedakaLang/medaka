@@ -15,7 +15,7 @@ fixing the same pattern elsewhere in this doc set.
 > `wTrmcUniformCtor` gate was retired (mixed leaf-ctor sets emit via a
 > `$__tmc_dctor` link dispatch; singleton sets byte-identical to before), which
 > also made the v5 stage-1-claims predicate backend-identical.  Both emitters
-> write `;; tmc:` / `; tmc:` census markers; `test/diff_compiler_tmc_parity.sh`
+> write `;; tmc:` / `; tmc:` census markers; `test/diff_compiler_tmc_parity_test.mdk`
 > gates the per-function TMC sets equal.
 > Companion to `TRMC-DESIGN.md` (the LLVM-backend TRMC), `WASM-SELFHOST-ROADMAP.md`
 > (the layer log — this is **layer-5**), `WASMGC-DESIGN.md` (value rep). The next agent
