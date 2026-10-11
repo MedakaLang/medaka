@@ -1561,7 +1561,10 @@ keyed by qualified identity, **assembled once and never per-module**:
   free, any other step spends one unit of `requiresNonShrinkingFuel` (32), and a
   goal equal to one on the walk's path is a cycle; the solving walks reject a
   cycle (`T-REQUIRES-CYCLE`) or spent fuel (`T-REQUIRES-DEPTH`) at the goal's
-  site. `monoSize` counts an effect row as one node; that under-counts a child at
+  site. Each walk carries one `WalkMemo` from its start, so a goal its `requires`
+  reach along many paths is followed once per walk, keyed on the whole goal and
+  the fuel left after entering it (#1924); a subtree that met an error or a cut
+  is not recorded. `monoSize` counts an effect row as one node; that under-counts a child at
   most, which only makes a step look shrinking, and the size stays a natural
   number, so the measure is still well-founded. A static Paterson check was
   measured and declined: it would reject impls in 14 test fixtures, an acceptance

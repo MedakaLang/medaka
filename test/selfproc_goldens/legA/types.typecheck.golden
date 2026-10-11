@@ -427,6 +427,7 @@ checkEffectParams : List Decl -> Unit
 checkEffectParamsDecl : Decl -> Unit
 checkEffectParamsTy : Ty -> Unit
 checkEffectParamsTys : List Ty -> Unit
+checkEnteredReqs : ImplUniverse -> ReqWalk -> IfaceRef -> List Mono -> Option Loc -> ScopeId -> Unit
 checkFileValueFlow : (Option Loc, Mono, Mono) -> Unit
 checkFixedWidthLiterals : List (Mono, Int, Option Loc) -> Unit
 checkGradedImplHead : String -> Ty -> List Kind -> Unit
@@ -1001,6 +1002,7 @@ entailFallback : ScopeId -> Mono -> EntailKind -> Route
 entailInst : String -> Mono -> String -> ScopeId -> String -> EntailKind -> (Route, List Route)
 entailedByDeclared : String -> String -> Ty -> Bool
 enterLevel : Unit -> Unit
+enteredGoalKey : ReqWalk -> String
 entryCovers : KeyEntry -> KeyEntry -> Bool
 entryCoversAllOthers : KeyEntry -> List KeyEntry -> Bool
 entryHeadMatches : Ty -> List Ty -> List Mono -> Bool
@@ -2206,6 +2208,7 @@ nestedRequireGoals : Map String Unit -> Map String Unit -> List UObligation -> L
 nestedRequireGoalsGo : Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
+newWalkMemo : Unit -> WalkMemo
 noDictHook : String -> EvId -> Unit
 noImplAdvice : String -> String -> String
 noImplFoundMsg : String -> List Mono -> String
@@ -2230,7 +2233,9 @@ noteNumericEntailment : EntailKind -> ScopeId -> Option IfaceRef -> Route -> Lis
 noteNumericObligationChecked : UObligation -> List Mono -> Unit
 noteNumericPredicateTrace : NumericPredicateTraceStage -> ClassPredicate -> ScopeId -> Option Loc -> Option IfaceRef -> Option Route -> List Route -> Unit
 noteNumlitCtx : Mono -> Mono -> JoinContext -> Unit
+noteRouteWalkCut : ReqWalk -> Unit
 noteTypeErrorDetected : Unit -> Unit
+noteWalkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Unit
 nthArgMono : Int -> Mono -> Option Mono
 nthFunDomain : Int -> Mono -> Option Mono
 nthInt : Int -> List Int -> Int
@@ -2727,9 +2732,10 @@ reqObligationsFor : ImplUniverse -> IfaceRef -> List Mono -> List (IfaceRef, Lis
 reqToObligation : List (String, Mono) -> Require -> (IfaceRef, List Mono)
 reqTyToMono : List (String, Mono) -> Ty -> Mono
 reqWalkEnter : ReqWalk -> IfaceRef -> List Mono -> ReqStep
+reqWalkMemo : ReqWalk -> WalkMemo
 reqWalkReported : Option Loc -> ReqStep -> Option ReqWalk
 reqWalkSeed : IfaceRef -> List Mono -> ReqWalk
-reqWalkStart : ReqWalk
+reqWalkStart : Unit -> ReqWalk
 requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
 requireGoalAt : UObligation -> List Int -> (IfaceRef, List Mono) -> List UObligation
 requirePredicateSlot : List (String, Mono) -> Require -> PredicateSlot
@@ -2818,15 +2824,17 @@ routeOutcomeKind : Route -> EvidenceOutcomeKind
 routePrerequisiteRoutes : Route -> List Route
 routeRDictName : Route -> List String
 routeUndeterminedTop : ScopeId -> IfaceRef -> List Mono -> Route
+routeWalkMemoized : String -> ScopeId -> List Mono -> ImplRow -> ReqWalk -> (Unit -> List Route) -> List Route
+routeWalkRecorded : IfaceRef -> List Mono -> ImplRow -> String -> ScopeId -> List RouteWalkEntry -> Option (List Route)
 routesOfMonosTop : String -> ScopeId -> List Mono -> List IfaceRef -> List Route
 routesOfMonosTopV : String -> ScopeId -> List Mono -> List IfaceRef -> List (List Mono) -> List Route
-rowArgAtomsApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List (String, List Atom) -> List (String, List Atom)
+rowArgAtomsApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> Option (List (String, List Atom))
 rowArgAtomsIn : List (String, List Kind) -> Ty -> List (String, List Atom)
-rowArgAtomsVarApp : List (String, List Kind) -> String -> List Ty -> List (String, List Atom) -> List (String, List Atom)
+rowArgAtomsVarApp : List (String, List Kind) -> String -> List Ty -> Option (List (String, List Atom))
 rowArgNames : Ty -> List String
-rowArgNamesApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> List String -> List String
+rowArgNamesApp : List (String, List Kind) -> TyConOrigin -> String -> List Ty -> Option (List String)
 rowArgNamesIn : List (String, List Kind) -> Ty -> List String
-rowArgNamesVarApp : List (String, List Kind) -> String -> List Ty -> List String -> List String
+rowArgNamesVarApp : List (String, List Kind) -> String -> List Ty -> Option (List String)
 rowArgOf : SigVars -> Ty -> EffRow
 rowAuthIds : EffRow -> Map Int Unit -> Map Int Unit
 rowBoundByMember : UseMember -> (String, String, Ident) -> Bool
@@ -3244,6 +3252,7 @@ wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
+walkGoalDischarged : ReqWalk -> IfaceRef -> List Mono -> Bool
 wantAuthority : Authority -> Authority -> Unit
 wantAuthorityFrom : Option String -> Bool -> Authority -> Authority -> Unit
 wantAuthorityOne : Option String -> Bool -> Bool -> Authority -> Authority -> Unit
