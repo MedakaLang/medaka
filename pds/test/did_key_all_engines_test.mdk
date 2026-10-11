@@ -2,9 +2,11 @@
    native and Wasm, and a mutation self-test showing the gate can fail.
 
    The value test grades the 16 external rows and the 14 named malformed
-   cells on eval, and requires native and Wasm to print the same bytes. A
-   host without the Wasm emitter, `node` or `wasm-tools` fails the row
-   rather than skipping the Wasm arm.
+   cells on native, and requires Wasm to print the same bytes. A host
+   without the Wasm emitter, `node` or `wasm-tools` fails the row rather
+   than skipping the Wasm arm. The interpreter's agreement with native is
+   graded nightly by `pds/nightly/did_key_eval_engine_test.mdk`, which shares
+   the cell list through `pds/test/did_key_support.mdk`.
 
    The mutation test copies `pds/` into a scratch tree, breaks one line of
    the implementation or the driver at a time, and requires the driver,
@@ -26,6 +28,7 @@ import test.vector_runner.{
   expectMutations,
   expectRow,
 }
+import test.did_key_support.{didKeyNeedles}
 import test.{Expectation}
 import test_process.{medakaRoot}
 
@@ -37,24 +40,6 @@ driver = "pds/test/did_key_all_engines_main.mdk"
 
 corpusFile : String
 corpusFile = "pds/test/vectors/pds_did_key_corpus.txt"
-
-malformedCells : List String
-malformedCells = [
-  "wrong-method",
-  "wrong-method-case",
-  "missing-multibase",
-  "invalid-multibase",
-  "invalid-base58",
-  "wrong-codec",
-  "nonminimal-codec",
-  "empty-payload",
-  "short-payload",
-  "long-payload",
-  "trailing-payload",
-  "invalid-sec1-prefix",
-  "invalid-sec1-x",
-  "invalid-sec1-nonsquare",
-]
 
 arm : Engine -> List String -> Arm
 arm e needs = Arm {
@@ -74,14 +59,7 @@ row = Row {
   corpusCount = Exactly 1,
   sourceShapes = [],
   oracle = None,
-  arms = [
-    arm
-      EvalEngine
-      (["external: 16/16 official-PDS rows", "malformed: 14/14 rejected"]
-        ++ map (l => "MALFORMED \{l} PASS") malformedCells),
-    arm NativeEngine [],
-    arm WasmEngine [],
-  ],
+  arms = [arm NativeEngine didKeyNeedles, arm WasmEngine []],
   parity = True,
 }
 
@@ -138,7 +116,7 @@ mutationTest = MutationTest {
   mutations = mutations,
 }
 
-test "did:key: 16/16 external rows, 14/14 malformed cells, eval == native == Wasm" =
+test "did:key: 16/16 external rows, 14/14 malformed cells, native == Wasm" =
   expectRow row
 
 test "did:key: each of 5 mutations turns the gate red with its own witness" =

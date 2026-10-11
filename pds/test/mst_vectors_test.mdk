@@ -1,12 +1,13 @@
-{- | The deterministic atproto MST against the official reference, on eval,
-   native and Wasm, plus the repository's scaling and footprint bounds,
-   native only.
+{- | The deterministic atproto MST against the official reference, on native
+   and Wasm, plus the repository's scaling and footprint bounds, native only.
 
    The value row grades the two ledgered corpora (the reference roots and
    node bytes, and the covering proofs) and the hostile-validation routes on
-   eval, and requires native and Wasm to print the same bytes. A host without
-   the Wasm emitter, `node` or `wasm-tools` fails the row rather than
-   skipping the Wasm arm.
+   native, and requires Wasm to print the same bytes. A host without the Wasm
+   emitter, `node` or `wasm-tools` fails the row rather than skipping the Wasm
+   arm. The interpreter arm runs nightly in
+   `pds/nightly/mst_vectors_eval_engine_test.mdk`, over the same corpora and
+   substrings from `pds/test/mst_vectors_support.mdk`.
 
    The scaling test builds `performance_resource_main.mdk` once and times
    three routes at 1000 and 2000 rows: `mstValidateBlocks` rejecting a
@@ -50,66 +51,12 @@ import test.vector_runner.{
 import list.{replicate, somes}
 import string.{contains, lines, startsWith, toInt, words}
 import test.{Expectation, expectNoFindings}
+import test.mst_vectors_support.{mstCorpora, routeNeeds}
 import test_process.{medakaRoot}
 import time.{elapsedSince, monotonic}
 
 gate : String
 gate = "pds/test/mst_vectors"
-
-externalCases : List String
-externalCases = [
-  "empty",
-  "leading-zero-bits-0",
-  "leading-zero-bits-2",
-  "leading-zero-bits-4",
-  "leading-zero-bits-6",
-  "prefix-compression",
-  "permutation-forward",
-  "permutation-reverse",
-  "replace",
-  "delete",
-  "delete-to-empty",
-]
-
-hostileRoutes : List String
-hostileRoutes = [
-  "empty-key",
-  "duplicates",
-  "depth",
-  "order",
-  "prefix",
-  "undercompressed",
-  "misplaced-left",
-  "misplaced-between",
-  "misplaced-right",
-  "misplaced-transitive",
-  "malformed-links",
-  "truncation",
-  "unreachable",
-  "invalid-node",
-]
-
-proofCases : List String
-proofCases = ["proof-single-node", "proof-two-layer", "proof-three-layer"]
-
-lexicalControls : List String
-lexicalControls = ["left-neighbor", "between-neighbor", "right-neighbor"]
-
--- Every case by name, so a driver that stopped emitting one is a missing
--- substring rather than a total that still happens to add up.
-routeNeeds : List String
-routeNeeds =
-  [
-      "external: 11/11 official-reference cases",
-      "covering proofs: 17/17 official-reference rows",
-      "narrower than the whole tree: 13/17 proof rows",
-      "hostile: 14/14 rejected on named routes",
-      "controls: 3/3 valid lexical neighbors",
-    ]
-    ++ map (n => "CASE \{n} PASS ") externalCases
-    ++ map (l => "HOSTILE \{l} PASS route=") hostileRoutes
-    ++ map (n => "PROOFCASE \{n} ") proofCases
-    ++ map (l => "MST CONTROL \{l} PASS") lexicalControls
 
 arm : Engine -> List String -> Arm
 arm e needs = Arm {
@@ -121,21 +68,16 @@ arm e needs = Arm {
   exactStdout = None,
 }
 
--- The driver reads the reference corpus first and the covering-proof corpus
--- second, so the two are named in that order rather than looked up by
--- consumer id, whose result is sorted.
+-- The corpora are named in `mstCorpora`'s order, see its declaration.
 row : Row
 row = Row {
   gate = gate,
   driver = "pds/test/mst_vectors_main.mdk",
-  corpus = Explicit [
-    "pds/test/vectors/mst_reference_corpus.txt",
-    "pds/test/vectors/mst_covering_proof_corpus.txt",
-  ],
+  corpus = Explicit mstCorpora,
   corpusCount = Exactly 2,
   sourceShapes = [],
   oracle = None,
-  arms = [arm EvalEngine routeNeeds, arm NativeEngine [], arm WasmEngine []],
+  arms = [arm NativeEngine routeNeeds, arm WasmEngine routeNeeds],
   parity = True,
 }
 
@@ -485,7 +427,7 @@ pageFindings scratch =
     [] => costCorpora scratch synth
     fs => fs
 
-test "MST: 11 official-reference cases, 17 covering-proof rows, 14 hostile routes, 3 lexical controls, eval == native == Wasm" =
+test "MST: 11 official-reference cases, 17 covering-proof rows, 14 hostile routes, 3 lexical controls, native == Wasm" =
   expectRow row
 
 test "MST: validate, insert, export and rehydrate scale within their bounds; the inbound path stays under 8 MB" =

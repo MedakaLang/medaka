@@ -1,0 +1,139 @@
+{- | The eval interpreter's arm of the merge-path suites in
+   `pds/test/inlang_test_oracle_test.mdk`: each suite in `interpreterSuites`
+   runs under `medaka test --engines eval` and is graded against the same
+   floor the merge path commits to under `--native`.
+
+   It runs nightly, not in the merge queue. The cost is the interpreter: the
+   `http_test` arm alone takes about 155 s here against 2.5 s natively. The
+   merge path already grades each suite's count natively, so this file adds
+   only the engine-agreement signal, which is what breadth nightly is for.
+   `ratelimit_test` is not in this list: the merge path runs it under eval.
+
+   Runs under `medaka test --native`: the spawns are subprocesses. -}
+
+import io.{readLines}
+import list.{lookup, zipWith3}
+import test.inlang_roster_support.{interpreterSuites}
+import test.{Expectation(..)}
+import test_process.{
+  disagreeingFloorBlocks,
+  expectFloor,
+  testAssertionCounts,
+  underRoot,
+  ungradedRosterRows,
+}
+
+-- Every suite in `interpreterSuites` spawned once under the eval engine, in
+-- one batch, each with its executed-assertion count or an error naming the
+-- file and the arm. Top-level nullary bindings are memoized, so the `test`
+-- blocks below share this one batch.
+evalResults : <Exec, IO> List (String, (Int, Result String Int))
+evalResults =
+  let paths =
+    map ((name, _) => underRoot "pds/test/\{name}.mdk") interpreterSuites
+  zipWith3
+    ((name, floor) path counted =>
+      (name, (floor, mapErr (e => "\{path} (eval): \{e}") counted)))
+    interpreterSuites
+    paths
+    (testAssertionCounts (map (path => (path, ["--engines", "eval"])) paths))
+
+-- Grades one suite's floor. A spawn that failed outright reports its own
+-- text, so a broken assertion inside a suite is never read as a short count.
+floorExpectation : String -> <Exec, IO> Expectation
+floorExpectation name = match lookup name evalResults
+  None => Fail "pds/test/\{name}.mdk has no `evalResults` entry" "" ""
+  Some (floor, counted) => expectFloor "pds/test/\{name}.mdk" floor counted
+
+test "pds/test/skeleton_test.mdk executed >= 2 assertions" =
+  floorExpectation "skeleton_test"
+
+test "pds/test/httpclient_test.mdk executed >= 12 assertions" =
+  floorExpectation "httpclient_test"
+
+test "pds/test/http_test.mdk executed >= 85 assertions" =
+  floorExpectation "http_test"
+
+test "pds/test/xrpc_test.mdk executed >= 29 assertions" =
+  floorExpectation "xrpc_test"
+
+test "pds/test/server_core_test.mdk executed >= 14 assertions" =
+  floorExpectation "server_core_test"
+
+test "pds/test/encodings_test.mdk executed >= 29 assertions" =
+  floorExpectation "encodings_test"
+
+test "pds/test/dagcbor_cid_test.mdk executed >= 12 assertions" =
+  floorExpectation "dagcbor_cid_test"
+
+test "pds/test/car_store_test.mdk executed >= 12 assertions" =
+  floorExpectation "car_store_test"
+
+test "pds/test/sign_key_test.mdk executed >= 7 assertions" =
+  floorExpectation "sign_key_test"
+
+test "pds/test/secp256k1_point_test.mdk executed >= 8 assertions" =
+  floorExpectation "secp256k1_point_test"
+
+test "pds/test/rfc6979_test.mdk executed >= 4 assertions" =
+  floorExpectation "rfc6979_test"
+
+test "pds/test/ecdsa_test.mdk executed >= 2 assertions" =
+  floorExpectation "ecdsa_test"
+
+test "pds/test/read_buffer_test.mdk executed >= 19 assertions" =
+  floorExpectation "read_buffer_test"
+
+test "pds/test/egress_census_test.mdk executed >= 9 assertions" =
+  floorExpectation "egress_census_test"
+
+test "pds/test/route_policy_test.mdk executed >= 4 assertions" =
+  floorExpectation "route_policy_test"
+
+-- # Lockstep with the title and the roster
+
+-- A row with no `test` block that names and grades it, or a block whose
+-- title and grading call name different suites, is a floor that is never
+-- applied while its row reads as covered. The scan reads this file's own
+-- source, as the merge-path gate does.
+
+ownSourceLines : <IO> Result String (List String)
+ownSourceLines = readLines (underRoot "pds/nightly/inlang_eval_engine_test.mdk")
+
+uncheckedRows : <IO> Result String (List String)
+uncheckedRows =
+  map
+    (ls =>
+      ungradedRosterRows
+        "pds/test/"
+        "floorExpectation \""
+        (map fst interpreterSuites)
+        ls)
+    ownSourceLines
+
+test "every `interpreterSuites` row has a matching `test` block" =
+  match uncheckedRows
+    Err e => Fail e "no unchecked rows" "read failed"
+    Ok [] => Pass "no unchecked rows" "no unchecked rows"
+    Ok extras =>
+      Fail
+        "`interpreterSuites` row(s) with no matching `test` block: \{debug extras}"
+        "no unchecked rows"
+        "\{debug extras}"
+
+disagreeingBlocks : <IO> Result String (List String)
+disagreeingBlocks =
+  map
+    (ls => disagreeingFloorBlocks "pds/test/" "floorExpectation \"" ls)
+    ownSourceLines
+
+test "every floor assertion grades the suite its own title names" =
+  match disagreeingBlocks
+    Err e => Fail e "no title/argument disagreements" "read failed"
+    Ok [] =>
+      Pass "no title/argument disagreements" "no title/argument disagreements"
+    Ok bad =>
+      Fail
+        "floor assertion block(s) whose title and `floorExpectation` argument name different suites: \{debug bad}"
+        "no title/argument disagreements"
+        "\{debug bad}"
