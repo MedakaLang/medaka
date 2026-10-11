@@ -4743,7 +4743,7 @@ codeFailures _ (Err e) = Err "could not run `medaka check --json`: \{e}"
 codeFailures cs (Ok (_, json)) = Ok (somes (map (codeProblem json) cs))
 
 entryPath : Row -> <IO> String
-entryPath r ="\{corpus}/\{r.entry}"
+entryPath r = "\{corpus}/\{r.entry}"
 
 hasCodes : Row -> Bool
 hasCodes r = match r.codes
