@@ -235,6 +235,7 @@ import backend.core_validate.{
   renderTailRefusal,
   validateCalls,
   validateImplSymbols,
+  validateMethodContexts,
   validateTails,
   validateRecords,
   unrefusedExternMessage,
@@ -886,7 +887,7 @@ makeWasmProgramIndexWithLazy groups ctorArs ctorTypes impls fnNames valNames laz
     fnImpl = WasmFnImplIndex {
       fnNames = fnIndex,
       valNames = valIndex,
-      arities = programArities (CProgram groups ctorArs ctorTypes impls),
+      arities = programArities (CProgram groups ctorArs ctorTypes impls []),
       implBuckets = groupImplsByMethodW impls,
       lazyGlobals = omFromNames lazyNames omEmpty,
     },
@@ -1347,7 +1348,9 @@ refuseUnprovidedExternsW emit input cp =
   let _ = match validateRecords cp
     [] => ()
     bad => panic ("internal error: " ++ renderRecordRefusal bad)
-  let _ = match validateCalls cp ++ validateImplSymbols cp
+  let badCalls =
+    validateCalls cp ++ validateImplSymbols cp ++ validateMethodContexts cp
+  let _ = match badCalls
     [] => ()
     bad => panic ("internal error: " ++ renderCallRefusal bad)
   let _ = match validateTails cp
@@ -1363,7 +1366,7 @@ refuseUnprovidedExternsW emit input cp =
           findings
 
 emitProgramCore : WasmEmit -> WasmEmitInput -> CProgram -> String
-emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls)) =
+emitProgramCore emit input (cp@(CProgram groups ctorArs ctorTypes impls _)) =
   let _ = refuseUnprovidedExternsW emit input cp
   let _ = setRef emit.useStr (programUsesStr groups)
   -- W7: scan the program for collection usage (gates type-section decls + forces
@@ -1559,13 +1562,13 @@ checkCalledNamesW defined (name :: rest) =
 -- so a recorded gap is attributed to its source binding.
 export
 emitProgramGaps : WasmEmitInput -> CProgram -> List String
-emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =
+emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx) =
   let emit = freshWasmEmit WGapRecord
   let _ =
     refuseUnprovidedExternsW
       emit
       input
-      (CProgram groups ctorArs ctorTypes impls)
+      (CProgram groups ctorArs ctorTypes impls mctx)
   let _ = setRef emit.useStr (programUsesStr groups)
   let _ = scanProgW7 emit groups
   let _ = scanImplsW7 emit impls

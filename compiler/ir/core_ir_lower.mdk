@@ -807,7 +807,8 @@ lowerProgramWith dispositions pins prog =
         (instanceReqCounts prog)
         (declaredMethodArities prog)
         dispositions
-        prog))
+        prog)
+      (methodContextSlotCounts prog))
 
 -- ── which refutable lets keep their decision (see `letDecision`) ─────────────
 -- Only the native backend tests a refutable `let` through its decision; every
@@ -871,12 +872,13 @@ letDecisionSite t = match treeFailSiteOpt t
   _ => None
 
 refoldProgram : (Pat -> Bool) -> CProgram -> CProgram
-refoldProgram keep (CProgram groups ctorArs ctorTypes implEntries) =
+refoldProgram keep (CProgram groups ctorArs ctorTypes implEntries mctx) =
   CProgram
     (map (refoldBind keep) groups)
     ctorArs
     ctorTypes
     (map (refoldImpl keep) implEntries)
+    mctx
 
 refoldBind : (Pat -> Bool) -> CBind -> CBind
 refoldBind keep (CBind n clauses site) =
@@ -1063,7 +1065,7 @@ lowerProgramEmitPinned target pins prog =
             rewritten))
 
 cprogramCtorTypes : CProgram -> List (String, String)
-cprogramCtorTypes (CProgram _ _ ctorTypes _) = ctorTypes
+cprogramCtorTypes (CProgram _ _ ctorTypes _ _) = ctorTypes
 
 -- ── call modes: every application is read against its head's defined arity ────
 -- A head's defined arity is the parameter count of the clause the lowering
@@ -1091,7 +1093,7 @@ export type CallScope = OrdMap (Option Int)
 
 export
 programArities : CProgram -> ArityEnv
-programArities (CProgram groups ctors _ impls) =
+programArities (CProgram groups ctors _ impls _) =
   ArityEnv
     (omFromPairs (map bindArityRow groups) omEmpty)
     (omFromPairs ctors omEmpty)
@@ -1236,7 +1238,7 @@ bindGroupScope ((CBind name clauses _) :: rest) s =
 -- (`mergeTailLambda`), and when even that leaves them different, none of them is
 -- expanded.
 etaSaturateProgram : CProgram -> CProgram
-etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls)) =
+etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls mctx)) =
   let env = programArities prog
   let expanded = map (ent => (ent, etaEntry env ent)) impls
   let split = splitEntryGroups (map snd expanded) omEmpty omEmpty
@@ -1247,6 +1249,7 @@ etaSaturateProgram (prog@(CProgram groups ctors ctorTypes impls)) =
     ctors
     ctorTypes
     (map (keepWholeGroup stillSplit) merged)
+    mctx
 
 -- An entry of a split group, paired with its lambda-merged expansion.
 pickMerged : ArityEnv ->
@@ -1411,13 +1414,14 @@ applyAtTail body args = mkApp body args
 -- in scope itself: a local named like a top-level function is not that function.
 export
 stampCallModes : CProgram -> CProgram
-stampCallModes (prog@(CProgram groups ctors ctorTypes impls)) =
+stampCallModes (prog@(CProgram groups ctors ctorTypes impls mctx)) =
   let env = programArities prog
   CProgram
     (map (callsBind env omEmpty) groups)
     ctors
     ctorTypes
     (map (callsEntry env) impls)
+    mctx
 
 callsBind : ArityEnv -> CallScope -> CBind -> CBind
 callsBind env scope (CBind name clauses site) =
@@ -1586,8 +1590,8 @@ callsField env scope (CField k o e) = CField k o (callsExpr env scope e)
 -- arm: a new expression form must decide whether it passes tail position on.
 export
 markTailSites : CProgram -> CProgram
-markTailSites (CProgram groups ctors ctorTypes impls) =
-  CProgram (map tailBind groups) ctors ctorTypes (map tailEntry impls)
+markTailSites (CProgram groups ctors ctorTypes impls mctx) =
+  CProgram (map tailBind groups) ctors ctorTypes (map tailEntry impls) mctx
 
 tailBind : CBind -> CBind
 tailBind (CBind name clauses site) = CBind name (map tailClause clauses) site
@@ -1903,13 +1907,14 @@ rewriteRecPatField _ (RecPatField l fl None) = RecPatField l fl None
 -- built from the original PRec arms, which canonPat wildcarded; the rewritten PCon
 -- arms compile to a proper constructor switch with no needs-guard fall-through).
 rewriteProgramRecPats : List (String, List String) -> CProgram -> CProgram
-rewriteProgramRecPats fo0 (CProgram groups ctorArs ctorTypes implEntries) =
+rewriteProgramRecPats fo0 (CProgram groups ctorArs ctorTypes implEntries mctx) =
   let fo = recOrdersOf fo0
   CProgram
     (map (rewriteBindRP fo) groups)
     ctorArs
     ctorTypes
     (map (rewriteImplRP fo) implEntries)
+    mctx
 
 rewriteBindRP : RecOrders -> CBind -> CBind
 rewriteBindRP fo (CBind n clauses site) =
@@ -2402,10 +2407,10 @@ recordMultiImplMemoGo st name ((m, key, sel) :: rest)
 -- then prepend one synthesized CAF value-bind per referenced instance.  A no-op (the
 -- byte-identical old program) when the program defines no memoisable nullary method.
 hoistNullaryMemo : CProgram -> CProgram
-hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
+hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries mctx) =
   let keys = memoKeys implEntries
   if isEmptyL keys then
-    CProgram groups ctorArs ctorTypes implEntries
+    CProgram groups ctorArs ctorTypes implEntries mctx
   else
     let st = LowerState {
       memoKeysAll = keys,
@@ -2415,7 +2420,7 @@ hoistNullaryMemo (CProgram groups ctorArs ctorTypes implEntries) =
     let groups2 = map (hoistBind st) groups
     let impls2 = map (hoistImpl st) implEntries
     let refs = dedupPairs (reverseL !st.memoRefs)
-    CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2
+    CProgram (map memoCafBind refs ++ groups2) ctorArs ctorTypes impls2 mctx
 
 memoCafBind : (String, String, String) -> CBind
 memoCafBind (sel, key, method) =
@@ -2723,10 +2728,10 @@ ifaceImplHeadEntries _ = []
 -- must not rename a symbol `prelude.o` already exports.
 export
 stampImplSymbols : List (String, String, String) -> CProgram -> CProgram
-stampImplSymbols pins (CProgram groups ctorArs ctorTypes impls) =
+stampImplSymbols pins (CProgram groups ctorArs ctorTypes impls mctx) =
   let collide = collidingHeads (map implEntryRow impls) omEmpty omEmpty
   let pinned = pinTable pins omEmpty
-  CProgram groups ctorArs ctorTypes (map (stampEntry collide pinned) impls)
+  CProgram groups ctorArs ctorTypes (map (stampEntry collide pinned) impls) mctx
 
 -- (method, head tag, canonical key) of an entry of either kind
 implEntryRow : CImplEntry -> (String, String, String)
@@ -2823,7 +2828,7 @@ implHeadKey m tag = "\{m}\n\{tag}"
 -- (`lowerProgramEmit`).  An entry carries no source location, so the message names
 -- the canonical dispatch keys, `<module>::<Interface>|<type arguments>|`.
 implSymbolCollisionGuard : CProgram -> Unit
-implSymbolCollisionGuard (CProgram _ _ _ impls) =
+implSymbolCollisionGuard (CProgram _ _ _ impls _) =
   checkImplSymbolsInjective
     (dedupImplSymRows (flatMap taggedImplSymRow impls) omEmpty)
     omEmpty
@@ -3590,8 +3595,8 @@ ifaceNameOfWord word = match reverseL (splitOnChar ':' word)
 -- method whose dict is threaded per-call by the RESULT type, not the container)
 -- to the threaded method-dict PARAM and dispatch it at run time — so one shared
 -- `@mdk_default_foldMap_List` serves both a List-monoid and a String-monoid fold.
--- A constraint over ONLY interface params contributes no slot (it dispatches via
--- the impl, not a per-call dict); mirrors typecheck's `constraintIsMethodLevel`.
+-- Every constraint that mentions a tyvar is a slot, interface params included;
+-- the same predicate as typecheck's `constraintIsMethodLevel`.
 -- Qualified rows include an explicit [] so a selected unconstrained method cannot
 -- fall through to a same-spelled interface method's legacy bare row.
 export
@@ -3601,18 +3606,13 @@ methodConstraintIfaces prog = flatMap methodConstraintIfaceEntries prog
 methodConstraintIfaceEntries : Decl -> List (String, List String)
 -- #1037
 methodConstraintIfaceEntries (DAttrib _ d) = methodConstraintIfaceEntries d
-methodConstraintIfaceEntries (DInterface { name = ifaceName, ifaceOrigin = o, typarams, methods, ... }) =
-  flatMap
-    (m => methodConstraintIfaceEntry (ifaceWordOf o ifaceName) typarams m)
-    methods
+methodConstraintIfaceEntries (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  flatMap (m => methodConstraintIfaceEntry (ifaceWordOf o ifaceName) m) methods
 methodConstraintIfaceEntries _ = []
 
-methodConstraintIfaceEntry : String ->
-  List String ->
-  IfaceMethod ->
-  List (String, List String)
-methodConstraintIfaceEntry ifaceWord typarams (IfaceMethod mname mty _ _) =
-  let ifaces = methodLevelConstraintIfaces typarams mty
+methodConstraintIfaceEntry : String -> IfaceMethod -> List (String, List String)
+methodConstraintIfaceEntry ifaceWord (IfaceMethod mname mty _ _) =
+  let ifaces = methodLevelConstraintIfaces mty
   let qualified = (ifaceMethodArityKey ifaceWord mname, ifaces)
   if isEmptyL ifaces then
     [qualified]
@@ -3622,44 +3622,51 @@ methodConstraintIfaceEntry ifaceWord typarams (IfaceMethod mname mty _ _) =
       qualified,
     ]
 
+-- The program's method-context table (`core_ir.CProgram`): each interface method
+-- whose declared `=>` context has a slot, with that slot count, keyed like the
+-- qualified rows above.
+methodContextSlotCounts : List Decl -> List (String, Int)
+methodContextSlotCounts prog = flatMap methodContextRows prog
+
+methodContextRows : Decl -> List (String, Int)
+methodContextRows (DAttrib _ d) = methodContextRows d
+methodContextRows (DInterface { name = ifaceName, ifaceOrigin = o, methods, ... }) =
+  flatMap (m => methodContextRow (ifaceWordOf o ifaceName) m) methods
+methodContextRows _ = []
+
+methodContextRow : String -> IfaceMethod -> List (String, Int)
+methodContextRow ifaceWord (IfaceMethod mname mty _ _) =
+  match listLen (methodLevelConstraintIfaces mty)
+    0 => []
+    n => [(ifaceMethodArityKey ifaceWord mname, n)]
+
 -- the interface name of each method-level constraint in [ty], in declaration
 -- order (peels TyConstrained/TyEffect like methodConstraintSlotIds).
-methodLevelConstraintIfaces : List String -> Ty -> List String
-methodLevelConstraintIfaces typarams (TyConstrained cs t) =
-  flatMap (c => constraintIfaceIfMethodLevel typarams c) cs
-    ++ methodLevelConstraintIfaces typarams t
-methodLevelConstraintIfaces typarams (TyEffect _ _ t) =
-  methodLevelConstraintIfaces typarams t
-methodLevelConstraintIfaces _ _ = []
+methodLevelConstraintIfaces : Ty -> List String
+methodLevelConstraintIfaces (TyConstrained cs t) =
+  flatMap constraintIfaceIfMethodLevel cs ++ methodLevelConstraintIfaces t
+methodLevelConstraintIfaces (TyEffect _ _ t) = methodLevelConstraintIfaces t
+methodLevelConstraintIfaces _ = []
 
-constraintIfaceIfMethodLevel : List String -> Constraint -> List String
-constraintIfaceIfMethodLevel typarams (Constraint { constraintHead = ifaceName, constraintArgs = args })
-  | constraintArgsMentionNonParam typarams args = [ifaceName]
+constraintIfaceIfMethodLevel : Constraint -> List String
+constraintIfaceIfMethodLevel (Constraint { constraintHead = ifaceName, constraintArgs = args })
+  | anyList tyMentionsTyVar args = [ifaceName]
   | otherwise = []
 
--- a constraint is method-level iff one of its argument types mentions a tyvar
--- that is NOT an interface param (so the dict is supplied per-call).
-constraintArgsMentionNonParam : List String -> List Ty -> Bool
-constraintArgsMentionNonParam typarams args =
-  anyList (t => tyMentionsNonParam t typarams) args
-
-tyMentionsNonParam : Ty -> List String -> Bool
-tyMentionsNonParam (TyVar n) params = not (contains n params)
-tyMentionsNonParam (TyCon { tyConName = _ }) _ = False
-tyMentionsNonParam (TyApp a b) params =
-  tyMentionsNonParam a params || tyMentionsNonParam b params
-tyMentionsNonParam (TyFun a b) params =
-  tyMentionsNonParam a params || tyMentionsNonParam b params
-tyMentionsNonParam (TyTuple ts) params =
-  anyList (t => tyMentionsNonParam t params) ts
-tyMentionsNonParam (TyEffect _ _ t) params = tyMentionsNonParam t params
--- Mirror of the `tyMentionsParams` arm above.
-tyMentionsNonParam (TyRow _ tail _) params =
-  anyList (v => not (contains v params)) tail
-tyMentionsNonParam (TyAuth _ _) _ = False
-tyMentionsNonParam (TyConstrained _ t) params = tyMentionsNonParam t params
-tyMentionsNonParam (TyNamed _ t _) params = tyMentionsNonParam t params
-tyMentionsNonParam (TyQual t _ _) params = tyMentionsNonParam t params
+-- does [t] mention an ordinary type variable?  Exactly typecheck's `tyVarNames`
+-- being non-empty: a row atom's tail is an effect-namespace name, not a tyvar.
+tyMentionsTyVar : Ty -> Bool
+tyMentionsTyVar (TyVar _) = True
+tyMentionsTyVar (TyCon { tyConName = _ }) = False
+tyMentionsTyVar (TyApp a b) = tyMentionsTyVar a || tyMentionsTyVar b
+tyMentionsTyVar (TyFun a b) = tyMentionsTyVar a || tyMentionsTyVar b
+tyMentionsTyVar (TyTuple ts) = anyList tyMentionsTyVar ts
+tyMentionsTyVar (TyEffect _ _ t) = tyMentionsTyVar t
+tyMentionsTyVar (TyRow _ _ _) = False
+tyMentionsTyVar (TyAuth _ _) = False
+tyMentionsTyVar (TyConstrained _ t) = tyMentionsTyVar t
+tyMentionsTyVar (TyNamed _ t _) = tyMentionsTyVar t
+tyMentionsTyVar (TyQual t _ _) = tyMentionsTyVar t
 
 -- ── constructor → DECLARED field type-head names (native backend, Gap E2) ────
 -- Per data-constructor name: the head type-name of each declared field, IN

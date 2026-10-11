@@ -1,0 +1,31 @@
+-- #3800 through a superclass: `Show2` requires `Show1`, and the `Show2 (Pair b)`
+-- body uses both, so the dictionary the call supplies must carry its `Show1`
+-- super.  Expected, from the impls: `show2 (Pair 1 2)` = `show2 1 ++ "/" ++ show1 1`
+-- = "int 1/one 1".
+data Pair a = Pair a a
+
+interface Show1 a where
+  show1 : a -> String
+
+impl Show1 Int where
+  show1 n = "one \{n}"
+
+interface Show2 a requires Show1 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show1 (Pair b) requires Show1 b where
+  show1 (Pair x _) = show1 x
+
+impl Show2 (Pair b) requires Show2 b where
+  show2 (Pair x _) = show2 x ++ "/" ++ show1 x
+
+interface Desc a where
+  desc : Show2 a => a -> String
+
+impl Desc (Pair b) where
+  desc p = show2 p
+
+main = println (desc (Pair (1 : Int) 2))

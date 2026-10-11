@@ -134,7 +134,7 @@ emitTail mods runtimeDecls coreD modules1 =
 -- `filterList` granularity exactly, so "kept / total" over this count IS the
 -- notion of reachable S1 computes — not a re-derived one.
 programUnitCount : CProgram -> Int
-programUnitCount (CProgram groups _ _ impls) = listLen groups + listLen impls
+programUnitCount (CProgram groups _ _ impls _) = listLen groups + listLen impls
 
 refuseNarrowFileGrants : List (String, String, List Decl) ->
   List Decl ->

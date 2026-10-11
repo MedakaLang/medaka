@@ -449,7 +449,20 @@ parseCProgram s = match parseAll s
       (map toCtorArity ctorArities)
       (map toCtorType ctorTypes)
       (map toCImplEntry impls)
+      []
+  SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls, SList mctx]) =>
+    CProgram
+      (map toCBind binds)
+      (map toCtorArity ctorArities)
+      (map toCtorType ctorTypes)
+      (map toCImplEntry impls)
+      (map toMethodContext mctx)
   other => panic ("core_ir_sexp_parse: bad CProgram: " ++ sexprToStr other)
+
+toMethodContext : SExp -> (String, Int)
+toMethodContext (SList ((SAtom "mc") :: [key, n])) = (toStr key, toInt n)
+toMethodContext other =
+  panic ("core_ir_sexp_parse: bad method context: " ++ sexprToStr other)
 
 -- ── debug helper ─────────────────────────────────────────────────────────────
 

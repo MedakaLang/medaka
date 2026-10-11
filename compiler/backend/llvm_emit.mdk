@@ -247,6 +247,7 @@ import backend.core_validate.{
   renderTailRefusal,
   validateCalls,
   validateImplSymbols,
+  validateMethodContexts,
   validateTails,
   validateRecords,
   unrefusedExternMessage,
@@ -14965,7 +14966,7 @@ runStrictEmission e input groups implEntries =
 -- expects: "the table the emitter built"), not two.
 export
 emitProgramWithStats : EmitInput -> CProgram -> (String, List (String, Int))
-emitProgramWithStats input (cp@(CProgram groups ctorArs ctorTypes implEntries)) =
+emitProgramWithStats input (cp@(CProgram groups ctorArs ctorTypes implEntries _)) =
   let _ = unprovidedExterns Strict input cp
   let cfg = programEmitConfig Strict input groups
   let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries
@@ -15086,7 +15087,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     sigs = Ref (inferSigs input.declSigIndex (fnBinds groups)),
     lams = Ref [],
     implEntries = Ref implEntries,
-    arities = programArities (CProgram groups ctorArs ctorTypes implEntries),
+    arities = programArities (CProgram groups ctorArs ctorTypes implEntries []),
     globalsReg = Ref cfg.globalsReg0,
     gapMode = cfg.gapMode,
     gapLog = Ref [],
@@ -15162,7 +15163,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   e
 
 emitProgramMode : GapMode -> EmitInput -> CProgram -> (String, List String)
-emitProgramMode gapMode input (cp@(CProgram groups ctorArs ctorTypes implEntries)) =
+emitProgramMode gapMode input (cp@(CProgram groups ctorArs ctorTypes implEntries _)) =
   -- Each half's run checks the whole program it received, so a refused extern
   -- is refused by the half that reaches it, before that half emits anything.
   let found = unprovidedExterns gapMode input cp
@@ -15206,9 +15207,12 @@ refuseUnstampedRecords cp = match validateRecords cp
 -- An application whose mode its head's defined arity contradicts is an internal
 -- error: the lowering's stamp and the validator read one helper.
 refuseUnstampedCalls : CProgram -> Unit
-refuseUnstampedCalls cp = match validateCalls cp ++ validateImplSymbols cp
-  [] => ()
-  bad => panic ("internal error: " ++ renderCallRefusal bad)
+refuseUnstampedCalls cp =
+  let bad =
+    validateCalls cp ++ validateImplSymbols cp ++ validateMethodContexts cp
+  match bad
+    [] => ()
+    _ => panic ("internal error: " ++ renderCallRefusal bad)
 
 -- An application whose tail flag disagrees with its position is an internal
 -- error: the lowering's flag pass and the validator state the rules separately.
@@ -15509,7 +15513,7 @@ ctag _ = "?"
 -- The emitted LLVM text is discarded by the probe — only the gap log matters.
 export
 emitProgramGaps : EmitInput -> CProgram -> List String
-emitProgramGaps input (cp@(CProgram groups ctorArs ctorTypes implEntries)) =
+emitProgramGaps input (cp@(CProgram groups ctorArs ctorTypes implEntries _)) =
   -- #561 PR-A: the gap census emits every value bind ORDINARILY (eager load), so
   -- install an EMPTY lazy set — this also RESETS any prior emitProgram's set so it
   -- cannot leak into the census. Likewise `runDispatchAnalysis = False` resets the

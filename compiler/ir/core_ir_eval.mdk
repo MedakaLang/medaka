@@ -467,7 +467,7 @@ cClauseClosure env (CClause pats body) = VClosureF env pats (e => ceval e body)
 -- point-free defs can reference values installed later, in any order.
 export
 cevalProgram : CProgram -> <e> List (String, Value e)
-cevalProgram (CProgram groups ctorArs ctorToType implEntries) =
+cevalProgram (CProgram groups ctorArs ctorToType implEntries _) =
   ctorToTypeRef := ctorToType
   let ctors = map ctorBinding ctorArs
   let allNames =

@@ -91,6 +91,7 @@ emitGapIsolation =
       []
       []
       []
+      []
   let (_, gaps) = emitProgramRecord input cp
   if contains "?\tunsupported Core IR node CMatch" gaps then
     let _ = putStr "LLVM_GAP_RECORD_OK\n"

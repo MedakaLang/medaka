@@ -113,7 +113,7 @@ emitHalfOfEnv = match getEnv "MEDAKA_EMIT_HALF"
 -- for it.
 preludeSymsOf : List Decl -> (List String, List (String, String, String))
 preludeSymsOf coreD = match lowerProgramEmit TargetNative coreD
-  CProgram groups _ _ impls => (
+  CProgram groups _ _ impls _ => (
     filterList
       (n => not (endsWith autoPrintPinName n))
       (map cbindNameOf groups),

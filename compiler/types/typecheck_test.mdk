@@ -1348,14 +1348,14 @@ wrappedReturnRoutes source =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
   let elaborated = elaborateOne [] core ("wrapped_return", program)
-  let (CProgram binds _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _) = lowerProgram elaborated
   returnBindRoutes binds
 
 wrappedReturnFlatRoutes : String -> Option (List String)
 wrappedReturnFlatRoutes source =
   let program = desugar (parseLocated "\{numericPreludeSource}\n\{source}")
   let elaborated = elaborateOne [] [] ("wrapped_return_flat", program)
-  let (CProgram binds _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _) = lowerProgram elaborated
   returnBindRoutes binds
 
 test "wrapped return prerequisites use the class parameter, not the result type" =
@@ -2389,7 +2389,7 @@ loweredMethodArity source bindName method =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
   let elaborated = elaborateOne [] core ("method_arity", program)
-  let (CProgram binds _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _) = lowerProgram elaborated
   bindMethodArity bindName method binds
 
 test "method occurrence freezes declared arity before higher-order specialization" =
@@ -2478,8 +2478,9 @@ test "Core IR round-trip preserves method occurrence arity" =
       []
       []
       []
+      []
   match parseCProgram (cprogramToSexp original)
-    CProgram [CBind "main" [CClause [] (CMethod "probe" "" arity RNone [] [])] _] _ _ _ =>
+    CProgram [CBind "main" [CClause [] (CMethod "probe" "" arity RNone [] [])] _] _ _ _ _ =>
       expectEqual 7 arity
     _ => fail "expected the round-tripped CProgram to keep the same shape"
 
@@ -2533,7 +2534,7 @@ blockRecCoreFacts =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
   let elaborated = elaborateOne [] core ("block_rec_core", program)
-  let (CProgram binds _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _) = lowerProgram elaborated
   fold
     (facts bind => mergeLocalCoreFacts facts (blockRecValueFacts bind))
     emptyLocalCoreFacts
@@ -2574,7 +2575,7 @@ lamThenGroupCoreFacts =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated lamThenGroupSource)
   let elaborated = elaborateOne [] core ("lam_then_group_core", program)
-  let (CProgram binds _ _ _) = lowerProgram elaborated
+  let (CProgram binds _ _ _ _) = lowerProgram elaborated
   fold
     (facts bind => mergeLocalCoreFacts facts (lamThenGroupBindFacts bind))
     emptyLocalCoreFacts

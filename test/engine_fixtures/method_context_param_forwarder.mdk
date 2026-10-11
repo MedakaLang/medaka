@@ -1,0 +1,28 @@
+-- #3800 at a ground head and through a polymorphic forwarder.  `twice` receives
+-- both the `Desc a` and the `Show2 a` dictionaries and passes the second on to
+-- each `desc` call.  Expected, from the impls: `twice 3` = "d:int 3" twice;
+-- `twice (Pair (Pair 1 2) (Pair 3 4))` = `show2 (Pair 1 2)` twice = "int 1" twice.
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show2 (Pair b) requires Show2 b where
+  show2 (Pair x _) = show2 x
+
+interface Desc a where
+  desc : Show2 a => a -> String
+
+impl Desc Int where
+  desc n = "d:" ++ show2 n
+
+impl Desc (Pair b) where
+  desc p = show2 p
+
+twice : (Desc a, Show2 a) => a -> String
+twice x = desc x ++ desc x
+
+main = println (twice (3 : Int) ++ twice (Pair (Pair (1 : Int) 2) (Pair 3 4)))

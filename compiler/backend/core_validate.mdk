@@ -20,6 +20,16 @@
 -- one method and route word that take different value arities: they are the
 -- clauses of one define.
 --
+-- The method-context check: an interface method whose declared `=>` context has
+-- slots (the program's method-context table, which lowering reads off the
+-- signature) takes one dictionary per slot.  A `CMethod` occurrence of it supplies
+-- that many method routes; an impl entry for it opens with that many
+-- `$dict_<method>_<k>` parameters, k counting from 0 (a supplied method may take
+-- its instance's `requires` dictionaries after them, an inherited default takes
+-- exactly one more, its receiver).  The emitters size a call by the routes and an
+-- entry by its patterns, so the two must agree with the declaration, not only with
+-- each other.  A method the table has no row for is not checked.
+--
 -- The extern check: a runtime extern whose catalog row gives the backend no
 -- lowering (`NotProvided`) is refused wherever the program references it
 -- freely.  A reference is free when no local binder in scope and no top-level
@@ -54,9 +64,11 @@ import ir.core_ir_lower.{
   definedArityOf,
   entryArityRow,
   programArities,
+  ifaceMethodArityKey,
   ifaceWordOfKey,
 }
 import ir.core_ir_sexp.{callModeSexp}
+import frontend.ast.{Pat(..)}
 import backend.extern_catalog.{
   Disposition(..),
   GapKind,
@@ -65,7 +77,14 @@ import backend.extern_catalog.{
   rowLlvm,
   rowWasm,
 }
-import support.ordmap.{OrdMap, omEmpty, omInsert, omHasKey, omLookup}
+import support.ordmap.{
+  OrdMap,
+  omEmpty,
+  omFromPairs,
+  omInsert,
+  omHasKey,
+  omLookup,
+}
 import support.util.{isNonEmptyL, joinWith, listLen, reverseL}
 
 public export data Backend = LlvmBackend | WasmBackend
@@ -118,14 +137,14 @@ validateExterns : Backend -> List String -> CProgram -> List ExternFinding
 validateExterns backend runtimeExterns prog =
   let _ = refuseMissingRows runtimeExterns
   match walkProgram backend prog
-    Walk _ found _ _ => reverseL found
+    Walk _ found _ _ _ => reverseL found
 
 -- One line per record node whose ordinals the emitters cannot trust, in
 -- program order; empty for a well-stamped program.
 export
 validateRecords : CProgram -> List String
 validateRecords prog = match walkProgram LlvmBackend prog
-  Walk _ _ bad _ => reverseL bad
+  Walk _ _ bad _ _ => reverseL bad
 
 export
 renderRecordRefusal : List String -> String
@@ -135,8 +154,9 @@ renderRecordRefusal bad = joinWith "\n" bad
 -- program order; empty for a well-stamped program.
 export
 validateCalls : CProgram -> List String
-validateCalls (prog@(CProgram _ _ _ impls)) = match walkProgram LlvmBackend prog
-  Walk _ _ _ bad => reverseL bad ++ splitGroupFaults impls omEmpty []
+validateCalls (prog@(CProgram _ _ _ impls _)) =
+  match walkProgram LlvmBackend prog
+    Walk _ _ _ bad _ => reverseL bad ++ splitGroupFaults impls omEmpty []
 
 -- The entries of one method and route word are the clauses of one define, which
 -- takes one parameter count, so an entry whose value arity differs from the
@@ -157,6 +177,49 @@ splitGroupFaults ((ent@(CImplEntry method _ _ body)) :: rest) seen acc =
             :: acc)
     None => splitGroupFaults rest (omInsert key n seen) acc
 
+-- One line per method occurrence or impl entry whose dictionaries disagree with
+-- the method's declared context (see the header), in program order.
+export
+validateMethodContexts : CProgram -> List String
+validateMethodContexts (prog@(CProgram _ _ _ impls mctx)) =
+  match walkProgram LlvmBackend prog
+    Walk _ _ _ _ bad =>
+      reverseL bad
+        ++ flatMap (entryContextFaults (omFromPairs mctx omEmpty)) impls
+
+entryContextFaults : OrdMap Int -> CImplEntry -> List String
+entryContextFaults table (CImplEntry method _ _ (CImplTagged tag _ iface _ _ pats _)) =
+  match omLookup (ifaceMethodArityKey iface method) table
+    Some k =>
+      let n = leadingMethodDicts method 0 pats
+      if n >= k then
+        []
+      else
+        [
+          "method context: impl entry opens with \{intToString n} `$dict_\{method}_k` parameters, `\{iface}` declares \{intToString k} [in impl \{method}@\{tag}]",
+        ]
+    None => []
+entryContextFaults table (CImplEntry method _ _ (CImplDefault iface tag _ _ _ pats _)) =
+  match omLookup (ifaceMethodArityKey iface method) table
+    Some k =>
+      let n = leadingMethodDicts method 0 pats
+      if n == k + 1 then
+        []
+      else
+        [
+          "method context: default entry opens with \{intToString n} `$dict_\{method}_k` parameters, `\{iface}` declares \{intToString k} and a receiver [in impl \{method}@\{tag}]",
+        ]
+    None => []
+
+-- How many of [pats], from the front, are `$dict_<method>_0`, `$dict_<method>_1`, ….
+leadingMethodDicts : String -> Int -> List Pat -> Int
+leadingMethodDicts method k ((PVar x _) :: rest) =
+  if x == "$dict_\{method}_\{intToString k}" then
+    leadingMethodDicts method (k + 1) rest
+  else
+    k
+leadingMethodDicts _ k _ = k
+
 -- The impl-symbol check: every impl entry carries the symbol words
 -- `core_ir_lower.stampImplSymbols` wrote, and a supplied method's interface word
 -- is the qualified word its canonical key opens with.  The emitters only prefix
@@ -164,7 +227,7 @@ splitGroupFaults ((ent@(CImplEntry method _ _ body)) :: rest) seen acc =
 -- nothing.
 export
 validateImplSymbols : CProgram -> List String
-validateImplSymbols (CProgram _ _ _ impls) = flatMap implSymbolFaults impls
+validateImplSymbols (CProgram _ _ _ impls _) = flatMap implSymbolFaults impls
 
 implSymbolFaults : CImplEntry -> List String
 implSymbolFaults (CImplEntry method _ _ (CImplTagged tag key iface (ImplSym sym _ _) _ _ _)) =
@@ -247,58 +310,53 @@ isProgramName : OrdMap Unit -> String -> Bool
 isProgramName top x = omHasKey x top || omHasKey ("core__" ++ x) top
 
 -- The walk's state: the externs already found, the extern findings, the record
--- nodes with untrustworthy ordinals, and the applications with a wrong mode,
--- each newest first.
-data Walk = Walk (OrdMap Unit) (List ExternFinding) (List String) (List String)
+-- nodes with untrustworthy ordinals, the applications with a wrong mode, and the
+-- method occurrences whose routes contradict their declared context, each newest
+-- first.
+data Walk =
+  | Walk (OrdMap Unit) (List ExternFinding) (List String) (List String) (List String)
 
 noFindings : Walk
-noFindings = Walk omEmpty [] [] []
+noFindings = Walk omEmpty [] [] [] []
 
--- The backend, the program's own names, its defined arities, and the top-level
--- binding being read.
-data Ctx = Ctx Backend (OrdMap Unit) ArityEnv String
+-- The backend, the program's own names, its defined arities, its method-context
+-- table, and the top-level binding being read.
+data Ctx = Ctx Backend (OrdMap Unit) ArityEnv (OrdMap Int) String
 
 walkProgram : Backend -> CProgram -> Walk
-walkProgram backend (prog@(CProgram groups ctors _ impls)) =
+walkProgram backend (prog@(CProgram groups ctors _ impls mctx)) =
   let top = programNames groups ctors omEmpty
   let env = programArities prog
-  walkImpls backend top env impls (walkBinds backend top env groups noFindings)
+  let ctx = Ctx backend top env (omFromPairs mctx omEmpty) ""
+  walkImpls ctx impls (walkBinds ctx groups noFindings)
 
-walkBinds : Backend -> OrdMap Unit -> ArityEnv -> List CBind -> Walk -> Walk
-walkBinds _ _ _ [] w = w
-walkBinds backend top env ((CBind name clauses _) :: rest) w =
-  walkBinds
-    backend
-    top
-    env
-    rest
-    (walkClauses (Ctx backend top env name) omEmpty clauses w)
+walkBinds : Ctx -> List CBind -> Walk -> Walk
+walkBinds _ [] w = w
+walkBinds ctx ((CBind name clauses _) :: rest) w =
+  walkBinds ctx rest (walkClauses (inBinding ctx name) omEmpty clauses w)
 
-walkImpls : Backend ->
-  OrdMap Unit ->
-  ArityEnv ->
-  List CImplEntry ->
-  Walk ->
-  Walk
-walkImpls _ _ _ [] w = w
-walkImpls backend top env ((CImplEntry method _ _ body) :: rest) w =
-  walkImpls
-    backend
-    top
-    env
-    rest
-    (walkImplBody (Ctx backend top env "impl \{method}") body w)
+walkImpls : Ctx -> List CImplEntry -> Walk -> Walk
+walkImpls _ [] w = w
+walkImpls ctx ((CImplEntry method _ _ body) :: rest) w =
+  walkImpls ctx rest (walkImplBody (inBinding ctx "impl \{method}") body w)
+
+inBinding : Ctx -> String -> Ctx
+inBinding (Ctx backend top env mctx _) binding =
+  Ctx backend top env mctx binding
+
+ctxBinding : Ctx -> String
+ctxBinding (Ctx _ _ _ _ binding) = binding
 
 walkImplBody : Ctx -> CImplBody -> Walk -> Walk
-walkImplBody (Ctx backend top env binding) (CImplTagged tag _ _ _ _ pats body) w =
+walkImplBody ctx (CImplTagged tag _ _ _ _ pats body) w =
   walkE
-    (Ctx backend top env "\{binding}@\{tag}")
+    (inBinding ctx "\{ctxBinding ctx}@\{tag}")
     (bindPatsScope pats omEmpty)
     body
     w
-walkImplBody (Ctx backend top env binding) (CImplDefault _ tag _ _ _ pats body) w =
+walkImplBody ctx (CImplDefault _ tag _ _ _ pats body) w =
   walkE
-    (Ctx backend top env "\{binding}@\{tag}")
+    (inBinding ctx "\{ctxBinding ctx}@\{tag}")
     (bindPatsScope pats omEmpty)
     body
     w
@@ -357,8 +415,26 @@ walkE ctx scope (CStringSlice a lo hi _) w = walkList ctx scope [a, lo, hi] w
 walkE ctx scope (CListIndex a i) w = walkList ctx scope [a, i] w
 walkE ctx scope (CListSlice a lo hi _) w = walkList ctx scope [a, lo, hi] w
 walkE ctx scope (CBlock stmts) w = walkStmts ctx scope stmts w
-walkE _ _ (CMethod _ _ _ _ _ _) w = w
+walkE ctx _ (CMethod name iface _ _ _ meths) w =
+  noteMethodContext ctx name iface (listLen meths) w
 walkE _ _ (CDict _ _) w = w
+
+-- A method occurrence supplies one route per slot of its declared context.
+noteMethodContext : Ctx -> String -> String -> Int -> Walk -> Walk
+noteMethodContext (Ctx _ _ _ mctx binding) name iface n (w@(Walk seen found bad calls ctxs)) =
+  match omLookup (ifaceMethodArityKey iface name) mctx
+    Some k =>
+      if n == k then
+        w
+      else
+        Walk
+          seen
+          found
+          bad
+          calls
+          ("method context: method \{name} supplies \{intToString n} method routes, `\{iface}` declares \{intToString k} [in \{binding}]"
+            :: ctxs)
+    None => w
 
 -- A field access is stamped, or reads a `Ref` cell through `.value`, which is
 -- never stamped: an emitter reading a stamped `.value` as a record field would
@@ -406,15 +482,15 @@ fieldOrdinalText : CField -> String
 fieldOrdinalText (CField k o _) = "\{k}@\{intToString o}"
 
 noteRecordBad : Ctx -> String -> String -> Walk -> Walk
-noteRecordBad (Ctx _ _ _ binding) node why (Walk seen found bad calls) =
-  Walk seen found ("record: \{node} \{why} [in \{binding}]" :: bad) calls
+noteRecordBad (Ctx _ _ _ _ binding) node why (Walk seen found bad calls ctxs) =
+  Walk seen found ("record: \{node} \{why} [in \{binding}]" :: bad) calls ctxs
 
 -- The mode the head's defined arity gives the arguments, or the shape fault.
 noteCall : Ctx -> CallScope -> CExpr -> List CExpr -> CallSite -> Walk -> Walk
 noteCall ctx _ _ [] _ w = noteCallBad ctx "application with no arguments" w
 noteCall ctx _ (CApp _ _ _) _ _ w =
   noteCallBad ctx "application whose head is an application" w
-noteCall (ctx@(Ctx _ _ env _)) scope hd args (CallSite mode _) w =
+noteCall (ctx@(Ctx _ _ env _ _)) scope hd args (CallSite mode _) w =
   let n = listLen args
   let arity = definedArityOf env scope hd
   if sameMode (callModeFor arity n) mode then
@@ -439,8 +515,8 @@ sameMode CallDynamic CallDynamic = True
 sameMode _ _ = False
 
 noteCallBad : Ctx -> String -> Walk -> Walk
-noteCallBad (Ctx _ _ _ binding) why (Walk seen found bad calls) =
-  Walk seen found bad ("call: \{why} [in \{binding}]" :: calls)
+noteCallBad (Ctx _ _ _ _ binding) why (Walk seen found bad calls ctxs) =
+  Walk seen found bad ("call: \{why} [in \{binding}]" :: calls) ctxs
 
 headText : CExpr -> String
 headText (CVar x _) = x
@@ -450,7 +526,7 @@ headText (CLam _ _) = "a lambda"
 headText _ = "an expression"
 
 noteVar : Ctx -> CallScope -> String -> Walk -> Walk
-noteVar (Ctx backend top _ binding) scope x (w@(Walk seen found bad calls)) =
+noteVar (Ctx backend top _ _ binding) scope x (w@(Walk seen found bad calls ctxs)) =
   if omHasKey x scope || omHasKey x seen then
     w
   else match unprovidedOn backend x
@@ -464,6 +540,7 @@ noteVar (Ctx backend top _ binding) scope x (w@(Walk seen found bad calls)) =
           (ExternFinding x backend kind why binding :: found)
           bad
           calls
+          ctxs
 
 walkList : Ctx -> CallScope -> List CExpr -> Walk -> Walk
 walkList _ _ [] w = w
@@ -517,7 +594,7 @@ walkStmts ctx scope ((CSAssign _ e) :: rest) w =
 -- statement of a block.
 export
 validateTails : CProgram -> List String
-validateTails (CProgram groups _ _ impls) =
+validateTails (CProgram groups _ _ impls _) =
   reverseL (tailImpls impls (tailBinds groups []))
 
 export

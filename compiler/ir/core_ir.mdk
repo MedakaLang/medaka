@@ -329,7 +329,14 @@ noImplSym = ImplSym "" "" ""
 -- ── programs ───────────────────────────────────────────────────────────────
 -- A lowered program: top-level function groups (coalesced multi-clause), the
 -- constructor table (name → arity, for building VCon makers), the ctor→type map
--- eval needs for runtime type tags, and (slice 5) the lowered typeclass
--- impl/default entries.  Slice-1 programs carry an empty impl list.
+-- eval needs for runtime type tags, (slice 5) the lowered typeclass
+-- impl/default entries, and the method-context table.  Slice-1 programs carry an
+-- empty impl list.
+-- The method-context table: per interface method of the lowered declarations whose
+-- own `=>` context has a slot, keyed by `core_ir_lower.ifaceMethodArityKey`, the
+-- number of constraints in that context that mention a type variable.  It is read
+-- off the declared signature, not the typechecker's evidence, so
+-- `core_validate.validateMethodContexts` can hold a `CMethod`'s method routes and an
+-- impl entry's leading dictionaries to it.
 public export data CProgram =
-  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry)
+  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int))

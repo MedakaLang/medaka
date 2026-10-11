@@ -48,6 +48,7 @@ import backend.core_validate.{
   validateCalls,
   validateExterns,
   validateImplSymbols,
+  validateMethodContexts,
   validateRecords,
   validateTails,
 }
@@ -254,7 +255,7 @@ recordFindings : EmitTarget -> String -> List String
 recordFindings target src = validateRecords (lowered target src)
 
 unstamped : CExpr -> CProgram
-unstamped body = CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] []
+unstamped body = CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] [] []
 
 zero : CExpr
 zero = CLit (LInt 0)
@@ -357,8 +358,8 @@ typedLowered preludeSrc src =
 -- [prog] with every application whose head is the variable [name] re-stamped
 -- [mode], in top-level bindings.
 restamp : String -> CallMode -> CProgram -> CProgram
-restamp name mode (CProgram groups ctors ctorTypes impls) =
-  CProgram (map (restampBind name mode) groups) ctors ctorTypes impls
+restamp name mode (CProgram groups ctors ctorTypes impls mctx) =
+  CProgram (map (restampBind name mode) groups) ctors ctorTypes impls mctx
 
 restampBind : String -> CallMode -> CBind -> CBind
 restampBind name mode (CBind n clauses site) =
@@ -469,8 +470,8 @@ test "(m) an application with no arguments, or whose head is an application, is 
 -- [prog] with the tail flag of every application whose head is the variable
 -- [name] set to [flag], in top-level bindings.
 reflag : String -> Bool -> CProgram -> CProgram
-reflag name flag (CProgram groups ctors ctorTypes impls) =
-  CProgram (map (reflagBind name flag) groups) ctors ctorTypes impls
+reflag name flag (CProgram groups ctors ctorTypes impls mctx) =
+  CProgram (map (reflagBind name flag) groups) ctors ctorTypes impls mctx
 
 reflagBind : String -> Bool -> CBind -> CBind
 reflagBind name flag (CBind n clauses site) =
@@ -597,8 +598,8 @@ mixedGroupSrc =
 
 -- [prog] with one more parameter on the first impl entry of method [m].
 widenFirstEntry : String -> CProgram -> CProgram
-widenFirstEntry m (CProgram groups ctors ctorTypes impls) =
-  CProgram groups ctors ctorTypes (widenEntries m impls)
+widenFirstEntry m (CProgram groups ctors ctorTypes impls mctx) =
+  CProgram groups ctors ctorTypes (widenEntries m impls) mctx
 
 widenEntries : String -> List CImplEntry -> List CImplEntry
 widenEntries _ [] = []
@@ -634,8 +635,8 @@ test "(q) the impl entries of one method and route word take one arity" = expect
 -- [prog] with every impl entry's stamped symbol cleared, as a lowering that
 -- never stamped would leave it.
 unstampImpls : CProgram -> CProgram
-unstampImpls (CProgram groups ctors ctorTypes impls) =
-  CProgram groups ctors ctorTypes (map unstampEntry impls)
+unstampImpls (CProgram groups ctors ctorTypes impls mctx) =
+  CProgram groups ctors ctorTypes (map unstampEntry impls) mctx
 
 unstampEntry : CImplEntry -> CImplEntry
 unstampEntry (CImplEntry n s d (CImplTagged tag key iface _ pos pats body)) =
@@ -645,8 +646,8 @@ unstampEntry (CImplEntry n s d (CImplDefault w tag key _ pos pats body)) =
 
 -- [prog] with every supplied method's interface word replaced by [word].
 reword : String -> CProgram -> CProgram
-reword word (CProgram groups ctors ctorTypes impls) =
-  CProgram groups ctors ctorTypes (map (rewordEntry word) impls)
+reword word (CProgram groups ctors ctorTypes impls mctx) =
+  CProgram groups ctors ctorTypes (map (rewordEntry word) impls) mctx
 
 rewordEntry : String -> CImplEntry -> CImplEntry
 rewordEntry word (CImplEntry n s d (CImplTagged tag key _ sym pos pats body)) =
@@ -680,6 +681,78 @@ test "(t) every impl entry carries its stamped symbol and its qualified interfac
           (reword "Other" (lowered TargetNative mixedGroupSrc))),
     ),
   ]
+
+-- ── method contexts ─────────────────────────────────────────────────────────
+
+-- `desc`'s declared context constrains only the interface parameter, so each
+-- call supplies the `Show2 (Pair b)` dictionary and the impl entry takes it.
+paramContextSrc : String
+paramContextSrc =
+  "data Pair a = Pair a a\ninterface Show2 a where\n  show2 : a -> String\nimpl Show2 Int where\n  show2 n = \"int\"\nimpl Show2 (Pair b) requires Show2 b where\n  show2 (Pair x _) = show2 x\ninterface Desc a where\n  desc : Show2 a => a -> String\nimpl Desc (Pair b) where\n  desc p = show2 p\nmain = desc (Pair (1 : Int) 2)"
+
+-- [prog] with the method routes of every top-level application of method [name]
+-- dropped, as an elaboration that posed no goal for the context would leave it.
+dropMethodRoutes : String -> CProgram -> CProgram
+dropMethodRoutes name (CProgram groups ctors ctorTypes impls mctx) =
+  CProgram (map (dropRoutesBind name) groups) ctors ctorTypes impls mctx
+
+dropRoutesBind : String -> CBind -> CBind
+dropRoutesBind name (CBind n clauses site) =
+  CBind n (map (dropRoutesClause name) clauses) site
+
+dropRoutesClause : String -> CClause -> CClause
+dropRoutesClause name (CClause pats body) =
+  CClause pats (dropRoutesExpr name body)
+
+dropRoutesExpr : String -> CExpr -> CExpr
+dropRoutesExpr name (CApp hd args site) =
+  CApp (dropRoutesExpr name hd) (map (dropRoutesExpr name) args) site
+dropRoutesExpr name (m@(CMethod n iface arity route impls _)) =
+  if n == name then CMethod n iface arity route impls [] else m
+dropRoutesExpr _ e = e
+
+-- [prog] with the leading parameter of every impl entry of method [m] dropped.
+dropEntryDict : String -> CProgram -> CProgram
+dropEntryDict m (CProgram groups ctors ctorTypes impls mctx) =
+  CProgram groups ctors ctorTypes (map (dropEntryDictOne m) impls) mctx
+
+dropEntryDictOne : String -> CImplEntry -> CImplEntry
+dropEntryDictOne m (ent@(CImplEntry n s d body)) =
+  if n == m then CImplEntry n s d (dropFirstPat body) else ent
+
+dropFirstPat : CImplBody -> CImplBody
+dropFirstPat (CImplTagged tag key iface sym pos (_ :: pats) body) =
+  CImplTagged tag key iface sym pos pats body
+dropFirstPat (CImplDefault w tag key sym pos (_ :: pats) body) =
+  CImplDefault w tag key sym pos pats body
+dropFirstPat b = b
+
+test "(u) a method's dictionaries match its declared context" = expectEach [
+  (
+    "a context over only the interface parameter: lowered, it validates clean",
+    expectEqual
+      []
+      (validateMethodContexts (typedLowered i2078Prelude paramContextSrc)),
+  ),
+  (
+    "a call that supplies no route for the context is refused",
+    expectEqual
+      [
+        "method context: method desc supplies 0 method routes, `calls::Desc` declares 1 [in main]",
+      ]
+      (validateMethodContexts
+        (dropMethodRoutes "desc" (typedLowered i2078Prelude paramContextSrc))),
+  ),
+  (
+    "an impl entry that takes no dictionary for the context is refused",
+    expectEqual
+      [
+        "method context: impl entry opens with 0 `$dict_desc_k` parameters, `calls::Desc` declares 1 [in impl desc@calls.Pair]",
+      ]
+      (validateMethodContexts
+        (dropEntryDict "desc" (typedLowered i2078Prelude paramContextSrc))),
+  ),
+]
 
 -- An impl group whose first clause returns a lambda literal: that clause takes
 -- the lambda's parameter, so both entries take two.  When a `let` stands before
