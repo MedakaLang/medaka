@@ -69,7 +69,7 @@ fi
 for sym in \
   WasmFnImplIndex WasmRecordValueIndex WasmCtorIndex WasmProgramIndex Prog \
   progIndex makeWasmProgramIndex makeWasmProgramIndexGaps makeWasmProgramIndexWithLazy \
-  indexFnNamesW indexValNamesW indexFnAritiesW indexImplsByMethodW indexLazyGlobalsW \
+  indexFnNamesW indexValNamesW indexAritiesW indexImplsByMethodW indexLazyGlobalsW \
   indexRecFieldsW indexFnsUsedAsValuesW indexCtorAritiesW indexCtorTypesW \
   indexCtorOrdinalsW indexTypeCtorsW; do
   grep -E "^$sym[[:space:]]*:|^data $sym" "$WASM_SRC" >/dev/null || {

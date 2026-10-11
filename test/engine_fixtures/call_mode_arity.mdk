@@ -1,0 +1,120 @@
+-- Every application is made in the mode its head's DEFINED arity gives it: the
+-- parameters of the clause the head names, not its signature.  Each section prints
+-- what the source says, read with no engine in the loop:
+--   point-free wrapper  `mk n = add n` defines 1 parameter; `apply1 (mk 1) 2` is 3.
+--   eta-short wrappers  `plus = add` takes 0 and `inc n = add (n + 1)` 1, so
+--                       `plus 3 4` 7, `inc 1 2` 4, through `apply2` 11 and 12,
+--                       and `map (plus 10) [1, 2]` is [11, 12].
+--   over-application    `pick` takes 1 and returns `add` or `sub`: 13 and 7;
+--                       `adder 4 5` 9; `(adder 1 >> adder 2) 0` 3.
+--   partial application `add3 1` then 2 then 3 is 123; [124, 125]; 7; 145.
+--   short impl clauses  `comb (MkBox n) = add n` takes 1 of 2 and `comb = b => …`
+--                       none: 3, 15, 7, -7, [101, 102].
+--   effectful prefix    `act b` and `cmpWith n` print `prefix` when applied to their
+--                       one parameter, before `between`: a defined arity is never
+--                       widened past an effect.
+--   prelude wrappers    elem/any/all/find/count and `map (elem 2)`.
+--   constrained compose `clamp lo hi = min hi >> max lo` applied to three values
+--                       over-applies the two-parameter define: 7, 0, 10, p.
+
+add : Int -> Int -> Int
+add a b = a + b
+
+sub : Int -> Int -> Int
+sub a b = a - b
+
+mk : Int -> Int -> Int
+mk n = add n
+
+apply1 : (Int -> Int) -> Int -> Int
+apply1 f x = f x
+
+plus : Int -> Int -> Int
+plus = add
+
+inc : Int -> Int -> Int
+inc n = add (n + 1)
+
+apply2 : (Int -> Int -> Int) -> Int -> Int -> Int
+apply2 f x y = f x y
+
+pick : Bool -> Int -> Int -> Int
+pick b = if b then add else sub
+
+adder : Int -> Int -> Int
+adder n = x => n + x
+
+add3 : Int -> Int -> Int -> Int
+add3 a b c = a * 100 + b * 10 + c
+
+twice : (Int -> Int) -> Int -> Int
+twice f x = f (f x)
+
+interface Comb a where
+  comb : a -> Int -> Int
+
+data Box = MkBox Int
+
+impl Comb Box where
+  comb (MkBox n) = add n
+
+impl Comb Bool where
+  comb = b => k => if b then k else 0 - k
+
+interface Act a where
+  act : a -> <Stdout> (Unit -> Int)
+
+impl Act Bool where
+  act b =
+    let _ = println "prefix"
+    u => if b then 1 else 0
+
+noisy : Int -> <Stdout> Int
+noisy n =
+  println "prefix"
+  n
+
+cmpWith : Int -> <Stdout> (Int -> Ordering)
+cmpWith n = compare (noisy n)
+
+clamp : Ord a => a -> a -> a -> a
+clamp lo hi = min hi >> max lo
+
+main =
+  println (apply1 (mk 1) 2)
+  println (plus 3 4)
+  println (inc 1 2)
+  println (apply2 plus 5 6)
+  println (apply2 inc 5 6)
+  println (map (plus 10) [1, 2])
+  println (pick True 10 3)
+  println (pick False 10 3)
+  println (adder 4 5)
+  println ((adder 1 >> adder 2) 0)
+  let p1 = add3 1
+  let p2 = p1 2
+  println (p2 3)
+  println (map (add3 1 2) [4, 5])
+  println (twice (add3 0 0) 7)
+  println (p1 4 5)
+  println (comb (MkBox 1) 2)
+  println (apply1 (comb (MkBox 10)) 5)
+  println (comb True 7)
+  println (apply1 (comb False) 7)
+  println (map (comb (MkBox 100)) [1, 2])
+  let f = act True
+  println "between"
+  println (f ())
+  let g = cmpWith 1
+  println "between"
+  println (g 2)
+  println (elem 3 [1, 2, 3])
+  println (any (x => x > 2) [1, 2, 3])
+  println (all (x => x > 2) [1, 2, 3])
+  println (find (x => x > 1) [1, 2, 3])
+  println (count (x => x > 1) [1, 2, 3])
+  println (map (elem 2) [[1], [2]])
+  putStrLn (intToString (clamp 0 10 7))
+  putStrLn (intToString (clamp 0 10 (0 - 5)))
+  putStrLn (intToString (clamp 0 10 15))
+  putStrLn (clamp "c" "p" "z")
