@@ -493,16 +493,140 @@ gradeSplit _ _ _ _ = []
 -- Runs `body` in a scratch directory made for this call, then removes it.
 inFreshScratch : (String -> <Exec, FileRead, IO> Expectation) ->
   <Exec, FileRead, IO> Expectation
-inFreshScratch body = match runVerb "mktemp" ["-d"]
-  Err e => fail "could not make a scratch directory: \{e}"
+inFreshScratch body = inFreshDirOf body fail
+
+{- | Runs `body` in a directory made for this call, removes it, and returns
+   what `body` returned. `fromMsg` turns a failure to make the directory into
+   the caller's result type, so each caller words that failure its own way.
+
+   The directory is made here rather than taken from `test_process.scratchDir`,
+   which is one directory per process and outlives the sweep that removes it. -}
+export
+inFreshDirOf : (String -> <e> a) -> (String -> a) -> <Exec, IO | e> a
+inFreshDirOf body fromMsg = match runVerb "mktemp" ["-d"]
+  Err e => fromMsg "could not make a scratch directory: \{e}"
   Ok (0, out, _) =>
     let scratch = trim out
     let result = body scratch
     let _ = runVerb "rm" ["-rf", scratch]
     result
   Ok (code, _, err) =>
-    fail
+    fromMsg
       "could not make a scratch directory: mktemp -d exited \{intToString code}: \{err}"
+
+-- # Staging a batch of rows
+
+{- | A scratch directory for one row of a batch: a function of the row, not a
+   value, since a value is evaluated once per process and every row would share
+   one directory. -}
+export
+freshDirFor : a -> <Exec, IO> Result String String
+freshDirFor _ = match runVerb "mktemp" ["-d"]
+  Err e => Err e
+  Ok (0, out, _) => Ok (trim out)
+  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
+
+export
+okDir : Result String String -> Option String
+okDir (Ok d) = Some d
+okDir (Err _) = None
+
+export
+liveOf : Result e a -> Option a
+liveOf (Ok x) = Some x
+liveOf (Err _) = None
+
+export
+finalOf : Result Expectation Expectation -> Expectation
+finalOf (Ok e) = e
+finalOf (Err e) = e
+
+-- `xs` cut into consecutive runs of the lengths in `ns`, in order.
+export
+splitCounts : List Int -> List a -> List (List a)
+splitCounts [] _ = []
+splitCounts (n :: ns) xs =
+  let (mine, rest) = splitAt n xs
+  mine :: splitCounts ns rest
+
+{- | The spawns `spawnsOf` names for each item, all run as one batch of
+   `boundedVerbsSeconds secs` rows, with each item's results handed back in its
+   own list, in input order. -}
+export
+spawnEach : Int ->
+  (s -> List (String, List String)) ->
+  List s ->
+  <Exec, IO> List (List (Result String (Int, String, String)))
+spawnEach secs spawnsOf items =
+  let named = map spawnsOf items
+  splitCounts
+    (map length named)
+    (boundedVerbsSeconds secs (flatMap (x => x) named))
+
+{- | Grades each live state from the results of its own spawns, one result
+   list per state, in order.
+
+   The batch is split by the counts the spawns were named with, so the two
+   lists agree in length by construction. Should they not, each unpaired state
+   and each unclaimed result list is a failure row built by `mismatch`, never a
+   row that is skipped or passes. -}
+export
+gradeLive : (String -> e) ->
+  (s -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> Result e t) ->
+  List s ->
+  List (List (Result String (Int, String, String))) ->
+  <Exec, FileRead, IO> List (Result e t)
+gradeLive _ _ [] [] = []
+gradeLive m grade (s :: ss) (r :: rs) = grade s r :: gradeLive m grade ss rs
+gradeLive m grade (_ :: ss) [] =
+  Err (m "internal: a live row got no batch results") :: gradeLive m grade ss []
+gradeLive m grade [] (_ :: rs) =
+  Err (m "internal: a batch answered a row that was not live")
+    :: gradeLive m grade [] rs
+
+{- | One stage of a row chain. A row already settled by an earlier stage
+   passes through untouched and spawns nothing. Every live row's spawns run as
+   one batch bounded by `secs`, then each live row is graded from its own
+   results. `mismatch` builds the failure a row gets when its batch answer is
+   missing. -}
+export
+stageRun : Int ->
+  (s -> List (String, List String)) ->
+  (String -> e) ->
+  (s -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> Result e t) ->
+  List (Result e s) ->
+  <Exec, FileRead, IO> List (Result e t)
+stageRun secs spawnsOf mismatch grade states =
+  let live = somes (map liveOf states)
+  mergeStage
+    mismatch
+    states
+    (gradeLive mismatch grade live (spawnEach secs spawnsOf live))
+
+{- | Pairs each `Ok` state with the next graded result, and keeps each `Err`
+   state as it is. A state left without a graded result is a failure row. -}
+export
+mergeStage : (String -> e) ->
+  List (Result e s) ->
+  List (Result e t) ->
+  List (Result e t)
+mergeStage _ [] gs = gs
+mergeStage m ((Err e) :: rest) gs = Err e :: mergeStage m rest gs
+mergeStage m ((Ok _) :: rest) (g :: gs) = g :: mergeStage m rest gs
+mergeStage m ((Ok _) :: rest) [] =
+  Err (m "internal: a live row got no graded result") :: mergeStage m rest []
+
+{- | Each row's label paired with its grade. A count mismatch is a failure
+   row carrying the mismatch, never a dropped row. -}
+export
+labelGrades : List String -> List Expectation -> List (String, Expectation)
+labelGrades [] [] = []
+labelGrades (l :: ls) (e :: es) = (l, e) :: labelGrades ls es
+labelGrades (l :: ls) [] =
+  (l, fail "internal: no grade was produced for this row") :: labelGrades ls []
+labelGrades [] (e :: es) =
+  ("(no row)", fail "internal: a grade was produced for no row")
+    :: labelGrades [] es
 
 {- | The `summarize` most `sweepUnits` callers pass: a generic "N of M probe
    rows failed" report, or `pass` when nothing failed.

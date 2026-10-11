@@ -116,12 +116,12 @@
    feeds all three; the failure message names which axis each row failed on,
    so an emitter-verdict regression is legible on its own. -}
 
-import compiler_cli_test_support.{emitterBin}
+import compiler_cli_test_support.{emitterBin, inFreshDirOf, stageRun}
 import fs.{fixtureDirs, fixtureFiles, mkdirAll}
 import io.{runVerb}
 import list.{
   chunks, drop, errs, indexed, lookup, mapWithIndex, nub, oks, permutations,
-  range, reverse, somes, sort, splitAt, zip
+  range, reverse, somes, sort, zip
 }
 import path.{basename}
 import string.{
@@ -132,7 +132,7 @@ import regex.{
   Regex, Match, mustCompile, isMatch, find as reFind, findAll as reFindAll
 }
 import test.{Expectation, fail, pass}
-import test_process.{medakaBin, medakaRoot, missingUnits, scratchDir, testJobs}
+import test_process.{medakaBin, medakaRoot, missingUnits, testJobs}
 
 -- Everything is located through MEDAKA_ROOT rather than the working
 -- directory: a gate runner exports it and inherits whatever cwd its caller
@@ -287,57 +287,15 @@ inTreeRow : String -> String -> String -> List String -> (String, List String)
 inTreeRow root emitter cmd args =
   ("env", ["MEDAKA_ROOT=\{root}", "MEDAKA_EMITTER=\{emitter}", cmd] ++ args)
 
--- Every spawn of one batch is bounded by the `perl` alarm `boundedVerbSeconds`
--- uses, at `perSpawnSeconds`.
-batchSpawns : List (String, List String) ->
-  <Exec, IO> List (Result String (Int, String, String))
-batchSpawns rows =
-  let alarm = "alarm \{intToString perSpawnSeconds}; exec @ARGV"
-  runCommandBatch
-    "perl"
-    testJobs
-    (map ((cmd, args) => ["-e", alarm, "env", cmd] ++ args) rows)
-
-spawnEach : (s -> List (String, List String)) ->
-  List s ->
-  <Exec, IO> List (List (Result String (Int, String, String)))
-spawnEach spawnsOf items =
-  let named = map spawnsOf items
-  splitCounts (map length named) (batchSpawns (flatMap (x => x) named))
-
-splitCounts : List Int -> List a -> List (List a)
-splitCounts [] _ = []
-splitCounts (n :: ns) xs =
-  let (mine, rest) = splitAt n xs
-  mine :: splitCounts ns rest
-
-liveOf : Result a b -> Option b
-liveOf (Ok x) = Some x
-liveOf (Err _) = None
-
-mergeStage : List (Result e s) -> List (Result e t) -> List (Result e t)
-mergeStage [] _ = []
-mergeStage ((Err e) :: rest) gs = Err e :: mergeStage rest gs
-mergeStage ((Ok _) :: rest) (g :: gs) = g :: mergeStage rest gs
-mergeStage _ _ = []
-
--- One stage of an ordering's chain. An ordering already settled by an earlier
--- stage passes through and spawns nothing; the live ones spawn as one batch.
-stageRunE : (s -> List (String, List String)) ->
+-- One stage of an ordering's chain, its live spawns bounded by `perSpawnSeconds`.
+-- An ordering already settled by an earlier stage passes through and spawns
+-- nothing; the live ones spawn as one batch.
+stage : (s -> List (String, List String)) ->
   (s -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> Result String t) ->
   List (Result String s) ->
   <Exec, FileRead, IO> List (Result String t)
-stageRunE spawnsOf grade states =
-  let live = somes (map liveOf states)
-  mergeStage states (applyEach grade live (spawnEach spawnsOf live))
-
--- `grade` takes effects, so each live state is graded by recursion, not `mapWith`.
-applyEach : (s -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> Result String t) ->
-  List s ->
-  List (List (Result String (Int, String, String))) ->
-  <Exec, FileRead, IO> List (Result String t)
-applyEach grade (s :: ss) (r :: rs) = grade s r :: applyEach grade ss rs
-applyEach _ _ _ = []
+stage spawnsOf grade states =
+  stageRun perSpawnSeconds spawnsOf (msg => msg) grade states
 
 -- What one ordering has observed so far. Each stage fills in its own fields.
 data Work = Work {
@@ -475,28 +433,25 @@ runWorks works =
   let root = medakaRoot
   let emitter = emitterBin
   let s1 =
-    stageRunE
+    stage
       (w => [inTreeRow root emitter bin ["check", "--json", workPathOf w]])
       gradeJson
       works
   let s2 =
-    stageRunE
+    stage
       (w => [inTreeRow root emitter bin ["check", workPathOf w]])
       gradeCheck
       s1
   let s3 =
-    stageRunE
-      (w => [inTreeRow root emitter bin ["run", workPathOf w]])
-      gradeRun
-      s2
+    stage (w => [inTreeRow root emitter bin ["run", workPathOf w]]) gradeRun s2
   let s4 =
-    stageRunE
+    stage
       (w =>
         [inTreeRow root emitter bin ["build", workPathOf w, "-o", workBinOf w]])
       gradeBuild
       s3
-  let s5 = stageRunE (execSpawns root emitter) gradeExec s4
-  stageRunE (emitSpawns root emitter) gradeEmitted s5
+  let s5 = stage (execSpawns root emitter) gradeExec s4
+  stage (emitSpawns root emitter) gradeEmitted s5
 
 -- The `check=` cell of a signature, which is what the emitter-verdict
 -- classification is computed against.
@@ -976,20 +931,28 @@ gradedCorpus = match corpusUnits
   Ok units => match (readLedger orderLedgerPath 2, readLedger emitLedgerPath 3)
     (Err e, _) => fail e
     (_, Err e) => fail e
-    (Ok orderRows, Ok emitRows) => match scratchDir
-      Err e => fail "could not make a scratch directory: \{e}"
-      Ok scratch =>
-        let cases = map (runCase scratch) units
-        let _ = runVerb "rm" ["-rf", scratch]
-        summarizeCensus
-          cases
-          (section
-              "the answer depends on import-clause order"
-              (somes (map (gradeOrder orderRows) cases))
-            ++ section
-              "a case's declared diagnostic codes are not what it produced"
-              (somes (map gradeCodes cases))
-            ++ section
-              "the emitter's verdict is not what the sidecar ledger pins"
-              (somes (map (gradeEmit emitRows) cases))
-            ++ section "an arm graded nothing" (witnessFailures cases))
+    (Ok orderRows, Ok emitRows) =>
+      inFreshDirOf
+        (scratch => gradeCorpus scratch units orderRows emitRows)
+        fail
+
+-- Every case run in `scratch`, which the caller removes once this returns.
+gradeCorpus : String ->
+  List String ->
+  List Row ->
+  List Row ->
+  <Exec, FileRead, FileWrite, IO> Expectation
+gradeCorpus scratch units orderRows emitRows =
+  let cases = map (runCase scratch) units
+  summarizeCensus
+    cases
+    (section
+        "the answer depends on import-clause order"
+        (somes (map (gradeOrder orderRows) cases))
+      ++ section
+        "a case's declared diagnostic codes are not what it produced"
+        (somes (map gradeCodes cases))
+      ++ section
+        "the emitter's verdict is not what the sidecar ledger pins"
+        (somes (map (gradeEmit emitRows) cases))
+      ++ section "an arm graded nothing" (witnessFailures cases))

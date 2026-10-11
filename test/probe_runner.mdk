@@ -35,15 +35,14 @@
    neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  chompNewlines, stripUnitAutoPrint, summarizeSweep, sweepSpawns
+  chompNewlines, inFreshDirOf, stripUnitAutoPrint, summarizeSweep, sweepSpawns
 }
-import fs.{expectUnitCount, fixtureFiles, isFile, mkdirAll}
-import io.{runVerb}
+import fs.{expectUnitCount, fixtureFiles, isFile}
 import list.{somes, sort}
 import path.{dirname, stem, stripPrefix}
 import string.{contains, endsWith, lines, unlines}
 import test.{Expectation, expectEqualLines, expectationMessage, fail, pass}
-import test_process.{boundedVerb, medakaRoot, scratchDir}
+import test_process.{boundedVerb, medakaRoot}
 
 {- | One retired probe gate, as data.
 
@@ -285,24 +284,6 @@ gradeProbeRows : List Row -> <Exec, FileRead, IO> Expectation
 gradeProbeRows rows =
   sweepSpawns rows rowSpawns gradeRow rowFailure summarizeSweep
 
--- # Scratch space
-
-{- | A directory of this test's own, named `name`, under the process's
-   scratch root.
-
-   `test_process.scratchDir` is a top-level nullary, so it is evaluated ONCE
-   per process and every test in a module is handed the same path —
-   including after a sweep has removed it, which `sweepUnits` does when it
-   finishes. A test that writes therefore has to make its directory
-   rather than assume one; `mkdirAll` remakes the root on the way and is not
-   an error when it is still there. -}
-ownScratch : String -> <Exec, FileWrite> Result String String
-ownScratch name = match scratchDir
-  Err e => Err e
-  Ok root =>
-    let dir = "\{root}/\{name}"
-    map (() => dir) (mkdirAll dir)
-
 -- # The scaffolded tree
 
 {- | Every regular file under `root`, as paths relative to it, sorted.
@@ -350,18 +331,26 @@ scaffoldFailures : String ->
   String ->
   Int ->
   <Exec, FileRead, FileWrite, IO> List String
-scaffoldFailures probe name golden files = match ownScratch "new"
-  Err e => ["\{name}: could not make a scratch directory: \{e}"]
-  Ok scratch =>
-    let bin = "\{medakaRoot}/\{probe}"
-    let found = match spawnIn scratch bin name
-      Err e => ["\{name}: could not spawn \{probe}: \{e}"]
-      Ok (code, _, err) => match processFailure probe name code err
-        Some m => [m]
-        None =>
-          treeFailures files "\{scratch}/\{name}" "\{medakaRoot}/\{golden}"
-    let _ = runVerb "rm" ["-rf", scratch]
-    found
+scaffoldFailures probe name golden files =
+  inFreshDirOf
+    (scratch => scaffoldIn scratch probe name golden files)
+    (m => ["\{name}: \{m}"])
+
+-- What `probe` scaffolds under `name` when started in `scratch`, graded
+-- against `golden`.
+scaffoldIn : String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  <Exec, FileRead, FileWrite, IO> List String
+scaffoldIn scratch probe name golden files =
+  let bin = "\{medakaRoot}/\{probe}"
+  match spawnIn scratch bin name
+    Err e => ["\{name}: could not spawn \{probe}: \{e}"]
+    Ok (code, _, err) => match processFailure probe name code err
+      Some m => [m]
+      None => treeFailures files "\{scratch}/\{name}" "\{medakaRoot}/\{golden}"
 
 treeFailures : Int -> String -> String -> <FileRead, IO> List String
 treeFailures files got want = match treeFiles want
@@ -461,33 +450,38 @@ undispSrc = "data Foo = Foo\n\nmain = Foo\n"
    nothing. -}
 export
 errorPathFailures : String -> Int -> <Exec, FileRead, FileWrite, IO> List String
-errorPathFailures probe checks = match ownScratch "entry"
-  Err e => ["could not make a scratch directory: \{e}"]
-  Ok scratch =>
-    let bin = "\{medakaRoot}/\{probe}"
-    let good = "\{scratch}/good.mdk"
-    let undisp = "\{scratch}/undisp.mdk"
-    let nope = "\{scratch}/NOPE.mdk"
-    let runtime = "\{medakaRoot}/stdlib/runtime.mdk"
-    let core = "\{medakaRoot}/stdlib/core.mdk"
-    let found = match writeFile good goodSrc
-      Err e => ["could not write \{good}: \{e}"]
-      Ok () => match writeFile undisp undispSrc
-        Err e => ["could not write \{undisp}: \{e}"]
-        Ok () =>
-          let graded = [
-            expectFails "usage/arity (too few args)" bin [good],
-            expectFails "nonexistent runtime.mdk" bin [nope, core, good],
-            expectFails "nonexistent core.mdk" bin [runtime, nope, good],
-            expectFails "nonexistent entry.mdk" bin [runtime, core, nope],
-            expectFails "underived Display main (typecheck diagnostic)" bin [
-              runtime, core, undisp
-            ],
-            expectEmits bin [runtime, core, good] "define i32 @mdk_program_main",
-          ]
-          countFloor "error paths" checks graded ++ somes graded
-    let _ = runVerb "rm" ["-rf", scratch]
-    found
+errorPathFailures probe checks =
+  inFreshDirOf (scratch => errorPathsIn scratch probe checks) (m => [m])
+
+-- The error paths and their control, with the synthesized sources written
+-- into `scratch`.
+errorPathsIn : String ->
+  String ->
+  Int ->
+  <Exec, FileRead, FileWrite, IO> List String
+errorPathsIn scratch probe checks =
+  let bin = "\{medakaRoot}/\{probe}"
+  let good = "\{scratch}/good.mdk"
+  let undisp = "\{scratch}/undisp.mdk"
+  let nope = "\{scratch}/NOPE.mdk"
+  let runtime = "\{medakaRoot}/stdlib/runtime.mdk"
+  let core = "\{medakaRoot}/stdlib/core.mdk"
+  match writeFile good goodSrc
+    Err e => ["could not write \{good}: \{e}"]
+    Ok () => match writeFile undisp undispSrc
+      Err e => ["could not write \{undisp}: \{e}"]
+      Ok () =>
+        let graded = [
+          expectFails "usage/arity (too few args)" bin [good],
+          expectFails "nonexistent runtime.mdk" bin [nope, core, good],
+          expectFails "nonexistent core.mdk" bin [runtime, nope, good],
+          expectFails "nonexistent entry.mdk" bin [runtime, core, nope],
+          expectFails "underived Display main (typecheck diagnostic)" bin [
+            runtime, core, undisp
+          ],
+          expectEmits bin [runtime, core, good] "define i32 @mdk_program_main",
+        ]
+        countFloor "error paths" checks graded ++ somes graded
 
 {- | A finding when a sweep covered a different number of units than the
    count written beside it, and nothing when it covered exactly that many.

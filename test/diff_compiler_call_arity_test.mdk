@@ -13,9 +13,9 @@
    each fixture and reads the kept IR, neither of which the interpreter binds. -}
 
 import test_process.{
-  medakaBin, medakaRoot, underRoot, boundedVerb, scratchDir, withScratchDir
+  medakaBin, medakaRoot, underRoot, boundedVerb, withScratchDir
 }
-import compiler_cli_test_support.{boundedInTree, fixtureStems}
+import compiler_cli_test_support.{boundedInTree, fixtureStems, inFreshDirOf}
 import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
 import string as S
 import list as L
@@ -311,13 +311,11 @@ nonTailOk b =
 tailOk : String -> Bool
 tailOk b = S.contains "musttail call i64 @\{dictPrefix}tail(" b
 
--- The CDict fixture is built ONCE per process, with its kept IR, into the
--- shared scratch directory: three tests below read the same IR. Nothing reads
--- the build for anything but its text, so no test changes what another sees.
+-- The CDict fixture is built ONCE per process: three tests below read the same
+-- IR. The build goes into a directory that is removed as soon as its IR text
+-- is read, so only the text outlives the build.
 cdictIR : <Exec, IO, FileRead> Result String String
-cdictIR = match scratchDir
-  Err e => Err e
-  Ok dir => buildIR dir dictStem
+cdictIR = inFreshDirOf (dir => buildIR dir dictStem) (m => Err m)
 
 skewCDict : <Exec, IO, FileRead> Expectation
 skewCDict = match cdictIR

@@ -979,35 +979,38 @@ runGraded t (Ok ((_, m), spawned)) = match spawned
         "\{labelOf t m}: the mutant failed without its witness \{debug m.witness}, so for an unrelated reason",
       ]
 
-{- | Every mutated file, in the scratch tree and in the live tree, must end
-   byte-identical to its text before the first mutation. A scratch copy left
-   modified means a later mutation graded a doubly-broken tree; a live copy
-   left modified means the test broke the checkout it ran in. `pristine`
-   pairs each repo-relative file with that text. -}
+{- | Every file of `pristine`, in the scratch tree's `pds/` and in the live
+   checkout, must still read its text from before the mutations ran.
+
+   Each mutant is written only into its own `mutant<i>` copy, so this check
+   proves that no staged write reached the pristine scratch copy or the live
+   checkout. It does not look at the mutants: a mutant is built and run from
+   its own copy, and nothing is written back from it. `pristine` pairs each
+   repo-relative file with that text. -}
 export
-restoredFindings : MutationTest ->
+unmodifiedFindings : MutationTest ->
   String ->
   List (String, String) ->
   <FileRead, IO> List String
-restoredFindings t tree pristine =
+unmodifiedFindings t tree pristine =
   somes
     (flatMap
       ((rel, text) => [
-        restoredFinding t "the mutation tree's copy" "\{tree}/\{rel}" rel text,
-        restoredFinding t "the live copy" "\{medakaRoot}/\{rel}" rel text,
+        unmodifiedFinding t "the scratch tree's copy" "\{tree}/\{rel}" rel text,
+        unmodifiedFinding t "the live copy" "\{medakaRoot}/\{rel}" rel text,
       ])
       pristine)
 
 -- | `None` when the file at `path` still reads `text`; otherwise the finding
 -- naming `what` copy of `rel` was left modified.
 export
-restoredFinding : MutationTest ->
+unmodifiedFinding : MutationTest ->
   String ->
   String ->
   String ->
   String ->
   <FileRead> Option String
-restoredFinding t what path rel text = match readFile path
+unmodifiedFinding t what path rel text = match readFile path
   Ok now =>
     if now == text then
       None
@@ -1046,17 +1049,20 @@ mutationsFindings t tree =
     map ((mutantBin, _) => (runSeconds, [], mutantBin, t.args)) (okValues built)
   flatMap (runGraded t) (pairOks built (spawnBatch runRows))
 
+{- | Every finding of the self-test, in `tree`: a pristine copy of `pds/` is
+   made there, every mutation is graded against it, and the copy and the live
+   checkout are then checked unmodified. -}
 export
-allMutationFindings : MutationTest ->
+mutationSelfTestFindings : MutationTest ->
   String ->
   <Exec, FileRead, FileWrite, IO> List String
-allMutationFindings t tree =
+mutationSelfTestFindings t tree =
   match pristineOf (nub (map (m => m.file) t.mutations))
     Err e => ["\{t.gate}: \{e}"]
     Ok pristine =>
       match spawn runSeconds [] "cp" ["-R", "\{medakaRoot}/pds", "\{tree}/pds"]
         Ok (0, _, _) =>
-          mutationsFindings t tree ++ restoredFindings t tree pristine
+          mutationsFindings t tree ++ unmodifiedFindings t tree pristine
         Ok (code, _, err) =>
           ["\{t.gate}: copying pds/ exited \{intToString code}: \{err}"]
         Err e => ["\{t.gate}: could not copy pds/: \{e}"]
@@ -1065,4 +1071,5 @@ allMutationFindings t tree =
 -- module, in a scratch directory it makes and removes.
 export
 expectMutations : MutationTest -> <Exec, FileRead, FileWrite, IO> Expectation
-expectMutations t = expectNoFindings t.gate (inScratch (allMutationFindings t))
+expectMutations t =
+  expectNoFindings t.gate (inScratch (mutationSelfTestFindings t))

@@ -21,9 +21,12 @@
    The grader itself (hitsOk) is self-checked by its own test block below.
 -}
 
+import compiler_cli_test_support.{
+  finalOf, freshDirFor, labelGrades, liveOf, mergeStage, okDir, spawnEach
+}
 import fs.{isFile}
 import io.{runVerb}
-import list.{chunks, nub, somes, splitAt}
+import list.{chunks, nub, somes}
 import regex.{Regex, compile, isMatch}
 import string.{lines, split, trim}
 import test.{
@@ -635,60 +638,6 @@ readIr entry dir = match readFile "\{dir}/ir.ll"
   Err e => fail "\{entry}: no IR emitted (build failed?): \{e}"
   Ok ir => expectAll (map (r => gradeRow entry ir r) (rowsFor entry))
 
--- The entries' builds run as batches, `testJobs` wide, one group at a time.
--- A fresh scratch directory per entry: a function, not a value, since a value
--- is evaluated once per process and every entry would share one directory.
-freshDirFor : String -> <Exec, IO> Result String String
-freshDirFor _ = match runVerb "mktemp" ["-d"]
-  Err e => Err e
-  Ok (0, out, _) => Ok (trim out)
-  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
-
-okDir : Result String String -> Option String
-okDir (Ok d) = Some d
-okDir (Err _) = None
-
-liveOf : Result a b -> Option b
-liveOf (Ok x) = Some x
-liveOf (Err _) = None
-
-mapWith : (a -> b -> c) -> List a -> List b -> List c
-mapWith f (x :: xs) (y :: ys) = f x y :: mapWith f xs ys
-mapWith _ _ _ = []
-
-finalOf : Result Expectation Expectation -> Expectation
-finalOf (Ok e) = e
-finalOf (Err e) = e
-
-mergeStage : List (Result e s) -> List (Result e t) -> List (Result e t)
-mergeStage [] _ = []
-mergeStage ((Err e) :: rest) gs = Err e :: mergeStage rest gs
-mergeStage ((Ok _) :: rest) (g :: gs) = g :: mergeStage rest gs
-mergeStage _ _ = []
-
-splitCounts : List Int -> List a -> List (List a)
-splitCounts [] _ = []
-splitCounts (n :: ns) xs =
-  let (mine, rest) = splitAt n xs
-  mine :: splitCounts ns rest
-
--- Every spawn of one batch is bounded by the `perl` alarm `boundedVerb` uses.
-batchSpawns : List (String, List String) ->
-  <Exec, IO> List (Result String (Int, String, String))
-batchSpawns rows =
-  let alarm = "alarm \{intToString spawnTimeoutSeconds}; exec @ARGV"
-  runCommandBatch
-    "perl"
-    testJobs
-    (map ((cmd, args) => ["-e", alarm, "env", cmd] ++ args) rows)
-
-spawnEach : (s -> List (String, List String)) ->
-  List s ->
-  <Exec, IO> List (List (Result String (Int, String, String)))
-spawnEach spawnsOf items =
-  let named = map spawnsOf items
-  splitCounts (map length named) (batchSpawns (flatMap (x => x) named))
-
 -- The entry's own state before its build, or the Expectation that settles it.
 prepEntry : String ->
   Result String String ->
@@ -719,17 +668,19 @@ gradeBuilt (entry, dir, _) [r] = match r
 gradeBuilt (entry, _, _) _ = fail "\{entry}: internal: no single build result"
 
 -- One group of entries: every directory made, every fixture checked, the
--- builds run as one batch, then the group's directories removed.
+-- builds run as one batch, then the group's directories removed. A build the
+-- batch did not answer, or an entry that got no directory, is a failure row.
 groupEntries : List String -> <Exec, IO, FileRead> List (String, Expectation)
 groupEntries group =
   let bin = medakaBin
   let dirs = map freshDirFor group
   let prepared = prepEntries group dirs
   let live = somes (map liveOf prepared)
-  let graded = gradeBuilts live (spawnEach (buildSpawn bin) live)
-  let settled = mergeStage prepared (map (g => Ok g) graded)
+  let graded =
+    gradeBuilts live (spawnEach spawnTimeoutSeconds (buildSpawn bin) live)
+  let settled = mergeStage fail prepared (map (g => Ok g) graded)
   let _ = map (d => runVerb "rm" ["-rf", d]) (somes (map okDir dirs))
-  mapWith (e s => (e, finalOf s)) group settled
+  labelGrades group (map finalOf settled)
 
 entries : List String
 entries = nub (map entryOf table)
@@ -738,27 +689,31 @@ entries = nub (map entryOf table)
 prepEntries : List String ->
   List (Result String String) ->
   <FileRead, IO> List (Result Expectation (String, String, String))
-prepEntries [] _ = []
+prepEntries [] [] = []
 prepEntries (e :: es) (d :: ds) = prepEntry e d :: prepEntries es ds
-prepEntries _ _ = []
+prepEntries (e :: es) [] =
+  Err (fail "\{e}: internal: no scratch directory was made")
+    :: prepEntries es []
+prepEntries [] (_ :: ds) =
+  Err (fail "internal: a scratch directory was made for no entry")
+    :: prepEntries [] ds
 
 gradeBuilts : List (String, String, String) ->
   List (List (Result String (Int, String, String))) ->
   <FileRead, IO> List Expectation
+gradeBuilts [] [] = []
 gradeBuilts (e :: es) (r :: rs) = gradeBuilt e r :: gradeBuilts es rs
-gradeBuilts _ _ = []
-
--- `xs` in consecutive groups of `n`, in order.
-groupsOf : Int -> List a -> List (List a)
-groupsOf _ [] = []
-groupsOf n xs =
-  let (mine, rest) = splitAt n xs
-  mine :: groupsOf n rest
+gradeBuilts ((entry, _, _) :: es) [] =
+  fail "\{entry}: internal: the build batch returned no result"
+    :: gradeBuilts es []
+gradeBuilts [] (_ :: rs) =
+  fail "internal: the build batch answered an entry that was not live"
+    :: gradeBuilts [] rs
 
 test "diff_compiler_dict_semantics_ir: section 3 emitted-LLVM IR rows" = expectAll
   [
     expectAtLeast 92 (length table),
-    expectEach (flatMap groupEntries (groupsOf testJobs entries)),
+    expectEach (flatMap groupEntries (chunks testJobs entries)),
   ]
 
 test "diff_compiler_dict_semantics_ir: grader decides HAS, LACKS and COUNT= correctly" = expectAll

@@ -22,15 +22,20 @@
    Floor: the derived set keeps at least 135 (fixture, interface) rows. Fewer
    means the derivation (enumeration or qualifying-interface scan) broke; the
    floor catches that, not a change in which rows exist. Rows are graded in
-   input order, `testJobs` at a time, each in its own scratch dir; under
-   MEDAKA_TEST_JOBS=1 each row's spawns run in serial order. Needs clang (build).
+   groups of `testJobs`: each group's spawns run as one batch, and each row
+   works in a scratch directory of its own, removed once its group is graded.
+   Under MEDAKA_TEST_JOBS=1 a group is one row, so its spawns run in the order
+   they are listed. Needs clang (build).
 
    Usage: medaka test <this file>
 -}
 
+import compiler_cli_test_support.{
+  finalOf, freshDirFor, labelGrades, okDir, stageRun
+}
 import fs.{fixtureFiles}
 import io.{runVerb}
-import list.{chunks, dropWhile, nub, somes, splitAt, takeWhile}
+import list.{chunks, dropWhile, nub, somes, takeWhile}
 import string.{contains, endsWith, lines, replaceAll, split, startsWith, trim}
 import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
 import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
@@ -59,10 +64,10 @@ implName ("impl" :: n :: _) = n
 implName _ = ""
 
 -- (interface, lines) per top-level chunk; "" interface for non-impl chunks.
-chunks : List String -> List (String, List String)
-chunks [] = []
-chunks (l :: rest) =
-  (implIface l, l :: takeWhile isBody rest) :: chunks (dropWhile isBody rest)
+topChunks : List String -> List (String, List String)
+topChunks [] = []
+topChunks (l :: rest) =
+  (implIface l, l :: takeWhile isBody rest) :: topChunks (dropWhile isBody rest)
 
 bodiesOf : String -> List (String, List String) -> List (List String)
 bodiesOf _ [] = []
@@ -111,7 +116,7 @@ joinSemi [r] = r
 joinSemi (r :: rest) = "\{r}; \{joinSemi rest}"
 
 permuteText : String -> String -> String
-permuteText iface text = permuteChunks iface (chunks (lines text))
+permuteText iface text = permuteChunks iface (topChunks (lines text))
 
 permuteChunks : String -> List (String, List String) -> String
 permuteChunks iface cs =
@@ -217,61 +222,6 @@ buildReasons ob pb oOk pOk oo po =
 
 boolText : Bool -> String
 boolText b = if b then "1" else "0"
-
--- ── Spawning rows ────────────────────────────────────────────────────────────
-
--- Every spawn of a sweep goes through one `perl` alarm, as `boundedVerb` does,
--- and the batch is `testJobs` wide.
-batchSpawns : List (String, List String) ->
-  <Exec, IO> List (Result String (Int, String, String))
-batchSpawns rows =
-  let alarm = "alarm \{intToString spawnTimeoutSeconds}; exec @ARGV"
-  runCommandBatch
-    "perl"
-    testJobs
-    (map ((cmd, args) => ["-e", alarm, "env", cmd] ++ args) rows)
-
--- The spawns `spawnsOf` names for each item, all run as one batch, with each
--- item's results handed back in its own list, in input order.
-spawnEach : (s -> List (String, List String)) ->
-  List s ->
-  <Exec, IO> List (List (Result String (Int, String, String)))
-spawnEach spawnsOf items =
-  let named = map spawnsOf items
-  splitCounts (map length named) (batchSpawns (flatMap (x => x) named))
-
-splitCounts : List Int -> List a -> List (List a)
-splitCounts [] _ = []
-splitCounts (n :: ns) xs =
-  let (mine, rest) = splitAt n xs
-  mine :: splitCounts ns rest
-
-mapWith : (a -> b -> c) -> List a -> List b -> List c
-mapWith f (x :: xs) (y :: ys) = f x y :: mapWith f xs ys
-mapWith _ _ _ = []
-
-liveOf : Result a b -> Option b
-liveOf (Ok x) = Some x
-liveOf (Err _) = None
-
--- One stage of a row's chain. A row already settled by an earlier stage passes
--- through untouched and spawns nothing. Every live row's spawns run in one
--- batch, then each live row is graded from its own results.
-stageRun : (s -> List (String, List String)) ->
-  (s -> List (Result String (Int, String, String)) -> Result Expectation t) ->
-  List (Result Expectation s) ->
-  <Exec, IO> List (Result Expectation t)
-stageRun spawnsOf grade states =
-  let live = somes (map liveOf states)
-  mergeStage states (mapWith grade live (spawnEach spawnsOf live))
-
-mergeStage : List (Result Expectation s) ->
-  List (Result Expectation t) ->
-  List (Result Expectation t)
-mergeStage [] _ = []
-mergeStage ((Err e) :: rest) gs = Err e :: mergeStage rest gs
-mergeStage ((Ok _) :: rest) (g :: gs) = g :: mergeStage rest gs
-mergeStage _ _ = []
 
 -- Per-row state, carried from stage to stage. Each record holds what the
 -- stages before it observed, so every message is graded from its own spawn.
@@ -447,11 +397,19 @@ binSpawns t =
   else
     []
 
+-- With no binary to run (`binSpawns` named none), the build verdict alone is
+-- graded. Any other answer count is a failure row, never that same grading.
 gradeBins : TestRec ->
   List (Result String (Int, String, String)) ->
   Result Expectation Expectation
 gradeBins t [oR, pR] = finishBins t (binOutOf oR) (binOutOf pR)
-gradeBins t _ = finishBins t (Ok "") (Ok "")
+gradeBins t [] =
+  if bothBuilt t then
+    Err (fail "internal: two built binaries were named but none was answered")
+  else
+    finishBins t (Ok "") (Ok "")
+gradeBins _ _ =
+  Err (fail "internal: a row was not answered by its two binary spawns")
 
 finishBins : TestRec ->
   Result String String ->
@@ -467,34 +425,19 @@ finishBins t (Ok oo) (Ok po) =
   let runRs = runReasons rs.runOrc rs.runOro rs.runPrc rs.runPro
   Ok (outcome (runRs ++ buildReasons b.buildOb b.buildPb oOk pOk oo po))
 
-finalOf : Result Expectation Expectation -> Expectation
-finalOf (Ok e) = e
-finalOf (Err e) = e
-
 -- The five stages of one batch of rows, each stage run over every row still
--- standing, in the order a serial loop over the rows would spawn them.
+-- standing. A stage's spawns run as one batch, so a group's `check`s all
+-- start before its first `run`.
 runGroup : String ->
   List (Result Expectation Row) ->
-  <Exec, IO> List Expectation
+  <Exec, FileRead, IO> List Expectation
 runGroup bin rows =
-  let s1 = stageRun (checkSpawns bin) gradeCheck rows
-  let s2 = stageRun (runSpawns bin) gradeRun s1
-  let s3 = stageRun (buildSpawns bin) gradeBuild s2
-  let s4 = stageRun testSpawns gradeTest s3
-  let s5 = stageRun binSpawns gradeBins s4
+  let s1 = stageRun spawnTimeoutSeconds (checkSpawns bin) fail gradeCheck rows
+  let s2 = stageRun spawnTimeoutSeconds (runSpawns bin) fail gradeRun s1
+  let s3 = stageRun spawnTimeoutSeconds (buildSpawns bin) fail gradeBuild s2
+  let s4 = stageRun spawnTimeoutSeconds testSpawns fail gradeTest s3
+  let s5 = stageRun spawnTimeoutSeconds binSpawns fail gradeBins s4
   map finalOf s5
-
--- A fresh scratch directory per row. A function, not a value: a value is
--- evaluated once per process, and every row would share one directory.
-freshDirFor : (String, String) -> <Exec, IO> Result String String
-freshDirFor _ = match runVerb "mktemp" ["-d"]
-  Err e => Err e
-  Ok (0, out, _) => Ok (trim out)
-  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
-
-okDir : Result String String -> Option String
-okDir (Ok d) = Some d
-okDir (Err _) = None
 
 rowLabel : (String, String) -> String
 rowLabel (f, iface) = "\{f} [\{iface}]"
@@ -526,31 +469,30 @@ groupRows bin fixDir pairs =
   let prepared = prepAll fixDir pairs dirs
   let settled = runGroup bin prepared
   let _ = map (d => runVerb "rm" ["-rf", d]) (somes (map okDir dirs))
-  mapWith (p e => (rowLabel p, e)) pairs settled
+  labelGrades (map rowLabel pairs) settled
 
 groupedRows : String ->
   String ->
   List (String, String) ->
   <Exec, IO, FileRead, FileWrite> List (String, Expectation)
 groupedRows bin fixDir pairs =
-  flatMap (groupRows bin fixDir) (groupsOf testJobs pairs)
+  flatMap (groupRows bin fixDir) (chunks testJobs pairs)
 
--- `prepRow` over every pair, each with its own directory result. Written out
--- because `mapWith` takes a pure function.
+-- `prepRow` over every pair, each with its own directory result. A pair with
+-- no directory, or a directory with no pair, is a failure row rather than a
+-- row that is silently dropped.
 prepAll : String ->
   List (String, String) ->
   List (Result String String) ->
   <Exec, IO, FileRead, FileWrite> List (Result Expectation Row)
-prepAll _ [] _ = []
+prepAll _ [] [] = []
 prepAll fixDir (p :: ps) (d :: ds) = prepRow fixDir p d :: prepAll fixDir ps ds
-prepAll _ _ _ = []
-
--- `xs` in consecutive groups of `n`, in order.
-groupsOf : Int -> List a -> List (List a)
-groupsOf _ [] = []
-groupsOf n xs =
-  let (mine, rest) = splitAt n xs
-  mine :: groupsOf n rest
+prepAll fixDir (p :: ps) [] =
+  Err (fail "\{rowLabel p}: internal: no scratch directory was made")
+    :: prepAll fixDir ps []
+prepAll fixDir [] (_ :: ds) =
+  Err (fail "internal: a scratch directory was made for no row")
+    :: prepAll fixDir [] ds
 
 check : <Exec, IO, FileRead, FileWrite> Expectation
 check = checkIn medakaBin (underRoot "test/dict_fixtures")
