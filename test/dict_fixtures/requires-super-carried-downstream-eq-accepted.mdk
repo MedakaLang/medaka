@@ -1,0 +1,14 @@
+-- R-SUPER-CARRY control: a program `impl Eq (List Color)` more specific than the prelude's
+-- `impl Eq (List a)` does not destabilize `impl Ord (List a)` (GHC's declaration-stability
+-- rule is declined): `False` then `Lt`, on every engine.
+data Color = Red | Green
+
+impl Eq Color where
+  eq _ _ = True
+
+impl Eq (List Color) where
+  eq _ _ = False
+
+main =
+  println ([Red] == [Red])
+  println (compare [1, 2] [1, 3])

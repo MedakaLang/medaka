@@ -411,7 +411,7 @@ checkBinderDomain : String -> Ty -> Option EffAtomTy -> Unit
 checkBodyImpl : ModuleSeed -> String -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
-checkCoherence : ImplEnv -> Int -> Bool -> Unit
+checkCoherence : ImplEnv -> Int -> Unit
 checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> ModuleBindings
 checkDeclAuthorityDomains : List (String, Param) -> List (String, KindAnn) -> List Ty -> Unit
 checkDeclAuthorityUses : List Decl -> Unit
@@ -451,7 +451,7 @@ checkImplHeadNumIds : String -> List (String, Mono) -> List Require -> Map Strin
 checkImplHeadNumObligations : String -> List (String, Mono) -> List Require -> Map String Unit -> List UObligation -> Unit
 checkImplHeadPrerequisites : String -> IfaceRef -> ImplBodySite -> List (String, Mono) -> Ty -> List UObligation -> List (IfaceRef, List Mono, Option Loc) -> Unit
 checkImplHeadRigidity : String -> String -> ImplBodySite -> List (String, HeadVarRoot) -> Option Loc -> Unit
-checkImplSuperContexts : List Decl -> ClassEnv -> Int -> Decl -> Unit
+checkImplSuperContexts : List Decl -> ClassEnv -> Int -> List ImplRow -> Decl -> Unit
 checkIndexOnlyEffVarsOpen : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkIndexOnlyGo : String -> List (String, Ref Effvar) -> Option Loc -> List String -> Unit
 checkInterfaceCycles : ClassEnv -> Int -> Unit
@@ -515,9 +515,8 @@ checkSigsFixedByExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List 
 checkSigsOverExpansive : TcEnv -> Map String (List (List Pat, Expr)) -> List (String, Ty, List (String, Mono)) -> Unit
 checkSigsTooGeneral : List (String, Ty, List (String, Mono)) -> Unit
 checkStmtNotDiscarded : List UObligation -> Mono -> Expr -> Unit
-checkSuperContext : ImplUniverse -> ReqWalk -> (IfaceRef, List Mono) -> Option Loc -> ScopeId -> Unit
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
-checkSuperInstanceContext : String -> List (String, Int) -> Map String Unit -> List PredicateSlot -> Option Loc -> Bool -> IfaceRef -> List Mono -> Unit
+checkSuperInstanceContext : String -> List (String, Int) -> Map String Unit -> List PredicateSlot -> Option Loc -> Bool -> IfaceRef -> List Mono -> (Unit -> Bool) -> Unit
 checkSuperKinds : List Decl -> String -> List String -> List (Option KindAnn) -> List IfaceMethod -> List Super -> Unit
 checkSurvivorCallObligations : String -> String -> List String -> Ty -> List (String, Mono) -> List (IfaceRef, List Mono, Option Loc) -> Option Loc -> Unit
 checkSurvivorDispatchMonos : String -> String -> List String -> Ty -> List (String, Mono) -> String -> List Mono -> Option Loc -> Unit
@@ -580,19 +579,23 @@ cohOntoFull : Option String -> Option String -> (List (String, Scheme), List TcD
 cohOverlap : List Mono -> List Mono -> Bool
 cohOverlapGo : Ref (List (Int, Mono)) -> List (Mono, Mono) -> Bool
 cohOverlapMsg : String -> List Mono -> List Mono -> String
+cohPairsPrelude : String -> String -> Bool
 cohPpEach : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
 cohPpPair : List Mono -> List Mono -> (String, String)
+cohPreludeMid : String
+cohPreludeOrd : Int
+cohPreludeOverlapMsg : String -> List Mono -> List Mono -> String
+cohPreludeRows : ImplEnv -> List ImplRow
 cohPushHard : Option (String, Option Loc) -> Unit
 cohPushSoft : Option (String, Option Loc) -> Unit
 cohResolve : Ref (List (Int, Mono)) -> Mono -> Mono
-cohRowVisible : Bool -> ImplRow -> Bool
-cohRowsOf : Bool -> ImplEnv -> List ImplRow
-cohRowsOwnedBy : Int -> Bool -> ImplEnv -> List ImplRow
+cohRowsOf : ImplEnv -> List ImplRow
+cohRowsOwnedBy : Int -> ImplEnv -> List ImplRow
 cohSameIface : IfaceRef -> IfaceRef -> Bool
-cohScan : CohSweep -> List CohImpl -> CohScan
+cohScan : CohSweep -> List CohImpl -> List CohImpl -> CohScan
 cohScanDone : CohScan -> Bool
 cohScanInner : CohSweep -> CohImpl -> List CohImpl -> CohScan -> CohScan
-cohScanOuter : CohSweep -> List CohImpl -> CohScan -> CohScan
+cohScanOuter : CohSweep -> List CohImpl -> List CohImpl -> CohScan -> CohScan
 cohSoftInScope : CohSweep -> String -> String -> Bool
 cohSoftOnto : Option String -> List TcDiag -> List TcDiag
 cohStep : Mono -> Mono -> MStep Int Mono Mono
@@ -1295,6 +1298,7 @@ givenInScope : GivenScope -> GivenEntry -> Bool
 givenRoute : Bool -> EvidenceBinderId -> Route
 givensForScope : ScopeId -> List GivenEntry
 globalCoherenceConflict : ImplEnv -> (Option String, Option String)
+goalAnsweredBy : List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
 goalCandidates : Map String Unit -> List Mono -> List ImplRow -> List (ImplRow, List (Int, Mono))
 goalDefersOpenWorld : ScopeId -> IfaceRef -> List Mono -> Bool
 goalFirstIsVariable : List Mono -> Bool
@@ -2154,7 +2158,6 @@ missingConstraintMsg : String -> String -> String -> String
 missingConstraintVecMsg : String -> String -> List String -> String
 missingFieldMsg : String -> String -> String
 missingImplMethodMsg : String -> List Ty -> String -> String
-missingSuperImplMsg : String -> List Ty -> String -> List Ty -> String
 mkMethodOccObl : IfaceRef -> List String -> Ty -> Mono -> Provenance -> Option Loc -> ScopeId -> UObligation
 modInScope : String -> Map String Unit -> Bool
 moduleAliasEntry : String -> String -> ((String, String), a) -> List (String, a)
@@ -2735,6 +2738,7 @@ reportBinderDomains : Ty -> List (String, Param) -> Unit
 reportEffectSummaryFailures : List (SummaryFailure ObligationSite) -> Unit
 reportImplHeadResidual : String -> List (String, Int) -> Option Loc -> (IfaceRef, List Mono) -> Unit
 reportIndexFailure : Bool -> Option Loc -> Authority -> Authority -> Unit
+reportMissingSuperImpl : String -> List (String, Int) -> Option Loc -> Bool -> IfaceRef -> List Mono -> Unit
 reportMixedGoalAmbiguity : Map String Unit -> GoalWindow -> IfaceRef -> List Mono -> Option Loc -> Unit
 reportNumOrNoImpl : String -> List Mono -> Option Loc -> Unit
 reportOverlapForIface : String -> List Mono -> List KeyEntry -> Unit
@@ -2878,7 +2882,7 @@ rowSlotArgMono : SigVars -> List (String, Mono) -> Ty -> Mono
 rowTailId : EffRow -> List Int
 rowTailIsJoin : EffRow -> Bool
 rowText : String -> String
-runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Bool -> Unit
+runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Unit
 runStampCtxs : List StampCtx -> Unit
 runStampStep : StampCtx -> StampStep -> Unit
 runStampSteps : StampCtx -> List StampStep -> Unit
@@ -3074,18 +3078,22 @@ substituteIndex : Ref Authvar -> Authority -> Unit
 substituteIndexLinked : Ref Authvar -> Authority -> Unit
 suggestField : String -> List String -> Option String
 summaryEscape : Bool -> List Atom -> List Atom -> List Atom
+superCarriedResiduals : List (IfaceRef, List Mono) -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
 superContextLeaves : ReqWalk -> Map String Unit -> List PredicateSlot -> Option Loc -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 superContextNoImplMsg : String -> Bool -> String -> String -> String -> String
 superContextUndeclaredMsg : String -> Bool -> String -> String -> String -> String
 superGoalClosure : IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 superGoalClosureGo : List (IfaceRef, List Mono) -> List IfaceRef -> List (IfaceRef, List Mono) -> List (IfaceRef, List Mono)
+superGoalEntered : ImplUniverse -> ReqWalk -> Option Loc -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> List SuperGoalEntry
+superGoalsEntered : ImplUniverse -> ReqWalk -> Option Loc -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> List SuperGoalEntry
+superHeadCovers : List Ty -> List Ty -> Bool
+superHeadStep : Ty -> Ty -> MStep String Ty Ty
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
-superImplMsgsOf : ClassEnv -> Int -> List ImplRow -> Decl -> List String
 superLookup : IfaceRef -> Option (List String, List Super)
-superMsgFor : List ImplRow -> String -> List Ty -> List (String, Ty) -> Super -> List String
 superParamsOf : Super -> List String
 superRouteAt : String -> ScopeId -> ReqWalk -> (IfaceRef, Option (List Mono)) -> Route
 superRoutesAt : IfaceRef -> String -> ScopeId -> List Mono -> ReqWalk -> List Route
+superRowExists : List ImplRow -> List (String, Ty) -> Super -> Bool
 suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
 survivorNameOf : Mono -> List (String, Mono) -> Option String
 survivorNameOfId : Int -> List (String, Mono) -> Option String
@@ -3142,9 +3150,7 @@ tyCarries : List TabKey -> String -> Ty -> Bool
 tyConNamesInConstraint : Constraint -> List String
 tyConNamesInTy : Ty -> List String
 tyHeadEqV : List Ty -> List Ty -> Bool
-tyIsConcrete : Ty -> Bool
 tyIsQualified : Ty -> Bool
-tyMatchesAst : Ty -> Ty -> Bool
 tyOfMsg : Option TabKey -> String
 tyStep : Ty -> Ty -> MStep String Ty Ty
 tyStrictlyMoreSpecificV : List Ty -> List Ty -> Bool

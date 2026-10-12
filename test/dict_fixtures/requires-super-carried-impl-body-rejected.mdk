@@ -1,0 +1,29 @@
+-- §6.1.4 pt 4, R-SUPER-CARRY (#4010), impl body: `go`'s body reduces `Sub (Box (Two a))`
+-- with `a` a head variable, and the super instance it selects requires `Show2 a`, which
+-- `impl Run (Box a)` does not declare: T-IMPL-MISSING-REQUIRES naming `requires Show2 a`,
+-- on every verb.  It used to be accepted, printing `suptisub` twice.
+interface Show2 t where
+  show2 : t -> String
+impl Show2 Int where
+  show2 _ = "i"
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+data Two a = Two a
+impl Sup (Box a) where
+  sup _ = "sup"
+impl Sup (Box (Two a)) requires Show2 a where
+  sup (Box (Two x)) = "supt" ++ show2 x
+impl Sub (Box a) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+interface Run a where
+  go : a -> String
+impl Run (Box a) where
+  go (Box x) = useSup (Box (Two x))
+main =
+  println (go (Box (1 : Int)))
+  println (go (Box True))

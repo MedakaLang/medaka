@@ -105,7 +105,6 @@ sourceBindingArity	Expr	6/42
 spineHeadEv	Expr	3/42
 stampTailDecl	Decl	1/14
 stmtCalleeName	Expr	10/42
-superImplMsgsOf	Decl	1/14
 tupleArgElems	Expr	2/42
 useModuleId	Decl	1/14
 wholeDomainExpr	Expr	1/42
