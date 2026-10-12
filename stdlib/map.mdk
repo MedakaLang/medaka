@@ -663,10 +663,27 @@ export
 union : Ord k => Map k v -> Map k v -> Map k v
 union Tip b = b
 union a Tip = a
-union (Bin _ k v l r) b =
+-- A side under a sixteenth of the other is cheaper to insert entry by entry.
+union a b
+  | size b * 16 <= size a = foldlWithKey (acc k v => insertAbsent k v acc) a b
+  | size a * 16 <= size b = foldlWithKey (acc k v => set k v acc) b a
+  | otherwise = unionSplit a b
+
+-- `insertAbsent` adds `k` only when it is missing; an existing entry is kept.
+insertAbsent : Ord k => k -> v -> Map k v -> Map k v
+insertAbsent k v Tip = singleton k v
+insertAbsent k v (m@(Bin _ k2 v2 l r)) = match compare k k2
+  Lt => balanceL k2 v2 (insertAbsent k v l) r
+  Gt => balanceR k2 v2 l (insertAbsent k v r)
+  Eq => m
+
+unionSplit : Ord k => Map k v -> Map k v -> Map k v
+unionSplit Tip b = b
+unionSplit a Tip = a
+unionSplit (Bin _ k v l r) b =
   let (bl, br) = splitAt k b
   -- `k`'s own entry in `b` was dropped by `splitAt`, so the left map wins.
-  link k v (union l bl) (union r br)
+  link k v (unionSplit l bl) (unionSplit r br)
 
 -- > size (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
 -- 2
@@ -679,12 +696,21 @@ export
 unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
 unionWith f Tip b = b
 unionWith f a Tip = a
-unionWith f (Bin _ k v l r) b =
+unionWith f a b
+  | size b * 16 <= size a =
+    foldlWithKey (acc k w => insertWith (x y => f y x) k w acc) a b
+  | size a * 16 <= size b = foldlWithKey (acc k v => insertWith f k v acc) b a
+  | otherwise = unionWithSplit f a b
+
+unionWithSplit : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
+unionWithSplit f Tip b = b
+unionWithSplit f a Tip = a
+unionWithSplit f (Bin _ k v l r) b =
   let (bl, found, br) = splitLookup k b
   let v2 = match found
     None => v
     Some w => f v w
-  link k v2 (unionWith f l bl) (unionWith f r br)
+  link k v2 (unionWithSplit f l bl) (unionWithSplit f r br)
 
 {- | The entries of the first map whose keys are absent from the second.
 
@@ -1159,6 +1185,25 @@ prop "union agrees with naive fold-insert" (xs : List (Int, Int)) (ys : List (In
   let a = fromList xs
   let b = fromList ys
   eq (entries (union a b)) (entries (naiveUnion a b))
+
+prop "union with a tiny side agrees with naive in both orders" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  let big = fromList (map (i => (i, i)) [0..=63] ++ xs)
+  let small = fromList (take 2 ys)
+  eq (entries (union big small)) (entries (naiveUnion big small))
+    && eq (entries (union small big)) (entries (naiveUnion small big))
+    && wellFormed (union big small)
+    && wellFormed (union small big)
+
+prop "unionWith with a tiny side agrees with naive in both orders" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  let big = fromList (map (i => (i, i)) [0..=63] ++ xs)
+  let small = fromList (take 2 ys)
+  let f = x y => 2 * x + y
+  eq (entries (unionWith f big small)) (entries (naiveUnionWith f big small))
+    && eq
+      (entries (unionWith f small big))
+      (entries (naiveUnionWith f small big))
+    && wellFormed (unionWith f big small)
+    && wellFormed (unionWith f small big)
 
 prop "union keys stay strictly ascending" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   ascending (keys (union (fromList xs) (fromList ys)))
