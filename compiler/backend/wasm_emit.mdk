@@ -4175,25 +4175,19 @@ synthParams n = map (i => "__wparg" ++ intToString i) (rangeList 0 n)
 clauseParamNames : List CClause -> Int -> List String
 clauseParamNames [CClause pats body] arity =
   if allPlainParams pats && not (exprHasFallthrough body) then
-    headParamNames pats (flatMap patVars pats) (collectExprLocals body) 0
+    headParamNames pats (collectExprLocals body) 0
   else
     synthParams arity
 clauseParamNames _ arity = synthParams arity
 
-headParamNames : List Pat -> List String -> List String -> Int -> List String
-headParamNames [] _ _ _ = []
-headParamNames (p :: ps) bound inner i =
+headParamNames : List Pat -> List String -> Int -> List String
+headParamNames [] _ _ = []
+headParamNames (p :: ps) inner i =
   let name = "__wparg" ++ intToString i
   let chosen = match p
-    PVar x _ =>
-      if startsWith "__" x
-        || listLen (filterList (== x) bound) /= 1
-        || contains x inner then
-        name
-      else
-        x
+    PVar x _ => if startsWith "__" x || contains x inner then name else x
     _ => name
-  chosen :: headParamNames ps bound inner (i + 1)
+  chosen :: headParamNames ps inner (i + 1)
 
 -- emit the clause chain.  Single all-PVar clause: rename its params to the synthetic
 -- positions (so the body env binds them) and tail-emit.  Otherwise: a fallthrough

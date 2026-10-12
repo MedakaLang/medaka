@@ -1,5 +1,5 @@
 # META
-source_lines=12247
+source_lines=12241
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -4179,25 +4179,19 @@ synthParams n = map (i => "__wparg" ++ intToString i) (rangeList 0 n)
 clauseParamNames : List CClause -> Int -> List String
 clauseParamNames [CClause pats body] arity =
   if allPlainParams pats && not (exprHasFallthrough body) then
-    headParamNames pats (flatMap patVars pats) (collectExprLocals body) 0
+    headParamNames pats (collectExprLocals body) 0
   else
     synthParams arity
 clauseParamNames _ arity = synthParams arity
 
-headParamNames : List Pat -> List String -> List String -> Int -> List String
-headParamNames [] _ _ _ = []
-headParamNames (p :: ps) bound inner i =
+headParamNames : List Pat -> List String -> Int -> List String
+headParamNames [] _ _ = []
+headParamNames (p :: ps) inner i =
   let name = "__wparg" ++ intToString i
   let chosen = match p
-    PVar x _ =>
-      if startsWith "__" x
-        || listLen (filterList (== x) bound) /= 1
-        || contains x inner then
-        name
-      else
-        x
+    PVar x _ => if startsWith "__" x || contains x inner then name else x
     _ => name
-  chosen :: headParamNames ps bound inner (i + 1)
+  chosen :: headParamNames ps inner (i + 1)
 
 -- emit the clause chain.  Single all-PVar clause: rename its params to the synthetic
 -- positions (so the body env binds them) and tail-emit.  Otherwise: a fallthrough
@@ -13037,11 +13031,11 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "synthParams" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "synthParams" ((PVar "n")) (EApp (EApp (EVar "map") (ELam ((PVar "i")) (EBinOp "++" (ELit (LString "__wparg")) (EApp (EVar "intToString") (EVar "i"))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "n"))))
 (DTypeSig false "clauseParamNames" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "clauseParamNames" ((PList (PCon "CClause" (PVar "pats") (PVar "body"))) (PVar "arity")) (EIf (EBinOp "&&" (EApp (EVar "allPlainParams") (EVar "pats")) (EApp (EVar "not") (EApp (EVar "exprHasFallthrough") (EVar "body")))) (EApp (EApp (EApp (EApp (EVar "headParamNames") (EVar "pats")) (EApp (EApp (EVar "flatMap") (EVar "patVars")) (EVar "pats"))) (EApp (EVar "collectExprLocals") (EVar "body"))) (ELit (LInt 0))) (EApp (EVar "synthParams") (EVar "arity"))))
+(DFunDef false "clauseParamNames" ((PList (PCon "CClause" (PVar "pats") (PVar "body"))) (PVar "arity")) (EIf (EBinOp "&&" (EApp (EVar "allPlainParams") (EVar "pats")) (EApp (EVar "not") (EApp (EVar "exprHasFallthrough") (EVar "body")))) (EApp (EApp (EApp (EVar "headParamNames") (EVar "pats")) (EApp (EVar "collectExprLocals") (EVar "body"))) (ELit (LInt 0))) (EApp (EVar "synthParams") (EVar "arity"))))
 (DFunDef false "clauseParamNames" (PWild (PVar "arity")) (EApp (EVar "synthParams") (EVar "arity")))
-(DTypeSig false "headParamNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "headParamNames" ((PList) PWild PWild PWild) (EListLit))
-(DFunDef false "headParamNames" ((PCons (PVar "p") (PVar "ps")) (PVar "bound") (PVar "inner") (PVar "i")) (EBlock (DoLet false false (PVar "name") (EBinOp "++" (ELit (LString "__wparg")) (EApp (EVar "intToString") (EVar "i")))) (DoLet false false (PVar "chosen") (EMatch (EVar "p") (arm (PCon "PVar" (PVar "x") PWild) () (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "startsWith") (ELit (LString "__"))) (EVar "x")) (EBinOp "/=" (EApp (EVar "listLen") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "x")))) (EVar "bound"))) (ELit (LInt 1)))) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "inner"))) (EVar "name") (EVar "x"))) (arm PWild () (EVar "name")))) (DoExpr (EBinOp "::" (EVar "chosen") (EApp (EApp (EApp (EApp (EVar "headParamNames") (EVar "ps")) (EVar "bound")) (EVar "inner")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DTypeSig false "headParamNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "headParamNames" ((PList) PWild PWild) (EListLit))
+(DFunDef false "headParamNames" ((PCons (PVar "p") (PVar "ps")) (PVar "inner") (PVar "i")) (EBlock (DoLet false false (PVar "name") (EBinOp "++" (ELit (LString "__wparg")) (EApp (EVar "intToString") (EVar "i")))) (DoLet false false (PVar "chosen") (EMatch (EVar "p") (arm (PCon "PVar" (PVar "x") PWild) () (EIf (EBinOp "||" (EApp (EApp (EVar "startsWith") (ELit (LString "__"))) (EVar "x")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "inner"))) (EVar "name") (EVar "x"))) (arm PWild () (EVar "name")))) (DoExpr (EBinOp "::" (EVar "chosen") (EApp (EApp (EApp (EVar "headParamNames") (EVar "ps")) (EVar "inner")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
 (DTypeSig false "emitClausesRef" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitClausesRef" ((PVar "prog") (PVar "name") (PVar "params") (PVar "arity") (PVar "clauses")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClausesRefEnv") (EVar "prog")) (EListLit)) (EVar "name")) (EVar "params")) (EVar "arity")) (EVar "clauses")))
 (DTypeSig false "emitClausesRefEnv" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))))
@@ -15370,11 +15364,11 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "synthParams" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "synthParams" ((PVar "n")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (EBinOp "++" (ELit (LString "__wparg")) (EApp (EVar "intToString") (EVar "i"))))) (EApp (EApp (EVar "rangeList") (ELit (LInt 0))) (EVar "n"))))
 (DTypeSig false "clauseParamNames" (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "clauseParamNames" ((PList (PCon "CClause" (PVar "pats") (PVar "body"))) (PVar "arity")) (EIf (EBinOp "&&" (EApp (EVar "allPlainParams") (EVar "pats")) (EApp (EVar "not") (EApp (EVar "exprHasFallthrough") (EVar "body")))) (EApp (EApp (EApp (EApp (EVar "headParamNames") (EVar "pats")) (EApp (EApp (EDictApp "flatMap") (EVar "patVars")) (EVar "pats"))) (EApp (EVar "collectExprLocals") (EVar "body"))) (ELit (LInt 0))) (EApp (EVar "synthParams") (EVar "arity"))))
+(DFunDef false "clauseParamNames" ((PList (PCon "CClause" (PVar "pats") (PVar "body"))) (PVar "arity")) (EIf (EBinOp "&&" (EApp (EVar "allPlainParams") (EVar "pats")) (EApp (EVar "not") (EApp (EVar "exprHasFallthrough") (EVar "body")))) (EApp (EApp (EApp (EVar "headParamNames") (EVar "pats")) (EApp (EVar "collectExprLocals") (EVar "body"))) (ELit (LInt 0))) (EApp (EVar "synthParams") (EVar "arity"))))
 (DFunDef false "clauseParamNames" (PWild (PVar "arity")) (EApp (EVar "synthParams") (EVar "arity")))
-(DTypeSig false "headParamNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "headParamNames" ((PList) PWild PWild PWild) (EListLit))
-(DFunDef false "headParamNames" ((PCons (PVar "p") (PVar "ps")) (PVar "bound") (PVar "inner") (PVar "i")) (EBlock (DoLet false false (PVar "name") (EBinOp "++" (ELit (LString "__wparg")) (EApp (EVar "intToString") (EVar "i")))) (DoLet false false (PVar "chosen") (EMatch (EVar "p") (arm (PCon "PVar" (PVar "x") PWild) () (EIf (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "startsWith") (ELit (LString "__"))) (EVar "x")) (EBinOp "/=" (EApp (EVar "listLen") (EApp (EApp (EVar "filterList") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "x")))) (EVar "bound"))) (ELit (LInt 1)))) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "inner"))) (EVar "name") (EVar "x"))) (arm PWild () (EVar "name")))) (DoExpr (EBinOp "::" (EVar "chosen") (EApp (EApp (EApp (EApp (EVar "headParamNames") (EVar "ps")) (EVar "bound")) (EVar "inner")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
+(DTypeSig false "headParamNames" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "headParamNames" ((PList) PWild PWild) (EListLit))
+(DFunDef false "headParamNames" ((PCons (PVar "p") (PVar "ps")) (PVar "inner") (PVar "i")) (EBlock (DoLet false false (PVar "name") (EBinOp "++" (ELit (LString "__wparg")) (EApp (EVar "intToString") (EVar "i")))) (DoLet false false (PVar "chosen") (EMatch (EVar "p") (arm (PCon "PVar" (PVar "x") PWild) () (EIf (EBinOp "||" (EApp (EApp (EVar "startsWith") (ELit (LString "__"))) (EVar "x")) (EApp (EApp (EVar "contains") (EVar "x")) (EVar "inner"))) (EVar "name") (EVar "x"))) (arm PWild () (EVar "name")))) (DoExpr (EBinOp "::" (EVar "chosen") (EApp (EApp (EApp (EVar "headParamNames") (EVar "ps")) (EVar "inner")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))))
 (DTypeSig false "emitClausesRef" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "emitClausesRef" ((PVar "prog") (PVar "name") (PVar "params") (PVar "arity") (PVar "clauses")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitClausesRefEnv") (EVar "prog")) (EListLit)) (EVar "name")) (EVar "params")) (EVar "arity")) (EVar "clauses")))
 (DTypeSig false "emitClausesRefEnv" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))))))

@@ -97,6 +97,15 @@ test "distinct literals keep distinct segments, numbered in first-use order" =
       (expectEqual ["0", "1", "0"] (refs wat)),
   ]
 
+-- bytes [10, 111] ("\n" then `o`) and [101, 11] (`e` then VT) both flatten to "10111"
+-- without a separator, so they pin that the segment key delimits its byte values
+test "payloads whose byte values concatenate to the same digits stay distinct" =
+  let wat =
+    watOf "f : Int -> String\nf 0 = \"\\u{a}o\"\nf _ = \"e\\u{b}\"\nmain = f 0"
+  labelFail
+    "two segments, one per payload"
+    (expectEqual [("0", "\\0a\\6f"), ("1", "\\65\\0b")] (segments wat))
+
 test "the empty string is one segment with no bytes, shared by its sites" =
   let wat = watOf "f : Int -> String\nf 0 = \"\"\nf _ = \"\"\nmain = f 0"
   expectAll [
