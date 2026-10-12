@@ -1787,3 +1787,35 @@ accounting now includes reserved pools and descriptor/work/remembered capacities
 logical live bytes are separate. Full samples, hashes, alignment sensitivity,
 and correctness evidence are in [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md)
 and [the experiment README](../test/gc_prototype/README.md).
+
+## Prepared native allocation experiment (2026-10-12)
+
+The isolated collector now has prepared layout handles and allocation/store
+paths that inline into the caller. Assertions, accounting, and nursery poisoning
+remain enabled. The comparison adds an equally caller-inline Boehm allocator
+and checked stores; the historical adapter remains available. Assembly was
+inspected to confirm that the new paths actually inline.
+
+At five million allocations, a 262,136-byte nursery, and minimum-of-ten cyclically
+ordered samples, custom versus the fastest measured Boehm variant takes
+24.10/34.27 ms for ephemeral lists, 22.77/32.06 ms for old-to-young replacement,
+16.38/26.89 ms for atomic cells, 20.19/62.10 ms for mixed lifetimes, and
+109.19/584.22 ms for varied sizes/lifetimes. Retained lists and trees still lose:
+182.15/167.20 ms and 331.00/243.18 ms. At 262,144 bytes, the short-lived wins
+remain, but retained lists/trees lose by 24%/45%. Both capacities are recorded
+because object-stride alignment changes nursery survival.
+
+Preparation alone does not establish a speedup; several out-of-line prepared
+variants regress. Exposing allocation and initialization together to the caller
+is the useful result of this API experiment. All arms prepare their layout
+manifest outside timing; setup time/storage are reported separately. Full
+collection remains timed. Static libgc linkage and the default initial Boehm
+heap policy match across Boehm variants.
+
+Retained-graph custom RSS stays about 163 MB versus 175–178 MB for Boehm. The
+varied-size custom profile uses about 32 MB versus 75 MB. These are synthetic
+shared-machine measurements, not compiler performance. Independent sanitizer,
+mutation, generated-root, and Valgrind checks pass. Full samples, API ablations,
+initialization-contract differences, and provenance are in
+[GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md) and the
+[experiment README](../test/gc_prototype/README.md).

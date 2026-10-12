@@ -192,6 +192,51 @@ upstream dependency and is landable now. `wasmReachFilter`'s post-lower pruning
 becomes the shared reachability pass once F3 gives it identity-keyed dispatch
 edges; until then it stays a Wasm-only field, named as such.
 
+### R5a. Experimental native moving-GC contract
+
+The [GC feasibility experiment](../docs/design/GC-FEASIBILITY.md) adds requirements
+for an opt-in native moving collector. These are integration requirements under
+investigation, not additions to the active F5 sprint's acceptance criteria or a
+change to the default collector. The revised Core-plus-Plan model still applies.
+
+- **One native layout contract.** The native emitter and C runtime must agree
+  on allocation extent, traced value slots, raw payload slots, and initialization
+  rules. Closure code addresses, array lengths, numeric payloads, and string
+  bytes cannot be traced merely because their bits resemble pointers. Native
+  descriptors are physical; Wasm keeps its own representation.
+- **Semantic types precede physical classification.** Consume F5's validated
+  binder, parameter, and return facts. Native lowering separately distinguishes
+  tagged values, raw scalars, code addresses, and heap-derived addresses. A
+  semantic Float or fixed-width type may have boxed or unboxed storage, so a
+  runtime-type stamp alone is not a root map. No GC-specific scalar-inference
+  table, source-name lookup, or default-to-Int rule becomes a second authority.
+- **Calls have collection contracts.** Allocation, runtime helpers, indirect
+  calls, and callbacks need an authoritative native contract for collection and
+  re-entry into allocating Medaka code. These are execution properties, not new
+  source effect rows: a pure call can allocate. An unknown call cannot be treated
+  as collection-free.
+- **Roots cover expression evaluation.** Earlier arguments, constructor
+  operands, projections, conditional results, and other live temporaries need
+  protection alongside lexical binders. References surviving a safepoint must
+  be available at their relocated addresses afterward. Root liveness and slot
+  placement are native decisions. TRMC interior destinations require a rooted
+  base plus offset or a stable-address contract; array builders must reload their
+  bases after allocating callbacks.
+
+F5 does not provide complete field/capture layouts or object scan maps. Reuse
+Core's existing ordinals and call/tail facts. Additional semantic field or capture
+facts needed by both backends must be published and validated through Core;
+concrete scan descriptors, root frames, barriers, and relocation belong to native
+lowering and the runtime. Shared global and TRMC decisions remain owned by R5
+and the Targets arc.
+
+The experimental path must reject missing contracts and unsupported forms before
+execution. Its tests must include hand-derived answers, omitted-root/reload
+mutations, malformed layouts, and unrelated-code controls. This amendment does
+not require a new IR, a V/ANF/AP revival, or additional unboxing. Collector-side
+experiments can proceed alongside F5; compiler changes consume its settled
+carrier and follow the existing serialized landing lane.
+
 ### R6. The Core validator
 
 `coreValidate : EmitTarget -> CProgram -> Plan -> List CoreDefect`, run by every

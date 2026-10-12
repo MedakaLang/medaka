@@ -13,6 +13,11 @@ python3 /absolute/path/to/medaka/test/gc_prototype/run.py --count 5000000 --nurs
 python3 /absolute/path/to/medaka/test/gc_prototype/run.py --count 5000000 --nursery-bytes 1048576 --profiles ephemeral mutation
 ```
 
+The default run includes ten API/backend variants. `--backends` selects a subset;
+`--repeats 10` gives every variant each execution position once with the full
+set. Use both `--nursery-bytes 262144` and `--nursery-bytes 262136` to expose
+periodic workload alignment.
+
 `CC` selects clang. All generated adapters, mutation variants, and binaries use
 temporary directories and are removed on exit. The driver clears inherited
 `GC_*` settings, sets Boehm's free-space divisor to 1, and uses its default initial
@@ -86,7 +91,7 @@ the shadow-root operations away and relies on its production conservative C
 stack/register contract. `GC_reachable_here` keeps final workload roots visible
 through the final Boehm collection.
 
-Both Boehm comparators use the same workload source. `boehm` uses `GC_malloc` for
+The historical Boehm comparators use the same workload source. `boehm` uses `GC_malloc` for
 pointer-bearing objects and `GC_malloc_atomic` for pointer-free ones.
 `boehm_inline` uses the small-object allocator extracted at build time from
 `runtime/medaka_rt.c`, with its version guard, granule rounding, disabled
@@ -94,6 +99,45 @@ pointer-bearing objects and `GC_malloc_atomic` for pointer-free ones.
 libgc 8.2 fall back to `GC_malloc`; `inline_available` reports that. Atomic objects
 continue through `GC_malloc_atomic`. The extractor deliberately fails if its
 source boundaries change, so drift needs a conscious update.
+
+The historical `boehm_inline` arm calls an out-of-line wrapper around that
+allocator; it does not inline into the workload. `boehm_caller_inline` additionally
+puts its small-object hit path into the caller, shares one externally defined TLS
+free-list table, and retains the original refill and collector notifications.
+Its hit path still calls Boehm's `GC_end_stubborn_change`. Assembly inspection
+confirmed caller inlining for both this arm and `custom_AS` at `-O2`.
+
+The prepared API separates allocation from initialization:
+`prepare_layout(words, mask)` interns a stable descriptor index once;
+`allocate_prepared(layout)` may collect; callers then reload rooted fields and
+use `store_prepared(layout, object, index, value)`. Prepared layouts expire with
+their heap and carry an epoch checked on use. They never point into a growable
+descriptor table. Prepared allocation clears all fields, including atomic
+payloads; historical generic Boehm atomic allocation does not promise clearing.
+Known-layout stores check bounds and pointer-mask validity, and custom stores
+also check the object's descriptor and retain the old-to-young barrier.
+Initialization stores do not collect, including remembered-vector growth.
+
+| Backend | Allocation | Field stores |
+| --- | --- | --- |
+| `custom` (D) | Dynamic descriptor lookup, out of line | Generic, out of line |
+| `custom_P` | Prepared, out of line | Generic, out of line |
+| `custom_K` | Prepared, out of line | Prepared, out of line |
+| `custom_A` | Prepared, caller inline | Prepared, out of line |
+| `custom_S` | Prepared, out of line | Prepared, caller inline |
+| `custom_AS` | Prepared, caller inline | Prepared, caller inline |
+| `boehm` | Generic Boehm | Generic, out of line |
+| `boehm_inline` | Historical production allocator adapter | Generic, out of line |
+| `boehm_prepared_outline` | Prepared production allocator adapter, out of line | Prepared, out of line |
+| `boehm_caller_inline` | Prepared production allocator adapter, caller inline | Prepared, caller inline |
+
+These are API ablations: the prepared out-of-line allocator validates descriptor
+consistency on each call, while the inline hit uses a trusted prepared layout.
+They do not isolate hashing alone. All custom counters, assertions, root
+operations, and nursery poisoning remain enabled. Custom field stores retain
+collector-specific checks and barriers; Boehm uses conservative roots and its
+own allocation accounting. The prepared Boehm stores have the same caller-side
+bounds and pointer-mask checks as the custom ones.
 
 Correctness fixtures check root updates, aliasing, sharing, cycles, remembered
 old-to-young writes, repeated collections with a 240-byte nursery, large objects,
@@ -107,6 +151,13 @@ The independent [pool review fixture](pool_review.c) additionally exercises
 descriptor-table growth, mixed object sizes, partial-pool reuse with different
 descriptors, complete pool release, large allocations, aliasing, cycles, and
 heap destruction/reinitialization.
+The independent [prepared-API fixture](prepared_api.c) exercises inline and
+out-of-line calls at 23 capacities. It checks stable handles across descriptor
+growth, zeroed reused storage, both collecting allocation slow paths, direct-old
+initialization barriers, mixed-size boundaries, graph-model reachability, and
+exact reclamation. Six deliberately broken runs (root updates, zeroing, and
+barriers in both modes) must fail at named checks before dereferencing stale
+objects.
 Temporary broken builds suppress root-slot updates or the remembered-set barrier;
 the corresponding fixtures must fail at their assertions. They do not dereference
 the stale references and no broken variant is installed or committed.
@@ -149,21 +200,34 @@ written to the chosen output directory; an existing nonempty directory is refuse
 The committed [validation record](results/2026-10-12-generated-contract.json)
 contains the exact hashes, commands, schedules, expected and observed outputs.
 
-The six timing profiles all allocate 24-byte payloads. Ephemeral lists drop their
+The first six timing profiles allocate 24-byte payloads. Ephemeral lists drop their
 root every 256 nodes. The list and balanced tree retain every node. Mutation keeps
 an old anchor whose child is replaced every 64 nodes, exercising the barrier.
 Atomic allocates pointer-free three-word payloads. Mixed retains every 64th node
 in a growing spine while dropping each batch of temporary nodes. Its retained
 spine checksum and exact post-collection object count are checked. This is a
 synthetic lifetime distribution, not a captured compiler allocation trace.
+The seventh profile, `sizes`, cycles through 2, 3, 7, 16, 63, 64, 65, and 127
+payload words, including atomic layouts and pointer slot 63. It retains a
+pointer-bearing spine every 61 allocations and the most recent retained atomic
+object of each atomic shape, while dropping temporary chains every 64. The
+61-step retention schedule visits every shape in the eight-shape cycle.
 The mutation profile has one
 extra anchor allocation. Every arm must produce the same allocation count,
 logical payload byte count, and arithmetic checksum for each profile. Payloads
 are read to calculate the checksum and the checksum is observed through a
 volatile sink, so the compiler cannot remove the workload allocations.
 
-Each backend/profile runs in three fresh processes, sequentially. The driver
-reports all three timings and the statistics from the fastest sample. Time covers
+Each backend/profile runs in fresh processes, sequentially, with three repeats
+by default. The driver cyclically rotates backend order each round and reports
+every sample's counters and position, plus the fastest sample. A full cycle of
+ten repeats balances execution positions across the default ten backends. All
+eleven workload layouts are prepared before timing in every arm, including the
+dynamic custom baseline, which therefore starts with populated descriptor tables.
+Preparation time, descriptor storage after preparation, and the 352-byte workload
+layout manifest are reported separately; the manifest is outside collector
+`accounted_bytes`. Preparation changes the baseline relative to historical runs.
+Time covers
 workload construction, checksum traversal, and a final full collection with the
 profile's final roots still live. It excludes heap initialization, output, and
 destruction. That final collection makes custom old live bytes exact at the
@@ -246,7 +310,8 @@ including the mixed profile:
 
 To reconstruct that previous collector, extract `test/gc_prototype/` and
 `runtime/medaka_rt.c` from commit `33f900bca3bf577e8c49745080ec16147a0b017b` into
-a scratch checkout. Replace its `workload.c` with the current file and add
+a scratch checkout. Replace its `workload.c` with the file from commit
+`682cfeae0e9aba37b247a5c260cf31959f9dd383` and add
 `"mixed"` to its runner's `PROFILES` tuple. No other baseline source changes are
 needed; the evidence records all resulting hashes. Run both collectors at both
 capacities with `--count 5000000`. The eight-byte offset matters: 32-byte cells
@@ -259,3 +324,37 @@ The [allocation-path profile](results/2026-10-12-pool-profile.json) records
 It also records the independent audit of source hashes, complete sample rows,
 checksums, and correctness markers in all four timing artifacts. These CPU
 shares identify hot paths; they are not absolute function-time measurements.
+
+Prepared-layout and caller-inline measurements use ten position-balanced rounds
+at five million allocations, with all ten variants and all seven profiles:
+
+- [262,144-byte nursery](results/2026-10-12-prepared-5m-256k.jsonl)
+- [262,136-byte nursery](results/2026-10-12-prepared-5m-offset.jsonl)
+- [Independent artifact audit and full ablation summaries](results/2026-10-12-prepared-audit.json)
+- [Assembly inspection of custom and Boehm call-site inlining](results/2026-10-12-prepared-assembly.json)
+- [Generated-source rooting revalidation](results/2026-10-12-prepared-generated-contract.json)
+- [Valgrind results and exact commands](results/2026-10-12-prepared-valgrind.json)
+
+For the offset nursery, `custom_AS` versus the fastest measured Boehm variant
+takes 24.10/34.27 ms for ephemeral lists, 22.77/32.06 ms for mutation,
+16.38/26.89 ms for atomic cells, 20.19/62.10 ms for mixed lifetimes, and
+109.19/584.22 ms for varied sizes. Retained lists and trees remain slower:
+182.15/167.20 ms and 331.00/243.18 ms. These are minima, with every sample and
+median/range summaries available above. The fastest Boehm variant is the new
+caller-inline arm except for varied sizes, where the historical `boehm_inline`
+arm wins. Its atomic allocation has no full-zeroing promise; the prepared API
+has that stronger contract. Comparing every arm avoids choosing a weaker
+Boehm baseline to inflate the gain.
+
+Valgrind is an additional on-demand check, separate from timing and sanitizers.
+On the measured Linux host, Memcheck 3.24.0 passed both prepared API modes at
+capacities 32, 240, and 262136, with zero errors and all heap blocks freed.
+To repeat one case from the repository root, choose a scratch binary path:
+
+```console
+clang -std=c11 -O2 -g -gdwarf-4 -Wall -Wextra -Werror test/gc_prototype/gc.c test/gc_prototype/prepared_api.c -o /tmp/medaka-prepared-api
+valgrind --tool=memcheck --error-exitcode=99 --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=all --track-origins=yes /tmp/medaka-prepared-api 240 all inline
+```
+
+Use `outline` to check the out-of-line API. This check exercises the custom
+collector directly; it does not run Memcheck over conservative Boehm scanning.

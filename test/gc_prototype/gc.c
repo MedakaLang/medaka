@@ -6,14 +6,20 @@
 #include <string.h>
 
 Stats stats;
+GcFastState gc_fast;
+uintptr_t gc_heap_epoch;
 
 #ifdef USE_BOEHM
 #include <gc/gc.h>
 void *prototype_inline_alloc(long long bytes);
 size_t prototype_inline_root_bytes(void);
 int prototype_inline_enabled(void);
-void heap_init(size_t bytes) { (void)bytes; GC_INIT(); GC_set_free_space_divisor(1); }
+void heap_init(size_t bytes) {
+  (void)bytes; assert(gc_heap_epoch != UINTPTR_MAX); gc_heap_epoch++;
+  memset(&stats, 0, sizeof stats); GC_INIT(); GC_set_free_space_divisor(1);
+}
 void heap_destroy(void) {}
+uintptr_t register_layout(size_t words, uint64_t mask) { (void)words; (void)mask; return 0; }
 Word allocate(size_t words, uint64_t mask) {
   size_t bytes = words * sizeof(Word);
   void *object;
@@ -26,6 +32,20 @@ Word allocate(size_t words, uint64_t mask) {
   assert(object);
   stats.allocations++; stats.payload_bytes += bytes;
   return (Word)object;
+}
+Word allocate_prepared_slow(GcLayout layout) {
+  assert(layout.epoch == gc_heap_epoch);
+#ifdef USE_CALLER_INLINE
+  return allocate_prepared(layout);
+#else
+  Word object = allocate(layout.words, layout.mask);
+  if (!layout.mask) memset((void *)object, 0, layout.words * sizeof(Word));
+  return object;
+#endif
+}
+Word allocate_prepared_out_of_line(GcLayout layout) { return allocate_prepared_slow(layout); }
+void store_prepared_out_of_line(GcLayout layout, Word object, size_t index, Word value) {
+  store_prepared(layout, object, index, value);
 }
 void store(Word object, size_t index, Word value) { ((Word *)object)[index] = value; }
 void minor_collect(void) { GC_gcollect(); stats.minor_count++; }
@@ -75,8 +95,6 @@ static uint32_t *descriptor_hash;
 static size_t descriptor_count, descriptor_capacity, hash_capacity;
 static Root *roots;
 enum { REMEMBERED = 1, MARKED = 2, FORWARDED = 4 };
-static unsigned char *nursery;
-static size_t nursery_capacity, used, old_limit;
 static Large *large_objects;
 static Queue remembered, work;
 
@@ -92,16 +110,16 @@ size_t nursery_header_size(void) { return sizeof(Header); }
 size_t old_header_size(void) { return sizeof(Header); }
 static int pointer(Word word) { return word && !(word & 1); }
 int is_young(Word word) {
-  return pointer(word) && word >= (Word)nursery && word < (Word)nursery + used;
+  return pointer(word) && word >= (Word)gc_fast.nursery && word < (Word)gc_fast.nursery + gc_fast.used;
 }
 static size_t static_metadata_bytes(void) {
   return sizeof classes + sizeof class_sizes + sizeof work + sizeof remembered
       + sizeof descriptors + sizeof descriptor_hash + sizeof descriptor_count
-      + sizeof descriptor_capacity + sizeof hash_capacity + sizeof roots + sizeof nursery
-      + sizeof nursery_capacity + sizeof used + sizeof old_limit + sizeof large_objects + sizeof stats;
+      + sizeof descriptor_capacity + sizeof hash_capacity + sizeof roots + sizeof gc_fast
+      + sizeof gc_heap_epoch + sizeof large_objects + sizeof stats;
 }
 static size_t accounted_bytes(void) {
-  return nursery_capacity + stats.pool_reserved_bytes + stats.large_reserved_bytes
+  return gc_fast.capacity + stats.pool_reserved_bytes + stats.large_reserved_bytes
       + stats.descriptor_bytes + stats.work_queue_bytes + stats.remembered_queue_bytes + stats.root_bytes + static_metadata_bytes();
 }
 static void account_peak_extra(size_t extra) {
@@ -165,10 +183,11 @@ static void queue_push(Queue *q, Header *h, size_t *bytes) {
   q->items[q->count++] = h;
 }
 void heap_init(size_t bytes) {
-  assert(!nursery && bytes >= object_bytes(3) && bytes <= SIZE_MAX / 4);
+  assert(!gc_fast.nursery && bytes >= object_bytes(3) && bytes <= SIZE_MAX / 4);
+  assert(gc_heap_epoch != UINTPTR_MAX); gc_heap_epoch++;
   memset(&stats, 0, sizeof stats);
-  nursery_capacity = bytes; nursery = malloc(bytes); assert(nursery);
-  old_limit = bytes * 4; account_peak();
+  gc_fast.capacity = bytes; gc_fast.nursery = malloc(bytes); assert(gc_fast.nursery);
+  gc_fast.old_limit = bytes * 4; account_peak();
 }
 void root_push(Root *root, Word *slot) {
   root->slot = slot; root->previous = roots; roots = root;
@@ -218,6 +237,45 @@ static Header *new_old(uintptr_t info) {
   stats.old_object_count++; stats.old_total_allocated_bytes += bytes;
   account_peak(); return h;
 }
+uintptr_t register_layout(size_t words, uint64_t mask) {
+  assert(gc_fast.nursery); return descriptor_info(words, mask);
+}
+Word allocate_prepared_slow(GcLayout layout) {
+  assert(layout.epoch == gc_heap_epoch);
+  assert((layout.info >> 3) && (layout.info >> 3) <= descriptor_count);
+  assert(descriptors[(layout.info >> 3) - 1].words == layout.words);
+  assert(descriptors[(layout.info >> 3) - 1].mask == layout.mask);
+  size_t bytes = object_bytes(layout.words); Word result;
+  if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();
+  if (bytes > gc_fast.capacity) {
+    result = payload(new_old(layout.info));
+    stats.direct_old_allocations++; stats.direct_old_payload_bytes += layout.words * sizeof(Word);
+  } else {
+    if (bytes > gc_fast.capacity - gc_fast.used) {
+      minor_collect();
+      if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();
+    }
+    Header *h = (Header *)(gc_fast.nursery + gc_fast.used); gc_fast.used += bytes;
+#ifndef GC_MUTATE_ZERO
+    memset(h, 0, bytes);
+#endif
+    h->info = layout.info; result = payload(h);
+    stats.nursery_allocations++; stats.nursery_payload_bytes += layout.words * sizeof(Word);
+  }
+  stats.allocation_header_bytes += sizeof(Header);
+  stats.allocations++; stats.payload_bytes += layout.words * sizeof(Word);
+  return result;
+}
+/* Calling the slow allocator here keeps the outline ablation independent of
+   the caller-inline implementation, including its nursery-hit branch. */
+Word allocate_prepared_out_of_line(GcLayout layout) { return allocate_prepared_slow(layout); }
+void remember_prepared(Word object) {
+  Header *h = header(object); h->info |= REMEMBERED;
+  queue_push(&remembered, h, &stats.remembered_queue_bytes);
+}
+void store_prepared_out_of_line(GcLayout layout, Word object, size_t index, Word value) {
+  store_prepared(layout, object, index, value);
+}
 static Word promote(Word word) {
   if (!is_young(word)) return word;
   Header *from = header(word);
@@ -251,7 +309,7 @@ void minor_collect(void) {
     h->info &= ~(uintptr_t)REMEMBERED; scan_promote(h);
   }
   while (work.count) scan_promote(work.items[--work.count]);
-  memset(nursery, 0xa5, used); used = 0;
+  memset(gc_fast.nursery, 0xa5, gc_fast.used); gc_fast.used = 0;
 }
 static void mark(Word word) {
   if (!pointer(word)) return;
@@ -308,24 +366,24 @@ void major_collect(void) {
       stats.large_object_count--; free(l);
     }
   }
-  old_limit = stats.old_live_bytes > (SIZE_MAX - nursery_capacity * 4) / 2
-      ? SIZE_MAX : stats.old_live_bytes * 2 + nursery_capacity * 4;
+  gc_fast.old_limit = stats.old_live_bytes > (SIZE_MAX - gc_fast.capacity * 4) / 2
+      ? SIZE_MAX : stats.old_live_bytes * 2 + gc_fast.capacity * 4;
 }
 Word allocate(size_t words, uint64_t mask) {
   assert(words > 0 && words <= (SIZE_MAX - sizeof(Large)) / sizeof(Word));
   assert(words >= 64 || (mask >> words) == 0);
   size_t bytes = object_bytes(words);
-  if (stats.old_live_bytes >= old_limit) major_collect();
+  if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();
   uintptr_t info = descriptor_info(words, mask); Word result;
-  if (bytes > nursery_capacity) {
+  if (bytes > gc_fast.capacity) {
     result = payload(new_old(info));
     stats.direct_old_allocations++; stats.direct_old_payload_bytes += words * sizeof(Word);
   } else {
-    if (bytes > nursery_capacity - used) {
+    if (bytes > gc_fast.capacity - gc_fast.used) {
       minor_collect();
-      if (stats.old_live_bytes >= old_limit) major_collect();
+      if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();
     }
-    Header *h = (Header *)(nursery + used); used += bytes;
+    Header *h = (Header *)(gc_fast.nursery + gc_fast.used); gc_fast.used += bytes;
     memset(h, 0, bytes); h->info = info; result = payload(h);
     stats.nursery_allocations++; stats.nursery_payload_bytes += words * sizeof(Word);
   }
@@ -354,9 +412,9 @@ void heap_destroy(void) {
     classes[ci] = (Class){0};
   }
   while (large_objects) { Large *next = large_objects->next; free(large_objects); large_objects = next; }
-  free(nursery); free(descriptors); free(descriptor_hash); free(work.items); free(remembered.items);
-  nursery = NULL; descriptors = NULL; descriptor_hash = NULL;
-  nursery_capacity = used = descriptor_count = descriptor_capacity = hash_capacity = 0;
+  free(gc_fast.nursery); free(descriptors); free(descriptor_hash); free(work.items); free(remembered.items);
+  gc_fast.nursery = NULL; descriptors = NULL; descriptor_hash = NULL;
+  gc_fast.capacity = gc_fast.used = descriptor_count = descriptor_capacity = hash_capacity = 0;
   work = remembered = (Queue){0};
   stats.old_live_bytes = stats.old_live_payload_bytes = stats.old_object_count = 0;
   stats.old_slot_bytes = stats.pool_reserved_bytes = stats.large_reserved_bytes = 0;
@@ -375,9 +433,9 @@ void print_stats(void) {
          "\"nursery_allocations\":%" PRIu64 ",\"nursery_payload_bytes\":%" PRIu64
          ",\"direct_old_allocations\":%" PRIu64 ",\"direct_old_payload_bytes\":%" PRIu64,
          stats.allocations, stats.payload_bytes, stats.allocation_header_bytes, sizeof(Header), sizeof(Header),
-         nursery_capacity, stats.minor_count, stats.major_count, stats.copied_bytes, stats.copied_payload_bytes,
+         gc_fast.capacity, stats.minor_count, stats.major_count, stats.copied_bytes, stats.copied_payload_bytes,
          stats.promoted_count, stats.reclaimed_bytes, stats.old_live_bytes, stats.peak_old_bytes,
-         stats.peak_accounted_bytes, used, stats.old_total_allocated_bytes, stats.peak_root_bytes, stats.old_live_bytes,
+         stats.peak_accounted_bytes, gc_fast.used, stats.old_total_allocated_bytes, stats.peak_root_bytes, stats.old_live_bytes,
          stats.nursery_allocations, stats.nursery_payload_bytes, stats.direct_old_allocations, stats.direct_old_payload_bytes);
   size_t large_metadata = stats.large_object_count * offsetof(Large, object);
   size_t large_logical = stats.large_reserved_bytes - large_metadata;
