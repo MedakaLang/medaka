@@ -6509,17 +6509,14 @@ parseLocatedResult src = match tokenizeWithOffsetPairs src
     let _ = setLocState src (arrayFromList offPairs)
     parseResultWith src tokList (map fst offPairs)
 
--- Shared body of `parseResult` / `parseLocatedResult`: the removed-construct and
--- lex-error pre-scans, then the grammar, over an ALREADY-tokenized stream.  Split
--- out so the located entry does not have to tokenize a second time (the loader
--- parses every module in the graph through it).
-parseResultWith : String ->
-  List Token ->
-  List Int ->
-  Result ParseError (List Decl)
-parseResultWith src tokList offList =
-  let toks = arrayFromList tokList
-  let offs = arrayFromList offList
+-- The removed-construct and lex-error pre-scans over an ALREADY-tokenized
+-- stream, in the order the diagnostics take precedence: the first one that
+-- fires is the error.  `None` means no pre-scan fired and the grammar decides.
+-- Exported so `medaka fmt` can run the same pre-scans without the separate
+-- grammar pass of `parseResultWith` (see `formatSourceChecked`).
+export
+prescanError : String -> Array Token -> Array Int -> Option ParseError
+prescanError src toks offs =
   let srcLen = stringLength src
   let beIdx = firstBangEqIdx toks 0
   let lmIdx = firstMutIdx toks 0
@@ -6541,10 +6538,10 @@ parseResultWith src tokList offList =
     Some (leIdx, leMsg) =>
       let leMsg2 =
         if leMsg == "unexpected character `;`" then semicolonMsg else leMsg
-      Err (mkLocated src toks offs srcLen leMsg2 leIdx)
+      Some (mkLocated src toks offs srcLen leMsg2 leIdx)
     None =>
       if beIdx >= 0 then
-        Err
+        Some
           (mkLocated
             src
             toks
@@ -6553,11 +6550,11 @@ parseResultWith src tokList offList =
             "unexpected `!=`; did you mean `/=`?"
             beIdx)
       else if lmIdx >= 0 then
-        Err (mkLocated src toks offs srcLen letMutRemovedMsg lmIdx)
+        Some (mkLocated src toks offs srcLen letMutRemovedMsg lmIdx)
       else if recIdx >= 0 then
-        Err (mkLocated src toks offs srcLen recordRemovedMsg recIdx)
+        Some (mkLocated src toks offs srcLen recordRemovedMsg recIdx)
       else if ckIdx >= 0 then
-        Err
+        Some
           (mkLocated
             src
             toks
@@ -6566,29 +6563,29 @@ parseResultWith src tokList offList =
             (reservedKeywordMsg (contextualKwName (peekTok toks ckIdx)))
             ckIdx)
       else if fnIdx >= 0 then
-        Err (mkLocated src toks offs srcLen functionRemovedMsg fnIdx)
+        Some (mkLocated src toks offs srcLen functionRemovedMsg fnIdx)
       else if ilIdx >= 0 then
-        Err (mkLocated src toks offs srcLen inlineLetMissingInMsg ilIdx)
+        Some (mkLocated src toks offs srcLen inlineLetMissingInMsg ilIdx)
       else if coIdx >= 0 then
-        Err (mkLocated src toks offs srcLen hsCaseOfMsg coIdx)
+        Some (mkLocated src toks offs srcLen hsCaseOfMsg coIdx)
       else if btIdx >= 0 then
-        Err (mkLocated src toks offs srcLen backtickInfixMsg btIdx)
+        Some (mkLocated src toks offs srcLen backtickInfixMsg btIdx)
       else if mwIdx >= 0 then
-        Err (mkLocated src toks offs srcLen matchWithMsg mwIdx)
+        Some (mkLocated src toks offs srcLen matchWithMsg mwIdx)
       else if wiIdx >= 0 then
-        Err (mkLocated src toks offs srcLen letRecWithRemovedMsg wiIdx)
+        Some (mkLocated src toks offs srcLen letRecWithRemovedMsg wiIdx)
       else if bcIdx >= 0 then
         -- Before the `**` hint: a `/**` or `(**` comment opener lexes as a
         -- `**` token, and the comment diagnosis is the true one.
-        Err (mkLocated src toks offs srcLen blockCommentMsg bcIdx)
+        Some (mkLocated src toks offs srcLen blockCommentMsg bcIdx)
       else if ssIdx >= 0 then
-        Err (mkLocated src toks offs srcLen starStarMsg ssIdx)
+        Some (mkLocated src toks offs srcLen starStarMsg ssIdx)
       else if sigIdx >= 0 then
-        Err (mkLocated src toks offs srcLen hsSigMsg sigIdx)
+        Some (mkLocated src toks offs srcLen hsSigMsg sigIdx)
       else if bbIdx >= 0 then
-        Err (mkLocated src toks offs srcLen braceBlockMsg bbIdx)
+        Some (mkLocated src toks offs srcLen braceBlockMsg bbIdx)
       else if fkwIdx >= 0 then
-        Err
+        Some
           (mkLocated
             src
             toks
@@ -6597,7 +6594,34 @@ parseResultWith src tokList offList =
             (foreignKwMsg (peekTok toks fkwIdx))
             fkwIdx)
       else if forIdx >= 0 then
-        Err (mkLocated src toks offs srcLen forLoopMsg forIdx)
+        Some (mkLocated src toks offs srcLen forLoopMsg forIdx)
       else
-        let _ = primeGuardPos src offs
-        resultDeclsResult src toks offs srcLen (runP parseProgram toks 0)
+        None
+
+-- `prescanError` over the `tokenizeWithOffsetPairs` shape that `fmt` holds.
+export
+prescanErrorPairs : String -> List Token -> List (Int, Int) -> Option ParseError
+prescanErrorPairs src tokList offPairs =
+  prescanError src (arrayFromList tokList) (arrayFromList (map fst offPairs))
+
+-- Shared body of `parseResult` / `parseLocatedResult`: the pre-scans, then the
+-- grammar, over an ALREADY-tokenized stream.  Split out so the located entry
+-- does not have to tokenize a second time (the loader parses every module in
+-- the graph through it).
+parseResultWith : String ->
+  List Token ->
+  List Int ->
+  Result ParseError (List Decl)
+parseResultWith src tokList offList =
+  let toks = arrayFromList tokList
+  let offs = arrayFromList offList
+  match prescanError src toks offs
+    Some e => Err e
+    None =>
+      let _ = primeGuardPos src offs
+      resultDeclsResult
+        src
+        toks
+        offs
+        (stringLength src)
+        (runP parseProgram toks 0)

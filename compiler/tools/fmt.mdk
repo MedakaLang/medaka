@@ -55,6 +55,9 @@ import frontend.lexer.{
 }
 import frontend.parser.{
   parseWithPositionsOptPairs,
+  parseResultPairs,
+  prescanErrorPairs,
+  ParseError(..),
   Positions,
   DeclPos,
   positionsDecls,
@@ -669,20 +672,47 @@ export
 formatSourcePairs : String -> List Token -> List (Int, Int) -> String
 formatSourcePairs src toks pairs =
   match parseWithPositionsOptPairs src toks pairs
-    Some (decls, pos) =>
-      let commas = trailingCommaLocs ()
-      let arms = unitStarts ()
-      restoreTripleQuotedStrings
-        src
-        (formatProgram
-          decls
-          (positionsDecls pos)
-          (positionsVariantLines pos)
-          commas
-          arms
-          (collectComments src)
-          src)
+    Some parsed => formatParsed src parsed
     None => panic "parse error"
+
+-- The formatter proper, over the result of a successful
+-- `parseWithPositionsOptPairs`.  Reads the side-channel refs that parse just
+-- filled, so it must run before any other parse.
+formatParsed : String -> (List Decl, Positions) -> String
+formatParsed src (decls, pos) =
+  let commas = trailingCommaLocs ()
+  let arms = unitStarts ()
+  restoreTripleQuotedStrings
+    src
+    (formatProgram
+      decls
+      (positionsDecls pos)
+      (positionsVariantLines pos)
+      commas
+      arms
+      (collectComments src)
+      src)
+
+-- `medaka fmt`'s parse check and formatter in one, over an ALREADY-tokenized
+-- stream.  Same verdict as `parseResultPairs` followed by `formatSourcePairs`,
+-- without running the grammar twice: the pre-scans run first (they are not
+-- redundant with the grammar; they reject some sources the grammar accepts,
+-- e.g. `record P : Int`), then the formatting parse, which the grammar accepts
+-- exactly when `parseResultWith` does.  Only when that parse fails does the
+-- full `parseResultPairs` run, to produce the diagnostic it always produced.
+export
+formatSourceChecked : String ->
+  List Token ->
+  List (Int, Int) ->
+  Result ParseError String
+formatSourceChecked src toks pairs = match prescanErrorPairs src toks pairs
+  Some e => Err e
+  None => match parseWithPositionsOptPairs src toks pairs
+    Some parsed => Ok (formatParsed src parsed)
+    None =>
+      map
+        (_ => formatSourcePairs src toks pairs)
+        (parseResultPairs src toks pairs)
 
 -- ── Triple-quoted string preservation ─────────────
 -- `formatProgram` re-renders every string literal in the canonical

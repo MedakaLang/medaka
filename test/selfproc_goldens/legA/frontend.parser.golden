@@ -581,6 +581,8 @@ positionsDecls : Positions -> List DeclPos
 positionsLastContentLine : Positions -> Int
 positionsVariantLines : Positions -> List Int
 postfixTail : Expr -> ParserE <> Expr
+prescanError : String -> Array Token -> Array Int -> Option ParseError
+prescanErrorPairs : String -> List Token -> List (Int, Int) -> Option ParseError
 primeGuardPos : String -> Array Int -> Unit
 productAxes : Bool -> ParserE <> (List (String, EffParamTy))
 productAxesMore : Bool -> ParserE <> (List (String, EffParamTy))

@@ -27,7 +27,7 @@ import tools.snapshot.{
   parseStages,
   SnapMode(..),
 }
-import tools.fmt.{formatSourcePairs, FmtMode(..)}
+import tools.fmt.{formatSourceChecked, FmtMode(..)}
 import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
@@ -110,7 +110,6 @@ import frontend.parser.{
   parseWithPositions,
   parseWithPositionsLocated,
   parseResult,
-  parseResultPairs,
   parseLocatedResult,
   ParseError,
   parseErrorLine,
@@ -2100,30 +2099,28 @@ fmtOneReport mode file = match readSourceE file
     (True, False)
   -- One lexing pass shared by the parse check and the formatter.
   Ok src => match tokenizeWithOffsetPairs src
-    (toks, pairs) => match parseResultPairs src toks pairs
+    (toks, pairs) => match formatSourceChecked src toks pairs
       Err e =>
         let _ = ePutStrLn (ppParseError src file e)
         (True, False)
-      Ok _ =>
-        let formatted = formatSourcePairs src toks pairs
-        match mode
-          FmtStdout =>
-            let _ = putStr formatted
+      Ok formatted => match mode
+        FmtStdout =>
+          let _ = putStr formatted
+          (False, False)
+        FmtCheck =>
+          if formatted == src then
             (False, False)
-          FmtCheck =>
-            if formatted == src then
-              (False, False)
-            else
-              let _ = ePutStrLn (file ++ ": not formatted")
+          else
+            let _ = ePutStrLn (file ++ ": not formatted")
+            (True, False)
+        FmtWrite =>
+          if formatted == src then
+            (False, False)
+          else match writeFile file formatted
+            Err msg =>
+              let _ = ePutStrLn "\{file}: \{msg}"
               (True, False)
-          FmtWrite =>
-            if formatted == src then
-              (False, False)
-            else match writeFile file formatted
-              Err msg =>
-                let _ = ePutStrLn "\{file}: \{msg}"
-                (True, False)
-              Ok _ => (False, True)
+            Ok _ => (False, True)
 
 fmtArgSpec : ArgSpec
 fmtArgSpec = spec "fmt" [
@@ -2154,20 +2151,18 @@ fmtOne mode file = match readSourceE file
   -- formatSource's panicking `parse` fires a bare `parse error`.
   -- One lexing pass shared by the parse check and the formatter.
   Ok src => match tokenizeWithOffsetPairs src
-    (toks, pairs) => match parseResultPairs src toks pairs
+    (toks, pairs) => match formatSourceChecked src toks pairs
       Err e => dieMsg (ppParseError src file e)
-      Ok _ =>
-        let formatted = formatSourcePairs src toks pairs
-        match mode
-          FmtStdout => putStr formatted
-          FmtCheck =>
-            if formatted == src then () else dieMsg (file ++ ": not formatted")
-          FmtWrite =>
-            if formatted == src then
-              putStrLn "already formatted"
-            else match writeFile file formatted
-              Err msg => dieMsg "\{file}: \{msg}"
-              Ok _ => putStrLn "formatted 1 file"
+      Ok formatted => match mode
+        FmtStdout => putStr formatted
+        FmtCheck =>
+          if formatted == src then () else dieMsg (file ++ ": not formatted")
+        FmtWrite =>
+          if formatted == src then
+            putStrLn "already formatted"
+          else match writeFile file formatted
+            Err msg => dieMsg "\{file}: \{msg}"
+            Ok _ => putStrLn "formatted 1 file"
 
 -- ── codemod ────────────────────────────────────────────────────────────────
 -- `medaka codemod <name> [codemod-flags] [--write|--stdout] <paths...>`.
