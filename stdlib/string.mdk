@@ -492,12 +492,6 @@ repeatDbl k s =
     let h = repeatDbl (k / 2) s
     if isEven k then h ++ h else h ++ h ++ s
 
--- A list of `n` copies of `x` (empty when `n <= 0`).  Used by the padding
--- helpers below, whose `n` is a display width (small in practice) rather
--- than a caller-controlled repeat count.
-replic : Int -> a -> List a
-replic n x = if n <= 0 then [] else x :: replic (n - 1) x
-
 -- # Transformation
 
 {- | The string with its characters in reverse order.
@@ -611,8 +605,11 @@ replaceFirst old new s = match indexOf old s
   Some i => spliceAt i (stringLength old) new s
 
 spliceAt : Int -> Int -> String -> String -> String
-spliceAt i oldLen new s =
-  stringSlice 0 i s ++ new ++ stringSlice (i + oldLen) (stringLength s) s
+spliceAt i oldLen new s = stringConcat [
+  stringSlice 0 i s,
+  new,
+  stringSlice (i + oldLen) (stringLength s) s,
+]
 
 {- | The string with every non-overlapping occurrence of `old` replaced by
    `new`.
@@ -764,7 +761,30 @@ subChars a lo hi =
    ["a", "b", "c"] -}
 export
 lines : String -> List String
-lines s = map stripCR (split nl s)
+lines s =
+  let a = toChars s
+  linesFrom a (arrayLength a) 0
+
+-- Each line is cut once: the `\r` before the `\n` is left out of the slice,
+-- so no line is copied a second time to strip it.
+linesFrom : Array Char -> Int -> Int -> List String
+linesFrom a n start = match newlineFrom a n start
+  None => [lineSlice a start n]
+  Some i => lineSlice a start i :: linesFrom a n (i + 1)
+
+newlineFrom : Array Char -> Int -> Int -> Option Int
+newlineFrom a n i
+  | i >= n = None
+  | arrayGetUnsafe i a == '\n' = Some i
+  | otherwise = newlineFrom a n (i + 1)
+
+-- The characters `[start, hi)`, minus one trailing `\r` when present.
+lineSlice : Array Char -> Int -> Int -> String
+lineSlice a start hi =
+  if hi > start && arrayGetUnsafe (hi - 1) a == '\r' then
+    subChars a start (hi - 1)
+  else
+    subChars a start hi
 
 {- | The line without one trailing `\r`.
 
@@ -809,10 +829,12 @@ wordsEmit a n start e =
    "a\nb\n" -}
 export
 unlines : List String -> String
-unlines parts = stringConcat (map addNL parts)
+unlines parts = stringConcat (withNewlines parts)
 
-addNL : String -> String
-addNL p = p ++ nl
+-- Interleaves the separator between the pieces, so one concat joins them.
+withNewlines : List String -> List String
+withNewlines [] = []
+withNewlines (p :: ps) = p :: nl :: withNewlines ps
 
 -- A single newline.
 nl : String
@@ -840,7 +862,7 @@ padLeft n c s =
   if stringLength s >= n then
     s
   else
-    stringConcat (replic (n - stringLength s) (charToStr c)) ++ s
+    repeat (n - stringLength s) (charToStr c) ++ s
 
 {- | The string padded on the right with `c` to length `n`.
 
@@ -854,7 +876,7 @@ padRight n c s =
   if stringLength s >= n then
     s
   else
-    s ++ stringConcat (replic (n - stringLength s) (charToStr c))
+    s ++ repeat (n - stringLength s) (charToStr c)
 
 {- | The string centered in a field of width `n`, padded with `c`.
 
@@ -869,17 +891,5 @@ center n c s =
   if stringLength s >= n then
     s
   else
-    centerPad
-      (half (n - stringLength s))
-      (n - stringLength s - half (n - stringLength s))
-      c
-      s
-
-centerPad : Int -> Int -> Char -> String -> String
-centerPad l r c s =
-  stringConcat (replic l (charToStr c))
-    ++ s
-    ++ stringConcat (replic r (charToStr c))
-
-half : Int -> Int
-half k = if k <= 1 then 0 else 1 + half (k - 2)
+    let k = n - stringLength s
+    repeat (k / 2) (charToStr c) ++ s ++ repeat (k - k / 2) (charToStr c)

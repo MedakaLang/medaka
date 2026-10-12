@@ -4,8 +4,8 @@
 -- byte offset would show.
 
 import string.{
-  countOccurrences, drop, fromChars, indexOf, lastIndexOf, replaceAll, splitAt,
-  take
+  center, countOccurrences, drop, fromChars, indexOf, lastIndexOf, lines,
+  padLeft, padRight, replace, replaceAll, splitAt, take, unlines
 }
 import test.{expectEqual}
 
@@ -168,6 +168,77 @@ test "fromChars result slices by codepoint" =
 
 test "fromChars of only multibyte characters" =
   expectEqual 2 (stringLength (fromChars ['😀', '😀']))
+
+test "padLeft fills on the left and leaves a long string alone" =
+  expectEqual ("...ab", "abc") (padLeft 5 '.' "ab", padLeft 2 '.' "abc")
+
+test "padLeft with a width at or below zero is unchanged" =
+  expectEqual ("ab", "ab") (padLeft 0 '.' "ab", padLeft (0 - 3) '.' "ab")
+
+test "padLeft of the empty string" = expectEqual "..." (padLeft 3 '.' "")
+
+test "padLeft counts codepoints for a multibyte pad character" =
+  expectEqual "日日ab" (padLeft 4 '日' "ab")
+
+test "padRight fills on the right and leaves a long string alone" =
+  expectEqual ("ab...", "abc") (padRight 5 '.' "ab", padRight 2 '.' "abc")
+
+test "padRight with a width at or below zero is unchanged" =
+  expectEqual "ab" (padRight (0 - 3) '.' "ab")
+
+test "padRight counts codepoints for a multibyte pad character" =
+  expectEqual "é→→→" (padRight 4 '→' "é")
+
+test "center puts the odd pad character on the right" =
+  expectEqual ".ab.." (center 5 '.' "ab")
+
+test "center splits an even pad evenly" =
+  expectEqual ("..ab..", ".ab.") (center 6 '.' "ab", center 4 '.' "ab")
+
+test "center of the empty string" = expectEqual "..." (center 3 '.' "")
+
+test "center with a width at or below the length is unchanged" =
+  expectEqual ("abc", "abc") (center 2 '.' "abc", center (0 - 1) '.' "abc")
+
+test "replace of an empty needle is unchanged" =
+  expectEqual "hi" (replace "" "x" "hi")
+
+test "replace of an absent needle is unchanged" =
+  expectEqual "hello" (replace "z" "y" "hello")
+
+test "replace touches only the first occurrence" =
+  expectEqual "ba" (replace "aa" "b" "aaa")
+
+test "replace counts codepoints around a multibyte hit" =
+  expectEqual "a-b日" (replace "日" "-" "a日b日")
+
+test "replace can delete the first occurrence" =
+  expectEqual "xy" (replace "ab" "" "xaby")
+
+test "lines of the empty string is one empty line" = expectEqual [""] (lines "")
+
+test "lines removes one trailing carriage return per line" =
+  expectEqual ["a", "b", ""] (lines "a\r\nb\r\n")
+
+test "lines keeps a second carriage return" =
+  expectEqual ["a\r", "b"] (lines "a\r\r\nb")
+
+test "lines of a lone carriage return is one empty line" =
+  expectEqual [""] (lines "\r")
+
+test "lines does not split on a bare carriage return" =
+  expectEqual ["a\rb"] (lines "a\rb")
+
+test "lines of multibyte text with carriage returns" =
+  expectEqual ["é", "日"] (lines "é\r\n日\r")
+
+test "unlines of no lines is empty" = expectEqual "" (unlines [])
+
+test "unlines ends every line, including empty ones" =
+  expectEqual "\n\n" (unlines ["", ""])
+
+test "unlines keeps a carriage return inside a line" =
+  expectEqual "a\r\n" (unlines ["a\r"])
 
 -- # Properties
 

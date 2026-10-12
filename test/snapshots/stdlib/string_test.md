@@ -1,5 +1,5 @@
 # META
-source_lines=183
+source_lines=254
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -8,8 +8,8 @@ stages=DESUGAR,MARK
 -- byte offset would show.
 
 import string.{
-  countOccurrences, drop, fromChars, indexOf, lastIndexOf, replaceAll, splitAt,
-  take
+  center, countOccurrences, drop, fromChars, indexOf, lastIndexOf, lines,
+  padLeft, padRight, replace, replaceAll, splitAt, take, unlines
 }
 import test.{expectEqual}
 
@@ -173,6 +173,77 @@ test "fromChars result slices by codepoint" =
 test "fromChars of only multibyte characters" =
   expectEqual 2 (stringLength (fromChars ['😀', '😀']))
 
+test "padLeft fills on the left and leaves a long string alone" =
+  expectEqual ("...ab", "abc") (padLeft 5 '.' "ab", padLeft 2 '.' "abc")
+
+test "padLeft with a width at or below zero is unchanged" =
+  expectEqual ("ab", "ab") (padLeft 0 '.' "ab", padLeft (0 - 3) '.' "ab")
+
+test "padLeft of the empty string" = expectEqual "..." (padLeft 3 '.' "")
+
+test "padLeft counts codepoints for a multibyte pad character" =
+  expectEqual "日日ab" (padLeft 4 '日' "ab")
+
+test "padRight fills on the right and leaves a long string alone" =
+  expectEqual ("ab...", "abc") (padRight 5 '.' "ab", padRight 2 '.' "abc")
+
+test "padRight with a width at or below zero is unchanged" =
+  expectEqual "ab" (padRight (0 - 3) '.' "ab")
+
+test "padRight counts codepoints for a multibyte pad character" =
+  expectEqual "é→→→" (padRight 4 '→' "é")
+
+test "center puts the odd pad character on the right" =
+  expectEqual ".ab.." (center 5 '.' "ab")
+
+test "center splits an even pad evenly" =
+  expectEqual ("..ab..", ".ab.") (center 6 '.' "ab", center 4 '.' "ab")
+
+test "center of the empty string" = expectEqual "..." (center 3 '.' "")
+
+test "center with a width at or below the length is unchanged" =
+  expectEqual ("abc", "abc") (center 2 '.' "abc", center (0 - 1) '.' "abc")
+
+test "replace of an empty needle is unchanged" =
+  expectEqual "hi" (replace "" "x" "hi")
+
+test "replace of an absent needle is unchanged" =
+  expectEqual "hello" (replace "z" "y" "hello")
+
+test "replace touches only the first occurrence" =
+  expectEqual "ba" (replace "aa" "b" "aaa")
+
+test "replace counts codepoints around a multibyte hit" =
+  expectEqual "a-b日" (replace "日" "-" "a日b日")
+
+test "replace can delete the first occurrence" =
+  expectEqual "xy" (replace "ab" "" "xaby")
+
+test "lines of the empty string is one empty line" = expectEqual [""] (lines "")
+
+test "lines removes one trailing carriage return per line" =
+  expectEqual ["a", "b", ""] (lines "a\r\nb\r\n")
+
+test "lines keeps a second carriage return" =
+  expectEqual ["a\r", "b"] (lines "a\r\r\nb")
+
+test "lines of a lone carriage return is one empty line" =
+  expectEqual [""] (lines "\r")
+
+test "lines does not split on a bare carriage return" =
+  expectEqual ["a\rb"] (lines "a\rb")
+
+test "lines of multibyte text with carriage returns" =
+  expectEqual ["é", "日"] (lines "é\r\n日\r")
+
+test "unlines of no lines is empty" = expectEqual "" (unlines [])
+
+test "unlines ends every line, including empty ones" =
+  expectEqual "\n\n" (unlines ["", ""])
+
+test "unlines keeps a carriage return inside a line" =
+  expectEqual "a\r\n" (unlines ["a\r"])
+
 -- # Properties
 
 prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
@@ -186,7 +257,7 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
       stringSlice i (i + 2) s == "ab"
         && indexOf "ab" (stringSlice (i + 1) (stringLength s) s) == None
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false))))
+(DUse false (UseGroup ("string") ((mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false) (mem "unlines" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -229,10 +300,35 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
 (DTest false "fromChars counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀")))))))
 (DTest false "fromChars result slices by codepoint" (EApp (EApp (EVar "expectEqual") (ELit (LString "é日"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 3))) (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀")))))))
 (DTest false "fromChars of only multibyte characters" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EVar "fromChars") (EListLit (ELit (LChar "😀")) (ELit (LChar "😀")))))))
+(DTest false "padLeft fills on the left and leaves a long string alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "...ab")) (ELit (LString "abc")))) (ETuple (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 5))) (ELit (LChar "."))) (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 2))) (ELit (LChar "."))) (ELit (LString "abc"))))))
+(DTest false "padLeft with a width at or below zero is unchanged" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "ab")) (ELit (LString "ab")))) (ETuple (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 0))) (ELit (LChar "."))) (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "padLeft") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 3)))) (ELit (LChar "."))) (ELit (LString "ab"))))))
+(DTest false "padLeft of the empty string" (EApp (EApp (EVar "expectEqual") (ELit (LString "..."))) (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 3))) (ELit (LChar "."))) (ELit (LString "")))))
+(DTest false "padLeft counts codepoints for a multibyte pad character" (EApp (EApp (EVar "expectEqual") (ELit (LString "日日ab"))) (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 4))) (ELit (LChar "日"))) (ELit (LString "ab")))))
+(DTest false "padRight fills on the right and leaves a long string alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "ab...")) (ELit (LString "abc")))) (ETuple (EApp (EApp (EApp (EVar "padRight") (ELit (LInt 5))) (ELit (LChar "."))) (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "padRight") (ELit (LInt 2))) (ELit (LChar "."))) (ELit (LString "abc"))))))
+(DTest false "padRight with a width at or below zero is unchanged" (EApp (EApp (EVar "expectEqual") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "padRight") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 3)))) (ELit (LChar "."))) (ELit (LString "ab")))))
+(DTest false "padRight counts codepoints for a multibyte pad character" (EApp (EApp (EVar "expectEqual") (ELit (LString "é→→→"))) (EApp (EApp (EApp (EVar "padRight") (ELit (LInt 4))) (ELit (LChar "→"))) (ELit (LString "é")))))
+(DTest false "center puts the odd pad character on the right" (EApp (EApp (EVar "expectEqual") (ELit (LString ".ab.."))) (EApp (EApp (EApp (EVar "center") (ELit (LInt 5))) (ELit (LChar "."))) (ELit (LString "ab")))))
+(DTest false "center splits an even pad evenly" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "..ab..")) (ELit (LString ".ab.")))) (ETuple (EApp (EApp (EApp (EVar "center") (ELit (LInt 6))) (ELit (LChar "."))) (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "center") (ELit (LInt 4))) (ELit (LChar "."))) (ELit (LString "ab"))))))
+(DTest false "center of the empty string" (EApp (EApp (EVar "expectEqual") (ELit (LString "..."))) (EApp (EApp (EApp (EVar "center") (ELit (LInt 3))) (ELit (LChar "."))) (ELit (LString "")))))
+(DTest false "center with a width at or below the length is unchanged" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "abc")) (ELit (LString "abc")))) (ETuple (EApp (EApp (EApp (EVar "center") (ELit (LInt 2))) (ELit (LChar "."))) (ELit (LString "abc"))) (EApp (EApp (EApp (EVar "center") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (ELit (LChar "."))) (ELit (LString "abc"))))))
+(DTest false "replace of an empty needle is unchanged" (EApp (EApp (EVar "expectEqual") (ELit (LString "hi"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString ""))) (ELit (LString "x"))) (ELit (LString "hi")))))
+(DTest false "replace of an absent needle is unchanged" (EApp (EApp (EVar "expectEqual") (ELit (LString "hello"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString "z"))) (ELit (LString "y"))) (ELit (LString "hello")))))
+(DTest false "replace touches only the first occurrence" (EApp (EApp (EVar "expectEqual") (ELit (LString "ba"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString "aa"))) (ELit (LString "b"))) (ELit (LString "aaa")))))
+(DTest false "replace counts codepoints around a multibyte hit" (EApp (EApp (EVar "expectEqual") (ELit (LString "a-b日"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString "日"))) (ELit (LString "-"))) (ELit (LString "a日b日")))))
+(DTest false "replace can delete the first occurrence" (EApp (EApp (EVar "expectEqual") (ELit (LString "xy"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString "ab"))) (ELit (LString ""))) (ELit (LString "xaby")))))
+(DTest false "lines of the empty string is one empty line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "")))) (EApp (EVar "lines") (ELit (LString "")))))
+(DTest false "lines removes one trailing carriage return per line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "")))) (EApp (EVar "lines") (ELit (LString "a\r\nb\r\n")))))
+(DTest false "lines keeps a second carriage return" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a\r")) (ELit (LString "b")))) (EApp (EVar "lines") (ELit (LString "a\r\r\nb")))))
+(DTest false "lines of a lone carriage return is one empty line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "")))) (EApp (EVar "lines") (ELit (LString "\r")))))
+(DTest false "lines does not split on a bare carriage return" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a\rb")))) (EApp (EVar "lines") (ELit (LString "a\rb")))))
+(DTest false "lines of multibyte text with carriage returns" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "é")) (ELit (LString "日")))) (EApp (EVar "lines") (ELit (LString "é\r\n日\r")))))
+(DTest false "unlines of no lines is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "unlines") (EListLit))))
+(DTest false "unlines ends every line, including empty ones" (EApp (EApp (EVar "expectEqual") (ELit (LString "\n\n"))) (EApp (EVar "unlines") (EListLit (ELit (LString "")) (ELit (LString ""))))))
+(DTest false "unlines keeps a carriage return inside a line" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\r\n"))) (EApp (EVar "unlines") (EListLit (ELit (LString "a\r"))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false))))
+(DUse false (UseGroup ("string") ((mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false) (mem "unlines" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -275,5 +371,30 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
 (DTest false "fromChars counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀")))))))
 (DTest false "fromChars result slices by codepoint" (EApp (EApp (EVar "expectEqual") (ELit (LString "é日"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 3))) (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀")))))))
 (DTest false "fromChars of only multibyte characters" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EVar "fromChars") (EListLit (ELit (LChar "😀")) (ELit (LChar "😀")))))))
+(DTest false "padLeft fills on the left and leaves a long string alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "...ab")) (ELit (LString "abc")))) (ETuple (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 5))) (ELit (LChar "."))) (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 2))) (ELit (LChar "."))) (ELit (LString "abc"))))))
+(DTest false "padLeft with a width at or below zero is unchanged" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "ab")) (ELit (LString "ab")))) (ETuple (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 0))) (ELit (LChar "."))) (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "padLeft") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 3)))) (ELit (LChar "."))) (ELit (LString "ab"))))))
+(DTest false "padLeft of the empty string" (EApp (EApp (EVar "expectEqual") (ELit (LString "..."))) (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 3))) (ELit (LChar "."))) (ELit (LString "")))))
+(DTest false "padLeft counts codepoints for a multibyte pad character" (EApp (EApp (EVar "expectEqual") (ELit (LString "日日ab"))) (EApp (EApp (EApp (EVar "padLeft") (ELit (LInt 4))) (ELit (LChar "日"))) (ELit (LString "ab")))))
+(DTest false "padRight fills on the right and leaves a long string alone" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "ab...")) (ELit (LString "abc")))) (ETuple (EApp (EApp (EApp (EVar "padRight") (ELit (LInt 5))) (ELit (LChar "."))) (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "padRight") (ELit (LInt 2))) (ELit (LChar "."))) (ELit (LString "abc"))))))
+(DTest false "padRight with a width at or below zero is unchanged" (EApp (EApp (EVar "expectEqual") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "padRight") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 3)))) (ELit (LChar "."))) (ELit (LString "ab")))))
+(DTest false "padRight counts codepoints for a multibyte pad character" (EApp (EApp (EVar "expectEqual") (ELit (LString "é→→→"))) (EApp (EApp (EApp (EVar "padRight") (ELit (LInt 4))) (ELit (LChar "→"))) (ELit (LString "é")))))
+(DTest false "center puts the odd pad character on the right" (EApp (EApp (EVar "expectEqual") (ELit (LString ".ab.."))) (EApp (EApp (EApp (EVar "center") (ELit (LInt 5))) (ELit (LChar "."))) (ELit (LString "ab")))))
+(DTest false "center splits an even pad evenly" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "..ab..")) (ELit (LString ".ab.")))) (ETuple (EApp (EApp (EApp (EVar "center") (ELit (LInt 6))) (ELit (LChar "."))) (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "center") (ELit (LInt 4))) (ELit (LChar "."))) (ELit (LString "ab"))))))
+(DTest false "center of the empty string" (EApp (EApp (EVar "expectEqual") (ELit (LString "..."))) (EApp (EApp (EApp (EVar "center") (ELit (LInt 3))) (ELit (LChar "."))) (ELit (LString "")))))
+(DTest false "center with a width at or below the length is unchanged" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "abc")) (ELit (LString "abc")))) (ETuple (EApp (EApp (EApp (EVar "center") (ELit (LInt 2))) (ELit (LChar "."))) (ELit (LString "abc"))) (EApp (EApp (EApp (EVar "center") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (ELit (LChar "."))) (ELit (LString "abc"))))))
+(DTest false "replace of an empty needle is unchanged" (EApp (EApp (EVar "expectEqual") (ELit (LString "hi"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString ""))) (ELit (LString "x"))) (ELit (LString "hi")))))
+(DTest false "replace of an absent needle is unchanged" (EApp (EApp (EVar "expectEqual") (ELit (LString "hello"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString "z"))) (ELit (LString "y"))) (ELit (LString "hello")))))
+(DTest false "replace touches only the first occurrence" (EApp (EApp (EVar "expectEqual") (ELit (LString "ba"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString "aa"))) (ELit (LString "b"))) (ELit (LString "aaa")))))
+(DTest false "replace counts codepoints around a multibyte hit" (EApp (EApp (EVar "expectEqual") (ELit (LString "a-b日"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString "日"))) (ELit (LString "-"))) (ELit (LString "a日b日")))))
+(DTest false "replace can delete the first occurrence" (EApp (EApp (EVar "expectEqual") (ELit (LString "xy"))) (EApp (EApp (EApp (EVar "replace") (ELit (LString "ab"))) (ELit (LString ""))) (ELit (LString "xaby")))))
+(DTest false "lines of the empty string is one empty line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "")))) (EApp (EVar "lines") (ELit (LString "")))))
+(DTest false "lines removes one trailing carriage return per line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a")) (ELit (LString "b")) (ELit (LString "")))) (EApp (EVar "lines") (ELit (LString "a\r\nb\r\n")))))
+(DTest false "lines keeps a second carriage return" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a\r")) (ELit (LString "b")))) (EApp (EVar "lines") (ELit (LString "a\r\r\nb")))))
+(DTest false "lines of a lone carriage return is one empty line" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "")))) (EApp (EVar "lines") (ELit (LString "\r")))))
+(DTest false "lines does not split on a bare carriage return" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a\rb")))) (EApp (EVar "lines") (ELit (LString "a\rb")))))
+(DTest false "lines of multibyte text with carriage returns" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "é")) (ELit (LString "日")))) (EApp (EVar "lines") (ELit (LString "é\r\n日\r")))))
+(DTest false "unlines of no lines is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "unlines") (EListLit))))
+(DTest false "unlines ends every line, including empty ones" (EApp (EApp (EVar "expectEqual") (ELit (LString "\n\n"))) (EApp (EVar "unlines") (EListLit (ELit (LString "")) (ELit (LString ""))))))
+(DTest false "unlines keeps a carriage return inside a line" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\r\n"))) (EApp (EVar "unlines") (EListLit (ELit (LString "a\r"))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))
