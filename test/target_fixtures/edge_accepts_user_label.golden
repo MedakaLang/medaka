@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+note : String -> <Log> Unit
+main : <Log, Stdout> Unit
+-- <fixtures>/user_label.mdk: ok (2 declaration(s) checked, 0 errors)
+--- stderr

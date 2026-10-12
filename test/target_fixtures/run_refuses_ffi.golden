@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/ffi_entry.mdk:6:0: `main` performs <FFI> via `main → ffiAddInts`, and the target `eval/run` does not grant FFI
+  |
+6 | main : <Stdout, FFI> Unit
+  | ^

@@ -3,7 +3,7 @@
    `medaka.toml`'s field layout is the COMPILER's business, not the standard
    library's (I-1): a user reading `docs/stdlib/toml.md` should find a general
    TOML reader, not four functions about a file format they may never write.
-   These four accessors live here rather than in `stdlib/toml.mdk`, and must
+   These accessors live here rather than in `stdlib/toml.mdk`, and must
    not move back.
 
    The ruling that put them here is "manifest-schema accessors do not live in
@@ -17,7 +17,9 @@
    `toml` would drag the `Toml` type and its impls into dispatch scope for
    every compile — [T-STDLIB-IMPORT]), not an oversight. -}
 
-import toml.{Toml, getString, getArray, parse}
+import toml.{Toml(..), TomlValue(..), getString, getArray, parse}
+import list.{lookup}
+import string.{startsWith, trim, lines}
 
 {- | `name` from a parsed `[package]` section, or `None` when it is absent.
 
@@ -63,6 +65,53 @@ packageEntry doc = getString "package.entry" doc
 export
 workspaceMembers : Toml -> Option (List String)
 workspaceMembers doc = getArray "workspace.members" doc
+
+{- | `profile` from a parsed `[target]` section, `Ok None` when the manifest
+   states no `[target]` key at all, and `Err` with the reason when it states
+   one but no profile can be read from it.  A target that cannot be read is
+   never treated as no target.
+
+   > targetProfile (okDoc "[target]\nprofile = \"wasmgc/edge\"")
+   Ok (Some "wasmgc/edge")
+
+   > targetProfile (okDoc "[package]\nname = \"x\"")
+   Ok None
+
+   > targetProfile (okDoc "[target]\nprofile = 42")
+   Err "`profile` is not a string; write a profile name, such as `profile = \"wasmgc/node\"`"
+
+   > targetProfile (okDoc "[target]\nprofil = \"wasmgc/node\"")
+   Err "it states no `profile`; write one, such as `profile = \"wasmgc/node\"`" -}
+export
+targetProfile : Toml -> Result String (Option String)
+targetProfile (Toml kvs) =
+  match filter (kv => startsWith "target." (fst kv)) kvs
+    [] => Ok None
+    stated => match lookup "target.profile" stated
+      Some (TString p) => Ok (Some p)
+      Some _ =>
+        Err
+          "`profile` is not a string; write a profile name, such as `profile = \"wasmgc/node\"`"
+      None =>
+        Err
+          "it states no `profile`; write one, such as `profile = \"wasmgc/node\"`"
+
+{- | True if the manifest text has a `[target]` header line.  A manifest the
+   TOML subset reader rejects is only a `[target]` refusal when it states one;
+   otherwise its other readers (`allow-internal`, the loader's scanner) keep
+   their own verdicts on it.
+
+   > statesTargetSection "[package]\nname = \"x\"\n[target]\nprofile = \"a\""
+   True
+
+   > statesTargetSection "[package]\nname = \"x\"\nallow-internal = true-ish"
+   False
+
+   > statesTargetSection "[target.extra]\nk = 1"
+   True -}
+export
+statesTargetSection : String -> Bool
+statesTargetSection text = any (l => startsWith "[target" (trim l)) (lines text)
 
 -- Doctest helper: parse a known-good TOML source.  A parse failure here would
 -- be a bug in the fixture, not in the accessor under test, so it panics rather

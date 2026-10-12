@@ -1,0 +1,8 @@
+-- A parameterized label at the entry, `Net "a.com"`: a profile granting the
+-- whole `Net` domain admits it; one granting no `Net` refuses it.
+fetchHost : (h : String) -> <Net h, Stdout> Unit
+fetchHost h = match netResolve h
+  Ok _ => println "resolved"
+  Err e => println e
+
+main = fetchHost "a.com"

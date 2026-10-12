@@ -1,0 +1,4 @@
+exit=1
+--- stdout
+--- stderr
+error: cannot read `[target]` in <fixtures>/bad_manifest_target/medaka.toml: not valid TOML: expected '=' in: [dependencies

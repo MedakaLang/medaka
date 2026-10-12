@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+netGet : (url : String) -> <FFI, Net url> String
+main : <FFI, Net, Stdout> Unit
+-- <fixtures>/user_spelled_net.mdk: ok (2 declaration(s) checked, 0 errors)
+--- stderr

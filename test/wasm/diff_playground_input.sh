@@ -96,8 +96,8 @@ if [ -f "$PLAYGROUND" ] && node "$ROOT/playground/dev_compile_node.mjs" "$PLAYGR
 # Product-input parity, FFI extern table: the modules entry passes the validated
 # FFI extern table into WasmEmitInput; the playground entry passed `[]` until
 # 2026-09-03, so the emitter fell through to its generic unbound-variable gap
-# instead of the named native-only refusal (#2129's message, which
-# test/wasm/diff_wasm_ffi_wall.sh pins on the modules path) — and compile.mjs
+# instead of the named native-only refusal (#2129's message, which the
+# modules emitter gives when it is started without a profile) — and compile.mjs
 # dropped the guest's stderr on the trap path, so the browser showed a bare
 # "compiler trap: unreachable" either way.  Both products must refuse, and refuse
 # by name; the second grep is the fall-through control.

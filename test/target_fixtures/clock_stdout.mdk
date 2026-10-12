@@ -1,0 +1,4 @@
+-- `Clock` and `Stdout`: granted by every wasm profile with grants, the
+-- narrowest being wasmgc/edge.
+main : <Clock, Stdout> Unit
+main = println (monotonicSec () >= 0.0)

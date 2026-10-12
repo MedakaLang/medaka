@@ -1096,6 +1096,7 @@ ffiCheckShadowGo : List Decl -> Unit
 ffiCheckSpineRow : String -> Ty -> List (String, Int) -> List (String, Ty) -> String -> (List EffAtomTy, List String) -> (List EffAtomTy, List String) -> Unit
 ffiCrossableConName : String -> Bool
 ffiCrossableTy : Ty -> Bool
+ffiDeclaredLabelMsg : String -> String
 ffiExpandTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List String, String))
 ffiHasAtom : List EffAtomTy -> Bool
@@ -1116,6 +1117,7 @@ ffiReservedMsg : String -> String
 ffiResultRowHasFFI : Ty -> Bool
 ffiRowBody : Ty -> Ty
 ffiRowHasFFITy : Ty -> Option Bool
+ffiRowNamesDeclaredFfi : Ty -> Bool
 ffiRowParts : Ty -> (List EffAtomTy, List String, Ty)
 ffiSameAtom : EffAtomTy -> EffAtomTy -> Bool
 ffiSameNames : List String -> List String -> Bool
@@ -1777,7 +1779,8 @@ intercalateComma : List String -> String
 interpEVars : InterpPart -> List String
 intersectDeclAtoms : List (List Atom) -> List Atom
 invocationHeadKey : Mono -> String
-ioAliasLabels : List String
+ioJoinAtoms : List (String, EffParamTy) -> List Atom
+ioJoinClause : List Atom -> String
 ioLabel : EffLabel
 isAliasDecl : Decl -> Bool
 isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
@@ -1798,6 +1801,7 @@ isEPProduct : EffParamTy -> Bool
 isEPSet : EffParamTy -> Bool
 isEmptyStringLit : Expr -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
+isForeignCallAtom : EffAtomTy -> Bool
 isGrantOnlyEv : EvId -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLetrecGroup : List String -> Bool
@@ -2449,7 +2453,7 @@ preludeArgPosDictNames : List Decl -> List Decl -> List String
 preludeConstrainedBodyVars : List Decl -> List (String, List String)
 preludeMarkFactsOf : List Decl -> PreludeMarkFacts
 preludePreambleFor : Option (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
-preludePreambleMemoRef : Ref (Option ((Int, Int), PreludePreamble))
+preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleOf : List Decl -> DeclEnvModule -> PreludePreamble
 preludePreambleStore : (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
 preludeReturnPosDictNames : List Decl -> List Decl -> List String
@@ -2945,6 +2949,7 @@ setDictEligible : List String -> Unit
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 setFunPredicateSlots : List (String, List PredicateSlot) -> Unit
 setGrantOcc : EvId -> GrantOcc -> Unit
+setIoJoin : Option TargetProfile -> Unit
 setLocIfSome : Option Loc -> Unit
 setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit

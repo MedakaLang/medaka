@@ -1,0 +1,4 @@
+-- The manifest is not valid TOML, so the `[target]` it states cannot be read;
+-- that is refused rather than read as no target.
+main : <Stdout> Unit
+main = println "hi"

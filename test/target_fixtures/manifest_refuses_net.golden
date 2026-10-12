@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/project_target/main.mdk:6:0: `main` performs <Net>, and the target `wasmgc/node` does not grant Net
+  |
+6 | main : <Net, Stdout> Unit
+  | ^

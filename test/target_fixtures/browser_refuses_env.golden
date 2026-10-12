@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/env_stdout.mdk:2:0: `main` performs <Env>, and the target `wasmgc/browser-worker` does not grant Env
+  |
+2 | main : <Env, Stdout> Unit
+  | ^

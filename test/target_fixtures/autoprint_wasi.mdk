@@ -1,0 +1,3 @@
+-- A value `main` other than `Unit` is printed, which performs `Stdout`, and
+-- wasmgc/wasi-p2 grants nothing.
+main = 6 * 7

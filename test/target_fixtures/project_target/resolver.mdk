@@ -1,0 +1,3 @@
+export
+lookup : String -> <Net> Result String (List String)
+lookup h = netResolve h

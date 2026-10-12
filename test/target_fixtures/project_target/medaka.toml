@@ -1,0 +1,5 @@
+[package]
+name = "project_target"
+
+[target]
+profile = "wasmgc/node"

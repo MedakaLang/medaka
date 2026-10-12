@@ -1,0 +1,5 @@
+[package]
+name = "project_no_entry"
+
+[target]
+profile = "wasmgc/edge"

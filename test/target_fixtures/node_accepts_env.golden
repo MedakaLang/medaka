@@ -1,0 +1,5 @@
+exit=0
+--- stdout
+main : <Env, Stdout> Unit
+-- <fixtures>/env_stdout.mdk: ok (1 declaration(s) checked, 0 errors)
+--- stderr

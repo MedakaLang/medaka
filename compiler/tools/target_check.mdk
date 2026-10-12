@@ -1,0 +1,138 @@
+-- compiler/tools/target_check.mdk — does a program's entry fit a target
+-- profile?  The entry's invocation summary, cut to the labels a profile gates,
+-- is judged by the same subsumption `check-policy` uses, and a refusal becomes
+-- one located `T-TARGET-CAPABILITY` diagnostic.
+import frontend.ast.{Decl(..), Loc(..), TyConOrigin(..)}
+import types.target_profile.{
+  TargetProfile, profileName, profileGrants, isGatedLabel, reachesLabel
+}
+import types.effect_policy.{
+  PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
+}
+import types.effect_invocation.{invocationSummary}
+import types.effect_rows.{
+  Atom, atomLabel, atomLabelOf, effLabelOrigin, renderAtom
+}
+import tools.check_policy.{EntryAnalysis(..)}
+import driver.diagnostics.{Diag(..), Severity(..), mkDiag}
+import support.util.{lookupAssoc, joinWith, dedup, contains}
+import string.{trim}
+
+export
+targetCapabilityCode : String
+targetCapabilityCode = "T-TARGET-CAPABILITY"
+
+-- The refusal of the program whose entry file is `file`, or `None` when its
+-- `main` performs nothing the profile withholds.  A program with no `main` of
+-- its own has no entry to judge, and that is a refusal too.  The entry judged
+-- is the one the drivers run: a value `main` they print performs what the
+-- `println` applied to it performs.
+export
+targetRefusal : TargetProfile -> String -> EntryAnalysis -> Option Diag
+targetRefusal profile file analysis =
+  match lookupAssoc "main" analysis.eaSchemes
+    None => Some (missingEntryDiag profile file)
+    Some sch =>
+      let printed = match analysis.eaAutoPrintCall
+        Some call => invocationSummary analysis.eaOps call
+        None => []
+      let summary = invocationSummary analysis.eaOps sch ++ printed
+      let atoms = filter isGatedAtom summary
+      let unjoined = filter (unjoinedIo profile) summary
+      let ioLabels = match unjoined
+        [] => []
+        _ => ["IO"]
+      match policyRefusals atoms (profileGrants profile)
+        PolicyAdmitted => match unjoined
+          [] => None
+          _ => Some (refusalDiag profile analysis unjoined ioLabels [])
+        PolicyRefused labels lines =>
+          Some
+            (refusalDiag
+              profile
+              analysis
+              (atoms ++ unjoined)
+              (dedup labels ++ ioLabels)
+              lines)
+
+-- A label a user module declares is never a host capability, whatever it is
+-- spelled: only a builtin host label or `FFI` is gated.  An `IO` atom is left
+-- to the typechecker: `check`, `run` and `build` select the profile before
+-- they typecheck, and the typechecker bounds every `IO` by that profile's join
+-- (`ioJoinGrants`).  `unjoinedIo` is the one exception.
+isGatedAtom : Atom -> Bool
+isGatedAtom a = match effLabelOrigin (atomLabelOf a)
+  OriginModule _ => False
+  _ => isGatedLabel (atomLabel a)
+
+-- The one `IO` the typechecker cannot refuse: an `IO` performed under an `IO`
+-- bound, on a profile whose join is empty.  Nothing performed as `IO` runs
+-- there.
+unjoinedIo : TargetProfile -> Atom -> Bool
+unjoinedIo profile a = match effLabelOrigin (atomLabelOf a)
+  OriginModule _ => False
+  _ => atomLabel a == "IO" && not (reachesLabel profile "IO")
+
+refusalDiag : TargetProfile ->
+  EntryAnalysis ->
+  List Atom ->
+  List String ->
+  List String ->
+  Diag
+refusalDiag profile analysis atoms labels lines =
+  let chain =
+    viaChain
+      (buildCallGraph analysis.eaEntryDecls)
+      (fnEffectsTable analysis.eaSchemes)
+      "main"
+      (firstOr "" labels)
+  let refused = filter (a => contains (atomLabel a) labels) atoms
+  let route = match chain
+    _ :: _ :: _ => " via `\{joinWith " → " chain}`"
+    _ => ""
+  let notProven = stringConcat (map (l => "; " ++ trim l) lines)
+  let printed = match analysis.eaAutoPrintCall
+    Some _ =>
+      "; `main` is a value other than `Unit`, so it is printed with `println`"
+    None => ""
+  mkDiag
+    SevError
+    targetCapabilityCode
+    "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " (map withheldName labels)}\{notProven}\{printed}"
+    (entryLoc analysis.eaEntryDecls)
+
+-- `IO` is refused only when the profile grants no host label for it to join.
+withheldName : String -> String
+withheldName "IO" = "any host label for `IO` to join"
+withheldName label = label
+
+missingEntryDiag : TargetProfile -> String -> Diag
+missingEntryDiag profile file =
+  mkDiag
+    SevError
+    targetCapabilityCode
+    "no `main` entry found, so there is nothing to check against the target `\{profileName profile}`; add `main = ...`"
+    (Some (Loc file 1 0 1 0))
+
+-- Where the entry is declared: its signature, which is where its row is
+-- written, else its definition.
+entryLoc : List Decl -> Option Loc
+entryLoc decls = match mainSigLoc decls
+  Some l => Some l
+  None => mainDefLoc decls
+
+mainSigLoc : List Decl -> Option Loc
+mainSigLoc [] = None
+mainSigLoc ((DAttrib _ d) :: rest) = mainSigLoc (d :: rest)
+mainSigLoc ((DTypeSig _ "main" _ l) :: _) = Some l
+mainSigLoc (_ :: rest) = mainSigLoc rest
+
+mainDefLoc : List Decl -> Option Loc
+mainDefLoc [] = None
+mainDefLoc ((DAttrib _ d) :: rest) = mainDefLoc (d :: rest)
+mainDefLoc ((DFunDef _ "main" _ _ l) :: _) = Some l
+mainDefLoc (_ :: rest) = mainDefLoc rest
+
+firstOr : String -> List String -> String
+firstOr d [] = d
+firstOr _ (x :: _) = x

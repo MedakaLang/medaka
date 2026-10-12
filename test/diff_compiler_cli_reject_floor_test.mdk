@@ -444,6 +444,8 @@ commentLineRe = R.mustCompile "^\\s*--"
 --                  through an <verb>ArgSpec value because they enter a loop first.
 --   runArgvFilter  run's own known-flag filter, deliberately not routed (program
 --                  passthrough args follow the target file).
+--   runTargetGo/runFlagGiven  read the same pre-positional prefix runArgvFilter
+--                  consumes, so they cannot be routed for the same reason.
 --   splitCodemodArgv/parseEffectArgs  codemod's per-codemod vocabulary (§4).
 --   parseCiArgs/parseBalArgs  undocumented maintainer subcommands of gate.
 exemptArms : List String
@@ -453,6 +455,8 @@ exemptArms = [
   "compiler/driver/medaka_cli.mdk:runLspCmd",
   "compiler/driver/medaka_cli.mdk:runMcpCmd",
   "compiler/driver/medaka_cli.mdk:runArgvFilter",
+  "compiler/driver/medaka_cli.mdk:runTargetGo",
+  "compiler/driver/medaka_cli.mdk:runFlagGiven",
   "compiler/driver/medaka_cli.mdk:splitCodemodArgv",
   "compiler/tools/codemod.mdk:parseEffectArgs",
   "compiler/tools/gate_cmd.mdk:parseCiArgs",

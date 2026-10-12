@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+fns : List (String -> <Net> Result String (List String))
+main : <Stdout> Unit
+-- <fixtures>/extern_value_not_performed.mdk: ok (2 declaration(s) checked, 0 errors)
+--- stderr

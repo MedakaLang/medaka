@@ -194,8 +194,13 @@ Issue: #3663 (matrix gate reads the catalog).
 The subsumption check already exists: `medaka check-policy --allow L1,L2 --fn f`
 compares an entry's inferred row with an allowed set
 (`compiler/tools/check_policy.mdk`, over `compiler/types/effect_invocation.mdk`).
-A host profile is that allowed set, built in. No typechecker rule changes; a
-profile never touches inference, only the entry-point check.
+A host profile is that allowed set, built in. A profile reaches inference
+through exactly one definition: what `IO` joins. Under a profile, `IO` is the
+join of the host labels that profile grants (`docs/spec/EFFECTS-SEMANTICS.md`
+§7), so an `<IO>` definition performing a label the profile withholds is a type
+error where it performs it, in any module. No other typechecker rule changes;
+everything else a profile decides is the entry-point check, which gates the
+host labels and `FFI` and, with `IO` already bounded, never `IO`.
 
 The profiles and their grants are one compiler-owned table — §8 gives the
 contents.
@@ -273,8 +278,11 @@ Issue: #3665 (check refuses on profile).
 
 ### 5.5 What this retires
 
-After §4 and §5.4, an extern with no lowering can reach an emitter only through a
-compiler bug. The worded net and FFI rejections and the `unbound variable`
+After §4 and §5.4, an extern with no lowering reaches an emitter only through a
+compiler bug, or when a program names an extern as a value without ever
+performing it: `check` judges what `main` performs and admits that program,
+and the emitter's validator then refuses it with a user-facing line (`run` of
+it still panics at `eval.mdk:748`). The worded net and FFI rejections and the `unbound variable`
 fallthrough for catalog names in `compiler/backend/wasm_emit.mdk`, and the
 `unsupported extern` arm in `compiler/backend/llvm_emit.mdk`, are replaced by one
 validator refusal that names the extern and the profile and says that `check`

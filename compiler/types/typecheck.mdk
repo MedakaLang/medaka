@@ -506,6 +506,9 @@ import types.disposition.{
   restoreDispositions,
   validateDispositionTable,
 }
+import types.target_profile.{
+  TargetProfile, hostLabels, ioJoinGrants, profileName, selectedProfile
+}
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
 -- ONE program-global identity, NOT the identity of whichever module wrote it,
@@ -719,51 +722,57 @@ ioLabel = builtinLabel "IO"
 
 -- ── v2 Stage 3: the `IO` widening union alias (design §3.2) ─────────────────
 -- `IO` is the coarse security alias: in a BOUND/annotation row it stands for
--- the join of every narrow security label at ⊤.  ioAliasLabels lists them
--- (every minted security label EXCEPT IO itself); internal labels (Mut/Panic)
--- are NOT members, so they are tracked independently of IO.
-export
-ioAliasLabels : List String
-ioAliasLabels = [
-  "Stdout",
-  "Stderr",
-  "Stdin",
-  "Clock",
-  "Env",
-  "Exec",
-  "Rand",
-  "Net",
-  "FileRead",
-  "FileWrite",
-  "Signal",
-]
+-- the join of the narrow security labels the selected profile grants, every one
+-- at ⊤ when none is selected.  `hostLabels` lists them (every minted security
+-- label EXCEPT IO itself); internal labels (Mut/Panic) are NOT members, so they
+-- are tracked independently of IO.
 -- NOTE: `FFI` is deliberately NOT a member. #2071/#2070 (epic, Layer 1, R1):
 -- an `<IO>` bound must NOT subsume an `<FFI>`-performing body — FFI crosses a
 -- trust boundary the IO alias is not meant to paper over. Do not "complete"
 -- this list by adding FFI.
 
--- `IO` is the join of the eleven security labels, so it widens on either side of
--- an escape check.  On the bound side a NARROW inferred row is subsumed by an `<IO>`
--- bound (narrow ⊑ IO); `IO` stays in the expansion (atomsNorm keeps it) so an
--- inferred IO matches a bound IO.
+-- What `IO` joins in this drive: the selected profile's grants of the alias
+-- labels, each at the parameter granted, in `hostLabels` order.  With no
+-- profile that is all eleven at their tops.  Every module of the program is
+-- judged against the one join, the shipped stdlib included.
+export
+ioJoinAtoms : List (String, EffParamTy) -> List Atom
+ioJoinAtoms grants =
+  filterMap
+    (l =>
+      map
+        (granted =>
+          atomWith
+            (builtinLabel l)
+            (writtenParam (dtopFor (builtinLabel l)) granted))
+        (lookupAssoc l grants))
+    hostLabels
+
+-- `IO` is the join of the labels the drive's profile grants (`ioJoin`), so it
+-- widens on either side of an escape check.  On the bound side a NARROW inferred
+-- row is subsumed by an `<IO>` bound (narrow ⊑ IO); `IO` stays in the expansion
+-- (atomsNorm keeps it) so an inferred IO matches a bound IO.
 expandIoInBound : List Atom -> List Atom
 expandIoInBound b = match findAtom (labelKey ioLabel) b
   None => b
-  Some _ => atomsNorm (b ++ map atomOfLabel ioAliasLabels)
+  Some _ => atomsNorm (b ++ driverState.value.ioJoin.value)
 
--- A performed `IO` left over against a bound without `IO` stands for the eleven
--- labels: a bound naming all eleven admits it, a bound naming some refuses it
--- naming the labels it lacks, and a bound naming none leaves it as `IO`.
+-- A performed `IO` left over against a bound without `IO` stands for the labels
+-- it joins: a bound naming all of them admits it, a bound naming some refuses it
+-- naming the labels it lacks, and a bound naming none leaves it as `IO`.  Only a
+-- label of the join can cover a performed `IO`, so when the profile grants no
+-- host label the join is empty, the bound names none of it, and `IO` stands.
 narrowPerformedIo : List Atom -> List Atom -> List Atom
 narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
   None => diff
   Some _ =>
     let rest = filterList (x => atomKey x /= labelKey ioLabel) diff
-    let missing = atomsDiff (map atomOfLabel ioAliasLabels) bound
-    if isEmptyL missing then
-      rest
-    else if listLen missing == listLen ioAliasLabels then
+    let join = driverState.value.ioJoin.value
+    let missing = atomsDiff join bound
+    if listLen missing == listLen join then
       diff
+    else if isEmptyL missing then
+      rest
     else
       atomsNorm (rest ++ missing)
 
@@ -1811,7 +1820,20 @@ closedRowMismatchMsg l1 l2 =
 
 effectLeakMsg : List Atom -> List Atom -> String
 effectLeakMsg bound extras =
-  "performs <\{renderAtoms extras}> where only <\{renderAtoms bound}> is allowed"
+  "performs <\{renderAtoms extras}> where only <\{renderAtoms bound}> is allowed\{ioJoinClause (bound ++ extras)}"
+
+-- What `IO` means on the selected profile, for a message naming `IO` there:
+-- the reader cannot otherwise tell why `IO` does not cover a host label.
+-- Empty when `IO` joins every host label at its top.
+ioJoinClause : List Atom -> String
+ioJoinClause atoms =
+  let join = driverState.value.ioJoin.value
+  let full = map atomOfLabel hostLabels
+  if isSome (findAtom (labelKey ioLabel) atoms)
+    && isNonEmptyL (atomsDiff full join) then
+    "; `IO` on `\{driverState.value.ioJoinProfile.value}` is <\{renderAtoms join}>"
+  else
+    ""
 
 -- v2 Stage 2a: diagnostic for a rejected written effect param.
 effectParamMsg : String -> String -> String
@@ -8590,6 +8612,11 @@ ifaceExportsIndex _ =
 -- this header shape) — field prose lives on the reader, e.g. `dispatchIdxScoped`.
 data DriverState = DriverState {
   effectDomains : Ref (List (String, Param)),
+  -- What `IO` joins in this drive (`ioJoinAtoms`), and the name of the profile
+  -- it was taken from (`""` for none).  Written once per drive by
+  -- `graphPreamble`, after the effect domains it reads.
+  ioJoin : Ref (List Atom),
+  ioJoinProfile : Ref String,
   -- Per module: the (dependency id, method name) pairs `deAliasMethodImports`
   -- admitted for dispatch without the program binding that bare name, so the
   -- import seed can tell an admission from a written binding.
@@ -8635,6 +8662,8 @@ data DriverState = DriverState {
 freshDriverState : Unit -> DriverState
 freshDriverState _ = DriverState {
   effectDomains = Ref [],
+  ioJoin = Ref [],
+  ioJoinProfile = Ref "",
   graphAdmittedMethodsRef = Ref omEmpty,
   declEnvsRef = Ref emptyDeclEnvs,
   abstractRecordTypesRef = Ref omEmpty,
@@ -42377,7 +42406,27 @@ ffiResultRowHasFFI _ = False
 -- so `<Net "a.com/*", FFI>` prints as `<FFI, Net "a.com/*">`.
 ffiHasAtom : List EffAtomTy -> Bool
 ffiHasAtom [] = False
-ffiHasAtom (a :: rest) = a.eatLabel == "FFI" || ffiHasAtom rest
+ffiHasAtom (a :: rest) = isForeignCallAtom a || ffiHasAtom rest
+
+-- The foreign-call effect itself.  A label a module declares with `effect FFI`
+-- is spelled the same but is a user label, which the target check never gates,
+-- so it cannot be what makes a declaration honest about calling foreign code.
+isForeignCallAtom : EffAtomTy -> Bool
+isForeignCallAtom a = match a.eatOrigin
+  OriginModule _ => False
+  _ => a.eatLabel == "FFI"
+
+-- Does the declared result row spell `FFI` as a module's own label?  The walk
+-- `ffiRowHasFFITy` takes; it only picks `T-FFI-UNLABELLED`'s wording.
+ffiRowNamesDeclaredFfi : Ty -> Bool
+ffiRowNamesDeclaredFfi (TyConstrained _ t) = ffiRowNamesDeclaredFfi t
+ffiRowNamesDeclaredFfi (TyFun _ r) = ffiRowNamesDeclaredFfi r
+ffiRowNamesDeclaredFfi (TyEffect ls _ _) =
+  anyListM (a => a.eatLabel == "FFI" && not (isForeignCallAtom a)) ls
+ffiRowNamesDeclaredFfi t = match expandAliasHeadTy t
+  TyFun _ r => ffiRowNamesDeclaredFfi r
+  TyConstrained _ inner => ffiRowNamesDeclaredFfi inner
+  _ => False
 
 -- ── the FFI-ABI.md §1 CROSSABLE SET ─────────────────────────────────────────
 --
@@ -43299,13 +43348,23 @@ ffiCheckLabelsGo (_ :: rest) = ffiCheckLabelsGo rest
 -- option that is definitely wrong.
 ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
 ffiCheckExternLabel n fb ty = match ffiRowHasFFITy ty
-  Some False => pushTypeErrorAt "T-FFI-UNLABELLED" fb (ffiUnlabelledMsg n)
+  Some False =>
+    let msg =
+      if ffiRowNamesDeclaredFfi ty then
+        ffiDeclaredLabelMsg n
+      else
+        ffiUnlabelledMsg n
+    pushTypeErrorAt "T-FFI-UNLABELLED" fb msg
   Some True => ()
   None => pushTypeErrorAt "T-FFI-NULLARY" fb (ffiNullaryMsg n)
 
 ffiNullaryMsg : String -> String
 ffiNullaryMsg n =
   "foreign declaration `\{n}` has no arrow in its signature, so it declares a foreign value rather than a foreign call; declare a call instead, `extern \{n} : Unit -> <FFI> T`, invoked as `\{n} ()`"
+
+ffiDeclaredLabelMsg : String -> String
+ffiDeclaredLabelMsg n =
+  "foreign declaration `\{n}` names `FFI` in its result row, but that `FFI` is a label declared with `effect FFI`, not the foreign-call effect; rename the declared label so `FFI` here means the foreign call"
 
 ffiUnlabelledMsg : String -> String
 ffiUnlabelledMsg n =
@@ -52062,7 +52121,7 @@ foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData a
 -- One entry only (the prelude does not change under a process); a different
 -- prelude simply misses and replaces it.
 data CoreCheckMemo = CoreCheckMemo {
-  ccmKey : (Int, Int),
+  ccmKey : ((Int, Int), String),
   ccmCoreSchemes : ModuleBindings,
   ccmCrossRun : CrossRun,
   ccmGraphRun : GraphRun,
@@ -52076,7 +52135,11 @@ coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
 coreCheckMemoHit None = None
 coreCheckMemoHit (Some key) = match !coreCheckMemoRef
   None => None
-  Some m => if m.ccmKey == key then Some m else None
+  Some m =>
+    if m.ccmKey == (key, driverState.value.ioJoinProfile.value) then
+      Some m
+    else
+      None
 
 -- A detached copy: every field re-minted as a fresh Ref over the same (immutable)
 -- value, so neither side's later writes reach the other.  The constructor keeps
@@ -52110,6 +52173,8 @@ copyCrossRun c = CrossRun {
 copyDriverState : DriverState -> DriverState
 copyDriverState d = DriverState {
   effectDomains = Ref d.effectDomains.value,
+  ioJoin = Ref d.ioJoin.value,
+  ioJoinProfile = Ref d.ioJoinProfile.value,
   graphAdmittedMethodsRef = Ref d.graphAdmittedMethodsRef.value,
   declEnvsRef = Ref d.declEnvsRef.value,
   abstractRecordTypesRef = Ref d.abstractRecordTypesRef.value,
@@ -52190,7 +52255,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
       None => ()
       Some k =>
         coreCheckMemoRef := Some CoreCheckMemo {
-          ccmKey = k,
+          ccmKey = (k, driverState.value.ioJoinProfile.value),
           ccmCoreSchemes = coreSchemes,
           ccmCrossRun = copyCrossRun crossRun.value,
           ccmGraphRun = copyGraphRunForMemo graphRun.value,
@@ -52241,7 +52306,7 @@ data PreludePreamble = PreludePreamble {
   ppMarkFacts : PreludeMarkFacts,
 }
 
-preludePreambleMemoRef : Ref (Option ((Int, Int), PreludePreamble))
+preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleMemoRef = Ref None
 
 preludePreambleOf : List Decl -> DeclEnvModule -> PreludePreamble
@@ -52258,7 +52323,7 @@ preludePreambleFor : Option (Int, Int) ->
 preludePreambleFor None coreDecls coreRow = preludePreambleOf coreDecls coreRow
 preludePreambleFor (Some k) coreDecls coreRow = match !preludePreambleMemoRef
   Some entry =>
-    if fst entry == k then
+    if fst entry == (k, driverState.value.ioJoinProfile.value) then
       snd entry
     else
       preludePreambleStore k coreDecls coreRow
@@ -52272,7 +52337,7 @@ preludePreambleStore : (Int, Int) ->
   PreludePreamble
 preludePreambleStore k coreDecls coreRow =
   let p = preludePreambleOf coreDecls coreRow
-  preludePreambleMemoRef := Some (k, p)
+  preludePreambleMemoRef := Some ((k, driverState.value.ioJoinProfile.value), p)
   p
 
 -- `preludeKey`: the desugar-cache generation pair identifying `runtimeDecls` /
@@ -52289,6 +52354,13 @@ preludePreambleStore k coreDecls coreRow =
 --     the residual and the evidence table.  What `run`, `build`'s child,
 --     `medaka test`'s phases and the emit entries consume.
 data GraphOut = GOutDiags | GOutTrees
+
+setIoJoin : Option TargetProfile -> Unit
+setIoJoin profile =
+  driverState.value.ioJoin := ioJoinAtoms (ioJoinGrants profile)
+  driverState.value.ioJoinProfile := match profile
+    None => ""
+    Some p => profileName p
 
 graphPreamble : GraphOut ->
   Option (Int, Int) ->
@@ -52353,6 +52425,10 @@ graphPreamble sel preludeKey runtimeDecls coreDecls modules =
   -- in the same order; `populateEffectDomainsGraph` walks them without building
   -- that concatenation a second time.
   let _ = populateEffectDomainsGraph coreDecls modules
+  -- What `IO` joins, from the profile the verb selected, after the domains the
+  -- atoms take their tops from.  `run` checks against `runProfile` of that
+  -- profile, whose host-label grants are the selected profile's own.
+  let _ = setIoJoin !selectedProfile
   -- the prelude's own contribution to every derivation below, from the memo when
   -- the caller supplied a prelude key -- see `PreludePreamble`.  The row is built
   -- HERE, not inside the memo, because it carries THIS analyze's decls.
@@ -53042,7 +53118,8 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
     stampGraphTyOrigins coreDecls0 (renameAliasedMethods coreDecls0 modules0)
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
-  let fullKey = chainFullKey rk ck chainKey
+  let fullKey =
+    "\{driverState.value.ioJoinProfile.value}\n\{chainFullKey rk ck chainKey}"
   let steps = match !moduleChainMemoRef
     Some m => if m.chKey == fullKey then m.chSteps else []
     None => []

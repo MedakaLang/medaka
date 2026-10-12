@@ -1,0 +1,240 @@
+-- The one table of target profiles: a profile is a backend, the host ABI that
+-- backend lowers to, and the grant set of effect labels the host can honour.
+-- Design: docs/design/TARGETS-DESIGN.md §8.1.
+--
+-- A grant is written the way `check-policy` writes a policy entry: a label and
+-- its domain, the label's whole domain being `EPTop`.  `native` and `wasm` are
+-- aliases of a row, never rows of their own.
+
+import frontend.ast.{EffParamTy(..)}
+import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup}
+import support.util.{isNonEmptyL}
+import string.{join}
+
+public export data Backend =
+  | BackendLlvm
+  | BackendWasmgc
+  | BackendEval
+  deriving (Eq, Debug)
+
+-- name, backend, host ABI, grants.
+public export data TargetProfile =
+  | TargetProfile String Backend String (List (String, EffParamTy))
+
+export
+profileName : TargetProfile -> String
+profileName (TargetProfile n _ _ _) = n
+
+export
+profileBackend : TargetProfile -> Backend
+profileBackend (TargetProfile _ b _ _) = b
+
+export
+profileAbi : TargetProfile -> String
+profileAbi (TargetProfile _ _ a _) = a
+
+export
+profileGrants : TargetProfile -> List (String, EffParamTy)
+profileGrants (TargetProfile _ _ _ g) = g
+
+-- Does the profile grant any part of this label's domain?
+export
+grantsLabel : TargetProfile -> String -> Bool
+grantsLabel p label = any (g => fst g == label) (profileGrants p)
+
+-- Can a program performing this label run under the profile?  `IO` is the
+-- join of the host labels the profile grants (`ioJoinGrants`), so it is
+-- reached exactly when that join is non-empty.
+export
+reachesLabel : TargetProfile -> String -> Bool
+reachesLabel p "IO" = isNonEmptyL (ioJoinGrants (Some p))
+reachesLabel p label = grantsLabel p label
+
+-- The labels of an extern the profile does not reach.  A program using the
+-- extern performs every label it declares, so the extern is usable under the
+-- profile exactly when this is empty.
+export
+withheldLabels : TargetProfile -> List String -> List String
+withheldLabels p labels = filter (l => not (reachesLabel p l)) labels
+
+export
+backendName : Backend -> String
+backendName BackendLlvm = "llvm"
+backendName BackendWasmgc = "wasmgc"
+backendName BackendEval = "eval"
+
+-- Each label granted over its whole domain.
+wholeDomain : List String -> List (String, EffParamTy)
+wholeDomain labels = map (l => (l, EPTop)) labels
+
+-- The eleven host labels: the labels `IO` is the join of, and with `FFI` the
+-- only labels a profile gates.
+export
+hostLabels : List String
+hostLabels = [
+  "Stdout",
+  "Stderr",
+  "Stdin",
+  "Clock",
+  "Env",
+  "Exec",
+  "Rand",
+  "FileRead",
+  "FileWrite",
+  "Net",
+  "Signal",
+]
+
+-- What `IO` joins under a profile: its grants of host labels, each with the
+-- parameter it grants.  With no profile it is every host label over its whole
+-- domain.
+export
+ioJoinGrants : Option TargetProfile -> List (String, EffParamTy)
+ioJoinGrants None = wholeDomain hostLabels
+ioJoinGrants (Some p) =
+  filter (g => any (== fst g) hostLabels) (profileGrants p)
+
+-- `wasmgc/edge` does not grant `Net`: §8.1 routes it through a fetch binding,
+-- and no such binding exists until T3 (#3668).
+-- `wasmgc/wasi-p2` is a seam with nothing built, so it grants nothing.
+profileRows : List TargetProfile
+profileRows = [
+  TargetProfile
+    "llvm/native-posix"
+    BackendLlvm
+    "C symbols"
+    (wholeDomain (hostLabels ++ ["FFI"])),
+  evalRunProfile,
+  TargetProfile
+    "wasmgc/node"
+    BackendWasmgc
+    "env"
+    (wholeDomain [
+      "Stdout",
+      "Stderr",
+      "Stdin",
+      "Clock",
+      "Env",
+      "Rand",
+      "FileRead",
+      "FileWrite",
+    ]),
+  TargetProfile
+    "wasmgc/browser-worker"
+    BackendWasmgc
+    "env"
+    (wholeDomain [
+      "Stdout", "Stderr", "Clock", "Rand", "FileRead", "FileWrite"
+    ]),
+  TargetProfile
+    "wasmgc/edge"
+    BackendWasmgc
+    "env"
+    (wholeDomain ["Stdout", "Stderr", "Clock", "Rand"]),
+  TargetProfile "wasmgc/wasi-p2" BackendWasmgc "WIT" [],
+]
+
+evalRunProfile : TargetProfile
+evalRunProfile =
+  TargetProfile
+    "eval/run"
+    BackendEval
+    "ioExternBindings"
+    (wholeDomain hostLabels)
+
+aliasRows : List (String, String)
+aliasRows = [("native", "llvm/native-posix"), ("wasm", "wasmgc/node")]
+
+-- Keyed by every name a user can write: each profile's own and each alias.
+profileIndex : OrdMap TargetProfile
+profileIndex =
+  omFromPairs (map (p => (profileName p, p)) profileRows) omEmpty
+    |> withAliases aliasRows
+
+withAliases : List (String, String) ->
+  OrdMap TargetProfile ->
+  OrdMap TargetProfile
+withAliases aliases idx =
+  omFromPairs (filterMap (a => aliased a idx) aliases) idx
+
+aliased : (String, String) ->
+  OrdMap TargetProfile ->
+  Option (String, TargetProfile)
+aliased (alias, target) idx = map (p => (alias, p)) (omLookup target idx)
+
+-- The profile names, in table order.
+export
+profileNames : List String
+profileNames = map profileName profileRows
+
+-- Every name a user can write: the profile names, then the aliases.
+export
+knownNames : List String
+knownNames = profileNames ++ map fst aliasRows
+
+export
+lookupProfile : String -> Result String TargetProfile
+lookupProfile name = match omLookup name profileIndex
+  Some p => Ok p
+  None => Err "unknown target `\{name}` (known: \{join ", " knownNames})"
+
+-- The profile a verb carries: the flag wins over the manifest's
+-- `[target] profile`; with neither, there is none.
+export
+selectProfile : Option String ->
+  Option String ->
+  Result String (Option TargetProfile)
+selectProfile (Some flag) _ = map Some (lookupProfile flag)
+selectProfile None (Some fromManifest) = map Some (lookupProfile fromManifest)
+selectProfile None None = Ok None
+
+-- Can `medaka build` emit for this profile?
+export
+buildable : TargetProfile -> Bool
+buildable p = profileBackend p /= BackendEval
+
+export
+buildableNames : List String
+buildableNames =
+  filter
+    (n => match lookupProfile n
+      Ok p => buildable p
+      Err _ => False)
+    knownNames
+
+-- Is this label one a profile gates: a host label or `FFI`?  `IO` is not, since
+-- under a profile it joins only what the profile grants (`ioJoinGrants`).  Any
+-- other label is a user effect, admitted on every profile.
+export
+isGatedLabel : String -> Bool
+isGatedLabel l = l == "FFI" || any (== l) hostLabels
+
+-- What `medaka run` checks against: the interpreter's grants, narrowed to the
+-- labels the selected profile also grants.  `eval/run` grants each of its
+-- labels over the whole domain, so the selected profile's own entries for
+-- those labels are the intersection.
+export
+runProfile : Option TargetProfile -> TargetProfile
+runProfile None = evalRunProfile
+runProfile (Some p) =
+  if profileName p == profileName evalRunProfile then
+    p
+  else
+    TargetProfile
+      "\{profileName evalRunProfile} ∩ \{profileName p}"
+      BackendEval
+      (profileAbi evalRunProfile)
+      (filter (g => grantsLabel evalRunProfile (fst g)) (profileGrants p))
+
+-- The profile `check`, `run` and `build` resolved from `--target` or the
+-- manifest.  `build` always selects one, so its emitter child always checks.
+export
+selectedProfile : Ref (Option TargetProfile)
+selectedProfile = Ref None
+
+-- How `build` hands its emitter child the selected profile's name.  A child
+-- started without it checks nothing, as every direct caller of an emit entry
+-- expects.
+export
+targetProfileEnv : String
+targetProfileEnv = "MEDAKA_TARGET_PROFILE"

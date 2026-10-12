@@ -244,6 +244,8 @@ import backend.core_validate.{
   validateTails,
   validateRecords,
   unrefusedExternMessage,
+  withheldExternNote,
+  checkedTarget,
   validateExterns,
 }
 import support.ordmap.{
@@ -785,6 +787,18 @@ isFfiExternW : Prog -> String -> Bool
 isFfiExternW prog name = match ffiSigOfW prog name
   Some _ => True
   None => False
+
+-- What a reference to a user FFI extern meets: foreign C calls have no WasmGC
+-- equivalent.  No wasm profile grants `FFI`, so under a checked target the
+-- program names the extern without performing it (`withheldExternNote`).
+ffiWallW : Prog -> String -> List String
+ffiWallW prog name =
+  let wall =
+    "wasm: FFI extern '\{name}' is native-only — foreign C calls have no WasmGC equivalent"
+  match !checkedTarget
+    Some t =>
+      gapLP prog "\{wall}; \{withheldExternNote WasmBackend name ["FFI"] t}"
+    None => gapLP prog "\{wall}. Build for a native target instead."
 
 declRetTypeOf : Prog -> String -> String
 declRetTypeOf prog name = match declRetLookupW prog name
@@ -6027,11 +6041,7 @@ emitVarRefPlain prog env d x =
     -- the saturated-call arms (emitAppRef/emitTailCallW) already give, not the generic
     -- unbound-variable fallback below — wasm still can't call it either way, but the
     -- diagnostic should say "exists but unsupported here", not "no such thing".
-    gapLP
-      prog
-      ("wasm: FFI extern '"
-        ++ x
-        ++ "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")
+    ffiWallW prog x
   else if isUnprovidedOn WasmBackend x then
     unprovidedExternW (progEmit prog) x
   else
@@ -6989,11 +6999,7 @@ emitAppRef prog env d app =
       else if f == "setRef" then
         emitRefBoxSet prog env d args
       else if isFfiExternW prog f then
-        gapLP
-          prog
-          ("wasm: FFI extern '"
-            ++ f
-            ++ "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")
+        ffiWallW prog f
       else match externFamilyW f
         Some WasmStr => emitStrExternRef prog env d f args
         Some WasmLeaf => emitLeafExternRef prog env d f args
@@ -9258,11 +9264,7 @@ emitTailCallW prog env app =
       else if isCtor prog f then
         emitRefExpr prog env 0 app ++ ["return"]
       else if isFfiExternW prog f then
-        gapLP
-          prog
-          ("wasm: FFI extern '"
-            ++ f
-            ++ "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")
+        ffiWallW prog f
       else if f == "Ref" || f == "setRef" || isSome (externFamilyW f) then
         emitAppRef prog env 0 app ++ ["return"]
       else if progFnMemberW prog f && isExactCall mode then

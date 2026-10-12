@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/net_param.mdk:8:0: `main` performs <Net "a.com"> via `main → fetchHost`, and the target `wasmgc/edge` does not grant Net
+  |
+8 | main = fetchHost "a.com"
+  | ^

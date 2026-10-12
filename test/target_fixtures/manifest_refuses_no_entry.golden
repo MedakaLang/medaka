@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/project_no_entry/lib.mdk:1:0: no `main` entry found, so there is nothing to check against the target `wasmgc/edge`; add `main = ...`
+  |
+1 | -- A library in a project that names a `[target]`: it has no entry point, so
+  | ^

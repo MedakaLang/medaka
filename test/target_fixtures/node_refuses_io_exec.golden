@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/io_exec.mdk:5:28: performs <Exec "ls"> where only <IO> is allowed; `IO` on `wasmgc/node` is <Clock, Env, FileRead, FileWrite, Rand, Stderr, Stdin, Stdout>
+  |
+5 | listDir _ = runCommand "ls" []
+  |                             ^

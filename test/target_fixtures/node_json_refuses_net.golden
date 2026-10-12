@@ -1,0 +1,4 @@
+exit=1
+--- stdout
+{"files":[{"file":"<fixtures>/net_reached.mdk","diagnostics":[{"code":"T-TARGET-CAPABILITY","kind":"type","message":"`main` performs <Net> via `main → lookup`, and the target `wasmgc/node` does not grant Net","range":{"end":{"character":4,"line":6},"start":{"character":0,"line":6}},"severity":1,"source":"medaka"}]}]}
+--- stderr

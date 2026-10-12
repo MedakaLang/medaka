@@ -1,0 +1,4 @@
+exit=1
+--- stdout
+--- stderr
+error: cannot read `[target]` in <fixtures>/profile_not_string/medaka.toml: `profile` is not a string; write a profile name, such as `profile = "wasmgc/node"`
