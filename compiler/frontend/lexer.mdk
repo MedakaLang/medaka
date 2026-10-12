@@ -357,9 +357,11 @@ describeToken (TLexError s) = s
 -- (one per significant source line break, carrying the indentation of the
 -- following line). A second `layout` pass turns those markers into
 -- INDENT/DEDENT/NEWLINE per the OCaml `handle_indent` algorithm.
--- `RComment startPos text` carries a captured comment out-of-band: `startPos`
--- is the source char offset of the opening `--`/`{-`, `text` the full lexeme
--- (including the `--` / `{- … -}` delimiters).  These markers are produced by the comment arms of `scanAt` and
+-- `RComment startPos endPos` carries a captured comment out-of-band: `startPos`
+-- is the source char offset of the opening `--`/`{-`, `endPos` one past its last
+-- char, so the lexeme is `[startPos, endPos)` (delimiters included).  The text
+-- is materialised only by `rawToComments`; `tokenize` never builds it.  These
+-- markers are produced by the comment arms of `scanAt` and
 -- *skipped by the layout pass* (its `RComment` arms are no-ops), so the Token stream the
 -- parser consumes is byte-identical to before — comments are purely a side
 -- channel.  `collectComments` re-reads the raw stream to surface them.
@@ -371,7 +373,7 @@ describeToken (TLexError s) = s
 -- `RNewline col off` carries the offset of the newline char that ended
 -- the preceding line, so synthetic NEWLINE/INDENT/DEDENT tokens inserted by the
 -- layout pass get a source line too.
-data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int String
+data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int Int
 
 -- ── Character classification: ASCII Char -> Bool predicates now live in
 -- support/char.mdk (imported at the top of this module).
@@ -391,8 +393,12 @@ is3 src len pos a b c =
     && at src (pos + 2) == c
 
 substr : Array Char -> Int -> Int -> String
-substr src start endp =
-  stringFromChars (arrayMakeWith (endp - start) (i => at src (start + i)))
+substr src start endp
+  | endp <= start = ""
+  | otherwise =
+    let out = arrayMake (endp - start) (at src start)
+    let _ = arrayBlit src start out 0 (endp - start)
+    stringFromChars out
 
 collectNoUs : Array Char -> Int -> Int -> List Char
 collectNoUs src p endp
@@ -569,13 +575,13 @@ scanAt src len pos depth id c
   | isNL c || isCR c = handleNewline src len pos depth id
   | c == '-' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipLineComment src len pos
-    RComment pos (substr src pos e) :: scan src len e depth id
+    RComment pos e :: scan src len e depth id
   | c == '{' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipBlockComment src len (pos + 2) 1
     if e < 0 then
       lexErrorTok pos "unterminated block comment"
     else
-      RComment pos (substr src pos e) :: scan src len e depth id
+      RComment pos e :: scan src len e depth id
   | isDigit c = scanNumber src len pos depth id
   | isQuote c && isTripleAt src len pos =
     scanTriple src len (pos + 3) pos depth id False ""
@@ -630,7 +636,34 @@ scanLower src len pos depth id =
 identToken : Array Char -> Int -> Int -> Token
 identToken src pos e
   | at src pos == '_' && e - pos == 1 = TUnderscore
-  | otherwise = keywordOrIdent (substr src pos e)
+  | kwCandidate src pos e = keywordOrIdent (substr src pos e)
+  | otherwise = TIdent (substr src pos e)
+
+-- Necessary condition for `keywordOrIdent` to match: every keyword spelling is
+-- 2 to 9 chars and starts with one of the letters below. Identifiers failing it
+-- skip the keyword chain entirely (they still get `TIdent`, as the chain's
+-- fall-through would give). Keep in step with the `keywordOrIdent` clauses.
+kwCandidate : Array Char -> Int -> Int -> Bool
+kwCandidate src pos e =
+  let n = e - pos
+  n >= 2 && n <= 9 && kwStart (at src pos)
+
+kwStart : Char -> Bool
+kwStart 'a' = True
+kwStart 'b' = True
+kwStart 'd' = True
+kwStart 'e' = True
+kwStart 'f' = True
+kwStart 'i' = True
+kwStart 'l' = True
+kwStart 'm' = True
+kwStart 'n' = True
+kwStart 'o' = True
+kwStart 'p' = True
+kwStart 'r' = True
+kwStart 't' = True
+kwStart 'w' = True
+kwStart _ = False
 
 scanUpper : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 scanUpper src len pos depth id =
@@ -954,7 +987,17 @@ scanStr src len p startQ depth id acc
     scanStrEsc src len p startQ depth id acc (at src (p + 1))
   | isBackslash (at src p) = lexErrorTok p "unterminated string literal"
   | otherwise =
-    scanStr src len (p + 1) startQ depth id (acc ++ charToStr (at src p))
+    let q = plainRunEnd src len (p + 1)
+    scanStr src len q startQ depth id (acc ++ substr src p q)
+
+-- The first index at or after `p` holding a quote or a backslash (or `len`).
+-- A string's plain run is copied in one piece, so `acc` is appended once per
+-- escape or run rather than once per character.
+plainRunEnd : Array Char -> Int -> Int -> Int
+plainRunEnd src len p
+  | p >= len = len
+  | isQuote (at src p) || isBackslash (at src p) = p
+  | otherwise = plainRunEnd src len (p + 1)
 
 -- The escape letters shared by string AND character literals: the decoded
 -- content of `\<e>`, or `None` if `<e>` is not one of them. This ONE table is
@@ -1008,7 +1051,8 @@ scanInterpCont src len p depth acc
   | isBackslash (at src p) && p + 1 < len =
     scanInterpEsc src len p depth acc (at src (p + 1))
   | otherwise =
-    scanInterpCont src len (p + 1) depth (acc ++ charToStr (at src p))
+    let q = plainRunEnd src len (p + 1)
+    scanInterpCont src len q depth (acc ++ substr src p q)
 
 scanInterpEsc : Array Char -> Int -> Int -> Int -> String -> Char -> List RawTok
 scanInterpEsc src len p depth acc e
@@ -2649,7 +2693,208 @@ tokenize : String -> List Token
 tokenize s =
   let src = stringToChars s
   let len = arrayLength src
-  map fst (layoutWithOffsets src len)
+  elseFilterToks
+    (layoutToks (dedentTripleInterp (scan src len 0 0 0)) [0] [] TNewline False)
+
+-- `elseFilter` (the offset-carrying form used by `layoutWithOffsets`) with the
+-- offset projection fused in, so `tokenize` builds one list instead of two.
+-- The clauses must stay in step with `elseFilter`.
+elseFilterToks : List Token -> List Token
+elseFilterToks (TNewline :: TElse :: rest) = TElse :: elseFilterToks rest
+elseFilterToks (TNewline :: TThen :: rest) = TThen :: elseFilterToks rest
+elseFilterToks (t :: rest) = t :: elseFilterToks rest
+elseFilterToks [] = []
+
+-- Token-only twin of the `layout` family (no offsets): the same decisions, so
+-- `tokenize` conses each token once instead of as a `(Token, Int)` pair.  Every
+-- clause must stay in step with its `layout` counterpart.  `prev` is a bare
+-- Token, not an `Option`, so no `Some` is allocated per token: `TNewline` plays
+-- `None`.  That is sound because layout never records a TNewline as `prev`, and
+-- canEndExpr / isTrailingContinuationOp / armsHeraldTok all answer for it as they
+-- do for `None`.
+armsHeraldTok : Bool -> Token -> Bool
+armsHeraldTok _ TDo = True
+armsHeraldTok _ TDefer = True
+armsHeraldTok _ TFatArrow = True
+armsHeraldTok opener _ = opener
+
+layoutToks : List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+layoutToks [] stack frames prev opener = closeAllToks stack
+layoutToks ((RTok t _ _) :: rest) stack frames prev opener
+  | bracketOpener t =
+    t
+      :: layoutToks
+        rest
+        stack
+        (BracketFrame 0 (opener || isOpener t) :: frames)
+        t
+        False
+  | bracketCloser t = flushCloseToks t rest stack frames opener
+  | t == TComma && frameHasLive frames = flushSepToks t rest stack frames opener
+  | otherwise = t :: layoutToks rest stack frames t (opener || isOpener t)
+layoutToks ((RComment _ _) :: rest) stack frames prev opener =
+  layoutToks rest stack frames prev opener
+layoutToks ((RNewline col _) :: rest) stack frames prev opener =
+  applyNlToks col rest stack frames prev opener
+
+closeAllToks : List Int -> List Token
+closeAllToks stack = TNewline :: closeDedentsToks stack
+
+closeDedentsToks : List Int -> List Token
+closeDedentsToks [] = [TEof]
+closeDedentsToks [_] = [TEof]
+closeDedentsToks (_ :: tl) = TDedent :: TNewline :: closeDedentsToks tl
+
+flushCloseToks : Token ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+flushCloseToks t rest stack [] opener =
+  t :: layoutToks rest stack [] t (opener || isOpener t)
+flushCloseToks t rest stack ((BracketFrame f saved) :: fs) _ =
+  flushCloseGoToks t rest stack f fs saved
+
+flushCloseGoToks : Token ->
+  List RawTok ->
+  List Int ->
+  Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+flushCloseGoToks t rest [] f fs opener =
+  t :: layoutToks rest [] fs t (opener || isOpener t)
+flushCloseGoToks t rest (top :: tl) f fs opener
+  | f <= 0 = t :: layoutToks rest (top :: tl) fs t (opener || isOpener t)
+  | otherwise =
+    TNewline :: TDedent :: flushCloseGoToks t rest tl (f - 1) fs opener
+
+flushSepToks : Token ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+flushSepToks t rest stack [] opener = t :: layoutToks rest stack [] t opener
+flushSepToks t rest stack ((BracketFrame f saved) :: fs) opener =
+  flushSepGoToks t rest stack f (BracketFrame 0 saved :: fs) opener
+
+flushSepGoToks : Token ->
+  List RawTok ->
+  List Int ->
+  Int ->
+  List BracketFrame ->
+  Bool ->
+  List Token
+flushSepGoToks t rest [] _ frames opener =
+  t :: layoutToks rest [] frames t opener
+flushSepGoToks t rest (top :: tl) f frames opener
+  | f <= 0 = t :: layoutToks rest (top :: tl) frames t opener
+  | otherwise =
+    TNewline :: TDedent :: flushSepGoToks t rest tl (f - 1) frames opener
+
+applyNlToks : Int ->
+  List RawTok ->
+  List Int ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+applyNlToks col rest [] frames prev opener =
+  TNewline :: layoutToks rest [] frames TNewline False
+applyNlToks col rest (top :: tl) frames prev opener =
+  applyNlFrameToks col top (top :: tl) rest frames prev opener
+
+applyNlFrameToks : Int ->
+  Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+applyNlFrameToks col top stack rest [] prev opener =
+  applyNlTopToks col top stack rest [] prev opener
+applyNlFrameToks col top stack rest ((BracketFrame f saved) :: fs) prev opener
+  | f > 0 =
+    applyNlTopToks col top stack rest (BracketFrame f saved :: fs) prev opener
+  | col > top
+    && not (isTrailingContinuationOp prev)
+    && armsHeraldTok opener prev =
+    TIndent
+      :: layoutToks
+        rest
+        (col :: stack)
+        (BracketFrame 1 saved :: fs)
+        TNewline
+        False
+  | otherwise = layoutToks rest stack (BracketFrame f saved :: fs) prev opener
+
+applyNlTopToks : Int ->
+  Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+applyNlTopToks col top stack rest frames prev opener
+  | col > top = wouldIndentToks col stack rest frames prev opener
+  | col == top = TNewline :: layoutToks rest stack frames TNewline False
+  | otherwise = TNewline :: popDedentsToks col stack rest frames
+
+wouldIndentToks : Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+wouldIndentToks col stack rest frames prev opener
+  | isTrailingContinuationOp prev = layoutToks rest stack frames prev opener
+  | opener || not (canEndExpr prev) =
+    TIndent :: layoutToks rest (col :: stack) (bumpFrame frames) TNewline False
+  | otherwise = resolveContToks col stack rest frames prev opener
+
+resolveContToks : Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  Token ->
+  Bool ->
+  List Token
+resolveContToks col stack ((RTok t toff tend) :: more) frames prev opener
+  | canStartAtom t =
+    layoutToks (RTok t toff tend :: more) stack frames prev opener
+  | t == TThen = layoutToks (RTok t toff tend :: more) stack frames prev opener
+  | t == TElse = layoutToks (RTok t toff tend :: more) stack frames prev opener
+  | otherwise =
+    TIndent
+      :: layoutToks
+        (RTok t toff tend :: more)
+        (col :: stack)
+        (bumpFrame frames)
+        TNewline
+        False
+resolveContToks col stack rest frames prev opener =
+  layoutToks rest stack frames TNewline False
+
+popDedentsToks : Int ->
+  List Int ->
+  List RawTok ->
+  List BracketFrame ->
+  List Token
+popDedentsToks col [] rest frames = layoutToks rest [] frames TNewline False
+popDedentsToks col (top :: tl) rest frames
+  | top > col =
+    TDedent :: TNewline :: popDedentsToks col tl rest (dropFrame frames)
+  | otherwise = layoutToks rest (top :: tl) frames TNewline False
 
 -- Tokenize and return each token paired with the 1-based source line of its
 -- char offset.  The position side-channel (`compiler/frontend/parser.mdk`) consults the
@@ -2799,7 +3044,7 @@ posLineColFrom src target p line lineStart
   | at src p == '\n' = posLineColFrom src target (p + 1) (line + 1) (p + 1)
   | otherwise = posLineColFrom src target (p + 1) line lineStart
 
--- Turn each `RComment startPos text` into a `Comment line col text`.
+-- Turn each `RComment startPos endPos` into a `Comment line col text`.
 -- `RComment` tokens arrive in strictly-ascending `startPos` order (scan is a
 -- single left-to-right pass), so a running `(p, line, lineStart)` cursor lets
 -- `posLineColFrom` resume from the previous comment instead of rescanning from
@@ -2812,10 +3057,10 @@ rawToComments src toks = rawToCommentsGo src toks 0 1 0
 
 rawToCommentsGo : Array Char -> List RawTok -> Int -> Int -> Int -> List Comment
 rawToCommentsGo _ [] _ _ _ = []
-rawToCommentsGo src ((RComment startPos text) :: rest) p line lineStart =
+rawToCommentsGo src ((RComment startPos endPos) :: rest) p line lineStart =
   match posLineColFrom src startPos p line lineStart
     (line2, col) =>
-      Comment line2 col text
+      Comment line2 col (substr src startPos endPos)
         :: rawToCommentsGo src rest startPos line2 (startPos - col)
 rawToCommentsGo src (_ :: rest) p line lineStart =
   rawToCommentsGo src rest p line lineStart
