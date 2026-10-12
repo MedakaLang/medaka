@@ -4,11 +4,11 @@ appArgExpr	Expr	2/42
 appArgLoc	Expr	2/42
 appNodeArg	Expr	2/42
 appSpineArgCount	Expr	4/42
-appSpineExpr	Expr	2/42
+appSpineExprGo	Expr	2/42
 appSpineHead	Expr	2/42
 appSpineHeadLoc	Expr	2/42
 appSpineName	Expr	9/42
-appSpineNodes	Expr	2/42
+appSpineNodesGo	Expr	2/42
 argDispatchOfDecl	Decl	2/14
 argDispatchOfDeclById	Decl	2/14
 checkDeclAuthorityUsesDecl	Decl	1/14

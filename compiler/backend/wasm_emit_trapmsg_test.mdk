@@ -1,0 +1,132 @@
+-- Sibling test for `compiler/backend/wasm_emit.mdk`'s coded-trap helpers ([P-TEST-SIBLING]).
+--
+-- Each program is prelude-free, lowered without typechecking, and emitted through
+-- `emitProgramRecord` as `compiler/entries/wasm_emit_modules_main.mdk` does for its
+-- lowered program.  A coded trap writes its stderr line through `$trapmsg_K`
+-- helpers, one per distinct fixed text: each helper body is a run of
+-- `i32.const <byte>` / `call $mdk_write_err_byte` pairs.  The tests decode those
+-- bodies back to text and compare them with the stderr line the language spec
+-- gives, so the expectations are the spec's, not a capture of the emitter.
+
+-- lint-disable-file rule-duplicate-body
+-- `watOf` is also the sibling strseg test's helper, kept local so each test file reads alone.
+
+import test.{Expectation, expectAll, expectAtLeast, expectEqual, labelFail}
+import string.{fromChars, lines, stripPrefix, toInt}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.typecheck.{grantWholeDomain}
+import ir.core_ir_lower.{
+  EmitTarget(..),
+  ctorFieldTypeNames,
+  declSigTypeNames,
+  declaredRecordFieldOrders,
+  lowerProgramEmit,
+}
+import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
+
+-- the emitted WAT of `src`, as the modules entry would print it for that program
+watOf : String -> String
+watOf src =
+  let decls = grantWholeDomain (desugar (parse src))
+  let input =
+    makeWasmEmitInputFull
+      []
+      (declSigTypeNames decls)
+      (ctorFieldTypeNames decls)
+      False
+      False
+      (declaredRecordFieldOrders decls)
+      []
+  let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
+  let (text, _) = emitProgramRecord input cp
+  text
+
+-- the bytes one helper body writes: each `i32.const N` line contributes the byte N
+bodyChars : List String -> List Char
+bodyChars [] = []
+bodyChars (l :: rest) = match stripPrefix "    i32.const " l
+  Some n => match toInt n
+    Some b => match charFromCode b
+      Some c => c :: bodyChars rest
+      None => bodyChars rest
+    None => bodyChars rest
+  None => bodyChars rest
+
+-- (helper number, the text its body writes), in definition order
+helperTexts : String -> List (String, String)
+helperTexts wat = helperScan (lines wat)
+
+helperScan : List String -> List (String, String)
+helperScan [] = []
+helperScan (l :: rest) = match stripPrefix "  (func $trapmsg_" l
+  Some num => (num, fromChars (bodyChars (takeBody rest))) :: helperScan rest
+  None => helperScan rest
+
+-- the lines of one helper body: everything up to its closing `  )`
+takeBody : List String -> List String
+takeBody [] = []
+takeBody (l :: rest) = if l == "  )" then [] else l :: takeBody rest
+
+-- how many call sites name helper `num`
+callSites : String -> String -> Int
+callSites num wat = countCalls num (lines wat)
+
+countCalls : String -> List String -> Int
+countCalls _ [] = 0
+countCalls num (l :: rest) = match stripPrefix "    call $trapmsg_" l
+  Some n => (if n == num then 1 else 0) + countCalls num rest
+  None => countCalls num rest
+
+-- the texts of every helper, in number order
+texts : String -> List String
+texts wat = map snd (helperTexts wat)
+
+nonexhSrc : String
+nonexhSrc =
+  "g : Int -> Int\ng 0 = 1\ng 1 = 2\nh : Int -> Int\nh 0 = 3\nh 1 = 4\nmain = g 0 + h 0"
+
+test "non-exhaustive match: one helper spells the spec line, and each miss site calls it" =
+  let wat = watOf nonexhSrc
+  expectAll [
+    labelFail
+      "one helper per distinct text, with the spec's stderr bytes"
+      (expectEqual
+        [("0", "runtime error [E-NONEXHAUSTIVE-MATCH]: non-exhaustive match\n")]
+        (helperTexts wat)),
+    labelFail
+      "two miss sites, both calling the one helper"
+      (expectAtLeast 2 (callSites "0" wat)),
+  ]
+
+test "panic: the fixed prefix is interned as one helper, the message is streamed at the site" =
+  let wat = watOf "main = panic \"boom\""
+  labelFail
+    "E-PANIC prefix helper"
+    (expectEqual ["runtime error [E-PANIC]: "] (texts wat))
+
+test "division by zero: the spec's line, interned once" =
+  let wat = watOf "dv : Int -> Int -> Int\ndv a b = a / b\nmain = dv 1 0"
+  labelFail
+    "E-DIV-ZERO helper"
+    (expectEqual ["runtime error [E-DIV-ZERO]: division by zero\n"] (texts wat))
+
+test "index out of bounds: the fixed prefix and suffix around the runtime index are interned" =
+  let wat = watOf "main = indexErrorAt 7"
+  labelFail
+    "E-INDEX-OOB fixed ends"
+    (expectEqual
+      ["runtime error [E-INDEX-OOB]: index ", " out of bounds\n"]
+      (texts wat))
+
+test "cyclic value:the constant prefix and suffix are shared helpers, the name is unrolled" =
+  let wat = watOf "f x = a ++ x\na = b\nb = a\nmain = f \"x\""
+  labelFail
+    "E-CYCLIC-VALUE fixed ends"
+    (expectEqual
+      [
+        "runtime error [E-CYCLIC-VALUE]: ",
+        " refers to itself during initialization (non-productive cyclic value)\n",
+      ]
+      (texts wat))
