@@ -493,7 +493,16 @@ gradeSplit _ _ _ _ = []
 -- Runs `body` in a scratch directory made for this call, then removes it.
 inFreshScratch : (String -> <Exec, FileRead, IO> Expectation) ->
   <Exec, FileRead, IO> Expectation
-inFreshScratch body = inFreshDirOf body fail
+inFreshScratch body = match runVerb "mktemp" ["-d"]
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok (0, out, _) =>
+    let scratch = trim out
+    let result = body scratch
+    let _ = runVerb "rm" ["-rf", scratch]
+    result
+  Ok (code, _, err) =>
+    fail
+      "could not make a scratch directory: mktemp -d exited \{intToString code}: \{err}"
 
 {- | Runs `body` in a directory made for this call, removes it, and returns
    what `body` returned. `fromMsg` turns a failure to make the directory into
@@ -586,22 +595,19 @@ gradeLive m grade [] (_ :: rs) =
 
 {- | One stage of a row chain. A row already settled by an earlier stage
    passes through untouched and spawns nothing. Every live row's spawns run as
-   one batch bounded by `secs`, then each live row is graded from its own
-   results. `mismatch` builds the failure a row gets when its batch answer is
-   missing. -}
+   one batch through `spawn` (a `spawnEach` the caller has applied to its
+   bound and spawn list, so the caller's own code names the spawn it grades),
+   then each live row is graded from its own results. `mismatch` builds the
+   failure a row gets when its batch answer is missing. -}
 export
-stageRun : Int ->
-  (s -> List (String, List String)) ->
+stageRun : (List s -> <Exec, IO> List (List (Result String (Int, String, String)))) ->
   (String -> e) ->
   (s -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> Result e t) ->
   List (Result e s) ->
   <Exec, FileRead, IO> List (Result e t)
-stageRun secs spawnsOf mismatch grade states =
+stageRun spawn mismatch grade states =
   let live = somes (map liveOf states)
-  mergeStage
-    mismatch
-    states
-    (gradeLive mismatch grade live (spawnEach secs spawnsOf live))
+  mergeStage mismatch states (gradeLive mismatch grade live (spawn live))
 
 {- | Pairs each `Ok` state with the next graded result, and keeps each `Err`
    state as it is. A state left without a graded result is a failure row. -}

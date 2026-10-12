@@ -116,7 +116,7 @@
    feeds all three; the failure message names which axis each row failed on,
    so an emitter-verdict regression is legible on its own. -}
 
-import compiler_cli_test_support.{emitterBin, inFreshDirOf, stageRun}
+import compiler_cli_test_support.{emitterBin, inFreshDirOf, spawnEach, stageRun}
 import fs.{fixtureDirs, fixtureFiles, mkdirAll}
 import io.{runVerb}
 import list.{
@@ -290,12 +290,11 @@ inTreeRow root emitter cmd args =
 -- One stage of an ordering's chain, its live spawns bounded by `perSpawnSeconds`.
 -- An ordering already settled by an earlier stage passes through and spawns
 -- nothing; the live ones spawn as one batch.
-stage : (s -> List (String, List String)) ->
+stage : (List s -> <Exec, IO> List (List (Result String (Int, String, String)))) ->
   (s -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> Result String t) ->
   List (Result String s) ->
   <Exec, FileRead, IO> List (Result String t)
-stage spawnsOf grade states =
-  stageRun perSpawnSeconds spawnsOf (msg => msg) grade states
+stage spawn grade states = stageRun spawn (msg => msg) grade states
 
 -- What one ordering has observed so far. Each stage fills in its own fields.
 data Work = Work {
@@ -434,24 +433,35 @@ runWorks works =
   let emitter = emitterBin
   let s1 =
     stage
-      (w => [inTreeRow root emitter bin ["check", "--json", workPathOf w]])
+      (spawnEach perSpawnSeconds (w => [
+        inTreeRow root emitter bin ["check", "--json", workPathOf w],
+      ]))
       gradeJson
       works
   let s2 =
     stage
-      (w => [inTreeRow root emitter bin ["check", workPathOf w]])
+      (spawnEach perSpawnSeconds (w => [
+        inTreeRow root emitter bin ["check", workPathOf w],
+      ]))
       gradeCheck
       s1
   let s3 =
-    stage (w => [inTreeRow root emitter bin ["run", workPathOf w]]) gradeRun s2
+    stage
+      (spawnEach perSpawnSeconds (w => [
+        inTreeRow root emitter bin ["run", workPathOf w],
+      ]))
+      gradeRun
+      s2
   let s4 =
     stage
-      (w =>
-        [inTreeRow root emitter bin ["build", workPathOf w, "-o", workBinOf w]])
+      (spawnEach perSpawnSeconds (w => [
+        inTreeRow root emitter bin ["build", workPathOf w, "-o", workBinOf w],
+      ]))
       gradeBuild
       s3
-  let s5 = stage (execSpawns root emitter) gradeExec s4
-  stage (emitSpawns root emitter) gradeEmitted s5
+  let s5 =
+    stage (spawnEach perSpawnSeconds (execSpawns root emitter)) gradeExec s4
+  stage (spawnEach perSpawnSeconds (emitSpawns root emitter)) gradeEmitted s5
 
 -- The `check=` cell of a signature, which is what the emitter-verdict
 -- classification is computed against.

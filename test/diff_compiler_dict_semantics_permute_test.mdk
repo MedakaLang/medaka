@@ -31,7 +31,7 @@
 -}
 
 import compiler_cli_test_support.{
-  finalOf, freshDirFor, labelGrades, okDir, stageRun
+  finalOf, freshDirFor, labelGrades, okDir, spawnEach, stageRun
 }
 import fs.{fixtureFiles}
 import io.{runVerb}
@@ -264,19 +264,20 @@ gradeCheck : Row ->
   Result Expectation Row
 gradeCheck r [oR, pR] = match oR
   Err e => Err (fail "could not spawn check on \{r.rowOrig}: \{e}")
-  Ok (oc, oo, oe) =>
-    if launchFail oc then
+  Ok (oCode, oo, oe) =>
+    if launchFail oCode then
       Err
-        (fail "check could not launch on \{r.rowOrig}: exit \{intToString oc}")
+        (fail
+          "check could not launch on \{r.rowOrig}: exit \{intToString oCode}")
     else match pR
       Err e => Err (fail "could not spawn check on \{r.rowPerm}: \{e}")
-      Ok (pc, po, pe) =>
-        if launchFail pc then
+      Ok (pCode, po, pe) =>
+        if launchFail pCode then
           Err
             (fail
-              "check could not launch on \{r.rowPerm}: exit \{intToString pc}")
+              "check could not launch on \{r.rowPerm}: exit \{intToString pCode}")
         else
-          verdictGate r (checkVerdict oc (oo ++ oe) pc (po ++ pe))
+          verdictGate r (checkVerdict oCode (oo ++ oe) pCode (po ++ pe))
 gradeCheck _ _ =
   Err (fail "internal: a row was not answered by its two check spawns")
 
@@ -293,22 +294,23 @@ gradeRun : Row ->
   Result Expectation RunRec
 gradeRun r [oR, pR] = match oR
   Err e => Err (fail "could not spawn run on \{r.rowOrig}: \{e}")
-  Ok (oc, oo, _) =>
-    if launchFail oc then
-      Err (fail "run could not launch on \{r.rowOrig}: exit \{intToString oc}")
+  Ok (oCode, oo, _) =>
+    if launchFail oCode then
+      Err
+        (fail "run could not launch on \{r.rowOrig}: exit \{intToString oCode}")
     else match pR
       Err e => Err (fail "could not spawn run on \{r.rowPerm}: \{e}")
-      Ok (pc, po, _) =>
-        if launchFail pc then
+      Ok (pCode, po, _) =>
+        if launchFail pCode then
           Err
             (fail
-              "run could not launch on \{r.rowPerm}: exit \{intToString pc}")
+              "run could not launch on \{r.rowPerm}: exit \{intToString pCode}")
         else
           Ok RunRec {
             runRow = r,
-            runOrc = oc,
+            runOrc = oCode,
             runOro = oo,
-            runPrc = pc,
+            runPrc = pCode,
             runPro = po,
           }
 gradeRun _ _ =
@@ -330,20 +332,20 @@ gradeBuild s [oR, pR] =
   let r = s.runRow
   match oR
     Err e => Err (fail "could not spawn build on \{r.rowOrig}: \{e}")
-    Ok (ob, _, _) =>
-      if launchFail ob then
+    Ok (oCode, _, _) =>
+      if launchFail oCode then
         Err
           (fail
-            "build could not launch on \{r.rowOrig}: exit \{intToString ob}")
+            "build could not launch on \{r.rowOrig}: exit \{intToString oCode}")
       else match pR
         Err e => Err (fail "could not spawn build on \{r.rowPerm}: \{e}")
-        Ok (pb, _, _) =>
-          if launchFail pb then
+        Ok (pCode, _, _) =>
+          if launchFail pCode then
             Err
               (fail
-                "build could not launch on \{r.rowPerm}: exit \{intToString pb}")
+                "build could not launch on \{r.rowPerm}: exit \{intToString pCode}")
           else
-            Ok BuildRec { buildRun = s, buildOb = ob, buildPb = pb }
+            Ok BuildRec { buildRun = s, buildOb = oCode, buildPb = pCode }
 gradeBuild _ _ =
   Err (fail "internal: a row was not answered by its two build spawns")
 
@@ -363,20 +365,20 @@ gradeTest b [oR, pR] =
   let r = b.buildRun.runRow
   match oR
     Err e => Err (fail "could not test -x \{origBinOf r}: \{e}")
-    Ok (oxc, _, _) =>
-      if launchFail oxc then
+    Ok (oCode, _, _) =>
+      if launchFail oCode then
         Err
           (fail
-            "test -x could not launch on \{origBinOf r}: exit \{intToString oxc}")
+            "test -x could not launch on \{origBinOf r}: exit \{intToString oCode}")
       else match pR
         Err e => Err (fail "could not test -x \{permBinOf r}: \{e}")
-        Ok (pxc, _, _) =>
-          if launchFail pxc then
+        Ok (pCode, _, _) =>
+          if launchFail pCode then
             Err
               (fail
-                "test -x could not launch on \{permBinOf r}: exit \{intToString pxc}")
+                "test -x could not launch on \{permBinOf r}: exit \{intToString pCode}")
           else
-            Ok TestRec { testBuild = b, testOxc = oxc, testPxc = pxc }
+            Ok TestRec { testBuild = b, testOxc = oCode, testPxc = pCode }
 gradeTest _ _ =
   Err (fail "internal: a row was not answered by its two test -x spawns")
 
@@ -432,11 +434,22 @@ runGroup : String ->
   List (Result Expectation Row) ->
   <Exec, FileRead, IO> List Expectation
 runGroup bin rows =
-  let s1 = stageRun spawnTimeoutSeconds (checkSpawns bin) fail gradeCheck rows
-  let s2 = stageRun spawnTimeoutSeconds (runSpawns bin) fail gradeRun s1
-  let s3 = stageRun spawnTimeoutSeconds (buildSpawns bin) fail gradeBuild s2
-  let s4 = stageRun spawnTimeoutSeconds testSpawns fail gradeTest s3
-  let s5 = stageRun spawnTimeoutSeconds binSpawns fail gradeBins s4
+  let s1 =
+    stageRun
+      (spawnEach spawnTimeoutSeconds (checkSpawns bin))
+      fail
+      gradeCheck
+      rows
+  let s2 =
+    stageRun (spawnEach spawnTimeoutSeconds (runSpawns bin)) fail gradeRun s1
+  let s3 =
+    stageRun
+      (spawnEach spawnTimeoutSeconds (buildSpawns bin))
+      fail
+      gradeBuild
+      s2
+  let s4 = stageRun (spawnEach spawnTimeoutSeconds testSpawns) fail gradeTest s3
+  let s5 = stageRun (spawnEach spawnTimeoutSeconds binSpawns) fail gradeBins s4
   map finalOf s5
 
 rowLabel : (String, String) -> String
