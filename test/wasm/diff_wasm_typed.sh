@@ -1562,7 +1562,7 @@ if grep -F '$mdk_hash_mix64' "$INPUT_WORK/feature-u.wat" >/dev/null ||
   exit 1
 fi
 ! grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
-  grep -F '(func $featureFloatDiv (param $u____wparg0 (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
+  grep -F '(func $featureFloatDiv (param $x (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
   grep -F 'f64.div' "$INPUT_WORK/feature-float-div.wat" >/dev/null || {
   echo "FAIL H2B9-DIV-FLOAT: Float-only division declared the Int divisor local, or lost its f64.div shape"
   exit 1

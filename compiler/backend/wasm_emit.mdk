@@ -4091,7 +4091,7 @@ emitRefFnBind prog (CBind name clauses bindLoc) =
   let _ =
     setRef (progEmit prog).numPolyLocals (numPolyParamNames prog name clauses)
   let arity = clauseArityOf clauses
-  let params = synthParams arity
+  let params = clauseParamNames clauses arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
   -- reset-wrapper (root) / inner-loop or redirected-leaf member path.  The group takes
   -- PRECEDENCE over Stage-1: a group root like the lexer's `layout` is Stage-1-eligible
@@ -4164,6 +4164,37 @@ emitRefFnBind prog (CBind name clauses bindLoc) =
 synthParams : Int -> List String
 synthParams n = map (i => "__wparg" ++ intToString i) (rangeList 0 n)
 
+-- wasm param names for a clause group.  A single clause whose params are all plain and
+-- whose body has no guard fallthrough takes the fast path (emitClausesRefEnv and the
+-- TRMC loop): a PVar param is named by its source variable, so the body reads the wasm
+-- param directly and no `local.get $__wparg<i>; local.set $x` copy is emitted.  The
+-- source name is kept only when it is not `__`-prefixed (scratch locals), is bound once
+-- in the head, and is not bound again by a local of the body (a shadowing binder would
+-- otherwise share the param's own wasm local).  Every other param keeps its positional
+-- `__wparg<i>` name (a PWild, a shadowed name, or any param of a multi-clause group).
+clauseParamNames : List CClause -> Int -> List String
+clauseParamNames [CClause pats body] arity =
+  if allPlainParams pats && not (exprHasFallthrough body) then
+    headParamNames pats (flatMap patVars pats) (collectExprLocals body) 0
+  else
+    synthParams arity
+clauseParamNames _ arity = synthParams arity
+
+headParamNames : List Pat -> List String -> List String -> Int -> List String
+headParamNames [] _ _ _ = []
+headParamNames (p :: ps) bound inner i =
+  let name = "__wparg" ++ intToString i
+  let chosen = match p
+    PVar x _ =>
+      if startsWith "__" x
+        || listLen (filterList (== x) bound) /= 1
+        || contains x inner then
+        name
+      else
+        x
+    _ => name
+  chosen :: headParamNames ps bound inner (i + 1)
+
 -- emit the clause chain.  Single all-PVar clause: rename its params to the synthetic
 -- positions (so the body env binds them) and tail-emit.  Otherwise: a fallthrough
 -- chain of guarded blocks.
@@ -4225,15 +4256,17 @@ stmtHasFallthrough (CSExpr e) = exprHasFallthrough e
 stmtHasFallthrough (CSLet _ _ e) = exprHasFallthrough e
 stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 
--- when the single clause's params are plain PVars, alias each to the synthetic
--- positional wasm param ($a<i>): `local.get $a<i>; local.set $<srcname>`.  (The
+-- when the single clause's params are plain PVars, alias each to its wasm param:
+-- `local.get $<param>; local.set $<srcname>`.  A PVar already named by its source
+-- variable (clauseParamNames) IS its own wasm param, so no copy is emitted.  (The
 -- source names are declared as locals via clauseLocals.)
 bindParamAliases : Prog -> List Pat -> List String -> List String
 bindParamAliases prog pats params =
   flatMap (aliasOne prog) (zipPats pats params)
 
 aliasOne : Prog -> (Pat, String) -> List String
-aliasOne _ (PVar x _, a) = ["local.get $" ++ gname a, "local.set $" ++ gname x]
+aliasOne _ (PVar x _, a) =
+  if x == a then [] else ["local.get $" ++ gname a, "local.set $" ++ gname x]
 aliasOne _ (PWild, _) = []
 aliasOne prog _ = gapLP prog "ref-mode: non-plain param in fast-path alias"
 
@@ -8772,7 +8805,7 @@ emitWasmTrmcCore : Prog ->
   List (String, Int) ->
   List String
 emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
-  let params = synthParams arity
+  let params = clauseParamNames clauses arity
   let pslots = map gname params
   let loopLbl = "$tmcloop"
   let exitLbl = "$tmcexit"
@@ -9968,7 +10001,7 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc) =
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let _ = noteFuncRef (progEmit prog) lamName
   let arity = clauseArityOf clauses
-  let params = synthParams arity
+  let params = clauseParamNames clauses arity
   let w7Outer = w7ScopeOpen (progEmit prog)
   let capPrologue = flatMap capLoadAt (zipIdx groupCaps 0)
   let memberRebuilds = liftedMemberRebuilds prog gid groupCaps binds

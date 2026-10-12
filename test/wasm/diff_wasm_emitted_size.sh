@@ -122,7 +122,11 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    string-literal segments: one `(data $strseg_N)` per distinct payload, shared
 #    by every site that spells those bytes.  Funcs, the F1 ratio and the unit-kept
 #    ratio are unchanged (6109, 4024, 2693/23199).
-MODULES_BYTES_CEIL=2843854
+#    Re-baselined to the measured 2832707 B, with no headroom, for the source-named
+#    wasm params of single all-PVar clauses (no `local.get $__wparg<i>; local.set $x`
+#    copy); the 11147 B fall is the removed copy pairs at about 4 bytes each.
+#    Funcs, the F1 ratio and the unit-kept ratio are unchanged.
+MODULES_BYTES_CEIL=2832707
 MODULES_FUNCS_CEIL=6109
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
@@ -140,7 +144,7 @@ TYPED_FUNCS_CEIL=145
 # when they're actually fixtures dropping out). A gap appearing at all here is
 # itself the regression signal this gate exists to catch.
 MODULES_OK_EXACT=60
-PLAIN_OK_EXACT=167
+PLAIN_OK_EXACT=168
 TYPED_OK_EXACT=9
 
 # ── F1's wasm-opt-derived function-count floor (F2/S2-4) ───────────────────

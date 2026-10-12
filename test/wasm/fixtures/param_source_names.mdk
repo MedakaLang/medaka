@@ -1,0 +1,38 @@
+-- Parameters named by their source variables (no positional alias copy).  Each value
+-- below is derived from the language spec, not from the emitter, and main prints
+-- `true` when every one of them holds:
+--   shadowLam 4        = (x => x * 2) 3 + 4     = 10   (lambda x shadows param x)
+--   unwrapPlus 3 Some9 = 9 + 1000               = 1009 (match binder x shadows param x)
+--   unwrapPlus 3 None  = 3                      = 3
+--   adder 10 5         = 5 + 10                 = 15   (closure captures param n)
+--   second 1 21        = 21 * 2                 = 42   (wildcard beside a PVar)
+--   countTo (spaced 1 200000 2) 0               = 100000 (TRMC over three params, deep)
+
+shadowLam : Int -> Int
+shadowLam x = (let f = (x => x * 2) in f 3) + x
+
+unwrapPlus : Int -> Option Int -> Int
+unwrapPlus x o = match o
+  Some x => x + 1000
+  None => x
+
+adder : Int -> (Int -> Int)
+adder n = (k => k + n)
+
+second : Int -> Int -> Int
+second _ b = b * 2
+
+spaced : Int -> Int -> Int -> List Int
+spaced lo hi step = if lo > hi then [] else lo :: spaced (lo + step) hi step
+
+countTo : List Int -> Int -> Int
+countTo [] n = n
+countTo (_ :: t) n = countTo t (n + 1)
+
+main =
+  shadowLam 4 == 10
+    && unwrapPlus 3 (Some 9) == 1009
+    && unwrapPlus 3 None == 3
+    && adder 10 5 == 15
+    && second 1 21 == 42
+    && countTo (spaced 1 200000 2) 0 == 100000

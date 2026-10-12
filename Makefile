@@ -200,6 +200,11 @@ inlang-backend-core-validate-test:
 inlang-backend-wasm-emit-trapmsg-test:
 	./medaka test compiler/backend/wasm_emit_trapmsg_test.mdk
 
+## Source-named wasm params of wasm_emit.mdk: a single all-PVar clause binds no
+## `__wparg` copy; multi-clause and wildcard params stay positional.
+inlang-backend-wasm-emit-paramname-test:
+	./medaka test compiler/backend/wasm_emit_paramname_test.mdk
+
 ## String-literal segments of wasm_emit.mdk: one `(data $strseg_N)` per distinct
 ## payload, shared by every site that spells the same bytes.
 inlang-backend-wasm-emit-strseg-test:
