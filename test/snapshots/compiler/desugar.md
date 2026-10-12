@@ -1,5 +1,5 @@
 # META
-source_lines=1290
+source_lines=1291
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -1179,6 +1179,7 @@ desugarIn mid prog =
 binderOrdinalRef : Ref Int
 binderOrdinalRef = Ref 0
 
+export
 freshBinderId : String -> BinderId
 freshBinderId mid =
   let n = !binderOrdinalRef
@@ -1714,7 +1715,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))
 (DTypeSig false "binderOrdinalRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "binderOrdinalRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
-(DTypeSig false "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))
+(DTypeSig true "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))
 (DFunDef false "freshBinderId" ((PVar "mid")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "binderOrdinalRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "binderOrdinalRef")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "mid")) (EVar "n")))))
 (DTypeSig false "stampBinderIds" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampBinderIds" ((PVar "mid") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "stampDecl") (EVar "mid"))) (EVar "prog")))
@@ -2192,7 +2193,7 @@ stampRecField mid (RecPatField l loc _ (Some p)) =
 (DFunDef false "desugarIn" ((PVar "mid") (PVar "prog")) (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EBinOp "|>" (EApp (EVar "qualifyAliasRefs") (EVar "prog")) (EVar "mergeIfaceDefaults")) (EApp (EVar "concatMapDecl") (EVar "expandDecl"))) (EVar "desugarRecordPuns")) (EVar "lowerContainerLiterals")) (EApp (EVar "mapProg") (EVar "rewriteDo"))) (EApp (EVar "mapProg") (EVar "rewriteAssignIndex"))) (EApp (EVar "mapProg") (EVar "rewriteSugar"))) (EApp (EVar "stampBinderIds") (EVar "mid"))))
 (DTypeSig false "binderOrdinalRef" (TyApp (TyCon "Ref") (TyCon "Int")))
 (DFunDef false "binderOrdinalRef" () (EApp (EVar "Ref") (ELit (LInt 0))))
-(DTypeSig false "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))
+(DTypeSig true "freshBinderId" (TyFun (TyCon "String") (TyCon "BinderId")))
 (DFunDef false "freshBinderId" ((PVar "mid")) (EBlock (DoLet false false (PVar "n") (EUnOp "!" (EVar "binderOrdinalRef"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "binderOrdinalRef")) (EBinOp "+" (EVar "n") (ELit (LInt 1))))) (DoExpr (EApp (EApp (EVar "BinderId") (EVar "mid")) (EVar "n")))))
 (DTypeSig false "stampBinderIds" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "stampBinderIds" ((PVar "mid") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "stampDecl") (EVar "mid"))) (EVar "prog")))

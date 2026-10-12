@@ -46,6 +46,15 @@
 -- default sexp printer drops an `RKey`'s prerequisite and super routes, so a
 -- program parsed back from a dump would be refused.
 --
+-- The binder-stamp check: every binder pattern in the program (a `PVar`, a `PAs`,
+-- a record-pattern pun) has a row in the program's binder table
+-- (`DeclFacts.factBinders`), so it says what it holds at run time.  A `let` of a
+-- literal, a tuple, a list or a constructor is held to what its own right-hand
+-- side is: a binder stamped as another scalar than the literal's, or as a scalar
+-- where a cell is bound, is refused.  `RTValue` is the answer "no static fact" and
+-- contradicts nothing; an integer literal may be stamped as any numeric type,
+-- because it is written the same at each.
+--
 -- The extern check: a runtime extern whose catalog row gives the backend no
 -- lowering (`NotProvided`) is refused wherever the program references it
 -- freely.  A reference is free when no local binder in scope and no top-level
@@ -70,8 +79,13 @@ import ir.core_ir.{
   DeclFacts(..),
   CallMode(..),
   CallSite(..),
+  noDeclFacts,
   givenNames,
+  mapProgramBinders,
+  litRuntimeType,
 }
+import types.runtime_types.{BinderRow(..), RuntimeType(..), runtimeTypeName}
+import map as BM
 import ir.core_ir_lower.{
   ArityEnv,
   CallScope,
@@ -88,7 +102,9 @@ import ir.core_ir_lower.{
   leadingDictParams,
 }
 import ir.core_ir_sexp.{callModeSexp}
-import frontend.ast.{Pat(..), Route(..), Decl(..), Ty(..)}
+import frontend.ast.{
+  Pat(..), Route(..), Decl(..), Ty(..), Lit(..), BinderId(..)
+}
 import types.target_profile.{TargetProfile, withheldLabels, profileName}
 import backend.extern_catalog.{
   Disposition(..),
@@ -987,3 +1003,127 @@ tailStmt : String -> CStmt -> List String -> List String
 tailStmt b (CSExpr e) acc = tailE b False e acc
 tailStmt b (CSLet _ _ e) acc = tailE b False e acc
 tailStmt b (CSAssign _ e) acc = tailE b False e acc
+
+-- ── binder stamps ─────────────────────────────────────────────────────────────
+-- One line per binder with no row, and per binder stamped against the literal,
+-- tuple, list or constructor it is bound to, in program order.
+export
+validateBinderStamps : CProgram -> List String
+validateBinderStamps (CProgram groups ctorArs ctorTypes impls _ facts) =
+  let rows = BM.fromList (map (r => (rowOrdinal r, r)) facts.factBinders)
+  let ctors = omFromPairs ctorTypes omEmpty
+  let arities = omFromPairs ctorArs omEmpty
+  flatMap (bindStampFaults rows ctors arities) groups
+    ++ flatMap (entryStampFaults rows ctors arities) impls
+
+rowOrdinal : BinderRow -> Int
+rowOrdinal row = match row.brId
+  BinderId _ n => n
+
+bindStampFaults : BM.Map Int BinderRow ->
+  OrdMap String ->
+  OrdMap Int ->
+  CBind ->
+  List String
+bindStampFaults rows ctors arities (b@(CBind name _ _)) =
+  stampFaultsIn rows ctors arities name (CProgram [b] [] [] [] [] noDeclFacts)
+
+entryStampFaults : BM.Map Int BinderRow ->
+  OrdMap String ->
+  OrdMap Int ->
+  CImplEntry ->
+  List String
+entryStampFaults rows ctors arities (e@(CImplEntry method _ _ body)) =
+  stampFaultsIn
+    rows
+    ctors
+    arities
+    "impl \{method}@\{implBodyTag body}"
+    (CProgram [] [] [] [e] [] noDeclFacts)
+
+stampFaultsIn : BM.Map Int BinderRow ->
+  OrdMap String ->
+  OrdMap Int ->
+  String ->
+  CProgram ->
+  List String
+stampFaultsIn rows ctors arities where_ prog =
+  let found = Ref []
+  let _ =
+    mapProgramBinders
+      (rhs x bid =>
+        let _ = match stampFault rows ctors arities rhs x bid
+          Some msg => found := "binder: \{msg} [in \{where_}]" :: !found
+          None => ()
+        bid)
+      prog
+  reverseL !found
+
+stampFault : BM.Map Int BinderRow ->
+  OrdMap String ->
+  OrdMap Int ->
+  Option CExpr ->
+  String ->
+  BinderId ->
+  Option String
+stampFault rows ctors arities rhs x (BinderId _ n) =
+  if n < 0 then
+    Some "\{x} has no id, so no stamped type"
+  else match BM.get n rows
+    None => Some "\{x} has no stamped type"
+    Some row => match rhs
+      None => None
+      Some e => match boundShape ctors arities e
+        None => None
+        Some shape =>
+          if stampAllows shape row.brType then
+            None
+          else
+            Some
+              "\{x} is stamped \{runtimeTypeName row.brType} but is bound to \{shapeName shape}"
+
+-- What a `let` right-hand side is, where that fixes what its binder holds.
+data BoundShape = BoundLit RuntimeType | BoundInt | BoundCell
+
+boundShape : OrdMap String -> OrdMap Int -> CExpr -> Option BoundShape
+boundShape _ _ (CLit (LInt _)) = Some BoundInt
+boundShape _ _ (CLit l) = Some (BoundLit (litRuntimeType l))
+boundShape _ _ (CTuple _) = Some BoundCell
+boundShape _ _ (CList _) = Some BoundCell
+boundShape ctors arities (CVar c _) = ctorShape ctors arities c 0
+boundShape ctors arities (CApp (CVar c _) args _) =
+  ctorShape ctors arities c (listLen args)
+boundShape _ _ _ = None
+
+-- A constructor of a type other than `Bool` and `Unit`, applied to all its fields.
+ctorShape : OrdMap String -> OrdMap Int -> String -> Int -> Option BoundShape
+ctorShape ctors arities c n = match (omLookup c arities, omLookup c ctors)
+  (Some k, Some ty) =>
+    if k == n && ty /= "Bool" && ty /= "Unit" then Some BoundCell else None
+  _ => None
+
+stampAllows : BoundShape -> RuntimeType -> Bool
+stampAllows _ RTValue = True
+stampAllows (BoundLit t) stamped = t == stamped
+stampAllows BoundInt stamped = isNumericRuntimeType stamped
+stampAllows BoundCell stamped = stamped == RTCon
+
+isNumericRuntimeType : RuntimeType -> Bool
+isNumericRuntimeType RTInt = True
+isNumericRuntimeType RTFloat = True
+isNumericRuntimeType RTU64 = True
+isNumericRuntimeType RTI64 = True
+isNumericRuntimeType RTU32 = True
+isNumericRuntimeType RTI32 = True
+isNumericRuntimeType RTU16 = True
+isNumericRuntimeType RTU8 = True
+isNumericRuntimeType _ = False
+
+shapeName : BoundShape -> String
+shapeName (BoundLit t) = "a \{runtimeTypeName t} literal"
+shapeName BoundInt = "an integer literal"
+shapeName BoundCell = "a constructor cell"
+
+export
+renderBinderRefusal : List String -> String
+renderBinderRefusal bad = joinWith "\n" bad
