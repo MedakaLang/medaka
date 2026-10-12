@@ -360,7 +360,7 @@ describeToken (TLexError s) = s
 -- `RComment startPos text` carries a captured comment out-of-band: `startPos`
 -- is the source char offset of the opening `--`/`{-`, `text` the full lexeme
 -- (including the `--` / `{- … -}` delimiters).  These markers are produced by the comment arms of `scanAt` and
--- *stripped before the layout pass* (`stripComments`), so the Token stream the
+-- *skipped by the layout pass* (its `RComment` arms are no-ops), so the Token stream the
 -- parser consumes is byte-identical to before — comments are purely a side
 -- channel.  `collectComments` re-reads the raw stream to surface them.
 -- `RTok tok startOff endOff` carries the source char offsets of the token's
@@ -1407,14 +1407,28 @@ substituteOwn [] (t :: rest) = t :: substituteOwn [] rest
 
 -- Top-level pass: rewrite every triple-quoted interpolation group's segments
 -- to their jointly-dedented values; every other token passes through as-is.
+-- A stream with no triple-quoted interpolation is returned unchanged without
+-- being rebuilt (the scan is non-allocating).
 dedentTripleInterp : List RawTok -> List RawTok
-dedentTripleInterp [] = []
-dedentTripleInterp ((RTok (TInterpOpen s) so eo) :: rest)
+dedentTripleInterp toks
+  | hasTripleInterpOpen toks = dedentTripleGo toks
+  | otherwise = toks
+
+hasTripleInterpOpen : List RawTok -> Bool
+hasTripleInterpOpen [] = False
+hasTripleInterpOpen ((RTok (TInterpOpen s) _ _) :: rest)
+  | hasTripleInterpMark s = True
+  | otherwise = hasTripleInterpOpen rest
+hasTripleInterpOpen (_ :: rest) = hasTripleInterpOpen rest
+
+dedentTripleGo : List RawTok -> List RawTok
+dedentTripleGo [] = []
+dedentTripleGo ((RTok (TInterpOpen s) so eo) :: rest)
   | hasTripleInterpMark s =
     let sReal = dropTripleInterpMark s
     let (rawSegs, midToks, afterEnd) = splitInterpGroup rest
     dedentTripleGroup sReal so eo rawSegs midToks afterEnd
-dedentTripleInterp (t :: rest) = t :: dedentTripleInterp rest
+dedentTripleGo (t :: rest) = t :: dedentTripleGo rest
 
 dedentTripleGroup : String ->
   Int ->
@@ -1430,11 +1444,10 @@ dedentTripleGroup sReal so eo rawSegs midToks afterEnd
     match dedentGroupSegs minInd allRaw
       openStr' :: restVals =>
         RTok (TInterpOpen openStr') so eo
-          :: substituteOwn restVals midToks ++ dedentTripleInterp afterEnd
-      [] =>
-        RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleInterp afterEnd
+          :: substituteOwn restVals midToks ++ dedentTripleGo afterEnd
+      [] => RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleGo afterEnd
   | otherwise =
-    RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleInterp afterEnd
+    RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleGo afterEnd
 
 concatAll : List String -> String
 concatAll [] = ""
@@ -2394,24 +2407,15 @@ elseFilter ((TNewline, _) :: (TThen, eoff) :: rest) =
 elseFilter (t :: rest) = t :: elseFilter rest
 elseFilter [] = []
 
--- Drop the out-of-band `RComment` markers before the layout pass, so the Token
--- stream the parser consumes is byte-identical regardless of comment capture.
-stripComments : List RawTok -> List RawTok
-stripComments [] = []
-stripComments ((RComment _ _) :: rest) = stripComments rest
-stripComments (r :: rest) = r :: stripComments rest
-
 -- The layout pass over the raw stream, carrying offsets.  Shared by `tokenize`
 -- (which drops offsets) and `tokenizeWithOffsets` (the position side-channel).
+-- `RComment` markers pass through untouched: `layout` treats them as no-ops, and
+-- no lookahead in layout can reach one (a comment never directly follows an
+-- `RNewline`; `afterNl` suppresses the newline before a comment line).
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 layoutWithOffsets src len =
   elseFilter
-    (layout
-      (stripComments (dedentTripleInterp (scan src len 0 0 0)))
-      [0]
-      []
-      None
-      False)
+    (layout (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
 
 -- Layout variant that threads both START and END offsets per token, used by
 -- `tokenizeWithOffsetPairs`.  Real tokens carry their RTok start+end; synthetic
@@ -2638,12 +2642,7 @@ elseFilterPairs [] = []
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsetPairs src len =
   elseFilterPairs
-    (layoutPairs
-      (stripComments (dedentTripleInterp (scan src len 0 0 0)))
-      [0]
-      []
-      None
-      False)
+    (layoutPairs (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
 
 export
 tokenize : String -> List Token
@@ -2750,6 +2749,7 @@ lineStartSearch arr off lo hi
 -- synthetic tail tokens all share the EOF offset, which is monotone) to 1-based
 -- source lines in a single left-to-right walk over the source, mirroring
 -- `posToLineCol`'s amortized-linear strategy for comments.
+export
 offsetsToLines : Array Char -> List Int -> List Int
 offsetsToLines src offs = offsetsToLinesGo src offs 0 1
 
@@ -2773,8 +2773,8 @@ advanceLine src target p line
 -- lexeme text (the `--…` / `{- … -}`, delimiters included).  Surfaced in
 -- SOURCE ORDER.
 -- `format_program`/the comment-preserving printer consume this
--- list keyed by position; the parser is unaffected (comments are stripped
--- before layout — see `stripComments`).
+-- list keyed by position; the parser is unaffected (the layout pass skips
+-- comment markers — see `layout`).
 export data Comment = Comment Int Int String
 
 export

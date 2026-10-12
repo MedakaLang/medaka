@@ -218,6 +218,11 @@ inlang-backend-llvm-emit-tail-call-test:
 inlang-backend-llvm-emit-tail-call-test-o2: | inlang-backend-llvm-emit-tail-call-test
 	MEDAKA_TEST_CLANG_OPT=-O2 ./medaka test --native compiler/backend/llvm_emit_tail_call_test.mdk
 
+## Char comparisons inline as tagged-word compares (RScalar "Char", #2356 family).
+## Native-only: the claim is about the emitted icmp.
+inlang-backend-llvm-emit-char-cmp-test:
+	./medaka test --native compiler/backend/llvm_emit_char_cmp_test.mdk
+
 ## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 ## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 ## else runs this file's doctests — no gate script invokes `medaka test` on

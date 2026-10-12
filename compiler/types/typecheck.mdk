@@ -29428,6 +29428,8 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
       && (tag == "Int" || isTaggedFixedHead tag)
       && isCompareMethod method then
       RScalar "Int"
+    else if isBinop && tag == "Char" && isCompareMethod method then
+      RScalar "Char"
     else if isBinop && isBoxed64Head tag && isCompareMethod method then
       RScalar tag
     else

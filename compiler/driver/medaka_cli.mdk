@@ -27,7 +27,7 @@ import tools.snapshot.{
   parseStages,
   SnapMode(..),
 }
-import tools.fmt.{formatSource, FmtMode(..)}
+import tools.fmt.{formatSourceChecked, FmtMode(..)}
 import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
@@ -117,6 +117,7 @@ import frontend.parser.{
   parseErrorMessage,
   Positions,
 }
+import frontend.lexer.{tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
@@ -2096,13 +2097,13 @@ fmtOneReport mode file = match readSourceE file
   Err e =>
     let _ = ePutStrLn (sourceReadLine file e)
     (True, False)
-  Ok src => match parseResult src
-    Err e =>
-      let _ = ePutStrLn (ppParseError src file e)
-      (True, False)
-    Ok _ =>
-      let formatted = formatSource src
-      match mode
+  -- One lexing pass shared by the parse check and the formatter.
+  Ok src => match tokenizeWithOffsetPairs src
+    (toks, pairs) => match formatSourceChecked src toks pairs
+      Err e =>
+        let _ = ePutStrLn (ppParseError src file e)
+        (True, False)
+      Ok formatted => match mode
         FmtStdout =>
           let _ = putStr formatted
           (False, False)
@@ -2148,11 +2149,11 @@ fmtOne mode file = match readSourceE file
   Err e => dieMsg (sourceReadLine file e)
   -- PARSE-ERROR-LOCATION Stage 1: surface a located parse error before
   -- formatSource's panicking `parse` fires a bare `parse error`.
-  Ok src => match parseResult src
-    Err e => dieMsg (ppParseError src file e)
-    Ok _ =>
-      let formatted = formatSource src
-      match mode
+  -- One lexing pass shared by the parse check and the formatter.
+  Ok src => match tokenizeWithOffsetPairs src
+    (toks, pairs) => match formatSourceChecked src toks pairs
+      Err e => dieMsg (ppParseError src file e)
+      Ok formatted => match mode
         FmtStdout => putStr formatted
         FmtCheck =>
           if formatted == src then () else dieMsg (file ++ ": not formatted")
