@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/autoprint_wasi.mdk:3:0: `main` performs <Stdout>, and the target `wasmgc/wasi-p2` does not grant Stdout; `main` is a value other than `Unit`, so it is printed with `println`
+  |
+3 | main = 6 * 7
+  | ^

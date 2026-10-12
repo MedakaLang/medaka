@@ -1431,24 +1431,31 @@ runTargetGo acc (x :: rest)
   | otherwise = acc
 runTargetGo acc [] = acc
 
--- The manifest's `[target] profile` for the project holding `entry`.
-manifestProfileOf : String -> <IO> Option String
-manifestProfileOf entry = match findProjectRoot (dirOf2 entry)
-  None => None
-  Some root => match readFile (root ++ "/medaka.toml")
-    Err _ => None
-    Ok text => match parseToml text
-      Ok doc => targetProfile doc
-      Err _ => None
+-- The manifest's `[target] profile` for the project holding `entry`; `Err`
+-- when a manifest exists but its `[target]` cannot be read.  The walk-up
+-- starts from the entry's absolute directory: a relative entry's `dirOf2` is
+-- `.`, whose parent is itself.
+manifestProfileOf : String -> <IO> Result String (Option String)
+manifestProfileOf entry =
+  match findProjectRoot (canonicalizePath (dirOf2 entry))
+    None => Ok None
+    Some root =>
+      let path = root ++ "/medaka.toml"
+      let read = match readFile path
+        Err e => Err e
+        Ok text => match parseToml text
+          Err e => Err "not valid TOML: \{e}"
+          Ok doc => targetProfile doc
+      mapErr (why => "cannot read `[target]` in \{path}: \{why}") read
 
 -- Resolve `--target` (over the manifest) and carry the profile; a name the
 -- table does not know aborts.
 carryTargetProfile : Option String -> String -> <IO> Unit
 carryTargetProfile flagValue entry =
   let fromManifest = match flagValue
-    Some _ => None
+    Some _ => Ok None
     None => manifestProfileOf entry
-  match selectProfile flagValue fromManifest
+  match andThen fromManifest (selectProfile flagValue)
     Ok p => selectedProfile := p
     Err m => dieMsg ("error: " ++ m)
 
@@ -2816,16 +2823,18 @@ parseTarget name = match lookupProfile name
 -- emitter child, which checks the program against it before lowering.
 selectBuildProfile : Args -> String -> <IO> Result String BuildTarget
 selectBuildProfile a input =
-  let name = match lastValue "--target" a
-    Some v => v
-    None => optionOr "llvm/native-posix" (manifestProfileOf input)
-  match lookupProfile name
+  let named = match lastValue "--target" a
+    Some v => Ok v
+    None => map (optionOr "llvm/native-posix") (manifestProfileOf input)
+  match named
     Err m => Err ("error: " ++ m)
-    Ok p => match parseTarget name
-      Err m => Err m
-      Ok target =>
-        selectedProfile := Some p
-        Ok target
+    Ok name => match lookupProfile name
+      Err m => Err ("error: " ++ m)
+      Ok p => match parseTarget name
+        Err m => Err m
+        Ok target =>
+          selectedProfile := Some p
+          Ok target
 
 buildTargetOrDie : Args -> String -> <IO> BuildTarget
 buildTargetOrDie a input = match selectBuildProfile a input

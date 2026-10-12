@@ -138,10 +138,13 @@ listMod = "stdlib/list.mdk"
 runtimeMod : String
 runtimeMod = "stdlib/runtime.mdk"
 
--- | Named once because two things spawn it: the corpus row below, and the
+-- | Named once because two things spawn each: the corpus rows below, and the
 -- FFI engine-wall probes at the foot of this file.
 coreIrModulesOracle : String
 coreIrModulesOracle = "test/bin/core_ir_modules_main"
+
+evalModulesOracle : String
+evalModulesOracle = "test/bin/eval_modules_main"
 
 rows : List Row
 rows = [
@@ -255,7 +258,7 @@ rows = [
   },
   Row {
     gate = "diff_compiler_eval_modules",
-    oracle = "test/bin/eval_modules_main",
+    oracle = evalModulesOracle,
     corpus = "test/eval_modules_fixtures",
     prelude = [coreMod],
     shape = DirFixture "main_*.mdk" "main.eval.golden",
@@ -560,12 +563,14 @@ test "every eval and Core IR oracle reproduces its corpus's goldens" =
 
 {- | The three probes `diff_compiler_core_ir_modules.sh` carried alongside
    its corpus loop (#2133). They are not corpus data: their fixtures are
-   three programs written on the spot, two of the three spawns take flags no
-   row has, and one of them spawns `medaka` itself rather than an oracle. So
-   they stay a second test rather than being bent into a `Row`.
+   three programs written on the spot, and the reset probe takes a flag no
+   row has. So they stay a second test rather than being bent into a `Row`.
 
    What they pin: a user-declared `<FFI>` extern that is REACHED must stop
-   both engines with the same deliberate message, and the mutable classifier
+   both engines with the same deliberate message.  Both are driven through
+   their oracle entries, which run no target check: `medaka run` refuses the
+   program at check before either engine starts (`run_refuses_ffi` in
+   `test/target_fixtures_test.mdk`).  And the mutable classifier
    that decides "reached" must be reset between two fixtures sharing one
    process — an unreachable extern in the first must leave no trace on the
    second. -}
@@ -673,7 +678,10 @@ ffiEngineWall = match ffiScratch
       Err e => fail "could not write the FFI fixtures: \{e}"
       Ok () =>
         let findings = somes [
-          expectWall "ffi-engine-wall-ast" medakaBin ["run", reached],
+          expectWall
+            "ffi-engine-wall-ast"
+            "\{medakaRoot}/\{evalModulesOracle}"
+            ["\{medakaRoot}/\{coreMod}", reached, scratch],
           expectWall
             "ffi-engine-wall-core-ir"
             "\{medakaRoot}/\{coreIrModulesOracle}"

@@ -244,7 +244,7 @@ import backend.core_validate.{
   validateTails,
   validateRecords,
   unrefusedExternMessage,
-  uncheckedExternMessage,
+  withheldExternNote,
   checkedTarget,
   validateExterns,
 }
@@ -789,17 +789,16 @@ isFfiExternW prog name = match ffiSigOfW prog name
   None => False
 
 -- What a reference to a user FFI extern meets: foreign C calls have no WasmGC
--- equivalent.  `build` refuses `FFI` on every wasm profile before lowering, so
--- under a checked target reaching one is an internal error.
+-- equivalent.  No wasm profile grants `FFI`, so under a checked target the
+-- program names the extern without performing it (`withheldExternNote`).
 ffiWallW : Prog -> String -> List String
-ffiWallW prog name = match !checkedTarget
-  Some t => panic (uncheckedExternMessage WasmBackend name t)
-  None =>
-    gapLP
-      prog
-      ("wasm: FFI extern '"
-        ++ name
-        ++ "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")
+ffiWallW prog name =
+  let wall =
+    "wasm: FFI extern '\{name}' is native-only — foreign C calls have no WasmGC equivalent"
+  match !checkedTarget
+    Some t =>
+      gapLP prog "\{wall}; \{withheldExternNote WasmBackend name ["FFI"] t}"
+    None => gapLP prog "\{wall}. Build for a native target instead."
 
 declRetTypeOf : Prog -> String -> String
 declRetTypeOf prog name = match declRetLookupW prog name

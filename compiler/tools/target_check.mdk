@@ -24,14 +24,19 @@ targetCapabilityCode = "T-TARGET-CAPABILITY"
 
 -- The refusal of the program whose entry file is `file`, or `None` when its
 -- `main` performs nothing the profile withholds.  A program with no `main` of
--- its own has no entry to judge, and that is a refusal too.
+-- its own has no entry to judge, and that is a refusal too.  The entry judged
+-- is the one the drivers run: a value `main` they print performs what the
+-- `println` applied to it performs.
 export
 targetRefusal : TargetProfile -> String -> EntryAnalysis -> Option Diag
 targetRefusal profile file analysis =
   match lookupAssoc "main" analysis.eaSchemes
     None => Some (missingEntryDiag profile file)
     Some sch =>
-      let summary = invocationSummary analysis.eaOps sch
+      let printed = match analysis.eaAutoPrintCall
+        Some call => invocationSummary analysis.eaOps call
+        None => []
+      let summary = invocationSummary analysis.eaOps sch ++ printed
       let atoms = filter isGatedAtom summary
       let unjoined = filter (unjoinedIo profile) summary
       let ioLabels = match unjoined
@@ -86,10 +91,14 @@ refusalDiag profile analysis atoms labels lines =
     _ :: _ :: _ => " via `\{joinWith " → " chain}`"
     _ => ""
   let notProven = stringConcat (map (l => "; " ++ trim l) lines)
+  let printed = match analysis.eaAutoPrintCall
+    Some _ =>
+      "; `main` is a value other than `Unit`, so it is printed with `println`"
+    None => ""
   mkDiag
     SevError
     targetCapabilityCode
-    "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " (map withheldName labels)}\{notProven}"
+    "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " (map withheldName labels)}\{notProven}\{printed}"
     (entryLoc analysis.eaEntryDecls)
 
 -- `IO` is refused only when the profile grants no host label for it to join.

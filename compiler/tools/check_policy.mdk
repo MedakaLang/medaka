@@ -41,6 +41,7 @@ import types.effect_rows.{atomKey, atomLabel, atomAuth, renderAtom, Atom(..)}
 -- OCaml's log-then-result ordering byte-for-byte.
 
 import frontend.ast.{EffParamTy(..), effParamSurface, Decl(..)}
+import driver.main_autoprint.{shouldAutoPrintMain}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.repr.{Scheme(..), Mono(..), normalize}
@@ -313,12 +314,16 @@ lookupValue k ((n, v) :: rest) = if k == n then Some v else lookupValue k rest
 -- (`lookupAssoc` is a first-match scan), so an entry redefinition of a prelude
 -- name must win, and a prelude name (`--fn println`) must be present rather
 -- than read as effect-free.  `eaOps` is read straight after the drive, since
--- `lastInvocationOps` describes whichever drive ran last.
+-- `lastInvocationOps` describes whichever drive ran last, and so is
+-- `eaAutoPrintCall`: when the drivers that run the program print a value `main`
+-- (`shouldAutoPrintMain` reads the drive's `main` type), the scheme of the
+-- prelude `println` the wrap applies to it.
 public export data EntryAnalysis = EntryAnalysis {
   eaElab : ElabResult,
   eaSchemes : List (String, Scheme),
   eaOps : InvocationOps,
   eaEntryDecls : List Decl,
+  eaAutoPrintCall : Option Scheme,
 }
 
 export
@@ -330,11 +335,17 @@ analyzeProgram rtD coreD modsD =
   let (elaborated, preludeSchemes, ownSchemes) =
     elaborateModulesWithSchemes rtD coreD modsD
   let ops = lastInvocationOps ()
+  let autoPrintCall =
+    if shouldAutoPrintMain coreD modsD then
+      lookupAssoc "println" preludeSchemes
+    else
+      None
   EntryAnalysis {
     eaElab = elaborated,
     eaSchemes = ownSchemes ++ preludeSchemes,
     eaOps = ops,
     eaEntryDecls = entryModuleDecls modsD,
+    eaAutoPrintCall = autoPrintCall,
   }
 
 -- The entry module's decls: the last of the loader's dependency-first list.

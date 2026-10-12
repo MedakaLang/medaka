@@ -42404,7 +42404,27 @@ ffiResultRowHasFFI _ = False
 -- so `<Net "a.com/*", FFI>` prints as `<FFI, Net "a.com/*">`.
 ffiHasAtom : List EffAtomTy -> Bool
 ffiHasAtom [] = False
-ffiHasAtom (a :: rest) = a.eatLabel == "FFI" || ffiHasAtom rest
+ffiHasAtom (a :: rest) = isForeignCallAtom a || ffiHasAtom rest
+
+-- The foreign-call effect itself.  A label a module declares with `effect FFI`
+-- is spelled the same but is a user label, which the target check never gates,
+-- so it cannot be what makes a declaration honest about calling foreign code.
+isForeignCallAtom : EffAtomTy -> Bool
+isForeignCallAtom a = match a.eatOrigin
+  OriginModule _ => False
+  _ => a.eatLabel == "FFI"
+
+-- Does the declared result row spell `FFI` as a module's own label?  The walk
+-- `ffiRowHasFFITy` takes; it only picks `T-FFI-UNLABELLED`'s wording.
+ffiRowNamesDeclaredFfi : Ty -> Bool
+ffiRowNamesDeclaredFfi (TyConstrained _ t) = ffiRowNamesDeclaredFfi t
+ffiRowNamesDeclaredFfi (TyFun _ r) = ffiRowNamesDeclaredFfi r
+ffiRowNamesDeclaredFfi (TyEffect ls _ _) =
+  anyListM (a => a.eatLabel == "FFI" && not (isForeignCallAtom a)) ls
+ffiRowNamesDeclaredFfi t = match expandAliasHeadTy t
+  TyFun _ r => ffiRowNamesDeclaredFfi r
+  TyConstrained _ inner => ffiRowNamesDeclaredFfi inner
+  _ => False
 
 -- ── the FFI-ABI.md §1 CROSSABLE SET ─────────────────────────────────────────
 --
@@ -43326,13 +43346,23 @@ ffiCheckLabelsGo (_ :: rest) = ffiCheckLabelsGo rest
 -- option that is definitely wrong.
 ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
 ffiCheckExternLabel n fb ty = match ffiRowHasFFITy ty
-  Some False => pushTypeErrorAt "T-FFI-UNLABELLED" fb (ffiUnlabelledMsg n)
+  Some False =>
+    let msg =
+      if ffiRowNamesDeclaredFfi ty then
+        ffiDeclaredLabelMsg n
+      else
+        ffiUnlabelledMsg n
+    pushTypeErrorAt "T-FFI-UNLABELLED" fb msg
   Some True => ()
   None => pushTypeErrorAt "T-FFI-NULLARY" fb (ffiNullaryMsg n)
 
 ffiNullaryMsg : String -> String
 ffiNullaryMsg n =
   "foreign declaration `\{n}` has no arrow in its signature, so it declares a foreign value rather than a foreign call; declare a call instead, `extern \{n} : Unit -> <FFI> T`, invoked as `\{n} ()`"
+
+ffiDeclaredLabelMsg : String -> String
+ffiDeclaredLabelMsg n =
+  "foreign declaration `\{n}` names `FFI` in its result row, but that `FFI` is a label declared with `effect FFI`, not the foreign-call effect; rename the declared label so `FFI` here means the foreign call"
 
 ffiUnlabelledMsg : String -> String
 ffiUnlabelledMsg n =

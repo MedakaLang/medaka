@@ -45,6 +45,26 @@ spawnCase stem cmd argv = match boundedVerb cmd argv
   Ok (code, out, err) =>
     expectGolden "\{fixtureDir}/\{stem}.golden" (transcript code out err)
 
+-- One case run from inside `dir` (under the fixtures), naming the entry by its
+-- bare file name, as a user in that directory would.
+inDirCase : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead> (String, Expectation)
+inDirCase stem verb dir entry = (
+  stem,
+  spawnCase stem "sh" [
+    "-c",
+    "cd \"$1\" && exec \"$2\" \"$3\" \"$4\"",
+    "sh",
+    "\{fixtureDir}/\{dir}",
+    medakaBin,
+    verb,
+    entry,
+  ],
+)
+
 -- One case of the emitter child `medaka build` spawns, started as `build`
 -- starts it: the selected profile in the environment, then the runtime, the
 -- prelude, the entry and the search roots.  The check sits in the child's
@@ -216,4 +236,61 @@ test "target_fixtures: entries, manifests and the JSON envelope" = expectEach [
     "project_target/main.mdk",
   targetCase "run_manifest_refuses_net" "run" [] "project_target/main.mdk",
   targetCase "manifest_refuses_no_entry" "check" [] "project_no_entry/lib.mdk",
+]
+
+test "target_fixtures: a project's target is found from any directory and read or refused" = expectEach
+  [
+    inDirCase "relative_entry_subdir" "check" "project_subdir/src" "main.mdk",
+    inDirCase "relative_entry_subdir_run" "run" "project_subdir/src" "main.mdk",
+    targetCase
+      "relative_entry_subdir_root"
+      "check"
+      []
+      "project_subdir/src/main.mdk",
+    targetCase "bad_manifest_target" "check" [] "bad_manifest_target/main.mdk",
+    targetCase
+      "bad_manifest_target_build"
+      "build"
+      ["-o", "/dev/null"]
+      "bad_manifest_target/main.mdk",
+    targetCase "profile_not_string" "check" [] "profile_not_string/main.mdk",
+    targetCase "profile_not_string_run" "run" [] "profile_not_string/main.mdk",
+  ]
+
+test "target_fixtures: a module label spelled FFI does not label a foreign call" = expectEach
+  [
+    targetCase
+      "user_effect_ffi"
+      "check"
+      ["--target", "wasmgc/edge"]
+      "user_effect_ffi.mdk",
+    targetCase
+      "user_effect_ffi_policy"
+      "check-policy"
+      ["--allow", "Stdout", "--fn", "main"]
+      "user_effect_ffi.mdk",
+    targetCase
+      "user_effect_ffi_cross"
+      "check"
+      ["--target", "wasmgc/edge"]
+      "user_effect_ffi_cross/main.mdk",
+  ]
+
+test "target_fixtures: the program judged is the one that runs" = expectEach [
+  targetCase
+    "autoprint_wasi"
+    "check"
+    ["--target", "wasmgc/wasi-p2"]
+    "autoprint_wasi.mdk",
+  targetCase
+    "autoprint_wasi_run"
+    "run"
+    ["--target", "wasmgc/wasi-p2"]
+    "autoprint_wasi.mdk",
+  emitterCase "autoprint_wasi_seam" "wasmgc/wasi-p2" "autoprint_wasi.mdk",
+  targetCase
+    "extern_value_not_performed"
+    "check"
+    ["--target", "wasm"]
+    "extern_value_not_performed.mdk",
 ]
