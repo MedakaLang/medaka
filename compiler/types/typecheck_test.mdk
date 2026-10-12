@@ -4322,8 +4322,12 @@ aliasHeadPrelude = joinNl [
 ]
 
 aliasHeadOutcome : List (String, String) -> (List String, String)
-aliasHeadOutcome sources =
-  let core = desugar (parseLocated aliasHeadPrelude)
+aliasHeadOutcome sources = preludeOutcome aliasHeadPrelude sources
+
+-- The outcome of [sources] checked, elaborated and evaluated over [prelude].
+preludeOutcome : String -> List (String, String) -> (List String, String)
+preludeOutcome prelude sources =
+  let core = desugar (parseLocated prelude)
   let modules =
     map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources
   let codes =
@@ -4710,3 +4714,310 @@ test "spelling-collision judgment matrix: super construction" =
 
 test "spelling-collision judgment matrix: min order" =
   aliasHeadVerdicts ([], "entry") collisionMinOrder
+
+-- An arrow is a constructed head like any other (#1617): an impl over `(Int -> b)`
+-- is selected for a ground arrow goal, and that impl's `requires` are owed at the
+-- use, as they are for `(Box b)` (#4045).
+arrowHeadShow : List String
+arrowHeadShow = [
+  "interface Show2 a where",
+  "  show2 : a -> String",
+  "impl Show2 Int where",
+  "  show2 _ = \"i\"",
+  "interface Sup2 a where",
+  "  sup2 : a -> String",
+  "impl Sup2 (Int -> b) requires Show2 b where",
+  "  sup2 f = \"INTFN\" ++ show2 (f 1)",
+  "isPos : Int -> Bool",
+  "isPos _ = True",
+]
+
+arrowHeadShowOutcome : List String -> (List String, String)
+arrowHeadShowOutcome lines =
+  aliasHeadOutcome (aliasHeadModule (arrowHeadShow ++ lines))
+
+test "an arrow-headed impl's requires are checked at every use" = expectEach [
+  (
+    "plain use",
+    expectEqual (["T-NO-IMPL"], "") (arrowHeadShowOutcome ["main = sup2 isPos"]),
+  ),
+  (
+    "use through a carried super",
+    expectEqual
+      (["T-NO-IMPL"], "")
+      (arrowHeadShowOutcome [
+        "interface Sub2 a requires Sup2 a where",
+        "  sub2 : a -> String",
+        "impl Sub2 (Int -> b) requires Show2 b where",
+        "  sub2 _ = \"sub\"",
+        "useSub : Sub2 a => a -> String",
+        "useSub x = sup2 x",
+        "main = useSub isPos",
+      ]),
+  ),
+  (
+    "nested requires",
+    expectEqual
+      (["T-NO-IMPL"], "")
+      (arrowHeadShowOutcome [
+        "impl Sup2 (List a) requires Sup2 a where",
+        "  sup2 xs = match xs",
+        "    [] => \"nil\"",
+        "    x :: _ => \"L\" ++ sup2 x",
+        "main = sup2 [isPos]",
+      ]),
+  ),
+  (
+    "generalized binder",
+    expectEqual
+      (["T-NO-IMPL"], "")
+      (arrowHeadShowOutcome [
+        "konst : b -> Int -> b",
+        "konst y _ = y",
+        "h y = sup2 (konst y)",
+        "main = h True",
+      ]),
+  ),
+  (
+    "satisfied requires",
+    expectEqual
+      ([], "INTFNb")
+      (arrowHeadShowOutcome [
+        "impl Show2 Bool where",
+        "  show2 _ = \"b\"",
+        "main = sup2 isPos",
+      ]),
+  ),
+]
+
+-- The arrow-vs-Box judgment matrix: one program per judgment, written once with an
+-- arrow head and once with a `Box` head.  Every judgment must reach the same verdict
+-- on both.  `lib` declares the interfaces and general fallback impls, so an entry
+-- impl that loses selection to one shows up as the fallback's word.
+arrowHeadVar : Bool -> String
+arrowHeadVar arrow = if arrow then "(Int -> b)" else "(Box b)"
+
+arrowHeadBool : Bool -> String
+arrowHeadBool arrow = if arrow then "(Int -> Bool)" else "(Box Bool)"
+
+arrowHeadGeneral : Bool -> String
+arrowHeadGeneral arrow = if arrow then "(a -> b)" else "(Box b)"
+
+arrowHeadValue : Bool -> String
+arrowHeadValue arrow = if arrow then "isPos" else "(Box True)"
+
+arrowHeadLib : (String, String)
+arrowHeadLib = (
+  "lib",
+  joinNl [
+    "export interface Show2 a where",
+    "  show2 : a -> String",
+    "impl Show2 Int where",
+    "  show2 _ = \"i\"",
+    "public export data Box a = Box a",
+    "export interface Sel a where",
+    "  sel : a -> String",
+    "impl Sel a where",
+    "  sel _ = \"GEN\"",
+    "export interface Sup a where",
+    "  sup : a -> String",
+    "export interface Sub a requires Sup a where",
+    "  sub : a -> String",
+    "impl Sup a where",
+    "  sup _ = \"GEN\"",
+    "export interface Lone a where",
+    "  lone : a -> String",
+    "export interface LoneSub a requires Lone a where",
+    "  loneSub : a -> String",
+    "export interface R a where",
+    "  r : a -> String",
+    "impl R a where",
+    "  r _ = \"GEN\"",
+    "export interface Mo a where",
+    "  mo : a -> String",
+  ],
+)
+
+arrowHeadEntry : List String -> (List String, String)
+arrowHeadEntry lines = aliasHeadOutcome [
+  arrowHeadLib,
+  (
+    "entry",
+    joinNl
+      ([
+          "import lib.*",
+          "isPos : Int -> Bool",
+          "isPos _ = True",
+        ]
+        ++ lines),
+  ),
+]
+
+arrowHeadSelection : Bool -> (List String, String)
+arrowHeadSelection arrow = arrowHeadEntry [
+  "impl Sel \{arrowHeadVar arrow} where",
+  "  sel _ = \"SPEC\"",
+  "main = sel \{arrowHeadValue arrow}",
+]
+
+arrowHeadCoherence : Bool -> (List String, String)
+arrowHeadCoherence arrow = arrowHeadEntry [
+  "impl Lone \{arrowHeadVar arrow} where",
+  "  lone _ = \"one\"",
+  "impl Lone \{arrowHeadVar arrow} where",
+  "  lone _ = \"two\"",
+  "main = lone \{arrowHeadValue arrow}",
+]
+
+arrowHeadSuperExistence : Bool -> (List String, String)
+arrowHeadSuperExistence arrow = arrowHeadEntry [
+  "impl LoneSub \{arrowHeadVar arrow} where",
+  "  loneSub _ = \"s\"",
+  "main = loneSub \{arrowHeadValue arrow}",
+]
+
+-- The super dictionary `useSup` receives is built from the entry's impl, whose
+-- `requires Show2 b` is owed at `b = Bool`.
+arrowHeadSuperConstruction : List String -> Bool -> (List String, String)
+arrowHeadSuperConstruction extra arrow =
+  arrowHeadEntry
+    (extra
+      ++ [
+        "impl Sup \{arrowHeadVar arrow} requires Show2 b where",
+        "  sup _ = \"SUP\"",
+        "impl Sub \{arrowHeadVar arrow} requires Show2 b where",
+        "  sub _ = \"sub\"",
+        "useSup : Sub a => a -> String",
+        "useSup x = sup x",
+        "main = useSup \{arrowHeadValue arrow}",
+      ])
+
+arrowHeadRequires : List String -> Bool -> (List String, String)
+arrowHeadRequires extra arrow =
+  arrowHeadEntry
+    (extra
+      ++ [
+        "impl R \{arrowHeadVar arrow} requires Show2 b where",
+        "  r _ = \"R\"",
+        "main = r \{arrowHeadValue arrow}",
+      ])
+
+arrowHeadShowBool : List String
+arrowHeadShowBool = ["impl Show2 Bool where", "  show2 _ = \"b\""]
+
+arrowHeadMinOrder : Bool -> (List String, String)
+arrowHeadMinOrder arrow = arrowHeadEntry [
+  "impl Mo \{arrowHeadGeneral arrow} where",
+  "  mo _ = \"GEN\"",
+  "impl Mo \{arrowHeadBool arrow} where",
+  "  mo _ = \"SPEC\"",
+  "main = mo \{arrowHeadValue arrow}",
+]
+
+test "arrow-head judgment matrix: selection" =
+  aliasHeadVerdicts ([], "SPEC") arrowHeadSelection
+
+test "arrow-head judgment matrix: coherence" =
+  aliasHeadVerdicts (["T-CONFLICTING-IMPL"], "") arrowHeadCoherence
+
+test "arrow-head judgment matrix: super existence" =
+  aliasHeadVerdicts (["T-MISSING-SUPER-IMPL"], "") arrowHeadSuperExistence
+
+test "arrow-head judgment matrix: super construction" = expectEach [
+  (
+    "unsatisfied requires",
+    aliasHeadVerdicts (["T-NO-IMPL"], "") (arrowHeadSuperConstruction []),
+  ),
+  (
+    "satisfied requires",
+    aliasHeadVerdicts ([], "SUP") (arrowHeadSuperConstruction arrowHeadShowBool),
+  ),
+]
+
+test "arrow-head judgment matrix: requires" = expectEach [
+  (
+    "unsatisfied requires",
+    aliasHeadVerdicts (["T-NO-IMPL"], "") (arrowHeadRequires []),
+  ),
+  (
+    "satisfied requires",
+    aliasHeadVerdicts ([], "R") (arrowHeadRequires arrowHeadShowBool),
+  ),
+]
+
+test "arrow-head judgment matrix: min order" =
+  aliasHeadVerdicts ([], "SPEC") arrowHeadMinOrder
+
+-- A goal that mixes a constructed head with a variable defers to its use whatever
+-- the constructed head is: never called, `f` generalizes over the goal, and called,
+-- it is rejected at the call.
+arrowMixedProgram : String -> Bool -> (List String, String)
+arrowMixedProgram mainLine arrow =
+  aliasHeadOutcome
+    (aliasHeadModule [
+      "interface C a b where",
+      "  c : a -> b -> String",
+      "impl C Int Int where",
+      "  c _ _ = \"ii\"",
+      "data Box a = Box a",
+      "isPos : Int -> Bool",
+      "isPos _ = True",
+      "f x = c \{arrowHeadValue arrow} x",
+      mainLine,
+    ])
+
+test "a mixed arrow goal defers to its use, as a mixed Box goal does" = expectEach
+  [
+    (
+      "never called",
+      aliasHeadVerdicts ([], "ok") (arrowMixedProgram "main = \"ok\""),
+    ),
+    (
+      "called",
+      aliasHeadVerdicts (["T-NO-IMPL"], "") (arrowMixedProgram "main = f 1"),
+    ),
+  ]
+
+-- A declared `Num` impl over an arrow answers a literal at that arrow, as one over a
+-- `Box` does; a literal applied as a function is rejected where it is used.
+arrowNumOutcome : List String -> (List String, String)
+arrowNumOutcome lines =
+  preludeOutcome numericPreludeSource (aliasHeadModule lines)
+
+arrowNumImpl : Bool -> (List String, String)
+arrowNumImpl arrow =
+  if arrow then
+    arrowNumOutcome [
+      "impl Num (Int -> String) where",
+      "  fromInt _ = x => \"FN\"",
+      "v : Int -> String",
+      "v = 7",
+      "main = v 0",
+    ]
+  else
+    arrowNumOutcome [
+      "data Box a = Box a",
+      "unbox : Box a -> a",
+      "unbox (Box x) = x",
+      "impl Num (Box (Int -> String)) where",
+      "  fromInt _ = Box (x => \"FN\")",
+      "v : Box (Int -> String)",
+      "v = 7",
+      "main = unbox v 0",
+    ]
+
+test "a Num impl over an arrow is selected like one over a Box" =
+  aliasHeadVerdicts ([], "FN") arrowNumImpl
+
+test "a literal applied as a function is rejected at its use" = expectEach [
+  (
+    "never called",
+    expectEqual ([], "ok") (arrowNumOutcome ["f x = 1 x", "main = \"ok\""]),
+  ),
+  (
+    "called",
+    expectEqual
+      (["T-NO-IMPL"], "")
+      (arrowNumOutcome ["f x = 1 x", "main : String", "main = f 2"]),
+  ),
+]

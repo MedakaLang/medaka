@@ -1553,8 +1553,6 @@ implHeadVarRoots : List (String, Mono) -> List (String, HeadVarRoot)
 implKeyTc : String -> List Ty -> String
 implKindMismatchFix : String -> String -> Int -> String
 implKindMismatchMsg : String -> String -> Int -> List Kind -> List Kind -> String
-implMatchesArgsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
-implMatchesReceiverU : ImplUniverse -> IfaceRef -> Mono -> Bool
 implMatchesU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesWithReqsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMethodDictArity : IfaceRef -> String -> Int
@@ -2191,7 +2189,6 @@ monoIndexEffvarIds : Mono -> List Int
 monoIsApp : Mono -> Bool
 monoIsBareTyvar : Mono -> Bool
 monoIsBool : Mono -> Bool
-monoIsFunction : Mono -> Bool
 monoIsTyvarId : Mono -> Int -> Bool
 monoMintedBefore : Int -> Int -> Mono -> Bool
 monoRootIdSet : List Mono -> Map String Unit
