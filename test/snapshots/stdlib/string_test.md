@@ -1,5 +1,5 @@
 # META
-source_lines=314
+source_lines=443
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -8,11 +8,12 @@ stages=DESUGAR,MARK
 -- byte offset would show.
 
 import string.{
-  byteLength, center, countOccurrences, drop, fromChars, indexOf, lastIndexOf,
-  lines, padLeft, padRight, replace, replaceAll, splitAt, take, trim, trimLeft,
-  trimRight, unlines, utf8ByteLength
+  byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
+  lastIndexOf, lines, padLeft, padRight, replace, replaceAll, splitAt,
+  startsWith, stripPrefix, stripSuffix, take, trim, trimLeft, trimRight,
+  unlines, utf8ByteLength
 }
-import test.{expectEqual}
+import test.{expectEqual, expectFalse, expectTrue}
 
 -- # Fixed cases
 
@@ -316,9 +317,137 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
     Some i =>
       stringSlice i (i + 2) s == "ab"
         && indexOf "ab" (stringSlice (i + 1) (stringLength s) s) == None
+
+-- # Native byte-level searches
+
+test "startsWith the empty prefix is True" = expectTrue (startsWith "" "")
+
+test "startsWith a prefix longer than the string is False" =
+  expectFalse (startsWith "hello!" "hello")
+
+test "startsWith compares whole codepoints of multibyte text" =
+  expectEqual (True, False) (startsWith "日" "日本", startsWith "日本" "日")
+
+test "endsWith the empty suffix is True" = expectTrue (endsWith "" "")
+
+test "endsWith a suffix longer than the string is False" =
+  expectFalse (endsWith "xhello" "hello")
+
+test "endsWith of a multibyte suffix" =
+  expectEqual (True, False) (endsWith "語" "日本語", endsWith "本" "日本語")
+
+test "stripPrefix and stripSuffix on multibyte text" =
+  expectEqual
+    (Some "本語", Some "日本")
+    (stripPrefix "日" "日本語", stripSuffix "語" "日本語")
+
+test "countOccurrences of an empty needle is 0" =
+  expectEqual 0 (countOccurrences "" "héllo")
+
+test "countOccurrences does not count overlapping matches in multibyte text" =
+  expectEqual 2 (countOccurrences "éé" "ééé é ééé")
+
+test "countOccurrences finds multibyte needles" =
+  expectEqual 3 (countOccurrences "日" "日a日日")
+
+test "lastIndexOf of a needle longer than the haystack is None" =
+  expectEqual None (lastIndexOf "hello!" "hello")
+
+test "lastIndexOf keeps the last overlapping match in a run" =
+  expectEqual (Some 3) (lastIndexOf "aa" "aaaaa")
+
+test "lastIndexOf returns the codepoint index past a multibyte prefix" =
+  expectEqual (Some 3) (lastIndexOf "日" "日本語日")
+
+-- Reference semantics for countOccurrences and lastIndexOf, compared
+-- codepoint by codepoint.  They are the definitions the native externs
+-- replaced, so the differential below pins the new behaviour to them.
+
+refStartsWith : String -> String -> Bool
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refStartsWith p s = stringSlice 0 (stringLength p) s == p
+
+refEndsWith : String -> String -> Bool
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refEndsWith p s =
+  stringSlice (stringLength s - stringLength p) (stringLength s) s == p
+
+refCountOccurrences : String -> String -> Int
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refCountOccurrences needle hay
+  | needle == "" = 0
+  | otherwise = refCountGo needle hay 0 0
+
+refCountGo : String -> String -> Int -> Int -> Int
+refCountGo needle hay i acc
+  | i + stringLength needle > stringLength hay = acc
+  | stringSlice i (i + stringLength needle) hay == needle =
+    refCountGo needle hay (i + stringLength needle) (acc + 1)
+  | otherwise = refCountGo needle hay (i + 1) acc
+
+refLastIndexOf : String -> String -> Option Int
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refLastIndexOf needle hay
+  | needle == "" = Some (stringLength hay)
+  | otherwise = refLastGo needle hay 0 None
+
+refLastGo : String -> String -> Int -> Option Int -> Option Int
+refLastGo needle hay i acc
+  | i + stringLength needle > stringLength hay = acc
+  | stringSlice i (i + stringLength needle) hay == needle =
+    refLastGo needle hay (i + 1) (Some i)
+  | otherwise = refLastGo needle hay (i + 1) acc
+
+edgePairs : List (String, String)
+edgePairs = [
+  ("", ""),
+  ("", "abc"),
+  ("a", ""),
+  ("aa", "aaaa"),
+  ("aa", "aaa"),
+  ("aa", "a"),
+  ("aba", "ababa"),
+  ("ab", "xabab"),
+  ("x", "xxxxx"),
+  ("ll", "lllll"),
+  ("z", "hello"),
+  ("é", "éaé"),
+  ("é", "ééé"),
+  ("éé", "ééé"),
+  ("日本", "日本語日本"),
+  ("日", "a日日b"),
+  ("😀", "a😀😀b"),
+  ("ééé", "éé"),
+  ("abc", "ab"),
+  ("é", ""),
+]
+
+refPairs : (String -> String -> a) -> List (String, String) -> List a
+refPairs _ [] = []
+refPairs f ((n, h) :: rest) = f n h :: refPairs f rest
+
+test "startsWith agrees with the codepoint reference on edge inputs" =
+  expectEqual (refPairs refStartsWith edgePairs) (refPairs startsWith edgePairs)
+
+test "endsWith agrees with the codepoint reference on edge inputs" =
+  expectEqual (refPairs refEndsWith edgePairs) (refPairs endsWith edgePairs)
+
+test "countOccurrences agrees with the codepoint reference on edge inputs" =
+  expectEqual
+    (refPairs refCountOccurrences edgePairs)
+    (refPairs countOccurrences edgePairs)
+
+test "lastIndexOf agrees with the codepoint reference on edge inputs" =
+  expectEqual
+    (refPairs refLastIndexOf edgePairs)
+    (refPairs lastIndexOf edgePairs)
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "utf8ByteLength" false))))
-(DUse false (UseGroup ("test") ((mem "expectEqual" false))))
+(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
 (DTest false "lastIndexOf of an empty needle is the end of the string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 5)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString ""))) (ELit (LString "héllo")))))
@@ -407,9 +536,43 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
 (DTest false "trim of a single space character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString " "))) (EApp (EVar "trimLeft") (ELit (LString " "))) (EApp (EVar "trimRight") (ELit (LString " "))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))
+(DTest false "startsWith the empty prefix is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "startsWith") (ELit (LString ""))) (ELit (LString "")))))
+(DTest false "startsWith a prefix longer than the string is False" (EApp (EVar "expectFalse") (EApp (EApp (EVar "startsWith") (ELit (LString "hello!"))) (ELit (LString "hello")))))
+(DTest false "startsWith compares whole codepoints of multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "True") (EVar "False"))) (ETuple (EApp (EApp (EVar "startsWith") (ELit (LString "日"))) (ELit (LString "日本"))) (EApp (EApp (EVar "startsWith") (ELit (LString "日本"))) (ELit (LString "日"))))))
+(DTest false "endsWith the empty suffix is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "endsWith") (ELit (LString ""))) (ELit (LString "")))))
+(DTest false "endsWith a suffix longer than the string is False" (EApp (EVar "expectFalse") (EApp (EApp (EVar "endsWith") (ELit (LString "xhello"))) (ELit (LString "hello")))))
+(DTest false "endsWith of a multibyte suffix" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "True") (EVar "False"))) (ETuple (EApp (EApp (EVar "endsWith") (ELit (LString "語"))) (ELit (LString "日本語"))) (EApp (EApp (EVar "endsWith") (ELit (LString "本"))) (ELit (LString "日本語"))))))
+(DTest false "stripPrefix and stripSuffix on multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LString "本語"))) (EApp (EVar "Some") (ELit (LString "日本"))))) (ETuple (EApp (EApp (EVar "stripPrefix") (ELit (LString "日"))) (ELit (LString "日本語"))) (EApp (EApp (EVar "stripSuffix") (ELit (LString "語"))) (ELit (LString "日本語"))))))
+(DTest false "countOccurrences of an empty needle is 0" (EApp (EApp (EVar "expectEqual") (ELit (LInt 0))) (EApp (EApp (EVar "countOccurrences") (ELit (LString ""))) (ELit (LString "héllo")))))
+(DTest false "countOccurrences does not count overlapping matches in multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EApp (EVar "countOccurrences") (ELit (LString "éé"))) (ELit (LString "ééé é ééé")))))
+(DTest false "countOccurrences finds multibyte needles" (EApp (EApp (EVar "expectEqual") (ELit (LInt 3))) (EApp (EApp (EVar "countOccurrences") (ELit (LString "日"))) (ELit (LString "日a日日")))))
+(DTest false "lastIndexOf of a needle longer than the haystack is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "hello!"))) (ELit (LString "hello")))))
+(DTest false "lastIndexOf keeps the last overlapping match in a run" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 3)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaaaa")))))
+(DTest false "lastIndexOf returns the codepoint index past a multibyte prefix" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 3)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "日"))) (ELit (LString "日本語日")))))
+(DTypeSig false "refStartsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "refStartsWith" ((PVar "p") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "p"))) (EVar "s")) (EVar "p")))
+(DTypeSig false "refEndsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "refEndsWith" ((PVar "p") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "p")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "p")))
+(DTypeSig false "refCountOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
+(DFunDef false "refCountOccurrences" ((PVar "needle") (PVar "hay")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "refCountGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "refCountGo" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "refLastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "refLastIndexOf" ((PVar "needle") (PVar "hay")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "hay"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "refLastGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "refLastGo" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "edgePairs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "edgePairs" () (EListLit (ETuple (ELit (LString "")) (ELit (LString ""))) (ETuple (ELit (LString "")) (ELit (LString "abc"))) (ETuple (ELit (LString "a")) (ELit (LString ""))) (ETuple (ELit (LString "aa")) (ELit (LString "aaaa"))) (ETuple (ELit (LString "aa")) (ELit (LString "aaa"))) (ETuple (ELit (LString "aa")) (ELit (LString "a"))) (ETuple (ELit (LString "aba")) (ELit (LString "ababa"))) (ETuple (ELit (LString "ab")) (ELit (LString "xabab"))) (ETuple (ELit (LString "x")) (ELit (LString "xxxxx"))) (ETuple (ELit (LString "ll")) (ELit (LString "lllll"))) (ETuple (ELit (LString "z")) (ELit (LString "hello"))) (ETuple (ELit (LString "é")) (ELit (LString "éaé"))) (ETuple (ELit (LString "é")) (ELit (LString "ééé"))) (ETuple (ELit (LString "éé")) (ELit (LString "ééé"))) (ETuple (ELit (LString "日本")) (ELit (LString "日本語日本"))) (ETuple (ELit (LString "日")) (ELit (LString "a日日b"))) (ETuple (ELit (LString "😀")) (ELit (LString "a😀😀b"))) (ETuple (ELit (LString "ééé")) (ELit (LString "éé"))) (ETuple (ELit (LString "abc")) (ELit (LString "ab"))) (ETuple (ELit (LString "é")) (ELit (LString "")))))
+(DTypeSig false "refPairs" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "refPairs" (PWild (PList)) (EListLit))
+(DFunDef false "refPairs" ((PVar "f") (PCons (PTuple (PVar "n") (PVar "h")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "f") (EVar "n")) (EVar "h")) (EApp (EApp (EVar "refPairs") (EVar "f")) (EVar "rest"))))
+(DTest false "startsWith agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refStartsWith")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "startsWith")) (EVar "edgePairs"))))
+(DTest false "endsWith agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refEndsWith")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "endsWith")) (EVar "edgePairs"))))
+(DTest false "countOccurrences agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refCountOccurrences")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "countOccurrences")) (EVar "edgePairs"))))
+(DTest false "lastIndexOf agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refLastIndexOf")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "lastIndexOf")) (EVar "edgePairs"))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "utf8ByteLength" false))))
-(DUse false (UseGroup ("test") ((mem "expectEqual" false))))
+(DUse false (UseGroup ("string") ((mem "byteLength" false) (mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "endsWith" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "startsWith" false) (mem "stripPrefix" false) (mem "stripSuffix" false) (mem "take" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false) (mem "utf8ByteLength" false))))
+(DUse false (UseGroup ("test") ((mem "expectEqual" false) (mem "expectFalse" false) (mem "expectTrue" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
 (DTest false "lastIndexOf of an empty needle is the end of the string" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 5)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString ""))) (ELit (LString "héllo")))))
@@ -498,3 +661,37 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
 (DTest false "trim of a single space character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString " "))) (EApp (EVar "trimLeft") (ELit (LString " "))) (EApp (EVar "trimRight") (ELit (LString " "))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))
+(DTest false "startsWith the empty prefix is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "startsWith") (ELit (LString ""))) (ELit (LString "")))))
+(DTest false "startsWith a prefix longer than the string is False" (EApp (EVar "expectFalse") (EApp (EApp (EVar "startsWith") (ELit (LString "hello!"))) (ELit (LString "hello")))))
+(DTest false "startsWith compares whole codepoints of multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "True") (EVar "False"))) (ETuple (EApp (EApp (EVar "startsWith") (ELit (LString "日"))) (ELit (LString "日本"))) (EApp (EApp (EVar "startsWith") (ELit (LString "日本"))) (ELit (LString "日"))))))
+(DTest false "endsWith the empty suffix is True" (EApp (EVar "expectTrue") (EApp (EApp (EVar "endsWith") (ELit (LString ""))) (ELit (LString "")))))
+(DTest false "endsWith a suffix longer than the string is False" (EApp (EVar "expectFalse") (EApp (EApp (EVar "endsWith") (ELit (LString "xhello"))) (ELit (LString "hello")))))
+(DTest false "endsWith of a multibyte suffix" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "True") (EVar "False"))) (ETuple (EApp (EApp (EVar "endsWith") (ELit (LString "語"))) (ELit (LString "日本語"))) (EApp (EApp (EVar "endsWith") (ELit (LString "本"))) (ELit (LString "日本語"))))))
+(DTest false "stripPrefix and stripSuffix on multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (EApp (EVar "Some") (ELit (LString "本語"))) (EApp (EVar "Some") (ELit (LString "日本"))))) (ETuple (EApp (EApp (EVar "stripPrefix") (ELit (LString "日"))) (ELit (LString "日本語"))) (EApp (EApp (EVar "stripSuffix") (ELit (LString "語"))) (ELit (LString "日本語"))))))
+(DTest false "countOccurrences of an empty needle is 0" (EApp (EApp (EVar "expectEqual") (ELit (LInt 0))) (EApp (EApp (EVar "countOccurrences") (ELit (LString ""))) (ELit (LString "héllo")))))
+(DTest false "countOccurrences does not count overlapping matches in multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EApp (EVar "countOccurrences") (ELit (LString "éé"))) (ELit (LString "ééé é ééé")))))
+(DTest false "countOccurrences finds multibyte needles" (EApp (EApp (EVar "expectEqual") (ELit (LInt 3))) (EApp (EApp (EVar "countOccurrences") (ELit (LString "日"))) (ELit (LString "日a日日")))))
+(DTest false "lastIndexOf of a needle longer than the haystack is None" (EApp (EApp (EVar "expectEqual") (EVar "None")) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "hello!"))) (ELit (LString "hello")))))
+(DTest false "lastIndexOf keeps the last overlapping match in a run" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 3)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaaaa")))))
+(DTest false "lastIndexOf returns the codepoint index past a multibyte prefix" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 3)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "日"))) (ELit (LString "日本語日")))))
+(DTypeSig false "refStartsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "refStartsWith" ((PVar "p") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "p"))) (EVar "s")) (EVar "p")))
+(DTypeSig false "refEndsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "refEndsWith" ((PVar "p") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "p")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "p")))
+(DTypeSig false "refCountOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
+(DFunDef false "refCountOccurrences" ((PVar "needle") (PVar "hay")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (ELit (LInt 0))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "refCountGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "refCountGo" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refCountGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "refLastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "refLastIndexOf" ((PVar "needle") (PVar "hay")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "hay"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "refLastGo" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "refLastGo" ((PVar "needle") (PVar "hay") (PVar "i") (PVar "acc")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle"))) (EApp (EVar "stringLength") (EVar "hay"))) (EVar "acc") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EApp (EVar "stringLength") (EVar "needle")))) (EVar "hay")) (EVar "needle")) (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "refLastGo") (EVar "needle")) (EVar "hay")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "edgePairs" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
+(DFunDef false "edgePairs" () (EListLit (ETuple (ELit (LString "")) (ELit (LString ""))) (ETuple (ELit (LString "")) (ELit (LString "abc"))) (ETuple (ELit (LString "a")) (ELit (LString ""))) (ETuple (ELit (LString "aa")) (ELit (LString "aaaa"))) (ETuple (ELit (LString "aa")) (ELit (LString "aaa"))) (ETuple (ELit (LString "aa")) (ELit (LString "a"))) (ETuple (ELit (LString "aba")) (ELit (LString "ababa"))) (ETuple (ELit (LString "ab")) (ELit (LString "xabab"))) (ETuple (ELit (LString "x")) (ELit (LString "xxxxx"))) (ETuple (ELit (LString "ll")) (ELit (LString "lllll"))) (ETuple (ELit (LString "z")) (ELit (LString "hello"))) (ETuple (ELit (LString "é")) (ELit (LString "éaé"))) (ETuple (ELit (LString "é")) (ELit (LString "ééé"))) (ETuple (ELit (LString "éé")) (ELit (LString "ééé"))) (ETuple (ELit (LString "日本")) (ELit (LString "日本語日本"))) (ETuple (ELit (LString "日")) (ELit (LString "a日日b"))) (ETuple (ELit (LString "😀")) (ELit (LString "a😀😀b"))) (ETuple (ELit (LString "ééé")) (ELit (LString "éé"))) (ETuple (ELit (LString "abc")) (ELit (LString "ab"))) (ETuple (ELit (LString "é")) (ELit (LString "")))))
+(DTypeSig false "refPairs" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "String") (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "List") (TyVar "a")))))
+(DFunDef false "refPairs" (PWild (PList)) (EListLit))
+(DFunDef false "refPairs" ((PVar "f") (PCons (PTuple (PVar "n") (PVar "h")) (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "f") (EVar "n")) (EVar "h")) (EApp (EApp (EVar "refPairs") (EVar "f")) (EVar "rest"))))
+(DTest false "startsWith agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refStartsWith")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "startsWith")) (EVar "edgePairs"))))
+(DTest false "endsWith agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refEndsWith")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "endsWith")) (EVar "edgePairs"))))
+(DTest false "countOccurrences agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refCountOccurrences")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "countOccurrences")) (EVar "edgePairs"))))
+(DTest false "lastIndexOf agrees with the codepoint reference on edge inputs" (EApp (EApp (EVar "expectEqual") (EApp (EApp (EVar "refPairs") (EVar "refLastIndexOf")) (EVar "edgePairs"))) (EApp (EApp (EVar "refPairs") (EVar "lastIndexOf")) (EVar "edgePairs"))))

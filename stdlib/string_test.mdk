@@ -4,11 +4,12 @@
 -- byte offset would show.
 
 import string.{
-  byteLength, center, countOccurrences, drop, fromChars, indexOf, lastIndexOf,
-  lines, padLeft, padRight, replace, replaceAll, splitAt, take, trim, trimLeft,
-  trimRight, unlines, utf8ByteLength
+  byteLength, center, countOccurrences, drop, endsWith, fromChars, indexOf,
+  lastIndexOf, lines, padLeft, padRight, replace, replaceAll, splitAt,
+  startsWith, stripPrefix, stripSuffix, take, trim, trimLeft, trimRight,
+  unlines, utf8ByteLength
 }
-import test.{expectEqual}
+import test.{expectEqual, expectFalse, expectTrue}
 
 -- # Fixed cases
 
@@ -312,3 +313,131 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
     Some i =>
       stringSlice i (i + 2) s == "ab"
         && indexOf "ab" (stringSlice (i + 1) (stringLength s) s) == None
+
+-- # Native byte-level searches
+
+test "startsWith the empty prefix is True" = expectTrue (startsWith "" "")
+
+test "startsWith a prefix longer than the string is False" =
+  expectFalse (startsWith "hello!" "hello")
+
+test "startsWith compares whole codepoints of multibyte text" =
+  expectEqual (True, False) (startsWith "日" "日本", startsWith "日本" "日")
+
+test "endsWith the empty suffix is True" = expectTrue (endsWith "" "")
+
+test "endsWith a suffix longer than the string is False" =
+  expectFalse (endsWith "xhello" "hello")
+
+test "endsWith of a multibyte suffix" =
+  expectEqual (True, False) (endsWith "語" "日本語", endsWith "本" "日本語")
+
+test "stripPrefix and stripSuffix on multibyte text" =
+  expectEqual
+    (Some "本語", Some "日本")
+    (stripPrefix "日" "日本語", stripSuffix "語" "日本語")
+
+test "countOccurrences of an empty needle is 0" =
+  expectEqual 0 (countOccurrences "" "héllo")
+
+test "countOccurrences does not count overlapping matches in multibyte text" =
+  expectEqual 2 (countOccurrences "éé" "ééé é ééé")
+
+test "countOccurrences finds multibyte needles" =
+  expectEqual 3 (countOccurrences "日" "日a日日")
+
+test "lastIndexOf of a needle longer than the haystack is None" =
+  expectEqual None (lastIndexOf "hello!" "hello")
+
+test "lastIndexOf keeps the last overlapping match in a run" =
+  expectEqual (Some 3) (lastIndexOf "aa" "aaaaa")
+
+test "lastIndexOf returns the codepoint index past a multibyte prefix" =
+  expectEqual (Some 3) (lastIndexOf "日" "日本語日")
+
+-- Reference semantics for countOccurrences and lastIndexOf, compared
+-- codepoint by codepoint.  They are the definitions the native externs
+-- replaced, so the differential below pins the new behaviour to them.
+
+refStartsWith : String -> String -> Bool
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refStartsWith p s = stringSlice 0 (stringLength p) s == p
+
+refEndsWith : String -> String -> Bool
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refEndsWith p s =
+  stringSlice (stringLength s - stringLength p) (stringLength s) s == p
+
+refCountOccurrences : String -> String -> Int
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refCountOccurrences needle hay
+  | needle == "" = 0
+  | otherwise = refCountGo needle hay 0 0
+
+refCountGo : String -> String -> Int -> Int -> Int
+refCountGo needle hay i acc
+  | i + stringLength needle > stringLength hay = acc
+  | stringSlice i (i + stringLength needle) hay == needle =
+    refCountGo needle hay (i + stringLength needle) (acc + 1)
+  | otherwise = refCountGo needle hay (i + 1) acc
+
+refLastIndexOf : String -> String -> Option Int
+-- Oracle: the codepoint definition the native extern replaced, kept on purpose.
+-- lint-disable-next-line rule-stdlib-reimpl
+refLastIndexOf needle hay
+  | needle == "" = Some (stringLength hay)
+  | otherwise = refLastGo needle hay 0 None
+
+refLastGo : String -> String -> Int -> Option Int -> Option Int
+refLastGo needle hay i acc
+  | i + stringLength needle > stringLength hay = acc
+  | stringSlice i (i + stringLength needle) hay == needle =
+    refLastGo needle hay (i + 1) (Some i)
+  | otherwise = refLastGo needle hay (i + 1) acc
+
+edgePairs : List (String, String)
+edgePairs = [
+  ("", ""),
+  ("", "abc"),
+  ("a", ""),
+  ("aa", "aaaa"),
+  ("aa", "aaa"),
+  ("aa", "a"),
+  ("aba", "ababa"),
+  ("ab", "xabab"),
+  ("x", "xxxxx"),
+  ("ll", "lllll"),
+  ("z", "hello"),
+  ("é", "éaé"),
+  ("é", "ééé"),
+  ("éé", "ééé"),
+  ("日本", "日本語日本"),
+  ("日", "a日日b"),
+  ("😀", "a😀😀b"),
+  ("ééé", "éé"),
+  ("abc", "ab"),
+  ("é", ""),
+]
+
+refPairs : (String -> String -> a) -> List (String, String) -> List a
+refPairs _ [] = []
+refPairs f ((n, h) :: rest) = f n h :: refPairs f rest
+
+test "startsWith agrees with the codepoint reference on edge inputs" =
+  expectEqual (refPairs refStartsWith edgePairs) (refPairs startsWith edgePairs)
+
+test "endsWith agrees with the codepoint reference on edge inputs" =
+  expectEqual (refPairs refEndsWith edgePairs) (refPairs endsWith edgePairs)
+
+test "countOccurrences agrees with the codepoint reference on edge inputs" =
+  expectEqual
+    (refPairs refCountOccurrences edgePairs)
+    (refPairs countOccurrences edgePairs)
+
+test "lastIndexOf agrees with the codepoint reference on edge inputs" =
+  expectEqual
+    (refPairs refLastIndexOf edgePairs)
+    (refPairs lastIndexOf edgePairs)

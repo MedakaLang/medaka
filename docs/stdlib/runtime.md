@@ -1270,6 +1270,40 @@ stringIndexOf : String -> String -> Option Int
 The position of the first occurrence of the first string in the second,
 or `None`.
 
+### `stringStartsWith`
+
+```
+stringStartsWith : String -> String -> Bool
+```
+
+Whether the second string begins with the first.
+
+### `stringEndsWith`
+
+```
+stringEndsWith : String -> String -> Bool
+```
+
+Whether the second string ends with the first.
+
+### `stringCountOccurrences`
+
+```
+stringCountOccurrences : String -> String -> Int
+```
+
+The number of non-overlapping occurrences of the first string in the
+second; `0` for an empty needle.
+
+### `stringLastIndexOf`
+
+```
+stringLastIndexOf : String -> String -> Option Int
+```
+
+The position of the last occurrence of the first string in the second,
+or `None`.  Occurrences may overlap; an empty needle is at the end.
+
 ### `stringCompare`
 
 ```

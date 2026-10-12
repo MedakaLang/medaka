@@ -2135,6 +2135,61 @@ long long mdk_string_index_of(long long needle, long long hay) {
   return mdk_none();
 }
 
+/* Byte-level searches over String cells.  UTF-8 is self-synchronizing, so a byte
+ * match is a codepoint match; every operand is well-formed (see mdk_utf8_cp_count).
+ * Results are raw 0/1 or counts; the emitter tags them. */
+long long mdk_string_starts_with(long long prefix, long long s) {
+  const char *pc = (const char *)prefix, *sc = (const char *)s;
+  long long pl = ((const long long *)pc)[1], sl = ((const long long *)sc)[1];
+  if (pl > sl) return 0;
+  return memcmp(sc + 24, pc + 24, (size_t)pl) == 0;
+}
+
+long long mdk_string_ends_with(long long suffix, long long s) {
+  const char *xc = (const char *)suffix, *sc = (const char *)s;
+  long long xl = ((const long long *)xc)[1], sl = ((const long long *)sc)[1];
+  if (xl > sl) return 0;
+  return memcmp(sc + 24 + (sl - xl), xc + 24, (size_t)xl) == 0;
+}
+
+/* Non-overlapping occurrences; 0 for an empty needle. */
+long long mdk_string_count_occurrences(long long needle, long long hay) {
+  const char *nc = (const char *)needle, *hc = (const char *)hay;
+  long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
+  const char *nb = nc + 24, *hb = hc + 24;
+  if (nl == 0) return 0;
+  long long count = 0;
+  long long b = 0;
+  while (b + nl <= hl) {
+    const char *p = memchr(hb + b, nb[0], (size_t)(hl - nl + 1 - b));
+    if (p == NULL) break;
+    b = p - hb;
+    if (memcmp(hb + b, nb, (size_t)nl) == 0) { count++; b += nl; }
+    else b++;
+  }
+  return count;
+}
+
+/* Overlapping occurrences are allowed; the last one wins.  An empty needle is
+ * found at the end of the haystack, i.e. at its codepoint count. */
+long long mdk_string_last_index_of(long long needle, long long hay) {
+  const char *nc = (const char *)needle, *hc = (const char *)hay;
+  long long nl = ((const long long *)nc)[1], hl = ((const long long *)hc)[1];
+  const char *nb = nc + 24, *hb = hc + 24;
+  if (nl == 0) return mdk_some((((const long long *)hc)[2] << 1) | 1);
+  long long last = -1;
+  long long b = 0;
+  while (b + nl <= hl) {
+    const char *p = memchr(hb + b, nb[0], (size_t)(hl - nl + 1 - b));
+    if (p == NULL) break;
+    b = p - hb;
+    if (memcmp(hb + b, nb, (size_t)nl) == 0) last = b;
+    b++;
+  }
+  if (last < 0) return mdk_none();
+  return mdk_some((mdk_utf8_cp_count(hb, last) << 1) | 1);
+}
+
 long long mdk_string_compare(long long a, long long b) {
   const char *ac = (const char *)a, *bc = (const char *)b;
   long long al = ((const long long *)ac)[1], bl = ((const long long *)bc)[1];

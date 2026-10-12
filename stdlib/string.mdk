@@ -298,7 +298,7 @@ toFloat s = stringToFloat s
    False -}
 export
 startsWith : String -> String -> Bool
-startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
+startsWith prefix s = stringStartsWith prefix s
 
 {- | Whether `s` ends with `suffix`.
 
@@ -306,9 +306,7 @@ startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
    True -}
 export
 endsWith : String -> String -> Bool
-endsWith suffix s =
-  stringSlice (stringLength s - stringLength suffix) (stringLength s) s
-    == suffix
+endsWith suffix s = stringEndsWith suffix s
 
 {- | `s` without its leading `prefix`, or `None` when `s` does not begin
    with it.
@@ -385,27 +383,7 @@ indexOf needle haystack = stringIndexOf needle haystack
    None -}
 export
 lastIndexOf : String -> String -> Option Int
-lastIndexOf needle haystack
-  | needle == "" = Some (stringLength haystack)
-  | otherwise = match indexOf needle haystack
-    None => None
-    Some _ =>
-      let a = toChars haystack
-      let nA = toChars needle
-      lastIndexOfGo a (arrayLength a) nA (arrayLength nA) 0 None
-
--- Walks forward from each hit, advancing one codepoint so overlapping
--- matches still count, and keeps the latest.
-lastIndexOfGo : Array Char ->
-  Int ->
-  Array Char ->
-  Int ->
-  Int ->
-  Option Int ->
-  Option Int
-lastIndexOfGo a n nA nl from acc = match sepFrom a n nA nl from
-  None => acc
-  Some i => lastIndexOfGo a n nA nl (i + 1) (Some i)
+lastIndexOf needle haystack = stringLastIndexOf needle haystack
 
 {- | The number of non-overlapping occurrences of `needle` in `haystack`.
 
@@ -417,20 +395,7 @@ lastIndexOfGo a n nA nl from acc = match sepFrom a n nA nl from
    2 -}
 export
 countOccurrences : String -> String -> Int
-countOccurrences needle haystack
-  | needle == "" = 0
-  | otherwise = match indexOf needle haystack
-    None => 0
-    Some _ =>
-      let a = toChars haystack
-      let nA = toChars needle
-      countGo a (arrayLength a) nA (arrayLength nA) 0 0
-
--- Non-overlapping: each hit resumes just past its own end.
-countGo : Array Char -> Int -> Array Char -> Int -> Int -> Int -> Int
-countGo a n nA nl from acc = match sepFrom a n nA nl from
-  None => acc
-  Some i => countGo a n nA nl (i + nl) (acc + 1)
+countOccurrences needle haystack = stringCountOccurrences needle haystack
 
 -- # Building
 

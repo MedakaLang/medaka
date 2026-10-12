@@ -1,5 +1,5 @@
 # META
-source_lines=909
+source_lines=874
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -302,7 +302,7 @@ toFloat s = stringToFloat s
    False -}
 export
 startsWith : String -> String -> Bool
-startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
+startsWith prefix s = stringStartsWith prefix s
 
 {- | Whether `s` ends with `suffix`.
 
@@ -310,9 +310,7 @@ startsWith prefix s = stringSlice 0 (stringLength prefix) s == prefix
    True -}
 export
 endsWith : String -> String -> Bool
-endsWith suffix s =
-  stringSlice (stringLength s - stringLength suffix) (stringLength s) s
-    == suffix
+endsWith suffix s = stringEndsWith suffix s
 
 {- | `s` without its leading `prefix`, or `None` when `s` does not begin
    with it.
@@ -389,27 +387,7 @@ indexOf needle haystack = stringIndexOf needle haystack
    None -}
 export
 lastIndexOf : String -> String -> Option Int
-lastIndexOf needle haystack
-  | needle == "" = Some (stringLength haystack)
-  | otherwise = match indexOf needle haystack
-    None => None
-    Some _ =>
-      let a = toChars haystack
-      let nA = toChars needle
-      lastIndexOfGo a (arrayLength a) nA (arrayLength nA) 0 None
-
--- Walks forward from each hit, advancing one codepoint so overlapping
--- matches still count, and keeps the latest.
-lastIndexOfGo : Array Char ->
-  Int ->
-  Array Char ->
-  Int ->
-  Int ->
-  Option Int ->
-  Option Int
-lastIndexOfGo a n nA nl from acc = match sepFrom a n nA nl from
-  None => acc
-  Some i => lastIndexOfGo a n nA nl (i + 1) (Some i)
+lastIndexOf needle haystack = stringLastIndexOf needle haystack
 
 {- | The number of non-overlapping occurrences of `needle` in `haystack`.
 
@@ -421,20 +399,7 @@ lastIndexOfGo a n nA nl from acc = match sepFrom a n nA nl from
    2 -}
 export
 countOccurrences : String -> String -> Int
-countOccurrences needle haystack
-  | needle == "" = 0
-  | otherwise = match indexOf needle haystack
-    None => 0
-    Some _ =>
-      let a = toChars haystack
-      let nA = toChars needle
-      countGo a (arrayLength a) nA (arrayLength nA) 0 0
-
--- Non-overlapping: each hit resumes just past its own end.
-countGo : Array Char -> Int -> Array Char -> Int -> Int -> Int -> Int
-countGo a n nA nl from acc = match sepFrom a n nA nl from
-  None => acc
-  Some i => countGo a n nA nl (i + nl) (acc + 1)
+countOccurrences needle haystack = stringCountOccurrences needle haystack
 
 -- # Building
 
@@ -964,9 +929,9 @@ center n c s =
 (DTypeSig true "toFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "s")) (EVar "prefix")))
+(DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "endsWith" ((PVar "suffix") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "suffix")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "suffix")))
+(DFunDef false "endsWith" ((PVar "suffix") (PVar "s")) (EApp (EApp (EVar "stringEndsWith") (EVar "suffix")) (EVar "s")))
 (DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "stripPrefix" ((PVar "prefix") (PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "s")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None")))
 (DTypeSig true "stripSuffix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -976,13 +941,9 @@ center n c s =
 (DTypeSig true "indexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "indexOf" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "haystack"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "haystack"))) (DoLet false false (PVar "nA") (EApp (EVar "toChars") (EVar "needle"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "nA")) (EApp (EVar "arrayLength") (EVar "nA"))) (ELit (LInt 0))) (EVar "None")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "lastIndexOfGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
-(DFunDef false "lastIndexOfGo" ((PVar "a") (PVar "n") (PVar "nA") (PVar "nl") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EVar "from")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringLastIndexOf") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "countOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "countOccurrences" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "haystack"))) (DoLet false false (PVar "nA") (EApp (EVar "toChars") (EVar "needle"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "countGo") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "nA")) (EApp (EVar "arrayLength") (EVar "nA"))) (ELit (LInt 0))) (ELit (LInt 0))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "countGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))))
-(DFunDef false "countGo" ((PVar "a") (PVar "n") (PVar "nA") (PVar "nl") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EVar "from")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "countGo") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EBinOp "+" (EVar "i") (EVar "nl"))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))))))
+(DFunDef false "countOccurrences" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringCountOccurrences") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "prepend" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "prepend" ((PVar "pre") (PVar "s")) (EBinOp "++" (EVar "pre") (EVar "s")))
 (DTypeSig true "concat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
@@ -1142,9 +1103,9 @@ center n c s =
 (DTypeSig true "toFloat" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Float"))))
 (DFunDef false "toFloat" ((PVar "s")) (EApp (EVar "stringToFloat") (EVar "s")))
 (DTypeSig true "startsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "stringLength") (EVar "prefix"))) (EVar "s")) (EVar "prefix")))
+(DFunDef false "startsWith" ((PVar "prefix") (PVar "s")) (EApp (EApp (EVar "stringStartsWith") (EVar "prefix")) (EVar "s")))
 (DTypeSig true "endsWith" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "endsWith" ((PVar "suffix") (PVar "s")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EVar "suffix")))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s")) (EVar "suffix")))
+(DFunDef false "endsWith" ((PVar "suffix") (PVar "s")) (EApp (EApp (EVar "stringEndsWith") (EVar "suffix")) (EVar "s")))
 (DTypeSig true "stripPrefix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "stripPrefix" ((PVar "prefix") (PVar "s")) (EIf (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "s")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "prefix"))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None")))
 (DTypeSig true "stripSuffix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -1154,13 +1115,9 @@ center n c s =
 (DTypeSig true "indexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "indexOf" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringIndexOf") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (EApp (EVar "Some") (EApp (EVar "stringLength") (EVar "haystack"))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "haystack"))) (DoLet false false (PVar "nA") (EApp (EVar "toChars") (EVar "needle"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "nA")) (EApp (EVar "arrayLength") (EVar "nA"))) (ELit (LInt 0))) (EVar "None")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "lastIndexOfGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))))
-(DFunDef false "lastIndexOfGo" ((PVar "a") (PVar "n") (PVar "nA") (PVar "nl") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EVar "from")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "Some") (EVar "i"))))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringLastIndexOf") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "countOccurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int"))))
-(DFunDef false "countOccurrences" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EVar "needle") (ELit (LString ""))) (ELit (LInt 0)) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack")) (arm (PCon "None") () (ELit (LInt 0))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "haystack"))) (DoLet false false (PVar "nA") (EApp (EVar "toChars") (EVar "needle"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "countGo") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))) (EVar "nA")) (EApp (EVar "arrayLength") (EVar "nA"))) (ELit (LInt 0))) (ELit (LInt 0))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "countGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))))
-(DFunDef false "countGo" ((PVar "a") (PVar "n") (PVar "nA") (PVar "nl") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "sepFrom") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EVar "from")) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "countGo") (EVar "a")) (EVar "n")) (EVar "nA")) (EVar "nl")) (EBinOp "+" (EVar "i") (EVar "nl"))) (EBinOp "+" (EVar "acc") (ELit (LInt 1)))))))
+(DFunDef false "countOccurrences" ((PVar "needle") (PVar "haystack")) (EApp (EApp (EVar "stringCountOccurrences") (EVar "needle")) (EVar "haystack")))
 (DTypeSig true "prepend" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "prepend" ((PVar "pre") (PVar "s")) (EBinOp "++" (EVar "pre") (EVar "s")))
 (DTypeSig true "concat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))

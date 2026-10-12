@@ -2240,6 +2240,28 @@ emitStrExtern e env "stringByteLength" args = match emitArgs e env args
     let _ = emit e "  \{n} = load i64, ptr \{bp}"
     (tagInt e n, LTInt)
   _ => panic "llvm: stringByteLength takes one argument"
+emitStrExtern e env "stringStartsWith" args = match emitArgs e env args
+  [p, s] =>
+    let r = freshReg e
+    let _ =
+      emit e "  \{r} = call i64 @mdk_string_starts_with(i64 \{p}, i64 \{s})"
+    (tagInt e r, LTBool)
+  _ => panic "llvm: stringStartsWith takes two arguments"
+emitStrExtern e env "stringEndsWith" args = match emitArgs e env args
+  [p, s] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_string_ends_with(i64 \{p}, i64 \{s})"
+    (tagInt e r, LTBool)
+  _ => panic "llvm: stringEndsWith takes two arguments"
+emitStrExtern e env "stringCountOccurrences" args = match emitArgs e env args
+  [n, h] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_string_count_occurrences(i64 \{n}, i64 \{h})"
+    (tagInt e r, LTInt)
+  _ => panic "llvm: stringCountOccurrences takes two arguments"
 -- INTRINSIC: load cp_count@16, tag it
 
 emitStrExtern e _ name _ = gapE e ("unsupported string extern " ++ name)
@@ -2810,6 +2832,13 @@ emitAdtExtern e env "stringIndexOf" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_string_index_of(i64 \{n}, i64 \{h})"
     (r, LTCon)
   _ => panic "llvm: stringIndexOf takes two arguments"
+emitAdtExtern e env "stringLastIndexOf" args = match emitArgs e env args
+  [n, h] =>
+    let r = freshReg e
+    let _ =
+      emit e "  \{r} = call i64 @mdk_string_last_index_of(i64 \{n}, i64 \{h})"
+    (r, LTCon)
+  _ => panic "llvm: stringLastIndexOf takes two arguments"
 emitAdtExtern e env "stringCompare" args = match emitArgs e env args
   [a, b] =>
     let r = freshReg e

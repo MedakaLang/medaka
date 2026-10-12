@@ -745,15 +745,9 @@ IDENT "startsWith"
 IDENT "prefix"
 IDENT "s"
 EQUAL
-IDENT "stringSlice"
-INT 0
-LPAREN
-IDENT "stringLength"
+IDENT "stringStartsWith"
 IDENT "prefix"
-RPAREN
 IDENT "s"
-EQ_EQ
-IDENT "prefix"
 NEWLINE
 EXPORT
 NEWLINE
@@ -769,24 +763,9 @@ IDENT "endsWith"
 IDENT "suffix"
 IDENT "s"
 EQUAL
-INDENT
-IDENT "stringSlice"
-LPAREN
-IDENT "stringLength"
-IDENT "s"
-MINUS
-IDENT "stringLength"
+IDENT "stringEndsWith"
 IDENT "suffix"
-RPAREN
-LPAREN
-IDENT "stringLength"
 IDENT "s"
-RPAREN
-IDENT "s"
-EQ_EQ
-IDENT "suffix"
-NEWLINE
-DEDENT
 NEWLINE
 EXPORT
 NEWLINE
@@ -932,133 +911,10 @@ NEWLINE
 IDENT "lastIndexOf"
 IDENT "needle"
 IDENT "haystack"
-INDENT
-PIPE
-IDENT "needle"
-EQ_EQ
-STRING ""
 EQUAL
-UPPER "Some"
-LPAREN
-IDENT "stringLength"
-IDENT "haystack"
-RPAREN
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
-MATCH
-IDENT "indexOf"
+IDENT "stringLastIndexOf"
 IDENT "needle"
 IDENT "haystack"
-INDENT
-UPPER "None"
-FAT_ARROW
-UPPER "None"
-NEWLINE
-UPPER "Some"
-UNDERSCORE
-FAT_ARROW
-INDENT
-LET
-IDENT "a"
-EQUAL
-IDENT "toChars"
-IDENT "haystack"
-NEWLINE
-LET
-IDENT "nA"
-EQUAL
-IDENT "toChars"
-IDENT "needle"
-NEWLINE
-IDENT "lastIndexOfGo"
-IDENT "a"
-LPAREN
-IDENT "arrayLength"
-IDENT "a"
-RPAREN
-IDENT "nA"
-LPAREN
-IDENT "arrayLength"
-IDENT "nA"
-RPAREN
-INT 0
-UPPER "None"
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "lastIndexOfGo"
-COLON
-UPPER "Array"
-UPPER "Char"
-ARROW
-INDENT
-UPPER "Int"
-ARROW
-NEWLINE
-UPPER "Array"
-UPPER "Char"
-ARROW
-NEWLINE
-UPPER "Int"
-ARROW
-NEWLINE
-UPPER "Int"
-ARROW
-NEWLINE
-UPPER "Option"
-UPPER "Int"
-ARROW
-NEWLINE
-UPPER "Option"
-UPPER "Int"
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "lastIndexOfGo"
-IDENT "a"
-IDENT "n"
-IDENT "nA"
-IDENT "nl"
-IDENT "from"
-IDENT "acc"
-EQUAL
-MATCH
-IDENT "sepFrom"
-IDENT "a"
-IDENT "n"
-IDENT "nA"
-IDENT "nl"
-IDENT "from"
-INDENT
-UPPER "None"
-FAT_ARROW
-IDENT "acc"
-NEWLINE
-UPPER "Some"
-IDENT "i"
-FAT_ARROW
-IDENT "lastIndexOfGo"
-IDENT "a"
-IDENT "n"
-IDENT "nA"
-IDENT "nl"
-LPAREN
-IDENT "i"
-PLUS
-INT 1
-RPAREN
-LPAREN
-UPPER "Some"
-IDENT "i"
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 EXPORT
 NEWLINE
@@ -1073,120 +929,10 @@ NEWLINE
 IDENT "countOccurrences"
 IDENT "needle"
 IDENT "haystack"
-INDENT
-PIPE
-IDENT "needle"
-EQ_EQ
-STRING ""
 EQUAL
-INT 0
-NEWLINE
-PIPE
-IDENT "otherwise"
-EQUAL
-MATCH
-IDENT "indexOf"
+IDENT "stringCountOccurrences"
 IDENT "needle"
 IDENT "haystack"
-INDENT
-UPPER "None"
-FAT_ARROW
-INT 0
-NEWLINE
-UPPER "Some"
-UNDERSCORE
-FAT_ARROW
-INDENT
-LET
-IDENT "a"
-EQUAL
-IDENT "toChars"
-IDENT "haystack"
-NEWLINE
-LET
-IDENT "nA"
-EQUAL
-IDENT "toChars"
-IDENT "needle"
-NEWLINE
-IDENT "countGo"
-IDENT "a"
-LPAREN
-IDENT "arrayLength"
-IDENT "a"
-RPAREN
-IDENT "nA"
-LPAREN
-IDENT "arrayLength"
-IDENT "nA"
-RPAREN
-INT 0
-INT 0
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-DEDENT
-NEWLINE
-IDENT "countGo"
-COLON
-UPPER "Array"
-UPPER "Char"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Array"
-UPPER "Char"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-ARROW
-UPPER "Int"
-NEWLINE
-IDENT "countGo"
-IDENT "a"
-IDENT "n"
-IDENT "nA"
-IDENT "nl"
-IDENT "from"
-IDENT "acc"
-EQUAL
-MATCH
-IDENT "sepFrom"
-IDENT "a"
-IDENT "n"
-IDENT "nA"
-IDENT "nl"
-IDENT "from"
-INDENT
-UPPER "None"
-FAT_ARROW
-IDENT "acc"
-NEWLINE
-UPPER "Some"
-IDENT "i"
-FAT_ARROW
-IDENT "countGo"
-IDENT "a"
-IDENT "n"
-IDENT "nA"
-IDENT "nl"
-LPAREN
-IDENT "i"
-PLUS
-IDENT "nl"
-RPAREN
-LPAREN
-IDENT "acc"
-PLUS
-INT 1
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 EXPORT
 NEWLINE

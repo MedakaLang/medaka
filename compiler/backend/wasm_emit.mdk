@@ -1805,6 +1805,10 @@ externArityW name =
     [
       "randomInt",
       "stringIndexOf",
+      "stringStartsWith",
+      "stringEndsWith",
+      "stringCountOccurrences",
+      "stringLastIndexOf",
       "stringCompare",
       "arrayGetUnsafe",
       "arrayMake",
@@ -7133,6 +7137,36 @@ emitStrExternRef prog env d "stringIndexOf" [needle, hay] =
     ++ ["ref.cast (ref $str)", "call $mdk_str_index_of"]
 emitStrExternRef prog env d "stringIndexOf" _ =
   gapLP prog "wasm W8b: stringIndexOf takes exactly two arguments"
+-- W8c: byte-level searches over two $str.  Bool / Int results are i32 immediates
+-- from the runtime fns; stringLastIndexOf builds its Option Int like $mdk_str_index_of.
+emitStrExternRef prog env d "stringStartsWith" [p, s] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)", "call $mdk_str_starts_with", "ref.i31"]
+emitStrExternRef prog env d "stringStartsWith" _ =
+  gapLP prog "wasm W8c: stringStartsWith takes exactly two arguments"
+emitStrExternRef prog env d "stringEndsWith" [p, s] =
+  emitRefExpr prog env d p
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d s
+    ++ ["ref.cast (ref $str)", "call $mdk_str_ends_with", "ref.i31"]
+emitStrExternRef prog env d "stringEndsWith" _ =
+  gapLP prog "wasm W8c: stringEndsWith takes exactly two arguments"
+emitStrExternRef prog env d "stringCountOccurrences" [n, h] =
+  emitRefExpr prog env d n
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d h
+    ++ ["ref.cast (ref $str)", "call $mdk_str_count_occ", "ref.i31"]
+emitStrExternRef prog env d "stringCountOccurrences" _ =
+  gapLP prog "wasm W8c: stringCountOccurrences takes exactly two arguments"
+emitStrExternRef prog env d "stringLastIndexOf" [n, h] =
+  emitRefExpr prog env d n
+    ++ ["ref.cast (ref $str)"]
+    ++ emitRefExpr prog env d h
+    ++ ["ref.cast (ref $str)", "call $mdk_str_last_index_of"]
+emitStrExternRef prog env d "stringLastIndexOf" _ =
+  gapLP prog "wasm W8c: stringLastIndexOf takes exactly two arguments"
 -- W8b: stringCompare a b : two $str → Ordering (ref eq).  The runtime fn returns the
 -- Lt/Eq/Gt i31 immediate directly.
 emitStrExternRef prog env d "stringCompare" [a, b] =

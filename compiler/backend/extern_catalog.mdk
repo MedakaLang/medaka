@@ -341,6 +341,10 @@ wasmUseRows = [
   ("stringSlice", [UseStrLeaf]),
   ("stringConcat", [UseStrLeaf]),
   ("stringIndexOf", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringStartsWith", [UseStr, UseStrLeaf]),
+  ("stringEndsWith", [UseStr, UseStrLeaf]),
+  ("stringCountOccurrences", [UseStr, UseStrLeaf, UseStrSearch]),
+  ("stringLastIndexOf", [UseStr, UseStrLeaf, UseStrSearch]),
   ("stringCompare", [UseStr, UseStrLeaf, UseStrSearch]),
   ("stringToFloat", [UseStr, UseFloat, UseFloatStr, UseIO]),
   ("charIsAlpha", [UseCharClass]),
@@ -1232,6 +1236,26 @@ catalogRows = [
   ExternRow
     "stringIndexOf"
     (CSymbol LlvmAdt "mdk_string_index_of")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringStartsWith"
+    (CSymbol LlvmStr "mdk_string_starts_with")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringEndsWith"
+    (CSymbol LlvmStr "mdk_string_ends_with")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringCountOccurrences"
+    (CSymbol LlvmStr "mdk_string_count_occurrences")
+    (Inline WasmStr)
+    Interpreted,
+  ExternRow
+    "stringLastIndexOf"
+    (CSymbol LlvmAdt "mdk_string_last_index_of")
     (Inline WasmStr)
     Interpreted,
   ExternRow
