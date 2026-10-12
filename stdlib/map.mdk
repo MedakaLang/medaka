@@ -338,15 +338,17 @@ glue l r
   | size l > size r = glueMax l r
   | otherwise = glueMin l r
 
+-- `glueMax` removes the maximum of `l`, so only the left subtree shrinks and
+-- only the right-heavy check can fire; `glueMin` is the mirror image.
 glueMax : Map k v -> Map k v -> Map k v
-glueMax l r = match maxView l
+glueMax l r = match getMax l
   None => r
-  Some (k, v, l') => balance k v l' r
+  Some (k, v) => balanceR k v (deleteMax l) r
 
 glueMin : Map k v -> Map k v -> Map k v
-glueMin l r = match minView r
+glueMin l r = match getMin r
   None => l
-  Some (k, v, r') => balance k v l r'
+  Some (k, v) => balanceL k v l (deleteMin r)
 
 -- # Minimum and maximum
 
@@ -358,9 +360,11 @@ glueMin l r = match minView r
 export
 minView : Map k v -> Option (k, v, Map k v)
 minView Tip = None
-minView (Bin _ k v l r) = match minView l
-  None => Some (k, v, r)
-  Some (km, vm, l') => Some (km, vm, balance k v l' r)
+-- The explicit match avoids the closure that `map` would allocate per call.
+-- lint-disable-next-line rule-match-to-map
+minView m = match getMin m
+  None => None
+  Some (k, v) => Some (k, v, deleteMin m)
 
 {- | The largest entry and the map without it, or `None` when the map is
    empty.
@@ -370,9 +374,11 @@ minView (Bin _ k v l r) = match minView l
 export
 maxView : Map k v -> Option (k, v, Map k v)
 maxView Tip = None
-maxView (Bin _ k v l r) = match maxView r
-  None => Some (k, v, l)
-  Some (km, vm, r') => Some (km, vm, balance k v l r')
+-- The explicit match avoids the closure that `map` would allocate per call.
+-- lint-disable-next-line rule-match-to-map
+maxView m = match getMax m
+  None => None
+  Some (k, v) => Some (k, v, deleteMax m)
 
 {- | The entry with the smallest key, or `None` when the map is empty.
 
@@ -380,7 +386,9 @@ maxView (Bin _ k v l r) = match maxView r
    Some (1, 0) -}
 export
 getMin : Map k v -> Option (k, v)
-getMin m = map ((k, v, _) => (k, v)) (minView m)
+getMin Tip = None
+getMin (Bin _ k v Tip _) = Some (k, v)
+getMin (Bin _ _ _ l _) = getMin l
 
 {- | The entry with the largest key, or `None` when the map is empty.
 
@@ -388,7 +396,9 @@ getMin m = map ((k, v, _) => (k, v)) (minView m)
    Some (3, 0) -}
 export
 getMax : Map k v -> Option (k, v)
-getMax m = map ((k, v, _) => (k, v)) (maxView m)
+getMax Tip = None
+getMax (Bin _ k v _ Tip) = Some (k, v)
+getMax (Bin _ _ _ _ r) = getMax r
 
 {- | The map without its smallest entry.
 
@@ -398,9 +408,9 @@ getMax m = map ((k, v, _) => (k, v)) (maxView m)
    [2, 3] -}
 export
 deleteMin : Map k v -> Map k v
-deleteMin m = match minView m
-  None => Tip
-  Some (_, _, m') => m'
+deleteMin Tip = Tip
+deleteMin (Bin _ _ _ Tip r) = r
+deleteMin (Bin _ k v l r) = balanceR k v (deleteMin l) r
 
 {- | The map without its largest entry.
 
@@ -410,9 +420,9 @@ deleteMin m = match minView m
    [1, 2] -}
 export
 deleteMax : Map k v -> Map k v
-deleteMax m = match maxView m
-  None => Tip
-  Some (_, _, m') => m'
+deleteMax Tip = Tip
+deleteMax (Bin _ _ _ l Tip) = l
+deleteMax (Bin _ k v l r) = balanceL k v l (deleteMax r)
 
 -- # Folds and traversal
 
@@ -932,7 +942,7 @@ deleteOld k Tip = Tip
 deleteOld k (Bin _ k2 v2 l r) = match compare k k2
   Lt => balance k2 v2 (deleteOld k l) r
   Gt => balance k2 v2 l (deleteOld k r)
-  Eq => glue l r
+  Eq => glueOld l r
 
 insertMinOld : k -> v -> Map k v -> Map k v
 insertMinOld k v Tip = singleton k v
@@ -941,6 +951,51 @@ insertMinOld k v (Bin _ k2 v2 l r) = balance k2 v2 (insertMinOld k v l) r
 insertMaxOld : k -> v -> Map k v -> Map k v
 insertMaxOld k v Tip = singleton k v
 insertMaxOld k v (Bin _ k2 v2 l r) = balance k2 v2 l (insertMaxOld k v r)
+
+glueOld : Map k v -> Map k v -> Map k v
+glueOld Tip r = r
+glueOld l Tip = l
+glueOld l r
+  | size l > size r = glueMaxOld l r
+  | otherwise = glueMinOld l r
+
+glueMaxOld : Map k v -> Map k v -> Map k v
+glueMaxOld l r = match maxViewOld l
+  None => r
+  Some (k, v, l') => balance k v l' r
+
+glueMinOld : Map k v -> Map k v -> Map k v
+glueMinOld l r = match minViewOld r
+  None => l
+  Some (k, v, r') => balance k v l r'
+
+minViewOld : Map k v -> Option (k, v, Map k v)
+minViewOld Tip = None
+minViewOld (Bin _ k v l r) = match minViewOld l
+  None => Some (k, v, r)
+  Some (km, vm, l') => Some (km, vm, balance k v l' r)
+
+maxViewOld : Map k v -> Option (k, v, Map k v)
+maxViewOld Tip = None
+maxViewOld (Bin _ k v l r) = match maxViewOld r
+  None => Some (k, v, l)
+  Some (km, vm, r') => Some (km, vm, balance k v l r')
+
+getMinOld : Map k v -> Option (k, v)
+getMinOld m = map ((k, v, _) => (k, v)) (minViewOld m)
+
+getMaxOld : Map k v -> Option (k, v)
+getMaxOld m = map ((k, v, _) => (k, v)) (maxViewOld m)
+
+deleteMinOld : Map k v -> Map k v
+deleteMinOld m = match minViewOld m
+  None => Tip
+  Some (_, _, m') => m'
+
+deleteMaxOld : Map k v -> Map k v
+deleteMaxOld m = match maxViewOld m
+  None => Tip
+  Some (_, _, m') => m'
 
 -- Structural equality: same shape, cached sizes, keys and values at every node.
 sameShape : (Eq k, Eq v) => Map k v -> Map k v -> Bool
@@ -1002,6 +1057,72 @@ prop "delete matches the balance-only body shape" (xs : List (Int, Int)) (ks : L
       got
       (foldDeletes deleteOld ks (foldDeletes deleteOld (fstKeys ys) base))
     && wellFormed got
+
+-- Walks the new tree and the balance-only tree through repeated removals of
+-- the minimum (or maximum) in lockstep, so every intermediate shape is compared.
+minChainOk : Map Int Int -> Map Int Int -> Bool
+minChainOk got old =
+  if isEmpty old then
+    isEmpty got
+  else
+    sameShape got old
+      && wellFormed got
+      && minChainOk (deleteMin got) (deleteMinOld old)
+
+maxChainOk : Map Int Int -> Map Int Int -> Bool
+maxChainOk got old =
+  if isEmpty old then
+    isEmpty got
+  else
+    sameShape got old
+      && wellFormed got
+      && maxChainOk (deleteMax got) (deleteMaxOld old)
+
+-- Checks `glue` at every node of a tree, where its two arguments are siblings.
+glueAgrees : Map Int Int -> Bool
+glueAgrees Tip = True
+glueAgrees (Bin _ _ _ l r) =
+  sameShape (glue l r) (glueOld l r)
+    && wellFormed (glue l r)
+    && glueAgrees l
+    && glueAgrees r
+
+minViewAgrees : Map Int Int -> Bool
+minViewAgrees m = match minView m
+  None => isEmpty m
+  Some (k, v, rest) =>
+    eq (getMinOld m) (Some (k, v))
+      && sameShape rest (deleteMinOld m)
+      && wellFormed rest
+
+maxViewAgrees : Map Int Int -> Bool
+maxViewAgrees m = match maxView m
+  None => isEmpty m
+  Some (k, v, rest) =>
+    eq (getMaxOld m) (Some (k, v))
+      && sameShape rest (deleteMaxOld m)
+      && wellFormed rest
+
+prop "deleteMin matches the balance-only body shape at every step" (xs : List (Int, Int)) =
+  let m = foldInserts set xs Tip
+  minChainOk m m
+
+prop "deleteMax matches the balance-only body shape at every step" (xs : List (Int, Int)) =
+  let m = foldInserts set xs Tip
+  maxChainOk m m
+
+prop "getMin, getMax, minView and maxView agree with the balance-only bodies" (xs : List (Int, Int)) =
+  let m = foldInserts set xs Tip
+  eq (getMin m) (getMinOld m)
+    && eq (getMax m) (getMaxOld m)
+    && minViewAgrees m
+    && maxViewAgrees m
+
+prop "glue matches the balance-only body shape at every node" (xs : List (Int, Int)) =
+  glueAgrees (foldInserts set xs Tip) && glueAgrees (fromList xs)
+
+prop "glue on duplicate-heavy inserts matches the balance-only body shape" (xs : List (Int, Int)) =
+  glueAgrees (foldInserts set (modKeys xs) Tip)
 
 naiveFromList : Ord k => List (k, v) -> Map k v
 naiveFromList xs = fold (m (k, v) => set k v m) Tip xs
