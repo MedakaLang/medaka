@@ -407,6 +407,9 @@ data WasmEmit = WasmEmit {
   currentBinding : Ref String,
   stringSegments : Ref (List (Int, List Int)),
   nextStringSegmentId : Ref Int,
+  -- the segment of each distinct literal payload, keyed by `strSegKey` (an OrdMap,
+  -- so a lookup is O(log n)).  `freshStrSeg` consults it before allocating.
+  strSegIds : Ref (OrdMap Int),
   trmcCtx : Ref WTrmcCtx,
   nextLambdaId : Ref Int,
   liftedDefinitions : Ref (List (List String)),
@@ -502,6 +505,7 @@ freshWasmEmit mode = WasmEmit {
   currentBinding = Ref "?",
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
+  strSegIds = Ref omEmpty,
   trmcCtx = Ref WTrmcOff,
   nextLambdaId = Ref 0,
   liftedDefinitions = Ref [],
@@ -984,13 +988,10 @@ canonFn prog n =
 -- (intToString/charToStr/stringConcat/…) — any of which forces the §3.3 `$str`
 -- aggregate + the byte-write runtime into the module (and ref-mode, since a String
 -- is a boxed (ref eq) value).  `WasmEmit.stringSegments` accumulates the passive data
--- segments for string literals (one `(data $strseg_N "…")` per literal OCCURRENCE — #383:
--- `freshStrSeg` allocates a fresh segment id on every call with no dedup by content,
--- so the SAME literal appearing twice in source gets two segments; "per distinct
--- literal" was aspirational, not what `freshStrSeg`/`emitLitRef emit (LString s)`
--- actually do — init'd via `array.new_data`, the §11-preferred non-const-array
--- scheme). Both segment state and `useStr` itself belong to each fresh `WasmEmit`
--- record (a `Ref Bool` field, not an ambient cell).
+-- segments for string literals: one `(data $strseg_N "…")` per DISTINCT byte payload
+-- (`freshStrSeg` interns by content), init'd via `array.new_data`, the
+-- §11-preferred non-const-array scheme. Both segment state and `useStr` itself belong
+-- to each fresh `WasmEmit` record (a `Ref Bool` field, not an ambient cell).
 -- ── gap census (mirrors LLVM's per-emission gap recording) ───────────────────
 -- The WasmGC emitter normally `panic`s at the first node it can't lower (`gap`).
 -- In CENSUS mode the gap helpers instead RECORD the reason and return a
@@ -1209,13 +1210,28 @@ containsInt : Int -> List Int -> Bool
 containsInt _ [] = False
 containsInt x (y :: ys) = x == y || containsInt x ys
 
--- intern a literal's bytes as a fresh passive data segment; returns its index.
+-- intern a literal's bytes as a passive data segment; returns its index.  A payload
+-- seen before reuses its segment: `array.new_data` copies out of the segment, so
+-- sharing one is invisible to the program.  The codepoint count is not stored with
+-- the segment; `emitLitRef` derives it from the literal, and it is a function of the
+-- bytes.
 freshStrSeg : WasmEmit -> List Int -> Int
 freshStrSeg emit bytes =
-  let i = !emit.nextStringSegmentId
-  let _ = setRef emit.nextStringSegmentId (i + 1)
-  let _ = setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)
-  i
+  let key = strSegKey bytes
+  match omLookup key !emit.strSegIds
+    Some i => i
+    None =>
+      let i = !emit.nextStringSegmentId
+      let _ = setRef emit.nextStringSegmentId (i + 1)
+      let _ = setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)
+      let _ = setRef emit.strSegIds (omInsert key i !emit.strSegIds)
+      i
+
+-- the `strSegIds` key of a payload: its byte values, comma-separated.  Distinct byte
+-- lists give distinct keys (a comma follows every value but the last, and only the
+-- empty list spells as "").
+strSegKey : List Int -> String
+strSegKey bytes = joinWith "," (map intToString bytes)
 
 freshLamId : WasmEmit -> Int
 freshLamId emit =
@@ -3281,9 +3297,9 @@ emitRefProgram prog groups =
       ++ [")"])
 
 -- the passive data segments for string literals — one `(data $strseg_N "…")` per
--- literal OCCURRENCE (#383: no content-dedup, see the `useStr` section above for
--- the correction), emitted in segment-index order.  `array.new_data` reads from
--- these (the §11-preferred non-const-array init scheme; no active memory needed).
+-- distinct payload (`freshStrSeg`), emitted in segment-index order.  `array.new_data`
+-- reads from these (the §11-preferred non-const-array init scheme; no active memory
+-- needed).
 emitDataSegs : WasmEmit -> List String
 emitDataSegs emit =
   let segs = sortSegsByIdx (reverseL !emit.stringSegments)

@@ -200,6 +200,11 @@ inlang-backend-core-validate-test:
 inlang-backend-wasm-emit-trapmsg-test:
 	./medaka test compiler/backend/wasm_emit_trapmsg_test.mdk
 
+## String-literal segments of wasm_emit.mdk: one `(data $strseg_N)` per distinct
+## payload, shared by every site that spells the same bytes.
+inlang-backend-wasm-emit-strseg-test:
+	./medaka test compiler/backend/wasm_emit_strseg_test.mdk
+
 ## #3908: match-arm self tail calls must lower to musttail. The sibling is
 ## native-only (the claim is about emitted code) and has no other runner.
 inlang-backend-llvm-emit-tail-call-test:

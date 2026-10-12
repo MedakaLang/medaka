@@ -118,7 +118,11 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    the helper count.  The bytes fall by 344615 B (-10.7%) from the
 #    pre-change 3206970 B: each trap text is spelled once rather than at every
 #    site, and the `E-CYCLIC-VALUE` name is the only per-site text left.
-MODULES_BYTES_CEIL=2862355
+#    Re-baselined to the measured 2843854 B, with no headroom, for the interned
+#    string-literal segments: one `(data $strseg_N)` per distinct payload, shared
+#    by every site that spells those bytes.  Funcs, the F1 ratio and the unit-kept
+#    ratio are unchanged (6109, 4024, 2693/23199).
+MODULES_BYTES_CEIL=2843854
 MODULES_FUNCS_CEIL=6109
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
