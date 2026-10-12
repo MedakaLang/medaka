@@ -3,6 +3,7 @@
 -- compare immutable module/owner labels across requests, never raw ordinals.
 
 import test.{
+  Expectation,
   expectAll,
   expectEach,
   expectEqual,
@@ -103,7 +104,8 @@ import types.typecheck.{
   walkGoalSameProbe,
 }
 import types.target_profile.{selectProfile, selectedProfile}
-import support.util.{contains, joinNl, joinWith, listLen, lookupAssoc}
+import support.util.{contains, isEmptyL, joinNl, joinWith, listLen, lookupAssoc}
+import list.{last}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -4306,3 +4308,207 @@ test "the memoized drive gives each profile its own result in one process" =
     ),
     ("none after wasm", expectEqual [] again),
   ]
+
+-- An impl head written through a `type` alias is the impl over the alias's
+-- expansion (DICT-SEMANTICS §8 I4.3): `impl Nm LB` IS `impl Nm (List Bool)`.
+-- Each program is checked, then elaborated and evaluated, and observed as its
+-- error codes and the value of `main` (empty when the program is rejected).
+aliasHeadPrelude : String
+aliasHeadPrelude = joinNl [
+  "interface Shw a where",
+  "  shw : a -> String",
+  "impl Shw (List a) where",
+  "  shw _ = \"general\"",
+]
+
+aliasHeadOutcome : List (String, String) -> (List String, String)
+aliasHeadOutcome sources =
+  let core = desugar (parseLocated aliasHeadPrelude)
+  let modules =
+    map (entry => (fst entry, desugar (parseLocated (snd entry)))) sources
+  let codes =
+    flatMap
+      (row => match row
+        (_, (_, errors, _)) => map tcCode errors)
+      (checkModulesDiagsChain None "" [] [] core modules)
+  if isEmptyL codes then
+    let (coreD, elaborated, _, _, _, _) = elaborateModules [] core modules
+    let rootId = optionOr "" (map fst (last sources))
+    let bindings = evalOne [] (rootId, coreD ++ flatMap snd elaborated)
+    match lookupAssoc "main" bindings
+      Some value => match force value
+        VString s => (codes, s)
+        _ => (codes, "<not a string>")
+      None => (codes, "<no main>")
+  else
+    (codes, "")
+
+aliasHeadModule : List String -> List (String, String)
+aliasHeadModule lines = [("alias_head", joinNl lines)]
+
+test "an impl over an alias head is selected for the alias's expansion" = expectEach
+  [
+    (
+      "prelude interface beside the prelude's general impl",
+      expectEqual
+        ([], "LB")
+        (aliasHeadOutcome
+          (aliasHeadModule [
+            "type LB = List Bool",
+            "impl Shw LB where",
+            "  shw _ = \"LB\"",
+            "main = shw [True]",
+          ])),
+    ),
+    (
+      "user interface beside a general impl",
+      expectEqual
+        ([], "LB")
+        (aliasHeadOutcome
+          (aliasHeadModule [
+            "type LB = List Bool",
+            "interface Nm a where",
+            "  nm : a -> String",
+            "impl Nm (List a) where",
+            "  nm _ = \"general\"",
+            "impl Nm LB where",
+            "  nm _ = \"LB\"",
+            "main = nm [True]",
+          ])),
+    ),
+    (
+      "alias head alone",
+      expectEqual
+        ([], "LB")
+        (aliasHeadOutcome
+          (aliasHeadModule [
+            "type LB = List Bool",
+            "interface Nm a where",
+            "  nm : a -> String",
+            "impl Nm LB where",
+            "  nm _ = \"LB\"",
+            "main = nm [True]",
+          ])),
+    ),
+  ]
+
+-- The judgment matrix: one program per judgment, written once with the head
+-- spelled through the alias and once spelled as its expansion.  Every judgment
+-- must reach the same verdict on both spellings, and that verdict is the one the
+-- semantics gives the expanded spelling.
+aliasHeadSpelling : Bool -> String
+aliasHeadSpelling aliased = if aliased then "LB" else "(List Bool)"
+
+aliasHeadIfaces : List String
+aliasHeadIfaces = [
+  "type LB = List Bool",
+  "interface Sup a where",
+  "  sup : a -> String",
+  "interface Sub a requires Sup a where",
+  "  sub : a -> String",
+]
+
+aliasHeadSelection : Bool -> (List String, String)
+aliasHeadSelection aliased =
+  aliasHeadOutcome
+    (aliasHeadModule
+      (aliasHeadIfaces
+        ++ [
+          "impl Sup \{aliasHeadSpelling aliased} where",
+          "  sup _ = \"SUP\"",
+          "main = sup [True]",
+        ]))
+
+-- The alias is private to `lib`, so only an expansion made with `lib`'s own
+-- aliases sees that `lib`'s impl and `entry`'s overlap.
+aliasHeadCoherence : Bool -> (List String, String)
+aliasHeadCoherence aliased = aliasHeadOutcome [
+  (
+    "lib",
+    joinNl [
+      "type LB = List Bool",
+      "export interface Nm a where",
+      "  nm : a -> String",
+      "impl Nm \{aliasHeadSpelling aliased} where",
+      "  nm _ = \"lib\"",
+    ],
+  ),
+  (
+    "entry",
+    joinNl [
+      "import lib.{Nm, nm}",
+      "impl Nm (List Bool) where",
+      "  nm _ = \"entry\"",
+      "main = nm [True]",
+    ],
+  ),
+]
+
+-- The alias heads the super's impl, so the check that `impl Sub (List Bool)` has
+-- its super finds that impl through the alias.
+aliasHeadSuperExistence : Bool -> (List String, String)
+aliasHeadSuperExistence aliased =
+  aliasHeadOutcome
+    (aliasHeadModule
+      (aliasHeadIfaces
+        ++ [
+          "impl Sup \{aliasHeadSpelling aliased} where",
+          "  sup _ = \"SUP\"",
+          "impl Sub (List Bool) where",
+          "  sub _ = \"sub\"",
+          "main = sub [True]",
+        ]))
+
+-- The dictionary `useSup` receives for `Sub (List Bool)` carries its super's,
+-- which must be built from the alias-headed impl, the more specific of the two
+-- `Sup` impls at `List Bool`.
+aliasHeadSuperConstruction : Bool -> (List String, String)
+aliasHeadSuperConstruction aliased =
+  aliasHeadOutcome
+    (aliasHeadModule
+      (aliasHeadIfaces
+        ++ [
+          "impl Sup (List a) where",
+          "  sup _ = \"general\"",
+          "impl Sup \{aliasHeadSpelling aliased} where",
+          "  sup _ = \"SUP\"",
+          "impl Sub (List Bool) where",
+          "  sub _ = \"sub\"",
+          "useSup : Sub a => a -> String",
+          "useSup x = sup x",
+          "main = useSup [True]",
+        ]))
+
+aliasHeadMinOrder : Bool -> (List String, String)
+aliasHeadMinOrder aliased =
+  aliasHeadOutcome
+    (aliasHeadModule
+      (aliasHeadIfaces
+        ++ [
+          "impl Sup (List a) where",
+          "  sup _ = \"general\"",
+          "impl Sup \{aliasHeadSpelling aliased} where",
+          "  sup _ = \"SUP\"",
+          "main = sup [True]",
+        ]))
+
+aliasHeadVerdicts : (List String, String) ->
+  (Bool -> (List String, String)) ->
+  Expectation
+aliasHeadVerdicts expected observe =
+  expectEqual (expected, expected) (observe False, observe True)
+
+test "alias-head judgment matrix: selection" =
+  aliasHeadVerdicts ([], "SUP") aliasHeadSelection
+
+test "alias-head judgment matrix: coherence" =
+  aliasHeadVerdicts (["T-CONFLICTING-IMPL"], "") aliasHeadCoherence
+
+test "alias-head judgment matrix: super existence" =
+  aliasHeadVerdicts ([], "sub") aliasHeadSuperExistence
+
+test "alias-head judgment matrix: super construction" =
+  aliasHeadVerdicts ([], "SUP") aliasHeadSuperConstruction
+
+test "alias-head judgment matrix: min order" =
+  aliasHeadVerdicts ([], "SUP") aliasHeadMinOrder
