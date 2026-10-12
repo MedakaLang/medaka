@@ -2750,6 +2750,7 @@ lineStartSearch arr off lo hi
 -- synthetic tail tokens all share the EOF offset, which is monotone) to 1-based
 -- source lines in a single left-to-right walk over the source, mirroring
 -- `posToLineCol`'s amortized-linear strategy for comments.
+export
 offsetsToLines : Array Char -> List Int -> List Int
 offsetsToLines src offs = offsetsToLinesGo src offs 0 1
 

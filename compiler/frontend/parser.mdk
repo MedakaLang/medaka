@@ -81,12 +81,12 @@ import frontend.ast.{
 import frontend.lexer.{
   Token(..),
   tokenize,
-  tokenizeWithLines,
   tokenizeWithOffsets,
   tokenizeWithOffsetPairs,
   offsetToLineCol,
   lineStartsOf,
   offsetToLineColFast,
+  offsetsToLines,
   describeToken,
 }
 import support.util.{reverseL, joinWith}
@@ -5652,42 +5652,34 @@ parseWithPositionsLocated src = parseWithPositions src
 -- files are unparseable constantly mid-edit.
 export
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
-parseWithPositionsOpt src = match tokenizeWithLines src
-  (tokList, lineList) =>
+parseWithPositionsOpt src = match tokenizeWithOffsetPairs src
+  (tokList, offPairList) =>
+    -- One tokenize pass feeds the token array, the (start,end) offsets and the
+    -- per-token lines: `tokenizeWithOffsetPairs` yields the same token stream as
+    -- the line-only entry, and its pair starts are the offsets the lines are
+    -- derived from.  The SAME offsets prime `setLocState`, so `located`'s
+    -- expression `ELoc`s carry real spans for every caller (LSP included).
     let toks = arrayFromList tokList
-    let lines = arrayFromList lineList
-    -- #331/#649 (increment 3, I6): a second tokenize pass for the (start,end)
-    -- offset pairs the decl NAME-span finder needs (`declNameSpanOf`).  Its
-    -- token stream is byte-identical to `tokenizeWithLines`'s (both documented
-    -- as such), so the indices line up with `toks`/`spans` below.  The SAME
-    -- `offs` also primes `setLocState`, so `located`'s expression `ELoc`s
-    -- carry real spans too — this used to be deliberately skipped (see the old
-    -- `locOfSpanWith` header note, now stale) so that `parseWithPositionsOpt`
-    -- and `parseWithPositionsLocated` stayed two different-fidelity entries;
-    -- unifying them (I6) is the whole point of this increment, so every
-    -- caller — LSP `documentSymbols`/`definition`/`inlayHint` included — now
-    -- gets real sub-expression positions for free, at the SAME one-extra-pass
-    -- cost this function already paid.
-    match tokenizeWithOffsetPairs src
-      (_, offPairList) =>
-        let offs = arrayFromList offPairList
-        let nameLineStarts = lineStartsOf src
-        let _ = setLocState src offs
-        trailingCommaLocsRef := []
-        unitStartsRef := []
-        match runP programWithSpans toks 0
-          PErr _ _ => None
-          PFatal _ _ => None
-          POk spans pos =>
-            if isEofTok (peekTok toks pos) then
-              let decls = map ((d, _s, _e) => d) spans
-              let dps = map (declPosOf toks lines offs nameLineStarts) spans
-              let vls = allVariantLines toks lines spans
-              let lcl = lastContentLineOf toks lines spans
-              let cls = allChainLines toks lines spans
-              Some (decls, Positions dps vls lcl cls)
-            else
-              None
+    let offs = arrayFromList offPairList
+    let lines =
+      arrayFromList (offsetsToLines (stringToChars src) (map fst offPairList))
+    let nameLineStarts = lineStartsOf src
+    let _ = setLocState src offs
+    trailingCommaLocsRef := []
+    unitStartsRef := []
+    match runP programWithSpans toks 0
+      PErr _ _ => None
+      PFatal _ _ => None
+      POk spans pos =>
+        if isEofTok (peekTok toks pos) then
+          let decls = map ((d, _s, _e) => d) spans
+          let dps = map (declPosOf toks lines offs nameLineStarts) spans
+          let vls = allVariantLines toks lines spans
+          let lcl = lastContentLineOf toks lines spans
+          let cls = allChainLines toks lines spans
+          Some (decls, Positions dps vls lcl cls)
+        else
+          None
 
 -- Check that the parse consumed all tokens (no trailing garbage), panic on error.
 resultDecls : Array Token -> PR (List Decl) -> List Decl
