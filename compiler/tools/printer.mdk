@@ -240,11 +240,19 @@ restEndsLine ((Item _ _ (LineComment _)) :: _) = False
 restEndsLine ((Item i m (Fill sf ds)) :: z) =
   restEndsLine (Item i m (fillFlatDoc sf ds) :: z)
 
--- `n` spaces.
+-- `n` spaces.  Indents up to `spaceRunLen` are one slice of a shared run (one
+-- allocation); deeper ones chain whole runs.
+spaceRunLen : Int
+spaceRunLen = 64
+
+spaceRun : String
+spaceRun = stringFromChars (arrayMake spaceRunLen ' ')
+
 spaces : Int -> String
 spaces n
   | n <= 0 = ""
-  | otherwise = " " ++ spaces (n - 1)
+  | n <= spaceRunLen = stringSlice 0 n spaceRun
+  | otherwise = spaceRun ++ spaces (n - spaceRunLen)
 
 newlineStr : Int -> String
 newlineStr i = "\n" ++ spaces i

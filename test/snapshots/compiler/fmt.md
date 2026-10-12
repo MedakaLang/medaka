@@ -1,5 +1,5 @@
 # META
-source_lines=750
+source_lines=746
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -416,13 +416,9 @@ leadingSpaceCountGo src i n
   | charAt src i == ' ' = leadingSpaceCountGo src (i + 1) n
   | otherwise = i
 
+-- The leading run is spaces by definition, so it is a prefix slice of `s`.
 leadingSpaces : String -> String
-leadingSpaces s = spacesN (leadingSpaceCount s)
-
-spacesN : Int -> String
-spacesN n
-  | n <= 0 = ""
-  | otherwise = " " ++ spacesN (n - 1)
+leadingSpaces s = stringSlice 0 (leadingSpaceCount s) s
 
 -- Drop the consumed comments from the pending stream (order-preserving), by
 -- source line — interior comment lines are unique per output line.
@@ -860,9 +856,7 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DTypeSig false "leadingSpaceCountGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "leadingSpaceCountGo" ((PVar "src") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "src")) (EVar "i")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "leadingSpaceCountGo") (EVar "src")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "leadingSpaces" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "leadingSpaces" ((PVar "s")) (EApp (EVar "spacesN") (EApp (EVar "leadingSpaceCount") (EVar "s"))))
-(DTypeSig false "spacesN" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "spacesN" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "spacesN") (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "leadingSpaces" ((PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "leadingSpaceCount") (EVar "s"))) (EVar "s")))
 (DTypeSig false "dropConsumed" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Comment")))))
 (DFunDef false "dropConsumed" ((PVar "cs") (PVar "consumed")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "anyLineEq") (EApp (EVar "commentLine") (EVar "c"))) (EVar "consumed"))))) (EVar "cs")))
 (DTypeSig false "anyLineEq" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "Bool"))))
@@ -1038,9 +1032,7 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DTypeSig false "leadingSpaceCountGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "leadingSpaceCountGo" ((PVar "src") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EVar "charAt") (EVar "src")) (EVar "i")) (ELit (LChar " "))) (EApp (EApp (EApp (EVar "leadingSpaceCountGo") (EVar "src")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "leadingSpaces" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "leadingSpaces" ((PVar "s")) (EApp (EVar "spacesN") (EApp (EVar "leadingSpaceCount") (EVar "s"))))
-(DTypeSig false "spacesN" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "spacesN" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "spacesN") (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "leadingSpaces" ((PVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EApp (EVar "leadingSpaceCount") (EVar "s"))) (EVar "s")))
 (DTypeSig false "dropConsumed" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Comment")))))
 (DFunDef false "dropConsumed" ((PVar "cs") (PVar "consumed")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "anyLineEq") (EApp (EVar "commentLine") (EVar "c"))) (EVar "consumed"))))) (EVar "cs")))
 (DTypeSig false "anyLineEq" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "Bool"))))
