@@ -826,6 +826,11 @@ wall time quantified, not vibes; (c) the knob/atomic ladder above has been swept
 and logged in `compiler/PERF-RESULTS.md`. Until then, a custom GC is a solution
 ahead of its evidence.
 
+The user-authorized 2026-10-12 feasibility investigation is recorded in
+[GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md), with fresh production
+measurements in `compiler/PERF-RESULTS.md` and an isolated explicit-root
+prototype. It does not change the production collector decision above.
+
 ---
 
 ## 10. FFI value-crossing ABI — see `compiler/FFI-ABI.md`

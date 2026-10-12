@@ -1705,3 +1705,64 @@ The allocation pin (`test/diff_compiler_closure_alloc.sh`, `getsome`/`tupleloop`
 allocates 320 MB / 480 MB / 192 MB on the base emitter and 32 / 80 / 32 bytes with the attributes.
 The comment at the top of `compiler/frontend/parser.mdk` that called direct-style parsing
 "perf-neutral" did not hold on this head and was replaced.
+
+## GC feasibility baseline after the inline allocator (2026-10-12, #503)
+
+Pinned revision: `6aae2ea97e49656995a23eadaed333f676ee61ca`, including #4048's
+small-object inline allocator. The local compiler was restored by `make medaka`
+and verified with `MEDAKA_STRICT=1`. These measurements use the production
+binary, not the allocation census's instrumented allocator.
+
+Whole-compiler workload: `medaka check compiler/driver/medaka_cli.mdk`.
+Both policies explicitly set `GC_FREE_SPACE_DIVISOR=1`; the initial heap is the
+only changed knob. Three sequential timings and a separate `GC_PRINT_STATS=1`
+run per policy were recorded on the shared Linux x86_64 machine (libgc 8.2.8).
+The initial size does not limit subsequent heap growth.
+
+| Initial heap | Timing samples (s) | Min (s) | Timing-run peak RSS (KiB) | Collections in stats run | Full collection duration (s) | Stats-run elapsed (s) |
+|---|---|---:|---|---:|---:|---:|
+| 128 MiB | 14.771, 15.251, 15.774 | 14.771 | 1,566,212–1,575,136 | 53 | 3.165 | 14.751 |
+| 2 GiB | 15.518, 16.045, 15.658 | 15.518 | 2,365,100–2,365,312 | 12 | 4.751 | 16.122 |
+
+The smaller starting heap was faster in these samples and used less memory.
+This is a policy comparison, not evidence of a scaling defect or a statistical
+significance claim. Full-collection duration was about 21.5% and 29.5% of the
+respective instrumented runs. Boehm performs some lazy sweeping during later
+allocation, so these fractions do not account for all GC work.
+
+Summing allocations logged at collection boundaries gives 13,665,167,888 bytes
+for 128 MiB and 13,122,998,576 for 2 GiB. **These are incomplete totals:**
+allocations after the final collection are absent. The differing totals do not
+establish differing program allocation. Reported freed bytes likewise do not
+establish nursery survival or exact live heap.
+
+A separate 99 Hz DWARF profile (`dwarf,16384`) at 2 GiB captured 2,129 samples
+with none lost. Top flat CPU-cycle shares: `GC_mark_from` 19.88%,
+`GC_header_cache_miss` 9.58%, `GC_push_contents_hdr.isra.0` 8.62%, `mdk_alloc`
+4.80%, and `GC_reclaim_generic` 3.89%. The collector is statically linked into
+the executable. These are CPU samples across parallel marker threads, **not
+wall-time shares**. The old claim that collection is negligible must not be
+generalized to this whole-compiler workload and revision.
+
+At 2 GiB, checking `compiler/frontend/lexer.mdk` took 0.926/0.785/0.834 s and
+checking `test/llvm_fixtures/gc_stress.mdk` took 0.174/0.264/0.174 s. Each logged
+only the startup collection. The latter checks the fixture; it does not execute
+its allocation workload.
+
+All recorded check processes exited 0. Timing stdout and stderr hashes matched
+within each workload and across the whole-compiler heap policies. The compiler
+workload's stderr contains the same 74-byte summary of further imported-module
+diagnostics; it is not an empty-diagnostics claim.
+
+Durable samples and binary identity:
+[Boehm baseline JSON](../test/gc_prototype/results/2026-10-12-boehm.json).
+The reusable `test/gc_prototype/profile_boehm.py` records per-child RSS with
+`wait4`, source/binary identity, raw logs and parsed stats; the historical runs
+used a preceding scratch driver with GNU `time -v` for RSS.
+
+**Decision:** collection is a material cost on this whole-compiler workload,
+but the allocation-reduction plateau has not been reached (#4028/#4029/#4040)
+and this two-policy comparison does not exhaust #503's knob/atomic sweep.
+An isolated collector experiment is justified; replacing production Boehm is
+not established by these measurements. The integration audit and experimental
+boundary are in [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).
