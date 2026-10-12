@@ -1648,9 +1648,9 @@ emitProgramGaps input cp0 =
 
 emitFnsGapsW : Prog -> List CBind -> Unit
 emitFnsGapsW _ [] = ()
-emitFnsGapsW prog ((CBind name cs site) :: rest) =
+emitFnsGapsW prog ((CBind name cs site bid) :: rest) =
   let _ = setGapBindingOfW (progEmit prog) ("fn " ++ name)
-  let _ = emitRefFnBind prog (CBind name cs site)
+  let _ = emitRefFnBind prog (CBind name cs site bid)
   emitFnsGapsW prog rest
 
 emitImplsGapsW : Prog -> List ImplG -> Unit
@@ -1980,7 +1980,7 @@ programUsesStr : List CBind -> Bool
 programUsesStr groups = anyBind bindUsesStr groups
 
 bindUsesStr : CBind -> Bool
-bindUsesStr (CBind _ clauses _) =
+bindUsesStr (CBind _ clauses _ _) =
   anyList (c => exprUsesStr (clauseBodyOf c)) clauses
 
 exprUsesStr : CExpr -> Bool
@@ -2042,7 +2042,7 @@ forEachU _ [] = ()
 forEachU f (x :: xs) = let _ = f x in forEachU f xs
 
 scanBindW7 : WasmEmit -> CBind -> Unit
-scanBindW7 emit (CBind _ clauses _) =
+scanBindW7 emit (CBind _ clauses _ _) =
   forEachU (clause => scanClauseW7 emit clause) clauses
 
 -- W9: scan BOTH a clause's param patterns (a list/tuple clause head forces the
@@ -2238,7 +2238,7 @@ cFieldExpr : CField -> CExpr
 cFieldExpr (CField _ _ e) = e
 
 bindUsesClosures : OrdMap Unit -> List (String, Int) -> CBind -> Bool
-bindUsesClosures fnNames ctorArs (CBind _ clauses _) =
+bindUsesClosures fnNames ctorArs (CBind _ clauses _ _) =
   multiOrPatternClauses clauses
     || anyList (clauseUsesClosures fnNames ctorArs) clauses
 
@@ -2281,7 +2281,7 @@ scanImplEntryValueUses fnNames ctorArs (CImplEntry _ _ _ body) = match body
   CImplDefault _ _ _ _ _ _ b => scanExprValueUses fnNames ctorArs b
 
 scanBindValueUses : OrdMap Unit -> List (String, Int) -> CBind -> List String
-scanBindValueUses fnNames ctorArs (CBind _ clauses _) =
+scanBindValueUses fnNames ctorArs (CBind _ clauses _ _) =
   flatMap (c => scanExprValueUses fnNames ctorArs (clauseBodyOf c)) clauses
 
 scanExprValueUses : OrdMap Unit -> List (String, Int) -> CExpr -> List String
@@ -2487,7 +2487,7 @@ programUsesAdt groups ctorArs =
 
 anyBindHasDecision : List CBind -> Bool
 anyBindHasDecision [] = False
-anyBindHasDecision ((CBind _ clauses _) :: rest) =
+anyBindHasDecision ((CBind _ clauses _ _) :: rest) =
   if anyClauseHasDecision clauses then True else anyBindHasDecision rest
 
 anyClauseHasDecision : List CClause -> Bool
@@ -2601,7 +2601,7 @@ emitScalarValInit : WasmEmit ->
   List String ->
   CBind ->
   List String
-emitScalarValInit emit fnNames valNames (CBind name [CClause [] body] _) =
+emitScalarValInit emit fnNames valNames (CBind name [CClause [] body] _ _) =
   let (instrs, _) = emitScalarExpr emit fnNames valNames omEmpty body
   indent instrs ++ ["    global.set $" ++ gname name]
 emitScalarValInit emit _ _ _ =
@@ -2645,7 +2645,7 @@ emitScalarFnBind : WasmEmit ->
   List String ->
   CBind ->
   List String
-emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body] _) =
+emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body] _ _) =
   let params = map (patName emit) pats
   let localsInBody = collectExprLocals body
   let extraLocals = filterList (notIn params) (dedupKeep localsInBody)
@@ -2657,7 +2657,7 @@ emitScalarFnBind emit fnNames valNames (CBind name [CClause pats body] _) =
   -- B5: scalar divisor-guard scratch for a concrete-Int `/`/`%` in this fn body.
   let dv = if !emit.useDivGuard then ["(local $__sdivr i64)"] else []
   [sig] ++ map ("  " ++ _) (dv ++ localDecls) ++ indent instrs ++ ["  )"]
-emitScalarFnBind emit _ _ (CBind name _ _) =
+emitScalarFnBind emit _ _ (CBind name _ _ _) =
   gapL
     emit
     ("scalar-mode top-level function '"
@@ -3663,7 +3663,7 @@ emitRefInit prog groups =
     ++ ["  )", "  (start $__init)"]
 
 bindBodies : CBind -> List CExpr
-bindBodies (CBind _ clauses _) = flatMap clauseBody clauses
+bindBodies (CBind _ clauses _ _) = flatMap clauseBody clauses
 
 clauseBody : CClause -> List CExpr
 clauseBody (CClause _ body) = [body]
@@ -3673,7 +3673,7 @@ foldMaxDepth [] = 0
 foldMaxDepth (e :: rest) = maxI (maxRefDepth e) (foldMaxDepth rest)
 
 emitRefValInit : Prog -> CBind -> List String
-emitRefValInit prog (CBind name [CClause [] body] _) =
+emitRefValInit prog (CBind name [CClause [] body] _ _) =
   let instrs = emitRefExpr prog [] 0 body
   indent instrs ++ ["    global.set $" ++ gname name]
 emitRefValInit prog _ = gapLP prog "value binding must be a nullary clause"
@@ -3700,7 +3700,7 @@ emitRefForceFns prog groups =
       (filterList isValBind groups))
 
 emitRefForceFn : Prog -> CBind -> List String
-emitRefForceFn prog (CBind name [CClause [] body] _) =
+emitRefForceFn prog (CBind name [CClause [] body] _ _) =
   let g = gname name
   let w7Outer = w7ScopeOpen (progEmit prog)
   let instrs = emitRefExpr prog [] 0 body
@@ -3852,7 +3852,7 @@ cafBodies groups = omFromPairs (cafBodyRows groups) omEmpty
 
 cafBodyRows : List CBind -> List (String, CExpr)
 cafBodyRows [] = []
-cafBodyRows ((CBind name [CClause [] body] _) :: rest) =
+cafBodyRows ((CBind name [CClause [] body] _ _) :: rest) =
   if name == "main" then cafBodyRows rest else (name, body) :: cafBodyRows rest
 cafBodyRows (_ :: rest) = cafBodyRows rest
 
@@ -4096,7 +4096,7 @@ refPrintFor prog WRef =
 -- applied), also emit a closure wrapper `$name__clos` (a $clos with arity = param
 -- count, code = a thunk that unpacks the args array + calls $name).
 emitRefFnBind : Prog -> CBind -> List String
-emitRefFnBind prog (CBind name clauses bindLoc) =
+emitRefFnBind prog (CBind name clauses bindLoc _) =
   let _ = setCurrentBindingOfW (progEmit prog) name
   let _ =
     setRef (progEmit prog).clauseSite (sitePackedW (progEmit prog) bindLoc)
@@ -9862,7 +9862,7 @@ emitSelfRecLocalBind : Prog ->
   List String
 emitSelfRecLocalBind prog env x pats body =
   let gid = freshLamId (progEmit prog)
-  let bind = CBind x [CClause pats body] noDeclLoc
+  let bind = CBind x [CClause pats body] noDeclLoc noBinderId
   let groupCaps =
     filterList
       (c => contains c env)
@@ -9957,7 +9957,7 @@ liftedMemberRebuilds prog gid groupCaps binds =
 -- the hoisted-global form of rebuildLgClosure: same lifted code function, same arity,
 -- an empty env — read from one module global and stored into the member's local.
 constLgClosure : Prog -> Int -> CBind -> List String
-constLgClosure prog gid (CBind name clauses _) =
+constLgClosure prog gid (CBind name clauses _ _) =
   wConstClos
       (progEmit prog)
       "$mdk_lg\{intToString gid}_\{gname name}"
@@ -9966,14 +9966,14 @@ constLgClosure prog gid (CBind name clauses _) =
 
 -- P1: a CLetGroup member that is a nullary VALUE binding, not a local function.
 isLgValBind : CBind -> Bool
-isLgValBind (CBind _ [CClause [] _] _) = True
+isLgValBind (CBind _ [CClause [] _] _ _) = True
 isLgValBind _ = False
 
 -- P1: evaluate each value binding's rhs into its local, threading the bound names
 -- through the env so a later value binding can reference an earlier one.
 emitLgValBinds : Prog -> List String -> Int -> List CBind -> List String
 emitLgValBinds _ _ _ [] = []
-emitLgValBinds prog env d ((CBind name [CClause [] rhs] _) :: rest) =
+emitLgValBinds prog env d ((CBind name [CClause [] rhs] _ _) :: rest) =
   emitRefExpr prog env d rhs
     ++ ["local.set $" ++ gname name]
     ++ emitLgValBinds prog (name :: env) d rest
@@ -9985,7 +9985,7 @@ anyOfList xs ys = anyList (x => contains x ys) xs
 
 -- params of a CLetGroup binding (the first clause's pattern arity → synthetic names).
 lgBindParams : CBind -> List String
-lgBindParams (CBind _ clauses _) = synthParams (clauseArityOf clauses)
+lgBindParams (CBind _ clauses _ _) = synthParams (clauseArityOf clauses)
 
 -- the lifted member function `$mdk_lg<gid>_<name>`: $env = groupCaps; prologue loads
 -- caps, rebuilds every member closure into its local, loads own params, emits clauses.
@@ -9996,7 +9996,7 @@ emitLgLifted : Prog ->
   List CBind ->
   CBind ->
   Unit
-emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc) =
+emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc _) =
   let _ = setCurrentBindingOfW (progEmit prog) ("lg:" ++ name)
   let savedSite = (progEmit prog).clauseSite.value
   let _ =
@@ -10056,7 +10056,7 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc) =
 -- bind it to its local `$<name>`.  Used BOTH at the use site and inside each lifted
 -- member's prologue; groupCaps must be bound as locals in either context.
 rebuildLgClosure : Prog -> Int -> List String -> CBind -> List String
-rebuildLgClosure prog gid groupCaps (CBind name clauses _) =
+rebuildLgClosure prog gid groupCaps (CBind name clauses _ _) =
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let arity = clauseArityOf clauses
   let capInstrs = flatMap (c => ["local.get $" ++ gname c]) groupCaps
@@ -10138,7 +10138,7 @@ freeVarsExpr bound _ = []
 
 -- free vars of a CLetGroup binding's clauses (each clause's params are locally bound).
 freeVarsClauses : List String -> CBind -> List String
-freeVarsClauses bound (CBind _ clauses _) =
+freeVarsClauses bound (CBind _ clauses _ _) =
   flatMap (freeVarsClause bound) clauses
 
 freeVarsClause : List String -> CClause -> List String
@@ -10146,7 +10146,7 @@ freeVarsClause bound (CClause pats body) =
   freeVarsExpr (flatMap patVars pats ++ bound) body
 
 lgBindName : CBind -> String
-lgBindName (CBind n _ _) = n
+lgBindName (CBind n _ _ _) = n
 
 freeVarsStmts : List String -> List CStmt -> List String
 freeVarsStmts _ [] = []
@@ -11266,11 +11266,11 @@ bindConFieldsGo prog env c (p :: rest) v i =
 
 -- top-level binding classification (W2 + W3, identical).
 isValBind : CBind -> Bool
-isValBind (CBind name [CClause [] _] _) = name /= "main"
+isValBind (CBind name [CClause [] _] _ _) = name /= "main"
 isValBind _ = False
 
 isFnBind : CBind -> Bool
-isFnBind (CBind "main" _ _) = False
+isFnBind (CBind "main" _ _ _) = False
 isFnBind b = not (isValBind b)
 
 -- #288: names of nullary value bindings whose RHS is statically Float (structural
@@ -11280,7 +11280,7 @@ floatValGlobalNames : Prog -> List CBind -> List String
 floatValGlobalNames prog binds = flatMap (floatValGlobalName prog) binds
 
 floatValGlobalName : Prog -> CBind -> List String
-floatValGlobalName prog (CBind name [CClause [] body] _) =
+floatValGlobalName prog (CBind name [CClause [] body] _ _) =
   if cexprIsFloat prog [] body then [name] else []
 floatValGlobalName _ _ = []
 
@@ -11294,18 +11294,18 @@ collectValNames : List CBind -> List String
 collectValNames groups = map bindName (filterList isValBind groups)
 
 bindName : CBind -> String
-bindName (CBind n _ _) = n
+bindName (CBind n _ _ _) = n
 
 findMain : WasmEmit -> List CBind -> Option CExpr
 findMain _ [] = None
-findMain _ ((CBind "main" [CClause [] body] _) :: _) = Some body
-findMain emit ((CBind "main" _ _) :: _) =
+findMain _ ((CBind "main" [CClause [] body] _ _) :: _) = Some body
+findMain emit ((CBind "main" _ _ _) :: _) =
   gapOptE emit "`main` must be a nullary value (main = ...)"
 findMain emit (_ :: rest) = findMain emit rest
 
 -- the let-bound locals inside a binding's (single, nullary) clause body.
 collectBindLocals : CBind -> List String
-collectBindLocals (CBind _ [CClause _ body] _) = collectExprLocals body
+collectBindLocals (CBind _ [CClause _ body] _ _) = collectExprLocals body
 collectBindLocals _ = []
 
 patName : WasmEmit -> Pat -> String
@@ -11377,7 +11377,7 @@ collectFieldLocals (CField _ _ value) = collectExprLocals value
 -- P1: the inline-emitted locals of a group's nullary VALUE member (none for a function
 -- member — that one is lifted).
 collectLgValLocals : CBind -> List String
-collectLgValLocals (CBind _ [CClause [] rhs] _) = collectExprLocals rhs
+collectLgValLocals (CBind _ [CClause [] rhs] _ _) = collectExprLocals rhs
 collectLgValLocals _ = []
 
 collectStmtLocals : CStmt -> List String
@@ -11595,7 +11595,8 @@ ubPat sc (PAs x l bid p) = PAs (ubNew sc x) l bid (ubPat sc p)
 ubPat _ p = p
 
 ubBind : OrdMap Int -> CBind -> CBind
-ubBind sc (CBind n clauses loc) = CBind n (map (ubClause sc) clauses) loc
+ubBind sc (CBind n clauses loc bid) =
+  CBind n (map (ubClause sc) clauses) loc bid
 
 ubClause : OrdMap Int -> CClause -> CClause
 ubClause sc (CClause pats body) =
@@ -11650,7 +11651,7 @@ ubExpr _ e = e
 
 -- a let-group member's own name, as bound in the enclosing scope
 ubRenameBind : OrdMap Int -> CBind -> CBind
-ubRenameBind sc (CBind n clauses loc) = CBind (ubNew sc n) clauses loc
+ubRenameBind sc (CBind n clauses loc bid) = CBind (ubNew sc n) clauses loc bid
 
 ubStmts : OrdMap Int -> List CStmt -> List CStmt
 ubStmts _ [] = []
@@ -12207,7 +12208,7 @@ treeSwitchNesting (CTSwitch branches dft) =
 -- P1: scratch depth of a group's nullary VALUE member's inline-emitted rhs (a function
 -- member contributes nothing here — it is lifted).
 maxIndexAtLgVal : CBind -> Int -> Int
-maxIndexAtLgVal (CBind _ [CClause [] rhs] _) d = maxIndexAt rhs d
+maxIndexAtLgVal (CBind _ [CClause [] rhs] _ _) d = maxIndexAt rhs d
 maxIndexAtLgVal _ d = d - 1
 
 maxIndexAtStmt : CStmt -> Int -> Int

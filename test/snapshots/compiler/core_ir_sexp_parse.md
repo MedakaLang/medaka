@@ -408,7 +408,7 @@ toCClause other =
 
 toCBind : SExp -> CBind
 toCBind (SList ((SAtom "CBind") :: name :: clauses)) =
-  CBind (toStr name) (map toCClause clauses) noDeclLoc
+  CBind (toStr name) (map toCClause clauses) noDeclLoc noBinderId
 toCBind other = panic ("core_ir_sexp_parse: bad CBind: " ++ sexprToStr other)
 
 toImplSym : SExp -> ImplSym
@@ -764,7 +764,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCClause" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CClause"))) (PList (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EVar "CClause") (EApp (EApp (EVar "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
 (DFunDef false "toCClause" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CClause: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCBind" (TyFun (TyCon "SExp") (TyCon "CBind")))
-(DFunDef false "toCBind" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBind"))) (PCons (PVar "name") (PVar "clauses"))))) (EApp (EApp (EApp (EVar "CBind") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EVar "map") (EVar "toCClause")) (EVar "clauses"))) (EVar "noDeclLoc")))
+(DFunDef false "toCBind" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBind"))) (PCons (PVar "name") (PVar "clauses"))))) (EApp (EApp (EApp (EApp (EVar "CBind") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EVar "map") (EVar "toCClause")) (EVar "clauses"))) (EVar "noDeclLoc")) (EVar "noBinderId")))
 (DFunDef false "toCBind" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CBind: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toImplSym" (TyFun (TyCon "SExp") (TyCon "ImplSym")))
 (DFunDef false "toImplSym" ((PCon "SList" (PList (PVar "tag") (PVar "ifaceTag") (PVar "keyTag")))) (EApp (EApp (EApp (EVar "ImplSym") (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "ifaceTag"))) (EApp (EVar "toStr") (EVar "keyTag"))))
@@ -1000,7 +1000,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toCClause" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CClause"))) (PList (PCon "SList" (PVar "pats")) (PVar "body"))))) (EApp (EApp (EVar "CClause") (EApp (EApp (EMethodRef "map") (EVar "toPat")) (EVar "pats"))) (EApp (EVar "toCExpr") (EVar "body"))))
 (DFunDef false "toCClause" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CClause: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toCBind" (TyFun (TyCon "SExp") (TyCon "CBind")))
-(DFunDef false "toCBind" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBind"))) (PCons (PVar "name") (PVar "clauses"))))) (EApp (EApp (EApp (EVar "CBind") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EMethodRef "map") (EVar "toCClause")) (EVar "clauses"))) (EVar "noDeclLoc")))
+(DFunDef false "toCBind" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "CBind"))) (PCons (PVar "name") (PVar "clauses"))))) (EApp (EApp (EApp (EApp (EVar "CBind") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EMethodRef "map") (EVar "toCClause")) (EVar "clauses"))) (EVar "noDeclLoc")) (EVar "noBinderId")))
 (DFunDef false "toCBind" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad CBind: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toImplSym" (TyFun (TyCon "SExp") (TyCon "ImplSym")))
 (DFunDef false "toImplSym" ((PCon "SList" (PList (PVar "tag") (PVar "ifaceTag") (PVar "keyTag")))) (EApp (EApp (EApp (EVar "ImplSym") (EApp (EVar "toStr") (EVar "tag"))) (EApp (EVar "toStr") (EVar "ifaceTag"))) (EApp (EVar "toStr") (EVar "keyTag"))))

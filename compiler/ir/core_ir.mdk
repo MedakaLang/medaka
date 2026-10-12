@@ -58,6 +58,7 @@ import frontend.ast.{
   Route(..),
   BinderId(..),
   noDeclLoc,
+  noBinderId,
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import support.util.{reverseL}
@@ -318,13 +319,17 @@ public export data CStmt =
 -- clauses (multi-clause dispatch + guard fall-through stay structural — the
 -- decision-tree compilation of these into a single match is a later 2.1 step).
 -- The `Loc` is the first clause's site, which a call that no clause or guard
--- accepts reports; a synthesized binding carries `noDeclLoc`.
-public export data CBind = CBind String (List CClause) Loc
+-- accepts reports; a synthesized binding carries `noDeclLoc`.  The `BinderId`
+-- names the function's row in the program's binder table (`DeclFacts`), which
+-- gives the type its body returns: the source function's own id (a coalesced
+-- top-level function's first clause), or one `core_ir_lower` minted for a
+-- binding it made up.
+public export data CBind = CBind String (List CClause) Loc BinderId
 
 -- a binding the compiler makes up, which has no source site.
 export
 synthBind : String -> List CClause -> CBind
-synthBind name clauses = CBind name clauses noDeclLoc
+synthBind name clauses = CBind name clauses noDeclLoc noBinderId
 
 -- The head of a trap-site literal: `CApp (CVar siteSentinelName _)
 -- [CLit (LString file), CLit (LInt line), CLit (LInt col)] _` is the Int a
@@ -412,12 +417,13 @@ public export data CProgram =
 -- `noDeclFacts`.
 --
 -- `factBinders` is the program's binder table: one row per `BinderId` that a
--- binder pattern in the program carries, in ordinal order, as the typechecker
--- published it (`types.runtime_types`) or as lowering minted it for a binder of
--- its own.  A binder pattern is a `PVar`, a `PAs`, or a record-pattern pun.  The
+-- binder pattern or a `CBind` in the program carries, in ordinal order, as the
+-- typechecker published it (`types.runtime_types`) or as lowering minted it for a
+-- binder of its own.  A binder pattern is a `PVar`, a `PAs`, or a record-pattern
+-- pun; a `CBind`'s row also gives the type its body returns (`brReturns`).  The
 -- table is a snapshot, so the program is self-contained: a consumer never reads
 -- the typechecker's installed table.  `core_validate.validateBinderStamps` refuses
--- a binder with no row.
+-- a binder with no row and a function with no return type.
 public export data DeclFacts = DeclFacts {
   factRequires : List (String, Int),
   factSupers : List (String, Int),
@@ -429,15 +435,28 @@ noDeclFacts : DeclFacts
 noDeclFacts = DeclFacts { factRequires = [], factSupers = [], factBinders = [] }
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
--- One traversal of every binder pattern in a program, in a fixed order, with the
--- id each is given by [visit].  It serves lowering (which mints and snapshots),
--- the s-expression printer (which lists the ids in walk order) and the parser
--- (which hands them back in the same order), so the three cannot disagree about
--- which occurrence is which.
+-- One traversal of every binder in a program, in a fixed order, with the id each
+-- is given by [visit]: first every binder pattern, then every named function
+-- (`CBind`), each in program order.  It serves lowering (which mints and
+-- snapshots), the s-expression printer (which lists the ids in walk order) and
+-- the parser (which hands them back in the same order), so the three cannot
+-- disagree about which occurrence is which.
 --
--- [visit] gets the expression a `let` binds the binder to (`None` for a parameter,
--- an arm pattern or anything nested in a pattern), the binder's name and its id.
-export type BinderVisit = Option CExpr -> String -> BinderId -> BinderId
+-- [visit] gets what kind of binder it is, the binder's name and its id.
+export type BinderVisit = BinderSite -> String -> BinderId -> BinderId
+
+-- A binder pattern carries the expression a `let` binds it to (`None` for a
+-- parameter, an arm pattern or anything nested in a pattern); a function carries
+-- its clauses.  These are two kinds of binder, not a success and a failure, so
+-- `Result` cannot stand in for it.
+-- lint-disable-next-line rule-clone-type
+public export data BinderSite =
+  | PatternBinder (Option CExpr)
+  | FunctionBinder (List CClause)
+
+-- Which binders one walk visits.  The function pass rebuilds the same tree but
+-- leaves every pattern as it is.
+data BinderPass = PatternPass | FunctionPass
 
 -- The runtime type a bound expression states for itself, if it does.  An integer
 -- literal does not: it is written the same at every numeric type.
@@ -462,14 +481,21 @@ litRuntimeType (LI64 _ _) = RTI64
 
 export
 mapProgramBinders : BinderVisit -> CProgram -> CProgram
-mapProgramBinders f (CProgram binds ctorArs ctorTypes impls mctx facts) =
+mapProgramBinders f prog =
+  mapProgramPass FunctionPass f (mapProgramPass PatternPass f prog)
+
+mapProgramPass : BinderPass -> BinderVisit -> CProgram -> CProgram
+mapProgramPass pass f (CProgram binds ctorArs ctorTypes impls mctx facts) =
+  let w = BinderWalk pass f
   CProgram
-    (map (mapBindBinders f) binds)
+    (map (mapBindBinders w) binds)
     ctorArs
     ctorTypes
-    (map (mapEntryBinders f) impls)
+    (map (mapEntryBinders w) impls)
     mctx
     facts
+
+data BinderWalk = BinderWalk BinderPass BinderVisit
 
 -- [prog] with [rows] as its binder table.
 export
@@ -499,7 +525,7 @@ programBinderIds prog =
       prog
   reverseL !seen
 
-mapEntryBinders : BinderVisit -> CImplEntry -> CImplEntry
+mapEntryBinders : BinderWalk -> CImplEntry -> CImplEntry
 mapEntryBinders f (CImplEntry m s d (CImplTagged tag key iface sym pos pats body)) =
   let pats2 = map (mapPatBinders f None) pats
   CImplEntry
@@ -515,17 +541,23 @@ mapEntryBinders f (CImplEntry m s d (CImplDefault w tag key sym pos pats body)) 
     d
     (CImplDefault w tag key sym pos pats2 (mapExprBinders f body))
 
-mapBindBinders : BinderVisit -> CBind -> CBind
-mapBindBinders f (CBind name clauses site) =
-  CBind name (map (mapClauseBinders f) clauses) site
+mapBindBinders : BinderWalk -> CBind -> CBind
+mapBindBinders w (CBind name clauses site bid) =
+  let clauses2 = map (mapClauseBinders w) clauses
+  let bid2 = match w
+    BinderWalk FunctionPass f => f (FunctionBinder clauses2) name bid
+    BinderWalk PatternPass _ => bid
+  CBind name clauses2 site bid2
 
-mapClauseBinders : BinderVisit -> CClause -> CClause
+mapClauseBinders : BinderWalk -> CClause -> CClause
 mapClauseBinders f (CClause pats body) =
   let pats2 = map (mapPatBinders f None) pats
   CClause pats2 (mapExprBinders f body)
 
-mapPatBinders : BinderVisit -> Option CExpr -> Pat -> Pat
-mapPatBinders f hint (PVar x l bid) = PVar x l (f hint x bid)
+mapPatBinders : BinderWalk -> Option CExpr -> Pat -> Pat
+mapPatBinders (BinderWalk FunctionPass _) _ p = p
+mapPatBinders (BinderWalk PatternPass f) hint (PVar x l bid) =
+  PVar x l (f (PatternBinder hint) x bid)
 mapPatBinders _ _ PWild = PWild
 mapPatBinders _ _ (PLit l) = PLit l
 mapPatBinders f _ (PCon c ps) = PCon c (map (mapPatBinders f None) ps)
@@ -534,20 +566,20 @@ mapPatBinders f _ (PCons a b) =
   PCons a2 (mapPatBinders f None b)
 mapPatBinders f _ (PTuple ps) = PTuple (map (mapPatBinders f None) ps)
 mapPatBinders f _ (PList ps) = PList (map (mapPatBinders f None) ps)
-mapPatBinders f _ (PAs x l bid p) =
-  let bid2 = f None x bid
-  PAs x l bid2 (mapPatBinders f None p)
+mapPatBinders (w@(BinderWalk _ f)) _ (PAs x l bid p) =
+  let bid2 = f (PatternBinder None) x bid
+  PAs x l bid2 (mapPatBinders w None p)
 mapPatBinders _ _ (PRng lo hi incl) = PRng lo hi incl
 mapPatBinders f _ (PRec name fields rest) =
   PRec name (map (mapRecFieldBinders f) fields) rest
 
-mapRecFieldBinders : BinderVisit -> RecPatField -> RecPatField
-mapRecFieldBinders f (RecPatField n l bid None) =
-  RecPatField n l (f None n bid) None
+mapRecFieldBinders : BinderWalk -> RecPatField -> RecPatField
+mapRecFieldBinders (BinderWalk _ f) (RecPatField n l bid None) =
+  RecPatField n l (f (PatternBinder None) n bid) None
 mapRecFieldBinders f (RecPatField n l bid (Some p)) =
   RecPatField n l bid (Some (mapPatBinders f None p))
 
-mapExprBinders : BinderVisit -> CExpr -> CExpr
+mapExprBinders : BinderWalk -> CExpr -> CExpr
 mapExprBinders _ (CLit l) = CLit l
 mapExprBinders _ (CVar x addr) = CVar x addr
 mapExprBinders f (CApp h args site) =
@@ -621,22 +653,22 @@ mapExprBinders f (CBlock stmts) = CBlock (map (mapStmtBinders f) stmts)
 mapExprBinders _ (CMethod name ev) = CMethod name ev
 mapExprBinders _ (CDict name rs) = CDict name rs
 
-mapFieldBinders : BinderVisit -> CField -> CField
+mapFieldBinders : BinderWalk -> CField -> CField
 mapFieldBinders f (CField k o e) = CField k o (mapExprBinders f e)
 
-mapArmBinders : BinderVisit -> CArm -> CArm
+mapArmBinders : BinderWalk -> CArm -> CArm
 mapArmBinders f (CArm pat guards body) =
   let pat2 = mapPatBinders f None pat
   let guards2 = map (mapGuardBinders f) guards
   CArm pat2 guards2 (mapExprBinders f body)
 
-mapGuardBinders : BinderVisit -> CGuard -> CGuard
+mapGuardBinders : BinderWalk -> CGuard -> CGuard
 mapGuardBinders f (CGBool c) = CGBool (mapExprBinders f c)
 mapGuardBinders f (CGBind pat e) =
   let pat2 = mapPatBinders f None pat
   CGBind pat2 (mapExprBinders f e)
 
-mapStmtBinders : BinderVisit -> CStmt -> CStmt
+mapStmtBinders : BinderWalk -> CStmt -> CStmt
 mapStmtBinders f (CSExpr e) = CSExpr (mapExprBinders f e)
 mapStmtBinders f (CSLet recF pat e) =
   let pat2 = mapPatBinders f (Some e) pat
