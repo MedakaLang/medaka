@@ -1,19 +1,20 @@
 # META
-source_lines=6563
+source_lines=6581
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
 -- *combinator* parser over `List Token` from the lexer: a `ParserE` monad
 -- (`DeferredMappable`/`DeferredApplicative`/`DeferredThenable` impls) with
 -- `defer`-notation, and
--- combinators (`many`/`sepBy1`/`choice`/`chainl1`).  Precedence is the stratified
--- ladder from parser.mly, one function per level.  Validated by the
+-- combinators (`many`/`sepBy1`/`orElse`).  Precedence is the stratified
+-- ladder from parser.mly.  Validated by the
 -- `parse_fixtures` family (test/diff_compiler_snapshot_frontend_test.mdk).
 --
--- (Chosen over the direct recursive-descent version after Phase 136 unblocked
--- recursive polymorphic combinators and a perf comparison showed monadic
--- combinators are perf-neutral here — it dogfoods DeferredThenable/defer far
--- more.)
+-- The combinators are not free: each `defer` step allocates a continuation
+-- closure and a `ParserE` cell, and each `PR` result is a fresh cell.  The
+-- binary-operator ladder, which every expression operand descends, is written
+-- over the raw `ParserE` representation instead (`binLevel`): as `chainl1`
+-- combinators it was 30% of the parser's allocations.
 --
 -- COVERAGE: the arithmetic+boolean+comparison+cons+append operator ladder, `=>`
 -- lambdas, single-line `if`/`let … in`, `match` with indented arms, postfix
@@ -361,10 +362,6 @@ orElseRb ea qa (PErr eb qb)
   | qa > qb = PErr ea qa
   | otherwise = PErr eb qb
 
-choice : List (Parser a) -> Parser a
-choice [] = failP "no alternative"
-choice (p :: ps) = orElse p (choice ps)
-
 -- zero or more; primitive + progress-guarded so it can never loop
 many : Parser a -> Parser (List a)
 many p = ParserE (toks pos => manyGo p toks pos [])
@@ -434,27 +431,6 @@ optTrailingCommaTuple : List a -> Parser Unit
 optTrailingCommaTuple [_] = deferPure ()
 optTrailingCommaTuple _ = optTrailingComma
 
--- Structurally identical to stdlib/byteparser.mdk's chainl1.  Both containers
--- are `DeferredThenable` now, but the loop tail also needs `orElse`, which each
--- provides as a plain function rather than through a shared interface
--- (`Alternative` requires `Applicative` at kind `Type -> Type`, which an
--- `Effect`-indexed container cannot satisfy) — so there is still nothing to hang
--- a single generic version off of.
-chainl1 : Parser a -> Parser (a -> a -> a) -> Parser a
--- lint-disable-next-line rule-duplicate-body
-chainl1 p op = defer
-  x <- p
-  chainl1Rest p op x
-
-chainl1Rest : Parser a -> Parser (a -> a -> a) -> a -> Parser a
-chainl1Rest p op x = orElse (chainl1More p op x) (deferPure x)
-
-chainl1More : Parser a -> Parser (a -> a -> a) -> a -> Parser a
-chainl1More p op x = defer
-  f <- op
-  y <- p
-  chainl1Rest p op (f x y)
-
 -- NB: recurse through a do-continuation (lazy), not by passing `skipNewlines`
 -- as a strict argument — the latter forces the value while it's being defined
 -- (a recursive-value init cycle → CamlinternalLazy.Undefined under strict eval).
@@ -523,14 +499,6 @@ parseLam : Parser Expr
 parseLam = defer
   e <- parsePipe
   orElse (lamTail e) (deferPure e)
-
--- `|>` pipe (loosest operator), then `>>`/`<<` composition, then `||`…
-parsePipe : Parser Expr
-parsePipe = chainl1 parseCompose (binOp TPipeRight "|>")
-
-parseCompose : Parser Expr
-parseCompose =
-  chainl1 parseOr (choice [binOp TRCompose ">>", binOp TLCompose "<<"])
 
 lamTail : Expr -> Parser Expr
 lamTail e = located (lamTailRaw e)
@@ -668,56 +636,106 @@ stripLoc1 : Expr -> Expr
 stripLoc1 (ELoc _ e) = e
 stripLoc1 e = e
 
-binOp : Token -> String -> Parser (Expr -> Expr -> Expr)
-binOp tk op = defer
-  expectTok tk
-  deferPure (l r => EBinOp op l r (Ref RNone))
+-- ── The binary-operator ladder ──────────────────────────────────────────
+-- Levels, loosest first: 1 `|>`, 2 `>>` `<<`, 3 `||`, 4 `&&`, 5 the
+-- comparisons, 6 `::`, 7 `++`, 8 `+` `-`, 9 `*` `/` `%`.  Every level is
+-- left-associative except `::`, which is right-associative.  The operands of
+-- level 9 are `parseUnary`.  0 means "not a binary operator".
+binLevelOf : Token -> Int
+binLevelOf TPipeRight = 1
+binLevelOf TRCompose = 2
+binLevelOf TLCompose = 2
+binLevelOf TOr = 3
+binLevelOf TAnd = 4
+binLevelOf TEqEq = 5
+binLevelOf TNeq = 5
+binLevelOf TLt = 5
+binLevelOf TGt = 5
+binLevelOf TLeq = 5
+binLevelOf TGeq = 5
+binLevelOf TCons = 6
+binLevelOf TPlusPlus = 7
+binLevelOf TPlus = 8
+binLevelOf TMinus = 8
+binLevelOf TMinusTight = 8
+binLevelOf TStar = 9
+binLevelOf TSlash = 9
+binLevelOf TMod = 9
+binLevelOf _ = 0
+
+binOpName : Token -> String
+binOpName TPipeRight = "|>"
+binOpName TRCompose = ">>"
+binOpName TLCompose = "<<"
+binOpName TOr = "||"
+binOpName TAnd = "&&"
+binOpName TEqEq = "=="
+binOpName TNeq = "/="
+binOpName TLt = "<"
+binOpName TGt = ">"
+binOpName TLeq = "<="
+binOpName TGeq = ">="
+binOpName TCons = "::"
+binOpName TPlusPlus = "++"
+binOpName TStar = "*"
+binOpName TSlash = "/"
+binOpName TMod = "%"
+binOpName TPlus = "+"
+binOpName _ = "-"
+
+consLevel : Int
+consLevel = 6
+
+mulLevel : Int
+mulLevel = 9
+
+parsePipe : Parser Expr
+parsePipe = ParserE (binLevel 1)
 
 parseOr : Parser Expr
-parseOr = chainl1 parseAnd (binOp TOr "||")
+parseOr = ParserE (binLevel 3)
 
-parseAnd : Parser Expr
-parseAnd = chainl1 parseCmp (binOp TAnd "&&")
+-- One level of the ladder, over the raw `ParserE` representation rather than
+-- `defer`-notation: an operand that no operator of this level follows passes
+-- up as the very `PR` its level returned, so a descent through all nine levels
+-- allocates nothing of its own.
+binLevel : Int -> Array Token -> Int -> PR Expr
+binLevel lvl toks pos
+  | lvl > mulLevel = runP parseUnary toks pos
+  | otherwise = binLevelRest lvl toks (binLevel (lvl + 1) toks pos)
 
-parseCmp : Parser Expr
-parseCmp = chainl1 parseCons cmpOp
+binLevelRest : Int -> Array Token -> PR Expr -> PR Expr
+binLevelRest lvl toks (r@(POk x pos)) =
+  binTry lvl toks r x pos (peekTok toks pos)
+binLevelRest _ _ r = r
 
-cmpOp : Parser (Expr -> Expr -> Expr)
-cmpOp = choice [
-  binOp TEqEq "==",
-  binOp TNeq "/=",
-  binOp TLt "<",
-  binOp TGt ">",
-  binOp TLeq "<=",
-  binOp TGeq ">=",
-]
+-- `r` is `POk x pos`, handed back unchanged when `t` is not this level's.
+binTry : Int -> Array Token -> PR Expr -> Expr -> Int -> Token -> PR Expr
+binTry lvl toks r x pos t
+  | binLevelOf t == lvl =
+    binRhs lvl toks x pos t (binLevel (binRhsLevel lvl) toks (pos + 1))
+  | otherwise = r
 
--- `::` is right-associative
-parseCons : Parser Expr
-parseCons = defer
-  x <- parseAppend
-  orElse (consTail x) (deferPure x)
+binRhsLevel : Int -> Int
+binRhsLevel lvl
+  | lvl == consLevel = lvl
+  | otherwise = lvl + 1
 
-consTail : Expr -> Parser Expr
-consTail x = defer
-  expectTok TCons
-  y <- parseCons
-  deferPure (EBinOp "::" x y (Ref RNone))
+-- A right operand that fails recoverably un-consumes the operator: the level
+-- yields its left operand at the operator's position.  No looser level then
+-- tries that token, since each operator belongs to exactly one level.  `::`
+-- stops after one operator because its right operand already took the rest
+-- of the chain.
+binRhs : Int -> Array Token -> Expr -> Int -> Token -> PR Expr -> PR Expr
+binRhs lvl toks x _ t (POk y q) =
+  binNext lvl toks (POk (EBinOp (binOpName t) x y (Ref RNone)) q)
+binRhs _ _ x pos _ (PErr _ _) = POk x pos
+binRhs _ _ _ _ _ ry = ry
 
-parseAppend : Parser Expr
-parseAppend = chainl1 parseAdd (binOp TPlusPlus "++")
-
-parseAdd : Parser Expr
-parseAdd =
-  chainl1
-    parseMul
-    (choice [binOp TPlus "+", binOp TMinus "-", binOp TMinusTight "-"])
-
-parseMul : Parser Expr
-parseMul =
-  chainl1
-    parseUnary
-    (choice [binOp TStar "*", binOp TSlash "/", binOp TMod "%"])
+binNext : Int -> Array Token -> PR Expr -> PR Expr
+binNext lvl toks r
+  | lvl == consLevel = r
+  | otherwise = binLevelRest lvl toks r
 
 -- ── The 2^62 int literal: legal only under a unary `-` (#171) ───────────────
 -- `Int` is 63-bit (`word = (n << 1) | 1`), spanning [-2^62, 2^62-1].  The lexer
@@ -1018,7 +1036,7 @@ nestTooDeepMsg =
 -- Depth tracking is written directly over the raw `ParserE` representation
 -- (not `defer`-notation) so the counter is restored on EVERY outcome — including
 -- a non-fatal `PErr` from a failed speculative atom attempt, routine under
--- `orElse`/`chainl1` throughout this file. A `defer`-sequenced decrement after
+-- `orElse` throughout this file. A `defer`-sequenced decrement after
 -- `located parseAtomRaw` would never run on that path: `bindPR` short-circuits
 -- straight past subsequent binds on `PErr`/`PFatal`, which would leak an
 -- increment on every backtrack and eventually trip the cap on an ordinary
@@ -6666,9 +6684,6 @@ parseResultWith src tokList offList =
 (DFunDef false "orElseRb" (PWild PWild (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EVar "POk") (EVar "y")) (EVar "q")))
 (DFunDef false "orElseRb" (PWild PWild (PCon "PFatal" (PVar "eb") (PVar "qb"))) (EApp (EApp (EVar "PFatal") (EVar "eb")) (EVar "qb")))
 (DFunDef false "orElseRb" ((PVar "ea") (PVar "qa") (PCon "PErr" (PVar "eb") (PVar "qb"))) (EIf (EBinOp ">" (EVar "qa") (EVar "qb")) (EApp (EApp (EVar "PErr") (EVar "ea")) (EVar "qa")) (EIf (EVar "otherwise") (EApp (EApp (EVar "PErr") (EVar "eb")) (EVar "qb")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "choice" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Parser") (TyVar "a"))) (TyApp (TyCon "Parser") (TyVar "a"))))
-(DFunDef false "choice" ((PList)) (EApp (EVar "failP") (ELit (LString "no alternative"))))
-(DFunDef false "choice" ((PCons (PVar "p") (PVar "ps"))) (EApp (EApp (EVar "orElse") (EVar "p")) (EApp (EVar "choice") (EVar "ps"))))
 (DTypeSig false "many" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "many" ((PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "toks")) (EVar "pos")) (EListLit)))))
 (DTypeSig false "manyGo" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "PR") (TyApp (TyCon "List") (TyVar "a"))))))))
@@ -6693,12 +6708,6 @@ parseResultWith src tokList offList =
 (DTypeSig false "optTrailingCommaTuple" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Parser") (TyCon "Unit"))))
 (DFunDef false "optTrailingCommaTuple" ((PList PWild)) (EApp (EVar "deferPure") (ELit LUnit)))
 (DFunDef false "optTrailingCommaTuple" (PWild) (EVar "optTrailingComma"))
-(DTypeSig false "chainl1" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a")))) (TyApp (TyCon "Parser") (TyVar "a")))))
-(DFunDef false "chainl1" ((PVar "p") (PVar "op")) (EApp (EApp (EVar "deferThen") (EVar "p")) (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "chainl1Rest") (EVar "p")) (EVar "op")) (EVar "x")))))
-(DTypeSig false "chainl1Rest" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a")))) (TyFun (TyVar "a") (TyApp (TyCon "Parser") (TyVar "a"))))))
-(DFunDef false "chainl1Rest" ((PVar "p") (PVar "op") (PVar "x")) (EApp (EApp (EVar "orElse") (EApp (EApp (EApp (EVar "chainl1More") (EVar "p")) (EVar "op")) (EVar "x"))) (EApp (EVar "deferPure") (EVar "x"))))
-(DTypeSig false "chainl1More" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a")))) (TyFun (TyVar "a") (TyApp (TyCon "Parser") (TyVar "a"))))))
-(DFunDef false "chainl1More" ((PVar "p") (PVar "op") (PVar "x")) (EApp (EApp (EVar "deferThen") (EVar "op")) (ELam ((PVar "f")) (EApp (EApp (EVar "deferThen") (EVar "p")) (ELam ((PVar "y")) (EApp (EApp (EApp (EVar "chainl1Rest") (EVar "p")) (EVar "op")) (EApp (EApp (EVar "f") (EVar "x")) (EVar "y"))))))))
 (DTypeSig false "skipNewlines" (TyApp (TyCon "Parser") (TyCon "Unit")))
 (DFunDef false "skipNewlines" () (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "skipNlFor") (EVar "t")))))
 (DTypeSig false "skipNlFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit"))))
@@ -6716,10 +6725,6 @@ parseResultWith src tokList offList =
 (DFunDef false "annotTail" ((PVar "e")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EVar "deferPure") (EApp (EApp (EVar "EAnnot") (EVar "e")) (EVar "t"))))))))
 (DTypeSig false "parseLam" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseLam" () (EApp (EApp (EVar "deferThen") (EVar "parsePipe")) (ELam ((PVar "e")) (EApp (EApp (EVar "orElse") (EApp (EVar "lamTail") (EVar "e"))) (EApp (EVar "deferPure") (EVar "e"))))))
-(DTypeSig false "parsePipe" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parsePipe" () (EApp (EApp (EVar "chainl1") (EVar "parseCompose")) (EApp (EApp (EVar "binOp") (EVar "TPipeRight")) (ELit (LString "|>")))))
-(DTypeSig false "parseCompose" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseCompose" () (EApp (EApp (EVar "chainl1") (EVar "parseOr")) (EApp (EVar "choice") (EListLit (EApp (EApp (EVar "binOp") (EVar "TRCompose")) (ELit (LString ">>"))) (EApp (EApp (EVar "binOp") (EVar "TLCompose")) (ELit (LString "<<")))))))
 (DTypeSig false "lamTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "lamTail" ((PVar "e")) (EApp (EVar "located") (EApp (EVar "lamTailRaw") (EVar "e"))))
 (DTypeSig false "lamTailRaw" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
@@ -6781,26 +6786,69 @@ parseResultWith src tokList offList =
 (DTypeSig false "stripLoc1" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "stripLoc1" ((PCon "ELoc" PWild (PVar "e"))) (EVar "e"))
 (DFunDef false "stripLoc1" ((PVar "e")) (EVar "e"))
-(DTypeSig false "binOp" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))))
-(DFunDef false "binOp" ((PVar "tk") (PVar "op")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "tk"))) (ELam (PWild) (EApp (EVar "deferPure") (ELam ((PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "Ref") (EVar "RNone"))))))))
+(DTypeSig false "binLevelOf" (TyFun (TyCon "Token") (TyCon "Int")))
+(DFunDef false "binLevelOf" ((PCon "TPipeRight")) (ELit (LInt 1)))
+(DFunDef false "binLevelOf" ((PCon "TRCompose")) (ELit (LInt 2)))
+(DFunDef false "binLevelOf" ((PCon "TLCompose")) (ELit (LInt 2)))
+(DFunDef false "binLevelOf" ((PCon "TOr")) (ELit (LInt 3)))
+(DFunDef false "binLevelOf" ((PCon "TAnd")) (ELit (LInt 4)))
+(DFunDef false "binLevelOf" ((PCon "TEqEq")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TNeq")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TLt")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TGt")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TLeq")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TGeq")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TCons")) (ELit (LInt 6)))
+(DFunDef false "binLevelOf" ((PCon "TPlusPlus")) (ELit (LInt 7)))
+(DFunDef false "binLevelOf" ((PCon "TPlus")) (ELit (LInt 8)))
+(DFunDef false "binLevelOf" ((PCon "TMinus")) (ELit (LInt 8)))
+(DFunDef false "binLevelOf" ((PCon "TMinusTight")) (ELit (LInt 8)))
+(DFunDef false "binLevelOf" ((PCon "TStar")) (ELit (LInt 9)))
+(DFunDef false "binLevelOf" ((PCon "TSlash")) (ELit (LInt 9)))
+(DFunDef false "binLevelOf" ((PCon "TMod")) (ELit (LInt 9)))
+(DFunDef false "binLevelOf" (PWild) (ELit (LInt 0)))
+(DTypeSig false "binOpName" (TyFun (TyCon "Token") (TyCon "String")))
+(DFunDef false "binOpName" ((PCon "TPipeRight")) (ELit (LString "|>")))
+(DFunDef false "binOpName" ((PCon "TRCompose")) (ELit (LString ">>")))
+(DFunDef false "binOpName" ((PCon "TLCompose")) (ELit (LString "<<")))
+(DFunDef false "binOpName" ((PCon "TOr")) (ELit (LString "||")))
+(DFunDef false "binOpName" ((PCon "TAnd")) (ELit (LString "&&")))
+(DFunDef false "binOpName" ((PCon "TEqEq")) (ELit (LString "==")))
+(DFunDef false "binOpName" ((PCon "TNeq")) (ELit (LString "/=")))
+(DFunDef false "binOpName" ((PCon "TLt")) (ELit (LString "<")))
+(DFunDef false "binOpName" ((PCon "TGt")) (ELit (LString ">")))
+(DFunDef false "binOpName" ((PCon "TLeq")) (ELit (LString "<=")))
+(DFunDef false "binOpName" ((PCon "TGeq")) (ELit (LString ">=")))
+(DFunDef false "binOpName" ((PCon "TCons")) (ELit (LString "::")))
+(DFunDef false "binOpName" ((PCon "TPlusPlus")) (ELit (LString "++")))
+(DFunDef false "binOpName" ((PCon "TStar")) (ELit (LString "*")))
+(DFunDef false "binOpName" ((PCon "TSlash")) (ELit (LString "/")))
+(DFunDef false "binOpName" ((PCon "TMod")) (ELit (LString "%")))
+(DFunDef false "binOpName" ((PCon "TPlus")) (ELit (LString "+")))
+(DFunDef false "binOpName" (PWild) (ELit (LString "-")))
+(DTypeSig false "consLevel" (TyCon "Int"))
+(DFunDef false "consLevel" () (ELit (LInt 6)))
+(DTypeSig false "mulLevel" (TyCon "Int"))
+(DFunDef false "mulLevel" () (ELit (LInt 9)))
+(DTypeSig false "parsePipe" (TyApp (TyCon "Parser") (TyCon "Expr")))
+(DFunDef false "parsePipe" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (ELit (LInt 1)))))
 (DTypeSig false "parseOr" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseOr" () (EApp (EApp (EVar "chainl1") (EVar "parseAnd")) (EApp (EApp (EVar "binOp") (EVar "TOr")) (ELit (LString "||")))))
-(DTypeSig false "parseAnd" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseAnd" () (EApp (EApp (EVar "chainl1") (EVar "parseCmp")) (EApp (EApp (EVar "binOp") (EVar "TAnd")) (ELit (LString "&&")))))
-(DTypeSig false "parseCmp" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseCmp" () (EApp (EApp (EVar "chainl1") (EVar "parseCons")) (EVar "cmpOp")))
-(DTypeSig false "cmpOp" (TyApp (TyCon "Parser") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "cmpOp" () (EApp (EVar "choice") (EListLit (EApp (EApp (EVar "binOp") (EVar "TEqEq")) (ELit (LString "=="))) (EApp (EApp (EVar "binOp") (EVar "TNeq")) (ELit (LString "/="))) (EApp (EApp (EVar "binOp") (EVar "TLt")) (ELit (LString "<"))) (EApp (EApp (EVar "binOp") (EVar "TGt")) (ELit (LString ">"))) (EApp (EApp (EVar "binOp") (EVar "TLeq")) (ELit (LString "<="))) (EApp (EApp (EVar "binOp") (EVar "TGeq")) (ELit (LString ">="))))))
-(DTypeSig false "parseCons" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseCons" () (EApp (EApp (EVar "deferThen") (EVar "parseAppend")) (ELam ((PVar "x")) (EApp (EApp (EVar "orElse") (EApp (EVar "consTail") (EVar "x"))) (EApp (EVar "deferPure") (EVar "x"))))))
-(DTypeSig false "consTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "consTail" ((PVar "x")) (EApp (EApp (EVar "deferThen") (EApp (EVar "expectTok") (EVar "TCons"))) (ELam (PWild) (EApp (EApp (EVar "deferThen") (EVar "parseCons")) (ELam ((PVar "y")) (EApp (EVar "deferPure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "::"))) (EVar "x")) (EVar "y")) (EApp (EVar "Ref") (EVar "RNone")))))))))
-(DTypeSig false "parseAppend" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseAppend" () (EApp (EApp (EVar "chainl1") (EVar "parseAdd")) (EApp (EApp (EVar "binOp") (EVar "TPlusPlus")) (ELit (LString "++")))))
-(DTypeSig false "parseAdd" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseAdd" () (EApp (EApp (EVar "chainl1") (EVar "parseMul")) (EApp (EVar "choice") (EListLit (EApp (EApp (EVar "binOp") (EVar "TPlus")) (ELit (LString "+"))) (EApp (EApp (EVar "binOp") (EVar "TMinus")) (ELit (LString "-"))) (EApp (EApp (EVar "binOp") (EVar "TMinusTight")) (ELit (LString "-")))))))
-(DTypeSig false "parseMul" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseMul" () (EApp (EApp (EVar "chainl1") (EVar "parseUnary")) (EApp (EVar "choice") (EListLit (EApp (EApp (EVar "binOp") (EVar "TStar")) (ELit (LString "*"))) (EApp (EApp (EVar "binOp") (EVar "TSlash")) (ELit (LString "/"))) (EApp (EApp (EVar "binOp") (EVar "TMod")) (ELit (LString "%")))))))
+(DFunDef false "parseOr" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (ELit (LInt 3)))))
+(DTypeSig false "binLevel" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Expr"))))))
+(DFunDef false "binLevel" ((PVar "lvl") (PVar "toks") (PVar "pos")) (EIf (EBinOp ">" (EVar "lvl") (EVar "mulLevel")) (EApp (EApp (EApp (EVar "runP") (EVar "parseUnary")) (EVar "toks")) (EVar "pos")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "binLevelRest") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EApp (EVar "binLevel") (EBinOp "+" (EVar "lvl") (ELit (LInt 1)))) (EVar "toks")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "binLevelRest" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))
+(DFunDef false "binLevelRest" ((PVar "lvl") (PVar "toks") (PAs "r" (PCon "POk" (PVar "x") (PVar "pos")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "binTry") (EVar "lvl")) (EVar "toks")) (EVar "r")) (EVar "x")) (EVar "pos")) (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))))
+(DFunDef false "binLevelRest" (PWild PWild (PVar "r")) (EVar "r"))
+(DTypeSig false "binTry" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "PR") (TyCon "Expr")))))))))
+(DFunDef false "binTry" ((PVar "lvl") (PVar "toks") (PVar "r") (PVar "x") (PVar "pos") (PVar "t")) (EIf (EBinOp "==" (EApp (EVar "binLevelOf") (EVar "t")) (EVar "lvl")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "binRhs") (EVar "lvl")) (EVar "toks")) (EVar "x")) (EVar "pos")) (EVar "t")) (EApp (EApp (EApp (EVar "binLevel") (EApp (EVar "binRhsLevel") (EVar "lvl"))) (EVar "toks")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EVar "r") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "binRhsLevel" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "binRhsLevel" ((PVar "lvl")) (EIf (EBinOp "==" (EVar "lvl") (EVar "consLevel")) (EVar "lvl") (EIf (EVar "otherwise") (EBinOp "+" (EVar "lvl") (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "binRhs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr")))))))))
+(DFunDef false "binRhs" ((PVar "lvl") (PVar "toks") (PVar "x") PWild (PVar "t") (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EApp (EVar "binNext") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EApp (EVar "binOpName") (EVar "t"))) (EVar "x")) (EVar "y")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "q"))))
+(DFunDef false "binRhs" (PWild PWild (PVar "x") (PVar "pos") PWild (PCon "PErr" PWild PWild)) (EApp (EApp (EVar "POk") (EVar "x")) (EVar "pos")))
+(DFunDef false "binRhs" (PWild PWild PWild PWild PWild (PVar "ry")) (EVar "ry"))
+(DTypeSig false "binNext" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))
+(DFunDef false "binNext" ((PVar "lvl") (PVar "toks") (PVar "r")) (EIf (EBinOp "==" (EVar "lvl") (EVar "consLevel")) (EVar "r") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "binLevelRest") (EVar "lvl")) (EVar "toks")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "intMinLit" (TyCon "Int"))
 (DFunDef false "intMinLit" () (EBinOp "-" (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 4611686018427387903))) (ELit (LInt 1))))
 (DTypeSig false "isIntMinLit" (TyFun (TyCon "Int") (TyCon "Bool")))
@@ -8595,9 +8643,6 @@ parseResultWith src tokList offList =
 (DFunDef false "orElseRb" (PWild PWild (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EVar "POk") (EVar "y")) (EVar "q")))
 (DFunDef false "orElseRb" (PWild PWild (PCon "PFatal" (PVar "eb") (PVar "qb"))) (EApp (EApp (EVar "PFatal") (EVar "eb")) (EVar "qb")))
 (DFunDef false "orElseRb" ((PVar "ea") (PVar "qa") (PCon "PErr" (PVar "eb") (PVar "qb"))) (EIf (EBinOp ">" (EVar "qa") (EVar "qb")) (EApp (EApp (EVar "PErr") (EVar "ea")) (EVar "qa")) (EIf (EVar "otherwise") (EApp (EApp (EVar "PErr") (EVar "eb")) (EVar "qb")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "choice" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Parser") (TyVar "a"))) (TyApp (TyCon "Parser") (TyVar "a"))))
-(DFunDef false "choice" ((PList)) (EApp (EVar "failP") (ELit (LString "no alternative"))))
-(DFunDef false "choice" ((PCons (PVar "p") (PVar "ps"))) (EApp (EApp (EVar "orElse#shadow") (EVar "p")) (EApp (EVar "choice") (EVar "ps"))))
 (DTypeSig false "many" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyApp (TyCon "Parser") (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "many" ((PVar "p")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EApp (EApp (EVar "manyGo") (EVar "p")) (EVar "toks")) (EVar "pos")) (EListLit)))))
 (DTypeSig false "manyGo" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "PR") (TyApp (TyCon "List") (TyVar "a"))))))))
@@ -8622,12 +8667,6 @@ parseResultWith src tokList offList =
 (DTypeSig false "optTrailingCommaTuple" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Parser") (TyCon "Unit"))))
 (DFunDef false "optTrailingCommaTuple" ((PList PWild)) (EApp (EMethodRef "deferPure") (ELit LUnit)))
 (DFunDef false "optTrailingCommaTuple" (PWild) (EVar "optTrailingComma"))
-(DTypeSig false "chainl1" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a")))) (TyApp (TyCon "Parser") (TyVar "a")))))
-(DFunDef false "chainl1" ((PVar "p") (PVar "op")) (EApp (EApp (EMethodRef "deferThen") (EVar "p")) (ELam ((PVar "x")) (EApp (EApp (EApp (EVar "chainl1Rest") (EVar "p")) (EVar "op")) (EVar "x")))))
-(DTypeSig false "chainl1Rest" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a")))) (TyFun (TyVar "a") (TyApp (TyCon "Parser") (TyVar "a"))))))
-(DFunDef false "chainl1Rest" ((PVar "p") (PVar "op") (PVar "x")) (EApp (EApp (EVar "orElse#shadow") (EApp (EApp (EApp (EVar "chainl1More") (EVar "p")) (EVar "op")) (EVar "x"))) (EApp (EMethodRef "deferPure") (EVar "x"))))
-(DTypeSig false "chainl1More" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyFun (TyVar "a") (TyFun (TyVar "a") (TyVar "a")))) (TyFun (TyVar "a") (TyApp (TyCon "Parser") (TyVar "a"))))))
-(DFunDef false "chainl1More" ((PVar "p") (PVar "op") (PVar "x")) (EApp (EApp (EMethodRef "deferThen") (EVar "op")) (ELam ((PVar "f")) (EApp (EApp (EMethodRef "deferThen") (EVar "p")) (ELam ((PVar "y")) (EApp (EApp (EApp (EVar "chainl1Rest") (EVar "p")) (EVar "op")) (EApp (EApp (EVar "f") (EVar "x")) (EVar "y"))))))))
 (DTypeSig false "skipNewlines" (TyApp (TyCon "Parser") (TyCon "Unit")))
 (DFunDef false "skipNewlines" () (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "t")) (EApp (EVar "skipNlFor") (EVar "t")))))
 (DTypeSig false "skipNlFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit"))))
@@ -8645,10 +8684,6 @@ parseResultWith src tokList offList =
 (DFunDef false "annotTail" ((PVar "e")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TColon"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseTy")) (ELam ((PVar "t")) (EApp (EMethodRef "deferPure") (EApp (EApp (EVar "EAnnot") (EVar "e")) (EVar "t"))))))))
 (DTypeSig false "parseLam" (TyApp (TyCon "Parser") (TyCon "Expr")))
 (DFunDef false "parseLam" () (EApp (EApp (EMethodRef "deferThen") (EVar "parsePipe")) (ELam ((PVar "e")) (EApp (EApp (EVar "orElse#shadow") (EApp (EVar "lamTail") (EVar "e"))) (EApp (EMethodRef "deferPure") (EVar "e"))))))
-(DTypeSig false "parsePipe" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parsePipe" () (EApp (EApp (EVar "chainl1") (EVar "parseCompose")) (EApp (EApp (EVar "binOp") (EVar "TPipeRight")) (ELit (LString "|>")))))
-(DTypeSig false "parseCompose" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseCompose" () (EApp (EApp (EVar "chainl1") (EVar "parseOr")) (EApp (EVar "choice") (EListLit (EApp (EApp (EVar "binOp") (EVar "TRCompose")) (ELit (LString ">>"))) (EApp (EApp (EVar "binOp") (EVar "TLCompose")) (ELit (LString "<<")))))))
 (DTypeSig false "lamTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
 (DFunDef false "lamTail" ((PVar "e")) (EApp (EVar "located") (EApp (EVar "lamTailRaw") (EVar "e"))))
 (DTypeSig false "lamTailRaw" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
@@ -8710,26 +8745,69 @@ parseResultWith src tokList offList =
 (DTypeSig false "stripLoc1" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "stripLoc1" ((PCon "ELoc" PWild (PVar "e"))) (EVar "e"))
 (DFunDef false "stripLoc1" ((PVar "e")) (EVar "e"))
-(DTypeSig false "binOp" (TyFun (TyCon "Token") (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))))
-(DFunDef false "binOp" ((PVar "tk") (PVar "op")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "tk"))) (ELam (PWild) (EApp (EMethodRef "deferPure") (ELam ((PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EApp (EVar "Ref") (EVar "RNone"))))))))
+(DTypeSig false "binLevelOf" (TyFun (TyCon "Token") (TyCon "Int")))
+(DFunDef false "binLevelOf" ((PCon "TPipeRight")) (ELit (LInt 1)))
+(DFunDef false "binLevelOf" ((PCon "TRCompose")) (ELit (LInt 2)))
+(DFunDef false "binLevelOf" ((PCon "TLCompose")) (ELit (LInt 2)))
+(DFunDef false "binLevelOf" ((PCon "TOr")) (ELit (LInt 3)))
+(DFunDef false "binLevelOf" ((PCon "TAnd")) (ELit (LInt 4)))
+(DFunDef false "binLevelOf" ((PCon "TEqEq")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TNeq")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TLt")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TGt")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TLeq")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TGeq")) (ELit (LInt 5)))
+(DFunDef false "binLevelOf" ((PCon "TCons")) (ELit (LInt 6)))
+(DFunDef false "binLevelOf" ((PCon "TPlusPlus")) (ELit (LInt 7)))
+(DFunDef false "binLevelOf" ((PCon "TPlus")) (ELit (LInt 8)))
+(DFunDef false "binLevelOf" ((PCon "TMinus")) (ELit (LInt 8)))
+(DFunDef false "binLevelOf" ((PCon "TMinusTight")) (ELit (LInt 8)))
+(DFunDef false "binLevelOf" ((PCon "TStar")) (ELit (LInt 9)))
+(DFunDef false "binLevelOf" ((PCon "TSlash")) (ELit (LInt 9)))
+(DFunDef false "binLevelOf" ((PCon "TMod")) (ELit (LInt 9)))
+(DFunDef false "binLevelOf" (PWild) (ELit (LInt 0)))
+(DTypeSig false "binOpName" (TyFun (TyCon "Token") (TyCon "String")))
+(DFunDef false "binOpName" ((PCon "TPipeRight")) (ELit (LString "|>")))
+(DFunDef false "binOpName" ((PCon "TRCompose")) (ELit (LString ">>")))
+(DFunDef false "binOpName" ((PCon "TLCompose")) (ELit (LString "<<")))
+(DFunDef false "binOpName" ((PCon "TOr")) (ELit (LString "||")))
+(DFunDef false "binOpName" ((PCon "TAnd")) (ELit (LString "&&")))
+(DFunDef false "binOpName" ((PCon "TEqEq")) (ELit (LString "==")))
+(DFunDef false "binOpName" ((PCon "TNeq")) (ELit (LString "/=")))
+(DFunDef false "binOpName" ((PCon "TLt")) (ELit (LString "<")))
+(DFunDef false "binOpName" ((PCon "TGt")) (ELit (LString ">")))
+(DFunDef false "binOpName" ((PCon "TLeq")) (ELit (LString "<=")))
+(DFunDef false "binOpName" ((PCon "TGeq")) (ELit (LString ">=")))
+(DFunDef false "binOpName" ((PCon "TCons")) (ELit (LString "::")))
+(DFunDef false "binOpName" ((PCon "TPlusPlus")) (ELit (LString "++")))
+(DFunDef false "binOpName" ((PCon "TStar")) (ELit (LString "*")))
+(DFunDef false "binOpName" ((PCon "TSlash")) (ELit (LString "/")))
+(DFunDef false "binOpName" ((PCon "TMod")) (ELit (LString "%")))
+(DFunDef false "binOpName" ((PCon "TPlus")) (ELit (LString "+")))
+(DFunDef false "binOpName" (PWild) (ELit (LString "-")))
+(DTypeSig false "consLevel" (TyCon "Int"))
+(DFunDef false "consLevel" () (ELit (LInt 6)))
+(DTypeSig false "mulLevel" (TyCon "Int"))
+(DFunDef false "mulLevel" () (ELit (LInt 9)))
+(DTypeSig false "parsePipe" (TyApp (TyCon "Parser") (TyCon "Expr")))
+(DFunDef false "parsePipe" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (ELit (LInt 1)))))
 (DTypeSig false "parseOr" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseOr" () (EApp (EApp (EVar "chainl1") (EVar "parseAnd")) (EApp (EApp (EVar "binOp") (EVar "TOr")) (ELit (LString "||")))))
-(DTypeSig false "parseAnd" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseAnd" () (EApp (EApp (EVar "chainl1") (EVar "parseCmp")) (EApp (EApp (EVar "binOp") (EVar "TAnd")) (ELit (LString "&&")))))
-(DTypeSig false "parseCmp" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseCmp" () (EApp (EApp (EVar "chainl1") (EVar "parseCons")) (EVar "cmpOp")))
-(DTypeSig false "cmpOp" (TyApp (TyCon "Parser") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
-(DFunDef false "cmpOp" () (EApp (EVar "choice") (EListLit (EApp (EApp (EVar "binOp") (EVar "TEqEq")) (ELit (LString "=="))) (EApp (EApp (EVar "binOp") (EVar "TNeq")) (ELit (LString "/="))) (EApp (EApp (EVar "binOp") (EVar "TLt")) (ELit (LString "<"))) (EApp (EApp (EVar "binOp") (EVar "TGt")) (ELit (LString ">"))) (EApp (EApp (EVar "binOp") (EVar "TLeq")) (ELit (LString "<="))) (EApp (EApp (EVar "binOp") (EVar "TGeq")) (ELit (LString ">="))))))
-(DTypeSig false "parseCons" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseCons" () (EApp (EApp (EMethodRef "deferThen") (EVar "parseAppend")) (ELam ((PVar "x")) (EApp (EApp (EVar "orElse#shadow") (EApp (EVar "consTail") (EVar "x"))) (EApp (EMethodRef "deferPure") (EVar "x"))))))
-(DTypeSig false "consTail" (TyFun (TyCon "Expr") (TyApp (TyCon "Parser") (TyCon "Expr"))))
-(DFunDef false "consTail" ((PVar "x")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expectTok") (EVar "TCons"))) (ELam (PWild) (EApp (EApp (EMethodRef "deferThen") (EVar "parseCons")) (ELam ((PVar "y")) (EApp (EMethodRef "deferPure") (EApp (EApp (EApp (EApp (EVar "EBinOp") (ELit (LString "::"))) (EVar "x")) (EVar "y")) (EApp (EVar "Ref") (EVar "RNone")))))))))
-(DTypeSig false "parseAppend" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseAppend" () (EApp (EApp (EVar "chainl1") (EVar "parseAdd")) (EApp (EApp (EVar "binOp") (EVar "TPlusPlus")) (ELit (LString "++")))))
-(DTypeSig false "parseAdd" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseAdd" () (EApp (EApp (EVar "chainl1") (EVar "parseMul")) (EApp (EVar "choice") (EListLit (EApp (EApp (EVar "binOp") (EVar "TPlus")) (ELit (LString "+"))) (EApp (EApp (EVar "binOp") (EVar "TMinus")) (ELit (LString "-"))) (EApp (EApp (EVar "binOp") (EVar "TMinusTight")) (ELit (LString "-")))))))
-(DTypeSig false "parseMul" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseMul" () (EApp (EApp (EVar "chainl1") (EVar "parseUnary")) (EApp (EVar "choice") (EListLit (EApp (EApp (EVar "binOp") (EVar "TStar")) (ELit (LString "*"))) (EApp (EApp (EVar "binOp") (EVar "TSlash")) (ELit (LString "/"))) (EApp (EApp (EVar "binOp") (EVar "TMod")) (ELit (LString "%")))))))
+(DFunDef false "parseOr" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (ELit (LInt 3)))))
+(DTypeSig false "binLevel" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Expr"))))))
+(DFunDef false "binLevel" ((PVar "lvl") (PVar "toks") (PVar "pos")) (EIf (EBinOp ">" (EVar "lvl") (EVar "mulLevel")) (EApp (EApp (EApp (EVar "runP") (EVar "parseUnary")) (EVar "toks")) (EVar "pos")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "binLevelRest") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EApp (EVar "binLevel") (EBinOp "+" (EVar "lvl") (ELit (LInt 1)))) (EVar "toks")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "binLevelRest" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))
+(DFunDef false "binLevelRest" ((PVar "lvl") (PVar "toks") (PAs "r" (PCon "POk" (PVar "x") (PVar "pos")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "binTry") (EVar "lvl")) (EVar "toks")) (EVar "r")) (EVar "x")) (EVar "pos")) (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))))
+(DFunDef false "binLevelRest" (PWild PWild (PVar "r")) (EVar "r"))
+(DTypeSig false "binTry" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyApp (TyCon "PR") (TyCon "Expr")))))))))
+(DFunDef false "binTry" ((PVar "lvl") (PVar "toks") (PVar "r") (PVar "x") (PVar "pos") (PVar "t")) (EIf (EBinOp "==" (EApp (EVar "binLevelOf") (EVar "t")) (EVar "lvl")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "binRhs") (EVar "lvl")) (EVar "toks")) (EVar "x")) (EVar "pos")) (EVar "t")) (EApp (EApp (EApp (EVar "binLevel") (EApp (EVar "binRhsLevel") (EVar "lvl"))) (EVar "toks")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EVar "r") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "binRhsLevel" (TyFun (TyCon "Int") (TyCon "Int")))
+(DFunDef false "binRhsLevel" ((PVar "lvl")) (EIf (EBinOp "==" (EVar "lvl") (EVar "consLevel")) (EVar "lvl") (EIf (EVar "otherwise") (EBinOp "+" (EVar "lvl") (ELit (LInt 1))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "binRhs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Expr") (TyFun (TyCon "Int") (TyFun (TyCon "Token") (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr")))))))))
+(DFunDef false "binRhs" ((PVar "lvl") (PVar "toks") (PVar "x") PWild (PVar "t") (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EApp (EVar "binNext") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EVar "POk") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EApp (EVar "binOpName") (EVar "t"))) (EVar "x")) (EVar "y")) (EApp (EVar "Ref") (EVar "RNone")))) (EVar "q"))))
+(DFunDef false "binRhs" (PWild PWild (PVar "x") (PVar "pos") PWild (PCon "PErr" PWild PWild)) (EApp (EApp (EVar "POk") (EVar "x")) (EVar "pos")))
+(DFunDef false "binRhs" (PWild PWild PWild PWild PWild (PVar "ry")) (EVar "ry"))
+(DTypeSig false "binNext" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))
+(DFunDef false "binNext" ((PVar "lvl") (PVar "toks") (PVar "r")) (EIf (EBinOp "==" (EVar "lvl") (EVar "consLevel")) (EVar "r") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "binLevelRest") (EVar "lvl")) (EVar "toks")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "intMinLit" (TyCon "Int"))
 (DFunDef false "intMinLit" () (EBinOp "-" (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 4611686018427387903))) (ELit (LInt 1))))
 (DTypeSig false "isIntMinLit" (TyFun (TyCon "Int") (TyCon "Bool")))
