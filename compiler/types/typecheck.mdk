@@ -32122,8 +32122,7 @@ implRowMatchesSuper superKey superName goal (ImplRow _ _ ir tys _ _) =
 -- `implHeadSubst` match), so a variable [pats] repeats must bind equal types, and a
 -- variable of [goal] matches only a variable of [pats].  `impl D (Pair a a)` does not
 -- cover `D (Pair a b)` or `D (Pair Int Bool)`.  Effect rows are transparent on both
--- sides.  Type constructors compare by spelling (`tyStep`), where the use site
--- compares identity.
+-- sides.  Type constructors compare by identity (`tyStep`), as at the use site.
 superHeadCovers : List Ty -> List Ty -> Bool
 superHeadCovers pats goal =
   isSome (matchOneSided superHeadStep eqStr tyStructEq (zipL pats goal) [])
@@ -32689,11 +32688,14 @@ tyStrictlyMoreSpecificV a b = tySubsumesV b a && not (tySubsumesV a b)
 -- no catch-all — a new constructor must add an arm here, not rely on a
 -- wildcard (a hand-maintained count here would rot; see `TyRow`'s own arm
 -- below for why: a bare row atom has no wrapped type to recurse into, so it
--- vacuously matches anything in this position).
+-- vacuously matches anything in this position).  A type constructor compares by
+-- identity (`sameTyConHead`), the rule the use site's `matchStep` and coherence's
+-- `cohStep` apply, so a module-local type never matches an imported type it shares a
+-- spelling with.
 tyStep : Ty -> Ty -> MStep String Ty Ty
 tyStep (TyVar gn) _ = MVar gn
-tyStep (TyCon { tyConName = a }) (TyCon { tyConName = b }) =
-  if a == b then MOk else MFail
+tyStep (TyCon { tyConName = a, tyConOrigin = oa }) (TyCon { tyConName = b, tyConOrigin = ob }) =
+  if sameTyConHead a oa b ob then MOk else MFail
 tyStep (TyCon { tyConName = _ }) _ = MFail
 tyStep (TyApp f1 a1) (TyApp f2 a2) = MKids [(f1, f2), (a1, a2)]
 tyStep (TyApp _ _) _ = MFail
@@ -32723,9 +32725,11 @@ stripTyWrap (TyNamed _ t _) = stripTyWrap t
 stripTyWrap (TyQual t _ _) = stripTyWrap t
 stripTyWrap t = t
 
--- structural equality of two AST type patterns (rigid; TyVar names must match).
+-- structural equality of two AST type patterns (rigid; TyVar names must match, type
+-- constructors compare by identity as in `tyStep`).
 tyStructEq : Ty -> Ty -> Bool
-tyStructEq (TyCon { tyConName = a }) (TyCon { tyConName = b }) = a == b
+tyStructEq (TyCon { tyConName = a, tyConOrigin = oa }) (TyCon { tyConName = b, tyConOrigin = ob }) =
+  sameTyConHead a oa b ob
 tyStructEq (TyVar a) (TyVar b) = a == b
 tyStructEq (TyApp f1 a1) (TyApp f2 a2) = tyStructEq f1 f2 && tyStructEq a1 a2
 tyStructEq (TyFun a1 b1) (TyFun a2 b2) = tyStructEq a1 a2 && tyStructEq b1 b2

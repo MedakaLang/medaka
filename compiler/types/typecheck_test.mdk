@@ -4512,3 +4512,201 @@ test "alias-head judgment matrix: super construction" =
 
 test "alias-head judgment matrix: min order" =
   aliasHeadVerdicts ([], "SUP") aliasHeadMinOrder
+
+-- Two modules' types that share a spelling are two types (DICT-SEMANTICS §8 I4):
+-- an impl over `lib`'s `Box` neither answers nor supplies the super of an impl
+-- over the entry module's own `Box`.  `lib` does not export `Box` to the entry
+-- module, so only an identity comparison tells the two apart.
+collisionLib : List String -> (String, String)
+collisionLib impls = (
+  "lib",
+  joinNl
+    ([
+        "export interface Sup a where",
+        "  sup : a -> String",
+        "export interface Sub a requires Sup a where",
+        "  sub : a -> String",
+        "public export data Box a = Box a",
+      ]
+      ++ impls),
+)
+
+collisionEntry : String -> List String -> (String, String)
+collisionEntry ty lines = (
+  "entry",
+  joinNl
+    (["import lib.{Sup, Sub, sup, sub}", "data \{ty} a = \{ty} a"] ++ lines),
+)
+
+test "an impl over another module's same-spelled type is no super impl" = expectEach
+  [
+    (
+      "parametric head",
+      expectEqual
+        (["T-MISSING-SUPER-IMPL"], "")
+        (aliasHeadOutcome [
+          collisionLib ["impl Sup (Box a) where", "  sup _ = \"lib\""],
+          collisionEntry "Box" [
+            "impl Sub (Box a) where",
+            "  sub _ = \"sub\"",
+            "useSup : Sub a => a -> String",
+            "useSup x = sup x ++ sub x",
+            "main = useSup (Box True)",
+          ],
+        ]),
+    ),
+    (
+      "concrete head",
+      expectEqual
+        (["T-MISSING-SUPER-IMPL"], "")
+        (aliasHeadOutcome [
+          collisionLib ["impl Sup (Box a) where", "  sup _ = \"lib\""],
+          collisionEntry "Box" [
+            "impl Sub (Box Bool) where",
+            "  sub _ = \"sub\"",
+            "useSup : Sub a => a -> String",
+            "useSup x = sup x ++ sub x",
+            "main = useSup (Box True)",
+          ],
+        ]),
+    ),
+  ]
+
+-- Each of two modules declares its own `T` with a `Conv` impl, and the receiver's
+-- impl alone determines the result type, so each call has exactly one instance.
+test "a receiver's own impl determines a multi-parameter goal beside a same-spelled type" =
+  expectEqual
+    ([], "beeint")
+    (aliasHeadOutcome [
+      (
+        "cv",
+        joinNl [
+          "export interface Conv a b where",
+          "  conv : a -> b",
+          "export interface Say a where",
+          "  say : a -> String",
+          "impl Say Int where",
+          "  say _ = \"int\"",
+          "impl Say String where",
+          "  say s = s",
+        ],
+      ),
+      (
+        "amod",
+        joinNl [
+          "import cv.{Conv, conv}",
+          "public export data T = TA",
+          "impl Conv T Int where",
+          "  conv _ = 7",
+        ],
+      ),
+      (
+        "bmod",
+        joinNl [
+          "import cv.{Conv, conv}",
+          "public export data T = TB",
+          "impl Conv T String where",
+          "  conv _ = \"bee\"",
+        ],
+      ),
+      (
+        "main",
+        joinNl [
+          "import cv.{Conv, conv, Say, say}",
+          "import amod as A",
+          "import bmod as B",
+          "main = say (conv B.TB) ++ say (conv A.TA)",
+        ],
+      ),
+    ])
+
+-- The spelling-collision judgment matrix: one program per judgment, with the entry
+-- module's own type spelled like `lib`'s `Box` and spelled distinctly.  Every
+-- judgment must reach the same verdict on both spellings.
+collisionSpelling : Bool -> String
+collisionSpelling collides = if collides then "Box" else "Crate"
+
+-- `Box` sits below the head's root, so the bucket keyed on the root (`List`)
+-- admits `lib`'s impl and only the matcher can refuse it.
+collisionSelection : Bool -> (List String, String)
+collisionSelection collides =
+  let ty = collisionSpelling collides
+  aliasHeadOutcome [
+    collisionLib ["impl Sup (List (Box Bool)) where", "  sup _ = \"lib\""],
+    collisionEntry ty [
+      "impl Sup (List (\{ty} a)) where",
+      "  sup _ = \"entry\"",
+      "main = sup [\{ty} True]",
+    ],
+  ]
+
+collisionCoherence : Bool -> (List String, String)
+collisionCoherence collides =
+  let ty = collisionSpelling collides
+  aliasHeadOutcome [
+    collisionLib ["impl Sup (Box Bool) where", "  sup _ = \"lib\""],
+    collisionEntry ty [
+      "impl Sup (\{ty} Bool) where",
+      "  sup _ = \"entry\"",
+      "main = sup (\{ty} True)",
+    ],
+  ]
+
+collisionSuperExistence : Bool -> (List String, String)
+collisionSuperExistence collides =
+  let ty = collisionSpelling collides
+  aliasHeadOutcome [
+    collisionLib ["impl Sup (Box a) where", "  sup _ = \"lib\""],
+    collisionEntry ty [
+      "impl Sub (\{ty} a) where",
+      "  sub _ = \"sub\"",
+      "main = sub (\{ty} True)",
+    ],
+  ]
+
+collisionSuperConstruction : Bool -> (List String, String)
+collisionSuperConstruction collides =
+  let ty = collisionSpelling collides
+  aliasHeadOutcome [
+    collisionLib ["impl Sup (Box a) where", "  sup _ = \"lib\""],
+    collisionEntry ty [
+      "impl Sup (\{ty} a) where",
+      "  sup _ = \"entry\"",
+      "impl Sub (\{ty} a) where",
+      "  sub _ = \"sub\"",
+      "useSup : Sub a => a -> String",
+      "useSup x = sup x",
+      "main = useSup (\{ty} True)",
+    ],
+  ]
+
+-- `lib`'s impl is the more specific of the three heads when only spellings are
+-- compared, so the ranking must see the entry module's own two impls alone.
+collisionMinOrder : Bool -> (List String, String)
+collisionMinOrder collides =
+  let ty = collisionSpelling collides
+  aliasHeadOutcome [
+    collisionLib ["impl Sup (List (Box Bool)) where", "  sup _ = \"lib\""],
+    collisionEntry ty [
+      "impl Sup (List a) where",
+      "  sup _ = \"general\"",
+      "impl Sup (List (\{ty} a)) where",
+      "  sup _ = \"entry\"",
+      "main = sup [\{ty} True]",
+    ],
+  ]
+
+test "spelling-collision judgment matrix: selection" =
+  aliasHeadVerdicts ([], "entry") collisionSelection
+
+test "spelling-collision judgment matrix: coherence" =
+  aliasHeadVerdicts ([], "entry") collisionCoherence
+
+test "spelling-collision judgment matrix: super existence" =
+  aliasHeadVerdicts (["T-MISSING-SUPER-IMPL"], "") collisionSuperExistence
+
+test "spelling-collision judgment matrix: super construction" =
+  aliasHeadVerdicts ([], "entry") collisionSuperConstruction
+
+test "spelling-collision judgment matrix: min order" =
+  aliasHeadVerdicts ([], "entry") collisionMinOrder
