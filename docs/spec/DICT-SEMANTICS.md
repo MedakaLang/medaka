@@ -1893,7 +1893,8 @@ to it later is a semantics change, not a bug fix.
    unifies with it** — the generalizable variables free, every other variable
    rigid — **is ⊒ the matching one**, **and the same holds of each super goal its
    construction selects an instance for** (`D τ̄` for every super `D` of `C`,
-   transitively, whose arguments are not all variables; point 4, §3 R-SUPER-CARRY):
+   transitively, that has a constructed argument and that the matched instance's
+   context does not answer; point 4, §3 R-SUPER-CARRY):
    then every instantiation of those variables still selects the matching instance
    and the same super instances, and reducing early changes no use's answer.
    Otherwise the goal enters `P'` **as written**, and each use selects at its
@@ -1909,16 +1910,25 @@ to it later is a semantics change, not a bug fix.
    builds the super at `Box (Two Bool)`, as `useSup (Box (Two True))` does. Likewise a
    program `impl Eq (List Color)` keeps `h x = useEqViaOrd [x] [x]` at
    `Ord (List a) ⇒ a → Bool` (`test/dict_fixtures/requires-super-selection-*.mdk`).
-   A super goal whose arguments are all variables selects no instance: it is
-   answered by the instance's context, which is reduced under this same test.
-   A goal over a rigid variable is not generalizable, and the rest of this point
-   governs it unchanged, its supers included: a signed binder or an impl body holds its variables rigid, its goal and
-   the supers its construction builds commit as written, and that commitment is
-   final (`requires-super-selection-signed-commits.mdk`,
-   `requires-super-selection-impl-head-commits.mdk`). But a
-   goal over a **rigid** (signature-bound) variable — e.g. `Default (List a)`
+   A super goal the matched instance's context answers, itself or through its
+   supers, is built from that context (`assum` before `inst`) and selects no
+   instance; the context's own goals are reduced under this same test. So with
+   `impl Sub (Box a) requires Sup (Box a)` beside `impl Sup (Box Int)` and
+   `impl Sup (Box Bool)`, `g x = useSup (Box x)` has scheme `Sup (Box a) ⇒ a → String`
+   (`requires-super-selection-context-answers.mdk`). Two classes of super goal are
+   not tested, so a use can select a super instance the reduction did not: a super
+   goal whose argument is a function type, which the test does not count as
+   constructed (#4043), and a super goal whose arguments are all variables, which
+   the instance's context or a blanket instance answers; in the blanket case a
+   more specific instance can match at a use (#4044).
+   A goal over a **rigid** variable is not generalizable: a signed binder and an
+   impl body hold their variables rigid. Such a goal — e.g. `Default (List a)`
    inside `f : ∀a. Default a ⇒ …` — matches only the general instance and is
-   discharged there, once, when `f` is elaborated. If `f` is later used at
+   discharged there, once, when `f` is elaborated, together with the super
+   instances its construction selects
+   (`requires-super-selection-signed-commits.mdk`,
+   `requires-super-selection-impl-head-commits.mdk`,
+   `requires-super-selection-signed-caller.mdk`). If `f` is later used at
    `a := Int`, `f`'s body still runs the general instance's evidence (closed
    over the caller's `Default Int` dict); it is **not** retroactively
    re-resolved to `Default (List Int)`. So a ground predicate can receive
@@ -3145,7 +3155,7 @@ not this paragraph.
 | §3 **W3-inst** (instance-head rigidity) | `checkImplHeadRigidity`, `checkImplHeadPrerequisites` (`compiler/types/typecheck.mdk`) | an impl body may not pin or identify a head variable, and every predicate it leaves on one is entailed by the impl's `requires` (with superinterfaces), the method's `=>` context or the head itself | impl bodies only, at the same boundary as W3, before body-local defaulting; a pin is reported by the body that introduced it; a goal an instance answers only by fixing a head variable is reported whatever other variables it mentions (#3798, #3817) |
 | §3 **W-super** (the declaration entails its supers' instance contexts) | `checkImplSuperContexts` beside `checkSuperImpls` (`compiler/types/typecheck.mdk`) | for each direct super `D` of an impl's interface, the context of the instance `D` selects at the impl head (head variables rigid) is entailed by the impl's `requires` with their superinterfaces | every impl declaration, whether or not a use reduces it; a residual over head variables is `T-IMPL-MISSING-REQUIRES` at the impl, a ground one no instance matches `T-NO-IMPL` at the impl; no impl row covering the super itself, and no given of the `requires` answering it, is `T-MISSING-SUPER-IMPL` at the impl at any head (`checkImplSuperContexts`, over the graph-wide rows, with a rigid and linear match, `superHeadCovers`); a more specific super instance a goal selects has its context carried to the binder that reduces the goal (R-SUPER-CARRY, `superGoalsEntered`, §6.1.4 point 4) (#3995, #4010), and a generalizing binder reduces the goal only when that super selection is stable (`residualSelectionStable`, §6.1.3) (#4023) |
 | §4 `var` | `instantiate:3630`; per-residual entailment via `entail:11892`; obligation discharge `checkCallObligationsU:13793`/`checkOneCallObligation:13814` | instantiation + per-predicate entailment at each use | — |
-| §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates. A concrete-headed residual is reduced by `residualPredsOf` only when `residualSelectionStable` holds (every other unifying head ⊒ the matching one, for the goal and for each super goal of `superGoalClosure` with a constructed argument, `goalSelectionStable`, §6.1.3, R-STABLE); otherwise it is deferred as written (`test/dict_fixtures/r-stable-overlap-goal-quantified.mdk`, #1579; the super half `test/dict_fixtures/requires-super-selection-*.mdk`, #4023). The signed path (`checkSigConstraintOne`) commits as written |
+| §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates. A concrete-headed residual is reduced by `residualPredsOf` only when `residualSelectionStable` holds (every other unifying head ⊒ the matching one, for the goal and for each super goal of `superGoalClosure` with a constructed argument that the matched instance's context does not answer (`goalAnsweredBy`), `goalSelectionStable`, §6.1.3, R-STABLE); otherwise it is deferred as written (`test/dict_fixtures/r-stable-overlap-goal-quantified.mdk`, #1579; the super half `test/dict_fixtures/requires-super-selection-*.mdk`, #4023). Not tested: a super goal whose argument is a function type (#4043) or whose arguments are all variables (#4044). The signed path (`checkSigConstraintOne`) reduces the goal where it stands, its variables rigid; a signed caller's dictionary application records a slot's lead for `inferredConstraintIds` only when the slot's arguments are all variables (`bareVectorLeads`), since a structured slot reaches it whole on the call channel |
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |
 | §4 `gen-sig` (#619) | `checkSigConstraintCoverage:16344`/`checkSigConstraintOne:16350` (`compiler/types/typecheck.mdk`) | `Q_sig ⊩ P'ᵢ` — inferred body context must be entailed by the declared one, not merged | — |
 | §4.1 **G1** (uniform dict abstraction at a local binder) | **CONFORMANT (#1082).** `openLocalScopeIf`/`registerLocalAbs` (`compiler/types/typecheck.mdk:14756-14780`) mint a scope and abstract one dictionary parameter per predicate for every candidate local, keyed by that binder's OWN scope identity, never the bare name; `localAbsCandidate` (`:23761-23795`) decides candidacy over the same ctor-app-spine shapes `isNonexpansive` (`:11806-11838`) uses for the value restriction, so the two judgments agree on which locals generalize. Every use site is an `EDictAt`/`pushLocalDictApp` (`:14814-14820`) applying that binder's own params, per G1's `var` clause | — | the all-or-nothing pin (`pinLocalIfDictForwarded`, `MEDAKA_ARGTAG_UNPIN`, `T-LOCAL-CONSTRAINED-MONO`) that used to decline generalization for a dict-forwarding local is DELETED tree-wide (owner ruling D1, 2026-09-26, on a 3-engine green spike over eval/native/wasm); `let` and `where` share `localAbsCandidate`'s one candidacy test, so the two spellings' behavioural fork this row used to report no longer has a mechanism to fork on |
