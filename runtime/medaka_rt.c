@@ -718,8 +718,17 @@ void mdk_print_str(long long w) {
 long long mdk_int_to_string(long long tagged) {
   long long n = tagged >> 1;
   char buf[32];
-  int len = snprintf(buf, sizeof buf, "%lld", n);
-  return mdk_str_lit(buf, len);
+  /* Hand-rolled decimal, byte-identical to "%lld": snprintf's machinery was
+   * the largest single cost under every key build (lenKey, "\{n}"). The
+   * magnitude is taken in unsigned space so LLONG_MIN is exact. */
+  unsigned long long u = n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n;
+  char *p = buf + sizeof buf;
+  do {
+    *--p = (char)('0' + u % 10);
+    u /= 10;
+  } while (u != 0);
+  if (n < 0) *--p = '-';
+  return mdk_str_lit(p, (long long)(buf + sizeof buf - p));
 }
 
 long long mdk_float_to_string(double d) {
