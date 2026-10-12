@@ -409,7 +409,7 @@ checkBinderDomain : String -> Ty -> Option EffAtomTy -> Unit
 checkBodyImpl : ModuleSeed -> String -> List Decl -> List Decl -> (ModuleBindings, List Decl)
 checkCallObligationsU : Bool -> ImplUniverse -> List UObligation -> Unit
 checkClausesNonFunctionLocated : List String -> String -> List FunClause -> Unit
-checkCoherence : ImplEnv -> Int -> Bool -> Unit
+checkCoherence : ImplEnv -> Int -> Unit
 checkCoreMemoized : Option (Int, Int) -> List Decl -> List (String, Scheme) -> ModuleBindings
 checkDeclAuthorityDomains : List (String, Param) -> List (String, KindAnn) -> List Ty -> Unit
 checkDeclAuthorityUses : List Decl -> Unit
@@ -578,17 +578,20 @@ cohOverlapGo : Ref (List (Int, Mono)) -> List (Mono, Mono) -> Bool
 cohOverlapMsg : String -> List Mono -> List Mono -> String
 cohPpEach : Ref (List (Int, String)) -> Ref Int -> List Mono -> List String
 cohPpPair : List Mono -> List Mono -> (String, String)
+cohPreludeMid : String
+cohPreludeOrd : Int
+cohPreludeOverlapMsg : String -> List Mono -> List Mono -> String
+cohPreludeRows : ImplEnv -> List ImplRow
 cohPushHard : Option (String, Option Loc) -> Unit
 cohPushSoft : Option (String, Option Loc) -> Unit
 cohResolve : Ref (List (Int, Mono)) -> Mono -> Mono
-cohRowVisible : Bool -> ImplRow -> Bool
-cohRowsOf : Bool -> ImplEnv -> List ImplRow
-cohRowsOwnedBy : Int -> Bool -> ImplEnv -> List ImplRow
+cohRowsOf : ImplEnv -> List ImplRow
+cohRowsOwnedBy : Int -> ImplEnv -> List ImplRow
 cohSameIface : IfaceRef -> IfaceRef -> Bool
-cohScan : CohSweep -> List CohImpl -> CohScan
+cohScan : CohSweep -> List CohImpl -> List CohImpl -> CohScan
 cohScanDone : CohScan -> Bool
 cohScanInner : CohSweep -> CohImpl -> List CohImpl -> CohScan -> CohScan
-cohScanOuter : CohSweep -> List CohImpl -> CohScan -> CohScan
+cohScanOuter : CohSweep -> List CohImpl -> List CohImpl -> CohScan -> CohScan
 cohSoftInScope : CohSweep -> String -> String -> Bool
 cohSoftOnto : Option String -> List TcDiag -> List TcDiag
 cohStep : Mono -> Mono -> MStep Int Mono Mono
@@ -2872,7 +2875,7 @@ rowSlotArgMono : SigVars -> List (String, Mono) -> Ty -> Mono
 rowTailId : EffRow -> List Int
 rowTailIsJoin : EffRow -> Bool
 rowText : String -> String
-runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Bool -> Unit
+runFinalChecks : List Decl -> List Decl -> ClassEnv -> ClassEnv -> ImplEnv -> ImplEnv -> Int -> Unit
 runStampCtxs : List StampCtx -> Unit
 runStampStep : StampCtx -> StampStep -> Unit
 runStampSteps : StampCtx -> List StampStep -> Unit

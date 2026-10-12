@@ -5139,6 +5139,72 @@ table = [
     pinned = "",
     codes = [Present "T-NO-IMPL"],
   },
+  Row {
+    entry = "s6-1-prelude-display-string-impl-rejected.mdk",
+    label =
+      "§6.1 a program `impl Display String` is α-equal to the prelude's, so the pair has no unique ⊑-minimum: a located reject on check, run AND build (#3633 (user impl Display String silently loses to the prelude's) -- was exit 0 printing the prelude's rendering)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-CONFLICTING-IMPL"],
+  },
+  Row {
+    entry = "s6-1-prelude-mappable-list-impl-rejected.mdk",
+    label =
+      "§6.1 a program `impl Mappable List` is α-equal to the prelude's: reject on every verb (#3872 (user impls of prelude interfaces ignored) -- was exit 0 printing the prelude's answer)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-CONFLICTING-IMPL"],
+  },
+  Row {
+    entry = "s6-1-prelude-semigroup-array-impl-rejected.mdk",
+    label =
+      "§6.1 a program `impl Semigroup (Array a)` is α-equal to the prelude's: reject on every verb (#3872 (user impls of prelude interfaces ignored) -- was exit 0 printing the prelude's answer)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-CONFLICTING-IMPL"],
+  },
+  Row {
+    entry = "s6-1-prelude-foldable-array-impl-rejected.mdk",
+    label =
+      "§6.1 a program `impl Foldable Array` is α-equal to the prelude's: reject on every verb (#3872 (user impls of prelude interfaces ignored) -- was exit 0 with `length [|1|]` printing the prelude's 1; drained from the must_fail pin)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-CONFLICTING-IMPL"],
+  },
+  Row {
+    entry = "s6-1-prelude-eq-array-impl-rejected.mdk",
+    label =
+      "§6.1 a program `impl Eq (Array a)` is α-equal to the prelude's: reject on every verb (#3872 (user impls of prelude interfaces ignored) -- was check exit 0 then a run-time E-NOT-A-FUNCTION and a trapping binary)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-CONFLICTING-IMPL"],
+  },
+  Row {
+    entry = "s6-1-prelude-more-specific-impl-wins.mdk",
+    label =
+      "§6.1 the control for the prelude rejects: a program `impl Display (List Bool)` is STRICTLY more specific than the prelude's `Display (List a)`, so it is the goal's unique ⊑-minimum and wins on every engine (prints `bools`)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "bools\n",
+    codes = [Absent "T-CONFLICTING-IMPL"],
+  },
 ]
 
 {- | How many rows `table` owes.
@@ -5150,7 +5216,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 455
+tableRows = 461
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —

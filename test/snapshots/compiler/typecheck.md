@@ -1,5 +1,5 @@
 # META
-source_lines=55635
+source_lines=55620
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -29604,40 +29604,30 @@ cohImplOfRow r = match ieRowTriple r
   (ir, tys, _) =>
     CohImpl ir (cohFreshTys tys) (instRefMid (ieRowInst r)) (firstTyLocList tys)
 
--- #1559 A-3.7: 🚨 THE PRELUDE CARVE-OUT, AND [hasPrelude] IS THE WHOLE POINT OF IT.
--- Coherence has never seen prelude impls: a user `impl Eq Int` deliberately overrides
--- the prelude's and is α-equal to it, so pairing the two would reject
--- `test/lint_fixtures/derivable_needs_datadecl.mdk` and every program like it.  Both
--- old adapters got this for free — `checkCoherence` was handed the driver-staged USER
--- decls and `cohCollectModuleImpls` walked USER modules only.  An `IE` built by
--- `buildDeclEnvs` contains the prelude, so the exclusion has to be made explicit.
---
--- The prelude is ALWAYS ordinal 0 on the Module arm, structurally: `buildDeclEnvs`
--- builds `declEnvModulesFrom 0 (("core", coreDecls)::modules)`, so nothing else can be.
---
--- ⚠️ AND A HARDCODED `/= 0` WOULD BE WRONG — IT IS THE MOST DANGEROUS LINE IN THIS
--- UNIT. `flatImplEnvOf` is now a standalone-list helper used by internal checks;
--- `/= 0` drops EVERY row and turns every flat coherence rejection into a silent
--- accept.  Flat's prelude/user boundary is carried by the decl list the driver hands
--- in (`coherenceUserDecls`), not by an ordinal, so Flat passes `False` here and there
--- is nothing to filter.  Module passes `True`.
-cohRowVisible : Bool -> ImplRow -> Bool
-cohRowVisible hasPrelude r = not (hasPrelude && ieRowOrd r == 0)
+-- The prelude is ordinal 0 on the Module arm, structurally: `buildDeclEnvs` builds
+-- `declEnvModulesFrom 0 (("core", coreDecls)::modules)`, so nothing else can be.
+-- Coherence compares a program's impls with the prelude's (DICT-SEMANTICS §6.1), but
+-- never the prelude's with itself: the prelude is trusted and cannot be edited.
+cohPreludeOrd : Int
+cohPreludeOrd = 0
 
--- the whole-graph sweep's population (`globalCoherenceConflict`).  The filter runs
--- BEFORE the caller's `reverseL`, so the surviving list's head is the first USER
--- module — which is exactly what the decl-walking adapter's list was.
-cohRowsOf : Bool -> ImplEnv -> List ImplRow
-cohRowsOf hasPrelude env = filterList (cohRowVisible hasPrelude) (ieRowsAll env)
+-- the prelude's own rows: the second population of the per-module sweep.
+cohPreludeRows : ImplEnv -> List ImplRow
+cohPreludeRows env = ieRowsOwnedBy cohPreludeOrd env
 
--- the per-module sweep's population (`checkCoherence`).  The carve-out is composed in
--- rather than assumed away: on Module [cur] is a user module's ordinal and so never 0,
--- and on Flat [hasPrelude] is `False` — so this filter removes nothing on either live
--- arm.  It is written anyway because "0 is never both" is a property of the callers,
--- not of this function, and a fourth caller would not inherit it.
-cohRowsOwnedBy : Int -> Bool -> ImplEnv -> List ImplRow
-cohRowsOwnedBy cur hasPrelude env =
-  filterList (cohRowVisible hasPrelude) (ieRowsOwnedBy cur env)
+-- every USER module's rows, for the whole-graph sweep.  The prelude is absent here
+-- because a program-vs-prelude pair is owned by the per-module sweep (which sees the
+-- prelude and reports with the impl's own span); the whole-graph sweep would report
+-- the same pair a second time, span-less.
+cohRowsOf : ImplEnv -> List ImplRow
+cohRowsOf env = filterList (r => ieRowOrd r /= cohPreludeOrd) (ieRowsAll env)
+
+-- the per-module sweep's own population.  The prelude module itself checks nothing:
+-- its rows are the second population, never the first.
+cohRowsOwnedBy : Int -> ImplEnv -> List ImplRow
+cohRowsOwnedBy cur env
+  | cur == cohPreludeOrd = []
+  | otherwise = ieRowsOwnedBy cur env
 
 -- impls_overlap: do two impl head-arg lists share a common instance?  Every
 -- TVar (fresh per impl, so distinct ids) is a unification wildcard with a shared
@@ -29982,14 +29972,21 @@ data CohScan =
 -- what pointing it at `IE` does.  See `cohSoftInScope` for the failure it prevents.
 data CohSweep = CohSweepOwn | CohSweepGlobal
 
-cohScan : CohSweep -> List CohImpl -> CohScan
-cohScan sweep impls = cohScanOuter sweep impls (CohScan None None)
+-- [impls] are paired with each other; each is also paired with every one of [fixed]
+-- (the prelude's impls), which are never paired with one another.
+cohScan : CohSweep -> List CohImpl -> List CohImpl -> CohScan
+cohScan sweep impls fixed = cohScanOuter sweep impls fixed (CohScan None None)
 
-cohScanOuter : CohSweep -> List CohImpl -> CohScan -> CohScan
-cohScanOuter _ [] acc = acc
-cohScanOuter sweep (e :: rest) acc
+cohScanOuter : CohSweep -> List CohImpl -> List CohImpl -> CohScan -> CohScan
+cohScanOuter _ [] _ acc = acc
+cohScanOuter sweep (e :: rest) fixed acc
   | cohScanDone acc = acc
-  | otherwise = cohScanOuter sweep rest (cohScanInner sweep e rest acc)
+  | otherwise =
+    cohScanOuter
+      sweep
+      rest
+      fixed
+      (cohScanInner sweep e fixed (cohScanInner sweep e rest acc))
 
 -- both classes already witnessed ⇒ nothing later can change what is reported.
 cohScanDone : CohScan -> Bool
@@ -30056,30 +30053,10 @@ cohScanInner sweep (e1@(CohImpl if1 xs mid1 _)) ((CohImpl if2 ys mid2 _) :: rest
 -- work.  Until it exists, the declaration site is the only place this class is
 -- caught at all.
 --
--- 🚨 THE A-3 CARRY-FORWARD, DISCHARGED BY A-3.7 (#1559) — AND THE RESIDUE IT NAMES
--- SURVIVES, so this note is rewritten rather than deleted.
---
--- What it warned about: the HARD arm's reach is user-vs-user only, because
--- `checkCoherence`'s input was USER DECLS ONLY.  A user `impl Eq Int` shadowing the
--- PRELUDE's is α-equal to it and so is NOT rejected — `test/lint_fixtures/
--- derivable_needs_datadecl.mdk` checks clean at exit 0 (#1162's equal-head second
--- symptom, which F-3d neither fixes nor worsens).  Widening coherence's input to the
--- global `IE` would have made this arm reject every such program, including that
--- in-tree fixture: a mass NARROWING §5 R2 does not license.
---
--- How A-3.7 discharged it: coherence now DOES read `IE`, and `cohRowVisible` carves
--- the prelude out of both sweeps explicitly — `hasPrelude` on the Module arm drops
--- ordinal 0 (structurally the prelude, per `buildDeclEnvs`), while the standalone
--- its prelude boundary in the decl list the driver stages (`coherenceUserDecls`),
--- which is why that field does NOT retire in this unit.  Both probes were measured
--- across the relocation: a user `impl Eq Int` α-equal to the prelude's checks at exit
--- 0 in both representations, before and after.
---
--- ⚠️ THE RESIDUE IS DELIBERATELY PRESERVED, NOT FIXED.  With the carve-out in place a
--- user impl shadowing a prelude impl stays UNCHECKED rather than merely accepted.
--- Whether it SHOULD be rejected is a language question (#1162's equal-head second
--- symptom), not a substrate one, and A-3.7 relocated the input without re-adjudicating
--- it.  Do not "tidy" this by dropping the carve-out; that is the narrowing above.
+-- A program impl α-equal to a PRELUDE impl is this arm's class too: the per-module
+-- sweep pairs each program impl with the prelude's impls (DICT-SEMANTICS §6.1), so a
+-- user `impl Display String` is rejected at the program's impl.  A strictly more
+-- specific program impl is coherent and wins on every engine.
 cohClassify : CohSweep ->
   CohImpl ->
   List Mono ->
@@ -30175,7 +30152,7 @@ cohSoftInScope CohSweepGlobal mid1 mid2 = cohIsCrossModule mid1 mid2
 --
 -- ⚠️ NOT loud→silent, and here is why that is a claim and not a hope.  The pair this
 -- now declines is INTRA-module, and the per-module sweep's population
--- (`cohRowsOwnedBy cur hasPrelude`) contains every one of that module's own rows by
+-- (`cohRowsOwnedBy cur`) contains every one of that module's own rows by
 -- construction, with `foldModules` running the worker for EVERY module in the graph.
 -- So the union of the per-module sweeps already covers every intra-module pair the
 -- whole-graph sweep could see, WITH a span, which is strictly the better diagnostic.
@@ -30207,9 +30184,22 @@ cohKeepFirst None y = y
 -- coherence case, D3/WS-2 — which is exactly the duplicate-instance class).
 cohHardMsg : CohImpl -> List Mono -> List Mono -> String -> String -> String
 cohHardMsg e1 xs ys mid1 mid2
+  | mid1 == cohPreludeMid || mid2 == cohPreludeMid =
+    cohPreludeOverlapMsg (cohImplIfaceName e1) xs ys
   | cohIsCrossModule mid1 mid2 =
     cohCrossModuleMsg (cohImplIfaceName e1) mid1 mid2
   | otherwise = cohOverlapMsg (cohImplIfaceName e1) xs ys
+
+-- the prelude's module id in `buildDeclEnvs`' module list.
+cohPreludeMid : String
+cohPreludeMid = "core"
+
+-- a program impl α-equal to a prelude impl.  The prelude cannot be edited, so the
+-- remedy is the newtype, not disjointness of the program's two impls.
+cohPreludeOverlapMsg : String -> List Mono -> List Mono -> String
+cohPreludeOverlapMsg iface xs ys = match cohPpPair xs ys
+  (s1, s2) =>
+    "overlapping impls of \{iface}: \{s1} and the prelude's \{s2} can match the same type; the prelude's impl cannot be replaced, so wrap the type in a newtype and implement \{iface} for that"
 
 cohIsCrossModule : String -> String -> Bool
 cohIsCrossModule mid1 mid2 = mid1 /= "" && mid2 /= "" && mid1 /= mid2
@@ -30297,9 +30287,8 @@ pushCoherenceWarning loc msg =
 -- entry (`entry :: !(env.impls)`) — so the conflict message names the later-declared
 -- impl as the first head, byte-identical.
 -- #1559 A-3.7: the input is `IE`'s rows for THIS module, not a decl list.
--- [cur] is the reading module's ordinal and [hasPrelude] says whether this env
--- contains the prelude at ordinal 0 — see `cohRowVisible`, whose header carries the
--- fail-direction for both arms.
+-- [cur] is the reading module's ordinal.  Its own rows are paired with each other and
+-- with the prelude's rows (`cohPreludeRows`), never prelude with prelude.
 --
 -- POPULATION EQUALITY, derived rather than assumed (it is the one thing that could
 -- silently change what gets checked).  The Module caller used to pass `prog`, the
@@ -30311,11 +30300,12 @@ pushCoherenceWarning loc msg =
 -- no transform on either side.  Harvest equality holds too: `implDeclFact` and the
 -- retired `cohImplsOfMid` match arm-for-arm (unwrap `DAttrib`, take `DImpl`, drop
 -- everything else) and both are a `flatMap` in decl order.
-checkCoherence : ImplEnv -> Int -> Bool -> Unit
-checkCoherence env cur hasPrelude =
+checkCoherence : ImplEnv -> Int -> Unit
+checkCoherence env cur =
   match (cohScan
     CohSweepOwn
-    (reverseL (map cohImplOfRow (cohRowsOwnedBy cur hasPrelude env))))
+    (reverseL (map cohImplOfRow (cohRowsOwnedBy cur env)))
+    (map cohImplOfRow (cohPreludeRows env)))
     CohScan hard soft =>
       let _ = cohPushHard hard
       cohPushSoft soft
@@ -31816,9 +31806,8 @@ checkInterfaceCycles ce cur =
 -- the same reason A-3.5c gave it two `CE`s — [cohIe] is the env over the population
 -- [cohDecls] names (the USER boundary, trap #5) and [cycIe] is the env over the
 -- whole-universe population [cycDecls] names.  They are the same env only on the paths
--- where those two decl lists were already the same.  [hasPrelude] rides with [cohIe]:
--- it is a property of THAT env, not of the caller's mode, and `cohRowVisible` states
--- what each arm must pass and what happens if it passes the other one.
+-- where those two decl lists were already the same.  [cohIe] must contain the prelude at
+-- ordinal 0, since coherence pairs the module's own rows with the prelude's.
 --
 -- 🚨 SA-6 (sprint repair round): THE `-1` SENTINEL IS FAIL-CLOSED HERE, AND IT HAS TO BE
 -- ANNOUNCED AT THIS READER.  [cur] is `declEnvsOrdOf mid` on the Module arm, whose miss
@@ -31842,7 +31831,7 @@ checkInterfaceCycles ce cur =
 -- 🎯 WHAT THIS DOES *NOT* COVER, stated because it is the near miss: a driver that
 -- threads a VALID-but-WRONG ordinal (some other module's) is undetectable here — the
 -- sentinel is the only self-identifying failure — and `globalCoherenceConflict` takes no
--- ordinal at all (`cohRowsOf True`, whole graph), so it is outside this guard entirely.
+-- ordinal at all (`cohRowsOf`, whole graph), so it is outside this guard entirely.
 runFinalChecks : List Decl ->
   List Decl ->
   ClassEnv ->
@@ -31850,11 +31839,10 @@ runFinalChecks : List Decl ->
   ImplEnv ->
   ImplEnv ->
   Int ->
-  Bool ->
   Unit
-runFinalChecks cohDecls _cycDecls ownCe cycCe cohIe cycIe cur hasPrelude =
+runFinalChecks cohDecls _cycDecls ownCe cycCe cohIe cycIe cur =
   let _ = ordinalSentinelGuard cur
-  let _ = checkCoherence cohIe cur hasPrelude
+  let _ = checkCoherence cohIe cur
   let _ = checkInterfaceCycles cycCe cur
   let _ = checkPhantomMethods ownCe cur
   checkSuperImpls cohDecls cycCe cycIe cur
@@ -32130,15 +32118,15 @@ tyMatchesAst _ _ = False
 -- Per-module coherence accepts two DIFFERENT modules that
 -- each define `impl C T` for the SAME instance — each module is locally coherent,
 -- but jointly they are incoherent (silent dispatch ambiguity).  This pass scans
--- the joint impl set over ALL USER modules (prelude EXCLUDED — a user `impl Eq Int`
--- legitimately overrides the prelude one, so prelude impls must NOT be in the set).
+-- the joint impl set over ALL USER modules (the prelude is paired by the per-module
+-- sweep, which reports with the impl's own span).
 -- Each CohImpl carries the id of the module that PHYSICALLY declares it; imports do
 -- NOT copy impl decls, so the joint set has exactly one entry per definition and a
 -- structural (iface, head-tys) overlap already distinguishes distinct definitions —
 -- no occurrence-dedup needed.  A conflict between two distinct modules is reported
 -- naming BOTH (cohCrossModuleMsg via cohHardMsg's cross-module branch, or the
 -- `(defined in …)` suffix `cohWhereSuffix` adds to the F-3d soft warning).
--- #1559 A-3.7: "the joint impl set over ALL USER modules" is now `cohRowsOf True` over
+-- #1559 A-3.7: "the joint impl set over ALL USER modules" is now `cohRowsOf` over
 -- the whole-graph `IE` — the prelude exclusion is the `True`, and the one-entry-per-
 -- definition property is `ieRows`' by construction (imports copy no rows either).
 --
@@ -32171,14 +32159,12 @@ tyMatchesAst _ _ = False
 -- driver's `modules` in dependency-first order; `ieRows` is built by `buildImplEnvGo`
 -- over the same modules in ORDINAL order (which is that same order, offset by the
 -- prelude at 0) and within a module by `implDeclFacts = flatMap implDeclFact prog`, in
--- decl order.  The one difference is the prelude, which `cohRowsOf True` removes
+-- decl order.  The one difference is the prelude, which `cohRowsOf` removes
 -- BEFORE the `reverseL` below — so the filtered list's head is the first user module,
 -- which is exactly what the old list's head was.
 globalCoherenceConflict : ImplEnv -> (Option String, Option String)
 globalCoherenceConflict env =
-  match (cohScan
-    CohSweepGlobal
-    (reverseL (map cohImplOfRow (cohRowsOf True env))))
+  match cohScan CohSweepGlobal (reverseL (map cohImplOfRow (cohRowsOf env))) []
     CohScan hard soft => (map fst hard, map fst soft)
 
 -- the USER decls a driver wants coherence-checked.  Set by single-file drivers
@@ -52661,9 +52647,9 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- `ceHere` and `moduleImplUniv` (`checkBodyImpl`) already read at.
   -- #1559 A-3.7: coherence reads the SAME whole-graph `IE` at the SAME `ordHere`, and
   -- takes this module's OWN rows from it (`cohRowsOwnedBy`) — the population `prog`
-  -- named, derived in `checkCoherence`'s header.  `hasPrelude = True`: this env came
-  -- from `buildDeclEnvs`, which seats the prelude at ordinal 0, and coherence has never
-  -- seen prelude impls.
+  -- named, derived in `checkCoherence`'s header.  This env came
+  -- from `buildDeclEnvs`, which seats the prelude at ordinal 0, so the module's rows
+  -- are also paired with the prelude's.
   let _ =
     runFinalChecks
       prog
@@ -52673,7 +52659,6 @@ checkModuleFullDiags mid seedVars accData accAll prog =
       declEnvsHere.deImpls
       declEnvsHere.deImpls
       ordHere
-      True
   (
     schemes,
     marked,
@@ -53358,7 +53343,7 @@ driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
   -- #414: no span — see globalCoherenceConflict (the entry module it attaches to is
   -- not the module the span would name, and the renderer keys the file by group).
   -- F-3d: the ⊑-incomparable half rides the WARNING list of the same module.
-  -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf True` is
+  -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf` is
   -- what excludes the prelude, replacing "walk the user `modules` list".
   -- It reads `deImpls` only, which nothing between here and the tree arm's return
   -- writes, so attaching once here serves both selections.
@@ -60910,12 +60895,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "implHeadIndexMsg" ((PVar "head") (PVar "written")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl head `")) (EApp (EVar "display") (EVar "head"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "written"))) (ELit (LString "` writes an `Authority` index, but an instance is chosen by the type's head and covers every index; write a name in the slot instead of `"))) (EApp (EVar "display") (EVar "written"))) (ELit (LString "`"))))
 (DTypeSig false "cohImplOfRow" (TyFun (TyCon "ImplRow") (TyCon "CohImpl")))
 (DFunDef false "cohImplOfRow" ((PVar "r")) (EMatch (EApp (EVar "ieRowTriple") (EVar "r")) (arm (PTuple (PVar "ir") (PVar "tys") PWild) () (EApp (EApp (EApp (EApp (EVar "CohImpl") (EVar "ir")) (EApp (EVar "cohFreshTys") (EVar "tys"))) (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "firstTyLocList") (EVar "tys"))))))
-(DTypeSig false "cohRowVisible" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplRow") (TyCon "Bool"))))
-(DFunDef false "cohRowVisible" ((PVar "hasPrelude") (PVar "r")) (EApp (EVar "not") (EBinOp "&&" (EVar "hasPrelude") (EBinOp "==" (EApp (EVar "ieRowOrd") (EVar "r")) (ELit (LInt 0))))))
-(DTypeSig false "cohRowsOf" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow")))))
-(DFunDef false "cohRowsOf" ((PVar "hasPrelude") (PVar "env")) (EApp (EApp (EVar "filterList") (EApp (EVar "cohRowVisible") (EVar "hasPrelude"))) (EApp (EVar "ieRowsAll") (EVar "env"))))
-(DTypeSig false "cohRowsOwnedBy" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow"))))))
-(DFunDef false "cohRowsOwnedBy" ((PVar "cur") (PVar "hasPrelude") (PVar "env")) (EApp (EApp (EVar "filterList") (EApp (EVar "cohRowVisible") (EVar "hasPrelude"))) (EApp (EApp (EVar "ieRowsOwnedBy") (EVar "cur")) (EVar "env"))))
+(DTypeSig false "cohPreludeOrd" (TyCon "Int"))
+(DFunDef false "cohPreludeOrd" () (ELit (LInt 0)))
+(DTypeSig false "cohPreludeRows" (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow"))))
+(DFunDef false "cohPreludeRows" ((PVar "env")) (EApp (EApp (EVar "ieRowsOwnedBy") (EVar "cohPreludeOrd")) (EVar "env")))
+(DTypeSig false "cohRowsOf" (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow"))))
+(DFunDef false "cohRowsOf" ((PVar "env")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "/=" (EApp (EVar "ieRowOrd") (EVar "r")) (EVar "cohPreludeOrd")))) (EApp (EVar "ieRowsAll") (EVar "env"))))
+(DTypeSig false "cohRowsOwnedBy" (TyFun (TyCon "Int") (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow")))))
+(DFunDef false "cohRowsOwnedBy" ((PVar "cur") (PVar "env")) (EIf (EBinOp "==" (EVar "cur") (EVar "cohPreludeOrd")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "ieRowsOwnedBy") (EVar "cur")) (EVar "env")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohOverlap" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "cohOverlap" ((PVar "xs") (PVar "ys")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "xs")) (EApp (EVar "listLen") (EVar "ys"))) (EApp (EApp (EVar "cohOverlapGo") (EApp (EVar "Ref") (EListLit))) (EApp (EApp (EVar "zipL") (EVar "xs")) (EVar "ys"))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohOverlapGo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Mono"))) (TyCon "Bool"))))
@@ -61003,11 +60990,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohOverlapMsg" ((PVar "iface") (PVar "xs") (PVar "ys")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "overlapping impls of ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "s1"))) (ELit (LString " and "))) (EApp (EVar "display") (EVar "s2"))) (ELit (LString " can match the same type; make them disjoint or wrap one type in a newtype"))))))
 (DData Private "CohScan" () ((variant "CohScan" (ConPos (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))) ())
 (DData Private "CohSweep" () ((variant "CohSweepOwn" (ConPos)) (variant "CohSweepGlobal" (ConPos))) ())
-(DTypeSig false "cohScan" (TyFun (TyCon "CohSweep") (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyCon "CohScan"))))
-(DFunDef false "cohScan" ((PVar "sweep") (PVar "impls")) (EApp (EApp (EApp (EVar "cohScanOuter") (EVar "sweep")) (EVar "impls")) (EApp (EApp (EVar "CohScan") (EVar "None")) (EVar "None"))))
-(DTypeSig false "cohScanOuter" (TyFun (TyCon "CohSweep") (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyFun (TyCon "CohScan") (TyCon "CohScan")))))
-(DFunDef false "cohScanOuter" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "cohScanOuter" ((PVar "sweep") (PCons (PVar "e") (PVar "rest")) (PVar "acc")) (EIf (EApp (EVar "cohScanDone") (EVar "acc")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohScanOuter") (EVar "sweep")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e")) (EVar "rest")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "cohScan" (TyFun (TyCon "CohSweep") (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyCon "CohScan")))))
+(DFunDef false "cohScan" ((PVar "sweep") (PVar "impls") (PVar "fixed")) (EApp (EApp (EApp (EApp (EVar "cohScanOuter") (EVar "sweep")) (EVar "impls")) (EVar "fixed")) (EApp (EApp (EVar "CohScan") (EVar "None")) (EVar "None"))))
+(DTypeSig false "cohScanOuter" (TyFun (TyCon "CohSweep") (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyFun (TyCon "CohScan") (TyCon "CohScan"))))))
+(DFunDef false "cohScanOuter" (PWild (PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "cohScanOuter" ((PVar "sweep") (PCons (PVar "e") (PVar "rest")) (PVar "fixed") (PVar "acc")) (EIf (EApp (EVar "cohScanDone") (EVar "acc")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "cohScanOuter") (EVar "sweep")) (EVar "rest")) (EVar "fixed")) (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e")) (EVar "fixed")) (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e")) (EVar "rest")) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohScanDone" (TyFun (TyCon "CohScan") (TyCon "Bool")))
 (DFunDef false "cohScanDone" ((PCon "CohScan" (PCon "Some" PWild) (PCon "Some" PWild))) (EVar "True"))
 (DFunDef false "cohScanDone" (PWild) (EVar "False"))
@@ -61030,7 +61017,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohKeepFirst" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x")))
 (DFunDef false "cohKeepFirst" ((PCon "None") (PVar "y")) (EVar "y"))
 (DTypeSig false "cohHardMsg" (TyFun (TyCon "CohImpl") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
-(DFunDef false "cohHardMsg" ((PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohCrossModuleMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "mid1")) (EVar "mid2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "cohHardMsg" ((PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EIf (EBinOp "||" (EBinOp "==" (EVar "mid1") (EVar "cohPreludeMid")) (EBinOp "==" (EVar "mid2") (EVar "cohPreludeMid"))) (EApp (EApp (EApp (EVar "cohPreludeOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohCrossModuleMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "mid1")) (EVar "mid2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "cohPreludeMid" (TyCon "String"))
+(DFunDef false "cohPreludeMid" () (ELit (LString "core")))
+(DTypeSig false "cohPreludeOverlapMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String")))))
+(DFunDef false "cohPreludeOverlapMsg" ((PVar "iface") (PVar "xs") (PVar "ys")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "overlapping impls of ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "s1"))) (ELit (LString " and the prelude's "))) (EApp (EVar "display") (EVar "s2"))) (ELit (LString " can match the same type; the prelude's impl cannot be replaced, so wrap the type in a newtype and implement "))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " for that"))))))
 (DTypeSig false "cohIsCrossModule" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "cohIsCrossModule" ((PVar "mid1") (PVar "mid2")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "mid1") (ELit (LString ""))) (EBinOp "/=" (EVar "mid2") (ELit (LString "")))) (EBinOp "/=" (EVar "mid1") (EVar "mid2"))))
 (DTypeSig false "cohIncomparableMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
@@ -61049,8 +61040,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohImplLoc" ((PCon "CohImpl" PWild PWild PWild (PVar "l"))) (EVar "l"))
 (DTypeSig false "pushCoherenceWarning" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushCoherenceWarning" ((PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "warning") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EVar "warning") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
-(DTypeSig false "checkCoherence" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit")))))
-(DFunDef false "checkCoherence" ((PVar "env") (PVar "cur") (PVar "hasPrelude")) (EMatch (EApp (EApp (EVar "cohScan") (EVar "CohSweepOwn")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "cohImplOfRow")) (EApp (EApp (EApp (EVar "cohRowsOwnedBy") (EVar "cur")) (EVar "hasPrelude")) (EVar "env"))))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (EBlock (DoLet false false PWild (EApp (EVar "cohPushHard") (EVar "hard"))) (DoExpr (EApp (EVar "cohPushSoft") (EVar "soft")))))))
+(DTypeSig false "checkCoherence" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyCon "Unit"))))
+(DFunDef false "checkCoherence" ((PVar "env") (PVar "cur")) (EMatch (EApp (EApp (EApp (EVar "cohScan") (EVar "CohSweepOwn")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "cohImplOfRow")) (EApp (EApp (EVar "cohRowsOwnedBy") (EVar "cur")) (EVar "env"))))) (EApp (EApp (EVar "map") (EVar "cohImplOfRow")) (EApp (EVar "cohPreludeRows") (EVar "env")))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (EBlock (DoLet false false PWild (EApp (EVar "cohPushHard") (EVar "hard"))) (DoExpr (EApp (EVar "cohPushSoft") (EVar "soft")))))))
 (DTypeSig false "cohPushHard" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))
 (DFunDef false "cohPushHard" ((PCon "None")) (ELit LUnit))
 (DFunDef false "cohPushHard" ((PCon "Some" (PTuple (PVar "msg") (PVar "loc")))) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-CONFLICTING-IMPL"))) (EVar "loc")) (EVar "msg")))
@@ -61284,8 +61275,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "intercalateComma" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "', "))) (EApp (EVar "display") (EApp (EVar "intercalateComma") (EVar "rest")))) (ELit (LString ""))))
 (DTypeSig false "checkInterfaceCycles" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyCon "Unit"))))
 (DFunDef false "checkInterfaceCycles" ((PVar "ce") (PVar "cur")) (EBlock (DoLet false false (PVar "done") (EApp (EVar "Ref") (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "foreachUnit") (EApp (EApp (EApp (EVar "checkOneIfaceCycle") (EVar "ce")) (EVar "cur")) (EVar "done"))) (EApp (EApp (EVar "ceRowsVisibleAt") (EVar "cur")) (EVar "ce"))))))
-(DTypeSig false "runFinalChecks" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit"))))))))))
-(DFunDef false "runFinalChecks" ((PVar "cohDecls") (PVar "_cycDecls") (PVar "ownCe") (PVar "cycCe") (PVar "cohIe") (PVar "cycIe") (PVar "cur") (PVar "hasPrelude")) (EBlock (DoLet false false PWild (EApp (EVar "ordinalSentinelGuard") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCoherence") (EVar "cohIe")) (EVar "cur")) (EVar "hasPrelude"))) (DoLet false false PWild (EApp (EApp (EVar "checkInterfaceCycles") (EVar "cycCe")) (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "checkPhantomMethods") (EVar "ownCe")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkSuperImpls") (EVar "cohDecls")) (EVar "cycCe")) (EVar "cycIe")) (EVar "cur")))))
+(DTypeSig false "runFinalChecks" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyCon "Unit")))))))))
+(DFunDef false "runFinalChecks" ((PVar "cohDecls") (PVar "_cycDecls") (PVar "ownCe") (PVar "cycCe") (PVar "cohIe") (PVar "cycIe") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "ordinalSentinelGuard") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "checkCoherence") (EVar "cohIe")) (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "checkInterfaceCycles") (EVar "cycCe")) (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "checkPhantomMethods") (EVar "ownCe")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkSuperImpls") (EVar "cohDecls")) (EVar "cycCe")) (EVar "cycIe")) (EVar "cur")))))
 (DTypeSig false "ordinalSentinelGuard" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "ordinalSentinelGuard" ((PVar "cur")) (EIf (EApp (EVar "ordinalIsSentinel") (EVar "cur")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-INTERNAL-ORDINAL"))) (EVar "ordinalSentinelMsg")) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ordinalIsSentinel" (TyFun (TyCon "Int") (TyCon "Bool")))
@@ -61354,7 +61345,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tyMatchesAst" ((PVar "t1") (PCon "TyConstrained" PWild (PVar "t2"))) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
 (DFunDef false "tyMatchesAst" (PWild PWild) (EVar "False"))
 (DTypeSig false "globalCoherenceConflict" (TyFun (TyCon "ImplEnv") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "globalCoherenceConflict" ((PVar "env")) (EMatch (EApp (EApp (EVar "cohScan") (EVar "CohSweepGlobal")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "cohImplOfRow")) (EApp (EApp (EVar "cohRowsOf") (EVar "True")) (EVar "env"))))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (ETuple (EApp (EApp (EVar "map") (EVar "fst")) (EVar "hard")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "soft"))))))
+(DFunDef false "globalCoherenceConflict" ((PVar "env")) (EMatch (EApp (EApp (EApp (EVar "cohScan") (EVar "CohSweepGlobal")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "cohImplOfRow")) (EApp (EVar "cohRowsOf") (EVar "env"))))) (EListLit)) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (ETuple (EApp (EApp (EVar "map") (EVar "fst")) (EVar "hard")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "soft"))))))
 (DTypeSig true "setCoherenceUserDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "setCoherenceUserDecls" ((PVar "ds")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls")) (EVar "ds")))
 (DTypeSig true "setStdlibOwnership" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))
@@ -64550,7 +64541,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "checkModulesK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "checkModulesK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EFieldAccess (EVar "coreSchemes") "mbSchemes"))) (EApp (EApp (EVar "tagModuleExports") (EFieldAccess (EVar "coreSchemes") "mbStandaloneSchemes")) (EFieldAccess (EVar "coreSchemes") "mbSchemes"))) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig false "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
-(DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
+(DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeAlias true "ModDiags" () (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
 (DTypeSig false "graphModuleWorker" (TyFun (TyCon "GraphOut") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))))
 (DFunDef false "graphModuleWorker" ((PVar "sel") (PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "implDecls") (EBinOp "++" (EVar "accAll") (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "implDecls"))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "implDecls")) (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "schemes") "mbSchemes")) (arm (PCon "Some" (PVar "sc")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EVar "Some") (EVar "sc")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef")) (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value"))))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "marked") (EFieldAccess (EVar "schemes") "mbSchemes") (EVar "errs") (EVar "warns"))))))
@@ -70161,12 +70152,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "implHeadIndexMsg" ((PVar "head") (PVar "written")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl head `")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString "` writes an `Authority` index, but an instance is chosen by the type's head and covers every index; write a name in the slot instead of `"))) (EApp (EMethodRef "display") (EVar "written"))) (ELit (LString "`"))))
 (DTypeSig false "cohImplOfRow" (TyFun (TyCon "ImplRow") (TyCon "CohImpl")))
 (DFunDef false "cohImplOfRow" ((PVar "r")) (EMatch (EApp (EVar "ieRowTriple") (EVar "r")) (arm (PTuple (PVar "ir") (PVar "tys") PWild) () (EApp (EApp (EApp (EApp (EVar "CohImpl") (EVar "ir")) (EApp (EVar "cohFreshTys") (EVar "tys"))) (EApp (EVar "instRefMid") (EApp (EVar "ieRowInst") (EVar "r")))) (EApp (EVar "firstTyLocList") (EVar "tys"))))))
-(DTypeSig false "cohRowVisible" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplRow") (TyCon "Bool"))))
-(DFunDef false "cohRowVisible" ((PVar "hasPrelude") (PVar "r")) (EApp (EVar "not") (EBinOp "&&" (EVar "hasPrelude") (EBinOp "==" (EApp (EVar "ieRowOrd") (EVar "r")) (ELit (LInt 0))))))
-(DTypeSig false "cohRowsOf" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow")))))
-(DFunDef false "cohRowsOf" ((PVar "hasPrelude") (PVar "env")) (EApp (EApp (EVar "filterList") (EApp (EVar "cohRowVisible") (EVar "hasPrelude"))) (EApp (EVar "ieRowsAll") (EVar "env"))))
-(DTypeSig false "cohRowsOwnedBy" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow"))))))
-(DFunDef false "cohRowsOwnedBy" ((PVar "cur") (PVar "hasPrelude") (PVar "env")) (EApp (EApp (EVar "filterList") (EApp (EVar "cohRowVisible") (EVar "hasPrelude"))) (EApp (EApp (EVar "ieRowsOwnedBy") (EVar "cur")) (EVar "env"))))
+(DTypeSig false "cohPreludeOrd" (TyCon "Int"))
+(DFunDef false "cohPreludeOrd" () (ELit (LInt 0)))
+(DTypeSig false "cohPreludeRows" (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow"))))
+(DFunDef false "cohPreludeRows" ((PVar "env")) (EApp (EApp (EVar "ieRowsOwnedBy") (EVar "cohPreludeOrd")) (EVar "env")))
+(DTypeSig false "cohRowsOf" (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow"))))
+(DFunDef false "cohRowsOf" ((PVar "env")) (EApp (EApp (EVar "filterList") (ELam ((PVar "r")) (EBinOp "/=" (EApp (EVar "ieRowOrd") (EVar "r")) (EVar "cohPreludeOrd")))) (EApp (EVar "ieRowsAll") (EVar "env"))))
+(DTypeSig false "cohRowsOwnedBy" (TyFun (TyCon "Int") (TyFun (TyCon "ImplEnv") (TyApp (TyCon "List") (TyCon "ImplRow")))))
+(DFunDef false "cohRowsOwnedBy" ((PVar "cur") (PVar "env")) (EIf (EBinOp "==" (EVar "cur") (EVar "cohPreludeOrd")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "ieRowsOwnedBy") (EVar "cur")) (EVar "env")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohOverlap" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
 (DFunDef false "cohOverlap" ((PVar "xs") (PVar "ys")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "xs")) (EApp (EVar "listLen") (EVar "ys"))) (EApp (EApp (EVar "cohOverlapGo") (EApp (EVar "Ref") (EListLit))) (EApp (EApp (EVar "zipL") (EVar "xs")) (EVar "ys"))) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohOverlapGo" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyCon "Mono"))) (TyCon "Bool"))))
@@ -70254,11 +70247,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohOverlapMsg" ((PVar "iface") (PVar "xs") (PVar "ys")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "overlapping impls of ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "s1"))) (ELit (LString " and "))) (EApp (EMethodRef "display") (EVar "s2"))) (ELit (LString " can match the same type; make them disjoint or wrap one type in a newtype"))))))
 (DData Private "CohScan" () ((variant "CohScan" (ConPos (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))))))) ())
 (DData Private "CohSweep" () ((variant "CohSweepOwn" (ConPos)) (variant "CohSweepGlobal" (ConPos))) ())
-(DTypeSig false "cohScan" (TyFun (TyCon "CohSweep") (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyCon "CohScan"))))
-(DFunDef false "cohScan" ((PVar "sweep") (PVar "impls")) (EApp (EApp (EApp (EVar "cohScanOuter") (EVar "sweep")) (EVar "impls")) (EApp (EApp (EVar "CohScan") (EVar "None")) (EVar "None"))))
-(DTypeSig false "cohScanOuter" (TyFun (TyCon "CohSweep") (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyFun (TyCon "CohScan") (TyCon "CohScan")))))
-(DFunDef false "cohScanOuter" (PWild (PList) (PVar "acc")) (EVar "acc"))
-(DFunDef false "cohScanOuter" ((PVar "sweep") (PCons (PVar "e") (PVar "rest")) (PVar "acc")) (EIf (EApp (EVar "cohScanDone") (EVar "acc")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohScanOuter") (EVar "sweep")) (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e")) (EVar "rest")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "cohScan" (TyFun (TyCon "CohSweep") (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyCon "CohScan")))))
+(DFunDef false "cohScan" ((PVar "sweep") (PVar "impls") (PVar "fixed")) (EApp (EApp (EApp (EApp (EVar "cohScanOuter") (EVar "sweep")) (EVar "impls")) (EVar "fixed")) (EApp (EApp (EVar "CohScan") (EVar "None")) (EVar "None"))))
+(DTypeSig false "cohScanOuter" (TyFun (TyCon "CohSweep") (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyFun (TyApp (TyCon "List") (TyCon "CohImpl")) (TyFun (TyCon "CohScan") (TyCon "CohScan"))))))
+(DFunDef false "cohScanOuter" (PWild (PList) PWild (PVar "acc")) (EVar "acc"))
+(DFunDef false "cohScanOuter" ((PVar "sweep") (PCons (PVar "e") (PVar "rest")) (PVar "fixed") (PVar "acc")) (EIf (EApp (EVar "cohScanDone") (EVar "acc")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "cohScanOuter") (EVar "sweep")) (EVar "rest")) (EVar "fixed")) (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e")) (EVar "fixed")) (EApp (EApp (EApp (EApp (EVar "cohScanInner") (EVar "sweep")) (EVar "e")) (EVar "rest")) (EVar "acc")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohScanDone" (TyFun (TyCon "CohScan") (TyCon "Bool")))
 (DFunDef false "cohScanDone" ((PCon "CohScan" (PCon "Some" PWild) (PCon "Some" PWild))) (EVar "True"))
 (DFunDef false "cohScanDone" (PWild) (EVar "False"))
@@ -70281,7 +70274,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohKeepFirst" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x")))
 (DFunDef false "cohKeepFirst" ((PCon "None") (PVar "y")) (EVar "y"))
 (DTypeSig false "cohHardMsg" (TyFun (TyCon "CohImpl") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
-(DFunDef false "cohHardMsg" ((PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohCrossModuleMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "mid1")) (EVar "mid2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "cohHardMsg" ((PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EIf (EBinOp "||" (EBinOp "==" (EVar "mid1") (EVar "cohPreludeMid")) (EBinOp "==" (EVar "mid2") (EVar "cohPreludeMid"))) (EApp (EApp (EApp (EVar "cohPreludeOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohCrossModuleMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "mid1")) (EVar "mid2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "cohPreludeMid" (TyCon "String"))
+(DFunDef false "cohPreludeMid" () (ELit (LString "core")))
+(DTypeSig false "cohPreludeOverlapMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String")))))
+(DFunDef false "cohPreludeOverlapMsg" ((PVar "iface") (PVar "xs") (PVar "ys")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "overlapping impls of ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "s1"))) (ELit (LString " and the prelude's "))) (EApp (EMethodRef "display") (EVar "s2"))) (ELit (LString " can match the same type; the prelude's impl cannot be replaced, so wrap the type in a newtype and implement "))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " for that"))))))
 (DTypeSig false "cohIsCrossModule" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "cohIsCrossModule" ((PVar "mid1") (PVar "mid2")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "mid1") (ELit (LString ""))) (EBinOp "/=" (EVar "mid2") (ELit (LString "")))) (EBinOp "/=" (EVar "mid1") (EVar "mid2"))))
 (DTypeSig false "cohIncomparableMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
@@ -70300,8 +70297,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohImplLoc" ((PCon "CohImpl" PWild PWild PWild (PVar "l"))) (EVar "l"))
 (DTypeSig false "pushCoherenceWarning" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushCoherenceWarning" ((PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "warning") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EVar "warning") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
-(DTypeSig false "checkCoherence" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit")))))
-(DFunDef false "checkCoherence" ((PVar "env") (PVar "cur") (PVar "hasPrelude")) (EMatch (EApp (EApp (EVar "cohScan") (EVar "CohSweepOwn")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "cohImplOfRow")) (EApp (EApp (EApp (EVar "cohRowsOwnedBy") (EVar "cur")) (EVar "hasPrelude")) (EVar "env"))))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (EBlock (DoLet false false PWild (EApp (EVar "cohPushHard") (EVar "hard"))) (DoExpr (EApp (EVar "cohPushSoft") (EVar "soft")))))))
+(DTypeSig false "checkCoherence" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyCon "Unit"))))
+(DFunDef false "checkCoherence" ((PVar "env") (PVar "cur")) (EMatch (EApp (EApp (EApp (EVar "cohScan") (EVar "CohSweepOwn")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "cohImplOfRow")) (EApp (EApp (EVar "cohRowsOwnedBy") (EVar "cur")) (EVar "env"))))) (EApp (EApp (EMethodRef "map") (EVar "cohImplOfRow")) (EApp (EVar "cohPreludeRows") (EVar "env")))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (EBlock (DoLet false false PWild (EApp (EVar "cohPushHard") (EVar "hard"))) (DoExpr (EApp (EVar "cohPushSoft") (EVar "soft")))))))
 (DTypeSig false "cohPushHard" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))
 (DFunDef false "cohPushHard" ((PCon "None")) (ELit LUnit))
 (DFunDef false "cohPushHard" ((PCon "Some" (PTuple (PVar "msg") (PVar "loc")))) (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-CONFLICTING-IMPL"))) (EVar "loc")) (EVar "msg")))
@@ -70535,8 +70532,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "intercalateComma" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "'")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString "', "))) (EApp (EMethodRef "display") (EApp (EVar "intercalateComma") (EVar "rest")))) (ELit (LString ""))))
 (DTypeSig false "checkInterfaceCycles" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyCon "Unit"))))
 (DFunDef false "checkInterfaceCycles" ((PVar "ce") (PVar "cur")) (EBlock (DoLet false false (PVar "done") (EApp (EVar "Ref") (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "foreachUnit") (EApp (EApp (EApp (EVar "checkOneIfaceCycle") (EVar "ce")) (EVar "cur")) (EVar "done"))) (EApp (EApp (EVar "ceRowsVisibleAt") (EVar "cur")) (EVar "ce"))))))
-(DTypeSig false "runFinalChecks" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit"))))))))))
-(DFunDef false "runFinalChecks" ((PVar "cohDecls") (PVar "_cycDecls") (PVar "ownCe") (PVar "cycCe") (PVar "cohIe") (PVar "cycIe") (PVar "cur") (PVar "hasPrelude")) (EBlock (DoLet false false PWild (EApp (EVar "ordinalSentinelGuard") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCoherence") (EVar "cohIe")) (EVar "cur")) (EVar "hasPrelude"))) (DoLet false false PWild (EApp (EApp (EVar "checkInterfaceCycles") (EVar "cycCe")) (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "checkPhantomMethods") (EVar "ownCe")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkSuperImpls") (EVar "cohDecls")) (EVar "cycCe")) (EVar "cycIe")) (EVar "cur")))))
+(DTypeSig false "runFinalChecks" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyCon "Unit")))))))))
+(DFunDef false "runFinalChecks" ((PVar "cohDecls") (PVar "_cycDecls") (PVar "ownCe") (PVar "cycCe") (PVar "cohIe") (PVar "cycIe") (PVar "cur")) (EBlock (DoLet false false PWild (EApp (EVar "ordinalSentinelGuard") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "checkCoherence") (EVar "cohIe")) (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "checkInterfaceCycles") (EVar "cycCe")) (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "checkPhantomMethods") (EVar "ownCe")) (EVar "cur"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "checkSuperImpls") (EVar "cohDecls")) (EVar "cycCe")) (EVar "cycIe")) (EVar "cur")))))
 (DTypeSig false "ordinalSentinelGuard" (TyFun (TyCon "Int") (TyCon "Unit")))
 (DFunDef false "ordinalSentinelGuard" ((PVar "cur")) (EIf (EApp (EVar "ordinalIsSentinel") (EVar "cur")) (EApp (EApp (EVar "pushTypeError") (ELit (LString "T-INTERNAL-ORDINAL"))) (EVar "ordinalSentinelMsg")) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "ordinalIsSentinel" (TyFun (TyCon "Int") (TyCon "Bool")))
@@ -70605,7 +70602,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tyMatchesAst" ((PVar "t1") (PCon "TyConstrained" PWild (PVar "t2"))) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
 (DFunDef false "tyMatchesAst" (PWild PWild) (EVar "False"))
 (DTypeSig false "globalCoherenceConflict" (TyFun (TyCon "ImplEnv") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "globalCoherenceConflict" ((PVar "env")) (EMatch (EApp (EApp (EVar "cohScan") (EVar "CohSweepGlobal")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "cohImplOfRow")) (EApp (EApp (EVar "cohRowsOf") (EVar "True")) (EVar "env"))))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (ETuple (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "hard")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "soft"))))))
+(DFunDef false "globalCoherenceConflict" ((PVar "env")) (EMatch (EApp (EApp (EApp (EVar "cohScan") (EVar "CohSweepGlobal")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "cohImplOfRow")) (EApp (EVar "cohRowsOf") (EVar "env"))))) (EListLit)) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (ETuple (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "hard")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "soft"))))))
 (DTypeSig true "setCoherenceUserDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "setCoherenceUserDecls" ((PVar "ds")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls")) (EVar "ds")))
 (DTypeSig true "setStdlibOwnership" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit"))))
@@ -73801,7 +73798,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig true "checkModulesK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
 (DFunDef false "checkModulesK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EVar "stampGraphTyOrigins") (EVar "coreDecls0")) (EVar "modules0"))) (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes")) (EApp (EApp (EApp (EApp (EVar "checkModulesPreambleK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "foldModules") (EVar "False")) (EVar "False")) (EVar "cmCheckWorker")) (ELam ((PVar "_last") (PVar "mid") (PVar "schemes") (PVar "rest")) (EBinOp "::" (ETuple (EVar "mid") (EVar "schemes")) (EVar "rest")))) (EListLit)) (EBinOp "++" (EVar "runtimeSeed") (EFieldAccess (EVar "coreSchemes") "mbSchemes"))) (EApp (EApp (EVar "tagModuleExports") (EFieldAccess (EVar "coreSchemes") "mbStandaloneSchemes")) (EFieldAccess (EVar "coreSchemes") "mbSchemes"))) (EListLit)) (EListLit)) (EListLit)) (EVar "modules")))))
 (DTypeSig false "checkModuleFullDiags" (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))
-(DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere")) (EVar "True"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
+(DFunDef false "checkModuleFullDiags" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "declEnvsHere") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EVar "prog") (EApp (EApp (EApp (EVar "importedCtorTypeDeclsFirstWins") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EApp (EApp (EApp (EVar "oracleImportDecls") (EVar "prog")) (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (EFieldAccess (EVar "declEnvsHere") "deModules"))) (EVar "accData")))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (EVar "mid")) (EVar "seedVars")) (EVar "accData")) (EVar "accAll")) (EVar "prog"))) (DoLet false false (PVar "ceHere") (EFieldAccess (EVar "declEnvsHere") "deIfaces")) (DoLet false false (PVar "ordHere") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "declEnvsHere"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EVar "accAll") (EVar "accData")) (EVar "prog"))) (EVar "ceHere")) (EVar "ceHere")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EFieldAccess (EVar "declEnvsHere") "deImpls")) (EVar "ordHere"))) (DoExpr (ETuple (EVar "schemes") (EVar "marked") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeAlias true "ModDiags" () (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))
 (DTypeSig false "graphModuleWorker" (TyFun (TyCon "GraphOut") (TyFun (TyCon "String") (TyFun (TyCon "ModuleSeed") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyCon "ModuleBindings") (TyTuple (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))))))
 (DFunDef false "graphModuleWorker" ((PVar "sel") (PVar "mid") (PVar "seed") (PVar "accData") (PVar "accAll") (PVar "prog")) (EBlock (DoLet false false (PVar "implDecls") (EBinOp "++" (EVar "accAll") (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "implDecls"))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoLet false false (PTuple (PVar "schemes") (PVar "marked") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullDiags") (EVar "mid")) (EVar "seed")) (EVar "accData")) (EVar "implDecls")) (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "sel") (arm (PCon "GOutTrees") () (EBlock (DoLet false false PWild (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "main"))) (EFieldAccess (EVar "schemes") "mbSchemes")) (arm (PCon "Some" (PVar "sc")) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EApp (EVar "Some") (EVar "sc")))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef")) (EApp (EVar "dedup") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "promotionHarvestRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value"))))) (DoExpr (ELit LUnit)))) (arm (PCon "GOutDiags") () (ELit LUnit)))) (DoExpr (ETuple (EVar "schemes") (ETuple (EVar "marked") (EFieldAccess (EVar "schemes") "mbSchemes") (EVar "errs") (EVar "warns"))))))
