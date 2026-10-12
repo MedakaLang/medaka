@@ -1,5 +1,5 @@
 # META
-source_lines=55558
+source_lines=55557
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -37760,9 +37760,8 @@ checkOneCallObligation deferNonGround univ iface occs loc scope =
     -- ⚡ PERF (#1974): the truncation gate and the match test below read THE SAME two
     -- buckets, so they are answered from ONE pair of lookups (`oblCallVerdict`) rather
     -- than the two-then-two the separate `oblGoalIsTruncated` / `implMatchesArgsU` calls
-    -- performed.  Every `mregLookupK` RENDERS ITS KEY INTO A FRESH STRING (`insertUnivImplAt`
-    -- carries the same warning for the same reason, and `check` is GC-bound), so the
-    -- doubled lookups were ~70 MB of extra garbage at N=400 modules and ~22% of the whole
+    -- performed.  Each `mregLookupK` is a full tree walk over the bucket map, and the
+    -- doubled lookups cost ~70 MB of extra garbage at N=400 modules and ~22% of the whole
     -- `typecheck` stage on `diff_compiler_perf_scaling.sh`'s `modules` shape — enough to
     -- push its TIME arm over the gate's 3.0x-per-doubling ceiling (measured 1.63 s -> 1.28 s
     -- at N=400 with the gate stubbed out).  The VERDICTS are byte-identical: same buckets,
