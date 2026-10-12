@@ -1,0 +1,5 @@
+-- `Env`: granted by wasmgc/node, not by wasmgc/browser-worker.
+main : <Env, Stdout> Unit
+main = match getEnv "HOME"
+  Some _ => println "set"
+  None => println "unset"

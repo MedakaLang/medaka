@@ -44,10 +44,14 @@ import ir.core_ir_lower.{
 import backend.extern_catalog.{catalogRow, ledgerEntry, rowLlvm, rowWasm}
 import backend.core_validate.{
   Backend(..),
+  CheckedTarget,
+  checkedTarget,
+  checkedTargetOf,
   findingExtern,
   missingCatalogRows,
   missingRowsMessage,
   renderExternFinding,
+  renderExternRefusalUnder,
   validateCalls,
   validateDispatchEvidence,
   validateExterns,
@@ -62,6 +66,8 @@ import backend.wasm_emit.{
   makeWasmEmitInputFull,
 }
 import backend.llvm_emit.{emitProgramRecord as llvmRecord, makeEmitInput}
+import types.target_profile.{lookupProfile}
+import test_process.{underRoot}
 
 lowered : EmitTarget -> String -> CProgram
 lowered target src =
@@ -246,6 +252,164 @@ test "(g) a runtime extern with no catalog row is an internal error naming it" =
       ["internal error", "'zzNoSuchExtern'", "extern catalog"]
       (missingRowsMessage missing),
   ]
+
+-- ── under the target `build` checked ─────────────────────────────────────────
+
+-- What `medaka build` publishes once a program passes the target check: the
+-- profile, with each runtime extern's labels as `stdlib/runtime.mdk` declares
+-- them.  Naming a profile the program was never checked against is the hook
+-- that forces an extern past the check.
+checkedUnder : String -> <IO, FileRead> Result String CheckedTarget
+checkedUnder name = do
+  src <- readFile (underRoot "stdlib/runtime.mdk")
+  profile <- lookupProfile name
+  Ok (checkedTargetOf profile (parse src))
+
+-- The wasm refusal of `src` as `build` renders it under `profile`.
+wasmRefusalUnder : String -> String -> <IO, FileRead> Result String String
+wasmRefusalUnder profile src =
+  map
+    (t =>
+      renderExternRefusalUnder
+        (Some t)
+        (validateExterns WasmBackend [] (lowered TargetWasm src)))
+    (checkedUnder profile)
+
+-- What a build says of an extern the profile withholds.  `check` admits a
+-- program that names it without performing it, and the lowering cannot tell
+-- that program from one whose call `check` missed, so the line claims neither.
+withheldLine : String -> String -> String -> String -> String
+withheldLine line name labels profile =
+  "\{line}; the target `\{profile}` does not grant \{labels}, which `\{name}` performs; `check` admits a program that names it without performing it, but the wasm backend cannot lower even the name"
+
+owedLine : String -> String -> String
+owedLine line profile =
+  "\{line}; `\{profile}` grants its labels, so this is a lowering still owed (#3666)"
+
+test "(y) under a checked target, a withheld label names what check admits and a ratchet row names #3666" = expectEach
+  [
+    (
+      "a Net extern named as a value on wasmgc/node",
+      expectEqual
+        (Ok
+          (withheldLine
+            "wasm: runtime extern 'netTcpConnect' is not available on the wasm backend (PERMANENT: \{wasmReason "netTcpConnect"}) [in fns]"
+            "netTcpConnect"
+            "Net"
+            "wasmgc/node"))
+        (wasmRefusalUnder "wasmgc/node" "fns = [netTcpConnect]\nmain = 0"),
+    ),
+    (
+      "a Net extern applied on wasmgc/node, which check refuses before lowering",
+      expectEqual
+        (Ok
+          (withheldLine
+            "wasm: runtime extern 'netTcpConnect' is not available on the wasm backend (PERMANENT: \{wasmReason "netTcpConnect"}) [in main]"
+            "netTcpConnect"
+            "Net"
+            "wasmgc/node"))
+        (wasmRefusalUnder "wasmgc/node" "main = netTcpConnect \"localhost\" 80"),
+    ),
+    (
+      "an IO extern past the check on wasmgc/wasi-p2, whose IO joins nothing",
+      expectEqual
+        (Ok
+          (withheldLine
+            "wasm: runtime extern 'allocBytes' is not available on the wasm backend (WASM-GAP: \{wasmReason "allocBytes"}) [in main]"
+            "allocBytes"
+            "IO"
+            "wasmgc/wasi-p2"))
+        (wasmRefusalUnder "wasmgc/wasi-p2" "main = allocBytes ()"),
+    ),
+    (
+      "a FileWrite ratchet row on wasmgc/node",
+      expectEqual
+        (Ok
+          (owedLine
+            "wasm: runtime extern 'writeFile' is not available on the wasm backend (WASM-GAP: \{wasmReason "writeFile"}) [in main]"
+            "wasmgc/node"))
+        (wasmRefusalUnder "wasmgc/node" "main = writeFile \"a\" \"b\""),
+    ),
+    (
+      "an IO ratchet row on wasmgc/node, whose IO joins its host labels",
+      expectEqual
+        (Ok
+          (owedLine
+            "wasm: runtime extern 'allocBytes' is not available on the wasm backend (WASM-GAP: \{wasmReason "allocBytes"}) [in main]"
+            "wasmgc/node"))
+        (wasmRefusalUnder "wasmgc/node" "main = allocBytes ()"),
+    ),
+    (
+      "a label-less extern keeps its line",
+      expectEqual
+        (Ok
+          "wasm: runtime extern 'socketFd' is not available on the wasm backend (PERMANENT: \{wasmReason "socketFd"}) [in main]")
+        (wasmRefusalUnder "wasmgc/node" "main = socketFd 3"),
+    ),
+    (
+      "with no checked target, every line reads as today",
+      expectEqual (refusalLines
+        WasmBackend
+        "main = netTcpConnect \"localhost\" 80") [
+        renderExternRefusalUnder
+          None
+          (validateExterns
+            WasmBackend
+            []
+            (lowered TargetWasm "main = netTcpConnect \"localhost\" 80")),
+      ],
+    ),
+  ]
+
+-- A user FFI extern named as a value and never applied: `check` admits it on
+-- every profile, and wasm cannot lower even the name.
+ffiValueSrc : String
+ffiValueSrc =
+  "extern ffiAddInts : Int -> Int -> <FFI> Int\n\nfns = [ffiAddInts]\n\nmain = 0"
+
+-- The wasm record-mode events of `ffiValueSrc` with `checked` published as
+-- the target `build` checked it against.  An emitter gap names no binding, so
+-- each event's binding column is `?`.
+ffiWallEvents : Option CheckedTarget -> <IO> List String
+ffiWallEvents checked =
+  let decls = grantWholeDomain (desugar (parse ffiValueSrc))
+  let ffiTypes = [("ffiAddInts", (["Int", "Int"], "Int"))]
+  let input =
+    makeWasmEmitInputFull
+      []
+      (declSigTypeNames decls)
+      (ctorFieldTypeNames decls)
+      False
+      False
+      (declaredRecordFieldOrders decls)
+      ffiTypes
+  let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
+  checkedTarget := checked
+  let (_, events) = wasmRecord input cp
+  checkedTarget := None
+  events
+
+ffiWall : String
+ffiWall =
+  "wasm: FFI extern 'ffiAddInts' is native-only — foreign C calls have no WasmGC equivalent"
+
+test "(z) an FFI extern named as a value reads as a withheld label under a checked target" =
+  match checkedUnder "wasmgc/node"
+    Err e => expectEqual "" e
+    Ok t => expectEach [
+      (
+        "under wasmgc/node",
+        expectEqual
+          ["?\t" ++ withheldLine ffiWall "ffiAddInts" "FFI" "wasmgc/node"]
+          (ffiWallEvents (Some t)),
+      ),
+      (
+        "with no checked target",
+        expectEqual
+          ["?\t\{ffiWall}. Build for a native target instead."]
+          (ffiWallEvents None),
+      ),
+    ]
 
 -- ── record ordinals ──────────────────────────────────────────────────────────
 

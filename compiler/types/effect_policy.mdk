@@ -1,0 +1,345 @@
+-- compiler/types/effect_policy.mdk — does an entry's invocation summary fit a
+-- policy?  A policy is a list of (label, written parameter) entries, the shape
+-- a target profile's rows carry.  The verdict (`policyRefusals`) is decided
+-- from the atoms and the grants alone; the call-chain explanation
+-- (`viaChain`) is a separate entry point, called only on a refusal.
+import frontend.ast.{
+  EffParamTy(..),
+  TyConOrigin(..),
+  Decl(..),
+  Expr(..),
+  Arm(..),
+  Guard(..),
+  DoStmt(..),
+  LetBind(..),
+  FunClause(..),
+  FieldAssign(..),
+}
+import types.effect_authority.{
+  Authority(..), authSub, authVars, authHasVars, authvarDefaultName, authJoinAll
+}
+import types.effect_rows.{
+  effLabelOrigin,
+  atomLabelOf,
+  atomLabel,
+  atomAuth,
+  atomsUnion,
+  renderAtom,
+  Atom(..),
+  effrowLabels,
+}
+import types.repr.{Scheme(..), Mono(..), normalize}
+import types.typecheck.{decodeWrittenParam, atomOfLabel}
+import types.target_profile.{hostLabels}
+import support.util.{
+  sortUniqS, joinWith, reverseL, filterList, contains, anyList
+}
+import support.ordmap.{
+  OrdMap, omEmpty, omFromPairs, omFromNames, omLookup, omHasKey
+}
+
+-- ── the verdict ─────────────────────────────────────────────────────────────
+-- Admitted, or refused with the labels of the refused atoms (in atom order) and
+-- the report lines that explain them: each malformed entry's problem, then each
+-- unresolved authority that a narrower grant could not be proven to cover.
+public export data PolicyVerdict =
+  | PolicyAdmitted
+  | PolicyRefused (List String) (List String)
+
+-- The one call: the atoms an entry may perform against a policy.  The
+-- explanation lines are built only on a refusal.
+export
+policyRefusals : List Atom -> List (String, EffParamTy) -> PolicyVerdict
+policyRefusals atoms policy = match filterForbidden atoms policy
+  [] => PolicyAdmitted
+  labels =>
+    PolicyRefused
+      labels
+      (policyProblems atoms policy ++ notProvenLines atoms policy)
+
+filterForbidden : List Atom -> List (String, EffParamTy) -> List String
+filterForbidden [] _ = []
+filterForbidden (a :: rest) policy = match permitOf a policy
+  Permitted => filterForbidden rest policy
+  _ => atomLabel a :: filterForbidden rest policy
+
+-- Why each refused atom's policy entry could not be read, one report line per
+-- malformed entry the verdict met.
+policyProblems : List Atom -> List (String, EffParamTy) -> List String
+policyProblems effs policy =
+  flatMap
+    (a => match permitOf a policy
+      Malformed m => ["   policy entry for \{atomLabel a}: \{m}\n"]
+      _ => [])
+    effs
+
+export data Permit = Permitted | Forbidden | Malformed String
+
+-- Permitted iff the label is in the policy AND the inferred authority is
+-- provably within what the label's entries admit together, each entry decoded
+-- in the domain of the atom's own label: an authority still symbolic at the
+-- manifest boundary is not proven and is not permitted, and an entry the
+-- domain does not admit permits nothing.
+export
+permitOf : Atom -> List (String, EffParamTy) -> Permit
+permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
+  (True, []) => permitIoAsJoin policy
+  (_, []) => Forbidden
+  (_, written) => match allOk (map (decodeWrittenParam (atomLabelOf a)) written)
+    -- The entries are read exactly, however many there are: a set is never
+    -- folded, so a manifest of any size is accepted back as a policy.
+    Ok pps =>
+      if authSub (atomAuth a) (authJoinAll (map AConst pps)) then
+        Permitted
+      else
+        Forbidden
+    Err m => Malformed m
+
+-- Here `IO` is the join of the eleven host labels, so an `IO` atom under a
+-- policy with no `IO` entry is permitted exactly when the policy admits every
+-- one of the eleven at its top.  That is `IO`'s meaning with no profile, which
+-- is `check-policy`'s case: its policy is a manifest, not a profile.  The one
+-- caller that passes a profile's grants, `tools.target_check`, never passes an
+-- `IO` atom, because the typechecker has already bounded `IO` by that
+-- profile's join.
+permitIoAsJoin : List (String, EffParamTy) -> Permit
+permitIoAsJoin policy =
+  firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) hostLabels)
+
+firstNotPermitted : List Permit -> Permit
+firstNotPermitted [] = Permitted
+firstNotPermitted (Permitted :: rest) = firstNotPermitted rest
+firstNotPermitted (p :: _) = p
+
+-- An atom whose authority is still a variable at the host boundary, refused
+-- by a policy entry narrower than the whole label: the entry may well cover
+-- what the caller will choose, but nothing proves it.
+notProvenLines : List Atom -> List (String, EffParamTy) -> List String
+notProvenLines effs policy =
+  flatMap
+    (a => match (authHasVars (atomAuth a), permitOf a policy)
+      (True, Forbidden) => match policyEntriesFor a policy
+        _ :: _ =>
+          let unresolved =
+            Atom
+              (atomLabelOf a)
+              (authJoinAll (map AVar (authVars (atomAuth a))))
+          ["   not proven: \{renderAtom unresolved} (\{unresolvedWhy a})\n"]
+        [] => []
+      _ => [])
+    effs
+
+-- Why an atom's authority is unresolved: the variables it still names.
+export
+unresolvedWhy : Atom -> String
+unresolvedWhy a =
+  let names =
+    map (v => "`" ++ authvarDefaultName v ++ "`") (authVars (atomAuth a))
+  match names
+    [one] => "authority variable \{one}"
+    _ => "authority variables \{joinWith ", " names}"
+
+-- The entries for an atom: those under its qualified key, else those under
+-- its bare label.
+policyEntriesFor : Atom -> List (String, EffParamTy) -> List EffParamTy
+policyEntriesFor a policy =
+  match entriesUnder (policySpelling (qualifiedKey a)) policy
+    [] => entriesUnder (atomLabel a) policy
+    es => es
+
+entriesUnder : String -> List (String, EffParamTy) -> List EffParamTy
+entriesUnder key policy = map snd (filterList (e => fst e == key) policy)
+
+-- A policy token spells a qualified key without the TOML quotes.
+policySpelling : String -> String
+policySpelling k =
+  let n = stringLength k
+  if n >= 2 && stringSlice 0 1 k == "\"" && stringSlice (n - 1) n k == "\"" then
+    stringSlice 1 (n - 1) k
+  else
+    k
+
+-- `"mod.Name"` for a module-declared label, the bare name for a builtin.
+export
+qualifiedKey : Atom -> String
+qualifiedKey a = match effLabelOrigin (atomLabelOf a)
+  OriginModule m => "\"\{m}.\{atomLabel a}\""
+  _ => atomLabel a
+
+-- Every result's value, or the first error.
+export
+allOk : List (Result String a) -> Result String (List a)
+allOk [] = Ok []
+allOk ((Err m) :: _) = Err m
+allOk ((Ok x) :: rest) = map (x :: _) (allOk rest)
+
+-- ── the call graph ──────────────────────────────────────────────────────────
+-- name → callees restricted to top-level names.  Keyed; on a repeated name the
+-- first binding wins, as a first-match scan would.
+export type CallGraph = OrdMap (List String)
+
+-- name → the atoms calling it performs, for every effectful fn.
+export type EffectTable = OrdMap (List Atom)
+
+-- collectEVars: every EVar name referenced in an expression (conservative —
+-- includes non-call uses, safe for the chain heuristic).  The desugared tree
+-- has no EGuards/ESection/EBlock surface sugar, so those arms are omitted
+-- (already lowered).
+collectEVars : Expr -> List String
+collectEVars (EVar n) = [n]
+collectEVars (ELoc _ e) = collectEVars e
+collectEVars (EMethodRef n) = [n]
+collectEVars (EDictApp n) = [n]
+collectEVars (EApp f x) = collectEVars f ++ collectEVars x
+collectEVars (ELam _ body) = collectEVars body
+collectEVars (ELet _ _ _ v body) = collectEVars v ++ collectEVars body
+collectEVars (ELetGroup binds body) =
+  concatMapCP collectBind binds ++ collectEVars body
+collectEVars (EMatch e arms) = collectEVars e ++ concatMapCP collectArm arms
+collectEVars (EIf c t f) = collectEVars c ++ collectEVars t ++ collectEVars f
+collectEVars (EBinOp _ a b _) = collectEVars a ++ collectEVars b
+collectEVars (EUnOp _ e _) = collectEVars e
+collectEVars (EInfix _ a b) = collectEVars a ++ collectEVars b
+collectEVars (EAnnot e _) = collectEVars e
+collectEVars (EHeadAnnot e _) = collectEVars e
+collectEVars (EFieldAccess e _ _) = collectEVars e
+collectEVars (ERecordCreate _ flds) = concatMapCP collectFieldAssign flds
+collectEVars (ERecordUpdate e flds _) =
+  collectEVars e ++ concatMapCP collectFieldAssign flds
+collectEVars (EVariantUpdate _ e flds) =
+  collectEVars e ++ concatMapCP collectFieldAssign flds
+collectEVars (ETuple es) = concatMapCP collectEVars es
+collectEVars (EListLit es) = concatMapCP collectEVars es
+collectEVars (EArrayLit es) = concatMapCP collectEVars es
+collectEVars (ERangeList a b _) = collectEVars a ++ collectEVars b
+collectEVars (ERangeArray a b _) = collectEVars a ++ collectEVars b
+collectEVars (ESlice a b c _ _) =
+  collectEVars a ++ collectEVars b ++ collectEVars c
+collectEVars (EIndex a b _) = collectEVars a ++ collectEVars b
+collectEVars (EBlock stmts) = concatMapCP collectStmt stmts
+collectEVars (EDo _ stmts) = concatMapCP collectStmt stmts
+collectEVars _ = []
+
+collectBind : LetBind -> List String
+collectBind (LetBind _ clauses _) = concatMapCP collectClause clauses
+
+collectClause : FunClause -> List String
+collectClause (FunClause _ body) = collectEVars body
+
+collectArm : Arm -> List String
+collectArm (Arm _ guards body) =
+  concatMapCP collectGuard guards ++ collectEVars body
+
+collectGuard : Guard -> List String
+collectGuard (GBool e) = collectEVars e
+collectGuard (GBind _ e) = collectEVars e
+
+collectFieldAssign : FieldAssign -> List String
+collectFieldAssign (FieldAssign _ e) = collectEVars e
+
+collectStmt : DoStmt -> List String
+collectStmt (DoExpr e) = collectEVars e
+collectStmt (DoBind _ e) = collectEVars e
+collectStmt (DoLet _ _ _ e _) = collectEVars e
+collectStmt (DoAssign _ e) = collectEVars e
+collectStmt (DoFieldAssign _ _ e) = collectEVars e
+
+concatMapCP : (a -> List b) -> List a -> List b
+concatMapCP _ [] = []
+concatMapCP f (x :: xs) = f x ++ concatMapCP f xs
+
+-- A top-level name (DFunDef or DExtern), peeling DAttrib.
+topName : Decl -> Option String
+topName (DFunDef _ n _ _ _) = Some n
+topName (DExtern _ n _) = Some n
+topName (DAttrib _ d) = topName d
+topName _ = None
+
+-- (name, body-EVars) for each top-level DFunDef (externs have no body).
+fnBody : Decl -> Option (String, List String)
+fnBody (DFunDef _ n _ body _) = Some (n, collectEVars body)
+fnBody (DAttrib _ d) = fnBody d
+fnBody _ = None
+
+export
+buildCallGraph : List Decl -> CallGraph
+buildCallGraph decls =
+  let tops = omFromNames (collectOpts (map topName decls)) omEmpty
+  let bodies = collectOpts (map fnBody decls)
+  omFromPairs (reverseL (map (restrictBody tops) bodies)) omEmpty
+
+restrictBody : OrdMap Unit -> (String, List String) -> (String, List String)
+restrictBody tops (n, refs) = (n, filterList (r => omHasKey r tops) refs)
+
+collectOpts : List (Option a) -> List a
+collectOpts [] = []
+collectOpts (None :: rest) = collectOpts rest
+collectOpts ((Some x) :: rest) = x :: collectOpts rest
+
+-- ── effectful callees ───────────────────────────────────────────────────────
+-- (name, effect-atoms) for every fn whose CALL performs a non-empty effect set:
+-- the chain below follows what calling a callee performs, not what a host
+-- could reach through it.
+export
+fnEffectsTable : List (String, Scheme) -> EffectTable
+fnEffectsTable schemes = omFromPairs (reverseL (effectfulPairs schemes)) omEmpty
+
+effectfulPairs : List (String, Scheme) -> List (String, List Atom)
+effectfulPairs [] = []
+effectfulPairs ((name, sch) :: rest) = match callPerformed sch
+  [] => effectfulPairs rest
+  effs => (name, effs) :: effectfulPairs rest
+
+-- What applying a binding performs: its forcing row and the rows along its
+-- result spine, an effect index returned included.
+callPerformed : Scheme -> List Atom
+callPerformed (Forall _ _ _ _ force mono) =
+  atomsUnion (effrowLabels force) (resultSpineRows mono)
+
+resultSpineRows : Mono -> List Atom
+resultSpineRows m = match normalize m
+  TFun _ row res => atomsUnion (effrowLabels row) (resultSpineRows res)
+  TEff row => effrowLabels row
+  _ => []
+
+-- Does fn `name` carry an atom whose LABEL is `label`?  (Chain reconstruction
+-- stays label-keyed — the param does not participate in the call-graph trace.)
+fnHasEffect : EffectTable -> String -> String -> Bool
+fnHasEffect table name label = match omLookup name table
+  None => False
+  Some effs => anyList (a => atomLabel a == label) effs
+
+-- ── the via-chain ───────────────────────────────────────────────────────────
+-- From `start`, repeatedly hop to the lexicographically-smallest callee that
+-- carries `forbiddenLabel`, stopping at a leaf or a revisit.  Called only to
+-- explain a refusal.
+export
+viaChain : CallGraph -> EffectTable -> String -> String -> List String
+viaChain callGraph effTable start forbiddenLabel =
+  traceChain callGraph effTable forbiddenLabel start [start]
+
+traceChain : CallGraph ->
+  EffectTable ->
+  String ->
+  String ->
+  List String ->
+  List String
+traceChain callGraph effTable forbiddenLabel fn visited =
+  let callees = match omLookup fn callGraph
+    None => []
+    Some s => s
+  match firstWithEffect effTable forbiddenLabel (sortUniqS callees)
+    None => [fn]
+    Some c =>
+      if contains c visited then
+        [fn, c]
+      else
+        fn :: traceChain callGraph effTable forbiddenLabel c (c :: visited)
+
+firstWithEffect : EffectTable -> String -> List String -> Option String
+firstWithEffect _ _ [] = None
+firstWithEffect effTable label (c :: rest) =
+  if fnHasEffect effTable c label then
+    Some c
+  else
+    firstWithEffect effTable label rest

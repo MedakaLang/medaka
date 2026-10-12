@@ -1,0 +1,5 @@
+-- A library in a project that names a `[target]`: it has no entry point, so
+-- the target check has nothing to judge and refuses rather than passing.
+export
+double : Int -> Int
+double n = n * 2

@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+lookup : String -> <Net> Result String (List String)
+main : <Net, Stdout> Unit
+-- <fixtures>/net_reached.mdk: ok (2 declaration(s) checked, 0 errors)
+--- stderr

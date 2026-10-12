@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/imported_main/entry.mdk:1:0: no `main` entry found, so there is nothing to check against the target `llvm/native-posix`; add `main = ...`
+  |
+1 | -- The entry's `main` is imported, not its own: a program's entry is the entry
+  | ^

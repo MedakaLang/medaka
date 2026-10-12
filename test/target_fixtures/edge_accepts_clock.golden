@@ -1,0 +1,5 @@
+exit=0
+--- stdout
+main : <Clock, Stdout> Unit
+-- <fixtures>/clock_stdout.mdk: ok (1 declaration(s) checked, 0 errors)
+--- stderr

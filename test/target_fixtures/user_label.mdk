@@ -1,0 +1,11 @@
+-- A user effect label performs nothing a host lacks, so every profile admits
+-- it, the narrowest included.
+effect Log
+
+note : String -> <Log> Unit
+note _ = ()
+
+main : <Log, Stdout> Unit
+main =
+  let _ = note "start"
+  println "logged"

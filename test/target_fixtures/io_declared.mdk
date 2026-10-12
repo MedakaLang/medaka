@@ -1,0 +1,5 @@
+-- A declared `<IO>` entry: `IO` joins the host labels the target grants, and
+-- `main` performs only `Stdout`, so every profile granting `Stdout` admits it
+-- (wasmgc/node, llvm/native-posix, eval/run).
+main : <IO> Unit
+main = println "hi"

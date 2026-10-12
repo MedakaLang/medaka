@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/io_extern.mdk:4:0: `main` performs <IO>, and the target `wasmgc/wasi-p2` does not grant any host label for `IO` to join
+  |
+4 | main : <IO> Unit
+  | ^

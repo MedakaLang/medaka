@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+fetchHost : (h : String) -> <Net h, Stdout> Unit
+main : <Net "a.com", Stdout> Unit
+-- <fixtures>/net_param.mdk: ok (2 declaration(s) checked, 0 errors)
+--- stderr

@@ -330,11 +330,11 @@ the pre-sprint baseline captured when it was first written; every cell below is 
 
 | Verb | Unknown flag → | rc | stream | C2 | Usage error rc | C3 |
 |---|---|---|---|---|---|---|
-| `check` | `medaka check: unrecognized flag '--zzz…' (known: --json, --types, --allow-internal)` | 1 | stderr | ✅ | 1 | ✅ |
+| `check` | `medaka check: unrecognized flag '--zzz…' (known: --json, --types, --allow-internal, --target)` | 1 | stderr | ✅ | 1 | ✅ |
 | `fmt` | `medaka fmt: unrecognized flag '--zzz…' (known: --check, --stdout, --write, -w)` | 1 | stderr | ✅ | 1 | ✅ |
 | `new` | `medaka new: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ **DRAINED by S-5** (was REJECT-VAGUE — `runNewCmd`'s 2+-arg arm now C2-names a leading-dash token before its generic usage line) | 1 | ✅ |
 | `build` | `medaka build: unrecognized flag '--zzz…' (known: --keep-ir, --allow-internal, --json, …)` | 1 | stderr | ✅ | 1 | ✅ |
-| `run` | `medaka run: unrecognized flag '--zzz…' (known: --json, --allow-internal, --release)` | 1 | stderr | ✅ | 1 | ✅ |
+| `run` | `medaka run: unrecognized flag '--zzz…' (known: --json, --allow-internal, --release, --target)` | 1 | stderr | ✅ | 1 | ✅ |
 | `test` | `medaka test: unrecognized flag '--zzz…' (known: --native, --json, --engines, --filter, --seed, --cases)` | 1 | stderr | ✅ **reference** | 1 | ✅ |
 | `snapshot` | `medaka snapshot: unrecognized flag '--zzz…' (known: --check, --new, --bless, --isolate, --worker, --out, --root, --stages)` | 1 | stderr | ✅ | 1 | ✅ |
 | `doc` | `medaka doc: unrecognized flag '--zzz…' (known: none)` | 1 | stderr | ✅ | 1 | ✅ |
