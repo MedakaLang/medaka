@@ -60,7 +60,6 @@ import entries.check_match_main.{oracleMain as check_match_main}
 import entries.lint_main.{oracleMain as lint_main}
 import entries.lint_fix_main.{oracleMain as lint_fix_main}
 import entries.check_one_diags_main.{oracleMain as check_one_diags_main}
-import entries.diagnostics_main.{oracleMain as diagnostics_main}
 import entries.diagnostics_project_main.{oracleMain as diagnostics_project_main}
 import entries.fmt_main.{oracleMain as fmt_main}
 import entries.new_main.{oracleMain as new_main}
@@ -112,7 +111,6 @@ main = match basename (executablePath ())
   "lint_main" => lint_main ()
   "lint_fix_main" => lint_fix_main ()
   "check_one_diags_main" => check_one_diags_main ()
-  "diagnostics_main" => diagnostics_main ()
   "diagnostics_project_main" => diagnostics_project_main ()
   "fmt_main" => fmt_main ()
   "new_main" => new_main ()
