@@ -61,7 +61,17 @@ wasm-tools validate --features=all "$WASM"
 echo "  VALIDATE_OK"
 wasm-tools strip --all "$WASM" -o "$WASM"   # drop the debug name section (same as wasmAssemble)
 echo "  STRIP_OK"
-rm -f "$WAT"   # keep dist lean; WAT is huge and regenerable
+# Size pass: -Os cuts the module ~24% raw and ~3% brotli (what Cloudflare serves).
+# Optional: without binaryen the unoptimised module is still correct.
+if command -v wasm-opt >/dev/null 2>&1; then
+  wasm-opt --all-features -Os "$WASM" -o "$WASM.opt"
+  wasm-tools validate --features=all "$WASM.opt"
+  mv "$WASM.opt" "$WASM"
+  echo "  WASMOPT_OK"
+else
+  echo "  WASMOPT_SKIP (wasm-opt not on PATH)"
+fi
+rm -f "$WAT"  # keep dist lean; WAT is huge and regenerable
 
 # ── stage the stdlib sources the browser vfs will feed ───────────────────────────
 cp "$RUNTIME" "$DIST/runtime.mdk"

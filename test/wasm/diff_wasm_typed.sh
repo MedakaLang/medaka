@@ -1562,7 +1562,7 @@ if grep -F '$mdk_hash_mix64' "$INPUT_WORK/feature-u.wat" >/dev/null ||
   exit 1
 fi
 ! grep -F '(local $__divr0 i64)' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
-  grep -F '(func $featureFloatDiv (param $u____wparg0 (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
+  grep -F '(func $featureFloatDiv (param $x (ref eq)) (result (ref eq))' "$INPUT_WORK/feature-float-div.wat" >/dev/null &&
   grep -F 'f64.div' "$INPUT_WORK/feature-float-div.wat" >/dev/null || {
   echo "FAIL H2B9-DIV-FLOAT: Float-only division declared the Int divisor local, or lost its f64.div shape"
   exit 1
@@ -2670,7 +2670,7 @@ cmp -s "$WORK/string-p1.wat" "$WORK/string-u.wat" && {
 }
 # Check the segment namespace before parsing so duplicate or missing declarations
 # fail at this ownership assertion rather than being masked by wasm-tools.
-for string_spec in "string-p1 11" "string-u 2" "string-p2 11"; do
+for string_spec in "string-p1 10" "string-u 2" "string-p2 10"; do
   string_name="${string_spec% *}"
   string_count="${string_spec#* }"
   string_ids="$(awk '/^[[:space:]]*\(data \$strseg_[0-9]+ "/ { id = $0; sub(/^.*\$strseg_/, "", id); sub(/[[:space:]].*$/, "", id); print id }' "$WORK/$string_name.wat")"
@@ -2766,8 +2766,8 @@ assert_string_segments() {
     exit 1
   }
 }
-P_SEGMENTS="$(printf '0\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\n1\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n2\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72\n3\t\\70\\2d\\74\\61\\69\\6c\n4\t\\70\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n5\t\\70\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72\n6\t\\70\\2d\\63\\6c\\61\\75\\73\\65\n7\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\62\\6f\\64\\79\n8\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\6f\\74\\68\\65\\72\n9\t\\70\\2d\\65\\78\\70\\72\n10\t\\70\\2d\\65\\78\\70\\72')"
-P_REFS="$(printf '10\n9\n6\n7\n8\n3\n4\n5\n0\n1\n2')"
+P_SEGMENTS="$(printf '0\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\n1\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n2\t\\70\\2d\\6e\\6f\\6e\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72\n3\t\\70\\2d\\74\\61\\69\\6c\n4\t\\70\\2d\\74\\61\\69\\6c\\2d\\62\\6f\\64\\79\n5\t\\70\\2d\\74\\61\\69\\6c\\2d\\6f\\74\\68\\65\\72\n6\t\\70\\2d\\63\\6c\\61\\75\\73\\65\n7\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\62\\6f\\64\\79\n8\t\\70\\2d\\63\\6c\\61\\75\\73\\65\\2d\\6f\\74\\68\\65\\72\n9\t\\70\\2d\\65\\78\\70\\72')"
+P_REFS="$(printf '9\n9\n6\n7\n8\n3\n4\n5\n0\n1\n2')"
 U_SEGMENTS="$(printf '0\t\\75\\2d\\6f\\74\\68\\65\\72\n1\t\\75\\2d\\65\\78\\70\\72')"
 U_REFS="$(printf '1\n0')"
 assert_string_segments string-p1 "$WORK/string-p1.wat" "$P_SEGMENTS" "$P_REFS"
