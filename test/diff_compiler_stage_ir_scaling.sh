@@ -2,7 +2,8 @@
 # shell-because: instrumentation — valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing
 # diff_compiler_stage_ir_scaling.sh — the DETERMINISTIC superlinearity detector for
 # the BUILD-PATH stages (lower / emit / mangle / dce / trmc), the single-file
-# FRONTEND stages (parse / exhaust / desugar / resolve / mark / typecheck), and the
+# FRONTEND stages (parse / exhaust / desugar / resolve / mark / typecheck), the
+# single-file TOOL stages (fmt / lint), and the
 # MULTI-MODULE frontend stages (parse / load / desugar / resolve / mark /
 # typecheck), measured in PER-STAGE Callgrind INSTRUCTION COUNTS.
 #

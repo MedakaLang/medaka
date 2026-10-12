@@ -342,12 +342,12 @@ persistReps = "50000"
 persistAllocRatio : Float
 persistAllocRatio = 1.5
 
--- The smallest `allocBytes=` figure across `outs`, which every run prints
--- to the byte.
+-- The smallest `allocBytes=` figure across `outs`; a run that printed none
+-- makes the whole measurement absent.
 bestAlloc : List String -> Option Int
 bestAlloc outs = match somes (map (wordFigure "allocBytes=") outs)
   [] => None
-  x :: xs => Some (fold min x xs)
+  x :: xs => if length xs + 1 == length outs then Some (fold min x xs) else None
 
 persistAllocFindings : List String -> List String -> List String
 persistAllocFindings smallOuts largeOuts = match (
@@ -356,7 +356,7 @@ persistAllocFindings smallOuts largeOuts = match (
 )
   (Some small, Some large) =>
     ratioFindings
-      "persistTransition allocation (bytes per request, small vs large corpus)"
+      "persistTransition allocation (bytes per call, small vs large corpus)"
       (intToFloat small)
       (intToFloat large)
       persistAllocRatio

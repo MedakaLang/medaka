@@ -271,8 +271,9 @@ N="${PERF_N:-250}"
 #
 # QUICK still runs `xref`, at 2000/4000/8000 — it does NOT drop the shape, and that is
 # the point of the split. The BACKEND rows survive: `emit` reads 2.74 s and `wasm-emit`
-# 10.4 s at 8000, both far over the floor and both still ledgered and graded, so
-# backend_graded stays 1 and #359's arm keeps running on every PR. Only `resolve` falls
+# 10.4 s at 8000, both far over the floor and both ledgered and graded in the TIME arm,
+# which runs under DEEP only (TIME_ARM below); a per-PR run grades allocation and op
+# counts, and stage_ir_scaling grades lower/emit in instructions. Only `resolve` falls
 # under the floor (~0.145 s at 8000) and SKIPs — loudly — so the #78 resolve detector is
 # what DEEP is really for.
 #
@@ -280,7 +281,7 @@ N="${PERF_N:-250}"
 # wall-clock is the SLOWEST shard. At 12 min this gate WAS `gates (types)` and was the
 # critical path, 3x `gates (engines)` (3.7 min) — the shard the ci.yml header still
 # names as the pole. Deleting the gate from PRs would fix the clock and cost all per-PR
-# perf coverage; this keeps the arm that catches emitter quadratics where the bug lands
+# perf coverage; this keeps the deterministic arms that catch quadratics where the bug lands
 # and banishes only the two N=16000 bands, which no amount of restructuring can afford:
 # at K=5 they are irreducible. (Measured: routing every stage to its own band still only
 # reaches ~400 s. You cannot hold N=16000 at K=5 and get under 4 min.)
@@ -292,8 +293,7 @@ PERF_DEEP="${PERF_DEEP:-0}"
 # The wall-clock arm (per-stage TIME, min-of-K) runs only where PERF_DEEP=1, i.e. nightly,
 # or where PERF_TIME=1 forces it. A per-PR run grades allocation and op counts, which are
 # deterministic; per-stage instruction counts are graded by diff_compiler_stage_ir_scaling.sh.
-# Wall-clock ratios flap on shared runners (#2440, #3739, #1879), and a flap reds an
-# unrelated PR.
+# Wall-clock ratios flap on shared runners, and a flap reds an unrelated PR.
 TIME_ARM="${PERF_TIME:-$PERF_DEEP}"
 if [ "$TIME_ARM" != "1" ]; then
   echo "NOTE: the TIME arm (per-stage wall clock) is OFF: nightly runs it (PERF_DEEP=1), or set PERF_TIME=1."
@@ -4999,6 +4999,7 @@ printf '%d ok, %d known-superlinear (ledgered), %d regressed (threshold %sx per 
 if [ "$TIME_ARM" != "1" ]; then
   echo "TIME arm: off in this run (nightly grades it); lower/emit are graded in instructions by stage_ir_scaling, wasm-emit only by the nightly TIME arm"
 fi
+if [ "$TIME_ARM" = "1" ]; then
 printf 'backend TIME arm (issue #359): %d native lower/emit stage-ratios graded\n' "$backend_graded"
 # The wasm arm is NOT counted by backend_graded (see that counter's note: wasm-emit
 # clears the floor on most shapes, so counting it would make the counter unfailable).
@@ -5006,6 +5007,7 @@ printf 'backend TIME arm (issue #359): %d native lower/emit stage-ratios graded\
 # graded on every green run or the gate is red — so report it rather than leaving the
 # arm unmentioned.
 printf 'backend TIME arm (issue #359): wasm graded via the xref:wasm-emit ledger row\n'
+fi
 printf 'OP-COUNT arm (issue #884): %d per-stage op-ratios graded (deterministic, no floor)\n' "$ops_graded"
 
 # Never exit 0 having measured nothing.
