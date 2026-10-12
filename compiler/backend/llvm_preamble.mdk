@@ -17,8 +17,8 @@ preambleLines : List String
 preambleLines = [
   "; Medaka native spike (Stage 2.4) — emitted textual LLVM IR.",
   "; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md.",
-  "declare ptr @mdk_alloc(i64)",
-  "declare ptr @mdk_alloc_atomic(i64)",
+  "declare noalias align 8 ptr @mdk_alloc(i64) allockind(\"alloc,zeroed\") allocsize(0) \"alloc-family\"=\"mdk_gc\"",
+  "declare noalias align 8 ptr @mdk_alloc_atomic(i64) allockind(\"alloc,uninitialized\") allocsize(0) \"alloc-family\"=\"mdk_gc\"",
   "declare i64 @__mdk_apply(i64, i64, ptr)",
   "declare void @mdk_oob() noreturn",
   -- #1787: the same coded E-INDEX-OOB abort, carrying the offending index (raw

@@ -1,5 +1,5 @@
 # META
-source_lines=617
+source_lines=614
 stages=DESUGAR,MARK
 # SOURCE
 {- | Parser combinators over `Bytes`.
@@ -292,11 +292,8 @@ choice (q :: rest) = orElse q (choice rest)
    far and the next `p`. -}
 export
 chainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
--- Structurally identical to compiler/frontend/parser.mdk's chainl1. Both
--- containers are `DeferredThenable`, but the loop tail also needs `orElse`,
--- which each provides as a plain function rather than through a shared
--- interface, so a single generic version has nothing to abstract over.
--- lint-disable-next-line rule-duplicate-body
+-- The loop tail needs `orElse`, which `ByteParser` provides as a plain function
+-- rather than through a shared interface, so there is nothing to abstract over.
 chainl1 p op = defer
   x <- p
   chainl1Rest p op x

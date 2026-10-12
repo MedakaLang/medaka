@@ -1608,3 +1608,100 @@ memo-reachable live request carriers remain zero while two immutable summaries a
 one chain step are retained, and explicit session teardown reduces all three counts
 to zero. General cache replacement, eager defaulting/open-goal behavior, and solver
 claims outside this ordinary-return fence remain out of scope.
+
+## Allocation census baseline: `check` of the compiler (#4027, #503 item 3, #2357)
+
+Measured at base `614862503c4a781408a66ffd359d07549f64e1c1` with
+`make alloc-census` (`test/alloc_census.sh`; report-only, always exits 0). The
+census builds the CLI non-LTO (`MEDAKA_NO_LTO=1 medaka build --keep-ir`),
+optimizes at `clang -O2`, classifies every `mdk_alloc`/`mdk_alloc_atomic` site
+by pointer fate with `test/alloc_census/escape.py`, and counts allocations over
+`check compiler/driver/medaka_cli.mdk`. Counts are of the `-O2` IR, so LLVM's own
+deletions are already out. `escape.py` is a lower bound on "does not escape".
+
+Instrumented stdout equals plain stdout byte for byte: **VALID**.
+
+| Quantity | Value |
+|---|---:|
+| Total allocations (emitted sites + runtime callers) | 532.1 M |
+| Emitted-site allocations (9,638 of 33,116 sites fired) | 432.7 M (10.99 GB) |
+| Runtime (C) allocations | 99.4 M (4.15 GB) |
+| GC total bytes (`GC_get_total_bytes`) | 20.56 GB |
+| `perf stat` instructions, plain non-LTO `check` | 155,999,348,658 |
+
+By escape class (share of all allocations):
+
+| Class | Allocs | Share |
+|---|---:|---:|
+| RET (returned) | 164.8 M | 31.0% |
+| STORE (stored into another cell) | 146.1 M | 27.5% |
+| NOESC (stays local) | 87.5 M | 16.5% |
+| CALLEE_ESC (callee keeps it) | 21.9 M | 4.1% |
+| RET_LOCAL (returned, every caller keeps it local) | 8.8 M | 1.7% |
+| UNKNOWN_CALL | 3.6 M | 0.7% |
+
+Class x kind, top rows:
+
+| Class x kind | Allocs | Share |
+|---|---:|---:|
+| RET adt/record | 124.7 M | 23.4% |
+| NOESC tuple | 76.8 M | 14.4% |
+| STORE closure | 64.7 M | 12.2% |
+| STORE Cons | 44.0 M | 8.3% |
+| STORE adt/record | 24.9 M | 4.7% |
+| CALLEE_ESC closure | 17.1 M | 3.2% |
+
+One site dominates NOESC: `impl Eq Token` (`mdk_impl_zZfrontend_2e_lexer_2e_Token_eq`)
+allocates a 24-byte tuple 73.6 M times, 13.8% of all allocations, that never
+leaves the function.
+
+Append calls by runtime entry point, from emitted code: `mdk_string_append`
+57.19 M, `mdk_list_append` 18.89 M, `mdk_append` 6.81 M. Top callers:
+
+| Callers | Calls |
+|---|---:|
+| `mdk_string_append` in `frontend/parser.mdk` `expectGo` | 38.11 M |
+| `mdk_list_append` in `List.andThen` lambda | 14.14 M |
+| `mdk_string_append` in `types/registry.mdk` `tabKeyRender` | 4.78 M |
+| `mdk_string_append` in `types/registry.mdk` `identKey` | 3.92 M |
+| `mdk_string_append` in `types/registry.mdk` `regKeyRender` | 3.69 M |
+| `mdk_append` in `frontend/resolve.mdk` `scanDecls` | 2.90 M |
+
+Command: `make alloc-census` (about 4 minutes; set `CENSUS_WORK=<dir>` to keep
+the artifacts, `CENSUS_REUSE=1` to skip the build on a rerun).
+
+### Allocation census after sprint #4027 (allocate-what-it-keeps)
+
+Same command and build mode as the baseline above, measured at sprint head
+`fc4c08d28fdd539e1b76e5ab5f0ca73e62f531f0` (sprint slices plus main as of #4018).
+Stdout comparison: **VALID**. The baseline predates #4030
+(`parser: match Token constructors without the Eq dictionary`, a GC heap change and a
+registry key change), which landed on main between the two measurements and is
+included in the final column; the per-slice rows below isolate this sprint's own effect.
+
+| Quantity | Baseline | Final |
+|---|---:|---:|
+| Total allocations | 532.1 M | 353.9 M |
+| Emitted-site allocations | 432.7 M | 308.8 M |
+| Runtime (C) allocations | 99.4 M | 45.0 M |
+| GC total bytes | 20.56 GB | 13.74 GB |
+| `mdk_string_append` calls (all callers) | 57.19 M | 6.83 M |
+| `perf stat` instructions, plain non-LTO `check` | 155.999 G | 115.829 G |
+
+By escape class, final (baseline in parentheses): STORE 131.4 M (146.1), RET 128.6 M (164.8),
+CALLEE_ESC 19.8 M (21.9), NOESC 12.9 M (87.5), RET_LOCAL 12.5 M (8.8), UNKNOWN_CALL 3.6 M (3.6).
+`expectGo` no longer appears among the string-append callers. `List.andThen` is still
+14.19 M list appends (#4028).
+
+Per slice (each measured on its own base, so the rows do not sum to the table above):
+
+| Slice | Total allocations | `check` instructions |
+|---|---|---|
+| allocator attributes (`mdk_alloc`/`mdk_alloc_atomic` declared as LLVM allocators) | 532.1 M to 455.1 M | non-LTO 155.999 G to 142.245 G (-8.8%); production ThinLTO about -9.1% |
+| lazy parse-failure rendering (`PErr` carries an unrendered failure) | 439.5 M to 411.0 M | ThinLTO 128.05 G to 120.18 G (-6.2%) |
+| operator ladder as direct-style `binLevel` (30.1% of the parser's allocations) | 411.0 M to 353.0 M | ThinLTO 120.54 G to 109.12 G (-9.5%) |
+
+The allocation pin (`test/diff_compiler_closure_alloc.sh`, `getsome`/`tupleloop`/`matchtuple`)
+allocates 320 MB / 480 MB / 192 MB on the base emitter and 32 / 80 / 32 bytes with the attributes.
+The comment at the top of `compiler/frontend/parser.mdk` that called direct-style parsing
+"perf-neutral" did not hold on this head and was replaced.

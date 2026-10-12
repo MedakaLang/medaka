@@ -1,0 +1,10 @@
+step : (Int, Int, Int) -> Int -> (Int, Int, Int)
+step (a, b, c) n = if n == 0 then (a, b, c) else step (b, c, (a + b + c) % 1000003) (n - 1)
+
+main : <IO> Unit
+main =
+  let before = allocBytes ()
+  let (x, y, z) = step (1, 2, 3) 10000000
+  let after = allocBytes ()
+  println "tupleloop result=\{debug (x + y + z)}"
+  println "tupleloop allocBytes=\{debug (after - before)}"

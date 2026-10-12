@@ -2,14 +2,16 @@
 -- *combinator* parser over `List Token` from the lexer: a `ParserE` monad
 -- (`DeferredMappable`/`DeferredApplicative`/`DeferredThenable` impls) with
 -- `defer`-notation, and
--- combinators (`many`/`sepBy1`/`choice`/`chainl1`).  Precedence is the stratified
--- ladder from parser.mly, one function per level.  Validated by the
+-- combinators (`many`/`sepBy1`/`orElse`).  Precedence is the stratified
+-- ladder from parser.mly.  Validated by the
 -- `parse_fixtures` family (test/diff_compiler_snapshot_frontend_test.mdk).
 --
--- (Chosen over the direct recursive-descent version after Phase 136 unblocked
--- recursive polymorphic combinators and a perf comparison showed monadic
--- combinators are perf-neutral here — it dogfoods DeferredThenable/defer far
--- more.)
+-- The combinators are not free: each `defer` step allocates a continuation
+-- closure and a `ParserE` cell, and each `PR` result is a fresh cell.  The
+-- binary-operator ladder, which every expression operand descends, is written
+-- over the raw `ParserE` representation instead (`binLevel`): every expression
+-- operand descends all nine levels, so the per-level closure and result cells
+-- of combinator style would dominate the parser's allocation.
 --
 -- COVERAGE: the arithmetic+boolean+comparison+cons+append operator ladder, `=>`
 -- lambdas, single-line `if`/`let … in`, `match` with indented arms, postfix
@@ -100,7 +102,19 @@ import support.char.{isUpper}
 -- Without this channel a deep, well-worded rejection (e.g. the #171 bare-2^62
 -- literal) is discarded by the enclosing `many (appArg …)` and the user sees a
 -- generic "unexpected INT" from the leftover-token path instead.
-public export data PR a = POk a Int | PErr String Int | PFatal String Int
+public export data PR a = POk a Int | PErr PFail Int | PFatal String Int
+
+-- A recoverable failure, kept unrendered: `orElse`/`many` discard almost all of
+-- them, so the message text is built only where one becomes a diagnostic
+-- (`renderFail`).
+public export data PFail = FailMsg String | FailExpect Token Token
+
+export
+renderFail : PFail -> String
+renderFail (FailMsg m) = m
+renderFail (FailExpect x t) =
+  "\{unexpectedTokenMsg x}; expected \{expectedTokenMsg t}"
+
 -- A parser STORES its continuation under the stepping arrow rather than running
 -- it, so the honest type indexes the container by the row that arrow performs:
 -- `ParserE e a` is the DEFERRED family's shape (core.mdk `Deferred*`, #825), and
@@ -114,6 +128,7 @@ public export data ParserE (e : Effect) a =
 
 export type Parser a = ParserE <> a
 
+export
 runP : ParserE e a -> Array Token -> Int -> <e> PR a
 runP (ParserE f) toks pos = f toks pos
 
@@ -150,8 +165,9 @@ peekTok toks pos
   | pos < arrayLength toks = arrayGetUnsafe pos toks
   | otherwise = TEof
 
+export
 failP : String -> Parser a
-failP msg = ParserE (toks pos => PErr msg pos)
+failP msg = ParserE (toks pos => PErr (FailMsg msg) pos)
 
 -- A COMMITTED failure at the current token (see `PR`).  Use only where no other
 -- production could possibly claim the token — the message is guaranteed to reach
@@ -263,7 +279,7 @@ advance : Parser Token
 advance = ParserE (toks pos => advanceR (peekTok toks pos) pos)
 
 advanceR : Token -> Int -> PR Token
-advanceR TEof pos = PErr "unexpected end of input" pos
+advanceR TEof pos = PErr (FailMsg "unexpected end of input") pos
 advanceR t pos = POk t (pos + 1)
 
 -- consume one token, yield the given value
@@ -272,6 +288,7 @@ emit x = defer
   advance
   deferPure x
 
+export
 expectTok : Token -> Parser Unit
 expectTok t = defer
   x <- peekP
@@ -279,10 +296,7 @@ expectTok t = defer
 
 expectGo : Token -> Token -> Parser Unit
 expectGo t x =
-  if x == t then
-    emit ()
-  else
-    failP "\{unexpectedTokenMsg x}; expected \{expectedTokenMsg t}"
+  if x == t then emit () else ParserE (_toks pos => PErr (FailExpect x t) pos)
 
 -- The "unexpected X" half of a parse error.  A description that carries an
 -- article (`a number`) or names a layout event (`a dedent`) reads badly after
@@ -320,6 +334,7 @@ identNameFor (TIdent x) = emit x
 identNameFor _ = failP "expected an identifier"
 
 -- ── Combinators ─────────────────────────────────────────────────────────
+export
 orElse : Parser a -> Parser a -> Parser a
 orElse pa pb = ParserE (toks pos => orElseR pa pb toks pos)
 
@@ -337,16 +352,12 @@ orElseR pa pb toks pos = match runP pa toks pos
   PFatal ea qa => PFatal ea qa
   PErr ea qa => orElseRb ea qa (runP pb toks pos)
 
-orElseRb : String -> Int -> PR a -> PR a
+orElseRb : PFail -> Int -> PR a -> PR a
 orElseRb _ _ (POk y q) = POk y q
 orElseRb _ _ (PFatal eb qb) = PFatal eb qb
 orElseRb ea qa (PErr eb qb)
   | qa > qb = PErr ea qa
   | otherwise = PErr eb qb
-
-choice : List (Parser a) -> Parser a
-choice [] = failP "no alternative"
-choice (p :: ps) = orElse p (choice ps)
 
 -- zero or more; primitive + progress-guarded so it can never loop
 many : Parser a -> Parser (List a)
@@ -417,27 +428,6 @@ optTrailingCommaTuple : List a -> Parser Unit
 optTrailingCommaTuple [_] = deferPure ()
 optTrailingCommaTuple _ = optTrailingComma
 
--- Structurally identical to stdlib/byteparser.mdk's chainl1.  Both containers
--- are `DeferredThenable` now, but the loop tail also needs `orElse`, which each
--- provides as a plain function rather than through a shared interface
--- (`Alternative` requires `Applicative` at kind `Type -> Type`, which an
--- `Effect`-indexed container cannot satisfy) — so there is still nothing to hang
--- a single generic version off of.
-chainl1 : Parser a -> Parser (a -> a -> a) -> Parser a
--- lint-disable-next-line rule-duplicate-body
-chainl1 p op = defer
-  x <- p
-  chainl1Rest p op x
-
-chainl1Rest : Parser a -> Parser (a -> a -> a) -> a -> Parser a
-chainl1Rest p op x = orElse (chainl1More p op x) (deferPure x)
-
-chainl1More : Parser a -> Parser (a -> a -> a) -> a -> Parser a
-chainl1More p op x = defer
-  f <- op
-  y <- p
-  chainl1Rest p op (f x y)
-
 -- NB: recurse through a do-continuation (lazy), not by passing `skipNewlines`
 -- as a strict argument — the latter forces the value while it's being defined
 -- (a recursive-value init cycle → CamlinternalLazy.Undefined under strict eval).
@@ -506,14 +496,6 @@ parseLam : Parser Expr
 parseLam = defer
   e <- parsePipe
   orElse (lamTail e) (deferPure e)
-
--- `|>` pipe (loosest operator), then `>>`/`<<` composition, then `||`…
-parsePipe : Parser Expr
-parsePipe = chainl1 parseCompose (binOp TPipeRight "|>")
-
-parseCompose : Parser Expr
-parseCompose =
-  chainl1 parseOr (choice [binOp TRCompose ">>", binOp TLCompose "<<"])
 
 lamTail : Expr -> Parser Expr
 lamTail e = located (lamTailRaw e)
@@ -651,56 +633,114 @@ stripLoc1 : Expr -> Expr
 stripLoc1 (ELoc _ e) = e
 stripLoc1 e = e
 
-binOp : Token -> String -> Parser (Expr -> Expr -> Expr)
-binOp tk op = defer
-  expectTok tk
-  deferPure (l r => EBinOp op l r (Ref RNone))
+-- ── The binary-operator ladder ──────────────────────────────────────────
+-- Levels, loosest first: 1 `|>`, 2 `>>` `<<`, 3 `||`, 4 `&&`, 5 the
+-- comparisons, 6 `::`, 7 `++`, 8 `+` `-`, 9 `*` `/` `%`.  Every level is
+-- left-associative except `::`, which is right-associative.  The operands of
+-- level 9 are `parseUnary`.  0 means "not a binary operator".
+binLevelOf : Token -> Int
+binLevelOf TPipeRight = 1
+binLevelOf TRCompose = 2
+binLevelOf TLCompose = 2
+binLevelOf TOr = 3
+binLevelOf TAnd = 4
+binLevelOf TEqEq = 5
+binLevelOf TNeq = 5
+binLevelOf TLt = 5
+binLevelOf TGt = 5
+binLevelOf TLeq = 5
+binLevelOf TGeq = 5
+binLevelOf TCons = 6
+binLevelOf TPlusPlus = 7
+binLevelOf TPlus = 8
+binLevelOf TMinus = 8
+binLevelOf TMinusTight = 8
+binLevelOf TStar = 9
+binLevelOf TSlash = 9
+binLevelOf TMod = 9
+binLevelOf _ = 0
+
+binOpName : Token -> String
+binOpName TPipeRight = "|>"
+binOpName TRCompose = ">>"
+binOpName TLCompose = "<<"
+binOpName TOr = "||"
+binOpName TAnd = "&&"
+binOpName TEqEq = "=="
+binOpName TNeq = "/="
+binOpName TLt = "<"
+binOpName TGt = ">"
+binOpName TLeq = "<="
+binOpName TGeq = ">="
+binOpName TCons = "::"
+binOpName TPlusPlus = "++"
+binOpName TStar = "*"
+binOpName TSlash = "/"
+binOpName TMod = "%"
+binOpName TPlus = "+"
+binOpName TMinus = "-"
+binOpName TMinusTight = "-"
+binOpName _ = panic "binOpName: not a binary operator"
+
+pipeLevel : Int
+pipeLevel = 1
+
+orLevel : Int
+orLevel = 3
+
+consLevel : Int
+consLevel = 6
+
+mulLevel : Int
+mulLevel = 9
+
+parsePipe : Parser Expr
+parsePipe = ParserE (binLevel pipeLevel)
 
 parseOr : Parser Expr
-parseOr = chainl1 parseAnd (binOp TOr "||")
+parseOr = ParserE (binLevel orLevel)
 
-parseAnd : Parser Expr
-parseAnd = chainl1 parseCmp (binOp TAnd "&&")
+-- One level of the ladder, over the raw `ParserE` representation rather than
+-- `defer`-notation: an operand that no operator of this level follows passes
+-- up as the very `PR` its level returned, so a descent through all nine levels
+-- allocates nothing of its own.
+binLevel : Int -> Array Token -> Int -> PR Expr
+binLevel lvl toks pos
+  | lvl > mulLevel = runP parseUnary toks pos
+  | otherwise = binLevelRest lvl toks (binLevel (lvl + 1) toks pos)
 
-parseCmp : Parser Expr
-parseCmp = chainl1 parseCons cmpOp
+binLevelRest : Int -> Array Token -> PR Expr -> PR Expr
+binLevelRest lvl toks (r@(POk x pos)) =
+  binTry lvl toks r x pos (peekTok toks pos)
+binLevelRest _ _ r = r
 
-cmpOp : Parser (Expr -> Expr -> Expr)
-cmpOp = choice [
-  binOp TEqEq "==",
-  binOp TNeq "/=",
-  binOp TLt "<",
-  binOp TGt ">",
-  binOp TLeq "<=",
-  binOp TGeq ">=",
-]
+-- `r` is `POk x pos`, handed back unchanged when `t` is not this level's.
+binTry : Int -> Array Token -> PR Expr -> Expr -> Int -> Token -> PR Expr
+binTry lvl toks r x pos t
+  | binLevelOf t == lvl =
+    binRhs lvl toks x pos t (binLevel (binRhsLevel lvl) toks (pos + 1))
+  | otherwise = r
 
--- `::` is right-associative
-parseCons : Parser Expr
-parseCons = defer
-  x <- parseAppend
-  orElse (consTail x) (deferPure x)
+binRhsLevel : Int -> Int
+binRhsLevel lvl
+  | lvl == consLevel = lvl
+  | otherwise = lvl + 1
 
-consTail : Expr -> Parser Expr
-consTail x = defer
-  expectTok TCons
-  y <- parseCons
-  deferPure (EBinOp "::" x y (Ref RNone))
+-- A right operand that fails recoverably un-consumes the operator: the level
+-- yields its left operand at the operator's position.  No looser level then
+-- tries that token, since each operator belongs to exactly one level.  `::`
+-- stops after one operator because its right operand already took the rest
+-- of the chain.
+binRhs : Int -> Array Token -> Expr -> Int -> Token -> PR Expr -> PR Expr
+binRhs lvl toks x _ t (POk y q) =
+  binNext lvl toks (POk (EBinOp (binOpName t) x y (Ref RNone)) q)
+binRhs _ _ x pos _ (PErr _ _) = POk x pos
+binRhs _ _ _ _ _ ry = ry
 
-parseAppend : Parser Expr
-parseAppend = chainl1 parseAdd (binOp TPlusPlus "++")
-
-parseAdd : Parser Expr
-parseAdd =
-  chainl1
-    parseMul
-    (choice [binOp TPlus "+", binOp TMinus "-", binOp TMinusTight "-"])
-
-parseMul : Parser Expr
-parseMul =
-  chainl1
-    parseUnary
-    (choice [binOp TStar "*", binOp TSlash "/", binOp TMod "%"])
+binNext : Int -> Array Token -> PR Expr -> PR Expr
+binNext lvl toks r
+  | lvl == consLevel = r
+  | otherwise = binLevelRest lvl toks r
 
 -- ── The 2^62 int literal: legal only under a unary `-` (#171) ───────────────
 -- `Int` is 63-bit (`word = (n << 1) | 1`), spanning [-2^62, 2^62-1].  The lexer
@@ -816,8 +856,8 @@ parseApp = defer
 -- One application argument.  Normally an aspat, but a TIGHT negative literal
 -- (`f -1` / `f -1.5`, lexed as TMinusTight INT/FLOAT) is grabbed as a
 -- negative-numeric argument when the application HEAD is non-numeric.  A numeric
--- head (`5 -1`) never grabs, so the TMinusTight falls through to parseAdd's
--- binary minus and stays subtraction (Rule C, head-gated).
+-- head (`5 -1`) never grabs, so the TMinusTight falls through to the
+-- binary-minus level (`binLevel`) and stays subtraction (Rule C, head-gated).
 appArg : Bool -> Parser Expr
 appArg headNum = orElse (negLitArg headNum) (orElse derefArg parseAspat)
 
@@ -1001,7 +1041,7 @@ nestTooDeepMsg =
 -- Depth tracking is written directly over the raw `ParserE` representation
 -- (not `defer`-notation) so the counter is restored on EVERY outcome — including
 -- a non-fatal `PErr` from a failed speculative atom attempt, routine under
--- `orElse`/`chainl1` throughout this file. A `defer`-sequenced decrement after
+-- `orElse` throughout this file. A `defer`-sequenced decrement after
 -- `located parseAtomRaw` would never run on that path: `bindPR` short-circuits
 -- straight past subsequent binds on `PErr`/`PFatal`, which would leak an
 -- increment on every backtrack and eventually trip the cap on an ordinary
@@ -5693,7 +5733,7 @@ parseLocated src = match tokenizeWithOffsetPairs src
 -- ── Structured parse errors (non-panicking entry) ───────────────────────────
 -- The LSP prerequisite (Stage 4 task #24): a parser should yield errors as
 -- DATA, not abort.  The combinator already threads errors as values internally
--- (`PR a = POk | PErr String Int`); only the top boundary (`resultDecls`,
+-- (`PR a = POk | PErr PFail Int | PFatal String Int`); only the top boundary (`resultDecls`,
 -- `parseWithPositions`) panics on `PErr` / leftover tokens.  `parseResult` is a
 -- purely-additive non-panicking entry: it returns the same parse on success and
 -- a located, structured `ParseError` on failure, leaving `parse` byte-identical.
@@ -5746,8 +5786,8 @@ resultDeclsResult : String ->
   Int ->
   PR (List Decl) ->
   Result ParseError (List Decl)
-resultDeclsResult src toks offs srcLen (PErr msg pos) =
-  Err (mkLocated src toks offs srcLen msg pos)
+resultDeclsResult src toks offs srcLen (PErr f pos) =
+  Err (mkLocated src toks offs srcLen (renderFail f) pos)
 resultDeclsResult src toks offs srcLen (PFatal msg pos) =
   Err (mkLocated src toks offs srcLen msg pos)
 resultDeclsResult src toks offs srcLen (POk ds pos)
@@ -5766,7 +5806,8 @@ resultDeclsResult src toks offs srcLen (POk ds pos)
 deepenLeftover : String -> Array Token -> Array Int -> Int -> Int -> ParseError
 deepenLeftover src toks offs srcLen pos = match runP parseDecl toks pos
   PFatal msg2 pos2 => mkLocated src toks offs srcLen msg2 pos2
-  PErr msg2 pos2 if pos2 > pos => mkLocated src toks offs srcLen msg2 pos2
+  PErr f2 pos2 if pos2 > pos =>
+    mkLocated src toks offs srcLen (renderFail f2) pos2
   _ =>
     mkLocated
       src

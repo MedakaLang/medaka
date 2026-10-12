@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census doc-census jev-census jev-eval bytes-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census alloc-census doc-census jev-census jev-eval bytes-census
 
 ## medaka  — build the native `medaka` CLI.
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -369,6 +369,12 @@ inlang-frontend-resolve:
 inlang-frontend-resolve-test:
 	./medaka test --native compiler/frontend/resolve_test.mdk
 
+## compiler/frontend/parser_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): the unrendered-failure text and
+## the furthest-failure choice would otherwise never run.
+inlang-frontend-parser-test:
+	./medaka test compiler/frontend/parser_test.mdk
+
 ## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole
 ## in-language suite (lib + main) has no floor gate of any kind, and a
 ## directory target already grades every assertion in it with one exit
@@ -558,6 +564,16 @@ doc-census:
 ##           test/o2_survivor_census.sh's header.
 o2-survivor-census: medaka
 	sh test/o2_survivor_census.sh
+
+## alloc-census — report-only allocation census of `medaka check` on the
+##           compiler (#4027, #2357, #503): builds the CLI non-LTO with
+##           --keep-ir, classifies every mdk_alloc site by pointer fate,
+##           counts them in an instrumented run, and reports class x kind x
+##           function plus string/list append callers. ~4 min. Needs a built
+##           ./medaka, clang, python3, bdw-gc. Always exits 0: a census, not
+##           a gate — see test/alloc_census.sh's header.
+alloc-census: medaka
+	sh test/alloc_census.sh
 
 ## dup-census — report what rule-duplicate-body's zero is hiding (#2861):
 ##           suppression directives per file, the findings they hide (derived

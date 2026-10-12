@@ -213,6 +213,13 @@ build_one lambda_value_nocapture &&
 build_one lambda_value_capture &&
   check_probe lambda_value_capture lambda-capture 1999999000000
 
+# NOESCAPE ALLOC ATTRIBUTES (#3368 match-get Some, #2729 match-tuple, #3369
+# tuple-carried loop state): the preamble declares mdk_alloc with noalias/
+# allockind, which lets -O2 delete cells whose fields were already forwarded.
+build_one getsome && check_probe getsome getsome 30000000
+build_one tupleloop && check_probe tupleloop tupleloop 1000059
+build_one matchtuple && check_probe matchtuple matchtuple 2000000
+
 # DIRECT-CALL ESCAPES (#2241 end-of-sprint review finding): a where-bound
 # saturated-only-LOOKING local function that escapes via one of the four
 # non-saturated occurrences satOnlyUses must reject — passed as an argument,
@@ -232,6 +239,9 @@ check_threshold flat flat-alloc-baseline
 check_threshold where_nocapture where-nocapture-alloc
 check_threshold eta eta-closure-alloc
 check_threshold lambda_value_nocapture lambda-nocapture-alloc
+check_threshold getsome getsome-alloc
+check_threshold tupleloop tupleloop-alloc
+check_threshold matchtuple matchtuple-alloc
 check_min_alloc lambda_value_capture lambda-capture-alloc
 
 if [ "$checked" -lt 10 ]; then

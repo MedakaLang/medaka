@@ -1,0 +1,28 @@
+data T = A Int | B Int | C
+
+same : T -> T -> Bool
+same x y = match (x, y)
+  (A i, A j) => i == j
+  (B i, B j) => i == j
+  (C, C) => True
+  _ => False
+
+count : Array T -> Int -> Int -> Int
+count arr i acc =
+  if i >= arrayLength arr then
+    acc
+  else
+    let hit = same arr[i] arr[(i + 1) % arrayLength arr]
+    count arr (i + 1) (if hit then acc + 1 else acc)
+
+reps : Array T -> Int -> Int -> Int
+reps arr n acc = if n == 0 then acc else reps arr (n - 1) (acc + count arr 0 0)
+
+main : <IO> Unit
+main =
+  let arr = arrayFromList [A 1, A 1, B 2, C, C, B 3]
+  let before = allocBytes ()
+  let r = reps arr 1000000 0
+  let after = allocBytes ()
+  println "matchtuple result=\{debug (r)}"
+  println "matchtuple allocBytes=\{debug (after - before)}"

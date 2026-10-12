@@ -3486,7 +3486,7 @@ emitReservedCtorStruct ty ctor =
 -- global (`topA = wrap topB`), and a forward reference reads that other global's
 -- slot before its `global.set` runs → it is still `ref.null eq` → a `ref.as_non_null`
 -- in the consumer traps "dereferencing a null pointer" at instantiate.  The parser
--- combinator ladder (`parsePipe = chainl1 parseCompose …`) is exactly this shape, a
+-- combinator ladder (`parsePipe = ParserE (binLevel pipeLevel)`) is exactly this shape, a
 -- chain of forward-referencing nullary value globals.  Topologically sort the value
 -- binds so every global is initialized AFTER the value globals it reads EAGERLY.
 --
