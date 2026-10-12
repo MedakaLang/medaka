@@ -3119,7 +3119,6 @@ IDENT "y"
 INDENT
 UPPER "Gt"
 FAT_ARROW
-INDENT
 LET
 LPAREN
 IDENT "run"
@@ -3130,21 +3129,16 @@ EQUAL
 IDENT "sortRunDesc"
 IDENT "cmp"
 LBRACKET
-RBRACKET
 IDENT "x"
-LPAREN
+RBRACKET
 IDENT "y"
-CONS
 IDENT "ys"
-RPAREN
 IN
 IDENT "run"
 CONS
 IDENT "sortRuns"
 IDENT "cmp"
 IDENT "after"
-NEWLINE
-DEDENT
 NEWLINE
 UNDERSCORE
 FAT_ARROW
@@ -3159,13 +3153,10 @@ EQUAL
 IDENT "sortRunAsc"
 IDENT "cmp"
 LBRACKET
-RBRACKET
 IDENT "x"
-LPAREN
+RBRACKET
 IDENT "y"
-CONS
 IDENT "ys"
-RPAREN
 IN
 IDENT "reverse"
 IDENT "run"
@@ -6273,7 +6264,7 @@ NEWLINE
 DEDENT
 NEWLINE
 PROP
-STRING "elemIndices agrees with findIndices on [] and singletons"
+STRING "elemIndices agrees with the plain findIndices reference on [] and singletons"
 LPAREN
 IDENT "k"
 COLON

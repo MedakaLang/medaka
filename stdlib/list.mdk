@@ -879,11 +879,9 @@ sortRunDesc cmp acc x (y :: ys) = match cmp x y
 sortRunsFrom : (a -> a -> <e> Ordering) -> a -> List a -> <e> List (List a)
 sortRunsFrom _ x [] = [[x]]
 sortRunsFrom cmp x (y :: ys) = match cmp x y
-  Gt =>
-    let (run, after) = sortRunDesc cmp [] x (y :: ys) in
-      run :: sortRuns cmp after
+  Gt => let (run, after) = sortRunDesc cmp [x] y ys in run :: sortRuns cmp after
   _ =>
-    let (run, after) = sortRunAsc cmp [] x (y :: ys) in
+    let (run, after) = sortRunAsc cmp [x] y ys in
       reverse run :: sortRuns cmp after
 
 -- The maximal runs of `xs`, in input order. A strictly descending run is the only
@@ -1327,7 +1325,7 @@ prop "findIndices agrees with a plain reference on all, none, mixed, [] and sing
     && eq (findIndices (x => x < k) [k]) (findIndicesRef (x => x < k) [k])
     && eq (findIndices (x => x < 3) [1, 2, 3, 1]) [0, 1, 3]
 
-prop "elemIndices agrees with findIndices on [] and singletons" (k : Int) (xs : List Int) =
+prop "elemIndices agrees with the plain findIndices reference on [] and singletons" (k : Int) (xs : List Int) =
   eq (elemIndices k []) (findIndicesRef (x => x == k) [])
     && eq (elemIndices k [k]) [0]
     && eq (elemIndices k xs) (findIndicesRef (x => x == k) xs)

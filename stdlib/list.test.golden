@@ -116,36 +116,36 @@ running doctests in stdlib/list.mdk
   ok   stdlib/list.mdk:850: sortBy compare [7]
   ok   stdlib/list.mdk:852: sortBy compare [1, 1, 1]
   ok   stdlib/list.mdk:854: sortBy compare [1, 2, 3, 2, 1]
-  ok   stdlib/list.mdk:917: sort [3, 1, 2, 1]
-  ok   stdlib/list.mdk:928: sortOn (x => 0 - x) [1, 3, 2]
-  ok   stdlib/list.mdk:941: nubBy (x y => x == y) [1, 2, 1, 3, 2]
-  ok   stdlib/list.mdk:957: nub [1, 2, 1, 3, 2, 1]
-  ok   stdlib/list.mdk:967: deleteBy (x y => x == y) 2 [1, 2, 3, 2]
-  ok   stdlib/list.mdk:980: delete 2 [1, 2, 3, 2]
-  ok   stdlib/list.mdk:986: delete 9 [1, 2]
-  ok   stdlib/list.mdk:999: groupBy (x y => x == y) [1, 1, 2, 3, 3, 3]
-  ok   stdlib/list.mdk:1010: group [1, 1, 2, 3, 3]
-  ok   stdlib/list.mdk:1020: partition (x => x > 2) [1, 2, 3, 4]
-  ok   stdlib/list.mdk:1031: somes [Some 1, None, Some 3]
-  ok   stdlib/list.mdk:1039: somes ([] : List (Option Int))
-  ok   stdlib/list.mdk:1044: oks [Ok 1, Err "boom", Ok 3]
-  ok   stdlib/list.mdk:1054: errs [Ok 1, Err "boom", Ok 3]
-  ok   stdlib/list.mdk:1064: partitionResults [Ok 1, Err "boom", Ok 3]
-  ok   stdlib/list.mdk:1082: tally [1, 2, 1, 3, 1, 2]
-  ok   stdlib/list.mdk:1102: zip [1, 2, 3] [10, 20]
-  ok   stdlib/list.mdk:1110: zip ([] : List Int) [1, 2]
-  ok   stdlib/list.mdk:1117: zip3 [1, 2] [3, 4] [5, 6]
-  ok   stdlib/list.mdk:1126: zip3 [1, 2, 3] [4, 5] [6]
-  ok   stdlib/list.mdk:1134: zipWith (x y => x + y) [1, 2, 3] [10, 20, 30]
-  ok   stdlib/list.mdk:1142: zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
-  ok   stdlib/list.mdk:1149: zip4 [1, 2] [3, 4] [5, 6] [7, 8]
-  ok   stdlib/list.mdk:1159: zip4 [1, 2] [3] [5, 6] [7, 8]
-  ok   stdlib/list.mdk:1166: zipWith3 (x y z => x + y + z) [1, 2] [10, 20] [100, 200]
-  ok   stdlib/list.mdk:1175: zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
-  ok   stdlib/list.mdk:1180: unzip [(1, 2), (3, 4)]
-  ok   stdlib/list.mdk:1187: unzip ([] : List (Int, Int))
-  ok   stdlib/list.mdk:1192: unzip3 [(1, 2, 3), (4, 5, 6)]
-  ok   stdlib/list.mdk:1200: unzip3 ([] : List (Int, Int, Int))
+  ok   stdlib/list.mdk:915: sort [3, 1, 2, 1]
+  ok   stdlib/list.mdk:926: sortOn (x => 0 - x) [1, 3, 2]
+  ok   stdlib/list.mdk:939: nubBy (x y => x == y) [1, 2, 1, 3, 2]
+  ok   stdlib/list.mdk:955: nub [1, 2, 1, 3, 2, 1]
+  ok   stdlib/list.mdk:965: deleteBy (x y => x == y) 2 [1, 2, 3, 2]
+  ok   stdlib/list.mdk:978: delete 2 [1, 2, 3, 2]
+  ok   stdlib/list.mdk:984: delete 9 [1, 2]
+  ok   stdlib/list.mdk:997: groupBy (x y => x == y) [1, 1, 2, 3, 3, 3]
+  ok   stdlib/list.mdk:1008: group [1, 1, 2, 3, 3]
+  ok   stdlib/list.mdk:1018: partition (x => x > 2) [1, 2, 3, 4]
+  ok   stdlib/list.mdk:1029: somes [Some 1, None, Some 3]
+  ok   stdlib/list.mdk:1037: somes ([] : List (Option Int))
+  ok   stdlib/list.mdk:1042: oks [Ok 1, Err "boom", Ok 3]
+  ok   stdlib/list.mdk:1052: errs [Ok 1, Err "boom", Ok 3]
+  ok   stdlib/list.mdk:1062: partitionResults [Ok 1, Err "boom", Ok 3]
+  ok   stdlib/list.mdk:1080: tally [1, 2, 1, 3, 1, 2]
+  ok   stdlib/list.mdk:1100: zip [1, 2, 3] [10, 20]
+  ok   stdlib/list.mdk:1108: zip ([] : List Int) [1, 2]
+  ok   stdlib/list.mdk:1115: zip3 [1, 2] [3, 4] [5, 6]
+  ok   stdlib/list.mdk:1124: zip3 [1, 2, 3] [4, 5] [6]
+  ok   stdlib/list.mdk:1132: zipWith (x y => x + y) [1, 2, 3] [10, 20, 30]
+  ok   stdlib/list.mdk:1140: zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
+  ok   stdlib/list.mdk:1147: zip4 [1, 2] [3, 4] [5, 6] [7, 8]
+  ok   stdlib/list.mdk:1157: zip4 [1, 2] [3] [5, 6] [7, 8]
+  ok   stdlib/list.mdk:1164: zipWith3 (x y z => x + y + z) [1, 2] [10, 20] [100, 200]
+  ok   stdlib/list.mdk:1173: zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
+  ok   stdlib/list.mdk:1178: unzip [(1, 2), (3, 4)]
+  ok   stdlib/list.mdk:1185: unzip ([] : List (Int, Int))
+  ok   stdlib/list.mdk:1190: unzip3 [(1, 2, 3), (4, 5, 6)]
+  ok   stdlib/list.mdk:1198: unzip3 ([] : List (Int, Int, Int))
 
 stdlib/list.mdk: 147/147 passed
 Testing "reverse is an involution" [eval] ... OK (100 tests passed)
@@ -168,4 +168,4 @@ Testing "range length is max 0 (hi - lo)" [eval] ... OK (100 tests passed)
 Testing "span agrees with a plain reference on all, none, mixed, [] and singletons" [eval] ... OK (100 tests passed)
 Testing "break agrees with a plain reference on all, none, mixed, [] and singletons" [eval] ... OK (100 tests passed)
 Testing "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" [eval] ... OK (100 tests passed)
-Testing "elemIndices agrees with findIndices on [] and singletons" [eval] ... OK (100 tests passed)
+Testing "elemIndices agrees with the plain findIndices reference on [] and singletons" [eval] ... OK (100 tests passed)
