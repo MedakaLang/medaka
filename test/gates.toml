@@ -3348,7 +3348,7 @@ kind = "exec"
 migration = "shell:instrumentation"
 run = "test/diff_compiler_closure_alloc.sh"
 oracles = []
-sources = ["compiler/backend/llvm_emit.mdk", "test/diff_compiler_closure_alloc.sh"]
+sources = ["compiler/backend/llvm_emit.mdk", "compiler/backend/llvm_preamble.mdk", "test/diff_compiler_closure_alloc.sh"]
 corpus = ["test/closure_alloc_fixtures"]
 toolchain = []
 

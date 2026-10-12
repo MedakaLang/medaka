@@ -1,0 +1,21 @@
+import array.{get}
+
+sumGet : Array Int -> Int -> Int -> Int
+sumGet arr i acc =
+  if i >= arrayLength arr then
+    acc
+  else match get i arr
+    Some w => sumGet arr (i + 1) (acc + w)
+    None => acc
+
+reps : Array Int -> Int -> Int -> Int
+reps arr n acc = if n == 0 then acc else reps arr (n - 1) (acc + sumGet arr 0 0)
+
+main : <IO> Unit
+main =
+  let arr = arrayMake 1000 3
+  let before = allocBytes ()
+  let r = reps arr 10000 0
+  let after = allocBytes ()
+  println "getsome result=\{debug (r)}"
+  println "getsome allocBytes=\{debug (after - before)}"
