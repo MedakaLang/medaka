@@ -1819,3 +1819,26 @@ mutation, generated-root, and Valgrind checks pass. Full samples, API ablations,
 initialization-contract differences, and provenance are in
 [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md) and the
 [experiment README](../test/gc_prototype/README.md).
+
+## Promotion allocation experiment (2026-10-12)
+
+Retained-graph CPU profiles identified mature allocation as hot. The standalone
+collector now avoids clearing payload bytes immediately overwritten by promotion
+and avoids recomputing storage peaks when taking an already reserved pool slot.
+Direct-old initialization, padding zeroing, collection behavior, and exact
+accounting remain intact.
+
+Six position-balanced rounds at five million allocations compare the previous
+caller-inline collector, each optimization alone, both together, and two Boehm
+arms. Across 262,136/262,144-byte nurseries, median list time improves 14%/13%,
+tree time 8%/7%, and varied-size time 15%/16%. Lists take 182.43/208.60 ms versus
+the fastest Boehm arm's 213.33/204.63 ms; trees take 332.18/363.45 ms versus
+299.19/295.15 ms. Short-lived changes are mixed and noisy, including a 5%
+aligned ephemeral regression; no general gain is claimed for those cases.
+
+All custom variants have identical deterministic counters and memory peaks.
+Sanitizer, mutation, and independent Valgrind checks pass. These are synthetic
+results, with medians rather than the preceding experiment's minima. Full
+ablation samples and reconstruction patches are linked from the
+[experiment README](../test/gc_prototype/README.md); interpretation is in
+[GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).

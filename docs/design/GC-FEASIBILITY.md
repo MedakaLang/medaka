@@ -382,3 +382,79 @@ Retained graphs still need work, and no compiler speedup has been established.
 Integration should consume the active F5 runtime-type work and the added native
 GC requirements in R5a of the emitter target architecture; these results do not
 justify replacing production Boehm yet.
+
+## Promotion work and retained graphs (2026-10-12)
+
+DWARF CPU sampling of 30 fresh five-million-object runs per retained workload
+identified mature allocation as a useful next target: `new_old` accounted for
+17.5% of flat samples on custom lists and 9.1% on trees. Tree root registration
+and removal together accounted for 3.7%. These are sampled CPU shares, including
+kernel work, not wall-clock attribution. The profile retains benchmark and
+marker-thread names within benchmark process IDs, excluding Python before
+`exec`; no secondary-thread samples were observed.
+
+Promotion now copies the complete logical payload into its mature slot without
+first clearing the same bytes. Pool padding remains cleared, direct-old births
+remain fully zeroed, and dedicated large allocations retain `calloc`. Allocation
+from a pool updates the logical old-generation peak directly; full storage-peak
+accounting still runs when reserved storage changes. Roots, barriers, tracing,
+assertions, counters, and nursery poisoning are unchanged.
+
+Six position-balanced rounds compare the previous caller-inline collector,
+each change separately, both together, and the caller-inline and historical
+production-adapter Boehm arms. The table uses **medians**, unlike the preceding
+minimum-of-ten table. Each cell shows offset/aligned nursery capacities
+(262,136/262,144 bytes); each process allocates five million objects.
+
+| Workload | Previous custom (ms) | Combined custom (ms) | Fastest of two Boehm arms (ms) |
+|---|---:|---:|---:|
+| Ephemeral lists | 24.91 / 29.32 | 24.88 / 30.88 | 37.10 / 39.43 |
+| Entire list retained | 212.50 / 238.76 | 182.43 / 208.60 | 213.33 / 204.63 |
+| Entire tree retained | 362.05 / 389.92 | 332.18 / 363.45 | 299.19 / 295.15 |
+| Replaced old-to-young child | 26.32 / 23.95 | 25.43 / 23.70 | 45.70 / 38.37 |
+| Pointer-free cells | 18.17 / 18.35 | 18.64 / 17.57 | 30.85 / 29.65 |
+| Mixed temporary nodes and retained spine | 25.28 / 21.26 | 22.96 / 20.72 | 71.06 / 68.34 |
+| Varied sizes and lifetimes | 134.00 / 137.71 | 113.81 / 115.74 | 762.03 / 749.45 |
+
+Lists improve 13–14%, trees 7–8%, and varied sizes 15–16% against the same-run
+custom baseline. Lists beat Boehm at the offset capacity and remain about 2%
+slower when aligned; trees remain 11–23% slower. The individual changes do not
+have additive timing effects, and the combination is not fastest in every
+cell. Small changes in short-lived cases are inconsistent, including a 5%
+aligned ephemeral regression; shared-machine variation prevents a general
+speedup claim for those cases. Caller-inline Boehm wins its comparison except
+for aligned varied sizes, where the historical adapter wins.
+
+All 252 custom variant comparisons across both capacities have identical
+deterministic counters, including copied payload, collections, logical live
+storage, and peak accounted storage. The full correctness/sanitizer matrix and
+six independent Valgrind runs pass. Reproduction patches, complete samples,
+profile provenance, and validation records are linked from the
+[experiment README](../../test/gc_prototype/README.md).
+
+This is a bounded improvement to the standalone collector. Real Medaka workloads
+and the production compiler still require emitter integration before any custom
+GC performance comparison is possible.
+
+### Application workloads for native integration
+
+The existing PDS and gzip projects provide application-level candidates beyond
+compiler checking. These are identified targets, not custom-GC measurements:
+
+| Candidate | Existing entry and workload | Independent correctness check |
+|---|---|---|
+| PDS CAR encoding | `pds/test/performance_resource_main.mdk`, `car 1000` and `car 2000` | Output `CAR 1000 40059` / `CAR 2000 80059`: a 59-byte framed header plus 40 bytes per section |
+| PDS persistent MST insertion | Same entry, `mst-insert 1000` / `mst-insert 2000` | Reported entry count equals the requested count; `allocBytes` is a measurement, not a fixed answer |
+| gzip compression | `gzip/deflate_demo.mdk`, repeated-text and deterministic incompressible corpora from its oracle tests | System `gunzip` reconstructs every input byte |
+| gzip decompression | `gzip/inflate_demo.mdk`, committed `compiler/seed/emitter.ll.gz` | Byte-for-byte agreement with system `gunzip` |
+
+A focused Medaka entry around the existing CAR algorithm, starting with 16
+blocks, is the preferred first broader integration target. The full resource
+driver also imports signing and handler machinery; a smaller entry can run the
+actual CAR library without unrelated startup. Even that target needs rooted
+control flow and recursion, ADT/list layouts, closures and dictionaries, packed
+`ByteBlock` storage, and allocation contracts for runtime helpers. Its byte
+builder keeps a backing block in a mutable `Ref`, requiring barriers and valid
+buffer bases across growth. gzip adds mutable numeric arrays, bit cursors, and
+vector growth. These requirements should extend the native R5a implementation
+plan while consuming F5's settled semantic facts.

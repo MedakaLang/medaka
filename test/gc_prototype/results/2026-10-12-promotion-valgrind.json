@@ -1,0 +1,150 @@
+{
+  "status": "six runs passed; zero errors and zero leaks",
+  "scope": "independent prepared API Memcheck validation after bounded promotion-copy and peak-accounting optimization",
+  "git_head": "c324af5a926c7e65a4aede0844de459616c6e8f2",
+  "source_sha256": {
+    "gc.c": "174e98b4a5732c0ead0aa45d876280c2bd35ab848c88ded19cd6443bf1c5ae0a",
+    "gc.h": "c70257e8bb754ac649db073f7aad9960a6a734273b77bc213de14fc45d94cff0",
+    "prepared_api.c": "11d67906c1ab2c41ad2ea5e8a671159f25a81104a929e3c74945959dcc5c9c47"
+  },
+  "binary_sha256": "fa44406e307690d17554898449ce3563f408e3360436e2c45a477606170d78fd",
+  "valgrind": "valgrind-3.24.0",
+  "compiler": "Debian clang version 19.1.7 (3+b1)",
+  "build_command": [
+    "clang",
+    "-std=c11",
+    "-O2",
+    "-g",
+    "-gdwarf-4",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "test/gc_prototype/gc.c",
+    "test/gc_prototype/prepared_api.c",
+    "-o",
+    "/tmp/medaka-promotion-valgrind-review"
+  ],
+  "build_working_directory": "/root/.codex/worktrees/f396/medaka",
+  "runs": [
+    {
+      "command": [
+        "valgrind",
+        "--tool=memcheck",
+        "--error-exitcode=99",
+        "--leak-check=full",
+        "--show-leak-kinds=all",
+        "--errors-for-leak-kinds=all",
+        "--track-origins=yes",
+        "/tmp/medaka-promotion-valgrind-review",
+        "32",
+        "all",
+        "inline"
+      ],
+      "nursery_bytes": 32,
+      "mode": "inline",
+      "exit_code": 0,
+      "stdout": "prepared API passed\n",
+      "stderr": "==3== Memcheck, a memory error detector\n==3== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.\n==3== Using Valgrind-3.24.0 and LibVEX; rerun with -h for copyright info\n==3== Command: /tmp/medaka-promotion-valgrind-review 32 all inline\n==3== \n==3== \n==3== HEAP SUMMARY:\n==3==     in use at exit: 0 bytes in 0 blocks\n==3==   total heap usage: 762 allocs, 762 frees, 2,905,504 bytes allocated\n==3== \n==3== All heap blocks were freed -- no leaks are possible\n==3== \n==3== For lists of detected and suppressed errors, rerun with: -s\n==3== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)\n"
+    },
+    {
+      "command": [
+        "valgrind",
+        "--tool=memcheck",
+        "--error-exitcode=99",
+        "--leak-check=full",
+        "--show-leak-kinds=all",
+        "--errors-for-leak-kinds=all",
+        "--track-origins=yes",
+        "/tmp/medaka-promotion-valgrind-review",
+        "32",
+        "all",
+        "outline"
+      ],
+      "nursery_bytes": 32,
+      "mode": "outline",
+      "exit_code": 0,
+      "stdout": "prepared API passed\n",
+      "stderr": "==4== Memcheck, a memory error detector\n==4== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.\n==4== Using Valgrind-3.24.0 and LibVEX; rerun with -h for copyright info\n==4== Command: /tmp/medaka-promotion-valgrind-review 32 all outline\n==4== \n==4== \n==4== HEAP SUMMARY:\n==4==     in use at exit: 0 bytes in 0 blocks\n==4==   total heap usage: 762 allocs, 762 frees, 2,905,504 bytes allocated\n==4== \n==4== All heap blocks were freed -- no leaks are possible\n==4== \n==4== For lists of detected and suppressed errors, rerun with: -s\n==4== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)\n"
+    },
+    {
+      "command": [
+        "valgrind",
+        "--tool=memcheck",
+        "--error-exitcode=99",
+        "--leak-check=full",
+        "--show-leak-kinds=all",
+        "--errors-for-leak-kinds=all",
+        "--track-origins=yes",
+        "/tmp/medaka-promotion-valgrind-review",
+        "240",
+        "all",
+        "inline"
+      ],
+      "nursery_bytes": 240,
+      "mode": "inline",
+      "exit_code": 0,
+      "stdout": "prepared API passed\n",
+      "stderr": "==5== Memcheck, a memory error detector\n==5== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.\n==5== Using Valgrind-3.24.0 and LibVEX; rerun with -h for copyright info\n==5== Command: /tmp/medaka-promotion-valgrind-review 240 all inline\n==5== \n==5== \n==5== HEAP SUMMARY:\n==5==     in use at exit: 0 bytes in 0 blocks\n==5==   total heap usage: 762 allocs, 762 frees, 2,906,016 bytes allocated\n==5== \n==5== All heap blocks were freed -- no leaks are possible\n==5== \n==5== For lists of detected and suppressed errors, rerun with: -s\n==5== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)\n"
+    },
+    {
+      "command": [
+        "valgrind",
+        "--tool=memcheck",
+        "--error-exitcode=99",
+        "--leak-check=full",
+        "--show-leak-kinds=all",
+        "--errors-for-leak-kinds=all",
+        "--track-origins=yes",
+        "/tmp/medaka-promotion-valgrind-review",
+        "240",
+        "all",
+        "outline"
+      ],
+      "nursery_bytes": 240,
+      "mode": "outline",
+      "exit_code": 0,
+      "stdout": "prepared API passed\n",
+      "stderr": "==6== Memcheck, a memory error detector\n==6== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.\n==6== Using Valgrind-3.24.0 and LibVEX; rerun with -h for copyright info\n==6== Command: /tmp/medaka-promotion-valgrind-review 240 all outline\n==6== \n==6== \n==6== HEAP SUMMARY:\n==6==     in use at exit: 0 bytes in 0 blocks\n==6==   total heap usage: 762 allocs, 762 frees, 2,906,016 bytes allocated\n==6== \n==6== All heap blocks were freed -- no leaks are possible\n==6== \n==6== For lists of detected and suppressed errors, rerun with: -s\n==6== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)\n"
+    },
+    {
+      "command": [
+        "valgrind",
+        "--tool=memcheck",
+        "--error-exitcode=99",
+        "--leak-check=full",
+        "--show-leak-kinds=all",
+        "--errors-for-leak-kinds=all",
+        "--track-origins=yes",
+        "/tmp/medaka-promotion-valgrind-review",
+        "262136",
+        "all",
+        "inline"
+      ],
+      "nursery_bytes": 262136,
+      "mode": "inline",
+      "exit_code": 0,
+      "stdout": "prepared API passed\n",
+      "stderr": "==7== Memcheck, a memory error detector\n==7== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.\n==7== Using Valgrind-3.24.0 and LibVEX; rerun with -h for copyright info\n==7== Command: /tmp/medaka-promotion-valgrind-review 262136 all inline\n==7== \n==7== \n==7== HEAP SUMMARY:\n==7==     in use at exit: 0 bytes in 0 blocks\n==7==   total heap usage: 586 allocs, 586 frees, 5,652,944 bytes allocated\n==7== \n==7== All heap blocks were freed -- no leaks are possible\n==7== \n==7== For lists of detected and suppressed errors, rerun with: -s\n==7== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)\n"
+    },
+    {
+      "command": [
+        "valgrind",
+        "--tool=memcheck",
+        "--error-exitcode=99",
+        "--leak-check=full",
+        "--show-leak-kinds=all",
+        "--errors-for-leak-kinds=all",
+        "--track-origins=yes",
+        "/tmp/medaka-promotion-valgrind-review",
+        "262136",
+        "all",
+        "outline"
+      ],
+      "nursery_bytes": 262136,
+      "mode": "outline",
+      "exit_code": 0,
+      "stdout": "prepared API passed\n",
+      "stderr": "==8== Memcheck, a memory error detector\n==8== Copyright (C) 2002-2024, and GNU GPL'd, by Julian Seward et al.\n==8== Using Valgrind-3.24.0 and LibVEX; rerun with -h for copyright info\n==8== Command: /tmp/medaka-promotion-valgrind-review 262136 all outline\n==8== \n==8== \n==8== HEAP SUMMARY:\n==8==     in use at exit: 0 bytes in 0 blocks\n==8==   total heap usage: 586 allocs, 586 frees, 5,652,944 bytes allocated\n==8== \n==8== All heap blocks were freed -- no leaks are possible\n==8== \n==8== For lists of detected and suppressed errors, rerun with: -s\n==8== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)\n"
+    }
+  ]
+}

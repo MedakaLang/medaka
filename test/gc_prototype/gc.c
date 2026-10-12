@@ -212,7 +212,7 @@ static Pool *new_pool(size_t class_index) {
   stats.pool_reserved_bytes += bytes; stats.pool_count++; stats.pool_allocations++;
   account_peak(); return p;
 }
-static Header *new_old(uintptr_t info) {
+static Header *new_old(uintptr_t info, const Header *source) {
   Descriptor *d = &descriptors[(info >> 3) - 1]; size_t bytes = object_bytes(d->words);
   Header *h;
   size_t class_index = 0;
@@ -229,13 +229,20 @@ static Header *new_old(uintptr_t info) {
     if (!p->free) { c->available = p->available_next; p->available_next = NULL; }
     /* Dead slots use bit 2 with a zero descriptor index to distinguish reuse. */
     if (h->info == FORWARDED) stats.pool_reused_slots++;
-    memset(h, 0, p->slot_bytes);
+    if (source) {
+      /* Promotion overwrites the complete logical payload; only padding needs clearing. */
+      if (p->slot_bytes > bytes) memset((unsigned char *)h + bytes, 0, p->slot_bytes - bytes);
+    } else memset(h, 0, p->slot_bytes);
     stats.old_slot_bytes += p->slot_bytes; stats.pooled_allocations++;
   }
   h->info = info;
+  if (source) memcpy(h + 1, source + 1, bytes - sizeof(Header));
   stats.old_live_bytes += bytes; stats.old_live_payload_bytes += bytes - sizeof(Header);
   stats.old_object_count++; stats.old_total_allocated_bytes += bytes;
-  account_peak(); return h;
+  /* Pooled slots add no reserved storage; new_pool already accounts pool growth. */
+  if (class_index == CLASS_COUNT) account_peak();
+  else if (stats.old_live_bytes > stats.peak_old_bytes) stats.peak_old_bytes = stats.old_live_bytes;
+  return h;
 }
 uintptr_t register_layout(size_t words, uint64_t mask) {
   assert(gc_fast.nursery); return descriptor_info(words, mask);
@@ -248,7 +255,7 @@ Word allocate_prepared_slow(GcLayout layout) {
   size_t bytes = object_bytes(layout.words); Word result;
   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();
   if (bytes > gc_fast.capacity) {
-    result = payload(new_old(layout.info));
+    result = payload(new_old(layout.info, NULL));
     stats.direct_old_allocations++; stats.direct_old_payload_bytes += layout.words * sizeof(Word);
   } else {
     if (bytes > gc_fast.capacity - gc_fast.used) {
@@ -281,8 +288,7 @@ static Word promote(Word word) {
   Header *from = header(word);
   if (from->info & FORWARDED) return from->info & ~(uintptr_t)7;
   size_t words = descriptor(from)->words;
-  Header *to = new_old(from->info);
-  memcpy(to + 1, from + 1, words * sizeof(Word));
+  Header *to = new_old(from->info, from);
   from->info = payload(to) | FORWARDED;
   queue_push(&work, to, &stats.work_queue_bytes);
   stats.promoted_count++; stats.copied_bytes += object_bytes(words);
@@ -376,7 +382,7 @@ Word allocate(size_t words, uint64_t mask) {
   if (stats.old_live_bytes >= gc_fast.old_limit) major_collect();
   uintptr_t info = descriptor_info(words, mask); Word result;
   if (bytes > gc_fast.capacity) {
-    result = payload(new_old(info));
+    result = payload(new_old(info, NULL));
     stats.direct_old_allocations++; stats.direct_old_payload_bytes += words * sizeof(Word);
   } else {
     if (bytes > gc_fast.capacity - gc_fast.used) {

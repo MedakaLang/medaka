@@ -358,3 +358,32 @@ valgrind --tool=memcheck --error-exitcode=99 --leak-check=full --show-leak-kinds
 
 Use `outline` to check the out-of-line API. This check exercises the custom
 collector directly; it does not run Memcheck over conservative Boehm scanning.
+
+The subsequent promotion experiment removes redundant payload clearing during
+evacuation and updates logical mature-heap peaks without recomputing unchanged
+reserved-storage totals. Direct-old allocations remain zeroed, pool padding is
+cleared, and all counters and diagnostic poisoning remain enabled.
+
+- [Retained list/tree DWARF CPU profiles](results/2026-10-12-retained-profile.json)
+- [Six-arm comparison, 262,136-byte nursery](results/2026-10-12-promotion-5m-offset.jsonl)
+- [Six-arm comparison, 262,144-byte nursery](results/2026-10-12-promotion-5m-aligned.jsonl)
+- [Ablation audit, reconstruction patches, and measurement scripts](results/2026-10-12-promotion-audit.json)
+- [Full correctness and sanitizer record](results/2026-10-12-promotion-correctness.json)
+- [Generated-source rooting revalidation](results/2026-10-12-promotion-generated-contract.json)
+- [Independent Valgrind record](results/2026-10-12-promotion-valgrind.json)
+
+The baseline is commit `c324af5a926c7e65a4aede0844de459616c6e8f2`;
+the audit embeds exact `gc.c` patches for peak accounting alone, promotion alone,
+and both together. Other collector/workload sources match that baseline. The
+embedded driver records its original scratch paths; adapt those paths when
+reproducing elsewhere and verify the recorded source hashes before building.
+
+Each capacity has 252 measurements: seven profiles, six arms, six cyclic rounds.
+All custom deterministic counters, including memory peaks, match the baseline
+in all 252 variant comparisons across the two capacities. Median list times
+improve 13–14%, tree times 7–8%, and varied-size times 15–16%. Short-lived changes
+are inconsistent; aligned ephemeral time regresses about 5%. Both Boehm arms
+are measured again in the same rounds. Lists are faster than Boehm at the offset
+capacity and about 2% slower when aligned; trees remain 11–23% slower. Full
+interpretation and medians are in
+[GC feasibility](../../docs/design/GC-FEASIBILITY.md).
