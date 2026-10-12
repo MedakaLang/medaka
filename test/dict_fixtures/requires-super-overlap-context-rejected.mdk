@@ -3,7 +3,7 @@
 -- ground goal `Sub (Box (Two Bool))` selects the more specific
 -- `impl Sup (Box (Two a)) requires Show2 a` for its super dictionary, whose context
 -- `Show2 Bool` no instance gives: T-NO-IMPL at the call (36:16), on every verb.  This is
--- the use-site super walk's (`checkSuperContext`) own case; without it the program is
+-- the ground face of the super carry (`superGoalsEntered`); without it the program is
 -- accepted and prints `suptisub` through the `Show2 Int` dictionary.
 interface Show2 t where
   show2 : t -> String

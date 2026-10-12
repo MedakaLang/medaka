@@ -1,0 +1,9 @@
+-- DICT-SEMANTICS §6.1: a program's impls are compared with the prelude's.
+--
+-- SPEC ANSWER (hand-derived): the prelude has `impl Mappable List`; the program's
+-- is α-equal to it, so the pair has no unique ⊑-minimum.  REJECTED at the program's
+-- impl on every verb (#3872).
+impl Mappable List where
+  map f xs = []
+
+main = println (map (x => x + 1) [1, 2])

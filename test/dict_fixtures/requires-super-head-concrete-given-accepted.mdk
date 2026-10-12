@@ -1,0 +1,8 @@
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+impl Sub (Box Int) requires Sup (Box Int) where
+  sub _ = "sub"
+main = println "ok"

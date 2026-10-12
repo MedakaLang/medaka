@@ -1,0 +1,2 @@
+data Box a = Box a deriving (Ord)
+main = println (compare (Box 1) (Box 2))

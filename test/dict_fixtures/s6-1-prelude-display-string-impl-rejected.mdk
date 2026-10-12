@@ -1,0 +1,11 @@
+-- DICT-SEMANTICS §6.1: a program's impls are compared with the prelude's.
+--
+-- SPEC ANSWER (hand-derived): the prelude has `impl Display String`; the program's
+-- `impl Display String` is α-equal to it (mutually ⊑), so a goal `Display String`
+-- has two ⊑-minimal impls and no unique minimum.  REJECTED at the program's impl on
+-- every verb, as a duplicate head -- not accepted with the prelude's silently
+-- winning (#3633).
+impl Display String where
+  display s = "../" ++ s
+
+main = println "\{"x"}"

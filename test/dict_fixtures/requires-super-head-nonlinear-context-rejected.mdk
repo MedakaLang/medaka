@@ -1,0 +1,14 @@
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Pair a b = Pair a b
+impl Sup (Pair a a) requires Display a where
+  sup (Pair x y) = display x ++ "," ++ display y
+impl Sub (Pair a b) requires Display a, Display b where
+  sub _ = "|sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+main =
+  println (useSup (Pair (1 : Int) (2 : Int)))
+  println (useSup (Pair (7 : Int) "hello"))
