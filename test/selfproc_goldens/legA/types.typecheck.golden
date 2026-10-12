@@ -1313,6 +1313,7 @@ goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalRows : IfaceRef -> List Mono -> List ImplRow
 goalSatisfiable : Map String Unit -> UObligation -> List Mono -> Bool
 goalSatisfiableAfterDefault : ArmedGuard -> Int -> UObligation -> Bool
+goalSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
 goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
 goalVarsAllHeld : Map String Unit -> List Mono -> Bool

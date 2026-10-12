@@ -1,0 +1,31 @@
+-- §6.1.3 R-STABLE over super selection (#4023), generalizing binder: `g`'s goal
+-- `Sub (Box a)` matches only `impl Sub (Box a)`, but the super goal `Sup (Box a)` its
+-- construction builds unifies with `impl Sup (Box (Two a))`, which is not more
+-- general than the matching `impl Sup (Box a)`.  So the goal is kept as written,
+-- `g : Sub (Box a) => a -> String`, and `g (Two True)` builds the super at
+-- `Box (Two Bool)`, as the direct call does: `SPECbsub` twice.  It used to print
+-- `GENsub` first, the super committed to the general instance at `g`.
+interface Show2 t where
+  show2 : t -> String
+impl Show2 Int where
+  show2 _ = "i"
+impl Show2 Bool where
+  show2 _ = "b"
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+data Two a = Two a
+impl Sup (Box a) where
+  sup _ = "GEN"
+impl Sup (Box (Two a)) requires Show2 a where
+  sup (Box (Two x)) = "SPEC" ++ show2 x
+impl Sub (Box a) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+g x = useSup (Box x)
+main =
+  println (g (Two True))
+  println (useSup (Box (Two True)))
