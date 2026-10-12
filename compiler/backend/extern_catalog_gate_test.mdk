@@ -33,10 +33,9 @@
    scratch trees, neither of which the interpreter binds. -}
 
 import test.{
-  Expectation,
+  Expectation(..),
   expectAll,
   expectAtLeast,
-  expectAtMost,
   expectEach,
   expectEqual,
   expectNoFindings,
@@ -54,7 +53,7 @@ import types.target_profile.{
   profileGrants,
   profileName,
   profileNames,
-  reachesLabel,
+  withheldLabels,
 }
 import backend.extern_catalog_test.{externDeclNames, minus}
 import backend.core_validate.{externLabels}
@@ -83,6 +82,7 @@ import string.{
   startsWith,
   take,
   trim,
+  unlines,
   unwords,
   words,
 }
@@ -655,12 +655,10 @@ isRatchet BackendWasmgc GapUnported = True
 isRatchet BackendEval GapBug = True
 isRatchet _ _ = False
 
--- Does the profile's grant reach this extern?  `IO` is the join of the host
--- labels the profile grants, so a profile granting any of them reaches an `IO`
--- extern.
+-- Does the profile's grant reach this extern?  Every label the extern performs
+-- must be granted, as `core_validate` judges it.
 appliesTo : TargetProfile -> List String -> Bool
-appliesTo _ [] = True
-appliesTo p labels = any (reachesLabel p) labels
+appliesTo p labels = isEmpty (withheldLabels p labels)
 
 -- The (profile, extern, gap, reason) cells a profile's grant reaches that its
 -- backend does not lower.
@@ -800,10 +798,19 @@ isUngated _ = False
 
 -- The ratchet may only fall: draining a row lowers this ceiling in the same
 -- change.
+-- A passing run reports the owed rows as the actual value (`medaka test
+-- --json` carries it), so the list #3666 owes is visible while the ceiling holds.
 test "profiles: the owed ratchet rows are at most 64" = match runtimeText
   Err e => expectEqual "read runtime.mdk" "failed: \{e}"
   Ok src =>
-    expectAtMost
-      64
-      (length
-        (owedRatchetRows allProfiles (externLabels (parse src)) catalogRows))
+    let owed =
+      owedRatchetRows allProfiles (externLabels (parse src)) catalogRows
+    let n = length owed
+    let listing = "\{n} owed (KIND name (profile): reason)\n" ++ unlines owed
+    if n <= 64 then
+      Pass "at most 64" listing
+    else
+      Fail
+        "\{n} owed ratchet rows exceed the ceiling of 64"
+        "at most 64"
+        listing

@@ -1,5 +1,5 @@
 # META
-source_lines=233
+source_lines=240
 stages=DESUGAR,MARK
 # SOURCE
 -- The one table of target profiles: a profile is a backend, the host ABI that
@@ -53,6 +53,13 @@ export
 reachesLabel : TargetProfile -> String -> Bool
 reachesLabel p "IO" = isNonEmptyL (ioJoinGrants (Some p))
 reachesLabel p label = grantsLabel p label
+
+-- The labels of an extern the profile does not reach.  A program using the
+-- extern performs every label it declares, so the extern is usable under the
+-- profile exactly when this is empty.
+export
+withheldLabels : TargetProfile -> List String -> List String
+withheldLabels p labels = filter (l => not (reachesLabel p l)) labels
 
 export
 backendName : Backend -> String
@@ -257,6 +264,8 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DTypeSig true "reachesLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "reachesLabel" ((PVar "p") (PLit (LString "IO"))) (EApp (EVar "isNonEmptyL") (EApp (EVar "ioJoinGrants") (EApp (EVar "Some") (EVar "p")))))
 (DFunDef false "reachesLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EVar "grantsLabel") (EVar "p")) (EVar "label")))
+(DTypeSig true "withheldLabels" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "withheldLabels" ((PVar "p") (PVar "labels")) (EApp (EApp (EVar "filter") (ELam ((PVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "reachesLabel") (EVar "p")) (EVar "l"))))) (EVar "labels")))
 (DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))
 (DFunDef false "backendName" ((PCon "BackendLlvm")) (ELit (LString "llvm")))
 (DFunDef false "backendName" ((PCon "BackendWasmgc")) (ELit (LString "wasmgc")))
@@ -325,6 +334,8 @@ targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 (DTypeSig true "reachesLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "reachesLabel" ((PVar "p") (PLit (LString "IO"))) (EApp (EVar "isNonEmptyL") (EApp (EVar "ioJoinGrants") (EApp (EVar "Some") (EVar "p")))))
 (DFunDef false "reachesLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EVar "grantsLabel") (EVar "p")) (EVar "label")))
+(DTypeSig true "withheldLabels" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "withheldLabels" ((PVar "p") (PVar "labels")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "reachesLabel") (EVar "p")) (EVar "l"))))) (EVar "labels")))
 (DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))
 (DFunDef false "backendName" ((PCon "BackendLlvm")) (ELit (LString "llvm")))
 (DFunDef false "backendName" ((PCon "BackendWasmgc")) (ELit (LString "wasmgc")))

@@ -1,5 +1,5 @@
 # META
-source_lines=344
+source_lines=345
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/types/effect_policy.mdk — does an entry's invocation summary fit a
@@ -33,7 +33,8 @@ import types.effect_rows.{
   effrowLabels,
 }
 import types.repr.{Scheme(..), Mono(..), normalize}
-import types.typecheck.{decodeWrittenParam, atomOfLabel, ioAliasLabels}
+import types.typecheck.{decodeWrittenParam, atomOfLabel}
+import types.target_profile.{hostLabels}
 import support.util.{
   sortUniqS, joinWith, reverseL, filterList, contains, anyList
 }
@@ -107,7 +108,7 @@ permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
 -- profile's join.
 permitIoAsJoin : List (String, EffParamTy) -> Permit
 permitIoAsJoin policy =
-  firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) ioAliasLabels)
+  firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) hostLabels)
 
 firstNotPermitted : List Permit -> Permit
 firstNotPermitted [] = Permitted
@@ -351,7 +352,8 @@ firstWithEffect effTable label (c :: rest) =
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "decodeWrittenParam" false) (mem "atomOfLabel" false) (mem "ioAliasLabels" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "decodeWrittenParam" false) (mem "atomOfLabel" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "filterList" false) (mem "contains" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DData Public "PolicyVerdict" () ((variant "PolicyAdmitted" (ConPos)) (variant "PolicyRefused" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))) ())
@@ -366,7 +368,7 @@ firstWithEffect effTable label (c :: rest) =
 (DTypeSig true "permitOf" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
 (DFunDef false "permitOf" ((PVar "a") (PVar "policy")) (EMatch (ETuple (EBinOp "==" (EApp (EVar "atomLabel") (EVar "a")) (ELit (LString "IO"))) (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EVar "permitIoAsJoin") (EVar "policy"))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EVar "map") (EApp (EVar "decodeWrittenParam") (EApp (EVar "atomLabelOf") (EVar "a")))) (EVar "written"))) (arm (PCon "Ok" (PVar "pps")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EVar "map") (EVar "AConst")) (EVar "pps")))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
 (DTypeSig false "permitIoAsJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit")))
-(DFunDef false "permitIoAsJoin" ((PVar "policy")) (EApp (EVar "firstNotPermitted") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EApp (EVar "permitOf") (EApp (EVar "atomOfLabel") (EVar "l"))) (EVar "policy")))) (EVar "ioAliasLabels"))))
+(DFunDef false "permitIoAsJoin" ((PVar "policy")) (EApp (EVar "firstNotPermitted") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EApp (EApp (EVar "permitOf") (EApp (EVar "atomOfLabel") (EVar "l"))) (EVar "policy")))) (EVar "hostLabels"))))
 (DTypeSig false "firstNotPermitted" (TyFun (TyApp (TyCon "List") (TyCon "Permit")) (TyCon "Permit")))
 (DFunDef false "firstNotPermitted" ((PList)) (EVar "Permitted"))
 (DFunDef false "firstNotPermitted" ((PCons (PCon "Permitted") (PVar "rest"))) (EApp (EVar "firstNotPermitted") (EVar "rest")))
@@ -479,7 +481,8 @@ firstWithEffect effTable label (c :: rest) =
 (DUse false (UseGroup ("types" "effect_authority") ((mem "Authority" true) (mem "authSub" false) (mem "authVars" false) (mem "authHasVars" false) (mem "authvarDefaultName" false) (mem "authJoinAll" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "effLabelOrigin" false) (mem "atomLabelOf" false) (mem "atomLabel" false) (mem "atomAuth" false) (mem "atomsUnion" false) (mem "renderAtom" false) (mem "Atom" true) (mem "effrowLabels" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "normalize" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "decodeWrittenParam" false) (mem "atomOfLabel" false) (mem "ioAliasLabels" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "decodeWrittenParam" false) (mem "atomOfLabel" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "hostLabels" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "filterList" false) (mem "contains" false) (mem "anyList" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omFromNames" false) (mem "omLookup" false) (mem "omHasKey" false))))
 (DData Public "PolicyVerdict" () ((variant "PolicyAdmitted" (ConPos)) (variant "PolicyRefused" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))) ())
@@ -494,7 +497,7 @@ firstWithEffect effTable label (c :: rest) =
 (DTypeSig true "permitOf" (TyFun (TyCon "Atom") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit"))))
 (DFunDef false "permitOf" ((PVar "a") (PVar "policy")) (EMatch (ETuple (EBinOp "==" (EApp (EVar "atomLabel") (EVar "a")) (ELit (LString "IO"))) (EApp (EApp (EVar "policyEntriesFor") (EVar "a")) (EVar "policy"))) (arm (PTuple (PCon "True") (PList)) () (EApp (EVar "permitIoAsJoin") (EVar "policy"))) (arm (PTuple PWild (PList)) () (EVar "Forbidden")) (arm (PTuple PWild (PVar "written")) () (EMatch (EApp (EVar "allOk") (EApp (EApp (EMethodRef "map") (EApp (EVar "decodeWrittenParam") (EApp (EVar "atomLabelOf") (EVar "a")))) (EVar "written"))) (arm (PCon "Ok" (PVar "pps")) () (EIf (EApp (EApp (EVar "authSub") (EApp (EVar "atomAuth") (EVar "a"))) (EApp (EVar "authJoinAll") (EApp (EApp (EMethodRef "map") (EVar "AConst")) (EVar "pps")))) (EVar "Permitted") (EVar "Forbidden"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Malformed") (EVar "m")))))))
 (DTypeSig false "permitIoAsJoin" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyCon "Permit")))
-(DFunDef false "permitIoAsJoin" ((PVar "policy")) (EApp (EVar "firstNotPermitted") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EApp (EVar "permitOf") (EApp (EVar "atomOfLabel") (EVar "l"))) (EVar "policy")))) (EVar "ioAliasLabels"))))
+(DFunDef false "permitIoAsJoin" ((PVar "policy")) (EApp (EVar "firstNotPermitted") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EApp (EApp (EVar "permitOf") (EApp (EVar "atomOfLabel") (EVar "l"))) (EVar "policy")))) (EVar "hostLabels"))))
 (DTypeSig false "firstNotPermitted" (TyFun (TyApp (TyCon "List") (TyCon "Permit")) (TyCon "Permit")))
 (DFunDef false "firstNotPermitted" ((PList)) (EVar "Permitted"))
 (DFunDef false "firstNotPermitted" ((PCons (PCon "Permitted") (PVar "rest"))) (EApp (EVar "firstNotPermitted") (EVar "rest")))

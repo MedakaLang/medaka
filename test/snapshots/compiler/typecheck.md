@@ -1,5 +1,5 @@
 # META
-source_lines=55729
+source_lines=55715
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -511,7 +511,7 @@ import types.disposition.{
   validateDispositionTable,
 }
 import types.target_profile.{
-  TargetProfile, ioJoinGrants, profileName, selectedProfile
+  TargetProfile, hostLabels, ioJoinGrants, profileName, selectedProfile
 }
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
@@ -727,33 +727,19 @@ ioLabel = builtinLabel "IO"
 -- ── v2 Stage 3: the `IO` widening union alias (design §3.2) ─────────────────
 -- `IO` is the coarse security alias: in a BOUND/annotation row it stands for
 -- the join of the narrow security labels the selected profile grants, every one
--- at ⊤ when none is selected.  ioAliasLabels lists them (every minted security
+-- at ⊤ when none is selected.  `hostLabels` lists them (every minted security
 -- label EXCEPT IO itself); internal labels (Mut/Panic) are NOT members, so they
 -- are tracked independently of IO.
-export
-ioAliasLabels : List String
-ioAliasLabels = [
-  "Stdout",
-  "Stderr",
-  "Stdin",
-  "Clock",
-  "Env",
-  "Exec",
-  "Rand",
-  "Net",
-  "FileRead",
-  "FileWrite",
-  "Signal",
-]
 -- NOTE: `FFI` is deliberately NOT a member. #2071/#2070 (epic, Layer 1, R1):
 -- an `<IO>` bound must NOT subsume an `<FFI>`-performing body — FFI crosses a
 -- trust boundary the IO alias is not meant to paper over. Do not "complete"
 -- this list by adding FFI.
 
 -- What `IO` joins in this drive: the selected profile's grants of the alias
--- labels, each at the parameter granted, in `ioAliasLabels` order.  With no
+-- labels, each at the parameter granted, in `hostLabels` order.  With no
 -- profile that is all eleven at their tops.  Every module of the program is
 -- judged against the one join, the shipped stdlib included.
+export
 ioJoinAtoms : List (String, EffParamTy) -> List Atom
 ioJoinAtoms grants =
   filterMap
@@ -764,7 +750,7 @@ ioJoinAtoms grants =
             (builtinLabel l)
             (writtenParam (dtopFor (builtinLabel l)) granted))
         (lookupAssoc l grants))
-    ioAliasLabels
+    hostLabels
 
 -- `IO` is the join of the labels the drive's profile grants (`ioJoin`), so it
 -- widens on either side of an escape check.  On the bound side a NARROW inferred
@@ -1846,7 +1832,7 @@ effectLeakMsg bound extras =
 ioJoinClause : List Atom -> String
 ioJoinClause atoms =
   let join = driverState.value.ioJoin.value
-  let full = map atomOfLabel ioAliasLabels
+  let full = map atomOfLabel hostLabels
   if isSome (findAtom (labelKey ioLabel) atoms)
     && isNonEmptyL (atomsDiff full join) then
     "; `IO` on `\{driverState.value.ioJoinProfile.value}` is <\{renderAtoms join}>"
@@ -55764,7 +55750,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
-(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "ioJoinGrants" false) (mem "profileName" false) (mem "selectedProfile" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false) (mem "selectedProfile" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "tconBuiltin" ((PVar "n")) (EApp (EApp (EVar "TCon") (EVar "n")) (EVar "OriginBuiltin")))
 (DTypeSig false "tconTupleHead" (TyFun (TyCon "Int") (TyCon "Mono")))
@@ -55808,10 +55794,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "atomOfLabel" ((PVar "l")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))))
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
 (DFunDef false "ioLabel" () (EApp (EVar "builtinLabel") (ELit (LString "IO"))))
-(DTypeSig true "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Signal"))))
-(DTypeSig false "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "ioJoinAtoms" ((PVar "grants")) (EApp (EApp (EVar "filterMap") (ELam ((PVar "l")) (EApp (EApp (EVar "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "ioAliasLabels")))
+(DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom"))))
+(DFunDef false "ioJoinAtoms" ((PVar "grants")) (EApp (EApp (EVar "filterMap") (ELam ((PVar "l")) (EApp (EApp (EVar "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value"))))))
 (DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
@@ -56031,7 +56015,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "effectLeakMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
 (DFunDef false "effectLeakMsg" ((PVar "bound") (PVar "extras")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "performs <")) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "extras")))) (ELit (LString "> where only <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "bound")))) (ELit (LString "> is allowed"))) (EApp (EVar "display") (EApp (EVar "ioJoinClause") (EBinOp "++" (EVar "bound") (EVar "extras"))))) (ELit (LString ""))))
 (DTypeSig false "ioJoinClause" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
-(DFunDef false "ioJoinClause" ((PVar "atoms")) (EBlock (DoLet false false (PVar "join") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value")) (DoLet false false (PVar "full") (EApp (EApp (EVar "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels"))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isSome") (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "atoms"))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "atomsDiff") (EVar "full")) (EVar "join")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; `IO` on `")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoinProfile") "value"))) (ELit (LString "` is <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "join")))) (ELit (LString ">"))) (ELit (LString ""))))))
+(DFunDef false "ioJoinClause" ((PVar "atoms")) (EBlock (DoLet false false (PVar "join") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value")) (DoLet false false (PVar "full") (EApp (EApp (EVar "map") (EVar "atomOfLabel")) (EVar "hostLabels"))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isSome") (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "atoms"))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "atomsDiff") (EVar "full")) (EVar "join")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; `IO` on `")) (EApp (EVar "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoinProfile") "value"))) (ELit (LString "` is <"))) (EApp (EVar "display") (EApp (EVar "renderAtoms") (EVar "join")))) (ELit (LString ">"))) (ELit (LString ""))))))
 (DTypeSig false "effectParamMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "effectParamMsg" ((PVar "label") (PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "invalid effect parameter on <")) (EApp (EVar "display") (EVar "label"))) (ELit (LString ">: "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString ""))))
 (DTypeSig false "prefixPatternErrMsg" (TyFun (TyCon "String") (TyCon "String")))
@@ -65031,7 +65015,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "registry") ((mem "HeadKey" true) (mem "headKeyOfCon" false) (mem "headKeyTag" false) (mem "headKeyIdent" false) (mem "headKeyDecl" false) (mem "RegKey" false) (mem "regKeyOfTab" false) (mem "regKeyNTab" false) (mem "regKeyRender" false) (mem "dispKeyRender" false) (mem "Registry" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false) (mem "MultiRegistry" false) (mem "mregEmpty" false) (mem "mregAppendK" false) (mem "mregLookupK" false) (mem "SpellingPop" false) (mem "spEmpty" false) (mem "spFromFloor" false) (mem "spInsert" false) (mem "spRows" false) (mem "spFloor" false) (mem "spCollided" false) (mem "spCandsOf" false) (mem "spLookupIdent" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
-(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "ioJoinGrants" false) (mem "profileName" false) (mem "selectedProfile" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false) (mem "selectedProfile" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "tconBuiltin" ((PVar "n")) (EApp (EApp (EVar "TCon") (EVar "n")) (EVar "OriginBuiltin")))
 (DTypeSig false "tconTupleHead" (TyFun (TyCon "Int") (TyCon "Mono")))
@@ -65075,10 +65059,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "atomOfLabel" ((PVar "l")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))))
 (DTypeSig false "ioLabel" (TyCon "EffLabel"))
 (DFunDef false "ioLabel" () (EApp (EVar "builtinLabel") (ELit (LString "IO"))))
-(DTypeSig true "ioAliasLabels" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "ioAliasLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "Net")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Signal"))))
-(DTypeSig false "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom"))))
-(DFunDef false "ioJoinAtoms" ((PVar "grants")) (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "l")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "ioAliasLabels")))
+(DTypeSig true "ioJoinAtoms" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy"))) (TyApp (TyCon "List") (TyCon "Atom"))))
+(DFunDef false "ioJoinAtoms" ((PVar "grants")) (EApp (EApp (EMethodRef "filterMap") (ELam ((PVar "l")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "granted")) (EApp (EApp (EVar "atomWith") (EApp (EVar "builtinLabel") (EVar "l"))) (EApp (EApp (EVar "writtenParam") (EApp (EVar "dtopFor") (EApp (EVar "builtinLabel") (EVar "l")))) (EVar "granted"))))) (EApp (EApp (EVar "lookupAssoc") (EVar "l")) (EVar "grants"))))) (EVar "hostLabels")))
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value"))))))
 (DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
@@ -65298,7 +65280,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "effectLeakMsg" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String"))))
 (DFunDef false "effectLeakMsg" ((PVar "bound") (PVar "extras")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "performs <")) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "extras")))) (ELit (LString "> where only <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "bound")))) (ELit (LString "> is allowed"))) (EApp (EMethodRef "display") (EApp (EVar "ioJoinClause") (EBinOp "++" (EVar "bound") (EVar "extras"))))) (ELit (LString ""))))
 (DTypeSig false "ioJoinClause" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
-(DFunDef false "ioJoinClause" ((PVar "atoms")) (EBlock (DoLet false false (PVar "join") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value")) (DoLet false false (PVar "full") (EApp (EApp (EMethodRef "map") (EVar "atomOfLabel")) (EVar "ioAliasLabels"))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isSome") (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "atoms"))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "atomsDiff") (EVar "full")) (EVar "join")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; `IO` on `")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoinProfile") "value"))) (ELit (LString "` is <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "join")))) (ELit (LString ">"))) (ELit (LString ""))))))
+(DFunDef false "ioJoinClause" ((PVar "atoms")) (EBlock (DoLet false false (PVar "join") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value")) (DoLet false false (PVar "full") (EApp (EApp (EMethodRef "map") (EVar "atomOfLabel")) (EVar "hostLabels"))) (DoExpr (EIf (EBinOp "&&" (EApp (EVar "isSome") (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "atoms"))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "atomsDiff") (EVar "full")) (EVar "join")))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "; `IO` on `")) (EApp (EMethodRef "display") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoinProfile") "value"))) (ELit (LString "` is <"))) (EApp (EMethodRef "display") (EApp (EVar "renderAtoms") (EVar "join")))) (ELit (LString ">"))) (ELit (LString ""))))))
 (DTypeSig false "effectParamMsg" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "effectParamMsg" ((PVar "label") (PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "invalid effect parameter on <")) (EApp (EMethodRef "display") (EVar "label"))) (ELit (LString ">: "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString ""))))
 (DTypeSig false "prefixPatternErrMsg" (TyFun (TyCon "String") (TyCon "String")))

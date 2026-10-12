@@ -81,7 +81,7 @@ import types.target_profile.{
   selectProfile,
   selectedProfile,
 }
-import tools.target_check.{targetRefusal, targetCapabilityCode}
+import tools.target_check.{targetRefusal}
 import string.{toInt}
 -- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
 -- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
@@ -807,7 +807,7 @@ runCheckCmd argv =
     _ =>
       let _ =
         ePutStrLn
-          "usage: medaka check [--json] [--types] [--allow-internal] <file.mdk>"
+          "usage: medaka check [--json] [--types] [--allow-internal] [--target <profile>] <file.mdk>"
       exit 1
 -- G1: print the report (byte-identical stdout for no-import files:
 -- diff_native_cli gate), then gate the EXIT CODE on the error predicate
@@ -1244,7 +1244,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
         let report = runCheckModulesFromDiags rtD coreD modsD perMod
         -- After the report is rendered: the target check elaborates the graph
         -- again, and a report rendered after that drive can name a scheme's
-        -- type variables differently (`Speak b => a -> String`).
+        -- type variables differently (`Speak b => a -> String`), #4053.
         let _ = checkTargetGate rsrc csrc tsrc target mods
         let _ = putStrLn report
         -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
@@ -1333,7 +1333,7 @@ checkTargetJson rsrc csrc target stdlibDir cj = match !selectedProfile
         Some
           (mkDiag
             SevError
-            targetCapabilityCode
+            "R-MODULE-LOAD"
             "`\{target}` could not be loaded again to check it against the target"
             None)
     match (refusal, cj)
@@ -2442,9 +2442,9 @@ buildArgSpec =
           "stamp the commit, compiler fingerprint and build date into the binary",
         value ["-o"] "PATH" "output path for the binary",
         -- `value`, not `oneOf`: the rejection sentence for a bad target is
-        -- `parseTarget`'s own `error: unknown --target '…' (expected native|wasm)`,
+        -- `lookupProfile`'s own `unknown target '…' (known: …)`,
         -- and this slice keeps every hand-written sentence verbatim.
-        value ["--target"] "native|wasm" "backend to emit for",
+        value ["--target"] "PROFILE" "target profile to build for",
         value ["--emit-rt-obj"] "PATH" "precompile the C runtime to an object",
         value
           ["--emit-prelude-obj"]
@@ -2583,10 +2583,13 @@ buildUsage : Unit -> <IO> Unit
 buildUsage _ =
   putStrLn
     (stringConcat [
-      "usage: medaka build [--target native|wasm] <file.mdk> [-o <out>] [--keep-ir] [--allow-internal] [--json] [--stamp-build]\n",
+      "usage: medaka build [--target <profile>] <file.mdk> [-o <out>] [--keep-ir] [--allow-internal] [--json] [--stamp-build]\n",
       "\n",
       "  -o <out>          output path for the binary (default: <file> with its extension dropped)\n",
-      "  --target <t>      backend: native (LLVM + clang, default) or wasm (WasmGC + wasm-tools)\n",
+      "  --target <profile> target profile, one of: \{joinWith ", " buildableNames}\n",
+      "                    (default: [target] profile in medaka.toml, else llvm/native-posix).\n",
+      "                    The program is checked against the profile before it is lowered;\n",
+      "                    its backend picks the emitter (LLVM + clang, or WasmGC + wasm-tools)\n",
       "  --json            emit the {\"files\":[...]} structured-diagnostics envelope (same\n",
       "                    schema as `medaka check --json`) instead of human text; a genuine\n",
       "                    build-stage (emitter/clang) failure carries code R-BUILD-FAILED\n",
@@ -2607,12 +2610,14 @@ buildUsage _ =
       "                    the runtime on every subsequent build. MEDAKA_RT_OBJ must be paired\n",
       "                    with the matching link mode (MEDAKA_NO_LTO set for both, or for\n",
       "                    neither) — a mismatch either fails to link or silently loses\n",
-      "                    ThinLTO's inlining\n", "  --emit-prelude-obj <p>\n",
+      "                    ThinLTO's inlining\n",
+      "  --emit-prelude-obj <p>\n",
       "                    compile only stdlib/core.mdk to a reusable object at <p> (with the\n",
       "                    same flags a normal link uses) and exit; point MEDAKA_PRELUDE_OBJ at\n",
       "                    it to skip re-optimising the prelude on every subsequent build.\n",
       "                    Opt-in: separate objects cannot inline the prelude into user code\n",
-      "\n", "runtime object cache (ON by default):\n",
+      "\n",
+      "runtime object cache (ON by default):\n",
       "  Every native build links a compiled runtime/medaka_rt.c. Rather than recompile\n",
       "  it each time (~0.76s), build caches the object, keyed on a hash of the .c\n",
       "  source, the C compiler and its version, and the exact compile flags, so a\n",
@@ -2629,7 +2634,7 @@ buildUsage _ =
       "  (which `ld -r` can merge and ThinLTO bitcode cannot), e.g.\n",
       "  test/diff_compiler_llvm_ffi.sh and the memcheck probe in\n",
       "  pds/test/constant_time_signing.sh. Set it for both the build that emits\n",
-      "  the object and the build that links it.\n"
+      "  the object and the build that links it.\n",
     ])
 
 -- Default output path per target: native drops the extension (a bare exe name);
@@ -2788,23 +2793,19 @@ typecheckGateRoute allowInternal trusted pathMap _roots rsrc csrc tsrc target mo
 -- Read `[-o <out>] [--target <native|wasm>]` off the parsed argv; the
 -- positionals are the input.  Default target is TNative (the LLVM/clang path).
 --
--- BOTH flags are LAST-WINS, reproducing the pre-migration `parseBuildGo`
--- (each arm overwrote its accumulator), and EVERY `--target` occurrence is
--- still validated, not just the winner — `--target zzz --target native` was a
--- hard error before this slice and stays one.  `--keep-ir`/`--allow-internal`/
+-- BOTH flags are LAST-WINS, as `check` and `run` read `--target`: an earlier
+-- `--target` is overridden, not validated.  `--keep-ir`/`--allow-internal`/
 -- `--json` are read separately by their own call sites and are simply not
 -- positionals any more, which is what the old "strip it here so it doesn't
 -- fall through to finishBuildArgs" arms existed to arrange (#1078).
 parseBuildArgs : Args -> Result String (String, Option String, BuildTarget)
-parseBuildArgs a = match buildTargetOf (flagValues "--target" a) TNative
+parseBuildArgs a = match buildTargetOf (lastValue "--target" a)
   Err msg => Err msg
   Ok target => finishBuildArgs a.positionals (lastValue "-o" a) target
 
-buildTargetOf : List String -> BuildTarget -> Result String BuildTarget
-buildTargetOf [] acc = Ok acc
-buildTargetOf (v :: rest) _ = match parseTarget v
-  Err msg => Err msg
-  Ok t => buildTargetOf rest t
+buildTargetOf : Option String -> Result String BuildTarget
+buildTargetOf None = Ok TNative
+buildTargetOf (Some v) = parseTarget v
 
 -- Through the profile table: an alias or profile name resolves, its backend
 -- picks the `BuildTarget`, and the interpreter's profile is not buildable.
@@ -2848,7 +2849,7 @@ finishBuildArgs : List String ->
   BuildTarget ->
   Result String (String, Option String, BuildTarget)
 finishBuildArgs [] _ _ =
-  Err "usage: medaka build [--target native|wasm] <file.mdk> [-o <out>]"
+  Err "usage: medaka build [--target <profile>] <file.mdk> [-o <out>]"
 finishBuildArgs [input] out target = Ok (input, out, target)
 finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 
@@ -2973,7 +2974,8 @@ runHelpText = stringConcat [
   "                    consumer must handle both.\n",
   "  --allow-internal  permit internal-only externs outside stdlib/\n",
   "  --target <name>   target profile `main` must also fit; every run is\n",
-  "                    checked against eval/run\n",
+  "                    checked against eval/run (default: [target] profile in\n",
+  "                    medaka.toml)\n",
   "  --release         accepted, ignored — the interpreter has no release mode.\n",
   "                    There is no `build --release`; a native build is always\n",
   "                    optimized. Kept so a `--release` in a shared script does\n",
@@ -3023,7 +3025,7 @@ runRunCmd argv =
   match runArgvFilter argv
     [] =>
       runAbort
-        "usage: medaka run [--json] [--allow-internal] [--release] <file.mdk> [args...]"
+        "usage: medaka run [--json] [--allow-internal] [--release] [--target <profile>] <file.mdk> [args...]"
     -- #219: a leading-`-` token `dropFlags` didn't recognize (e.g. `-e`) used
     -- to fall through as the entry `target`, so the loader rejected it as
     -- "unknown module: -e" — a message that sends the reader debugging a

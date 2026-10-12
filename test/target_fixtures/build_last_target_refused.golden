@@ -1,0 +1,5 @@
+exit=0
+--- stdout
+error: `eval/run` is not buildable (buildable: llvm/native-posix, wasmgc/node, wasmgc/browser-worker, wasmgc/edge, wasmgc/wasi-p2, native, wasm)
+build=1
+--- stderr

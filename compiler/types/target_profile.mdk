@@ -50,6 +50,13 @@ reachesLabel : TargetProfile -> String -> Bool
 reachesLabel p "IO" = isNonEmptyL (ioJoinGrants (Some p))
 reachesLabel p label = grantsLabel p label
 
+-- The labels of an extern the profile does not reach.  A program using the
+-- extern performs every label it declares, so the extern is usable under the
+-- profile exactly when this is empty.
+export
+withheldLabels : TargetProfile -> List String -> List String
+withheldLabels p labels = filter (l => not (reachesLabel p l)) labels
+
 export
 backendName : Backend -> String
 backendName BackendLlvm = "llvm"

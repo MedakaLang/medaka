@@ -29,7 +29,8 @@ import types.effect_rows.{
   effrowLabels,
 }
 import types.repr.{Scheme(..), Mono(..), normalize}
-import types.typecheck.{decodeWrittenParam, atomOfLabel, ioAliasLabels}
+import types.typecheck.{decodeWrittenParam, atomOfLabel}
+import types.target_profile.{hostLabels}
 import support.util.{
   sortUniqS, joinWith, reverseL, filterList, contains, anyList
 }
@@ -103,7 +104,7 @@ permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
 -- profile's join.
 permitIoAsJoin : List (String, EffParamTy) -> Permit
 permitIoAsJoin policy =
-  firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) ioAliasLabels)
+  firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) hostLabels)
 
 firstNotPermitted : List Permit -> Permit
 firstNotPermitted [] = Permitted

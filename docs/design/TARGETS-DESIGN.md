@@ -278,8 +278,11 @@ Issue: #3665 (check refuses on profile).
 
 ### 5.5 What this retires
 
-After §4 and §5.4, an extern with no lowering can reach an emitter only through a
-compiler bug. The worded net and FFI rejections and the `unbound variable`
+After §4 and §5.4, an extern with no lowering reaches an emitter only through a
+compiler bug, or when a program names an extern as a value without ever
+performing it: `check` judges what `main` performs and admits that program,
+and the emitter's validator then refuses it with a user-facing line (`run` of
+it still panics at `eval.mdk:748`). The worded net and FFI rejections and the `unbound variable`
 fallthrough for catalog names in `compiler/backend/wasm_emit.mdk`, and the
 `unsupported extern` arm in `compiler/backend/llvm_emit.mdk`, are replaced by one
 validator refusal that names the extern and the profile and says that `check`

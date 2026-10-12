@@ -1,5 +1,5 @@
 # META
-source_lines=987
+source_lines=989
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -93,7 +93,7 @@ import ir.core_ir_lower.{
 }
 import ir.core_ir_sexp.{callModeSexp}
 import frontend.ast.{Pat(..), Route(..), Decl(..), Ty(..)}
-import types.target_profile.{TargetProfile, reachesLabel, profileName}
+import types.target_profile.{TargetProfile, withheldLabels, profileName}
 import backend.extern_catalog.{
   Disposition(..),
   GapKind(..),
@@ -321,7 +321,7 @@ renderExternRefusal : List ExternFinding -> String
 renderExternRefusal findings = renderExternRefusalUnder !checkedTarget findings
 
 -- A refusal is partitioned by what `check` already judged against the target.
--- An extern behind a label the profile does not reach (`reachesLabel`) says so
+-- An extern behind a label the profile does not reach (`withheldLabels`) says so
 -- (`withheldExternNote`).  An extern whose labels the profile reaches and whose
 -- row is a ratchet gap is a lowering still owed, by #3666.  Any other finding,
 -- a label-less extern among them, reads as it does with no target.
@@ -335,7 +335,7 @@ renderExternRefusalUnder (Some t) findings =
 renderFindingUnder : CheckedTarget -> ExternFinding -> String
 renderFindingUnder (t@(CheckedTarget profile labels)) (f@(ExternFinding name backend kind _ _)) =
   let declared = optionOr [] (omLookup name labels)
-  match filter (l => not (reachesLabel profile l)) declared
+  match withheldLabels profile declared
     [] =>
       if isRatchetGap backend kind then
         "\{renderExternFinding f}; `\{profileName profile}` grants its labels, so this is a lowering still owed (#3666)"
@@ -344,6 +344,8 @@ renderFindingUnder (t@(CheckedTarget profile labels)) (f@(ExternFinding name bac
     withheld =>
       "\{renderExternFinding f}; \{withheldExternNote backend name withheld t}"
 
+-- `eval` is absent because the validator never runs for it; the extern catalog
+-- gate's own `isRatchet` deliberately adds eval GapBug rows to what it counts.
 isRatchetGap : Backend -> GapKind -> Bool
 isRatchetGap WasmBackend GapUnported = True
 isRatchetGap _ _ = False
@@ -994,7 +996,7 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "Ty" true))))
-(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "reachesLabel" false) (mem "profileName" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
@@ -1062,7 +1064,7 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
-(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "reachesLabel") (EVar "profile")) (EVar "l"))))) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
+(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
 (DTypeSig false "isRatchetGap" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyCon "Bool"))))
 (DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
 (DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))
@@ -1323,7 +1325,7 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true) (mem "Decl" true) (mem "Ty" true))))
-(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "reachesLabel" false) (mem "profileName" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "withheldLabels" false) (mem "profileName" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "Disposition" true) (mem "GapKind" true) (mem "catalogRow" false) (mem "gapKindName" false) (mem "rowLlvm" false) (mem "rowWasm" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omInsert" false) (mem "omHasKey" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "isNonEmptyL" false) (mem "joinWith" false) (mem "listLen" false) (mem "reverseL" false))))
@@ -1391,7 +1393,7 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
-(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "reachesLabel") (EVar "profile")) (EVar "l"))))) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
+(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EVar "withheldLabels") (EVar "profile")) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
 (DTypeSig false "isRatchetGap" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyCon "Bool"))))
 (DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
 (DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))

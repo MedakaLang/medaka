@@ -7,9 +7,10 @@ import types.effect_domain.{Param(..)}
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, viaChain, CallGraph, EffectTable
 }
-import types.effect_rows.{Atom(..), EffLabel(..), atomBuiltin}
-import types.typecheck.{ioAliasLabels, atomOfLabel}
-import list.{take}
+import types.effect_rows.{Atom(..), EffLabel(..), atomBuiltin, atomLabel}
+import types.typecheck.{atomOfLabel, ioJoinAtoms}
+import types.target_profile.{hostLabels}
+import list.{take, sort}
 import support.ordmap.{omEmpty, omFromPairs}
 
 ioAtom : Atom
@@ -34,24 +35,22 @@ refusalLines PolicyAdmitted = []
 refusalLines (PolicyRefused _ ls) = ls
 
 eightLabels : List (String, EffParamTy)
-eightLabels = map wholeGrant (take 8 ioAliasLabels)
+eightLabels = map wholeGrant (take 8 hostLabels)
 
 test "IO is the join: refused by eight labels, permitted by all eleven" = expectAll
   [
     expectTrue (refused (policyRefusals [ioAtom] eightLabels)),
     expectEqual ["IO"] (refusedLabels (policyRefusals [ioAtom] eightLabels)),
-    expectFalse
-      (refused (policyRefusals [ioAtom] (map wholeGrant ioAliasLabels))),
+    expectFalse (refused (policyRefusals [ioAtom] (map wholeGrant hostLabels))),
   ]
 
 test "FFI is not in the IO join" = expectAll [
-  expectTrue
-    (refused (policyRefusals [ffiAtom] (map wholeGrant ioAliasLabels))),
+  expectTrue (refused (policyRefusals [ffiAtom] (map wholeGrant hostLabels))),
   expectFalse
     (refused
       (policyRefusals
         [ffiAtom]
-        (wholeGrant "FFI" :: map wholeGrant ioAliasLabels))),
+        (wholeGrant "FFI" :: map wholeGrant hostLabels))),
 ]
 
 unresolvedNet : Atom
@@ -98,4 +97,28 @@ test "the via-chain follows the smallest effectful callee and stops on a cycle" 
     expectEqual ["b"] (viaChain callGraph effTable "b" "Net"),
     expectEqual ["d", "d"] (viaChain callGraph effTable "d" "Net"),
     expectEqual ["a"] (viaChain callGraph effTable "a" "Stdout"),
+  ]
+
+-- The typechecker's `IO` join over a profile granting everything is the eleven
+-- host labels, the same set `target_profile` gates on.
+test "the typechecker's IO join over the full profile is hostLabels" = expectAll
+  [
+    expectEqual
+      (sort hostLabels)
+      (sort (map atomLabel (ioJoinAtoms (map wholeGrant hostLabels)))),
+    expectEqual
+      (sort [
+        "Clock",
+        "Env",
+        "Exec",
+        "FileRead",
+        "FileWrite",
+        "Net",
+        "Rand",
+        "Signal",
+        "Stderr",
+        "Stdin",
+        "Stdout",
+      ])
+      (sort hostLabels),
   ]

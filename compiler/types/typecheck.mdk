@@ -507,7 +507,7 @@ import types.disposition.{
   validateDispositionTable,
 }
 import types.target_profile.{
-  TargetProfile, ioJoinGrants, profileName, selectedProfile
+  TargetProfile, hostLabels, ioJoinGrants, profileName, selectedProfile
 }
 
 -- A head the LANGUAGE provides, written here as a string literal.  §8 I6.2(a):
@@ -723,33 +723,19 @@ ioLabel = builtinLabel "IO"
 -- ── v2 Stage 3: the `IO` widening union alias (design §3.2) ─────────────────
 -- `IO` is the coarse security alias: in a BOUND/annotation row it stands for
 -- the join of the narrow security labels the selected profile grants, every one
--- at ⊤ when none is selected.  ioAliasLabels lists them (every minted security
+-- at ⊤ when none is selected.  `hostLabels` lists them (every minted security
 -- label EXCEPT IO itself); internal labels (Mut/Panic) are NOT members, so they
 -- are tracked independently of IO.
-export
-ioAliasLabels : List String
-ioAliasLabels = [
-  "Stdout",
-  "Stderr",
-  "Stdin",
-  "Clock",
-  "Env",
-  "Exec",
-  "Rand",
-  "Net",
-  "FileRead",
-  "FileWrite",
-  "Signal",
-]
 -- NOTE: `FFI` is deliberately NOT a member. #2071/#2070 (epic, Layer 1, R1):
 -- an `<IO>` bound must NOT subsume an `<FFI>`-performing body — FFI crosses a
 -- trust boundary the IO alias is not meant to paper over. Do not "complete"
 -- this list by adding FFI.
 
 -- What `IO` joins in this drive: the selected profile's grants of the alias
--- labels, each at the parameter granted, in `ioAliasLabels` order.  With no
+-- labels, each at the parameter granted, in `hostLabels` order.  With no
 -- profile that is all eleven at their tops.  Every module of the program is
 -- judged against the one join, the shipped stdlib included.
+export
 ioJoinAtoms : List (String, EffParamTy) -> List Atom
 ioJoinAtoms grants =
   filterMap
@@ -760,7 +746,7 @@ ioJoinAtoms grants =
             (builtinLabel l)
             (writtenParam (dtopFor (builtinLabel l)) granted))
         (lookupAssoc l grants))
-    ioAliasLabels
+    hostLabels
 
 -- `IO` is the join of the labels the drive's profile grants (`ioJoin`), so it
 -- widens on either side of an escape check.  On the bound side a NARROW inferred
@@ -1842,7 +1828,7 @@ effectLeakMsg bound extras =
 ioJoinClause : List Atom -> String
 ioJoinClause atoms =
   let join = driverState.value.ioJoin.value
-  let full = map atomOfLabel ioAliasLabels
+  let full = map atomOfLabel hostLabels
   if isSome (findAtom (labelKey ioLabel) atoms)
     && isNonEmptyL (atomsDiff full join) then
     "; `IO` on `\{driverState.value.ioJoinProfile.value}` is <\{renderAtoms join}>"
