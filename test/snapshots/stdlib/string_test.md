@@ -1,5 +1,5 @@
 # META
-source_lines=254
+source_lines=298
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -9,7 +9,8 @@ stages=DESUGAR,MARK
 
 import string.{
   center, countOccurrences, drop, fromChars, indexOf, lastIndexOf, lines,
-  padLeft, padRight, replace, replaceAll, splitAt, take, unlines
+  padLeft, padRight, replace, replaceAll, splitAt, take, trim, trimLeft,
+  trimRight, unlines
 }
 import test.{expectEqual}
 
@@ -244,6 +245,49 @@ test "unlines ends every line, including empty ones" =
 test "unlines keeps a carriage return inside a line" =
   expectEqual "a\r\n" (unlines ["a\r"])
 
+-- # Trimming
+
+test "trim removes both ends" = expectEqual "hi" (trim "  hi  ")
+
+test "trimLeft keeps the trailing whitespace" =
+  expectEqual "hi  " (trimLeft "  hi  ")
+
+test "trimRight keeps the leading whitespace" =
+  expectEqual "  hi" (trimRight "  hi  ")
+
+test "trim of the empty string is empty" =
+  expectEqual ("", "", "") (trim "", trimLeft "", trimRight "")
+
+test "trim of all-space is empty" =
+  expectEqual ("", "", "") (trim "   \t", trimLeft "   \t", trimRight "   \t")
+
+test "trim of no whitespace is the string" = expectEqual "hi" (trim "hi")
+
+test "trim with only leading space" =
+  expectEqual ("a", "a", " a") (trim " a", trimLeft " a", trimRight " a")
+
+test "trim with only trailing space" =
+  expectEqual
+    ("a", "a \t", "a")
+    (trim "a \t", trimLeft "a \t", trimRight "a \t")
+
+test "trim of a multibyte body keeps its codepoints" =
+  expectEqual "héllo→" (trim "  héllo→ ")
+
+test "trimRight of a multibyte tail with spaces" =
+  expectEqual "日本語" (trimRight "日本語 \n")
+
+test "trimLeft of a multibyte head with spaces" =
+  expectEqual "→ x" (trimLeft "\t→ x")
+
+test "trim treats tab, newline, carriage return and vertical tab as space" =
+  expectEqual "x" (trim "\r\n\t\u{0b}\u{0c} x \r\n")
+
+test "trim does not remove a non-breaking space" = expectEqual " x" (trim " x")
+
+test "trim of a single space character" =
+  expectEqual ("", "", "") (trim " ", trimLeft " ", trimRight " ")
+
 -- # Properties
 
 prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
@@ -257,7 +301,7 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
       stringSlice i (i + 2) s == "ab"
         && indexOf "ab" (stringSlice (i + 1) (stringLength s) s) == None
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false) (mem "unlines" false))))
+(DUse false (UseGroup ("string") ((mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -325,10 +369,24 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
 (DTest false "unlines of no lines is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "unlines") (EListLit))))
 (DTest false "unlines ends every line, including empty ones" (EApp (EApp (EVar "expectEqual") (ELit (LString "\n\n"))) (EApp (EVar "unlines") (EListLit (ELit (LString "")) (ELit (LString ""))))))
 (DTest false "unlines keeps a carriage return inside a line" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\r\n"))) (EApp (EVar "unlines") (EListLit (ELit (LString "a\r"))))))
+(DTest false "trim removes both ends" (EApp (EApp (EVar "expectEqual") (ELit (LString "hi"))) (EApp (EVar "trim") (ELit (LString "  hi  ")))))
+(DTest false "trimLeft keeps the trailing whitespace" (EApp (EApp (EVar "expectEqual") (ELit (LString "hi  "))) (EApp (EVar "trimLeft") (ELit (LString "  hi  ")))))
+(DTest false "trimRight keeps the leading whitespace" (EApp (EApp (EVar "expectEqual") (ELit (LString "  hi"))) (EApp (EVar "trimRight") (ELit (LString "  hi  ")))))
+(DTest false "trim of the empty string is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString ""))) (EApp (EVar "trimLeft") (ELit (LString ""))) (EApp (EVar "trimRight") (ELit (LString ""))))))
+(DTest false "trim of all-space is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString "   \t"))) (EApp (EVar "trimLeft") (ELit (LString "   \t"))) (EApp (EVar "trimRight") (ELit (LString "   \t"))))))
+(DTest false "trim of no whitespace is the string" (EApp (EApp (EVar "expectEqual") (ELit (LString "hi"))) (EApp (EVar "trim") (ELit (LString "hi")))))
+(DTest false "trim with only leading space" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a")) (ELit (LString "a")) (ELit (LString " a")))) (ETuple (EApp (EVar "trim") (ELit (LString " a"))) (EApp (EVar "trimLeft") (ELit (LString " a"))) (EApp (EVar "trimRight") (ELit (LString " a"))))))
+(DTest false "trim with only trailing space" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a")) (ELit (LString "a \t")) (ELit (LString "a")))) (ETuple (EApp (EVar "trim") (ELit (LString "a \t"))) (EApp (EVar "trimLeft") (ELit (LString "a \t"))) (EApp (EVar "trimRight") (ELit (LString "a \t"))))))
+(DTest false "trim of a multibyte body keeps its codepoints" (EApp (EApp (EVar "expectEqual") (ELit (LString "héllo→"))) (EApp (EVar "trim") (ELit (LString "  héllo→ ")))))
+(DTest false "trimRight of a multibyte tail with spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "日本語"))) (EApp (EVar "trimRight") (ELit (LString "日本語 \n")))))
+(DTest false "trimLeft of a multibyte head with spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "→ x"))) (EApp (EVar "trimLeft") (ELit (LString "\t→ x")))))
+(DTest false "trim treats tab, newline, carriage return and vertical tab as space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString "\r\n\t\u{0b}\u{0c} x \r\n")))))
+(DTest false "trim does not remove a non-breaking space" (EApp (EApp (EVar "expectEqual") (ELit (LString " x"))) (EApp (EVar "trim") (ELit (LString " x")))))
+(DTest false "trim of a single space character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString " "))) (EApp (EVar "trimLeft") (ELit (LString " "))) (EApp (EVar "trimRight") (ELit (LString " "))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false) (mem "unlines" false))))
+(DUse false (UseGroup ("string") ((mem "center" false) (mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "lines" false) (mem "padLeft" false) (mem "padRight" false) (mem "replace" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false) (mem "trim" false) (mem "trimLeft" false) (mem "trimRight" false) (mem "unlines" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -396,5 +454,19 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
 (DTest false "unlines of no lines is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "unlines") (EListLit))))
 (DTest false "unlines ends every line, including empty ones" (EApp (EApp (EVar "expectEqual") (ELit (LString "\n\n"))) (EApp (EVar "unlines") (EListLit (ELit (LString "")) (ELit (LString ""))))))
 (DTest false "unlines keeps a carriage return inside a line" (EApp (EApp (EVar "expectEqual") (ELit (LString "a\r\n"))) (EApp (EVar "unlines") (EListLit (ELit (LString "a\r"))))))
+(DTest false "trim removes both ends" (EApp (EApp (EVar "expectEqual") (ELit (LString "hi"))) (EApp (EVar "trim") (ELit (LString "  hi  ")))))
+(DTest false "trimLeft keeps the trailing whitespace" (EApp (EApp (EVar "expectEqual") (ELit (LString "hi  "))) (EApp (EVar "trimLeft") (ELit (LString "  hi  ")))))
+(DTest false "trimRight keeps the leading whitespace" (EApp (EApp (EVar "expectEqual") (ELit (LString "  hi"))) (EApp (EVar "trimRight") (ELit (LString "  hi  ")))))
+(DTest false "trim of the empty string is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString ""))) (EApp (EVar "trimLeft") (ELit (LString ""))) (EApp (EVar "trimRight") (ELit (LString ""))))))
+(DTest false "trim of all-space is empty" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString "   \t"))) (EApp (EVar "trimLeft") (ELit (LString "   \t"))) (EApp (EVar "trimRight") (ELit (LString "   \t"))))))
+(DTest false "trim of no whitespace is the string" (EApp (EApp (EVar "expectEqual") (ELit (LString "hi"))) (EApp (EVar "trim") (ELit (LString "hi")))))
+(DTest false "trim with only leading space" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a")) (ELit (LString "a")) (ELit (LString " a")))) (ETuple (EApp (EVar "trim") (ELit (LString " a"))) (EApp (EVar "trimLeft") (ELit (LString " a"))) (EApp (EVar "trimRight") (ELit (LString " a"))))))
+(DTest false "trim with only trailing space" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "a")) (ELit (LString "a \t")) (ELit (LString "a")))) (ETuple (EApp (EVar "trim") (ELit (LString "a \t"))) (EApp (EVar "trimLeft") (ELit (LString "a \t"))) (EApp (EVar "trimRight") (ELit (LString "a \t"))))))
+(DTest false "trim of a multibyte body keeps its codepoints" (EApp (EApp (EVar "expectEqual") (ELit (LString "héllo→"))) (EApp (EVar "trim") (ELit (LString "  héllo→ ")))))
+(DTest false "trimRight of a multibyte tail with spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "日本語"))) (EApp (EVar "trimRight") (ELit (LString "日本語 \n")))))
+(DTest false "trimLeft of a multibyte head with spaces" (EApp (EApp (EVar "expectEqual") (ELit (LString "→ x"))) (EApp (EVar "trimLeft") (ELit (LString "\t→ x")))))
+(DTest false "trim treats tab, newline, carriage return and vertical tab as space" (EApp (EApp (EVar "expectEqual") (ELit (LString "x"))) (EApp (EVar "trim") (ELit (LString "\r\n\t\u{0b}\u{0c} x \r\n")))))
+(DTest false "trim does not remove a non-breaking space" (EApp (EApp (EVar "expectEqual") (ELit (LString " x"))) (EApp (EVar "trim") (ELit (LString " x")))))
+(DTest false "trim of a single space character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")) (ELit (LString "")))) (ETuple (EApp (EVar "trim") (ELit (LString " "))) (EApp (EVar "trimLeft") (ELit (LString " "))) (EApp (EVar "trimRight") (ELit (LString " "))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))

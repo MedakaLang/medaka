@@ -5,7 +5,8 @@
 
 import string.{
   center, countOccurrences, drop, fromChars, indexOf, lastIndexOf, lines,
-  padLeft, padRight, replace, replaceAll, splitAt, take, unlines
+  padLeft, padRight, replace, replaceAll, splitAt, take, trim, trimLeft,
+  trimRight, unlines
 }
 import test.{expectEqual}
 
@@ -239,6 +240,49 @@ test "unlines ends every line, including empty ones" =
 
 test "unlines keeps a carriage return inside a line" =
   expectEqual "a\r\n" (unlines ["a\r"])
+
+-- # Trimming
+
+test "trim removes both ends" = expectEqual "hi" (trim "  hi  ")
+
+test "trimLeft keeps the trailing whitespace" =
+  expectEqual "hi  " (trimLeft "  hi  ")
+
+test "trimRight keeps the leading whitespace" =
+  expectEqual "  hi" (trimRight "  hi  ")
+
+test "trim of the empty string is empty" =
+  expectEqual ("", "", "") (trim "", trimLeft "", trimRight "")
+
+test "trim of all-space is empty" =
+  expectEqual ("", "", "") (trim "   \t", trimLeft "   \t", trimRight "   \t")
+
+test "trim of no whitespace is the string" = expectEqual "hi" (trim "hi")
+
+test "trim with only leading space" =
+  expectEqual ("a", "a", " a") (trim " a", trimLeft " a", trimRight " a")
+
+test "trim with only trailing space" =
+  expectEqual
+    ("a", "a \t", "a")
+    (trim "a \t", trimLeft "a \t", trimRight "a \t")
+
+test "trim of a multibyte body keeps its codepoints" =
+  expectEqual "héllo→" (trim "  héllo→ ")
+
+test "trimRight of a multibyte tail with spaces" =
+  expectEqual "日本語" (trimRight "日本語 \n")
+
+test "trimLeft of a multibyte head with spaces" =
+  expectEqual "→ x" (trimLeft "\t→ x")
+
+test "trim treats tab, newline, carriage return and vertical tab as space" =
+  expectEqual "x" (trim "\r\n\t\u{0b}\u{0c} x \r\n")
+
+test "trim does not remove a non-breaking space" = expectEqual " x" (trim " x")
+
+test "trim of a single space character" =
+  expectEqual ("", "", "") (trim " ", trimLeft " ", trimRight " ")
 
 -- # Properties
 

@@ -16,10 +16,11 @@
 -- a `List Char` of cons cells.  Three tiers, fastest first:
 --   1. operate on the String directly (no char materialization): `take`/`drop`/
 --      `sliceClamped`, `startsWith`/`endsWith` (slice + `==`), `concat`/`join`/
---      `repeat`, and substring search via the host `stringIndexOf` (`indexOf`,
+--      `repeat`, `trim*` (probe the ends one character at a time, then one
+--      slice), and substring search via the host `stringIndexOf` (`indexOf`,
 --      and `contains`/`replace*` derived from it);
 --   2. decode once to `Array Char`, scan by index, rebuild via `stringFromChars`
---      or carve out `stringSlice`s: `trim*`, `words`, `split`/`lines`,
+--      or carve out `stringSlice`s: `words`, `split`/`lines`,
 --      `reverse`, `capitalize`, `toInt`;
 --   3. `List Char` is avoided internally.
 --
@@ -514,8 +515,8 @@ reverseArr a n = arrayMakeWith n (i => arrayGetUnsafe (n - 1 - i) a)
 export
 trimLeft : String -> String
 trimLeft s =
-  let a = toChars s
-  stringSlice (firstNonSpace a 0 (arrayLength a)) (stringLength s) s
+  let n = stringLength s
+  stringSlice (firstNonSpaceStr s 0 n) n s
 
 {- | The string without its trailing whitespace.
 
@@ -523,9 +524,7 @@ trimLeft s =
    "  hi" -}
 export
 trimRight : String -> String
-trimRight s =
-  let a = toChars s
-  stringSlice 0 (lastNonSpace a (arrayLength a - 1) + 1) s
+trimRight s = stringSlice 0 (lastNonSpaceStr s (stringLength s - 1) 0 + 1) s
 
 {- | The string without leading or trailing whitespace.
 
@@ -534,20 +533,35 @@ trimRight s =
 export
 trim : String -> String
 trim s =
-  let a = toChars s
-  let n = arrayLength a
-  stringSlice (firstNonSpace a 0 n) (lastNonSpace a (n - 1) + 1) s
+  let n = stringLength s
+  let lo = firstNonSpaceStr s 0 n
+  stringSlice lo (lastNonSpaceStr s (n - 1) lo + 1) s
+
+-- Only the characters at the ends are inspected, so trimming costs the
+-- length of the surrounding whitespace, not of the string.
+charAtStr : String -> Int -> Char
+charAtStr s i = arrayGetUnsafe 0 (toChars (stringSlice i (i + 1) s))
+
+-- The first index in [i, n) holding a non-space, or n.
+firstNonSpaceStr : String -> Int -> Int -> Int
+firstNonSpaceStr s i n
+  | i >= n = n
+  | isSpace (charAtStr s i) = firstNonSpaceStr s (i + 1) n
+  | otherwise = i
+
+-- The last index in [lo, i] holding a non-space, or lo - 1 when there is none.
+-- Callers pass lo = 0 for a whole string, or a lo that is already a non-space
+-- index (or the string length), so the scan never passes a non-space at lo.
+lastNonSpaceStr : String -> Int -> Int -> Int
+lastNonSpaceStr s i lo
+  | i < lo = lo - 1
+  | isSpace (charAtStr s i) = lastNonSpaceStr s (i - 1) lo
+  | otherwise = i
 
 firstNonSpace : Array Char -> Int -> Int -> Int
 firstNonSpace a i n
   | i >= n = n
   | isSpace (arrayGetUnsafe i a) = firstNonSpace a (i + 1) n
-  | otherwise = i
-
-lastNonSpace : Array Char -> Int -> Int
-lastNonSpace a i
-  | i < 0 = -1
-  | isSpace (arrayGetUnsafe i a) = lastNonSpace a (i - 1)
   | otherwise = i
 
 firstSpace : Array Char -> Int -> Int -> Int
