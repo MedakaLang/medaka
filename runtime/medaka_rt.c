@@ -86,8 +86,16 @@
  * (main-thread) stack base; the worker thread's own stack is registered
  * separately by GC_pthread_create.  GC_malloc would otherwise lazily init on its
  * first call. */
+/* Initial heap to pre-expand, in bytes, for the COMPILER/CLI only: the stage-B
+ * provenance object (test/build_native_medaka.sh) defines this for ./medaka. Every
+ * other link (user programs, the emitter, the seed) keeps the weak 0, so none of
+ * them pre-expand the heap. An explicit GC_INITIAL_HEAP_SIZE in the environment wins. */
+__attribute__((weak)) const long long mdk_gc_initial_heap_bytes = 0;
+
 __attribute__((constructor)) static void mdk_gc_init(void) {
   GC_INIT();
+  if (mdk_gc_initial_heap_bytes > 0 && !getenv("GC_INITIAL_HEAP_SIZE"))
+    GC_expand_hp((size_t)mdk_gc_initial_heap_bytes);
   /* Perf tuning (compiler/PERF-RESULTS.md): Medaka workloads are
    * allocation-heavy and mostly short-lived (the emitter alone allocates
    * ~4200 cells/run plus every cons/closure/ADT).  The default free-space
