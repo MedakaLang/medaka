@@ -1,0 +1,3 @@
+-- A String index equal to the length: the first out-of-range codepoint, so the
+-- guard's bound is `i >= length`, not `i > length`. 3 codepoints, index 3.
+main = println "abc"[3]
