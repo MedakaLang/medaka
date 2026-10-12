@@ -1499,7 +1499,7 @@ toolchain = []
 [[gate]]
 name = "target_fixtures"
 area = "types"
-shard = "gates_3"
+shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
