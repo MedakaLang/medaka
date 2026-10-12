@@ -1,5 +1,5 @@
 # META
-source_lines=579
+source_lines=583
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -534,7 +534,11 @@ toBinderRow (SList ((SAtom "b") :: d :: m :: name :: ty :: rest)) =
       brType = toRuntimeType ty,
       brReturns = match rest
         [] => None
-        [r] => Some (toRuntimeType r)
+        r :: _ => Some (toRuntimeType r),
+      brSigned = match rest
+        [] => False
+        [_] => False
+        [_, SAtom "signed"] => True
         _ => panic "core_ir_sexp_parse: bad binder row",
     },
   )
@@ -796,7 +800,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "occurrenceIds" ((PCons (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "ids"))) (PVar "ds"))) PWild)) (EApp (EVar "Some") (EApp (EApp (EVar "map") (EVar "toInt")) (EVar "ds"))))
 (DFunDef false "occurrenceIds" ((PCons PWild (PVar "rest"))) (EApp (EVar "occurrenceIds") (EVar "rest")))
 (DTypeSig false "toBinderRow" (TyFun (TyCon "SExp") (TyTuple (TyCon "Int") (TyCon "BinderRow"))))
-(DFunDef false "toBinderRow" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "b"))) (PCons (PVar "d") (PCons (PVar "m") (PCons (PVar "name") (PCons (PVar "ty") (PVar "rest")))))))) (EBlock (DoLet false false (PVar "i") (EApp (EVar "toInt") (EVar "d"))) (DoExpr (ETuple (EVar "i") (ERecordCreate "BinderRow" ((fa "brId" (EApp (EApp (EVar "BinderId") (EApp (EVar "toStr") (EVar "m"))) (EVar "i"))) (fa "brName" (EApp (EVar "toStr") (EVar "name"))) (fa "brType" (EApp (EVar "toRuntimeType") (EVar "ty"))) (fa "brReturns" (EMatch (EVar "rest") (arm (PList) () (EVar "None")) (arm (PList (PVar "r")) () (EApp (EVar "Some") (EApp (EVar "toRuntimeType") (EVar "r")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad binder row"))))))))))))
+(DFunDef false "toBinderRow" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "b"))) (PCons (PVar "d") (PCons (PVar "m") (PCons (PVar "name") (PCons (PVar "ty") (PVar "rest")))))))) (EBlock (DoLet false false (PVar "i") (EApp (EVar "toInt") (EVar "d"))) (DoExpr (ETuple (EVar "i") (ERecordCreate "BinderRow" ((fa "brId" (EApp (EApp (EVar "BinderId") (EApp (EVar "toStr") (EVar "m"))) (EVar "i"))) (fa "brName" (EApp (EVar "toStr") (EVar "name"))) (fa "brType" (EApp (EVar "toRuntimeType") (EVar "ty"))) (fa "brReturns" (EMatch (EVar "rest") (arm (PList) () (EVar "None")) (arm (PCons (PVar "r") PWild) () (EApp (EVar "Some") (EApp (EVar "toRuntimeType") (EVar "r")))))) (fa "brSigned" (EMatch (EVar "rest") (arm (PList) () (EVar "False")) (arm (PList PWild) () (EVar "False")) (arm (PList PWild (PCon "SAtom" (PLit (LString "signed")))) () (EVar "True")) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad binder row"))))))))))))
 (DFunDef false "toBinderRow" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad binder row: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toRuntimeType" (TyFun (TyCon "SExp") (TyCon "RuntimeType")))
 (DFunDef false "toRuntimeType" ((PCon "SAtom" (PVar "s"))) (EMatch (EApp (EVar "runtimeTypeFromName") (EVar "s")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EVar "s"))))))
@@ -1032,7 +1036,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "occurrenceIds" ((PCons (PCon "SList" (PCons (PCon "SAtom" (PLit (LString "ids"))) (PVar "ds"))) PWild)) (EApp (EVar "Some") (EApp (EApp (EMethodRef "map") (EVar "toInt")) (EVar "ds"))))
 (DFunDef false "occurrenceIds" ((PCons PWild (PVar "rest"))) (EApp (EVar "occurrenceIds") (EVar "rest")))
 (DTypeSig false "toBinderRow" (TyFun (TyCon "SExp") (TyTuple (TyCon "Int") (TyCon "BinderRow"))))
-(DFunDef false "toBinderRow" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "b"))) (PCons (PVar "d") (PCons (PVar "m") (PCons (PVar "name") (PCons (PVar "ty") (PVar "rest")))))))) (EBlock (DoLet false false (PVar "i") (EApp (EVar "toInt") (EVar "d"))) (DoExpr (ETuple (EVar "i") (ERecordCreate "BinderRow" ((fa "brId" (EApp (EApp (EVar "BinderId") (EApp (EVar "toStr") (EVar "m"))) (EVar "i"))) (fa "brName" (EApp (EVar "toStr") (EVar "name"))) (fa "brType" (EApp (EVar "toRuntimeType") (EVar "ty"))) (fa "brReturns" (EMatch (EVar "rest") (arm (PList) () (EVar "None")) (arm (PList (PVar "r")) () (EApp (EVar "Some") (EApp (EVar "toRuntimeType") (EVar "r")))) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad binder row"))))))))))))
+(DFunDef false "toBinderRow" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "b"))) (PCons (PVar "d") (PCons (PVar "m") (PCons (PVar "name") (PCons (PVar "ty") (PVar "rest")))))))) (EBlock (DoLet false false (PVar "i") (EApp (EVar "toInt") (EVar "d"))) (DoExpr (ETuple (EVar "i") (ERecordCreate "BinderRow" ((fa "brId" (EApp (EApp (EVar "BinderId") (EApp (EVar "toStr") (EVar "m"))) (EVar "i"))) (fa "brName" (EApp (EVar "toStr") (EVar "name"))) (fa "brType" (EApp (EVar "toRuntimeType") (EVar "ty"))) (fa "brReturns" (EMatch (EVar "rest") (arm (PList) () (EVar "None")) (arm (PCons (PVar "r") PWild) () (EApp (EVar "Some") (EApp (EVar "toRuntimeType") (EVar "r")))))) (fa "brSigned" (EMatch (EVar "rest") (arm (PList) () (EVar "False")) (arm (PList PWild) () (EVar "False")) (arm (PList PWild (PCon "SAtom" (PLit (LString "signed")))) () (EVar "True")) (arm PWild () (EApp (EVar "panic") (ELit (LString "core_ir_sexp_parse: bad binder row"))))))))))))
 (DFunDef false "toBinderRow" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad binder row: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toRuntimeType" (TyFun (TyCon "SExp") (TyCon "RuntimeType")))
 (DFunDef false "toRuntimeType" ((PCon "SAtom" (PVar "s"))) (EMatch (EApp (EVar "runtimeTypeFromName") (EVar "s")) (arm (PCon "Some" (PVar "t")) () (EVar "t")) (arm (PCon "None") () (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad runtime type: ")) (EVar "s"))))))

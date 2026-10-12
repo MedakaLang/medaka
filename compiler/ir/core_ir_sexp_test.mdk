@@ -259,6 +259,7 @@ test "two occurrences of one binder id stay one binder" =
             brName = "a",
             brType = RTFloat,
             brReturns = None,
+            brSigned = False,
           },
         ],
       }

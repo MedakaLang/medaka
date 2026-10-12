@@ -1358,6 +1358,7 @@ restampBinder name ty (CProgram groups ctors ctorTypes impls mctx facts) = CProg
               brName = row.brName,
               brType = ty,
               brReturns = row.brReturns,
+              brSigned = row.brSigned,
             }
           else
             row)
@@ -1435,12 +1436,19 @@ intLetProg ty =
       factRequires = [],
       factSupers = [],
       factBinders = [
-        BinderRow { brId = bid, brName = "n", brType = ty, brReturns = None },
+        BinderRow {
+          brId = bid,
+          brName = "n",
+          brType = ty,
+          brReturns = None,
+          brSigned = False,
+        },
         BinderRow {
           brId = mainId,
           brName = "main",
           brType = RTUnit,
           brReturns = Some RTUnit,
+          brSigned = False,
         },
       ],
     }
@@ -1506,6 +1514,7 @@ dropReturnsNamed name prog =
               brName = r.brName,
               brType = r.brType,
               brReturns = None,
+              brSigned = r.brSigned,
             }
           else
             r)

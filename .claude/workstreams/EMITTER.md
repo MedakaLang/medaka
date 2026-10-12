@@ -32,8 +32,8 @@ to it, in gate-verified steps (DAG in #362).
 
 | Family | Members |
 |---|---|
-| Type recovery ×2 | `typeOf`/`callRetTy`/`paramUseTy`/`inferSigs` (pure twin) ∥ every `emitExpr` arm's inline `(String, LTy)` recovery (#353 — the file admits the twinning at the `typeOf` header) |
-| Float-ness heuristics ×5 | `staticIsFloat` · two-pass `inferSigs` (mutates `sigs`!) · `bodyFloatRet`/`closureRetTy` · the `RScalar` stamp (the done-right model) · `mainTypeIsFloat` auto-print hint (#353) |
+| Type recovery ×2 | `typeOf`/`callRetTy` (a structural read over binder and return stamps, `DeclFacts.factBinders`) ∥ every `emitExpr` arm's inline `(String, LTy)` recovery (#353 — the file admits the twinning at the `typeOf` header) |
+| Float-ness reads ×3 | binder and return stamps · `closureRetTy` (an indirect call's Float result, recorded by `recordClosureResult`) · the `RScalar` stamp · `mainTypeIsFloat` auto-print hint (#353) |
 | Cell allocators ×6 | `emitCtorAlloc` ∥ `emitClosureAlloc` ∥ `emitClosureAllocPatch` ∥ dict cell ∥ atomic Float box ∥ TRMC cons cell (#356 — `$tuple`/`$ref` were already unified; the rest were not) |
 | Call emission ×16 | `emitApp`/`emitExternApplied`/`emitIndirect`/`emitImplCall*`/`emitOverApp`/`emitApplyAny`/`emitApplyRuntime`/`emitPap*`/`emitDictApp*`/`emitCtorApp`/`emitMethodDispatch*`/`emitTrmcTailCall` |
 | Extern dispatch ladders ×5 | `emitFileExtern`/`emitNumExtern`/`emitNetExtern`/`emitUnicodeExtern`/io+str siblings — the five biggest fns in the file (#358) |
@@ -74,7 +74,7 @@ re-mints: `test/refresh_seed.sh` is not idempotent after a codegen change — ru
 re-mint units (`feedback_defer_seed_remint`).
 
 ### 5. Emitter perf defects are mostly PURE SCANS — the alloc gate is physically blind to them
-`findByTagArity`/`findByKeyArityW`, `lookupAssoc`, `paramUseTy` allocate nothing. Grade per-stage TIME with a pinned
+`findByTagArity`/`findByKeyArityW`, `lookupAssoc` allocate nothing. Grade per-stage TIME with a pinned
 heap (`GC_INITIAL_HEAP_SIZE`), min-of-K — and note `perf_scaling` currently has **no lower/emit
 stage at all** (#359 adds it; land it before claiming a perf fix is regression-guarded).
 

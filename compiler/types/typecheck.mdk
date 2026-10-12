@@ -8976,23 +8976,24 @@ currentSeedSchemes _ = perRun.value.seedSchemesOut.value
 -- in scope at the cursor from one bound in an unrelated declaration.
 recordLocalBind : String -> Option Loc -> BinderId -> Mono -> Unit
 recordLocalBind name loc bid v =
-  let _ = recordBinderType bid name v None
+  let _ = recordBinderType bid name v None False
   perRun.value.localBindRefs :=
     (localSourceName name, loc, v) :: perRun.value.localBindRefs.value
 
 -- Queue binder [bid]'s type for the runtime-type table.  [arity] is `Some n` for
--- a function binder, whose return type is read after its n declared parameters.
+-- a function binder, whose return type is read after its n declared parameters;
+-- [signed] is whether that function has a declared type signature.
 -- A binder no minting pass visited (a node the typechecker or a later pass
 -- synthesized) has no id to publish under and is skipped.
-recordBinderType : BinderId -> String -> Mono -> Option Int -> Unit
-recordBinderType bid name v arity = match bid
+recordBinderType : BinderId -> String -> Mono -> Option Int -> Bool -> Unit
+recordBinderType bid name v arity signed = match bid
   BinderId _ i =>
     if i < 0 then
       ()
     else
       let g = graphRun.value
       g.binderPending :=
-        PendingBinder bid (localSourceName name) v arity
+        PendingBinder bid (localSourceName name) v arity signed
           :: g.binderPending.value
 
 -- dict-passing state (the typed pipeline's `=>`-constraint layer):
@@ -11481,9 +11482,10 @@ data GraphRun = GraphRun {
   binderRows : Ref BinderTypeTable,
 }
 
--- One binder awaiting the drain: its id, source name, type cell, and for a
--- function binder the declared parameter count its return type is read after.
-data PendingBinder = PendingBinder BinderId String Mono (Option Int)
+-- One binder awaiting the drain: its id, source name, type cell, for a
+-- function binder the declared parameter count its return type is read after,
+-- and whether the binder's function has a declared type signature.
+data PendingBinder = PendingBinder BinderId String Mono (Option Int) Bool
 
 freshGraphRun : Unit -> GraphRun
 freshGraphRun _ = GraphRun {
@@ -16169,7 +16171,7 @@ inferRecPatFieldWith : TcEnv ->
   Option Pat ->
   List (String, Scheme)
 inferRecPatFieldWith _ ft fname bid None =
-  let _ = recordBinderType bid fname ft None
+  let _ = recordBinderType bid fname ft None False
   [(fname, monoScheme ft)]
 inferRecPatFieldWith env ft _ _ (Some p) =
   let pr = inferPat env p
@@ -26410,32 +26412,45 @@ funDefs (_ :: rest) = funDefs rest
 -- Publish every top-level function clause and top-level let-group member under
 -- the scheme its group generalized to, mirroring the decl shapes `funDefs`
 -- flattens.  Each clause of a multi-clause function has its own id and records
--- the one scheme.
+-- the one scheme, and whether the module declares a signature for its name.
 recordTopBinderTypes : OrdMap Scheme -> List Decl -> Unit
-recordTopBinderTypes _ [] = ()
-recordTopBinderTypes schemes (d :: rest) =
-  let _ = recordTopDeclBinderTypes schemes d
-  recordTopBinderTypes schemes rest
+recordTopBinderTypes schemes decls =
+  let signed = signedTopNames decls omEmpty
+  fold (_ d => recordTopDeclBinderTypes schemes signed d) () decls
 
-recordTopDeclBinderTypes : OrdMap Scheme -> Decl -> Unit
-recordTopDeclBinderTypes schemes (DFunDef _ n ps _ _ bid) =
-  recordTopFunBinderType schemes n bid (listLen ps)
-recordTopDeclBinderTypes schemes (DLetGroup _ binds) =
+-- The names a top-level type signature declares, an annotated one included.
+signedTopNames : List Decl -> OrdMap Unit -> OrdMap Unit
+signedTopNames [] acc = acc
+signedTopNames ((DTypeSig _ n _ _) :: rest) acc =
+  signedTopNames rest (omInsert n () acc)
+signedTopNames ((DAttrib _ d) :: rest) acc = signedTopNames (d :: rest) acc
+signedTopNames (_ :: rest) acc = signedTopNames rest acc
+
+recordTopDeclBinderTypes : OrdMap Scheme -> OrdMap Unit -> Decl -> Unit
+recordTopDeclBinderTypes schemes signed (DFunDef _ n ps _ _ bid) =
+  recordTopFunBinderType schemes signed n bid (listLen ps)
+recordTopDeclBinderTypes schemes signed (DLetGroup _ binds) =
   fold
     (_ b => match b
       LetBind n clauses _ bid => match clauses
         (FunClause ps _) :: _ =>
-          recordTopFunBinderType schemes n bid (listLen ps)
-        [] => recordTopFunBinderType schemes n bid 0)
+          recordTopFunBinderType schemes signed n bid (listLen ps)
+        [] => recordTopFunBinderType schemes signed n bid 0)
     ()
     binds
-recordTopDeclBinderTypes schemes (DAttrib _ d) =
-  recordTopDeclBinderTypes schemes d
-recordTopDeclBinderTypes _ _ = ()
+recordTopDeclBinderTypes schemes signed (DAttrib _ d) =
+  recordTopDeclBinderTypes schemes signed d
+recordTopDeclBinderTypes _ _ _ = ()
 
-recordTopFunBinderType : OrdMap Scheme -> String -> BinderId -> Int -> Unit
-recordTopFunBinderType schemes n bid arity = match omLookup n schemes
-  Some sch => recordBinderType bid n (schemeMono sch) (Some arity)
+recordTopFunBinderType : OrdMap Scheme ->
+  OrdMap Unit ->
+  String ->
+  BinderId ->
+  Int ->
+  Unit
+recordTopFunBinderType schemes signed n bid arity = match omLookup n schemes
+  Some sch =>
+    recordBinderType bid n (schemeMono sch) (Some arity) (omHasKey n signed)
   None => ()
 
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
@@ -26751,10 +26766,11 @@ processLetGroup env binds =
   genv
 
 -- A where/let group member's own type cell, the one its clauses are inferred
--- into, published with the member's declared parameter count.
+-- into, published with the member's declared parameter count.  A member is never
+-- signed: a `LetBind` carries no type signature.
 recordLetBindType : (LetBind, (String, BindingSummary)) -> Unit
 recordLetBindType (LetBind name _ _ bid, (_, summary)) =
-  recordBinderType bid name summary.bsValue (Some summary.bsArity)
+  recordBinderType bid name summary.bsValue (Some summary.bsArity) False
 
 -- Whether a where/let group member generalizes, and its type.
 letBindGeneralizes : TcEnv ->
@@ -29301,8 +29317,8 @@ binopBuiltinHead method tag =
 -- SHARED-FLOAT-RESIDUAL §3(C): after the module is inferred, zonk each recorded
 -- arithmetic operand mono; when it grounds to concrete Float, stamp RScalar
 -- "Float" on the node's route so lowering carries it into CBinPrim and the native
--- emitter picks the Float primitive (bypassing the type-lost structural
--- staticIsFloat).  Grounded-only, exactly like resolveBinopSite: a still-
+-- emitter picks the Float primitive without reading the operands' structure.
+-- Grounded-only, exactly like resolveBinopSite: a still-
 -- polymorphic operand (headTyconMono None) is left untouched (RNone → dict path),
 -- so polymorphic-Num arithmetic keeps routing through the runtime Num dict.  This
 -- channel stamps Float and the unsigned heads with their own tag (Int is the
@@ -35189,8 +35205,8 @@ rewriteBinopExpr (EBinOp op l r routeRef) = match !routeRef
   -- type in a NODE by wrapping the binop in `EAnnot … (TyCon tag)`.  Eval ignores the
   -- annotation (`eval (EAnnot e _) = eval e`) and evaluates the binop dynamically
   -- (Float-correct); lowering reads the annotation to stamp CBinPrim's scalar tag so
-  -- the native emitter picks that type's primitive (bypassing the type-lost
-  -- staticIsFloat).  This is the dispatch route READ-OUT the design names, relocated
+  -- the native emitter picks that type's primitive without reading the operands'
+  -- structure.  This is the dispatch route READ-OUT the design names, relocated
   -- from the (lost) ref cell to a (surviving) node.
   --
   -- #1110 (was a residual, DRAINED by the stamping PR): `tag` is a SCALAR-TYPE
@@ -55495,7 +55511,7 @@ materializeBinderTypes _ =
 materializeBinder : (String -> TyConOrigin -> Bool) ->
   PendingBinder ->
   BinderRow
-materializeBinder isCell (PendingBinder bid name t arity) = BinderRow {
+materializeBinder isCell (PendingBinder bid name t arity signed) = BinderRow {
   brId = bid,
   brName = name,
   brType = runtimeTypeOf isCell t,
@@ -55505,6 +55521,7 @@ materializeBinder isCell (PendingBinder bid name t arity) = BinderRow {
       (n =>
         optionOr RTValue (map (runtimeTypeOf isCell) (resultAfterArrows n t)))
       arity,
+  brSigned = signed,
 }
 
 -- The type heads whose values are constructor cells: every `data` and `newtype`

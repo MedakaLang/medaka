@@ -426,6 +426,8 @@ binderRowSexp byOrd (d, BinderId _ n) = match BM.get n byOrd
       let ret = match row.brReturns
         None => []
         Some r => [runtimeTypeName r]
+      -- a signed function's row ends in `signed`; every other row omits it
+      let signed = if row.brSigned then ["signed"] else []
       [
         node
           "b"
@@ -435,5 +437,6 @@ binderRowSexp byOrd (d, BinderId _ n) = match BM.get n byOrd
               escStr row.brName,
               runtimeTypeName row.brType,
             ]
-            ++ ret),
+            ++ ret
+            ++ signed),
       ]

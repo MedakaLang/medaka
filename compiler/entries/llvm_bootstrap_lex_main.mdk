@@ -40,7 +40,7 @@ import ir.core_ir_lower.{
   selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
-  declSigTypeNames,
+  externArities,
   validateFfiExternTypeNames,
 }
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
@@ -68,7 +68,7 @@ runEmit runtimeDecls coreDecls modules =
       (selfFnParamTable allDecls)
       (methodIfaceTable allDecls)
       (ctorFieldTypeNames allDecls)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+      (externArities runtimeDecls)
       (mainTypeIsUnit ())
       (mainTypeIsFloat ())
       0

@@ -1,5 +1,5 @@
 # META
-source_lines=244
+source_lines=248
 stages=DESUGAR,MARK
 # SOURCE
 -- What each source binder holds at run time, as the typechecker decided it.
@@ -62,11 +62,15 @@ public export data RuntimeType =
 -- is the function's type, which is `RTValue` whenever it takes parameters, and
 -- what its body returns after its declared parameters is a second fact.  Every
 -- clause of a multi-clause function carries the function's one return type.
+-- `brSigned` is whether the source function has a declared type signature: an
+-- inferred type and a declared one stamp alike, and a backend that gives only
+-- declared functions a different calling convention needs to tell them apart.
 public export data BinderRow = BinderRow {
   brId : BinderId,
   brName : String,
   brType : RuntimeType,
   brReturns : Option RuntimeType,
+  brSigned : Bool,
 }
 
 -- The table, keyed by the id's ordinal.  Ordinals come from one process-global
@@ -253,7 +257,7 @@ installedBinderRows _ = match !binderTypesRef
 (DData Public "RuntimeType" () ((variant "RTInt" (ConPos)) (variant "RTFloat" (ConPos)) (variant "RTBool" (ConPos)) (variant "RTChar" (ConPos)) (variant "RTString" (ConPos)) (variant "RTUnit" (ConPos)) (variant "RTU64" (ConPos)) (variant "RTI64" (ConPos)) (variant "RTU32" (ConPos)) (variant "RTI32" (ConPos)) (variant "RTU16" (ConPos)) (variant "RTU8" (ConPos)) (variant "RTCon" (ConPos)) (variant "RTValue" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "RuntimeType")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RTInt") (PCon "RTInt")) () (EVar "True")) (arm (PTuple (PCon "RTFloat") (PCon "RTFloat")) () (EVar "True")) (arm (PTuple (PCon "RTBool") (PCon "RTBool")) () (EVar "True")) (arm (PTuple (PCon "RTChar") (PCon "RTChar")) () (EVar "True")) (arm (PTuple (PCon "RTString") (PCon "RTString")) () (EVar "True")) (arm (PTuple (PCon "RTUnit") (PCon "RTUnit")) () (EVar "True")) (arm (PTuple (PCon "RTU64") (PCon "RTU64")) () (EVar "True")) (arm (PTuple (PCon "RTI64") (PCon "RTI64")) () (EVar "True")) (arm (PTuple (PCon "RTU32") (PCon "RTU32")) () (EVar "True")) (arm (PTuple (PCon "RTI32") (PCon "RTI32")) () (EVar "True")) (arm (PTuple (PCon "RTU16") (PCon "RTU16")) () (EVar "True")) (arm (PTuple (PCon "RTU8") (PCon "RTU8")) () (EVar "True")) (arm (PTuple (PCon "RTCon") (PCon "RTCon")) () (EVar "True")) (arm (PTuple (PCon "RTValue") (PCon "RTValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "RuntimeType")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RTInt") () (ELit (LString "RTInt"))) (arm (PCon "RTFloat") () (ELit (LString "RTFloat"))) (arm (PCon "RTBool") () (ELit (LString "RTBool"))) (arm (PCon "RTChar") () (ELit (LString "RTChar"))) (arm (PCon "RTString") () (ELit (LString "RTString"))) (arm (PCon "RTUnit") () (ELit (LString "RTUnit"))) (arm (PCon "RTU64") () (ELit (LString "RTU64"))) (arm (PCon "RTI64") () (ELit (LString "RTI64"))) (arm (PCon "RTU32") () (ELit (LString "RTU32"))) (arm (PCon "RTI32") () (ELit (LString "RTI32"))) (arm (PCon "RTU16") () (ELit (LString "RTU16"))) (arm (PCon "RTU8") () (ELit (LString "RTU8"))) (arm (PCon "RTCon") () (ELit (LString "RTCon"))) (arm (PCon "RTValue") () (ELit (LString "RTValue")))))))
-(DData Public "BinderRow" () ((variant "BinderRow" (ConNamed (field "brId" (TyCon "BinderId")) (field "brName" (TyCon "String")) (field "brType" (TyCon "RuntimeType")) (field "brReturns" (TyApp (TyCon "Option") (TyCon "RuntimeType")))))) ())
+(DData Public "BinderRow" () ((variant "BinderRow" (ConNamed (field "brId" (TyCon "BinderId")) (field "brName" (TyCon "String")) (field "brType" (TyCon "RuntimeType")) (field "brReturns" (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (field "brSigned" (TyCon "Bool"))))) ())
 (DTypeAlias true "BinderTypeTable" () (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "BinderRow")))
 (DTypeSig true "emptyBinderTypes" (TyCon "BinderTypeTable"))
 (DFunDef false "emptyBinderTypes" () (EVar "Tip"))
@@ -349,7 +353,7 @@ installedBinderRows _ = match !binderTypesRef
 (DData Public "RuntimeType" () ((variant "RTInt" (ConPos)) (variant "RTFloat" (ConPos)) (variant "RTBool" (ConPos)) (variant "RTChar" (ConPos)) (variant "RTString" (ConPos)) (variant "RTUnit" (ConPos)) (variant "RTU64" (ConPos)) (variant "RTI64" (ConPos)) (variant "RTU32" (ConPos)) (variant "RTI32" (ConPos)) (variant "RTU16" (ConPos)) (variant "RTU8" (ConPos)) (variant "RTCon" (ConPos)) (variant "RTValue" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "RuntimeType")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RTInt") (PCon "RTInt")) () (EVar "True")) (arm (PTuple (PCon "RTFloat") (PCon "RTFloat")) () (EVar "True")) (arm (PTuple (PCon "RTBool") (PCon "RTBool")) () (EVar "True")) (arm (PTuple (PCon "RTChar") (PCon "RTChar")) () (EVar "True")) (arm (PTuple (PCon "RTString") (PCon "RTString")) () (EVar "True")) (arm (PTuple (PCon "RTUnit") (PCon "RTUnit")) () (EVar "True")) (arm (PTuple (PCon "RTU64") (PCon "RTU64")) () (EVar "True")) (arm (PTuple (PCon "RTI64") (PCon "RTI64")) () (EVar "True")) (arm (PTuple (PCon "RTU32") (PCon "RTU32")) () (EVar "True")) (arm (PTuple (PCon "RTI32") (PCon "RTI32")) () (EVar "True")) (arm (PTuple (PCon "RTU16") (PCon "RTU16")) () (EVar "True")) (arm (PTuple (PCon "RTU8") (PCon "RTU8")) () (EVar "True")) (arm (PTuple (PCon "RTCon") (PCon "RTCon")) () (EVar "True")) (arm (PTuple (PCon "RTValue") (PCon "RTValue")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
 (DImpl true "Debug" ((TyCon "RuntimeType")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RTInt") () (ELit (LString "RTInt"))) (arm (PCon "RTFloat") () (ELit (LString "RTFloat"))) (arm (PCon "RTBool") () (ELit (LString "RTBool"))) (arm (PCon "RTChar") () (ELit (LString "RTChar"))) (arm (PCon "RTString") () (ELit (LString "RTString"))) (arm (PCon "RTUnit") () (ELit (LString "RTUnit"))) (arm (PCon "RTU64") () (ELit (LString "RTU64"))) (arm (PCon "RTI64") () (ELit (LString "RTI64"))) (arm (PCon "RTU32") () (ELit (LString "RTU32"))) (arm (PCon "RTI32") () (ELit (LString "RTI32"))) (arm (PCon "RTU16") () (ELit (LString "RTU16"))) (arm (PCon "RTU8") () (ELit (LString "RTU8"))) (arm (PCon "RTCon") () (ELit (LString "RTCon"))) (arm (PCon "RTValue") () (ELit (LString "RTValue")))))))
-(DData Public "BinderRow" () ((variant "BinderRow" (ConNamed (field "brId" (TyCon "BinderId")) (field "brName" (TyCon "String")) (field "brType" (TyCon "RuntimeType")) (field "brReturns" (TyApp (TyCon "Option") (TyCon "RuntimeType")))))) ())
+(DData Public "BinderRow" () ((variant "BinderRow" (ConNamed (field "brId" (TyCon "BinderId")) (field "brName" (TyCon "String")) (field "brType" (TyCon "RuntimeType")) (field "brReturns" (TyApp (TyCon "Option") (TyCon "RuntimeType"))) (field "brSigned" (TyCon "Bool"))))) ())
 (DTypeAlias true "BinderTypeTable" () (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "BinderRow")))
 (DTypeSig true "emptyBinderTypes" (TyCon "BinderTypeTable"))
 (DFunDef false "emptyBinderTypes" () (EVar "Tip"))

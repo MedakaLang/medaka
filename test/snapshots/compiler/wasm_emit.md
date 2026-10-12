@@ -1190,7 +1190,7 @@ isLazyGlobalW prog x = omHasKey x (indexLazyGlobalsW (progIndex prog))
 -- runtime-dispatched path.  Seeding these names (in emitRefProgram, before any body
 -- emission) lets `cexprIsFloat` recognize the operand as Float so the comparison
 -- lowers to inline `f64.le`/`f64.ge` (IEEE-correct, NaN → False), mirroring native's
--- `staticIsFloat`-reads-the-global fcmp path.
+-- fcmp on a global whose stamp is Float.
 -- (#305: the poly path is IEEE-correct at NaN too now — ordering there calls the
 -- per-op $mdk_value_lt/le/gt/ge rather than comparing a 3-way against 0 — so this
 -- seeding is a code-quality win (inline f64, no call), no longer a correctness fix.)

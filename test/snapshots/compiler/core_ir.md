@@ -1,5 +1,5 @@
 # META
-source_lines=676
+source_lines=677
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -98,8 +98,9 @@ public export data CExpr =
   -- to CIf/CApp/CLam and never appear here.)  The 4th field is the scalar-type
   -- tag stamped by typecheck for a MONOMORPHIC concrete-primitive arithmetic
   -- operand ("Float"/"Int"; "" = unstamped → today's structural/dict path).  The
-  -- native emitter reads it (emitBin → fieldNameToLTy → LTFloat) to bypass the
-  -- type-lost `staticIsFloat` blind spot (SHARED-FLOAT-RESIDUAL-DESIGN §3(C)).
+  -- native emitter reads it (emitBin → fieldNameToLTy → LTFloat) to pick the
+  -- primitive without a structural read of the operands
+  -- (SHARED-FLOAT-RESIDUAL-DESIGN §3(C)).
   -- A fixed-width tag ("U8"/"U16"/"U32", `ast.fixedWidthMask`) is not only a hint:
   -- every engine MUST reduce an arithmetic result modulo 2^n on it.
   -- The 5th field is the trap site of an overflow or zero-divisor abort: the start

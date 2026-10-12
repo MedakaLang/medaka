@@ -2573,7 +2573,7 @@ recordAbsorptions : List Atom -> Ref Effvar -> Unit
 recordArgSiteFn : String -> Int -> Mono -> Unit
 recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
 recordAuthCells : List Int -> Mono -> List (String, Mono) -> Map Int (Ref Authvar)
-recordBinderType : BinderId -> String -> Mono -> Option Int -> Unit
+recordBinderType : BinderId -> String -> Mono -> Option Int -> Bool -> Unit
 recordBinopGoals : String -> Ref Route -> Mono -> Unit
 recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
@@ -2643,8 +2643,8 @@ recordSite : TcEnv -> String -> Scheme -> Ref Route -> Ref (List Route) -> Ref (
 recordStandaloneAt : String -> Expr -> SelectedValueOccurrence -> Unit
 recordStandaloneGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Int -> Unit
 recordTopBinderTypes : Map String Scheme -> List Decl -> Unit
-recordTopDeclBinderTypes : Map String Scheme -> Decl -> Unit
-recordTopFunBinderType : Map String Scheme -> String -> BinderId -> Int -> Unit
+recordTopDeclBinderTypes : Map String Scheme -> Map String Unit -> Decl -> Unit
+recordTopFunBinderType : Map String Scheme -> Map String Unit -> String -> BinderId -> Int -> Unit
 recordTopGrants : String -> List (String, Scheme) -> Map String (List (List Pat, Expr)) -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit
@@ -3012,6 +3012,7 @@ sigVarsForWith : Ty -> List String -> List (String, Param) -> SigVars
 sigVarsUnion : SigVars -> SigVars -> SigVars
 sigVarsWithAuths : List (String, Ref Authvar) -> SigVars -> SigVars
 sigVarsWithRows : List (String, Ref Effvar) -> SigVars -> SigVars
+signedTopNames : List Decl -> Map String Unit -> Map String Unit
 sigsOf : List Decl -> List (String, Ty)
 singleTyparamIfaceMethod : String -> Bool
 siteEntry : Obligation -> List PendingEntry
