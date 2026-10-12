@@ -284,8 +284,6 @@ fi
 #   check_match_main        — diff_compiler_check (match-exhaustiveness leg)
 #   lint_main               — diff_compiler_fmt (the lint row of
 #                             test/diff_compiler_fmt_test.mdk; added by the lint workstream)
-#   diagnostics_main        — diff_compiler_fmt (the diagnostics row of
-#                             test/diff_compiler_fmt_test.mdk)
 #   diagnostics_project_main — diff_compiler_fmt (analyzeProjectFixtureFailures,
 #                             test/diff_compiler_fmt_test.mdk)
 #   ── Phase 2 §2c tooling gates (fmt/new/test/repl/lsp) ──
@@ -310,7 +308,7 @@ resolve_main resolve_batch resolve_modules_main draft_semantic_main anf_identity
 typecheck_main check_main check_batch \
 check_modules_main check_all_main check_match_main lint_main lint_fix_main \
 check_one_diags_main \
-diagnostics_main diagnostics_project_main \
+diagnostics_project_main \
 fmt_main new_main test_main repl_main fuzz_gen_main \
  profile_main profile_modules_main profile_eval_main refindex_main"
 

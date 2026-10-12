@@ -153,6 +153,13 @@ for line in gates_toml.splitlines():
         _run = line.split('"')[1]
         if _kind == 'native' and _run:
             native_candidates.append(_run)
+# `*_test.mdk` siblings run by a Makefile `inlang-*` step (the required `inlang`
+# check) are gates too: a stage retired from a probe row into an in-process
+# sibling under compiler/ reads its corpus from there (#2594).
+for _l in pathlib.Path(root, 'Makefile').read_text().splitlines():
+    _m = re.match(r'\t\./medaka test (?:--native )?(\S+_test\.mdk)\s*$', _l)
+    if _m and _m.group(1) not in native_candidates:
+        native_candidates.append(_m.group(1))
 candidates = sh_candidates + native_candidates
 
 if not candidates:

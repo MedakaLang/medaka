@@ -329,6 +329,13 @@ inlang-regex-conformance-test:
 inlang-frontend-exhaust-test:
 	./medaka test --native compiler/frontend/exhaust_test.mdk
 
+## analyzeToLines over the resolve/exhaust/check_match fixtures, called
+## in-process (replaces the diagnostics_main probe row). A `*_test.mdk`
+## sibling is outside every entry's closure ([W-MODULE-BLIND]); `--native`
+## for `readFile`.
+inlang-driver-diagnostics-test:
+	./medaka test --native compiler/driver/diagnostics_test.mdk
+
 ## compiler/frontend/resolve.mdk carries its own `test "…"` block
 ## (the did-you-mean pool memo's once-per-Env discipline, #2800): the
 ## module's TYPES are checked on every build via the live pipeline's
