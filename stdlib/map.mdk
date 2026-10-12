@@ -73,6 +73,33 @@ balance k v l r
   | size l > 3 * size r = rotateR k v l r
   | otherwise = bin k v l r
 
+-- `balanceL` repairs a node whose left subtree may have grown (an insert into
+-- `l`) or whose right subtree may have shrunk (a delete from `r`). Only the
+-- left-heavy check can fire, so the right side is never inspected for a
+-- rotation. Matching each child once reads the cached sizes directly; the
+-- result is identical to `balance` under that precondition.
+balanceL : k -> v -> Map k v -> Map k v -> Map k v
+balanceL k v Tip r = Bin (size r + 1) k v Tip r
+balanceL k v (l@(Bin sl _ _ _ _)) Tip =
+  if sl <= 1 then Bin (sl + 1) k v l Tip else rotateR k v l Tip
+balanceL k v (l@(Bin sl _ _ _ _)) (r@(Bin sr _ _ _ _)) =
+  if sl > 3 * sr && sl + sr > 1 then
+    rotateR k v l r
+  else
+    Bin (sl + sr + 1) k v l r
+
+-- Mirror of `balanceL`: the right subtree may have grown (an insert into `r`)
+-- or the left subtree may have shrunk (a delete from `l`).
+balanceR : k -> v -> Map k v -> Map k v -> Map k v
+balanceR k v l Tip = Bin (size l + 1) k v l Tip
+balanceR k v Tip (r@(Bin sr _ _ _ _)) =
+  if sr <= 1 then Bin (sr + 1) k v Tip r else rotateL k v Tip r
+balanceR k v (l@(Bin sl _ _ _ _)) (r@(Bin sr _ _ _ _)) =
+  if sr > 3 * sl && sl + sr > 1 then
+    rotateL k v l r
+  else
+    Bin (sl + sr + 1) k v l r
+
 -- Right subtree too heavy: single left rotation, or double if its left
 -- grandchild outweighs its right.
 rotateL : k -> v -> Map k v -> Map k v -> Map k v
@@ -217,8 +244,8 @@ export
 set : Ord k => k -> v -> Map k v -> Map k v
 set k v Tip = singleton k v
 set k v (Bin s k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (set k v l) r
-  Gt => balance k2 v2 l (set k v r)
+  Lt => balanceL k2 v2 (set k v l) r
+  Gt => balanceR k2 v2 l (set k v r)
   Eq => Bin s k v l r
 
 {- | The map with `v` stored at `k`, combining with an existing value.
@@ -232,8 +259,8 @@ export
 insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
 insertWith f k v Tip = singleton k v
 insertWith f k v (Bin s k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (insertWith f k v l) r
-  Gt => balance k2 v2 l (insertWith f k v r)
+  Lt => balanceL k2 v2 (insertWith f k v l) r
+  Gt => balanceR k2 v2 l (insertWith f k v r)
   Eq => Bin s k2 (f v v2) l r
 
 {- | The map with `f` applied to the value at `k`.
@@ -262,8 +289,8 @@ export
 delete : Ord k => k -> Map k v -> Map k v
 delete k Tip = Tip
 delete k (Bin _ k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (delete k l) r
-  Gt => balance k2 v2 l (delete k r)
+  Lt => balanceR k2 v2 (delete k l) r
+  Gt => balanceL k2 v2 l (delete k r)
   Eq => glue l r
 
 -- > size (delete 9 (fromList [(1, 10), (2, 20)]))
@@ -510,11 +537,11 @@ mapWithKey f (Bin s k v l r) = Bin s k (f k v) (mapWithKey f l) (mapWithKey f r)
 -- the key still has to be pushed down to its extreme and rebalanced.
 insertMin : k -> v -> Map k v -> Map k v
 insertMin k v Tip = singleton k v
-insertMin k v (Bin _ k2 v2 l r) = balance k2 v2 (insertMin k v l) r
+insertMin k v (Bin _ k2 v2 l r) = balanceL k2 v2 (insertMin k v l) r
 
 insertMax : k -> v -> Map k v -> Map k v
 insertMax k v Tip = singleton k v
-insertMax k v (Bin _ k2 v2 l r) = balance k2 v2 l (insertMax k v r)
+insertMax k v (Bin _ k2 v2 l r) = balanceR k2 v2 l (insertMax k v r)
 
 {- `link` joins `l < k,v < r` for arbitrarily unbalanced `l`/`r`.  When one side
    outweighs the other by more than `delta` we cannot just `bin` them: we
@@ -852,6 +879,98 @@ naiveFilterWithKey p m = foldrWithKey (naiveFilterStep p) Tip m
 
 naiveFilterStep : Ord k => (k -> v -> Bool) -> k -> v -> Map k v -> Map k v
 naiveFilterStep p k v acc = if p k v then set k v acc else acc
+
+-- The `balance`-only bodies that the `balanceL`/`balanceR` paths replaced.
+-- The shape props below compare against them node for node.
+setOld : Ord k => k -> v -> Map k v -> Map k v
+setOld k v Tip = singleton k v
+setOld k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (setOld k v l) r
+  Gt => balance k2 v2 l (setOld k v r)
+  Eq => Bin s k v l r
+
+insertWithOld : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+insertWithOld f k v Tip = singleton k v
+insertWithOld f k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (insertWithOld f k v l) r
+  Gt => balance k2 v2 l (insertWithOld f k v r)
+  Eq => Bin s k2 (f v v2) l r
+
+deleteOld : Ord k => k -> Map k v -> Map k v
+deleteOld k Tip = Tip
+deleteOld k (Bin _ k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (deleteOld k l) r
+  Gt => balance k2 v2 l (deleteOld k r)
+  Eq => glue l r
+
+insertMinOld : k -> v -> Map k v -> Map k v
+insertMinOld k v Tip = singleton k v
+insertMinOld k v (Bin _ k2 v2 l r) = balance k2 v2 (insertMinOld k v l) r
+
+insertMaxOld : k -> v -> Map k v -> Map k v
+insertMaxOld k v Tip = singleton k v
+insertMaxOld k v (Bin _ k2 v2 l r) = balance k2 v2 l (insertMaxOld k v r)
+
+-- Structural equality: same shape, cached sizes, keys and values at every node.
+sameShape : (Eq k, Eq v) => Map k v -> Map k v -> Bool
+sameShape Tip Tip = True
+sameShape (Bin s1 k1 v1 l1 r1) (Bin s2 k2 v2 l2 r2) =
+  s1 == s2 && eq k1 k2 && eq v1 v2 && sameShape l1 l2 && sameShape r1 r2
+sameShape _ _ = False
+
+-- Applies `step` to each pair in order, left to right.
+foldInserts : (k -> v -> Map k v -> Map k v) ->
+  List (k, v) ->
+  Map k v ->
+  Map k v
+foldInserts step [] m = m
+foldInserts step ((k, v) :: rest) m = foldInserts step rest (step k v m)
+
+-- Folds each key through `step` in order, for the delete props.
+foldDeletes : (k -> Map k v -> Map k v) -> List k -> Map k v -> Map k v
+foldDeletes step [] m = m
+foldDeletes step (k :: rest) m = foldDeletes step rest (step k m)
+
+-- Collapses keys onto 0..7 so that the props hit the duplicate (`Eq`) paths.
+modKeys : List (Int, Int) -> List (Int, Int)
+modKeys [] = []
+modKeys ((k, v) :: rest) = (k % 8, v) :: modKeys rest
+
+fstKeys : List (Int, Int) -> List Int
+fstKeys [] = []
+fstKeys ((k, _) :: rest) = k :: fstKeys rest
+
+prop "set builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
+  let got = foldInserts set xs Tip
+  sameShape got (foldInserts setOld xs Tip) && wellFormed got
+
+prop "set on duplicate keys builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
+  let ys = modKeys xs
+  let got = foldInserts set ys Tip
+  sameShape got (foldInserts setOld ys Tip) && wellFormed got
+
+prop "insertWith builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
+  let ys = modKeys xs
+  let got = foldInserts (k v m => insertWith (a b => a + b) k v m) ys Tip
+  sameShape
+      got
+      (foldInserts (k v m => insertWithOld (a b => a + b) k v m) ys Tip)
+    && wellFormed got
+
+prop "insertMin and insertMax match the balance-only body shape" (xs : List (Int, Int)) =
+  let got = foldInserts (k v m => insertMin k v m) xs Tip
+  let gotMax = foldInserts (k v m => insertMax k v m) xs Tip
+  sameShape got (foldInserts (k v m => insertMinOld k v m) xs Tip)
+    && sameShape gotMax (foldInserts (k v m => insertMaxOld k v m) xs Tip)
+
+prop "delete matches the balance-only body shape" (xs : List (Int, Int)) (ks : List Int) =
+  let ys = modKeys xs
+  let base = foldInserts set ys Tip
+  let got = foldDeletes delete ks (foldDeletes delete (fstKeys ys) base)
+  sameShape
+      got
+      (foldDeletes deleteOld ks (foldDeletes deleteOld (fstKeys ys) base))
+    && wellFormed got
 
 prop "union agrees with naive fold-insert" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
