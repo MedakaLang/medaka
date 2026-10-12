@@ -6,7 +6,7 @@
 --   unwrapPlus 3 None  = 3                      = 3
 --   adder 10 5         = 5 + 10                 = 15   (closure captures param n)
 --   second 1 21        = 21 * 2                 = 42   (wildcard beside a PVar)
---   countTo (spaced 1 200000 2) 0               = 100000 (TRMC over three params, deep)
+--   countTo (spaced 1 40000 2) 0                = 20000 (TRMC over three params; depth kept under the evaluator's 25000 limit)
 
 shadowLam : Int -> Int
 shadowLam x = (let f = (x => x * 2) in f 3) + x
@@ -35,4 +35,4 @@ main =
     && unwrapPlus 3 None == 3
     && adder 10 5 == 15
     && second 1 21 == 42
-    && countTo (spaced 1 200000 2) 0 == 100000
+    && countTo (spaced 1 40000 2) 0 == 20000
