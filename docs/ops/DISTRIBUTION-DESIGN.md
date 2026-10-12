@@ -57,12 +57,14 @@ machine." File:line references are from the audited tree.
    extern, unbound in `medaka run` → resolve error). So shipping `medaka` alone
    does not give a working `build`; ship **both** binaries + default the env var.
 
-4. **libgc (bdw-gc) is a required system dep, dynamically linked (`-lgc`), not
-   vendored.** Three-tier probe in `detectGC` (`build_cmd.mdk:85-118`):
-   pkg-config `bdw-gc` → `brew --prefix bdw-gc` → bare `-lgc`; hard-errors with an
-   install hint if all fail (`:254`). Both *building* and *every produced binary*
-   depend on libgc at runtime. → **Either lean on the package manager to install
-   it, or vendor + static-link.**
+4. **libgc (bdw-gc) is a required system dep, not vendored.** Three-tier probe in
+   `detectGC` (`compiler/driver/build_cmd.mdk`): pkg-config `bdw-gc` →
+   `brew --prefix bdw-gc` → bare `-lgc`; hard-errors with an install hint if all
+   fail. *Building* always needs libgc installed. When the install ships
+   `libgc.a`, both the `medaka` binary and every produced binary link it
+   statically, for allocation speed (#503), and then don't need libgc at run
+   time. Otherwise they link `-lgc` and do. → **Either lean on the package
+   manager to install it, or vendor + static-link.**
 
 5. **`clang` assumed on `PATH`** (`CC` default `"clang"`, `medaka_cli.mdk:483`),
    and **`runtime/medaka_rt.c` is compiled from source on every build** (no

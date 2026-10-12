@@ -391,9 +391,40 @@ detectGC cc tmpDir =
     -- fail-open-by-design: a pkg-config miss falls through to the brew probe.
     Ok (0, _, _) =>
       let cflags = gcQuery "pkg-config" ["--cflags", "bdw-gc"]
-      let libs = gcQuery "pkg-config" ["--libs", "bdw-gc"]
-      Some (words cflags, words libs)
+      let archive =
+        gcArchiveIn (gcQuery "pkg-config" ["--variable=libdir", "bdw-gc"])
+      let libs =
+        if archive == "" then
+          words (gcQuery "pkg-config" ["--libs", "bdw-gc"])
+        else
+          gcStaticLibs
+            archive
+            (words (gcQuery "pkg-config" ["--static", "--libs", "bdw-gc"]))
+      Some (words cflags, libs)
     _ => detectGCBrew cc tmpDir
+
+-- The path of the static libgc archive in libDir, or "" when there is none.
+-- Linking the archive instead of the shared library lets the linker resolve
+-- libgc's thread-local free-list lookup and its internal calls directly, and
+-- every allocation pays for those (#503).  Where no archive is installed the
+-- build keeps `-lgc`, so a produced binary then needs libgc at run time.
+gcArchiveIn : String -> <IO> String
+gcArchiveIn libDir =
+  let archive = joinPath libDir "libgc.a"
+  if libDir /= "" && fileExists archive then archive else ""
+
+-- `pkg-config --static --libs` with `-lgc` replaced by the archive path, which
+-- keeps the archive's own dependencies (`-lpthread`, `-ldl` on older glibc).
+export
+gcStaticLibs : String -> List String -> List String
+gcStaticLibs archive libs = map (t => if t == "-lgc" then archive else t) libs
+
+-- Link flags for a Boehm GC install prefix: its archive if it has one.
+gcPrefixLibs : String -> <IO> List String
+gcPrefixLibs prefix =
+  let libDir = joinPath prefix "lib"
+  let archive = gcArchiveIn libDir
+  if archive == "" then ["-L" ++ libDir, "-lgc"] else [archive]
 
 -- GC_PREFIX override: same header check and flag shape as detectGCBrew's
 -- discovered prefix, but skips the `brew --prefix` shell-out since the
@@ -404,10 +435,7 @@ detectGC cc tmpDir =
 detectGCPrefix : String -> <IO> Option (List String, List String)
 detectGCPrefix prefix =
   if fileExists (joinPath prefix "include/gc.h") then
-    Some (
-      ["-I" ++ joinPath prefix "include"],
-      ["-L" ++ joinPath prefix "lib", "-lgc"],
-    )
+    Some (["-I" ++ joinPath prefix "include"], gcPrefixLibs prefix)
   else
     None
 
@@ -424,10 +452,7 @@ detectGCBrew cc tmpDir = match runCommand "brew" ["--prefix", "bdw-gc"]
   Ok (0, out, _) =>
     let prefix = stringTrim out
     if prefix /= "" && fileExists (joinPath prefix "include/gc.h") then
-      Some (
-        ["-I" ++ joinPath prefix "include"],
-        ["-L" ++ joinPath prefix "lib", "-lgc"],
-      )
+      Some (["-I" ++ joinPath prefix "include"], gcPrefixLibs prefix)
     else
       detectGCBare cc tmpDir
   _ => detectGCBare cc tmpDir

@@ -1,5 +1,5 @@
 # META
-source_lines=1957
+source_lines=1982
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -395,9 +395,40 @@ detectGC cc tmpDir =
     -- fail-open-by-design: a pkg-config miss falls through to the brew probe.
     Ok (0, _, _) =>
       let cflags = gcQuery "pkg-config" ["--cflags", "bdw-gc"]
-      let libs = gcQuery "pkg-config" ["--libs", "bdw-gc"]
-      Some (words cflags, words libs)
+      let archive =
+        gcArchiveIn (gcQuery "pkg-config" ["--variable=libdir", "bdw-gc"])
+      let libs =
+        if archive == "" then
+          words (gcQuery "pkg-config" ["--libs", "bdw-gc"])
+        else
+          gcStaticLibs
+            archive
+            (words (gcQuery "pkg-config" ["--static", "--libs", "bdw-gc"]))
+      Some (words cflags, libs)
     _ => detectGCBrew cc tmpDir
+
+-- The path of the static libgc archive in libDir, or "" when there is none.
+-- Linking the archive instead of the shared library lets the linker resolve
+-- libgc's thread-local free-list lookup and its internal calls directly, and
+-- every allocation pays for those (#503).  Where no archive is installed the
+-- build keeps `-lgc`, so a produced binary then needs libgc at run time.
+gcArchiveIn : String -> <IO> String
+gcArchiveIn libDir =
+  let archive = joinPath libDir "libgc.a"
+  if libDir /= "" && fileExists archive then archive else ""
+
+-- `pkg-config --static --libs` with `-lgc` replaced by the archive path, which
+-- keeps the archive's own dependencies (`-lpthread`, `-ldl` on older glibc).
+export
+gcStaticLibs : String -> List String -> List String
+gcStaticLibs archive libs = map (t => if t == "-lgc" then archive else t) libs
+
+-- Link flags for a Boehm GC install prefix: its archive if it has one.
+gcPrefixLibs : String -> <IO> List String
+gcPrefixLibs prefix =
+  let libDir = joinPath prefix "lib"
+  let archive = gcArchiveIn libDir
+  if archive == "" then ["-L" ++ libDir, "-lgc"] else [archive]
 
 -- GC_PREFIX override: same header check and flag shape as detectGCBrew's
 -- discovered prefix, but skips the `brew --prefix` shell-out since the
@@ -408,10 +439,7 @@ detectGC cc tmpDir =
 detectGCPrefix : String -> <IO> Option (List String, List String)
 detectGCPrefix prefix =
   if fileExists (joinPath prefix "include/gc.h") then
-    Some (
-      ["-I" ++ joinPath prefix "include"],
-      ["-L" ++ joinPath prefix "lib", "-lgc"],
-    )
+    Some (["-I" ++ joinPath prefix "include"], gcPrefixLibs prefix)
   else
     None
 
@@ -428,10 +456,7 @@ detectGCBrew cc tmpDir = match runCommand "brew" ["--prefix", "bdw-gc"]
   Ok (0, out, _) =>
     let prefix = stringTrim out
     if prefix /= "" && fileExists (joinPath prefix "include/gc.h") then
-      Some (
-        ["-I" ++ joinPath prefix "include"],
-        ["-L" ++ joinPath prefix "lib", "-lgc"],
-      )
+      Some (["-I" ++ joinPath prefix "include"], gcPrefixLibs prefix)
     else
       detectGCBare cc tmpDir
   _ => detectGCBare cc tmpDir
@@ -2019,13 +2044,19 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "sweepEachStale" ((PList)) (ELit LUnit))
 (DFunDef false "sweepEachStale" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "d"))) (DoExpr (EApp (EVar "sweepEachStale") (EVar "rest")))))
 (DTypeSig false "detectGC" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "gcPrefix") (EApp (EApp (EVar "envOr") (ELit (LString "GC_PREFIX"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "/=" (EVar "gcPrefix") (ELit (LString ""))) (EApp (EVar "detectGCPrefix") (EVar "gcPrefix")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "libs") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "words") (EVar "cflags")) (EApp (EVar "words") (EVar "libs"))))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir"))))))))
+(DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "gcPrefix") (EApp (EApp (EVar "envOr") (ELit (LString "GC_PREFIX"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "/=" (EVar "gcPrefix") (ELit (LString ""))) (EApp (EVar "detectGCPrefix") (EVar "gcPrefix")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "archive") (EApp (EVar "gcArchiveIn") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--variable=libdir")) (ELit (LString "bdw-gc")))))) (DoLet false false (PVar "libs") (EIf (EBinOp "==" (EVar "archive") (ELit (LString ""))) (EApp (EVar "words") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (EApp (EApp (EVar "gcStaticLibs") (EVar "archive")) (EApp (EVar "words") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--static")) (ELit (LString "--libs")) (ELit (LString "bdw-gc")))))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "words") (EVar "cflags")) (EVar "libs")))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir"))))))))
+(DTypeSig false "gcArchiveIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "gcArchiveIn" ((PVar "libDir")) (EBlock (DoLet false false (PVar "archive") (EApp (EApp (EVar "joinPath") (EVar "libDir")) (ELit (LString "libgc.a")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "libDir") (ELit (LString ""))) (EApp (EVar "fileExists") (EVar "archive"))) (EVar "archive") (ELit (LString ""))))))
+(DTypeSig true "gcStaticLibs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "gcStaticLibs" ((PVar "archive") (PVar "libs")) (EApp (EApp (EVar "map") (ELam ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "-lgc"))) (EVar "archive") (EVar "t")))) (EVar "libs")))
+(DTypeSig false "gcPrefixLibs" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "gcPrefixLibs" ((PVar "prefix")) (EBlock (DoLet false false (PVar "libDir") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "lib")))) (DoLet false false (PVar "archive") (EApp (EVar "gcArchiveIn") (EVar "libDir"))) (DoExpr (EIf (EBinOp "==" (EVar "archive") (ELit (LString ""))) (EListLit (EBinOp "++" (ELit (LString "-L")) (EVar "libDir")) (ELit (LString "-lgc"))) (EListLit (EVar "archive"))))))
 (DTypeSig false "detectGCPrefix" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "detectGCPrefix" ((PVar "prefix")) (EIf (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include/gc.h")))) (EApp (EVar "Some") (ETuple (EListLit (EBinOp "++" (ELit (LString "-I")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include"))))) (EListLit (EBinOp "++" (ELit (LString "-L")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "lib")))) (ELit (LString "-lgc"))))) (EVar "None")))
+(DFunDef false "detectGCPrefix" ((PVar "prefix")) (EIf (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include/gc.h")))) (EApp (EVar "Some") (ETuple (EListLit (EBinOp "++" (ELit (LString "-I")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include"))))) (EApp (EVar "gcPrefixLibs") (EVar "prefix")))) (EVar "None")))
 (DTypeSig false "gcQuery" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "gcQuery" ((PVar "prog") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "prog")) (EVar "args")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "stringTrim") (EVar "out"))) (arm (PCon "Err" PWild) () (ELit (LString "")))))
 (DTypeSig false "detectGCBrew" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "detectGCBrew" ((PVar "cc") (PVar "tmpDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "brew"))) (EListLit (ELit (LString "--prefix")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "prefix") (ELit (LString ""))) (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include/gc.h"))))) (EApp (EVar "Some") (ETuple (EListLit (EBinOp "++" (ELit (LString "-I")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include"))))) (EListLit (EBinOp "++" (ELit (LString "-L")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "lib")))) (ELit (LString "-lgc"))))) (EApp (EApp (EVar "detectGCBare") (EVar "cc")) (EVar "tmpDir")))))) (arm PWild () (EApp (EApp (EVar "detectGCBare") (EVar "cc")) (EVar "tmpDir")))))
+(DFunDef false "detectGCBrew" ((PVar "cc") (PVar "tmpDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "brew"))) (EListLit (ELit (LString "--prefix")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "prefix") (ELit (LString ""))) (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include/gc.h"))))) (EApp (EVar "Some") (ETuple (EListLit (EBinOp "++" (ELit (LString "-I")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include"))))) (EApp (EVar "gcPrefixLibs") (EVar "prefix")))) (EApp (EApp (EVar "detectGCBare") (EVar "cc")) (EVar "tmpDir")))))) (arm PWild () (EApp (EApp (EVar "detectGCBare") (EVar "cc")) (EVar "tmpDir")))))
 (DTypeSig false "detectGCBare" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "detectGCBare" ((PVar "cc") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "probe") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "gcprobe.c")))) (DoLet false false (PVar "probeOut") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "gcprobe.out")))) (DoLet false false PWild (EApp (EApp (EVar "writeFile") (EVar "probe")) (ELit (LString "#include <gc.h>\nint main(void){return 0;}\n")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EListLit (EVar "probe") (ELit (LString "-lgc")) (ELit (LString "-o")) (EVar "probeOut"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EApp (EVar "Some") (ETuple (EListLit) (EListLit (ELit (LString "-lgc")))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "libgcMissingError" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -2207,13 +2238,19 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DFunDef false "sweepEachStale" ((PList)) (ELit LUnit))
 (DFunDef false "sweepEachStale" ((PCons (PVar "d") (PVar "rest"))) (EBlock (DoLet false false PWild (EApp (EVar "cleanupTempDir") (EVar "d"))) (DoExpr (EApp (EVar "sweepEachStale") (EVar "rest")))))
 (DTypeSig false "detectGC" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "gcPrefix") (EApp (EApp (EVar "envOr") (ELit (LString "GC_PREFIX"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "/=" (EVar "gcPrefix") (ELit (LString ""))) (EApp (EVar "detectGCPrefix") (EVar "gcPrefix")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "libs") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "words") (EVar "cflags")) (EApp (EVar "words") (EVar "libs"))))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir"))))))))
+(DFunDef false "detectGC" ((PVar "cc") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "gcPrefix") (EApp (EApp (EVar "envOr") (ELit (LString "GC_PREFIX"))) (ELit (LString "")))) (DoExpr (EIf (EBinOp "/=" (EVar "gcPrefix") (ELit (LString ""))) (EApp (EVar "detectGCPrefix") (EVar "gcPrefix")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--exists")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EBlock (DoLet false false (PVar "cflags") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--cflags")) (ELit (LString "bdw-gc"))))) (DoLet false false (PVar "archive") (EApp (EVar "gcArchiveIn") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--variable=libdir")) (ELit (LString "bdw-gc")))))) (DoLet false false (PVar "libs") (EIf (EBinOp "==" (EVar "archive") (ELit (LString ""))) (EApp (EVar "words") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--libs")) (ELit (LString "bdw-gc"))))) (EApp (EApp (EVar "gcStaticLibs") (EVar "archive")) (EApp (EVar "words") (EApp (EApp (EVar "gcQuery") (ELit (LString "pkg-config"))) (EListLit (ELit (LString "--static")) (ELit (LString "--libs")) (ELit (LString "bdw-gc")))))))) (DoExpr (EApp (EVar "Some") (ETuple (EApp (EVar "words") (EVar "cflags")) (EVar "libs")))))) (arm PWild () (EApp (EApp (EVar "detectGCBrew") (EVar "cc")) (EVar "tmpDir"))))))))
+(DTypeSig false "gcArchiveIn" (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "String"))))
+(DFunDef false "gcArchiveIn" ((PVar "libDir")) (EBlock (DoLet false false (PVar "archive") (EApp (EApp (EVar "joinPath") (EVar "libDir")) (ELit (LString "libgc.a")))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "libDir") (ELit (LString ""))) (EApp (EVar "fileExists") (EVar "archive"))) (EVar "archive") (ELit (LString ""))))))
+(DTypeSig true "gcStaticLibs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "gcStaticLibs" ((PVar "archive") (PVar "libs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "t")) (EIf (EBinOp "==" (EVar "t") (ELit (LString "-lgc"))) (EVar "archive") (EVar "t")))) (EVar "libs")))
+(DTypeSig false "gcPrefixLibs" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "gcPrefixLibs" ((PVar "prefix")) (EBlock (DoLet false false (PVar "libDir") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "lib")))) (DoLet false false (PVar "archive") (EApp (EVar "gcArchiveIn") (EVar "libDir"))) (DoExpr (EIf (EBinOp "==" (EVar "archive") (ELit (LString ""))) (EListLit (EBinOp "++" (ELit (LString "-L")) (EVar "libDir")) (ELit (LString "-lgc"))) (EListLit (EVar "archive"))))))
 (DTypeSig false "detectGCPrefix" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "detectGCPrefix" ((PVar "prefix")) (EIf (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include/gc.h")))) (EApp (EVar "Some") (ETuple (EListLit (EBinOp "++" (ELit (LString "-I")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include"))))) (EListLit (EBinOp "++" (ELit (LString "-L")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "lib")))) (ELit (LString "-lgc"))))) (EVar "None")))
+(DFunDef false "detectGCPrefix" ((PVar "prefix")) (EIf (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include/gc.h")))) (EApp (EVar "Some") (ETuple (EListLit (EBinOp "++" (ELit (LString "-I")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include"))))) (EApp (EVar "gcPrefixLibs") (EVar "prefix")))) (EVar "None")))
 (DTypeSig false "gcQuery" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "String")))))
 (DFunDef false "gcQuery" ((PVar "prog") (PVar "args")) (EMatch (EApp (EApp (EVar "runCommand") (EVar "prog")) (EVar "args")) (arm (PCon "Ok" (PTuple PWild (PVar "out") PWild)) () (EApp (EVar "stringTrim") (EVar "out"))) (arm (PCon "Err" PWild) () (ELit (LString "")))))
 (DTypeSig false "detectGCBrew" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "detectGCBrew" ((PVar "cc") (PVar "tmpDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "brew"))) (EListLit (ELit (LString "--prefix")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "prefix") (ELit (LString ""))) (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include/gc.h"))))) (EApp (EVar "Some") (ETuple (EListLit (EBinOp "++" (ELit (LString "-I")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include"))))) (EListLit (EBinOp "++" (ELit (LString "-L")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "lib")))) (ELit (LString "-lgc"))))) (EApp (EApp (EVar "detectGCBare") (EVar "cc")) (EVar "tmpDir")))))) (arm PWild () (EApp (EApp (EVar "detectGCBare") (EVar "cc")) (EVar "tmpDir")))))
+(DFunDef false "detectGCBrew" ((PVar "cc") (PVar "tmpDir")) (EMatch (EApp (EApp (EVar "runCommand") (ELit (LString "brew"))) (EListLit (ELit (LString "--prefix")) (ELit (LString "bdw-gc")))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EBlock (DoLet false false (PVar "prefix") (EApp (EVar "stringTrim") (EVar "out"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "/=" (EVar "prefix") (ELit (LString ""))) (EApp (EVar "fileExists") (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include/gc.h"))))) (EApp (EVar "Some") (ETuple (EListLit (EBinOp "++" (ELit (LString "-I")) (EApp (EApp (EVar "joinPath") (EVar "prefix")) (ELit (LString "include"))))) (EApp (EVar "gcPrefixLibs") (EVar "prefix")))) (EApp (EApp (EVar "detectGCBare") (EVar "cc")) (EVar "tmpDir")))))) (arm PWild () (EApp (EApp (EVar "detectGCBare") (EVar "cc")) (EVar "tmpDir")))))
 (DTypeSig false "detectGCBare" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
 (DFunDef false "detectGCBare" ((PVar "cc") (PVar "tmpDir")) (EBlock (DoLet false false (PVar "probe") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "gcprobe.c")))) (DoLet false false (PVar "probeOut") (EApp (EApp (EVar "joinPath") (EVar "tmpDir")) (ELit (LString "gcprobe.out")))) (DoLet false false PWild (EApp (EApp (EVar "writeFile") (EVar "probe")) (ELit (LString "#include <gc.h>\nint main(void){return 0;}\n")))) (DoExpr (EMatch (EApp (EApp (EVar "runCommand") (EVar "cc")) (EListLit (EVar "probe") (ELit (LString "-lgc")) (ELit (LString "-o")) (EVar "probeOut"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) PWild PWild)) () (EApp (EVar "Some") (ETuple (EListLit) (EListLit (ELit (LString "-lgc")))))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "libgcMissingError" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))

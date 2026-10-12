@@ -737,10 +737,24 @@ if [ ! -x "$EMITTER" ]; then
 fi
 
 # ---- Resolve GC flags (clang/libgc already proven present) ----------------------
+# A pkg-config or brew install that ships libgc.a links the archive (#503): the
+# linker then resolves libgc's thread-local free-list lookup and its internal
+# calls directly instead of through the PLT and __tls_get_addr, which every
+# allocation pays for (-7.8% instructions on a `check`). Same choice as detectGC
+# in compiler/driver/build_cmd.mdk. No archive keeps `-lgc`.
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
   GC_CFLAGS="$(pkg-config --cflags bdw-gc)"; GC_LIBS="$(pkg-config --libs bdw-gc)"
+  GC_ARCHIVE="$(pkg-config --variable=libdir bdw-gc)/libgc.a"
+  if [ -f "$GC_ARCHIVE" ]; then
+    GC_LIBS=""
+    for _t in $(pkg-config --static --libs bdw-gc); do
+      [ "$_t" = "-lgc" ] && _t="$GC_ARCHIVE"
+      GC_LIBS="$GC_LIBS $_t"
+    done
+  fi
 elif GC_PREFIX="$(brew --prefix bdw-gc 2>/dev/null)" && [ -n "$GC_PREFIX" ] && [ -f "$GC_PREFIX/include/gc.h" ]; then
   GC_CFLAGS="-I$GC_PREFIX/include"; GC_LIBS="-L$GC_PREFIX/lib -lgc"
+  [ -f "$GC_PREFIX/lib/libgc.a" ] && GC_LIBS="$GC_PREFIX/lib/libgc.a"
 elif printf '#include <gc.h>\nint main(void){return 0;}\n' | "$CC" -x c - -lgc -o /dev/null 2>/dev/null; then
   GC_CFLAGS=""; GC_LIBS="-lgc"
 else
