@@ -1,5 +1,5 @@
 # META
-source_lines=746
+source_lines=756
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -58,7 +58,7 @@ import frontend.lexer.{
   tokenizeWithOffsetPairs,
 }
 import frontend.parser.{
-  parseWithPositions,
+  parseWithPositionsOptPairs,
   Positions,
   DeclPos,
   positionsDecls,
@@ -663,20 +663,30 @@ drainAll (FmtState pieces (c :: rest) vlines cursor started placed) =
 -- Convenience: parse + collect comments + format, from source text.
 export
 formatSource : String -> String
-formatSource src = match parseWithPositions src
-  (decls, pos) =>
-    let commas = trailingCommaLocs ()
-    let arms = unitStarts ()
-    restoreTripleQuotedStrings
-      src
-      (formatProgram
-        decls
-        (positionsDecls pos)
-        (positionsVariantLines pos)
-        commas
-        arms
-        (collectComments src)
-        src)
+formatSource src = match tokenizeWithOffsetPairs src
+  (toks, pairs) => formatSourcePairs src toks pairs
+
+-- `formatSource` over an ALREADY-tokenized stream (`tokenizeWithOffsetPairs
+-- src`), so a caller that lexed the source for its own parse does not lex it
+-- again. Panics on a parse failure, as `parseWithPositions` does.
+export
+formatSourcePairs : String -> List Token -> List (Int, Int) -> String
+formatSourcePairs src toks pairs =
+  match parseWithPositionsOptPairs src toks pairs
+    Some (decls, pos) =>
+      let commas = trailingCommaLocs ()
+      let arms = unitStarts ()
+      restoreTripleQuotedStrings
+        src
+        (formatProgram
+          decls
+          (positionsDecls pos)
+          (positionsVariantLines pos)
+          commas
+          arms
+          (collectComments src)
+          src)
+    None => panic "parse error"
 
 -- ── Triple-quoted string preservation ─────────────
 -- `formatProgram` re-renders every string literal in the canonical
@@ -752,7 +762,7 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "render" false) (mem "printDecl" false) (mem "printDataDeclCommented" false) (mem "printNamedFieldData" false) (mem "PComment" true) (mem "setComments" false) (mem "takeLeftoverComments" false) (mem "commentsPlaced" false) (mem "setTrailingCommas" false) (mem "setImportForced" false) (mem "setUnitStarts" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "trailingCommaLocs" false) (mem "unitStarts" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOptPairs" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "trailingCommaLocs" false) (mem "unitStarts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitNl" false) (mem "joinNl" false))))
 (DData Public "FmtMode" () ((variant "FmtWrite" (ConPos)) (variant "FmtStdout" (ConPos)) (variant "FmtCheck" (ConPos))) ())
 (DData Private "FmtState" () ((variant "FmtState" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyCon "Bool") (TyCon "Int")))) ())
@@ -900,7 +910,9 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DFunDef false "drainAll" ((PCon "FmtState" (PVar "pieces") (PList) (PVar "vlines") (PVar "cursor") (PVar "started") (PVar "placed"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EListLit)) (EVar "vlines")) (EVar "cursor")) (EVar "started")) (EVar "placed")))
 (DFunDef false "drainAll" ((PCon "FmtState" (PVar "pieces") (PCons (PVar "c") (PVar "rest")) (PVar "vlines") (PVar "cursor") (PVar "started") (PVar "placed"))) (EApp (EVar "drainAll") (EApp (EApp (EVar "emitComment") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "rest")) (EVar "vlines")) (EVar "cursor")) (EVar "started")) (EVar "placed"))) (EVar "c"))))
 (DTypeSig true "formatSource" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "formatSource" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositions") (EVar "src")) (arm (PTuple (PVar "decls") (PVar "pos")) () (EBlock (DoLet false false (PVar "commas") (EApp (EVar "trailingCommaLocs") (ELit LUnit))) (DoLet false false (PVar "arms") (EApp (EVar "unitStarts") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "restoreTripleQuotedStrings") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EVar "commas")) (EVar "arms")) (EApp (EVar "collectComments") (EVar "src"))) (EVar "src"))))))))
+(DFunDef false "formatSource" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EApp (EApp (EApp (EVar "formatSourcePairs") (EVar "src")) (EVar "toks")) (EVar "pairs")))))
+(DTypeSig true "formatSourcePairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "String")))))
+(DFunDef false "formatSourcePairs" ((PVar "src") (PVar "toks") (PVar "pairs")) (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "toks")) (EVar "pairs")) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "pos"))) () (EBlock (DoLet false false (PVar "commas") (EApp (EVar "trailingCommaLocs") (ELit LUnit))) (DoLet false false (PVar "arms") (EApp (EVar "unitStarts") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "restoreTripleQuotedStrings") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EVar "commas")) (EVar "arms")) (EApp (EVar "collectComments") (EVar "src"))) (EVar "src")))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "parse error"))))))
 (DTypeSig false "isTripleStringAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "isTripleStringAt" ((PVar "src") (PVar "pos")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "src")) (ELit (LString "\"\"\""))))
 (DTypeSig false "stringTokenInfo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String")))))))
@@ -928,7 +940,7 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "render" false) (mem "printDecl" false) (mem "printDataDeclCommented" false) (mem "printNamedFieldData" false) (mem "PComment" true) (mem "setComments" false) (mem "takeLeftoverComments" false) (mem "commentsPlaced" false) (mem "setTrailingCommas" false) (mem "setImportForced" false) (mem "setUnitStarts" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "Comment" false) (mem "commentLine" false) (mem "commentCol" false) (mem "commentText" false) (mem "collectComments" false) (mem "tokenizeWithOffsetPairs" false))))
-(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "trailingCommaLocs" false) (mem "unitStarts" false))))
+(DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositionsOptPairs" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "positionsVariantLines" false) (mem "positionsLastContentLine" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "trailingCommaLocs" false) (mem "unitStarts" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "isEmptyL" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "splitNl" false) (mem "joinNl" false))))
 (DData Public "FmtMode" () ((variant "FmtWrite" (ConPos)) (variant "FmtStdout" (ConPos)) (variant "FmtCheck" (ConPos))) ())
 (DData Private "FmtState" () ((variant "FmtState" (ConPos (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Int")) (TyCon "Int") (TyCon "Bool") (TyCon "Int")))) ())
@@ -1076,7 +1088,9 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
 (DFunDef false "drainAll" ((PCon "FmtState" (PVar "pieces") (PList) (PVar "vlines") (PVar "cursor") (PVar "started") (PVar "placed"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EListLit)) (EVar "vlines")) (EVar "cursor")) (EVar "started")) (EVar "placed")))
 (DFunDef false "drainAll" ((PCon "FmtState" (PVar "pieces") (PCons (PVar "c") (PVar "rest")) (PVar "vlines") (PVar "cursor") (PVar "started") (PVar "placed"))) (EApp (EVar "drainAll") (EApp (EApp (EVar "emitComment") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "rest")) (EVar "vlines")) (EVar "cursor")) (EVar "started")) (EVar "placed"))) (EVar "c"))))
 (DTypeSig true "formatSource" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "formatSource" ((PVar "src")) (EMatch (EApp (EVar "parseWithPositions") (EVar "src")) (arm (PTuple (PVar "decls") (PVar "pos")) () (EBlock (DoLet false false (PVar "commas") (EApp (EVar "trailingCommaLocs") (ELit LUnit))) (DoLet false false (PVar "arms") (EApp (EVar "unitStarts") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "restoreTripleQuotedStrings") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EVar "commas")) (EVar "arms")) (EApp (EVar "collectComments") (EVar "src"))) (EVar "src"))))))))
+(DFunDef false "formatSource" ((PVar "src")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "toks") (PVar "pairs")) () (EApp (EApp (EApp (EVar "formatSourcePairs") (EVar "src")) (EVar "toks")) (EVar "pairs")))))
+(DTypeSig true "formatSourcePairs" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "String")))))
+(DFunDef false "formatSourcePairs" ((PVar "src") (PVar "toks") (PVar "pairs")) (EMatch (EApp (EApp (EApp (EVar "parseWithPositionsOptPairs") (EVar "src")) (EVar "toks")) (EVar "pairs")) (arm (PCon "Some" (PTuple (PVar "decls") (PVar "pos"))) () (EBlock (DoLet false false (PVar "commas") (EApp (EVar "trailingCommaLocs") (ELit LUnit))) (DoLet false false (PVar "arms") (EApp (EVar "unitStarts") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "restoreTripleQuotedStrings") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "formatProgram") (EVar "decls")) (EApp (EVar "positionsDecls") (EVar "pos"))) (EApp (EVar "positionsVariantLines") (EVar "pos"))) (EVar "commas")) (EVar "arms")) (EApp (EVar "collectComments") (EVar "src"))) (EVar "src")))))) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "parse error"))))))
 (DTypeSig false "isTripleStringAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "isTripleStringAt" ((PVar "src") (PVar "pos")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "pos")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "src")) (ELit (LString "\"\"\""))))
 (DTypeSig false "stringTokenInfo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Token")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Bool") (TyCon "String")))))))

@@ -5653,33 +5653,43 @@ parseWithPositionsLocated src = parseWithPositions src
 export
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
 parseWithPositionsOpt src = match tokenizeWithOffsetPairs src
-  (tokList, offPairList) =>
-    -- One tokenize pass feeds the token array, the (start,end) offsets and the
-    -- per-token lines: `tokenizeWithOffsetPairs` yields the same token stream as
-    -- the line-only entry, and its pair starts are the offsets the lines are
-    -- derived from.  The SAME offsets prime `setLocState`, so `located`'s
-    -- expression `ELoc`s carry real spans for every caller (LSP included).
-    let toks = arrayFromList tokList
-    let offs = arrayFromList offPairList
-    let lines =
-      arrayFromList (offsetsToLines (stringToChars src) (map fst offPairList))
-    let nameLineStarts = lineStartsOf src
-    let _ = setLocState src offs
-    trailingCommaLocsRef := []
-    unitStartsRef := []
-    match runP programWithSpans toks 0
-      PErr _ _ => None
-      PFatal _ _ => None
-      POk spans pos =>
-        if isEofTok (peekTok toks pos) then
-          let decls = map ((d, _s, _e) => d) spans
-          let dps = map (declPosOf toks lines offs nameLineStarts) spans
-          let vls = allVariantLines toks lines spans
-          let lcl = lastContentLineOf toks lines spans
-          let cls = allChainLines toks lines spans
-          Some (decls, Positions dps vls lcl cls)
-        else
-          None
+  (tokList, offPairList) => parseWithPositionsOptPairs src tokList offPairList
+
+-- `parseWithPositionsOpt` over an ALREADY-tokenized stream: `tokList` and
+-- `offPairList` must be `tokenizeWithOffsetPairs src`.  Lets a caller that has
+-- lexed the source once (fmt) parse it without a second lexing pass.
+export
+parseWithPositionsOptPairs : String ->
+  List Token ->
+  List (Int, Int) ->
+  Option (List Decl, Positions)
+parseWithPositionsOptPairs src tokList offPairList =
+  -- One tokenize pass feeds the token array, the (start,end) offsets and the
+  -- per-token lines: `tokenizeWithOffsetPairs` yields the same token stream as
+  -- the line-only entry, and its pair starts are the offsets the lines are
+  -- derived from.  The SAME offsets prime `setLocState`, so `located`'s
+  -- expression `ELoc`s carry real spans for every caller (LSP included).
+  let toks = arrayFromList tokList
+  let offs = arrayFromList offPairList
+  let lines =
+    arrayFromList (offsetsToLines (stringToChars src) (map fst offPairList))
+  let nameLineStarts = lineStartsOf src
+  let _ = setLocState src offs
+  trailingCommaLocsRef := []
+  unitStartsRef := []
+  match runP programWithSpans toks 0
+    PErr _ _ => None
+    PFatal _ _ => None
+    POk spans pos =>
+      if isEofTok (peekTok toks pos) then
+        let decls = map ((d, _s, _e) => d) spans
+        let dps = map (declPosOf toks lines offs nameLineStarts) spans
+        let vls = allVariantLines toks lines spans
+        let lcl = lastContentLineOf toks lines spans
+        let cls = allChainLines toks lines spans
+        Some (decls, Positions dps vls lcl cls)
+      else
+        None
 
 -- Check that the parse consumed all tokens (no trailing garbage), panic on error.
 resultDecls : Array Token -> PR (List Decl) -> List Decl
@@ -6469,6 +6479,17 @@ export
 parseResult : String -> Result ParseError (List Decl)
 parseResult src = match tokenizeWithOffsets src
   (tokList, offList) => parseResultWith src tokList offList
+
+-- `parseResult` over an ALREADY-tokenized stream: `tokList` and `offPairs` must
+-- be `tokenizeWithOffsetPairs src` (its pair starts are `tokenizeWithOffsets`'s
+-- offsets).  Lets a caller that has lexed the source once reuse the tokens.
+export
+parseResultPairs : String ->
+  List Token ->
+  List (Int, Int) ->
+  Result ParseError (List Decl)
+parseResultPairs src tokList offPairs =
+  parseResultWith src tokList (map fst offPairs)
 
 -- Non-panicking located parse: the `parseResult` of `parseLocated`.  Sets the
 -- loc-state refs from the (start, end) offset pairs — so the ELoc wrappers carry

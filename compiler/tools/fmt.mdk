@@ -54,7 +54,7 @@ import frontend.lexer.{
   tokenizeWithOffsetPairs,
 }
 import frontend.parser.{
-  parseWithPositions,
+  parseWithPositionsOptPairs,
   Positions,
   DeclPos,
   positionsDecls,
@@ -659,20 +659,30 @@ drainAll (FmtState pieces (c :: rest) vlines cursor started placed) =
 -- Convenience: parse + collect comments + format, from source text.
 export
 formatSource : String -> String
-formatSource src = match parseWithPositions src
-  (decls, pos) =>
-    let commas = trailingCommaLocs ()
-    let arms = unitStarts ()
-    restoreTripleQuotedStrings
-      src
-      (formatProgram
-        decls
-        (positionsDecls pos)
-        (positionsVariantLines pos)
-        commas
-        arms
-        (collectComments src)
-        src)
+formatSource src = match tokenizeWithOffsetPairs src
+  (toks, pairs) => formatSourcePairs src toks pairs
+
+-- `formatSource` over an ALREADY-tokenized stream (`tokenizeWithOffsetPairs
+-- src`), so a caller that lexed the source for its own parse does not lex it
+-- again. Panics on a parse failure, as `parseWithPositions` does.
+export
+formatSourcePairs : String -> List Token -> List (Int, Int) -> String
+formatSourcePairs src toks pairs =
+  match parseWithPositionsOptPairs src toks pairs
+    Some (decls, pos) =>
+      let commas = trailingCommaLocs ()
+      let arms = unitStarts ()
+      restoreTripleQuotedStrings
+        src
+        (formatProgram
+          decls
+          (positionsDecls pos)
+          (positionsVariantLines pos)
+          commas
+          arms
+          (collectComments src)
+          src)
+    None => panic "parse error"
 
 -- ── Triple-quoted string preservation ─────────────
 -- `formatProgram` re-renders every string literal in the canonical

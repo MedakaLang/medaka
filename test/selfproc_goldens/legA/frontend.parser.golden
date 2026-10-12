@@ -528,6 +528,7 @@ parseProgram : ParserE <> (List Decl)
 parseProp : Bool -> ParserE <> Decl
 parseRecordUpdate : ParserE <> Expr
 parseResult : String -> Result ParseError (List Decl)
+parseResultPairs : String -> List Token -> List (Int, Int) -> Result ParseError (List Decl)
 parseResultWith : String -> List Token -> List Int -> Result ParseError (List Decl)
 parseRhsExpr : ParserE <> Expr
 parseSectionOp : String -> ParserE <> Expr
@@ -560,6 +561,7 @@ parseWhereBindings : ParserE <> (List (String, List Pat, Expr, Loc))
 parseWithPositions : String -> (List Decl, Positions)
 parseWithPositionsLocated : String -> (List Decl, Positions)
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
+parseWithPositionsOptPairs : String -> List Token -> List (Int, Int) -> Option (List Decl, Positions)
 patAppFor : Token -> ParserE <> Pat
 patConsTail : Pat -> ParserE <> Pat
 patListFor : Token -> ParserE <> Pat
