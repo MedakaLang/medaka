@@ -83,6 +83,41 @@ CEIL_bintrees_ir="${BINTREES_IR_CEIL:-2880000000}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mdk-emittedfloor.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
+# The ceilings measure what the backend emits, and were derived with libgc
+# linked as a shared library. `medaka build` now links libgc.a when the install
+# ships one (detectGC), which adds the collector itself (~170 KB, its size set
+# by the install rather than this tree) and would swamp the bytes metric. So the
+# fixtures build against a GC_PREFIX holding only the installed shared library.
+# Without pkg-config or brew there is nothing to build one from, and detectGC's
+# bare `-lgc` arm links shared anyway, so GC_PREFIX stays unset.
+GC_SHARED_PREFIX=""
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
+  _gc_inc="$(pkg-config --variable=includedir bdw-gc)"
+  _gc_lib="$(pkg-config --variable=libdir bdw-gc)"
+elif _gc_brew="$(brew --prefix bdw-gc 2>/dev/null)" && [ -n "$_gc_brew" ]; then
+  _gc_inc="$_gc_brew/include"
+  _gc_lib="$_gc_brew/lib"
+else
+  _gc_inc=""
+  _gc_lib=""
+fi
+if [ -n "$_gc_lib" ]; then
+  GC_SHARED_PREFIX="$WORK/gc-shared"
+  mkdir -p "$GC_SHARED_PREFIX/lib"
+  ln -s "$_gc_inc" "$GC_SHARED_PREFIX/include"
+  _gc_found=0
+  for _so in libgc.so libgc.dylib; do
+    if [ -e "$_gc_lib/$_so" ]; then
+      ln -s "$_gc_lib/$_so" "$GC_SHARED_PREFIX/lib/$_so"
+      _gc_found=1
+    fi
+  done
+  if [ "$_gc_found" = 0 ] || [ ! -f "$GC_SHARED_PREFIX/include/gc.h" ]; then
+    printf 'FAIL: no shared libgc or gc.h under %s / %s to measure against.\n' "$_gc_lib" "$_gc_inc" >&2
+    exit 1
+  fi
+fi
+
 # measure FIXTURE SRC -> sets $M_BYTES and $M_IR, or leaves both empty on
 # failure. The heap is pinned so allocator growth policy cannot make the
 # count workload-dependent (same rationale as check_ir_floor's measure_ir).
@@ -91,7 +126,8 @@ measure() {
   _bin="$WORK/$_name.bin"
   M_BYTES=""
   M_IR=""
-  if ! MEDAKA_STRICT=1 "$MEDAKA" build "$_src" -o "$_bin" >/dev/null 2>"$WORK/build.$_name.err"; then
+  if ! env ${GC_SHARED_PREFIX:+GC_PREFIX="$GC_SHARED_PREFIX"} MEDAKA_STRICT=1 \
+      "$MEDAKA" build "$_src" -o "$_bin" >/dev/null 2>"$WORK/build.$_name.err"; then
     printf 'measure: `medaka build %s` failed — not grading a fixture that will not build.\n' "$_src" >&2
     cat "$WORK/build.$_name.err" >&2
     return 1

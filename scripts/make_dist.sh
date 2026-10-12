@@ -60,7 +60,7 @@ esac
 
 ARTIFACT="medaka-${VERSION}-${OS_NAME}-${ARCH_NAME}"
 
-for f in "$REPO_ROOT/medaka" "$REPO_ROOT/medaka_emitter" "$REPO_ROOT/stdlib" "$REPO_ROOT/runtime/medaka_rt.c" "$REPO_ROOT/LICENSE"; do
+for f in "$REPO_ROOT/medaka" "$REPO_ROOT/medaka_emitter" "$REPO_ROOT/stdlib" "$REPO_ROOT/runtime/medaka_rt.c" "$REPO_ROOT/LICENSE" "$REPO_ROOT/LICENSE-bdwgc"; do
   if [ ! -e "$f" ]; then
     echo "make_dist.sh: missing $f — run 'make medaka' first" >&2
     exit 1
@@ -78,10 +78,21 @@ cp "$REPO_ROOT/medaka_emitter" "$TREE/medaka_emitter"
 cp -R "$REPO_ROOT/stdlib" "$TREE/stdlib"
 cp "$REPO_ROOT/runtime/medaka_rt.c" "$TREE/runtime/medaka_rt.c"
 cp "$REPO_ROOT/LICENSE" "$TREE/LICENSE"
+cp "$REPO_ROOT/LICENSE-bdwgc" "$TREE/LICENSE-bdwgc"
 
 # Test scaffolding, not an install artifact — the repo's own golden fixtures,
 # irrelevant once shipped (764 KB of the 8.6 MB tree, #2514 review F-7).
 find "$TREE/stdlib" \( -name '*.lextok.golden' -o -name '*.test.golden' \) -delete
+
+# Whether this medaka carries libgc inside it (build_native_medaka.sh links the
+# archive when the install has one) decides what the README promises. `nm` exists
+# on both platforms; Mach-O prefixes C symbols with `_`.
+if nm "$REPO_ROOT/medaka" 2>/dev/null | grep -Eq ' [Tt] _?GC_malloc$'; then
+  GC_REQ="\`medaka\` carries the Boehm GC (\`libgc\`) inside it."
+else
+  GC_REQ="\`medaka\` is dynamically linked against the Boehm GC (\`libgc\`); most Linux
+  distributions and macOS via Homebrew (\`brew install bdw-gc\`) already have it."
+fi
 
 cat > "$TREE/README.md" <<README
 # Medaka $VERSION ($OS_NAME-$ARCH_NAME)
@@ -92,13 +103,14 @@ directory, or move the whole directory anywhere and run it from there.
 ## Requirements
 
 - \`medaka run\`/\`medaka check\` etc. need no additional runtime dependency —
-  \`medaka\` is dynamically linked against the Boehm GC (\`libgc\`); most Linux
-  distributions and macOS via Homebrew (\`brew install bdw-gc\`) already have it.
+  $GC_REQ
 - \`medaka build\` additionally needs \`clang\` on \$PATH, and libgc's headers
-  (\`gc.h\`) at build time (Debian/Ubuntu: \`apt install libgc-dev\`; macOS:
-  \`brew install bdw-gc\`).
+  and library at build time (Debian/Ubuntu: \`apt install libgc-dev\`; macOS:
+  \`brew install bdw-gc\`). When that install ships \`libgc.a\`, the programs
+  it builds carry libgc inside them too.
 
-See LICENSE for the terms this software is distributed under.
+See LICENSE for the terms this software is distributed under, and
+LICENSE-bdwgc for the Boehm GC's notice.
 README
 
 TARBALL="$OUT_DIR/$ARTIFACT.tar.gz"

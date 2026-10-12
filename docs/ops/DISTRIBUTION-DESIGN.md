@@ -57,12 +57,14 @@ machine." File:line references are from the audited tree.
    extern, unbound in `medaka run` → resolve error). So shipping `medaka` alone
    does not give a working `build`; ship **both** binaries + default the env var.
 
-4. **libgc (bdw-gc) is a required system dep, dynamically linked (`-lgc`), not
-   vendored.** Three-tier probe in `detectGC` (`build_cmd.mdk:85-118`):
-   pkg-config `bdw-gc` → `brew --prefix bdw-gc` → bare `-lgc`; hard-errors with an
-   install hint if all fail (`:254`). Both *building* and *every produced binary*
-   depend on libgc at runtime. → **Either lean on the package manager to install
-   it, or vendor + static-link.**
+4. **libgc (bdw-gc) is a required system dep, not vendored.** Three-tier probe in
+   `detectGC` (`compiler/driver/build_cmd.mdk`): pkg-config `bdw-gc` →
+   `brew --prefix bdw-gc` → bare `-lgc`; hard-errors with an install hint if all
+   fail. *Building* always needs libgc installed. When the install ships
+   `libgc.a`, both the `medaka` binary and every produced binary link it
+   statically, for allocation speed (#503), and then don't need libgc at run
+   time. Otherwise they link `-lgc` and do. → **Either lean on the package
+   manager to install it, or vendor + static-link.**
 
 5. **`clang` assumed on `PATH`** (`CC` default `"clang"`, `medaka_cli.mdk:483`),
    and **`runtime/medaka_rt.c` is compiled from source on every build** (no
@@ -156,8 +158,10 @@ the observed case. This is what splits the fix cleanly into two tracks (D2).
 - **Lean on the package manager; do NOT chase a zero-dep static binary for
   0.1.0.** Homebrew formula with `depends_on "bdw-gc"` (+ Xcode CLT provides
   clang) makes blockers #4/#5 mostly evaporate on mac. Linux ships a tarball whose
-  README lists `clang` + `libgc-dev`. Static-linking libgc is *optional polish*,
-  deferred — don't let it block launch.
+  README lists `clang` + `libgc-dev`. Vendoring libgc is *optional polish*,
+  deferred — don't let it block launch. Since #4042 the system `libgc.a` is
+  linked when the install ships one (point 4), and the tarball carries
+  `LICENSE-bdwgc`.
 - **exe-relative stdlib discovery** (blocker #1): add an `executable_path`
   primitive (`_NSGetExecutablePath` on mac, `readlink /proc/self/exe` on Linux),
   and default `MEDAKA_ROOT` to a layout-relative path (e.g. `<exedir>/../lib/medaka`
@@ -221,8 +225,9 @@ the observed case. This is what splits the fix cleanly into two tracks (D2).
 - **D4 — release CI matrix.** Tagged CI builds mac (arm64; x86_64 if cheap) +
   Linux (x86_64; arm64 if cheap) artifacts + Homebrew bottle. This is
   `RELEASE-0.1.0-PLAN.md` §W8's delivery vehicle.
-- **D5 (optional polish, post-0.1.0-OK)** — vendor + static-link libgc for a
-  self-contained binary; prebuilt `libmedaka_rt` so clang doesn't recompile the
+- **D5 (optional polish, post-0.1.0-OK)** — vendor libgc, so building needs no
+  libgc install either (static linking against an installed `libgc.a` already
+  happens, point 4); prebuilt `libmedaka_rt` so clang doesn't recompile the
   runtime each build; `/tmp` scratch hardening.
 
 ## 6. Cross-checks
