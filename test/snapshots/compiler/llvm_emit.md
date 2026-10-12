@@ -1,5 +1,5 @@
 # META
-source_lines=15556
+source_lines=15555
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -8679,9 +8679,8 @@ groupArity (ImplGroup _ _ _ _ _ arity _ _) = arity
 
 -- the group among [groups] whose lifted define is `@mdk_impl_<symTag>_<method>` —
 -- i.e. the one `gatherGroup` built for the SAME impl an entry-holding call site
--- names.  `symTag` (`implEntrySymTag`) is exactly the identity `gatherGroup` used to
--- name that define (the entry's stamp), so this is a
--- same-identity lookup, not a second guess: any hit is THE group whose `arity`
+-- names.  `symTag` (`implEntrySymTag`) is the entry's stamp, which also names that
+-- define, so this is a same-identity lookup, not a second guess: any hit is THE group whose `arity`
 -- field is what the define was actually emitted to accept.
 findGroupBySymTag : String -> List ImplGroup -> Option ImplGroup
 findGroupBySymTag _ [] = None
@@ -15497,9 +15496,9 @@ ctag (CStringIndex _ _) = "CStringIndex"
 ctag (CStringSlice _ _ _ _) = "CStringSlice"
 ctag (CListIndex _ _) = "CListIndex"
 ctag (CListSlice _ _ _ _) = "CListSlice"
-ctag (CMethod _ _) = "CMethod (typeclass dispatch) (MethodEvidence "
-ctag (CDict _ _) = " CDict (dictionary) "
-ctag (CVariantUpdate _ _ _) = " CVariantUpdate) (named-field variant update)"
+ctag (CMethod _ _) = "CMethod (typeclass dispatch)"
+ctag (CDict _ _) = "CDict (dictionary)"
+ctag (CVariantUpdate _ _ _) = "CVariantUpdate (named-field variant update)"
 ctag _ = "?"
 
 -- ── D4 emitter-completeness inventory entry point ───────────────────────────
@@ -18380,9 +18379,9 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DFunDef false "ctag" ((PCon "CStringSlice" PWild PWild PWild PWild)) (ELit (LString "CStringSlice")))
 (DFunDef false "ctag" ((PCon "CListIndex" PWild PWild)) (ELit (LString "CListIndex")))
 (DFunDef false "ctag" ((PCon "CListSlice" PWild PWild PWild PWild)) (ELit (LString "CListSlice")))
-(DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (typeclass dispatch) (MethodEvidence ")))
-(DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString " CDict (dictionary) ")))
-(DFunDef false "ctag" ((PCon "CVariantUpdate" PWild PWild PWild)) (ELit (LString " CVariantUpdate) (named-field variant update)")))
+(DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (typeclass dispatch)")))
+(DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString "CDict (dictionary)")))
+(DFunDef false "ctag" ((PCon "CVariantUpdate" PWild PWild PWild)) (ELit (LString "CVariantUpdate (named-field variant update)")))
 (DFunDef false "ctag" (PWild) (ELit (LString "?")))
 (DTypeSig true "emitProgramGaps" (TyFun (TyCon "EmitInput") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitProgramGaps" ((PVar "input") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") PWild PWild))) (EBlock (DoLet false false (PVar "cfg") (ERecordCreate "EmitStateConfig" ((fa "counter0" (ELit (LInt 0))) (fa "globalsReg0" (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups")))) (fa "gapMode" (EVar "Record")) (fa "lazyGlobalNames" (EListLit)) (fa "runDispatchAnalysis" (EVar "False"))))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries"))) (DoLet false false PWild (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "Record")) (EVar "input")) (EVar "cp")))) (DoLet false false PWild (EApp (EVar "emitPreamble") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emitFnsGaps") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoLet false false PWild (EApp (EApp (EVar "emitImplsGaps") (EVar "e")) (EVar "implEntries"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EVar "omEmpty")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog"))))))
@@ -21220,9 +21219,9 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DFunDef false "ctag" ((PCon "CStringSlice" PWild PWild PWild PWild)) (ELit (LString "CStringSlice")))
 (DFunDef false "ctag" ((PCon "CListIndex" PWild PWild)) (ELit (LString "CListIndex")))
 (DFunDef false "ctag" ((PCon "CListSlice" PWild PWild PWild PWild)) (ELit (LString "CListSlice")))
-(DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (typeclass dispatch) (MethodEvidence ")))
-(DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString " CDict (dictionary) ")))
-(DFunDef false "ctag" ((PCon "CVariantUpdate" PWild PWild PWild)) (ELit (LString " CVariantUpdate) (named-field variant update)")))
+(DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (typeclass dispatch)")))
+(DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString "CDict (dictionary)")))
+(DFunDef false "ctag" ((PCon "CVariantUpdate" PWild PWild PWild)) (ELit (LString "CVariantUpdate (named-field variant update)")))
 (DFunDef false "ctag" (PWild) (ELit (LString "?")))
 (DTypeSig true "emitProgramGaps" (TyFun (TyCon "EmitInput") (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "emitProgramGaps" ((PVar "input") (PAs "cp" (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "implEntries") PWild PWild))) (EBlock (DoLet false false (PVar "cfg") (ERecordCreate "EmitStateConfig" ((fa "counter0" (ELit (LInt 0))) (fa "globalsReg0" (EApp (EVar "initGlobalsRegReady") (EApp (EVar "valBinds") (EVar "groups")))) (fa "gapMode" (EVar "Record")) (fa "lazyGlobalNames" (EListLit)) (fa "runDispatchAnalysis" (EVar "False"))))) (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "buildEmitState") (EVar "cfg")) (EVar "input")) (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "implEntries"))) (DoLet false false PWild (EApp (EApp (EVar "noteUnprovidedExterns") (EVar "e")) (EApp (EApp (EApp (EVar "unprovidedExterns") (EVar "Record")) (EVar "input")) (EVar "cp")))) (DoLet false false PWild (EApp (EVar "emitPreamble") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emitFnsGaps") (EVar "e")) (EApp (EVar "fnBinds") (EVar "groups")))) (DoLet false false PWild (EApp (EApp (EVar "emitImplsGaps") (EVar "e")) (EVar "implEntries"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "emitTopBindsGaps") (EVar "e")) (EVar "omEmpty")) (EApp (EVar "valBinds") (EVar "groups")))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EFieldAccess (EVar "e") "gapLog"))))))

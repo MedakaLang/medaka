@@ -166,7 +166,8 @@ givenNames RNone = []
 givenNames (RScalar _) = []
 
 -- [r] is answered by a dictionary that is only known at run time: a given, or a
--- projection out of one.
+-- projection out of one.  Accepts any projection without checking its root;
+-- core_validate.givenRooted recurses through RProj to check it.
 export
 isGivenRooted : Route -> Bool
 isGivenRooted (RDict _) = True
@@ -376,17 +377,18 @@ noImplSym : ImplSym
 noImplSym = ImplSym "" "" ""
 
 -- ── programs ───────────────────────────────────────────────────────────────
--- A lowered program: top-level function groups (coalesced multi-clause), the
--- constructor table (name → arity, for building VCon makers), the ctor→type map
--- eval needs for runtime type tags, (slice 5) the lowered typeclass
--- impl/default entries, the method-context table and the declaration facts.
--- Slice-1 programs carry an empty impl list.
--- The method-context table: per interface method of the lowered declarations whose
+-- The method-context table, the fifth field of `CProgram`: per interface method of the lowered declarations whose
 -- own `=>` context has a slot, keyed by `core_ir_lower.ifaceMethodArityKey`, the
 -- number of constraints in that context that mention a type variable.  It is read
 -- off the declared signature, not the typechecker's evidence, so
 -- `core_validate.validateMethodContexts` can hold a `CMethod`'s method routes and an
 -- impl entry's leading dictionaries to it.
+
+-- A lowered program: top-level function groups (coalesced multi-clause), the
+-- constructor table (name → arity, for building VCon makers), the ctor→type map
+-- eval needs for runtime type tags, (slice 5) the lowered typeclass
+-- impl/default entries, the method-context table and the declaration facts.
+-- Slice-1 programs carry an empty impl list.
 public export data CProgram =
   | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
 

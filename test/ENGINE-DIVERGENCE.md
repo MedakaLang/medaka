@@ -300,8 +300,9 @@ validates; it traps at run time on a reachable `unreachable`. So the signature i
 |---|---|---|---|---|
 | `llvmM/inherited_default_dict_dispatch` | `woof` / `MEOW` / `WOOF` | **trap: `runtime error: unreachable`** | #1020 (S1) | At the time: a CROSS-MODULE `impl` that overrides none of an interface's methods lowered to ZERO `CImplEntry` (`lowerDeclImpl` emitted one entry per method the impl *defines*; desugar's now-deleted `fillImplDefaults` specialized same-module only). `emitMethodDispatchRef` (`compiler/backend/wasm_emit.mdk`) built its if-chain from `methodImpls` — tagged entries only — and had no default-synthesis arms at all, i.e. no peer of `llvm_emit.mdk`'s `emitDefaultDispatchChain` / `emitDispatchChainDefaulted`. No arm matched the receiver's dict tag, so the chain fell through to the trailing `unreachable`. See the PROMOTED note below for the current mechanism. |
 
-The wasm backend already owns the per-tag default machinery (`defaultForW`,
-`defaultFnNameW`, `ensureDefaultEmittedW`, `restampIfaceDictsW`) and uses it on the RKey
+At the time, the wasm backend already owned a per-tag default machinery (`defaultForW`,
+`defaultFnNameW`, `ensureDefaultEmittedW`, `restampIfaceDictsW`; impl symbols are now
+stamped by `core_ir_lower.stampImplSymbols`) and used it on the RKey
 path in `emitDefaultRKeyRef`; what is missing is wiring it into the RDict chain. Note the
 gap is wider than the method-less impl #948 turned on — the derived-Ord ADT inheriting
 `max`/`min` is exactly what `emitDispatchChainDefaulted` exists for on the LLVM side.

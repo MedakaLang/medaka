@@ -12,7 +12,7 @@
 --     reading the dict.
 --
 --   * even without that shortcut no arm could have fired: the emitter derived this
---     impl's route key from `headTagUnique` over CImplEntries — and the inheriting
+--     impl's route key from the head tag alone, unique among CImplEntries — and the inheriting
 --     impl produces NONE — so it hashed the bare head "Box", while typecheck's
 --     INTERFACE-keyed `keyForSiteByIface` (which does see a method-less impl) stamped
 --     the canonical key `Speak|(Box Int)|` into the caller's dict cell.  Different

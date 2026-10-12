@@ -12114,9 +12114,9 @@ ctag (CRangeList _ _ _) = "CRangeList (W7)"
 ctag (CRangeArray _ _ _) = "CRangeArray (W7)"
 ctag (CIndex _ _) = "CIndex (W7)"
 ctag (CSlice _ _ _ _) = "CSlice (W7)"
-ctag (CMethod _ _) = "CMethod (dispatch — W5) (MethodEvidence "
-ctag (CDict _ _) = " CDict (dispatch — W5) "
-ctag (CLetGroup _ _) = " CLetGroup) (where/let-group — W4)"
+ctag (CMethod _ _) = "CMethod (dispatch — W5)"
+ctag (CDict _ _) = "CDict (dispatch — W5)"
+ctag (CLetGroup _ _) = "CLetGroup (where/let-group — W4)"
 ctag _ = "?"
 
 -- a readable tag for an unsupported pattern.

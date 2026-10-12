@@ -188,6 +188,10 @@ fillEvidence arr ((e@(EvEntry (EvId m i) _)) :: rest) =
       panic "evidence table: two goals published under \{m}#\{intToString i}"
   fillEvidence arr rest
 
+neverPublished : String -> String -> Int -> a
+neverPublished what m i =
+  panic "evidence table: \{what} \{m}#\{intToString i} was never published"
+
 -- The dictionary routes solved for [ev], slot-ordered.
 --
 -- Every `EDictAt` has an entry; an application that needs no routing (the #739
@@ -202,12 +206,9 @@ evDictRoutes (EvId m i) = match !evidenceRef
       "evidence table: no elaboration has published one (looking up \{m}#\{intToString i})"
   Some arr =>
     if i >= arrayLength arr then
-      panic
-        "evidence table: dictionary application \{m}#\{intToString i} was never published"
+      neverPublished "dictionary application" m i
     else match arrayGetUnsafe i arr
-      None =>
-        panic
-          "evidence table: dictionary application \{m}#\{intToString i} was never published"
+      None => neverPublished "dictionary application" m i
       Some (EvEntry (EvId m2 _) v) =>
         if m2 == m then
           evRoutesOf v
@@ -241,12 +242,9 @@ evMethodRoutes (EvId m i) = match !evidenceRef
       "evidence table: no elaboration has published one (looking up method \{m}#\{intToString i})"
   Some arr =>
     if i >= arrayLength arr then
-      panic
-        "evidence table: method occurrence \{m}#\{intToString i} was never published"
+      neverPublished "method occurrence" m i
     else match arrayGetUnsafe i arr
-      None =>
-        panic
-          "evidence table: method occurrence \{m}#\{intToString i} was never published"
+      None => neverPublished "method occurrence" m i
       Some (EvEntry (EvId m2 _) v) =>
         if m2 == m then
           evMethodOf v

@@ -1,5 +1,5 @@
 # META
-source_lines=3993
+source_lines=3980
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -2767,7 +2767,8 @@ ifaceImplHeadEntries _ = []
 -- ── emitted impl symbols: the one rule, and its collision guard (#1950) ───────
 -- An impl method is emitted as `mdk_impl_<symTag>_<method>`, where `symTag` is the
 -- encoded head tag when that head is the SOLE impl of (method, head), and otherwise
--- (TYPECHECK-AUDIT C7) the encoded canonical dispatch key.  `stampImplSymbols` is
+-- the encoded canonical dispatch key (the key that tells apart same-head impls whose
+-- type arguments differ).  `stampImplSymbols` is
 -- the only place that rule is written: it stamps every entry with its `ImplSym`, and
 -- both emitters read the stamp.  The encoding is `private_mangle.injectiveIdent`,
 -- which is injective, so two distinct keys can never reach one symbol through the
@@ -3635,20 +3636,6 @@ ifaceWordOfKey : String -> String
 ifaceWordOfKey key = match splitOnChar '|' key
   w :: _ => w
   [] => key
-
--- The interface SPELLING an `ifaceWordOf` word names: the part after
--- `<module>::`, or the whole word when no origin was stamped (a module id never
--- contains `:`).
---
--- > ifaceNameOfWord "core::Show"
--- "Show"
--- > ifaceNameOfWord "Show"
--- "Show"
-export
-ifaceNameOfWord : String -> String
-ifaceNameOfWord word = match reverseL (splitOnChar ':' word)
-  name :: _ => name
-  [] => word
 
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
 -- Per interface method that carries a method-level `=>` constraint (foldMap's
@@ -5152,8 +5139,6 @@ nodeTag _ = "?"
 (DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EVar "display") (EVar "mname"))) (ELit (LString ""))))
 (DTypeSig true "ifaceWordOfKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ifaceWordOfKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "|"))) (EVar "key")) (arm (PCons (PVar "w") PWild) () (EVar "w")) (arm (PList) () (EVar "key"))))
-(DTypeSig true "ifaceNameOfWord" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "ifaceNameOfWord" ((PVar "word")) (EMatch (EApp (EVar "reverseL") (EApp (EApp (EVar "splitOnChar") (ELit (LChar ":"))) (EVar "word"))) (arm (PCons (PVar "name") PWild) () (EVar "name")) (arm (PList) () (EVar "word"))))
 (DTypeSig true "methodConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "methodConstraintIfaces" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "methodConstraintIfaceEntries")) (EVar "prog")))
 (DTypeSig false "methodConstraintIfaceEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -6440,8 +6425,6 @@ nodeTag _ = "?"
 (DFunDef false "ifaceMethodArityKey" ((PVar "ifaceWord") (PVar "mname")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "ifaceWord"))) (ELit (LString "#"))) (EApp (EMethodRef "display") (EVar "mname"))) (ELit (LString ""))))
 (DTypeSig true "ifaceWordOfKey" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ifaceWordOfKey" ((PVar "key")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "|"))) (EVar "key")) (arm (PCons (PVar "w") PWild) () (EVar "w")) (arm (PList) () (EVar "key"))))
-(DTypeSig true "ifaceNameOfWord" (TyFun (TyCon "String") (TyCon "String")))
-(DFunDef false "ifaceNameOfWord" ((PVar "word")) (EMatch (EApp (EVar "reverseL") (EApp (EApp (EVar "splitOnChar") (ELit (LChar ":"))) (EVar "word"))) (arm (PCons (PVar "name") PWild) () (EVar "name")) (arm (PList) () (EVar "word"))))
 (DTypeSig true "methodConstraintIfaces" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "methodConstraintIfaces" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "methodConstraintIfaceEntries")) (EVar "prog")))
 (DTypeSig false "methodConstraintIfaceEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
