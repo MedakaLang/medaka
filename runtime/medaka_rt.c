@@ -79,6 +79,12 @@
 #define GC_THREADS
 #include <gc.h>
 
+/* Initial heap to pre-expand, in bytes, for the COMPILER/CLI only: the stage-B
+ * provenance object (test/build_native_medaka.sh) defines this for ./medaka. Every
+ * other link (user programs, the emitter, the seed) keeps the weak 0, so none of
+ * them pre-expand the heap. An explicit GC_INITIAL_HEAP_SIZE in the environment wins. */
+__attribute__((weak)) const long long mdk_gc_initial_heap_bytes = 0;
+
 /* Initialize Boehm once before main().  This runtime owns `int main` (bottom of
  * this file); the emitted IR's entry is `mdk_program_main`, which we run on a
  * GC_pthread_create'd large-stack worker thread.  A constructor runs first, near
@@ -86,8 +92,11 @@
  * (main-thread) stack base; the worker thread's own stack is registered
  * separately by GC_pthread_create.  GC_malloc would otherwise lazily init on its
  * first call. */
+
 __attribute__((constructor)) static void mdk_gc_init(void) {
   GC_INIT();
+  if (mdk_gc_initial_heap_bytes > 0 && !getenv("GC_INITIAL_HEAP_SIZE"))
+    GC_expand_hp((size_t)mdk_gc_initial_heap_bytes);
   /* Perf tuning (compiler/PERF-RESULTS.md): Medaka workloads are
    * allocation-heavy and mostly short-lived (the emitter alone allocates
    * ~4200 cells/run plus every cons/closure/ADT).  The default free-space
@@ -710,8 +719,17 @@ void mdk_print_str(long long w) {
 long long mdk_int_to_string(long long tagged) {
   long long n = tagged >> 1;
   char buf[32];
-  int len = snprintf(buf, sizeof buf, "%lld", n);
-  return mdk_str_lit(buf, len);
+  /* Hand-rolled decimal, byte-identical to "%lld": snprintf's machinery was
+   * the largest single cost under every key build (lenKey, "\{n}"). The
+   * magnitude is taken in unsigned space so LLONG_MIN is exact. */
+  unsigned long long u = n < 0 ? 0ULL - (unsigned long long)n : (unsigned long long)n;
+  char *p = buf + sizeof buf;
+  do {
+    *--p = (char)('0' + u % 10);
+    u /= 10;
+  } while (u != 0);
+  if (n < 0) *--p = '-';
+  return mdk_str_lit(p, (long long)(buf + sizeof buf - p));
 }
 
 long long mdk_float_to_string(double d) {
