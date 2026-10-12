@@ -1,0 +1,270 @@
+-- Sibling test module for `compiler/ir/core_ir_sexp.mdk` and
+-- `compiler/ir/core_ir_sexp_parse.mdk` ([P-TEST-SIBLING]).
+--
+-- The printer and the parser are two halves of one format, and the gate that
+-- round-trips a dump (`core_ir_roundtrip_main`) compares evaluator output, which
+-- ignores a call's mode, its tail flag, a record's field ordinals and a binder's
+-- stamp.  Each case here builds the node, prints it, parses it back and reads
+-- that field off the result, so a printer or parser that drops one goes red.
+
+import test.{
+  Expectation,
+  expectAll,
+  expectEqual,
+  expectTextContainsAll,
+  expectTrue,
+  labelFail,
+}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.typecheck.{elaborateOne, grantWholeDomain}
+import types.runtime_types.{BinderRow(..), RuntimeType(..)}
+import frontend.ast.{BinderId(..), Lit(..), Pat(..), Addr(..), noDeclLoc}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  CField(..),
+  CProgram(..),
+  CallMode(..),
+  CallSite(..),
+  DeclFacts(..),
+  noDeclFacts,
+  programBinderIds,
+}
+import ir.core_ir_lower.{EmitTarget(..), lowerProgramEmit}
+import ir.core_ir_sexp.{cprogramToSexp}
+import ir.core_ir_sexp_parse.{parseCProgram}
+import backend.core_validate.{validateBinderStamps}
+import support.util.{listLen}
+import list.{sortOn}
+
+-- A one-binding program whose body is [body].
+programOf : CExpr -> CProgram
+programOf body =
+  CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] [] [] noDeclFacts
+
+-- The body of the only binding of a parsed program.
+bodyOf : CProgram -> Option CExpr
+bodyOf (CProgram [CBind _ [CClause _ body] _] _ _ _ _ _) = Some body
+bodyOf _ = None
+
+roundTrip : CExpr -> Option CExpr
+roundTrip body = bodyOf (parseCProgram (cprogramToSexp (programOf body)))
+
+callOf : CallMode -> Bool -> CExpr
+callOf mode tailPos =
+  CApp (CVar "f" AGlobal) [CLit (LInt 1)] (CallSite mode tailPos)
+
+-- The mode and tail flag of a parsed application.
+siteOf : Option CExpr -> Option (CallMode, Bool)
+siteOf (Some (CApp _ _ (CallSite mode tailPos))) = Some (mode, tailPos)
+siteOf _ = None
+
+modeName : Option (CallMode, Bool) -> String
+modeName None = "none"
+modeName (Some (CallExact, t)) = "exact \{debug t}"
+modeName (Some (CallPartial n, t)) = "partial \{intToString n} \{debug t}"
+modeName (Some (CallOver n, t)) = "over \{intToString n} \{debug t}"
+modeName (Some (CallDynamic, t)) = "dynamic \{debug t}"
+
+test "a call's mode and tail flag survive the round trip" = expectAll [
+  labelFail
+    "exact, tail"
+    (expectEqual
+      "exact True"
+      (modeName (siteOf (roundTrip (callOf CallExact True))))),
+  labelFail
+    "partial 2, not tail"
+    (expectEqual
+      "partial 2 False"
+      (modeName (siteOf (roundTrip (callOf (CallPartial 2) False))))),
+  labelFail
+    "over 3, not tail"
+    (expectEqual
+      "over 3 False"
+      (modeName (siteOf (roundTrip (callOf (CallOver 3) False))))),
+  labelFail
+    "dynamic, tail"
+    (expectEqual
+      "dynamic True"
+      (modeName (siteOf (roundTrip (callOf CallDynamic True))))),
+]
+
+-- The declared field ordinal of a parsed field access, record literal and update.
+accessOrdinal : Option CExpr -> Int
+accessOrdinal (Some (CFieldAccess _ _ _ o)) = o
+accessOrdinal _ = 0 - 9
+
+recordOrdinals : Option CExpr -> List Int
+recordOrdinals (Some (CRecord _ fields)) =
+  map
+    (f => match f
+      CField _ o _ => o)
+    fields
+recordOrdinals (Some (CRecordUpdate _ _ fields)) =
+  map
+    (f => match f
+      CField _ o _ => o)
+    fields
+recordOrdinals _ = []
+
+test "a record's field ordinals survive the round trip" = expectAll [
+  labelFail
+    "field access"
+    (expectEqual
+      3
+      (accessOrdinal (roundTrip (CFieldAccess (CVar "r" AGlobal) "d" "R" 3)))),
+  labelFail
+    "record literal"
+    (expectEqual
+      [0, 1, 2]
+      (recordOrdinals
+        (roundTrip
+          (CRecord "R" [
+            CField "a" 0 (CLit (LInt 1)),
+            CField "b" 1 (CLit (LInt 2)),
+            CField "c" 2 (CLit (LInt 3)),
+          ])))),
+  labelFail
+    "record update"
+    (expectEqual
+      [1, 3]
+      (recordOrdinals
+        (roundTrip
+          (CRecordUpdate "R" (CVar "r" AGlobal) [
+            CField "b" 1 (CLit (LInt 2)),
+            CField "d" 3 (CLit (LInt 4)),
+          ])))),
+  labelFail
+    "a Ref read stays unstamped"
+    (expectEqual
+      (0 - 1)
+      (accessOrdinal
+        (roundTrip (CFieldAccess (CVar "r" AGlobal) "value" "" (0 - 1))))),
+]
+
+floatOf : Option CExpr -> Option Float
+floatOf (Some (CLit (LFloat x))) = Some x
+floatOf _ = None
+
+test "a float literal survives the round trip" = expectAll [
+  labelFail
+    "zero"
+    (expectEqual (Some 0.0) (floatOf (roundTrip (CLit (LFloat 0.0))))),
+  labelFail
+    "fraction"
+    (expectEqual (Some 2.5) (floatOf (roundTrip (CLit (LFloat 2.5))))),
+  labelFail
+    "negative"
+    (expectEqual
+      (Some (0.0 - 1.25))
+      (floatOf (roundTrip (CLit (LFloat (0.0 - 1.25)))))),
+]
+
+-- ── binder stamps ────────────────────────────────────────────────────────────
+
+prelude : String
+prelude =
+  "interface Num a where\n  fromInt : Int -> a\n  add : a -> a -> a\nimpl Num Int where\n  fromInt n = n\n  add a b = a"
+
+-- A shadowing pair of different scalar types, a Float, a pair and a lambda.
+src : String
+src =
+  "f x = x\nmain =\n  let v = 1.5\n  let w = \"s\"\n  let t = (1, 2)\n  let g = k => k\n  let v = 2\n  f (g v)"
+
+typed : CProgram
+typed =
+  lowerProgramEmit
+    TargetNative
+    (elaborateOne [] (desugar (parse prelude)) (
+      "sexp",
+      grantWholeDomain (desugar (parse src)),
+    ))
+
+-- The table's rows as "name type [return]" text, sorted: the original holds them
+-- in ordinal order and a parsed program in the dump's walk order.
+rowsOf : CProgram -> List String
+rowsOf (CProgram _ _ _ _ _ facts) =
+  sortOn
+    (r => r)
+    (map
+      (r => "\{r.brName} \{debug r.brType} \{debug r.brReturns}")
+      facts.factBinders)
+
+test "the dump lists each binder's type and parses back to the same table" =
+  let text = cprogramToSexp typed
+  let back = parseCProgram text
+  expectAll [
+    labelFail
+      "the section is present"
+      (expectTextContainsAll ["(binder-types"] text),
+    labelFail
+      "the Float binder is typed"
+      (expectTextContainsAll ["RTFloat"] text),
+    labelFail
+      "the String binder is typed"
+      (expectTextContainsAll ["RTString"] text),
+    labelFail
+      "the dump is a fixpoint of parse then print"
+      (expectEqual text (cprogramToSexp back)),
+    labelFail
+      "the rows are the same"
+      (expectEqual (rowsOf typed) (rowsOf back)),
+    labelFail
+      "every binder of the parsed program has a row"
+      (expectEqual [] (validateBinderStamps back)),
+    labelFail
+      "as many binder occurrences"
+      (expectEqual
+        (listLen (programBinderIds typed))
+        (listLen (programBinderIds back))),
+  ]
+
+-- A clone of one source binder, as an interface default body is lowered once per
+-- instance, repeats its id: the dump keeps the two occurrences one binder.
+test "two occurrences of one binder id stay one binder" =
+  let shared = BinderId "m" 700
+  let prog =
+    CProgram
+      [
+        CBind
+          "main"
+          [
+            CClause
+              [PVar "a" noDeclLoc shared, PVar "b" noDeclLoc shared]
+              (CLit (LInt 0)),
+          ]
+          noDeclLoc,
+      ]
+      []
+      []
+      []
+      []
+      DeclFacts {
+        factRequires = [],
+        factSupers = [],
+        factBinders = [
+          BinderRow {
+            brId = shared,
+            brName = "a",
+            brType = RTFloat,
+            brReturns = None,
+          },
+        ],
+      }
+  let back = parseCProgram (cprogramToSexp prog)
+  expectAll [
+    labelFail "one row" (expectEqual ["a RTFloat None"] (rowsOf back)),
+    labelFail
+      "both occurrences name it"
+      (expectTrue (match programBinderIds back
+        [x, y] => idOrdinal x == idOrdinal y
+        _ => False)),
+    labelFail
+      "re-printed"
+      (expectEqual (cprogramToSexp prog) (cprogramToSexp back)),
+  ]
+
+idOrdinal : BinderId -> Int
+idOrdinal (BinderId _ n) = n

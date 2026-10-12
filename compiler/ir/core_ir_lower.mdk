@@ -12,6 +12,7 @@
 
 import frontend.ast.{
   noBinderId,
+  BinderId(..),
   Lit(..),
   Loc(..),
   noDeclLoc,
@@ -75,8 +76,17 @@ import ir.core_ir.{
   CHead(..),
   FailSite(..),
   siteSentinelName,
+  mapProgramBinders,
+  obviousRuntimeType,
+  withBinderRows,
 }
-import frontend.desugar.{mapProg}
+import frontend.desugar.{mapProg, freshBinderId}
+import types.runtime_types.{
+  BinderRow(..),
+  RuntimeType(..),
+  binderRowIfInstalled,
+}
+import map as BM
 import frontend.marker.{localBoundNames}
 import types.disposition.{
   DispositionTable,
@@ -1090,11 +1100,53 @@ emitDeclFacts dispositions decls =
   DeclFacts {
     factRequires = map (k => (k, optionOr 0 (omLookup k reqs))) (omKeys reqs),
     factSupers = map (w => (w, ifaceSuperCount w table)) words,
+    factBinders = [],
   }
 
 withDeclFacts : DeclFacts -> CProgram -> CProgram
 withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
   CProgram groups ctorArs ctorTypes impls mctx facts
+
+-- ── binder stamps: every binder pattern says what it holds ────────────────────
+-- Run last, so no later pass can mint a binder it has not stamped.  A binder that
+-- carries a source id is stamped from the typechecker's published table (a row
+-- the table lacks stays absent, which `core_validate.validateBinderStamps`
+-- refuses).  A binder with no id is synthesized, by the typechecker or by an
+-- earlier lowering pass: it gets a fresh id and a row of the type its right-hand
+-- side states, else `RTValue`, the answer "no static fact".  The rows are
+-- snapshotted into the program's `DeclFacts`, so a consumer never reads the
+-- typechecker's table, which the next elaboration replaces.
+stampBinders : CProgram -> CProgram
+stampBinders prog =
+  let rows = Ref BM.Tip
+  let stamped = mapProgramBinders (stampVisit rows) prog
+  withBinderRows (BM.values !rows) stamped
+
+stampVisit : Ref (BM.Map Int BinderRow) ->
+  Option CExpr ->
+  String ->
+  BinderId ->
+  BinderId
+stampVisit rows hint x (bid@(BinderId _ n)) =
+  if n >= 0 then
+    match binderRowIfInstalled bid
+      Some row => rows := BM.set n row !rows
+      None => ()
+    bid
+  else
+    let fresh = freshBinderId ""
+    let ord = match fresh
+      BinderId _ k => k
+    let row = BinderRow {
+      brId = fresh,
+      brName = x,
+      brType = match hint
+        Some rhs => optionOr RTValue (obviousRuntimeType rhs)
+        None => RTValue,
+      brReturns = None,
+    }
+    rows := BM.set ord row !rows
+    fresh
 
 cprogramCtorTypes : CProgram -> List (String, String)
 cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
@@ -1110,7 +1162,8 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
 finishLowering : CProgram -> CProgram
-finishLowering prog = markTailSites (stampCallModes (etaSaturateProgram prog))
+finishLowering prog =
+  stampBinders (markTailSites (stampCallModes (etaSaturateProgram prog)))
 
 -- A program's defined arities: each top-level binding's clause pattern count,
 -- each constructor's field count, each impl entry's value arity by method and

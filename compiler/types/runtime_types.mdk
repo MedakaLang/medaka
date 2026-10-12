@@ -170,14 +170,71 @@ binderRow (BinderId m i) = match !binderTypesRef
   None =>
     panic
       "binder table: no elaboration has published one (looking up \{m}#\{intToString i})"
-  Some table => match get i table
-    None => None
-    Some row => match row.brId
-      BinderId m2 _ =>
-        if m2 == m then
-          Some row
-        else
-          panic "binder table: \{m}#\{intToString i} answered by module \{m2}"
+  Some table => rowIn table m i
+
+-- `binderRow` for a reader that may run with no elaboration behind it (an untyped
+-- lowering): no table answers `None` instead of panicking.
+export
+binderRowIfInstalled : BinderId -> Option BinderRow
+binderRowIfInstalled (BinderId m i) = match !binderTypesRef
+  None => None
+  Some table => rowIn table m i
+
+rowIn : BinderTypeTable -> String -> Int -> Option BinderRow
+rowIn table m i = match get i table
+  None => None
+  Some row => match row.brId
+    BinderId m2 _ =>
+      if m2 == m then
+        Some row
+      else
+        panic "binder table: \{m}#\{intToString i} answered by module \{m2}"
+
+-- The installed table, for a helper elaboration that replaces it and must put it
+-- back (`route_key.withEvidencePreserved`).
+export
+installedBinderTable : Unit -> Option BinderTypeTable
+installedBinderTable _ = !binderTypesRef
+
+export
+restoreBinderTable : Option BinderTypeTable -> Unit
+restoreBinderTable table = binderTypesRef := table
+
+-- The spelling a row's type has in a Core dump (`core_ir_sexp`), and its inverse.
+export
+runtimeTypeName : RuntimeType -> String
+runtimeTypeName RTInt = "RTInt"
+runtimeTypeName RTFloat = "RTFloat"
+runtimeTypeName RTBool = "RTBool"
+runtimeTypeName RTChar = "RTChar"
+runtimeTypeName RTString = "RTString"
+runtimeTypeName RTUnit = "RTUnit"
+runtimeTypeName RTU64 = "RTU64"
+runtimeTypeName RTI64 = "RTI64"
+runtimeTypeName RTU32 = "RTU32"
+runtimeTypeName RTI32 = "RTI32"
+runtimeTypeName RTU16 = "RTU16"
+runtimeTypeName RTU8 = "RTU8"
+runtimeTypeName RTCon = "RTCon"
+runtimeTypeName RTValue = "RTValue"
+
+export
+runtimeTypeFromName : String -> Option RuntimeType
+runtimeTypeFromName "RTInt" = Some RTInt
+runtimeTypeFromName "RTFloat" = Some RTFloat
+runtimeTypeFromName "RTBool" = Some RTBool
+runtimeTypeFromName "RTChar" = Some RTChar
+runtimeTypeFromName "RTString" = Some RTString
+runtimeTypeFromName "RTUnit" = Some RTUnit
+runtimeTypeFromName "RTU64" = Some RTU64
+runtimeTypeFromName "RTI64" = Some RTI64
+runtimeTypeFromName "RTU32" = Some RTU32
+runtimeTypeFromName "RTI32" = Some RTI32
+runtimeTypeFromName "RTU16" = Some RTU16
+runtimeTypeFromName "RTU8" = Some RTU8
+runtimeTypeFromName "RTCon" = Some RTCon
+runtimeTypeFromName "RTValue" = Some RTValue
+runtimeTypeFromName _ = None
 
 -- Every installed row, in ordinal order; empty before any elaboration.
 export

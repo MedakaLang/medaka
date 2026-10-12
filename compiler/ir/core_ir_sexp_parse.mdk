@@ -10,6 +10,7 @@
 
 import frontend.ast.{
   noBinderId,
+  BinderId(..),
   Lit(..),
   Pat(..),
   RecPatField(..),
@@ -39,7 +40,11 @@ import ir.core_ir.{
   CTBranch(..),
   CHead(..),
   FailSite(..),
+  mapProgramBinders,
+  withBinderRows,
 }
+import types.runtime_types.{BinderRow(..), RuntimeType, runtimeTypeFromName}
+import map as BM
 import support.util.{reverseL}
 
 -- ── tokenizer ─────────────────────────────────────────────────────────────────
@@ -214,7 +219,7 @@ toInt other =
 
 toLit : SExp -> Lit
 toLit (SList ((SAtom "LInt") :: [n])) = LInt (toInt n)
-toLit (SList ((SAtom "LFloat") :: [f])) = match stringToFloat (toStr f)
+toLit (SList ((SAtom "LFloat") :: [SAtom f])) = match stringToFloat f
   Some x => LFloat x
   None => panic "core_ir_sexp_parse: bad float"
 toLit (SList ((SAtom "LString") :: [s])) = LString (toStr s)
@@ -450,35 +455,100 @@ export
 parseCProgram : String -> CProgram
 parseCProgram s = match parseAll s
   SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls]) =>
-    CProgram
-      (map toCBind binds)
-      (map toCtorArity ctorArities)
-      (map toCtorType ctorTypes)
-      (map toCImplEntry impls)
-      []
-      noDeclFacts
+    buildProgram binds ctorArities ctorTypes impls [] noDeclFacts
   SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls, SList mctx]) =>
-    CProgram
-      (map toCBind binds)
-      (map toCtorArity ctorArities)
-      (map toCtorType ctorTypes)
-      (map toCImplEntry impls)
-      (map toMethodContext mctx)
-      noDeclFacts
+    buildProgram binds ctorArities ctorTypes impls mctx noDeclFacts
   SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls, SList mctx, facts]) =>
-    CProgram
-      (map toCBind binds)
-      (map toCtorArity ctorArities)
-      (map toCtorType ctorTypes)
-      (map toCImplEntry impls)
-      (map toMethodContext mctx)
-      (toDeclFacts facts)
+    buildProgram binds ctorArities ctorTypes impls mctx (toDeclFacts facts)
+  SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls, SList mctx, facts, SList ((SAtom "binder-types") :: items)]) =>
+    restoreBinders
+      items
+      (buildProgram binds ctorArities ctorTypes impls mctx (toDeclFacts facts))
   other => panic ("core_ir_sexp_parse: bad CProgram: " ++ sexprToStr other)
+
+buildProgram : List SExp ->
+  List SExp ->
+  List SExp ->
+  List SExp ->
+  List SExp ->
+  DeclFacts ->
+  CProgram
+buildProgram binds ctorArities ctorTypes impls mctx facts =
+  CProgram
+    (map toCBind binds)
+    (map toCtorArity ctorArities)
+    (map toCtorType ctorTypes)
+    (map toCImplEntry impls)
+    (map toMethodContext mctx)
+    facts
+
+-- Give each binder the id the dump's `binder-types` section lists for it, in the
+-- walk order `core_ir_sexp.binderTypesSexp` listed them in, and put the rows in
+-- the program's facts.  The ids are the dump's own numbering, not the original
+-- process's ordinals.
+restoreBinders : List SExp -> CProgram -> CProgram
+restoreBinders items prog =
+  let rows = BM.fromList (map toBinderRow (filter isRowItem items))
+  let queue = Ref (occurrenceIds items)
+  let next = Ref 0
+  let restored =
+    mapProgramBinders
+      (_ _ _ =>
+        let d = match !queue
+          Some (d :: rest) =>
+            queue := Some rest
+            d
+          _ =>
+            let k = !next
+            next := k + 1
+            k
+        if d < 0 then
+          noBinderId
+        else match BM.get d rows
+          Some row => row.brId
+          None => BinderId "" d)
+      prog
+  withBinderRows (BM.values rows) restored
+
+isRowItem : SExp -> Bool
+isRowItem (SList ((SAtom "b") :: _)) = True
+isRowItem _ = False
+
+occurrenceIds : List SExp -> Option (List Int)
+occurrenceIds [] = None
+occurrenceIds ((SList ((SAtom "ids") :: ds)) :: _) = Some (map toInt ds)
+occurrenceIds (_ :: rest) = occurrenceIds rest
+
+toBinderRow : SExp -> (Int, BinderRow)
+toBinderRow (SList ((SAtom "b") :: d :: m :: name :: ty :: rest)) =
+  let i = toInt d
+  (
+    i,
+    BinderRow {
+      brId = BinderId (toStr m) i,
+      brName = toStr name,
+      brType = toRuntimeType ty,
+      brReturns = match rest
+        [] => None
+        [r] => Some (toRuntimeType r)
+        _ => panic "core_ir_sexp_parse: bad binder row",
+    },
+  )
+toBinderRow other =
+  panic ("core_ir_sexp_parse: bad binder row: " ++ sexprToStr other)
+
+toRuntimeType : SExp -> RuntimeType
+toRuntimeType (SAtom s) = match runtimeTypeFromName s
+  Some t => t
+  None => panic ("core_ir_sexp_parse: bad runtime type: " ++ s)
+toRuntimeType other =
+  panic ("core_ir_sexp_parse: bad runtime type: " ++ sexprToStr other)
 
 toDeclFacts : SExp -> DeclFacts
 toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
   factRequires = map (toFactPair "rq") reqs,
   factSupers = map (toFactPair "sp") sups,
+  factBinders = [],
 }
 toDeclFacts other =
   panic ("core_ir_sexp_parse: bad declaration facts: " ++ sexprToStr other)

@@ -1,5 +1,5 @@
 # META
-source_lines=3981
+source_lines=4034
 stages=DESUGAR,MARK
 # SOURCE
 -- elaborated-AST → Core IR lowering (STAGE2-DESIGN §2.1).  Consumes the SAME
@@ -16,6 +16,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{
   noBinderId,
+  BinderId(..),
   Lit(..),
   Loc(..),
   noDeclLoc,
@@ -79,8 +80,17 @@ import ir.core_ir.{
   CHead(..),
   FailSite(..),
   siteSentinelName,
+  mapProgramBinders,
+  obviousRuntimeType,
+  withBinderRows,
 }
-import frontend.desugar.{mapProg}
+import frontend.desugar.{mapProg, freshBinderId}
+import types.runtime_types.{
+  BinderRow(..),
+  RuntimeType(..),
+  binderRowIfInstalled,
+}
+import map as BM
 import frontend.marker.{localBoundNames}
 import types.disposition.{
   DispositionTable,
@@ -1094,11 +1104,53 @@ emitDeclFacts dispositions decls =
   DeclFacts {
     factRequires = map (k => (k, optionOr 0 (omLookup k reqs))) (omKeys reqs),
     factSupers = map (w => (w, ifaceSuperCount w table)) words,
+    factBinders = [],
   }
 
 withDeclFacts : DeclFacts -> CProgram -> CProgram
 withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
   CProgram groups ctorArs ctorTypes impls mctx facts
+
+-- ── binder stamps: every binder pattern says what it holds ────────────────────
+-- Run last, so no later pass can mint a binder it has not stamped.  A binder that
+-- carries a source id is stamped from the typechecker's published table (a row
+-- the table lacks stays absent, which `core_validate.validateBinderStamps`
+-- refuses).  A binder with no id is synthesized, by the typechecker or by an
+-- earlier lowering pass: it gets a fresh id and a row of the type its right-hand
+-- side states, else `RTValue`, the answer "no static fact".  The rows are
+-- snapshotted into the program's `DeclFacts`, so a consumer never reads the
+-- typechecker's table, which the next elaboration replaces.
+stampBinders : CProgram -> CProgram
+stampBinders prog =
+  let rows = Ref BM.Tip
+  let stamped = mapProgramBinders (stampVisit rows) prog
+  withBinderRows (BM.values !rows) stamped
+
+stampVisit : Ref (BM.Map Int BinderRow) ->
+  Option CExpr ->
+  String ->
+  BinderId ->
+  BinderId
+stampVisit rows hint x (bid@(BinderId _ n)) =
+  if n >= 0 then
+    match binderRowIfInstalled bid
+      Some row => rows := BM.set n row !rows
+      None => ()
+    bid
+  else
+    let fresh = freshBinderId ""
+    let ord = match fresh
+      BinderId _ k => k
+    let row = BinderRow {
+      brId = fresh,
+      brName = x,
+      brType = match hint
+        Some rhs => optionOr RTValue (obviousRuntimeType rhs)
+        None => RTValue,
+      brReturns = None,
+    }
+    rows := BM.set ord row !rows
+    fresh
 
 cprogramCtorTypes : CProgram -> List (String, String)
 cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
@@ -1114,7 +1166,8 @@ cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
 -- `definedArityOf`, so the stamp and the check cannot disagree about a table.
 
 finishLowering : CProgram -> CProgram
-finishLowering prog = markTailSites (stampCallModes (etaSaturateProgram prog))
+finishLowering prog =
+  stampBinders (markTailSites (stampCallModes (etaSaturateProgram prog)))
 
 -- A program's defined arities: each top-level binding's clause pattern count,
 -- each constructor's field count, each impl entry's value arity by method and
@@ -3984,10 +4037,12 @@ nodeTag (EMethodRef _) = "EMethodRef"
 nodeTag (EDictApp _) = "EDictApp"
 nodeTag _ = "?"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderRowIfInstalled" false))))
+(DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "emptyDispositionTable" false) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
@@ -4349,13 +4404,17 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgramEmitPinned" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
 (DFunDef false "lowerProgramEmitPinned" ((PVar "target") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoLet false false (PVar "sited") (EMatch (EVar "target") (arm (PCon "TargetBothUnknown") () (EVar "prog")) (arm PWild () (EApp (EVar "siteTrapCalls") (EVar "prog"))))) (DoLet false false (PVar "dispositions") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EVar "emitDeclFacts") (EVar "dispositions")) (EVar "sited"))) (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "dispositions")) (EVar "pins")) (EVar "sited")))) (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "raw"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoExpr (EApp (EVar "finishLowering") (EApp (EVar "hoistNullaryMemo") (EMatch (EVar "target") (arm (PCon "TargetBothUnknown") () (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "raw")))) (arm PWild () (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten")))))))))))
 (DTypeSig false "emitDeclFacts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DeclFacts"))))
-(DFunDef false "emitDeclFacts" ((PVar "dispositions") (PVar "decls")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EVar "dispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EVar "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))))))))
+(DFunDef false "emitDeclFacts" ((PVar "dispositions") (PVar "decls")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EVar "dispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EVar "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EVar "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)))))))
 (DTypeSig false "withDeclFacts" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "withDeclFacts" ((PVar "facts") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))
+(DTypeSig false "stampBinders" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
+(DFunDef false "stampBinders" ((PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "Ref") (EVar "BM.Tip"))) (DoLet false false (PVar "stamped") (EApp (EApp (EVar "mapProgramBinders") (EApp (EVar "stampVisit") (EVar "rows"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "withBinderRows") (EApp (EVar "BM.values") (EUnOp "!" (EVar "rows")))) (EVar "stamped")))))
+(DTypeSig false "stampVisit" (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))) (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId"))))))
+(DFunDef false "stampVisit" ((PVar "rows") (PVar "hint") (PVar "x") (PAs "bid" (PCon "BinderId" PWild (PVar "n")))) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBlock (DoExpr (EMatch (EApp (EVar "binderRowIfInstalled") (EVar "bid")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "n")) (EVar "row")) (EUnOp "!" (EVar "rows"))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EVar "bid"))) (EBlock (DoLet false false (PVar "fresh") (EApp (EVar "freshBinderId") (ELit (LString "")))) (DoLet false false (PVar "ord") (EMatch (EVar "fresh") (arm (PCon "BinderId" PWild (PVar "k")) () (EVar "k")))) (DoLet false false (PVar "row") (ERecordCreate "BinderRow" ((fa "brId" (EVar "fresh")) (fa "brName" (EVar "x")) (fa "brType" (EMatch (EVar "hint") (arm (PCon "Some" (PVar "rhs")) () (EApp (EApp (EVar "optionOr") (EVar "RTValue")) (EApp (EVar "obviousRuntimeType") (EVar "rhs")))) (arm (PCon "None") () (EVar "RTValue")))) (fa "brReturns" (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "ord")) (EVar "row")) (EUnOp "!" (EVar "rows"))))) (DoExpr (EVar "fresh")))))
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild)) (EVar "ctorTypes"))
 (DTypeSig false "finishLowering" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "finishLowering" ((PVar "prog")) (EApp (EVar "markTailSites") (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog")))))
+(DFunDef false "finishLowering" ((PVar "prog")) (EApp (EVar "stampBinders") (EApp (EVar "markTailSites") (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog"))))))
 (DData Public "ArityEnv" () ((variant "ArityEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))) ())
 (DTypeAlias true "CallScope" () (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DTypeSig true "programArities" (TyFun (TyCon "CProgram") (TyCon "ArityEnv")))
@@ -5270,10 +5329,12 @@ nodeTag _ = "?"
 (DFunDef false "nodeTag" ((PCon "EDictApp" PWild)) (ELit (LString "EDictApp")))
 (DFunDef false "nodeTag" (PWild) (ELit (LString "?")))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "BinderId" true) (mem "Lit" true) (mem "Loc" true) (mem "noDeclLoc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Expr" true) (mem "Arm" true) (mem "Guard" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Addr" true) (mem "Decl" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "Ty" true) (mem "Constraint" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "Route" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "defaultReceiverDict" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false) (mem "numIntWord" false) (mem "numFloatWord" false))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "isGivenRooted" false) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "noImplSym" false) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "mkApp" false) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true) (mem "siteSentinelName" false) (mem "mapProgramBinders" false) (mem "obviousRuntimeType" false) (mem "withBinderRows" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false) (mem "freshBinderId" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true) (mem "binderRowIfInstalled" false))))
+(DUse false (UseAlias ("map") "BM"))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "DispositionTable" false) (mem "InstanceShape" true) (mem "emptyDispositionTable" false) (mem "ifaceSuperCount" false) (mem "inheritorsOf" false) (mem "installedDispositions" false) (mem "installedDispositionsOpt" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "buildCtorToType" false) (mem "installDispatchTables" false) (mem "lookupPositions" false) (mem "tyvarsInArgs" false) (mem "headTyconHead" false) (mem "exprStartLoc" false))))
@@ -5635,13 +5696,17 @@ nodeTag _ = "?"
 (DTypeSig true "lowerProgramEmitPinned" (TyFun (TyCon "EmitTarget") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CProgram")))))
 (DFunDef false "lowerProgramEmitPinned" ((PVar "target") (PVar "pins") (PVar "prog")) (EBlock (DoLet false false PWild (EApp (EApp (EVar "dictWitnessTagGuard") (EVar "target")) (EVar "prog"))) (DoLet false false (PVar "sited") (EMatch (EVar "target") (arm (PCon "TargetBothUnknown") () (EVar "prog")) (arm PWild () (EApp (EVar "siteTrapCalls") (EVar "prog"))))) (DoLet false false (PVar "dispositions") (EApp (EVar "installedDispositionsOpt") (ELit LUnit))) (DoLet false false (PVar "raw") (EApp (EApp (EVar "withDeclFacts") (EApp (EApp (EVar "emitDeclFacts") (EVar "dispositions")) (EVar "sited"))) (EApp (EApp (EApp (EVar "lowerProgramWith") (EVar "dispositions")) (EVar "pins")) (EVar "sited")))) (DoLet false false PWild (EApp (EVar "implSymbolCollisionGuard") (EVar "raw"))) (DoLet false false (PVar "fo") (EApp (EVar "declaredRecordFieldOrders") (EVar "prog"))) (DoExpr (EApp (EVar "finishLowering") (EApp (EVar "hoistNullaryMemo") (EMatch (EVar "target") (arm (PCon "TargetBothUnknown") () (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EApp (EApp (EVar "refoldProgram") (EVar "noLetCheck")) (EVar "raw")))) (arm PWild () (EBlock (DoLet false false (PVar "rewritten") (EApp (EApp (EVar "rewriteProgramRecPats") (EVar "fo")) (EVar "raw"))) (DoExpr (EApp (EApp (EVar "refoldProgram") (EApp (EVar "patCanMiss") (EApp (EVar "siblingTable") (EApp (EVar "cprogramCtorTypes") (EVar "raw"))))) (EVar "rewritten")))))))))))
 (DTypeSig false "emitDeclFacts" (TyFun (TyApp (TyCon "Option") (TyCon "DispositionTable")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "DeclFacts"))))
-(DFunDef false "emitDeclFacts" ((PVar "dispositions") (PVar "decls")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EVar "dispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))))))))
+(DFunDef false "emitDeclFacts" ((PVar "dispositions") (PVar "decls")) (EBlock (DoLet false false (PVar "reqs") (EApp (EVar "instanceReqCounts") (EVar "decls"))) (DoLet false false (PVar "table") (EApp (EApp (EVar "optionOr") (EVar "emptyDispositionTable")) (EVar "dispositions"))) (DoLet false false (PVar "words") (EApp (EVar "omKeys") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (EVar "ifaceWordOfKey")) (EApp (EVar "omKeys") (EVar "reqs")))) (EVar "omEmpty")))) (DoExpr (ERecordCreate "DeclFacts" ((fa "factRequires" (EApp (EApp (EMethodRef "map") (ELam ((PVar "k")) (ETuple (EVar "k") (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EVar "k")) (EVar "reqs")))))) (EApp (EVar "omKeys") (EVar "reqs")))) (fa "factSupers" (EApp (EApp (EMethodRef "map") (ELam ((PVar "w")) (ETuple (EVar "w") (EApp (EApp (EVar "ifaceSuperCount") (EVar "w")) (EVar "table"))))) (EVar "words"))) (fa "factBinders" (EListLit)))))))
 (DTypeSig false "withDeclFacts" (TyFun (TyCon "DeclFacts") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "withDeclFacts" ((PVar "facts") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") PWild)) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (EVar "facts")))
+(DTypeSig false "stampBinders" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
+(DFunDef false "stampBinders" ((PVar "prog")) (EBlock (DoLet false false (PVar "rows") (EApp (EVar "Ref") (EVar "BM.Tip"))) (DoLet false false (PVar "stamped") (EApp (EApp (EVar "mapProgramBinders") (EApp (EVar "stampVisit") (EVar "rows"))) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "withBinderRows") (EApp (EVar "BM.values") (EUnOp "!" (EVar "rows")))) (EVar "stamped")))))
+(DTypeSig false "stampVisit" (TyFun (TyApp (TyCon "Ref") (TyApp (TyApp (TyCon "BM.Map") (TyCon "Int")) (TyCon "BinderRow"))) (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId"))))))
+(DFunDef false "stampVisit" ((PVar "rows") (PVar "hint") (PVar "x") (PAs "bid" (PCon "BinderId" PWild (PVar "n")))) (EIf (EBinOp ">=" (EVar "n") (ELit (LInt 0))) (EBlock (DoExpr (EMatch (EApp (EVar "binderRowIfInstalled") (EVar "bid")) (arm (PCon "Some" (PVar "row")) () (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "n")) (EVar "row")) (EUnOp "!" (EVar "rows"))))) (arm (PCon "None") () (ELit LUnit)))) (DoExpr (EVar "bid"))) (EBlock (DoLet false false (PVar "fresh") (EApp (EVar "freshBinderId") (ELit (LString "")))) (DoLet false false (PVar "ord") (EMatch (EVar "fresh") (arm (PCon "BinderId" PWild (PVar "k")) () (EVar "k")))) (DoLet false false (PVar "row") (ERecordCreate "BinderRow" ((fa "brId" (EVar "fresh")) (fa "brName" (EVar "x")) (fa "brType" (EMatch (EVar "hint") (arm (PCon "Some" (PVar "rhs")) () (EApp (EApp (EVar "optionOr") (EVar "RTValue")) (EApp (EVar "obviousRuntimeType") (EVar "rhs")))) (arm (PCon "None") () (EVar "RTValue")))) (fa "brReturns" (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "rows")) (EApp (EApp (EApp (EVar "BM.set") (EVar "ord")) (EVar "row")) (EUnOp "!" (EVar "rows"))))) (DoExpr (EVar "fresh")))))
 (DTypeSig false "cprogramCtorTypes" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
 (DFunDef false "cprogramCtorTypes" ((PCon "CProgram" PWild PWild (PVar "ctorTypes") PWild PWild PWild)) (EVar "ctorTypes"))
 (DTypeSig false "finishLowering" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "finishLowering" ((PVar "prog")) (EApp (EVar "markTailSites") (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog")))))
+(DFunDef false "finishLowering" ((PVar "prog")) (EApp (EVar "stampBinders") (EApp (EVar "markTailSites") (EApp (EVar "stampCallModes") (EApp (EVar "etaSaturateProgram") (EVar "prog"))))))
 (DData Public "ArityEnv" () ((variant "ArityEnv" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyApp (TyCon "OrdMap") (TyCon "Int"))))) ())
 (DTypeAlias true "CallScope" () (TyApp (TyCon "OrdMap") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DTypeSig true "programArities" (TyFun (TyCon "CProgram") (TyCon "ArityEnv")))

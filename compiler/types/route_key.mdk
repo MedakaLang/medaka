@@ -60,6 +60,7 @@ import frontend.ast.{
   authTermsSurface,
 }
 import support.util.{joinWith, escStr}
+import types.runtime_types.{installedBinderTable, restoreBinderTable}
 
 -- ── the published evidence table (#2549 M2) ───────────────────────────────
 -- `EDictAt` carries an `EvId`, not a route cell, so a reader answers "what did
@@ -148,13 +149,16 @@ installedEvidenceEntries _ = match !evidenceRef
 
 -- Helper elaboration temporarily replaces the process-global evidence table.
 -- Restore the complete installed table afterward, including method-occurrence
--- entries that an elaborateModules return value does not carry.
+-- entries that an elaborateModules return value does not carry.  The binder-type
+-- table is replaced by the same elaborations and is put back with it.
 export
 withEvidencePreserved : (Unit -> <e> a) -> <e> a
 withEvidencePreserved action =
   let before = installedEvidenceEntries ()
+  let binders = installedBinderTable ()
   let result = action ()
   let _ = installEvidence before
+  let _ = restoreBinderTable binders
   result
 
 evidenceEntriesFrom : Array (Option EvEntry) ->

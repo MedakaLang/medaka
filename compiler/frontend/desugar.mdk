@@ -1175,6 +1175,7 @@ desugarIn mid prog =
 binderOrdinalRef : Ref Int
 binderOrdinalRef = Ref 0
 
+export
 freshBinderId : String -> BinderId
 freshBinderId mid =
   let n = !binderOrdinalRef
