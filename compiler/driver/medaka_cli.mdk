@@ -1341,6 +1341,22 @@ checkTargetJson rsrc csrc target stdlibDir cj = match !selectedProfile
         Some (CjParts entry (cjFoldIntoFile entry [d] triples))
       _ => None
 
+-- `build --json`'s copy of `check --json`'s target refusal: the envelope is
+-- printed here, and the answer is whether it was.  The emitter child checks
+-- the same program again; this copy only puts the code in the envelope.
+printedTargetRefusal : String ->
+  String ->
+  String ->
+  String ->
+  CheckJson ->
+  <IO> Bool
+printedTargetRefusal rsrc csrc target stdlibDir cj =
+  match checkTargetJson rsrc csrc target stdlibDir cj
+    Some refusedCj =>
+      let _ = println (ppCheckJson refusedCj)
+      True
+    None => False
+
 -- `run`'s refusal, against `eval/run` and the selected profile together.  An
 -- entry `run` cannot start at all is left to `finishRunEval`'s own refusal.
 runTargetGate : Bool ->
@@ -1621,6 +1637,8 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
               let _ =
                 println
                   (cjAllToJson [(input, entrySrc, entryMainRefusal entrySrc)])
+              exit 1
+            else if printedTargetRefusal rsrc csrc input stdlibDir cj then
               exit 1
             else
               let medaka = envOr "MEDAKA" "medaka"
@@ -2491,10 +2509,11 @@ runBuildPlainCmd a =
   let perfT0 = now ()
   match parseBuildArgs a
     Err msg => dieMsg msg
-    Ok (input, outOpt, target) =>
+    Ok (input, outOpt, _) =>
       if not (fileExists input) then
         dieMsg ("error: no such file: " ++ input)
       else
+        let target = buildTargetOrDie a input
         perfArm perfT0
         let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
         let medaka = envOr "MEDAKA" "medaka"
@@ -2538,11 +2557,15 @@ runBuildJsonEntry a = match parseBuildArgs a
   Err msg =>
     let _ = println (cjBuildFailedJson "" msg)
     exit 1
-  Ok (input, outOpt, target) =>
-    let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
-    let stdlibDir = root ++ "/stdlib"
-    let allowInternal = flag "--allow-internal" a
-    runBuildJsonCmd a allowInternal root stdlibDir input outOpt target
+  Ok (input, outOpt, _) => match selectBuildProfile a input
+    Err msg =>
+      let _ = println (cjBuildFailedJson "" msg)
+      exit 1
+    Ok target =>
+      let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
+      let stdlibDir = root ++ "/stdlib"
+      let allowInternal = flag "--allow-internal" a
+      runBuildJsonCmd a allowInternal root stdlibDir input outOpt target
 
 -- `medaka build --help` / `-h`: a subcommand-local usage, since the global
 -- `usage()` (only matched when --help/-h is argv[0]) never sees this — dispatch
@@ -2787,6 +2810,29 @@ parseTarget name = match lookupProfile name
     BackendEval =>
       Err
         "error: `\{name}` is not buildable (buildable: \{joinWith ", " buildableNames})"
+
+-- `build`'s profile: `--target`, else the manifest's `[target] profile`, else
+-- `llvm/native-posix`.  Its backend picks the emitter, and it is carried to the
+-- emitter child, which checks the program against it before lowering.
+selectBuildProfile : Args -> String -> <IO> Result String BuildTarget
+selectBuildProfile a input =
+  let name = match lastValue "--target" a
+    Some v => v
+    None => optionOr "llvm/native-posix" (manifestProfileOf input)
+  match lookupProfile name
+    Err m => Err ("error: " ++ m)
+    Ok p => match parseTarget name
+      Err m => Err m
+      Ok target =>
+        selectedProfile := Some p
+        Ok target
+
+buildTargetOrDie : Args -> String -> <IO> BuildTarget
+buildTargetOrDie a input = match selectBuildProfile a input
+  Ok target => target
+  Err msg =>
+    let _ = dieMsg msg
+    TNative
 
 finishBuildArgs : List String ->
   Option String ->

@@ -34,6 +34,7 @@ import driver.loader.{
 import support.path.{dirOf, chopExt, joinPath}
 import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
+import types.target_profile.{selectedProfile, profileName, targetProfileEnv}
 import driver.diagnostics.{
   Diag,
   Severity(..),
@@ -856,7 +857,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   -- names its own culprit instead of reporting one opaque 1.4 s number.
   let perfOn = perfEnabled ()
   let tEmit0 = now ()
-  let emitRes = runCommand emitProg emitArgs
+  let emitRes = runEmitterFor emitProg emitArgs
   let tEmit1 = now ()
   let _ = emitPhase perfOn "emit-ir" (tEmit1 - tEmit0) inputAbs
   match emitRes
@@ -1013,7 +1014,7 @@ runBuildWasmIn root medaka inputAbs outPath tmpDir keepIrCli quietEmitStderr =
     None =>
       buildErr
         "error: wasm-tools not found on PATH; install it with `cargo install wasm-tools`"
-    Some _ => match runCommand wasmEmitter emitArgsBase
+    Some _ => match runEmitterFor wasmEmitter emitArgsBase
       Err e =>
         buildErr "error: could not run the wasm emitter `\{wasmEmitter}`: \{e}"
       Ok (code, watRaw, emitErr) =>
@@ -1810,6 +1811,19 @@ withEmitHalf half prog args =
 -- POSIX exec chain, and keeping them separate keeps each wrapper single-purpose.
 withStrictEmit : String -> List String -> (String, List String)
 withStrictEmit prog args = ("env", ["MEDAKA_STRICT=1", prog] ++ args)
+
+-- Run the emitter child, handing it the selected target profile by the same
+-- `env` idiom.  The child checks the program against that profile before it
+-- lowers anything (`entries/entry_support.runEmitWith`), so a program `check`
+-- would refuse never reaches an emitter.  With no profile selected (a caller
+-- other than the `build` verb) the child checks nothing.
+runEmitterFor : String ->
+  List String ->
+  <IO> Result String (Int, String, String)
+runEmitterFor prog args = match !selectedProfile
+  Some p =>
+    runCommand "env" (["\{targetProfileEnv}=\{profileName p}", prog] ++ args)
+  None => runCommand prog args
 
 -- `medaka build --emit-prelude-obj <path>`: emit stdlib/core.mdk ALONE as a
 -- library (MEDAKA_EMIT_HALF=prelude) and compile it to a reusable object with

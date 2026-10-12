@@ -5,11 +5,12 @@
 # HOF / returned point-free), or a bare top-level reference never applied — instead
 # of a generic "unbound variable" panic for the value-position/bare-reference shapes.
 #
-# The saturated-call shape was already correct before #2129's fix (emitAppRef /
-# emitTailCallW's isFfiExternW arms); the value-position and bare-reference shapes
-# both fell through emitVarRefPlain's ladder to the generic gapUnboundLP fallback
-# until this gate's companion fix added an isFfiExternW arm there too (mirrors the
-# LLVM emitter's own emitExternEtaClosure treatment of value-position externs).
+# `build` checks the program against the selected profile (`wasmgc/node` for
+# `--target wasm`) before anything is lowered, and no wasm profile grants `FFI`,
+# so every shape is refused by that check (`T-TARGET-CAPABILITY`, located at
+# `main`, with the via-chain to the extern).  The emitter's own FFI arms
+# (`ffiWallW`, compiler/backend/wasm_emit.mdk) are reached only by a child
+# started without a profile.
 #
 # No real C linkage needed: `build --target wasm` must refuse BEFORE attempting to
 # emit/validate/link anything, so these fixtures never reach wasm-tools or Node —
@@ -41,7 +42,7 @@ fi
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-EXPECT="wasm: FFI extern '%s' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead."
+EXPECT="→ %s\`, and the target \`wasmgc/node\` does not grant FFI"
 
 fail=0
 
@@ -105,7 +106,8 @@ main = (useIt ()) ()' \
 # A program reaching a runtime extern whose catalog row gives wasm no lowering
 # is refused before any WAT is emitted, naming the extern, the gap kind and
 # the row's reason.  The two cases at the end of this file show what it does
-# not refuse.
+# not refuse.  An extern behind a label the profile does not grant (`Net`
+# here) never gets that far: the target check refuses the program first.
 RUNTIME_EXPECT="wasm: runtime extern '%s' is not available on the wasm backend (%s: "
 
 check_refused "net_extern_refused" \
@@ -114,13 +116,21 @@ check_refused "net_extern_refused" \
 main = match resolve "localhost"
   Ok _ => println "resolved"
   Err e => println e' \
-  "$(printf "$RUNTIME_EXPECT" netResolve PERMANENT)"
+  "\`main\` performs <Net \"localhost\">, and the target \`wasmgc/node\` does not grant Net"
 
 check_refused "wasm_gap_extern_refused" \
 'main = match writeFile "out.txt" "x"
   Ok _ => println "written"
   Err e => println e' \
   "$(printf "$RUNTIME_EXPECT" writeFile WASM-GAP)"
+
+# The same refusal under the profile `build` checked: `wasmgc/node` grants
+# `FileWrite`, so the program passed the check and the lowering is owed.
+check_refused "wasm_gap_extern_owed" \
+'main = match writeFile "out.txt" "x"
+  Ok _ => println "written"
+  Err e => println e' \
+  "\`wasmgc/node\` grants its labels, so this is a lowering still owed (#3666)"
 
 # The same module the unreached case below imports, now reached: `isFile`
 # reads through `statFile`.
@@ -521,7 +531,7 @@ main = println (netSend 1)' \
   ""
 
 if [ "$fail" -eq 0 ]; then
-  echo "42 ok, 0 failing"
+  echo "43 ok, 0 failing"
   exit 0
 else
   echo "diff_wasm_ffi_wall: FAILURES ABOVE"

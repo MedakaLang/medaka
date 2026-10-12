@@ -88,10 +88,11 @@ import ir.core_ir_lower.{
   leadingDictParams,
 }
 import ir.core_ir_sexp.{callModeSexp}
-import frontend.ast.{Pat(..), Route(..)}
+import frontend.ast.{Pat(..), Route(..), Decl(..), Ty(..)}
+import types.target_profile.{TargetProfile, reachesLabel, profileName}
 import backend.extern_catalog.{
   Disposition(..),
-  GapKind,
+  GapKind(..),
   catalogRow,
   gapKindName,
   rowLlvm,
@@ -309,9 +310,75 @@ renderExternFinding : ExternFinding -> String
 renderExternFinding (ExternFinding name backend kind why binding) =
   "\{backendName backend}: runtime extern '\{name}' is not available on the \{backendName backend} backend (\{gapKindName kind}: \{why}) [in \{binding}]"
 
+-- The refusal under the target the build checked the program against
+-- (`checkedTarget`), or the plain findings when there is none.
 export
 renderExternRefusal : List ExternFinding -> String
-renderExternRefusal findings = joinWith "\n" (map renderExternFinding findings)
+renderExternRefusal findings = renderExternRefusalUnder !checkedTarget findings
+
+-- A refusal is partitioned by what `check` already judged against the target.
+-- An extern behind a label the profile does not reach (`reachesLabel`) is an
+-- internal error: `check` refuses every program that performs it.  An extern
+-- whose labels the profile reaches and whose row is a ratchet gap is a
+-- lowering still owed, by #3666.  Any other finding, a label-less extern among
+-- them, reads as it does with no target.
+export
+renderExternRefusalUnder : Option CheckedTarget -> List ExternFinding -> String
+renderExternRefusalUnder None findings =
+  joinWith "\n" (map renderExternFinding findings)
+renderExternRefusalUnder (Some t) findings =
+  joinWith "\n" (map (renderFindingUnder t) findings)
+
+renderFindingUnder : CheckedTarget -> ExternFinding -> String
+renderFindingUnder (t@(CheckedTarget profile labels)) (f@(ExternFinding name backend kind _ _)) =
+  if not (all (reachesLabel profile) (optionOr [] (omLookup name labels))) then
+    uncheckedExternMessage backend name t
+  else if isRatchetGap backend kind then
+    "\{renderExternFinding f}; `\{profileName profile}` grants its labels, so this is a lowering still owed (#3666)"
+  else
+    renderExternFinding f
+
+isRatchetGap : Backend -> GapKind -> Bool
+isRatchetGap WasmBackend GapUnported = True
+isRatchetGap _ _ = False
+
+-- The internal error of an emitter that reaches an extern `check` refuses on
+-- the target the build checked.
+export
+uncheckedExternMessage : Backend -> String -> CheckedTarget -> String
+uncheckedExternMessage backend name (CheckedTarget profile _) =
+  "internal error: extern `\{name}` reached `\{backendName backend}` lowering with disposition NotProvided; `check` should have refused this program (profile `\{profileName profile}`)"
+
+-- What `medaka build` checked the program against before lowering: the
+-- selected profile, and each runtime extern's declared labels.
+public export data CheckedTarget =
+  | CheckedTarget TargetProfile (OrdMap (List String))
+
+export
+checkedTargetOf : TargetProfile -> List Decl -> CheckedTarget
+checkedTargetOf profile runtimeDecls =
+  CheckedTarget profile (omFromPairs (externLabels runtimeDecls) omEmpty)
+
+-- Set by the build's emitter seam (`entries/entry_support.runEmitWith`) once
+-- the program has passed the target check; `None` for every other caller.
+export
+checkedTarget : Ref (Option CheckedTarget)
+checkedTarget = Ref None
+
+-- Each extern's result-row labels, read from its parsed declaration.
+export
+externLabels : List Decl -> List (String, List String)
+externLabels [] = []
+externLabels ((DExtern _ n ty) :: rest) =
+  (n, resultLabels ty) :: externLabels rest
+externLabels ((DAttrib _ d) :: rest) = externLabels (d :: rest)
+externLabels (_ :: rest) = externLabels rest
+
+resultLabels : Ty -> List String
+resultLabels (TyFun _ r) = resultLabels r
+resultLabels (TyConstrained _ t) = resultLabels t
+resultLabels (TyEffect atoms _ _) = map (a => a.eatLabel) atoms
+resultLabels _ = []
 
 -- The panic of an emitter that meets an extern `validateExterns` refuses: the
 -- validator runs first on every emission, so reaching one means the two

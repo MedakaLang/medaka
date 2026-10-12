@@ -8,6 +8,7 @@
 
 import frontend.ast.{EffParamTy(..)}
 import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup}
+import support.util.{isNonEmptyL}
 import string.{join}
 
 public export data Backend =
@@ -40,6 +41,14 @@ profileGrants (TargetProfile _ _ _ g) = g
 export
 grantsLabel : TargetProfile -> String -> Bool
 grantsLabel p label = any (g => fst g == label) (profileGrants p)
+
+-- Can a program performing this label run under the profile?  `IO` is the
+-- join of the host labels the profile grants (`ioJoinGrants`), so it is
+-- reached exactly when that join is non-empty.
+export
+reachesLabel : TargetProfile -> String -> Bool
+reachesLabel p "IO" = isNonEmptyL (ioJoinGrants (Some p))
+reachesLabel p label = grantsLabel p label
 
 export
 backendName : Backend -> String
@@ -210,7 +219,15 @@ runProfile (Some p) =
       (profileAbi evalRunProfile)
       (filter (g => grantsLabel evalRunProfile (fst g)) (profileGrants p))
 
--- The profile `check` and `run` resolved from `--target` or the manifest.
+-- The profile `check`, `run` and `build` resolved from `--target` or the
+-- manifest.  `build` always selects one, so its emitter child always checks.
 export
 selectedProfile : Ref (Option TargetProfile)
 selectedProfile = Ref None
+
+-- How `build` hands its emitter child the selected profile's name.  A child
+-- started without it checks nothing, as every direct caller of an emit entry
+-- expects.
+export
+targetProfileEnv : String
+targetProfileEnv = "MEDAKA_TARGET_PROFILE"
