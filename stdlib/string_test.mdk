@@ -37,6 +37,26 @@ test "replaceAll with an absent needle leaves the string alone" =
 
 test "replaceAll can delete" = expectEqual "hllo" (replaceAll "e" "" "hello")
 
+-- # Slicing
+
+test "stringSlice takes the codepoints in a half-open range" =
+  expectEqual "cd" (stringSlice 2 4 "abcdef")
+
+test "stringSlice counts codepoints, not bytes" =
+  expectEqual "él" (stringSlice 1 3 "héllo")
+
+test "stringSlice of a wide-character tail" =
+  expectEqual "本語" (stringSlice 1 3 "日本語")
+
+test "stringSlice clamps both ends to the string" =
+  expectEqual "ab" (stringSlice (0 - 2) 2 "abc")
+
+test "stringSlice past the end is empty" =
+  expectEqual "" (stringSlice 4 99 "abc")
+
+test "stringSlice with the end before the start is empty" =
+  expectEqual "" (stringSlice 2 1 "abc")
+
 -- # Properties
 
 prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =

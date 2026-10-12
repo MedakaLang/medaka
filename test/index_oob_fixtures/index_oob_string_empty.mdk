@@ -1,0 +1,2 @@
+-- Indexing the empty string: no index is in range, not even 0.
+main = println ""[0]

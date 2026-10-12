@@ -1,5 +1,5 @@
 # META
-source_lines=2319
+source_lines=2330
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -385,26 +385,29 @@ export impl Debug String where
 export impl Debug Char where
   debug c = debugCharLit c
 
--- Comma-joined element rendering for `Debug (List a)`: a top-level recursive
--- constrained helper.  Its self-call forwards the `Debug a` dictionary and the
--- impl body forwards its own `requires Debug a` dict into it.
-debugListItems : Debug a => List a -> String
-debugListItems [] = ""
-debugListItems [x] = debug x
-debugListItems (y :: rest) = "\{debug y}, \{debugListItems rest}"
+-- The rendered elements of a `Debug (List a)` with `, ` between them, as
+-- pieces for one `stringConcat`: a top-level recursive constrained helper.
+-- Its self-call forwards the `Debug a` dictionary and the impl body forwards
+-- its own `requires Debug a` dict into it.
+debugListItems : Debug a => List a -> List String
+debugListItems [] = []
+debugListItems [x] = [debug x]
+debugListItems (y :: rest) = debug y :: ", " :: debugListItems rest
 
 export impl Debug (List a) requires Debug a where
-  debug xs = "[\{debugListItems xs}]"
+  debug xs = "[\{stringConcat (debugListItems xs)}]"
 
--- Comma-joined element rendering for `Debug (Array a)`, mirroring
--- `debugListItems` but recursing by index (arrays aren't cons-lists) so it
--- allocates no intermediate list.
-debugArrayItems : Debug a => Array a -> Int -> Int -> String
-debugArrayItems arr i n
-  | i >= n = ""
-  | i == n - 1 = debug (arrayGetUnsafe i arr)
+-- The rendered elements `lo..j` of a `Debug (Array a)` with `, ` between them,
+-- prepended to `acc` from the back; mirrors `debugListItems` but walks by
+-- index (arrays aren't cons-lists).
+debugArrayItems : Debug a => Array a -> Int -> Int -> List String -> List String
+debugArrayItems arr lo j acc
+  | j < lo = acc
   | otherwise =
-    "\{debug (arrayGetUnsafe i arr)}, \{debugArrayItems arr (i + 1) n}"
+    let piece = debug (arrayGetUnsafe j arr)
+    debugArrayItems arr lo (j - 1) (match acc
+      [] => [piece]
+      _ => piece :: ", " :: acc)
 
 -- Lives in `core.mdk` (not `array.mdk`) so array literals render without an
 -- explicit `import array`.
@@ -413,7 +416,8 @@ debugArrayItems arr i n
    > debug [|1, 2, 3|]
    "[|1, 2, 3|]" -}
 export impl Debug (Array a) requires Debug a where
-  debug arr = "[|\{debugArrayItems arr 0 (arrayLength arr)}|]"
+  debug arr =
+    "[|\{stringConcat (debugArrayItems arr 0 (arrayLength arr - 1) [])}|]"
 
 -- Lives in `core.mdk` (not `array.mdk`) alongside `Debug`/`Index` so
 -- `deriving (Eq)` over a field of array type builds without an `import array`.
@@ -552,24 +556,31 @@ export impl Display String where
 export impl Display Char where
   display c = charToStr c
 
--- Comma-joined element rendering for `Display (List a)`, mirroring
--- `debugListItems`: a top-level recursive constrained helper that forwards its
--- `Display a` dictionary on the self-call.
-displayListItems : Display a => List a -> String
-displayListItems [] = ""
-displayListItems [x] = display x
-displayListItems (y :: rest) = "\{y}, \{displayListItems rest}"
+-- The displayed elements of a `Display (List a)` with `, ` between them,
+-- mirroring `debugListItems`: a top-level recursive constrained helper that
+-- forwards its `Display a` dictionary on the self-call.
+displayListItems : Display a => List a -> List String
+displayListItems [] = []
+displayListItems [x] = [display x]
+displayListItems (y :: rest) = display y :: ", " :: displayListItems rest
 
 export impl Display (List a) requires Display a where
-  display xs = "[\{displayListItems xs}]"
+  display xs = "[\{stringConcat (displayListItems xs)}]"
 
--- Display counterpart of `debugArrayItems`: recurses via `display` (unquoted).
-displayArrayItems : Display a => Array a -> Int -> Int -> String
-displayArrayItems arr i n
-  | i >= n = ""
-  | i == n - 1 = display (arrayGetUnsafe i arr)
+-- Display counterpart of `debugArrayItems`: renders via `display` (unquoted).
+displayArrayItems : Display a =>
+  Array a ->
+  Int ->
+  Int ->
+  List String ->
+  List String
+displayArrayItems arr lo j acc
+  | j < lo = acc
   | otherwise =
-    "\{display (arrayGetUnsafe i arr)}, \{displayArrayItems arr (i + 1) n}"
+    let piece = display (arrayGetUnsafe j arr)
+    displayArrayItems arr lo (j - 1) (match acc
+      [] => [piece]
+      _ => piece :: ", " :: acc)
 
 {- | Arrays render in their literal syntax, `[|1, 2, 3|]`, with the elements
    unquoted.
@@ -577,7 +588,8 @@ displayArrayItems arr i n
    > display [|1, 2, 3|]
    "[|1, 2, 3|]" -}
 export impl Display (Array a) requires Display a where
-  display arr = "[|\{displayArrayItems arr 0 (arrayLength arr)}|]"
+  display arr =
+    "[|\{stringConcat (displayArrayItems arr 0 (arrayLength arr - 1) [])}|]"
 
 export impl Display (Option a) requires Display a where
   display None = "None"
@@ -1444,11 +1456,10 @@ export impl Index String Int Char where
 
 stringIndexAt : Int -> String -> Int -> Char
 stringIndexAt site s i =
-  let cs = stringToChars s
-  if i < 0 || i >= arrayLength cs then
+  if i < 0 || i >= stringLength s then
     indexErrorAtSite site i
   else
-    arrayGetUnsafe i cs
+    arrayGetUnsafe 0 (stringToChars (stringSlice i (i + 1) s))
 
 {- | Containers that can be sliced by a half-open index range.
 
@@ -2386,15 +2397,15 @@ compareBySign : Float -> Float -> Ordering
 otherwise : Bool
 compareNaN : Float -> Float -> Ordering
 thenCmp : Ordering -> Ordering -> Ordering
-debugListItems : Debug a => List a -> String
-debugArrayItems : Debug a => Array a -> Int -> Int -> String
+debugListItems : Debug a => List a -> List String
+debugArrayItems : Debug a => Array a -> Int -> Int -> List String -> List String
 eqGo : Eq a => Array a -> Array a -> Int -> Int -> Bool
 arrItems : Array a -> Int -> Int -> List a
 arrToListGo : Array a -> Int -> List a -> List a
 arrFoldGo : (a -> b -> <c> a) -> Array b -> Int -> Int -> a -> <c> a
 arrFoldRightGo : (a -> b -> <c> b) -> Array a -> Int -> b -> <c> b
-displayListItems : Display a => List a -> String
-displayArrayItems : Display a => Array a -> Int -> Int -> String
+displayListItems : Display a => List a -> List String
+displayArrayItems : Display a => Array a -> Int -> Int -> List String -> List String
 derivedHasTopLevelSpace : Array Char -> Int -> Int -> Int -> Bool
 derivedArgNeedsParens : String -> Bool
 derivedShowWrap : String -> String

@@ -1,0 +1,105 @@
+-- Tests for the list and array rendering and string indexing in
+-- `stdlib/core.mdk`.
+--
+-- Elements are separated by `, `, with none before the first or after the
+-- last. `debug` quotes strings and `display` does not. Indexing a string
+-- counts codepoints, not bytes.
+
+import test.{expectEqual}
+
+-- # Debug and Display of lists
+
+test "debug of an empty list" = expectEqual "[]" (debug ([] : List Int))
+
+test "debug of a one-element list has no separator" =
+  expectEqual "[1]" (debug [1])
+
+test "debug of a list separates elements with a comma and a space" =
+  expectEqual "[1, 2, 3]" (debug [1, 2, 3])
+
+test "debug of a list of strings quotes them" =
+  expectEqual "[\"a\", \"b\"]" (debug ["a", "b"])
+
+test "debug of nested lists" =
+  expectEqual "[[1, 2], [], [3]]" (debug [[1, 2], [], [3]])
+
+test "display of an empty list" = expectEqual "[]" (display ([] : List Int))
+
+test "display of a one-element list has no separator" =
+  expectEqual "[1]" (display [1])
+
+test "display of a list of strings leaves them unquoted" =
+  expectEqual "[a, b]" (display ["a", "b"])
+
+test "display of nested lists" =
+  expectEqual "[[1, 2], [], [3]]" (display [[1, 2], [], [3]])
+
+-- # Debug and Display of arrays
+
+test "debug of an empty array" = expectEqual "[||]" (debug ([||] : Array Int))
+
+test "debug of a one-element array has no separator" =
+  expectEqual "[|1|]" (debug [|1|])
+
+test "debug of an array separates elements with a comma and a space" =
+  expectEqual "[|1, 2, 3|]" (debug [|1, 2, 3|])
+
+test "debug of an array of strings quotes them" =
+  expectEqual "[|\"a\", \"b\"|]" (debug [|"a", "b"|])
+
+test "display of an empty array" =
+  expectEqual "[||]" (display ([||] : Array Int))
+
+test "display of an array of strings leaves them unquoted" =
+  expectEqual "[|a, b|]" (display [|"a", "b"|])
+
+-- # Nested and structured elements
+
+data Shape = Circle Int | Rect Int Int | Empty deriving (Debug)
+
+test "debug of a list of options" =
+  expectEqual "[Some 1, None]" (debug [Some 1, None])
+
+test "display of a list of options" =
+  expectEqual "[Some 1, None]" (display [Some 1, None])
+
+test "debug of a list of tuples quotes the strings" =
+  expectEqual "[(1, \"x\"), (2, \"y\")]" (debug [(1, "x"), (2, "y")])
+
+test "display of a list of tuples leaves the strings unquoted" =
+  expectEqual "[(1, x), (2, y)]" (display [(1, "x"), (2, "y")])
+
+test "debug of three levels of nesting" =
+  expectEqual
+    "[[Some 1], [], [None, Some 2]]"
+    (debug [[Some 1], [], [None, Some 2]])
+
+test "debug of an array of tuples" =
+  expectEqual "[|(1, 'a'), (2, 'b')|]" (debug [|(1, 'a'), (2, 'b')|])
+
+test "display of an array of options" =
+  expectEqual "[|Some 1, None|]" (display [|Some 1, None|])
+
+test "debug of a list of a derived type" =
+  expectEqual "[Circle 3, Rect 1 2, Empty]" (debug [Circle 3, Rect 1 2, Empty])
+
+test "debug of an array of a derived type" =
+  expectEqual
+    "[|Circle 3, Rect 1 2, Empty|]"
+    (debug [|Circle 3, Rect 1 2, Empty|])
+
+test "debug of an array of arrays" =
+  expectEqual "[[|1, 2|], [||]]" (debug [[|1, 2|], [||]])
+
+-- # Indexing a string
+
+test "indexing a string reads a codepoint" = expectEqual 'é' "héllo"[1]
+
+test "indexing past a multibyte codepoint counts codepoints" =
+  expectEqual 'o' "héllo"[4]
+
+test "indexing the last codepoint of a wide-character string" =
+  expectEqual '語' "日本語"[2]
+
+test "indexing an ASCII string reads the first and last character" =
+  expectEqual ('a', 'f') ("abcdef"[0], "abcdef"[5])

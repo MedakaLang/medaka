@@ -1,5 +1,5 @@
 # META
-source_lines=2319
+source_lines=2330
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -384,26 +384,29 @@ export impl Debug String where
 export impl Debug Char where
   debug c = debugCharLit c
 
--- Comma-joined element rendering for `Debug (List a)`: a top-level recursive
--- constrained helper.  Its self-call forwards the `Debug a` dictionary and the
--- impl body forwards its own `requires Debug a` dict into it.
-debugListItems : Debug a => List a -> String
-debugListItems [] = ""
-debugListItems [x] = debug x
-debugListItems (y :: rest) = "\{debug y}, \{debugListItems rest}"
+-- The rendered elements of a `Debug (List a)` with `, ` between them, as
+-- pieces for one `stringConcat`: a top-level recursive constrained helper.
+-- Its self-call forwards the `Debug a` dictionary and the impl body forwards
+-- its own `requires Debug a` dict into it.
+debugListItems : Debug a => List a -> List String
+debugListItems [] = []
+debugListItems [x] = [debug x]
+debugListItems (y :: rest) = debug y :: ", " :: debugListItems rest
 
 export impl Debug (List a) requires Debug a where
-  debug xs = "[\{debugListItems xs}]"
+  debug xs = "[\{stringConcat (debugListItems xs)}]"
 
--- Comma-joined element rendering for `Debug (Array a)`, mirroring
--- `debugListItems` but recursing by index (arrays aren't cons-lists) so it
--- allocates no intermediate list.
-debugArrayItems : Debug a => Array a -> Int -> Int -> String
-debugArrayItems arr i n
-  | i >= n = ""
-  | i == n - 1 = debug (arrayGetUnsafe i arr)
+-- The rendered elements `lo..j` of a `Debug (Array a)` with `, ` between them,
+-- prepended to `acc` from the back; mirrors `debugListItems` but walks by
+-- index (arrays aren't cons-lists).
+debugArrayItems : Debug a => Array a -> Int -> Int -> List String -> List String
+debugArrayItems arr lo j acc
+  | j < lo = acc
   | otherwise =
-    "\{debug (arrayGetUnsafe i arr)}, \{debugArrayItems arr (i + 1) n}"
+    let piece = debug (arrayGetUnsafe j arr)
+    debugArrayItems arr lo (j - 1) (match acc
+      [] => [piece]
+      _ => piece :: ", " :: acc)
 
 -- Lives in `core.mdk` (not `array.mdk`) so array literals render without an
 -- explicit `import array`.
@@ -412,7 +415,8 @@ debugArrayItems arr i n
    > debug [|1, 2, 3|]
    "[|1, 2, 3|]" -}
 export impl Debug (Array a) requires Debug a where
-  debug arr = "[|\{debugArrayItems arr 0 (arrayLength arr)}|]"
+  debug arr =
+    "[|\{stringConcat (debugArrayItems arr 0 (arrayLength arr - 1) [])}|]"
 
 -- Lives in `core.mdk` (not `array.mdk`) alongside `Debug`/`Index` so
 -- `deriving (Eq)` over a field of array type builds without an `import array`.
@@ -551,24 +555,31 @@ export impl Display String where
 export impl Display Char where
   display c = charToStr c
 
--- Comma-joined element rendering for `Display (List a)`, mirroring
--- `debugListItems`: a top-level recursive constrained helper that forwards its
--- `Display a` dictionary on the self-call.
-displayListItems : Display a => List a -> String
-displayListItems [] = ""
-displayListItems [x] = display x
-displayListItems (y :: rest) = "\{y}, \{displayListItems rest}"
+-- The displayed elements of a `Display (List a)` with `, ` between them,
+-- mirroring `debugListItems`: a top-level recursive constrained helper that
+-- forwards its `Display a` dictionary on the self-call.
+displayListItems : Display a => List a -> List String
+displayListItems [] = []
+displayListItems [x] = [display x]
+displayListItems (y :: rest) = display y :: ", " :: displayListItems rest
 
 export impl Display (List a) requires Display a where
-  display xs = "[\{displayListItems xs}]"
+  display xs = "[\{stringConcat (displayListItems xs)}]"
 
--- Display counterpart of `debugArrayItems`: recurses via `display` (unquoted).
-displayArrayItems : Display a => Array a -> Int -> Int -> String
-displayArrayItems arr i n
-  | i >= n = ""
-  | i == n - 1 = display (arrayGetUnsafe i arr)
+-- Display counterpart of `debugArrayItems`: renders via `display` (unquoted).
+displayArrayItems : Display a =>
+  Array a ->
+  Int ->
+  Int ->
+  List String ->
+  List String
+displayArrayItems arr lo j acc
+  | j < lo = acc
   | otherwise =
-    "\{display (arrayGetUnsafe i arr)}, \{displayArrayItems arr (i + 1) n}"
+    let piece = display (arrayGetUnsafe j arr)
+    displayArrayItems arr lo (j - 1) (match acc
+      [] => [piece]
+      _ => piece :: ", " :: acc)
 
 {- | Arrays render in their literal syntax, `[|1, 2, 3|]`, with the elements
    unquoted.
@@ -576,7 +587,8 @@ displayArrayItems arr i n
    > display [|1, 2, 3|]
    "[|1, 2, 3|]" -}
 export impl Display (Array a) requires Display a where
-  display arr = "[|\{displayArrayItems arr 0 (arrayLength arr)}|]"
+  display arr =
+    "[|\{stringConcat (displayArrayItems arr 0 (arrayLength arr - 1) [])}|]"
 
 export impl Display (Option a) requires Display a where
   display None = "None"
@@ -1443,11 +1455,10 @@ export impl Index String Int Char where
 
 stringIndexAt : Int -> String -> Int -> Char
 stringIndexAt site s i =
-  let cs = stringToChars s
-  if i < 0 || i >= arrayLength cs then
+  if i < 0 || i >= stringLength s then
     indexErrorAtSite site i
   else
-    arrayGetUnsafe i cs
+    arrayGetUnsafe 0 (stringToChars (stringSlice i (i + 1) s))
 
 {- | Containers that can be sliced by a half-open index range.
 
@@ -2382,14 +2393,14 @@ prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List I
 (DImpl true "Ord" ((TyCon "Ordering")) () ((im "compare" ((PCon "Lt") (PCon "Lt")) (EVar "Eq")) (im "compare" ((PCon "Lt") PWild) (EVar "Lt")) (im "compare" (PWild (PCon "Lt")) (EVar "Gt")) (im "compare" ((PCon "Eq") (PCon "Eq")) (EVar "Eq")) (im "compare" ((PCon "Eq") PWild) (EVar "Lt")) (im "compare" (PWild (PCon "Eq")) (EVar "Gt")) (im "compare" ((PCon "Gt") (PCon "Gt")) (EVar "Eq"))))
 (DImpl true "Debug" ((TyCon "String")) () ((im "debug" ((PVar "s")) (EApp (EVar "debugStringLit") (EVar "s")))))
 (DImpl true "Debug" ((TyCon "Char")) () ((im "debug" ((PVar "c")) (EApp (EVar "debugCharLit") (EVar "c")))))
-(DTypeSig false "debugListItems" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "debugListItems" ((PList)) (ELit (LString "")))
-(DFunDef false "debugListItems" ((PList (PVar "x"))) (EApp (EVar "debug") (EVar "x")))
-(DFunDef false "debugListItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "y")))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "debugListItems") (EVar "rest")))) (ELit (LString ""))))
-(DImpl true "Debug" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EApp (EVar "debugListItems") (EVar "xs")))) (ELit (LString "]"))))))
-(DTypeSig false "debugArrayItems" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "debugArrayItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EVar "i") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "debug") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugArrayItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DImpl true "Debug" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugArrayItems") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))) (ELit (LString "|]"))))))
+(DTypeSig false "debugListItems" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "debugListItems" ((PList)) (EListLit))
+(DFunDef false "debugListItems" ((PList (PVar "x"))) (EListLit (EApp (EVar "debug") (EVar "x"))))
+(DFunDef false "debugListItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "::" (EApp (EVar "debug") (EVar "y")) (EBinOp "::" (ELit (LString ", ")) (EApp (EVar "debugListItems") (EVar "rest")))))
+(DImpl true "Debug" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EApp (EVar "stringConcat") (EApp (EVar "debugListItems") (EVar "xs"))))) (ELit (LString "]"))))))
+(DTypeSig false "debugArrayItems" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "debugArrayItems" ((PVar "arr") (PVar "lo") (PVar "j") (PVar "acc")) (EIf (EBinOp "<" (EVar "j") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "piece") (EApp (EVar "debug") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "debugArrayItems") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "j") (ELit (LInt 1)))) (EMatch (EVar "acc") (arm (PList) () (EListLit (EVar "piece"))) (arm PWild () (EBinOp "::" (EVar "piece") (EBinOp "::" (ELit (LString ", ")) (EVar "acc")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DImpl true "Debug" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EVar "display") (EApp (EVar "stringConcat") (EApp (EApp (EApp (EApp (EVar "debugArrayItems") (EVar "arr")) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))))) (ELit (LString "|]"))))))
 (DImpl true "Eq" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "arrayLength") (EVar "a")) (EApp (EVar "arrayLength") (EVar "b"))) (EVar "False") (EApp (EApp (EApp (EApp (EVar "eqGo") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))))))
 (DTypeSig false "eqGo" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
 (DFunDef false "eqGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EApp (EVar "eq") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "eqGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
@@ -2420,14 +2431,14 @@ prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List I
 (DImpl true "Display" ((TyCon "Ordering")) () ((im "display" ((PCon "Lt")) (ELit (LString "Lt"))) (im "display" ((PCon "Eq")) (ELit (LString "Eq"))) (im "display" ((PCon "Gt")) (ELit (LString "Gt")))))
 (DImpl true "Display" ((TyCon "String")) () ((im "display" ((PVar "s")) (EVar "s"))))
 (DImpl true "Display" ((TyCon "Char")) () ((im "display" ((PVar "c")) (EApp (EVar "charToStr") (EVar "c")))))
-(DTypeSig false "displayListItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displayListItems" ((PList)) (ELit (LString "")))
-(DFunDef false "displayListItems" ((PList (PVar "x"))) (EApp (EVar "display") (EVar "x")))
-(DFunDef false "displayListItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "y"))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EVar "displayListItems") (EVar "rest")))) (ELit (LString ""))))
-(DImpl true "Display" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EApp (EVar "displayListItems") (EVar "xs")))) (ELit (LString "]"))))))
-(DTypeSig false "displayArrayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "displayArrayItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EVar "i") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "displayArrayItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DImpl true "Display" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "displayArrayItems") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))) (ELit (LString "|]"))))))
+(DTypeSig false "displayListItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "displayListItems" ((PList)) (EListLit))
+(DFunDef false "displayListItems" ((PList (PVar "x"))) (EListLit (EApp (EVar "display") (EVar "x"))))
+(DFunDef false "displayListItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "::" (EApp (EVar "display") (EVar "y")) (EBinOp "::" (ELit (LString ", ")) (EApp (EVar "displayListItems") (EVar "rest")))))
+(DImpl true "Display" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EApp (EVar "stringConcat") (EApp (EVar "displayListItems") (EVar "xs"))))) (ELit (LString "]"))))))
+(DTypeSig false "displayArrayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "displayArrayItems" ((PVar "arr") (PVar "lo") (PVar "j") (PVar "acc")) (EIf (EBinOp "<" (EVar "j") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "piece") (EApp (EVar "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "displayArrayItems") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "j") (ELit (LInt 1)))) (EMatch (EVar "acc") (arm (PList) () (EListLit (EVar "piece"))) (arm PWild () (EBinOp "::" (EVar "piece") (EBinOp "::" (ELit (LString ", ")) (EVar "acc")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DImpl true "Display" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EVar "display") (EApp (EVar "stringConcat") (EApp (EApp (EApp (EApp (EVar "displayArrayItems") (EVar "arr")) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))))) (ELit (LString "|]"))))))
 (DImpl true "Display" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PCon "None")) (ELit (LString "None"))) (im "display" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "x")))))))
 (DImpl true "Display" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Display" ((TyVar "e"))) (req "Display" ((TyVar "a")))) ((im "display" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "x"))))) (im "display" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "display") (EVar "e")))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b")))) ((im "display" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EVar "display") (EVar "b"))) (ELit (LString ")"))))))
@@ -2566,7 +2577,7 @@ prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List I
 (DFunDef false "indexGo" ((PVar "site") (PCons (PVar "h") (PVar "t")) (PVar "i0") (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EApp (EApp (EVar "indexGo") (EVar "site")) (EVar "t")) (EVar "i0")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EApp (EApp (EApp (EVar "stringIndexAt") (ELit (LInt 0))) (EVar "s")) (EVar "i")))))
 (DTypeSig false "stringIndexAt" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Char")))))
-(DFunDef false "stringIndexAt" ((PVar "site") (PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EApp (EVar "indexErrorAtSite") (EVar "site")) (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))
+(DFunDef false "stringIndexAt" ((PVar "site") (PVar "s") (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EApp (EVar "indexErrorAtSite") (EVar "site")) (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))))))
 (DInterface true false "Slice" ("c") () ((imethod "slice" (TyFun (TyVar "c") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "c")))) None)))
 (DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
 (DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))
@@ -2809,14 +2820,14 @@ prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List I
 (DImpl true "Ord" ((TyCon "Ordering")) () ((im "compare" ((PCon "Lt") (PCon "Lt")) (EVar "Eq")) (im "compare" ((PCon "Lt") PWild) (EVar "Lt")) (im "compare" (PWild (PCon "Lt")) (EVar "Gt")) (im "compare" ((PCon "Eq") (PCon "Eq")) (EVar "Eq")) (im "compare" ((PCon "Eq") PWild) (EVar "Lt")) (im "compare" (PWild (PCon "Eq")) (EVar "Gt")) (im "compare" ((PCon "Gt") (PCon "Gt")) (EVar "Eq"))))
 (DImpl true "Debug" ((TyCon "String")) () ((im "debug" ((PVar "s")) (EApp (EVar "debugStringLit") (EVar "s")))))
 (DImpl true "Debug" ((TyCon "Char")) () ((im "debug" ((PVar "c")) (EApp (EVar "debugCharLit") (EVar "c")))))
-(DTypeSig false "debugListItems" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "debugListItems" ((PList)) (ELit (LString "")))
-(DFunDef false "debugListItems" ((PList (PVar "x"))) (EApp (EMethodRef "debug") (EVar "x")))
-(DFunDef false "debugListItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "y")))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EDictApp "debugListItems") (EVar "rest")))) (ELit (LString ""))))
-(DImpl true "Debug" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EApp (EDictApp "debugListItems") (EVar "xs")))) (ELit (LString "]"))))))
-(DTypeSig false "debugArrayItems" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "debugArrayItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EVar "i") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EMethodRef "debug") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EDictApp "debugArrayItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DImpl true "Debug" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EDictApp "debugArrayItems") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))) (ELit (LString "|]"))))))
+(DTypeSig false "debugListItems" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "debugListItems" ((PList)) (EListLit))
+(DFunDef false "debugListItems" ((PList (PVar "x"))) (EListLit (EApp (EMethodRef "debug") (EVar "x"))))
+(DFunDef false "debugListItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "::" (EApp (EMethodRef "debug") (EVar "y")) (EBinOp "::" (ELit (LString ", ")) (EApp (EDictApp "debugListItems") (EVar "rest")))))
+(DImpl true "Debug" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EApp (EVar "stringConcat") (EApp (EDictApp "debugListItems") (EVar "xs"))))) (ELit (LString "]"))))))
+(DTypeSig false "debugArrayItems" (TyConstrained ((cstr "Debug" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "debugArrayItems" ((PVar "arr") (PVar "lo") (PVar "j") (PVar "acc")) (EIf (EBinOp "<" (EVar "j") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "piece") (EApp (EMethodRef "debug") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EDictApp "debugArrayItems") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "j") (ELit (LInt 1)))) (EMatch (EVar "acc") (arm (PList) () (EListLit (EVar "piece"))) (arm PWild () (EBinOp "::" (EVar "piece") (EBinOp "::" (ELit (LString ", ")) (EVar "acc")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DImpl true "Debug" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Debug" ((TyVar "a")))) ((im "debug" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EMethodRef "display") (EApp (EVar "stringConcat") (EApp (EApp (EApp (EApp (EDictApp "debugArrayItems") (EVar "arr")) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))))) (ELit (LString "|]"))))))
 (DImpl true "Eq" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Eq" ((TyVar "a")))) ((im "eq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "arrayLength") (EVar "a")) (EApp (EVar "arrayLength") (EVar "b"))) (EVar "False") (EApp (EApp (EApp (EApp (EDictApp "eqGo") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "a")))))))
 (DTypeSig false "eqGo" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))))
 (DFunDef false "eqGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "a"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "b"))) (EApp (EApp (EApp (EApp (EDictApp "eqGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
@@ -2847,14 +2858,14 @@ prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List I
 (DImpl true "Display" ((TyCon "Ordering")) () ((im "display" ((PCon "Lt")) (ELit (LString "Lt"))) (im "display" ((PCon "Eq")) (ELit (LString "Eq"))) (im "display" ((PCon "Gt")) (ELit (LString "Gt")))))
 (DImpl true "Display" ((TyCon "String")) () ((im "display" ((PVar "s")) (EVar "s"))))
 (DImpl true "Display" ((TyCon "Char")) () ((im "display" ((PVar "c")) (EApp (EVar "charToStr") (EVar "c")))))
-(DTypeSig false "displayListItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "String"))))
-(DFunDef false "displayListItems" ((PList)) (ELit (LString "")))
-(DFunDef false "displayListItems" ((PList (PVar "x"))) (EApp (EMethodRef "display") (EVar "x")))
-(DFunDef false "displayListItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "y"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EDictApp "displayListItems") (EVar "rest")))) (ELit (LString ""))))
-(DImpl true "Display" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EApp (EDictApp "displayListItems") (EVar "xs")))) (ELit (LString "]"))))))
-(DTypeSig false "displayArrayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "displayArrayItems" ((PVar "arr") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EVar "i") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EMethodRef "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EMethodRef "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EDictApp "displayArrayItems") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DImpl true "Display" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EDictApp "displayArrayItems") (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))) (ELit (LString "|]"))))))
+(DTypeSig false "displayListItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "displayListItems" ((PList)) (EListLit))
+(DFunDef false "displayListItems" ((PList (PVar "x"))) (EListLit (EApp (EMethodRef "display") (EVar "x"))))
+(DFunDef false "displayListItems" ((PCons (PVar "y") (PVar "rest"))) (EBinOp "::" (EApp (EMethodRef "display") (EVar "y")) (EBinOp "::" (ELit (LString ", ")) (EApp (EDictApp "displayListItems") (EVar "rest")))))
+(DImpl true "Display" ((TyApp (TyCon "List") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "xs")) (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EApp (EVar "stringConcat") (EApp (EDictApp "displayListItems") (EVar "xs"))))) (ELit (LString "]"))))))
+(DTypeSig false "displayArrayItems" (TyConstrained ((cstr "Display" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "displayArrayItems" ((PVar "arr") (PVar "lo") (PVar "j") (PVar "acc")) (EIf (EBinOp "<" (EVar "j") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "piece") (EApp (EMethodRef "display") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "j")) (EVar "arr")))) (DoExpr (EApp (EApp (EApp (EApp (EDictApp "displayArrayItems") (EVar "arr")) (EVar "lo")) (EBinOp "-" (EVar "j") (ELit (LInt 1)))) (EMatch (EVar "acc") (arm (PList) () (EListLit (EVar "piece"))) (arm PWild () (EBinOp "::" (EVar "piece") (EBinOp "::" (ELit (LString ", ")) (EVar "acc")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DImpl true "Display" ((TyApp (TyCon "Array") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PVar "arr")) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EMethodRef "display") (EApp (EVar "stringConcat") (EApp (EApp (EApp (EApp (EDictApp "displayArrayItems") (EVar "arr")) (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "arrayLength") (EVar "arr")) (ELit (LInt 1)))) (EListLit))))) (ELit (LString "|]"))))))
 (DImpl true "Display" ((TyApp (TyCon "Option") (TyVar "a"))) ((req "Display" ((TyVar "a")))) ((im "display" ((PCon "None")) (ELit (LString "None"))) (im "display" ((PCon "Some" (PVar "x"))) (EBinOp "++" (ELit (LString "Some ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "x")))))))
 (DImpl true "Display" ((TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a"))) ((req "Display" ((TyVar "e"))) (req "Display" ((TyVar "a")))) ((im "display" ((PCon "Ok" (PVar "x"))) (EBinOp "++" (ELit (LString "Ok ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "x"))))) (im "display" ((PCon "Err" (PVar "e"))) (EBinOp "++" (ELit (LString "Err ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "display") (EVar "e")))))))
 (DImpl true "Display" ((TyTuple (TyVar "a") (TyVar "b"))) ((req "Display" ((TyVar "a"))) (req "Display" ((TyVar "b")))) ((im "display" ((PTuple (PVar "a") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EVar "b"))) (ELit (LString ")"))))))
@@ -2993,7 +3004,7 @@ prop "Array Mappable and Semigroup agree with List" (xs : List Int) (ys : List I
 (DFunDef false "indexGo" ((PVar "site") (PCons (PVar "h") (PVar "t")) (PVar "i0") (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EApp (EApp (EVar "indexGo") (EVar "site")) (EVar "t")) (EVar "i0")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EApp (EApp (EApp (EVar "stringIndexAt") (ELit (LInt 0))) (EVar "s")) (EVar "i")))))
 (DTypeSig false "stringIndexAt" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Char")))))
-(DFunDef false "stringIndexAt" ((PVar "site") (PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EApp (EVar "indexErrorAtSite") (EVar "site")) (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))
+(DFunDef false "stringIndexAt" ((PVar "site") (PVar "s") (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "s")))) (EApp (EApp (EVar "indexErrorAtSite") (EVar "site")) (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EApp (EVar "stringToChars") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "s"))))))
 (DInterface true false "Slice" ("c") () ((imethod "slice" (TyFun (TyVar "c") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "c")))) None)))
 (DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
 (DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EApp (EVar "sliceLastIndex") (EVar "hi"))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))

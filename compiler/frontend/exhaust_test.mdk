@@ -1,0 +1,43 @@
+{- | Guard exhaustiveness over `test/exhaust_fixtures`, calling the stage
+   in-process. Replaces the `exhaust_main` probe row of
+   `test/diff_compiler_fmt_test.mdk`.
+
+   Runs on the RAW parse (no desugar, before `EGuards` is lowered). Each
+   fixture's warnings are sorted and compared against its `.expected`. Does
+   NOT cover the same fixtures' `.analyze.golden` (the diagnostics row). -}
+
+import frontend.exhaust.{exhaustToLines}
+import frontend.parser.{parse}
+import fs.{fixtureFiles}
+import list.{sort, somes}
+import path.{dirname, stem}
+import string.{endsWith, lines, trim, unlines}
+import test.{Expectation, expectAll, expectAtLeast, expectNoFindings, fail}
+
+sortedWarnings : String -> String
+sortedWarnings text = trim (unlines (sort (lines text)))
+
+failureOf : String -> <FileRead> Option String
+failureOf path = match readFile path
+  Err e => Some "\{stem path}: could not read: \{e}"
+  Ok src => match readFile "\{dirname path}/\{stem path}.expected"
+    Err e => Some "\{stem path}: no readable golden: \{e}"
+    Ok want =>
+      let got = sortedWarnings (exhaustToLines (parse src))
+      let expected = sortedWarnings want
+      if got == expected then
+        None
+      else
+        Some "\{stem path}: expected \{debug expected} but got \{debug got}"
+
+check : <FileRead> Expectation
+check = match fixtureFiles "test/exhaust_fixtures"
+  Err e => fail "could not list test/exhaust_fixtures: \{e}"
+  Ok files =>
+    let srcs = sort (filter (endsWith ".mdk") files)
+    expectAll [
+      expectAtLeast 6 (length srcs),
+      expectNoFindings "exhaust fixtures" (Ok (somes (map failureOf srcs))),
+    ]
+
+test "exhaust: guard warnings match each fixture's .expected" = check

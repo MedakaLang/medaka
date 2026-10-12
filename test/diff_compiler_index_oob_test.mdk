@@ -68,7 +68,7 @@ oobAt i = AbortsLocated "E-INDEX-OOB" "index \{i} out of bounds"
 -- | The size of the corpus, written down so that a corpus which silently
 -- shrank is red. Growing it is expected: add the row and raise this.
 declaredFixtureCount : Int
-declaredFixtureCount = 15
+declaredFixtureCount = 18
 
 rows : List (String, RuntimeOutcome)
 rows = [
@@ -76,6 +76,9 @@ rows = [
   ("index_oob_write", oob "9"),
   ("index_oob_negative", oobAt "-3"),
   ("index_oob_string", oobAt "10"),
+  ("index_oob_string_at_length", oobAt "3"),
+  ("index_oob_string_negative", oobAt "-1"),
+  ("index_oob_string_empty", oobAt "0"),
   ("index_oob_vector", oob "4"),
   ("index_oob_array_set_in_place", oob "9"),
   ("index_oob_vector_set_in_place", oob "4"),
