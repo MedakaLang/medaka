@@ -1,5 +1,5 @@
 # META
-source_lines=2585
+source_lines=2583
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -401,10 +401,8 @@ mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 --
 --   grep -nw TabKey compiler/types/*.mdk | grep -vE ':[[:space:]]*--'
 --
---   * ALLOCATION. A `Registry` lookup that renders its key to a `String` builds
---     four netstrings, concatenated, on every call; `Registry` now keys on the
---     `RegKey` structurally, so that cost is gone from the registry path. Those
---     two tables are read
+--   * ALLOCATION. A key projection that mints a fresh value on every LOOKUP is
+--     REJECTED here. Those two tables are read
 --     from `fromAstTypeApp`/`fromAstTypeE`/`headRemainingKinds` — once or more
 --     per type-application node of every signature the elaborator meets —
 --     inside `medaka check`, which `compiler/AGENTS.md` measures as GC-BOUND

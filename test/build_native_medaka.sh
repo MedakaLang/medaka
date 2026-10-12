@@ -139,7 +139,7 @@ SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 # Every partition imports from runtime/medaka_rt.c, so anything that changes that
 # file's summary hash changes every partition's cache key. The three build-provenance
 # stamps are the standing instance: they change on every compiler edit, so they live
-# in a generated three-line provenance.c compiled WITHOUT -flto (see stage B) and
+# in a generated provenance.c compiled WITHOUT -flto (see stage B) and
 # medaka_rt.c stays byte-identical across builds. Measured on identical partitions
 # and one edit, varying only the fingerprint: unchanged — 4s, 5 entries written, 68
 # reused; changed — 23s, 73 written, 0 reused. Moving medaka_rt.c itself out of the
@@ -1118,10 +1118,10 @@ else
   # already had.
   #
   # It is compiled WITHOUT -flto for the reason the whole codegen path exists: these
-  # three strings change on every compiler edit, and anything inside the LTO unit
+  # stamps change on every compiler edit, and anything inside the LTO unit
   # that changes puts a fresh ThinLTO cache key on every partition importing it.
   # medaka_rt.c stays in the LTO unit (taking it out cost ~7.7% of interpreter
-  # runtime); only this three-line file leaves. See "PARALLEL CODEGEN" above.
+  # runtime); only this generated file leaves. See "PARALLEL CODEGEN" above.
   PROV_C="$WORK/provenance.c"
   PROV_O="$WORK/provenance.o"
   # The fourth line is the compiler-only GC heap pre-expansion (runtime/medaka_rt.c

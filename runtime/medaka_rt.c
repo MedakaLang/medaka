@@ -79,6 +79,12 @@
 #define GC_THREADS
 #include <gc.h>
 
+/* Initial heap to pre-expand, in bytes, for the COMPILER/CLI only: the stage-B
+ * provenance object (test/build_native_medaka.sh) defines this for ./medaka. Every
+ * other link (user programs, the emitter, the seed) keeps the weak 0, so none of
+ * them pre-expand the heap. An explicit GC_INITIAL_HEAP_SIZE in the environment wins. */
+__attribute__((weak)) const long long mdk_gc_initial_heap_bytes = 0;
+
 /* Initialize Boehm once before main().  This runtime owns `int main` (bottom of
  * this file); the emitted IR's entry is `mdk_program_main`, which we run on a
  * GC_pthread_create'd large-stack worker thread.  A constructor runs first, near
@@ -86,11 +92,6 @@
  * (main-thread) stack base; the worker thread's own stack is registered
  * separately by GC_pthread_create.  GC_malloc would otherwise lazily init on its
  * first call. */
-/* Initial heap to pre-expand, in bytes, for the COMPILER/CLI only: the stage-B
- * provenance object (test/build_native_medaka.sh) defines this for ./medaka. Every
- * other link (user programs, the emitter, the seed) keeps the weak 0, so none of
- * them pre-expand the heap. An explicit GC_INITIAL_HEAP_SIZE in the environment wins. */
-__attribute__((weak)) const long long mdk_gc_initial_heap_bytes = 0;
 
 __attribute__((constructor)) static void mdk_gc_init(void) {
   GC_INIT();
