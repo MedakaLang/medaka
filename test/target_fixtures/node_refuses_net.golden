@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/net_reached.mdk:7:0: `main` performs <Net> via `main → lookup`, and the target `wasmgc/node` does not grant Net
+  |
+7 | main : <Net, Stdout> Unit
+  | ^

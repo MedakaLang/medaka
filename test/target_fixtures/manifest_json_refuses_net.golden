@@ -1,0 +1,4 @@
+exit=1
+--- stdout
+{"files":[{"file":"test/target_fixtures/project_target/resolver.mdk","diagnostics":[]},{"file":"test/target_fixtures/project_target/main.mdk","diagnostics":[{"code":"T-TARGET-CAPABILITY","kind":"type","message":"`main` performs <Net>, and the target `wasmgc/node` does not grant Net","range":{"end":{"character":4,"line":5},"start":{"character":0,"line":5}},"severity":1,"source":"medaka"}]}]}
+--- stderr

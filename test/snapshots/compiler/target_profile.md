@@ -1,5 +1,5 @@
 # META
-source_lines=177
+source_lines=206
 stages=DESUGAR,MARK
 # SOURCE
 -- The one table of target profiles: a profile is a backend, the host ABI that
@@ -55,6 +55,9 @@ backendName BackendEval = "eval"
 wholeDomain : List String -> List (String, EffParamTy)
 wholeDomain labels = map (l => (l, EPTop)) labels
 
+-- The eleven host labels: the labels `IO` is the join of, and with `FFI` the
+-- only labels a profile gates.
+export
 hostLabels : List String
 hostLabels = [
   "Stdout",
@@ -80,11 +83,7 @@ profileRows = [
     BackendLlvm
     "C symbols"
     (wholeDomain (hostLabels ++ ["FFI"])),
-  TargetProfile
-    "eval/run"
-    BackendEval
-    "ioExternBindings"
-    (wholeDomain hostLabels),
+  evalRunProfile,
   TargetProfile
     "wasmgc/node"
     BackendWasmgc
@@ -113,6 +112,14 @@ profileRows = [
     (wholeDomain ["Stdout", "Stderr", "Clock", "Rand"]),
   TargetProfile "wasmgc/wasi-p2" BackendWasmgc "WIT" [],
 ]
+
+evalRunProfile : TargetProfile
+evalRunProfile =
+  TargetProfile
+    "eval/run"
+    BackendEval
+    "ioExternBindings"
+    (wholeDomain hostLabels)
 
 aliasRows : List (String, String)
 aliasRows = [("native", "llvm/native-posix"), ("wasm", "wasmgc/node")]
@@ -174,8 +181,30 @@ buildableNames =
       Err _ => False)
     knownNames
 
+-- Is this label one a profile gates: a host label, their join `IO`, or `FFI`?
+-- Any other label is a user effect, admitted on every profile.
+export
+isGatedLabel : String -> Bool
+isGatedLabel l = l == "IO" || l == "FFI" || any (== l) hostLabels
+
+-- What `medaka run` checks against: the interpreter's grants, narrowed to the
+-- labels the selected profile also grants.  `eval/run` grants each of its
+-- labels over the whole domain, so the selected profile's own entries for
+-- those labels are the intersection.
+export
+runProfile : Option TargetProfile -> TargetProfile
+runProfile None = evalRunProfile
+runProfile (Some p) =
+  if profileName p == profileName evalRunProfile then
+    p
+  else
+    TargetProfile
+      "\{profileName evalRunProfile} ∩ \{profileName p}"
+      BackendEval
+      (profileAbi evalRunProfile)
+      (filter (g => grantsLabel evalRunProfile (fst g)) (profileGrants p))
+
 -- The profile `check` and `run` resolved from `--target` or the manifest.
--- Nothing reads it yet; it is the seam a later stage consults.
 export
 selectedProfile : Ref (Option TargetProfile)
 selectedProfile = Ref None
@@ -203,10 +232,12 @@ selectedProfile = Ref None
 (DFunDef false "backendName" ((PCon "BackendEval")) (ELit (LString "eval")))
 (DTypeSig false "wholeDomain" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
 (DFunDef false "wholeDomain" ((PVar "labels")) (EApp (EApp (EVar "map") (ELam ((PVar "l")) (ETuple (EVar "l") (EVar "EPTop")))) (EVar "labels")))
-(DTypeSig false "hostLabels" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig true "hostLabels" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "hostLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Net")) (ELit (LString "Signal"))))
 (DTypeSig false "profileRows" (TyApp (TyCon "List") (TyCon "TargetProfile")))
-(DFunDef false "profileRows" () (EListLit (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "llvm/native-posix"))) (EVar "BackendLlvm")) (ELit (LString "C symbols"))) (EApp (EVar "wholeDomain") (EBinOp "++" (EVar "hostLabels") (EListLit (ELit (LString "FFI")))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "eval/run"))) (EVar "BackendEval")) (ELit (LString "ioExternBindings"))) (EApp (EVar "wholeDomain") (EVar "hostLabels"))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/node"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/browser-worker"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/edge"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/wasi-p2"))) (EVar "BackendWasmgc")) (ELit (LString "WIT"))) (EListLit))))
+(DFunDef false "profileRows" () (EListLit (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "llvm/native-posix"))) (EVar "BackendLlvm")) (ELit (LString "C symbols"))) (EApp (EVar "wholeDomain") (EBinOp "++" (EVar "hostLabels") (EListLit (ELit (LString "FFI")))))) (EVar "evalRunProfile") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/node"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/browser-worker"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/edge"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/wasi-p2"))) (EVar "BackendWasmgc")) (ELit (LString "WIT"))) (EListLit))))
+(DTypeSig false "evalRunProfile" (TyCon "TargetProfile"))
+(DFunDef false "evalRunProfile" () (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "eval/run"))) (EVar "BackendEval")) (ELit (LString "ioExternBindings"))) (EApp (EVar "wholeDomain") (EVar "hostLabels"))))
 (DTypeSig false "aliasRows" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "aliasRows" () (EListLit (ETuple (ELit (LString "native")) (ELit (LString "llvm/native-posix"))) (ETuple (ELit (LString "wasm")) (ELit (LString "wasmgc/node")))))
 (DTypeSig false "profileIndex" (TyApp (TyCon "OrdMap") (TyCon "TargetProfile")))
@@ -229,6 +260,11 @@ selectedProfile = Ref None
 (DFunDef false "buildable" ((PVar "p")) (EBinOp "/=" (EApp (EVar "profileBackend") (EVar "p")) (EVar "BackendEval")))
 (DTypeSig true "buildableNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "buildableNames" () (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EMatch (EApp (EVar "lookupProfile") (EVar "n")) (arm (PCon "Ok" (PVar "p")) () (EApp (EVar "buildable") (EVar "p"))) (arm (PCon "Err" PWild) () (EVar "False"))))) (EVar "knownNames")))
+(DTypeSig true "isGatedLabel" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isGatedLabel" ((PVar "l")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "l") (ELit (LString "IO"))) (EBinOp "==" (EVar "l") (ELit (LString "FFI")))) (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "l")))) (EVar "hostLabels"))))
+(DTypeSig true "runProfile" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyCon "TargetProfile")))
+(DFunDef false "runProfile" ((PCon "None")) (EVar "evalRunProfile"))
+(DFunDef false "runProfile" ((PCon "Some" (PVar "p"))) (EIf (EBinOp "==" (EApp (EVar "profileName") (EVar "p")) (EApp (EVar "profileName") (EVar "evalRunProfile"))) (EVar "p") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "evalRunProfile")))) (ELit (LString " ∩ "))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString "")))) (EVar "BackendEval")) (EApp (EVar "profileAbi") (EVar "evalRunProfile"))) (EApp (EApp (EVar "filter") (ELam ((PVar "g")) (EApp (EApp (EVar "grantsLabel") (EVar "evalRunProfile")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "profileGrants") (EVar "p"))))))
 (DTypeSig true "selectedProfile" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "TargetProfile"))))
 (DFunDef false "selectedProfile" () (EApp (EVar "Ref") (EVar "None")))
 # MARK
@@ -255,10 +291,12 @@ selectedProfile = Ref None
 (DFunDef false "backendName" ((PCon "BackendEval")) (ELit (LString "eval")))
 (DTypeSig false "wholeDomain" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "EffParamTy")))))
 (DFunDef false "wholeDomain" ((PVar "labels")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (ETuple (EVar "l") (EVar "EPTop")))) (EVar "labels")))
-(DTypeSig false "hostLabels" (TyApp (TyCon "List") (TyCon "String")))
+(DTypeSig true "hostLabels" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "hostLabels" () (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Exec")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite")) (ELit (LString "Net")) (ELit (LString "Signal"))))
 (DTypeSig false "profileRows" (TyApp (TyCon "List") (TyCon "TargetProfile")))
-(DFunDef false "profileRows" () (EListLit (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "llvm/native-posix"))) (EVar "BackendLlvm")) (ELit (LString "C symbols"))) (EApp (EVar "wholeDomain") (EBinOp "++" (EVar "hostLabels") (EListLit (ELit (LString "FFI")))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "eval/run"))) (EVar "BackendEval")) (ELit (LString "ioExternBindings"))) (EApp (EVar "wholeDomain") (EVar "hostLabels"))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/node"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/browser-worker"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/edge"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/wasi-p2"))) (EVar "BackendWasmgc")) (ELit (LString "WIT"))) (EListLit))))
+(DFunDef false "profileRows" () (EListLit (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "llvm/native-posix"))) (EVar "BackendLlvm")) (ELit (LString "C symbols"))) (EApp (EVar "wholeDomain") (EBinOp "++" (EVar "hostLabels") (EListLit (ELit (LString "FFI")))))) (EVar "evalRunProfile") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/node"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Stdin")) (ELit (LString "Clock")) (ELit (LString "Env")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/browser-worker"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand")) (ELit (LString "FileRead")) (ELit (LString "FileWrite"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/edge"))) (EVar "BackendWasmgc")) (ELit (LString "env"))) (EApp (EVar "wholeDomain") (EListLit (ELit (LString "Stdout")) (ELit (LString "Stderr")) (ELit (LString "Clock")) (ELit (LString "Rand"))))) (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "wasmgc/wasi-p2"))) (EVar "BackendWasmgc")) (ELit (LString "WIT"))) (EListLit))))
+(DTypeSig false "evalRunProfile" (TyCon "TargetProfile"))
+(DFunDef false "evalRunProfile" () (EApp (EApp (EApp (EApp (EVar "TargetProfile") (ELit (LString "eval/run"))) (EVar "BackendEval")) (ELit (LString "ioExternBindings"))) (EApp (EVar "wholeDomain") (EVar "hostLabels"))))
 (DTypeSig false "aliasRows" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))
 (DFunDef false "aliasRows" () (EListLit (ETuple (ELit (LString "native")) (ELit (LString "llvm/native-posix"))) (ETuple (ELit (LString "wasm")) (ELit (LString "wasmgc/node")))))
 (DTypeSig false "profileIndex" (TyApp (TyCon "OrdMap") (TyCon "TargetProfile")))
@@ -281,5 +319,10 @@ selectedProfile = Ref None
 (DFunDef false "buildable" ((PVar "p")) (EBinOp "/=" (EApp (EVar "profileBackend") (EVar "p")) (EVar "BackendEval")))
 (DTypeSig true "buildableNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "buildableNames" () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EMatch (EApp (EVar "lookupProfile") (EVar "n")) (arm (PCon "Ok" (PVar "p")) () (EApp (EVar "buildable") (EVar "p"))) (arm (PCon "Err" PWild) () (EVar "False"))))) (EVar "knownNames")))
+(DTypeSig true "isGatedLabel" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isGatedLabel" ((PVar "l")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "l") (ELit (LString "IO"))) (EBinOp "==" (EVar "l") (ELit (LString "FFI")))) (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "l")))) (EVar "hostLabels"))))
+(DTypeSig true "runProfile" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyCon "TargetProfile")))
+(DFunDef false "runProfile" ((PCon "None")) (EVar "evalRunProfile"))
+(DFunDef false "runProfile" ((PCon "Some" (PVar "p"))) (EIf (EBinOp "==" (EApp (EVar "profileName") (EVar "p")) (EApp (EVar "profileName") (EVar "evalRunProfile"))) (EVar "p") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "evalRunProfile")))) (ELit (LString " ∩ "))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString "")))) (EVar "BackendEval")) (EApp (EVar "profileAbi") (EVar "evalRunProfile"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "g")) (EApp (EApp (EVar "grantsLabel") (EVar "evalRunProfile")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "profileGrants") (EVar "p"))))))
 (DTypeSig true "selectedProfile" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "TargetProfile"))))
 (DFunDef false "selectedProfile" () (EApp (EVar "Ref") (EVar "None")))

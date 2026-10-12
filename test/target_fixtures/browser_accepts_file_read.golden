@@ -1,0 +1,5 @@
+exit=0
+--- stdout
+main : <FileRead, Stdout> Unit
+-- <fixtures>/file_read.mdk: ok (1 declaration(s) checked, 0 errors)
+--- stderr

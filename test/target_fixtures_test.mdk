@@ -1,0 +1,174 @@
+{- | Gate for the target check: `medaka check` and `medaka run` refuse an entry
+   whose invocation summary the selected target profile does not grant
+   (`T-TARGET-CAPABILITY`), and admit one it does.  Each case spawns the
+   native binary over a program in test/target_fixtures/ and compares its exit
+   code, stdout and stderr with a committed golden, so the refusal text, its
+   location and its via-chain are pinned as well as the verdict.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads
+   goldens, neither of which the interpreter binds. -}
+
+import test_process.{medakaBin, underRoot, boundedVerb}
+import test.{Expectation, expectEach, expectGolden, fail}
+import string.{replaceAll}
+
+fixtureDir : String
+fixtureDir = underRoot "test/target_fixtures"
+
+-- The transcript a golden holds: the exit code, then each stream, with the
+-- fixture directory spelled `<fixtures>` so the golden does not name a tree.
+transcript : Int -> String -> String -> <IO> String
+transcript code out err =
+  replaceAll
+    fixtureDir
+    "<fixtures>"
+    "exit=\{intToString code}\n--- stdout\n\{out}--- stderr\n\{err}"
+
+-- One case: `medaka <verb> <flags> <fixture>`, graded against
+-- `<stem>.golden`.
+targetCase : String ->
+  String ->
+  List String ->
+  String ->
+  <Exec, IO, FileRead> (String, Expectation)
+targetCase stem verb flags fixture =
+  (stem, runCase stem ([verb] ++ flags ++ ["\{fixtureDir}/\{fixture}"]))
+
+runCase : String -> List String -> <Exec, IO, FileRead> Expectation
+runCase stem argv = match boundedVerb medakaBin argv
+  Err e => fail "\{stem}: could not spawn: \{e}"
+  Ok (code, out, err) =>
+    expectGolden "\{fixtureDir}/\{stem}.golden" (transcript code out err)
+
+test "target_fixtures: one admitted and one refused program per profile" = expectEach
+  [
+    targetCase
+      "native_accepts_net"
+      "check"
+      ["--target", "native"]
+      "net_reached.mdk",
+    targetCase
+      "native_refuses_no_main"
+      "check"
+      ["--target", "native"]
+      "no_main.mdk",
+    targetCase
+      "evalrun_accepts_net"
+      "check"
+      ["--target", "eval/run"]
+      "net_reached.mdk",
+    targetCase
+      "evalrun_refuses_ffi"
+      "check"
+      ["--target", "eval/run"]
+      "ffi_entry.mdk",
+    targetCase
+      "node_accepts_env"
+      "check"
+      ["--target", "wasmgc/node"]
+      "env_stdout.mdk",
+    targetCase
+      "node_refuses_net"
+      "check"
+      ["--target", "wasm"]
+      "net_reached.mdk",
+    targetCase
+      "browser_accepts_file_read"
+      "check"
+      ["--target", "wasmgc/browser-worker"]
+      "file_read.mdk",
+    targetCase
+      "browser_refuses_env"
+      "check"
+      ["--target", "wasmgc/browser-worker"]
+      "env_stdout.mdk",
+    targetCase
+      "edge_accepts_clock"
+      "check"
+      ["--target", "wasmgc/edge"]
+      "clock_stdout.mdk",
+    targetCase
+      "edge_refuses_file_read"
+      "check"
+      ["--target", "wasmgc/edge"]
+      "file_read.mdk",
+  ]
+
+test "target_fixtures: the IO join, FFI and user labels" = expectEach [
+  targetCase
+    "node_refuses_io"
+    "check"
+    ["--target", "wasmgc/node"]
+    "io_declared.mdk",
+  targetCase
+    "native_accepts_io"
+    "check"
+    ["--target", "native"]
+    "io_declared.mdk",
+  targetCase "run_accepts_io" "run" [] "io_declared.mdk",
+  targetCase
+    "native_accepts_ffi"
+    "check"
+    ["--target", "native"]
+    "ffi_entry.mdk",
+  targetCase
+    "browser_refuses_ffi"
+    "check"
+    ["--target", "wasmgc/browser-worker"]
+    "ffi_entry.mdk",
+  targetCase "run_refuses_ffi" "run" [] "ffi_entry.mdk",
+  targetCase "run_json_refuses_ffi" "run" ["--json"] "ffi_entry.mdk",
+  targetCase
+    "native_accepts_net_param"
+    "check"
+    ["--target", "native"]
+    "net_param.mdk",
+  targetCase
+    "edge_refuses_net_param"
+    "check"
+    ["--target", "wasmgc/edge"]
+    "net_param.mdk",
+  targetCase
+    "edge_accepts_user_label"
+    "check"
+    ["--target", "wasmgc/edge"]
+    "user_label.mdk",
+  targetCase "run_accepts_user_label" "run" [] "user_label.mdk",
+  targetCase
+    "edge_refuses_ffi_not_user_net"
+    "check"
+    ["--target", "wasmgc/edge"]
+    "user_spelled_net.mdk",
+  targetCase
+    "native_accepts_user_net"
+    "check"
+    ["--target", "native"]
+    "user_spelled_net.mdk",
+]
+
+test "target_fixtures: entries, manifests and the JSON envelope" = expectEach [
+  targetCase
+    "node_json_refuses_net"
+    "check"
+    ["--json", "--target", "wasm"]
+    "net_reached.mdk",
+  targetCase "plain_accepts_no_main" "check" [] "no_main.mdk",
+  targetCase
+    "native_refuses_imported_main"
+    "check"
+    ["--target", "native"]
+    "imported_main/entry.mdk",
+  targetCase "manifest_refuses_net" "check" [] "project_target/main.mdk",
+  targetCase
+    "flag_overrides_manifest"
+    "check"
+    ["--target", "native"]
+    "project_target/main.mdk",
+  targetCase
+    "manifest_json_refuses_net"
+    "check"
+    ["--json"]
+    "project_target/main.mdk",
+  targetCase "run_manifest_refuses_net" "run" [] "project_target/main.mdk",
+  targetCase "manifest_refuses_no_entry" "check" [] "project_no_entry/lib.mdk",
+]

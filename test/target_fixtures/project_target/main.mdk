@@ -1,0 +1,9 @@
+-- A project whose manifest selects wasmgc/node: `Net`, reached through an
+-- imported module, is refused by `check` and `run` unless `--target` selects a
+-- profile that grants it.
+import resolver.{lookup}
+
+main : <Net, Stdout> Unit
+main = match lookup "example.com"
+  Ok _ => println "resolved"
+  Err e => println e
