@@ -195,6 +195,11 @@ inlang-backend-extern-catalog-test:
 inlang-backend-core-validate-test:
 	./medaka test compiler/backend/core_validate_test.mdk
 
+## Coded-trap helpers of wasm_emit.mdk: one `$trapmsg_K` per distinct fixed text,
+## graded against the spec's stderr lines.
+inlang-backend-wasm-emit-trapmsg-test:
+	./medaka test compiler/backend/wasm_emit_trapmsg_test.mdk
+
 ## #3908: match-arm self tail calls must lower to musttail. The sibling is
 ## native-only (the claim is about emitted code) and has no other runner.
 inlang-backend-llvm-emit-tail-call-test:

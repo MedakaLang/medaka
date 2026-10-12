@@ -3678,11 +3678,11 @@ emitRefForceFn prog (CBind name [CClause [] body] _) =
       ("  " ++ _)
       (w7LocalDecls (w7ScopeClose (progEmit prog) w7Outer) maxDepth)
   let cyclic =
-    wasmTrap
+    wasmTrapNamed
       (progEmit prog)
       "E-CYCLIC-VALUE"
-      (name
-        ++ " refers to itself during initialization (non-productive cyclic value)")
+      name
+      " refers to itself during initialization (non-productive cyclic value)\n"
   let unforced =
     ["    i32.const 1", "    global.set $gs_" ++ g]
       ++ indent instrs
@@ -6513,6 +6513,19 @@ trapMsgRuntimeOf emit = reverseL !emit.trapMsgFns
 wasmTrap : WasmEmit -> String -> String -> List String
 wasmTrap emit code msg =
   wasmTrapBytes emit "runtime error [\{code}]: \{msg}\n" ++ ["unreachable"]
+
+-- a coded trap whose message is the fixed prefix, then `name`, then the fixed
+-- `after` (which ends in its newline).  The prefix and `after` are interned like
+-- any fixed text, so sites that differ only in `name` share their two helpers and
+-- only the name bytes are unrolled at the site.  `name` is an identifier known at
+-- emission; the stderr bytes are the same as the whole message spelled out.
+wasmTrapNamed : WasmEmit -> String -> String -> String -> List String
+wasmTrapNamed emit code name after =
+  let _ = setRef emit.trapImportNeeded True
+  wasmTrapBytes emit "runtime error [\{code}]: "
+    ++ flatMap trapByteInstr (strBytesW name)
+    ++ wasmTrapBytes emit after
+    ++ ["unreachable"]
 
 -- #1787: a coded trap whose message carries a RUNTIME number -- the fixed bytes
 -- either side of it are still streamed unrolled, and the value itself goes through

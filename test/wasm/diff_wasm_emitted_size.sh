@@ -107,8 +107,19 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    shapes of #1349 and #2577 at a depth that needs constant stack) is 101544 B
 #    and 142 funcs on its own; the other 59 programs measure 3105426 B and 5716
 #    funcs, inside the previous ceilings.
-MODULES_BYTES_CEIL=3206970
-MODULES_FUNCS_CEIL=5858
+#    Re-baselined to the measured 2862355 B / 6109 funcs (F1-floor ratio 4024),
+#    with no headroom, for the coded-trap helpers of wasm_emit.mdk.  Each
+#    distinct fixed trap text a program streams is one `$trapmsg_K` function
+#    (its body is the unrolled byte writes, called from every site), so the
+#    funcs grow by exactly the helpers: 251 over the 60 modules programs, which
+#    is 6109 - 5858 and equals the `  (func $trapmsg_` definitions counted per
+#    program.  Those helpers are reachable (each is called), so the unit-kept
+#    ratio above is unchanged (2693/23199), and the F1 ratio moves only with
+#    the helper count.  The bytes fall by 344615 B (-10.7%) from the
+#    pre-change 3206970 B: each trap text is spelled once rather than at every
+#    site, and the `E-CYCLIC-VALUE` name is the only per-site text left.
+MODULES_BYTES_CEIL=2862355
+MODULES_FUNCS_CEIL=6109
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
@@ -137,7 +148,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=3859  # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
+MODULES_F1_RATIO_CEIL_X1000=4024  # 6109 * 1000 / 1518 = 4024.4, see the ceilings above; emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node
