@@ -176,6 +176,20 @@ test/o2_survivor_census         report-only census over test/o2_survivor_fixture
                                 gate/gates.toml involvement by design. See the
                                 script header.
 
+test/alloc_census               report-only allocation census (#4027, #2357, #503,
+                                `make alloc-census`): builds the CLI non-LTO with
+                                --keep-ir, classifies every mdk_alloc site by pointer
+                                fate (test/alloc_census/escape.py), counts them in an
+                                instrumented `check` of the compiler, and reports
+                                class x kind x function plus string/list append
+                                callers. Takes ~4 min. Always exits 0 and asserts
+                                nothing — no gate/gates.toml involvement by design.
+                                See the script header.
+
+test/alloc_census/compare       helper of test/alloc_census.sh: compares the plain and
+                                instrumented `check` stdout and labels the census run
+                                VALID or INVALID. Never run on its own by CI.
+
 test/cli_conformance_census    derived CLI conformance census (#2354, S-conformance-table,
                                 `make cli-conformance-census`): re-derives
                                 docs/ops/CLI-CONFORMANCE.md's machine-checkable columns —

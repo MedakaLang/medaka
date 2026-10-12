@@ -646,7 +646,9 @@ instance's. This is a rule on declarations, so it rejects an impl that no use ev
 reduces (`test/dict_fixtures/requires-super-decl-only-rejected.mdk`). It is
 entailment at the declared head, not a pre-resolution of the super dictionary: a goal
 may still select a more specific super instance (§6.1.4, point 4), and that instance's
-context is carried to the binder that reduces the goal (**R-SUPER-CARRY**, below).
+context is carried to the binder that reduces the goal (**R-SUPER-CARRY**, below); a
+generalizing binder whose uses could select different super instances does not
+reduce the goal (§6.1.3, R-STABLE).
 Enforced by `checkImplSuperContexts` beside `checkSuperImpls`
 (`compiler/types/typecheck.mdk`).
 
@@ -658,7 +660,10 @@ construction does: `min⊑(match(IE, D τ̄))`, the goal's variables held as the
 goal's residual, beside the residual of `C`'s own instance context, and is reduced
 the same way. The binder treats that residual as every residual: a generalizing
 binder (`gen`, a local `let`) quantifies it, R-STABLE and determination applying to
-each of its goals; a signed binder, an impl body (W3-inst) and the end-of-body
+each of its goals; such a binder reduces `C τ̄` at all only when each of those super
+selections is stable as well (§6.1.3, R-STABLE's super half: R-SUPER-CARRY makes a
+super's context respect R-STABLE, and that half makes the super's selection respect
+it); a signed binder, an impl body (W3-inst) and the end-of-body
 obligation checker must entail it, and reject it at the goal's site otherwise. A
 super goal the residual of `C`'s own context already answers, itself or through its
 supers, adds nothing (the construction tries `assum` before `inst`), and by W-super
@@ -1886,18 +1891,44 @@ to it later is a semantics change, not a bug fix.
    context, not the goal, enters `P'` (`impl Tag (Wrap a) requires Show2 a` turns
    it into `Show2 a`). It is reduced **only when every other instance head that
    unifies with it** — the generalizable variables free, every other variable
-   rigid — **is ⊒ the matching one**: then every instantiation of those variables
-   still selects the matching instance, and reducing early changes no use's
-   answer. Otherwise the goal enters `P'` **as written**, and each use selects at
-   its own instantiation: with `impl Tag (Wrap Bool)` declared beside that general
-   instance, `nest x = tagOf (Wrap x)` has scheme `Tag (Wrap a) ⇒ a → String`, and
+   rigid — **is ⊒ the matching one**, **and the same holds of each super goal its
+   construction selects an instance for** (`D τ̄` for every super `D` of `C`,
+   transitively, that has a constructed argument and that the matched instance's
+   context does not answer; point 4, §3 R-SUPER-CARRY):
+   then every instantiation of those variables still selects the matching instance
+   and the same super instances, and reducing early changes no use's answer.
+   Otherwise the goal enters `P'` **as written**, and each use selects at its
+   own instantiation, its supers included: with `impl Tag (Wrap Bool)` declared
+   beside that general instance, `nest x = tagOf (Wrap x)` has scheme `Tag (Wrap a) ⇒ a → String`, and
    `nest True` selects `impl Tag (Wrap Bool)` (#1579). This is GHC's overlap rule.
    A blanket `impl Tag a` beside the general instance does not block the
-   reduction: it is ⊒ `Tag (Wrap a)`. A goal over a rigid variable is not
-   generalizable, and the rest of this point governs it unchanged. But a
-   goal over a **rigid** (signature-bound) variable — e.g. `Default (List a)`
+   reduction: it is ⊒ `Tag (Wrap a)`. The super half (#4023): with
+   `impl Sub (Box a)`, `impl Sup (Box a)` and `impl Sup (Box (Two a)) requires Show2 a`,
+   the goal `Sub (Box a)` matches one instance, but its super goal `Sup (Box a)`
+   unifies with `impl Sup (Box (Two a))`, which is not ⊒ `impl Sup (Box a)`; so
+   `g x = useSup (Box x)` has scheme `Sub (Box a) ⇒ a → String`, and `g (Two True)`
+   builds the super at `Box (Two Bool)`, as `useSup (Box (Two True))` does. Likewise a
+   program `impl Eq (List Color)` keeps `h x = useEqViaOrd [x] [x]` at
+   `Ord (List a) ⇒ a → Bool` (`test/dict_fixtures/requires-super-selection-*.mdk`).
+   A super goal the matched instance's context answers, itself or through its
+   supers, is built from that context (`assum` before `inst`) and selects no
+   instance; the context's own goals are reduced under this same test. So with
+   `impl Sub (Box a) requires Sup (Box a)` beside `impl Sup (Box Int)` and
+   `impl Sup (Box Bool)`, `g x = useSup (Box x)` has scheme `Sup (Box a) ⇒ a → String`
+   (`requires-super-selection-context-answers.mdk`). Two classes of super goal are
+   not tested, so a use can select a super instance the reduction did not: a super
+   goal whose argument is a function type, which the test does not count as
+   constructed (#4043), and a super goal whose arguments are all variables, which
+   the instance's context or a blanket instance answers; in the blanket case a
+   more specific instance can match at a use (#4044).
+   A goal over a **rigid** variable is not generalizable: a signed binder and an
+   impl body hold their variables rigid. Such a goal — e.g. `Default (List a)`
    inside `f : ∀a. Default a ⇒ …` — matches only the general instance and is
-   discharged there, once, when `f` is elaborated. If `f` is later used at
+   discharged there, once, when `f` is elaborated, together with the super
+   instances its construction selects
+   (`requires-super-selection-signed-commits.mdk`,
+   `requires-super-selection-impl-head-commits.mdk`,
+   `requires-super-selection-signed-caller.mdk`). If `f` is later used at
    `a := Int`, `f`'s body still runs the general instance's evidence (closed
    over the caller's `Default Int` dict); it is **not** retroactively
    re-resolved to `Default (List Int)`. So a ground predicate can receive
@@ -1944,7 +1975,11 @@ to it later is a semantics change, not a bug fix.
    beside the goal and rejected there
    (`test/dict_fixtures/requires-super-overlap-context-rejected.mdk`); a generalizing
    or local binder quantifies it, and a signed or impl-body binder must declare it
-   (`test/dict_fixtures/requires-super-carried-*.mdk`).
+   (`test/dict_fixtures/requires-super-carried-*.mdk`). And a generalizing binder
+   reduces the goal only when every instantiation selects the same super instances
+   (point 3's R-STABLE, its super half): otherwise the goal is kept as written and
+   each use builds its supers at its own instantiation
+   (`test/dict_fixtures/requires-super-selection-*.mdk`).
 
 5. **Program impls are compared with the prelude's impls.** `IE` contains the
    prelude's instances, and C1 applies to them like any others: a program impl
@@ -3118,9 +3153,9 @@ not this paragraph.
 | §3 **W2** (instance-context termination) | `ReqWalk` / `reqWalkEnter` beside `monoSizes` (`compiler/types/typecheck.mdk`), the one measure every `requires` walk calls: `residualPredsOf` (generalizing binder), `implGoalResiduals` (W3-inst), `superContextLeaves` (W-super, at the impl declaration), `checkNestedReqs` (the end-of-body obligation checker's nested `requires`, and through `superGoalsEntered` each super instance's `requires`), `nestedRequireGoals` (a boundary's prerequisites) and the route walk `argImplRequiresRoutesForRow` (reached through `routeOfD` → `entail` (EKNestedTop) and `argImplReqRoutes` → `argReqRoute`) | a step to a strictly smaller goal vector (`monoSizes`) is free; any other step spends one unit of `requiresNonShrinkingFuel` (32); a goal equal to one on the walk's path (`sameIfaceDecl` + `monoVecSameGiven`) is a cycle; each walk's `WalkMemo` follows a goal reached along many paths once, keyed on the whole goal and the fuel left after entering it, and records no subtree that met an error or a cut (#1924); the solving walks (`wmSolved`, `wmFollowed`) compare goals with `walkGoalSame`, which also compares effect rows and authorities, and record a solve only when no variable it minted appears in its result; `nestedRequireGoals` first walks without reporting (`wmStopped`) and re-walks with reporting when any seed's walk stopped (#3996) | ✅ **CONFORMANT (R-W2, 2026-10-10).** W2 is the dynamic rule §3 states. The solving walks report through `reqWalkReported`: `T-REQUIRES-CYCLE` or `T-REQUIRES-DEPTH` at the goal's site, on every verb. The route walk shares the measure and enters each super of a goal beside it (`superRoutesAt`); the solving walks follow the same super goals the same way (`superGoalsEntered`), so the route walk's cut (`requiresRouteWalkCut`) is reached only on a program a solving walk already rejected, and on any other it is a compiler panic, never a silent `[]` (#1910). Until the obligation checker followed supers, a cycle reached only through a super instance's `requires` (`impl Sup (Box a) requires Sup (Box a)` under `interface Sub a requires Sup a`) passed every solving walk and hit that panic. `monoSize` counts an effect row as one node: under-counting a child only makes a step look shrinking (free), and the size stays a natural number, so the measure is still well-founded. History: the route walk's flat `depth >= 32` cutoff truncated valid ground chains (#1576/#1836); the solving walks' flat 32-step fuel false-rejected shrinking chains (#3802); the end-of-body obligation checker had no bound at all and overflowed the compiler's stack on a self-naming or growing context (#1575, #3801, #2120) |
 | §3 **W3** (method-scheme fidelity / rigidity) | `checkMethodRigidityCore`, `checkMethodEffVarRigidity`, `checkImplEffVarRigidity` (all `compiler/types/typecheck.mdk`) | an impl/default body may not pin a non-head quantified variable (type *or* effect) to a concrete shape | run by the one method-body driver `inferMethodBody` for both kinds (`MethodBodyKind`); a default body's rigidity reads the same instantiation as its body |
 | §3 **W3-inst** (instance-head rigidity) | `checkImplHeadRigidity`, `checkImplHeadPrerequisites` (`compiler/types/typecheck.mdk`) | an impl body may not pin or identify a head variable, and every predicate it leaves on one is entailed by the impl's `requires` (with superinterfaces), the method's `=>` context or the head itself | impl bodies only, at the same boundary as W3, before body-local defaulting; a pin is reported by the body that introduced it; a goal an instance answers only by fixing a head variable is reported whatever other variables it mentions (#3798, #3817) |
-| §3 **W-super** (the declaration entails its supers' instance contexts) | `checkImplSuperContexts` beside `checkSuperImpls` (`compiler/types/typecheck.mdk`) | for each direct super `D` of an impl's interface, the context of the instance `D` selects at the impl head (head variables rigid) is entailed by the impl's `requires` with their superinterfaces | every impl declaration, whether or not a use reduces it; a residual over head variables is `T-IMPL-MISSING-REQUIRES` at the impl, a ground one no instance matches `T-NO-IMPL` at the impl; no impl row covering the super itself, and no given of the `requires` answering it, is `T-MISSING-SUPER-IMPL` at the impl at any head (`checkImplSuperContexts`, over the graph-wide rows, with a rigid and linear match, `superHeadCovers`); a more specific super instance a goal selects has its context carried to the binder that reduces the goal (R-SUPER-CARRY, `superGoalsEntered`, §6.1.4 point 4) (#3995, #4010) |
+| §3 **W-super** (the declaration entails its supers' instance contexts) | `checkImplSuperContexts` beside `checkSuperImpls` (`compiler/types/typecheck.mdk`) | for each direct super `D` of an impl's interface, the context of the instance `D` selects at the impl head (head variables rigid) is entailed by the impl's `requires` with their superinterfaces | every impl declaration, whether or not a use reduces it; a residual over head variables is `T-IMPL-MISSING-REQUIRES` at the impl, a ground one no instance matches `T-NO-IMPL` at the impl; no impl row covering the super itself, and no given of the `requires` answering it, is `T-MISSING-SUPER-IMPL` at the impl at any head (`checkImplSuperContexts`, over the graph-wide rows, with a rigid and linear match, `superHeadCovers`); a more specific super instance a goal selects has its context carried to the binder that reduces the goal (R-SUPER-CARRY, `superGoalsEntered`, §6.1.4 point 4) (#3995, #4010), and a generalizing binder reduces the goal only when that super selection is stable (`residualSelectionStable`, §6.1.3) (#4023) |
 | §4 `var` | `instantiate:3630`; per-residual entailment via `entail:11892`; obligation discharge `checkCallObligationsU:13793`/`checkOneCallObligation:13814` | instantiation + per-predicate entailment at each use | — |
-| §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates. A concrete-headed residual is reduced by `residualPredsOf` only when `residualSelectionStable` holds (every other unifying head ⊒ the matching one, §6.1.3, R-STABLE); otherwise it is deferred as written (`test/dict_fixtures/r-stable-overlap-goal-quantified.mdk`, #1579). The signed path (`checkSigConstraintOne`) commits as written |
+| §4 `gen` | `generalize:3505`; check-path registration `registerInferredConstraints:16140`/`setDictEligible:9418` | abstracts a dict param per deferred predicate | arity becomes part of the binding's elaborated type — see I1 below for the cross-module keying hazard this creates. A concrete-headed residual is reduced by `residualPredsOf` only when `residualSelectionStable` holds (every other unifying head ⊒ the matching one, for the goal and for each super goal of `superGoalClosure` with a constructed argument that the matched instance's context does not answer (`goalAnsweredBy`), `goalSelectionStable`, §6.1.3, R-STABLE); otherwise it is deferred as written (`test/dict_fixtures/r-stable-overlap-goal-quantified.mdk`, #1579; the super half `test/dict_fixtures/requires-super-selection-*.mdk`, #4023). Not tested: a super goal whose argument is a function type (#4043) or whose arguments are all variables (#4044). The signed path (`checkSigConstraintOne`) reduces the goal where it stands, its variables rigid; a signed caller's dictionary application records a slot's lead for `inferredConstraintIds` only when the slot's arguments are all variables (`bareVectorLeads`), since a structured slot reaches it whole on the call channel |
 | §4 `gen-rec` | `processTopGroups:15568` → `processSCCs:15598` → `processSCC:15709` (`compiler/types/typecheck.mdk`) | one shared `λd̄.` prefix over a mutually-recursive group; recursive occurrences reuse it rather than re-entailing | — |
 | §4 `gen-sig` (#619) | `checkSigConstraintCoverage:16344`/`checkSigConstraintOne:16350` (`compiler/types/typecheck.mdk`) | `Q_sig ⊩ P'ᵢ` — inferred body context must be entailed by the declared one, not merged | — |
 | §4.1 **G1** (uniform dict abstraction at a local binder) | **CONFORMANT (#1082).** `openLocalScopeIf`/`registerLocalAbs` (`compiler/types/typecheck.mdk:14756-14780`) mint a scope and abstract one dictionary parameter per predicate for every candidate local, keyed by that binder's OWN scope identity, never the bare name; `localAbsCandidate` (`:23761-23795`) decides candidacy over the same ctor-app-spine shapes `isNonexpansive` (`:11806-11838`) uses for the value restriction, so the two judgments agree on which locals generalize. Every use site is an `EDictAt`/`pushLocalDictApp` (`:14814-14820`) applying that binder's own params, per G1's `var` clause | — | the all-or-nothing pin (`pinLocalIfDictForwarded`, `MEDAKA_ARGTAG_UNPIN`, `T-LOCAL-CONSTRAINED-MONO`) that used to decline generalization for a dict-forwarding local is DELETED tree-wide (owner ruling D1, 2026-09-26, on a 3-engine green spike over eval/native/wasm); `let` and `where` share `localAbsCandidate`'s one candidacy test, so the two spellings' behavioural fork this row used to report no longer has a mechanism to fork on |

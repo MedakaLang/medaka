@@ -1,0 +1,15 @@
+-- §6.1.3 R-STABLE over super selection (#4023), a program impl beside the prelude's:
+-- `h`'s goal `Ord (List a)` matches only the prelude's `impl Ord (List a)`, but its
+-- super goal `Eq (List a)` unifies with the program's `impl Eq (List Color)`, more
+-- specific than the prelude's `impl Eq (List a)`.  So the goal is kept as written,
+-- `h : Ord (List a) => a -> Bool`, and `h Red` selects `Eq (List Color)` as the
+-- direct call does: `False` twice.  It used to print `True` first.
+data Color = Red | Green deriving (Eq, Ord)
+impl Eq (List Color) where
+  eq _ _ = False
+useEqViaOrd : Ord a => a -> a -> Bool
+useEqViaOrd x y = x == y
+h x = useEqViaOrd [x] [x]
+main =
+  println (h Red)
+  println (useEqViaOrd [Red] [Red])

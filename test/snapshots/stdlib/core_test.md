@@ -1,5 +1,5 @@
 # META
-source_lines=105
+source_lines=127
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the list and array rendering and string indexing in
@@ -107,6 +107,28 @@ test "indexing the last codepoint of a wide-character string" =
 
 test "indexing an ASCII string reads the first and last character" =
   expectEqual ('a', 'f') ("abcdef"[0], "abcdef"[5])
+
+-- # Folding and comparing lists
+
+prop "foldMap over a List monoid agrees with the left-nested reference" (xs : List Int) =
+  eq (foldMap (x => [x, x]) xs) (fold (acc x => acc ++ [x, x]) [] xs)
+
+prop "foldMap over a String monoid agrees with the left-nested reference" (xs : List Int) =
+  foldMap (x => display x) xs == fold (acc x => acc ++ display x) "" xs
+
+test "foldMap of an empty list is the monoid identity" =
+  expectEqual ([] : List Int) (foldMap (x => [x]) ([] : List Int))
+
+test "foldMap applies the function in element order" =
+  expectEqual [1, 2, 3] (foldMap (x => [x]) [1, 2, 3])
+
+test "list compare decides on the first differing element" =
+  expectEqual
+    (Lt, Gt, Eq)
+    (compare [1, 2, 9] [1, 3], compare [2] [1, 9], compare [4, 4] [4, 4])
+
+prop "list compare is Eq exactly when the lists are equal" (xs : List Int) (ys : List Int) =
+  compare xs ys == Eq == eq xs ys
 # DESUGAR
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DTest false "debug of an empty list" (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EVar "debug") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -140,6 +162,12 @@ test "indexing an ASCII string reads the first and last character" =
 (DTest false "indexing past a multibyte codepoint counts codepoints" (EApp (EApp (EVar "expectEqual") (ELit (LChar "o"))) (EApp (EApp (EVar "index") (ELit (LString "héllo"))) (ELit (LInt 4)))))
 (DTest false "indexing the last codepoint of a wide-character string" (EApp (EApp (EVar "expectEqual") (ELit (LChar "語"))) (EApp (EApp (EVar "index") (ELit (LString "日本語"))) (ELit (LInt 2)))))
 (DTest false "indexing an ASCII string reads the first and last character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LChar "a")) (ELit (LChar "f")))) (ETuple (EApp (EApp (EVar "index") (ELit (LString "abcdef"))) (ELit (LInt 0))) (EApp (EApp (EVar "index") (ELit (LString "abcdef"))) (ELit (LInt 5))))))
+(DProp false "foldMap over a List monoid agrees with the left-nested reference" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x") (EVar "x")))) (EVar "xs"))) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EListLit (EVar "x") (EVar "x"))))) (EListLit)) (EVar "xs"))))
+(DProp false "foldMap over a String monoid agrees with the left-nested reference" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EApp (EVar "foldMap") (ELam ((PVar "x")) (EApp (EVar "display") (EVar "x")))) (EVar "xs")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EVar "display") (EVar "x"))))) (ELit (LString ""))) (EVar "xs"))))
+(DTest false "foldMap of an empty list is the monoid identity" (EApp (EApp (EVar "expectEqual") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x")))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DTest false "foldMap applies the function in element order" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (EApp (EApp (EVar "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x")))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
+(DTest false "list compare decides on the first differing element" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (ETuple (EApp (EApp (EVar "compare") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 9)))) (EListLit (ELit (LInt 1)) (ELit (LInt 3)))) (EApp (EApp (EVar "compare") (EListLit (ELit (LInt 2)))) (EListLit (ELit (LInt 1)) (ELit (LInt 9)))) (EApp (EApp (EVar "compare") (EListLit (ELit (LInt 4)) (ELit (LInt 4)))) (EListLit (ELit (LInt 4)) (ELit (LInt 4)))))))
+(DProp false "list compare is Eq exactly when the lists are equal" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EBinOp "==" (EApp (EApp (EVar "compare") (EVar "xs")) (EVar "ys")) (EVar "Eq")) (EApp (EApp (EVar "eq") (EVar "xs")) (EVar "ys"))))
 # MARK
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DTest false "debug of an empty list" (EApp (EApp (EVar "expectEqual") (ELit (LString "[]"))) (EApp (EMethodRef "debug") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -173,3 +201,9 @@ test "indexing an ASCII string reads the first and last character" =
 (DTest false "indexing past a multibyte codepoint counts codepoints" (EApp (EApp (EVar "expectEqual") (ELit (LChar "o"))) (EApp (EApp (EMethodRef "index") (ELit (LString "héllo"))) (ELit (LInt 4)))))
 (DTest false "indexing the last codepoint of a wide-character string" (EApp (EApp (EVar "expectEqual") (ELit (LChar "語"))) (EApp (EApp (EMethodRef "index") (ELit (LString "日本語"))) (ELit (LInt 2)))))
 (DTest false "indexing an ASCII string reads the first and last character" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LChar "a")) (ELit (LChar "f")))) (ETuple (EApp (EApp (EMethodRef "index") (ELit (LString "abcdef"))) (ELit (LInt 0))) (EApp (EApp (EMethodRef "index") (ELit (LString "abcdef"))) (ELit (LInt 5))))))
+(DProp false "foldMap over a List monoid agrees with the left-nested reference" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EMethodRef "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x") (EVar "x")))) (EVar "xs"))) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EListLit (EVar "x") (EVar "x"))))) (EListLit)) (EVar "xs"))))
+(DProp false "foldMap over a String monoid agrees with the left-nested reference" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EApp (EMethodRef "foldMap") (ELam ((PVar "x")) (EApp (EMethodRef "display") (EVar "x")))) (EVar "xs")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "x")) (EBinOp "++" (EVar "acc") (EApp (EMethodRef "display") (EVar "x"))))) (ELit (LString ""))) (EVar "xs"))))
+(DTest false "foldMap of an empty list is the monoid identity" (EApp (EApp (EVar "expectEqual") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x")))) (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DTest false "foldMap applies the function in element order" (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)))) (EApp (EApp (EMethodRef "foldMap") (ELam ((PVar "x")) (EListLit (EVar "x")))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3))))))
+(DTest false "list compare decides on the first differing element" (EApp (EApp (EVar "expectEqual") (ETuple (EVar "Lt") (EVar "Gt") (EVar "Eq"))) (ETuple (EApp (EApp (EMethodRef "compare") (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 9)))) (EListLit (ELit (LInt 1)) (ELit (LInt 3)))) (EApp (EApp (EMethodRef "compare") (EListLit (ELit (LInt 2)))) (EListLit (ELit (LInt 1)) (ELit (LInt 9)))) (EApp (EApp (EMethodRef "compare") (EListLit (ELit (LInt 4)) (ELit (LInt 4)))) (EListLit (ELit (LInt 4)) (ELit (LInt 4)))))))
+(DProp false "list compare is Eq exactly when the lists are equal" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "ys" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EBinOp "==" (EApp (EApp (EMethodRef "compare") (EVar "xs")) (EVar "ys")) (EVar "Eq")) (EApp (EApp (EMethodRef "eq") (EVar "xs")) (EVar "ys"))))

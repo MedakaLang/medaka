@@ -1,5 +1,5 @@
 # META
-source_lines=2330
+source_lines=2334
 stages=TYPES
 diagnostics=TYPES
 # SOURCE
@@ -309,7 +309,9 @@ export impl Ord (List a) requires Ord a where
   compare [] [] = Eq
   compare [] _ = Lt
   compare _ [] = Gt
-  compare (x :: xs) (y :: ys) = thenCmp (compare x y) (compare xs ys)
+  compare (x :: xs) (y :: ys) = match compare x y
+    Eq => compare xs ys
+    o => o
 
 -- | `None` sorts before every `Some`; two `Some`s compare by their contents.
 export impl Ord (Option a) requires Ord a where
@@ -1552,6 +1554,8 @@ export impl Foldable List where
   isEmpty [] = True
   isEmpty _ = False
   length = fold (acc _ => acc + 1) 0
+  foldMap f xs =
+    fold (acc y => append y acc) empty (fold (acc x => f x :: acc) [] xs)
 
 -- `Option` and `Result e` each fold as a 0-or-1-element container.
 export impl Foldable Option where

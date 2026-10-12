@@ -1,0 +1,30 @@
+-- §6.1.3, a signed caller of a generalizing binder that keeps its goal: `g` keeps
+-- `Sub (Box a)` because its super goal is unstable (#4023), and the signed
+-- `k2 : b -> String` holds `b` rigid, so `Sub (Box b)` is reduced in `k2`'s body
+-- through `impl Sub (Box a)`, which has no context, and the super commits to
+-- `impl Sup (Box a)`: `k2 (Two True)` prints `GENsub` and `g (Two True)` prints
+-- `SPECbsub`, on every verb.  `k2`'s body requires nothing its signature lacks.
+interface Show2 t where
+  show2 : t -> String
+impl Show2 Bool where
+  show2 _ = "b"
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+data Two a = Two a
+impl Sup (Box a) where
+  sup _ = "GEN"
+impl Sup (Box (Two a)) requires Show2 a where
+  sup (Box (Two x)) = "SPEC" ++ show2 x
+impl Sub (Box a) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+g x = useSup (Box x)
+k2 : b -> String
+k2 y = g y
+main =
+  println (k2 (Two True))
+  println (g (Two True))

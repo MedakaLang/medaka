@@ -5184,6 +5184,138 @@ table = [
     codes = [],
   },
   Row {
+    entry = "requires-super-selection-generalized.mdk",
+    label =
+      "§6.1.3 R-STABLE over super selection (#4023): `g`'s goal `Sub (Box a)` is stable, but its super goal `Sup (Box a)` unifies with the more specific `impl Sup (Box (Two a))`, so the goal stays in the scheme as written (section 2) and `g (Two True)` builds the super the direct call builds. Hand-derived: SPECbsub twice. Was `GENsub` then `SPECbsub` on every engine",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "SPECbsub\nSPECbsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-prelude-eq.mdk",
+    label =
+      "§6.1.3 R-STABLE over super selection (#4023): the super goal `Eq (List a)` of `h`'s `Ord (List a)` unifies with the program's `impl Eq (List Color)`, so `h` keeps `Ord (List a)` (section 2) and `h Red` selects the program impl as the direct call does. Hand-derived: False twice. Was `True` then `False`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "False\nFalse\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-stable-reduces.mdk",
+    label =
+      "§6.1.3 R-STABLE over super selection, control: only the general `impl Sup (Box a)` exists, so the super goal is stable and `g`'s goal is still reduced (section 2 pins `g : a -> String`). Hand-derived: GENsub twice; the same answer before #4023",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "GENsub\nGENsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-local-let.mdk",
+    label =
+      "§6.1.3 R-STABLE over super selection (#4023) at a generalized local: the `let`-bound `g` keeps `Sub (Box a)` as the top-level one does. Hand-derived: SPECbsub twice. Was `GENsub` then `SPECbsub`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "SPECbsub\nSPECbsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-impl-body.mdk",
+    label =
+      "§6.1.3 R-STABLE over super selection (#4023) at a generalized local inside an impl method body: `g` keeps `Sub (Box a)`. Hand-derived: SPECbsub twice. Was `GENsub` then `SPECbsub`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "SPECbsub\nSPECbsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-impl-head-commits.mdk",
+    label =
+      "§6.1.3 the stated price at a rigid variable, unchanged by #4023: `impl Run (W a)` holds `a` rigid in `go`'s body, so the super `Sup (Box a)` commits to the general instance when the impl is elaborated. Hand-derived: GENsub then SPECbsub",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "GENsub\nSPECbsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-signed-commits.mdk",
+    label =
+      "§6.1.3 the stated price at a rigid variable, unchanged by #4023: the signed `g : a -> String` holds `a` rigid, so the super `Sup (Box a)` commits to the general instance when `g` is elaborated. Hand-derived: GENsub then SPECbsub",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "GENsub\nSPECbsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-signed-caller.mdk",
+    label =
+      "§6.1.3 a signed caller of a binder that keeps `Sub (Box a)` (#4023): `k2 : b -> String` holds `b` rigid, so `Sub (Box b)` reduces through the context-free `impl Sub (Box a)` and the super commits to the general instance; `k2` needs no constraint. Hand-derived: GENsub then SPECbsub. Was a run/build reject naming `Sub b` while check accepted",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "GENsub\nSPECbsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-signed-caller-monoid.mdk",
+    label =
+      "§6.1.3 a signed caller of a binder that keeps `Monoid (List a)` beside a program `impl Semigroup (List Color)`: the rigid `Monoid (List b)` commits to the prelude's list instances. Hand-derived: 1, 1, then 0 for the direct `h Red`. Was a run/build reject naming `Monoid b` while check accepted",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n1\n0\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-signed-caller-applicative.mdk",
+    label =
+      "§6.1.3 a signed caller of a binder that keeps `Applicative (Result a)` beside a program `impl Mappable (Result Color)`: the rigid super commits to the prelude's `impl Mappable (Result e)`. Hand-derived: red, then green for the direct `h Red`. Was a run/build reject naming `Applicative b` while check accepted",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "red\ngreen\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-selection-context-answers.mdk",
+    label =
+      "§6.1.3 with §3 R-SUPER-CARRY: the super goal `Sup (Box a)` is answered by `impl Sub (Box a) requires Sup (Box a)`'s context, so it is not tested and `g` reduces to that context (section 2 pins `g : Sup (Box a) => a -> String`). Hand-derived: BOOLsub then INTsub",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "BOOLsub\nINTsub\n",
+    codes = [],
+  },
+  Row {
+    entry = "r-stable-own-goal-signed-caller.mdk",
+    label =
+      "§6.1.3 a signed caller of a binder that keeps its own goal `Tag (Wrap a)` (#1579's shape): `k2 : b -> String` reduces `Tag (Wrap b)` through the context-free general instance and needs no constraint. Hand-derived: gen then bool. Was a run/build reject naming `Tag b` while check accepted",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "gen\nbool\n",
+    codes = [],
+  },
+  Row {
     entry = "requires-cycle-each-site-reported.mdk",
     label =
       "§3 R-SC3 (#3998 (pushTypeErrorOnceAt dedups on message text)): two goal sites reach the same never-ending `requires` chain, and the two messages share their text, so each site is its own `T-REQUIRES-CYCLE`; section 5 grades both spans on every verb. Was one diagnostic, the second site silently folded",
@@ -5282,7 +5414,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 467
+tableRows = 479
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -5547,7 +5679,7 @@ data SchemeRow = SchemeRow { entry : String, label : String, want : String }
 {- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
    this is written down rather than discovered. -}
 schemeRows : Int
-schemeRows = 30
+schemeRows = 34
 
 schemeTable : List SchemeRow
 schemeTable = [
@@ -5729,6 +5861,30 @@ schemeTable = [
     label =
       "§6.1.3 R-STABLE, the two-parameter twin: `outer` keeps `Conv (Wrap Bool) a` (was `outer : a -> String`)",
     want = "outer : Conv (Wrap Bool) a => a -> String",
+  },
+  SchemeRow {
+    entry = "requires-super-selection-generalized.mdk",
+    label =
+      "§6.1.3 R-STABLE over super selection (#4023): the super goal `Sup (Box a)` is unstable, so `g` keeps its goal as written (was `g : a -> String`)",
+    want = "g : Sub (Box a) => a -> String",
+  },
+  SchemeRow {
+    entry = "requires-super-selection-prelude-eq.mdk",
+    label =
+      "§6.1.3 R-STABLE over super selection (#4023): the super goal `Eq (List a)` is unstable, so `h` keeps `Ord (List a)` as written (was `h : Ord a => a -> Bool`)",
+    want = "h : Ord (List a) => a -> Bool",
+  },
+  SchemeRow {
+    entry = "requires-super-selection-stable-reduces.mdk",
+    label =
+      "§6.1.3 R-STABLE over super selection, control: a stable super leaves the reduction in place",
+    want = "g : a -> String",
+  },
+  SchemeRow {
+    entry = "requires-super-selection-context-answers.mdk",
+    label =
+      "§6.1.3 with §3 R-SUPER-CARRY: a super goal the instance's own context answers is not tested, so `g` reduces to that context",
+    want = "g : Sup (Box a) => a -> String",
   },
 ]
 

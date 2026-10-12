@@ -18271,7 +18271,10 @@ inferDeclaredDictAt ev dc inst =
     pdaScope = captureScope (),
   }
   perRun.value.dictAppFns :=
-    consSiteFn perRun.value.currentFn.value monos perRun.value.dictAppFns.value
+    consSiteFn
+      perRun.value.currentFn.value
+      (bareVectorLeads monos argVecs)
+      perRun.value.dictAppFns.value
   -- #11 soundness: record this call's instantiated impl obligations (iface paired
   -- with the call's constraint mono), checked after inference by checkCallObligations.
   -- The iface list is slot-parallel to [monos]; a concrete-head mono with no impl
@@ -18449,6 +18452,19 @@ callArgVecsV ((s, v) :: rest) subst = match lookupAssocI s.csId subst
 substArgVec : List (Int, Mono) -> Mono -> List Mono -> List Mono
 substArgVec _ m [] = [m]
 substArgVec subst _ v = map (substMono subst [] []) v
+
+-- The leads of a dictionary application that `dictAppFns` may record for the caller.
+-- `inferredConstraintIds` reads a recorded lead as the predicate `iface lead`, which is
+-- that slot's predicate only when every argument of its vector is a type variable.  A
+-- slot with a structured argument (`Sub (Box b)`) reaches the caller whole on the call
+-- channel (`recordCallObligations`), where it is reduced, so its lead is not recorded.
+-- [monos] and [argVecs] are slot-parallel; a lead with no vector is kept.
+bareVectorLeads : List Mono -> List (List Mono) -> List Mono
+bareVectorLeads monos [] = monos
+bareVectorLeads [] _ = []
+bareVectorLeads (m :: ms) (v :: vs)
+  | allList isBareTyvarMono v = m :: bareVectorLeads ms vs
+  | otherwise = bareVectorLeads ms vs
 
 constraintMonosOf : List Int -> List (Int, Mono) -> List Mono
 constraintMonosOf [] _ = []
@@ -46299,10 +46315,12 @@ isBareTyvarMono m = match normalize m
 -- those leave (`superGoalsEntered`).
 -- - No instance matches: `unroutedResidual` decides between a reject at the goal's site
 --   and keeping the goal as its own residual.
--- - The match is not the instance every use selects (`residualSelectionStable`, §6.1.3):
---   the goal is kept as written, so each use selects at its own instantiation.  [chosen]
+-- - The match, or the instance a super goal of its construction selects, is not the one
+--   every use selects (`residualSelectionStable`, §6.1.3): the goal is kept as
+--   written, so each use selects at its own instantiation, its supers included.  [chosen]
 --   are the variables the binder's uses choose: the quantified variables of a
---   generalizing binder, and none at a signed binder, whose goal commits as written.
+--   generalizing binder, and none at a signed binder, whose goal is reduced where it
+--   stands.
 -- The walk is bounded by the shared `requires` measure (`reqWalkEnter`, DICT §3 W2): a
 -- cyclic instance is `T-REQUIRES-CYCLE` and a context that keeps growing its goal is
 -- `T-REQUIRES-DEPTH`, both at `goalSiteLoc`, so a goal that leaves no residual because
@@ -46324,8 +46342,12 @@ residualPredsOf chosen walk iface args
         let univ = perRun.value.residualUnivRef.value
         match findMatchingImplReqsU univ iface args
           None => unroutedResidual iface args
-          Some _ if not (residualSelectionStable chosen iface args) =>
-            [(iface, args)]
+          Some (subst, reqs) if not
+            (residualSelectionStable
+              chosen
+              (map (reqToObligation subst) reqs)
+              iface
+              args) => [(iface, args)]
           Some (subst, reqs) =>
             let own =
               flatMap
@@ -46340,15 +46362,39 @@ residualPredsOf chosen walk iface args
                     (reqObligationsFor univ e.sgIface e.sgArgs))
                 (superGoalsEntered univ walk !goalSiteLoc own iface args)))
 
--- Whether every use of the binder selects the instance the goal matches now
--- (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or among the
--- instance heads that unify with it, one matches it and is ⊑ every other
--- (`goalReach`'s stable minimum).  Only a variable some binder declared
--- (`declaredSigVarIds`) is held rigid in that unification: an enclosing binder's
--- variable that is not generalized yet can still become a type another instance
--- head needs.
-residualSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
-residualSelectionStable chosen iface args =
+-- Whether every use of the binder builds the dictionary the goal's reduction builds
+-- now (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or the
+-- goal is stable (`goalSelectionStable`) and so is each of its super goals
+-- (`superGoalClosure`) that is tested.  [context] is the matched instance's context
+-- at the goal; a super goal it answers (`goalAnsweredBy`) is built from that context,
+-- not selected, and the context's goals are reduced under this same test.  Not
+-- tested, and so able to differ between uses (#4043, #4044): a super goal with no
+-- argument `anyConcreteHead` counts as constructed, which includes a function-type
+-- argument, and an all-variable super goal, which a blanket instance can answer.
+residualSelectionStable : List Int ->
+  List (IfaceRef, List Mono) ->
+  IfaceRef ->
+  List Mono ->
+  Bool
+residualSelectionStable chosen context iface args
+  | not (anyIn (flatMap monoUnboundIds args) chosen) = True
+  | otherwise =
+    goalSelectionStable chosen iface args
+      && allList
+        (sg =>
+          not (anyConcreteHead (snd sg))
+            || goalAnsweredBy context (fst sg) (snd sg)
+            || goalSelectionStable chosen (fst sg) (snd sg))
+        (superGoalClosure iface args)
+
+-- Whether every use of the binder selects the instance the goal matches now: the goal
+-- mentions no variable the uses choose, or among the instance heads that unify with
+-- it, one matches it and is ⊑ every other (`goalReach`'s stable minimum).  Only a
+-- variable some binder declared (`declaredSigVarIds`) is held rigid in that
+-- unification: an enclosing binder's variable that is not generalized yet can still
+-- become a type another instance head needs.
+goalSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
+goalSelectionStable chosen iface args =
   let goalIds = dedupI (flatMap monoUnboundIds args)
   if not (anyIn goalIds chosen) then
     True

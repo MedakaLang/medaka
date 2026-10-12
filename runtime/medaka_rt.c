@@ -110,7 +110,10 @@ __attribute__((constructor)) static void mdk_gc_init(void) {
  * collected); every extern that RETURNS a Medaka value goes through this single
  * entry point, so the malloc->GC swap was one function (RUNTIME-DESIGN.md §2a).
  * GC_malloc returns >=8-byte-aligned, zeroed memory — satisfying the boxed-pointer
- * alignment contract the value rep relies on. */
+ * alignment contract the value rep relies on.  The emitted IR declares this with
+ * allockind("alloc,zeroed") and noalias, so LLVM may delete an unused cell and
+ * forward its stores: the function must stay free of observable side effects
+ * beyond the allocation, and must return zeroed memory. */
 void *mdk_alloc(long long n) { return GC_malloc((size_t)n); }
 
 /* Allocate `n` bytes of POINTER-FREE memory (raw bytes / string cells).  Routes to
@@ -120,7 +123,9 @@ void *mdk_alloc(long long n) { return GC_malloc((size_t)n); }
  * block before any read — GC_malloc_atomic does not zero — and the block MUST contain
  * no pointers the collector needs to follow.  String cells qualify: their header is
  * three integer words (tag, byte_len, cp_count) followed by raw UTF-8 bytes, all
- * written by mdk_str_lit; no field is a heap pointer. */
+ * written by mdk_str_lit; no field is a heap pointer.  The emitted IR declares this
+ * with allockind("alloc,uninitialized") and noalias: LLVM assumes the contents are
+ * unspecified and that the call has no side effect beyond the allocation. */
 void *mdk_alloc_atomic(long long n) { return GC_malloc_atomic((size_t)n); }
 
 /* ---- generic arity-aware closure application (partial application / PAPs) ----

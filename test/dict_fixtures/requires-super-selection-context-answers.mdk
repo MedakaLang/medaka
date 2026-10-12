@@ -1,0 +1,23 @@
+-- §6.1.3 and §3 R-SUPER-CARRY: a super goal the matched instance's context answers
+-- is built from that context, not selected, so it is not part of the super half of
+-- R-STABLE.  `impl Sub (Box a) requires Sup (Box a)` answers `Sub (Box a)`'s super
+-- goal `Sup (Box a)`, so `g`'s goal is reduced to its context and `g` has scheme
+-- `Sup (Box a) => a -> String`; each use selects `Sup (Box Bool)` or `Sup (Box Int)`:
+-- `BOOLsub` then `INTsub`.
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+impl Sup (Box Int) where
+  sup _ = "INT"
+impl Sup (Box Bool) where
+  sup _ = "BOOL"
+impl Sub (Box a) requires Sup (Box a) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+g x = useSup (Box x)
+main =
+  println (g True)
+  println (g (1 : Int))

@@ -406,12 +406,12 @@ findIndex p xs = go 0 xs
    [1, 3] -}
 export
 findIndices : (a -> <e> Bool) -> List a -> <e> List Int
-findIndices p xs = go 0 xs
+findIndices p xs = go 0 xs []
   where
-    go _ [] = []
-    go i (x :: rest)
-      | p x = i :: go (i + 1) rest
-      | otherwise = go (i + 1) rest
+    go _ [] acc = reverse acc
+    go i (x :: rest) acc
+      | p x = go (i + 1) rest (i :: acc)
+      | otherwise = go (i + 1) rest acc
 
 {- | The index of the first element equal to `x`, or `None`.
 
@@ -646,10 +646,12 @@ dropWhile p (xs@(x :: rest))
    ([1, 2], [3, 1]) -}
 export
 span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
-span _ [] = ([], [])
-span p (xs@(x :: rest))
-  | p x = let (a, b) = span p rest in (x :: a, b)
-  | otherwise = ([], xs)
+span p xs = go xs []
+  where
+    go [] acc = (reverse acc, [])
+    go (ys@(y :: rest)) acc
+      | p y = go rest (y :: acc)
+      | otherwise = (reverse acc, ys)
 
 -- > span (x => x < 9) [1, 2, 3]
 -- ([1, 2, 3], [])
@@ -841,11 +843,52 @@ containsSub sub (xs@(_ :: rest))
    [3, 2, 1] -}
 export
 sortBy : (a -> a -> <e> Ordering) -> List a -> <e> List a
-sortBy _ [] = []
-sortBy _ [x] = [x]
-sortBy cmp xs =
-  let (l, r) = splitAt (length xs / 2) xs
-  merge cmp (sortBy cmp l) (sortBy cmp r)
+sortBy cmp xs = sortMergeAll cmp (sortRuns cmp xs)
+
+-- > sortBy compare ([] : List Int)
+-- []
+-- > sortBy compare [7]
+-- [7]
+-- > sortBy compare [1, 1, 1]
+-- [1, 1, 1]
+-- > sortBy compare [1, 2, 3, 2, 1]
+-- [1, 1, 2, 2, 3]
+
+-- Maximal non-decreasing prefix, accumulated reversed; the caller reverses it.
+sortRunAsc : (a -> a -> <e> Ordering) ->
+  List a ->
+  a ->
+  List a ->
+  <e> (List a, List a)
+sortRunAsc _ acc x [] = (x :: acc, [])
+sortRunAsc cmp acc x (y :: ys) = match cmp x y
+  Gt => (x :: acc, y :: ys)
+  _ => sortRunAsc cmp (x :: acc) y ys
+
+-- Maximal strictly descending prefix; prepending while descending leaves it ascending.
+sortRunDesc : (a -> a -> <e> Ordering) ->
+  List a ->
+  a ->
+  List a ->
+  <e> (List a, List a)
+sortRunDesc _ acc x [] = (x :: acc, [])
+sortRunDesc cmp acc x (y :: ys) = match cmp x y
+  Gt => sortRunDesc cmp (x :: acc) y ys
+  _ => (x :: acc, y :: ys)
+
+sortRunsFrom : (a -> a -> <e> Ordering) -> a -> List a -> <e> List (List a)
+sortRunsFrom _ x [] = [[x]]
+sortRunsFrom cmp x (y :: ys) = match cmp x y
+  Gt => let (run, after) = sortRunDesc cmp [x] y ys in run :: sortRuns cmp after
+  _ =>
+    let (run, after) = sortRunAsc cmp [x] y ys in
+      reverse run :: sortRuns cmp after
+
+-- The maximal runs of `xs`, in input order. A strictly descending run is the only
+-- one reversed, so no equal elements change their relative order.
+sortRuns : (a -> a -> <e> Ordering) -> List a -> <e> List (List a)
+sortRuns _ [] = []
+sortRuns cmp (x :: rest) = sortRunsFrom cmp x rest
 
 -- Merge two sorted runs, taking from the left on ties so the sort stays stable.
 merge : (a -> a -> <e> Ordering) -> List a -> List a -> <e> List a
@@ -854,6 +897,16 @@ merge _ xs [] = xs
 merge cmp (xs@(x :: xs')) (ys@(y :: ys')) = match cmp x y
   Gt => y :: merge cmp xs ys'
   _ => x :: merge cmp xs' ys
+
+-- Merge adjacent pairs of runs; an odd trailing run passes through unchanged.
+sortMergePairs : (a -> a -> <e> Ordering) -> List (List a) -> <e> List (List a)
+sortMergePairs cmp (a :: b :: rest) = merge cmp a b :: sortMergePairs cmp rest
+sortMergePairs _ rs = rs
+
+sortMergeAll : (a -> a -> <e> Ordering) -> List (List a) -> <e> List a
+sortMergeAll _ [] = []
+sortMergeAll _ [r] = r
+sortMergeAll cmp rs = sortMergeAll cmp (sortMergePairs cmp rs)
 
 {- | The list sorted in ascending order.
 
@@ -1173,6 +1226,25 @@ prop "sort is ascending and length-preserving" (xs : List Int) =
   let ys = sort xs
   isSorted ys && length ys == length xs
 
+-- Reference stable sort: insert each element after the last element that does not compare greater.
+refInsert : (a -> a -> <e> Ordering) -> a -> List a -> <e> List a
+refInsert _ x [] = [x]
+refInsert cmp x (y :: ys) = match cmp y x
+  Gt => x :: y :: ys
+  _ => y :: refInsert cmp x ys
+
+refGo : (a -> a -> <e> Ordering) -> List a -> List a -> <e> List a
+refGo _ acc [] = acc
+refGo cmp acc (x :: rest) = refGo cmp (refInsert cmp x acc) rest
+
+prop "sortBy is stable: key-only comparator matches a reference insertion sort" (xs : List Int) =
+  let keyed = zip (map (x => x % 7) xs) (range 0 (length xs))
+  let byKey = (ka, _) (kb, _) => compare ka kb
+  eq (sortBy byKey keyed) (refGo byKey [] keyed)
+
+prop "sortBy agrees with a reference insertion sort on Int" (xs : List Int) =
+  eq (sortBy compare xs) (refGo compare [] xs)
+
 prop "partition splits by the predicate" (xs : List Int) =
   let (yes, no) = partition (x => x > 0) xs
   all (x => x > 0) yes && all (x => x <= 0) no
@@ -1210,3 +1282,50 @@ prop "break equals span of the negated predicate" (xs : List Int) =
 
 prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
   length (range lo hi) == max 0 (hi - lo)
+
+-- Plain non-tail references for span and findIndices.
+spanRef : (a -> Bool) -> List a -> (List a, List a)
+spanRef _ [] = ([], [])
+spanRef p (x :: rest)
+  | p x = let (a, b) = spanRef p rest in (x :: a, b)
+  | otherwise = ([], x :: rest)
+
+findIndicesRef : (a -> Bool) -> List a -> List Int
+findIndicesRef p xs = findIndicesRefGo p 0 xs
+
+findIndicesRefGo : (a -> Bool) -> Int -> List a -> List Int
+findIndicesRefGo _ _ [] = []
+findIndicesRefGo p i (x :: rest)
+  | p x = i :: findIndicesRefGo p (i + 1) rest
+  | otherwise = findIndicesRefGo p (i + 1) rest
+
+prop "span agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
+  let none = [] : List Int
+  eq (span (x => True) xs) (spanRef (x => True) xs)
+    && eq (span (x => False) xs) (spanRef (x => False) xs)
+    && eq (span (x => x < k) xs) (spanRef (x => x < k) xs)
+    && eq (span (x => x < k) none) (spanRef (x => x < k) none)
+    && eq (span (x => x < k) [k]) (spanRef (x => x < k) [k])
+    && eq (span (x => x < 3) [1, 2, 3, 1]) (spanRef (x => x < 3) [1, 2, 3, 1])
+
+prop "break agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
+  let none = [] : List Int
+  eq (break (x => True) xs) (spanRef (x => False) xs)
+    && eq (break (x => False) xs) (spanRef (x => True) xs)
+    && eq (break (x => x > k) xs) (spanRef (x => not (x > k)) xs)
+    && eq (break (x => x > k) none) (spanRef (x => not (x > k)) none)
+    && eq (break (x => x > k) [k]) (spanRef (x => not (x > k)) [k])
+
+prop "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
+  let none = [] : List Int
+  eq (findIndices (x => True) xs) (findIndicesRef (x => True) xs)
+    && eq (findIndices (x => False) xs) (findIndicesRef (x => False) xs)
+    && eq (findIndices (x => x < k) xs) (findIndicesRef (x => x < k) xs)
+    && eq (findIndices (x => x < k) none) (findIndicesRef (x => x < k) none)
+    && eq (findIndices (x => x < k) [k]) (findIndicesRef (x => x < k) [k])
+    && eq (findIndices (x => x < 3) [1, 2, 3, 1]) [0, 1, 3]
+
+prop "elemIndices agrees with the plain findIndices reference on [] and singletons" (k : Int) (xs : List Int) =
+  eq (elemIndices k []) (findIndicesRef (x => x == k) [])
+    && eq (elemIndices k [k]) [0]
+    && eq (elemIndices k xs) (findIndicesRef (x => x == k) xs)

@@ -136,7 +136,7 @@ That is genuinely strong. The holes are specific.
     (O(arms²)).
 
 *(Lower priority, distinct-but-low-risk: `deriving` fan-out, string-interpolation `++` chains,
-N-statement `do` blocks. Parser op-chains are provably linear — `chainl1` is a tail left-fold.)*
+N-statement `do` blocks. Parser op-chains are provably linear — each `binLevel` level folds its chain left in a loop.)*
 
 ### METRIC-axis holes — blow-ups no current metric can see
 

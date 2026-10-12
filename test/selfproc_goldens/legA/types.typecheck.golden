@@ -248,6 +248,7 @@ backticked : String -> String
 bangOnBoolHelp : String
 bangOnBoolMsg : String
 bareLocalBound : BareLocals -> String -> Bool
+bareVectorLeads : List Mono -> List (List Mono) -> List Mono
 beginAssumptionTrace : Unit -> Unit
 beginEffectContract : EffRow -> Mono -> (Map Int Unit, Map Int Unit)
 beginEffectSummaryScope : Unit -> Unit
@@ -1317,6 +1318,7 @@ goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalRows : IfaceRef -> List Mono -> List ImplRow
 goalSatisfiable : Map String Unit -> UObligation -> List Mono -> Bool
 goalSatisfiableAfterDefault : ArmedGuard -> Int -> UObligation -> Bool
+goalSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
 goalSiteLoc : Ref (Option Loc)
 goalSlotStillOpen : List Mono -> Bool
 goalVarsAllHeld : Map String Unit -> List Mono -> Bool
@@ -2786,7 +2788,7 @@ residualMixedPred : List Int -> IfaceRef -> List Mono -> List (IfaceRef, List In
 residualOblArgs : List Int -> List Mono -> List Mono
 residualPredsOf : List Int -> ReqWalk -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
 residualRefutableNow : IfaceRef -> List Mono -> Bool
-residualSelectionStable : List Int -> IfaceRef -> List Mono -> Bool
+residualSelectionStable : List Int -> List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
 residualVecObls : Bool -> List Int -> IfaceRef -> List Mono -> Option Loc -> List VecObl
 residualsOf : Int -> List (Int, AuthResidual) -> List AuthResidual
 resolveAliasMethodSpellings : (String, List Decl) -> (String, List Decl)

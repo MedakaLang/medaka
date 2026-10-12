@@ -1,0 +1,32 @@
+-- §6.1.3, the stated price at a rigid variable (#4023 leaves it unchanged): an impl
+-- body holds its head variable `a` rigid, so `go`'s goal `Sub (Box a)` and its super
+-- `Sup (Box a)` commit to `impl Sup (Box a)` when the impl is elaborated, and
+-- `go (W (Two True))` prints `GENsub` while the direct call prints `SPECbsub`.
+interface Show2 t where
+  show2 : t -> String
+impl Show2 Int where
+  show2 _ = "i"
+impl Show2 Bool where
+  show2 _ = "b"
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+data Two a = Two a
+impl Sup (Box a) where
+  sup _ = "GEN"
+impl Sup (Box (Two a)) requires Show2 a where
+  sup (Box (Two x)) = "SPEC" ++ show2 x
+impl Sub (Box a) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+data W a = W a
+interface Run t where
+  go : t -> String
+impl Run (W a) where
+  go (W x) = useSup (Box x)
+main =
+  println (go (W (Two True)))
+  println (useSup (Box (Two True)))

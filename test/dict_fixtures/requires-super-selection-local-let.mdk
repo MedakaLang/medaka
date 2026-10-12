@@ -1,0 +1,28 @@
+-- §6.1.3 R-STABLE over super selection (#4023), local `let`: the `let`-bound `g`
+-- keeps `Sub (Box a)` as written exactly as the top-level one does, so
+-- `g (Two True)` builds the specific super: `SPECbsub` twice.  It used to print
+-- `GENsub` first.
+interface Show2 t where
+  show2 : t -> String
+impl Show2 Int where
+  show2 _ = "i"
+impl Show2 Bool where
+  show2 _ = "b"
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+data Two a = Two a
+impl Sup (Box a) where
+  sup _ = "GEN"
+impl Sup (Box (Two a)) requires Show2 a where
+  sup (Box (Two x)) = "SPEC" ++ show2 x
+impl Sub (Box a) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+main =
+  let g x = useSup (Box x)
+  println (g (Two True))
+  println (useSup (Box (Two True)))

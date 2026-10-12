@@ -1,0 +1,19 @@
+-- §6.1.3, a signed caller of a binder that keeps its own goal (#1579's shape): `nest`
+-- keeps `Tag (Wrap a)` because `impl Tag (Wrap Bool)` is more specific than
+-- `impl Tag (Wrap a)`.  The signed `k2 : b -> String` holds `b` rigid, so its
+-- `Tag (Wrap b)` is reduced through the general instance, which has no context:
+-- `k2 True` prints `gen` and `nest True` prints `bool`, on every verb.  `k2`'s body
+-- requires nothing its signature lacks.
+interface Tag a where
+  tagOf : a -> String
+data Wrap a = Wrap a
+impl Tag (Wrap a) where
+  tagOf _ = "gen"
+impl Tag (Wrap Bool) where
+  tagOf _ = "bool"
+nest x = tagOf (Wrap x)
+k2 : b -> String
+k2 y = nest y
+main =
+  println (k2 True)
+  println (nest True)

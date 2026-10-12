@@ -1,0 +1,19 @@
+-- §6.1.3, the signed-caller shape over prelude interfaces: `h` keeps
+-- `Monoid (List a)` because its super goal `Semigroup (List a)` unifies with the
+-- program's `impl Semigroup (List Color)` (#4023).  The signed `k2 : b -> List b`
+-- holds `b` rigid, so its `Monoid (List b)` is reduced through the prelude's
+-- `impl Monoid (List a)` and the super commits to the prelude's list append:
+-- `k2 Red` and `k2 1` have length 1, while `h Red` selects the program impl and has
+-- length 0, on every verb.
+data Color = Red | Green deriving (Eq, Ord)
+impl Semigroup (List Color) where
+  append _ _ = []
+useM : Monoid a => a -> a
+useM x = append x empty
+h x = useM [x]
+k2 : b -> List b
+k2 y = h y
+main =
+  println (length (k2 Red))
+  println (length (k2 (1 : Int)))
+  println (length (h Red))

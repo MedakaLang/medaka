@@ -1,0 +1,236 @@
+{- | Recoverable parse failures stay unrendered until they become a
+   diagnostic: the text of `unexpected X; expected Y`, the furthest-failure
+   choice between two failed alternatives, and the tie rule.  Then the
+   binary-operator ladder: precedence, associativity, and an operator whose
+   right operand fails. -}
+
+import frontend.ast.{Expr(..), Decl(..)}
+import frontend.lexer.{Token(..)}
+import frontend.parser.{
+  PR(..),
+  PFail(..),
+  ParserE(..),
+  Parser,
+  failP,
+  expectTok,
+  runP,
+  renderFail,
+  parseResult,
+  parseErrorMessage,
+}
+import test.{expectEqual}
+import frontend.parser as P
+
+-- The rendered message of a recoverable failure, or the marker text for any
+-- other outcome so a wrong outcome shows up in the assertion's diff.
+failText : PR a -> String
+failText (PErr f _) = renderFail f
+failText (PFatal m _) = "fatal: \{m}"
+failText (POk _ _) = "ok"
+
+failPos : PR a -> Int
+failPos (PErr _ q) = q
+failPos _ = -1
+
+expectAt : Token -> List Token -> PR Unit
+expectAt t toks = runP (expectTok t) (arrayFromList toks) 0
+
+parseMsg : String -> String
+parseMsg src = match parseResult src
+  Err e => parseErrorMessage e
+  Ok _ => "parsed"
+
+-- Reverting to eager rendering leaves these equal; they pin the TEXT, which
+-- must not move when rendering is deferred.
+test "expect failure text: layout tokens" =
+  expectEqual
+    [
+      "unexpected indentation; expected `)`",
+      "unexpected end of block; expected an indented block",
+      "unexpected indentation; expected the end of the block",
+    ]
+    [
+      failText (expectAt TRParen [TIndent]),
+      failText (expectAt TIndent [TDedent]),
+      failText (expectAt TDedent [TIndent]),
+    ]
+
+test "expect failure text: identifier and punctuation tokens" =
+  expectEqual
+    [
+      "unexpected `x`; expected `)`",
+      "unexpected `)`; expected `(`",
+      "unexpected line break; expected `]`",
+    ]
+    [
+      failText (expectAt TRParen [TIdent "x"]),
+      failText (expectAt TLParen [TRParen]),
+      failText (expectAt TRBracket [TNewline]),
+    ]
+
+-- Reverting `PErr` to carry a String changes nothing visible here; the test
+-- pins that the end-to-end text still comes out of `renderFail`.
+test "expect failure text survives to the diagnostic" =
+  expectEqual
+    [
+      "unexpected line break; expected `)`",
+      "unexpected `=`; expected the end of the block",
+    ]
+    [
+      parseMsg "main = (1 + 2\n",
+      parseMsg "main =\n  let x = 1\n    y = 2\n  x\n",
+    ]
+
+test "renderFail of a plain message is that message" =
+  expectEqual "boom" (renderFail (FailMsg "boom"))
+
+-- `far` fails at token index 1 (after "consuming" one token), `near` at 0.
+far : Parser Unit
+far = ParserE (toks pos => runP (expectTok TRParen) toks (pos + 1))
+
+near : Parser Unit
+near = failP "near"
+
+twoToks : Array Token
+twoToks = arrayFromList [TIdent "y", TIdent "x"]
+
+-- The first alternative failed further (qa > qb): its message is kept.
+-- Reverting to "always the second alternative" would give "near".
+test "farthest failure wins when it is the first alternative" =
+  expectEqual
+    ("unexpected `x`; expected `)`", 1)
+    (
+      failText (runP (P.orElse far near) twoToks 0),
+      failPos (runP (P.orElse far near) twoToks 0),
+    )
+
+-- The second alternative failed further: it is kept.
+test "farthest failure wins when it is the second alternative" =
+  expectEqual
+    "unexpected `x`; expected `)`"
+    (failText (runP (P.orElse near far) twoToks 0))
+
+-- Equal positions: the later alternative (`otherwise = PErr eb qb`) wins.
+-- Reverting the tie to the first alternative would give "first".
+test "a tie goes to the later alternative" =
+  expectEqual
+    "second"
+    (failText (runP (P.orElse (failP "first") (failP "second")) twoToks 0))
+
+-- ── The binary-operator ladder ──────────────────────────────────────────
+-- Expected values follow the ladder `binLevelOf` encodes, which is the one the
+-- combinator ladder it replaced encoded: loosest first `|>`, `>>` `<<`, `||`,
+-- `&&`, comparisons, `::`, `++`, `+` `-`, `*` `/` `%`; all left-associative but
+-- `::`; application binds tighter than any operator.
+
+-- The operator skeleton of `x = <src>`'s body, fully parenthesised.
+shape : Expr -> String
+shape (ELoc _ e) = shape e
+shape (EBinOp op l r _) = "(\{shape l} \{op} \{shape r})"
+shape (EApp f a) = "(\{shape f} \{shape a})"
+shape (EVar v) = v
+shape (ENumLit _ _ _ lx) = lx
+shape _ = "?"
+
+bodyShape : String -> String
+bodyShape src = match parseResult "x = \{src}\n"
+  Ok [DFunDef _ _ _ e _] => shape e
+  Ok _ => "not one definition"
+  Err e => "error: \{parseErrorMessage e}"
+
+test "each operator binds tighter than the level above it" =
+  expectEqual
+    [
+      "(a |> (b >> c))",
+      "(a >> (b || c))",
+      "(a || (b && c))",
+      "(a && (b == c))",
+      "(a < (b :: c))",
+      "(a :: (b ++ c))",
+      "(a ++ (b + c))",
+      "(a + (b * c))",
+      "(a * (f b))",
+    ]
+    (map bodyShape [
+      "a |> b >> c",
+      "a >> b || c",
+      "a || b && c",
+      "a && b == c",
+      "a < b :: c",
+      "a :: b ++ c",
+      "a ++ b + c",
+      "a + b * c",
+      "a * f b",
+    ])
+
+test "a looser operator after a tighter one takes the whole left side" =
+  expectEqual
+    [
+      "((a << b) |> c)",
+      "((a || b) >> c)",
+      "((a && b) || c)",
+      "((a /= b) && c)",
+      "((a :: b) >= c)",
+      "((a ++ b) :: c)",
+      "((a - b) ++ c)",
+      "((a % b) - c)",
+    ]
+    (map bodyShape [
+      "a << b |> c",
+      "a || b >> c",
+      "a && b || c",
+      "a /= b && c",
+      "a :: b >= c",
+      "a ++ b :: c",
+      "a - b ++ c",
+      "a % b - c",
+    ])
+
+test "every level is left-associative except cons" =
+  expectEqual
+    [
+      "((a |> b) |> c)",
+      "((a >> b) << c)",
+      "((a || b) || c)",
+      "((a && b) && c)",
+      "((a < b) <= c)",
+      "(a :: (b :: c))",
+      "((a ++ b) ++ c)",
+      "((a - b) + c)",
+      "((a / b) * c)",
+    ]
+    (map bodyShape [
+      "a |> b |> c",
+      "a >> b << c",
+      "a || b || c",
+      "a && b && c",
+      "a < b <= c",
+      "a :: b :: c",
+      "a ++ b ++ c",
+      "a - b + c",
+      "a / b * c",
+    ])
+
+-- A tight minus after a numeric head is subtraction; after any other head it
+-- is a negative argument.
+test "a tight minus is subtraction only after a numeric head" =
+  expectEqual ["(5 - 1)", "(f -1)"] (map bodyShape ["5 -1", "f -1"])
+
+-- An operator whose right operand does not parse is not consumed, so the
+-- leftover-token diagnostic names that operator, at every level.
+test "an operator with no right operand is left for the diagnostic" =
+  expectEqual
+    [
+      "unexpected `+`",
+      "unexpected `::`",
+      "unexpected `++`",
+      "unexpected `|>`",
+      "unexpected `>`",
+    ]
+    [
+      parseMsg "x = a * b +\n",
+      parseMsg "x = a :: b ::\n",
+      parseMsg "x = a :: b ++\n",
+      parseMsg "x = a || b |>\n",
+      parseMsg "x = (a > b) >\n",
+    ]

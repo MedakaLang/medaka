@@ -4141,7 +4141,7 @@ isIntLit k e = match unwrapLoc e
 -- text already contains a `\{` sequence is SKIPPED (would collide with the
 -- interpolation syntax).
 --
--- `++` is left-associative (`chainl1`), so a chain nests leftward and a sub-chain
+-- `++` is left-associative, so a chain nests leftward and a sub-chain
 -- would fire again under the shared bottom-up driver; this rule therefore uses a
 -- bespoke TOP-DOWN rewrite that fires once at the maximal chain and descends only
 -- into hole operands (`rewriteConcatExpr`).
