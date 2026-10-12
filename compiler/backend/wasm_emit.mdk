@@ -430,6 +430,12 @@ data WasmEmit = WasmEmit {
   siteFileNums : Ref (OrdMap Int),
   siteRtUsed : Ref Bool,
   siteNonexhUsed : Ref Bool,
+  -- coded trap texts: one `$trapmsg_K` helper per DISTINCT text, numbered in
+  -- first-use order.  `trapMsgIds` maps a text to its number (an OrdMap, so a
+  -- lookup is O(log n)); `trapMsgFns` holds the helper definitions latest-first.
+  -- See `trapMsgCall`.
+  trapMsgIds : Ref (OrdMap Int),
+  trapMsgFns : Ref (List String),
   -- the first-clause site of the function whose clauses are being emitted
   clauseSite : Ref Int,
   -- the checked `Int` operators and `Int` shifts this emission called, by helper
@@ -511,6 +517,8 @@ freshWasmEmit mode = WasmEmit {
   siteFileNums = Ref omEmpty,
   siteRtUsed = Ref False,
   siteNonexhUsed = Ref False,
+  trapMsgIds = Ref omEmpty,
+  trapMsgFns = Ref [],
   clauseSite = Ref 0,
   intRtUsed = Ref [],
   useEPut = Ref False,
@@ -2506,6 +2514,7 @@ emitScalarProgram emit fnNames valNames groups =
   let trapIntRt = if !emit.trapIntNeeded then trapIntRuntimeLines else []
   let intRt = intRuntimeLines !emit.intRtUsed
   let siteRt = siteRuntimeOf emit
+  let trapMsgRt = trapMsgRuntimeOf emit
   joinNl
     (header
       ++ trapImport
@@ -2516,6 +2525,7 @@ emitScalarProgram emit fnNames valNames groups =
       ++ intRt
       ++ siteRt
       ++ initLines
+      ++ trapMsgRt
       ++ [")"])
 
 oneGlobalI32 : String -> String
@@ -3215,6 +3225,9 @@ emitRefProgram prog groups =
   -- the same reason `trapImport` and `dataSegs` are; their LINES are placed with the
   -- other globals below, which the text format permits independently of binding order.
   let constClosGlobals = wConstClosGlobalLines (progEmit prog)
+  -- the `$trapmsg_K` helpers, bound last of all: every coded trap they hold was
+  -- interned during the body emission above.
+  let trapMsgRt = trapMsgRuntimeOf (progEmit prog)
   joinNl
     (header
       ++ typeSection
@@ -3264,6 +3277,7 @@ emitRefProgram prog groups =
       ++ dataSegs
       ++ forceFns
       ++ initLines
+      ++ trapMsgRt
       ++ [")"])
 
 -- the passive data segments for string literals — one `(data $strseg_N "…")` per
@@ -6470,7 +6484,30 @@ trapByteInstr b = ["i32.const " ++ intToString b, "call $mdk_write_err_byte"]
 wasmTrapBytes : WasmEmit -> String -> List String
 wasmTrapBytes emit text =
   let _ = setRef emit.trapImportNeeded True
-  flatMap trapByteInstr (strBytesW text)
+  if text == "" then [] else trapMsgCall emit text
+
+-- Stream the coded-trap text [text] by calling its `$trapmsg_K` helper.  The
+-- helper holds the unrolled byte-writes once per DISTINCT text, so a message repeated
+-- at many trap sites costs one body plus a call per site.  The helper takes and
+-- leaves nothing, so the `call` is stack-neutral exactly as the pairs were; the
+-- caller still supplies any `unreachable`.  Helper bodies are assembled by
+-- `trapMsgRuntimeOf`, after every body emission (see the module assembly).
+trapMsgCall : WasmEmit -> String -> List String
+trapMsgCall emit text = match omLookup text !emit.trapMsgIds
+  Some k => ["call $trapmsg_" ++ intToString k]
+  None =>
+    let k = omSize !emit.trapMsgIds
+    let _ = setRef emit.trapMsgIds (omInsert text k !emit.trapMsgIds)
+    let def =
+      ["  (func $trapmsg_" ++ intToString k]
+        ++ map ("    " ++ _) (flatMap trapByteInstr (strBytesW text))
+        ++ ["  )"]
+    let _ = setRef emit.trapMsgFns (reverseL def ++ !emit.trapMsgFns)
+    ["call $trapmsg_" ++ intToString k]
+
+-- the `$trapmsg_K` helper definitions this emission made, in number order.
+trapMsgRuntimeOf : WasmEmit -> List String
+trapMsgRuntimeOf emit = reverseL !emit.trapMsgFns
 
 -- a full coded trap with a compile-time-fixed message (div/mod/OOB/non-exhaustive).
 wasmTrap : WasmEmit -> String -> String -> List String
