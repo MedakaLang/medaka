@@ -1,5 +1,5 @@
 # META
-source_lines=107
+source_lines=183
 stages=DESUGAR,MARK
 # SOURCE
 -- Tests for the substring search and replace functions in `stdlib/string.mdk`.
@@ -7,7 +7,10 @@ stages=DESUGAR,MARK
 -- Positions are codepoint indices, so the multibyte cases below are where a
 -- byte offset would show.
 
-import string.{countOccurrences, indexOf, lastIndexOf, replaceAll}
+import string.{
+  countOccurrences, drop, fromChars, indexOf, lastIndexOf, replaceAll, splitAt,
+  take
+}
 import test.{expectEqual}
 
 -- # Fixed cases
@@ -97,6 +100,79 @@ test "stringSlice jumps far in both directions on a multibyte string" =
     ["語", "日", "語", "日本語"]
     [stringSlice 8 9 s, stringSlice 0 1 s, stringSlice 5 6 s, stringSlice 6 9 s]
 
+test "stringSlice of the whole cell and of its ends" =
+  let s = "aé日😀"
+  expectEqual
+    [s, "", "", s, "😀", "a"]
+    [
+      stringSlice 0 4 s,
+      stringSlice 4 4 s,
+      stringSlice 0 0 s,
+      stringSlice 0 99 s,
+      stringSlice 3 4 s,
+      stringSlice 0 1 s,
+    ]
+
+-- # take, drop, splitAt
+
+test "take 0 is empty" = expectEqual "" (take 0 "héllo")
+
+test "take a negative count is empty" = expectEqual "" (take (0 - 2) "abc")
+
+test "take past the end is the whole string" = expectEqual "é日" (take 99 "é日")
+
+test "take counts codepoints across multibyte text" =
+  expectEqual "aé日" (take 3 "aé日😀")
+
+test "take of an empty string is empty" = expectEqual "" (take 3 "")
+
+test "drop 0 is the whole string" = expectEqual "héllo" (drop 0 "héllo")
+
+test "drop a negative count is the whole string" =
+  expectEqual "abc" (drop (0 - 2) "abc")
+
+test "drop past the end is empty" = expectEqual "" (drop 99 "abc")
+
+test "drop counts codepoints across multibyte text" =
+  expectEqual "日" (drop 1 "é日")
+
+test "drop of an empty string is empty" = expectEqual "" (drop 3 "")
+
+test "splitAt 0 gives an empty head" = expectEqual ("", "日本") (splitAt 0 "日本")
+
+test "splitAt a negative count gives an empty head" =
+  expectEqual ("", "ab") (splitAt (0 - 1) "ab")
+
+test "splitAt past the end gives an empty tail" =
+  expectEqual ("é日", "") (splitAt 9 "é日")
+
+test "splitAt splits between codepoints of multibyte text" =
+  expectEqual ("aé", "日") (splitAt 2 "aé日")
+
+test "splitAt of an empty string is two empty strings" =
+  expectEqual ("", "") (splitAt 0 "")
+
+test "splitAt pieces rejoin to the original" =
+  let s = "aé日😀z"
+  let (h, t) = splitAt 3 s
+  expectEqual s (h ++ t)
+
+-- # fromChars
+
+test "fromChars of no characters is empty" = expectEqual "" (fromChars [])
+
+test "fromChars encodes each codepoint once" =
+  expectEqual "aé日😀" (fromChars ['a', 'é', '日', '😀'])
+
+test "fromChars counts codepoints, not bytes" =
+  expectEqual 4 (stringLength (fromChars ['a', 'é', '日', '😀']))
+
+test "fromChars result slices by codepoint" =
+  expectEqual "é日" (stringSlice 1 3 (fromChars ['a', 'é', '日', '😀']))
+
+test "fromChars of only multibyte characters" =
+  expectEqual 2 (stringLength (fromChars ['😀', '😀']))
+
 -- # Properties
 
 prop "countOccurrences agrees with replaceAll on the removed length" (s : String) =
@@ -110,7 +186,7 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
       stringSlice i (i + 2) s == "ab"
         && indexOf "ab" (stringSlice (i + 1) (stringLength s) s) == None
 # DESUGAR
-(DUse false (UseGroup ("string") ((mem "countOccurrences" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "replaceAll" false))))
+(DUse false (UseGroup ("string") ((mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -131,10 +207,32 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
 (DTest false "stringSlice of a multibyte string is right in either walk direction" (EBlock (DoLet false false (PVar "s") (ELit (LString "aé日😀z"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a")) (ELit (LString "é")) (ELit (LString "日")) (ELit (LString "😀")) (ELit (LString "z")) (ELit (LString "😀")) (ELit (LString "日")) (ELit (LString "é")) (ELit (LString "a")))) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (ELit (LInt 5))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")))))))
 (DTest false "stringSlice stays right when two multibyte strings alternate" (EBlock (DoLet false false (PVar "s") (ELit (LString "éaé日"))) (DoLet false false (PVar "t") (ELit (LString "日éa😀"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "日")) (ELit (LString "é")) (ELit (LString "é")) (ELit (LString "a")) (ELit (LString "日")) (ELit (LString "😀")))) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "t")))))))
 (DTest false "stringSlice jumps far in both directions on a multibyte string" (EBlock (DoLet false false (PVar "s") (ELit (LString "日本語日本語日本語"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "語")) (ELit (LString "日")) (ELit (LString "語")) (ELit (LString "日本語")))) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 8))) (ELit (LInt 9))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 5))) (ELit (LInt 6))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 6))) (ELit (LInt 9))) (EVar "s")))))))
+(DTest false "stringSlice of the whole cell and of its ends" (EBlock (DoLet false false (PVar "s") (ELit (LString "aé日😀"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (EVar "s") (ELit (LString "")) (ELit (LString "")) (EVar "s") (ELit (LString "😀")) (ELit (LString "a")))) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 99))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")))))))
+(DTest false "take 0 is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "take") (ELit (LInt 0))) (ELit (LString "héllo")))))
+(DTest false "take a negative count is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "take") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 2)))) (ELit (LString "abc")))))
+(DTest false "take past the end is the whole string" (EApp (EApp (EVar "expectEqual") (ELit (LString "é日"))) (EApp (EApp (EVar "take") (ELit (LInt 99))) (ELit (LString "é日")))))
+(DTest false "take counts codepoints across multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé日"))) (EApp (EApp (EVar "take") (ELit (LInt 3))) (ELit (LString "aé日😀")))))
+(DTest false "take of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "take") (ELit (LInt 3))) (ELit (LString "")))))
+(DTest false "drop 0 is the whole string" (EApp (EApp (EVar "expectEqual") (ELit (LString "héllo"))) (EApp (EApp (EVar "drop") (ELit (LInt 0))) (ELit (LString "héllo")))))
+(DTest false "drop a negative count is the whole string" (EApp (EApp (EVar "expectEqual") (ELit (LString "abc"))) (EApp (EApp (EVar "drop") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 2)))) (ELit (LString "abc")))))
+(DTest false "drop past the end is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "drop") (ELit (LInt 99))) (ELit (LString "abc")))))
+(DTest false "drop counts codepoints across multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LString "日"))) (EApp (EApp (EVar "drop") (ELit (LInt 1))) (ELit (LString "é日")))))
+(DTest false "drop of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "drop") (ELit (LInt 3))) (ELit (LString "")))))
+(DTest false "splitAt 0 gives an empty head" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "日本")))) (EApp (EApp (EVar "splitAt") (ELit (LInt 0))) (ELit (LString "日本")))))
+(DTest false "splitAt a negative count gives an empty head" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "ab")))) (EApp (EApp (EVar "splitAt") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (ELit (LString "ab")))))
+(DTest false "splitAt past the end gives an empty tail" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LString "")))) (EApp (EApp (EVar "splitAt") (ELit (LInt 9))) (ELit (LString "é日")))))
+(DTest false "splitAt splits between codepoints of multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "aé")) (ELit (LString "日")))) (EApp (EApp (EVar "splitAt") (ELit (LInt 2))) (ELit (LString "aé日")))))
+(DTest false "splitAt of an empty string is two empty strings" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")))) (EApp (EApp (EVar "splitAt") (ELit (LInt 0))) (ELit (LString "")))))
+(DTest false "splitAt pieces rejoin to the original" (EBlock (DoLet false false (PVar "s") (ELit (LString "aé日😀z"))) (DoLet false false (PTuple (PVar "h") (PVar "t")) (EApp (EApp (EVar "splitAt") (ELit (LInt 3))) (EVar "s"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EVar "s")) (EBinOp "++" (EVar "h") (EVar "t"))))))
+(DTest false "fromChars of no characters is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "fromChars") (EListLit))))
+(DTest false "fromChars encodes each codepoint once" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé日😀"))) (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀"))))))
+(DTest false "fromChars counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀")))))))
+(DTest false "fromChars result slices by codepoint" (EApp (EApp (EVar "expectEqual") (ELit (LString "é日"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 3))) (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀")))))))
+(DTest false "fromChars of only multibyte characters" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EVar "fromChars") (EListLit (ELit (LChar "😀")) (ELit (LChar "😀")))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))
 # MARK
-(DUse false (UseGroup ("string") ((mem "countOccurrences" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "replaceAll" false))))
+(DUse false (UseGroup ("string") ((mem "countOccurrences" false) (mem "drop" false) (mem "fromChars" false) (mem "indexOf" false) (mem "lastIndexOf" false) (mem "replaceAll" false) (mem "splitAt" false) (mem "take" false))))
 (DUse false (UseGroup ("test") ((mem "expectEqual" false))))
 (DTest false "lastIndexOf finds overlapping occurrences" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 1)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "aa"))) (ELit (LString "aaa")))))
 (DTest false "lastIndexOf counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (EApp (EVar "Some") (ELit (LInt 2)))) (EApp (EApp (EVar "lastIndexOf") (ELit (LString "é"))) (ELit (LString "éaé")))))
@@ -155,5 +253,27 @@ prop "lastIndexOf hit is an occurrence and no later one exists" (s : String) =
 (DTest false "stringSlice of a multibyte string is right in either walk direction" (EBlock (DoLet false false (PVar "s") (ELit (LString "aé日😀z"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "a")) (ELit (LString "é")) (ELit (LString "日")) (ELit (LString "😀")) (ELit (LString "z")) (ELit (LString "😀")) (ELit (LString "日")) (ELit (LString "é")) (ELit (LString "a")))) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (ELit (LInt 5))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")))))))
 (DTest false "stringSlice stays right when two multibyte strings alternate" (EBlock (DoLet false false (PVar "s") (ELit (LString "éaé日"))) (DoLet false false (PVar "t") (ELit (LString "日éa😀"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "日")) (ELit (LString "é")) (ELit (LString "é")) (ELit (LString "a")) (ELit (LString "日")) (ELit (LString "😀")))) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 2))) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 2))) (ELit (LInt 3))) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "t")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "t")))))))
 (DTest false "stringSlice jumps far in both directions on a multibyte string" (EBlock (DoLet false false (PVar "s") (ELit (LString "日本語日本語日本語"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (ELit (LString "語")) (ELit (LString "日")) (ELit (LString "語")) (ELit (LString "日本語")))) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 8))) (ELit (LInt 9))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 5))) (ELit (LInt 6))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 6))) (ELit (LInt 9))) (EVar "s")))))))
+(DTest false "stringSlice of the whole cell and of its ends" (EBlock (DoLet false false (PVar "s") (ELit (LString "aé日😀"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EListLit (EVar "s") (ELit (LString "")) (ELit (LString "")) (EVar "s") (ELit (LString "😀")) (ELit (LString "a")))) (EListLit (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 4))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 0))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 99))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 3))) (ELit (LInt 4))) (EVar "s")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (ELit (LInt 1))) (EVar "s")))))))
+(DTest false "take 0 is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "take") (ELit (LInt 0))) (ELit (LString "héllo")))))
+(DTest false "take a negative count is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "take") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 2)))) (ELit (LString "abc")))))
+(DTest false "take past the end is the whole string" (EApp (EApp (EVar "expectEqual") (ELit (LString "é日"))) (EApp (EApp (EVar "take") (ELit (LInt 99))) (ELit (LString "é日")))))
+(DTest false "take counts codepoints across multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé日"))) (EApp (EApp (EVar "take") (ELit (LInt 3))) (ELit (LString "aé日😀")))))
+(DTest false "take of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "take") (ELit (LInt 3))) (ELit (LString "")))))
+(DTest false "drop 0 is the whole string" (EApp (EApp (EVar "expectEqual") (ELit (LString "héllo"))) (EApp (EApp (EVar "drop") (ELit (LInt 0))) (ELit (LString "héllo")))))
+(DTest false "drop a negative count is the whole string" (EApp (EApp (EVar "expectEqual") (ELit (LString "abc"))) (EApp (EApp (EVar "drop") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 2)))) (ELit (LString "abc")))))
+(DTest false "drop past the end is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "drop") (ELit (LInt 99))) (ELit (LString "abc")))))
+(DTest false "drop counts codepoints across multibyte text" (EApp (EApp (EVar "expectEqual") (ELit (LString "日"))) (EApp (EApp (EVar "drop") (ELit (LInt 1))) (ELit (LString "é日")))))
+(DTest false "drop of an empty string is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EApp (EVar "drop") (ELit (LInt 3))) (ELit (LString "")))))
+(DTest false "splitAt 0 gives an empty head" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "日本")))) (EApp (EApp (EVar "splitAt") (ELit (LInt 0))) (ELit (LString "日本")))))
+(DTest false "splitAt a negative count gives an empty head" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "ab")))) (EApp (EApp (EVar "splitAt") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (ELit (LString "ab")))))
+(DTest false "splitAt past the end gives an empty tail" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "é日")) (ELit (LString "")))) (EApp (EApp (EVar "splitAt") (ELit (LInt 9))) (ELit (LString "é日")))))
+(DTest false "splitAt splits between codepoints of multibyte text" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "aé")) (ELit (LString "日")))) (EApp (EApp (EVar "splitAt") (ELit (LInt 2))) (ELit (LString "aé日")))))
+(DTest false "splitAt of an empty string is two empty strings" (EApp (EApp (EVar "expectEqual") (ETuple (ELit (LString "")) (ELit (LString "")))) (EApp (EApp (EVar "splitAt") (ELit (LInt 0))) (ELit (LString "")))))
+(DTest false "splitAt pieces rejoin to the original" (EBlock (DoLet false false (PVar "s") (ELit (LString "aé日😀z"))) (DoLet false false (PTuple (PVar "h") (PVar "t")) (EApp (EApp (EVar "splitAt") (ELit (LInt 3))) (EVar "s"))) (DoExpr (EApp (EApp (EVar "expectEqual") (EVar "s")) (EBinOp "++" (EVar "h") (EVar "t"))))))
+(DTest false "fromChars of no characters is empty" (EApp (EApp (EVar "expectEqual") (ELit (LString ""))) (EApp (EVar "fromChars") (EListLit))))
+(DTest false "fromChars encodes each codepoint once" (EApp (EApp (EVar "expectEqual") (ELit (LString "aé日😀"))) (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀"))))))
+(DTest false "fromChars counts codepoints, not bytes" (EApp (EApp (EVar "expectEqual") (ELit (LInt 4))) (EApp (EVar "stringLength") (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀")))))))
+(DTest false "fromChars result slices by codepoint" (EApp (EApp (EVar "expectEqual") (ELit (LString "é日"))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 1))) (ELit (LInt 3))) (EApp (EVar "fromChars") (EListLit (ELit (LChar "a")) (ELit (LChar "é")) (ELit (LChar "日")) (ELit (LChar "😀")))))))
+(DTest false "fromChars of only multibyte characters" (EApp (EApp (EVar "expectEqual") (ELit (LInt 2))) (EApp (EVar "stringLength") (EApp (EVar "fromChars") (EListLit (ELit (LChar "😀")) (ELit (LChar "😀")))))))
 (DProp false "countOccurrences agrees with replaceAll on the removed length" ((pp "s" (TyCon "String"))) (EBinOp "==" (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (EApp (EVar "stringLength") (EApp (EApp (EApp (EVar "replaceAll") (ELit (LString "ab"))) (ELit (LString ""))) (EVar "s")))) (EBinOp "*" (ELit (LInt 2)) (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")))))
 (DProp false "lastIndexOf hit is an occurrence and no later one exists" ((pp "s" (TyCon "String"))) (EMatch (EApp (EApp (EVar "lastIndexOf") (ELit (LString "ab"))) (EVar "s")) (arm (PCon "None") () (EBinOp "==" (EApp (EApp (EVar "countOccurrences") (ELit (LString "ab"))) (EVar "s")) (ELit (LInt 0)))) (arm (PCon "Some" (PVar "i")) () (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "s")) (ELit (LString "ab"))) (EBinOp "==" (EApp (EApp (EVar "indexOf") (ELit (LString "ab"))) (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))) (EVar "None"))))))

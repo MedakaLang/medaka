@@ -1744,14 +1744,30 @@ long long mdk_string_to_chars(long long s) {
   }
   return (long long)arr;
 }
+/* Byte width mdk_utf8_encode writes for a codepoint, from the same thresholds. */
+static int mdk_utf8_width(long long cp) {
+  return cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+}
+/* One pass sizes the cell, a second writes it, and the codepoint count is n.
+ * Each encoded char has exactly one non-continuation lead byte, so the count
+ * is n for every codepoint >= 0. A negative value is encoded as one raw byte
+ * that may be a continuation byte, so that case recounts the bytes. */
 long long mdk_string_from_chars(long long arr) {
   const long long *a = (const long long *)arr;
-  long long n = a[0], total = 0; char tmp[4];
-  for (long long i = 0; i < n; i++) total += mdk_utf8_encode(a[i+1] >> 1, tmp);
-  char *buf = (char *)mdk_alloc(total + 1);
-  long long off = 0;
-  for (long long i = 0; i < n; i++) off += mdk_utf8_encode(a[i+1] >> 1, buf + off);
-  return mdk_str_lit(buf, total);
+  long long n = a[0], total = 0, neg = 0;
+  for (long long i = 0; i < n; i++) {
+    long long cp = a[i+1] >> 1;
+    total += mdk_utf8_width(cp);
+    neg |= (cp < 0);
+  }
+  char *cell = (char *)mdk_alloc_atomic(24 + total + 1);
+  char *dst = cell + 24;
+  for (long long i = 0; i < n; i++) dst += mdk_utf8_encode(a[i+1] >> 1, dst);
+  ((long long *)cell)[0] = MDK_STR_TAG;
+  ((long long *)cell)[1] = total;
+  ((long long *)cell)[2] = neg ? mdk_utf8_cp_count(cell + 24, total) : n;
+  cell[24 + total] = '\0';
+  return (long long)cell;
 }
 /* stringToUtf8Bytes : String -> Array Int.  Expose the String cell's raw UTF-8
  * backing as an Array of tagged Int bytes 0..255 (O(n) copy, NO codepoint
@@ -1785,14 +1801,18 @@ long long mdk_string_slice(long long lo_t, long long hi_t, long long s) {
   if (lo < 0) lo = 0; else if (lo > cp_count) lo = cp_count;
   if (hi < lo) hi = lo; else if (hi > cp_count) hi = cp_count;
   /* A cell whose codepoint count equals its byte length is all ASCII, so a
-   * codepoint index is its byte offset. */
+   * codepoint index is its byte offset.  An offset at either end of the cell
+   * is known without a walk. */
   long long blo, bhi;
   if (cp_count == byte_len) { blo = lo; bhi = hi; }
   else {
-    blo = mdk_utf8_cursor_offset(cell, bytes, byte_len, lo);
-    bhi = mdk_utf8_cursor_offset(cell, bytes, byte_len, hi);
+    blo = lo == 0 ? 0 : mdk_utf8_cursor_offset(cell, bytes, byte_len, lo);
+    bhi = hi == cp_count ? byte_len
+                         : mdk_utf8_cursor_offset(cell, bytes, byte_len, hi);
   }
-  return mdk_str_lit(bytes + blo, bhi - blo);
+  /* The bytes [blo, bhi) are whole codepoints lo..hi-1 of a well-formed cell,
+   * so the result's codepoint count is hi - lo without a rescan. */
+  return mdk_str_cell(bytes + blo, bhi - blo, hi - lo);
 }
 
 /* ── native extern catalog slice 14: ASCII char classification + case mapping ── */
