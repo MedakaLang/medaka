@@ -676,8 +676,16 @@ if [ "${1:-}" = "--for" ]; then
           set +f
           [ -n "$_glabel" ] || _glabel="$(basename "$_g")" ;;
       esac
-      echo "--for: $_glabel needs no oracles (drives ./medaka directly)."
+      if [ -n "$_foreign" ]; then
+        echo "--for: $_glabel needs no oracle this script builds."
+      else
+        echo "--for: $_glabel needs no oracles (drives ./medaka directly)."
+      fi
     done
+    if [ -n "$_foreign" ]; then
+      echo "note: these gates read probe binaries this script does not build:$_foreign"
+      echo "      build them with:  sh test/wasm/build_wasm_oracle.sh"
+    fi
     echo "nothing to build."
     exit 0
   fi
