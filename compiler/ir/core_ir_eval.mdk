@@ -25,7 +25,9 @@
 -- values eval.mdk installs); `CMethod`/`CDict` arms consume the elaborated routes
 -- on the typed lowering path.
 
-import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..)}
+import frontend.ast.{
+  Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..), noBinderId
+}
 import ir.core_ir.{
   CExpr(..),
   MethodEvidence(..),
@@ -126,7 +128,7 @@ ceval env (CApp f args _) =
   let fv = ceval env f
   applyValues fv (cevalArgs env args)
 ceval env (CLam pats body) = VClosureF env pats (e => ceval e body)
-ceval env (CLet True (PVar f _) e1 e2) = cevalRecLet env f e1 e2
+ceval env (CLet True (PVar f _ _) e1 e2) = cevalRecLet env f e1 e2
 ceval env (CLet _ pat e1 e2) = cevalLet env pat e1 e2
 ceval env (CLetGroup binds body) = cevalLetGroup env binds body
 ceval env (CMatch scrut arms) = cevalMatch env (ceval env scrut) arms
@@ -345,7 +347,9 @@ headExtract (HCon c a) v = extractWith (PCon c (cBinders a)) v
 headExtract (HTuple n) v = extractWith (PTuple (cBinders n)) v
 headExtract HCons v =
   extractWith
-    (PCons (PVar "$d0" (Loc "" 0 0 0 0)) (PVar "$d1" (Loc "" 0 0 0 0)))
+    (PCons
+      (PVar "$d0" (Loc "" 0 0 0 0) noBinderId)
+      (PVar "$d1" (Loc "" 0 0 0 0) noBinderId))
     v
 headExtract HNil v = extractWith (PList []) v
 headExtract HUnit v = extractWith (PLit LUnit) v
@@ -364,7 +368,8 @@ cBindersGo : Int -> Int -> List Pat
 cBindersGo i n
   | i >= n = []
   | otherwise =
-    PVar ("$d" ++ intToString i) (Loc "" 0 0 0 0) :: cBindersGo (i + 1) n
+    PVar ("$d" ++ intToString i) (Loc "" 0 0 0 0) noBinderId
+      :: cBindersGo (i + 1) n
 
 nthArm : List CArm -> Int -> Option CArm
 -- Intentional cross-file duplicate of llvm_emit.mdk's copy. This interpreter is
@@ -396,14 +401,14 @@ cevalLet env pat e1 e2 = match matchPat pat (ceval env e1)
 cevalBlock : EvalEnv (Value e) -> List CStmt -> <e> Value e
 cevalBlock _ [] = VUnit
 cevalBlock env [CSExpr e] = ceval env e
-cevalBlock env [CSLet True (PVar f _) e] =
+cevalBlock env [CSLet True (PVar f _ _) e] =
   let _ = cBlockRecEnv env f e
   VUnit
 cevalBlock env [CSLet _ pat e] = cBlockLetLast env pat e
 cevalBlock env ((CSExpr e) :: rest) =
   let _ = ceval env e
   cevalBlock env rest
-cevalBlock env ((CSLet True (PVar f _) e) :: rest) =
+cevalBlock env ((CSLet True (PVar f _ _) e) :: rest) =
   cevalBlock (cBlockRecEnv env f e) rest
 cevalBlock env ((CSLet _ pat e) :: rest) = cBlockLet env pat e rest
 cevalBlock env [CSAssign _ e] =
@@ -532,7 +537,7 @@ cImplMethodValue env positions [] body
   | otherwise =
     VClosureF
       env
-      [PVar "$eta" (Loc "" 0 0 0 0)]
+      [PVar "$eta" (Loc "" 0 0 0 0) noBinderId]
       (e => ceval e (mkApp body [CVar "$eta" AGlobal]))
 cImplMethodValue env _ pats body = VClosureF env pats (e => ceval e body)
 

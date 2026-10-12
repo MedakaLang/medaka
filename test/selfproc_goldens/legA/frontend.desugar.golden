@@ -10,6 +10,7 @@ attribHead : List Attr -> List Decl -> List Decl
 binMethod : String -> String -> String -> Expr -> ImplMethod
 binOp : String -> Expr -> Expr -> Expr
 bindMethodName : Bool -> String
+binderOrdinalRef : Ref Int
 callAndThen : Bool -> Expr -> Expr -> Expr
 callBin : String -> Expr -> Expr -> Expr
 cannotDeriveMsg : String -> List String -> String -> String
@@ -34,6 +35,7 @@ deriveOrdData : String -> List Variant -> Decl
 deriveShowData : String -> String -> String -> List Variant -> Decl
 derivedImpl : String -> String -> List ImplMethod -> Decl
 desugar : List Decl -> List Decl
+desugarIn : String -> List Decl -> List Decl
 desugarRecordPuns : List Decl -> List Decl
 doCont : Pat -> Expr -> Expr
 doStmtLoc : DoStmt -> Option Loc
@@ -45,6 +47,7 @@ exprLoc : Expr -> Option Loc
 fallthrough : Expr
 firstDoStmtLoc : List DoStmt -> Option Loc
 foldlMethods : (Map String IfaceMethod, List String) -> List IfaceMethod -> (Map String IfaceMethod, List String)
+freshBinderId : String -> BinderId
 genVars : String -> Int -> List String
 genVarsGo : String -> Int -> Int -> List String
 genericArm : Variant -> Arm
@@ -119,6 +122,20 @@ showFieldPart : String -> Int -> String -> List Expr
 showFieldParts : String -> Int -> List String -> List Expr
 showNamedPart : String -> Int -> String -> String -> List Expr
 showNamedParts : String -> Int -> List Field -> List String -> List Expr
+stampArm : String -> Arm -> Arm
+stampBinderIds : String -> List Decl -> List Decl
+stampDecl : String -> Decl -> Decl
+stampExpr : String -> Expr -> Expr
+stampGuard : String -> Guard -> Guard
+stampGuardArm : String -> GuardArm -> GuardArm
+stampIfaceMethod : String -> IfaceMethod -> IfaceMethod
+stampImplMethod : String -> ImplMethod -> ImplMethod
+stampLetBind : String -> LetBind -> LetBind
+stampLetBindHead : String -> LetBind -> LetBind
+stampNode : String -> Expr -> Expr
+stampPat : String -> Pat -> Pat
+stampRecField : String -> RecPatField -> RecPatField
+stampStmt : String -> DoStmt -> DoStmt
 stripLocE : Expr -> Expr
 toRep : String -> Expr
 typeKindedParams : List String -> List (Option KindAnn) -> List String

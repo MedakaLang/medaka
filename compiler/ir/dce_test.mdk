@@ -6,6 +6,7 @@
 
 import test.{expectAll, expectEqual, expectTrue}
 import frontend.ast.{
+  noBinderId,
   Attr(..),
   Decl(..),
   Expr(..),
@@ -52,7 +53,8 @@ refsExpr [] = ELit LUnit
 refsExpr (ref :: rest) = EApp (EVar ref) (refsExpr rest)
 
 funDecl : String -> List String -> Decl
-funDecl name refs = DFunDef False name [] (refsExpr refs) (Loc "" 1 0 1 0)
+funDecl name refs =
+  DFunDef False name [] (refsExpr refs) (Loc "" 1 0 1 0) noBinderId
 
 graphDecls : List (String, String) -> List Decl
 graphDecls edges = map (name => funDecl name (targetsOf name edges)) names
@@ -74,14 +76,14 @@ expectedFunctionNames edges = filter (reachable edges) names
 
 functionNames : List Decl -> List String
 functionNames [] = []
-functionNames ((DFunDef _ name _ _ _) :: rest) = name :: functionNames rest
-functionNames ((DAttrib _ (DFunDef _ name _ _ _)) :: rest) =
+functionNames ((DFunDef _ name _ _ _ _) :: rest) = name :: functionNames rest
+functionNames ((DAttrib _ (DFunDef _ name _ _ _ _)) :: rest) =
   name :: functionNames rest
 functionNames (_ :: rest) = functionNames rest
 
 isPlainFunction : Decl -> Bool
-isPlainFunction (DFunDef _ _ _ _ _) = True
-isPlainFunction (DAttrib _ (DFunDef _ _ _ _ _)) = True
+isPlainFunction (DFunDef _ _ _ _ _ _) = True
+isPlainFunction (DAttrib _ (DFunDef _ _ _ _ _ _)) = True
 isPlainFunction _ = False
 
 nonFunctionCount : List Decl -> Int
@@ -158,7 +160,11 @@ test "DCE preserves unrelated declarations but does not root prop or test bodies
 
 test "DCE roots helpers referenced by an emitting top-level let group" =
   let group = DLetGroup False [
-    LetBind "global" [FunClause [] (EVar "groupHelper")] (Loc "" 1 0 1 0),
+    LetBind
+      "global"
+      [FunClause [] (EVar "groupHelper")]
+      (Loc "" 1 0 1 0)
+      noBinderId,
   ]
   let decls = [
     funDecl "main" [],

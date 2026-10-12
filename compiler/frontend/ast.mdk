@@ -794,18 +794,18 @@ effAtomBare l = EffAtomTy {
 -- The names a pattern binds, in source order.
 export
 patBoundNames : Pat -> List String
-patBoundNames (PVar x _) = [x]
+patBoundNames (PVar x _ _) = [x]
 patBoundNames (PCon _ args) = flatMap patBoundNames args
 patBoundNames (PCons h t) = patBoundNames h ++ patBoundNames t
 patBoundNames (PTuple ps) = flatMap patBoundNames ps
 patBoundNames (PList ps) = flatMap patBoundNames ps
-patBoundNames (PAs x _ p) = x :: patBoundNames p
+patBoundNames (PAs x _ _ p) = x :: patBoundNames p
 patBoundNames (PRec _ fields _) = flatMap recPatFieldNames fields
 patBoundNames _ = []
 
 recPatFieldNames : RecPatField -> List String
-recPatFieldNames (RecPatField label _ None) = [label]
-recPatFieldNames (RecPatField _ _ (Some p)) = patBoundNames p
+recPatFieldNames (RecPatField label _ _ None) = [label]
+recPatFieldNames (RecPatField _ _ _ (Some p)) = patBoundNames p
 
 -- An effect declaration as the parser produces it: the resolver stamps its
 -- declaring origin, so before resolve it carries none.
@@ -1301,6 +1301,33 @@ intMinLiteralHelp =
 -- there to turn into a panic.
 public export data EvId = EvId String Int
 
+-- ── binder identity ───────────────────────────────────────────────────────────
+-- The key under which the typechecker publishes what a source binder holds at run
+-- time (`compiler/types/runtime_types.mdk`).  A binder's `Loc` cannot be that key:
+-- its file field is always empty, lambda, do-bind and guard parameters carry the
+-- zero span, and desugar mints many binders at one site, so two binders of
+-- different types share a `Loc` routinely.
+--
+-- Same shape and same discipline as `EvId`: the `String` is the module the binder
+-- was minted for (`""` where the minting call had none to give, which includes the
+-- whole prelude), the `Int` an ordinal from one process-global monotone counter,
+-- and uniqueness rests on the ordinal alone.  The module half is a tripwire the
+-- table compares on every hit.
+--
+-- Every binder node carries one: `PVar`, `PAs`, a record-pattern field (whose id
+-- names a binder only when the field is a pun), a `LetBind`, and each `DFunDef`
+-- clause.  The parser and every synthesizing pass build them with `noBinderId`;
+-- `stampBinderIds` (`compiler/frontend/desugar.mdk`) mints the real ones as the
+-- last step of desugar, and every later pass that rebuilds a binder carries its id
+-- across unchanged.
+public export data BinderId = BinderId String Int
+
+-- The id of a binder no minting pass has visited.  Its ordinal is negative, so no
+-- table row can ever answer it.
+export
+noBinderId : BinderId
+noBinderId = BinderId "" (0 - 1)
+
 -- The evidence shapes.  `EvOne` and `EvMany` are one per destination arm a goal
 -- can have: a single site route, or a dictionary application's slot-ordered route
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
@@ -1350,21 +1377,23 @@ export type EvTable = List EvEntry
 public export data Addr = ALocal Int Int | AGlobal
 
 public export data Pat =
-  | PVar String Loc
+  | PVar String Loc BinderId
   | PWild
   | PLit Lit
   | PCon String (List Pat)
   | PCons Pat Pat
   | PTuple (List Pat)
   | PList (List Pat)
-  | PAs String Loc Pat
+  | PAs String Loc BinderId Pat
   | PRng Lit Lit Bool
   | PRec String (List RecPatField) Bool
 
 -- one field of a record pattern: `field` (pun, None) or `field = pat`
 -- The Loc is the field-name token (#913 Inc 2b: a punned field `{x}` binds
 -- `x`, and rename must land on the field token, not the enclosing match Loc).
-public export data RecPatField = RecPatField String Loc (Option Pat)
+-- The `BinderId` names the binder a pun introduces; a field with a subpattern
+-- binds nothing itself and keeps `noBinderId`.
+public export data RecPatField = RecPatField String Loc BinderId (Option Pat)
 
 public export data Guard = GBool Expr | GBind Pat Expr
 
@@ -1409,7 +1438,7 @@ public export data FunClause = FunClause (List Pat) Expr
 -- The Loc is the first clause's name token, where a call whose clauses and
 -- guards all fall through is reported.  Like `DFunDef`'s site it is never
 -- rendered, and a synthesized binding carries `noDeclLoc`.
-public export data LetBind = LetBind String (List FunClause) Loc
+public export data LetBind = LetBind String (List FunClause) Loc BinderId
 
 public export data Expr =
   | ELit Lit
@@ -1757,12 +1786,12 @@ public export data Decl =
   -- dump renders it.
   | DTypeSig Bool String Ty Loc
   | DExtern Bool String Ty
-  -- pub? name params body site.  One clause; a multi-clause function is a run
-  -- of same-named DFunDefs.  The site is the clause's name token, so a call
+  -- pub? name params body site id.  One clause; a multi-clause function is a run
+  -- of same-named DFunDefs, each with its own `BinderId`.  The site is the clause's name token, so a call
   -- whose clauses and guards all fall through is reported at the function's
   -- first clause.  No printer or dump renders it, it takes no part in clause
   -- grouping, and a synthesized clause carries `noDeclLoc`.
-  | DFunDef Bool String (List Pat) Expr Loc
+  | DFunDef Bool String (List Pat) Expr Loc BinderId
   -- ── the four TYPE-DECLARATION forms carry module identity (#1110) ────────
   -- `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each gained a `…Origin` field,
   -- stamped by resolve (`stampGraphTyOrigins`, `frontend/resolve.mdk`) with the
@@ -2212,9 +2241,9 @@ mapTyInDecl f (DTypeSig pub n t site) =
 mapTyInDecl f (DExtern pub n t) =
   let (t2, c) = mapTyFull f t
   (DExtern pub n t2, c)
-mapTyInDecl f (DFunDef pub n ps e site) =
+mapTyInDecl f (DFunDef pub n ps e site bid) =
   let (e2, c) = mapTyInExpr f e
-  (DFunDef pub n ps e2 site, c)
+  (DFunDef pub n ps e2 site bid, c)
 -- ⚠️ Record UPDATE, not re-construction: rebuilding from the projected fields
 -- would DROP an already-acquired `dataOrigin`, which is exactly the identity-
 -- destroying shape #1219 found in `substTyVars`.  Every rebuild arm below follows
@@ -2340,10 +2369,10 @@ mapImplMethodsB f ((ImplMethod n ps e) :: rest) =
 
 mapLetBindsB : (Ty -> (Ty, Bool)) -> List LetBind -> (List LetBind, Bool)
 mapLetBindsB _ [] = ([], False)
-mapLetBindsB f ((LetBind n clauses site) :: rest) =
+mapLetBindsB f ((LetBind n clauses site bid) :: rest) =
   let (cs2, c1) = mapFunClausesB f clauses
   let (rest2, c2) = mapLetBindsB f rest
-  (LetBind n cs2 site :: rest2, c1 || c2)
+  (LetBind n cs2 site bid :: rest2, c1 || c2)
 
 mapFunClausesB : (Ty -> (Ty, Bool)) -> List FunClause -> (List FunClause, Bool)
 mapFunClausesB _ [] = ([], False)

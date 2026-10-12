@@ -180,12 +180,12 @@ bindName (CBind name _ _) = name
 -- the variables a pattern binds.
 export
 patVars : Pat -> List String
-patVars (PVar x _) = [x]
+patVars (PVar x _ _) = [x]
 patVars (PCon _ args) = patVarsList args
 patVars (PCons h t) = patVars h ++ patVars t
 patVars (PTuple ps) = patVarsList ps
 patVars (PList ps) = patVarsList ps
-patVars (PAs x _ p) = x :: patVars p
+patVars (PAs x _ _ p) = x :: patVars p
 patVars _ = []
 
 export
@@ -867,7 +867,7 @@ dispNonDict : List CClause -> Bool
 dispNonDict clauses = not (anyList dispClauseHasLeadingDict clauses)
 
 dispClauseHasLeadingDict : CClause -> Bool
-dispClauseHasLeadingDict (CClause ((PVar x _) :: _) _) = dispIsDictParamName x
+dispClauseHasLeadingDict (CClause ((PVar x _ _) :: _) _) = dispIsDictParamName x
 dispClauseHasLeadingDict _ = False
 
 dispIsDictParamName : String -> Bool
@@ -903,7 +903,7 @@ methodSelf method key pats = SelfByMethod method key (leadingDictCount pats)
 -- count of leading `$dict…` params in one clause's param list.
 export
 leadingDictCount : List Pat -> Int
-leadingDictCount ((PVar x _) :: rest) =
+leadingDictCount ((PVar x _ _) :: rest) =
   if dispIsDictParamName x then 1 + leadingDictCount rest else 0
 leadingDictCount _ = 0
 
@@ -1530,7 +1530,7 @@ dispLeavesOk cf isFn fa fnSet root (CIf _ t f) found =
   match dispLeavesOk cf isFn fa fnSet root t found
     None => None
     Some f2 => dispLeavesOk cf isFn fa fnSet root f f2
-dispLeavesOk cf isFn fa fnSet root (CLet False (PVar _ _) _ b) found =
+dispLeavesOk cf isFn fa fnSet root (CLet False (PVar _ _ _) _ b) found =
   dispLeavesOk cf isFn fa fnSet root b found
 dispLeavesOk cf isFn fa fnSet root (CLet False PWild _ b) found =
   dispLeavesOk cf isFn fa fnSet root b found
@@ -1656,7 +1656,7 @@ dispNonTailHeads cf isFn fa memberSet (CIf c t f) =
   allCallHeads cf c
     ++ dispNonTailHeads cf isFn fa memberSet t
     ++ dispNonTailHeads cf isFn fa memberSet f
-dispNonTailHeads cf isFn fa memberSet (CLet False (PVar _ _) rhs b) =
+dispNonTailHeads cf isFn fa memberSet (CLet False (PVar _ _ _) rhs b) =
   allCallHeads cf rhs ++ dispNonTailHeads cf isFn fa memberSet b
 dispNonTailHeads cf isFn fa memberSet (CLet False PWild rhs b) =
   allCallHeads cf rhs ++ dispNonTailHeads cf isFn fa memberSet b

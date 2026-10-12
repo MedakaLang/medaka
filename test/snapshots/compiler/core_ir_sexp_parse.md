@@ -1,5 +1,5 @@
 # META
-source_lines=507
+source_lines=509
 stages=DESUGAR,MARK
 # SOURCE
 -- Round-trip deserializer for the Core IR S-expression format produced by
@@ -13,6 +13,7 @@ stages=DESUGAR,MARK
 -- CallDynamic.
 
 import frontend.ast.{
+  noBinderId,
   Lit(..),
   Pat(..),
   RecPatField(..),
@@ -230,14 +231,15 @@ toLit other = panic ("core_ir_sexp_parse: bad Lit: " ++ sexprToStr other)
 
 toRecPatField : SExp -> RecPatField
 toRecPatField (SList ((SAtom "rf") :: [f, SAtom "None"])) =
-  RecPatField (toStr f) (Loc "" 0 0 0 0) None
+  RecPatField (toStr f) (Loc "" 0 0 0 0) noBinderId None
 toRecPatField (SList ((SAtom "rf") :: [f, p])) =
-  RecPatField (toStr f) (Loc "" 0 0 0 0) (Some (toPat p))
+  RecPatField (toStr f) (Loc "" 0 0 0 0) noBinderId (Some (toPat p))
 toRecPatField other =
   panic ("core_ir_sexp_parse: bad RecPatField: " ++ sexprToStr other)
 
 toPat : SExp -> Pat
-toPat (SList ((SAtom "PVar") :: [n])) = PVar (toStr n) (Loc "" 0 0 0 0)
+toPat (SList ((SAtom "PVar") :: [n])) =
+  PVar (toStr n) (Loc "" 0 0 0 0) noBinderId
 toPat (SAtom "PWild") = PWild
 toPat (SList ((SAtom "PLit") :: [l])) = PLit (toLit l)
 toPat (SList ((SAtom "PCon") :: name :: args)) =
@@ -246,7 +248,7 @@ toPat (SList ((SAtom "PCons") :: [h, t])) = PCons (toPat h) (toPat t)
 toPat (SList ((SAtom "PTuple") :: ps)) = PTuple (map toPat ps)
 toPat (SList ((SAtom "PList") :: ps)) = PList (map toPat ps)
 toPat (SList ((SAtom "PAs") :: [n, p])) =
-  PAs (toStr n) (Loc "" 0 0 0 0) (toPat p)
+  PAs (toStr n) (Loc "" 0 0 0 0) noBinderId (toPat p)
 toPat (SList ((SAtom "PRng") :: [lo, hi, incl])) =
   PRng (toLit lo) (toLit hi) (toBool incl)
 toPat (SList ((SAtom "PRec") :: [name, SList fields, rest])) =
@@ -510,7 +512,7 @@ joinSexps [] = ""
 joinSexps [x] = sexprToStr x
 joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
@@ -586,18 +588,18 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LI64"))) (PList (PVar "hi") (PVar "lo"))))) (EApp (EApp (EVar "LI64") (EApp (EVar "toInt") (EVar "hi"))) (EApp (EVar "toInt") (EVar "lo"))))
 (DFunDef false "toLit" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad Lit: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toRecPatField" (TyFun (TyCon "SExp") (TyCon "RecPatField")))
-(DFunDef false "toRecPatField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "rf"))) (PList (PVar "f") (PCon "SAtom" (PLit (LString "None"))))))) (EApp (EApp (EApp (EVar "RecPatField") (EApp (EVar "toStr") (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "None")))
-(DFunDef false "toRecPatField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "rf"))) (PList (PVar "f") (PVar "p"))))) (EApp (EApp (EApp (EVar "RecPatField") (EApp (EVar "toStr") (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EVar "Some") (EApp (EVar "toPat") (EVar "p")))))
+(DFunDef false "toRecPatField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "rf"))) (PList (PVar "f") (PCon "SAtom" (PLit (LString "None"))))))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EApp (EVar "toStr") (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EVar "None")))
+(DFunDef false "toRecPatField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "rf"))) (PList (PVar "f") (PVar "p"))))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EApp (EVar "toStr") (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EVar "toPat") (EVar "p")))))
 (DFunDef false "toRecPatField" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad RecPatField: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toPat" (TyFun (TyCon "SExp") (TyCon "Pat")))
-(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PVar"))) (PList (PVar "n"))))) (EApp (EApp (EVar "PVar") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
+(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PVar"))) (PList (PVar "n"))))) (EApp (EApp (EApp (EVar "PVar") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))
 (DFunDef false "toPat" ((PCon "SAtom" (PLit (LString "PWild")))) (EVar "PWild"))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PLit"))) (PList (PVar "l"))))) (EApp (EVar "PLit") (EApp (EVar "toLit") (EVar "l"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PCon"))) (PCons (PVar "name") (PVar "args"))))) (EApp (EApp (EVar "PCon") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EVar "map") (EVar "toPat")) (EVar "args"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PCons"))) (PList (PVar "h") (PVar "t"))))) (EApp (EApp (EVar "PCons") (EApp (EVar "toPat") (EVar "h"))) (EApp (EVar "toPat") (EVar "t"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PTuple"))) (PVar "ps")))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EVar "toPat")) (EVar "ps"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PList"))) (PVar "ps")))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EVar "toPat")) (EVar "ps"))))
-(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PAs"))) (PList (PVar "n") (PVar "p"))))) (EApp (EApp (EApp (EVar "PAs") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EVar "toPat") (EVar "p"))))
+(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PAs"))) (PList (PVar "n") (PVar "p"))))) (EApp (EApp (EApp (EApp (EVar "PAs") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "toPat") (EVar "p"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PRng"))) (PList (PVar "lo") (PVar "hi") (PVar "incl"))))) (EApp (EApp (EApp (EVar "PRng") (EApp (EVar "toLit") (EVar "lo"))) (EApp (EVar "toLit") (EVar "hi"))) (EApp (EVar "toBool") (EVar "incl"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PRec"))) (PList (PVar "name") (PCon "SList" (PVar "fields")) (PVar "rest"))))) (EApp (EApp (EApp (EVar "PRec") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EVar "map") (EVar "toRecPatField")) (EVar "fields"))) (EApp (EVar "toBool") (EVar "rest"))))
 (DFunDef false "toPat" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad Pat: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
@@ -727,7 +729,7 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "joinSexps" ((PList (PVar "x"))) (EApp (EVar "sexprToStr") (EVar "x")))
 (DFunDef false "joinSexps" ((PCons (PVar "x") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "sexprToStr") (EVar "x")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "joinSexps") (EVar "rest")))) (ELit (LString ""))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Lit" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "noDeclLoc" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "MethodEvidence" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "noDeclFacts" false) (mem "CallMode" true) (mem "CallSite" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "FailSite" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "SToken" () ((variant "TOpen" (ConPos)) (variant "TClose" (ConPos)) (variant "TAtom" (ConPos (TyCon "String")))) ())
@@ -803,18 +805,18 @@ joinSexps (x :: rest) = "\{sexprToStr x} \{joinSexps rest}"
 (DFunDef false "toLit" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "LI64"))) (PList (PVar "hi") (PVar "lo"))))) (EApp (EApp (EVar "LI64") (EApp (EVar "toInt") (EVar "hi"))) (EApp (EVar "toInt") (EVar "lo"))))
 (DFunDef false "toLit" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad Lit: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toRecPatField" (TyFun (TyCon "SExp") (TyCon "RecPatField")))
-(DFunDef false "toRecPatField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "rf"))) (PList (PVar "f") (PCon "SAtom" (PLit (LString "None"))))))) (EApp (EApp (EApp (EVar "RecPatField") (EApp (EVar "toStr") (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "None")))
-(DFunDef false "toRecPatField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "rf"))) (PList (PVar "f") (PVar "p"))))) (EApp (EApp (EApp (EVar "RecPatField") (EApp (EVar "toStr") (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EVar "Some") (EApp (EVar "toPat") (EVar "p")))))
+(DFunDef false "toRecPatField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "rf"))) (PList (PVar "f") (PCon "SAtom" (PLit (LString "None"))))))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EApp (EVar "toStr") (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EVar "None")))
+(DFunDef false "toRecPatField" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "rf"))) (PList (PVar "f") (PVar "p"))))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EApp (EVar "toStr") (EVar "f"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "Some") (EApp (EVar "toPat") (EVar "p")))))
 (DFunDef false "toRecPatField" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad RecPatField: ")) (EApp (EVar "sexprToStr") (EVar "other")))))
 (DTypeSig false "toPat" (TyFun (TyCon "SExp") (TyCon "Pat")))
-(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PVar"))) (PList (PVar "n"))))) (EApp (EApp (EVar "PVar") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
+(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PVar"))) (PList (PVar "n"))))) (EApp (EApp (EApp (EVar "PVar") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")))
 (DFunDef false "toPat" ((PCon "SAtom" (PLit (LString "PWild")))) (EVar "PWild"))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PLit"))) (PList (PVar "l"))))) (EApp (EVar "PLit") (EApp (EVar "toLit") (EVar "l"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PCon"))) (PCons (PVar "name") (PVar "args"))))) (EApp (EApp (EVar "PCon") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EMethodRef "map") (EVar "toPat")) (EVar "args"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PCons"))) (PList (PVar "h") (PVar "t"))))) (EApp (EApp (EVar "PCons") (EApp (EVar "toPat") (EVar "h"))) (EApp (EVar "toPat") (EVar "t"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PTuple"))) (PVar "ps")))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EVar "toPat")) (EVar "ps"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PList"))) (PVar "ps")))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EVar "toPat")) (EVar "ps"))))
-(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PAs"))) (PList (PVar "n") (PVar "p"))))) (EApp (EApp (EApp (EVar "PAs") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EApp (EVar "toPat") (EVar "p"))))
+(DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PAs"))) (PList (PVar "n") (PVar "p"))))) (EApp (EApp (EApp (EApp (EVar "PAs") (EApp (EVar "toStr") (EVar "n"))) (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (ELit (LString ""))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))) (EVar "noBinderId")) (EApp (EVar "toPat") (EVar "p"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PRng"))) (PList (PVar "lo") (PVar "hi") (PVar "incl"))))) (EApp (EApp (EApp (EVar "PRng") (EApp (EVar "toLit") (EVar "lo"))) (EApp (EVar "toLit") (EVar "hi"))) (EApp (EVar "toBool") (EVar "incl"))))
 (DFunDef false "toPat" ((PCon "SList" (PCons (PCon "SAtom" (PLit (LString "PRec"))) (PList (PVar "name") (PCon "SList" (PVar "fields")) (PVar "rest"))))) (EApp (EApp (EApp (EVar "PRec") (EApp (EVar "toStr") (EVar "name"))) (EApp (EApp (EMethodRef "map") (EVar "toRecPatField")) (EVar "fields"))) (EApp (EVar "toBool") (EVar "rest"))))
 (DFunDef false "toPat" ((PVar "other")) (EApp (EVar "panic") (EBinOp "++" (ELit (LString "core_ir_sexp_parse: bad Pat: ")) (EApp (EVar "sexprToStr") (EVar "other")))))

@@ -1,5 +1,5 @@
 # META
-source_lines=117
+source_lines=120
 stages=DESUGAR,MARK
 # SOURCE
 -- Typed bridge bindings for custom `Arbitrary` property parameters.
@@ -10,6 +10,7 @@ stages=DESUGAR,MARK
 -- property runner then invokes the resulting bindings by their exact names.
 
 import frontend.ast.{
+  noBinderId,
   Decl(..),
   Expr(..),
   Pat(..),
@@ -96,14 +97,16 @@ helperDecls i (CustomPlan _ carrier _) =
       generator
       [PLit LUnit]
       (ELoc loc (EApp (EVar "$prop_core.arbitrary") (ELit LUnit)))
-      loc,
+      loc
+      noBinderId,
     DTypeSig False shrinker (TyFun carrier (TyApp listTy carrier)) loc,
     DFunDef
       False
       shrinker
-      [PVar "$prop_value" loc]
+      [PVar "$prop_value" loc noBinderId]
       (ELoc loc (EApp (EVar "$prop_core.shrink") (EVar "$prop_value")))
-      loc,
+      loc
+      noBinderId,
   ]
 
 prependDecls : List Decl -> List Decl -> List Decl
@@ -120,7 +123,7 @@ generatorName i = "$prop_gen_\{intToString i}"
 shrinkerName : Int -> String
 shrinkerName i = "$prop_shrink_\{intToString i}"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Ty" true) (mem "Loc" true) (mem "UsePath" true) (mem "tyConBuiltin" false) (mem "effAtomBare" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Ty" true) (mem "Loc" true) (mem "UsePath" true) (mem "tyConBuiltin" false) (mem "effAtomBare" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DUse false (UseGroup ("tools" "prop_plan") ((mem "CustomPlan" true) (mem "GenPlan" false) (mem "PlanEnv" false) (mem "customPlansReachable" false))))
@@ -142,7 +145,7 @@ shrinkerName i = "$prop_shrink_\{intToString i}"
 (DTypeSig false "helperForCustom" (TyFun (TyCon "Int") (TyFun (TyCon "CustomPlan") (TyCon "PropHelper"))))
 (DFunDef false "helperForCustom" ((PVar "i") (PCon "CustomPlan" PWild PWild (PVar "word"))) (EApp (EApp (EApp (EVar "PropHelper") (EVar "word")) (EApp (EVar "generatorName") (EVar "i"))) (EApp (EVar "shrinkerName") (EVar "i"))))
 (DTypeSig false "helperDecls" (TyFun (TyCon "Int") (TyFun (TyCon "CustomPlan") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "helperDecls" ((PVar "i") (PCon "CustomPlan" PWild (PVar "carrier") PWild)) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "helperLoc") (EVar "i"))) (DoLet false false (PVar "generator") (EApp (EVar "generatorName") (EVar "i"))) (DoLet false false (PVar "shrinker") (EApp (EVar "shrinkerName") (EVar "i"))) (DoLet false false (PVar "unitTy") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EApp (EVar "Some") (EVar "loc")))) (DoLet false false (PVar "listTy") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "List"))) (EApp (EVar "Some") (EVar "loc")))) (DoExpr (EListLit (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (EVar "generator")) (EApp (EApp (EVar "TyFun") (EVar "unitTy")) (EApp (EApp (EApp (EVar "TyEffect") (EListLit (EApp (EVar "effAtomBare") (ELit (LString "Rand"))))) (EListLit)) (EVar "carrier")))) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "generator")) (EListLit (EApp (EVar "PLit") (EVar "LUnit")))) (EApp (EApp (EVar "ELoc") (EVar "loc")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "$prop_core.arbitrary")))) (EApp (EVar "ELit") (EVar "LUnit"))))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (EVar "shrinker")) (EApp (EApp (EVar "TyFun") (EVar "carrier")) (EApp (EApp (EVar "TyApp") (EVar "listTy")) (EVar "carrier")))) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "shrinker")) (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "$prop_value"))) (EVar "loc")))) (EApp (EApp (EVar "ELoc") (EVar "loc")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "$prop_core.shrink")))) (EApp (EVar "EVar") (ELit (LString "$prop_value")))))) (EVar "loc"))))))
+(DFunDef false "helperDecls" ((PVar "i") (PCon "CustomPlan" PWild (PVar "carrier") PWild)) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "helperLoc") (EVar "i"))) (DoLet false false (PVar "generator") (EApp (EVar "generatorName") (EVar "i"))) (DoLet false false (PVar "shrinker") (EApp (EVar "shrinkerName") (EVar "i"))) (DoLet false false (PVar "unitTy") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EApp (EVar "Some") (EVar "loc")))) (DoLet false false (PVar "listTy") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "List"))) (EApp (EVar "Some") (EVar "loc")))) (DoExpr (EListLit (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (EVar "generator")) (EApp (EApp (EVar "TyFun") (EVar "unitTy")) (EApp (EApp (EApp (EVar "TyEffect") (EListLit (EApp (EVar "effAtomBare") (ELit (LString "Rand"))))) (EListLit)) (EVar "carrier")))) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "generator")) (EListLit (EApp (EVar "PLit") (EVar "LUnit")))) (EApp (EApp (EVar "ELoc") (EVar "loc")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "$prop_core.arbitrary")))) (EApp (EVar "ELit") (EVar "LUnit"))))) (EVar "loc")) (EVar "noBinderId")) (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (EVar "shrinker")) (EApp (EApp (EVar "TyFun") (EVar "carrier")) (EApp (EApp (EVar "TyApp") (EVar "listTy")) (EVar "carrier")))) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "shrinker")) (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "$prop_value"))) (EVar "loc")) (EVar "noBinderId")))) (EApp (EApp (EVar "ELoc") (EVar "loc")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "$prop_core.shrink")))) (EApp (EVar "EVar") (ELit (LString "$prop_value")))))) (EVar "loc")) (EVar "noBinderId"))))))
 (DTypeSig false "prependDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "prependDecls" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "prependDecls" ((PCons (PVar "decl") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "prependDecls") (EVar "rest")) (EBinOp "::" (EVar "decl") (EVar "acc"))))
@@ -154,7 +157,7 @@ shrinkerName i = "$prop_shrink_\{intToString i}"
 (DTypeSig false "shrinkerName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "shrinkerName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "$prop_shrink_")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "i")))) (ELit (LString ""))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Ty" true) (mem "Loc" true) (mem "UsePath" true) (mem "tyConBuiltin" false) (mem "effAtomBare" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "noBinderId" false) (mem "Decl" true) (mem "Expr" true) (mem "Pat" true) (mem "Lit" true) (mem "Ty" true) (mem "Loc" true) (mem "UsePath" true) (mem "tyConBuiltin" false) (mem "effAtomBare" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omHasKey" false) (mem "omInsert" false) (mem "omKeys" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DUse false (UseGroup ("tools" "prop_plan") ((mem "CustomPlan" true) (mem "GenPlan" false) (mem "PlanEnv" false) (mem "customPlansReachable" false))))
@@ -176,7 +179,7 @@ shrinkerName i = "$prop_shrink_\{intToString i}"
 (DTypeSig false "helperForCustom" (TyFun (TyCon "Int") (TyFun (TyCon "CustomPlan") (TyCon "PropHelper"))))
 (DFunDef false "helperForCustom" ((PVar "i") (PCon "CustomPlan" PWild PWild (PVar "word"))) (EApp (EApp (EApp (EVar "PropHelper") (EVar "word")) (EApp (EVar "generatorName") (EVar "i"))) (EApp (EVar "shrinkerName") (EVar "i"))))
 (DTypeSig false "helperDecls" (TyFun (TyCon "Int") (TyFun (TyCon "CustomPlan") (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "helperDecls" ((PVar "i") (PCon "CustomPlan" PWild (PVar "carrier") PWild)) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "helperLoc") (EVar "i"))) (DoLet false false (PVar "generator") (EApp (EVar "generatorName") (EVar "i"))) (DoLet false false (PVar "shrinker") (EApp (EVar "shrinkerName") (EVar "i"))) (DoLet false false (PVar "unitTy") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EApp (EVar "Some") (EVar "loc")))) (DoLet false false (PVar "listTy") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "List"))) (EApp (EVar "Some") (EVar "loc")))) (DoExpr (EListLit (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (EVar "generator")) (EApp (EApp (EVar "TyFun") (EVar "unitTy")) (EApp (EApp (EApp (EVar "TyEffect") (EListLit (EApp (EVar "effAtomBare") (ELit (LString "Rand"))))) (EListLit)) (EVar "carrier")))) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "generator")) (EListLit (EApp (EVar "PLit") (EVar "LUnit")))) (EApp (EApp (EVar "ELoc") (EVar "loc")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "$prop_core.arbitrary")))) (EApp (EVar "ELit") (EVar "LUnit"))))) (EVar "loc")) (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (EVar "shrinker")) (EApp (EApp (EVar "TyFun") (EVar "carrier")) (EApp (EApp (EVar "TyApp") (EVar "listTy")) (EVar "carrier")))) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "shrinker")) (EListLit (EApp (EApp (EVar "PVar") (ELit (LString "$prop_value"))) (EVar "loc")))) (EApp (EApp (EVar "ELoc") (EVar "loc")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "$prop_core.shrink")))) (EApp (EVar "EVar") (ELit (LString "$prop_value")))))) (EVar "loc"))))))
+(DFunDef false "helperDecls" ((PVar "i") (PCon "CustomPlan" PWild (PVar "carrier") PWild)) (EBlock (DoLet false false (PVar "loc") (EApp (EVar "helperLoc") (EVar "i"))) (DoLet false false (PVar "generator") (EApp (EVar "generatorName") (EVar "i"))) (DoLet false false (PVar "shrinker") (EApp (EVar "shrinkerName") (EVar "i"))) (DoLet false false (PVar "unitTy") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EApp (EVar "Some") (EVar "loc")))) (DoLet false false (PVar "listTy") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "List"))) (EApp (EVar "Some") (EVar "loc")))) (DoExpr (EListLit (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (EVar "generator")) (EApp (EApp (EVar "TyFun") (EVar "unitTy")) (EApp (EApp (EApp (EVar "TyEffect") (EListLit (EApp (EVar "effAtomBare") (ELit (LString "Rand"))))) (EListLit)) (EVar "carrier")))) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "generator")) (EListLit (EApp (EVar "PLit") (EVar "LUnit")))) (EApp (EApp (EVar "ELoc") (EVar "loc")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "$prop_core.arbitrary")))) (EApp (EVar "ELit") (EVar "LUnit"))))) (EVar "loc")) (EVar "noBinderId")) (EApp (EApp (EApp (EApp (EVar "DTypeSig") (EVar "False")) (EVar "shrinker")) (EApp (EApp (EVar "TyFun") (EVar "carrier")) (EApp (EApp (EVar "TyApp") (EVar "listTy")) (EVar "carrier")))) (EVar "loc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "False")) (EVar "shrinker")) (EListLit (EApp (EApp (EApp (EVar "PVar") (ELit (LString "$prop_value"))) (EVar "loc")) (EVar "noBinderId")))) (EApp (EApp (EVar "ELoc") (EVar "loc")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "$prop_core.shrink")))) (EApp (EVar "EVar") (ELit (LString "$prop_value")))))) (EVar "loc")) (EVar "noBinderId"))))))
 (DTypeSig false "prependDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "prependDecls" ((PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "prependDecls" ((PCons (PVar "decl") (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "prependDecls") (EVar "rest")) (EBinOp "::" (EVar "decl") (EVar "acc"))))

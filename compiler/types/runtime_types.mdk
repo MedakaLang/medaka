@@ -1,0 +1,187 @@
+-- What each source binder holds at run time, as the typechecker decided it.
+--
+-- The typechecker publishes ONE table per elaboration, keyed by the `BinderId`
+-- every binder node carries (`frontend/ast.mdk`): lambda and clause parameters,
+-- `let` and match binders, as-pattern and record-pun binders, where/let-group
+-- functions and top-level function clauses.  A row is read after the graph-end
+-- drain, so after Num defaulting and after every unification any module could
+-- still make, and it is MATERIALIZED there: a row holds a `RuntimeType`, never
+-- a `Mono`, because a memoized prelude graph shares its type cells with later
+-- elaborations and a stored cell could be read back as some other program's type.
+--
+-- The lookup lives here, beside `route_key.mdk` and `disposition.mdk`, for the
+-- same reason theirs do: `types/` cannot import `ir/`, and the reader that
+-- needs it (`ir/core_ir_lower.mdk`) cannot import a typechecker-private cell.
+--
+-- Interface default bodies are typechecked once but lowered once per instance,
+-- so a Core binder cloned from one maps many-to-one onto a single row here.
+-- That is consistent only because such a binder is typed at the interface's own
+-- type variable, which this domain renders as `RTValue` for every instance.
+
+import frontend.ast.{BinderId(..), TyConOrigin(..)}
+import types.repr.{Mono(..), Tyvar(..)}
+import map.{Map(..), get, set, values}
+
+-- The runtime-type domain.  Each case is a distinction some emitter draws today
+-- by recovering it from the program's shape; the table states it instead.  The
+-- domain is deliberately not physical: no boxed/unboxed split, no register or
+-- wasm reference kinds.  Those are backend decisions made FROM this fact.
+--
+-- `RTCon` is a constructor cell: a value of a `data` or `newtype` type, a list
+-- or a tuple.  `RTValue` is everything the type alone does not pin to one of the
+-- other cases: a type variable (so a polymorphic binder, whose representation
+-- is the caller's), a rigid variable, a function or closure, and an opaque
+-- runtime object (`Ref`, `Array`, an `extern data` type).  It is the answer
+-- "no static fact", never a guess at one, and there is deliberately no
+-- numeric-but-unknown case: a `Num a =>` binder's arithmetic dispatches through
+-- its dictionary, and that is all an emitter can do with it.
+public export data RuntimeType =
+  | RTInt
+  | RTFloat
+  | RTBool
+  | RTChar
+  | RTString
+  | RTUnit
+  | RTU64
+  | RTI64
+  | RTU32
+  | RTI32
+  | RTU16
+  | RTU8
+  | RTCon
+  | RTValue
+  deriving (Eq, Debug)
+
+-- One published binder.  The name is the binder's source spelling, carried as a
+-- tripwire and for diagnostics, never as a key.  `brReturns` is `Some` for a
+-- function binder (a where/let-group member or a top-level clause): its own row
+-- is the function's type, which is `RTValue` whenever it takes parameters, and
+-- what its body returns after its declared parameters is a second fact.  Every
+-- clause of a multi-clause function carries the function's one return type.
+public export data BinderRow = BinderRow {
+  brId : BinderId,
+  brName : String,
+  brType : RuntimeType,
+  brReturns : Option RuntimeType,
+}
+
+-- The table, keyed by the id's ordinal.  Ordinals come from one process-global
+-- counter, so the ordinal alone is unique; the module half is compared on every
+-- hit (`binderRow`).
+export type BinderTypeTable = Map Int BinderRow
+
+export
+emptyBinderTypes : BinderTypeTable
+emptyBinderTypes = Tip
+
+-- Add [row] under its ordinal.  An ordinal the table already holds is
+-- overwritten: the same binder recorded twice by one elaboration names the same
+-- type cell both times.
+export
+addBinderRow : BinderRow -> BinderTypeTable -> BinderTypeTable
+addBinderRow row table = set (binderOrdinal row.brId) row table
+
+binderOrdinal : BinderId -> Int
+binderOrdinal (BinderId _ i) = i
+
+-- The runtime type of a binder whose (solved) type is [t].  [isCell] answers
+-- whether a non-builtin type constructor, by name and origin, is a `data` or
+-- `newtype` declaration rather than an opaque `extern data` one; the
+-- typechecker answers it from the graph's declarations.
+--
+-- A builtin head is read by name only under `OriginBuiltin`: a same-spelled head
+-- with any other origin is a different type, and the conservative answer for it
+-- is `RTValue`.
+--
+-- >>> runtimeTypeOf (_ _ => False) (TCon "Float" OriginBuiltin)
+-- RTFloat
+-- >>> runtimeTypeOf (_ _ => False) (TCon "Float" (OriginModule "m"))
+-- RTValue
+export
+runtimeTypeOf : (String -> TyConOrigin -> Bool) -> Mono -> RuntimeType
+runtimeTypeOf isCell (TVar cell) = match !cell
+  Link t => runtimeTypeOf isCell t
+  Unbound _ _ => RTValue
+runtimeTypeOf isCell (TQual inner _) = runtimeTypeOf isCell inner
+runtimeTypeOf isCell (TCon n o) = headRuntimeType isCell n o
+runtimeTypeOf isCell (TApp f _) = appliedRuntimeType isCell f
+runtimeTypeOf _ _ = RTValue
+
+-- An applied type is a cell when its head is; a scalar head never takes
+-- arguments, and a variable head (`f a`) fixes nothing.
+appliedRuntimeType : (String -> TyConOrigin -> Bool) -> Mono -> RuntimeType
+appliedRuntimeType isCell (TVar cell) = match !cell
+  Link t => appliedRuntimeType isCell t
+  Unbound _ _ => RTValue
+appliedRuntimeType isCell (TQual inner _) = appliedRuntimeType isCell inner
+appliedRuntimeType isCell (TApp f _) = appliedRuntimeType isCell f
+appliedRuntimeType isCell (TCon n o) = match headRuntimeType isCell n o
+  RTCon => RTCon
+  _ => RTValue
+appliedRuntimeType _ _ = RTValue
+
+headRuntimeType : (String -> TyConOrigin -> Bool) ->
+  String ->
+  TyConOrigin ->
+  RuntimeType
+headRuntimeType _ n OriginBuiltin = builtinRuntimeType n
+headRuntimeType isCell n o = if isCell n o then RTCon else RTValue
+
+builtinRuntimeType : String -> RuntimeType
+builtinRuntimeType "Int" = RTInt
+builtinRuntimeType "Float" = RTFloat
+builtinRuntimeType "Bool" = RTBool
+builtinRuntimeType "Char" = RTChar
+builtinRuntimeType "String" = RTString
+builtinRuntimeType "Unit" = RTUnit
+builtinRuntimeType "U64" = RTU64
+builtinRuntimeType "I64" = RTI64
+builtinRuntimeType "U32" = RTU32
+builtinRuntimeType "I32" = RTI32
+builtinRuntimeType "U16" = RTU16
+builtinRuntimeType "U8" = RTU8
+builtinRuntimeType "List" = RTCon
+builtinRuntimeType "__tuple2__" = RTCon
+builtinRuntimeType "__tuple3__" = RTCon
+builtinRuntimeType "__tuple4__" = RTCon
+builtinRuntimeType "__tuple5__" = RTCon
+builtinRuntimeType _ = RTValue
+
+-- ── the installed table ───────────────────────────────────────────────────
+-- Exactly one table is installed per elaboration, beside the evidence and
+-- disposition tables and under the same ordering: every read of it completes
+-- before the next elaboration installs its own.
+binderTypesRef : Ref (Option BinderTypeTable)
+binderTypesRef = Ref None
+
+-- Replace the installed table with this elaboration's.
+export
+installBinderTypes : BinderTypeTable -> Unit
+installBinderTypes table = binderTypesRef := Some table
+
+-- The row published for [bid], or `None` when the typechecker recorded none for
+-- it.  Reading before any elaboration installed a table is a panic, as is a row
+-- answering for a different module than the id names: ordinals are never reused
+-- within a process, so the second can only mean the module half was rewritten
+-- without the ordinal.
+export
+binderRow : BinderId -> Option BinderRow
+binderRow (BinderId m i) = match !binderTypesRef
+  None =>
+    panic
+      "binder table: no elaboration has published one (looking up \{m}#\{intToString i})"
+  Some table => match get i table
+    None => None
+    Some row => match row.brId
+      BinderId m2 _ =>
+        if m2 == m then
+          Some row
+        else
+          panic "binder table: \{m}#\{intToString i} answered by module \{m2}"
+
+-- Every installed row, in ordinal order; empty before any elaboration.
+export
+installedBinderRows : Unit -> List BinderRow
+installedBinderRows _ = match !binderTypesRef
+  None => []
+  Some table => values table

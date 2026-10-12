@@ -240,7 +240,7 @@ declaredMethodContext table iface method =
 
 -- How many of [pats], from the front, are `$dict_<method>_0`, `$dict_<method>_1`, ….
 leadingMethodDicts : String -> Int -> List Pat -> Int
-leadingMethodDicts method k ((PVar x _) :: rest) =
+leadingMethodDicts method k ((PVar x _ _) :: rest) =
   if x == "$dict_\{method}_\{intToString k}" then
     leadingMethodDicts method (k + 1) rest
   else

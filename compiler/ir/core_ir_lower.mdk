@@ -11,6 +11,7 @@
 -- is a clean diff, not a rewrite).
 
 import frontend.ast.{
+  noBinderId,
   Lit(..),
   Loc(..),
   noDeclLoc,
@@ -244,7 +245,7 @@ lowerBinop op l r tag = CBinPrim op (lower l) (lower r) tag (exprStartLoc l)
 composeLam : CExpr -> CExpr -> CExpr
 composeLam first second =
   CLam
-    [PVar composeVar (Loc "" 0 0 0 0)]
+    [PVar composeVar (Loc "" 0 0 0 0) noBinderId]
     (mkApp second [mkApp first [CVar composeVar AGlobal]])
 
 lowerArm : Arm -> CArm
@@ -281,9 +282,9 @@ letDecision site pat scrut body =
 -- cannot, and keeps the plain `CLet`.
 patMayFail : Pat -> Bool
 patMayFail PWild = False
-patMayFail (PVar _ _) = False
+patMayFail (PVar _ _ _) = False
 patMayFail (PLit LUnit) = False
-patMayFail (PAs _ _ p) = patMayFail p
+patMayFail (PAs _ _ _ p) = patMayFail p
 patMayFail (PTuple ps) = anyList patMayFail ps
 patMayFail _ = True
 
@@ -309,13 +310,13 @@ armTreeable (Arm pat _ _) = treeablePat pat
 -- ordered semantics exactly.
 treeablePat : Pat -> Bool
 treeablePat PWild = True
-treeablePat (PVar _ _) = True
+treeablePat (PVar _ _ _) = True
 treeablePat (PLit _) = True
 treeablePat (PCon _ args) = allList treeablePat args
 treeablePat (PCons h t) = treeablePat h && treeablePat t
 treeablePat (PList ps) = allList treeablePat ps
 treeablePat (PTuple ps) = allList treeablePat ps
-treeablePat (PAs _ _ p) = treeablePat p
+treeablePat (PAs _ _ _ p) = treeablePat p
 treeablePat (PRng _ _ _) = True
 treeablePat (PRec _ _ _) = True
 
@@ -337,7 +338,7 @@ patNeedsGuard (PCon _ args) = anyList patNeedsGuard args
 patNeedsGuard (PCons h t) = patNeedsGuard h || patNeedsGuard t
 patNeedsGuard (PList ps) = anyList patNeedsGuard ps
 patNeedsGuard (PTuple ps) = anyList patNeedsGuard ps
-patNeedsGuard (PAs _ _ p) = patNeedsGuard p
+patNeedsGuard (PAs _ _ _ p) = patNeedsGuard p
 patNeedsGuard _ = False
 
 -- one matrix row per arm: its (canonicalised) pattern as a single column, paired
@@ -526,7 +527,7 @@ unitName = "__unit__"
 -- arms) — part of the shared backend-neutral decision-tree pass (Axis-1).
 export
 canonPat : Pat -> Pat
-canonPat (PVar _ _) = PWild
+canonPat (PVar _ _ _) = PWild
 canonPat PWild = PWild
 canonPat (PLit (LBool True)) = PCon "True" []
 canonPat (PLit (LBool False)) = PCon "False" []
@@ -537,7 +538,7 @@ canonPat (PCon c args) = PCon c (map canonPat args)
 canonPat (PCons h t) = PCon consName [canonPat h, canonPat t]
 canonPat (PList []) = PCon nilName []
 canonPat (PList (h :: r)) = PCon consName [canonPat h, canonPat (PList r)]
-canonPat (PAs _ _ p) = canonPat p
+canonPat (PAs _ _ _ p) = canonPat p
 canonPat (PRng _ _ _) = PWild
 canonPat (PRec _ _ _) = PWild
 
@@ -755,7 +756,7 @@ lowerField : FieldAssign -> CField
 lowerField (FieldAssign k e) = CField k (-1) (lower e)
 
 lowerBind : LetBind -> CBind
-lowerBind (LetBind name clauses site) =
+lowerBind (LetBind name clauses site _) =
   CBind name (map lowerClause clauses) site
 
 lowerClause : FunClause -> CClause
@@ -833,10 +834,10 @@ noLetCheck _ = False
 -- pattern still unresolved after `rewriteProgramRecPats` keeps the plain `let`.
 patCanMiss : OrdMap Bool -> Pat -> Bool
 patCanMiss _ PWild = False
-patCanMiss _ (PVar _ _) = False
+patCanMiss _ (PVar _ _ _) = False
 patCanMiss _ (PLit LUnit) = False
 patCanMiss _ (PLit _) = True
-patCanMiss sib (PAs _ _ p) = patCanMiss sib p
+patCanMiss sib (PAs _ _ _ p) = patCanMiss sib p
 patCanMiss sib (PTuple ps) = anyList (patCanMiss sib) ps
 patCanMiss sib (PCon c ps) = ctorHasSibling sib c || anyList (patCanMiss sib) ps
 patCanMiss _ (PRec _ _ _) = False
@@ -1213,21 +1214,21 @@ callModeFor (Some k) n =
 -- local of the lambda's parameter count, any other binder a non-function local.
 export
 bindLetScope : Pat -> CExpr -> CallScope -> CallScope
-bindLetScope (PVar x _) (CLam (ps@(_ :: _)) _) s =
+bindLetScope (PVar x _ _) (CLam (ps@(_ :: _)) _) s =
   omInsert x (Some (listLen ps)) s
 bindLetScope pat _ s = bindPatScope pat s
 
 -- The scope after a pattern: each variable it binds is a non-function local.
 export
 bindPatScope : Pat -> CallScope -> CallScope
-bindPatScope (PVar x _) s = omInsert x None s
+bindPatScope (PVar x _ _) s = omInsert x None s
 bindPatScope PWild s = s
 bindPatScope (PLit _) s = s
 bindPatScope (PCon _ ps) s = bindPatsScope ps s
 bindPatScope (PCons h t) s = bindPatScope t (bindPatScope h s)
 bindPatScope (PTuple ps) s = bindPatsScope ps s
 bindPatScope (PList ps) s = bindPatsScope ps s
-bindPatScope (PAs x _ p) s = bindPatScope p (omInsert x None s)
+bindPatScope (PAs x _ _ p) s = bindPatScope p (omInsert x None s)
 bindPatScope (PRng _ _ _) s = s
 bindPatScope (PRec _ fields _) s = bindRecFieldsScope fields s
 
@@ -1239,9 +1240,9 @@ bindPatsScope (p :: rest) s = bindPatsScope rest (bindPatScope p s)
 -- A punned field `{x}` binds the field's own name.
 bindRecFieldsScope : List RecPatField -> CallScope -> CallScope
 bindRecFieldsScope [] s = s
-bindRecFieldsScope ((RecPatField f _ None) :: rest) s =
+bindRecFieldsScope ((RecPatField f _ _ None) :: rest) s =
   bindRecFieldsScope rest (omInsert f None s)
-bindRecFieldsScope ((RecPatField _ _ (Some p)) :: rest) s =
+bindRecFieldsScope ((RecPatField _ _ _ (Some p)) :: rest) s =
   bindRecFieldsScope rest (bindPatScope p s)
 
 -- A let group's functions, each at its clause pattern count.
@@ -1322,7 +1323,7 @@ mergeTailLambda declared pats (body@(CLam (lamPats@(_ :: _)) inner)) =
 mergeTailLambda _ pats body = (pats, body)
 
 isFreshVarPat : CallScope -> Pat -> Bool
-isFreshVarPat bound (PVar x _) = not (omHasKey x bound)
+isFreshVarPat bound (PVar x _ _) = not (omHasKey x bound)
 isFreshVarPat _ _ = False
 
 -- The (method, route word) groups whose entries take more than one value arity,
@@ -1421,7 +1422,7 @@ etaClause : Int -> List Pat -> CExpr -> CClause
 etaClause missing pats body =
   let fresh = map etaParamName (range (listLen pats) (listLen pats + missing))
   CClause
-    (pats ++ map (x => PVar x noDeclLoc) fresh)
+    (pats ++ map (x => PVar x noDeclLoc noBinderId) fresh)
     (applyAtTail body (map (x => CVar x AGlobal) fresh))
 
 etaParamName : Int -> String
@@ -1813,7 +1814,7 @@ preludeFunName names n
 
 topFunNames : List Decl -> OrdMap Unit -> OrdMap Unit
 topFunNames [] acc = acc
-topFunNames ((DFunDef _ n _ _ _) :: rest) acc =
+topFunNames ((DFunDef _ n _ _ _ _) :: rest) acc =
   topFunNames rest (omInsert n () acc)
 topFunNames ((DAttrib _ d) :: rest) acc = topFunNames (d :: rest) acc
 topFunNames (_ :: rest) acc = topFunNames rest acc
@@ -1835,11 +1836,11 @@ declBinders d = localBoundNames [d] ++ localFunNames d
 
 implMethodBinders : ImplMethod -> List String
 implMethodBinders (ImplMethod n ps body) =
-  declBinders (DFunDef False n ps body noDeclLoc)
+  declBinders (DFunDef False n ps body noDeclLoc noBinderId)
 
 ifaceMethodBinders : IfaceMethod -> List String
 ifaceMethodBinders (IfaceMethod n _ (Some (MethodDefault ps body)) _) =
-  declBinders (DFunDef False n ps body noDeclLoc)
+  declBinders (DFunDef False n ps body noDeclLoc noBinderId)
 ifaceMethodBinders _ = []
 
 -- the names of the `let`/`where` functions [d] defines (`localBoundNames`
@@ -1857,7 +1858,7 @@ noteLocalFuns acc (e@(ELetGroup binds _)) =
 noteLocalFuns _ e = e
 
 letBindName : LetBind -> String
-letBindName (LetBind n _ _) = n
+letBindName (LetBind n _ _ _) = n
 
 -- ── the ONE authority on a record's field order (#1513) ──────────────────────
 -- ctor name → [field label in declared order], from every DData named-field
@@ -1912,7 +1913,7 @@ rewritePat fo (PCon c args) = PCon c (map (rewritePat fo) args)
 rewritePat fo (PCons h t) = PCons (rewritePat fo h) (rewritePat fo t)
 rewritePat fo (PTuple ps) = PTuple (map (rewritePat fo) ps)
 rewritePat fo (PList ps) = PList (map (rewritePat fo) ps)
-rewritePat fo (PAs x l p) = PAs x l (rewritePat fo p)
+rewritePat fo (PAs x l bid p) = PAs x l bid (rewritePat fo p)
 rewritePat _ p = p
 
 -- the sub-pattern bound to declared field `label`: the named field's sub-pattern
@@ -1920,20 +1921,20 @@ rewritePat _ p = p
 -- not named in the pattern (open `..` / subset).
 recPatForLabel : RecOrders -> List RecPatField -> String -> Pat
 recPatForLabel fo recFields label = match findRecField label recFields
-  Some (RecPatField _ fl (Some sub)) => rewritePat fo sub
-  Some (RecPatField _ fl None) => PVar label fl
+  Some (RecPatField _ fl _ (Some sub)) => rewritePat fo sub
+  Some (RecPatField _ fl bid None) => PVar label fl bid
   None => PWild
 
 findRecField : String -> List RecPatField -> Option RecPatField
 findRecField _ [] = None
-findRecField label ((RecPatField l fl sub) :: rest)
-  | l == label = Some (RecPatField l fl sub)
+findRecField label ((RecPatField l fl bid sub) :: rest)
+  | l == label = Some (RecPatField l fl bid sub)
   | otherwise = findRecField label rest
 
 rewriteRecPatField : RecOrders -> RecPatField -> RecPatField
-rewriteRecPatField fo (RecPatField l fl (Some sub)) =
-  RecPatField l fl (Some (rewritePat fo sub))
-rewriteRecPatField _ (RecPatField l fl None) = RecPatField l fl None
+rewriteRecPatField fo (RecPatField l fl bid (Some sub)) =
+  RecPatField l fl bid (Some (rewritePat fo sub))
+rewriteRecPatField _ (RecPatField l fl bid None) = RecPatField l fl bid None
 
 -- ── apply the rewrite to every pattern position the lowered Core IR carries ───
 -- Walks the whole program (groups + impls), rewriting every pattern and — for a
@@ -2247,7 +2248,7 @@ bindFieldTemps [] body = body
 bindFieldTemps ((CField k _ ex) :: rest) body =
   CLet
     False
-    (PVar (recTempName k) (Loc "" 0 0 0 0))
+    (PVar (recTempName k) (Loc "" 0 0 0 0) noBinderId)
     ex
     (bindFieldTemps rest body)
 
@@ -2255,7 +2256,7 @@ bindUpdateTemps : List CField -> CExpr -> CExpr -> CExpr
 bindUpdateTemps fields body base =
   CLet
     False
-    (PVar updateBaseTemp (Loc "" 0 0 0 0))
+    (PVar updateBaseTemp (Loc "" 0 0 0 0) noBinderId)
     base
     (bindFieldTemps fields body)
 
@@ -2703,7 +2704,7 @@ lgToBind sites ((n, _), cs) = match omLookup n sites
 -- name -> the site of its first clause, over the decls `funClausesOf` reads.
 bindSites : List Decl -> OrdMap Loc -> OrdMap Loc
 bindSites [] acc = acc
-bindSites ((DFunDef _ n _ _ site) :: rest) acc =
+bindSites ((DFunDef _ n _ _ site _) :: rest) acc =
   bindSites rest (firstSite n site acc)
 bindSites ((DLetGroup _ binds) :: rest) acc =
   bindSites rest (letBindSites binds acc)
@@ -2712,7 +2713,7 @@ bindSites (_ :: rest) acc = bindSites rest acc
 
 letBindSites : List LetBind -> OrdMap Loc -> OrdMap Loc
 letBindSites [] acc = acc
-letBindSites ((LetBind n _ site) :: rest) acc =
+letBindSites ((LetBind n _ site _) :: rest) acc =
   letBindSites rest (firstSite n site acc)
 
 firstSite : String -> Loc -> OrdMap Loc -> OrdMap Loc
@@ -3209,7 +3210,7 @@ lowerInheritedDefault disp reqCounts arities dt o ifaceName (IfaceMethod mname _
   let receiver = "$dict_\{mname}_\{intToString nMethodDicts}"
   let params =
     take nMethodDicts pats
-      ++ [PVar receiver (Loc "" 0 0 0 0)]
+      ++ [PVar receiver (Loc "" 0 0 0 0) noBinderId]
       ++ drop nMethodDicts pats
       ++ lamParams body
   let lowered = lower (underLam body)
@@ -3452,7 +3453,7 @@ declaredArityOr arities ifaceWord mname pats =
 -- the leading `$dict_*` parameters dict-passing prepended to a default's clause
 export
 leadingDictParams : List Pat -> Int
-leadingDictParams ((PVar x _) :: rest) =
+leadingDictParams ((PVar x _ _) :: rest) =
   if startsWith "$dict" x then 1 + leadingDictParams rest else 0
 leadingDictParams _ = 0
 
@@ -3929,7 +3930,7 @@ tyIsFunReturningSelf _ _ = False
 
 funClausesOf : List Decl -> List (String, CClause)
 funClausesOf [] = []
-funClausesOf ((DFunDef _ n pats body _) :: rest) =
+funClausesOf ((DFunDef _ n pats body _ _) :: rest) =
   (n, CClause pats (lower body)) :: funClausesOf rest
 -- Top-level `let rec … with …` (DLetGroup): flatten each binding's clauses
 -- into (name, CClause) entries, mirroring eval.mdk's funDefs/letGroupDefs.
@@ -3940,7 +3941,7 @@ funClausesOf (_ :: rest) = funClausesOf rest
 
 letGroupClausesOf : List LetBind -> List (String, CClause)
 letGroupClausesOf [] = []
-letGroupClausesOf ((LetBind n clauses _) :: rest) =
+letGroupClausesOf ((LetBind n clauses _ _) :: rest) =
   map (lowerLetBind n) clauses ++ letGroupClausesOf rest
 
 lowerLetBind : String -> FunClause -> (String, CClause)

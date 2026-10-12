@@ -118,7 +118,7 @@ import frontend.parser.{
   Positions,
 }
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
-import frontend.desugar.{desugar}
+import frontend.desugar.{desugar, desugarIn}
 import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
 import driver.loader.{
   LoadError(..),
@@ -1772,7 +1772,7 @@ namesUserBinding names l = match schemeLineName l
 topLevelNames : List Decl -> List String
 topLevelNames [] = []
 topLevelNames ((DAttrib _ d) :: rest) = topLevelNames [d] ++ topLevelNames rest
-topLevelNames ((DFunDef _ n _ _ _) :: rest) = n :: topLevelNames rest
+topLevelNames ((DFunDef _ n _ _ _ _) :: rest) = n :: topLevelNames rest
 topLevelNames ((DTypeSig _ n _ _) :: rest) = n :: topLevelNames rest
 topLevelNames ((DExtern _ n _) :: rest) = n :: topLevelNames rest
 topLevelNames ((DLetGroup _ binds) :: rest) =
@@ -1780,7 +1780,7 @@ topLevelNames ((DLetGroup _ binds) :: rest) =
 topLevelNames (_ :: rest) = topLevelNames rest
 
 letBindName : LetBind -> String
-letBindName (LetBind n _ _) = n
+letBindName (LetBind n _ _ _) = n
 
 -- Re-render warning Diags LOCATED (file:L:C: + caret) to STDERR, exactly like
 -- errors (ppDiagCliSrc).  Warnings do not change the exit code (stays 0).
@@ -3325,7 +3325,7 @@ runRunCmd argv =
 -- diagnostic before elaborate/eval.
 
 desugarPair : (String, List Decl) -> (String, List Decl)
-desugarPair (mid, p) = (mid, desugar p)
+desugarPair (mid, p) = (mid, desugarIn mid p)
 
 -- (modId, path, decls) → (modId, path): the per-module file map threaded into the
 -- `run`'s elaborate: one pass to learn `main`'s type, then — for a `main : Async _`

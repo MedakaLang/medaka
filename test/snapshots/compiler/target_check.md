@@ -134,7 +134,7 @@ mainSigLoc (_ :: rest) = mainSigLoc rest
 mainDefLoc : List Decl -> Option Loc
 mainDefLoc [] = None
 mainDefLoc ((DAttrib _ d) :: rest) = mainDefLoc (d :: rest)
-mainDefLoc ((DFunDef _ "main" _ _ l) :: _) = Some l
+mainDefLoc ((DFunDef _ "main" _ _ l _) :: _) = Some l
 mainDefLoc (_ :: rest) = mainDefLoc rest
 
 firstOr : String -> List String -> String
@@ -175,7 +175,7 @@ firstOr _ (x :: _) = x
 (DTypeSig false "mainDefLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "mainDefLoc" ((PList)) (EVar "None"))
 (DFunDef false "mainDefLoc" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "mainDefLoc") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "mainDefLoc" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) PWild PWild (PVar "l")) PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "mainDefLoc" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) PWild PWild (PVar "l") PWild) PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "mainDefLoc" ((PCons PWild (PVar "rest"))) (EApp (EVar "mainDefLoc") (EVar "rest")))
 (DTypeSig false "firstOr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "firstOr" ((PVar "d") (PList)) (EVar "d"))
@@ -215,7 +215,7 @@ firstOr _ (x :: _) = x
 (DTypeSig false "mainDefLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Loc"))))
 (DFunDef false "mainDefLoc" ((PList)) (EVar "None"))
 (DFunDef false "mainDefLoc" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "mainDefLoc") (EBinOp "::" (EVar "d") (EVar "rest"))))
-(DFunDef false "mainDefLoc" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) PWild PWild (PVar "l")) PWild)) (EApp (EVar "Some") (EVar "l")))
+(DFunDef false "mainDefLoc" ((PCons (PCon "DFunDef" PWild (PLit (LString "main")) PWild PWild (PVar "l") PWild) PWild)) (EApp (EVar "Some") (EVar "l")))
 (DFunDef false "mainDefLoc" ((PCons PWild (PVar "rest"))) (EApp (EVar "mainDefLoc") (EVar "rest")))
 (DTypeSig false "firstOr" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "firstOr" ((PVar "d") (PList)) (EVar "d"))
