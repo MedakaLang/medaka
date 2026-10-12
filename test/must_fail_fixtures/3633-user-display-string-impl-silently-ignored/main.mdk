@@ -1,4 +1,0 @@
-impl Display String where
-  display s = "../" ++ s
-
-main = println "\{"x"}"

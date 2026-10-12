@@ -139,7 +139,7 @@ SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 # Every partition imports from runtime/medaka_rt.c, so anything that changes that
 # file's summary hash changes every partition's cache key. The three build-provenance
 # stamps are the standing instance: they change on every compiler edit, so they live
-# in a generated three-line provenance.c compiled WITHOUT -flto (see stage B) and
+# in a generated provenance.c compiled WITHOUT -flto (see stage B) and
 # medaka_rt.c stays byte-identical across builds. Measured on identical partitions
 # and one edit, varying only the fingerprint: unchanged — 4s, 5 entries written, 68
 # reused; changed — 23s, 73 written, 0 reused. Moving medaka_rt.c itself out of the
@@ -522,6 +522,47 @@ if command -v git >/dev/null 2>&1 && [ -e "$ROOT/.git" ]; then
 fi
 BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
 
+# ---- Resolve GC flags ----------------------------------------------------------
+# Same order and the same archive choice as detectGC in compiler/driver/build_cmd.mdk:
+# GC_PREFIX, then pkg-config, then brew, then a bare -lgc probe. An install that
+# ships libgc.a links the archive, so the linker resolves libgc's thread-local
+# free-list lookup and its internal calls directly instead of through the PLT and
+# __tls_get_addr, a cost every allocation pays (#503). The archive is taken only if
+# a probe program links against it; one that cannot be linked (non-PIC, or built
+# for another toolchain's LTO) keeps `-lgc`. GC_LINK records which was chosen and
+# is part of both build-cache keys below. Resolved here, before the cache lookup;
+# a host with no libgc at all exits 2 now rather than after the cold bootstrap.
+GC_ARCHIVE=""
+GC_ARCHIVE_LIBS=""
+if [ -n "${GC_PREFIX:-}" ]; then
+  if [ ! -f "$GC_PREFIX/include/gc.h" ]; then
+    echo "libgc (bdw-gc) not found under GC_PREFIX=$GC_PREFIX — skipping"; exit 2
+  fi
+  GC_CFLAGS="-I$GC_PREFIX/include"; GC_LIBS="-L$GC_PREFIX/lib -lgc"
+  GC_ARCHIVE="$GC_PREFIX/lib/libgc.a"; GC_ARCHIVE_LIBS="$GC_ARCHIVE"
+elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
+  GC_CFLAGS="$(pkg-config --cflags bdw-gc)"; GC_LIBS="$(pkg-config --libs bdw-gc)"
+  GC_ARCHIVE="$(pkg-config --variable=libdir bdw-gc)/libgc.a"
+  for _t in $(pkg-config --static --libs bdw-gc); do
+    [ "$_t" = "-lgc" ] && _t="$GC_ARCHIVE"
+    GC_ARCHIVE_LIBS="$GC_ARCHIVE_LIBS $_t"
+  done
+elif GC_BREW="$(brew --prefix bdw-gc 2>/dev/null)" && [ -n "$GC_BREW" ] && [ -f "$GC_BREW/include/gc.h" ]; then
+  GC_CFLAGS="-I$GC_BREW/include"; GC_LIBS="-L$GC_BREW/lib -lgc"
+  GC_ARCHIVE="$GC_BREW/lib/libgc.a"; GC_ARCHIVE_LIBS="$GC_ARCHIVE"
+elif printf '#include <gc.h>\nint main(void){return 0;}\n' | "$CC" -x c - -lgc -o /dev/null 2>/dev/null; then
+  GC_CFLAGS=""; GC_LIBS="-lgc"
+else
+  echo "libgc (bdw-gc) not found — skipping (opt-in; install bdw-gc or set GC_PREFIX)"; exit 2
+fi
+GC_LINK="shared"
+if [ -n "$GC_ARCHIVE" ] && [ -f "$GC_ARCHIVE" ] \
+   && printf '#include <gc.h>\nint main(void){GC_INIT();return GC_MALLOC(16)==0;}\n' \
+      | "$CC" -pthread $GC_CFLAGS -x c - -x none $GC_ARCHIVE_LIBS -o /dev/null 2>/dev/null; then
+  GC_LIBS="$GC_ARCHIVE_LIBS"
+  GC_LINK="static"
+fi
+
 # ---- BUILD CACHE: a binary another tree already built, keyed on its provenance ---
 # (issue #2683.) A fresh worktree at a commit some other tree has already built pays a
 # file copy instead of the ~350 s cold bootstrap. The cache is a pure ACCELERATOR: on
@@ -542,6 +583,10 @@ BUILD_DATE="$(date -u +%Y-%m-%d 2>/dev/null)"
 #     comparing one binary to itself. Both links take the path now, so both keys
 #     carry it; the CLI key's former literal `plain` tag described a CLI link that
 #     no longer exists.
+#   * $GC_LINK, on BOTH keys — whether libgc was linked from its archive or as a
+#     shared library. FP_FULL and FP_COMPILER cover neither this script nor the
+#     install it found, so without it a cache would serve a static binary to a
+#     shared build, or the reverse.
 #   * for the CLI only, $BUILD_COMMIT and $BUILD_DATE, which stage B stamps in
 #     alongside the fingerprint. Two commits can share one
 #     FP_COMPILER (a docs-only commit does), so keying on the fingerprint alone would
@@ -592,12 +637,12 @@ cache_tag() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 # chosen up front: marker-less stage-A IR degrades to thinlto-nomark-1 and produces a
 # different binary, so it must not be stored under the name of a partitioned one.
 emitter_key_for() {
-  printf 'emitter-%s-%s-%s' "$(cache_tag "$FP_FULL")" "$(cache_tag "${EMITTER_OPT:--O2}")" "$(cache_tag "$1")"
+  printf 'emitter-%s-%s-%s-gc%s' "$(cache_tag "$FP_FULL")" "$(cache_tag "${EMITTER_OPT:--O2}")" "$(cache_tag "$1")" "$GC_LINK"
 }
 EMITTER_KEY="$(emitter_key_for "$PCG_MODE")"
 cli_key_for() {
-  printf 'medaka-%s-%s-%s-%s-%s-%s' "$(cache_tag "$FP_COMPILER")" "$(cache_tag "$FP_RUNTIME")" \
-    "$(cache_tag "${CLI_OPT:--O2}")" "$(cache_tag "$1")" "$(cache_tag "$BUILD_COMMIT")" "$(cache_tag "$BUILD_DATE")"
+  printf 'medaka-%s-%s-%s-%s-gc%s-%s-%s' "$(cache_tag "$FP_COMPILER")" "$(cache_tag "$FP_RUNTIME")" \
+    "$(cache_tag "${CLI_OPT:--O2}")" "$(cache_tag "$1")" "$GC_LINK" "$(cache_tag "$BUILD_COMMIT")" "$(cache_tag "$BUILD_DATE")"
 }
 CLI_KEY="$(cli_key_for "$PCG_MODE")"
 
@@ -734,17 +779,6 @@ if [ ! -x "$EMITTER" ]; then
   if [ "$rc" != 0 ] || [ ! -x "$EMITTER" ]; then
     echo "FAIL: cold bootstrap did not produce $EMITTER"; exit 1
   fi
-fi
-
-# ---- Resolve GC flags (clang/libgc already proven present) ----------------------
-if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bdw-gc 2>/dev/null; then
-  GC_CFLAGS="$(pkg-config --cflags bdw-gc)"; GC_LIBS="$(pkg-config --libs bdw-gc)"
-elif GC_PREFIX="$(brew --prefix bdw-gc 2>/dev/null)" && [ -n "$GC_PREFIX" ] && [ -f "$GC_PREFIX/include/gc.h" ]; then
-  GC_CFLAGS="-I$GC_PREFIX/include"; GC_LIBS="-L$GC_PREFIX/lib -lgc"
-elif printf '#include <gc.h>\nint main(void){return 0;}\n' | "$CC" -x c - -lgc -o /dev/null 2>/dev/null; then
-  GC_CFLAGS=""; GC_LIBS="-lgc"
-else
-  echo "libgc (bdw-gc) not found — skipping (opt-in; install bdw-gc or set GC_PREFIX)"; exit 2
 fi
 
 # ---- Resolve section-level dead-code-elim flags (issue #120) --------------------
@@ -942,9 +976,9 @@ emit_graph() {
 # Skip ONLY when the emitter exists AND its stamp says it was built from exactly this
 # compiler source AND runtime source (an up-to-date emitter re-emits byte-identically
 # anyway; runtime/*.c is linked into the emitter binary, so it counts too — issue #182).
-# It does NOT record the codegen path ($PCG_MODE), so flipping MEDAKA_PARALLEL_CODEGEN
-# on an unchanged tree keeps the emitter the OTHER path built; use
-# FORCE_EMITTER_REBUILD=1 when switching paths. (The stamp's content is asserted
+# It does NOT record the codegen path ($PCG_MODE) or the libgc link ($GC_LINK), so
+# flipping MEDAKA_PARALLEL_CODEGEN or GC_PREFIX on an unchanged tree keeps the
+# emitter the OTHER setting built; use FORCE_EMITTER_REBUILD=1 when switching. (The stamp's content is asserted
 # byte-for-byte against a bare fingerprint by .github/actions/setup-medaka/action.yml,
 # so it cannot carry a second field without that assertion moving in lockstep.)
 # A build-cache hit above already wrote $SRC_STAMP, so it lands in this same skip arm.
@@ -1110,20 +1144,25 @@ else
   # partially-written $OUT, only last-writer-wins on which COMPLETE build stuck.
   OUT_NEW="$OUT.new.$$"
   rm -f "$OUT_NEW"
-  # PROVENANCE OBJECT: the three stamps live in their OWN translation unit, built
+  # PROVENANCE OBJECT: the stamps live in their OWN translation unit, built
   # here and linked into ./medaka alone. runtime/medaka_rt.c declares them weak and
-  # empty, so every other consumer of that file — stage A, bootstrap_from_seed.sh,
-  # selfcompile_fixpoint.sh, build_cmd.mdk's rt.o for user builds — links no
-  # provenance object and reads "", which is the contract those paths already had.
+  # empty (the heap size weak 0), so every other consumer of that file — stage A,
+  # bootstrap_from_seed.sh, selfcompile_fixpoint.sh, build_cmd.mdk's rt.o for user
+  # builds — links no provenance object and reads "" / 0, the contract those paths
+  # already had.
   #
   # It is compiled WITHOUT -flto for the reason the whole codegen path exists: these
-  # three strings change on every compiler edit, and anything inside the LTO unit
+  # stamps change on every compiler edit, and anything inside the LTO unit
   # that changes puts a fresh ThinLTO cache key on every partition importing it.
   # medaka_rt.c stays in the LTO unit (taking it out cost ~7.7% of interpreter
-  # runtime); only this three-line file leaves. See "PARALLEL CODEGEN" above.
+  # runtime); only this generated file leaves. See "PARALLEL CODEGEN" above.
   PROV_C="$WORK/provenance.c"
   PROV_O="$WORK/provenance.o"
-  printf 'const char mdk_build_fingerprint_str[] = "%s";\nconst char mdk_build_commit_str[] = "%s";\nconst char mdk_build_date_str[] = "%s";\n' \
+  # The fourth line is the compiler-only GC heap pre-expansion (runtime/medaka_rt.c
+  # mdk_gc_init). 128 MiB: measured on this box, the trivial `check` and parser.mdk
+  # `check` CPU drop ~20-30% at 128M-256M, while 16M-32M leave most of it behind.
+  # Only ./medaka carries this; user programs and the emitter stay at the weak 0.
+  printf 'const char mdk_build_fingerprint_str[] = "%s";\nconst char mdk_build_commit_str[] = "%s";\nconst char mdk_build_date_str[] = "%s";\nconst long long mdk_gc_initial_heap_bytes = 134217728;\n' \
     "$FP_COMPILER" "$BUILD_COMMIT" "$BUILD_DATE" > "$PROV_C"
   if ! "$CC" -c -O2 $GC_SECTION_CFLAGS "$PROV_C" -o "$PROV_O" 2>"$WORK/prov.err"; then
     rm -f "$OUT_NEW"

@@ -159,7 +159,7 @@ EOF
 nosup_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/mono_bad.mdk" 2>/dev/null)"
 nosup_code=$?
 case "$nosup_out" in
-  *'requires the superinterface `impl Semigroup Color`, which is missing'*)
+  *'requires the superinterface `Semigroup Color`, which no impl covers'*)
     if [ "$nosup_code" -eq 1 ]; then pass=$((pass+1)); printf 'ok   super-xmod/reject (no super anywhere still rejected)\n'
     else fail=$((fail+1)); printf 'FAIL super-xmod/reject (rejected but exit %d)\n' "$nosup_code"; fi ;;
   *) fail=$((fail+1)); printf 'FAIL super-xmod/reject (under-rejection regressed: [%s])\n' "$nosup_out" ;;
@@ -2725,7 +2725,7 @@ EOF
 sa3b_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3b/main.mdk" 2>&1)"
 sa3b_code=$?
 case "$sa3b_out" in
-  *"requires the superinterface \`impl Sup W\`, which is missing"*)
+  *"requires the superinterface \`Sup W\`, which no impl covers"*)
     if [ "$sa3b_code" -eq 1 ]; then
       pass=$((pass+1)); printf 'ok   SA-3/super-absent-rejects (the check can still fail — Module arm)\n'
     else
@@ -2752,7 +2752,7 @@ EOF
 sa3f_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3flat.mdk" 2>&1)"
 sa3f_code=$?
 case "$sa3f_out" in
-  *"requires the superinterface \`impl Sup W\`, which is missing"*)
+  *"requires the superinterface \`Sup W\`, which no impl covers"*)
     if [ "$sa3f_code" -eq 1 ]; then
       pass=$((pass+1)); printf 'ok   SA-3/flat-super-absent (the check can still fail — Flat arm)\n'
     else
@@ -2786,7 +2786,7 @@ EOF
 sa3d_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/sa3d/main.mdk" 2>&1)"
 sa3d_code=$?
 case "$sa3d_out" in
-  *"requires the superinterface \`impl Sup W\`, which is missing"*)
+  *"requires the superinterface \`Sup W\`, which no impl covers"*)
     if [ "$sa3d_code" -eq 1 ]; then
       pass=$((pass+1)); printf 'ok   SA-3/same-spelled-super (identity decides; the spelling does not)\n'
     else

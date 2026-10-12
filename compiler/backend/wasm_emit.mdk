@@ -409,6 +409,9 @@ data WasmEmit = WasmEmit {
   currentBinding : Ref String,
   stringSegments : Ref (List (Int, List Int)),
   nextStringSegmentId : Ref Int,
+  -- the segment of each distinct literal payload, keyed by `strSegKey` (an OrdMap,
+  -- so a lookup is O(log n)).  `freshStrSeg` consults it before allocating.
+  strSegIds : Ref (OrdMap Int),
   trmcCtx : Ref WTrmcCtx,
   nextLambdaId : Ref Int,
   liftedDefinitions : Ref (List (List String)),
@@ -432,6 +435,12 @@ data WasmEmit = WasmEmit {
   siteFileNums : Ref (OrdMap Int),
   siteRtUsed : Ref Bool,
   siteNonexhUsed : Ref Bool,
+  -- coded trap texts: one `$trapmsg_K` helper per DISTINCT text, numbered in
+  -- first-use order.  `trapMsgIds` maps a text to its number (an OrdMap, so a
+  -- lookup is O(log n)); `trapMsgFns` holds the helper definitions latest-first.
+  -- See `trapMsgCall`.
+  trapMsgIds : Ref (OrdMap Int),
+  trapMsgFns : Ref (List String),
   -- the first-clause site of the function whose clauses are being emitted
   clauseSite : Ref Int,
   -- the checked `Int` operators and `Int` shifts this emission called, by helper
@@ -498,6 +507,7 @@ freshWasmEmit mode = WasmEmit {
   currentBinding = Ref "?",
   stringSegments = Ref [],
   nextStringSegmentId = Ref 0,
+  strSegIds = Ref omEmpty,
   trmcCtx = Ref WTrmcOff,
   nextLambdaId = Ref 0,
   liftedDefinitions = Ref [],
@@ -513,6 +523,8 @@ freshWasmEmit mode = WasmEmit {
   siteFileNums = Ref omEmpty,
   siteRtUsed = Ref False,
   siteNonexhUsed = Ref False,
+  trapMsgIds = Ref omEmpty,
+  trapMsgFns = Ref [],
   clauseSite = Ref 0,
   intRtUsed = Ref [],
   useEPut = Ref False,
@@ -991,13 +1003,10 @@ canonFn prog n =
 -- (intToString/charToStr/stringConcat/…) — any of which forces the §3.3 `$str`
 -- aggregate + the byte-write runtime into the module (and ref-mode, since a String
 -- is a boxed (ref eq) value).  `WasmEmit.stringSegments` accumulates the passive data
--- segments for string literals (one `(data $strseg_N "…")` per literal OCCURRENCE — #383:
--- `freshStrSeg` allocates a fresh segment id on every call with no dedup by content,
--- so the SAME literal appearing twice in source gets two segments; "per distinct
--- literal" was aspirational, not what `freshStrSeg`/`emitLitRef emit (LString s)`
--- actually do — init'd via `array.new_data`, the §11-preferred non-const-array
--- scheme). Both segment state and `useStr` itself belong to each fresh `WasmEmit`
--- record (a `Ref Bool` field, not an ambient cell).
+-- segments for string literals: one `(data $strseg_N "…")` per DISTINCT byte payload
+-- (`freshStrSeg` interns by content), init'd via `array.new_data`, the
+-- §11-preferred non-const-array scheme. Both segment state and `useStr` itself belong
+-- to each fresh `WasmEmit` record (a `Ref Bool` field, not an ambient cell).
 -- ── gap census (mirrors LLVM's per-emission gap recording) ───────────────────
 -- The WasmGC emitter normally `panic`s at the first node it can't lower (`gap`).
 -- In CENSUS mode the gap helpers instead RECORD the reason and return a
@@ -1216,13 +1225,28 @@ containsInt : Int -> List Int -> Bool
 containsInt _ [] = False
 containsInt x (y :: ys) = x == y || containsInt x ys
 
--- intern a literal's bytes as a fresh passive data segment; returns its index.
+-- intern a literal's bytes as a passive data segment; returns its index.  A payload
+-- seen before reuses its segment: `array.new_data` copies out of the segment, so
+-- sharing one is invisible to the program.  The codepoint count is not stored with
+-- the segment; `emitLitRef` derives it from the literal, and it is a function of the
+-- bytes.
 freshStrSeg : WasmEmit -> List Int -> Int
 freshStrSeg emit bytes =
-  let i = !emit.nextStringSegmentId
-  let _ = setRef emit.nextStringSegmentId (i + 1)
-  let _ = setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)
-  i
+  let key = strSegKey bytes
+  match omLookup key !emit.strSegIds
+    Some i => i
+    None =>
+      let i = !emit.nextStringSegmentId
+      let _ = setRef emit.nextStringSegmentId (i + 1)
+      let _ = setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)
+      let _ = setRef emit.strSegIds (omInsert key i !emit.strSegIds)
+      i
+
+-- the `strSegIds` key of a payload: its byte values, comma-separated.  Distinct byte
+-- lists give distinct keys (a comma follows every value but the last, and only the
+-- empty list spells as "").
+strSegKey : List Int -> String
+strSegKey bytes = joinWith "," (map intToString bytes)
 
 freshLamId : WasmEmit -> Int
 freshLamId emit =
@@ -2521,6 +2545,7 @@ emitScalarProgram emit fnNames valNames groups =
   let trapIntRt = if !emit.trapIntNeeded then trapIntRuntimeLines else []
   let intRt = intRuntimeLines !emit.intRtUsed
   let siteRt = siteRuntimeOf emit
+  let trapMsgRt = trapMsgRuntimeOf emit
   joinNl
     (header
       ++ trapImport
@@ -2531,6 +2556,7 @@ emitScalarProgram emit fnNames valNames groups =
       ++ intRt
       ++ siteRt
       ++ initLines
+      ++ trapMsgRt
       ++ [")"])
 
 oneGlobalI32 : String -> String
@@ -3230,6 +3256,9 @@ emitRefProgram prog groups =
   -- the same reason `trapImport` and `dataSegs` are; their LINES are placed with the
   -- other globals below, which the text format permits independently of binding order.
   let constClosGlobals = wConstClosGlobalLines (progEmit prog)
+  -- the `$trapmsg_K` helpers, bound last of all: every coded trap they hold was
+  -- interned during the body emission above.
+  let trapMsgRt = trapMsgRuntimeOf (progEmit prog)
   joinNl
     (header
       ++ typeSection
@@ -3279,12 +3308,13 @@ emitRefProgram prog groups =
       ++ dataSegs
       ++ forceFns
       ++ initLines
+      ++ trapMsgRt
       ++ [")"])
 
 -- the passive data segments for string literals — one `(data $strseg_N "…")` per
--- literal OCCURRENCE (#383: no content-dedup, see the `useStr` section above for
--- the correction), emitted in segment-index order.  `array.new_data` reads from
--- these (the §11-preferred non-const-array init scheme; no active memory needed).
+-- distinct payload (`freshStrSeg`), emitted in segment-index order.  `array.new_data`
+-- reads from these (the §11-preferred non-const-array init scheme; no active memory
+-- needed).
 emitDataSegs : WasmEmit -> List String
 emitDataSegs emit =
   let segs = sortSegsByIdx (reverseL !emit.stringSegments)
@@ -3679,11 +3709,11 @@ emitRefForceFn prog (CBind name [CClause [] body] _) =
       ("  " ++ _)
       (w7LocalDecls (w7ScopeClose (progEmit prog) w7Outer) maxDepth)
   let cyclic =
-    wasmTrap
+    wasmTrapNamed
       (progEmit prog)
       "E-CYCLIC-VALUE"
-      (name
-        ++ " refers to itself during initialization (non-productive cyclic value)")
+      name
+      " refers to itself during initialization (non-productive cyclic value)\n"
   let unforced =
     ["    i32.const 1", "    global.set $gs_" ++ g]
       ++ indent instrs
@@ -4076,7 +4106,7 @@ emitRefFnBind prog (CBind name clauses bindLoc) =
   let _ =
     setRef (progEmit prog).numPolyLocals (numPolyParamNames prog name clauses)
   let arity = clauseArityOf clauses
-  let params = synthParams arity
+  let params = clauseParamNames clauses arity
   -- Stage-2/3 (b′): a member of a detected dispatch-TMC group emits via the dest-passing
   -- reset-wrapper (root) / inner-loop or redirected-leaf member path.  The group takes
   -- PRECEDENCE over Stage-1: a group root like the lexer's `layout` is Stage-1-eligible
@@ -4149,6 +4179,31 @@ emitRefFnBind prog (CBind name clauses bindLoc) =
 synthParams : Int -> List String
 synthParams n = map (i => "__wparg" ++ intToString i) (rangeList 0 n)
 
+-- wasm param names for a clause group.  A single clause whose params are all plain and
+-- whose body has no guard fallthrough takes the fast path (emitClausesRefEnv and the
+-- TRMC loop): a PVar param is named by its source variable, so the body reads the wasm
+-- param directly and no `local.get $__wparg<i>; local.set $x` copy is emitted.  The
+-- source name is kept only when it is not `__`-prefixed (scratch locals), is bound once
+-- in the head, and is not bound again by a local of the body (a shadowing binder would
+-- otherwise share the param's own wasm local).  Every other param keeps its positional
+-- `__wparg<i>` name (a PWild, a shadowed name, or any param of a multi-clause group).
+clauseParamNames : List CClause -> Int -> List String
+clauseParamNames [CClause pats body] arity =
+  if allPlainParams pats && not (exprHasFallthrough body) then
+    headParamNames pats (collectExprLocals body) 0
+  else
+    synthParams arity
+clauseParamNames _ arity = synthParams arity
+
+headParamNames : List Pat -> List String -> Int -> List String
+headParamNames [] _ _ = []
+headParamNames (p :: ps) inner i =
+  let name = "__wparg" ++ intToString i
+  let chosen = match p
+    PVar x _ => if startsWith "__" x || contains x inner then name else x
+    _ => name
+  chosen :: headParamNames ps inner (i + 1)
+
 -- emit the clause chain.  Single all-PVar clause: rename its params to the synthetic
 -- positions (so the body env binds them) and tail-emit.  Otherwise: a fallthrough
 -- chain of guarded blocks.
@@ -4210,15 +4265,17 @@ stmtHasFallthrough (CSExpr e) = exprHasFallthrough e
 stmtHasFallthrough (CSLet _ _ e) = exprHasFallthrough e
 stmtHasFallthrough (CSAssign _ e) = exprHasFallthrough e
 
--- when the single clause's params are plain PVars, alias each to the synthetic
--- positional wasm param ($a<i>): `local.get $a<i>; local.set $<srcname>`.  (The
+-- when the single clause's params are plain PVars, alias each to its wasm param:
+-- `local.get $<param>; local.set $<srcname>`.  A PVar already named by its source
+-- variable (clauseParamNames) IS its own wasm param, so no copy is emitted.  (The
 -- source names are declared as locals via clauseLocals.)
 bindParamAliases : Prog -> List Pat -> List String -> List String
 bindParamAliases prog pats params =
   flatMap (aliasOne prog) (zipPats pats params)
 
 aliasOne : Prog -> (Pat, String) -> List String
-aliasOne _ (PVar x _, a) = ["local.get $" ++ gname a, "local.set $" ++ gname x]
+aliasOne _ (PVar x _, a) =
+  if x == a then [] else ["local.get $" ++ gname a, "local.set $" ++ gname x]
 aliasOne _ (PWild, _) = []
 aliasOne prog _ = gapLP prog "ref-mode: non-plain param in fast-path alias"
 
@@ -6481,12 +6538,50 @@ trapByteInstr b = ["i32.const " ++ intToString b, "call $mdk_write_err_byte"]
 wasmTrapBytes : WasmEmit -> String -> List String
 wasmTrapBytes emit text =
   let _ = setRef emit.trapImportNeeded True
-  flatMap trapByteInstr (strBytesW text)
+  if text == "" then [] else trapMsgCall emit text
+
+-- Stream the coded-trap text [text] by calling its `$trapmsg_K` helper.  The
+-- helper holds the unrolled byte-writes once per DISTINCT text, so a message repeated
+-- at many trap sites costs one body plus a call per site.  The helper takes and
+-- leaves nothing, so the `call` is stack-neutral exactly as the pairs were; the
+-- caller still supplies any `unreachable`.  Helper bodies are assembled by
+-- `trapMsgRuntimeOf`, after every body emission (see the module assembly).
+trapMsgCall : WasmEmit -> String -> List String
+trapMsgCall emit text = match omLookup text !emit.trapMsgIds
+  Some k => ["call $trapmsg_" ++ intToString k]
+  None =>
+    let k = omSize !emit.trapMsgIds
+    let _ = setRef emit.trapMsgIds (omInsert text k !emit.trapMsgIds)
+    let def =
+      ["  (func $trapmsg_" ++ intToString k]
+        ++ map ("    " ++ _) (flatMap trapByteInstr (strBytesW text))
+        ++ ["  )"]
+    let _ = setRef emit.trapMsgFns (reverseL def ++ !emit.trapMsgFns)
+    ["call $trapmsg_" ++ intToString k]
+
+-- the `$trapmsg_K` helper definitions this emission made, in number order.
+trapMsgRuntimeOf : WasmEmit -> List String
+trapMsgRuntimeOf emit = reverseL !emit.trapMsgFns
 
 -- a full coded trap with a compile-time-fixed message (div/mod/OOB/non-exhaustive).
 wasmTrap : WasmEmit -> String -> String -> List String
 wasmTrap emit code msg =
   wasmTrapBytes emit "runtime error [\{code}]: \{msg}\n" ++ ["unreachable"]
+
+-- a coded trap whose message is the fixed prefix, then `name`, then the fixed
+-- `after` (which ends in its newline).  The prefix and `after` are interned like
+-- any fixed text, so sites that differ only in `name` share their two helpers and
+-- only the name bytes are unrolled at the site.  `name` is an identifier known at
+-- emission; the stderr bytes are the same as the whole message spelled out.  The name
+-- bytes call the error-byte import themselves, so the import flag is set here rather
+-- than left to the interned prefix.
+wasmTrapNamed : WasmEmit -> String -> String -> String -> List String
+wasmTrapNamed emit code name after =
+  let _ = setRef emit.trapImportNeeded True
+  wasmTrapBytes emit "runtime error [\{code}]: "
+    ++ flatMap trapByteInstr (strBytesW name)
+    ++ wasmTrapBytes emit after
+    ++ ["unreachable"]
 
 -- #1787: a coded trap whose message carries a RUNTIME number -- the fixed bytes
 -- either side of it are still streamed unrolled, and the value itself goes through
@@ -8713,7 +8808,7 @@ emitWasmTrmcCore : Prog ->
   List (String, Int) ->
   List String
 emitWasmTrmcCore prog funcSym self lblRoot arity clauses ctorSet =
-  let params = synthParams arity
+  let params = clauseParamNames clauses arity
   let pslots = map gname params
   let loopLbl = "$tmcloop"
   let exitLbl = "$tmcexit"
@@ -9905,6 +10000,8 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc) =
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let _ = noteFuncRef (progEmit prog) lamName
   let arity = clauseArityOf clauses
+  -- synthetic names: this member also declares its group captures and sibling
+  -- names as locals, so a source-named param could collide with either.
   let params = synthParams arity
   let w7Outer = w7ScopeOpen (progEmit prog)
   let capPrologue = flatMap capLoadAt (zipIdx groupCaps 0)

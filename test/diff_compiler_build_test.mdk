@@ -10,7 +10,9 @@
    Its stderr is dropped. Every build spawn's exit and Err are graded.
 
    Proves: every fixture builds through the native driver and its binary emits
-   the committed golden stdout.
+   the committed golden stdout; and a second test proves a GC_PREFIX holding
+   libgc.a beside the shared library links it statically while one holding
+   only the shared library does not.
    Does NOT prove: that the goldens are right (they are hand-reviewed, and are
    never written by this test), nor OCaml-oracle parity.
    Needs clang and libgc. Build and run each fixture in one batch, at
@@ -18,11 +20,21 @@
 
 import test_process.{medakaBin, medakaRoot, underRoot, withScratchDir, testJobs}
 import test.{
-  Expectation, expectAll, expectAtLeast, expectEqual, expectNoFindings, fail
+  Expectation,
+  expectAll,
+  expectAtLeast,
+  expectEach,
+  expectEqual,
+  expectNoFindings,
+  expectOkThen,
+  expectSatisfies,
+  fail,
 }
-import fs.{fixtureFiles}
+import fs.{fixtureFiles, mkdirAll}
 import io.{getEnvOr}
-import string.{contains, startsWith, stripSuffix, take, replaceAll}
+import string.{
+  contains, startsWith, stripSuffix, take, replaceAll, trim, words, lines
+}
 import list.{zip}
 
 fixDir : <IO> String
@@ -166,3 +178,137 @@ check = match worklist
 
 test "diff_compiler_build: native build of every build_diff fixture matches its golden stdout" =
   check
+
+-- ---- libgc linkage -----------------------------------------------------------
+-- `medaka build` links libgc's archive when the install has one and the shared
+-- library otherwise (detectGC, compiler/driver/build_cmd.mdk).  Two GC_PREFIX
+-- trees made from the installed libgc, one holding libgc.a beside the shared
+-- library and one holding only the shared library, must give a binary that
+-- defines GC_malloc and one that imports it.  The first tree has both because
+-- `-lgc` alone already picks an archive that has no shared library beside it.
+-- Losing the archive slows every allocation (#503) while every output stays
+-- the same, so no golden would notice.
+
+gcFixture : <IO> String
+gcFixture = underRoot "test/build_diff_fixtures/comp_list.mdk"
+
+-- The installed libgc as (include dir holding gc.h, lib dir).
+gcInstall : <Exec, IO> Result String (String, String)
+gcInstall = match runCommand "pkg-config" ["--variable=libdir", "bdw-gc"]
+  Ok (0, lib, _) =>
+    match runCommand "pkg-config" ["--variable=includedir", "bdw-gc"]
+      Ok (0, inc, _) => Ok (trim inc, trim lib)
+      Ok (code, _, err) =>
+        Err
+          "pkg-config --variable=includedir exited \{intToString code}: \{err}"
+      Err e => Err "pkg-config: \{e}"
+  _ => match runCommand "brew" ["--prefix", "bdw-gc"]
+    Ok (0, p, _) => Ok ("\{trim p}/include", "\{trim p}/lib")
+    _ => Err "no libgc install found through pkg-config or brew"
+
+-- Symlink each (target, link) pair; the first failure is the error.
+linkAll : List (String, String) -> <Exec, IO> Result String Unit
+linkAll [] = Ok ()
+linkAll ((target, link) :: rest) = match runCommand "ln" ["-s", target, link]
+  Ok (0, _, _) => linkAll rest
+  Ok (code, _, err) =>
+    Err "ln -s \{target} \{link} exited \{intToString code}: \{err}"
+  Err e => Err "ln: \{e}"
+
+-- A GC_PREFIX tree at dir whose include links to the installed headers and whose
+-- lib holds links to whichever of names the installed lib dir has, at least one
+-- of them from `required`.
+gcPrefix : String ->
+  String ->
+  String ->
+  List String ->
+  List String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+gcPrefix dir inc lib required names =
+  let present = filter (n => fileExists "\{lib}/\{n}") names
+  if not (any (n => elem n present) required) then
+    Err "none of \{debug required} is installed in \{lib}"
+  else match mkdirAll "\{dir}/lib"
+    Err e => Err "could not make \{dir}/lib: \{e}"
+    Ok _ =>
+      let links =
+        (inc, "\{dir}/include")
+          :: map (n => ("\{lib}/\{n}", "\{dir}/lib/\{n}")) present
+      map (_ => dir) (linkAll links)
+
+-- The type letter `nm -P` gives GC_malloc ("T" defined, "U" imported), or "".
+gcMallocType : List String -> String
+gcMallocType [] = ""
+gcMallocType (l :: rest) = match words l
+  name :: ty :: _ =>
+    if name == "GC_malloc" || name == "_GC_malloc" then
+      ty
+    else
+      gcMallocType rest
+  _ => gcMallocType rest
+
+-- Build the fixture with GC_PREFIX=prefix into bin, check it prints its golden,
+-- and return the type nm gives GC_malloc in it.
+gcBuildType : String ->
+  String ->
+  <Exec, IO, FileRead, FileWrite> Result String String
+gcBuildType bin prefix =
+  let root = medakaRoot
+  let emitter = getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
+  let src = gcFixture
+  let argv = "GC_PREFIX=\{prefix}" :: buildArgv root emitter bin src medakaBin
+  match runCommand "env" argv
+    Err e => Err "medaka build could not run: \{e}"
+    Ok (bc, _, berr) =>
+      if bc /= 0 then
+        Err "medaka build exited \{intToString bc}: \{take 300 berr}"
+      else
+        gcRunAndInspect bin src
+
+gcRunAndInspect : String -> String -> <Exec, IO, FileRead> Result String String
+gcRunAndInspect bin src = match (runCommand bin [], readFile (goldenOf src))
+  (Err e, _) => Err "\{bin} could not run: \{e}"
+  (_, Err e) => Err "no golden for \{src}: \{e}"
+  (Ok (_, out, _), Ok want) =>
+    if not (sameModuloNl out want) then
+      Err "\{bin} printed \{take 200 out}, expected \{take 200 want}"
+    else match runCommand "nm" ["-P", bin]
+      Ok (0, syms, _) => Ok (gcMallocType (lines syms))
+      Ok (code, _, err) => Err "nm -P exited \{intToString code}: \{err}"
+      Err e => Err "nm: \{e}"
+
+gcLinkCheck : <Exec, IO, FileRead, FileWrite> Expectation
+gcLinkCheck = match gcInstall
+  Err e => fail e
+  Ok (inc, lib) => withScratchDir (dir => match (
+    gcPrefix
+      "\{dir}/static"
+      inc
+      lib
+      ["libgc.a"]
+      ["libgc.a", "libgc.so", "libgc.dylib"],
+    gcPrefix
+      "\{dir}/shared"
+      inc
+      lib
+      ["libgc.so", "libgc.dylib"]
+      ["libgc.so", "libgc.dylib"],
+  )
+    (Err e, _) => fail "archive-and-shared GC_PREFIX: \{e}"
+    (_, Err e) => fail "shared-only GC_PREFIX: \{e}"
+    (Ok st, Ok sh) => expectEach [
+      (
+        "archive-and-shared GC_PREFIX",
+        expectOkThen
+          (expectSatisfies "GC_malloc defined in the binary" (t =>
+            t == "T" || t == "t"))
+          (gcBuildType "\{dir}/static.bin" st),
+      ),
+      (
+        "shared-only GC_PREFIX",
+        expectOkThen (expectEqual "U") (gcBuildType "\{dir}/shared.bin" sh),
+      ),
+    ])
+
+test "diff_compiler_build: libgc links from its archive when the prefix has one, else shared" =
+  gcLinkCheck

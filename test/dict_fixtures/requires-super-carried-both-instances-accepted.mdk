@@ -1,0 +1,27 @@
+-- §6.1.4 pt 4, R-SUPER-CARRY (#4010), the positive half: with `Show2 Bool` declared, the
+-- carried `Show2 a` is satisfied at both calls, and each runs its own instance: `suptisub`
+-- then `suptbsub` on every engine.  The built binary used to segfault (rc 139).
+interface Show2 t where
+  show2 : t -> String
+impl Show2 Int where
+  show2 _ = "i"
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+data Two a = Two a
+impl Sup (Box a) where
+  sup _ = "sup"
+impl Sup (Box (Two a)) requires Show2 a where
+  sup (Box (Two x)) = "supt" ++ show2 x
+impl Sub (Box a) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+impl Show2 Bool where
+  show2 _ = "b"
+f x = useSup (Box (Two x))
+main =
+  println (f (1 : Int))
+  println (f True)

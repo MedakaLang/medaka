@@ -195,6 +195,21 @@ inlang-backend-extern-catalog-test:
 inlang-backend-core-validate-test:
 	./medaka test compiler/backend/core_validate_test.mdk
 
+## Coded-trap helpers of wasm_emit.mdk: one `$trapmsg_K` per distinct fixed text,
+## graded against the spec's stderr lines.
+inlang-backend-wasm-emit-trapmsg-test:
+	./medaka test compiler/backend/wasm_emit_trapmsg_test.mdk
+
+## Source-named wasm params of wasm_emit.mdk: a single all-PVar clause binds no
+## `__wparg` copy; multi-clause and wildcard params stay positional.
+inlang-backend-wasm-emit-paramname-test:
+	./medaka test compiler/backend/wasm_emit_paramname_test.mdk
+
+## String-literal segments of wasm_emit.mdk: one `(data $strseg_N)` per distinct
+## payload, shared by every site that spells the same bytes.
+inlang-backend-wasm-emit-strseg-test:
+	./medaka test compiler/backend/wasm_emit_strseg_test.mdk
+
 ## #3908: match-arm self tail calls must lower to musttail. The sibling is
 ## native-only (the claim is about emitted code) and has no other runner.
 inlang-backend-llvm-emit-tail-call-test:

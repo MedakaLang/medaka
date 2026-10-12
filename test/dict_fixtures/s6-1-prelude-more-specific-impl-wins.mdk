@@ -1,0 +1,11 @@
+-- DICT-SEMANTICS §6.1: a program's impls are compared with the prelude's, and a
+-- STRICTLY more specific program impl is coherent: most-specific-wins ranks it.
+--
+-- SPEC ANSWER (hand-derived): the prelude's `impl Display (List a)` is strictly less
+-- specific than the program's `impl Display (List Bool)`, so the goal
+-- `Display (List Bool)` has the program's impl as its unique ⊑-minimum.  ACCEPTED on
+-- every verb, printing `bools`.
+impl Display (List Bool) where
+  display xs = "bools"
+
+main = println (display [True])

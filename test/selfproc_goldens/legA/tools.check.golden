@@ -1,10 +1,10 @@
 checkHasErrors : String -> String -> String -> Bool
-cleanReport : List Decl -> List Decl -> List Decl -> List Decl -> String
+cleanReport : String -> String -> List Decl -> List Decl -> List Decl -> List Decl -> String
 entryExhaust : List Decl -> List Decl -> List (String, List Decl) -> String
 entryExhaustGo : List Decl -> List (String, List Decl) -> List (String, List Decl) -> String
 joinNonEmpty : String -> String -> String
-reportFor : String -> List Decl -> List Decl -> List Decl -> List Decl -> String
-routeImportCheck : String -> List Decl -> List Decl -> List Decl -> List Decl -> String
+reportFor : String -> String -> String -> List Decl -> List Decl -> List Decl -> List Decl -> String
+routeImportCheck : String -> String -> String -> List Decl -> List Decl -> List Decl -> List Decl -> String
 runCheck : String -> String -> String -> String
 runCheckFromDecls : String -> String -> List Decl -> String
 runCheckModulesFromDiags : List Decl -> List Decl -> List (String, List Decl) -> List (String, (List (String, Scheme), List TcDiag, List TcDiag)) -> String

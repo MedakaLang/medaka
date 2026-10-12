@@ -3393,7 +3393,7 @@ kind = "exec"
 migration = "shell:instrumentation"
 run = "test/diff_compiler_emitted_code_floor.sh"
 oracles = []
-sources = ["test/diff_compiler_emitted_code_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/backend/trmc_analysis.mdk", "compiler/ir/dce.mdk"]
+sources = ["test/diff_compiler_emitted_code_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/backend/trmc_analysis.mdk", "compiler/ir/dce.mdk", "compiler/driver/build_cmd.mdk"]
 corpus = ["test/bench_fixtures"]
 toolchain = ["clang", "valgrind"]
 

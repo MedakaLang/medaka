@@ -4659,7 +4659,7 @@ declEnvVisibleAt cur entryOrd = entryOrd <= cur
 -- precisely so the name-scoping tables keep their ordinal filter, and
 -- `DICT-SEMANTICS.md:2025-2033` forbids extending I5's licence to names.  The
 -- SUPERS themselves still come from `CE` at the reading ordinal (`ceLookupAt` in
--- `superImplMsgsOf`); only the row set the existence query scans moved.
+-- `checkImplSuperContexts`); only the row set the existence query scans moved.
 ieCandidacyVisibleAt : Int -> Int -> Bool
 ieCandidacyVisibleAt _ _ = True
 
@@ -5131,7 +5131,8 @@ polarityEntriesPublicOnly : List Decl ->
   List (TabKey, List Polarity)
 polarityEntriesPublicOnly decls entries =
   let keys = polarityPublicKeys decls
-  filterList (e => tabKeyElem keys (fst e)) entries
+  let index = tabKeyIndex keys
+  filterList (e => tabKeyIndexHas index (fst e)) entries
 
 -- The keys of [decls] that leave the module.  Arm for arm with
 -- `kindPublicDataDecl`, plus `DTypeAlias`; `DAttrib` unwraps as everywhere else
@@ -5149,9 +5150,26 @@ polarityPublicKeys ((DTypeAlias { tyAliasPub = True, tyAliasName = n, tyAliasOri
   tyTabKey o n :: polarityPublicKeys rest
 polarityPublicKeys (_ :: rest) = polarityPublicKeys rest
 
-tabKeyElem : List TabKey -> TabKey -> Bool
-tabKeyElem [] _ = False
-tabKeyElem (k :: rest) key = tabKeyEq k key || tabKeyElem rest key
+-- Membership index over a `TabKey` list, bucketed by the bare name: the probe
+-- reads the name already stored in the key (no rendering, no allocation), and
+-- `tabKeyEq` decides inside the bucket, so `tabKeyIndexHas (tabKeyIndex ks) k`
+-- answers exactly "some `k2` in `ks` has `tabKeyEq k2 k`".
+tabKeyIndex : List TabKey -> OrdMap (List TabKey)
+tabKeyIndex keys = tabKeyIndexGo keys omEmpty
+
+tabKeyIndexGo : List TabKey -> OrdMap (List TabKey) -> OrdMap (List TabKey)
+tabKeyIndexGo [] index = index
+tabKeyIndexGo (k :: rest) index =
+  let name = tabKeyName k
+  let bucket = match omLookup name index
+    Some b => b
+    None => []
+  tabKeyIndexGo rest (omInsert name (k :: bucket) index)
+
+tabKeyIndexHas : OrdMap (List TabKey) -> TabKey -> Bool
+tabKeyIndexHas index key = match omLookup (tabKeyName key) index
+  None => False
+  Some bucket => anyList (k => tabKeyEq k key) bucket
 
 -- ── S0-3: the TRANSITIVE FIXPOINT the single fold above cannot reach ──────
 -- `declEnvPolarityEntries` (below) is ONE in-order pass, so a wrapper declared
@@ -7205,12 +7223,12 @@ ieSnapAt cur ((o, u) :: rest) acc
 -- `ieCandidacyVisibleAt` keeps its two unused arguments: the flip's whole diff is
 -- one predicate name, so the acceptance delta is attributable to that alone, and
 -- one line changes back if super-existence is ever re-scoped.  `cur` is still LIVE
--- in this check's other half — `superImplMsgsOf` resolves the interface and its
--- supers through `ceLookupAt … cur`, which is name-scoped and did NOT move.
+-- in this check's other half — `checkImplSuperContexts` resolves the interface and
+-- its supers through `ceLookupAt … cur`, which is name-scoped and did NOT move.
 -- ⚠️ WHAT DID NOT MOVE EITHER, and must not: this returns `ImplRow`s, not an
 -- `ImplUniverse`.  `ieUniverseAt` above answers "what does the obligation channel
 -- know about impls here"; this answers "which impl DECLARATIONS exist", and its
--- consumer matches AST `Ty`s with `tyMatchesAst` where an `ImplUniverse` holds
+-- consumer matches AST `Ty`s with `superHeadCovers` where an `ImplUniverse` holds
 -- `Mono`s matched by `matchStep`.  Routing this through `ieUniverseAt` to reach the
 -- same scope would swap the MATCHER as well as the table — a second, unbudgeted
 -- acceptance delta riding on the ruled one.  Widen the PREDICATE, never the table.
@@ -7218,7 +7236,7 @@ ieSnapAt cur ((o, u) :: rest) acc
 -- walk rebuilds #1438 in this substrate.
 --
 -- 🚨 PERF: THIS IS O(rows) PER CALL AND ITS CALLER RUNS PER (impl x super).  Bind it
--- ONCE per whole-module check and thread the list; calling it inside `superMsgFor`
+-- ONCE per whole-module check and thread the list; calling it in `superRowExists`
 -- would be O(user impls x supers x all impls) — the same class as A-3.4 PR2's first
 -- cut, which `diff_compiler_perf_scaling.sh` caught at r2=3.35 on the `modules` shape
 -- (see `ieUnivSnaps`).  `checkSuperImpls` is the one binding site; keep it that way.
@@ -9345,20 +9363,17 @@ predicateSlotArgs (slot :: rest) = match slot.psArgs
   PSArgsUnknown => []
   PSArgsKnown args => args :: predicateSlotArgs rest
 
+-- `idx` is the first-wins index `funPredicateSlotsIdxRef` mirrors from `funPredicateSlotsRef`.
 lookupPredicateSlots : String ->
-  List (String, List PredicateSlot) ->
+  OrdMap (List PredicateSlot) ->
   Option (List PredicateSlot)
-lookupPredicateSlots _ [] = None
-lookupPredicateSlots k ((k2, slots) :: rest)
-  | k == k2 = Some slots
-  | otherwise = lookupPredicateSlots k rest
+lookupPredicateSlots k idx = omLookup k idx
 
-hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
-hasPredicateSlots k table = isSome (lookupPredicateSlots k table)
+hasPredicateSlots : String -> OrdMap (List PredicateSlot) -> Bool
+hasPredicateSlots k idx = omHasKey k idx
 
-predicateSlotIdsAt : String -> List (String, List PredicateSlot) -> List Int
-predicateSlotIdsAt name table =
-  predicateSlotIds (optionOr [] (lookupPredicateSlots name table))
+predicateSlotIdsAt : String -> OrdMap (List PredicateSlot) -> List Int
+predicateSlotIdsAt name idx = predicateSlotIds (optionOr [] (omLookup name idx))
 
 predicateSlotWithoutArgs : PredicateSlot -> PredicateSlot
 predicateSlotWithoutArgs s = PredicateSlot {
@@ -11983,7 +11998,7 @@ data PerRun = PerRun {
   aliasMethodOriginsRef : Ref (OrdMap String),  -- #1386: the alias-qualified method spellings this module's imports bring into scope (`import m as A` ⇒ `A.mth`, `import m.{mth as loc}` ⇒ `loc`), each mapped to the ORIGIN method name.  A projection of the same candidate rows that supply `methodAliasEntriesRef`, UNFILTERED (the supply drops ambiguous and unresolvable keys; see `aliasMethodSpellings`), so this table is a superset of the supply's key set; read through `originMethodName`.
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
-  deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — `undeterminedGoalExempt` defers a goal on these into the scheme
+  deferrableVarIds : Ref (Map Int Unit),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — `undeterminedGoalExempt` defers a goal on these into the scheme
   liveMemberMonosRef : Ref (List Mono),  -- the types of the module's closed top-level members that generalization left a variable open in: a later group can still ground it (DICT-SEMANTICS §6.2 T2), so no boundary judges a goal on it (`liveMemberIds`)
   quiescentGoalsRef : Ref (List (OrdMap Unit, GoalWindow, UObligation)),  -- the goals on such a variable, newest first, each with its boundary's rigid variables and window (`judgeQuiescentGoals`)
   determinedRowsRef : Ref (Map Int (List (ImplRow, List Mono))),  -- the instance each determination commit chose, with the committed goal's arguments, filed under the variable heading the goal (`fileDeterminedRow`)
@@ -12002,6 +12017,7 @@ data PerRun = PerRun {
   localSchemesOut : Ref (List (String, Option Loc, Scheme)),
   seedSchemesOut : Ref (List (String, Scheme)),
   funPredicateSlotsRef : Ref (List (String, List PredicateSlot)),
+  funPredicateSlotsIdxRef : Ref (OrdMap (List PredicateSlot)),  -- first-wins index over funPredicateSlotsRef; written only through setFunPredicateSlots (or omInsert alongside the cons at setFunConstraintEntry)
   funConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
   currentImportDefinersRef : Ref (OrdMap String),
   currentImportOriginsRef : Ref (OrdMap String),
@@ -12097,7 +12113,7 @@ freshPerRun _ = PerRun {
   aliasMethodOriginsRef = Ref omEmpty,
   implObls = wNew (),
   poisonedVars = Ref [],
-  deferrableVarIds = Ref [],
+  deferrableVarIds = Ref Tip,
   liveMemberMonosRef = Ref [],
   quiescentGoalsRef = Ref [],
   determinedRowsRef = Ref Tip,
@@ -12116,6 +12132,7 @@ freshPerRun _ = PerRun {
   localSchemesOut = Ref [],
   seedSchemesOut = Ref [],
   funPredicateSlotsRef = Ref [],
+  funPredicateSlotsIdxRef = Ref omEmpty,
   funConstraintDeclaredRef = Ref [],
   currentImportDefinersRef = Ref omEmpty,
   currentImportOriginsRef = Ref omEmpty,
@@ -12174,6 +12191,10 @@ resetState _ =
 containsI : Int -> List Int -> Bool
 containsI _ [] = False
 containsI x (y :: ys) = x == y || containsI x ys
+
+idSetInsertAll : List Int -> Map Int Unit -> Map Int Unit
+idSetInsertAll [] m = m
+idSetInsertAll (i :: rest) m = idSetInsertAll rest (IdMap.set i () m)
 
 -- `support/util`'s `anyList` takes a PURE predicate, so it cannot carry the
 -- path-compressing (hence effectful) mono predicates below — `monoIsFunction`,
@@ -14300,64 +14321,72 @@ takeUntilInclusiveS target (x :: xs) =
 --   * it feeds `emitCyclicAliasErrors`, whose OUTPUT ORDER is observable in
 --     goldens (see the enumeration-order bullet in `types/registry.mdk`).
 -- `tabKeyName` is what makes the bare half explicit here rather than implicit.
-buildAliasGraphEntry : List String ->
+buildAliasGraphEntry : OrdMap Unit ->
   (TabKey, (List String, Ty)) ->
   (String, List String)
-buildAliasGraphEntry aliasKeys (key, paramsRhs) =
+buildAliasGraphEntry aliasSet (key, paramsRhs) =
   let rhs = snd paramsRhs
   (
     tabKeyName key,
-    filterList (k => contains k aliasKeys) (dedup (tyConNamesInTy rhs)),
+    filterList (k => omHasKey k aliasSet) (dedup (tyConNamesInTy rhs)),
   )
 
 -- DFS over the alias dependency graph.  Detects back-edges (a node is reached
 -- while it is already on the current path) → cycle.  On a back-edge to `target`,
 -- marks every node on the stack from the head down to and including `target` as
 -- cyclic (they are all on the same cycle path).
-aliasDfsVisit : List (String, List String) ->
+-- `onStackRef` keeps the path in order (for `takeUntilInclusiveS`); `onStackSetRef`
+-- mirrors it as a set for the membership test.  Both are updated together.
+aliasDfsVisit : OrdMap (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
-  Ref (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
   String ->
   Unit
-aliasDfsVisit graph visitedRef onStackRef cyclicOut name =
-  if contains name !visitedRef then
+aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut name =
+  if omHasKey name !visitedRef then
     ()
-  else if contains name !onStackRef then
+  else if omHasKey name !onStackSetRef then
     cyclicOut := dedup (takeUntilInclusiveS name !onStackRef ++ !cyclicOut)
   else
     onStackRef := name :: !onStackRef
+    onStackSetRef := omInsert name () !onStackSetRef
     let _ =
       aliasDfsVisitNeighbors
         graph
         visitedRef
         onStackRef
+        onStackSetRef
         cyclicOut
-        (optionOr [] (lookupAssoc name graph))
+        (optionOr [] (omLookup name graph))
     onStackRef := filterList (/= name) !onStackRef
-    visitedRef := name :: !visitedRef
+    onStackSetRef := omDelete name !onStackSetRef
+    visitedRef := omInsert name () !visitedRef
 
-aliasDfsVisitNeighbors : List (String, List String) ->
+aliasDfsVisitNeighbors : OrdMap (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
-  Ref (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
   List String ->
   Unit
-aliasDfsVisitNeighbors _ _ _ _ [] = ()
-aliasDfsVisitNeighbors graph visitedRef onStackRef cyclicOut (n :: ns) =
-  let _ = aliasDfsVisit graph visitedRef onStackRef cyclicOut n
-  aliasDfsVisitNeighbors graph visitedRef onStackRef cyclicOut ns
+aliasDfsVisitNeighbors _ _ _ _ _ [] = ()
+aliasDfsVisitNeighbors graph visitedRef onStackRef onStackSetRef cyclicOut (n :: ns) =
+  let _ = aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut n
+  aliasDfsVisitNeighbors graph visitedRef onStackRef onStackSetRef cyclicOut ns
 
-aliasDfsVisitAll : List (String, List String) ->
+aliasDfsVisitAll : OrdMap (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
-  Ref (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
   List String ->
   Unit
-aliasDfsVisitAll _ _ _ _ [] = ()
-aliasDfsVisitAll graph visitedRef onStackRef cyclicOut (k :: ks) =
-  let _ = aliasDfsVisit graph visitedRef onStackRef cyclicOut k
-  aliasDfsVisitAll graph visitedRef onStackRef cyclicOut ks
+aliasDfsVisitAll _ _ _ _ _ [] = ()
+aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut (k :: ks) =
+  let _ = aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut k
+  aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut ks
 
 emitCyclicAliasErrors : List String -> Unit
 emitCyclicAliasErrors [] = ()
@@ -14387,16 +14416,30 @@ rejectCyclicAliases _ =
   let table = perRun.value.aliasTableRef.value
   -- BARE NAMES on purpose — see `buildAliasGraphEntry`.
   let aliasKeys = map (e => tabKeyName (fst e)) table
-  let graph = map (buildAliasGraphEntry aliasKeys) table
-  let visitedRef = Ref []
+  let aliasSet = omFromNames aliasKeys omEmpty
+  -- first entry wins a duplicate key, as `lookupAssoc` did over the list
+  let graph =
+    omFromPairs (reverseL (map (buildAliasGraphEntry aliasSet) table)) omEmpty
+  let visitedRef = Ref omEmpty
   let onStackRef = Ref []
+  let onStackSetRef = Ref omEmpty
   let cyclicOut = Ref []
-  let _ = aliasDfsVisitAll graph visitedRef onStackRef cyclicOut aliasKeys
+  let _ =
+    aliasDfsVisitAll
+      graph
+      visitedRef
+      onStackRef
+      onStackSetRef
+      cyclicOut
+      aliasKeys
   let cyclic = !cyclicOut
   let _ = emitCyclicAliasErrors cyclic
+  let cyclicSet = omFromNames cyclic omEmpty
   setRef
     perRun.value.aliasTableRef
-    (filterList (entry => not (contains (tabKeyName (fst entry)) cyclic)) table)
+    (filterList
+      (entry => not (omHasKey (tabKeyName (fst entry)) cyclicSet))
+      table)
 
 -- like astTypeFresh but also returns the name→fresh-tyvar map (the same fresh
 -- vars used in the Mono), so a caller can check post-unify whether each
@@ -18043,7 +18086,7 @@ declaredConstraintIds name = match qualConstraintIds name
     if hasImportDefiner name then
       []
     else
-      predicateSlotIdsAt name perRun.value.funPredicateSlotsRef.value
+      predicateSlotIdsAt name perRun.value.funPredicateSlotsIdxRef.value
 
 qualConstraintIds : String -> Option (List Int)
 qualConstraintIds name = match qualConstraintKey name
@@ -18136,7 +18179,7 @@ localDeclaredConstraintFor name =
   let stored =
     optionOr
       []
-      (lookupPredicateSlots name perRun.value.funPredicateSlotsRef.value)
+      (lookupPredicateSlots name perRun.value.funPredicateSlotsIdxRef.value)
   let slots = predicateSlotCSlots stored
   CDeclared {
     cdSlots = slots,
@@ -18179,7 +18222,7 @@ inferDictAtFound name ev inst =
   let declaredIds = declaredConstraintIds name
   let known = match q
     Some _ => True
-    None => hasPredicateSlots name perRun.value.funPredicateSlotsRef.value
+    None => hasPredicateSlots name perRun.value.funPredicateSlotsIdxRef.value
   -- #739: an explicitly-imported callee with NO cross-module constraint (declaredIds empty
   -- and source-exact per Fix A above) is genuinely UNCONSTRAINED — it only reached this
   -- EDictAt path because the marker's dict-name set is source-blind and a DIFFERENT module
@@ -18437,8 +18480,16 @@ constraintMonosOf (id :: rest) subst = match lookupAssocI id subst
 -- slots) see the same slot sequence.
 dedupPredicateSlotsTable : Unit -> Unit
 dedupPredicateSlotsTable _ =
-  perRun.value.funPredicateSlotsRef :=
-    map dedupPredicateSlotEntry perRun.value.funPredicateSlotsRef.value
+  setFunPredicateSlots
+    (map dedupPredicateSlotEntry perRun.value.funPredicateSlotsRef.value)
+
+-- The one whole-table writer for `funPredicateSlotsRef`: it keeps the first-wins index
+-- `funPredicateSlotsIdxRef` in step with the list, so every lookup answers what a
+-- first-match scan of the list would.
+setFunPredicateSlots : List (String, List PredicateSlot) -> Unit
+setFunPredicateSlots table =
+  perRun.value.funPredicateSlotsRef := table
+  perRun.value.funPredicateSlotsIdxRef := omFromPairs (reverseL table) omEmpty
 
 dedupPredicateSlotEntry : (String, List PredicateSlot) ->
   (String, List PredicateSlot)
@@ -21855,9 +21906,14 @@ appSpineHeadLoc e = exprLoc e
 -- argument i.  ELoc wrappers are peeled off the nodes themselves (the argument keeps
 -- its own, which is what `appArgLoc` reads for the error span).
 appSpineNodes : Expr -> List Expr
-appSpineNodes (ELoc _ e) = appSpineNodes e
-appSpineNodes (EApp f x) = appSpineNodes f ++ [EApp f x]
-appSpineNodes _ = []
+appSpineNodes e = appSpineNodesGo e []
+
+-- Walks from the outermost node inward, prepending, so the list comes out in
+-- application order with no reverse.
+appSpineNodesGo : Expr -> List Expr -> List Expr
+appSpineNodesGo (ELoc _ e) acc = appSpineNodesGo e acc
+appSpineNodesGo (EApp f x) acc = appSpineNodesGo f (EApp f x :: acc)
+appSpineNodesGo _ acc = acc
 
 -- the argument an application node supplies.  Total only over nodes `appSpineNodes`
 -- returned; anything else has no argument and yields itself, which cannot happen.
@@ -21981,11 +22037,14 @@ inferExpected env e expected =
 -- through the location wrappers that sit between one application node and
 -- the next.  A non-application returns itself with no arguments.
 appSpineExpr : Expr -> (Expr, List Expr)
-appSpineExpr (EApp f x) =
-  let s = appSpineExpr f
-  (fst s, snd s ++ [x])
-appSpineExpr (ELoc _ (EApp f x)) = appSpineExpr (EApp f x)
-appSpineExpr e = (e, [])
+appSpineExpr e = appSpineExprGo e []
+
+-- Outermost node first, so each argument is prepended as it is met and the list
+-- is already in application order.
+appSpineExprGo : Expr -> List Expr -> (Expr, List Expr)
+appSpineExprGo (EApp f x) args = appSpineExprGo f (x :: args)
+appSpineExprGo (ELoc _ (EApp f x)) args = appSpineExprGo (EApp f x) args
+appSpineExprGo e args = (e, args)
 
 -- a head `inferAppExpr` would take through its plain arm: an ordinary variable
 -- that is neither a standalone shadow nor a definer shadow.  Anything else
@@ -28060,7 +28119,7 @@ constraintSlotDispatchVar typarams (Constraint { constraintArgs = args }) =
       n :: _ => [n]
       [] => []
 
-resolveSites : List String -> List PendingEntry -> Unit
+resolveSites : OrdMap Unit -> List PendingEntry -> Unit
 resolveSites _ [] = goalSiteLoc := None
 resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _) :: rest) =
   goalSiteLoc := loc
@@ -28113,7 +28172,7 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
 -- site keys off the RESULT mono (`isEmpty`'s `Bool`), which never names the receiver's
 -- impl, so this gate would mis-route every shadow method.  RLocal is stamped by the
 -- arg-position resolveRLocalSites (keyed on the RECEIVER mono) AFTER resolveSites.
-resolveSite : List String ->
+resolveSite : OrdMap Unit ->
   String ->
   Ref Route ->
   Ref (List Route) ->
@@ -28142,13 +28201,13 @@ resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
       resultMono
       encl
       scope
-      (EKReturn fullMono (contains name rpNames))
+      (EKReturn fullMono (omHasKey name rpNames))
   let _ = match route
     RNone => ()
     _ => tagRef := route
   implRef := routes
 
-resolveExactReturnSite : List String ->
+resolveExactReturnSite : OrdMap Unit ->
   String ->
   Ref Route ->
   Ref (List Route) ->
@@ -28183,7 +28242,7 @@ resolveExactReturnSite rpNames name tagRef implRef resultMono request encl origi
         else
           panic "ordinary return route received invalid solver evidence"
       let (route, routes) =
-        exactReturnRoutes name encl scope (contains name rpNames) resolution
+        exactReturnRoutes name encl scope (omHasKey name rpNames) resolution
       let _ = noteMethodReturnTrace MRTStamped request (Some route) routes
       let _ = match route
         RNone => ()
@@ -28251,7 +28310,7 @@ methodReturnEvidenceRoute encl scope prerequisite =
         (reqWalkStart ())
     [] => RNone
 
-resolveNumLitSite : List String ->
+resolveNumLitSite : OrdMap Unit ->
   String ->
   Ref Route ->
   Mono ->
@@ -28268,7 +28327,7 @@ resolveNumLitSite rpNames name tagRef resultMono fullMono predicate encl origin 
       resultMono
       encl
       scope
-      (EKNumReturn predicate fullMono (contains name rpNames) origin)
+      (EKNumReturn predicate fullMono (omHasKey name rpNames) origin)
   let _ = match route
     RNone => ()
     _ => tagRef := numericReturnRoute route routes
@@ -29030,7 +29089,7 @@ enclSlotIndex (Some request) target encl =
 
 enclSlotIds : String -> List Int
 enclSlotIds encl =
-  predicateSlotIdsAt encl perRun.value.funPredicateSlotsRef.value
+  predicateSlotIdsAt encl perRun.value.funPredicateSlotsIdxRef.value
 
 -- [encl]'s own constraint slots as PREDICATES, in slot order: each slot's interface
 -- and the argument vector its signature recorded, paired with every bound tyvar id.
@@ -29038,7 +29097,7 @@ enclPreds : String -> List PredicateSlot
 enclPreds encl =
   optionOr
     []
-    (lookupPredicateSlots encl perRun.value.funPredicateSlotsRef.value)
+    (lookupPredicateSlots encl perRun.value.funPredicateSlotsIdxRef.value)
 
 -- Stable one-pass predicate lookup.  Known/Known vector disagreement cannot downgrade
 -- to interface-only or scalar matching.
@@ -29672,40 +29731,30 @@ cohImplOfRow r = match ieRowTriple r
   (ir, tys, _) =>
     CohImpl ir (cohFreshTys tys) (instRefMid (ieRowInst r)) (firstTyLocList tys)
 
--- #1559 A-3.7: 🚨 THE PRELUDE CARVE-OUT, AND [hasPrelude] IS THE WHOLE POINT OF IT.
--- Coherence has never seen prelude impls: a user `impl Eq Int` deliberately overrides
--- the prelude's and is α-equal to it, so pairing the two would reject
--- `test/lint_fixtures/derivable_needs_datadecl.mdk` and every program like it.  Both
--- old adapters got this for free — `checkCoherence` was handed the driver-staged USER
--- decls and `cohCollectModuleImpls` walked USER modules only.  An `IE` built by
--- `buildDeclEnvs` contains the prelude, so the exclusion has to be made explicit.
---
--- The prelude is ALWAYS ordinal 0 on the Module arm, structurally: `buildDeclEnvs`
--- builds `declEnvModulesFrom 0 (("core", coreDecls)::modules)`, so nothing else can be.
---
--- ⚠️ AND A HARDCODED `/= 0` WOULD BE WRONG — IT IS THE MOST DANGEROUS LINE IN THIS
--- UNIT. `flatImplEnvOf` is now a standalone-list helper used by internal checks;
--- `/= 0` drops EVERY row and turns every flat coherence rejection into a silent
--- accept.  Flat's prelude/user boundary is carried by the decl list the driver hands
--- in (`coherenceUserDecls`), not by an ordinal, so Flat passes `False` here and there
--- is nothing to filter.  Module passes `True`.
-cohRowVisible : Bool -> ImplRow -> Bool
-cohRowVisible hasPrelude r = not (hasPrelude && ieRowOrd r == 0)
+-- The prelude is ordinal 0 on the Module arm, structurally: `buildDeclEnvs` builds
+-- `declEnvModulesFrom 0 (("core", coreDecls)::modules)`, so nothing else can be.
+-- Coherence compares a program's impls with the prelude's (DICT-SEMANTICS §6.1), but
+-- never the prelude's with itself: the prelude is trusted and cannot be edited.
+cohPreludeOrd : Int
+cohPreludeOrd = 0
 
--- the whole-graph sweep's population (`globalCoherenceConflict`).  The filter runs
--- BEFORE the caller's `reverseL`, so the surviving list's head is the first USER
--- module — which is exactly what the decl-walking adapter's list was.
-cohRowsOf : Bool -> ImplEnv -> List ImplRow
-cohRowsOf hasPrelude env = filterList (cohRowVisible hasPrelude) (ieRowsAll env)
+-- the prelude's own rows: the second population of the per-module sweep.
+cohPreludeRows : ImplEnv -> List ImplRow
+cohPreludeRows env = ieRowsOwnedBy cohPreludeOrd env
 
--- the per-module sweep's population (`checkCoherence`).  The carve-out is composed in
--- rather than assumed away: on Module [cur] is a user module's ordinal and so never 0,
--- and on Flat [hasPrelude] is `False` — so this filter removes nothing on either live
--- arm.  It is written anyway because "0 is never both" is a property of the callers,
--- not of this function, and a fourth caller would not inherit it.
-cohRowsOwnedBy : Int -> Bool -> ImplEnv -> List ImplRow
-cohRowsOwnedBy cur hasPrelude env =
-  filterList (cohRowVisible hasPrelude) (ieRowsOwnedBy cur env)
+-- every USER module's rows, for the whole-graph sweep.  The prelude is absent here
+-- because a program-vs-prelude pair is owned by the per-module sweep (which sees the
+-- prelude and reports with the impl's own span); the whole-graph sweep would report
+-- the same pair a second time, span-less.
+cohRowsOf : ImplEnv -> List ImplRow
+cohRowsOf env = filterList (r => ieRowOrd r /= cohPreludeOrd) (ieRowsAll env)
+
+-- the per-module sweep's own population.  The prelude module itself checks nothing:
+-- its rows are the second population, never the first.
+cohRowsOwnedBy : Int -> ImplEnv -> List ImplRow
+cohRowsOwnedBy cur env
+  | cur == cohPreludeOrd = []
+  | otherwise = ieRowsOwnedBy cur env
 
 -- impls_overlap: do two impl head-arg lists share a common instance?  Every
 -- TVar (fresh per impl, so distinct ids) is a unification wildcard with a shared
@@ -30050,14 +30099,21 @@ data CohScan =
 -- what pointing it at `IE` does.  See `cohSoftInScope` for the failure it prevents.
 data CohSweep = CohSweepOwn | CohSweepGlobal
 
-cohScan : CohSweep -> List CohImpl -> CohScan
-cohScan sweep impls = cohScanOuter sweep impls (CohScan None None)
+-- [impls] are paired with each other; each is also paired with every one of [fixed]
+-- (the prelude's impls), which are never paired with one another.
+cohScan : CohSweep -> List CohImpl -> List CohImpl -> CohScan
+cohScan sweep impls fixed = cohScanOuter sweep impls fixed (CohScan None None)
 
-cohScanOuter : CohSweep -> List CohImpl -> CohScan -> CohScan
-cohScanOuter _ [] acc = acc
-cohScanOuter sweep (e :: rest) acc
+cohScanOuter : CohSweep -> List CohImpl -> List CohImpl -> CohScan -> CohScan
+cohScanOuter _ [] _ acc = acc
+cohScanOuter sweep (e :: rest) fixed acc
   | cohScanDone acc = acc
-  | otherwise = cohScanOuter sweep rest (cohScanInner sweep e rest acc)
+  | otherwise =
+    cohScanOuter
+      sweep
+      rest
+      fixed
+      (cohScanInner sweep e fixed (cohScanInner sweep e rest acc))
 
 -- both classes already witnessed ⇒ nothing later can change what is reported.
 cohScanDone : CohScan -> Bool
@@ -30124,30 +30180,10 @@ cohScanInner sweep (e1@(CohImpl if1 xs mid1 _)) ((CohImpl if2 ys mid2 _) :: rest
 -- work.  Until it exists, the declaration site is the only place this class is
 -- caught at all.
 --
--- 🚨 THE A-3 CARRY-FORWARD, DISCHARGED BY A-3.7 (#1559) — AND THE RESIDUE IT NAMES
--- SURVIVES, so this note is rewritten rather than deleted.
---
--- What it warned about: the HARD arm's reach is user-vs-user only, because
--- `checkCoherence`'s input was USER DECLS ONLY.  A user `impl Eq Int` shadowing the
--- PRELUDE's is α-equal to it and so is NOT rejected — `test/lint_fixtures/
--- derivable_needs_datadecl.mdk` checks clean at exit 0 (#1162's equal-head second
--- symptom, which F-3d neither fixes nor worsens).  Widening coherence's input to the
--- global `IE` would have made this arm reject every such program, including that
--- in-tree fixture: a mass NARROWING §5 R2 does not license.
---
--- How A-3.7 discharged it: coherence now DOES read `IE`, and `cohRowVisible` carves
--- the prelude out of both sweeps explicitly — `hasPrelude` on the Module arm drops
--- ordinal 0 (structurally the prelude, per `buildDeclEnvs`), while the standalone
--- its prelude boundary in the decl list the driver stages (`coherenceUserDecls`),
--- which is why that field does NOT retire in this unit.  Both probes were measured
--- across the relocation: a user `impl Eq Int` α-equal to the prelude's checks at exit
--- 0 in both representations, before and after.
---
--- ⚠️ THE RESIDUE IS DELIBERATELY PRESERVED, NOT FIXED.  With the carve-out in place a
--- user impl shadowing a prelude impl stays UNCHECKED rather than merely accepted.
--- Whether it SHOULD be rejected is a language question (#1162's equal-head second
--- symptom), not a substrate one, and A-3.7 relocated the input without re-adjudicating
--- it.  Do not "tidy" this by dropping the carve-out; that is the narrowing above.
+-- A program impl α-equal to a PRELUDE impl is this arm's class too: the per-module
+-- sweep pairs each program impl with the prelude's impls (DICT-SEMANTICS §6.1), so a
+-- user `impl Display String` is rejected at the program's impl.  A strictly more
+-- specific program impl is coherent and wins on every engine.
 cohClassify : CohSweep ->
   CohImpl ->
   List Mono ->
@@ -30243,7 +30279,7 @@ cohSoftInScope CohSweepGlobal mid1 mid2 = cohIsCrossModule mid1 mid2
 --
 -- ⚠️ NOT loud→silent, and here is why that is a claim and not a hope.  The pair this
 -- now declines is INTRA-module, and the per-module sweep's population
--- (`cohRowsOwnedBy cur hasPrelude`) contains every one of that module's own rows by
+-- (`cohRowsOwnedBy cur`) contains every one of that module's own rows by
 -- construction, with `foldModules` running the worker for EVERY module in the graph.
 -- So the union of the per-module sweeps already covers every intra-module pair the
 -- whole-graph sweep could see, WITH a span, which is strictly the better diagnostic.
@@ -30275,9 +30311,26 @@ cohKeepFirst None y = y
 -- coherence case, D3/WS-2 — which is exactly the duplicate-instance class).
 cohHardMsg : CohImpl -> List Mono -> List Mono -> String -> String -> String
 cohHardMsg e1 xs ys mid1 mid2
+  | cohPairsPrelude mid1 mid2 = cohPreludeOverlapMsg (cohImplIfaceName e1) xs ys
   | cohIsCrossModule mid1 mid2 =
     cohCrossModuleMsg (cohImplIfaceName e1) mid1 mid2
   | otherwise = cohOverlapMsg (cohImplIfaceName e1) xs ys
+
+-- the prelude's module id in `buildDeclEnvs`' module list.
+cohPreludeMid : String
+cohPreludeMid = "core"
+
+-- Whether one impl of the pair is the prelude's.  The per-module sweep pairs a
+-- module's own rows (first) with the prelude's (second), so the prelude's is [mid2].
+cohPairsPrelude : String -> String -> Bool
+cohPairsPrelude mid1 mid2 = mid1 == cohPreludeMid || mid2 == cohPreludeMid
+
+-- a program impl α-equal to a prelude impl.  The prelude cannot be edited, so the
+-- remedy is the newtype, not disjointness of the program's two impls.
+cohPreludeOverlapMsg : String -> List Mono -> List Mono -> String
+cohPreludeOverlapMsg iface xs ys = match cohPpPair xs ys
+  (s1, s2) =>
+    "overlapping impls of \{iface}: \{s1} and the prelude's \{s2} can match the same type; the prelude's impl cannot be replaced, so wrap the type in a newtype and implement \{iface} for that"
 
 cohIsCrossModule : String -> String -> Bool
 cohIsCrossModule mid1 mid2 = mid1 /= "" && mid2 /= "" && mid1 /= mid2
@@ -30290,6 +30343,8 @@ cohIsCrossModule mid1 mid2 = mid1 /= "" && mid2 /= "" && mid1 /= mid2
 -- not be — and puts the SPEC's remedy first.  The old error's advice ("make them
 -- disjoint, or wrap one type in a newtype") is #614's S2: it is the wrong fix here
 -- and, as that issue's own control shows, adding the ranking impl changed nothing.
+-- A pair with the prelude names the prelude's impl as such rather than by module id,
+-- as `cohPreludeOverlapMsg` does: the program's own module id differs between verbs.
 cohIncomparableMsg : String ->
   List Mono ->
   List Mono ->
@@ -30298,7 +30353,10 @@ cohIncomparableMsg : String ->
   String
 cohIncomparableMsg iface xs ys mid1 mid2 = match cohPpPair xs ys
   (s1, s2) =>
-    "Warning: overlapping impls of \{iface}\{cohWhereSuffix mid1 mid2}: neither \{s1} nor \{s2} is more specific than the other, so a goal matching both has no impl to pick"
+    if cohPairsPrelude mid1 mid2 then
+      "Warning: overlapping impls of \{iface}: neither \{s1} nor the prelude's \{s2} is more specific than the other, so a goal matching both has no impl to pick"
+    else
+      "Warning: overlapping impls of \{iface}\{cohWhereSuffix mid1 mid2}: neither \{s1} nor \{s2} is more specific than the other, so a goal matching both has no impl to pick"
 
 cohWhereSuffix : String -> String -> String
 cohWhereSuffix mid1 mid2
@@ -30365,9 +30423,8 @@ pushCoherenceWarning loc msg =
 -- entry (`entry :: !(env.impls)`) — so the conflict message names the later-declared
 -- impl as the first head, byte-identical.
 -- #1559 A-3.7: the input is `IE`'s rows for THIS module, not a decl list.
--- [cur] is the reading module's ordinal and [hasPrelude] says whether this env
--- contains the prelude at ordinal 0 — see `cohRowVisible`, whose header carries the
--- fail-direction for both arms.
+-- [cur] is the reading module's ordinal.  Its own rows are paired with each other and
+-- with the prelude's rows (`cohPreludeRows`), never prelude with prelude.
 --
 -- POPULATION EQUALITY, derived rather than assumed (it is the one thing that could
 -- silently change what gets checked).  The Module caller used to pass `prog`, the
@@ -30379,11 +30436,12 @@ pushCoherenceWarning loc msg =
 -- no transform on either side.  Harvest equality holds too: `implDeclFact` and the
 -- retired `cohImplsOfMid` match arm-for-arm (unwrap `DAttrib`, take `DImpl`, drop
 -- everything else) and both are a `flatMap` in decl order.
-checkCoherence : ImplEnv -> Int -> Bool -> Unit
-checkCoherence env cur hasPrelude =
+checkCoherence : ImplEnv -> Int -> Unit
+checkCoherence env cur =
   match (cohScan
     CohSweepOwn
-    (reverseL (map cohImplOfRow (cohRowsOwnedBy cur hasPrelude env))))
+    (reverseL (map cohImplOfRow (cohRowsOwnedBy cur env)))
+    (map cohImplOfRow (cohPreludeRows env)))
     CohScan hard soft =>
       let _ = cohPushHard hard
       cohPushSoft soft
@@ -30396,53 +30454,21 @@ cohPushSoft : Option (String, Option Loc) -> Unit
 cohPushSoft None = ()
 cohPushSoft (Some (msg, loc)) = pushCoherenceWarning loc msg
 
--- ── D1 WS-1a: superinterface-existence gate ────────────────────────────────
--- An
--- `impl C T` whose interface declares `interface C a requires D a` is unsound
--- unless a matching `impl D T` also exists.  This post-pass iterates the USER
--- impls (so a user impl that overrides a prelude impl isn't double-flagged) and,
--- for each, looks up its interface's supers in the FULL decl universe
--- ([allDecls], prelude included — the SUPER impl it needs may be a prelude impl).
--- It fires ONLY when the impl head's type args are all CONCRETE/ground (mirrors
--- the oracle's `is_concrete` gate); a parametric head like `impl Monoid (Bag a)`
--- (free tyvar) is deferred exactly as the oracle defers it.  Error wording is
--- byte-identical to the oracle's MissingSuperImpl message.
--- [userDecls] = the impls to check.
+-- ── the superinterface rule for impl declarations (DICT-SEMANTICS §3 W-super) ──
+-- Checks each impl in [userDecls] against every direct super of its interface; see
+-- `checkImplSuperContexts`.  The supers come from `CE` at the reading ordinal [cur],
+-- keyed by the impl's `implOrigin`.  Existence of a super impl is asked of every
+-- `IE` row in the graph (`ieRowsVisibleAt` reads `ieCandidacyVisibleAt`, the
+-- predicate instance candidacy reads), so a super impl declared in a later module
+-- counts, as it does for dispatch; a row counts only when its own interface identity
+-- is the super's `superOrigin`, never a same-spelled interface.
 --
--- #1557 A-3.5b: the two BARE-NAME lookups this check used to make over a decl list
--- are relocated onto stage K.  WAS: `ifaceSupersOf allDecls iface` (a first-match scan
--- keyed `name == target`) for the supers, and `superImplExists allDecls superName`
--- (whose impl test was the bare `iface == superName`) for existence.  NOW: the supers
--- come from `ceLookupAt` at the reading ordinal, keyed by the naming `DImpl`'s
--- `implOrigin` — the SAME mint `implCompletenessMsgsOfMap` (A-3.5a) and
--- `ifaceDfsCycleOneSuper` (A-3.5c) use — and existence is a query over `IE`'s rows,
--- comparing the row's own `IfaceRef` identity against the SUPER's `superOrigin`.
---
--- ⚖️ RUN-055 (SA-3), owner ruling, 2026-08-12: THE EXISTENCE QUERY IS GRAPH-GLOBAL.
--- It used to scan `IE`'s rows visible at the reading ORDINAL while A-3.6 had already
--- made instance CANDIDACY graph-global, and the two scopes were measured to
--- contradict each other inside one program: with `impl Sub W` in an earlier module
--- and `impl Sup W` in a later one, a `Sup W` goal RESOLVES beside this check
--- reporting that same impl missing.  Both channels now read `ieCandidacyVisibleAt`.
--- ⚠️ ONLY THE SCOPE MOVED.  The supers still come from `CE` at the reading ordinal
--- ([cur] → `ceLookupAt` in `superImplMsgsOf`), the head test is still `tyMatchesAst`
--- over `ImplRow`'s AST `Ty`s, and the interface test is still the IDENTITY leg.  The
--- widening therefore accepts exactly the programs whose super impl EXISTS in the
--- graph and matches by identity — never one that merely shares a spelling.
---
--- 🚨 THE ROW LIST IS BOUND HERE, ONCE, AND THAT IS A PERF REQUIREMENT.  It is
--- O(rows); `superImplExists` runs per (impl x super).  See its header.
---
--- The visible-row list replaces [allDecls] for EXISTENCE only.  The supers themselves
--- come from `CE`, as every superclass reader's do (`superLookup`).
+-- The row list is bound here, once: it is O(rows), and the existence test runs per
+-- (impl x super).
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
 checkSuperImpls userDecls ce ie cur =
   let rows = ieRowsVisibleAt cur ie
-  let _ =
-    foreachUnit
-      (pushTypeError "T-MISSING-SUPER-IMPL")
-      (flatMap (superImplMsgsOf ce cur rows) userDecls)
-  foreachUnit (checkImplSuperContexts userDecls ce cur) userDecls
+  foreachUnit (checkImplSuperContexts userDecls ce cur rows) userDecls
 
 -- DICT-SEMANTICS §3, the declaration rule for supers: a dictionary for `C ts` carries
 -- one for each direct super `D` of `C` at the same arguments, built by the instance
@@ -30450,18 +30476,24 @@ checkSuperImpls userDecls ce ie cur =
 -- must entail it from its own `requires` (with their supers), at its head with the
 -- head variables rigid, or every binder that reduces `C ts` drops it.  A goal of the
 -- selected instance's context is reduced through the instances as W3-inst's are; a
--- leaf that is no given is reported at the impl.  The super goal itself is not
--- reduced here when no instance selects it: that is `superImplMsgsOf`'s existence
--- question.  Direct supers suffice because every impl is checked, the super's own
--- impl included.
+-- leaf that is no given is reported at the impl.  A super goal no given answers and
+-- no impl row covers (`superRowExists`) is a missing super impl, reported at the impl
+-- whether its head is concrete or parametric.  Direct supers suffice because every
+-- impl is checked, the super's own impl included.
 --
 -- A parsed `impl` always records its interface token's span; a derived one records
 -- none, so it is reported at the `data`/`newtype` declaration that produced it, and
--- its remedy is the hand-written impl, since a `deriving` clause takes no `requires`.
-checkImplSuperContexts : List Decl -> ClassEnv -> Int -> Decl -> Unit
-checkImplSuperContexts decls ce cur (DAttrib _ d) =
-  checkImplSuperContexts decls ce cur d
-checkImplSuperContexts decls ce cur (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
+-- its remedies are a `deriving` clause or a hand-written impl, since a `deriving`
+-- clause takes no `requires`.
+checkImplSuperContexts : List Decl ->
+  ClassEnv ->
+  Int ->
+  List ImplRow ->
+  Decl ->
+  Unit
+checkImplSuperContexts decls ce cur rows (DAttrib _ d) =
+  checkImplSuperContexts decls ce cur rows d
+checkImplSuperContexts decls ce cur rows (DImpl { iface, tys, reqs, implOrigin = o, implIfaceLoc = ifaceLoc, ... }) =
   let derived = isNone ifaceLoc
   let loc = if derived then derivedImplDeclLoc decls tys else ifaceLoc
   match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
@@ -30473,6 +30505,7 @@ checkImplSuperContexts decls ce cur (DImpl { iface, tys, reqs, implOrigin = o, i
       let givens =
         declared ++ flatMap (s => map fst (predicateSlotKnownSupers s)) declared
       let subject = "impl \{iface} \{joinWith " " (map ppTyAtom tys)}"
+      let subst = zipL (ceRowTyparams r) tys
       let argsOf =
         sup =>
           mapAll
@@ -30480,21 +30513,21 @@ checkImplSuperContexts decls ce cur (DImpl { iface, tys, reqs, implOrigin = o, i
             (superParamsOf sup)
       fold
         (_ sup => match argsOf sup
-          Some supArgs =>
-            checkSuperInstanceContext
-              subject
-              roots
-              headIds
-              givens
-              loc
-              derived
-              (superIfaceRef sup)
-              supArgs
+          Some supArgs => checkSuperInstanceContext
+            subject
+            roots
+            headIds
+            givens
+            loc
+            derived
+            (superIfaceRef sup)
+            supArgs
+            (_ => superRowExists rows subst sup)
           None => ())
         ()
         (ceRowSupers r)
     _ => ()
-checkImplSuperContexts _ _ _ _ = ()
+checkImplSuperContexts _ _ _ _ _ = ()
 
 -- The span of the `data`/`newtype` declaration a derived impl's head names.
 derivedImplDeclLoc : List Decl -> List Ty -> Option Loc
@@ -30520,11 +30553,14 @@ checkSuperInstanceContext : String ->
   Bool ->
   IfaceRef ->
   List Mono ->
+  (Unit -> Bool) ->
   Unit
-checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs
+checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs covered
   | anyList (givenAnswers sup supArgs) givens = ()
   | otherwise = match rigidHeadInstanceContext headIds sup supArgs
-    None => ()
+    None =>
+      if not (covered ()) then
+        reportMissingSuperImpl subject roots loc derived sup supArgs
     Some ctx =>
       let walk = reqWalkStart ()
       let leaves =
@@ -30536,6 +30572,35 @@ checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs
           reportSuperContextLeaf subject roots loc derived sup supArgs leaf)
         ()
         leaves
+
+-- Whether some impl row of the super covers the super goal at the impl's head
+-- (`superHeadCovers`).  Rows are graph-wide, so a super impl declared downstream
+-- counts.
+superRowExists : List ImplRow -> List (String, Ty) -> Super -> Bool
+superRowExists rows subst (Super { superHead = n, superParams = ps, superOrigin = so }) =
+  let tys = substParams ps subst
+  listLen tys /= listLen ps || superImplExists rows (ifaceTabKey so n) n tys
+
+-- The super is named by its spelling, as the checked impl's own interface is, so
+-- the text is the same on every verb and at every head.  A derived impl's remedy is
+-- the `deriving` clause when the super is derivable, else the hand-written impl.
+reportMissingSuperImpl : String ->
+  List (String, Int) ->
+  Option Loc ->
+  Bool ->
+  IfaceRef ->
+  List Mono ->
+  Unit
+reportMissingSuperImpl subject roots loc derived sup supArgs =
+  let named = Ref (map (p => (snd p, fst p)) roots)
+  let goal = "\{sup.irName} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
+  let missing = "requires the superinterface `\{goal}`, which no impl covers"
+  pushTypeErrorOnceAt "T-MISSING-SUPER-IMPL" loc (if not derived then
+    "`\{subject}` \{missing}; add an `impl \{goal}` covering it, or add `requires \{goal}` to the impl"
+  else if derivableIface sup.irName then
+    "`\{subject}` (derived) \{missing}; add `\{sup.irName}` to the type's `deriving` clause, or add an `impl \{goal}`"
+  else
+    "`\{subject}` (derived) \{missing}; add an `impl \{goal}`")
 
 -- The context of the instance [iface] [args] selects with the head variables
 -- [headIds] held rigid (`sigRigidBindings`), as goals over those variables again.
@@ -30662,8 +30727,8 @@ foreachUnit f (x :: xs) =
 -- The interface decl is resolved out of stage K's `CE` at the reading module's
 -- ordinal (`ceRequiredAt`), so an IMPORTED interface resolves exactly as a local one
 -- does; [iterDecls] (this module's own decls) are the impls to check.  Unknown
--- interface (not in scope) → skip (a distinct error is reported elsewhere),
--- mirroring superImplMsgsOf.
+-- interface (not in scope) → skip (a distinct error is reported elsewhere), as
+-- `checkImplSuperContexts` skips one.
 --
 -- #1557 A-3.5a: there is now ONE checker for both driver modes.  There used to be
 -- two — `checkImplCompleteness`, whose retired arm looked the interface up by a bare
@@ -31846,9 +31911,8 @@ checkInterfaceCycles ce cur =
 -- the same reason A-3.5c gave it two `CE`s — [cohIe] is the env over the population
 -- [cohDecls] names (the USER boundary, trap #5) and [cycIe] is the env over the
 -- whole-universe population [cycDecls] names.  They are the same env only on the paths
--- where those two decl lists were already the same.  [hasPrelude] rides with [cohIe]:
--- it is a property of THAT env, not of the caller's mode, and `cohRowVisible` states
--- what each arm must pass and what happens if it passes the other one.
+-- where those two decl lists were already the same.  [cohIe] must contain the prelude at
+-- ordinal 0, since coherence pairs the module's own rows with the prelude's.
 --
 -- 🚨 SA-6 (sprint repair round): THE `-1` SENTINEL IS FAIL-CLOSED HERE, AND IT HAS TO BE
 -- ANNOUNCED AT THIS READER.  [cur] is `declEnvsOrdOf mid` on the Module arm, whose miss
@@ -31872,7 +31936,7 @@ checkInterfaceCycles ce cur =
 -- 🎯 WHAT THIS DOES *NOT* COVER, stated because it is the near miss: a driver that
 -- threads a VALID-but-WRONG ordinal (some other module's) is undetectable here — the
 -- sentinel is the only self-identifying failure — and `globalCoherenceConflict` takes no
--- ordinal at all (`cohRowsOf True`, whole graph), so it is outside this guard entirely.
+-- ordinal at all (`cohRowsOf`, whole graph), so it is outside this guard entirely.
 runFinalChecks : List Decl ->
   List Decl ->
   ClassEnv ->
@@ -31880,11 +31944,10 @@ runFinalChecks : List Decl ->
   ImplEnv ->
   ImplEnv ->
   Int ->
-  Bool ->
   Unit
-runFinalChecks cohDecls _cycDecls ownCe cycCe cohIe cycIe cur hasPrelude =
+runFinalChecks cohDecls _cycDecls ownCe cycCe cohIe cycIe cur =
   let _ = ordinalSentinelGuard cur
-  let _ = checkCoherence cohIe cur hasPrelude
+  let _ = checkCoherence cohIe cur
   let _ = checkInterfaceCycles cycCe cur
   let _ = checkPhantomMethods ownCe cur
   checkSuperImpls cohDecls cycCe cycIe cur
@@ -31984,64 +32047,6 @@ cyclicSuperIfaceMsg : List String -> String
 cyclicSuperIfaceMsg path =
   "cyclic superinterface: " ++ joinWith " requires " (map backticked path)
 
--- the missing-superinterface error messages for one user decl (a DImpl, possibly
--- wrapped in DAttrib); [] for any non-impl decl or when every super impl exists.
--- Only an impl with a concrete head is asked: at a parametric head the super's
--- instance is not looked for here, and `checkImplSuperContexts` does not look for it
--- either (#4011).
---
--- OCCURRENCE MINT (#1110/#1111 A-2.4, the `implCompletenessMsgsOfMap` discipline):
--- `implOrigin` is destructured beside `iface` in the SAME record pattern, so the
--- identity and the name it qualifies cannot drift apart.
---
--- ⚠️ THE MISS ARM IS AN ABSTENTION AND IT IS THE ONE LOUD→SILENT RISK HERE.  A
--- `ceLookupAt` miss yields `[]` — no diagnostic — where the bare scan found the
--- interface by spelling regardless.  This is deliberately the SAME disposition
--- `ifaceSupersOf`'s `None` arm had ("unknown interface, reported elsewhere") and the
--- same one A-3.5a/A-3.5c took at their peers; making it loud instead would be a new
--- rejection class (an acceptance NARROWING) that no ruling licenses.  What guards it
--- is that a super-bearing impl MUST still reject: flat and 2-module
--- `T-MISSING-SUPER-IMPL` were measured before and after this relocation, and an
--- identity miss turns both GREEN, which is the direction that matters.
-superImplMsgsOf : ClassEnv -> Int -> List ImplRow -> Decl -> List String
-superImplMsgsOf ce cur rows (DAttrib _ d) = superImplMsgsOf ce cur rows d
-superImplMsgsOf ce cur rows (DImpl { iface, tys, implOrigin = o, ... }) =
-  match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
-    None => []  -- unknown interface (already reported elsewhere) → skip
-    Some r =>
-      if listLen (ceRowTyparams r) == listLen tys
-        && allList tyIsConcrete tys then
-        flatMap
-          (superMsgFor rows iface tys (zipL (ceRowTyparams r) tys))
-          (ceRowSupers r)
-      else
-        []  -- arity mismatch, or a non-concrete head (deferred, like the oracle)
-superImplMsgsOf _ _ _ _ = []
-
--- check one `Super superName params` against the substitution: map each super
--- param name through [subst] to its concrete Ty; if every param mapped, all are
--- concrete, AND no matching `impl superName <concrete>` exists, emit the error.
---
--- #1557 A-3.5b: the super's IDENTITY key is minted ONCE here, from `superOrigin` —
--- the same field and the same `ifaceTabKey` mint A-3.5c's cycle walk uses, which is
--- the point: two units, one key discipline.  `Super` has carried `superOrigin` since
--- #1110 Stage A-1.
-superMsgFor : List ImplRow ->
-  String ->
-  List Ty ->
-  List (String, Ty) ->
-  Super ->
-  List String
-superMsgFor rows iface implTys subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
-  let concrete = substParams params subst
-  if listLen concrete == listLen params
-    && allList tyIsConcrete concrete
-    && not
-      (superImplExists rows (ifaceTabKey so superName) superName concrete) then
-    [missingSuperImplMsg iface implTys superName concrete]
-  else
-    []
-
 -- map each super-param NAME through [subst] to its Ty, dropping any unmapped (so a
 -- short result vs [params] signals an incomplete substitution → caller skips).
 substParams : List String -> List (String, Ty) -> List Ty
@@ -32049,13 +32054,6 @@ substParams [] _ = []
 substParams (p :: rest) subst = match lookupAssoc p subst
   Some t => t :: substParams rest subst
   None => substParams rest subst
-
--- Both the impl
--- head and the super are printed with the same space-joined atom-position args.
-missingSuperImplMsg : String -> List Ty -> String -> List Ty -> String
-missingSuperImplMsg iface implTys superName superTys =
-  let superHead = "impl \{superName} \{joinWith " " (map ppTyAtom superTys)}"
-  "`impl \{iface} \{joinWith " " (map ppTyAtom implTys)}` requires the superinterface `\{superHead}`, which is missing; add `\{superHead}`"
 
 -- The type parameters and direct supers of one interface, by identity.
 superLookup : IfaceRef -> Option (List String, List Super)
@@ -32077,101 +32075,62 @@ ifaceSupersOf ((DInterface { pub, def, name, typarams, supers, methods }) :: res
   | otherwise = ifaceSupersOf rest target
 ifaceSupersOf (_ :: rest) target = ifaceSupersOf rest target
 
--- does any `impl superName <head>` with a head matching [concrete] exist? (head
--- may be parametric — a free tyvar in the impl head matches any concrete arg,
--- mirroring the oracle's mono_matches: pattern=impl head, concrete=super args.)
+-- does an `impl superName <head>` covering [goal] exist among [rows]?  [rows] are
+-- `IE`'s rows, bound once by `checkSuperImpls`; [superKey] is the super's identity and
+-- [superName] its bare spelling.
 --
--- #1557 A-3.5b: [rows] are `IE`'s rows, bound once by `checkSuperImpls`; [superKey]
--- is the super's identity and [superName] its bare spelling.  This replaced a scan of
--- the whole decl list whose interface test was the bare `iface == superName`.
--- ⚠️ [rows] WAS "the rows visible at the reading ordinal" until RUN-055 (SA-3) widened
--- the scope to the whole graph, to match instance candidacy.  Nothing in THIS function
--- changed: it was and is a scan of whatever population its caller binds, and the two
--- tests below (identity, then `tyMatchesAst`) are what keep the wider population from
--- admitting a super it should not.
---
--- 🚨 IT COMPARES THE IDENTITY LEG, NEVER THE BUCKETS.  `ieInsertRow` indexes every row
--- under `oblIfaceKeys`, which mints TWO keys — the identity key AND a bare-spelling
+-- It compares the identity leg, never the buckets.  `ieInsertRow` indexes every row
+-- under `oblIfaceKeys`, which mints two keys: the identity key and a bare-spelling
 -- compatibility leg that #1438 still rides on.  Looking [superKey] up in
--- `ieConcrete`/`ieHeadless` would therefore answer with BOTH same-spelled interfaces'
--- rows, rebuilding in the new substrate exactly the collapse this relocation removes.
--- Reading `ieRows` and testing each row's own `IfaceRef` cannot reach the bare bucket.
---
--- ⚠️ AND IT KEEPS `tyMatchesAst`.  The head match is unchanged, deliberately: `IE`'s
--- rows carry AST `Ty`s (`ImplRow`'s 4th position), so the existing predicate applies
--- verbatim.  Routing this through `ImplUniverse`/`matchStep` instead would carry a
--- second, unbudgeted acceptance delta on top of the intended re-key.
+-- `ieConcrete`/`ieHeadless` would therefore answer with both same-spelled interfaces'
+-- rows.  Reading `ieRows` and testing each row's own `IfaceRef` cannot reach the bare
+-- bucket.
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
-superImplExists rows superKey superName concrete =
-  anyList (implRowMatchesSuper superKey superName concrete) rows
+superImplExists rows superKey superName goal =
+  anyList (implRowMatchesSuper superKey superName goal) rows
 
--- NAME FIRST, then IDENTITY — the discipline `tabKeyEq` states for itself in
--- `types/registry.mdk`, applied here for a second reason: `ifaceTabKey` ALLOCATES (it
--- goes through `mkIdent`), and this runs once per visible row per (impl x super) in a
--- GC-bound stage.  Bare-name equality is a NECESSARY condition for key equality —
--- `tabKeyOf` puts the same [name] into both the `TkIdent` and the `TkBare` arm — so
--- gating on it is sound, and it bounds the minting to the set the OLD bare scan already
--- let through.  The DECIDING test is still the identity compare; the name test decides
--- nothing on its own.
+-- Name first, then identity: `ifaceTabKey` allocates (it goes through `mkIdent`), and
+-- this runs once per row per (impl x super) in a GC-bound stage.  Bare-name equality
+-- is a necessary condition for key equality (`tabKeyOf` puts the same name into both
+-- the `TkIdent` and the `TkBare` arm), so gating on it is sound; the identity compare
+-- decides.
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
-implRowMatchesSuper superKey superName concrete (ImplRow _ _ ir tys _ _) =
+implRowMatchesSuper superKey superName goal (ImplRow _ _ ir tys _ _) =
   ir.irName == superName
-    && listLen tys == listLen concrete
+    && listLen tys == listLen goal
     && ifaceTabKey ir.irOrigin ir.irName == superKey
-    && allList (p => tyMatchesAst (fst p) (snd p)) (zipL tys concrete)
+    && superHeadCovers tys goal
 
--- a Ty is concrete iff it contains no TyVar (mirror of the oracle's is_concrete,
--- which treats effect rows as transparent — TyEffect ignores its row).
-tyIsConcrete : Ty -> Bool
-tyIsConcrete (TyVar _) = False
-tyIsConcrete (TyCon { tyConName = _ }) = True
-tyIsConcrete (TyApp a b) = tyIsConcrete a && tyIsConcrete b
-tyIsConcrete (TyFun a b) = tyIsConcrete a && tyIsConcrete b
-tyIsConcrete (TyTuple ts) = allList tyIsConcrete ts
-tyIsConcrete (TyEffect _ _ t) = tyIsConcrete t
-tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
--- Same "effect rows are transparent" treatment as `TyEffect` above (the
--- comment on this function): a row's own tail var never counts against
--- concreteness even for a wrapping `TyEffect`, so a bare row atom — with no
--- wrapped type at all — is vacuously concrete too.
-tyIsConcrete (TyRow _ _ _) = True
-tyIsConcrete (TyAuth _ _) = True
-tyIsConcrete (TyNamed _ t _) = tyIsConcrete t
-tyIsConcrete (TyQual t _ _) = tyIsConcrete t
+-- Whether the impl head [pats] covers the super goal [goal], which is the checked
+-- impl's own head with its variables rigid: one substitution for the whole vector
+-- (`matchOneSided`, as the min⊑ selector's `tySubsumesV` and the use site's
+-- `implHeadSubst` match), so a variable [pats] repeats must bind equal types, and a
+-- variable of [goal] matches only a variable of [pats].  `impl D (Pair a a)` does not
+-- cover `D (Pair a b)` or `D (Pair Int Bool)`.  Effect rows are transparent on both
+-- sides.  Type constructors compare by spelling (`tyStep`), where the use site
+-- compares identity.
+superHeadCovers : List Ty -> List Ty -> Bool
+superHeadCovers pats goal =
+  isSome (matchOneSided superHeadStep eqStr tyStructEq (zipL pats goal) [])
 
--- one-directional structural match (pattern may carry free TyVar wildcards;
--- concrete is fully ground).
-tyMatchesAst : Ty -> Ty -> Bool
-tyMatchesAst (TyVar _) _ = True
-tyMatchesAst (TyCon { tyConName = a }) (TyCon { tyConName = b }) = a == b
-tyMatchesAst (TyApp f1 a1) (TyApp f2 a2) =
-  tyMatchesAst f1 f2 && tyMatchesAst a1 a2
-tyMatchesAst (TyFun a1 b1) (TyFun a2 b2) =
-  tyMatchesAst a1 a2 && tyMatchesAst b1 b2
-tyMatchesAst (TyTuple ts1) (TyTuple ts2) =
-  listLen ts1 == listLen ts2
-    && allList (p => tyMatchesAst (fst p) (snd p)) (zipL ts1 ts2)
-tyMatchesAst (TyEffect _ _ t1) t2 = tyMatchesAst t1 t2
-tyMatchesAst t1 (TyEffect _ _ t2) = tyMatchesAst t1 t2
-tyMatchesAst (TyConstrained _ t1) t2 = tyMatchesAst t1 t2
-tyMatchesAst t1 (TyConstrained _ t2) = tyMatchesAst t1 t2
-tyMatchesAst _ _ = False
+superHeadStep : Ty -> Ty -> MStep String Ty Ty
+superHeadStep pat t = tyStep pat (stripTyWrap t)
 
 -- ── D3 / WS-2 part-2: GLOBAL (cross-module) coherence ──────────────────────
 -- Per-module coherence accepts two DIFFERENT modules that
 -- each define `impl C T` for the SAME instance — each module is locally coherent,
 -- but jointly they are incoherent (silent dispatch ambiguity).  This pass scans
--- the joint impl set over ALL USER modules (prelude EXCLUDED — a user `impl Eq Int`
--- legitimately overrides the prelude one, so prelude impls must NOT be in the set).
+-- the joint impl set over ALL USER modules (the prelude is paired by the per-module
+-- sweep, which reports with the impl's own span).
 -- Each CohImpl carries the id of the module that PHYSICALLY declares it; imports do
 -- NOT copy impl decls, so the joint set has exactly one entry per definition and a
 -- structural (iface, head-tys) overlap already distinguishes distinct definitions —
 -- no occurrence-dedup needed.  A conflict between two distinct modules is reported
 -- naming BOTH (cohCrossModuleMsg via cohHardMsg's cross-module branch, or the
 -- `(defined in …)` suffix `cohWhereSuffix` adds to the F-3d soft warning).
--- #1559 A-3.7: "the joint impl set over ALL USER modules" is now `cohRowsOf True` over
--- the whole-graph `IE` — the prelude exclusion is the `True`, and the one-entry-per-
--- definition property is `ieRows`' by construction (imports copy no rows either).
+-- The joint impl set is `cohRowsOf` over the whole-graph `IE`, which leaves out the
+-- prelude's rows, and the one-entry-per-definition property is `ieRows`' by
+-- construction (imports copy no rows either).
 --
 -- the first cross-module coherence conflict of EACH CLASS (if any) as bare messages
 -- — `(hard, soft)`, the same split `checkCoherence` reports, so the cross-module path
@@ -32202,14 +32161,12 @@ tyMatchesAst _ _ = False
 -- driver's `modules` in dependency-first order; `ieRows` is built by `buildImplEnvGo`
 -- over the same modules in ORDINAL order (which is that same order, offset by the
 -- prelude at 0) and within a module by `implDeclFacts = flatMap implDeclFact prog`, in
--- decl order.  The one difference is the prelude, which `cohRowsOf True` removes
+-- decl order.  The one difference is the prelude, which `cohRowsOf` removes
 -- BEFORE the `reverseL` below — so the filtered list's head is the first user module,
 -- which is exactly what the old list's head was.
 globalCoherenceConflict : ImplEnv -> (Option String, Option String)
 globalCoherenceConflict env =
-  match (cohScan
-    CohSweepGlobal
-    (reverseL (map cohImplOfRow (cohRowsOf True env))))
+  match cohScan CohSweepGlobal (reverseL (map cohImplOfRow (cohRowsOf env))) []
     CohScan hard soft => (map fst hard, map fst soft)
 
 -- the USER decls a driver wants coherence-checked.  Set by single-file drivers
@@ -32601,7 +32558,7 @@ reportOverlapForIface iface goals cands =
 goalsClosed : List Mono -> Bool
 goalsClosed goals =
   allList
-    (i => containsI i perRun.value.deferrableVarIds.value)
+    (i => IdMap.has i perRun.value.deferrableVarIds.value)
     (flatMap monoUnboundIds goals)
 
 -- the ONE interface all candidates implement, or None if they disagree (see the
@@ -34123,7 +34080,7 @@ ambiguousImplMsg iface =
 -- its type needs (#1576); a non-shrinking step spends fuel; a repeated goal is a cycle.
 -- This walk also enters each super of a goal beside it (`superRoutesAt`) and follows
 -- that super instance's `requires`.  The solving walks follow the same goals under that
--- measure, the super goals included (`checkSuperContext`, entered beside the goal the
+-- measure, the super goals included (`superGoalsEntered`, entered beside the goal the
 -- same way), and reject a cycle or a spent walk at the goal's site, so this walk
 -- reaches either outcome only on a rejected program (`requiresRouteWalkCut`).
 --
@@ -34156,7 +34113,7 @@ argImplRequiresRoutesForRow encl useScope m goals walk row =
 
 -- A route walk that met a cycle or ran out of fuel.  The solving walks share its
 -- measure and follow the same goals, a super instance's `requires` included
--- (`checkSuperContext`), and reject the goal at its site, so this is reached only on a
+-- (`superGoalsEntered`), and reject the goal at its site, so this is reached only on a
 -- program that already carries a type error, and its routes are never emitted.  With no error
 -- recorded it is a compiler invariant failure, never a silent `[]` (#1910).
 requiresRouteWalkCut : ReqStep -> List Route
@@ -34307,7 +34264,7 @@ realizeRecDictApps ((RecDictApp routesRef callee encl mono scope _) :: rest) =
   let slots =
     optionOr
       []
-      (lookupPredicateSlots callee perRun.value.funPredicateSlotsRef.value)
+      (lookupPredicateSlots callee perRun.value.funPredicateSlotsIdxRef.value)
   let routes = recRoutes encl scope mono slots
   routesRef := routes
   realizeRecDictApps rest
@@ -34374,7 +34331,7 @@ enclSlot encl m = match normalize m
   TVar cell =>
     indexOfId
       (tyvarId cell)
-      (predicateSlotIdsAt encl perRun.value.funPredicateSlotsRef.value)
+      (predicateSlotIdsAt encl perRun.value.funPredicateSlotsIdxRef.value)
   _ => None
 
 indexOfId : Int -> List Int -> Option Int
@@ -35624,7 +35581,7 @@ dictArityOf n =
   listLen
     (optionOr
       []
-      (lookupPredicateSlots n perRun.value.funPredicateSlotsRef.value))
+      (lookupPredicateSlots n perRun.value.funPredicateSlotsIdxRef.value))
 
 dictParams : String -> Int -> List Pat
 dictParams n k = dictParamsGo n 0 k
@@ -36015,6 +35972,8 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
     driverState.value.methodDispatchIdxByIdRef :=
       crossRun.value.universeMethodDispatchIdxByIdRef.value
+    -- The list alone is seeded here and re-keyed twice below; nothing reads the
+    -- name index until the final `setFunPredicateSlots` of this arm rebuilds it.
     perRun.value.funPredicateSlotsRef :=
       crossRun.value.crossModuleFunPredicateSlotsRef.value
     -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
@@ -36050,8 +36009,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- Three writes, in lockstep, per B-2.2-f (#1113): the declared-prefix sidecar rides the
     -- IDS table, and this is a whole-table replacement of all three.
     let _ =
-      setRef
-        perRun.value.funPredicateSlotsRef
+      setFunPredicateSlots
         (selfDeclArities
           mid
           prog
@@ -37840,9 +37798,8 @@ checkOneCallObligation deferNonGround univ iface occs loc scope =
     -- ⚡ PERF (#1974): the truncation gate and the match test below read THE SAME two
     -- buckets, so they are answered from ONE pair of lookups (`oblCallVerdict`) rather
     -- than the two-then-two the separate `oblGoalIsTruncated` / `implMatchesArgsU` calls
-    -- performed.  Every `mregLookupK` RENDERS ITS KEY INTO A FRESH STRING (`insertUnivImplAt`
-    -- carries the same warning for the same reason, and `check` is GC-bound), so the
-    -- doubled lookups were ~70 MB of extra garbage at N=400 modules and ~22% of the whole
+    -- performed.  Each `mregLookupK` is a full tree walk over the bucket map, and the
+    -- doubled lookups cost ~70 MB of extra garbage at N=400 modules and ~22% of the whole
     -- `typecheck` stage on `diff_compiler_perf_scaling.sh`'s `modules` shape — enough to
     -- push its TIME arm over the gate's 3.0x-per-doubling ceiling (measured 1.63 s -> 1.28 s
     -- at N=400 with the gate stubbed out).  The VERDICTS are byte-identical: same buckets,
@@ -38303,7 +38260,9 @@ undeterminedGoalExempt iface args scope =
   iface.irName == "Num"
     || monoVectorClosed args
     || anyIn (flatMap monoUnboundIds args) perRun.value.poisonedVars.value
-    || allList (declaredOblArgOk perRun.value.deferrableVarIds.value) args
+    || allList
+      (declaredOblArgOk (i => IdMap.has i perRun.value.deferrableVarIds.value))
+      args
     || allList (a => isSome (activeDictVarOf a scope)) args
     || goalGivenAt iface args scope
 
@@ -38415,7 +38374,7 @@ reportMixedGoalAmbiguity rigidIds window iface args loc =
 boundaryOwnsOpen : OrdMap Unit -> Int -> Bool
 boundaryOwnsOpen rigidIds i =
   not (omHasKey (intToString i) rigidIds)
-    && not (containsI i perRun.value.deferrableVarIds.value)
+    && not (IdMap.has i perRun.value.deferrableVarIds.value)
 
 -- The variables a later group can still ground (§6.2 T2): those no scheme
 -- quantifies in the types of this group's members [monos] and of every earlier
@@ -38433,7 +38392,7 @@ liveMemberIds monos =
 liveVarIdsOf : Mono -> List Int
 liveVarIdsOf m =
   filterList
-    (i => not (containsI i perRun.value.deferrableVarIds.value))
+    (i => not (IdMap.has i perRun.value.deferrableVarIds.value))
     (monoUnboundIds m)
 
 -- The prerequisites of the instances [obls]' goals select, as goals of the same
@@ -39143,7 +39102,7 @@ monoIsFunction m = match normalize m
 -- The recursion is bounded by the shared `requires` measure: [walk] is the path that
 -- reached (iface, args), and a repeated or non-shrinking-past-fuel goal is reported at
 -- [loc] (#1575, #2120).  The goal's dictionary also carries its supers', so each super
--- instance's `requires` is checked too (`checkSuperContext`).
+-- instance's `requires` is checked too (`superGoalsEntered`).
 checkNestedReqs : ImplUniverse ->
   ReqWalk ->
   IfaceRef ->
@@ -39162,35 +39121,78 @@ checkNestedReqs univ walk iface args loc scope =
       let (erred, _) = erredDuring (_ =>
         let _ = checkEnteredReqs univ next iface args loc scope
         fold
-          (_ sg => checkSuperContext univ walk sg loc scope)
+          (_ e => checkEnteredReqs univ e.sgWalk e.sgIface e.sgArgs loc scope)
           ()
-          (superGoalClosure iface args))
+          (superGoalsEntered univ walk loc [] iface args))
       if erred then () else noteWalkGoalDischarged next iface args
 
--- A dictionary for a goal carries one for each of its interface's supers at the same
--- arguments (DICT-SEMANTICS §2), built by the instance each of those selects, so that
--- instance's `requires` is part of the goal's.  A super goal is entered beside the
--- goal, on the walk that reached it, as the route walk enters it (`superRoutesAt`).  A
--- super with no instance is the impl declaration's error (`checkSuperImpls`) only for
--- an impl whose head types are all concrete; at a parametric head neither this walk
--- nor `checkSuperImpls` reports it (#4011).
--- The declaration also entails the context of the super instance its head selects
--- (`checkImplSuperContexts`), but a ground goal can select a more specific super
--- instance (DICT-SEMANTICS §6.1.4), whose context that check never saw, so this walk
--- is what rejects it (`test/dict_fixtures/requires-super-overlap-context-rejected.mdk`).
--- That covers ground goals only: a goal with a binder in it, where the overlap is
--- still open, is not checked (#4010).
-checkSuperContext : ImplUniverse ->
+-- A super goal a goal's construction builds, entered on the walk that reached the goal.
+data SuperGoalEntry = SuperGoalEntry {
+  sgWalk : ReqWalk,
+  sgIface : IfaceRef,
+  sgArgs : List Mono,
+}
+
+-- R-SUPER-CARRY (DICT-SEMANTICS §6.1.4 point 4).  A dictionary for a goal carries one
+-- for each of its interface's supers at the same arguments, transitively, each built
+-- by the instance that super goal selects, so that instance's `requires` is part of
+-- the goal's residual at every walk that reduces the goal: the end-of-body checker
+-- (`checkNestedReqs`), a generalizing or signed binder (`residualPredsOf`) and an impl
+-- body (`implGoalResiduals`).  The declaration entails the context of the super
+-- instance its head selects (`checkImplSuperContexts`), so only a strictly more
+-- specific super instance adds a goal.  A super goal is entered beside the goal, on the
+-- walk that reached it, as the route walk enters it (`superRoutesAt`), a cycle or
+-- spent fuel reported at [loc].  A super goal [answered] gives, itself or through its
+-- supers, is not entered: the construction's ladder tries `assum` before `inst`.  A
+-- super goal with no constructed argument is answered by a given, and one no instance
+-- matches is the impl declaration's error (`checkImplSuperContexts`): the
+-- declaration's existence match (`superHeadCovers`) holds the head variables rigid and
+-- binds a repeated impl variable consistently, as `implMatchesU` does here.
+superGoalsEntered : ImplUniverse ->
   ReqWalk ->
-  (IfaceRef, List Mono) ->
   Option Loc ->
-  ScopeId ->
-  Unit
-checkSuperContext univ walk (iface, args) loc scope
-  | not (allConcreteHeads args && implMatchesU univ iface args) = ()
-  | otherwise = match reqWalkReported loc (reqWalkEnter walk iface args)
-    Some next => checkEnteredReqs univ next iface args loc scope
-    None => ()
+  List (IfaceRef, List Mono) ->
+  IfaceRef ->
+  List Mono ->
+  List SuperGoalEntry
+superGoalsEntered univ walk loc answered iface args =
+  flatMap
+    (sg => superGoalEntered univ walk loc answered (fst sg) (snd sg))
+    (superGoalClosure iface args)
+
+superGoalEntered : ImplUniverse ->
+  ReqWalk ->
+  Option Loc ->
+  List (IfaceRef, List Mono) ->
+  IfaceRef ->
+  List Mono ->
+  List SuperGoalEntry
+superGoalEntered univ walk loc answered sup supArgs
+  | not (anyConcreteHead supArgs && implMatchesU univ sup supArgs) = []
+  | goalAnsweredBy answered sup supArgs = []
+  | otherwise = match reqWalkReported loc (reqWalkEnter walk sup supArgs)
+    Some next =>
+      [SuperGoalEntry { sgWalk = next, sgIface = sup, sgArgs = supArgs }]
+    None => []
+
+-- Whether one of [answered], or one of its supers at its arguments, is the goal.
+goalAnsweredBy : List (IfaceRef, List Mono) -> IfaceRef -> List Mono -> Bool
+goalAnsweredBy answered iface args =
+  anyList
+    (g =>
+      walkGoalSame (fst g) (snd g) iface args
+        || anyList
+          (s => walkGoalSame (fst s) (snd s) iface args)
+          (superGoalClosure (fst g) (snd g)))
+    answered
+
+-- The goals a goal's super instances leave beyond [own], the residuals its own
+-- instance's context left: one [own] answers is not new.
+superCarriedResiduals : List (IfaceRef, List Mono) ->
+  List (IfaceRef, List Mono) ->
+  List (IfaceRef, List Mono)
+superCarriedResiduals own carried =
+  own ++ filterList (g => not (goalAnsweredBy own (fst g) (snd g))) carried
 
 -- The goals of [iface]'s supers at [args], transitively, each interface once, so a
 -- cyclic super graph (rejected by W1) still ends.
@@ -41041,8 +41043,9 @@ checkImplHeadGoal subject roots givens (iface, ds, loc) =
 -- instance that accepts the goal only by fixing a head variable does not reduce
 -- it, and the goal itself is the residual.  A goal whose arguments are all type
 -- variables is its own residual, as in a signature's body: no instance reduces it,
--- a blanket one included.  The walk is bounded by the shared `requires` measure and
--- solves each goal once (`solvedOnWalk`), as in `residualPredsOf`; [headIds] and
+-- a blanket one included.  A reduced goal's super instances contribute their context
+-- too, as in `residualPredsOf`.  The walk is bounded by the shared `requires` measure
+-- and solves each goal once (`solvedOnWalk`), as in `residualPredsOf`; [headIds] and
 -- [givens] are fixed for the walk `checkImplHeadGoal` starts.
 implGoalResiduals : ReqWalk ->
   OrdMap Unit ->
@@ -41071,15 +41074,27 @@ implGoalResiduals walk headIds givens iface args
             else
               []
           Some (subst, reqs) =>
-            flatMap
-              (r =>
-                implGoalResiduals
-                  next
-                  headIds
-                  givens
-                  (fst r)
-                  (map (unrigidSig cells) (snd r)))
-              (map (reqToObligation subst) reqs))
+            let own =
+              flatMap
+                (r =>
+                  implGoalResiduals
+                    next
+                    headIds
+                    givens
+                    (fst r)
+                    (map (unrigidSig cells) (snd r)))
+                (map (reqToObligation subst) reqs)
+            superCarriedResiduals
+              own
+              (flatMap
+                (e =>
+                  flatMap
+                    (g =>
+                      implGoalResiduals e.sgWalk headIds givens (fst g) (snd g))
+                    (optionOr
+                      []
+                      (rigidHeadInstanceContext headIds e.sgIface e.sgArgs)))
+                (superGoalsEntered univ walk !goalSiteLoc own iface args)))
 
 -- An instance answers the goal only by fixing a head variable: some instance head
 -- unifies with it while the head variables are free, and none does while they are
@@ -44049,18 +44064,21 @@ kindIsDeclared _ = True
 seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
 seedParamPolarityFixpointScoped ds allDs =
   let cur = perRun.value.dataParamPolarityRef.value
-  let fresh = filterList (d => not (declHasPolarityEntry cur d)) allDs
+  -- Index the small side: only the entries of `cur` that match a key of `allDs` matter.
+  let allKeyIndex = tabKeyIndex (declPolarityKeys allDs)
+  let curIndex =
+    tabKeyIndex
+      (map fst (filterList (e => tabKeyIndexHas allKeyIndex (fst e)) cur))
+  let fresh = filterList (d => not (declHasPolarityEntry curIndex d)) allDs
   let full = declEnvPolarityEntriesFix cur fresh
-  let keys = declPolarityKeys ds
-  let kept = filterList (e => tabKeyElem keys (fst e)) full
+  let keyIndex = tabKeyIndex (declPolarityKeys ds)
+  let kept = filterList (e => tabKeyIndexHas keyIndex (fst e)) full
   perRun.value.dataParamPolarityRef := kept ++ cur
 
-declHasPolarityEntry : List (TabKey, List Polarity) -> Decl -> Bool
-declHasPolarityEntry tab d = match declPolarityKeys [d]
+declHasPolarityEntry : OrdMap (List TabKey) -> Decl -> Bool
+declHasPolarityEntry index d = match declPolarityKeys [d]
   [] => False
-  k :: _ => match lookupTab k tab
-    Some _ => True
-    None => False
+  k :: _ => tabKeyIndexHas index k
 
 -- every key `declEnvPolarityEntries` would record for [ds], public or not —
 -- the input-side counterpart of `polarityPublicKeys`.
@@ -44990,6 +45008,8 @@ setFunConstraintEntry : String -> List PredicateSlot -> Unit
 setFunConstraintEntry m slots =
   perRun.value.funPredicateSlotsRef :=
     (m, slots) :: perRun.value.funPredicateSlotsRef.value
+  perRun.value.funPredicateSlotsIdxRef :=
+    omInsert m slots perRun.value.funPredicateSlotsIdxRef.value
   -- B-2.2-f (#1113): the DECLARED-prefix sidecar, written in the SAME op as the ids it
   -- describes so the two can never be written apart.
   --
@@ -45810,7 +45830,7 @@ registerSchemeObligations memberDefIds sigTvMaps callObls addedObls ((m, sch) ::
   -- `mk : Int -> a`) does NOT quantify its var (`Forall []`), so an escaped ambiguous
   -- var never enters this set and the undetermined-goal verdict rejects it (a1_greet/a1_letleak).
   perRun.value.deferrableVarIds :=
-    schemeIds sch ++ perRun.value.deferrableVarIds.value
+    idSetInsertAll (schemeIds sch) perRun.value.deferrableVarIds.value
   let obs =
     dedupVecObls (schemeOblsForMember sigTvMaps callObls addedObls m sch)
   let _ =
@@ -45902,7 +45922,8 @@ declaredOblMixed : List Int ->
 declaredOblMixed boundIds ifref tvMap args =
   let monos = map (fromAstType tvMap) args
   let ids = flatMap (declaredOblArgId boundIds) monos
-  if isEmptyL ids || not (allList (declaredOblArgOk boundIds) monos) then
+  if isEmptyL ids
+    || not (allList (declaredOblArgOk (i => containsI i boundIds)) monos) then
     []
   else
     [VecObl { voIface = ifref, voIds = ids, voArgs = monos }]
@@ -45925,10 +45946,10 @@ declaredOblArgId boundIds m = match normalize m
 -- the two halves are a single change (admitting without it substitutes to a
 -- wrong-but-CONCRETE goal, strictly worse than the missing one it replaces).  An
 -- UNBOUND tyvar anywhere in the argument is still refused — it has no id to defer on.
-declaredOblArgOk : List Int -> Mono -> Bool
-declaredOblArgOk boundIds m = match normalize m
-  TVar cell => containsI (tyvarId cell) boundIds
-  _ => allList (id => containsI id boundIds) (monoTyvarIds m)
+declaredOblArgOk : (Int -> Bool) -> Mono -> Bool
+declaredOblArgOk isBound m = match normalize m
+  TVar cell => isBound (tyvarId cell)
+  _ => allList isBound (monoTyvarIds m)
 
 -- the monos a predicate's arguments resolve to under a tyvar-name -> mono map, in
 -- declaration order; None if ANY argument is not a plain tyvar or is absent from the
@@ -46257,7 +46278,9 @@ isBareTyvarMono m = match normalize m
 -- instance-head variable to whatever stands at its position but never binds a free
 -- goal variable: an instance is selected only where it is generic exactly where the
 -- goal is still free, so `impl Conv Int Bool` is never selected for `Conv (Wrap t) u`.
--- The selected instance's `requires`, under the match, are solved in turn.
+-- The selected instance's `requires`, under the match, are solved in turn, and so is
+-- the context of each super instance the goal's construction selects, beyond what
+-- those leave (`superGoalsEntered`).
 -- - No instance matches: `unroutedResidual` decides between a reject at the goal's site
 --   and keeping the goal as its own residual.
 -- - The match is not the instance every use selects (`residualSelectionStable`, §6.1.3):
@@ -46281,22 +46304,25 @@ residualPredsOf chosen walk iface args
   | otherwise =
     match reqWalkReported !goalSiteLoc (reqWalkEnter walk iface args)
       None => []
-      Some next => solvedOnWalk
-        next
-        iface
-        args
-        (_ =>
-          match (findMatchingImplReqsU
-            perRun.value.residualUnivRef.value
-            iface
-            args)
-            None => unroutedResidual iface args
-            Some _ if not (residualSelectionStable chosen iface args) =>
-              [(iface, args)]
-            Some (subst, reqs) =>
+      Some next => solvedOnWalk next iface args (_ =>
+        let univ = perRun.value.residualUnivRef.value
+        match findMatchingImplReqsU univ iface args
+          None => unroutedResidual iface args
+          Some _ if not (residualSelectionStable chosen iface args) =>
+            [(iface, args)]
+          Some (subst, reqs) =>
+            let own =
               flatMap
                 (r => residualPredsOf chosen next (fst r) (snd r))
-                (map (reqToObligation subst) reqs))
+                (map (reqToObligation subst) reqs)
+            superCarriedResiduals
+              own
+              (flatMap
+                (e =>
+                  flatMap
+                    (r => residualPredsOf chosen e.sgWalk (fst r) (snd r))
+                    (reqObligationsFor univ e.sgIface e.sgArgs))
+                (superGoalsEntered univ walk !goalSiteLoc own iface args)))
 
 -- Whether every use of the binder selects the instance the goal matches now
 -- (DICT-SEMANTICS §6.1.3): the goal mentions no variable the uses choose, or among the
@@ -46599,7 +46625,7 @@ goalDefersOpenWorld scope iface args =
     && allList monoHeadIsDecl args
     && isNonEmptyL (flatMap monoUnboundIds args)
     && allList
-      (i => containsI i perRun.value.deferrableVarIds.value)
+      (i => IdMap.has i perRun.value.deferrableVarIds.value)
       (flatMap monoUnboundIds args)
     && (goalMatchesGiven scope iface args || goalSlotStillOpen args)
 
@@ -47311,7 +47337,7 @@ methodReturnProbeStamp ownedRow foreignRow impls =
   let resultMono = stripArrows request.mrrOccurrence
   let _ =
     resolveExactReturnSite
-      []
+      omEmpty
       "make"
       tagRef
       implRef
@@ -49430,9 +49456,9 @@ kindPublicDataDecl _ = False
 -- superinterface existence query (checkSuperImpls/superImplExists) must see an
 -- imported module's `impl Semigroup T` even when it isn't `export`-marked — else
 -- `impl Monoid T` in an importer is falsely rejected for a "missing" super impl.
-pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
+pickSchemes : List String -> OrdMap Scheme -> List (String, Scheme)
 pickSchemes [] _ = []
-pickSchemes (n :: ns) table = match lookupAssoc n table
+pickSchemes (n :: ns) table = match omLookup n table
   Some s => (n, s) :: pickSchemes ns table
   None => pickSchemes ns table
 
@@ -49691,7 +49717,9 @@ publicModuleExports prog bindings =
     ))
     (tagModuleExports
       standalones
-      (pickSchemes (publicValNames prog) bindings.mbSchemes))
+      (pickSchemes
+        (publicValNames prog)
+        (omFromPairs (reverseL bindings.mbSchemes) omEmpty)))
 
 -- The first row for a name wins, unless a second import supplies a different
 -- declaration of the same name: then the occurrence is the ambiguity the
@@ -52654,9 +52682,9 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   -- `ceHere` and `moduleImplUniv` (`checkBodyImpl`) already read at.
   -- #1559 A-3.7: coherence reads the SAME whole-graph `IE` at the SAME `ordHere`, and
   -- takes this module's OWN rows from it (`cohRowsOwnedBy`) — the population `prog`
-  -- named, derived in `checkCoherence`'s header.  `hasPrelude = True`: this env came
-  -- from `buildDeclEnvs`, which seats the prelude at ordinal 0, and coherence has never
-  -- seen prelude impls.
+  -- named, derived in `checkCoherence`'s header.  This env came
+  -- from `buildDeclEnvs`, which seats the prelude at ordinal 0, so the module's rows
+  -- are also paired with the prelude's.
   let _ =
     runFinalChecks
       prog
@@ -52666,7 +52694,6 @@ checkModuleFullDiags mid seedVars accData accAll prog =
       declEnvsHere.deImpls
       declEnvsHere.deImpls
       ordHere
-      True
   (
     schemes,
     marked,
@@ -53352,7 +53379,7 @@ driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
   -- #414: no span — see globalCoherenceConflict (the entry module it attaches to is
   -- not the module the span would name, and the renderer keys the file by group).
   -- F-3d: the ⊑-incomparable half rides the WARNING list of the same module.
-  -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf True` is
+  -- #1559 A-3.7: the whole-graph `IE` the preamble built above; `cohRowsOf` is
   -- what excludes the prelude, replacing "walk the user `modules` list".
   -- It reads `deImpls` only, which nothing between here and the tree arm's return
   -- writes, so attaching once here serves both selections.
@@ -53714,6 +53741,25 @@ checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkOneToLinesWithRuntime runtimeDecls coreProg userProg =
   checkModulesEntryReport runtimeDecls coreProg [("__user__", userProg)]
 
+-- `checkOneToLinesWithRuntime` with the prelude key for the core-check memo (see
+-- `checkCoreMemoized`): same contract as `checkOneSchemeFullK`.  Same render as
+-- `checkModulesEntryReport`, over the keyed driver.
+export
+checkOneToLinesWithRuntimeK : Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  String
+checkOneToLinesWithRuntimeK preludeKey runtimeDecls coreProg userProg =
+  let (schemes, errs, warns) = checkModulesEntryFullK
+    preludeKey
+    runtimeDecls
+    coreProg
+    [("__user__", userProg)]
+  match errs
+    [] => joinNl (schemeLines schemes ++ map tcMsg warns)
+    _ => joinNl (typeErrorLines (map tcMsg errs))
+
 export
 checkOneToLines : List Decl -> String
 checkOneToLines userProg =
@@ -53982,8 +54028,8 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
   let allModDecls = flatMap snd modules2
   let promotedQ = crossRun.value.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
-  perRun.value.funPredicateSlotsRef :=
-    scopePredicateSlots promotedQ allMods (core2 ++ allModDecls)
+  setFunPredicateSlots
+    (scopePredicateSlots promotedQ allMods (core2 ++ allModDecls))
   -- 🚨 B-2.2-b1: THE SIDECAR IS CLEARED, NOT LEFT ALONE.  `f` shipped arguing that
   -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
   -- REQUIRES WRITING `[]`.  `resetState ()` fires at exactly two sites and neither runs
@@ -54058,8 +54104,7 @@ dictPassModulesScoped dictNames promotedQ importerReach core2 allModules ((mid, 
   -- this module's phantom dict param; `selfDeclArities` is what puts the identity back for
   -- the one set of names this module can answer authoritatively — its own.
   let _ =
-    setRef
-      perRun.value.funPredicateSlotsRef
+    setFunPredicateSlots
       (selfDeclArities
         mid
         prog
@@ -55194,7 +55239,9 @@ runStampSteps ctx (s :: rest) =
 runStampStep : StampCtx -> StampStep -> Unit
 runStampStep ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
 runStampStep ctx SSReturnSites =
-  resolveSites ctx.scRpNames (siteGoalsIn GKReturnSite ctx.scGoals)
+  resolveSites
+    (omFromNames ctx.scRpNames omEmpty)
+    (siteGoalsIn GKReturnSite ctx.scGoals)
 runStampStep ctx SSBinopSites =
   resolveOpSites True (siteGoalsIn GKBinopSite ctx.scGoals)
 runStampStep ctx SSUnopSites =

@@ -1,0 +1,133 @@
+-- Sibling test for `compiler/backend/wasm_emit.mdk`'s string-literal segments ([P-TEST-SIBLING]).
+--
+-- Each program is prelude-free, lowered without typechecking, and emitted through
+-- `emitProgramRecord` as `compiler/entries/wasm_emit_modules_main.mdk` does for its
+-- lowered program.  A String literal's UTF-8 bytes live in one passive
+-- `(data $strseg_N "…")` per DISTINCT payload, and each site reads its segment with
+-- `array.new_data $u8arr $strseg_N`.  The expectations are derived from the bytes
+-- the literals spell (`a` is 0x61, `b` 0x62, `c` 0x63, `d` 0x64, `x` 0x78), not from
+-- a capture of the emitter.
+
+-- lint-disable-file rule-duplicate-body
+-- `watOf` is the sibling trapmsg test's helper, kept local so each test file reads alone.
+
+import test.{Expectation, expectAll, expectEqual, labelFail}
+import string.{split, stripSuffix}
+import frontend.parser.{parse}
+import frontend.desugar.{desugar}
+import types.annotate.{annotateProgram}
+import types.typecheck.{grantWholeDomain}
+import ir.core_ir_lower.{
+  EmitTarget(..),
+  ctorFieldTypeNames,
+  declSigTypeNames,
+  declaredRecordFieldOrders,
+  lowerProgramEmit,
+}
+import backend.wasm_emit.{emitProgramRecord, makeWasmEmitInputFull}
+
+-- the emitted WAT of `src`, as the modules entry would print it for that program
+watOf : String -> String
+watOf src =
+  let decls = grantWholeDomain (desugar (parse src))
+  let input =
+    makeWasmEmitInputFull
+      []
+      (declSigTypeNames decls)
+      (ctorFieldTypeNames decls)
+      False
+      False
+      (declaredRecordFieldOrders decls)
+      []
+  let cp = lowerProgramEmit TargetWasm (annotateProgram decls)
+  let (text, _) = emitProgramRecord input cp
+  text
+
+-- the (segment id, escaped payload) of one `(data $strseg_N "…")` line
+segmentOf : String -> Option (String, String)
+segmentOf l = match split "(data $strseg_" l
+  [_, rest] => match split " \"" rest
+    [n, body] => map (payload => (n, payload)) (stripSuffix "\")" body)
+    _ => None
+  _ => None
+
+-- the segments of the module, in the order the module declares them
+segments : String -> List (String, String)
+segments wat = segmentScan (split "\n" wat)
+
+segmentScan : List String -> List (String, String)
+segmentScan [] = []
+segmentScan (l :: rest) = match segmentOf l
+  Some s => s :: segmentScan rest
+  None => segmentScan rest
+
+-- the segment id each `array.new_data` site reads, in the order the sites appear
+refs : String -> List String
+refs wat = refScan (split "\n" wat)
+
+refScan : List String -> List String
+refScan [] = []
+refScan (l :: rest) = match split "array.new_data $u8arr $strseg_" l
+  [_, n] => n :: refScan rest
+  _ => refScan rest
+
+-- `f` returns the same literal from every clause, so each clause is one site
+sameLiteralSrc : String
+sameLiteralSrc = "f : Int -> String\nf 0 = \"ab\"\nf _ = \"ab\"\nmain = f 0"
+
+test "a literal used at two sites shares one segment: both sites read segment 0" =
+  let wat = watOf sameLiteralSrc
+  expectAll [
+    labelFail
+      "one segment, holding the bytes of \"ab\""
+      (expectEqual [("0", "\\61\\62")] (segments wat)),
+    labelFail "both sites read that segment" (expectEqual ["0", "0"] (refs wat)),
+  ]
+
+test "distinct literals keep distinct segments, numbered in first-use order" =
+  let wat =
+    watOf
+      "f : Int -> String\nf 0 = \"ab\"\nf 1 = \"cd\"\nf _ = \"ab\"\nmain = f 0"
+  expectAll [
+    labelFail
+      "two segments, one per distinct payload"
+      (expectEqual [("0", "\\61\\62"), ("1", "\\63\\64")] (segments wat)),
+    labelFail
+      "the three sites read the shared \"ab\" segment and the \"cd\" segment"
+      (expectEqual ["0", "1", "0"] (refs wat)),
+  ]
+
+-- bytes [10, 111] ("\n" then `o`) and [101, 11] (`e` then VT) both flatten to "10111"
+-- without a separator, so they pin that the segment key delimits its byte values
+test "payloads whose byte values concatenate to the same digits stay distinct" =
+  let wat =
+    watOf "f : Int -> String\nf 0 = \"\\u{a}o\"\nf _ = \"e\\u{b}\"\nmain = f 0"
+  labelFail
+    "two segments, one per payload"
+    (expectEqual [("0", "\\0a\\6f"), ("1", "\\65\\0b")] (segments wat))
+
+test "the empty string is one segment with no bytes, shared by its sites" =
+  let wat = watOf "f : Int -> String\nf 0 = \"\"\nf _ = \"\"\nmain = f 0"
+  expectAll [
+    labelFail "one empty segment" (expectEqual [("0", "")] (segments wat)),
+    labelFail "both sites read it" (expectEqual ["0", "0"] (refs wat)),
+  ]
+
+test "the empty string and a one-byte literal stay distinct" =
+  let wat = watOf "f : Int -> String\nf 0 = \"\"\nf _ = \"a\"\nmain = f 0"
+  labelFail
+    "two segments: empty, then \"a\""
+    (expectEqual [("0", ""), ("1", "\\61")] (segments wat))
+
+test "a literal repeated at many sites keeps one segment and one reference per site" =
+  let wat =
+    watOf
+      "f : Int -> String\nf 0 = \"x\"\nf 1 = \"x\"\nf 2 = \"x\"\nf _ = \"x\"\nmain = f 0"
+  expectAll [
+    labelFail
+      "one segment for \"x\""
+      (expectEqual [("0", "\\78")] (segments wat)),
+    labelFail
+      "four sites, all reading segment 0"
+      (expectEqual ["0", "0", "0", "0"] (refs wat)),
+  ]

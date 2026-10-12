@@ -397,9 +397,8 @@ mkIdent ns origin name = map (io => Ident ns io name) (identOriginOf origin)
 --
 --   grep -nw TabKey compiler/types/*.mdk | grep -vE ':[[:space:]]*--'
 --
---   * ALLOCATION. `Registry` keys on `regKeyRender`, so every LOOKUP would
---     build a fresh `String` (four netstrings, concatenated), UNCONDITIONALLY
---     and on every call — REJECTED for that reason. Those two tables are read
+--   * ALLOCATION. A key projection that mints a fresh value on every LOOKUP is
+--     REJECTED here. Those two tables are read
 --     from `fromAstTypeApp`/`fromAstTypeE`/`headRemainingKinds` — once or more
 --     per type-application node of every signature the elaborator meets —
 --     inside `medaka check`, which `compiler/AGENTS.md` measures as GC-BOUND

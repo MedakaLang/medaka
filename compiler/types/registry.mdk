@@ -63,19 +63,12 @@
 -- selects 16 — NARROWER than this file, not wider.
 --
 -- ── Backing store ───────────────────────────────────────────────────────────
--- Wraps the EXISTING `OrdMap` (`support/ordmap.mdk`, itself a transparent
--- alias for stdlib `Map String a`) rather than reaching for stdlib `map`/
--- `hash_map` directly. `support/ordmap.mdk` is already imported by
--- `types/typecheck.mdk`, so this pays NOTHING extra: `Map`'s Eq/Ord/Debug/
--- Display/Mappable/Monoid instance surface is already forced into the
--- binary. Importing a stdlib module that defines a brand NEW type (e.g.
--- `map` cold, or `hash_map`) from a module that does not already transitively
--- pull it in is the anti-pattern `AGENTS.md` measures at +34 KB / +4.8%
--- self-compile (DCE keeps a `DImpl`/`DInterface` whole once it is
--- reachable at all) — this module avoids that by riding the SAME `OrdMap`
--- everything else already rides. `map.{entries}` below is likewise
--- already-forced surface (`entries` operates on the already-forced `Map`
--- type), so it adds no new retained instance surface.
+-- Stdlib `Map` (`map.mdk`), keyed by the `RegKey` itself under its derived
+-- `Ord`, so a lookup or insert compares structurally and builds no string. (It
+-- was an `OrdMap` keyed by `regKeyRender`'s output, which allocated a fresh
+-- string per operation.) `map` is already in the binary through
+-- `support/ordmap.mdk`, which `types/typecheck.mdk` imports, so this adds no new
+-- retained instance surface.
 --
 -- ── `identKey`: the ONE renderer, collision-free by construction ───────────
 -- Every component (namespace tag, origin tag, origin module-or-empty, name)
@@ -163,13 +156,10 @@ import support.ordmap.{
   omEmpty,
   omInsert,
   omLookup,
-  omHasKey,
-  omDelete,
-  omSize,
 }
 import support.util.{lenKey, listLen, joinWith, filterList, contains}
 import types.route_key.{typeTagOf}
-import map.{entries}
+import map.{Map(..), entries, get, set, has, delete, size}
 
 -- ── identKey ─────────────────────────────────────────────────────────────
 
@@ -211,8 +201,7 @@ identKey (Ident ns origin name) =
 -- `RegKey`'s identity block. The `TkBare` arm is the OTHER half of `tabKeyEq`'s
 -- "never equate a
 -- `TkIdent` with a `TkBare`" rule, expressed in the rendering rather than in a
--- comparator, because `Registry` compares RENDERED keys inside an `OrdMap`
--- and would otherwise have no way to tell the two halves apart.
+-- comparator. The rendered text is what the rendering-layer tests pin.
 --
 -- ⚠️ ALSO EXACTLY FOUR NETSTRINGS, and the middle slot is `"bare"`, which
 -- `originTag` can never produce (`identOriginFold "builtin" (_ => "module")`
@@ -399,44 +388,39 @@ regKeyRender (RegKey keys ords) =
   lenKey "\{listLen keys}" ++ tabKeys keys ++ joinWith "" (map ordKey ords)
 
 -- ── Registry: LAST-WRITE-WINS map from a RegKey to ONE value ──────────────
--- Stores the ORIGINAL `RegKey` alongside each value (not just its rendered
--- key) so `regEntries` can hand identities back out without ever parsing
--- `regKeyRender`'s opaque output.
-public export data Registry v = Registry (OrdMap (RegKey, v))
+-- Keyed by the `RegKey` ITSELF, under its derived structural `Ord`: a lookup
+-- compares keys in place and allocates nothing. The earlier design rendered
+-- every key to a `String` first, and that render was the dominant allocation of
+-- each registry read (`check` is GC-bound). The map still stores the ORIGINAL
+-- `RegKey` beside each value so `regEntries` hands identities back out.
+public export data Registry v = Registry (Map RegKey (RegKey, v))
 
 export
 regEmpty : Registry v
-regEmpty = Registry omEmpty
+regEmpty = Registry Tip
 
 export
 regLookupK : RegKey -> Registry v -> Option v
-regLookupK k (Registry m) = map ((_, v) => v) (omLookup (regKeyRender k) m)
+regLookupK k (Registry m) = map ((_, v) => v) (get k m)
 
 export
 regLookup : Ident -> Registry v -> Option v
 regLookup ident r = regLookupK (regKeyOf ident) r
 
--- ⚠️ `regKeyRender k` is bound ONCE. Medaka is strict, so the two-call form
--- evaluates the projection TWICE, and this projection BUILDS a string —
--- `support/util.mdk`'s `dedupBy` carries the same warning verbatim for the
--- same reason, and `check` is GC-bound. Do not call `identKey ident` twice
--- here.
 export
 regInsertCheckedK : RegKey -> v -> Registry v -> (Registry v, Bool)
-regInsertCheckedK k v (Registry m) =
-  let s = regKeyRender k
-  (Registry (omInsert s (k, v) m), omHasKey s m)
+regInsertCheckedK k v (Registry m) = (Registry (set k (k, v) m), has k m)
 
 export
 regInsertChecked : Ident -> v -> Registry v -> (Registry v, Bool)
 regInsertChecked ident v r = regInsertCheckedK (regKeyOf ident) v r
 
--- ⚠️ NOT `fst (regInsertCheckedK …)`: that form did the `omHasKey` tree walk
+-- NOT `fst (regInsertCheckedK …)`: that form did the `has` tree walk
 -- and threw the answer away. The overwrite signal costs a lookup, so the
 -- caller who does not want it does not pay for it.
 export
 regInsertK : RegKey -> v -> Registry v -> Registry v
-regInsertK k v (Registry m) = Registry (omInsert (regKeyRender k) (k, v) m)
+regInsertK k v (Registry m) = Registry (set k (k, v) m)
 
 export
 regInsert : Ident -> v -> Registry v -> Registry v
@@ -444,13 +428,13 @@ regInsert ident v r = regInsertK (regKeyOf ident) v r
 
 export
 regDeleteK : RegKey -> Registry v -> Registry v
-regDeleteK k (Registry m) = Registry (omDelete (regKeyRender k) m)
+regDeleteK k (Registry m) = Registry (delete k m)
 
 export
 regDelete : Ident -> Registry v -> Registry v
 regDelete ident r = regDeleteK (regKeyOf ident) r
 
--- Enumeration order is `regKeyRender` order (a sorted `OrdMap`), which is
+-- Enumeration order is `RegKey`'s derived `Ord` order (a sorted `Map`), which is
 -- NEITHER declaration order NOR alphabetical by name — see "What a conversion
 -- still has to review" in the module doc-comment. It IS deterministic.
 export
@@ -468,7 +452,7 @@ regKeys r = map fst (regEntries r)
 
 export
 regSize : Registry v -> Int
-regSize (Registry m) = omSize m
+regSize (Registry m) = size m
 
 -- The bulk-delete `rejectCyclicAliases` (`types/typecheck.mdk`) needs: it
 -- enumerates the alias table, computes a cyclic set, then rebuilds the table
@@ -504,19 +488,17 @@ regMerge older newer = regFromEntriesGo (regEntries newer) older
 -- differ by call order — the "order-free" guarantee is about completeness
 -- (nothing is dropped), not about the enumeration order of `mregLookup`'s
 -- result.
-public export data MultiRegistry v = MultiRegistry (OrdMap (RegKey, List v))
+public export data MultiRegistry v = MultiRegistry (Map RegKey (RegKey, List v))
 
 export
 mregEmpty : MultiRegistry v
-mregEmpty = MultiRegistry omEmpty
+mregEmpty = MultiRegistry Tip
 
 export
 mregAddK : RegKey -> v -> MultiRegistry v -> MultiRegistry v
-mregAddK k v (MultiRegistry m) =
-  let s = regKeyRender k
-  match omLookup s m
-    Some (_, vs) => MultiRegistry (omInsert s (k, v :: vs) m)
-    None => MultiRegistry (omInsert s (k, [v]) m)
+mregAddK k v (MultiRegistry m) = match get k m
+  Some (_, vs) => MultiRegistry (set k (k, v :: vs) m)
+  None => MultiRegistry (set k (k, [v]) m)
 
 export
 mregAdd : Ident -> v -> MultiRegistry v -> MultiRegistry v
@@ -579,15 +561,13 @@ mregAdd ident v mr = mregAddK (regKeyOf ident) v mr
 -- bucket order is semantic. Say which in the call site's comment.
 export
 mregAppendK : RegKey -> v -> MultiRegistry v -> MultiRegistry v
-mregAppendK k v (MultiRegistry m) =
-  let s = regKeyRender k
-  match omLookup s m
-    Some (_, vs) => MultiRegistry (omInsert s (k, vs ++ [v]) m)
-    None => MultiRegistry (omInsert s (k, [v]) m)
+mregAppendK k v (MultiRegistry m) = match get k m
+  Some (_, vs) => MultiRegistry (set k (k, vs ++ [v]) m)
+  None => MultiRegistry (set k (k, [v]) m)
 
 export
 mregLookupK : RegKey -> MultiRegistry v -> List v
-mregLookupK k (MultiRegistry m) = match omLookup (regKeyRender k) m
+mregLookupK k (MultiRegistry m) = match get k m
   Some (_, vs) => vs
   None => []
 
@@ -609,7 +589,7 @@ mregKeys mr = map fst (mregEntries mr)
 -- Number of DISTINCT keys, not the total number of values added.
 export
 mregSize : MultiRegistry v -> Int
-mregSize (MultiRegistry m) = omSize m
+mregSize (MultiRegistry m) = size m
 
 -- Bucket-CONCATENATING union: no value from either side is dropped, which is
 -- the invariant that makes this type worth having. `newer`'s values for a
@@ -629,15 +609,15 @@ mregAddAll k (v :: vs) acc = mregAddAll k vs (mregAddK k v acc)
 -- ── SetRegistry: membership only ──────────────────────────────────────────
 -- Stores the `RegKey` as its value so the set can be ENUMERATED, which a
 -- size query (`sregSize`) and any "did you mean" candidate list need.
-public export data SetRegistry = SetRegistry (OrdMap RegKey)
+public export data SetRegistry = SetRegistry (Map RegKey RegKey)
 
 export
 sregEmpty : SetRegistry
-sregEmpty = SetRegistry omEmpty
+sregEmpty = SetRegistry Tip
 
 export
 sregAddK : RegKey -> SetRegistry -> SetRegistry
-sregAddK k (SetRegistry m) = SetRegistry (omInsert (regKeyRender k) k m)
+sregAddK k (SetRegistry m) = SetRegistry (set k k m)
 
 export
 sregAdd : Ident -> SetRegistry -> SetRegistry
@@ -645,7 +625,7 @@ sregAdd ident s = sregAddK (regKeyOf ident) s
 
 export
 sregMemberK : RegKey -> SetRegistry -> Bool
-sregMemberK k (SetRegistry m) = omHasKey (regKeyRender k) m
+sregMemberK k (SetRegistry m) = has k m
 
 export
 sregMember : Ident -> SetRegistry -> Bool
@@ -654,7 +634,7 @@ sregMember ident s = sregMemberK (regKeyOf ident) s
 -- The number of members; a count cannot be written against this type without it.
 export
 sregSize : SetRegistry -> Int
-sregSize (SetRegistry m) = omSize m
+sregSize (SetRegistry m) = size m
 
 export
 sregKeys : SetRegistry -> List RegKey

@@ -1,8 +1,12 @@
 -- Unit tests for the clang profile a build's link takes (build_cmd.mdk's
--- `profileClang`): which opt flag, and whether ThinLTO detection runs.
+-- `profileClang`): which opt flag, and whether ThinLTO detection runs.  Also
+-- the static-libgc link flags (`gcStaticLibs`) and their shared-library
+-- fallback (`gcSharedLibs`).
 
 import test.{expectAll, expectEqual}
-import driver.build_cmd.{BuildProfile(..), profileClang}
+import driver.build_cmd.{
+  BuildProfile(..), profileClang, gcStaticLibs, gcSharedLibs
+}
 
 test "a normal build keeps the opt level it was given and runs LTO detection" = expectAll
   [
@@ -26,3 +30,26 @@ test "a probe override takes that level with LTO detection on" = expectAll [
   expectEqual ("-O2", True) (profileClang BuildProbe "-O2" "-O2"),
   expectEqual ("-O1", True) (profileClang BuildProbe "-O3" "-O1"),
 ]
+
+test "the static libgc flags put the archive where -lgc was and keep its deps" =
+  expectEqual
+    ["/usr/lib/libgc.a", "-lpthread", "-ldl"]
+    (gcStaticLibs "/usr/lib/libgc.a" ["-lgc", "-lpthread", "-ldl"])
+
+test "the static libgc flags keep a search directory and leave other libraries" =
+  expectEqual
+    ["-L/opt/gc/lib", "/opt/gc/lib/libgc.a", "-lgcc"]
+    (gcStaticLibs "/opt/gc/lib/libgc.a" ["-L/opt/gc/lib", "-lgc", "-lgcc"])
+
+test "the shared fallback turns the archive back into a search dir and -lgc" =
+  expectEqual
+    ["-L/usr/lib", "-lgc", "-lpthread", "-ldl"]
+    (gcSharedLibs ["/usr/lib/libgc.a", "-lpthread", "-ldl"])
+
+test "the shared fallback leaves flags with no libgc archive unchanged" = expectAll
+  [
+    expectEqual
+      ["-L/opt/gc/lib", "-lgc"]
+      (gcSharedLibs ["-L/opt/gc/lib", "-lgc"]),
+    expectEqual ["/opt/x/libgcx.a"] (gcSharedLibs ["/opt/x/libgcx.a"]),
+  ]

@@ -452,9 +452,9 @@ test "regInsertChecked reports overwrite and freshness" =
 -- ── F4: `regEntries` hands back the ORIGINAL identities ────────────────────
 -- Asserted by comparing the returned keys themselves, not merely by counting
 -- them: a `regEntries` returning two FABRICATED identities would pass a count.
--- Enumeration is in `regKeyRender` order, and `4:type` sorts before
--- `5:iface`, so `NsType` comes first.
-test "regEntries returns the original identities in render order" =
+-- Enumeration is in `RegKey` structural order, and `NsType` is declared before
+-- `NsIface`, so `NsType` comes first.
+test "regEntries returns the original identities in key order" =
   expectEqual
     [True, True, True]
     [
@@ -579,8 +579,9 @@ test "tabHasName sees both TabKey halves and selects no row" =
     ]
 
 -- ── F5: the identity/bare exclusion THROUGH THE RENDERED PATH ──────────────
--- This is what an `OrdMap`-backed `Registry` actually compares; `tabKeyEq` is
--- not consulted down here, so a `tabKeyRender` whose bare arm collided with
+-- This is the rendered text the rendering-layer contract pins; the `Registry`
+-- itself compares `RegKey`s structurally, so `tabKeyEq` is not consulted down
+-- here either. A `tabKeyRender` whose bare arm collided with
 -- an identity arm is caught only by this.
 test "a bare slot key never renders as an identity-bearing one" =
   expectNotEqual (regKeyRender slotUA) (regKeyRender slotPA)
