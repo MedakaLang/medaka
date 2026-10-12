@@ -1253,7 +1253,7 @@ fi
 
 ordinary_return_stamp_body="$(sed -n '/^resolveExactReturnSite :/,/^resolveNumLitSite :/p' "$predicate_slot_src")"
 ordinary_return_stamp_required='      let resolution = solveExactReturnOnce request
-        exactReturnRoutes name encl scope (contains name rpNames) resolution
+        exactReturnRoutes name encl scope (omHasKey name rpNames) resolution
 exactReturnRoutes name encl scope isReturnPosition resolution = match (
     methodReturnEvidenceRoutes encl scope prerequisites,'
 printf '%s\n' "$ordinary_return_stamp_required" | while IFS= read -r required; do

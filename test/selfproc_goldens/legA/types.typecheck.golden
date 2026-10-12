@@ -828,12 +828,10 @@ declaresStandalone : String -> List Decl -> Bool
 decodeSetParam : String -> List String
 decodeWrittenParam : EffLabel -> EffParamTy -> Result String Param
 dedupBinders : List (String, Param) -> List (String, Param) -> List (String, Param)
-dedupBindersGo : List (String, Param) -> Map String Unit -> List (String, Param) -> List (String, Param)
 dedupI : List Int -> List Int
 dedupIGo : List Int -> Map Int Unit -> List Int -> List Int
 dedupIfacePairs : List (IfaceRef, Int) -> List (IfaceRef, Int)
 dedupLocated : List (String, Option Loc) -> List (String, Option Loc) -> List (String, Option Loc)
-dedupLocatedGo : List (String, Option Loc) -> Map String Unit -> List (String, Option Loc) -> List (String, Option Loc)
 dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List PredicateSlot)
 dedupPredicateSlotsTable : Unit -> Unit
 dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)

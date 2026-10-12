@@ -14656,18 +14656,12 @@ joinDomainMsg ns =
 dedupLocated : List (String, Option Loc) ->
   List (String, Option Loc) ->
   List (String, Option Loc)
-dedupLocated xs acc = dedupLocatedGo xs (omFromNames (map fst acc) omEmpty) acc
-
-dedupLocatedGo : List (String, Option Loc) ->
-  OrdMap Unit ->
-  List (String, Option Loc) ->
-  List (String, Option Loc)
-dedupLocatedGo [] _ acc = reverseL acc
-dedupLocatedGo ((n, l) :: rest) seen acc =
-  if omHasKey n seen then
-    dedupLocatedGo rest seen acc
+dedupLocated [] acc = reverseL acc
+dedupLocated ((n, l) :: rest) acc =
+  if isSome (lookupAssoc n acc) then
+    dedupLocated rest acc
   else
-    dedupLocatedGo rest (omInsert n () seen) ((n, l) :: acc)
+    dedupLocated rest ((n, l) :: acc)
 
 -- Every qualifier the type writes, its names with its span.
 writtenQualifiers : Ty -> List (List String, Option Loc)
@@ -14840,18 +14834,12 @@ kauthArgVarNames _ _ = []
 dedupBinders : List (String, Param) ->
   List (String, Param) ->
   List (String, Param)
-dedupBinders xs acc = dedupBindersGo xs (omFromNames (map fst acc) omEmpty) acc
-
-dedupBindersGo : List (String, Param) ->
-  OrdMap Unit ->
-  List (String, Param) ->
-  List (String, Param)
-dedupBindersGo [] _ acc = reverseL acc
-dedupBindersGo ((n, top) :: rest) seen acc =
-  if omHasKey n seen then
-    dedupBindersGo rest seen acc
+dedupBinders [] acc = reverseL acc
+dedupBinders ((n, top) :: rest) acc =
+  if isSome (lookupAssoc n acc) then
+    dedupBinders rest acc
   else
-    dedupBindersGo rest (omInsert n () seen) ((n, top) :: acc)
+    dedupBinders rest ((n, top) :: acc)
 
 namedAtomBinders : Ty -> List (String, Param)
 namedAtomBinders ty = atomBindersIn namedAtomBinder ty
@@ -35941,7 +35929,10 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
     driverState.value.methodDispatchIdxByIdRef :=
       crossRun.value.universeMethodDispatchIdxByIdRef.value
-    setFunPredicateSlots crossRun.value.crossModuleFunPredicateSlotsRef.value
+    -- The list alone is seeded here and re-keyed twice below; nothing reads the
+    -- name index until the final `setFunPredicateSlots` of this arm rebuilds it.
+    perRun.value.funPredicateSlotsRef :=
+      crossRun.value.crossModuleFunPredicateSlotsRef.value
     -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
     -- whole-table replacement of `funConstraintsRef` owes one of these.
     perRun.value.funConstraintDeclaredRef :=
@@ -35955,7 +35946,8 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- The graph-wide bare-name snapshot below remains vector-free because it lacks
     -- this source identity.
     let _ =
-      setFunPredicateSlots
+      setRef
+        perRun.value.funPredicateSlotsRef
         (aliasConstraintEntries
             prog
             crossRun.value.crossModuleFunPredicateSlotsQualRef.value
@@ -44029,7 +44021,11 @@ kindIsDeclared _ = True
 seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
 seedParamPolarityFixpointScoped ds allDs =
   let cur = perRun.value.dataParamPolarityRef.value
-  let curIndex = tabKeyIndex (map fst cur)
+  -- Index the small side: only the entries of `cur` that match a key of `allDs` matter.
+  let allKeyIndex = tabKeyIndex (declPolarityKeys allDs)
+  let curIndex =
+    tabKeyIndex
+      (map fst (filterList (e => tabKeyIndexHas allKeyIndex (fst e)) cur))
   let fresh = filterList (d => not (declHasPolarityEntry curIndex d)) allDs
   let full = declEnvPolarityEntriesFix cur fresh
   let keyIndex = tabKeyIndex (declPolarityKeys ds)
