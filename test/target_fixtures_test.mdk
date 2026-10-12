@@ -294,3 +294,33 @@ test "target_fixtures: the program judged is the one that runs" = expectEach [
     ["--target", "wasm"]
     "extern_value_not_performed.mdk",
 ]
+
+-- `medaka build <fixture> --target <first> --target <second>`, built to a
+-- scratch path: the transcript is the build's output when it fails, then its
+-- exit code.
+buildOrderCase : String ->
+  String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead> (String, Expectation)
+buildOrderCase stem first second fixture = (
+  stem,
+  spawnCase stem "sh" [
+    "-c",
+    "out=$(mktemp) && \"$1\" build --target \"$2\" --target \"$3\" \"$4\" -o \"$out\" >\"$out.log\" 2>&1; code=$?; if [ $code -ne 0 ]; then cat \"$out.log\"; fi; rm -f \"$out\" \"$out.log\"; echo \"build=$code\"",
+    "sh",
+    medakaBin,
+    first,
+    second,
+    "\{fixtureDir}/\{fixture}",
+  ],
+)
+
+test "target_fixtures: build's last --target wins" = expectEach [
+  buildOrderCase "build_last_target_wins" "eval/run" "native" "net_reached.mdk",
+  buildOrderCase
+    "build_last_target_refused"
+    "native"
+    "eval/run"
+    "net_reached.mdk",
+]

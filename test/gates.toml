@@ -1507,7 +1507,7 @@ kind = "native"
 migration = "done"
 run = "test/target_fixtures_test.mdk"
 oracles = []
-sources = ["compiler/driver/*", "compiler/tools/*", "compiler/types/*"]
+sources = ["compiler/backend/core_validate.mdk", "compiler/driver/*", "compiler/entries/entry_support.mdk", "compiler/support/manifest.mdk", "compiler/tools/*", "compiler/types/*"]
 corpus = ["test/target_fixtures"]
 toolchain = ["clang"]
 
@@ -3126,7 +3126,7 @@ kind = "exec"
 migration = "native-rewrite"
 run = "test/wasm/diff_wasm_ffi_wall.sh"
 oracles = []
-sources = ["compiler/backend/core_validate.mdk", "compiler/backend/extern_catalog.mdk", "compiler/backend/wasm_emit.mdk"]
+sources = ["compiler/backend/core_validate.mdk", "compiler/backend/extern_catalog.mdk", "compiler/backend/wasm_emit.mdk", "compiler/entries/entry_support.mdk", "compiler/tools/target_check.mdk"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 

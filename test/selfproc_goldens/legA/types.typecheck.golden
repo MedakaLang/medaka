@@ -1777,7 +1777,6 @@ intercalateComma : List String -> String
 interpEVars : InterpPart -> List String
 intersectDeclAtoms : List (List Atom) -> List Atom
 invocationHeadKey : Mono -> String
-ioAliasLabels : List String
 ioJoinAtoms : List (String, EffParamTy) -> List Atom
 ioJoinClause : List Atom -> String
 ioLabel : EffLabel
