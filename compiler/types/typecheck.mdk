@@ -9625,11 +9625,11 @@ data PendingDictApp = PendingDictApp {
 -- number of bound ids inside a predicate.  `pendingMethodDicts` carries the resulting
 -- instantiated PredicateSlots until `resolveMethodDicts` routes them after inference.
 --
--- Cross-run snapshots retain the same record payload.  The bare table supports
--- per-module discovery and first-match compatibility; its `(module, method)`-keyed
--- qualified peer is the authority consumed by final scoped dict passing.  Thus a
--- same-spelled method in another module cannot lend this method either its predicate
--- identity or its arity, while non-colliding programs preserve the historical order.
+-- Every row is keyed by `methodSlotKey`: the declaring interface's identity plus the
+-- method's declared name, never the bare spelling.  An occurrence reads the row of
+-- the declaration its module admits for the spelling (`methodIfaceHere`), so a
+-- same-spelled method of another interface, in this module or any other, cannot
+-- lend it predicate slots or an arity.  Cross-run snapshots retain the same payload.
 data PendingMethodDict = PendingMethodDict {
   pmdRoutesRef : Ref (List Route),
   -- #2549 M2: this application's evidence id — see `pdaEv`.
@@ -16758,12 +16758,14 @@ lookupIdxById iface n (((ir, mn), i) :: rest)
 -- resolveMethodDicts can route them after inference.  A method with no method-level
 -- constraint records nothing — methodRef stays [], eval's fold is a no-op.
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
-recordMethodDicts name methodRef subst =
-  match (lookupMethodPredicateSlots
-    name
-    perRun.value.methodPredicateSlotsRef.value)
-    None => ()
-    Some slots => recordMethodDictsFromSlots slots methodRef subst
+recordMethodDicts name methodRef subst = match methodIfaceHere name
+  None => ()
+  Some iface =>
+    match (lookupMethodPredicateSlots
+      (methodSlotKey iface (originMethodName name))
+      perRun.value.methodPredicateSlotsRef.value)
+      None => ()
+      Some slots => recordMethodDictsFromSlots slots methodRef subst
 
 recordMethodDictsFromSlots : List MethodPredicateSlot ->
   Ref (List Route) ->
@@ -16786,9 +16788,9 @@ lookupMethodPredicateSlots : String ->
   List (String, List MethodPredicateSlot) ->
   Option (List MethodPredicateSlot)
 lookupMethodPredicateSlots _ [] = None
-lookupMethodPredicateSlots name ((name2, slots) :: rest)
-  | name == name2 = Some slots
-  | otherwise = lookupMethodPredicateSlots name rest
+lookupMethodPredicateSlots key ((key2, slots) :: rest)
+  | key == key2 = Some slots
+  | otherwise = lookupMethodPredicateSlots key rest
 
 instantiateMethodPredicateSlots : List MethodPredicateSlot ->
   List (Int, Mono) ->
@@ -21727,11 +21729,13 @@ recordNumLitImplObligation anchor predicate occurrence origin scope
 -- slot of a method occurrence.  [mty] is the method's DECLARED type (with its `=>`);
 -- [occMono] is THIS occurrence's instantiated (constraint-free) type.  Align the
 -- declared function spine (constraints/effects stripped) against [occMono] with
--- matchTyMono to recover each constraint var's concrete mono, then record
--- `iface mono`.  matchTyMono captures the live tyvar cell, so a slot still a fresh
--- var at record time normalizes to its solved head at check time — a ground head
--- (`NoOrd`) with no impl is rejected `T-NO-IMPL`; a still-generalized var defers
--- into the scheme (`undeterminedGoalExempt`), uniform with every other obligation.  No slots ⇒ nothing
+-- matchTyMono to recover each constraint var's concrete mono, then record the
+-- constraint's whole argument vector under that substitution (`Show2 (f Int)` at
+-- `f := Box` poses `Show2 (Box Int)`, not `Show2 Box`).  matchTyMono captures the
+-- live tyvar cell, so a slot still a fresh var at record time normalizes to its
+-- solved head at check time — a ground head (`NoOrd`) with no impl is rejected
+-- `T-NO-IMPL`; a still-generalized var defers into the scheme
+-- (`undeterminedGoalExempt`), uniform with every other obligation.  No slots ⇒ nothing
 -- recorded (the receiver-only-method common case), and a shape mismatch (matchTyMono
 -- None) records nothing — never a false reject.
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
@@ -21743,22 +21747,22 @@ recordMethodLevelObls typarams mty occMono =
     None => ()
     Some subst => recordMethodLevelSlotObls slots subst
 
-recordMethodLevelSlotObls : List (String, IfaceRef) ->
-  List (String, Mono) ->
-  Unit
+recordMethodLevelSlotObls : List Constraint -> List (String, Mono) -> Unit
 recordMethodLevelSlotObls [] _ = ()
-recordMethodLevelSlotObls ((vname, iface) :: rest) subst =
-  let _ = match lookupAssoc vname subst
-    Some m =>
+recordMethodLevelSlotObls (c :: rest) subst =
+  let _ =
+    if allList (v => isSome (lookupAssoc v subst)) (constraintVarNames c) then
       recordObl
         Predicate {
-          iface = iface,
-          args = [m],
+          iface = IfaceRef {
+            irName = constraintIface c,
+            irOrigin = c.constraintOrigin,
+          },
+          args = map (fromAstType subst) c.constraintArgs,
         }
         0
         PMethodLevel
         !currentLoc
-    None => ()
   recordMethodLevelSlotObls rest subst
 
 -- Expected-type propagation for an application whose argument is a lambda.
@@ -35259,8 +35263,12 @@ dictPassDecl names _ (DLetGroup pub binds) =
 -- added UNIFORMLY across all clauses of a method when ANY clause uses the dict, so
 -- a multi-clause method keeps one arity).  The routes resolveSite/resolveArgStamp
 -- filled on the call-site EMethodAt's impl-dicts ref line up with these params.
-dictPassDecl _ _ (d@(DImpl { implOrigin, reqs, methods, ... })) = DImpl { d |
-  methods = implDictPassMethods implOrigin (listLen reqs) methods,
+dictPassDecl _ _ (d@(DImpl { iface, implOrigin, reqs, methods, ... })) = DImpl { d |
+  methods =
+    implDictPassMethods
+      IfaceRef { irName = iface, irOrigin = implOrigin }
+      (listLen reqs)
+      methods,
 }
 -- Phase 69.x-e: a method with method-level constraints (foldMap's `Monoid m`) gets
 -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
@@ -35309,12 +35317,15 @@ ifaceDictPassDefault n ty pats body mloc k
     IfaceMethod n ty (Some (MethodDefault (dictParams n k ++ pats) body)) mloc
   | otherwise = IfaceMethod n ty (Some (MethodDefault pats body)) mloc
 
+-- [key] is a `methodSlotKey`.
 methodDictArityOf : String -> Int
-methodDictArityOf n =
+methodDictArityOf key =
   listLen
     (optionOr
       []
-      (lookupMethodPredicateSlots n perRun.value.methodPredicateSlotsRef.value))
+      (lookupMethodPredicateSlots
+        key
+        perRun.value.methodPredicateSlotsRef.value))
 
 -- D3b-1: add the leading `$dict_<method>_<slot>` params UNIFORMLY across all
 -- clauses of a method.  An impl method is many ImplMethod entries (one per
@@ -35336,27 +35347,27 @@ methodDictArityOf n =
 -- method dicts unconditionally first (eval.mdk), so dropping the leading method-level
 -- params (the old `match reqs []=>d` early-out) mis-bound the dict into the first
 -- value parameter.
-implDictPassMethods : TyConOrigin -> Int -> List ImplMethod -> List ImplMethod
-implDictPassMethods ifaceOrigin nReq methods =
-  let users = dedup (flatMap (clauseImplDictUser ifaceOrigin nReq) methods)
-  map (prependImplDictIfUser ifaceOrigin nReq users) methods
+implDictPassMethods : IfaceRef -> Int -> List ImplMethod -> List ImplMethod
+implDictPassMethods iface nReq methods =
+  let users = dedup (flatMap (clauseImplDictUser iface nReq) methods)
+  map (prependImplDictIfUser iface nReq users) methods
 
-clauseImplDictUser : TyConOrigin -> Int -> ImplMethod -> List String
-clauseImplDictUser ifaceOrigin nReq (ImplMethod n _ body)
-  | usesImplDict n (methodDictArityAtOrigin ifaceOrigin n) nReq body = [n]
+clauseImplDictUser : IfaceRef -> Int -> ImplMethod -> List String
+clauseImplDictUser iface nReq (ImplMethod n _ body)
+  | usesImplDict n (implMethodDictArity iface n) nReq body = [n]
   | otherwise = []
 
 -- params = method-level dicts (slots 0..k-1) ++ impl-`requires` dicts (slots
 -- k..k+nReq-1, only when this method's body consumes one) ++ original pats.  Skip
 -- entirely only when there are neither (k = 0 and no impl-dict use), matching the
 -- oracle's `if k = 0 && not uses_impl_dict then (n, pats, body)`.
-prependImplDictIfUser : TyConOrigin ->
+prependImplDictIfUser : IfaceRef ->
   Int ->
   List String ->
   ImplMethod ->
   ImplMethod
-prependImplDictIfUser ifaceOrigin nReq users (ImplMethod n pats body) =
-  let k = methodDictArityAtOrigin ifaceOrigin n
+prependImplDictIfUser iface nReq users (ImplMethod n pats body) =
+  let k = implMethodDictArity iface n
   let implPats = if contains n users then dictParamsFrom n k nReq else []
   if k == 0 && isEmptyL implPats then
     ImplMethod n pats body
@@ -35375,15 +35386,20 @@ implDictNames : String -> Int -> Int -> List String
 implDictNames mname methodArity nReq =
   map (dictParamName mname) (rangeFromCount methodArity nReq)
 
+implMethodDictArity : IfaceRef -> String -> Int
+implMethodDictArity iface method =
+  methodDictArityAtOrigin iface.irOrigin (methodSlotKey iface method)
+
+-- [key] is a `methodSlotKey`; [origin] is its interface's declaring module.
 methodDictArityAtOrigin : TyConOrigin -> String -> Int
-methodDictArityAtOrigin (OriginModule mid) method =
+methodDictArityAtOrigin (OriginModule mid) key =
   match (lookupQualPayload
     mid
-    method
+    key
     crossRun.value.crossModuleMethodPredicateSlotsQualRef.value)
     Some slots => listLen slots
-    None => methodDictArityOf method
-methodDictArityAtOrigin _ method = methodDictArityOf method
+    None => methodDictArityOf key
+methodDictArityAtOrigin _ key = methodDictArityOf key
 
 -- [start, start+1, .. start+count-1]
 rangeFromCount : Int -> Int -> List Int
@@ -41625,32 +41641,17 @@ methodLevelConstraintMonos ifaceParams mty tvMap =
       None => [])
     (methodLevelConstraintVarNames ifaceParams mty)
 
--- #818 (#838 I3): (dispatch-var-name, interface-name) per method-level `=>` constraint
--- slot — the same slots methodLevelConstraintVarNames enumerates (its dispatch var, in
--- declaration order), each paired with its constraint's interface.
--- recordMethodLevelObls uses it to attach the right iface to each slot's obligation.
-methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
+-- #818 (#838 I3): the method-level `=>` constraints, one per slot, in the declaration
+-- order methodLevelConstraintVarNames enumerates.  recordMethodLevelObls poses each as
+-- its own obligation; the slot's interface identity is the `Constraint` occurrence's
+-- resolve stamp (`constraintOrigin`, #1110, P1 #1446).
+methodLevelConstraintSlots : List String -> Ty -> List Constraint
 methodLevelConstraintSlots typarams (TyConstrained cs t) =
-  flatMap (constraintSlotVarIface typarams) cs
+  filterList (constraintIsMethodLevel typarams) cs
     ++ methodLevelConstraintSlots typarams t
 methodLevelConstraintSlots typarams (TyEffect _ _ t) =
   methodLevelConstraintSlots typarams t
 methodLevelConstraintSlots _ _ = []
-
--- P1 (#1446): the slot's interface identity comes from the `Constraint` occurrence
--- resolve already stamped (`constraintOrigin`, #1110) — no new supply pass.
-constraintSlotVarIface : List String -> Constraint -> List (String, IfaceRef)
-constraintSlotVarIface typarams c = match constraintSlotDispatchVar typarams c
-  [] => []
-  n :: _ => [
-    (
-      n,
-      IfaceRef {
-        irName = constraintIface c,
-        irOrigin = c.constraintOrigin,
-      },
-    ),
-  ]
 
 -- #818 (#838 I3): strip the leading `=>`/effect wrappers off a method's declared type,
 -- leaving the bare function spine so matchTyMono can align it against a constraint-free
@@ -41732,7 +41733,7 @@ methodDictArityInClassEnv ce cur iface method =
   match ceMethodTyAt iface method cur ce
     Some (typarams, ty, _) =>
       listLen (methodLevelConstraintVarNames typarams ty)
-    None => methodDictArityOf method
+    None => methodDictArityOf (methodSlotKey iface method)
 
 -- a method registers an element dict if it is return-position (rpNames) or — on
 -- the emit path only — an arg-position dispatch method (argDispatchOf is Some).
@@ -43344,7 +43345,7 @@ methodSchemeRows _ _ _ [] = []
 methodSchemeRows scope iface typarams ((IfaceMethod mname mty _ _) :: rest) =
   let (scheme, tvs) = sigToSchemeTvsIn scope mty
   let slots = methodPredicateSlotsOfType typarams mty tvs (schemeIds scheme)
-  let _ = installMethodPredicateSlots mname slots
+  let _ = installMethodPredicateSlots (methodSlotKey iface mname) slots
   MethodSchemeRow {
       msrIface = iface,
       msrName = mname,
@@ -43448,25 +43449,30 @@ methodSchemesPure scope ((IfaceMethod mname mty _ _) :: rest) =
 
 -- Install the precomputed row slots through the historical first-write guard.  Empty
 -- method contexts remain absent, and the preserved Flat second row construction cannot
--- replace the first build's allocation-local ids.
+-- replace the first build's allocation-local ids.  [key] is a `methodSlotKey`.
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
-installMethodPredicateSlots mname slots =
+installMethodPredicateSlots key slots =
   if isEmptyL slots
     || isSome
       (lookupMethodPredicateSlots
-        mname
+        key
         perRun.value.methodPredicateSlotsRef.value) then
     ()
   else
-    setMethodPredicateSlotEntry mname slots
+    setMethodPredicateSlotEntry key slots
+
+-- The method-context table's key: the declaring interface's identity and the
+-- method's declared name, rendered through the method-row registry's own key.
+methodSlotKey : IfaceRef -> String -> String
+methodSlotKey iface method = regKeyRender (methodRowKey iface method)
 
 -- The sole per-run method-carrier writer.  Predicate identity, bound ids, and stable
 -- positions arrive in one record-valued payload, so no split writer or absence-based
 -- fallback can disagree about slot count or order.
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit
-setMethodPredicateSlotEntry mname slots =
+setMethodPredicateSlotEntry key slots =
   perRun.value.methodPredicateSlotsRef :=
-    (mname, slots) :: perRun.value.methodPredicateSlotsRef.value
+    (key, slots) :: perRun.value.methodPredicateSlotsRef.value
 
 methodPredicateSlotsOfType : List String ->
   Ty ->
@@ -46815,9 +46821,9 @@ methodRowSameNameView rows =
     rows
 
 methodRowRegistrySlotIds : String -> List (List Int)
-methodRowRegistrySlotIds name =
+methodRowRegistrySlotIds key =
   match (lookupMethodPredicateSlots
-    name
+    key
     perRun.value.methodPredicateSlotsRef.value)
     None => []
     Some slots => methodSlotBoundIds slots
@@ -46889,7 +46895,8 @@ observeMethodSchemeRowsForTest _ =
   let secondSchemeIds = schemeIds secondRow.msrScheme
   let firstRowSlotIds = methodSlotBoundIds firstRow.msrMethodSlots
   let secondRowSlotIds = methodSlotBoundIds secondRow.msrMethodSlots
-  let registryAfterSecondSlotIds = methodRowRegistrySlotIds "foldMap"
+  let registryAfterSecondSlotIds =
+    methodRowRegistrySlotIds (methodSlotKey firstRow.msrIface "foldMap")
 
   crossRun := freshCrossRun initialEnv
   graphRun := freshGraphRun ()
@@ -47439,7 +47446,8 @@ methodReturnProbeSlotCase ownedRow foreignRow retainOwner =
   graphRun := freshGraphRun ()
   perRun := freshPerRun ()
   let _ = methodReturnProbeScope "return-owner-slots"
-  perRun.value.methodPredicateSlotsRef := [("make", foreignRow.msrMethodSlots)]
+  perRun.value.methodPredicateSlotsRef :=
+    [(methodSlotKey foreignRow.msrIface "make", foreignRow.msrMethodSlots)]
   let _ = methodReturnProbeSpelling foreignRow
   let env =
     if retainOwner then
@@ -54154,13 +54162,12 @@ selfQualEntries mid own qual =
 -- WS-2/D2 method analog of scopePredicateSlots, WITHOUT the sig-fallback: every method-level
 -- constraint is registered during its interface module's typecheck
 -- (installMethodPredicateSlots during method-row construction), so there is no
--- unsignatured-promoted residual to seed from signatures.  No method-name scope filter
--- either: keep every entry whose bare method name does NOT collide across modules (so a
+-- unsignatured-promoted residual to seed from signatures.  No method scope filter
+-- either: keep every entry whose `methodSlotKey` no in-scope module also carries (so a
 -- method whose impl lives in a different module than its interface is never dropped),
--- and for the SUBSET of names that DO collide, prefer the entry whose owning (interface)
--- module is in [scopeMods] — the bare-name disambiguation.  Non-colliding programs keep
--- every entry → the per-scope methodPredicateSlotsRef is identical to the bare accumulated
--- table → byte-identical method dict-pass (every existing fixture, and the fixpoint).
+-- and for a key that some in-scope module does carry, keep only the in-scope entries.
+-- The key already names the declaring interface, so one key has one owning module and
+-- this keeps every entry.
 scopeMethodPredicateSlots : List ((String, String), List MethodPredicateSlot) ->
   OrdMap Unit ->
   List (String, List MethodPredicateSlot)
@@ -54300,21 +54307,34 @@ attributeSchemeOblsGo mid progNames seen (e :: rest)
 -- WS-2/D2 method analog: attribute each method whose INTERFACE is declared in [prog]
 -- (carrying a methodPredicateSlotsRef entry) to [mid].  Keyed by the interface's module —
 -- the arity is a property of the method signature, registered during that module's
--- method-row construction pass.
+-- method-row construction pass.  The per-run table also holds the rows imported
+-- modules contributed; only keys of [prog]'s own interfaces are attributed here.
 attributeMethodModulePredicateSlots : String ->
   List Decl ->
   List (String, List MethodPredicateSlot) ->
   List ((String, String), List MethodPredicateSlot)
 attributeMethodModulePredicateSlots mid prog entries =
-  let progMethods = namesToSet (allIfaceMethodNames prog) omEmpty
+  let progMethods = namesToSet (ifaceMethodSlotKeys prog) omEmpty
   map
     (e => ((mid, fst e), snd e))
     (filterList (e => omHasKey (fst e) progMethods) entries)
 
--- The bare method-slot table deliberately omits empty rows, because absence was its
--- historical unconstrained answer.  Its module-qualified carrier cannot do that:
--- an explicit empty row distinguishes this interface's unconstrained method from a
--- same-spelled constrained method in another module during final dict passing.
+-- The `methodSlotKey` of every method of every interface [prog] declares.
+ifaceMethodSlotKeys : List Decl -> List String
+ifaceMethodSlotKeys [] = []
+ifaceMethodSlotKeys ((DAttrib _ d) :: rest) =
+  ifaceMethodSlotKeys [d] ++ ifaceMethodSlotKeys rest
+ifaceMethodSlotKeys ((DInterface { name, methods, ifaceOrigin, ... }) :: rest) =
+  map
+      (methodSlotKey IfaceRef { irName = name, irOrigin = ifaceOrigin })
+      (ifaceMethodNames methods)
+    ++ ifaceMethodSlotKeys rest
+ifaceMethodSlotKeys (_ :: rest) = ifaceMethodSlotKeys rest
+
+-- The per-run method-slot table omits empty rows, because absence is its
+-- unconstrained answer.  The module-qualified carrier records them explicitly, so
+-- `methodDictArityAtOrigin` answers a declared-unconstrained method from the
+-- declaring module's own row.
 emptyMethodModulePredicateSlots : String ->
   List Decl ->
   List ((String, String), List MethodPredicateSlot)
@@ -54322,18 +54342,25 @@ emptyMethodModulePredicateSlots _ [] = []
 emptyMethodModulePredicateSlots mid ((DAttrib _ d) :: rest) =
   emptyMethodModulePredicateSlots mid [d]
     ++ emptyMethodModulePredicateSlots mid rest
-emptyMethodModulePredicateSlots mid ((DInterface { typarams, methods, ... }) :: rest) =
-  flatMap (emptyMethodModulePredicateSlot mid typarams) methods
+emptyMethodModulePredicateSlots mid ((DInterface { name, typarams, methods, ifaceOrigin, ... }) :: rest) =
+  flatMap
+      (emptyMethodModulePredicateSlot
+        mid
+        IfaceRef { irName = name, irOrigin = ifaceOrigin }
+        typarams)
+      methods
     ++ emptyMethodModulePredicateSlots mid rest
 emptyMethodModulePredicateSlots mid (_ :: rest) =
   emptyMethodModulePredicateSlots mid rest
 
 emptyMethodModulePredicateSlot : String ->
+  IfaceRef ->
   List String ->
   IfaceMethod ->
   List ((String, String), List MethodPredicateSlot)
-emptyMethodModulePredicateSlot mid typarams (IfaceMethod name ty _ _)
-  | isEmptyL (methodLevelConstraintVarNames typarams ty) = [((mid, name), [])]
+emptyMethodModulePredicateSlot mid iface typarams (IfaceMethod name ty _ _)
+  | isEmptyL (methodLevelConstraintVarNames typarams ty) =
+    [((mid, methodSlotKey iface name), [])]
   | otherwise = []
 -- membership-only sets (built once) instead of O(N) contains scans per entry:
 -- scopeNames (~all top-level fn names) was scanned per promotedC entry → O(N²).

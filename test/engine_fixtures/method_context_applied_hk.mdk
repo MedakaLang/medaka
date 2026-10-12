@@ -1,0 +1,46 @@
+-- A method context over an APPLIED higher-kinded variable: `Show2 (f Int)` over the
+-- interface parameter `f`, and `Show2 (g Int)` over a method variable `g`.  Each
+-- call's context is the whole applied type at the call's instantiation
+-- (`Show2 (Box Int)`, `Show2 (List Int)`), never the bare head.  Expected, from the
+-- impls: "box [i3]", "list Li3", "box [i9]#i1", "list Li2#i2", "i1 [i3]".
+data Box a = Box a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "i\{n}"
+
+impl Show2 (Box b) requires Show2 b where
+  show2 (Box x) = "[" ++ show2 x ++ "]"
+
+impl Show2 (List b) requires Show2 b where
+  show2 xs = "L" ++ show2 (length xs)
+
+interface Cont f where
+  cshow : Show2 (f Int) => f Int -> String
+  csize : f Int -> Int
+
+impl Cont Box where
+  cshow b = "box " ++ show2 b
+  csize _ = 1
+
+impl Cont List where
+  cshow xs = "list " ++ show2 xs
+  csize xs = length xs
+
+interface Tag a where
+  tshow : Show2 (g Int) => a -> g Int -> String
+
+impl Tag Int where
+  tshow n b = show2 n ++ " " ++ show2 b
+
+both : (Cont f, Show2 (f Int)) => f Int -> String
+both c = cshow c ++ "#" ++ show2 (csize c)
+
+main =
+  let _ = println (cshow (Box (3 : Int)))
+  let _ = println (cshow [(1 : Int), 2, 3])
+  let _ = println (both (Box (9 : Int)))
+  let _ = println (both [(1 : Int), 2])
+  println (tshow (1 : Int) (Box (3 : Int)))

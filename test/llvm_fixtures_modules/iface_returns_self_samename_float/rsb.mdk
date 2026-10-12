@@ -1,0 +1,10 @@
+-- Module B: an unrelated `Shape` with a same-named `mk` at the same head type,
+-- whose result is an Int, not the receiver's type.
+export interface Shape x where
+  mk : x -> Int
+
+impl Shape Float where
+  mk f = if f > 1.0 then 7 else 3
+
+export useB : Float -> Int
+useB f = mk f + 1

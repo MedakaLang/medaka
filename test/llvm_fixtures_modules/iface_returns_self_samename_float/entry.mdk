@@ -1,0 +1,19 @@
+-- `iface_returns_self_samename` at a `Float` head.  Module A's `mk : x -> x`
+-- returns the receiver's type, module B's `mk : x -> Int` does not, and at a
+-- `Float` head the two results have different native representations, so a call
+-- site that read the other module's `Shape` would be miscompiled.
+--
+-- The expected line is derived from the spec, not captured from an engine: each
+-- call site resolves to the `Shape` of its own module, so `useA 1.25` is
+-- 1.25 * 2.0 + 0.5 = 3.0, printed as floatToInt (3.0 * 100.0) = 300, and
+-- `useB 2.0` is 7 + 1 = 8.   Correct = `300|8`.  This corpus's emit driver has no
+-- prelude, so the Float is printed through `floatToInt`, not `debug`.
+import rsa.{useA}
+import rsb.{useB}
+
+main : <IO> Unit
+main =
+  putStrLn
+    (intToString (floatToInt (useA 1.25 * 100.0))
+      ++ "|"
+      ++ intToString (useB 2.0))

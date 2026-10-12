@@ -1,7 +1,7 @@
 -- §8 I4 — A METHOD-LEVEL `=>` SLOT NAMES ITS OWN CLASS.  The FOURTH channel that
 -- discriminates under #1446, and the one that had no coverage at all until this
 -- fixture: `recordMethodLevelSlotObls` (via `methodLevelConstraintSlots` →
--- `constraintSlotVarIface` → `Constraint.constraintOrigin`).  Occurrence-layer, so
+-- `Constraint.constraintOrigin`).  Occurrence-layer, so
 -- it keeps its identity for the same reason `requires` does.
 --
 -- SPEC ANSWER, HAND-DERIVED FROM §3 — the derivation, not a description of output:
