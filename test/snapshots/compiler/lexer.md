@@ -1,5 +1,5 @@
 # META
-source_lines=2829
+source_lines=2874
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -361,9 +361,11 @@ describeToken (TLexError s) = s
 -- (one per significant source line break, carrying the indentation of the
 -- following line). A second `layout` pass turns those markers into
 -- INDENT/DEDENT/NEWLINE per the OCaml `handle_indent` algorithm.
--- `RComment startPos text` carries a captured comment out-of-band: `startPos`
--- is the source char offset of the opening `--`/`{-`, `text` the full lexeme
--- (including the `--` / `{- … -}` delimiters).  These markers are produced by the comment arms of `scanAt` and
+-- `RComment startPos endPos` carries a captured comment out-of-band: `startPos`
+-- is the source char offset of the opening `--`/`{-`, `endPos` one past its last
+-- char, so the lexeme is `[startPos, endPos)` (delimiters included).  The text
+-- is materialised only by `rawToComments`; `tokenize` never builds it.  These
+-- markers are produced by the comment arms of `scanAt` and
 -- *skipped by the layout pass* (its `RComment` arms are no-ops), so the Token stream the
 -- parser consumes is byte-identical to before — comments are purely a side
 -- channel.  `collectComments` re-reads the raw stream to surface them.
@@ -375,7 +377,7 @@ describeToken (TLexError s) = s
 -- `RNewline col off` carries the offset of the newline char that ended
 -- the preceding line, so synthetic NEWLINE/INDENT/DEDENT tokens inserted by the
 -- layout pass get a source line too.
-data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int String
+data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int Int
 
 -- ── Character classification: ASCII Char -> Bool predicates now live in
 -- support/char.mdk (imported at the top of this module).
@@ -395,8 +397,12 @@ is3 src len pos a b c =
     && at src (pos + 2) == c
 
 substr : Array Char -> Int -> Int -> String
-substr src start endp =
-  stringFromChars (arrayMakeWith (endp - start) (i => at src (start + i)))
+substr src start endp
+  | endp <= start = ""
+  | otherwise =
+    let out = arrayMake (endp - start) (at src start)
+    let _ = arrayBlit src start out 0 (endp - start)
+    stringFromChars out
 
 collectNoUs : Array Char -> Int -> Int -> List Char
 collectNoUs src p endp
@@ -573,13 +579,13 @@ scanAt src len pos depth id c
   | isNL c || isCR c = handleNewline src len pos depth id
   | c == '-' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipLineComment src len pos
-    RComment pos (substr src pos e) :: scan src len e depth id
+    RComment pos e :: scan src len e depth id
   | c == '{' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipBlockComment src len (pos + 2) 1
     if e < 0 then
       lexErrorTok pos "unterminated block comment"
     else
-      RComment pos (substr src pos e) :: scan src len e depth id
+      RComment pos e :: scan src len e depth id
   | isDigit c = scanNumber src len pos depth id
   | isQuote c && isTripleAt src len pos =
     scanTriple src len (pos + 3) pos depth id False ""
@@ -634,7 +640,34 @@ scanLower src len pos depth id =
 identToken : Array Char -> Int -> Int -> Token
 identToken src pos e
   | at src pos == '_' && e - pos == 1 = TUnderscore
-  | otherwise = keywordOrIdent (substr src pos e)
+  | kwCandidate src pos e = keywordOrIdent (substr src pos e)
+  | otherwise = TIdent (substr src pos e)
+
+-- Necessary condition for `keywordOrIdent` to match: every keyword spelling is
+-- 2 to 9 chars and starts with one of the letters below. Identifiers failing it
+-- skip the keyword chain entirely (they still get `TIdent`, as the chain's
+-- fall-through would give). Keep in step with the `keywordOrIdent` clauses.
+kwCandidate : Array Char -> Int -> Int -> Bool
+kwCandidate src pos e =
+  let n = e - pos
+  n >= 2 && n <= 9 && kwStart (at src pos)
+
+kwStart : Char -> Bool
+kwStart 'a' = True
+kwStart 'b' = True
+kwStart 'd' = True
+kwStart 'e' = True
+kwStart 'f' = True
+kwStart 'i' = True
+kwStart 'l' = True
+kwStart 'm' = True
+kwStart 'n' = True
+kwStart 'o' = True
+kwStart 'p' = True
+kwStart 'r' = True
+kwStart 't' = True
+kwStart 'w' = True
+kwStart _ = False
 
 scanUpper : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 scanUpper src len pos depth id =
@@ -2653,7 +2686,19 @@ tokenize : String -> List Token
 tokenize s =
   let src = stringToChars s
   let len = arrayLength src
-  map fst (layoutWithOffsets src len)
+  elseFilterToks
+    (layout (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
+
+-- `elseFilter` (the offset-carrying form used by `layoutWithOffsets`) with the
+-- offset projection fused in, so `tokenize` builds one list instead of two.
+-- The clauses must stay in step with `elseFilter`.
+elseFilterToks : List (Token, Int) -> List Token
+elseFilterToks ((TNewline, _) :: (TElse, _) :: rest) =
+  TElse :: elseFilterToks rest
+elseFilterToks ((TNewline, _) :: (TThen, _) :: rest) =
+  TThen :: elseFilterToks rest
+elseFilterToks ((t, _) :: rest) = t :: elseFilterToks rest
+elseFilterToks [] = []
 
 -- Tokenize and return each token paired with the 1-based source line of its
 -- char offset.  The position side-channel (`compiler/frontend/parser.mdk`) consults the
@@ -2803,7 +2848,7 @@ posLineColFrom src target p line lineStart
   | at src p == '\n' = posLineColFrom src target (p + 1) (line + 1) (p + 1)
   | otherwise = posLineColFrom src target (p + 1) line lineStart
 
--- Turn each `RComment startPos text` into a `Comment line col text`.
+-- Turn each `RComment startPos endPos` into a `Comment line col text`.
 -- `RComment` tokens arrive in strictly-ascending `startPos` order (scan is a
 -- single left-to-right pass), so a running `(p, line, lineStart)` cursor lets
 -- `posLineColFrom` resume from the previous comment instead of rescanning from
@@ -2816,10 +2861,10 @@ rawToComments src toks = rawToCommentsGo src toks 0 1 0
 
 rawToCommentsGo : Array Char -> List RawTok -> Int -> Int -> Int -> List Comment
 rawToCommentsGo _ [] _ _ _ = []
-rawToCommentsGo src ((RComment startPos text) :: rest) p line lineStart =
+rawToCommentsGo src ((RComment startPos endPos) :: rest) p line lineStart =
   match posLineColFrom src startPos p line lineStart
     (line2, col) =>
-      Comment line2 col text
+      Comment line2 col (substr src startPos endPos)
         :: rawToCommentsGo src rest startPos line2 (startPos - col)
 rawToCommentsGo src (_ :: rest) p line lineStart =
   rawToCommentsGo src rest p line lineStart
@@ -3030,7 +3075,7 @@ collectComments s =
 (DFunDef false "describeToken" ((PCon "TDedent")) (ELit (LString "a dedent")))
 (DFunDef false "describeToken" ((PCon "TEof")) (ELit (LString "end of input")))
 (DFunDef false "describeToken" ((PCon "TLexError" (PVar "s"))) (EVar "s"))
-(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "String")))) ())
+(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig false "at" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Char"))))
 (DFunDef false "at" ((PVar "src") (PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")))
 (DTypeSig false "is2" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool")))))))
@@ -3038,7 +3083,7 @@ collectComments s =
 (DTypeSig false "is3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool"))))))))
 (DFunDef false "is3" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b") (PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "c"))))
 (DTypeSig false "substr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "substr" ((PVar "src") (PVar "start") (PVar "endp")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "endp") (EVar "start"))) (ELam ((PVar "i")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "start") (EVar "i")))))))
+(DFunDef false "substr" ((PVar "src") (PVar "start") (PVar "endp")) (EIf (EBinOp "<=" (EVar "endp") (EVar "start")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EVar "endp") (EVar "start"))) (EApp (EApp (EVar "at") (EVar "src")) (EVar "start")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "src")) (EVar "start")) (EVar "out")) (ELit (LInt 0))) (EBinOp "-" (EVar "endp") (EVar "start")))) (DoExpr (EApp (EVar "stringFromChars") (EVar "out")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "collectNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Char"))))))
 (DFunDef false "collectNoUs" ((PVar "src") (PVar "p") (PVar "endp")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EListLit) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "substrNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -3096,7 +3141,7 @@ collectComments s =
 (DTypeSig false "scan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scan" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EIf (EBinOp ">=" (EVar "pos") (EVar "len")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanAt") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "scanAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyApp (TyCon "List") (TyCon "RawTok")))))))))
-(DFunDef false "scanAt" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id") (PVar "c")) (EIf (EApp (EVar "isSpace") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isNL") (EVar "c")) (EApp (EVar "isCR") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "handleNewline") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EVar "pos"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "{"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EVar "skipBlockComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<" (EVar "e") (ELit (LInt 0))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "unterminated block comment"))) (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id")))))) (EIf (EApp (EVar "isDigit") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanNumber") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanTriple") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "False")) (ELit (LString ""))) (EIf (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (ELit (LString ""))) (EIf (EApp (EVar "isApos") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanChar") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EApp (EApp (EApp (EApp (EVar "scanLower") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanUpper") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isBacktick") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanBacktick") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanOp") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
+(DFunDef false "scanAt" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id") (PVar "c")) (EIf (EApp (EVar "isSpace") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isNL") (EVar "c")) (EApp (EVar "isCR") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "handleNewline") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EVar "pos"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "{"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EVar "skipBlockComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<" (EVar "e") (ELit (LInt 0))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "unterminated block comment"))) (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id")))))) (EIf (EApp (EVar "isDigit") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanNumber") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanTriple") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "False")) (ELit (LString ""))) (EIf (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (ELit (LString ""))) (EIf (EApp (EVar "isApos") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanChar") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EApp (EApp (EApp (EApp (EVar "scanLower") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanUpper") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isBacktick") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanBacktick") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanOp") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
 (DTypeSig false "skipLineComment" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "skipLineComment" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "p") (EIf (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "lexErrorTok" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RawTok")))))
@@ -3108,7 +3153,25 @@ collectComments s =
 (DTypeSig false "scanLower" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scanLower" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EApp (EApp (EVar "identToken") (EVar "src")) (EVar "pos")) (EVar "e"))) (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))))
 (DTypeSig false "identToken" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Token")))))
-(DFunDef false "identToken" ((PVar "src") (PVar "pos") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (ELit (LChar "_"))) (EBinOp "==" (EBinOp "-" (EVar "e") (EVar "pos")) (ELit (LInt 1)))) (EVar "TUnderscore") (EIf (EVar "otherwise") (EApp (EVar "keywordOrIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "identToken" ((PVar "src") (PVar "pos") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (ELit (LChar "_"))) (EBinOp "==" (EBinOp "-" (EVar "e") (EVar "pos")) (ELit (LInt 1)))) (EVar "TUnderscore") (EIf (EApp (EApp (EApp (EVar "kwCandidate") (EVar "src")) (EVar "pos")) (EVar "e")) (EApp (EVar "keywordOrIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EIf (EVar "otherwise") (EApp (EVar "TIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "kwCandidate" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "kwCandidate" ((PVar "src") (PVar "pos") (PVar "e")) (EBlock (DoLet false false (PVar "n") (EBinOp "-" (EVar "e") (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "<=" (EVar "n") (ELit (LInt 9)))) (EApp (EVar "kwStart") (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")))))))
+(DTypeSig false "kwStart" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "kwStart" ((PLit (LChar "a"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "b"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "d"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "e"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "f"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "i"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "l"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "m"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "n"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "o"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "p"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "r"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "t"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "w"))) (EVar "True"))
+(DFunDef false "kwStart" (PWild) (EVar "False"))
 (DTypeSig false "scanUpper" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scanUpper" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TUpper") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e")))) (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))))
 (DTypeSig false "scanBacktick" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
@@ -3578,7 +3641,12 @@ collectComments s =
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
-(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))))))
+(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EVar "elseFilterToks") (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))))
+(DTypeSig false "elseFilterToks" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "elseFilterToks" ((PCons (PTuple (PCon "TNewline") PWild) (PCons (PTuple (PCon "TElse") PWild) (PVar "rest")))) (EBinOp "::" (EVar "TElse") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PCons (PTuple (PCon "TNewline") PWild) (PCons (PTuple (PCon "TThen") PWild) (PVar "rest")))) (EBinOp "::" (EVar "TThen") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PCons (PTuple (PVar "t") PWild) (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PList)) (EListLit))
 (DTypeSig true "tokenizeWithLines" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "tokenizeWithLines" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))) (DoLet false false (PVar "toks") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "pairs"))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "offsetsToLines") (EVar "src")) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "pairs")))) (DoExpr (ETuple (EVar "toks") (EVar "lines")))))
 (DTypeSig true "tokenizeWithOffsets" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
@@ -3615,7 +3683,7 @@ collectComments s =
 (DFunDef false "rawToComments" ((PVar "src") (PVar "toks")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "toks")) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))
 (DTypeSig false "rawToCommentsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Comment"))))))))
 (DFunDef false "rawToCommentsGo" (PWild (PList) PWild PWild PWild) (EListLit))
-(DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "text")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EVar "text")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
+(DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "endPos")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "startPos")) (EVar "endPos"))) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
 (DFunDef false "rawToCommentsGo" ((PVar "src") (PCons PWild (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "p")) (EVar "line")) (EVar "lineStart")))
 (DTypeSig true "collectComments" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "collectComments" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "rawToComments") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))))
@@ -3818,7 +3886,7 @@ collectComments s =
 (DFunDef false "describeToken" ((PCon "TDedent")) (ELit (LString "a dedent")))
 (DFunDef false "describeToken" ((PCon "TEof")) (ELit (LString "end of input")))
 (DFunDef false "describeToken" ((PCon "TLexError" (PVar "s"))) (EVar "s"))
-(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "String")))) ())
+(DData Private "RawTok" () ((variant "RTok" (ConPos (TyCon "Token") (TyCon "Int") (TyCon "Int"))) (variant "RNewline" (ConPos (TyCon "Int") (TyCon "Int"))) (variant "RComment" (ConPos (TyCon "Int") (TyCon "Int")))) ())
 (DTypeSig false "at" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Char"))))
 (DFunDef false "at" ((PVar "src") (PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "src")))
 (DTypeSig false "is2" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool")))))))
@@ -3826,7 +3894,7 @@ collectComments s =
 (DTypeSig false "is3" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyFun (TyCon "Char") (TyCon "Bool"))))))))
 (DFunDef false "is3" ((PVar "src") (PVar "len") (PVar "pos") (PVar "a") (PVar "b") (PVar "c")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 2))) (EVar "len")) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (EVar "a"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "b"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (EVar "c"))))
 (DTypeSig false "substr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "substr" ((PVar "src") (PVar "start") (PVar "endp")) (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "endp") (EVar "start"))) (ELam ((PVar "i")) (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "start") (EVar "i")))))))
+(DFunDef false "substr" ((PVar "src") (PVar "start") (PVar "endp")) (EIf (EBinOp "<=" (EVar "endp") (EVar "start")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "out") (EApp (EApp (EVar "arrayMake") (EBinOp "-" (EVar "endp") (EVar "start"))) (EApp (EApp (EVar "at") (EVar "src")) (EVar "start")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "src")) (EVar "start")) (EVar "out")) (ELit (LInt 0))) (EBinOp "-" (EVar "endp") (EVar "start")))) (DoExpr (EApp (EVar "stringFromChars") (EVar "out")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "collectNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Char"))))))
 (DFunDef false "collectNoUs" ((PVar "src") (PVar "p") (PVar "endp")) (EIf (EBinOp ">=" (EVar "p") (EVar "endp")) (EListLit) (EIf (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (ELit (LChar "_"))) (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp")) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EVar "at") (EVar "src")) (EVar "p")) (EApp (EApp (EApp (EVar "collectNoUs") (EVar "src")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EVar "endp"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "substrNoUs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
@@ -3884,7 +3952,7 @@ collectComments s =
 (DTypeSig false "scan" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scan" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EIf (EBinOp ">=" (EVar "pos") (EVar "len")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanAt") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "scanAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Char") (TyApp (TyCon "List") (TyCon "RawTok")))))))))
-(DFunDef false "scanAt" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id") (PVar "c")) (EIf (EApp (EVar "isSpace") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isNL") (EVar "c")) (EApp (EVar "isCR") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "handleNewline") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EVar "pos"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "{"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EVar "skipBlockComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<" (EVar "e") (ELit (LInt 0))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "unterminated block comment"))) (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id")))))) (EIf (EApp (EVar "isDigit") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanNumber") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanTriple") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "False")) (ELit (LString ""))) (EIf (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (ELit (LString ""))) (EIf (EApp (EVar "isApos") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanChar") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EApp (EApp (EApp (EApp (EVar "scanLower") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanUpper") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isBacktick") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanBacktick") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanOp") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
+(DFunDef false "scanAt" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id") (PVar "c")) (EIf (EApp (EVar "isSpace") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isNL") (EVar "c")) (EApp (EVar "isCR") (EVar "c"))) (EApp (EApp (EApp (EApp (EApp (EVar "handleNewline") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "-"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EVar "pos"))) (DoExpr (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))) (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "c") (ELit (LChar "{"))) (EBinOp "<" (EBinOp "+" (EVar "pos") (ELit (LInt 1))) (EVar "len"))) (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (ELit (LChar "-")))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EApp (EVar "skipBlockComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 2)))) (ELit (LInt 1)))) (DoExpr (EIf (EBinOp "<" (EVar "e") (ELit (LInt 0))) (EApp (EApp (EVar "lexErrorTok") (EVar "pos")) (ELit (LString "unterminated block comment"))) (EBinOp "::" (EApp (EApp (EVar "RComment") (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id")))))) (EIf (EApp (EVar "isDigit") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanNumber") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "&&" (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EVar "isTripleAt") (EVar "src")) (EVar "len")) (EVar "pos"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanTriple") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 3)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "False")) (ELit (LString ""))) (EIf (EApp (EVar "isQuote") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanStr") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "pos")) (EVar "depth")) (EVar "id")) (ELit (LString ""))) (EIf (EApp (EVar "isApos") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanChar") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EBinOp "||" (EApp (EVar "isLower") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EApp (EApp (EApp (EApp (EApp (EVar "scanLower") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isUpper") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanUpper") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EApp (EVar "isBacktick") (EVar "c")) (EApp (EApp (EApp (EApp (EApp (EVar "scanBacktick") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "scanOp") (EVar "src")) (EVar "len")) (EVar "pos")) (EVar "depth")) (EVar "id")) (EVar "c")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))))))))
 (DTypeSig false "skipLineComment" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "skipLineComment" ((PVar "src") (PVar "len") (PVar "p")) (EIf (EBinOp ">=" (EVar "p") (EVar "len")) (EVar "p") (EIf (EApp (EVar "isNL") (EApp (EApp (EVar "at") (EVar "src")) (EVar "p"))) (EVar "p") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "skipLineComment") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "p") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "lexErrorTok" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "RawTok")))))
@@ -3896,7 +3964,25 @@ collectComments s =
 (DTypeSig false "scanLower" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scanLower" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EApp (EApp (EVar "identToken") (EVar "src")) (EVar "pos")) (EVar "e"))) (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))))
 (DTypeSig false "identToken" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Token")))))
-(DFunDef false "identToken" ((PVar "src") (PVar "pos") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (ELit (LChar "_"))) (EBinOp "==" (EBinOp "-" (EVar "e") (EVar "pos")) (ELit (LInt 1)))) (EVar "TUnderscore") (EIf (EVar "otherwise") (EApp (EVar "keywordOrIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "identToken" ((PVar "src") (PVar "pos") (PVar "e")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")) (ELit (LChar "_"))) (EBinOp "==" (EBinOp "-" (EVar "e") (EVar "pos")) (ELit (LInt 1)))) (EVar "TUnderscore") (EIf (EApp (EApp (EApp (EVar "kwCandidate") (EVar "src")) (EVar "pos")) (EVar "e")) (EApp (EVar "keywordOrIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EIf (EVar "otherwise") (EApp (EVar "TIdent") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "kwCandidate" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "kwCandidate" ((PVar "src") (PVar "pos") (PVar "e")) (EBlock (DoLet false false (PVar "n") (EBinOp "-" (EVar "e") (EVar "pos"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">=" (EVar "n") (ELit (LInt 2))) (EBinOp "<=" (EVar "n") (ELit (LInt 9)))) (EApp (EVar "kwStart") (EApp (EApp (EVar "at") (EVar "src")) (EVar "pos")))))))
+(DTypeSig false "kwStart" (TyFun (TyCon "Char") (TyCon "Bool")))
+(DFunDef false "kwStart" ((PLit (LChar "a"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "b"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "d"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "e"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "f"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "i"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "l"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "m"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "n"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "o"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "p"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "r"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "t"))) (EVar "True"))
+(DFunDef false "kwStart" ((PLit (LChar "w"))) (EVar "True"))
+(DFunDef false "kwStart" (PWild) (EVar "False"))
 (DTypeSig false "scanUpper" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
 (DFunDef false "scanUpper" ((PVar "src") (PVar "len") (PVar "pos") (PVar "depth") (PVar "id")) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identEnd") (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "pos") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TUpper") (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "pos")) (EVar "e")))) (EVar "pos")) (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (EVar "e")) (EVar "depth")) (EVar "id"))))))
 (DTypeSig false "scanBacktick" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "RawTok"))))))))
@@ -4366,7 +4452,12 @@ collectComments s =
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
-(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))))))
+(DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EVar "elseFilterToks") (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))))
+(DTypeSig false "elseFilterToks" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Token"))))
+(DFunDef false "elseFilterToks" ((PCons (PTuple (PCon "TNewline") PWild) (PCons (PTuple (PCon "TElse") PWild) (PVar "rest")))) (EBinOp "::" (EVar "TElse") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PCons (PTuple (PCon "TNewline") PWild) (PCons (PTuple (PCon "TThen") PWild) (PVar "rest")))) (EBinOp "::" (EVar "TThen") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PCons (PTuple (PVar "t") PWild) (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "elseFilterToks") (EVar "rest"))))
+(DFunDef false "elseFilterToks" ((PList)) (EListLit))
 (DTypeSig true "tokenizeWithLines" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "tokenizeWithLines" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))) (DoLet false false (PVar "toks") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "pairs"))) (DoLet false false (PVar "lines") (EApp (EApp (EVar "offsetsToLines") (EVar "src")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "pairs")))) (DoExpr (ETuple (EVar "toks") (EVar "lines")))))
 (DTypeSig true "tokenizeWithOffsets" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
@@ -4403,7 +4494,7 @@ collectComments s =
 (DFunDef false "rawToComments" ((PVar "src") (PVar "toks")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "toks")) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))
 (DTypeSig false "rawToCommentsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Comment"))))))))
 (DFunDef false "rawToCommentsGo" (PWild (PList) PWild PWild PWild) (EListLit))
-(DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "text")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EVar "text")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
+(DFunDef false "rawToCommentsGo" ((PVar "src") (PCons (PCon "RComment" (PVar "startPos") (PVar "endPos")) (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "posLineColFrom") (EVar "src")) (EVar "startPos")) (EVar "p")) (EVar "line")) (EVar "lineStart")) (arm (PTuple (PVar "line2") (PVar "col")) () (EBinOp "::" (EApp (EApp (EApp (EVar "Comment") (EVar "line2")) (EVar "col")) (EApp (EApp (EApp (EVar "substr") (EVar "src")) (EVar "startPos")) (EVar "endPos"))) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "startPos")) (EVar "line2")) (EBinOp "-" (EVar "startPos") (EVar "col")))))))
 (DFunDef false "rawToCommentsGo" ((PVar "src") (PCons PWild (PVar "rest")) (PVar "p") (PVar "line") (PVar "lineStart")) (EApp (EApp (EApp (EApp (EApp (EVar "rawToCommentsGo") (EVar "src")) (EVar "rest")) (EVar "p")) (EVar "line")) (EVar "lineStart")))
 (DTypeSig true "collectComments" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))
 (DFunDef false "collectComments" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "rawToComments") (EVar "src")) (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))))

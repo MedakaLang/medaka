@@ -357,9 +357,11 @@ describeToken (TLexError s) = s
 -- (one per significant source line break, carrying the indentation of the
 -- following line). A second `layout` pass turns those markers into
 -- INDENT/DEDENT/NEWLINE per the OCaml `handle_indent` algorithm.
--- `RComment startPos text` carries a captured comment out-of-band: `startPos`
--- is the source char offset of the opening `--`/`{-`, `text` the full lexeme
--- (including the `--` / `{- … -}` delimiters).  These markers are produced by the comment arms of `scanAt` and
+-- `RComment startPos endPos` carries a captured comment out-of-band: `startPos`
+-- is the source char offset of the opening `--`/`{-`, `endPos` one past its last
+-- char, so the lexeme is `[startPos, endPos)` (delimiters included).  The text
+-- is materialised only by `rawToComments`; `tokenize` never builds it.  These
+-- markers are produced by the comment arms of `scanAt` and
 -- *skipped by the layout pass* (its `RComment` arms are no-ops), so the Token stream the
 -- parser consumes is byte-identical to before — comments are purely a side
 -- channel.  `collectComments` re-reads the raw stream to surface them.
@@ -371,7 +373,7 @@ describeToken (TLexError s) = s
 -- `RNewline col off` carries the offset of the newline char that ended
 -- the preceding line, so synthetic NEWLINE/INDENT/DEDENT tokens inserted by the
 -- layout pass get a source line too.
-data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int String
+data RawTok = RTok Token Int Int | RNewline Int Int | RComment Int Int
 
 -- ── Character classification: ASCII Char -> Bool predicates now live in
 -- support/char.mdk (imported at the top of this module).
@@ -391,8 +393,12 @@ is3 src len pos a b c =
     && at src (pos + 2) == c
 
 substr : Array Char -> Int -> Int -> String
-substr src start endp =
-  stringFromChars (arrayMakeWith (endp - start) (i => at src (start + i)))
+substr src start endp
+  | endp <= start = ""
+  | otherwise =
+    let out = arrayMake (endp - start) (at src start)
+    let _ = arrayBlit src start out 0 (endp - start)
+    stringFromChars out
 
 collectNoUs : Array Char -> Int -> Int -> List Char
 collectNoUs src p endp
@@ -569,13 +575,13 @@ scanAt src len pos depth id c
   | isNL c || isCR c = handleNewline src len pos depth id
   | c == '-' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipLineComment src len pos
-    RComment pos (substr src pos e) :: scan src len e depth id
+    RComment pos e :: scan src len e depth id
   | c == '{' && pos + 1 < len && at src (pos + 1) == '-' =
     let e = skipBlockComment src len (pos + 2) 1
     if e < 0 then
       lexErrorTok pos "unterminated block comment"
     else
-      RComment pos (substr src pos e) :: scan src len e depth id
+      RComment pos e :: scan src len e depth id
   | isDigit c = scanNumber src len pos depth id
   | isQuote c && isTripleAt src len pos =
     scanTriple src len (pos + 3) pos depth id False ""
@@ -630,7 +636,34 @@ scanLower src len pos depth id =
 identToken : Array Char -> Int -> Int -> Token
 identToken src pos e
   | at src pos == '_' && e - pos == 1 = TUnderscore
-  | otherwise = keywordOrIdent (substr src pos e)
+  | kwCandidate src pos e = keywordOrIdent (substr src pos e)
+  | otherwise = TIdent (substr src pos e)
+
+-- Necessary condition for `keywordOrIdent` to match: every keyword spelling is
+-- 2 to 9 chars and starts with one of the letters below. Identifiers failing it
+-- skip the keyword chain entirely (they still get `TIdent`, as the chain's
+-- fall-through would give). Keep in step with the `keywordOrIdent` clauses.
+kwCandidate : Array Char -> Int -> Int -> Bool
+kwCandidate src pos e =
+  let n = e - pos
+  n >= 2 && n <= 9 && kwStart (at src pos)
+
+kwStart : Char -> Bool
+kwStart 'a' = True
+kwStart 'b' = True
+kwStart 'd' = True
+kwStart 'e' = True
+kwStart 'f' = True
+kwStart 'i' = True
+kwStart 'l' = True
+kwStart 'm' = True
+kwStart 'n' = True
+kwStart 'o' = True
+kwStart 'p' = True
+kwStart 'r' = True
+kwStart 't' = True
+kwStart 'w' = True
+kwStart _ = False
 
 scanUpper : Array Char -> Int -> Int -> Int -> Int -> List RawTok
 scanUpper src len pos depth id =
@@ -2649,7 +2682,19 @@ tokenize : String -> List Token
 tokenize s =
   let src = stringToChars s
   let len = arrayLength src
-  map fst (layoutWithOffsets src len)
+  elseFilterToks
+    (layout (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
+
+-- `elseFilter` (the offset-carrying form used by `layoutWithOffsets`) with the
+-- offset projection fused in, so `tokenize` builds one list instead of two.
+-- The clauses must stay in step with `elseFilter`.
+elseFilterToks : List (Token, Int) -> List Token
+elseFilterToks ((TNewline, _) :: (TElse, _) :: rest) =
+  TElse :: elseFilterToks rest
+elseFilterToks ((TNewline, _) :: (TThen, _) :: rest) =
+  TThen :: elseFilterToks rest
+elseFilterToks ((t, _) :: rest) = t :: elseFilterToks rest
+elseFilterToks [] = []
 
 -- Tokenize and return each token paired with the 1-based source line of its
 -- char offset.  The position side-channel (`compiler/frontend/parser.mdk`) consults the
@@ -2799,7 +2844,7 @@ posLineColFrom src target p line lineStart
   | at src p == '\n' = posLineColFrom src target (p + 1) (line + 1) (p + 1)
   | otherwise = posLineColFrom src target (p + 1) line lineStart
 
--- Turn each `RComment startPos text` into a `Comment line col text`.
+-- Turn each `RComment startPos endPos` into a `Comment line col text`.
 -- `RComment` tokens arrive in strictly-ascending `startPos` order (scan is a
 -- single left-to-right pass), so a running `(p, line, lineStart)` cursor lets
 -- `posLineColFrom` resume from the previous comment instead of rescanning from
@@ -2812,10 +2857,10 @@ rawToComments src toks = rawToCommentsGo src toks 0 1 0
 
 rawToCommentsGo : Array Char -> List RawTok -> Int -> Int -> Int -> List Comment
 rawToCommentsGo _ [] _ _ _ = []
-rawToCommentsGo src ((RComment startPos text) :: rest) p line lineStart =
+rawToCommentsGo src ((RComment startPos endPos) :: rest) p line lineStart =
   match posLineColFrom src startPos p line lineStart
     (line2, col) =>
-      Comment line2 col text
+      Comment line2 col (substr src startPos endPos)
         :: rawToCommentsGo src rest startPos line2 (startPos - col)
 rawToCommentsGo src (_ :: rest) p line lineStart =
   rawToCommentsGo src rest p line lineStart

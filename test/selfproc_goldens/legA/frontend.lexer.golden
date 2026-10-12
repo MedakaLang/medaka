@@ -51,6 +51,7 @@ dropFrame : List BracketFrame -> List BracketFrame
 dropTripleInterpMark : String -> String
 elseFilter : List (Token, Int) -> List (Token, Int)
 elseFilterPairs : List (Token, Int, Int) -> List (Token, Int, Int)
+elseFilterToks : List (Token, Int) -> List Token
 emit : Array Char -> Int -> Int -> Int -> Int -> Token -> Int -> Int -> List RawTok
 endsWithNl : String -> Bool
 escChar : Array Char -> Int -> Int -> Int -> Int -> Char -> List RawTok
@@ -95,6 +96,8 @@ isTripleAt : Array Char -> Int -> Int -> Bool
 isUnicodeEsc : Array Char -> Int -> Int -> Char -> Bool
 joinNlStr : List String -> String
 keywordOrIdent : String -> Token
+kwCandidate : Array Char -> Int -> Int -> Bool
+kwStart : Char -> Bool
 layout : List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int)
 layoutPairs : List RawTok -> List Int -> List BracketFrame -> Option Token -> Bool -> List (Token, Int, Int)
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
