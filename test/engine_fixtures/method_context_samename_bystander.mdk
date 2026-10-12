@@ -1,0 +1,11 @@
+-- Two modules each declare `Show2` and `Desc` with methods `desc` and `tag`; in
+-- `ma` only `desc` has a context, in `mb` only `tag` does, both over a variable
+-- that is not the interface parameter.  Each module's calls take exactly their own
+-- declaration's dictionaries.  Expected, from the impls:
+-- useA 1 = "a:" ++ "A1" ++ "tagA"; useB 2 = "b:" ++ "B2" ++ "tagB" ++ "B2".
+import method_context_samename_bystander.ma as A
+import method_context_samename_bystander.mb as B
+
+main =
+  let _ = println (A.useA 1)
+  println (B.useB 2)

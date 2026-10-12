@@ -1,5 +1,5 @@
 # META
-source_lines=1928
+source_lines=1927
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -1388,9 +1388,8 @@ safeChar c =
     || c == "_"
 
 -- #1950: encode an ARBITRARY String as a legal emitted identifier, INJECTIVELY.
--- This is the ONE definition of that encoding: `llvm_emit.defaultFnName` and
--- `llvm_emit.implFnSymTag`, `wasm_emit.implSymTagW`/`implFnSymTagW`, and
--- `core_ir_lower.memoBindName`/`implSymTagOf` all call THIS, so the two backends
+-- This is the ONE definition of that encoding: `core_ir_lower.stampImplSymbols`
+-- calls it to spell every impl symbol, and both backends read that stamp, so they
 -- and the injectivity guard cannot drift apart about what symbol was emitted.
 --
 -- ⚠️ It is NOT `sanitizeId`, and must never be reimplemented as a wrapper over it.

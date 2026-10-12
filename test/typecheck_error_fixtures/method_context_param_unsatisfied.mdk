@@ -1,0 +1,20 @@
+-- #3800: a method's context over the interface parameter is a goal at every call,
+-- even when the impl body ignores it.  `desc (Pair NoShow NoShow)` poses
+-- `Show2 (Pair NoShow)`, whose `requires` needs `Show2 NoShow`, and there is none.
+data Pair a = Pair a a
+
+data NoShow = NoShow
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 (Pair b) requires Show2 b where
+  show2 (Pair x _) = show2 x
+
+interface Desc a where
+  desc : Show2 a => a -> String
+
+impl Desc (Pair b) where
+  desc _ = "constant"
+
+main = desc (Pair NoShow NoShow)

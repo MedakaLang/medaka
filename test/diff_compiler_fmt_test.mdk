@@ -38,9 +38,6 @@
    block below instead, over the SAME two predicates as a `Row`: a spawn's
    exit code and stderr, and its stdout against a golden.
 
-   - `diff_compiler_draft_semantic` grades FIVE spawns per fixture (a
-     baseline plus four `MEDAKA_DRAFT_MUTATION`-controlled runs), only the
-     first of which is diffed against a golden.
    - `diff_compiler_references_correctness` dumps a whole 1-4-module
      project per fixture via `refindex_main --dump`, not a per-file corpus
      loop, over twelve fixture directories.
@@ -202,19 +199,6 @@ test "entry-probe error paths exit nonzero with an empty artifact" =
 
 -- # Shared helpers for the rows below that do not fit `Row`
 
-{- | Runs `cmd` with `name=value` set in its environment, on top of
-   `boundedVerb`'s own `env`-then-`perl` wrapping (`test_process.mdk`): a
-   bare `env` first argument is itself a valid command name, so `env` sees
-   it, re-execs `env name=value cmd args...`, and the variable reaches
-   `cmd`. -}
-withEnv : String ->
-  String ->
-  String ->
-  List String ->
-  <Exec> Result String (Int, String, String)
-withEnv name value cmd args =
-  boundedVerb "env" (["\{name}=\{value}", cmd] ++ args)
-
 -- | `text` contains every string in `needles`.
 containsAll : String -> List String -> Bool
 containsAll text needles = all (n => contains n text) needles
@@ -279,213 +263,6 @@ effectTypesSuperset snapshotRel host rt core fix =
               else
                 let body = unlines (map (l => "  missing: \{l}") missing)
                 Some "native-host TYPES missing # TYPES_USER lines:\n\{body}"
-
--- # `diff_compiler_draft_semantic`
-
-draftSemanticFixturesDir : String
-draftSemanticFixturesDir = "test/draft_semantic_fixtures"
-
-{- | The one `main_*.mdk` entry directly under `dir`, or an error naming how
-   many were found — the fixture is malformed unless there is exactly
-   one. -}
-draftSemanticEntry : String -> <FileRead> Result String String
-draftSemanticEntry dir = match fixtureFiles dir
-  Err e => Err "\{dir}: \{e}"
-  Ok paths =>
-    match (filter
-      (p => startsWith "main_" (basename p) && endsWith ".mdk" p)
-      paths)
-      [e] => Ok e
-      es =>
-        Err
-          "\{dir}: expected exactly one main_*.mdk entry, found \{intToString (length es)}"
-
-{- | Runs the probe under `mutation` (unmutated when `""`) and asserts
-   `wantReceipt` appears in its output, plus `wantDiffCount` when given —
-   the shared shape of every `MEDAKA_DRAFT_MUTATION` check the retired
-   script ran. `wantDiffCount` is `None` for the positive control, whose
-   difference count is asserted NONZERO by its own caller instead of a
-   fixed string here. -}
-draftSemanticAssert : String ->
-  String ->
-  String ->
-  Option String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, IO> Result String String
-draftSemanticAssert label mutation wantReceipt wantDiffCount bin rt core entry =
-  let spawn =
-    if mutation == "" then
-      boundedVerb bin [rt, core, entry]
-    else
-      withEnv "MEDAKA_DRAFT_MUTATION" mutation bin [rt, core, entry]
-  match spawn
-    Err e => Err "\{label}: could not spawn: \{e}"
-    Ok (code, out, _) =>
-      if code /= 0 then
-        Err
-          "\{label}: exited \{intToString code} instead of producing a receipt"
-      else
-        let text = chompNewlines out
-        if not (contains wantReceipt text) then
-          Err "\{label}: expected receipt not found: \{wantReceipt}"
-        else match wantDiffCount
-          Some needle =>
-            if contains needle text then
-              Ok text
-            else
-              Err
-                "\{label}: expected difference-count summary not found: \{needle}"
-          None => Ok text
-
-methodIfaceReceipt : String
-methodIfaceReceipt =
-  "(receipt method-iface methodIfaceTable elaborated-graph DIFFERENT)"
-
-{- | Everything wrong with one `draft_semantic_fixtures/<name>/` fixture:
-   the baseline draft (diffed against its golden), and the four mutation
-   controls that prove the golden's comparator can actually observe a
-   copied-field mismatch rather than only ever printing MATCH. -}
-draftSemanticFixtureFailure : String -> <Exec, FileRead, IO> Option String
-draftSemanticFixtureFailure dir = match draftSemanticEntry dir
-  Err e => Some e
-  Ok entry =>
-    let name = basename dir
-    let bin = underRoot "test/bin/draft_semantic_main"
-    let rt = underRoot "stdlib/runtime.mdk"
-    let core = underRoot "stdlib/core.mdk"
-    match boundedVerb bin [rt, core, entry, dir]
-      Err e => Some "\{name}: could not spawn draft_semantic_main: \{e}"
-      Ok (code, out, err) => match processFailure (basename bin) name code err
-        Some m => Some m
-        None =>
-          let baseline = chompNewlines out
-          if not (contains "(different 0)" baseline) then
-            Some
-              "\{name}: baseline draft has a transport mismatch (or no summary)"
-          else
-            draftSemanticChecks name bin rt core entry dir baseline
-
-draftSemanticChecks : String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Option String
-draftSemanticChecks name bin rt core entry dir baseline =
-  let malformed =
-    draftSemanticAssert
-      "\{name}: malformed-field control"
-      "method-iface"
-      methodIfaceReceipt
-      (Some "(different 1)")
-      bin
-      rt
-      core
-      entry
-  match malformed
-    Err e => Some e
-    Ok _ =>
-      let provenance =
-        draftSemanticAssert
-          "\{name}: provenance control"
-          "method-iface-provenance"
-          methodIfaceReceipt
-          (Some "(different 1)")
-          bin
-          rt
-          core
-          entry
-      match provenance
-        Err e => Some e
-        Ok _ =>
-          let control =
-            draftSemanticAssert
-              "\{name}: unrelated positive control"
-              "unrelated-control"
-              "(receipt module-emitter-projection elaborateModules elaborated-modules DIFFERENT)"
-              None
-              bin
-              rt
-              core
-              entry
-          match control
-            Err e => Some e
-            Ok text =>
-              if contains "(different 0)" text then
-                Some
-                  "\{name}: unrelated positive control could not observe its unrelated module"
-              else
-                draftSemanticTableControls name bin rt core entry dir baseline
-
--- The two installed-table facts (#1403) must each observe a copy that disagrees
--- with what the engines read: a dropped inherited-default row, and a method
--- occurrence whose arity was skewed.
-draftSemanticTableControls : String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Option String
-draftSemanticTableControls name bin rt core entry dir baseline =
-  let dispositions =
-    draftSemanticAssert
-      "\{name}: method-dispositions control"
-      "method-dispositions"
-      "(receipt method-dispositions X-E.P:dispositions installed-table DIFFERENT)"
-      (Some "(different 1)")
-      bin
-      rt
-      core
-      entry
-  match dispositions
-    Err e => Some e
-    Ok _ =>
-      let evidence =
-        draftSemanticAssert
-          "\{name}: evidence control"
-          "evidence"
-          "(receipt evidence X-E.P:evidence installed-table DIFFERENT)"
-          (Some "(different 1)")
-          bin
-          rt
-          core
-          entry
-      match evidence
-        Err e => Some e
-        Ok _ => draftSemanticIsolation name bin rt core entry dir baseline
-
-draftSemanticIsolation : String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Option String
-draftSemanticIsolation name bin rt core entry dir baseline =
-  match withEnv "MEDAKA_DRAFT_MUTATION" "same-process" bin [rt, core, entry]
-    Err e => Some "\{name}: P -> P+U -> P control could not spawn: \{e}"
-    Ok (code, out, _) =>
-      if code /= 0 then
-        Some "\{name}: P -> P+U -> P control exited \{intToString code}"
-      else if chompNewlines out /= baseline then
-        Some
-          "\{name}: P changed after constructing unrelated P+U in the same process"
-      else match readFile "\{dir}/draft.golden"
-        Err e => Some "\{name}: no readable golden: \{e}"
-        Ok raw =>
-          let want = chompNewlines raw
-          if want == baseline then
-            None
-          else
-            Some "\{name}: \{diffNote want baseline}"
 
 -- # `diff_compiler_references_correctness`
 
@@ -756,7 +533,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 153
+typecheckErrorFixtureCount = 155
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally
@@ -1679,14 +1456,6 @@ evalPropertyWorkerFailures = somes [
     ]
     ["interpreter property worker batch aborted"],
 ]
-
-test "draft-semantic transport survives every current emitter input" = report
-  "draft-semantic"
-  (match fixtureDirs (underRoot draftSemanticFixturesDir)
-    Err e => ["\{draftSemanticFixturesDir}: \{e}"]
-    Ok dirs =>
-      countFloor draftSemanticFixturesDir 1 dirs
-        ++ somes (map draftSemanticFixtureFailure (sort dirs)))
 
 {- | The words of the shell statement in `capture_goldens.sh` that starts at
    the first line containing `marker` and runs through its backslash

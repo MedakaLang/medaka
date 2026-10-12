@@ -12,7 +12,7 @@
 -- impls; wmod applies the constrained `cmod.tally` at two types, so two `EDictAt`
 -- sites publish real slot-ordered routes under distinct ordinals; umod contributes an
 -- unconstrained `pick` whose imported occurrence in wmod is the #739 arm, an `EDictAt`
--- with NO entry in the table at all (the miss that must stay silent). Ordinals for all
+-- published as an explicit empty entry, `EvMany []`, not left out. Ordinals for all
 -- of those are minted from the same graph-global counter that numbers every other goal
 -- in the run, including the bystander's.
 --

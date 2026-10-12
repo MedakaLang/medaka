@@ -1,0 +1,9 @@
+-- A same-spelled `Desc.desc` with no context, so its calls take no dictionary.
+export interface Desc a where
+  desc : a -> Int
+
+impl Desc Int where
+  desc n = n * 2
+
+export useB : Int -> Int
+useB n = desc n + 1

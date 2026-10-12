@@ -1,0 +1,29 @@
+-- #3800 with two constraints over the interface parameter: each is its own slot,
+-- in declaration order.  Expected, from the impls: "int 1" ++ "," ++ "three 1".
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+interface Show3 a where
+  show3 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show3 Int where
+  show3 n = "three \{n}"
+
+impl Show2 (Pair b) requires Show2 b where
+  show2 (Pair x _) = show2 x
+
+impl Show3 (Pair b) requires Show3 b where
+  show3 (Pair x _) = show3 x
+
+interface Desc a where
+  desc : (Show2 a, Show3 a) => a -> String
+
+impl Desc (Pair b) where
+  desc p = show2 p ++ "," ++ show3 p
+
+main = println (desc (Pair (1 : Int) 2))

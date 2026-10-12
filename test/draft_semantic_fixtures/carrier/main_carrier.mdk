@@ -1,4 +1,0 @@
-import alpha
-import beta
-
-main = println "draft"

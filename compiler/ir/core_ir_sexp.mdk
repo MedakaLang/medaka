@@ -12,6 +12,7 @@
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..)}
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -20,7 +21,9 @@ import ir.core_ir.{
   CClause(..),
   CImplEntry(..),
   CImplBody(..),
+  ImplSym(..),
   CProgram(..),
+  DeclFacts(..),
   CallMode(..),
   CallSite(..),
   CTree(..),
@@ -177,7 +180,7 @@ cexprSexp m (CListSlice a lo hi incl) = node "CListSlice" [
   boolStr incl,
 ]
 cexprSexp m (CBlock stmts) = node "CBlock" (map (cstmtSexp m) stmts)
-cexprSexp m (CMethod name iface arity route implRoutes methRoutes) = node
+cexprSexp m (CMethod name (MethodEvidence iface arity route implRoutes methRoutes)) = node
   "CMethod"
   [
     escStr name,
@@ -258,24 +261,30 @@ cclauseSexp m (CClause pats body) =
 
 -- ── CImplEntry, CImplBody ─────────────────────────────────────────────────────
 
+implSymSexp : ImplSym -> String
+implSymSexp (ImplSym tag ifaceTag keyTag) =
+  slist [escStr tag, escStr ifaceTag, escStr keyTag]
+
 export
 cimplBodySexp : SexpMode -> CImplBody -> String
-cimplBodySexp m (CImplTagged tag key iface positions pats body) = node
+cimplBodySexp m (CImplTagged tag key iface sym positions pats body) = node
   "CImplTagged"
   [
     escStr tag,
     escStr key,
     escStr iface,
+    implSymSexp sym,
     slist (map intToString positions),
     slist (map patSexp pats),
     cexprSexp m body,
   ]
-cimplBodySexp m (CImplDefault ifaceId tag key positions pats body) = node
+cimplBodySexp m (CImplDefault ifaceId tag key sym positions pats body) = node
   "CImplDefault"
   [
     escStr ifaceId,
     escStr tag,
     escStr key,
+    implSymSexp sym,
     slist (map intToString positions),
     slist (map patSexp pats),
     cexprSexp m body,
@@ -308,8 +317,7 @@ bindsSexp m binds = "(" ++ joinNl (map (cbindSexp m) binds) ++ ")"
 
 -- The default (golden/round-trip) projection — the frozen serialization contract
 -- and the shape every non-probe caller wants.  Unchanged signature: this is the
--- name snapshot.mdk, core_ir_dump_main, core_ir_roundtrip_main and
--- draft_semantic_program call.
+-- name snapshot.mdk, core_ir_dump_main and core_ir_roundtrip_main call.
 export
 cprogramToSexp : CProgram -> String
 cprogramToSexp prog = cprogramToSexpWith defaultSexpMode prog
@@ -318,11 +326,35 @@ cprogramToSexp prog = cprogramToSexpWith defaultSexpMode prog
 -- would otherwise be reached by flipping an ambient flag first.
 export
 cprogramToSexpWith : SexpMode -> CProgram -> String
-cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls) = node
-  "CProgram"
-  [
-    bindsSexp m binds,
-    slist (map ctorArityPairSexp ctorArities),
-    slist (map ctorTypePairSexp ctorToType),
-    slist (map (cimplEntrySexp m) impls),
-  ]
+cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls mctx facts) =
+  node
+    "CProgram"
+    ([
+        bindsSexp m binds,
+        slist (map ctorArityPairSexp ctorArities),
+        slist (map ctorTypePairSexp ctorToType),
+        slist (map (cimplEntrySexp m) impls),
+      ]
+      ++ tablesSexp mctx facts)
+
+-- The method-context table is written only when it has a row, so a program whose
+-- interfaces declare no method context keeps the four-element form.  The
+-- declaration facts are written only when they have a row, after the
+-- method-context table, which is then written even when empty.
+tablesSexp : List (String, Int) -> DeclFacts -> List String
+tablesSexp rows facts = match (rows, facts.factRequires, facts.factSupers)
+  ([], [], []) => []
+  (_, [], []) => [slist (map methodContextPairSexp rows)]
+  _ => [slist (map methodContextPairSexp rows), declFactsSexp facts]
+
+declFactsSexp : DeclFacts -> String
+declFactsSexp facts = node "facts" [
+  slist (map (factPairSexp "rq") facts.factRequires),
+  slist (map (factPairSexp "sp") facts.factSupers),
+]
+
+factPairSexp : String -> (String, Int) -> String
+factPairSexp tag (key, n) = node tag [escStr key, intToString n]
+
+methodContextPairSexp : (String, Int) -> String
+methodContextPairSexp (key, n) = node "mc" [escStr key, intToString n]

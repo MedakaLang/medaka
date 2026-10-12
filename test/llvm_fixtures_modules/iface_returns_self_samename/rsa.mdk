@@ -1,0 +1,9 @@
+-- Module A: `Shape.mk` returns the receiver's own type (a returns-self method).
+export interface Shape x where
+  mk : x -> x
+
+impl Shape String where
+  mk s = s ++ "A"
+
+export useA : String -> String
+useA s = mk s ++ "!"

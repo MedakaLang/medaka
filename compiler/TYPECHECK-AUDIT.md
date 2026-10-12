@@ -543,7 +543,7 @@ head tag when the head is the sole impl (byte-identical to the pre-C7 IR — eve
 existing symbol unchanged, fixpoint-safe) else the sanitized canonical key. The
 runtime dict-dispatch chain (`emitDispatchChain`) compares the right header word
 (head when unique, canonical key on collision) and calls the right symbol.
-`headTagUnique` counts DISTINCT canonical keys (the joint prelude+module entry list
+The emitter's `headTagUnique` (now `core_ir_lower.stampImplSymbols`'s collision guard) counts DISTINCT canonical keys (the joint prelude+module entry list
 duplicates each prelude impl; a multi-clause impl shares one key), not raw entries.
 Repros: `test/eval_dict_fixtures/same_head_argpos.mdk` (arg-position run==oracle),
 `test/build_diff_fixtures/same_head_typeargs.mdk` (native build==oracle). All gates

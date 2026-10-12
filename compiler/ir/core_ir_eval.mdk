@@ -28,6 +28,7 @@
 import frontend.ast.{Lit(..), Pat(..), Addr(..), Route(..), Decl, Loc(..)}
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -170,7 +171,7 @@ ceval env (CRangeArray lo hi incl) =
 -- methodReqCountRef state initialized by installDispatchTables (derives both
 -- tables from one decl list). See .claude/dossier/traps.md § "[T-EVAL-LOCKSTEP]
 -- evalModules / cevalModules lockstep".
-ceval env (CMethod name iface _ route implRoutes methRoutes) =
+ceval env (CMethod name (MethodEvidence iface _ route implRoutes methRoutes)) =
   let (narrowed, fwdReqs) =
     methodAtNarrow env name (narrowToIface iface (lookupEnv env name)) route
   applyMethodDicts env name route narrowed fwdReqs implRoutes methRoutes
@@ -467,7 +468,7 @@ cClauseClosure env (CClause pats body) = VClosureF env pats (e => ceval e body)
 -- point-free defs can reference values installed later, in any order.
 export
 cevalProgram : CProgram -> <e> List (String, Value e)
-cevalProgram (CProgram groups ctorArs ctorToType implEntries) =
+cevalProgram (CProgram groups ctorArs ctorToType implEntries _ _) =
   ctorToTypeRef := ctorToType
   let ctors = map ctorBinding ctorArs
   let allNames =
@@ -517,9 +518,9 @@ cImplEntryValues : EvalEnv (Value e) ->
 cImplEntryValues env ent = [cImplEntryValue env ent]
 
 cImplBodyValue : EvalEnv (Value e) -> CImplBody -> Value e
-cImplBodyValue env (CImplTagged tag key _ positions pats body) =
+cImplBodyValue env (CImplTagged tag key _ _ positions pats body) =
   VTypedImpl tag key positions 0 (cImplMethodValue env positions pats body)
-cImplBodyValue env (CImplDefault _ tag key positions pats body) =
+cImplBodyValue env (CImplDefault _ tag key _ positions pats body) =
   VTypedImpl tag key positions 0 (cImplMethodValue env positions pats body)
 
 -- A point-free (no-param) impl/default body: defer a return-position method as a

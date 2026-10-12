@@ -1,0 +1,1 @@
+TYPE ERROR: no impl of Show2 for NoShow; write `impl Show2 NoShow`

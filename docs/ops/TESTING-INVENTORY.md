@@ -110,7 +110,6 @@
 | `test/cross_project_deps_test.mdk` | GOLDEN | native (check/run/build+exec) | N | YES | — | 1703 | 82 | DONE: was `cross_project_deps.sh` + `cross_project_twonames.sh`, folded into one native gate |
 | `test/diff_async.sh` | GOLDEN | native (async I/O bound only in LLVM backend, per header) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 7379 | 68 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_fmt_test.mdk` | GOLDEN | native (compiled test/bin probe) | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE, EXTERNAL-TOOL | 4697 | 154 | REWRITE: probe/static text becomes library calls [python3] |
-| `test/diff_compiler_anf_identity.sh` | GOLDEN | native (compiled test/bin probe) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE, EXTERNAL-TOOL, SECTION-SPLIT | 35 | 57 | REWRITE: probe/static text becomes library calls [node] |
 | `test/diff_compiler_argtag_matrix.sh` | OTHER | multiple (check/run/build) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL, INVERTED-POLARITY | 16063 | 187 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_build.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL | 20877 | 112 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `test/diff_compiler_call_arity.sh` | STRUCTURAL-IR | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 184883 | 320 | WRAP: spawns ./medaka + diffs, module does the same [clang,python3] |

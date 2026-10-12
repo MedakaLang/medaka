@@ -49,7 +49,7 @@
 -- AST tree-walker over the whole fixture corpus.  Core IR is correct iff
 -- evaluating it matches evaluating the AST.
 
-import frontend.ast.{Lit, Loc, Pat, Addr, Route, noDeclLoc}
+import frontend.ast.{Lit, Loc, Pat, Addr, Route(..), noDeclLoc}
 
 -- ── expressions ────────────────────────────────────────────────────────────
 public export data CExpr =
@@ -134,15 +134,65 @@ public export data CExpr =
   | CBlock (List CStmt)
   -- typeclass dispatch, dicts explicit (slice 5; Route read out of the AST's
   -- mutable cell at lowering time so the IR is immutable):
-  --   CMethod = a method occurrence: its name, the `ifaceWordOf` word of the
-  --             interface it resolved to (`""` when unknown — no engine may
-  --             then narrow by interface), and its selected denotation pre-use
-  --             arrow arity, used to narrow its RKey/RDict candidates;
-  --             implRoutes applies per-instance requires dicts (Phase 83/84);
-  --             methRoutes applies method-level constraint dicts (Phase 69.x-e).
+  --   CMethod = a method occurrence: its name and its `MethodEvidence`.
   --   CDict   = a constrained-function occurrence, one Route per `=>` constraint.
-  | CMethod String String Int Route (List Route) (List Route)
+  | CMethod String MethodEvidence
   | CDict String (List Route)
+
+-- The evidence a method occurrence carries, exactly as elaboration published it
+-- (`route_key.evMethodRoutes`): the interface word (`""` when the occurrence
+-- denotes no interface method, so no engine may narrow by interface), the
+-- selected denotation's pre-use arity, the dispatch answer, the selected
+-- instance's prerequisite dictionaries, and the method's own context dictionaries.
+public export data MethodEvidence = MethodEvidence {
+  meIface : String,
+  meArity : Int,
+  meDispatch : Route,
+  mePrereqs : List Route,
+  meContext : List Route,
+}
+
+-- Every given dictionary name [r] reads, in order: a given's own name, the givens
+-- a dictionary built at the site nests in its requires and supers, the given a
+-- projection reads, and the givens a shadowing standalone is applied to.
+export
+givenNames : Route -> List String
+givenNames (RDict d) = [d]
+givenNames (RDictFwd d) = [d]
+givenNames (RKey _ reqs sups) = flatMap givenNames (reqs ++ sups)
+givenNames (RProj r _) = givenNames r
+givenNames (RLocal _ dicts) = flatMap givenNames dicts
+givenNames RNone = []
+givenNames (RScalar _) = []
+
+-- [r] is answered by a dictionary that is only known at run time: a given, or a
+-- projection out of one.  Accepts any projection without checking its root;
+-- core_validate.givenRooted recurses through RProj to check it.
+export
+isGivenRooted : Route -> Bool
+isGivenRooted (RDict _) = True
+isGivenRooted (RDictFwd _) = True
+isGivenRooted (RProj _ _) = True
+isGivenRooted (RKey _ _ _) = False
+isGivenRooted (RLocal _ _) = False
+isGivenRooted RNone = False
+isGivenRooted (RScalar _) = False
+
+-- The canonical key of the instance [r] selects statically, if it selects one.
+export
+instanceWord : Route -> Option String
+instanceWord (RKey word _ _) = Some word
+instanceWord _ = None
+
+-- The dictionary of the instance an occurrence selects statically: its word, the
+-- prerequisites the occurrence supplies and the supers its dispatch carries.  An
+-- inherited default receives it as its receiver.  Evidence that selects no
+-- instance statically is its own dispatch answer.
+export
+receiverEvidence : MethodEvidence -> Route
+receiverEvidence (MethodEvidence _ _ (RKey word _ sups) prereqs _) =
+  RKey word prereqs sups
+receiverEvidence ev = ev.meDispatch
 
 -- How an application is made, from its head's defined arity k and its n
 -- arguments.  `core_ir_lower.stampCallModes` decides it for every application a
@@ -291,8 +341,9 @@ public export data CClause = CClause (List Pat) CExpr
 -- CImplBody:
 --   CImplTagged = a method the impl SUPPLIES (concrete type-head tag, the canonical
 --     full-type impl key [for type-arg-distinct same-head dispatch, mirrors
---     eval.mdk's VTypedImpl `k`], iface, dispatch positions, the clause's
---     patterns, its lowered body).
+--     eval.mdk's VTypedImpl `k`], the interface word (`route_key.ifaceWordOf`, the
+--     same qualified word `CImplDefault` and `CMethod` carry), the emitted-symbol
+--     words, dispatch positions, the clause's patterns, its lowered body).
 --   CImplDefault = a slot the impl INHERITS from its interface's default body, one
 --     entry per `InheritedDefault` row of the disposition table
 --     (`types/disposition.mdk`): the interface word (`route_key.ifaceWordOf`,
@@ -308,13 +359,51 @@ public export data CClause = CClause (List Pat) CExpr
 --     defaults, because every inherited slot has its own entry.
 public export data CImplEntry = CImplEntry String Int Int CImplBody
 public export data CImplBody =
-  | CImplTagged String String String (List Int) (List Pat) CExpr
-  | CImplDefault String String String (List Int) (List Pat) CExpr
+  | CImplTagged String String String ImplSym (List Int) (List Pat) CExpr
+  | CImplDefault String String String ImplSym (List Int) (List Pat) CExpr
+
+-- The emitted-symbol words of an impl entry, stamped once by
+-- `core_ir_lower.stampImplSymbols` and read by both emitters, which only prefix
+-- and join them.  Fields: the symbol tag (the encoded head tag when the entry is
+-- the sole impl of (method, head), else the encoded canonical key -- the `<tag>` of
+-- `mdk_impl_<tag>_<method>` and of `$memo_<tag>_<method>`), then, for an inherited
+-- default only, the encoded interface word and the encoded instance key that
+-- spell `mdk_default_<iface>_<method>_<key>`; both are "" on a supplied method.
+-- `noImplSym` is the unstamped sentinel, which `core_validate` refuses.
+public export data ImplSym = ImplSym String String String
+
+export
+noImplSym : ImplSym
+noImplSym = ImplSym "" "" ""
 
 -- ── programs ───────────────────────────────────────────────────────────────
+-- The method-context table, the fifth field of `CProgram`: per interface method of the lowered declarations whose
+-- own `=>` context has a slot, keyed by `core_ir_lower.ifaceMethodArityKey`, the
+-- number of constraints in that context that mention a type variable.  It is read
+-- off the declared signature, not the typechecker's evidence, so
+-- `core_validate.validateMethodContexts` can hold a `CMethod`'s method routes and an
+-- impl entry's leading dictionaries to it.
+
 -- A lowered program: top-level function groups (coalesced multi-clause), the
 -- constructor table (name → arity, for building VCon makers), the ctor→type map
--- eval needs for runtime type tags, and (slice 5) the lowered typeclass
--- impl/default entries.  Slice-1 programs carry an empty impl list.
+-- eval needs for runtime type tags, (slice 5) the lowered typeclass
+-- impl/default entries, the method-context table and the declaration facts.
+-- Slice-1 programs carry an empty impl list.
 public export data CProgram =
-  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry)
+  | CProgram (List CBind) (List (String, Int)) (List (String, String)) (List CImplEntry) (List (String, Int)) DeclFacts
+
+-- The declaration facts a dictionary built at a site is held to
+-- (`core_validate.validateDispatchEvidence`): each instance's `requires` count,
+-- keyed by its canonical key word (`core_ir_lower.instanceReqCounts`), and each of
+-- those instances' interfaces' direct superinterface count, keyed by interface
+-- word (`disposition.ifaceSuperCount`).  A dictionary stores the supers, then the
+-- requires.  Only an emitting lowering fills them; every other lowering carries
+-- `noDeclFacts`.
+public export data DeclFacts = DeclFacts {
+  factRequires : List (String, Int),
+  factSupers : List (String, Int),
+}
+
+export
+noDeclFacts : DeclFacts
+noDeclFacts = DeclFacts { factRequires = [], factSupers = [] }

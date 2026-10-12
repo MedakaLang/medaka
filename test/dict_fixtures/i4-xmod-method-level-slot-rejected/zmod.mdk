@@ -5,7 +5,7 @@
 -- `zmod.Sizer`, and by §8 I4 its identity is `(zmod, Sizer)`.  This is a DIFFERENT
 -- channel from an impl's `requires` and from a signature-level `=>`: it is
 -- `recordMethodLevelSlotObls`, reached via `methodLevelConstraintSlots` /
--- `constraintSlotVarIface`, and it had NO fixture before this one.
+-- `Constraint.constraintOrigin`, and it had NO fixture before this one.
 export interface Sizer a where
   bulk : a -> Int
 

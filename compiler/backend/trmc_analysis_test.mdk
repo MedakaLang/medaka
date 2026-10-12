@@ -3,7 +3,14 @@
 
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..), noDeclLoc}
-import ir.core_ir.{CBind(..), CClause(..), CExpr(..), mkApp, synthBind}
+import ir.core_ir.{
+  CBind(..),
+  CClause(..),
+  CExpr(..),
+  MethodEvidence(..),
+  mkApp,
+  synthBind,
+}
 import backend.trmc_analysis.{SelfRef(..), freeVars, trmcEligible}
 
 loc : Loc
@@ -20,7 +27,9 @@ multiClauseGroup =
             CVar "outer" AGlobal,
             CVar "p" AGlobal,
             CVar "g" AGlobal,
-            CMethod "add" "" 2 (RDict "$d0") [] [RDictFwd "$d1"],
+            CMethod
+              "add"
+              (MethodEvidence "" 2 (RDict "$d0") [] [RDictFwd "$d1"]),
           ]),
         CClause
           [PVar "q" loc]

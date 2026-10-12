@@ -792,7 +792,7 @@ for required in \
   'reverseL !emit.stringSegments' \
   'emitProgram input cp = emitProgramWith (freshWasmEmit WGapStrict) input cp' \
   'emitProgramRecord input cp =' \
-  'emitProgramGaps input (CProgram groups ctorArs ctorTypes impls) =' \
+  'emitProgramGaps input (CProgram groups ctorArs ctorTypes impls mctx facts) =' \
   'let emit = freshWasmEmit WGapRecord' \
   'let dataSegs = emitDataSegs (progEmit prog)' \
   'emitRefExpr prog env d (CLit l) = emitLitRef (progEmit prog) l'; do
@@ -1052,12 +1052,13 @@ for retired in \
     exit 1
   fi
 done
-# The default's symbol is a pure function of the entry (interface, method, instance
-# key), and its body goes through the same impl-body path as a supplied method.
+# The default's symbol is a pure function of the entry (its stamped interface and
+# instance-key words, and the method), and its body goes through the same impl-body
+# path as a supplied method.
 for required in \
-  'defaultFnNameW : String -> String -> String -> String' \
-  'implEntrySymW _ method (CImplEntry _ _ _ (CImplDefault ifaceWord _ key _ _ _)) = defaultFnNameW ifaceWord method key' \
-  'implBodyExprW (CImplDefault _ _ _ _ _ e) = e'; do
+  'implEntrySymW : String -> CImplEntry -> String' \
+  'implEntrySymW method (CImplEntry _ _ _ (CImplDefault _ _ _ (ImplSym _ ifaceTag keyTag) _ _ _)) = "mdk_default_\{ifaceTag}_\{gname method}_\{keyTag}"' \
+  'implBodyExprW (CImplDefault _ _ _ _ _ _ e) = e'; do
   has_wasm_pin "$required" || {
     case "$required" in
       implBodyExprW*) id=H2B4-DEFAULT-DEFS ;;
@@ -1109,7 +1110,7 @@ for required in \
   'synthBind "defaultRequestTwo" [CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault")]' \
   'synthBind "defaultCensusGap" [CClause [] (CVar "missingDefaultCensus" AGlobal)]' \
   'synthBind "main" [CClause [] (CLit (LInt 0))]' \
-  'CImplEntry "synthDefault" 0 1 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" [] [PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
+  'CImplEntry "synthDefault" 0 1 (CImplDefault "DefaultFace" "UDefault" "DefaultFace|UDefault|" noImplSym [] [PVar "$dict_synthDefault_0" defaultStateLoc, PVar "value" defaultStateLoc] (CLit (LInt 29)))'; do
   has_typed_pin "$required" || {
     echo "FAIL H2B4-DEFAULT-DEFS: default-state harness is missing $required"
     exit 1
