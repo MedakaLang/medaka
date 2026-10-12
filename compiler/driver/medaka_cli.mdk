@@ -70,6 +70,16 @@ import support.timer.{
   flushPerfSinkProse,
 }
 import list.{sortOn}
+import toml.{parse as parseToml}
+import support.manifest.{targetProfile}
+import types.target_profile.{
+  Backend(..),
+  buildableNames,
+  lookupProfile,
+  profileBackend,
+  selectProfile,
+  selectedProfile,
+}
 import string.{toInt}
 -- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
 -- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
@@ -685,7 +695,8 @@ checkHelpText = stringConcat [
   "                    (default: only your own top-level bindings; no effect\n",
   "                    under --json — the envelope carries diagnostics, not\n",
   "                    scheme dumps)\n",
-  "  --allow-internal  permit internal-only externs outside stdlib/\n"
+  "  --allow-internal  permit internal-only externs outside stdlib/\n",
+  "  --target <name>   target profile to carry; nothing refuses yet\n"
 ]
 
 -- C2: `check`'s whole flag vocabulary, as `checkHelpText` documents it.
@@ -703,7 +714,10 @@ checkArgSpec =
     (spec "check" [
       switch ["--json"] "emit the structured-diagnostics envelope",
       switch ["--types"] "show the full inferred-scheme dump",
-      switch ["--allow-internal"] "permit internal-only externs outside stdlib/",
+      switch
+        ["--allow-internal"]
+        "permit internal-only externs outside stdlib/",
+      value ["--target"] "NAME" "target profile to carry (nothing refuses yet)",
     ])
 
 runCheckCmd : List String -> <IO> Unit
@@ -721,6 +735,7 @@ runCheckCmd argv =
   match a.positionals
     [target] =>
       perfArm perfT0
+      carryTargetProfile (lastValue "--target" a) target
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
@@ -1282,7 +1297,47 @@ runArgvFilter ("--json" :: rest) = runArgvFilter rest
 runArgvFilter ("--release" :: rest) = runArgvFilter rest
 runArgvFilter ("--allow-internal" :: rest) = runArgvFilter rest
 runArgvFilter ("--types" :: rest) = runArgvFilter rest
+runArgvFilter ("--target" :: _ :: rest) = runArgvFilter rest
+runArgvFilter (x :: rest)
+  | startsWith "--target=" x = runArgvFilter rest
 runArgvFilter argv = argv
+
+-- `--target`'s value in `run`'s pre-positional prefix, last one winning.
+runTargetFlag : List String -> Option String
+runTargetFlag argv = runTargetGo None argv
+
+runTargetGo : Option String -> List String -> Option String
+runTargetGo _ ("--target" :: v :: rest) = runTargetGo (Some v) rest
+runTargetGo acc (x :: rest)
+  | startsWith "--target=" x =
+    runTargetGo (Some (stringSlice 9 (stringLength x) x)) rest
+  | x == "--json"
+    || x == "--release"
+    || x == "--allow-internal"
+    || x == "--types" = runTargetGo acc rest
+  | otherwise = acc
+runTargetGo acc [] = acc
+
+-- The manifest's `[target] profile` for the project holding `entry`.
+manifestProfileOf : String -> <IO> Option String
+manifestProfileOf entry = match findProjectRoot (dirOf2 entry)
+  None => None
+  Some root => match readFile (root ++ "/medaka.toml")
+    Err _ => None
+    Ok text => match parseToml text
+      Ok doc => targetProfile doc
+      Err _ => None
+
+-- Resolve `--target` (over the manifest) and carry the profile; a name the
+-- table does not know aborts.
+carryTargetProfile : Option String -> String -> <IO> Unit
+carryTargetProfile flagValue entry =
+  let fromManifest = match flagValue
+    Some _ => None
+    None => manifestProfileOf entry
+  match selectProfile flagValue fromManifest
+    Ok p => selectedProfile := p
+    Err m => dieMsg ("error: " ++ m)
 
 -- True if the flag appears in `run`'s PRE-positional prefix ONLY — the same
 -- prefix `runArgvFilter` consumes, program passthrough args (after the first
@@ -1290,11 +1345,13 @@ runArgvFilter argv = argv
 -- byte-for-byte (see its note); both now agree on the fixed, precise scope.
 runFlagGiven : String -> List String -> Bool
 runFlagGiven _ [] = False
+runFlagGiven nm ("--target" :: _ :: rest) = runFlagGiven nm rest
 runFlagGiven nm (x :: rest)
   | x == "--json"
     || x == "--release"
     || x == "--allow-internal"
-    || x == "--types" = x == nm || runFlagGiven nm rest
+    || x == "--types"
+    || startsWith "--target=" x = x == nm || runFlagGiven nm rest
   | otherwise = False
 
 -- ── C1/C2: the one flag floor every verb shares ────────────────────────────
@@ -2615,11 +2672,17 @@ buildTargetOf (v :: rest) _ = match parseTarget v
   Err msg => Err msg
   Ok t => buildTargetOf rest t
 
+-- Through the profile table: an alias or profile name resolves, its backend
+-- picks the `BuildTarget`, and the interpreter's profile is not buildable.
 parseTarget : String -> Result String BuildTarget
-parseTarget "native" = Ok TNative
-parseTarget "wasm" = Ok TWasm
-parseTarget other =
-  Err ("error: unknown --target `" ++ other ++ "` (known: native, wasm)")
+parseTarget name = match lookupProfile name
+  Err m => Err ("error: " ++ m)
+  Ok p => match profileBackend p
+    BackendLlvm => Ok TNative
+    BackendWasmgc => Ok TWasm
+    BackendEval =>
+      Err
+        "error: `\{name}` is not buildable (buildable: \{joinWith ", " buildableNames})"
 
 finishBuildArgs : List String ->
   Option String ->
@@ -2750,6 +2813,7 @@ runHelpText = stringConcat [
   "                    text on stderr and exits 1 with no envelope, so a\n",
   "                    consumer must handle both.\n",
   "  --allow-internal  permit internal-only externs outside stdlib/\n",
+  "  --target <name>   target profile to carry; nothing refuses yet\n",
   "  --release         accepted, ignored — the interpreter has no release mode.\n",
   "                    There is no `build --release`; a native build is always\n",
   "                    optimized. Kept so a `--release` in a shared script does\n",
@@ -2772,6 +2836,7 @@ runArgSpec = spec "run" [
   switch ["--json"] "emit the structured-diagnostics envelope on stderr",
   switch ["--allow-internal"] "permit internal-only externs outside stdlib/",
   switch ["--release"] "accepted and ignored (eval is never optimized)",
+  value ["--target"] "NAME" "target profile to carry (nothing refuses yet)",
 ]
 
 -- The `eval` + `total` phase lines, as a named partially-applied function so the
@@ -2824,6 +2889,7 @@ runRunCmd argv =
       && not (fileExists target) => runAbort ("error: no such file: " ++ target)
     target :: progArgs =>
       perfArm perfT0
+      carryTargetProfile (runTargetFlag argv) target
       let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
       let rtPath = root ++ "/stdlib/runtime.mdk"
       let corePath = root ++ "/stdlib/core.mdk"
