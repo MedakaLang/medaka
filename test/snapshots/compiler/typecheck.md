@@ -1,5 +1,5 @@
 # META
-source_lines=55879
+source_lines=55883
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -32126,8 +32126,7 @@ implRowMatchesSuper superKey superName goal (ImplRow _ _ ir tys _ _) =
 -- `implHeadSubst` match), so a variable [pats] repeats must bind equal types, and a
 -- variable of [goal] matches only a variable of [pats].  `impl D (Pair a a)` does not
 -- cover `D (Pair a b)` or `D (Pair Int Bool)`.  Effect rows are transparent on both
--- sides.  Type constructors compare by spelling (`tyStep`), where the use site
--- compares identity.
+-- sides.  Type constructors compare by identity (`tyStep`), as at the use site.
 superHeadCovers : List Ty -> List Ty -> Bool
 superHeadCovers pats goal =
   isSome (matchOneSided superHeadStep eqStr tyStructEq (zipL pats goal) [])
@@ -32693,11 +32692,14 @@ tyStrictlyMoreSpecificV a b = tySubsumesV b a && not (tySubsumesV a b)
 -- no catch-all — a new constructor must add an arm here, not rely on a
 -- wildcard (a hand-maintained count here would rot; see `TyRow`'s own arm
 -- below for why: a bare row atom has no wrapped type to recurse into, so it
--- vacuously matches anything in this position).
+-- vacuously matches anything in this position).  A type constructor compares by
+-- identity (`sameTyConHead`), the rule the use site's `matchStep` and coherence's
+-- `cohStep` apply, so a module-local type never matches an imported type it shares a
+-- spelling with.
 tyStep : Ty -> Ty -> MStep String Ty Ty
 tyStep (TyVar gn) _ = MVar gn
-tyStep (TyCon { tyConName = a }) (TyCon { tyConName = b }) =
-  if a == b then MOk else MFail
+tyStep (TyCon { tyConName = a, tyConOrigin = oa }) (TyCon { tyConName = b, tyConOrigin = ob }) =
+  if sameTyConHead a oa b ob then MOk else MFail
 tyStep (TyCon { tyConName = _ }) _ = MFail
 tyStep (TyApp f1 a1) (TyApp f2 a2) = MKids [(f1, f2), (a1, a2)]
 tyStep (TyApp _ _) _ = MFail
@@ -32727,9 +32729,11 @@ stripTyWrap (TyNamed _ t _) = stripTyWrap t
 stripTyWrap (TyQual t _ _) = stripTyWrap t
 stripTyWrap t = t
 
--- structural equality of two AST type patterns (rigid; TyVar names must match).
+-- structural equality of two AST type patterns (rigid; TyVar names must match, type
+-- constructors compare by identity as in `tyStep`).
 tyStructEq : Ty -> Ty -> Bool
-tyStructEq (TyCon { tyConName = a }) (TyCon { tyConName = b }) = a == b
+tyStructEq (TyCon { tyConName = a, tyConOrigin = oa }) (TyCon { tyConName = b, tyConOrigin = ob }) =
+  sameTyConHead a oa b ob
 tyStructEq (TyVar a) (TyVar b) = a == b
 tyStructEq (TyApp f1 a1) (TyApp f2 a2) = tyStructEq f1 f2 && tyStructEq a1 a2
 tyStructEq (TyFun a1 b1) (TyFun a2 b2) = tyStructEq a1 a2 && tyStructEq b1 b2
@@ -61666,7 +61670,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tyStrictlyMoreSpecificV" ((PVar "a") (PVar "b")) (EBinOp "&&" (EApp (EApp (EVar "tySubsumesV") (EVar "b")) (EVar "a")) (EApp (EVar "not") (EApp (EApp (EVar "tySubsumesV") (EVar "a")) (EVar "b")))))
 (DTypeSig false "tyStep" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "String")) (TyCon "Ty")) (TyCon "Ty")))))
 (DFunDef false "tyStep" ((PCon "TyVar" (PVar "gn")) PWild) (EApp (EVar "MVar") (EVar "gn")))
-(DFunDef false "tyStep" ((PRec "TyCon" ((rf "tyConName" (PVar "a"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b"))) false)) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail")))
+(DFunDef false "tyStep" ((PRec "TyCon" ((rf "tyConName" (PVar "a")) (rf "tyConOrigin" (PVar "oa"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b")) (rf "tyConOrigin" (PVar "ob"))) false)) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (EVar "MOk") (EVar "MFail")))
 (DFunDef false "tyStep" ((PRec "TyCon" ((rf "tyConName" PWild)) false) PWild) (EVar "MFail"))
 (DFunDef false "tyStep" ((PCon "TyApp" (PVar "f1") (PVar "a1")) (PCon "TyApp" (PVar "f2") (PVar "a2"))) (EApp (EVar "MKids") (EListLit (ETuple (EVar "f1") (EVar "f2")) (ETuple (EVar "a1") (EVar "a2")))))
 (DFunDef false "tyStep" ((PCon "TyApp" PWild PWild) PWild) (EVar "MFail"))
@@ -61689,7 +61693,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stripTyWrap" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "stripTyWrap") (EVar "t")))
 (DFunDef false "stripTyWrap" ((PVar "t")) (EVar "t"))
 (DTypeSig false "tyStructEq" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyCon "Bool"))))
-(DFunDef false "tyStructEq" ((PRec "TyCon" ((rf "tyConName" (PVar "a"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b"))) false)) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "tyStructEq" ((PRec "TyCon" ((rf "tyConName" (PVar "a")) (rf "tyConOrigin" (PVar "oa"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b")) (rf "tyConOrigin" (PVar "ob"))) false)) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")))
 (DFunDef false "tyStructEq" ((PCon "TyVar" (PVar "a")) (PCon "TyVar" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "tyStructEq" ((PCon "TyApp" (PVar "f1") (PVar "a1")) (PCon "TyApp" (PVar "f2") (PVar "a2"))) (EBinOp "&&" (EApp (EApp (EVar "tyStructEq") (EVar "f1")) (EVar "f2")) (EApp (EApp (EVar "tyStructEq") (EVar "a1")) (EVar "a2"))))
 (DFunDef false "tyStructEq" ((PCon "TyFun" (PVar "a1") (PVar "b1")) (PCon "TyFun" (PVar "a2") (PVar "b2"))) (EBinOp "&&" (EApp (EApp (EVar "tyStructEq") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "tyStructEq") (EVar "b1")) (EVar "b2"))))
@@ -70965,7 +70969,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tyStrictlyMoreSpecificV" ((PVar "a") (PVar "b")) (EBinOp "&&" (EApp (EApp (EVar "tySubsumesV") (EVar "b")) (EVar "a")) (EApp (EVar "not") (EApp (EApp (EVar "tySubsumesV") (EVar "a")) (EVar "b")))))
 (DTypeSig false "tyStep" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "String")) (TyCon "Ty")) (TyCon "Ty")))))
 (DFunDef false "tyStep" ((PCon "TyVar" (PVar "gn")) PWild) (EApp (EVar "MVar") (EVar "gn")))
-(DFunDef false "tyStep" ((PRec "TyCon" ((rf "tyConName" (PVar "a"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b"))) false)) (EIf (EBinOp "==" (EVar "a") (EVar "b")) (EVar "MOk") (EVar "MFail")))
+(DFunDef false "tyStep" ((PRec "TyCon" ((rf "tyConName" (PVar "a")) (rf "tyConOrigin" (PVar "oa"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b")) (rf "tyConOrigin" (PVar "ob"))) false)) (EIf (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")) (EVar "MOk") (EVar "MFail")))
 (DFunDef false "tyStep" ((PRec "TyCon" ((rf "tyConName" PWild)) false) PWild) (EVar "MFail"))
 (DFunDef false "tyStep" ((PCon "TyApp" (PVar "f1") (PVar "a1")) (PCon "TyApp" (PVar "f2") (PVar "a2"))) (EApp (EVar "MKids") (EListLit (ETuple (EVar "f1") (EVar "f2")) (ETuple (EVar "a1") (EVar "a2")))))
 (DFunDef false "tyStep" ((PCon "TyApp" PWild PWild) PWild) (EVar "MFail"))
@@ -70988,7 +70992,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "stripTyWrap" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "stripTyWrap") (EVar "t")))
 (DFunDef false "stripTyWrap" ((PVar "t")) (EVar "t"))
 (DTypeSig false "tyStructEq" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyCon "Bool"))))
-(DFunDef false "tyStructEq" ((PRec "TyCon" ((rf "tyConName" (PVar "a"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b"))) false)) (EBinOp "==" (EVar "a") (EVar "b")))
+(DFunDef false "tyStructEq" ((PRec "TyCon" ((rf "tyConName" (PVar "a")) (rf "tyConOrigin" (PVar "oa"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b")) (rf "tyConOrigin" (PVar "ob"))) false)) (EApp (EApp (EApp (EApp (EVar "sameTyConHead") (EVar "a")) (EVar "oa")) (EVar "b")) (EVar "ob")))
 (DFunDef false "tyStructEq" ((PCon "TyVar" (PVar "a")) (PCon "TyVar" (PVar "b"))) (EBinOp "==" (EVar "a") (EVar "b")))
 (DFunDef false "tyStructEq" ((PCon "TyApp" (PVar "f1") (PVar "a1")) (PCon "TyApp" (PVar "f2") (PVar "a2"))) (EBinOp "&&" (EApp (EApp (EVar "tyStructEq") (EVar "f1")) (EVar "f2")) (EApp (EApp (EVar "tyStructEq") (EVar "a1")) (EVar "a2"))))
 (DFunDef false "tyStructEq" ((PCon "TyFun" (PVar "a1") (PVar "b1")) (PCon "TyFun" (PVar "a2") (PVar "b2"))) (EBinOp "&&" (EApp (EApp (EVar "tyStructEq") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "tyStructEq") (EVar "b1")) (EVar "b2"))))
