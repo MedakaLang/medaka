@@ -627,13 +627,13 @@ resultLabels _ = []
 
 -- Externs that a backend does not lower although every profile on it that
 -- reaches them must: those with no label, which no grant gates, and those
--- whose only label is `IO`, which a profile granting all eleven host labels
--- reaches.  Each with why.
+-- whose only label is `IO`, which every profile granting a host label reaches.
+-- Each with why.
 labellessExceptions : List (String, String)
 labellessExceptions = [
   (
     "assertSnapshot",
-    "a forward-declared snapshot-testing primitive no backend lowers and no stdlib code calls; its only label is IO, so llvm/native-posix and eval/run, which grant all eleven host labels, reach it",
+    "a forward-declared snapshot-testing primitive no backend lowers and no stdlib code calls; its only label is IO, so every profile granting a host label reaches it",
   ),
   (
     "buildFingerprint",
@@ -670,15 +670,15 @@ isRatchet BackendWasmgc GapUnported = True
 isRatchet BackendEval GapBug = True
 isRatchet _ _ = False
 
--- Does the profile's grant reach this extern?  `IO` is the join of the eleven
--- host labels, so only a profile granting every one of them grants it; on any
--- other profile `check` refuses a program that reaches an `IO` extern.
+-- Does the profile's grant reach this extern?  `IO` is the join of the host
+-- labels the profile grants, so a profile granting any of them reaches an `IO`
+-- extern.
 appliesTo : TargetProfile -> List String -> Bool
 appliesTo _ [] = True
 appliesTo p labels = any (reaches p) labels
 
 reaches : TargetProfile -> String -> Bool
-reaches p "IO" = all (grantsLabel p) hostLabels
+reaches p "IO" = any (grantsLabel p) hostLabels
 reaches p label = grantsLabel p label
 
 -- The (profile, extern, gap, reason) cells a profile's grant reaches that its
@@ -816,10 +816,10 @@ isUngated _ = False
 
 -- The ratchet may only fall: draining a row lowers this ceiling in the same
 -- change.
-test "profiles: the owed ratchet rows are at most 61" = match runtimeText
+test "profiles: the owed ratchet rows are at most 64" = match runtimeText
   Err e => expectEqual "read runtime.mdk" "failed: \{e}"
   Ok src =>
     expectAtMost
-      61
+      64
       (length
         (owedRatchetRows allProfiles (declLabels (parse src)) catalogRows))

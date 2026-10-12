@@ -1,0 +1,6 @@
+exit=0
+--- stdout
+listDir : Unit -> <IO> Result String (Int, String, String)
+main : <IO> Unit
+-- <fixtures>/io_exec.mdk: ok (2 declaration(s) checked, 0 errors)
+--- stderr

@@ -159,7 +159,10 @@ eleven labels above `FFI`. A bound of `<IO>` admits all eleven, so a row that pe
 the eleven labels out (a bound that names only ten refuses it, naming the missing
 label). Two things it does not cover: `FFI`, which has to be named explicitly
 because it leaves the language, and any label you declare yourself
-([chapter 3](effects-3-labels.md)).
+([chapter 3](effects-3-labels.md)). That is `IO` with no target selected; under
+`--target`, or a `[target] profile` in `medaka.toml`, `IO` joins only the labels
+that target grants, so on `wasmgc/node` an `<IO>` function that runs a command
+is refused where it calls `runCommand`.
 
 Some runtime externs perform no label at all. `args` reads a command line that
 was fixed when the process started, and `buildCommit`, `buildDate` and

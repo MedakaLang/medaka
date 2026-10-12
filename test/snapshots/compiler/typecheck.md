@@ -1,5 +1,5 @@
 # META
-source_lines=55650
+source_lines=55652
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -777,7 +777,9 @@ expandIoInBound b = match findAtom (labelKey ioLabel) b
 
 -- A performed `IO` left over against a bound without `IO` stands for the labels
 -- it joins: a bound naming all of them admits it, a bound naming some refuses it
--- naming the labels it lacks, and a bound naming none leaves it as `IO`.
+-- naming the labels it lacks, and a bound naming none leaves it as `IO`.  Only a
+-- label of the join can cover a performed `IO`, so when the profile grants no
+-- host label the join is empty, the bound names none of it, and `IO` stands.
 narrowPerformedIo : List Atom -> List Atom -> List Atom
 narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
   None => diff
@@ -785,10 +787,10 @@ narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
     let rest = filterList (x => atomKey x /= labelKey ioLabel) diff
     let join = driverState.value.ioJoin.value
     let missing = atomsDiff join bound
-    if isEmptyL missing then
-      rest
-    else if listLen missing == listLen join then
+    if listLen missing == listLen join then
       diff
+    else if isEmptyL missing then
+      rest
     else
       atomsNorm (rest ++ missing)
 
@@ -55736,7 +55738,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value"))))))
 (DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "narrowPerformedIo" ((PVar "diff") (PVar "bound")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "diff")) (arm (PCon "None") () (EVar "diff")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EBinOp "/=" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "labelKey") (EVar "ioLabel"))))) (EVar "diff"))) (DoLet false false (PVar "join") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value")) (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsDiff") (EVar "join")) (EVar "bound"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "missing")) (EVar "rest") (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "missing")) (EApp (EVar "listLen") (EVar "join"))) (EVar "diff") (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "rest") (EVar "missing"))))))))))
+(DFunDef false "narrowPerformedIo" ((PVar "diff") (PVar "bound")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "diff")) (arm (PCon "None") () (EVar "diff")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EBinOp "/=" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "labelKey") (EVar "ioLabel"))))) (EVar "diff"))) (DoLet false false (PVar "join") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value")) (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsDiff") (EVar "join")) (EVar "bound"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "missing")) (EApp (EVar "listLen") (EVar "join"))) (EVar "diff") (EIf (EApp (EVar "isEmptyL") (EVar "missing")) (EVar "rest") (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "rest") (EVar "missing"))))))))))
 (DTypeSig false "atomsEscape" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "atomsEscape" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "expandIoInBound") (EVar "b"))) (DoExpr (EApp (EApp (EVar "narrowPerformedIo") (EApp (EApp (EVar "atomsDiff") (EVar "a")) (EVar "bound"))) (EVar "bound")))))
 (DTypeSig false "atomOfWrittenIn" (TyFun (TyCon "SigVars") (TyFun (TyCon "EffAtomTy") (TyCon "Atom"))))
@@ -64988,7 +64990,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "expandIoInBound" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom"))))
 (DFunDef false "expandIoInBound" ((PVar "b")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "b")) (arm (PCon "None") () (EVar "b")) (arm (PCon "Some" PWild) () (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "b") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value"))))))
 (DTypeSig false "narrowPerformedIo" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
-(DFunDef false "narrowPerformedIo" ((PVar "diff") (PVar "bound")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "diff")) (arm (PCon "None") () (EVar "diff")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EBinOp "/=" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "labelKey") (EVar "ioLabel"))))) (EVar "diff"))) (DoLet false false (PVar "join") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value")) (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsDiff") (EVar "join")) (EVar "bound"))) (DoExpr (EIf (EApp (EVar "isEmptyL") (EVar "missing")) (EVar "rest") (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "missing")) (EApp (EVar "listLen") (EVar "join"))) (EVar "diff") (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "rest") (EVar "missing"))))))))))
+(DFunDef false "narrowPerformedIo" ((PVar "diff") (PVar "bound")) (EMatch (EApp (EApp (EVar "findAtom") (EApp (EVar "labelKey") (EVar "ioLabel"))) (EVar "diff")) (arm (PCon "None") () (EVar "diff")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "rest") (EApp (EApp (EVar "filterList") (ELam ((PVar "x")) (EBinOp "/=" (EApp (EVar "atomKey") (EVar "x")) (EApp (EVar "labelKey") (EVar "ioLabel"))))) (EVar "diff"))) (DoLet false false (PVar "join") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "ioJoin") "value")) (DoLet false false (PVar "missing") (EApp (EApp (EVar "atomsDiff") (EVar "join")) (EVar "bound"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "missing")) (EApp (EVar "listLen") (EVar "join"))) (EVar "diff") (EIf (EApp (EVar "isEmptyL") (EVar "missing")) (EVar "rest") (EApp (EVar "atomsNorm") (EBinOp "++" (EVar "rest") (EVar "missing"))))))))))
 (DTypeSig false "atomsEscape" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyApp (TyCon "List") (TyCon "Atom")))))
 (DFunDef false "atomsEscape" ((PVar "a") (PVar "b")) (EBlock (DoLet false false (PVar "bound") (EApp (EVar "expandIoInBound") (EVar "b"))) (DoExpr (EApp (EApp (EVar "narrowPerformedIo") (EApp (EApp (EVar "atomsDiff") (EVar "a")) (EVar "bound"))) (EVar "bound")))))
 (DTypeSig false "atomOfWrittenIn" (TyFun (TyCon "SigVars") (TyFun (TyCon "EffAtomTy") (TyCon "Atom"))))

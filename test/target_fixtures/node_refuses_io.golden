@@ -1,7 +1,0 @@
-exit=1
---- stdout
---- stderr
-error: <fixtures>/io_declared.mdk:4:0: `main` performs <IO>, and the target `wasmgc/node` does not grant Exec, Net, Signal; `IO` is the join of every host label, so narrow the `<IO>` annotation to the labels `main` performs, such as `<Stdout>`
-  |
-4 | main : <IO> Unit
-  | ^

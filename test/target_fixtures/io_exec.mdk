@@ -1,0 +1,10 @@
+-- An `<IO>` helper that runs a command.  `IO` joins the host labels the target
+-- grants: on llvm/native-posix that includes `Exec`, so the program checks; on
+-- wasmgc/node it does not, so the typechecker refuses the call.
+listDir : Unit -> <IO> Result String (Int, String, String)
+listDir _ = runCommand "ls" []
+
+main : <IO> Unit
+main = match listDir ()
+  Ok _ => println "listed"
+  Err e => println e

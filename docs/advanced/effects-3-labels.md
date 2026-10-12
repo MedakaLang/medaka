@@ -56,8 +56,8 @@ error: labels.mdk:1:19: unknown effect `Audit`
   |                    ^
 ```
 
-`IO` does not cover a label you declare. It is the join of the eleven built-in host
-labels and nothing else, so a function that calls `audit` under an `<IO>` bound is
+`IO` does not cover a label you declare. It is a join of built-in host labels (all
+eleven, unless a target narrows it) and nothing else, so a function that calls `audit` under an `<IO>` bound is
 refused the same way:
 
 ```

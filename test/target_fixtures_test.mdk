@@ -96,10 +96,16 @@ test "target_fixtures: one admitted and one refused program per profile" = expec
 
 test "target_fixtures: the IO join, FFI and user labels" = expectEach [
   targetCase
-    "node_refuses_io"
+    "node_accepts_io"
     "check"
     ["--target", "wasmgc/node"]
     "io_declared.mdk",
+  targetCase "node_refuses_io_exec" "check" ["--target", "wasm"] "io_exec.mdk",
+  targetCase
+    "native_accepts_io_exec"
+    "check"
+    ["--target", "native"]
+    "io_exec.mdk",
   targetCase
     "native_accepts_io"
     "check"

@@ -4109,7 +4109,7 @@ test "the solving-walk memo keeps goals that differ only in an effect row apart"
 
 ioJoinPrelude : String
 ioJoinPrelude =
-  "effect Audit\nextern runIt : String -> <Exec> Unit\nextern say : String -> <Stdout> Unit\nextern emitAudit : Unit -> <Audit> Unit\n"
+  "effect Audit\nextern runIt : String -> <Exec> Unit\nextern say : String -> <Stdout> Unit\nextern emitAudit : Unit -> <Audit> Unit\nextern touchIo : Unit -> <IO> Unit\n"
 
 -- Runs `k` with `name` selected the way `check --target` selects it, then puts
 -- back no selection, so no other test sees the profile.
@@ -4232,6 +4232,37 @@ test "a leak past an <IO> bound names what IO joins on a narrowed target only" =
           ),
         ]
         (ioJoinCheck (Some "wasmgc/edge") [("entry", source)]),
+    ),
+  ]
+
+-- A performed `IO` is covered only by a label of the join, so on
+-- `wasmgc/wasi-p2`, whose join is empty, a pure bound still refuses it.
+test "an <IO> extern in a pure function is refused on every profile" =
+  let source = "measure : Unit -> Unit\nmeasure _ = touchIo ()\n"
+  let bare = "performs <IO> where only <> is allowed"
+  let refusedWith = msg => [("entry", 2, "T-EFFECT-LEAK", msg)]
+  expectEach [
+    (
+      "none",
+      expectEqual (refusedWith bare) (ioJoinCheck None [("entry", source)]),
+    ),
+    (
+      "native",
+      expectEqual
+        (refusedWith bare)
+        (ioJoinCheck (Some "native") [("entry", source)]),
+    ),
+    (
+      "wasm",
+      expectEqual
+        (refusedWith (bare ++ nodeJoinClause))
+        (ioJoinCheck (Some "wasm") [("entry", source)]),
+    ),
+    (
+      "wasi-p2",
+      expectEqual
+        (refusedWith (bare ++ "; `IO` on `wasmgc/wasi-p2` is <>"))
+        (ioJoinCheck (Some "wasmgc/wasi-p2") [("entry", source)]),
     ),
   ]
 

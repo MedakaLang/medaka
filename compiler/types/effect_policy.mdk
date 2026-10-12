@@ -94,9 +94,13 @@ permitOf a policy = match (atomLabel a == "IO", policyEntriesFor a policy)
         Forbidden
     Err m => Malformed m
 
--- `IO` is the join of the eleven host labels, so an `IO` atom under a policy with
--- no `IO` entry is permitted exactly when the policy admits every one of the
--- eleven at its top.
+-- Here `IO` is the join of the eleven host labels, so an `IO` atom under a
+-- policy with no `IO` entry is permitted exactly when the policy admits every
+-- one of the eleven at its top.  That is `IO`'s meaning with no profile, which
+-- is `check-policy`'s case: its policy is a manifest, not a profile.  The one
+-- caller that passes a profile's grants, `tools.target_check`, never passes an
+-- `IO` atom, because the typechecker has already bounded `IO` by that
+-- profile's join.
 permitIoAsJoin : List (String, EffParamTy) -> Permit
 permitIoAsJoin policy =
   firstNotPermitted (map (l => permitOf (atomOfLabel l) policy) ioAliasLabels)
