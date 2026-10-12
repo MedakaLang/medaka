@@ -15,7 +15,7 @@ import tempfile
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
-PROFILES = ("ephemeral", "list", "tree", "mutation", "atomic")
+PROFILES = ("ephemeral", "list", "tree", "mutation", "atomic", "mixed")
 
 
 def run(command, quiet_failure=False, **kwargs):
@@ -107,15 +107,34 @@ def correctness(directory, binaries):
                 assert row["allocation_header_bytes"] == (
                     row["nursery_allocations"] * row["nursery_header_bytes"]
                     + row["direct_old_allocations"] * row["old_header_bytes"])
+                assert row["old_total_allocated_bytes"] - row["reclaimed_bytes"] == row["old_live_bytes"]
+                assert row["exact_live_payload_bytes"] + row["old_object_count"] * row["old_header_bytes"] == row["old_live_bytes"]
+                assert row["pool_allocations"] - row["pool_releases"] == row["pool_count"]
+                assert row["pool_reserved_bytes"] >= row["old_slot_bytes"]
+                assert row["accounted_bytes"] == (row["nursery_capacity_bytes"] + row["pool_reserved_bytes"]
+                    + row["large_reserved_bytes"] + row["descriptor_bytes"] + row["work_queue_bytes"]
+                    + row["remembered_queue_bytes"] + row["root_bytes"] + row["static_metadata_bytes"])
+                assert row["peak_accounted_bytes"] >= row["accounted_bytes"]
+                if profile == "mixed":
+                    assert row["exact_live_payload_bytes"] == 16 * 3 * 8
     sanitized = build(directory, "custom_sanitized", sanitize=True)
     sanitizer_env = dict(os.environ, ASAN_OPTIONS=os.environ.get("ASAN_OPTIONS", "") + ":detect_leaks=0")
     sanitizer_env["UBSAN_OPTIONS"] = "halt_on_error=1:print_stacktrace=1"
     run([str(sanitized), "--selftest"], env=sanitizer_env)
     for profile in PROFILES:
         run([str(sanitized), profile, "1024", "240"], env=sanitizer_env)
+    for count in (1, 63, 64, 65, 127):
+        run([str(sanitized), "mixed", str(count), "240"], env=sanitizer_env)
+    pools = build(directory, "pool_review_sanitized", sanitize=True, workload="pool_review.c")
+    pool_capacities = (32, 33, 39, 40, 47, 48, 63, 64, 127, 128, 239, 240, 511, 512,
+                       2047, 2048, 2049, 2055, 2056, 2057, 262144)
+    for capacity in pool_capacities:
+        result = run([str(pools), str(capacity)], env=sanitizer_env)
+        assert result.stdout == "pool review passed\n" and not result.stderr
+    print(json.dumps({"pooled_heap_review": "ASan+UBSan passed", "nursery_capacities": pool_capacities}))
     adversarial = build(directory, "custom_adversarial_sanitized", sanitize=True, workload="adversarial.c")
-    capacities = (48, 49, 55, 56, 63, 64, 79, 80, 81, 95, 96, 97, 239, 240, 241,
-                  319, 320, 321, 535, 536, 537, 567, 568, 569, 1024, 262144)
+    capacities = (32, 33, 39, 40, 41, 47, 48, 49, 55, 56, 63, 64, 79, 80, 81, 95, 96, 97, 239, 240, 241,
+                  319, 320, 321, 519, 520, 521, 535, 536, 537, 567, 568, 569, 1024, 262144)
     for capacity in capacities:
         result = run([str(adversarial), str(capacity)], env=sanitizer_env)
         assert result.stdout == "review graph passed\n" and not result.stderr
@@ -148,7 +167,7 @@ def main():
         binaries = {"custom": build(directory, "custom"),
                     "boehm": build(directory, "boehm", ["USE_BOEHM"], boehm=True),
                     "boehm_inline": build(directory, "boehm_inline", ["USE_BOEHM", "USE_INLINE"], boehm=True)}
-        sources = ("gc.h", "gc.c", "workload.c", "run.py", "adversarial.c", "llvm_contract/contract.ll",
+        sources = ("gc.h", "gc.c", "workload.c", "run.py", "adversarial.c", "pool_review.c", "llvm_contract/contract.ll",
                    "llvm_contract/driver.c", "llvm_contract/validate_llvm.py")
         print(json.dumps({"inline_allocator_source_sha256": digest,
                           "source_sha256": {name: hashlib.sha256((HERE / name).read_bytes()).hexdigest()

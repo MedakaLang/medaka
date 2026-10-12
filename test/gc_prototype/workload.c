@@ -109,6 +109,17 @@ static uint64_t workload(const char *profile, size_t count) {
       store(head, 1, integer(i ^ 123)); store(head, 2, integer(0));
       total += unbox(load(head, 0));
     }
+  } else if (strcmp(profile, "mixed") == 0) {
+    for (size_t i = 0; i < count; ++i) {
+      Word node = allocate(3, 2); store(node, 0, integer(i));
+      if (i % 64 == 0) { store(node, 1, anchor); anchor = node; }
+      else { store(node, 1, head); head = node; }
+      total += unbox(load(node, 0));
+      if ((i + 1) % 64 == 0) head = 0;
+    }
+    head = 0;
+    uint64_t retained = (count + 63) / 64;
+    assert(sum_list(anchor) == 64 * retained * (retained - 1) / 2);
   } else {
     int ephemeral = strcmp(profile, "ephemeral") == 0;
     int mutation = strcmp(profile, "mutation") == 0;
@@ -129,6 +140,10 @@ static uint64_t workload(const char *profile, size_t count) {
   observed = total;
   /* Final collection makes old_live_bytes precise for the roots still retained here. */
   major_collect();
+#ifndef USE_BOEHM
+  if (strcmp(profile, "mixed") == 0)
+    assert(stats.old_live_bytes == ((count + 63) / 64) * (old_header_size() + 3 * sizeof(Word)));
+#endif
 #ifdef USE_BOEHM
   GC_reachable_here(head); GC_reachable_here(anchor);
 #endif

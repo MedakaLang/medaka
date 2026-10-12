@@ -56,20 +56,26 @@ The single-thread custom collector uses:
   pointer fields, and handles aliases/cycles through forwarding headers. Used
   nursery bytes are poisoned after collection to make stale-root mutation checks
   deterministic. This extra diagnostic write is included in timing.
-- Per-object descriptors with a bitmap covering the first 64 words. Zero means
+- Shared descriptors with a bitmap covering the first 64 words. Zero means
   pointer-free; such payloads can exceed 64 words. Scanning ignores all other
   payload bits. The descriptor is supplied at allocation, not inferred.
-- A compact young header containing word count, descriptor, and forwarding
-  pointer. Its 24 bytes plus a 24-byte payload occupy 48 nursery bytes. Promoted
-  objects have the full 56-byte old header and occupy 80 requested bytes. Larger
-  direct-to-old allocations begin with that full old header.
-- Intrusive old-object, remembered-object, and tracing work lists. Every old-to-
-  young write goes through `store`; only pointer slots may hold pointers. Objects
-  larger than the nursery allocate directly in old space.
+- One eight-byte header containing a shared descriptor index and collector bits.
+  During evacuation, the young header instead holds the forwarding address.
+  A 24-byte payload occupies 32 bytes in either generation. Descriptors are
+  interned by word count and scan bitmap; table capacity is reported separately.
+- Mature size-class pools for objects up to 2 KiB including their header. Dead
+  slots carry free-list links; sweep reuses partially live pools and releases
+  completely empty pools. Larger mature objects have individual allocations
+  with separately counted list metadata. An object larger than the nursery
+  starts in mature storage, using a pool when its size allows.
+- Separate remembered-object and tracing work vectors. Every old-to-young write
+  goes through `store`; only pointer slots may hold pointers. Vector capacity
+  and descriptor tables remain allocated until heap destruction and are included
+  in reported storage.
 - Major mark/sweep before allocation when old requested bytes cross an adaptive
   threshold: initially four nursery capacities, then twice the live old bytes
-  plus four nursery capacities. A major starts with nursery promotion. Individual
-  `malloc`/`free` calls back old objects; this is deliberately a simple prototype.
+  plus four nursery capacities. A major starts with nursery promotion and scans
+  every reserved mature pool slot. The mature generation is nonmoving.
 
 `gc.h` is the explicit-root API. Register a mutable word slot with `root_push`
 before an operation that can allocate/collect. Reload that slot after the
@@ -95,9 +101,12 @@ pointer-looking atomic data, and root dropping followed by major reclamation.
 The independent [adversarial graph model](adversarial.c) mutates a shared cyclic
 graph across 5,000 allocations, compares every reachable edge against an integer
 model, verifies exact liveness/accounting, and exercises descriptor slot 63 across
-the nursery/direct-old boundary. The runner executes it with ASan/UBSan at 26
-capacities from 48 bytes through 256 KiB, including boundaries around 536-byte
-young and 568-byte old objects.
+the nursery/direct-old boundary. The runner executes it with ASan/UBSan at 35
+capacities from 32 bytes through 256 KiB, including the 520-byte object boundary.
+The independent [pool review fixture](pool_review.c) additionally exercises
+descriptor-table growth, mixed object sizes, partial-pool reuse with different
+descriptors, complete pool release, large allocations, aliasing, cycles, and
+heap destruction/reinitialization.
 Temporary broken builds suppress root-slot updates or the remembered-set barrier;
 the corresponding fixtures must fail at their assertions. They do not dereference
 the stale references and no broken variant is installed or committed.
@@ -114,10 +123,40 @@ It can also run directly:
 python3 /absolute/path/to/medaka/test/gc_prototype/llvm_contract/validate_llvm.py --gc-source /absolute/path/to/medaka/test/gc_prototype/gc.c
 ```
 
-The five timing profiles all allocate 24-byte payloads. Ephemeral lists drop their
+The separate [generated-code harness](generated_contract/validate.py) compiles
+three Medaka source fixtures through the typed LLVM probe, validates their
+emitted straight-line IR against trusted record/function contracts, and inserts
+explicit root slots and reloads. It links a small startup/printing shim and this
+collector. It does not change the production emitter or support general LLVM.
+
+Build only the required probe from the repository root, then choose a new or
+empty evidence directory:
+
+```console
+sh test/build_oracles.sh --build-one llvm_emit_typed_main
+python3 /absolute/path/to/medaka/test/gc_prototype/generated_contract/validate.py --output /new/empty/directory
+```
+
+The harness checks 18 successful builds, two exact wrong-answer mutations, and
+19 source/IR rejection cases. Positive cases cover two collection schedules at
+`-O0` and `-O2`, ASan/UBSan, and the ordinary Boehm adapter over the same transformed
+IR. Root slots remain registered for the whole function, so these are correctness
+checks only. Unsupported control flow, recursion, mutation, globals, raw-pointer
+lifetimes, and runtime helpers are rejected. Semantic contracts are independent
+oracle inputs for these known fixtures; neither `LTInt` nor arbitrary `i64` is
+treated as pointer provenance. Emitted/transformed LLVM and full provenance are
+written to the chosen output directory; an existing nonempty directory is refused.
+The committed [validation record](results/2026-10-12-generated-contract.json)
+contains the exact hashes, commands, schedules, expected and observed outputs.
+
+The six timing profiles all allocate 24-byte payloads. Ephemeral lists drop their
 root every 256 nodes. The list and balanced tree retain every node. Mutation keeps
 an old anchor whose child is replaced every 64 nodes, exercising the barrier.
-Atomic allocates pointer-free three-word payloads. The mutation profile has one
+Atomic allocates pointer-free three-word payloads. Mixed retains every 64th node
+in a growing spine while dropping each batch of temporary nodes. Its retained
+spine checksum and exact post-collection object count are checked. This is a
+synthetic lifetime distribution, not a captured compiler allocation trace.
+The mutation profile has one
 extra anchor allocation. Every arm must produce the same allocation count,
 logical payload byte count, and arithmetic checksum for each profile. Payloads
 are read to calculate the checksum and the checksum is observed through a
@@ -135,14 +174,19 @@ Interpret the memory fields with their different meanings:
 | Field | Meaning |
 | --- | --- |
 | `payload_bytes`, `allocations` | Equal logical workload requests, excluding survivor copies. |
-| `allocation_header_bytes` | Cumulative custom header bytes on original allocations: 24 per nursery allocation, 56 per direct old allocation on this 64-bit ABI. Promotion headers are accounted separately in copied/old bytes. |
+| `allocation_header_bytes` | Cumulative custom header bytes on original allocations: eight per allocation on this 64-bit ABI. Promotion headers are accounted separately in copied/old bytes. |
 | `nursery_header_bytes`, `old_header_bytes` | Requested metadata sizes for each generation, also exposed through the header-size API for correctness checks. |
 | `nursery_allocations`, `nursery_payload_bytes`, `direct_old_allocations`, `direct_old_payload_bytes` | Original allocation counts and payload bytes split by birth generation. |
 | `copied_bytes`, `copied_payload_bytes` | Cumulative promoted old object bytes including full old headers, and payload bytes alone. The latter divided by `nursery_payload_bytes` is the measured nursery survival fraction. These timing profiles all start in the nursery; direct-to-old large objects are excluded from both numerator and denominator. |
-| `old_total_allocated_bytes` | All requested old malloc bytes, including promotions and oversized allocations; excludes malloc's internal overhead. |
+| `old_total_allocated_bytes` | Cumulative logical mature object bytes, including promotions and direct mature allocations; excludes pool rounding and system allocator overhead. |
 | `old_live_bytes`, `exact_live_bytes` | Exact requested live object bytes including headers as of the final major, before the workload drops its final roots; the nursery is then empty. |
 | `peak_old_bytes` | Maximum requested old object bytes at any point, including dead objects pending sweep. |
-| `peak_accounted_bytes` | Maximum nursery capacity + requested old bytes + registered root records. Includes unused nursery capacity and all custom per-object list/descriptor/work metadata. Excludes malloc internal overhead, constant collector globals, root word slots already present in the workload, and non-root C stack. |
+| `exact_live_payload_bytes` | Reachable payload bytes after the final major, excluding object headers. |
+| `old_slot_bytes`, `pool_padding_bytes` | Occupied mature pool slots and their internal size-class padding. Logical objects and slots must not be added to reserved pool bytes again. |
+| `pool_reserved_bytes`, `peak_pool_reserved_bytes` | Current and peak requested pool allocations, including pool metadata, empty slots, and size-class padding. Empty pools are returned during major collection. |
+| `large_reserved_bytes`, `large_metadata_bytes` | Dedicated large-object allocations and their included list metadata. |
+| `descriptor_bytes`, `work_queue_bytes`, `remembered_queue_bytes` | Reserved capacities of shared descriptor/hash tables and tracing vectors, retained until heap destruction. |
+| `accounted_bytes`, `peak_accounted_bytes` | Current and peak nursery capacity + reserved pools/large objects + descriptor/vector capacities + collector static state + registered root records. Peak also includes overlapping old/new tables during growth. Excludes malloc internals, root word slots already present in the workload, and non-root C stack. |
 | `peak_root_bytes` | Largest registered root-record stack in bytes; included in `peak_accounted_bytes`. |
 | `boehm_heap_bytes`, `boehm_free_bytes`, `boehm_heap_minus_free_bytes` | Boehm's managed heap/free/occupied accounting at the end. Occupied bytes are conservative, include free-list retention and block granularity, and are not exact reachable payload bytes or a peak. |
 | `boehm_total_allocated_bytes` | Boehm's allocation accounting, including internal rounding and adapter refills. Free-list allocations may be accounted when refilled rather than per logical request. |
@@ -151,8 +195,7 @@ Interpret the memory fields with their different meanings:
 
 The roughly 19 MB RSS floor in these small-process measurements comes from the
 subprocess launcher's high-water accounting; it does not establish that each
-collector needs 19 MB. The larger retained-graph RSS measurements, about 482 MB
-custom versus 175 MB Boehm, rise well above that floor.
+collector needs 19 MB. Retained-graph RSS measurements rise well above that floor.
 
 These synthetic graphs have precise descriptors and deliberately explicit roots.
 The custom collector has no concurrent allocation, finalizers, weak references,
@@ -161,8 +204,8 @@ exception unwinding, or runtime object-layout coverage. Survival profiles can
 change the result substantially. Neither a local gain nor a local loss establishes
 a compiler-level performance result.
 
-Durable matched static-Boehm evidence from this experiment is recorded in four
-JSONL files, each containing source hashes, platform/compiler/link provenance,
+Historical matched static-Boehm evidence from the first experiment is recorded in
+JSONL files containing source hashes, platform/compiler/link provenance,
 correctness status, all three samples, and the fastest sample's counters:
 
 - [Full nursery header, 256 KiB, all profiles](results/2026-10-12-beforecompact-5m-256k.jsonl)
@@ -171,21 +214,48 @@ correctness status, all three samples, and the fastest sample's counters:
 - [Compact nursery header, 1 MiB, ephemeral and mutation](results/2026-10-12-compact-5m-1m.jsonl)
 - [Final correctness, including the adversarial graph model](results/2026-10-12-final-correctness.jsonl)
 
-The [baseline-to-current patch](results/2026-10-12-beforecompact-to-compact.patch)
+The [first-experiment patch](results/2026-10-12-beforecompact-to-compact.patch)
 can be reversed to reconstruct the exact baseline `gc.c`, `gc.h`, `workload.c`,
 and `run.py`. Its reverse application was checked against every recorded baseline
 source hash. For inspection, reconstruct in a scratch directory:
 
 ```console
-cp -R /absolute/path/to/medaka/test/gc_prototype /tmp/medaka-gc-baseline
+mkdir -p /tmp/medaka-gc-first
+git archive 33f900bca3bf577e8c49745080ec16147a0b017b test/gc_prototype | tar -x -C /tmp/medaka-gc-first
+cp -R /tmp/medaka-gc-first/test/gc_prototype /tmp/medaka-gc-baseline
 patch -R -p3 -d /tmp/medaka-gc-baseline -i /absolute/path/to/medaka/test/gc_prototype/results/2026-10-12-beforecompact-to-compact.patch
 ```
 
 To rerun a reconstructed version, put that directory at `test/gc_prototype/`
 inside a scratch checkout containing the repository's `runtime/` and Git metadata,
-then run the recorded settings. The current collector and measured workload hashes
-match the compact evidence. The driver gained the independent graph test after
+then run the recorded settings. The collector and workload at commit
+`33f900bca3bf577e8c49745080ec16147a0b017b` match the first compact evidence.
+That driver's independent graph test was added after
 measurement; it changes correctness coverage only. The exact
 [measurement runner](results/2026-10-12-compact-measurement-run.py) is preserved,
 and its hash matches the compact evidence's `run.py` hash. Restore it as `run.py`
 in the scratch experiment directory to recreate that driver revision.
+
+The pooled-heap comparison uses the same workload source in both custom versions,
+including the mixed profile:
+
+- [Previous collector, 256 KiB](results/2026-10-12-pool-baseline-5m-256k.jsonl)
+- [Pooled collector, 256 KiB](results/2026-10-12-pool-compact-5m-256k.jsonl)
+- [Previous collector, 262,136 bytes](results/2026-10-12-pool-baseline-5m-offset.jsonl)
+- [Pooled collector, 262,136 bytes](results/2026-10-12-pool-compact-5m-offset.jsonl)
+
+To reconstruct that previous collector, extract `test/gc_prototype/` and
+`runtime/medaka_rt.c` from commit `33f900bca3bf577e8c49745080ec16147a0b017b` into
+a scratch checkout. Replace its `workload.c` with the current file and add
+`"mixed"` to its runner's `PROFILES` tuple. No other baseline source changes are
+needed; the evidence records all resulting hashes. Run both collectors at both
+capacities with `--count 5000000`. The eight-byte offset matters: 32-byte cells
+fit exactly 8,192 times in 256 KiB, aligning with periodic temporary-root drops.
+Read copied-payload fractions alongside timings rather than interpreting that
+alignment as a general workload property.
+
+The [allocation-path profile](results/2026-10-12-pool-profile.json) records
+500-million-allocation CPU samples for the previous and pooled collectors.
+It also records the independent audit of source hashes, complete sample rows,
+checksums, and correctness markers in all four timing artifacts. These CPU
+shares identify hot paths; they are not absolute function-time measurements.

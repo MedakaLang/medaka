@@ -43,7 +43,7 @@ int main(int argc, char **argv) {
         assert((slots[i] ? unbox(load(slots[i], 0)) : 0) == ids[i]);
         count += check_graph(slots[i]);
       }
-      if (count && !stride) { stride = stats.old_live_bytes / count; assert(stride == 80); }
+      if (count && !stride) { stride = stats.old_live_bytes / count; assert(stride == old_header_size() + 3 * sizeof(Word)); }
       assert(stats.old_live_bytes == count * stride);
     }
   }
@@ -54,8 +54,8 @@ int main(int argc, char **argv) {
   big = allocate(64, UINT64_C(1) << 63); child = allocate(3, 0);
   store(child, 0, integer(42)); store(big, 63, child); child = 0;
   major_collect(); assert(load(load(big, 63), 0) == integer(42));
-  assert(stats.old_live_bytes == 56 + 64 * 8 + 80);
-  store(big, 63, 0); major_collect(); assert(stats.old_live_bytes == 56 + 64 * 8);
+  assert(stats.old_live_bytes == 2 * old_header_size() + 67 * sizeof(Word));
+  store(big, 63, 0); major_collect(); assert(stats.old_live_bytes == old_header_size() + 64 * sizeof(Word));
   big = 0; root_pop(&rc); root_pop(&rb); major_collect();
   assert(stats.old_live_bytes == 0 && stats.root_bytes == 0);
   assert(stats.allocations == stats.nursery_allocations + stats.direct_old_allocations);

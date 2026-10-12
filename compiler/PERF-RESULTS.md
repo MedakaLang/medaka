@@ -1766,3 +1766,24 @@ and this two-policy comparison does not exhaust #503's knob/atomic sweep.
 An isolated collector experiment is justified; replacing production Boehm is
 not established by these measurements. The integration audit and experimental
 boundary are in [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).
+
+## Compact mature-heap experiment (2026-10-12)
+
+The standalone explicit-root collector now uses eight-byte headers, shared
+descriptors, and mature size-class pools. This changes experimental C workloads
+only; the compiler and production runtime still use Boehm. At five million
+retained three-word objects, process peak RSS fell from about 482 MB to 163 MB,
+versus about 175 MB for the matched production-inline Boehm comparator.
+
+At a 262,136-byte nursery, minimum-of-three list/tree times fell from
+347.19/525.07 ms to 209.11/364.95 ms, versus Boehm's 183.93/266.98 ms in the new
+run. A mixed lifetime workload retaining every 64th node took 56.53 ms versus
+78.89 ms for Boehm. Short-lived and atomic cases regressed. The eight-byte
+offset avoids exact alignment between 32-byte cells and periodic root drops;
+the ordinary 256 KiB capacity was also measured.
+
+These are shared-machine synthetic results, not compiler speedups. Storage
+accounting now includes reserved pools and descriptor/work/remembered capacities;
+logical live bytes are separate. Full samples, hashes, alignment sensitivity,
+and correctness evidence are in [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md)
+and [the experiment README](../test/gc_prototype/README.md).

@@ -45,42 +45,128 @@ void print_stats(void) {
 }
 #else
 
-typedef struct Header {
-  struct Header *next_old, *next_remembered, *work, *forward;
-  size_t words;
-  uint64_t mask;
-  unsigned flags;
-} Header;
-typedef struct YoungHeader {
-  size_t words;
-  uint64_t mask;
-  Header *forward;
-} YoungHeader;
+/* Live headers encode (descriptor index + 1) << 3 and collection flags.
+   A forwarded nursery header instead encodes an aligned payload address | 4. */
+typedef struct Header { uintptr_t info; } Header;
+_Static_assert(sizeof(Word) == 8, "compact prototype requires 64-bit words");
+typedef struct Descriptor { size_t words; uint64_t mask; } Descriptor;
+typedef struct Pool {
+  struct Pool *next, *available_next;
+  Header *free;
+  size_t slot_bytes, slots, live;
+  unsigned char data[];
+} Pool;
+typedef struct Large {
+  struct Large *next;
+  size_t bytes;
+  Header object;
+} Large;
+typedef struct Class { Pool *pools, *available; } Class;
+typedef struct Queue { Header **items; size_t count, capacity; } Queue;
+static const size_t class_sizes[] = {
+  16, 32, 48, 64, 80, 96, 112, 128, 160, 192, 224, 256,
+  320, 384, 448, 512, 640, 768, 896, 1024, 1280, 1536, 1792, 2048
+};
+#define CLASS_COUNT (sizeof class_sizes / sizeof class_sizes[0])
+#define POOL_BYTES 16384
+static Class classes[CLASS_COUNT];
+static Descriptor *descriptors;
+static uint32_t *descriptor_hash;
+static size_t descriptor_count, descriptor_capacity, hash_capacity;
 static Root *roots;
-enum { REMEMBERED = 1, MARKED = 2 };
+enum { REMEMBERED = 1, MARKED = 2, FORWARDED = 4 };
 static unsigned char *nursery;
 static size_t nursery_capacity, used, old_limit;
-static Header *old, *remembered, *work;
+static Large *large_objects;
+static Queue remembered, work;
 
 static size_t object_bytes(size_t words) { return sizeof(Header) + words * sizeof(Word); }
-static size_t young_bytes(size_t words) { return sizeof(YoungHeader) + words * sizeof(Word); }
 static Header *header(Word word) { return (Header *)word - 1; }
-static YoungHeader *young_header(Word word) { return (YoungHeader *)word - 1; }
 static Word payload(Header *h) { return (Word)(h + 1); }
-size_t nursery_header_size(void) { return sizeof(YoungHeader); }
+static Descriptor *descriptor(Header *h) {
+  size_t id = h->info >> 3;
+  assert(id && id <= descriptor_count);
+  return &descriptors[id - 1];
+}
+size_t nursery_header_size(void) { return sizeof(Header); }
 size_t old_header_size(void) { return sizeof(Header); }
 static int pointer(Word word) { return word && !(word & 1); }
 int is_young(Word word) {
   return pointer(word) && word >= (Word)nursery && word < (Word)nursery + used;
 }
-static void account_peak(void) {
-  size_t bytes = nursery_capacity + stats.old_live_bytes + stats.root_bytes;
+static size_t static_metadata_bytes(void) {
+  return sizeof classes + sizeof class_sizes + sizeof work + sizeof remembered
+      + sizeof descriptors + sizeof descriptor_hash + sizeof descriptor_count
+      + sizeof descriptor_capacity + sizeof hash_capacity + sizeof roots + sizeof nursery
+      + sizeof nursery_capacity + sizeof used + sizeof old_limit + sizeof large_objects + sizeof stats;
+}
+static size_t accounted_bytes(void) {
+  return nursery_capacity + stats.pool_reserved_bytes + stats.large_reserved_bytes
+      + stats.descriptor_bytes + stats.work_queue_bytes + stats.remembered_queue_bytes + stats.root_bytes + static_metadata_bytes();
+}
+static void account_peak_extra(size_t extra) {
+  size_t bytes = accounted_bytes() + extra;
   if (bytes > stats.peak_accounted_bytes) stats.peak_accounted_bytes = bytes;
   if (stats.old_live_bytes > stats.peak_old_bytes) stats.peak_old_bytes = stats.old_live_bytes;
   if (stats.root_bytes > stats.peak_root_bytes) stats.peak_root_bytes = stats.root_bytes;
+  if (stats.pool_reserved_bytes > stats.peak_pool_reserved_bytes)
+    stats.peak_pool_reserved_bytes = stats.pool_reserved_bytes;
+}
+static void account_peak(void) { account_peak_extra(0); }
+static uint64_t descriptor_key(size_t words, uint64_t mask) {
+  uint64_t key = mask ^ ((uint64_t)words * UINT64_C(0x9e3779b97f4a7c15));
+  key ^= key >> 30; key *= UINT64_C(0xbf58476d1ce4e5b9);
+  key ^= key >> 27; key *= UINT64_C(0x94d049bb133111eb);
+  return key ^ (key >> 31);
+}
+static void grow_hash(void) {
+  size_t capacity = hash_capacity ? hash_capacity * 2 : 32;
+  uint32_t *table = calloc(capacity, sizeof *table); assert(table);
+  account_peak_extra(capacity * sizeof *table);
+  for (size_t id = 0; id < descriptor_count; ++id) {
+    Descriptor *d = &descriptors[id];
+    size_t slot = descriptor_key(d->words, d->mask) & (capacity - 1);
+    while (table[slot]) slot = (slot + 1) & (capacity - 1);
+    table[slot] = (uint32_t)(id + 1);
+  }
+  free(descriptor_hash); descriptor_hash = table; hash_capacity = capacity;
+  stats.descriptor_bytes = descriptor_capacity * sizeof(Descriptor) + hash_capacity * sizeof(uint32_t);
+}
+static uintptr_t descriptor_info(size_t words, uint64_t mask) {
+  if (!hash_capacity || (descriptor_count + 1) * 2 > hash_capacity) grow_hash();
+  size_t slot = descriptor_key(words, mask) & (hash_capacity - 1);
+  while (descriptor_hash[slot]) {
+    size_t id = descriptor_hash[slot]; Descriptor *d = &descriptors[id - 1];
+    if (d->words == words && d->mask == mask) return (uintptr_t)id << 3;
+    slot = (slot + 1) & (hash_capacity - 1);
+  }
+  assert(descriptor_count < UINT32_MAX && descriptor_count < (UINTPTR_MAX >> 3));
+  if (descriptor_count == descriptor_capacity) {
+    size_t capacity = descriptor_capacity ? descriptor_capacity * 2 : 16;
+    Descriptor *table = malloc(capacity * sizeof *table); assert(table);
+    account_peak_extra(capacity * sizeof *table);
+    if (descriptor_count) memcpy(table, descriptors, descriptor_count * sizeof *table);
+    free(descriptors); descriptors = table; descriptor_capacity = capacity;
+    stats.descriptor_bytes = descriptor_capacity * sizeof(Descriptor) + hash_capacity * sizeof(uint32_t);
+  }
+  descriptors[descriptor_count] = (Descriptor){words, mask};
+  descriptor_hash[slot] = (uint32_t)++descriptor_count;
+  account_peak(); return (uintptr_t)descriptor_count << 3;
+}
+static void queue_push(Queue *q, Header *h, size_t *bytes) {
+  if (q->count == q->capacity) {
+    size_t capacity = q->capacity ? q->capacity * 2 : 64;
+    Header **items = malloc(capacity * sizeof *items); assert(items);
+    account_peak_extra(capacity * sizeof *items);
+    if (q->count) memcpy(items, q->items, q->count * sizeof *items);
+    free(q->items); q->items = items; q->capacity = capacity;
+    *bytes = capacity * sizeof *items; account_peak();
+  }
+  q->items[q->count++] = h;
 }
 void heap_init(size_t bytes) {
-  assert(bytes >= young_bytes(3));
+  assert(!nursery && bytes >= object_bytes(3) && bytes <= SIZE_MAX / 4);
+  memset(&stats, 0, sizeof stats);
   nursery_capacity = bytes; nursery = malloc(bytes); assert(nursery);
   old_limit = bytes * 4; account_peak();
 }
@@ -91,31 +177,67 @@ void root_push(Root *root, Word *slot) {
 void root_pop(Root *root) {
   assert(roots == root); roots = root->previous; stats.root_bytes -= sizeof *root;
 }
-static Header *new_old(size_t words, uint64_t mask) {
-  size_t bytes = object_bytes(words);
-  Header *h = calloc(1, bytes); assert(h);
-  h->words = words; h->mask = mask; h->next_old = old; old = h;
-  stats.old_live_bytes += bytes; stats.old_total_allocated_bytes += bytes;
+static Header *free_next(Header *h) { return *(Header **)(h + 1); }
+static void set_free_next(Header *h, Header *next) { *(Header **)(h + 1) = next; }
+static Pool *new_pool(size_t class_index) {
+  size_t slot_bytes = class_sizes[class_index], slots = POOL_BYTES / slot_bytes;
+  size_t bytes = sizeof(Pool) + slots * slot_bytes;
+  Pool *p = calloc(1, bytes); assert(p);
+  p->slot_bytes = slot_bytes; p->slots = slots;
+  for (size_t i = slots; i-- > 0;) {
+    Header *h = (Header *)(p->data + i * slot_bytes);
+    set_free_next(h, p->free); p->free = h;
+  }
+  Class *c = &classes[class_index]; p->next = c->pools; c->pools = p;
+  p->available_next = c->available; c->available = p;
+  stats.pool_reserved_bytes += bytes; stats.pool_count++; stats.pool_allocations++;
+  account_peak(); return p;
+}
+static Header *new_old(uintptr_t info) {
+  Descriptor *d = &descriptors[(info >> 3) - 1]; size_t bytes = object_bytes(d->words);
+  Header *h;
+  size_t class_index = 0;
+  while (class_index < CLASS_COUNT && class_sizes[class_index] < bytes) ++class_index;
+  if (class_index == CLASS_COUNT) {
+    size_t reserved = offsetof(Large, object) + bytes;
+    Large *l = calloc(1, reserved); assert(l);
+    l->bytes = bytes; l->next = large_objects; large_objects = l; h = &l->object;
+    stats.large_reserved_bytes += reserved; stats.large_object_count++;
+  } else {
+    Class *c = &classes[class_index]; Pool *p = c->available;
+    if (!p) p = new_pool(class_index);
+    h = p->free; p->free = free_next(h); p->live++;
+    if (!p->free) { c->available = p->available_next; p->available_next = NULL; }
+    /* Dead slots use bit 2 with a zero descriptor index to distinguish reuse. */
+    if (h->info == FORWARDED) stats.pool_reused_slots++;
+    memset(h, 0, p->slot_bytes);
+    stats.old_slot_bytes += p->slot_bytes; stats.pooled_allocations++;
+  }
+  h->info = info;
+  stats.old_live_bytes += bytes; stats.old_live_payload_bytes += bytes - sizeof(Header);
+  stats.old_object_count++; stats.old_total_allocated_bytes += bytes;
   account_peak(); return h;
 }
 static Word promote(Word word) {
   if (!is_young(word)) return word;
-  YoungHeader *from = young_header(word);
-  if (from->forward) return payload(from->forward);
-  Header *to = new_old(from->words, from->mask);
-  memcpy(to + 1, from + 1, from->words * sizeof(Word));
-  from->forward = to; to->work = work; work = to;
-  stats.promoted_count++; stats.copied_bytes += object_bytes(from->words);
-  stats.copied_payload_bytes += from->words * sizeof(Word);
+  Header *from = header(word);
+  if (from->info & FORWARDED) return from->info & ~(uintptr_t)7;
+  size_t words = descriptor(from)->words;
+  Header *to = new_old(from->info);
+  memcpy(to + 1, from + 1, words * sizeof(Word));
+  from->info = payload(to) | FORWARDED;
+  queue_push(&work, to, &stats.work_queue_bytes);
+  stats.promoted_count++; stats.copied_bytes += object_bytes(words);
+  stats.copied_payload_bytes += words * sizeof(Word);
   return payload(to);
 }
 static void scan_promote(Header *h) {
-  Word *fields = (Word *)(h + 1);
-  for (size_t i = 0; i < h->words && i < 64; ++i)
-    if ((h->mask >> i) & 1) fields[i] = promote(fields[i]);
+  Descriptor d = *descriptor(h); Word *fields = (Word *)(h + 1);
+  for (size_t i = 0; i < d.words && i < 64; ++i)
+    if ((d.mask >> i) & 1) fields[i] = promote(fields[i]);
 }
 void minor_collect(void) {
-  assert(work == NULL); stats.minor_count++;
+  assert(work.count == 0); stats.minor_count++;
   for (Root *r = roots; r; r = r->previous) {
     Word relocated = promote(*r->slot);
 #ifndef GC_MUTATE_ROOTS
@@ -124,87 +246,122 @@ void minor_collect(void) {
     (void)relocated;
 #endif
   }
-  while (remembered) {
-    Header *h = remembered; remembered = h->next_remembered;
-    h->flags &= ~REMEMBERED; h->next_remembered = NULL; scan_promote(h);
+  while (remembered.count) {
+    Header *h = remembered.items[--remembered.count];
+    h->info &= ~(uintptr_t)REMEMBERED; scan_promote(h);
   }
-  while (work) {
-    Header *h = work; work = h->work; h->work = NULL; scan_promote(h);
-  }
+  while (work.count) scan_promote(work.items[--work.count]);
   memset(nursery, 0xa5, used); used = 0;
 }
 static void mark(Word word) {
   if (!pointer(word)) return;
-  assert(!is_young(word));
-  Header *h = header(word);
-  if (!(h->flags & MARKED)) { h->flags |= MARKED; h->work = work; work = h; }
+  assert(!is_young(word)); Header *h = header(word);
+  (void)descriptor(h);
+  if (!(h->info & MARKED)) {
+    h->info |= MARKED; queue_push(&work, h, &stats.work_queue_bytes);
+  }
+}
+static void reclaim(Header *h) {
+  size_t bytes = object_bytes(descriptor(h)->words);
+  stats.old_live_bytes -= bytes; stats.old_live_payload_bytes -= bytes - sizeof(Header);
+  stats.old_object_count--; stats.reclaimed_bytes += bytes;
 }
 void major_collect(void) {
   minor_collect(); stats.major_count++;
   for (Root *r = roots; r; r = r->previous) mark(*r->slot);
-  while (work) {
-    Header *h = work; work = h->work; h->work = NULL;
+  while (work.count) {
+    Header *h = work.items[--work.count]; Descriptor d = *descriptor(h);
     Word *fields = (Word *)(h + 1);
-    for (size_t i = 0; i < h->words && i < 64; ++i)
-      if ((h->mask >> i) & 1) mark(fields[i]);
+    for (size_t i = 0; i < d.words && i < 64; ++i)
+      if ((d.mask >> i) & 1) mark(fields[i]);
   }
-  Header **link = &old;
-  while (*link) {
-    Header *h = *link;
-    if (h->flags & MARKED) { h->flags &= ~MARKED; link = &h->next_old; }
-    else {
-      size_t bytes = object_bytes(h->words); *link = h->next_old;
-      stats.old_live_bytes -= bytes; stats.reclaimed_bytes += bytes; free(h);
+  for (size_t ci = 0; ci < CLASS_COUNT; ++ci) {
+    Class *c = &classes[ci]; c->available = NULL; Pool **link = &c->pools;
+    while (*link) {
+      Pool *p = *link; p->free = NULL;
+      for (size_t i = p->slots; i-- > 0;) {
+        Header *h = (Header *)(p->data + i * p->slot_bytes);
+        if (h->info >> 3) {
+          if (h->info & MARKED) { h->info &= ~(uintptr_t)MARKED; continue; }
+          reclaim(h); stats.old_slot_bytes -= p->slot_bytes; p->live--; h->info = FORWARDED;
+        }
+        set_free_next(h, p->free); p->free = h;
+      }
+      /* Empty pools leave no reserved capacity; partially occupied pools retain
+         their free slots until the next sweep and allocation cycle. */
+      if (!p->live) {
+        *link = p->next; stats.pool_reserved_bytes -= sizeof(Pool) + p->slots * p->slot_bytes;
+        stats.pool_count--; stats.pool_releases++; free(p);
+      } else {
+        if (p->free) { p->available_next = c->available; c->available = p; }
+        link = &p->next;
+      }
     }
   }
-  old_limit = stats.old_live_bytes * 2 + nursery_capacity * 4;
+  Large **link = &large_objects;
+  while (*link) {
+    Large *l = *link; Header *h = &l->object;
+    if (h->info & MARKED) { h->info &= ~(uintptr_t)MARKED; link = &l->next; }
+    else {
+      reclaim(h); *link = l->next;
+      stats.large_reserved_bytes -= offsetof(Large, object) + l->bytes;
+      stats.large_object_count--; free(l);
+    }
+  }
+  old_limit = stats.old_live_bytes > (SIZE_MAX - nursery_capacity * 4) / 2
+      ? SIZE_MAX : stats.old_live_bytes * 2 + nursery_capacity * 4;
 }
 Word allocate(size_t words, uint64_t mask) {
-  assert(words > 0 && words <= (SIZE_MAX - sizeof(Header)) / sizeof(Word));
+  assert(words > 0 && words <= (SIZE_MAX - sizeof(Large)) / sizeof(Word));
   assert(words >= 64 || (mask >> words) == 0);
-  size_t bytes = young_bytes(words);
+  size_t bytes = object_bytes(words);
   if (stats.old_live_bytes >= old_limit) major_collect();
-  Word result;
+  uintptr_t info = descriptor_info(words, mask); Word result;
   if (bytes > nursery_capacity) {
-    result = payload(new_old(words, mask));
+    result = payload(new_old(info));
     stats.direct_old_allocations++; stats.direct_old_payload_bytes += words * sizeof(Word);
-    stats.allocation_header_bytes += sizeof(Header);
-  }
-  else {
+  } else {
     if (bytes > nursery_capacity - used) {
       minor_collect();
       if (stats.old_live_bytes >= old_limit) major_collect();
     }
-    YoungHeader *h = (YoungHeader *)(nursery + used); used += bytes;
-    memset(h, 0, bytes); h->words = words; h->mask = mask;
-    result = (Word)(h + 1);
+    Header *h = (Header *)(nursery + used); used += bytes;
+    memset(h, 0, bytes); h->info = info; result = payload(h);
     stats.nursery_allocations++; stats.nursery_payload_bytes += words * sizeof(Word);
-    stats.allocation_header_bytes += sizeof(YoungHeader);
   }
+  stats.allocation_header_bytes += sizeof(Header);
   stats.allocations++; stats.payload_bytes += words * sizeof(Word);
   return result;
 }
 void store(Word object, size_t index, Word value) {
-  int young = is_young(object);
-  size_t words;
-  uint64_t mask;
-  if (young) { YoungHeader *h = young_header(object); words = h->words; mask = h->mask; }
-  else { Header *h = header(object); words = h->words; mask = h->mask; }
-  assert(index < words);
-  assert(!pointer(value) || (index < 64 && ((mask >> index) & 1)));
+  int young = is_young(object); Header *h = header(object); Descriptor *d = descriptor(h);
+  assert(index < d->words);
+  assert(!pointer(value) || (index < 64 && ((d->mask >> index) & 1)));
   ((Word *)object)[index] = value;
 #ifndef GC_MUTATE_BARRIER
-  if (!young && is_young(value)) {
-    Header *h = header(object);
-    if (!(h->flags & REMEMBERED)) {
-      h->flags |= REMEMBERED; h->next_remembered = remembered; remembered = h;
-    }
+  if (!young && is_young(value) && !(h->info & REMEMBERED)) {
+    h->info |= REMEMBERED; queue_push(&remembered, h, &stats.remembered_queue_bytes);
   }
+#else
+  (void)young;
 #endif
 }
 void heap_destroy(void) {
-  while (old) { Header *h = old; old = h->next_old; free(h); }
-  free(nursery); nursery = NULL; roots = NULL; remembered = work = NULL;
+  assert(!roots);
+  for (size_t ci = 0; ci < CLASS_COUNT; ++ci) {
+    Pool *p = classes[ci].pools;
+    while (p) { Pool *next = p->next; free(p); p = next; }
+    classes[ci] = (Class){0};
+  }
+  while (large_objects) { Large *next = large_objects->next; free(large_objects); large_objects = next; }
+  free(nursery); free(descriptors); free(descriptor_hash); free(work.items); free(remembered.items);
+  nursery = NULL; descriptors = NULL; descriptor_hash = NULL;
+  nursery_capacity = used = descriptor_count = descriptor_capacity = hash_capacity = 0;
+  work = remembered = (Queue){0};
+  stats.old_live_bytes = stats.old_live_payload_bytes = stats.old_object_count = 0;
+  stats.old_slot_bytes = stats.pool_reserved_bytes = stats.large_reserved_bytes = 0;
+  stats.descriptor_bytes = stats.work_queue_bytes = stats.remembered_queue_bytes = 0;
+  stats.pool_count = stats.large_object_count = 0;
 }
 void print_stats(void) {
   printf("\"allocations\":%" PRIu64 ",\"payload_bytes\":%" PRIu64
@@ -217,10 +374,26 @@ void print_stats(void) {
          "\"old_total_allocated_bytes\":%" PRIu64 ",\"peak_root_bytes\":%zu,\"exact_live_bytes\":%zu,"
          "\"nursery_allocations\":%" PRIu64 ",\"nursery_payload_bytes\":%" PRIu64
          ",\"direct_old_allocations\":%" PRIu64 ",\"direct_old_payload_bytes\":%" PRIu64,
-         stats.allocations, stats.payload_bytes, stats.allocation_header_bytes, sizeof(YoungHeader), sizeof(Header),
+         stats.allocations, stats.payload_bytes, stats.allocation_header_bytes, sizeof(Header), sizeof(Header),
          nursery_capacity, stats.minor_count, stats.major_count, stats.copied_bytes, stats.copied_payload_bytes,
          stats.promoted_count, stats.reclaimed_bytes, stats.old_live_bytes, stats.peak_old_bytes,
          stats.peak_accounted_bytes, used, stats.old_total_allocated_bytes, stats.peak_root_bytes, stats.old_live_bytes,
          stats.nursery_allocations, stats.nursery_payload_bytes, stats.direct_old_allocations, stats.direct_old_payload_bytes);
+  size_t large_metadata = stats.large_object_count * offsetof(Large, object);
+  size_t large_logical = stats.large_reserved_bytes - large_metadata;
+  printf(",\"old_slot_bytes\":%zu,\"pool_reserved_bytes\":%zu,\"peak_pool_reserved_bytes\":%zu,"
+         "\"pool_count\":%zu,\"pool_allocations\":%" PRIu64 ",\"pool_releases\":%" PRIu64
+         ",\"pooled_allocations\":%" PRIu64 ",\"pool_reused_slots\":%" PRIu64
+         ",\"pool_padding_bytes\":%zu,\"large_reserved_bytes\":%zu,\"large_metadata_bytes\":%zu,"
+         "\"large_object_count\":%zu,\"descriptor_bytes\":%zu,\"descriptor_count\":%zu,"
+         "\"work_queue_bytes\":%zu,\"remembered_queue_bytes\":%zu,\"accounted_bytes\":%zu,"
+         "\"exact_live_payload_bytes\":%zu,\"static_metadata_bytes\":%zu,\"root_bytes\":%zu,\"old_object_count\":%zu",
+         stats.old_slot_bytes, stats.pool_reserved_bytes, stats.peak_pool_reserved_bytes,
+         stats.pool_count, stats.pool_allocations, stats.pool_releases,
+         stats.pooled_allocations, stats.pool_reused_slots,
+         stats.old_slot_bytes - (stats.old_live_bytes - large_logical), stats.large_reserved_bytes, large_metadata,
+         stats.large_object_count, stats.descriptor_bytes, descriptor_count,
+         stats.work_queue_bytes, stats.remembered_queue_bytes, accounted_bytes(),
+         stats.old_live_payload_bytes, static_metadata_bytes(), stats.root_bytes, stats.old_object_count);
 }
 #endif

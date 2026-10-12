@@ -143,9 +143,117 @@ An independent review additionally checked graph reachability against an integer
 model at 26 nursery capacities, including descriptor slot 63 and object-size
 boundaries. This is Linux validation; the macOS paths have not been exercised.
 
-**Current decision:** preserve the working experiment, but do not wire this
+**Decision after the first prototype:** preserve the working experiment, but do not wire this
 collector into the production emitter. The short-lived-object benefit is too
 small to justify the present retained-object cost and integration bill. The next
 useful experiment is to reduce mature-object metadata/allocation overhead and
 establish representative object lifetimes before attempting compiler-wide root
 relocation. The results do not rule out a better custom collector.
+
+## Compact pooled heap (2026-10-12)
+
+The next version replaces both headers with one eight-byte descriptor-index/flag
+word. A three-word payload occupies 32 bytes in either generation. Mature objects
+through 2 KiB use size-class pools; sweep reuses free slots and returns empty
+pools. Larger objects retain dedicated allocations. Shared descriptor tables,
+work/remembered vectors, pool slack, and collector globals are included in the
+new reserved-storage accounting. Logical live bytes remain a separate measure.
+
+The comparison reruns the previous collector from commit `33f900bca3bf577e8c49745080ec16147a0b017b`
+with the new workload source, at five million allocations and three fresh
+processes per profile/backend. The additional mixed profile retains every 64th
+node while dropping batches of temporary nodes. It models a lifetime mixture;
+it is not a compiler trace.
+
+With 32-byte cells, a 256 KiB nursery fits exactly 8,192 objects, aligning with
+the ephemeral profile's 256-node drop interval. Its copied payload fraction is
+only 0.00128%. Reducing capacity by eight bytes makes that fraction 1.71162%.
+Both capacities were measured; the offset case below avoids that exact alignment.
+The previous 48-byte nursery cells have the same capacity in objects at both
+settings and copy 2.38892% of ephemeral payloads.
+
+| Profile, 262,136-byte nursery | Previous custom (ms) | Pooled custom (ms) | Tuned Boehm, pooled run (ms) |
+|---|---:|---:|---:|
+| Ephemeral lists | 47.25 | 59.67 | 51.97 |
+| Entire list retained | 347.19 | 209.11 | 183.93 |
+| Entire tree retained | 525.07 | 364.95 | 266.98 |
+| Replaced old-to-young child | 46.42 | 56.06 | 52.08 |
+| Pointer-free cells | 42.22 | 58.53 | 45.68 |
+| Mixed temporary nodes and retained spine | 49.78 | 56.53 | 78.89 |
+
+Retained-graph process peak RSS falls from about 482 MB to 163 MB, versus about
+175 MB for tuned Boehm. The pooled graph has 160 MB of logical live objects,
+160.47 MB of reserved pool storage, and a 160.74 MB accounted peak including the
+nursery and side metadata. These are decimal MB. The change resolves the large
+memory penalty and substantially reduces retained-graph time, but retained
+lists/trees remain about 14%/37% slower than tuned Boehm in the offset run.
+Mixed is about 28% faster; short-lived and pointer-free cases regress. Compact
+storage alone has not established a generally faster allocation path.
+
+Correctness now includes the integer graph model at 35 nursery capacities and
+an independently authored pool fixture at 21 capacities. The latter checks
+descriptor growth, partial-pool reuse with changed descriptors, empty-pool
+release, remembered-vector growth, sharing/cycles, large-object boundaries,
+atomic data, and heap reinitialization. Sanitizers, root/barrier mutation
+controls, and the optimized LLVM contract still pass. The recorded source
+hashes and complete samples are linked from the experiment README.
+
+**Current direction:** keep the pooled representation as an experimental
+foundation and investigate allocation-path overhead alongside the generated-root
+contract. Descriptor/vector capacity stays reserved until destruction; major
+sweep visits reserved pool slots; the mature heap remains nonmoving. This is
+still a single-mutator experiment, with no production collector switch.
+
+A separate 199 Hz DWARF profile at 500 million allocations captured 1,379/1,217
+samples for pooled ephemeral/atomic and 1,045/897 for the previous collector,
+with no lost samples. The pooled allocation function accounts for about
+59%/53% of sampled CPU cycles. Inlined descriptor-key hashing is a subset of
+that share, about 7%/5% overall. This points to allocation-path work beyond
+hashing alone; sample percentages do not establish absolute function costs.
+The [profile summary](../../test/gc_prototype/results/2026-10-12-pool-profile.json)
+records commands, counts, and the independent measurement-artifact audit.
+
+## Generated-code rooting experiment
+
+The on-demand `test/gc_prototype/generated_contract/` experiment now uses
+`compiler/entries/llvm_emit_typed_main.mdk` with the runtime extern catalog and
+no core prelude. This entry runs elaboration, Core lowering, and the real LLVM
+emitter. Three straight-line source fixtures exercise an earlier argument
+across a later allocating argument, a boxed field load across allocation,
+and nested record construction. Expected answers are 21, 137, and 89, derived
+from the source semantics.
+
+A closed LLVM transformation validates the complete input before returning
+rooted IR. Its trusted inputs include independently authored record layouts
+and function argument/result types for these fixtures. It verifies constructor
+tags, sizes, field types/offsets, and call/return types against those contracts.
+This is a test of known fixtures, not a type or pointer classifier for arbitrary
+emitted LLVM. It accepts immutable records, projections, tagged scalar constants,
+local bindings, and direct calls between accepted functions. It rejects control
+flow, recursion, globals, indirect calls, mutation, atomic objects, callbacks,
+FFI, and allocating runtime helpers. A minimal startup/printing adapter replaces
+the production runtime. Constructors must initialize without intervening calls,
+all objects must fit the nursery, and raw heap pointers may not survive calls.
+
+Approved tagged semantic values receive initialized root slots and are reloaded
+at every use, including constructor fields and final call arguments. Neither all
+`i64` values nor the emitter's `LTInt` classification is used as a root set.
+Slots stay registered until function return: this overstates lifetimes and
+cannot support performance claims. Collection schedules target the relevant
+allocations and require actual promotion and balanced roots.
+
+All 18 successful builds pass: each fixture at `-O0` and `-O2` under two collection
+schedules, with sanitizers, and against the ordinary Boehm adapter. The Boehm
+arm uses the same transformed IR, not the production C runtime. Omitting the
+earlier-argument reload returns 43 instead of 21; omitting the boxed-field root
+returns 99 instead of 137. Both controls require those exact wrong answers with
+normal exit and valid collector counters. Nineteen source/IR rejection checks
+include independently authored adversarial cases. The
+[provenance record](../../test/gc_prototype/results/2026-10-12-generated-contract.json)
+pins source, transformer, semantic contracts, emitter, runtime catalog, shim,
+compiler commands, outputs, and emitted/transformed IR hashes.
+
+This transformation stops at the small straight-line grammar. Loops, phi values,
+last-use clearing, tail calls, and runtime integration require emitter-owned GC
+metadata and an explicit experimental mode. The hand-written LLVM fixtures test
+tail-transfer mechanics separately; no production backend has changed.

@@ -1,0 +1,4 @@
+data Box = Box { number : Int }
+box : Box
+box = Box { number = 3 }
+main = box.number

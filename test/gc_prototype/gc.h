@@ -10,6 +10,11 @@ typedef struct Stats {
   uint64_t minor_count, major_count, copied_bytes, copied_payload_bytes;
   uint64_t promoted_count, reclaimed_bytes, old_total_allocated_bytes;
   uint64_t nursery_allocations, nursery_payload_bytes, direct_old_allocations, direct_old_payload_bytes;
+  uint64_t pool_allocations, pool_releases, pooled_allocations, pool_reused_slots;
+  size_t old_live_payload_bytes, old_object_count, old_slot_bytes;
+  size_t pool_reserved_bytes, peak_pool_reserved_bytes, pool_count;
+  size_t large_reserved_bytes, large_object_count, descriptor_bytes;
+  size_t work_queue_bytes, remembered_queue_bytes;
   size_t old_live_bytes, peak_old_bytes, peak_accounted_bytes, root_bytes, peak_root_bytes;
 } Stats;
 extern Stats stats;

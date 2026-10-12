@@ -1,0 +1,788 @@
+{
+  "emitter_sha256": "0ed8cada410ed4294bafa69034965d82fb5707203635bb2af6c2c8c2c8740608",
+  "gc_sha256": "675ceee5eb945ae3f0c15bd154b5c1a4aef949c26f97b0d0dcea738ff383acd3",
+  "gc_header_sha256": "1efa7119424de8d2a644b6d528cf1d158141deb6a3fb61bb0a9a0e12e0202774",
+  "transform_sha256": "d37b9203645e139d34ad83bb59c0acb1cfcf7913e8a732c36b33f284667d7266",
+  "runner_sha256": "70dca9039cf2fa7feabb696c8e0ce4fef4969ca4332e76b5d155e3a85d425861",
+  "shim_sha256": "74b4ecceb87da6e1a13362f0ab88402e0fc69995205cfc7e975e488ee9f396c3",
+  "independent_checks_sha256": "464ebaf7da92aa9639f11f258e9f82befb0bdc274a4b1993683053d5425852b6",
+  "contracts_sha256": "91c8ae19129fb446c3a89884f54031f6159cbd06cf272f23167e5ac63b381bd2",
+  "runtime_catalog_sha256": "c350f0425ab8716daf3341683cc82389bcaa2e10e30e5975a29e870985e216eb",
+  "git_head": "33f900bca3bf577e8c49745080ec16147a0b017b",
+  "platform": "Linux-6.12.95+deb13-amd64-x86_64-with-glibc2.41",
+  "contracts": {
+    "arguments": {
+      "records": {
+        "Box": {
+          "tag": 0,
+          "fields": [
+            "Int"
+          ]
+        }
+      },
+      "functions": {
+        "mdk___user____make": {
+          "args": [
+            "Int"
+          ],
+          "result": "Box"
+        },
+        "mdk___user____first": {
+          "args": [
+            "Box",
+            "Box"
+          ],
+          "result": "Int"
+        }
+      }
+    },
+    "field": {
+      "records": {
+        "Box": {
+          "tag": 0,
+          "fields": [
+            "Int"
+          ]
+        },
+        "Wrap": {
+          "tag": 4294967296,
+          "fields": [
+            "Box"
+          ]
+        }
+      },
+      "functions": {
+        "mdk___user____make": {
+          "args": [
+            "Int"
+          ],
+          "result": "Box"
+        }
+      }
+    },
+    "nested": {
+      "records": {
+        "Box": {
+          "tag": 0,
+          "fields": [
+            "Int"
+          ]
+        },
+        "Pair": {
+          "tag": 4294967296,
+          "fields": [
+            "Box",
+            "Box"
+          ]
+        },
+        "Wrap": {
+          "tag": 8589934592,
+          "fields": [
+            "Pair"
+          ]
+        }
+      },
+      "functions": {
+        "mdk___user____make": {
+          "args": [
+            "Int"
+          ],
+          "result": "Box"
+        }
+      }
+    }
+  },
+  "cases": {
+    "arguments": [
+      21,
+      [
+        4,
+        6
+      ]
+    ],
+    "field": [
+      137,
+      [
+        8,
+        12
+      ]
+    ],
+    "nested": [
+      89,
+      [
+        40,
+        56
+      ]
+    ]
+  },
+  "sources": {
+    "arguments": "84d13847f39e4b533c90cbc4daf38e172be4fb6f7467a1988a222759a66f7f77",
+    "field": "f8a0ea01d9fd5c1d12e60c771548bdbcb870d01bfaef9868f5e564c3c475c02b",
+    "nested": "9ad02b41cb34c328b464894b073041ab25900d9778b5c842c1dddb1741753c63",
+    "reject_branch": "e0976b7201fa6e4e4d937b4bd92d253a9e6ae9d627c0144efaab80932e4176cb",
+    "reject_global": "d5f0ce1cebbf0a1c0d92d5749dd573ac8466f14ebbb7a3354d2c980ee4a9e958",
+    "reject_helper": "db025405db588f2a685683d8857456255f9a09bc67643d2c16db07106f0e78de"
+  },
+  "compiler": "Debian clang version 19.1.7 (3+b1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix\nInstalledDir: /usr/lib/llvm-19/bin\n",
+  "results": [
+    {
+      "rejection": "reject_branch",
+      "reason": "unsupported instruction: %t1 = icmp ne i64 %t0, 0"
+    },
+    {
+      "rejection": "reject_global",
+      "reason": "unsupported module item (globals/aliases/definitions): @mdk_g___user____box = global i64 0"
+    },
+    {
+      "rejection": "reject_helper",
+      "reason": "unsupported runtime/indirect call: mdk_int_to_string"
+    },
+    {
+      "rejection": "raw_pointer_call",
+      "reason": "raw heap pointer lives across call: %t0"
+    },
+    {
+      "rejection": "field_bounds",
+      "reason": "field offset outside record schema"
+    },
+    {
+      "rejection": "raw_header_load",
+      "reason": "load lacks field provenance"
+    },
+    {
+      "rejection": "raw_argument",
+      "reason": "constant is not a tagged Int: 42"
+    },
+    {
+      "rejection": "constructor_interruption",
+      "reason": "constructor does not finish as tagged base"
+    },
+    {
+      "rejection": "finished_constructor_recursion",
+      "reason": "recursion is outside straight-line experiment",
+      "independent": true
+    },
+    {
+      "rejection": "indirect_call",
+      "reason": "unsupported instruction: %t2 = call i64 %t0(i64 %t0, i64 %t1)",
+      "independent": true
+    },
+    {
+      "rejection": "atomic_alloc",
+      "reason": "unsupported instruction: %t0 = call ptr @mdk_alloc_atomic(i64 16)",
+      "independent": true
+    },
+    {
+      "rejection": "mutation_after_constructor",
+      "reason": "unsupported instruction: store i64 3, ptr %t1",
+      "independent": true
+    },
+    {
+      "rejection": "unknown_constructor_tag",
+      "reason": "unknown constructor header",
+      "independent": true
+    },
+    {
+      "rejection": "raw_integer_field",
+      "reason": "constant is not a tagged Int: 42",
+      "independent": true
+    },
+    {
+      "rejection": "wrong_call_semantics",
+      "reason": "call argument type",
+      "independent": true
+    },
+    {
+      "rejection": "wrong_return_semantics",
+      "reason": "return semantic type",
+      "independent": true
+    },
+    {
+      "rejection": "raw_field_pointer_cross_call",
+      "reason": "raw heap pointer lives across call: %t1",
+      "independent": true
+    },
+    {
+      "rejection": "extra_unreachable_function",
+      "reason": "extra or missing function contract",
+      "independent": true
+    },
+    {
+      "rejection": "phi_instruction",
+      "reason": "unsupported instruction: %t99 = phi i64 [ 3, %entry ]",
+      "independent": true
+    },
+    {
+      "run": "arguments-O0-4",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=4ULL",
+        "-O0",
+        "/tmp/medaka-generated-gc-final-v2/arguments-O0-4.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/arguments-O0-4"
+      ],
+      "schedule": 4,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "21\n",
+      "stderr": "generated roots: allocations=2, promoted=1, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "3d996f5887238c83b443b1b6f0351b8fc5bbb7bc63b9d95fb0c10d55edd3ade3",
+      "ir_sha256": "e6b87f143b7835ed4d1a76d58cd6f8dffe3e059e919901730d1fdd4a65771f0b"
+    },
+    {
+      "run": "arguments-O2-4",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=4ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/arguments-O2-4.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/arguments-O2-4"
+      ],
+      "schedule": 4,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "21\n",
+      "stderr": "generated roots: allocations=2, promoted=1, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "3d996f5887238c83b443b1b6f0351b8fc5bbb7bc63b9d95fb0c10d55edd3ade3",
+      "ir_sha256": "e6b87f143b7835ed4d1a76d58cd6f8dffe3e059e919901730d1fdd4a65771f0b"
+    },
+    {
+      "run": "arguments-O0-6",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=6ULL",
+        "-O0",
+        "/tmp/medaka-generated-gc-final-v2/arguments-O0-6.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/arguments-O0-6"
+      ],
+      "schedule": 6,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "21\n",
+      "stderr": "generated roots: allocations=2, promoted=1, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "3d996f5887238c83b443b1b6f0351b8fc5bbb7bc63b9d95fb0c10d55edd3ade3",
+      "ir_sha256": "e6b87f143b7835ed4d1a76d58cd6f8dffe3e059e919901730d1fdd4a65771f0b"
+    },
+    {
+      "run": "arguments-O2-6",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=6ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/arguments-O2-6.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/arguments-O2-6"
+      ],
+      "schedule": 6,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "21\n",
+      "stderr": "generated roots: allocations=2, promoted=1, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "3d996f5887238c83b443b1b6f0351b8fc5bbb7bc63b9d95fb0c10d55edd3ade3",
+      "ir_sha256": "e6b87f143b7835ed4d1a76d58cd6f8dffe3e059e919901730d1fdd4a65771f0b"
+    },
+    {
+      "run": "arguments-boehm",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=4ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/arguments-boehm.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/arguments-boehm",
+        "-DUSE_BOEHM",
+        "-lgc",
+        "-lpthread",
+        "-ldl"
+      ],
+      "schedule": 4,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "21\n",
+      "stderr": "generated roots: allocations=2, promoted=0, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "3d996f5887238c83b443b1b6f0351b8fc5bbb7bc63b9d95fb0c10d55edd3ade3",
+      "ir_sha256": "e6b87f143b7835ed4d1a76d58cd6f8dffe3e059e919901730d1fdd4a65771f0b"
+    },
+    {
+      "run": "arguments-sanitized",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=4ULL",
+        "-O2",
+        "-fno-omit-frame-pointer",
+        "-fsanitize=address,undefined",
+        "-fno-sanitize-link-runtime",
+        "-lasan",
+        "-lubsan",
+        "/tmp/medaka-generated-gc-final-v2/arguments-sanitized.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/arguments-sanitized"
+      ],
+      "schedule": 4,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "21\n",
+      "stderr": "generated roots: allocations=2, promoted=1, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "3d996f5887238c83b443b1b6f0351b8fc5bbb7bc63b9d95fb0c10d55edd3ade3",
+      "ir_sha256": "e6b87f143b7835ed4d1a76d58cd6f8dffe3e059e919901730d1fdd4a65771f0b"
+    },
+    {
+      "run": "field-O0-8",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=8ULL",
+        "-O0",
+        "/tmp/medaka-generated-gc-final-v2/field-O0-8.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/field-O0-8"
+      ],
+      "schedule": 8,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "137\n",
+      "stderr": "generated roots: allocations=3, promoted=2, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "2e128535e296585f1dc2b5f992f40e28633840cc1a89721f92b45748ee2fdc8b",
+      "ir_sha256": "cd1b58fcebafbfb3f4d3c9abc66b49b11380876c57c5e14abb6ff30f4ea2217f"
+    },
+    {
+      "run": "field-O2-8",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=8ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/field-O2-8.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/field-O2-8"
+      ],
+      "schedule": 8,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "137\n",
+      "stderr": "generated roots: allocations=3, promoted=2, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "2e128535e296585f1dc2b5f992f40e28633840cc1a89721f92b45748ee2fdc8b",
+      "ir_sha256": "cd1b58fcebafbfb3f4d3c9abc66b49b11380876c57c5e14abb6ff30f4ea2217f"
+    },
+    {
+      "run": "field-O0-12",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=12ULL",
+        "-O0",
+        "/tmp/medaka-generated-gc-final-v2/field-O0-12.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/field-O0-12"
+      ],
+      "schedule": 12,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "137\n",
+      "stderr": "generated roots: allocations=3, promoted=2, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "2e128535e296585f1dc2b5f992f40e28633840cc1a89721f92b45748ee2fdc8b",
+      "ir_sha256": "cd1b58fcebafbfb3f4d3c9abc66b49b11380876c57c5e14abb6ff30f4ea2217f"
+    },
+    {
+      "run": "field-O2-12",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=12ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/field-O2-12.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/field-O2-12"
+      ],
+      "schedule": 12,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "137\n",
+      "stderr": "generated roots: allocations=3, promoted=2, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "2e128535e296585f1dc2b5f992f40e28633840cc1a89721f92b45748ee2fdc8b",
+      "ir_sha256": "cd1b58fcebafbfb3f4d3c9abc66b49b11380876c57c5e14abb6ff30f4ea2217f"
+    },
+    {
+      "run": "field-boehm",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=8ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/field-boehm.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/field-boehm",
+        "-DUSE_BOEHM",
+        "-lgc",
+        "-lpthread",
+        "-ldl"
+      ],
+      "schedule": 8,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "137\n",
+      "stderr": "generated roots: allocations=3, promoted=0, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "2e128535e296585f1dc2b5f992f40e28633840cc1a89721f92b45748ee2fdc8b",
+      "ir_sha256": "cd1b58fcebafbfb3f4d3c9abc66b49b11380876c57c5e14abb6ff30f4ea2217f"
+    },
+    {
+      "run": "field-sanitized",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=8ULL",
+        "-O2",
+        "-fno-omit-frame-pointer",
+        "-fsanitize=address,undefined",
+        "-fno-sanitize-link-runtime",
+        "-lasan",
+        "-lubsan",
+        "/tmp/medaka-generated-gc-final-v2/field-sanitized.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/field-sanitized"
+      ],
+      "schedule": 8,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "137\n",
+      "stderr": "generated roots: allocations=3, promoted=2, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "2e128535e296585f1dc2b5f992f40e28633840cc1a89721f92b45748ee2fdc8b",
+      "ir_sha256": "cd1b58fcebafbfb3f4d3c9abc66b49b11380876c57c5e14abb6ff30f4ea2217f"
+    },
+    {
+      "run": "nested-O0-40",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=40ULL",
+        "-O0",
+        "/tmp/medaka-generated-gc-final-v2/nested-O0-40.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/nested-O0-40"
+      ],
+      "schedule": 40,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "89\n",
+      "stderr": "generated roots: allocations=5, promoted=4, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "7bc92cabf15a12cae6eec66702e69b9981610b54d7564d73746800d8c82f6018",
+      "ir_sha256": "ba8733f665b0f133e2e49259ebfe83a120ff19e9cae42a971fc820c2fe5f9f5a"
+    },
+    {
+      "run": "nested-O2-40",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=40ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/nested-O2-40.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/nested-O2-40"
+      ],
+      "schedule": 40,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "89\n",
+      "stderr": "generated roots: allocations=5, promoted=4, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "7bc92cabf15a12cae6eec66702e69b9981610b54d7564d73746800d8c82f6018",
+      "ir_sha256": "ba8733f665b0f133e2e49259ebfe83a120ff19e9cae42a971fc820c2fe5f9f5a"
+    },
+    {
+      "run": "nested-O0-56",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=56ULL",
+        "-O0",
+        "/tmp/medaka-generated-gc-final-v2/nested-O0-56.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/nested-O0-56"
+      ],
+      "schedule": 56,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "89\n",
+      "stderr": "generated roots: allocations=5, promoted=4, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "7bc92cabf15a12cae6eec66702e69b9981610b54d7564d73746800d8c82f6018",
+      "ir_sha256": "ba8733f665b0f133e2e49259ebfe83a120ff19e9cae42a971fc820c2fe5f9f5a"
+    },
+    {
+      "run": "nested-O2-56",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=56ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/nested-O2-56.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/nested-O2-56"
+      ],
+      "schedule": 56,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "89\n",
+      "stderr": "generated roots: allocations=5, promoted=4, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "7bc92cabf15a12cae6eec66702e69b9981610b54d7564d73746800d8c82f6018",
+      "ir_sha256": "ba8733f665b0f133e2e49259ebfe83a120ff19e9cae42a971fc820c2fe5f9f5a"
+    },
+    {
+      "run": "nested-boehm",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=40ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/nested-boehm.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/nested-boehm",
+        "-DUSE_BOEHM",
+        "-lgc",
+        "-lpthread",
+        "-ldl"
+      ],
+      "schedule": 40,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "89\n",
+      "stderr": "generated roots: allocations=5, promoted=0, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "7bc92cabf15a12cae6eec66702e69b9981610b54d7564d73746800d8c82f6018",
+      "ir_sha256": "ba8733f665b0f133e2e49259ebfe83a120ff19e9cae42a971fc820c2fe5f9f5a"
+    },
+    {
+      "run": "nested-sanitized",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=40ULL",
+        "-O2",
+        "-fno-omit-frame-pointer",
+        "-fsanitize=address,undefined",
+        "-fno-sanitize-link-runtime",
+        "-lasan",
+        "-lubsan",
+        "/tmp/medaka-generated-gc-final-v2/nested-sanitized.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/nested-sanitized"
+      ],
+      "schedule": 40,
+      "mutation": false,
+      "exit": 0,
+      "stdout": "89\n",
+      "stderr": "generated roots: allocations=5, promoted=4, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "7bc92cabf15a12cae6eec66702e69b9981610b54d7564d73746800d8c82f6018",
+      "ir_sha256": "ba8733f665b0f133e2e49259ebfe83a120ff19e9cae42a971fc820c2fe5f9f5a"
+    },
+    {
+      "run": "arguments-mutant-stale_argument",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=4ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/arguments-mutant-stale_argument.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/arguments-mutant-stale_argument"
+      ],
+      "schedule": 4,
+      "mutation": true,
+      "exit": 0,
+      "stdout": "43\n",
+      "stderr": "generated roots: allocations=2, promoted=1, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "3d996f5887238c83b443b1b6f0351b8fc5bbb7bc63b9d95fb0c10d55edd3ade3",
+      "ir_sha256": "032cffb810e8ed783d5b01aa9a3df30459fee16eab35eca16ed0c0be890db78e"
+    },
+    {
+      "run": "field-mutant-drop_field_root",
+      "command": [
+        "clang",
+        "-g",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-Wno-override-module",
+        "-I",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype",
+        "-DCOLLECT_MASK=8ULL",
+        "-O2",
+        "/tmp/medaka-generated-gc-final-v2/field-mutant-drop_field_root.ll",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/generated_contract/shim.c",
+        "/root/.codex/worktrees/f396/medaka/test/gc_prototype/gc.c",
+        "-o",
+        "/var/tmp/medaka-scratch/medaka-gc-generated-59ltqlzg/field-mutant-drop_field_root"
+      ],
+      "schedule": 8,
+      "mutation": true,
+      "exit": 0,
+      "stdout": "99\n",
+      "stderr": "generated roots: allocations=3, promoted=2, roots=0, reclaimed-live=0\n",
+      "emitted_sha256": "2e128535e296585f1dc2b5f992f40e28633840cc1a89721f92b45748ee2fdc8b",
+      "ir_sha256": "f766d37575f08981555278a442e9a8d23e78483f70b01046004fe423cbedbb4a"
+    }
+  ],
+  "boehm_flags": [
+    "-lgc",
+    "-lpthread",
+    "-ldl"
+  ]
+}

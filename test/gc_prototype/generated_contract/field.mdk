@@ -1,0 +1,11 @@
+data Box = Box { number : Int }
+data Wrap = Wrap { child : Box }
+
+make : Int -> Box
+make n = Box { number = n }
+
+main =
+  let owner = Wrap { child = make 137 }
+  let child = owner.child
+  let garbage = make 99
+  child.number
