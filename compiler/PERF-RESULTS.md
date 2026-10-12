@@ -1669,3 +1669,39 @@ Append calls by runtime entry point, from emitted code: `mdk_string_append`
 
 Command: `make alloc-census` (about 4 minutes; set `CENSUS_WORK=<dir>` to keep
 the artifacts, `CENSUS_REUSE=1` to skip the build on a rerun).
+
+### Allocation census after sprint #4027 (allocate-what-it-keeps)
+
+Same command and build mode as the baseline above, measured at sprint head
+`fc4c08d28fdd539e1b76e5ab5f0ca73e62f531f0` (sprint slices plus main as of #4018).
+Stdout comparison: **VALID**. The baseline predates #4030
+(`parser: match Token constructors without the Eq dictionary`, a GC heap change and a
+registry key change), which landed on main between the two measurements and is
+included in the final column; the per-slice rows below isolate this sprint's own effect.
+
+| Quantity | Baseline | Final |
+|---|---:|---:|
+| Total allocations | 532.1 M | 353.9 M |
+| Emitted-site allocations | 432.7 M | 308.8 M |
+| Runtime (C) allocations | 99.4 M | 45.0 M |
+| GC total bytes | 20.56 GB | 13.74 GB |
+| `mdk_string_append` calls (all callers) | 57.19 M | 6.83 M |
+| `perf stat` instructions, plain non-LTO `check` | 155.999 G | 115.829 G |
+
+By escape class, final (baseline in parentheses): STORE 131.4 M (146.1), RET 128.6 M (164.8),
+CALLEE_ESC 19.8 M (21.9), NOESC 12.9 M (87.5), RET_LOCAL 12.5 M (8.8), UNKNOWN_CALL 3.6 M (3.6).
+`expectGo` no longer appears among the string-append callers. `List.andThen` is still
+14.19 M list appends (#4028).
+
+Per slice (each measured on its own base, so the rows do not sum to the table above):
+
+| Slice | Total allocations | `check` instructions |
+|---|---|---|
+| allocator attributes (`mdk_alloc`/`mdk_alloc_atomic` declared as LLVM allocators) | 532.1 M to 455.1 M | non-LTO 155.999 G to 142.245 G (-8.8%); production ThinLTO about -9.1% |
+| lazy parse-failure rendering (`PErr` carries an unrendered failure) | 439.5 M to 411.0 M | ThinLTO 128.05 G to 120.18 G (-6.2%) |
+| operator ladder as direct-style `binLevel` (30.1% of the parser's allocations) | 411.0 M to 353.0 M | ThinLTO 120.54 G to 109.12 G (-9.5%) |
+
+The allocation pin (`test/diff_compiler_closure_alloc.sh`, `getsome`/`tupleloop`/`matchtuple`)
+allocates 320 MB / 480 MB / 192 MB on the base emitter and 32 / 80 / 32 bytes with the attributes.
+The comment at the top of `compiler/frontend/parser.mdk` that called direct-style parsing
+"perf-neutral" did not hold on this head and was replaced.
