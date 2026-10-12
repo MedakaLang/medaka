@@ -296,7 +296,7 @@ renderNamedFieldMulti st decl = declDoc st decl
 -- (header on line 0, field i on line i+1): a STANDALONE comment renders as its
 -- own line above the field it precedes; a TRAILING comment is appended to its
 -- field's line.  Returns (newDeclStr, consumedComments).
-spliceInterior : List String ->
+spliceInterior : Array String ->
   String ->
   Int ->
   List Comment ->
@@ -309,28 +309,29 @@ spliceInterior srcLines declStr startLine interior =
     (newLines, consumed) => (joinNl newLines, consumed)
 
 -- Fetch source line `n` (1-indexed) from the whole-file `srcLines`, or "".
-nthLine : List String -> Int -> String
-nthLine [] _ = ""
-nthLine (l :: ls) n
-  | n <= 1 = l
-  | otherwise = nthLine ls (n - 1)
+-- `n <= 1` reads the first line; O(1) because `srcLines` is an Array built
+-- once per `formatProgram` call.
+nthLine : Array String -> Int -> String
+nthLine srcLines n =
+  let i = if n <= 1 then 0 else n - 1
+  if i < arrayLength srcLines then arrayGetUnsafe i srcLines else ""
 
 -- A comment is STANDALONE iff nothing but whitespace precedes it on its own
 -- SOURCE line — its column equals that line's own leading-space count.
-isStandaloneSrc : List String -> Comment -> Bool
+isStandaloneSrc : Array String -> Comment -> Bool
 isStandaloneSrc srcLines c =
   commentCol c == leadingSpaceCount (nthLine srcLines (commentLine c))
 
 data CKind = CTrailing | CStandalone
 
-classifyKind : List String -> Comment -> CKind
+classifyKind : Array String -> Comment -> CKind
 classifyKind srcLines c =
   if isStandaloneSrc srcLines c then CStandalone else CTrailing
 
 -- Map each interior comment to its OUTPUT-line index and its kind, accounting
 -- for the source lines already eaten by earlier STANDALONE comments.
 classifyIdxs : Int ->
-  List String ->
+  Array String ->
   Int ->
   List Comment ->
   List (Comment, Int, CKind)
@@ -435,16 +436,21 @@ anyLineEq l (c :: cs) = if commentLine c == l then True else anyLineEq l cs
 
 -- Extract source lines [startLine .. endLine] (1-based, inclusive) and rejoin
 -- them exactly.
-verbatimSpan : List String -> Int -> Int -> String
+verbatimSpan : Array String -> Int -> Int -> String
 verbatimSpan srcLines startLine endLine =
-  joinNl (spanLines srcLines 1 startLine endLine)
+  joinNl (spanLines srcLines startLine endLine)
 
-spanLines : List String -> Int -> Int -> Int -> List String
-spanLines [] _ _ _ = []
-spanLines (l :: ls) idx startLine endLine
-  | idx > endLine = []
-  | idx >= startLine = l :: spanLines ls (idx + 1) startLine endLine
-  | otherwise = spanLines ls (idx + 1) startLine endLine
+-- Source lines [startLine .. endLine] (1-based, inclusive, clamped to the
+-- file), built from the end so the result is a plain cons chain.
+spanLines : Array String -> Int -> Int -> List String
+spanLines srcLines startLine endLine =
+  spanGo srcLines (min (arrayLength srcLines) endLine) (max 1 startLine) []
+
+spanGo : Array String -> Int -> Int -> List String -> List String
+spanGo srcLines idx lo acc
+  | idx < lo = acc
+  | otherwise =
+    spanGo srcLines (idx - 1) lo (arrayGetUnsafe (idx - 1) srcLines :: acc)
 
 -- ── Main walk ─────────────────────────────────────
 
@@ -464,7 +470,7 @@ appendAfterComments (FmtState p c v cur s pl) after =
   FmtState p (c ++ after) v cur s pl
 
 -- The printer's view of a comment: line, column, lexeme, standalone flag.
-toPComment : List String -> Comment -> PComment
+toPComment : Array String -> Comment -> PComment
 toPComment srcLines c =
   PComment
     (commentLine c)
@@ -483,7 +489,7 @@ anyCommaWithin lo hi ((l, _) :: rest) =
 -- this decl's span before dispatching; the after-span remainder is
 -- re-appended on the way out.
 stepDecl : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   Decl ->
   DeclPos ->
@@ -502,7 +508,7 @@ stepDecl st srcLines commas decl dp =
 
 -- The per-decl body, over a comment stream narrowed to [line, endLine].
 stepDeclSpan : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   Decl ->
   Int ->
@@ -519,7 +525,7 @@ stepDeclSpan (FmtState pieces1 cs1 vlines1 cursor1 started1 placed1) srcLines co
 -- A non-data declaration: the printer places every interior comment; any it
 -- cannot place sends the declaration to the verbatim safety net.
 stepExprDecl : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   Decl ->
   Int ->
@@ -555,7 +561,7 @@ stepExprDecl (FmtState pieces2 cs1 vlines1 _cursor1 _started1 placed1) srcLines 
 -- A `data` declaration: interior comments are placed per variant
 -- (`printDataDeclCommented`) or, for a single-variant record with field
 -- comments, per field (`printNamedFieldData` + a line-index splice).
-stepDataDecl : FmtState -> List String -> Decl -> Int -> Int -> FmtState
+stepDataDecl : FmtState -> Array String -> Decl -> Int -> Int -> FmtState
 stepDataDecl (FmtState pieces2 cs1 vlines1 cursor1 started1 placed1) srcLines decl line endLine =
   -- The variant's OWN source line (`| X {` of a two-line header, else the
   -- decl's start line).
@@ -603,7 +609,7 @@ isStrictInterior startLine endLine c =
   l > startLine && l < endLine && isSingleLine (commentText c)
 
 walkDecls : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   List Decl ->
   List DeclPos ->
@@ -634,7 +640,8 @@ formatProgram decls declPositions variantLines commas arms comments src =
     setTrailingCommas commas
     setUnitStarts arms
     let st0 = FmtState [] comments variantLines 0 False 0
-    match drainAll (walkDecls st0 (splitNl src) commas decls declPositions)
+    match (drainAll
+      (walkDecls st0 (arrayFromList (splitNl src)) commas decls declPositions))
       FmtState finalPieces _ _ _ _ placed =>
         checkCommentCount (listLen comments) placed
         stringConcat (reverseL finalPieces)

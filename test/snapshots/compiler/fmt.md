@@ -1,5 +1,5 @@
 # META
-source_lines=733
+source_lines=740
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -300,7 +300,7 @@ renderNamedFieldMulti st decl = declDoc st decl
 -- (header on line 0, field i on line i+1): a STANDALONE comment renders as its
 -- own line above the field it precedes; a TRAILING comment is appended to its
 -- field's line.  Returns (newDeclStr, consumedComments).
-spliceInterior : List String ->
+spliceInterior : Array String ->
   String ->
   Int ->
   List Comment ->
@@ -313,28 +313,29 @@ spliceInterior srcLines declStr startLine interior =
     (newLines, consumed) => (joinNl newLines, consumed)
 
 -- Fetch source line `n` (1-indexed) from the whole-file `srcLines`, or "".
-nthLine : List String -> Int -> String
-nthLine [] _ = ""
-nthLine (l :: ls) n
-  | n <= 1 = l
-  | otherwise = nthLine ls (n - 1)
+-- `n <= 1` reads the first line; O(1) because `srcLines` is an Array built
+-- once per `formatProgram` call.
+nthLine : Array String -> Int -> String
+nthLine srcLines n =
+  let i = if n <= 1 then 0 else n - 1
+  if i < arrayLength srcLines then arrayGetUnsafe i srcLines else ""
 
 -- A comment is STANDALONE iff nothing but whitespace precedes it on its own
 -- SOURCE line — its column equals that line's own leading-space count.
-isStandaloneSrc : List String -> Comment -> Bool
+isStandaloneSrc : Array String -> Comment -> Bool
 isStandaloneSrc srcLines c =
   commentCol c == leadingSpaceCount (nthLine srcLines (commentLine c))
 
 data CKind = CTrailing | CStandalone
 
-classifyKind : List String -> Comment -> CKind
+classifyKind : Array String -> Comment -> CKind
 classifyKind srcLines c =
   if isStandaloneSrc srcLines c then CStandalone else CTrailing
 
 -- Map each interior comment to its OUTPUT-line index and its kind, accounting
 -- for the source lines already eaten by earlier STANDALONE comments.
 classifyIdxs : Int ->
-  List String ->
+  Array String ->
   Int ->
   List Comment ->
   List (Comment, Int, CKind)
@@ -439,16 +440,21 @@ anyLineEq l (c :: cs) = if commentLine c == l then True else anyLineEq l cs
 
 -- Extract source lines [startLine .. endLine] (1-based, inclusive) and rejoin
 -- them exactly.
-verbatimSpan : List String -> Int -> Int -> String
+verbatimSpan : Array String -> Int -> Int -> String
 verbatimSpan srcLines startLine endLine =
-  joinNl (spanLines srcLines 1 startLine endLine)
+  joinNl (spanLines srcLines startLine endLine)
 
-spanLines : List String -> Int -> Int -> Int -> List String
-spanLines [] _ _ _ = []
-spanLines (l :: ls) idx startLine endLine
-  | idx > endLine = []
-  | idx >= startLine = l :: spanLines ls (idx + 1) startLine endLine
-  | otherwise = spanLines ls (idx + 1) startLine endLine
+-- Source lines [startLine .. endLine] (1-based, inclusive, clamped to the
+-- file), built from the end so the result is a plain cons chain.
+spanLines : Array String -> Int -> Int -> List String
+spanLines srcLines startLine endLine =
+  spanGo srcLines (min (arrayLength srcLines) endLine) (max 1 startLine) []
+
+spanGo : Array String -> Int -> Int -> List String -> List String
+spanGo srcLines idx lo acc
+  | idx < lo = acc
+  | otherwise =
+    spanGo srcLines (idx - 1) lo (arrayGetUnsafe (idx - 1) srcLines :: acc)
 
 -- ── Main walk ─────────────────────────────────────
 
@@ -468,7 +474,7 @@ appendAfterComments (FmtState p c v cur s pl) after =
   FmtState p (c ++ after) v cur s pl
 
 -- The printer's view of a comment: line, column, lexeme, standalone flag.
-toPComment : List String -> Comment -> PComment
+toPComment : Array String -> Comment -> PComment
 toPComment srcLines c =
   PComment
     (commentLine c)
@@ -487,7 +493,7 @@ anyCommaWithin lo hi ((l, _) :: rest) =
 -- this decl's span before dispatching; the after-span remainder is
 -- re-appended on the way out.
 stepDecl : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   Decl ->
   DeclPos ->
@@ -506,7 +512,7 @@ stepDecl st srcLines commas decl dp =
 
 -- The per-decl body, over a comment stream narrowed to [line, endLine].
 stepDeclSpan : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   Decl ->
   Int ->
@@ -523,7 +529,7 @@ stepDeclSpan (FmtState pieces1 cs1 vlines1 cursor1 started1 placed1) srcLines co
 -- A non-data declaration: the printer places every interior comment; any it
 -- cannot place sends the declaration to the verbatim safety net.
 stepExprDecl : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   Decl ->
   Int ->
@@ -559,7 +565,7 @@ stepExprDecl (FmtState pieces2 cs1 vlines1 _cursor1 _started1 placed1) srcLines 
 -- A `data` declaration: interior comments are placed per variant
 -- (`printDataDeclCommented`) or, for a single-variant record with field
 -- comments, per field (`printNamedFieldData` + a line-index splice).
-stepDataDecl : FmtState -> List String -> Decl -> Int -> Int -> FmtState
+stepDataDecl : FmtState -> Array String -> Decl -> Int -> Int -> FmtState
 stepDataDecl (FmtState pieces2 cs1 vlines1 cursor1 started1 placed1) srcLines decl line endLine =
   -- The variant's OWN source line (`| X {` of a two-line header, else the
   -- decl's start line).
@@ -607,7 +613,7 @@ isStrictInterior startLine endLine c =
   l > startLine && l < endLine && isSingleLine (commentText c)
 
 walkDecls : FmtState ->
-  List String ->
+  Array String ->
   List (Int, Int) ->
   List Decl ->
   List DeclPos ->
@@ -638,7 +644,8 @@ formatProgram decls declPositions variantLines commas arms comments src =
     setTrailingCommas commas
     setUnitStarts arms
     let st0 = FmtState [] comments variantLines 0 False 0
-    match drainAll (walkDecls st0 (splitNl src) commas decls declPositions)
+    match (drainAll
+      (walkDecls st0 (arrayFromList (splitNl src)) commas decls declPositions))
       FmtState finalPieces _ _ _ _ placed =>
         checkCommentCount (listLen comments) placed
         stringConcat (reverseL finalPieces)
@@ -804,17 +811,16 @@ restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
 (DTypeSig false "renderNamedFieldMulti" (TyFun (TyCon "FmtState") (TyFun (TyCon "Decl") (TyTuple (TyCon "String") (TyCon "FmtState")))))
 (DFunDef false "renderNamedFieldMulti" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started") (PVar "placed")) (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "kinds")) (rf "dataCtors" (PVar "variants")) (rf "dataCtorBinders" (PVar "binders")) (rf "dataDerives" (PVar "derives"))) false)) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (ELit (LInt 1))) (arm (PTuple (PVar "vlinesRest") PWild) () (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "printNamedFieldData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "kinds")) (EVar "variants")) (EVar "binders")) (EVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started")) (EVar "placed"))))))
 (DFunDef false "renderNamedFieldMulti" ((PVar "st") (PVar "decl")) (EApp (EApp (EVar "declDoc") (EVar "st")) (EVar "decl")))
-(DTypeSig false "spliceInterior" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))))))
+(DTypeSig false "spliceInterior" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))))))
 (DFunDef false "spliceInterior" ((PVar "srcLines") (PVar "declStr") (PVar "startLine") (PVar "interior")) (EBlock (DoLet false false (PVar "outLines") (EApp (EVar "splitNl") (EVar "declStr"))) (DoLet false false (PVar "classified") (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "srcLines")) (ELit (LInt 0))) (EVar "interior"))) (DoLet false false (PVar "groups") (EApp (EVar "groupRuns") (EVar "classified"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "attachInterior") (EVar "outLines")) (EVar "groups")) (ELit (LInt 0))) (arm (PTuple (PVar "newLines") (PVar "consumed")) () (ETuple (EApp (EVar "joinNl") (EVar "newLines")) (EVar "consumed")))))))
-(DTypeSig false "nthLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "nthLine" ((PList) PWild) (ELit (LString "")))
-(DFunDef false "nthLine" ((PCons (PVar "l") (PVar "ls")) (PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 1))) (EVar "l") (EIf (EVar "otherwise") (EApp (EApp (EVar "nthLine") (EVar "ls")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "isStandaloneSrc" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "Bool"))))
+(DTypeSig false "nthLine" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "nthLine" ((PVar "srcLines") (PVar "n")) (EBlock (DoLet false false (PVar "i") (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 1))) (ELit (LInt 0)) (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "srcLines"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "srcLines")) (ELit (LString ""))))))
+(DTypeSig false "isStandaloneSrc" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "Bool"))))
 (DFunDef false "isStandaloneSrc" ((PVar "srcLines") (PVar "c")) (EBinOp "==" (EApp (EVar "commentCol") (EVar "c")) (EApp (EVar "leadingSpaceCount") (EApp (EApp (EVar "nthLine") (EVar "srcLines")) (EApp (EVar "commentLine") (EVar "c"))))))
 (DData Private "CKind" () ((variant "CTrailing" (ConPos)) (variant "CStandalone" (ConPos))) ())
-(DTypeSig false "classifyKind" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "CKind"))))
+(DTypeSig false "classifyKind" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "CKind"))))
 (DFunDef false "classifyKind" ((PVar "srcLines") (PVar "c")) (EIf (EApp (EApp (EVar "isStandaloneSrc") (EVar "srcLines")) (EVar "c")) (EVar "CStandalone") (EVar "CTrailing")))
-(DTypeSig false "classifyIdxs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))))))))
+(DTypeSig false "classifyIdxs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))))))))
 (DFunDef false "classifyIdxs" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "classifyIdxs" ((PVar "startLine") (PVar "srcLines") (PVar "eaten") (PCons (PVar "c") (PVar "cs"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EVar "classifyKind") (EVar "srcLines")) (EVar "c"))) (DoLet false false (PVar "idx") (EBinOp "-" (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (EVar "startLine")) (EVar "eaten"))) (DoLet false false (PVar "eaten1") (EMatch (EVar "k") (arm (PCon "CStandalone") () (EBinOp "+" (EVar "eaten") (ELit (LInt 1)))) (arm (PCon "CTrailing") () (EVar "eaten")))) (DoExpr (EBinOp "::" (ETuple (EVar "c") (EVar "idx") (EVar "k")) (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "srcLines")) (EVar "eaten1")) (EVar "cs"))))))
 (DTypeSig false "groupRuns" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind")))))))
@@ -852,37 +858,38 @@ restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
 (DTypeSig false "anyLineEq" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "Bool"))))
 (DFunDef false "anyLineEq" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyLineEq" ((PVar "l") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EVar "l")) (EVar "True") (EApp (EApp (EVar "anyLineEq") (EVar "l")) (EVar "cs"))))
-(DTypeSig false "verbatimSpan" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "verbatimSpan" ((PVar "srcLines") (PVar "startLine") (PVar "endLine")) (EApp (EVar "joinNl") (EApp (EApp (EApp (EApp (EVar "spanLines") (EVar "srcLines")) (ELit (LInt 1))) (EVar "startLine")) (EVar "endLine"))))
-(DTypeSig false "spanLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "spanLines" ((PList) PWild PWild PWild) (EListLit))
-(DFunDef false "spanLines" ((PCons (PVar "l") (PVar "ls")) (PVar "idx") (PVar "startLine") (PVar "endLine")) (EIf (EBinOp ">" (EVar "idx") (EVar "endLine")) (EListLit) (EIf (EBinOp ">=" (EVar "idx") (EVar "startLine")) (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EApp (EVar "spanLines") (EVar "ls")) (EBinOp "+" (EVar "idx") (ELit (LInt 1)))) (EVar "startLine")) (EVar "endLine"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "spanLines") (EVar "ls")) (EBinOp "+" (EVar "idx") (ELit (LInt 1)))) (EVar "startLine")) (EVar "endLine")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "verbatimSpan" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "verbatimSpan" ((PVar "srcLines") (PVar "startLine") (PVar "endLine")) (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "spanLines") (EVar "srcLines")) (EVar "startLine")) (EVar "endLine"))))
+(DTypeSig false "spanLines" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "spanLines" ((PVar "srcLines") (PVar "startLine") (PVar "endLine")) (EApp (EApp (EApp (EApp (EVar "spanGo") (EVar "srcLines")) (EApp (EApp (EVar "min") (EApp (EVar "arrayLength") (EVar "srcLines"))) (EVar "endLine"))) (EApp (EApp (EVar "max") (ELit (LInt 1))) (EVar "startLine"))) (EListLit)))
+(DTypeSig false "spanGo" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "spanGo" ((PVar "srcLines") (PVar "idx") (PVar "lo") (PVar "acc")) (EIf (EBinOp "<" (EVar "idx") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "spanGo") (EVar "srcLines")) (EBinOp "-" (EVar "idx") (ELit (LInt 1)))) (EVar "lo")) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "idx") (ELit (LInt 1)))) (EVar "srcLines")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "splitByEndLine" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Comment"))))))
 (DFunDef false "splitByEndLine" ((PList) PWild) (ETuple (EListLit) (EListLit)))
 (DFunDef false "splitByEndLine" ((PCons (PVar "c") (PVar "rest")) (PVar "endLine")) (EIf (EBinOp ">" (EApp (EVar "commentLine") (EVar "c")) (EVar "endLine")) (ETuple (EListLit) (EBinOp "::" (EVar "c") (EVar "rest"))) (EMatch (EApp (EApp (EVar "splitByEndLine") (EVar "rest")) (EVar "endLine")) (arm (PTuple (PVar "mine") (PVar "after")) () (ETuple (EBinOp "::" (EVar "c") (EVar "mine")) (EVar "after"))))))
 (DTypeSig false "appendAfterComments" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "FmtState"))))
 (DFunDef false "appendAfterComments" ((PCon "FmtState" (PVar "p") (PVar "c") (PVar "v") (PVar "cur") (PVar "s") (PVar "pl")) (PVar "after")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "p")) (EBinOp "++" (EVar "c") (EVar "after"))) (EVar "v")) (EVar "cur")) (EVar "s")) (EVar "pl")))
-(DTypeSig false "toPComment" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "PComment"))))
+(DTypeSig false "toPComment" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "PComment"))))
 (DFunDef false "toPComment" ((PVar "srcLines") (PVar "c")) (EApp (EApp (EApp (EApp (EVar "PComment") (EApp (EVar "commentLine") (EVar "c"))) (EApp (EVar "commentCol") (EVar "c"))) (EApp (EVar "commentText") (EVar "c"))) (EApp (EApp (EVar "isStandaloneSrc") (EVar "srcLines")) (EVar "c"))))
 (DTypeSig false "anyCommaWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Bool")))))
 (DFunDef false "anyCommaWithin" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "anyCommaWithin" ((PVar "lo") (PVar "hi") (PCons (PTuple (PVar "l") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "l") (EVar "lo")) (EBinOp "<=" (EVar "l") (EVar "hi"))) (EApp (EApp (EApp (EVar "anyCommaWithin") (EVar "lo")) (EVar "hi")) (EVar "rest"))))
-(DTypeSig false "stepDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "DeclPos") (TyCon "FmtState")))))))
+(DTypeSig false "stepDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "DeclPos") (TyCon "FmtState")))))))
 (DFunDef false "stepDecl" ((PVar "st") (PVar "srcLines") (PVar "commas") (PVar "decl") (PVar "dp")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoLet false false (PVar "endLine") (EApp (EVar "declPosEndLine") (EVar "dp"))) (DoLet false false (PVar "st1") (EApp (EApp (EVar "flushBefore") (EVar "st")) (EVar "line"))) (DoExpr (EMatch (EVar "st1") (arm (PCon "FmtState" (PVar "pieces1") (PVar "cs1") (PVar "vlines1") (PVar "cursor1") (PVar "started1") (PVar "placed1")) () (EMatch (EApp (EApp (EVar "splitByEndLine") (EVar "cs1")) (EVar "endLine")) (arm (PTuple (PVar "mine") (PVar "after")) () (EBlock (DoLet false false (PVar "stSpan") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces1")) (EVar "mine")) (EVar "vlines1")) (EVar "cursor1")) (EVar "started1")) (EVar "placed1"))) (DoLet false false (PVar "stOut") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "stepDeclSpan") (EVar "stSpan")) (EVar "srcLines")) (EVar "commas")) (EVar "decl")) (EVar "line")) (EVar "endLine"))) (DoExpr (EApp (EApp (EVar "appendAfterComments") (EVar "stOut")) (EVar "after")))))))))))
-(DTypeSig false "stepDeclSpan" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState"))))))))
+(DTypeSig false "stepDeclSpan" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState"))))))))
 (DFunDef false "stepDeclSpan" ((PCon "FmtState" (PVar "pieces1") (PVar "cs1") (PVar "vlines1") (PVar "cursor1") (PVar "started1") (PVar "placed1")) (PVar "srcLines") (PVar "commas") (PVar "decl") (PVar "line") (PVar "endLine")) (EBlock (DoLet false false (PVar "pieces2") (EApp (EApp (EApp (EApp (EVar "blankLineIfNeeded") (EVar "pieces1")) (EVar "line")) (EVar "cursor1")) (EVar "started1"))) (DoLet false false (PVar "st2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces2")) (EVar "cs1")) (EVar "vlines1")) (EVar "cursor1")) (EVar "started1")) (EVar "placed1"))) (DoExpr (EIf (EApp (EVar "isDataDeclF") (EVar "decl")) (EApp (EApp (EApp (EApp (EApp (EVar "stepDataDecl") (EVar "st2")) (EVar "srcLines")) (EVar "decl")) (EVar "line")) (EVar "endLine")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "stepExprDecl") (EVar "st2")) (EVar "srcLines")) (EVar "commas")) (EVar "decl")) (EVar "line")) (EVar "endLine"))))))
-(DTypeSig false "stepExprDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState"))))))))
+(DTypeSig false "stepExprDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState"))))))))
 (DFunDef false "stepExprDecl" ((PCon "FmtState" (PVar "pieces2") (PVar "cs1") (PVar "vlines1") (PVar "_cursor1") (PVar "_started1") (PVar "placed1")) (PVar "srcLines") (PVar "commas") (PVar "decl") (PVar "line") (PVar "endLine")) (EBlock (DoLet false false (PVar "interior") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "isInterior") (EVar "line")) (EVar "endLine"))) (EVar "cs1"))) (DoExpr (EApp (EApp (EVar "setComments") (EApp (EApp (EVar "map") (EApp (EVar "toPComment") (EVar "srcLines"))) (EVar "interior"))) (EBinOp "+" (EVar "endLine") (ELit (LInt 1))))) (DoExpr (EApp (EVar "setImportForced") (EBinOp "&&" (EApp (EVar "isImportDecl") (EVar "decl")) (EApp (EApp (EApp (EVar "anyCommaWithin") (EVar "line")) (EVar "endLine")) (EVar "commas"))))) (DoLet false false (PVar "declStr0") (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "decl")))) (DoLet false false (PVar "leftover") (EApp (EVar "takeLeftoverComments") (ELit LUnit))) (DoLet false false (PVar "placedNow") (EApp (EVar "commentsPlaced") (ELit LUnit))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EVar "leftover")) (EBlock (DoLet false false (PVar "inSpan") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "<=" (EApp (EVar "commentLine") (EVar "c")) (EVar "endLine")))) (EVar "cs1"))) (DoLet false false (PVar "csRest") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp ">" (EApp (EVar "commentLine") (EVar "c")) (EVar "endLine")))) (EVar "cs1"))) (DoLet false false (PVar "pieces3") (EBinOp "::" (ELit (LString "\n")) (EBinOp "::" (EApp (EApp (EApp (EVar "verbatimSpan") (EVar "srcLines")) (EVar "line")) (EVar "endLine")) (EVar "pieces2")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces3")) (EVar "csRest")) (EVar "vlines1")) (EVar "endLine")) (EVar "True")) (EBinOp "+" (EVar "placed1") (EApp (EVar "listLen") (EVar "inSpan")))))) (EBlock (DoLet false false (PVar "cs3") (EApp (EApp (EVar "dropConsumed") (EVar "cs1")) (EVar "interior"))) (DoExpr (EMatch (EApp (EApp (EVar "takeTrailing") (EVar "cs3")) (EVar "endLine")) (arm (PTuple (PVar "trailing") (PVar "csRest")) () (EBlock (DoLet false false (PVar "pieces4") (EApp (EApp (EVar "appendTrailing") (EBinOp "::" (EVar "declStr0") (EVar "pieces2"))) (EVar "trailing"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EBinOp "::" (ELit (LString "\n")) (EVar "pieces4"))) (EVar "csRest")) (EVar "vlines1")) (EVar "endLine")) (EVar "True")) (EBinOp "+" (EBinOp "+" (EVar "placed1") (EVar "placedNow")) (EApp (EVar "listLen") (EVar "trailing"))))))))))))))
-(DTypeSig false "stepDataDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState")))))))
+(DTypeSig false "stepDataDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState")))))))
 (DFunDef false "stepDataDecl" ((PCon "FmtState" (PVar "pieces2") (PVar "cs1") (PVar "vlines1") (PVar "cursor1") (PVar "started1") (PVar "placed1")) (PVar "srcLines") (PVar "decl") (PVar "line") (PVar "endLine")) (EBlock (DoLet false false (PVar "variantLine") (EMatch (EVar "vlines1") (arm (PCons (PVar "vl") PWild) () (EVar "vl")) (arm (PList) () (EVar "line")))) (DoLet false false (PVar "fieldComments") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "/=" (EApp (EVar "commentLine") (EVar "c")) (EVar "variantLine")))) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "isStrictInterior") (EVar "line")) (EVar "endLine"))) (EVar "cs1")))) (DoLet false false (PVar "nfMulti") (EBinOp "&&" (EApp (EVar "isSingleNamedFieldData") (EVar "decl")) (EApp (EVar "isNonEmptyL") (EVar "fieldComments")))) (DoLet false false (PVar "headerLine") (EIf (EVar "nfMulti") (EVar "variantLine") (EVar "line"))) (DoExpr (EMatch (EApp (EApp (EVar "takeTrailing") (EVar "cs1")) (EVar "endLine")) (arm (PTuple (PVar "trailing") (PVar "csNoTrail")) () (EBlock (DoLet false false (PVar "st2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces2")) (EVar "csNoTrail")) (EVar "vlines1")) (EVar "cursor1")) (EVar "started1")) (EVar "placed1"))) (DoExpr (EMatch (EIf (EVar "nfMulti") (EApp (EApp (EVar "renderNamedFieldMulti") (EVar "st2")) (EVar "decl")) (EApp (EApp (EVar "declDoc") (EVar "st2")) (EVar "decl"))) (arm (PTuple (PVar "declStr0") (PCon "FmtState" (PVar "pieces3") (PVar "cs3") (PVar "vlines3") (PVar "_cursor3") (PVar "_started3") (PVar "placed3"))) () (EBlock (DoLet false false (PVar "interior") (EIf (EVar "nfMulti") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "isStrictInterior") (EVar "line")) (EVar "endLine"))) (EVar "cs3")) (EListLit))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "spliceInterior") (EVar "srcLines")) (EVar "declStr0")) (EVar "headerLine")) (EVar "interior")) (arm (PTuple (PVar "declStr") (PVar "consumed")) () (EBlock (DoLet false false (PVar "cs3b") (EApp (EApp (EVar "dropConsumed") (EVar "cs3")) (EVar "consumed"))) (DoLet false false (PVar "pieces4") (EApp (EApp (EVar "appendTrailing") (EBinOp "::" (EVar "declStr") (EVar "pieces3"))) (EVar "trailing"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EBinOp "::" (ELit (LString "\n")) (EVar "pieces4"))) (EVar "cs3b")) (EVar "vlines3")) (EVar "endLine")) (EVar "True")) (EBinOp "+" (EBinOp "+" (EVar "placed3") (EApp (EVar "listLen") (EVar "consumed"))) (EApp (EVar "listLen") (EVar "trailing")))))))))))))))))))
 (DTypeSig false "isStrictInterior" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "Bool")))))
 (DFunDef false "isStrictInterior" ((PVar "startLine") (PVar "endLine") (PVar "c")) (EBlock (DoLet false false (PVar "l") (EApp (EVar "commentLine") (EVar "c"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "l") (EVar "startLine")) (EBinOp "<" (EVar "l") (EVar "endLine"))) (EApp (EVar "isSingleLine") (EApp (EVar "commentText") (EVar "c")))))))
-(DTypeSig false "walkDecls" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyCon "FmtState")))))))
+(DTypeSig false "walkDecls" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyCon "FmtState")))))))
 (DFunDef false "walkDecls" ((PVar "st") PWild PWild (PList) PWild) (EVar "st"))
 (DFunDef false "walkDecls" ((PVar "st") PWild PWild PWild (PList)) (EVar "st"))
 (DFunDef false "walkDecls" ((PVar "st") (PVar "srcLines") (PVar "commas") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EApp (EApp (EApp (EApp (EApp (EVar "walkDecls") (EApp (EApp (EApp (EApp (EApp (EVar "stepDecl") (EVar "st")) (EVar "srcLines")) (EVar "commas")) (EVar "d")) (EVar "p"))) (EVar "srcLines")) (EVar "commas")) (EVar "ds")) (EVar "ps")))
 (DTypeSig true "formatProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "String") (TyCon "String")))))))))
-(DFunDef false "formatProgram" ((PVar "decls") (PVar "declPositions") (PVar "variantLines") (PVar "commas") (PVar "arms") (PVar "comments") (PVar "src")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "declPositions")) (EApp (EVar "listLen") (EVar "decls"))) (EApp (EVar "panic") (ELit (LString "medaka fmt: internal error — declaration positions do not line up with the declarations; refusing to format"))) (EBlock (DoExpr (EApp (EVar "setTrailingCommas") (EVar "commas"))) (DoExpr (EApp (EVar "setUnitStarts") (EVar "arms"))) (DoLet false false (PVar "st0") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EListLit)) (EVar "comments")) (EVar "variantLines")) (ELit (LInt 0))) (EVar "False")) (ELit (LInt 0)))) (DoExpr (EMatch (EApp (EVar "drainAll") (EApp (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "st0")) (EApp (EVar "splitNl") (EVar "src"))) (EVar "commas")) (EVar "decls")) (EVar "declPositions"))) (arm (PCon "FmtState" (PVar "finalPieces") PWild PWild PWild PWild (PVar "placed")) () (EBlock (DoExpr (EApp (EApp (EVar "checkCommentCount") (EApp (EVar "listLen") (EVar "comments"))) (EVar "placed"))) (DoExpr (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "finalPieces")))))))))))
+(DFunDef false "formatProgram" ((PVar "decls") (PVar "declPositions") (PVar "variantLines") (PVar "commas") (PVar "arms") (PVar "comments") (PVar "src")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "declPositions")) (EApp (EVar "listLen") (EVar "decls"))) (EApp (EVar "panic") (ELit (LString "medaka fmt: internal error — declaration positions do not line up with the declarations; refusing to format"))) (EBlock (DoExpr (EApp (EVar "setTrailingCommas") (EVar "commas"))) (DoExpr (EApp (EVar "setUnitStarts") (EVar "arms"))) (DoLet false false (PVar "st0") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EListLit)) (EVar "comments")) (EVar "variantLines")) (ELit (LInt 0))) (EVar "False")) (ELit (LInt 0)))) (DoExpr (EMatch (EApp (EVar "drainAll") (EApp (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "st0")) (EApp (EVar "arrayFromList") (EApp (EVar "splitNl") (EVar "src")))) (EVar "commas")) (EVar "decls")) (EVar "declPositions"))) (arm (PCon "FmtState" (PVar "finalPieces") PWild PWild PWild PWild (PVar "placed")) () (EBlock (DoExpr (EApp (EApp (EVar "checkCommentCount") (EApp (EVar "listLen") (EVar "comments"))) (EVar "placed"))) (DoExpr (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "finalPieces")))))))))))
 (DTypeSig false "checkCommentCount" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))
 (DFunDef false "checkCommentCount" ((PVar "total") (PVar "placed")) (EIf (EBinOp "/=" (EVar "total") (EVar "placed")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka fmt: internal error — ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "total")))) (ELit (LString " comments in, "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "placed")))) (ELit (LString " placed; refusing to write output that would lose a comment")))) (ELit LUnit)))
 (DTypeSig false "drainAll" (TyFun (TyCon "FmtState") (TyCon "FmtState")))
@@ -980,17 +987,16 @@ restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
 (DTypeSig false "renderNamedFieldMulti" (TyFun (TyCon "FmtState") (TyFun (TyCon "Decl") (TyTuple (TyCon "String") (TyCon "FmtState")))))
 (DFunDef false "renderNamedFieldMulti" ((PCon "FmtState" (PVar "pieces") (PVar "cs") (PVar "vlines") (PVar "cursor") (PVar "started") (PVar "placed")) (PRec "DData" ((rf "dataVis" (PVar "vis")) (rf "dataName" (PVar "n")) (rf "dataParams" (PVar "params")) (rf "dataParamKinds" (PVar "kinds")) (rf "dataCtors" (PVar "variants")) (rf "dataCtorBinders" (PVar "binders")) (rf "dataDerives" (PVar "derives"))) false)) (EMatch (EApp (EApp (EVar "takeNVariantLines") (EVar "vlines")) (ELit (LInt 1))) (arm (PTuple (PVar "vlinesRest") PWild) () (ETuple (EApp (EVar "render") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "printNamedFieldData") (EVar "vis")) (EVar "n")) (EVar "params")) (EVar "kinds")) (EVar "variants")) (EVar "binders")) (EVar "derives"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces")) (EVar "cs")) (EVar "vlinesRest")) (EVar "cursor")) (EVar "started")) (EVar "placed"))))))
 (DFunDef false "renderNamedFieldMulti" ((PVar "st") (PVar "decl")) (EApp (EApp (EVar "declDoc") (EVar "st")) (EVar "decl")))
-(DTypeSig false "spliceInterior" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))))))
+(DTypeSig false "spliceInterior" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Comment"))))))))
 (DFunDef false "spliceInterior" ((PVar "srcLines") (PVar "declStr") (PVar "startLine") (PVar "interior")) (EBlock (DoLet false false (PVar "outLines") (EApp (EVar "splitNl") (EVar "declStr"))) (DoLet false false (PVar "classified") (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "srcLines")) (ELit (LInt 0))) (EVar "interior"))) (DoLet false false (PVar "groups") (EApp (EVar "groupRuns") (EVar "classified"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "attachInterior") (EVar "outLines")) (EVar "groups")) (ELit (LInt 0))) (arm (PTuple (PVar "newLines") (PVar "consumed")) () (ETuple (EApp (EVar "joinNl") (EVar "newLines")) (EVar "consumed")))))))
-(DTypeSig false "nthLine" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "String"))))
-(DFunDef false "nthLine" ((PList) PWild) (ELit (LString "")))
-(DFunDef false "nthLine" ((PCons (PVar "l") (PVar "ls")) (PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 1))) (EVar "l") (EIf (EVar "otherwise") (EApp (EApp (EVar "nthLine") (EVar "ls")) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "isStandaloneSrc" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "Bool"))))
+(DTypeSig false "nthLine" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyCon "String"))))
+(DFunDef false "nthLine" ((PVar "srcLines") (PVar "n")) (EBlock (DoLet false false (PVar "i") (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 1))) (ELit (LInt 0)) (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (DoExpr (EIf (EBinOp "<" (EVar "i") (EApp (EVar "arrayLength") (EVar "srcLines"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "srcLines")) (ELit (LString ""))))))
+(DTypeSig false "isStandaloneSrc" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "Bool"))))
 (DFunDef false "isStandaloneSrc" ((PVar "srcLines") (PVar "c")) (EBinOp "==" (EApp (EVar "commentCol") (EVar "c")) (EApp (EVar "leadingSpaceCount") (EApp (EApp (EVar "nthLine") (EVar "srcLines")) (EApp (EVar "commentLine") (EVar "c"))))))
 (DData Private "CKind" () ((variant "CTrailing" (ConPos)) (variant "CStandalone" (ConPos))) ())
-(DTypeSig false "classifyKind" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "CKind"))))
+(DTypeSig false "classifyKind" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "CKind"))))
 (DFunDef false "classifyKind" ((PVar "srcLines") (PVar "c")) (EIf (EApp (EApp (EVar "isStandaloneSrc") (EVar "srcLines")) (EVar "c")) (EVar "CStandalone") (EVar "CTrailing")))
-(DTypeSig false "classifyIdxs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))))))))
+(DTypeSig false "classifyIdxs" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))))))))
 (DFunDef false "classifyIdxs" (PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "classifyIdxs" ((PVar "startLine") (PVar "srcLines") (PVar "eaten") (PCons (PVar "c") (PVar "cs"))) (EBlock (DoLet false false (PVar "k") (EApp (EApp (EVar "classifyKind") (EVar "srcLines")) (EVar "c"))) (DoLet false false (PVar "idx") (EBinOp "-" (EBinOp "-" (EApp (EVar "commentLine") (EVar "c")) (EVar "startLine")) (EVar "eaten"))) (DoLet false false (PVar "eaten1") (EMatch (EVar "k") (arm (PCon "CStandalone") () (EBinOp "+" (EVar "eaten") (ELit (LInt 1)))) (arm (PCon "CTrailing") () (EVar "eaten")))) (DoExpr (EBinOp "::" (ETuple (EVar "c") (EVar "idx") (EVar "k")) (EApp (EApp (EApp (EApp (EVar "classifyIdxs") (EVar "startLine")) (EVar "srcLines")) (EVar "eaten1")) (EVar "cs"))))))
 (DTypeSig false "groupRuns" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "Int") (TyCon "CKind"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Comment") (TyCon "CKind")))))))
@@ -1028,37 +1034,38 @@ restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
 (DTypeSig false "anyLineEq" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "Bool"))))
 (DFunDef false "anyLineEq" (PWild (PList)) (EVar "False"))
 (DFunDef false "anyLineEq" ((PVar "l") (PCons (PVar "c") (PVar "cs"))) (EIf (EBinOp "==" (EApp (EVar "commentLine") (EVar "c")) (EVar "l")) (EVar "True") (EApp (EApp (EVar "anyLineEq") (EVar "l")) (EVar "cs"))))
-(DTypeSig false "verbatimSpan" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "verbatimSpan" ((PVar "srcLines") (PVar "startLine") (PVar "endLine")) (EApp (EVar "joinNl") (EApp (EApp (EApp (EApp (EVar "spanLines") (EVar "srcLines")) (ELit (LInt 1))) (EVar "startLine")) (EVar "endLine"))))
-(DTypeSig false "spanLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "spanLines" ((PList) PWild PWild PWild) (EListLit))
-(DFunDef false "spanLines" ((PCons (PVar "l") (PVar "ls")) (PVar "idx") (PVar "startLine") (PVar "endLine")) (EIf (EBinOp ">" (EVar "idx") (EVar "endLine")) (EListLit) (EIf (EBinOp ">=" (EVar "idx") (EVar "startLine")) (EBinOp "::" (EVar "l") (EApp (EApp (EApp (EApp (EVar "spanLines") (EVar "ls")) (EBinOp "+" (EVar "idx") (ELit (LInt 1)))) (EVar "startLine")) (EVar "endLine"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "spanLines") (EVar "ls")) (EBinOp "+" (EVar "idx") (ELit (LInt 1)))) (EVar "startLine")) (EVar "endLine")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "verbatimSpan" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "verbatimSpan" ((PVar "srcLines") (PVar "startLine") (PVar "endLine")) (EApp (EVar "joinNl") (EApp (EApp (EApp (EVar "spanLines") (EVar "srcLines")) (EVar "startLine")) (EVar "endLine"))))
+(DTypeSig false "spanLines" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "String"))))))
+(DFunDef false "spanLines" ((PVar "srcLines") (PVar "startLine") (PVar "endLine")) (EApp (EApp (EApp (EApp (EVar "spanGo") (EVar "srcLines")) (EApp (EApp (EMethodRef "min") (EApp (EVar "arrayLength") (EVar "srcLines"))) (EVar "endLine"))) (EApp (EApp (EMethodRef "max") (ELit (LInt 1))) (EVar "startLine"))) (EListLit)))
+(DTypeSig false "spanGo" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
+(DFunDef false "spanGo" ((PVar "srcLines") (PVar "idx") (PVar "lo") (PVar "acc")) (EIf (EBinOp "<" (EVar "idx") (EVar "lo")) (EVar "acc") (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "spanGo") (EVar "srcLines")) (EBinOp "-" (EVar "idx") (ELit (LInt 1)))) (EVar "lo")) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "idx") (ELit (LInt 1)))) (EVar "srcLines")) (EVar "acc"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "splitByEndLine" (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "Comment"))))))
 (DFunDef false "splitByEndLine" ((PList) PWild) (ETuple (EListLit) (EListLit)))
 (DFunDef false "splitByEndLine" ((PCons (PVar "c") (PVar "rest")) (PVar "endLine")) (EIf (EBinOp ">" (EApp (EVar "commentLine") (EVar "c")) (EVar "endLine")) (ETuple (EListLit) (EBinOp "::" (EVar "c") (EVar "rest"))) (EMatch (EApp (EApp (EVar "splitByEndLine") (EVar "rest")) (EVar "endLine")) (arm (PTuple (PVar "mine") (PVar "after")) () (ETuple (EBinOp "::" (EVar "c") (EVar "mine")) (EVar "after"))))))
 (DTypeSig false "appendAfterComments" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyCon "FmtState"))))
 (DFunDef false "appendAfterComments" ((PCon "FmtState" (PVar "p") (PVar "c") (PVar "v") (PVar "cur") (PVar "s") (PVar "pl")) (PVar "after")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "p")) (EBinOp "++" (EVar "c") (EVar "after"))) (EVar "v")) (EVar "cur")) (EVar "s")) (EVar "pl")))
-(DTypeSig false "toPComment" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "PComment"))))
+(DTypeSig false "toPComment" (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Comment") (TyCon "PComment"))))
 (DFunDef false "toPComment" ((PVar "srcLines") (PVar "c")) (EApp (EApp (EApp (EApp (EVar "PComment") (EApp (EVar "commentLine") (EVar "c"))) (EApp (EVar "commentCol") (EVar "c"))) (EApp (EVar "commentText") (EVar "c"))) (EApp (EApp (EVar "isStandaloneSrc") (EVar "srcLines")) (EVar "c"))))
 (DTypeSig false "anyCommaWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyCon "Bool")))))
 (DFunDef false "anyCommaWithin" (PWild PWild (PList)) (EVar "False"))
 (DFunDef false "anyCommaWithin" ((PVar "lo") (PVar "hi") (PCons (PTuple (PVar "l") PWild) (PVar "rest"))) (EBinOp "||" (EBinOp "&&" (EBinOp ">=" (EVar "l") (EVar "lo")) (EBinOp "<=" (EVar "l") (EVar "hi"))) (EApp (EApp (EApp (EVar "anyCommaWithin") (EVar "lo")) (EVar "hi")) (EVar "rest"))))
-(DTypeSig false "stepDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "DeclPos") (TyCon "FmtState")))))))
+(DTypeSig false "stepDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "DeclPos") (TyCon "FmtState")))))))
 (DFunDef false "stepDecl" ((PVar "st") (PVar "srcLines") (PVar "commas") (PVar "decl") (PVar "dp")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoLet false false (PVar "endLine") (EApp (EVar "declPosEndLine") (EVar "dp"))) (DoLet false false (PVar "st1") (EApp (EApp (EVar "flushBefore") (EVar "st")) (EVar "line"))) (DoExpr (EMatch (EVar "st1") (arm (PCon "FmtState" (PVar "pieces1") (PVar "cs1") (PVar "vlines1") (PVar "cursor1") (PVar "started1") (PVar "placed1")) () (EMatch (EApp (EApp (EVar "splitByEndLine") (EVar "cs1")) (EVar "endLine")) (arm (PTuple (PVar "mine") (PVar "after")) () (EBlock (DoLet false false (PVar "stSpan") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces1")) (EVar "mine")) (EVar "vlines1")) (EVar "cursor1")) (EVar "started1")) (EVar "placed1"))) (DoLet false false (PVar "stOut") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "stepDeclSpan") (EVar "stSpan")) (EVar "srcLines")) (EVar "commas")) (EVar "decl")) (EVar "line")) (EVar "endLine"))) (DoExpr (EApp (EApp (EVar "appendAfterComments") (EVar "stOut")) (EVar "after")))))))))))
-(DTypeSig false "stepDeclSpan" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState"))))))))
+(DTypeSig false "stepDeclSpan" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState"))))))))
 (DFunDef false "stepDeclSpan" ((PCon "FmtState" (PVar "pieces1") (PVar "cs1") (PVar "vlines1") (PVar "cursor1") (PVar "started1") (PVar "placed1")) (PVar "srcLines") (PVar "commas") (PVar "decl") (PVar "line") (PVar "endLine")) (EBlock (DoLet false false (PVar "pieces2") (EApp (EApp (EApp (EApp (EVar "blankLineIfNeeded") (EVar "pieces1")) (EVar "line")) (EVar "cursor1")) (EVar "started1"))) (DoLet false false (PVar "st2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces2")) (EVar "cs1")) (EVar "vlines1")) (EVar "cursor1")) (EVar "started1")) (EVar "placed1"))) (DoExpr (EIf (EApp (EVar "isDataDeclF") (EVar "decl")) (EApp (EApp (EApp (EApp (EApp (EVar "stepDataDecl") (EVar "st2")) (EVar "srcLines")) (EVar "decl")) (EVar "line")) (EVar "endLine")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "stepExprDecl") (EVar "st2")) (EVar "srcLines")) (EVar "commas")) (EVar "decl")) (EVar "line")) (EVar "endLine"))))))
-(DTypeSig false "stepExprDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState"))))))))
+(DTypeSig false "stepExprDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState"))))))))
 (DFunDef false "stepExprDecl" ((PCon "FmtState" (PVar "pieces2") (PVar "cs1") (PVar "vlines1") (PVar "_cursor1") (PVar "_started1") (PVar "placed1")) (PVar "srcLines") (PVar "commas") (PVar "decl") (PVar "line") (PVar "endLine")) (EBlock (DoLet false false (PVar "interior") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "isInterior") (EVar "line")) (EVar "endLine"))) (EVar "cs1"))) (DoExpr (EApp (EApp (EVar "setComments") (EApp (EApp (EMethodRef "map") (EApp (EVar "toPComment") (EVar "srcLines"))) (EVar "interior"))) (EBinOp "+" (EVar "endLine") (ELit (LInt 1))))) (DoExpr (EApp (EVar "setImportForced") (EBinOp "&&" (EApp (EVar "isImportDecl") (EVar "decl")) (EApp (EApp (EApp (EVar "anyCommaWithin") (EVar "line")) (EVar "endLine")) (EVar "commas"))))) (DoLet false false (PVar "declStr0") (EApp (EVar "render") (EApp (EVar "printDecl") (EVar "decl")))) (DoLet false false (PVar "leftover") (EApp (EVar "takeLeftoverComments") (ELit LUnit))) (DoLet false false (PVar "placedNow") (EApp (EVar "commentsPlaced") (ELit LUnit))) (DoExpr (EIf (EApp (EVar "isNonEmptyL") (EVar "leftover")) (EBlock (DoLet false false (PVar "inSpan") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "<=" (EApp (EVar "commentLine") (EVar "c")) (EVar "endLine")))) (EVar "cs1"))) (DoLet false false (PVar "csRest") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp ">" (EApp (EVar "commentLine") (EVar "c")) (EVar "endLine")))) (EVar "cs1"))) (DoLet false false (PVar "pieces3") (EBinOp "::" (ELit (LString "\n")) (EBinOp "::" (EApp (EApp (EApp (EVar "verbatimSpan") (EVar "srcLines")) (EVar "line")) (EVar "endLine")) (EVar "pieces2")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces3")) (EVar "csRest")) (EVar "vlines1")) (EVar "endLine")) (EVar "True")) (EBinOp "+" (EVar "placed1") (EApp (EVar "listLen") (EVar "inSpan")))))) (EBlock (DoLet false false (PVar "cs3") (EApp (EApp (EVar "dropConsumed") (EVar "cs1")) (EVar "interior"))) (DoExpr (EMatch (EApp (EApp (EVar "takeTrailing") (EVar "cs3")) (EVar "endLine")) (arm (PTuple (PVar "trailing") (PVar "csRest")) () (EBlock (DoLet false false (PVar "pieces4") (EApp (EApp (EVar "appendTrailing") (EBinOp "::" (EVar "declStr0") (EVar "pieces2"))) (EVar "trailing"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EBinOp "::" (ELit (LString "\n")) (EVar "pieces4"))) (EVar "csRest")) (EVar "vlines1")) (EVar "endLine")) (EVar "True")) (EBinOp "+" (EBinOp "+" (EVar "placed1") (EVar "placedNow")) (EApp (EVar "listLen") (EVar "trailing"))))))))))))))
-(DTypeSig false "stepDataDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState")))))))
+(DTypeSig false "stepDataDecl" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "FmtState")))))))
 (DFunDef false "stepDataDecl" ((PCon "FmtState" (PVar "pieces2") (PVar "cs1") (PVar "vlines1") (PVar "cursor1") (PVar "started1") (PVar "placed1")) (PVar "srcLines") (PVar "decl") (PVar "line") (PVar "endLine")) (EBlock (DoLet false false (PVar "variantLine") (EMatch (EVar "vlines1") (arm (PCons (PVar "vl") PWild) () (EVar "vl")) (arm (PList) () (EVar "line")))) (DoLet false false (PVar "fieldComments") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "/=" (EApp (EVar "commentLine") (EVar "c")) (EVar "variantLine")))) (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "isStrictInterior") (EVar "line")) (EVar "endLine"))) (EVar "cs1")))) (DoLet false false (PVar "nfMulti") (EBinOp "&&" (EApp (EVar "isSingleNamedFieldData") (EVar "decl")) (EApp (EVar "isNonEmptyL") (EVar "fieldComments")))) (DoLet false false (PVar "headerLine") (EIf (EVar "nfMulti") (EVar "variantLine") (EVar "line"))) (DoExpr (EMatch (EApp (EApp (EVar "takeTrailing") (EVar "cs1")) (EVar "endLine")) (arm (PTuple (PVar "trailing") (PVar "csNoTrail")) () (EBlock (DoLet false false (PVar "st2") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EVar "pieces2")) (EVar "csNoTrail")) (EVar "vlines1")) (EVar "cursor1")) (EVar "started1")) (EVar "placed1"))) (DoExpr (EMatch (EIf (EVar "nfMulti") (EApp (EApp (EVar "renderNamedFieldMulti") (EVar "st2")) (EVar "decl")) (EApp (EApp (EVar "declDoc") (EVar "st2")) (EVar "decl"))) (arm (PTuple (PVar "declStr0") (PCon "FmtState" (PVar "pieces3") (PVar "cs3") (PVar "vlines3") (PVar "_cursor3") (PVar "_started3") (PVar "placed3"))) () (EBlock (DoLet false false (PVar "interior") (EIf (EVar "nfMulti") (EApp (EApp (EVar "filterList") (EApp (EApp (EVar "isStrictInterior") (EVar "line")) (EVar "endLine"))) (EVar "cs3")) (EListLit))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "spliceInterior") (EVar "srcLines")) (EVar "declStr0")) (EVar "headerLine")) (EVar "interior")) (arm (PTuple (PVar "declStr") (PVar "consumed")) () (EBlock (DoLet false false (PVar "cs3b") (EApp (EApp (EVar "dropConsumed") (EVar "cs3")) (EVar "consumed"))) (DoLet false false (PVar "pieces4") (EApp (EApp (EVar "appendTrailing") (EBinOp "::" (EVar "declStr") (EVar "pieces3"))) (EVar "trailing"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EBinOp "::" (ELit (LString "\n")) (EVar "pieces4"))) (EVar "cs3b")) (EVar "vlines3")) (EVar "endLine")) (EVar "True")) (EBinOp "+" (EBinOp "+" (EVar "placed3") (EApp (EVar "listLen") (EVar "consumed"))) (EApp (EVar "listLen") (EVar "trailing")))))))))))))))))))
 (DTypeSig false "isStrictInterior" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Comment") (TyCon "Bool")))))
 (DFunDef false "isStrictInterior" ((PVar "startLine") (PVar "endLine") (PVar "c")) (EBlock (DoLet false false (PVar "l") (EApp (EVar "commentLine") (EVar "c"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp ">" (EVar "l") (EVar "startLine")) (EBinOp "<" (EVar "l") (EVar "endLine"))) (EApp (EVar "isSingleLine") (EApp (EVar "commentText") (EVar "c")))))))
-(DTypeSig false "walkDecls" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyCon "FmtState")))))))
+(DTypeSig false "walkDecls" (TyFun (TyCon "FmtState") (TyFun (TyApp (TyCon "Array") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyCon "FmtState")))))))
 (DFunDef false "walkDecls" ((PVar "st") PWild PWild (PList) PWild) (EVar "st"))
 (DFunDef false "walkDecls" ((PVar "st") PWild PWild PWild (PList)) (EVar "st"))
 (DFunDef false "walkDecls" ((PVar "st") (PVar "srcLines") (PVar "commas") (PCons (PVar "d") (PVar "ds")) (PCons (PVar "p") (PVar "ps"))) (EApp (EApp (EApp (EApp (EApp (EVar "walkDecls") (EApp (EApp (EApp (EApp (EApp (EVar "stepDecl") (EVar "st")) (EVar "srcLines")) (EVar "commas")) (EVar "d")) (EVar "p"))) (EVar "srcLines")) (EVar "commas")) (EVar "ds")) (EVar "ps")))
 (DTypeSig true "formatProgram" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyFun (TyCon "String") (TyCon "String")))))))))
-(DFunDef false "formatProgram" ((PVar "decls") (PVar "declPositions") (PVar "variantLines") (PVar "commas") (PVar "arms") (PVar "comments") (PVar "src")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "declPositions")) (EApp (EVar "listLen") (EVar "decls"))) (EApp (EVar "panic") (ELit (LString "medaka fmt: internal error — declaration positions do not line up with the declarations; refusing to format"))) (EBlock (DoExpr (EApp (EVar "setTrailingCommas") (EVar "commas"))) (DoExpr (EApp (EVar "setUnitStarts") (EVar "arms"))) (DoLet false false (PVar "st0") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EListLit)) (EVar "comments")) (EVar "variantLines")) (ELit (LInt 0))) (EVar "False")) (ELit (LInt 0)))) (DoExpr (EMatch (EApp (EVar "drainAll") (EApp (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "st0")) (EApp (EVar "splitNl") (EVar "src"))) (EVar "commas")) (EVar "decls")) (EVar "declPositions"))) (arm (PCon "FmtState" (PVar "finalPieces") PWild PWild PWild PWild (PVar "placed")) () (EBlock (DoExpr (EApp (EApp (EVar "checkCommentCount") (EApp (EVar "listLen") (EVar "comments"))) (EVar "placed"))) (DoExpr (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "finalPieces")))))))))))
+(DFunDef false "formatProgram" ((PVar "decls") (PVar "declPositions") (PVar "variantLines") (PVar "commas") (PVar "arms") (PVar "comments") (PVar "src")) (EIf (EBinOp "/=" (EApp (EVar "listLen") (EVar "declPositions")) (EApp (EVar "listLen") (EVar "decls"))) (EApp (EVar "panic") (ELit (LString "medaka fmt: internal error — declaration positions do not line up with the declarations; refusing to format"))) (EBlock (DoExpr (EApp (EVar "setTrailingCommas") (EVar "commas"))) (DoExpr (EApp (EVar "setUnitStarts") (EVar "arms"))) (DoLet false false (PVar "st0") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "FmtState") (EListLit)) (EVar "comments")) (EVar "variantLines")) (ELit (LInt 0))) (EVar "False")) (ELit (LInt 0)))) (DoExpr (EMatch (EApp (EVar "drainAll") (EApp (EApp (EApp (EApp (EApp (EVar "walkDecls") (EVar "st0")) (EApp (EVar "arrayFromList") (EApp (EVar "splitNl") (EVar "src")))) (EVar "commas")) (EVar "decls")) (EVar "declPositions"))) (arm (PCon "FmtState" (PVar "finalPieces") PWild PWild PWild PWild (PVar "placed")) () (EBlock (DoExpr (EApp (EApp (EVar "checkCommentCount") (EApp (EVar "listLen") (EVar "comments"))) (EVar "placed"))) (DoExpr (EApp (EVar "stringConcat") (EApp (EVar "reverseL") (EVar "finalPieces")))))))))))
 (DTypeSig false "checkCommentCount" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))
 (DFunDef false "checkCommentCount" ((PVar "total") (PVar "placed")) (EIf (EBinOp "/=" (EVar "total") (EVar "placed")) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka fmt: internal error — ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "total")))) (ELit (LString " comments in, "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "placed")))) (ELit (LString " placed; refusing to write output that would lose a comment")))) (ELit LUnit)))
 (DTypeSig false "drainAll" (TyFun (TyCon "FmtState") (TyCon "FmtState")))
