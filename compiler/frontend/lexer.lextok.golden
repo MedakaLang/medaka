@@ -8131,13 +8131,90 @@ UPPER "List"
 UPPER "RawTok"
 NEWLINE
 IDENT "dedentTripleInterp"
+IDENT "toks"
+INDENT
+PIPE
+IDENT "hasTripleInterpOpen"
+IDENT "toks"
+EQUAL
+IDENT "dedentTripleGo"
+IDENT "toks"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "toks"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "hasTripleInterpOpen"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "hasTripleInterpOpen"
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "False"
+NEWLINE
+IDENT "hasTripleInterpOpen"
+LPAREN
+LPAREN
+UPPER "RTok"
+LPAREN
+UPPER "TInterpOpen"
+IDENT "s"
+RPAREN
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+INDENT
+PIPE
+IDENT "hasTripleInterpMark"
+IDENT "s"
+EQUAL
+UPPER "True"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "hasTripleInterpOpen"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "hasTripleInterpOpen"
+LPAREN
+UNDERSCORE
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+IDENT "hasTripleInterpOpen"
+IDENT "rest"
+NEWLINE
+IDENT "dedentTripleGo"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+UPPER "List"
+UPPER "RawTok"
+NEWLINE
+IDENT "dedentTripleGo"
 LBRACKET
 RBRACKET
 EQUAL
 LBRACKET
 RBRACKET
 NEWLINE
-IDENT "dedentTripleInterp"
+IDENT "dedentTripleGo"
 LPAREN
 LPAREN
 UPPER "RTok"
@@ -8187,7 +8264,7 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
-IDENT "dedentTripleInterp"
+IDENT "dedentTripleGo"
 LPAREN
 IDENT "t"
 CONS
@@ -8196,7 +8273,7 @@ RPAREN
 EQUAL
 IDENT "t"
 CONS
-IDENT "dedentTripleInterp"
+IDENT "dedentTripleGo"
 IDENT "rest"
 NEWLINE
 IDENT "dedentTripleGroup"
@@ -8278,7 +8355,7 @@ IDENT "substituteOwn"
 IDENT "restVals"
 IDENT "midToks"
 PLUSPLUS
-IDENT "dedentTripleInterp"
+IDENT "dedentTripleGo"
 IDENT "afterEnd"
 NEWLINE
 DEDENT
@@ -8286,7 +8363,6 @@ NEWLINE
 LBRACKET
 RBRACKET
 FAT_ARROW
-INDENT
 UPPER "RTok"
 LPAREN
 UPPER "TInterpOpen"
@@ -8297,10 +8373,8 @@ IDENT "eo"
 CONS
 IDENT "midToks"
 PLUSPLUS
-IDENT "dedentTripleInterp"
+IDENT "dedentTripleGo"
 IDENT "afterEnd"
-NEWLINE
-DEDENT
 NEWLINE
 DEDENT
 NEWLINE
@@ -8320,7 +8394,7 @@ IDENT "eo"
 CONS
 IDENT "midToks"
 PLUSPLUS
-IDENT "dedentTripleInterp"
+IDENT "dedentTripleGo"
 IDENT "afterEnd"
 NEWLINE
 DEDENT

@@ -1,5 +1,5 @@
 # META
-source_lines=2816
+source_lines=2829
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -1411,14 +1411,28 @@ substituteOwn [] (t :: rest) = t :: substituteOwn [] rest
 
 -- Top-level pass: rewrite every triple-quoted interpolation group's segments
 -- to their jointly-dedented values; every other token passes through as-is.
+-- A stream with no triple-quoted interpolation is returned unchanged without
+-- being rebuilt (the scan is non-allocating).
 dedentTripleInterp : List RawTok -> List RawTok
-dedentTripleInterp [] = []
-dedentTripleInterp ((RTok (TInterpOpen s) so eo) :: rest)
+dedentTripleInterp toks
+  | hasTripleInterpOpen toks = dedentTripleGo toks
+  | otherwise = toks
+
+hasTripleInterpOpen : List RawTok -> Bool
+hasTripleInterpOpen [] = False
+hasTripleInterpOpen ((RTok (TInterpOpen s) _ _) :: rest)
+  | hasTripleInterpMark s = True
+  | otherwise = hasTripleInterpOpen rest
+hasTripleInterpOpen (_ :: rest) = hasTripleInterpOpen rest
+
+dedentTripleGo : List RawTok -> List RawTok
+dedentTripleGo [] = []
+dedentTripleGo ((RTok (TInterpOpen s) so eo) :: rest)
   | hasTripleInterpMark s =
     let sReal = dropTripleInterpMark s
     let (rawSegs, midToks, afterEnd) = splitInterpGroup rest
     dedentTripleGroup sReal so eo rawSegs midToks afterEnd
-dedentTripleInterp (t :: rest) = t :: dedentTripleInterp rest
+dedentTripleGo (t :: rest) = t :: dedentTripleGo rest
 
 dedentTripleGroup : String ->
   Int ->
@@ -1434,11 +1448,10 @@ dedentTripleGroup sReal so eo rawSegs midToks afterEnd
     match dedentGroupSegs minInd allRaw
       openStr' :: restVals =>
         RTok (TInterpOpen openStr') so eo
-          :: substituteOwn restVals midToks ++ dedentTripleInterp afterEnd
-      [] =>
-        RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleInterp afterEnd
+          :: substituteOwn restVals midToks ++ dedentTripleGo afterEnd
+      [] => RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleGo afterEnd
   | otherwise =
-    RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleInterp afterEnd
+    RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleGo afterEnd
 
 concatAll : List String -> String
 concatAll [] = ""
@@ -3262,11 +3275,17 @@ collectComments s =
 (DFunDef false "substituteOwn" ((PVar "vals") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "substituteOwn") (EVar "vals")) (EVar "rest"))))
 (DFunDef false "substituteOwn" ((PList) (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "substituteOwn") (EListLit)) (EVar "rest"))))
 (DTypeSig false "dedentTripleInterp" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok"))))
-(DFunDef false "dedentTripleInterp" ((PList)) (EListLit))
-(DFunDef false "dedentTripleInterp" ((PCons (PCon "RTok" (PCon "TInterpOpen" (PVar "s")) (PVar "so") (PVar "eo")) (PVar "rest"))) (EIf (EApp (EVar "hasTripleInterpMark") (EVar "s")) (EBlock (DoLet false false (PVar "sReal") (EApp (EVar "dropTripleInterpMark") (EVar "s"))) (DoLet false false (PTuple (PVar "rawSegs") (PVar "midToks") (PVar "afterEnd")) (EApp (EVar "splitInterpGroup") (EVar "rest"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dedentTripleGroup") (EVar "sReal")) (EVar "so")) (EVar "eo")) (EVar "rawSegs")) (EVar "midToks")) (EVar "afterEnd")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "dedentTripleInterp" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "dedentTripleInterp") (EVar "rest"))))
+(DFunDef false "dedentTripleInterp" ((PVar "toks")) (EIf (EApp (EVar "hasTripleInterpOpen") (EVar "toks")) (EApp (EVar "dedentTripleGo") (EVar "toks")) (EIf (EVar "otherwise") (EVar "toks") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "hasTripleInterpOpen" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyCon "Bool")))
+(DFunDef false "hasTripleInterpOpen" ((PList)) (EVar "False"))
+(DFunDef false "hasTripleInterpOpen" ((PCons (PCon "RTok" (PCon "TInterpOpen" (PVar "s")) PWild PWild) (PVar "rest"))) (EIf (EApp (EVar "hasTripleInterpMark") (EVar "s")) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "hasTripleInterpOpen") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "hasTripleInterpOpen" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasTripleInterpOpen") (EVar "rest")))
+(DTypeSig false "dedentTripleGo" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok"))))
+(DFunDef false "dedentTripleGo" ((PList)) (EListLit))
+(DFunDef false "dedentTripleGo" ((PCons (PCon "RTok" (PCon "TInterpOpen" (PVar "s")) (PVar "so") (PVar "eo")) (PVar "rest"))) (EIf (EApp (EVar "hasTripleInterpMark") (EVar "s")) (EBlock (DoLet false false (PVar "sReal") (EApp (EVar "dropTripleInterpMark") (EVar "s"))) (DoLet false false (PTuple (PVar "rawSegs") (PVar "midToks") (PVar "afterEnd")) (EApp (EVar "splitInterpGroup") (EVar "rest"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dedentTripleGroup") (EVar "sReal")) (EVar "so")) (EVar "eo")) (EVar "rawSegs")) (EVar "midToks")) (EVar "afterEnd")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "dedentTripleGo" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "dedentTripleGo") (EVar "rest"))))
 (DTypeSig false "dedentTripleGroup" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok")))))))))
-(DFunDef false "dedentTripleGroup" ((PVar "sReal") (PVar "so") (PVar "eo") (PVar "rawSegs") (PVar "midToks") (PVar "afterEnd")) (EIf (EApp (EVar "startsWithNl") (EVar "sReal")) (EBlock (DoLet false false (PVar "allRaw") (EBinOp "::" (EVar "sReal") (EVar "rawSegs"))) (DoLet false false (PVar "minInd") (EApp (EVar "computeMinIndent") (EApp (EVar "concatAll") (EVar "allRaw")))) (DoExpr (EMatch (EApp (EApp (EVar "dedentGroupSegs") (EVar "minInd")) (EVar "allRaw")) (arm (PCons (PVar "openStr'") (PVar "restVals")) () (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "openStr'"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EApp (EApp (EVar "substituteOwn") (EVar "restVals")) (EVar "midToks")) (EApp (EVar "dedentTripleInterp") (EVar "afterEnd"))))) (arm (PList) () (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "sReal"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EVar "midToks") (EApp (EVar "dedentTripleInterp") (EVar "afterEnd")))))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "sReal"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EVar "midToks") (EApp (EVar "dedentTripleInterp") (EVar "afterEnd")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedentTripleGroup" ((PVar "sReal") (PVar "so") (PVar "eo") (PVar "rawSegs") (PVar "midToks") (PVar "afterEnd")) (EIf (EApp (EVar "startsWithNl") (EVar "sReal")) (EBlock (DoLet false false (PVar "allRaw") (EBinOp "::" (EVar "sReal") (EVar "rawSegs"))) (DoLet false false (PVar "minInd") (EApp (EVar "computeMinIndent") (EApp (EVar "concatAll") (EVar "allRaw")))) (DoExpr (EMatch (EApp (EApp (EVar "dedentGroupSegs") (EVar "minInd")) (EVar "allRaw")) (arm (PCons (PVar "openStr'") (PVar "restVals")) () (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "openStr'"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EApp (EApp (EVar "substituteOwn") (EVar "restVals")) (EVar "midToks")) (EApp (EVar "dedentTripleGo") (EVar "afterEnd"))))) (arm (PList) () (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "sReal"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EVar "midToks") (EApp (EVar "dedentTripleGo") (EVar "afterEnd")))))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "sReal"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EVar "midToks") (EApp (EVar "dedentTripleGo") (EVar "afterEnd")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "concatAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "concatAll" ((PList)) (ELit (LString "")))
 (DFunDef false "concatAll" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EVar "x") (EApp (EVar "concatAll") (EVar "xs"))))
@@ -4044,11 +4063,17 @@ collectComments s =
 (DFunDef false "substituteOwn" ((PVar "vals") (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "substituteOwn") (EVar "vals")) (EVar "rest"))))
 (DFunDef false "substituteOwn" ((PList) (PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EApp (EVar "substituteOwn") (EListLit)) (EVar "rest"))))
 (DTypeSig false "dedentTripleInterp" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok"))))
-(DFunDef false "dedentTripleInterp" ((PList)) (EListLit))
-(DFunDef false "dedentTripleInterp" ((PCons (PCon "RTok" (PCon "TInterpOpen" (PVar "s")) (PVar "so") (PVar "eo")) (PVar "rest"))) (EIf (EApp (EVar "hasTripleInterpMark") (EVar "s")) (EBlock (DoLet false false (PVar "sReal") (EApp (EVar "dropTripleInterpMark") (EVar "s"))) (DoLet false false (PTuple (PVar "rawSegs") (PVar "midToks") (PVar "afterEnd")) (EApp (EVar "splitInterpGroup") (EVar "rest"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dedentTripleGroup") (EVar "sReal")) (EVar "so")) (EVar "eo")) (EVar "rawSegs")) (EVar "midToks")) (EVar "afterEnd")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
-(DFunDef false "dedentTripleInterp" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "dedentTripleInterp") (EVar "rest"))))
+(DFunDef false "dedentTripleInterp" ((PVar "toks")) (EIf (EApp (EVar "hasTripleInterpOpen") (EVar "toks")) (EApp (EVar "dedentTripleGo") (EVar "toks")) (EIf (EVar "otherwise") (EVar "toks") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "hasTripleInterpOpen" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyCon "Bool")))
+(DFunDef false "hasTripleInterpOpen" ((PList)) (EVar "False"))
+(DFunDef false "hasTripleInterpOpen" ((PCons (PCon "RTok" (PCon "TInterpOpen" (PVar "s")) PWild PWild) (PVar "rest"))) (EIf (EApp (EVar "hasTripleInterpMark") (EVar "s")) (EVar "True") (EIf (EVar "otherwise") (EApp (EVar "hasTripleInterpOpen") (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "hasTripleInterpOpen" ((PCons PWild (PVar "rest"))) (EApp (EVar "hasTripleInterpOpen") (EVar "rest")))
+(DTypeSig false "dedentTripleGo" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok"))))
+(DFunDef false "dedentTripleGo" ((PList)) (EListLit))
+(DFunDef false "dedentTripleGo" ((PCons (PCon "RTok" (PCon "TInterpOpen" (PVar "s")) (PVar "so") (PVar "eo")) (PVar "rest"))) (EIf (EApp (EVar "hasTripleInterpMark") (EVar "s")) (EBlock (DoLet false false (PVar "sReal") (EApp (EVar "dropTripleInterpMark") (EVar "s"))) (DoLet false false (PTuple (PVar "rawSegs") (PVar "midToks") (PVar "afterEnd")) (EApp (EVar "splitInterpGroup") (EVar "rest"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dedentTripleGroup") (EVar "sReal")) (EVar "so")) (EVar "eo")) (EVar "rawSegs")) (EVar "midToks")) (EVar "afterEnd")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "dedentTripleGo" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "dedentTripleGo") (EVar "rest"))))
 (DTypeSig false "dedentTripleGroup" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok")))))))))
-(DFunDef false "dedentTripleGroup" ((PVar "sReal") (PVar "so") (PVar "eo") (PVar "rawSegs") (PVar "midToks") (PVar "afterEnd")) (EIf (EApp (EVar "startsWithNl") (EVar "sReal")) (EBlock (DoLet false false (PVar "allRaw") (EBinOp "::" (EVar "sReal") (EVar "rawSegs"))) (DoLet false false (PVar "minInd") (EApp (EVar "computeMinIndent") (EApp (EVar "concatAll") (EVar "allRaw")))) (DoExpr (EMatch (EApp (EApp (EVar "dedentGroupSegs") (EVar "minInd")) (EVar "allRaw")) (arm (PCons (PVar "openStr'") (PVar "restVals")) () (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "openStr'"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EApp (EApp (EVar "substituteOwn") (EVar "restVals")) (EVar "midToks")) (EApp (EVar "dedentTripleInterp") (EVar "afterEnd"))))) (arm (PList) () (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "sReal"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EVar "midToks") (EApp (EVar "dedentTripleInterp") (EVar "afterEnd")))))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "sReal"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EVar "midToks") (EApp (EVar "dedentTripleInterp") (EVar "afterEnd")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dedentTripleGroup" ((PVar "sReal") (PVar "so") (PVar "eo") (PVar "rawSegs") (PVar "midToks") (PVar "afterEnd")) (EIf (EApp (EVar "startsWithNl") (EVar "sReal")) (EBlock (DoLet false false (PVar "allRaw") (EBinOp "::" (EVar "sReal") (EVar "rawSegs"))) (DoLet false false (PVar "minInd") (EApp (EVar "computeMinIndent") (EApp (EVar "concatAll") (EVar "allRaw")))) (DoExpr (EMatch (EApp (EApp (EVar "dedentGroupSegs") (EVar "minInd")) (EVar "allRaw")) (arm (PCons (PVar "openStr'") (PVar "restVals")) () (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "openStr'"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EApp (EApp (EVar "substituteOwn") (EVar "restVals")) (EVar "midToks")) (EApp (EVar "dedentTripleGo") (EVar "afterEnd"))))) (arm (PList) () (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "sReal"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EVar "midToks") (EApp (EVar "dedentTripleGo") (EVar "afterEnd")))))))) (EIf (EVar "otherwise") (EBinOp "::" (EApp (EApp (EApp (EVar "RTok") (EApp (EVar "TInterpOpen") (EVar "sReal"))) (EVar "so")) (EVar "eo")) (EBinOp "++" (EVar "midToks") (EApp (EVar "dedentTripleGo") (EVar "afterEnd")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "concatAll" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "concatAll" ((PList)) (ELit (LString "")))
 (DFunDef false "concatAll" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EVar "x") (EApp (EVar "concatAll") (EVar "xs"))))

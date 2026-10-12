@@ -1407,14 +1407,28 @@ substituteOwn [] (t :: rest) = t :: substituteOwn [] rest
 
 -- Top-level pass: rewrite every triple-quoted interpolation group's segments
 -- to their jointly-dedented values; every other token passes through as-is.
+-- A stream with no triple-quoted interpolation is returned unchanged without
+-- being rebuilt (the scan is non-allocating).
 dedentTripleInterp : List RawTok -> List RawTok
-dedentTripleInterp [] = []
-dedentTripleInterp ((RTok (TInterpOpen s) so eo) :: rest)
+dedentTripleInterp toks
+  | hasTripleInterpOpen toks = dedentTripleGo toks
+  | otherwise = toks
+
+hasTripleInterpOpen : List RawTok -> Bool
+hasTripleInterpOpen [] = False
+hasTripleInterpOpen ((RTok (TInterpOpen s) _ _) :: rest)
+  | hasTripleInterpMark s = True
+  | otherwise = hasTripleInterpOpen rest
+hasTripleInterpOpen (_ :: rest) = hasTripleInterpOpen rest
+
+dedentTripleGo : List RawTok -> List RawTok
+dedentTripleGo [] = []
+dedentTripleGo ((RTok (TInterpOpen s) so eo) :: rest)
   | hasTripleInterpMark s =
     let sReal = dropTripleInterpMark s
     let (rawSegs, midToks, afterEnd) = splitInterpGroup rest
     dedentTripleGroup sReal so eo rawSegs midToks afterEnd
-dedentTripleInterp (t :: rest) = t :: dedentTripleInterp rest
+dedentTripleGo (t :: rest) = t :: dedentTripleGo rest
 
 dedentTripleGroup : String ->
   Int ->
@@ -1430,11 +1444,10 @@ dedentTripleGroup sReal so eo rawSegs midToks afterEnd
     match dedentGroupSegs minInd allRaw
       openStr' :: restVals =>
         RTok (TInterpOpen openStr') so eo
-          :: substituteOwn restVals midToks ++ dedentTripleInterp afterEnd
-      [] =>
-        RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleInterp afterEnd
+          :: substituteOwn restVals midToks ++ dedentTripleGo afterEnd
+      [] => RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleGo afterEnd
   | otherwise =
-    RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleInterp afterEnd
+    RTok (TInterpOpen sReal) so eo :: midToks ++ dedentTripleGo afterEnd
 
 concatAll : List String -> String
 concatAll [] = ""
