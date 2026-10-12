@@ -216,7 +216,6 @@ build_one lambda_value_capture &&
 # NOESCAPE ALLOC ATTRIBUTES (#3368 match-get Some, #2729 match-tuple, #3369
 # tuple-carried loop state): the preamble declares mdk_alloc with noalias/
 # allockind, which lets -O2 delete cells whose fields were already forwarded.
-# Before: 320 MB / 192 MB / 480 MB; after: tens of bytes.
 build_one getsome && check_probe getsome getsome 30000000
 build_one tupleloop && check_probe tupleloop tupleloop 1000059
 build_one matchtuple && check_probe matchtuple matchtuple 2000000

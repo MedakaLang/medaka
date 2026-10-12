@@ -186,7 +186,7 @@ test/alloc_census               report-only allocation census (#4027, #2357, #50
                                 nothing — no gate/gates.toml involvement by design.
                                 See the script header.
 
-test/alloc_census/compare    helper of test/alloc_census.sh: compares the plain and
+test/alloc_census/compare       helper of test/alloc_census.sh: compares the plain and
                                 instrumented `check` stdout and labels the census run
                                 VALID or INVALID. Never run on its own by CI.
 

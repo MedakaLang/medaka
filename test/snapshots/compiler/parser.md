@@ -1,5 +1,5 @@
 # META
-source_lines=6581
+source_lines=6590
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -13,8 +13,9 @@ stages=DESUGAR,MARK
 -- The combinators are not free: each `defer` step allocates a continuation
 -- closure and a `ParserE` cell, and each `PR` result is a fresh cell.  The
 -- binary-operator ladder, which every expression operand descends, is written
--- over the raw `ParserE` representation instead (`binLevel`): as `chainl1`
--- combinators it was 30% of the parser's allocations.
+-- over the raw `ParserE` representation instead (`binLevel`): every expression
+-- operand descends all nine levels, so the per-level closure and result cells
+-- of combinator style would dominate the parser's allocation.
 --
 -- COVERAGE: the arithmetic+boolean+comparison+cons+append operator ladder, `=>`
 -- lambdas, single-line `if`/`let … in`, `match` with indented arms, postfix
@@ -681,7 +682,15 @@ binOpName TStar = "*"
 binOpName TSlash = "/"
 binOpName TMod = "%"
 binOpName TPlus = "+"
-binOpName _ = "-"
+binOpName TMinus = "-"
+binOpName TMinusTight = "-"
+binOpName _ = panic "binOpName: not a binary operator"
+
+pipeLevel : Int
+pipeLevel = 1
+
+orLevel : Int
+orLevel = 3
 
 consLevel : Int
 consLevel = 6
@@ -690,10 +699,10 @@ mulLevel : Int
 mulLevel = 9
 
 parsePipe : Parser Expr
-parsePipe = ParserE (binLevel 1)
+parsePipe = ParserE (binLevel pipeLevel)
 
 parseOr : Parser Expr
-parseOr = ParserE (binLevel 3)
+parseOr = ParserE (binLevel orLevel)
 
 -- One level of the ladder, over the raw `ParserE` representation rather than
 -- `defer`-notation: an operand that no operator of this level follows passes
@@ -851,8 +860,8 @@ parseApp = defer
 -- One application argument.  Normally an aspat, but a TIGHT negative literal
 -- (`f -1` / `f -1.5`, lexed as TMinusTight INT/FLOAT) is grabbed as a
 -- negative-numeric argument when the application HEAD is non-numeric.  A numeric
--- head (`5 -1`) never grabs, so the TMinusTight falls through to parseAdd's
--- binary minus and stays subtraction (Rule C, head-gated).
+-- head (`5 -1`) never grabs, so the TMinusTight falls through to the
+-- binary-minus level (`binLevel`) and stays subtraction (Rule C, head-gated).
 appArg : Bool -> Parser Expr
 appArg headNum = orElse (negLitArg headNum) (orElse derefArg parseAspat)
 
@@ -5728,7 +5737,7 @@ parseLocated src = match tokenizeWithOffsetPairs src
 -- ── Structured parse errors (non-panicking entry) ───────────────────────────
 -- The LSP prerequisite (Stage 4 task #24): a parser should yield errors as
 -- DATA, not abort.  The combinator already threads errors as values internally
--- (`PR a = POk | PErr String Int`); only the top boundary (`resultDecls`,
+-- (`PR a = POk | PErr PFail Int | PFatal String Int`); only the top boundary (`resultDecls`,
 -- `parseWithPositions`) panics on `PErr` / leftover tokens.  `parseResult` is a
 -- purely-additive non-panicking entry: it returns the same parse on success and
 -- a located, structured `ParseError` on failure, leaving `parse` byte-identical.
@@ -6825,15 +6834,21 @@ parseResultWith src tokList offList =
 (DFunDef false "binOpName" ((PCon "TSlash")) (ELit (LString "/")))
 (DFunDef false "binOpName" ((PCon "TMod")) (ELit (LString "%")))
 (DFunDef false "binOpName" ((PCon "TPlus")) (ELit (LString "+")))
-(DFunDef false "binOpName" (PWild) (ELit (LString "-")))
+(DFunDef false "binOpName" ((PCon "TMinus")) (ELit (LString "-")))
+(DFunDef false "binOpName" ((PCon "TMinusTight")) (ELit (LString "-")))
+(DFunDef false "binOpName" (PWild) (EApp (EVar "panic") (ELit (LString "binOpName: not a binary operator"))))
+(DTypeSig false "pipeLevel" (TyCon "Int"))
+(DFunDef false "pipeLevel" () (ELit (LInt 1)))
+(DTypeSig false "orLevel" (TyCon "Int"))
+(DFunDef false "orLevel" () (ELit (LInt 3)))
 (DTypeSig false "consLevel" (TyCon "Int"))
 (DFunDef false "consLevel" () (ELit (LInt 6)))
 (DTypeSig false "mulLevel" (TyCon "Int"))
 (DFunDef false "mulLevel" () (ELit (LInt 9)))
 (DTypeSig false "parsePipe" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parsePipe" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (ELit (LInt 1)))))
+(DFunDef false "parsePipe" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (EVar "pipeLevel"))))
 (DTypeSig false "parseOr" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseOr" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (ELit (LInt 3)))))
+(DFunDef false "parseOr" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (EVar "orLevel"))))
 (DTypeSig false "binLevel" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Expr"))))))
 (DFunDef false "binLevel" ((PVar "lvl") (PVar "toks") (PVar "pos")) (EIf (EBinOp ">" (EVar "lvl") (EVar "mulLevel")) (EApp (EApp (EApp (EVar "runP") (EVar "parseUnary")) (EVar "toks")) (EVar "pos")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "binLevelRest") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EApp (EVar "binLevel") (EBinOp "+" (EVar "lvl") (ELit (LInt 1)))) (EVar "toks")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "binLevelRest" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))
@@ -8784,15 +8799,21 @@ parseResultWith src tokList offList =
 (DFunDef false "binOpName" ((PCon "TSlash")) (ELit (LString "/")))
 (DFunDef false "binOpName" ((PCon "TMod")) (ELit (LString "%")))
 (DFunDef false "binOpName" ((PCon "TPlus")) (ELit (LString "+")))
-(DFunDef false "binOpName" (PWild) (ELit (LString "-")))
+(DFunDef false "binOpName" ((PCon "TMinus")) (ELit (LString "-")))
+(DFunDef false "binOpName" ((PCon "TMinusTight")) (ELit (LString "-")))
+(DFunDef false "binOpName" (PWild) (EApp (EVar "panic") (ELit (LString "binOpName: not a binary operator"))))
+(DTypeSig false "pipeLevel" (TyCon "Int"))
+(DFunDef false "pipeLevel" () (ELit (LInt 1)))
+(DTypeSig false "orLevel" (TyCon "Int"))
+(DFunDef false "orLevel" () (ELit (LInt 3)))
 (DTypeSig false "consLevel" (TyCon "Int"))
 (DFunDef false "consLevel" () (ELit (LInt 6)))
 (DTypeSig false "mulLevel" (TyCon "Int"))
 (DFunDef false "mulLevel" () (ELit (LInt 9)))
 (DTypeSig false "parsePipe" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parsePipe" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (ELit (LInt 1)))))
+(DFunDef false "parsePipe" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (EVar "pipeLevel"))))
 (DTypeSig false "parseOr" (TyApp (TyCon "Parser") (TyCon "Expr")))
-(DFunDef false "parseOr" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (ELit (LInt 3)))))
+(DFunDef false "parseOr" () (EApp (EVar "ParserE") (EApp (EVar "binLevel") (EVar "orLevel"))))
 (DTypeSig false "binLevel" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Expr"))))))
 (DFunDef false "binLevel" ((PVar "lvl") (PVar "toks") (PVar "pos")) (EIf (EBinOp ">" (EVar "lvl") (EVar "mulLevel")) (EApp (EApp (EApp (EVar "runP") (EVar "parseUnary")) (EVar "toks")) (EVar "pos")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "binLevelRest") (EVar "lvl")) (EVar "toks")) (EApp (EApp (EApp (EVar "binLevel") (EBinOp "+" (EVar "lvl") (ELit (LInt 1)))) (EVar "toks")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "binLevelRest" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "PR") (TyCon "Expr")) (TyApp (TyCon "PR") (TyCon "Expr"))))))
