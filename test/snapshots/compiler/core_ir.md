@@ -1,5 +1,5 @@
 # META
-source_lines=644
+source_lines=676
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR — STAGE2-DESIGN §2.1.  A serializable, backend-neutral intermediate
@@ -62,6 +62,7 @@ import frontend.ast.{
   Route(..),
   BinderId(..),
   noDeclLoc,
+  noBinderId,
 }
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
 import support.util.{reverseL}
@@ -322,13 +323,17 @@ public export data CStmt =
 -- clauses (multi-clause dispatch + guard fall-through stay structural — the
 -- decision-tree compilation of these into a single match is a later 2.1 step).
 -- The `Loc` is the first clause's site, which a call that no clause or guard
--- accepts reports; a synthesized binding carries `noDeclLoc`.
-public export data CBind = CBind String (List CClause) Loc
+-- accepts reports; a synthesized binding carries `noDeclLoc`.  The `BinderId`
+-- names the function's row in the program's binder table (`DeclFacts`), which
+-- gives the type its body returns: the source function's own id (a coalesced
+-- top-level function's first clause), or one `core_ir_lower` minted for a
+-- binding it made up.
+public export data CBind = CBind String (List CClause) Loc BinderId
 
 -- a binding the compiler makes up, which has no source site.
 export
 synthBind : String -> List CClause -> CBind
-synthBind name clauses = CBind name clauses noDeclLoc
+synthBind name clauses = CBind name clauses noDeclLoc noBinderId
 
 -- The head of a trap-site literal: `CApp (CVar siteSentinelName _)
 -- [CLit (LString file), CLit (LInt line), CLit (LInt col)] _` is the Int a
@@ -416,12 +421,13 @@ public export data CProgram =
 -- `noDeclFacts`.
 --
 -- `factBinders` is the program's binder table: one row per `BinderId` that a
--- binder pattern in the program carries, in ordinal order, as the typechecker
--- published it (`types.runtime_types`) or as lowering minted it for a binder of
--- its own.  A binder pattern is a `PVar`, a `PAs`, or a record-pattern pun.  The
+-- binder pattern or a `CBind` in the program carries, in ordinal order, as the
+-- typechecker published it (`types.runtime_types`) or as lowering minted it for a
+-- binder of its own.  A binder pattern is a `PVar`, a `PAs`, or a record-pattern
+-- pun; a `CBind`'s row also gives the type its body returns (`brReturns`).  The
 -- table is a snapshot, so the program is self-contained: a consumer never reads
 -- the typechecker's installed table.  `core_validate.validateBinderStamps` refuses
--- a binder with no row.
+-- a binder with no row and a function with no return type.
 public export data DeclFacts = DeclFacts {
   factRequires : List (String, Int),
   factSupers : List (String, Int),
@@ -433,15 +439,28 @@ noDeclFacts : DeclFacts
 noDeclFacts = DeclFacts { factRequires = [], factSupers = [], factBinders = [] }
 
 -- ── binder walk ──────────────────────────────────────────────────────────────
--- One traversal of every binder pattern in a program, in a fixed order, with the
--- id each is given by [visit].  It serves lowering (which mints and snapshots),
--- the s-expression printer (which lists the ids in walk order) and the parser
--- (which hands them back in the same order), so the three cannot disagree about
--- which occurrence is which.
+-- One traversal of every binder in a program, in a fixed order, with the id each
+-- is given by [visit]: first every binder pattern, then every named function
+-- (`CBind`), each in program order.  It serves lowering (which mints and
+-- snapshots), the s-expression printer (which lists the ids in walk order) and
+-- the parser (which hands them back in the same order), so the three cannot
+-- disagree about which occurrence is which.
 --
--- [visit] gets the expression a `let` binds the binder to (`None` for a parameter,
--- an arm pattern or anything nested in a pattern), the binder's name and its id.
-export type BinderVisit = Option CExpr -> String -> BinderId -> BinderId
+-- [visit] gets what kind of binder it is, the binder's name and its id.
+export type BinderVisit = BinderSite -> String -> BinderId -> BinderId
+
+-- A binder pattern carries the expression a `let` binds it to (`None` for a
+-- parameter, an arm pattern or anything nested in a pattern); a function carries
+-- its clauses.  These are two kinds of binder, not a success and a failure, so
+-- `Result` cannot stand in for it.
+-- lint-disable-next-line rule-clone-type
+public export data BinderSite =
+  | PatternBinder (Option CExpr)
+  | FunctionBinder (List CClause)
+
+-- Which binders one walk visits.  The function pass rebuilds the same tree but
+-- leaves every pattern as it is.
+data BinderPass = PatternPass | FunctionPass
 
 -- The runtime type a bound expression states for itself, if it does.  An integer
 -- literal does not: it is written the same at every numeric type.
@@ -466,14 +485,21 @@ litRuntimeType (LI64 _ _) = RTI64
 
 export
 mapProgramBinders : BinderVisit -> CProgram -> CProgram
-mapProgramBinders f (CProgram binds ctorArs ctorTypes impls mctx facts) =
+mapProgramBinders f prog =
+  mapProgramPass FunctionPass f (mapProgramPass PatternPass f prog)
+
+mapProgramPass : BinderPass -> BinderVisit -> CProgram -> CProgram
+mapProgramPass pass f (CProgram binds ctorArs ctorTypes impls mctx facts) =
+  let w = BinderWalk pass f
   CProgram
-    (map (mapBindBinders f) binds)
+    (map (mapBindBinders w) binds)
     ctorArs
     ctorTypes
-    (map (mapEntryBinders f) impls)
+    (map (mapEntryBinders w) impls)
     mctx
     facts
+
+data BinderWalk = BinderWalk BinderPass BinderVisit
 
 -- [prog] with [rows] as its binder table.
 export
@@ -503,7 +529,7 @@ programBinderIds prog =
       prog
   reverseL !seen
 
-mapEntryBinders : BinderVisit -> CImplEntry -> CImplEntry
+mapEntryBinders : BinderWalk -> CImplEntry -> CImplEntry
 mapEntryBinders f (CImplEntry m s d (CImplTagged tag key iface sym pos pats body)) =
   let pats2 = map (mapPatBinders f None) pats
   CImplEntry
@@ -519,17 +545,23 @@ mapEntryBinders f (CImplEntry m s d (CImplDefault w tag key sym pos pats body)) 
     d
     (CImplDefault w tag key sym pos pats2 (mapExprBinders f body))
 
-mapBindBinders : BinderVisit -> CBind -> CBind
-mapBindBinders f (CBind name clauses site) =
-  CBind name (map (mapClauseBinders f) clauses) site
+mapBindBinders : BinderWalk -> CBind -> CBind
+mapBindBinders w (CBind name clauses site bid) =
+  let clauses2 = map (mapClauseBinders w) clauses
+  let bid2 = match w
+    BinderWalk FunctionPass f => f (FunctionBinder clauses2) name bid
+    BinderWalk PatternPass _ => bid
+  CBind name clauses2 site bid2
 
-mapClauseBinders : BinderVisit -> CClause -> CClause
+mapClauseBinders : BinderWalk -> CClause -> CClause
 mapClauseBinders f (CClause pats body) =
   let pats2 = map (mapPatBinders f None) pats
   CClause pats2 (mapExprBinders f body)
 
-mapPatBinders : BinderVisit -> Option CExpr -> Pat -> Pat
-mapPatBinders f hint (PVar x l bid) = PVar x l (f hint x bid)
+mapPatBinders : BinderWalk -> Option CExpr -> Pat -> Pat
+mapPatBinders (BinderWalk FunctionPass _) _ p = p
+mapPatBinders (BinderWalk PatternPass f) hint (PVar x l bid) =
+  PVar x l (f (PatternBinder hint) x bid)
 mapPatBinders _ _ PWild = PWild
 mapPatBinders _ _ (PLit l) = PLit l
 mapPatBinders f _ (PCon c ps) = PCon c (map (mapPatBinders f None) ps)
@@ -538,20 +570,20 @@ mapPatBinders f _ (PCons a b) =
   PCons a2 (mapPatBinders f None b)
 mapPatBinders f _ (PTuple ps) = PTuple (map (mapPatBinders f None) ps)
 mapPatBinders f _ (PList ps) = PList (map (mapPatBinders f None) ps)
-mapPatBinders f _ (PAs x l bid p) =
-  let bid2 = f None x bid
-  PAs x l bid2 (mapPatBinders f None p)
+mapPatBinders (w@(BinderWalk _ f)) _ (PAs x l bid p) =
+  let bid2 = f (PatternBinder None) x bid
+  PAs x l bid2 (mapPatBinders w None p)
 mapPatBinders _ _ (PRng lo hi incl) = PRng lo hi incl
 mapPatBinders f _ (PRec name fields rest) =
   PRec name (map (mapRecFieldBinders f) fields) rest
 
-mapRecFieldBinders : BinderVisit -> RecPatField -> RecPatField
-mapRecFieldBinders f (RecPatField n l bid None) =
-  RecPatField n l (f None n bid) None
+mapRecFieldBinders : BinderWalk -> RecPatField -> RecPatField
+mapRecFieldBinders (BinderWalk _ f) (RecPatField n l bid None) =
+  RecPatField n l (f (PatternBinder None) n bid) None
 mapRecFieldBinders f (RecPatField n l bid (Some p)) =
   RecPatField n l bid (Some (mapPatBinders f None p))
 
-mapExprBinders : BinderVisit -> CExpr -> CExpr
+mapExprBinders : BinderWalk -> CExpr -> CExpr
 mapExprBinders _ (CLit l) = CLit l
 mapExprBinders _ (CVar x addr) = CVar x addr
 mapExprBinders f (CApp h args site) =
@@ -625,29 +657,29 @@ mapExprBinders f (CBlock stmts) = CBlock (map (mapStmtBinders f) stmts)
 mapExprBinders _ (CMethod name ev) = CMethod name ev
 mapExprBinders _ (CDict name rs) = CDict name rs
 
-mapFieldBinders : BinderVisit -> CField -> CField
+mapFieldBinders : BinderWalk -> CField -> CField
 mapFieldBinders f (CField k o e) = CField k o (mapExprBinders f e)
 
-mapArmBinders : BinderVisit -> CArm -> CArm
+mapArmBinders : BinderWalk -> CArm -> CArm
 mapArmBinders f (CArm pat guards body) =
   let pat2 = mapPatBinders f None pat
   let guards2 = map (mapGuardBinders f) guards
   CArm pat2 guards2 (mapExprBinders f body)
 
-mapGuardBinders : BinderVisit -> CGuard -> CGuard
+mapGuardBinders : BinderWalk -> CGuard -> CGuard
 mapGuardBinders f (CGBool c) = CGBool (mapExprBinders f c)
 mapGuardBinders f (CGBind pat e) =
   let pat2 = mapPatBinders f None pat
   CGBind pat2 (mapExprBinders f e)
 
-mapStmtBinders : BinderVisit -> CStmt -> CStmt
+mapStmtBinders : BinderWalk -> CStmt -> CStmt
 mapStmtBinders f (CSExpr e) = CSExpr (mapExprBinders f e)
 mapStmtBinders f (CSLet recF pat e) =
   let pat2 = mapPatBinders f (Some e) pat
   CSLet recF pat2 (mapExprBinders f e)
 mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" false) (mem "Route" true) (mem "BinderId" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" false) (mem "Route" true) (mem "BinderId" true) (mem "noDeclLoc" false) (mem "noBinderId" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
@@ -690,9 +722,9 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DData Public "CTBranch" () ((variant "CTBranch" (ConPos (TyCon "CHead") (TyCon "CTree")))) ())
 (DData Public "CHead" () ((variant "HCon" (ConPos (TyCon "String") (TyCon "Int"))) (variant "HTuple" (ConPos (TyCon "Int"))) (variant "HCons" (ConPos)) (variant "HNil" (ConPos)) (variant "HUnit" (ConPos)) (variant "HLit" (ConPos (TyCon "Lit")))) ())
 (DData Public "CStmt" () ((variant "CSExpr" (ConPos (TyCon "CExpr"))) (variant "CSLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr"))) (variant "CSAssign" (ConPos (TyCon "String") (TyCon "CExpr")))) ())
-(DData Public "CBind" () ((variant "CBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Loc")))) ())
+(DData Public "CBind" () ((variant "CBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Loc") (TyCon "BinderId")))) ())
 (DTypeSig true "synthBind" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "CBind"))))
-(DFunDef false "synthBind" ((PVar "name") (PVar "clauses")) (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "noDeclLoc")))
+(DFunDef false "synthBind" ((PVar "name") (PVar "clauses")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "noDeclLoc")) (EVar "noBinderId")))
 (DTypeSig true "siteSentinelName" (TyCon "String"))
 (DFunDef false "siteSentinelName" () (ELit (LString "__site__")))
 (DData Public "CClause" () ((variant "CClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
@@ -705,7 +737,9 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow")))))) ())
 (DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
 (DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)))))
-(DTypeAlias true "BinderVisit" () (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))
+(DTypeAlias true "BinderVisit" () (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))
+(DData Public "BinderSite" () ((variant "PatternBinder" (ConPos (TyApp (TyCon "Option") (TyCon "CExpr")))) (variant "FunctionBinder" (ConPos (TyApp (TyCon "List") (TyCon "CClause"))))) ())
+(DData Private "BinderPass" () ((variant "PatternPass" (ConPos)) (variant "FunctionPass" (ConPos))) ())
 (DTypeSig true "obviousRuntimeType" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "RuntimeType"))))
 (DFunDef false "obviousRuntimeType" ((PCon "CLit" (PCon "LInt" PWild))) (EVar "None"))
 (DFunDef false "obviousRuntimeType" ((PCon "CLit" (PVar "l"))) (EApp (EVar "Some") (EApp (EVar "litRuntimeType") (EVar "l"))))
@@ -722,33 +756,37 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "litRuntimeType" ((PCon "LU64" PWild PWild)) (EVar "RTU64"))
 (DFunDef false "litRuntimeType" ((PCon "LI64" PWild PWild)) (EVar "RTI64"))
 (DTypeSig true "mapProgramBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
-(DFunDef false "mapProgramBinders" ((PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EVar "mapBindBinders") (EVar "f"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EApp (EVar "mapEntryBinders") (EVar "f"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))
+(DFunDef false "mapProgramBinders" ((PVar "f") (PVar "prog")) (EApp (EApp (EApp (EVar "mapProgramPass") (EVar "FunctionPass")) (EVar "f")) (EApp (EApp (EApp (EVar "mapProgramPass") (EVar "PatternPass")) (EVar "f")) (EVar "prog"))))
+(DTypeSig false "mapProgramPass" (TyFun (TyCon "BinderPass") (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
+(DFunDef false "mapProgramPass" ((PVar "pass") (PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "BinderWalk") (EVar "pass")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "map") (EApp (EVar "mapBindBinders") (EVar "w"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "map") (EApp (EVar "mapEntryBinders") (EVar "w"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
+(DData Private "BinderWalk" () ((variant "BinderWalk" (ConPos (TyCon "BinderPass") (TyCon "BinderVisit")))) ())
 (DTypeSig true "withBinderRows" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows"))))))
 (DTypeSig true "programBinderIds" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "BinderId"))))
 (DFunDef false "programBinderIds" ((PVar "prog")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "mapProgramBinders") (ELam (PWild PWild (PVar "bid")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "seen")) (EBinOp "::" (EVar "bid") (EUnOp "!" (EVar "seen"))))) (DoExpr (EVar "bid"))))) (EVar "prog"))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EVar "seen"))))))
-(DTypeSig false "mapEntryBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
+(DTypeSig false "mapEntryBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
 (DFunDef false "mapEntryBinders" ((PVar "f") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EBlock (DoLet false false (PVar "pats2") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "pats"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "pos")) (EVar "pats2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "body")))))))
 (DFunDef false "mapEntryBinders" ((PVar "f") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "w") (PVar "tag") (PVar "key") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EBlock (DoLet false false (PVar "pats2") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "pats"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "w")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "pos")) (EVar "pats2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "body")))))))
-(DTypeSig false "mapBindBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CBind") (TyCon "CBind"))))
-(DFunDef false "mapBindBinders" ((PVar "f") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "mapClauseBinders") (EVar "f"))) (EVar "clauses"))) (EVar "site")))
-(DTypeSig false "mapClauseBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CClause") (TyCon "CClause"))))
+(DTypeSig false "mapBindBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CBind") (TyCon "CBind"))))
+(DFunDef false "mapBindBinders" ((PVar "w") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid"))) (EBlock (DoLet false false (PVar "clauses2") (EApp (EApp (EVar "map") (EApp (EVar "mapClauseBinders") (EVar "w"))) (EVar "clauses"))) (DoLet false false (PVar "bid2") (EMatch (EVar "w") (arm (PCon "BinderWalk" (PCon "FunctionPass") (PVar "f")) () (EApp (EApp (EApp (EVar "f") (EApp (EVar "FunctionBinder") (EVar "clauses2"))) (EVar "name")) (EVar "bid"))) (arm (PCon "BinderWalk" (PCon "PatternPass") PWild) () (EVar "bid")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses2")) (EVar "site")) (EVar "bid2")))))
+(DTypeSig false "mapClauseBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CClause") (TyCon "CClause"))))
 (DFunDef false "mapClauseBinders" ((PVar "f") (PCon "CClause" (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "pats2") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "pats"))) (DoExpr (EApp (EApp (EVar "CClause") (EVar "pats2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "body"))))))
-(DTypeSig false "mapPatBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "Pat") (TyCon "Pat")))))
-(DFunDef false "mapPatBinders" ((PVar "f") (PVar "hint") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EApp (EApp (EApp (EVar "f") (EVar "hint")) (EVar "x")) (EVar "bid"))))
+(DTypeSig false "mapPatBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "Pat") (TyCon "Pat")))))
+(DFunDef false "mapPatBinders" ((PCon "BinderWalk" (PCon "FunctionPass") PWild) PWild (PVar "p")) (EVar "p"))
+(DFunDef false "mapPatBinders" ((PCon "BinderWalk" (PCon "PatternPass") (PVar "f")) (PVar "hint") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EApp (EApp (EApp (EVar "f") (EApp (EVar "PatternBinder") (EVar "hint"))) (EVar "x")) (EVar "bid"))))
 (DFunDef false "mapPatBinders" (PWild PWild (PCon "PWild")) (EVar "PWild"))
 (DFunDef false "mapPatBinders" (PWild PWild (PCon "PLit" (PVar "l"))) (EApp (EVar "PLit") (EVar "l")))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "ps"))))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PCons" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "PCons") (EVar "a2")) (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "b"))))))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "ps"))))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EVar "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "ps"))))
-(DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PVar "bid2") (EApp (EApp (EApp (EVar "f") (EVar "None")) (EVar "x")) (EVar "bid"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid2")) (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "p"))))))
+(DFunDef false "mapPatBinders" ((PAs "w" (PCon "BinderWalk" PWild (PVar "f"))) PWild (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PVar "bid2") (EApp (EApp (EApp (EVar "f") (EApp (EVar "PatternBinder") (EVar "None"))) (EVar "x")) (EVar "bid"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid2")) (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "w")) (EVar "None")) (EVar "p"))))))
 (DFunDef false "mapPatBinders" (PWild PWild (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "PRng") (EVar "lo")) (EVar "hi")) (EVar "incl")))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PRec" (PVar "name") (PVar "fields") (PVar "rest"))) (EApp (EApp (EApp (EVar "PRec") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EVar "mapRecFieldBinders") (EVar "f"))) (EVar "fields"))) (EVar "rest")))
-(DTypeSig false "mapRecFieldBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
-(DFunDef false "mapRecFieldBinders" ((PVar "f") (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EApp (EApp (EApp (EVar "f") (EVar "None")) (EVar "n")) (EVar "bid"))) (EVar "None")))
+(DTypeSig false "mapRecFieldBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
+(DFunDef false "mapRecFieldBinders" ((PCon "BinderWalk" PWild (PVar "f")) (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EApp (EApp (EApp (EVar "f") (EApp (EVar "PatternBinder") (EVar "None"))) (EVar "n")) (EVar "bid"))) (EVar "None")))
 (DFunDef false "mapRecFieldBinders" ((PVar "f") (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "p")))))
-(DTypeSig false "mapExprBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DTypeSig false "mapExprBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "mapExprBinders" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "mapExprBinders" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CApp" (PVar "h") (PVar "args") (PVar "site"))) (EBlock (DoLet false false (PVar "h2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "h"))) (DoExpr (EApp (EApp (EApp (EVar "CApp") (EVar "h2")) (EApp (EApp (EVar "map") (EApp (EVar "mapExprBinders") (EVar "f"))) (EVar "args"))) (EVar "site")))))
@@ -778,19 +816,19 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EVar "map") (EApp (EVar "mapStmtBinders") (EVar "f"))) (EVar "stmts"))))
 (DFunDef false "mapExprBinders" (PWild (PCon "CMethod" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "ev")))
 (DFunDef false "mapExprBinders" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
-(DTypeSig false "mapFieldBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CField") (TyCon "CField"))))
+(DTypeSig false "mapFieldBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CField") (TyCon "CField"))))
 (DFunDef false "mapFieldBinders" ((PVar "f") (PCon "CField" (PVar "k") (PVar "o") (PVar "e"))) (EApp (EApp (EApp (EVar "CField") (EVar "k")) (EVar "o")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))
-(DTypeSig false "mapArmBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CArm") (TyCon "CArm"))))
+(DTypeSig false "mapArmBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CArm") (TyCon "CArm"))))
 (DFunDef false "mapArmBinders" ((PVar "f") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PVar "pat2") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "pat"))) (DoLet false false (PVar "guards2") (EApp (EApp (EVar "map") (EApp (EVar "mapGuardBinders") (EVar "f"))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArm") (EVar "pat2")) (EVar "guards2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "body"))))))
-(DTypeSig false "mapGuardBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
+(DTypeSig false "mapGuardBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
 (DFunDef false "mapGuardBinders" ((PVar "f") (PCon "CGBool" (PVar "c"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "c"))))
 (DFunDef false "mapGuardBinders" ((PVar "f") (PCon "CGBind" (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "pat2") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "pat"))) (DoExpr (EApp (EApp (EVar "CGBind") (EVar "pat2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))))
-(DTypeSig false "mapStmtBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
+(DTypeSig false "mapStmtBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
 (DFunDef false "mapStmtBinders" ((PVar "f") (PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))
 (DFunDef false "mapStmtBinders" ((PVar "f") (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "pat2") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EApp (EVar "Some") (EVar "e"))) (EVar "pat"))) (DoExpr (EApp (EApp (EApp (EVar "CSLet") (EVar "recF")) (EVar "pat2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))))
 (DFunDef false "mapStmtBinders" ((PVar "f") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" false) (mem "Route" true) (mem "BinderId" true) (mem "noDeclLoc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Pat" true) (mem "RecPatField" true) (mem "Addr" false) (mem "Route" true) (mem "BinderId" true) (mem "noDeclLoc" false) (mem "noBinderId" false))))
 (DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "RuntimeType" true))))
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false))))
 (DData Public "CExpr" () ((variant "CLit" (ConPos (TyCon "Lit"))) (variant "CVar" (ConPos (TyCon "String") (TyCon "Addr"))) (variant "CApp" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CExpr")) (TyCon "CallSite"))) (variant "CLam" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr"))) (variant "CLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CLetGroup" (ConPos (TyApp (TyCon "List") (TyCon "CBind")) (TyCon "CExpr"))) (variant "CMatch" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")))) (variant "CDecision" (ConPos (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CArm")) (TyCon "CTree"))) (variant "CIf" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr"))) (variant "CBinPrim" (ConPos (TyCon "String") (TyCon "CExpr") (TyCon "CExpr") (TyCon "String") (TyCon "Loc"))) (variant "CUnOp" (ConPos (TyCon "String") (TyCon "CExpr"))) (variant "CTuple" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CList" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRecord" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CFieldAccess" (ConPos (TyCon "CExpr") (TyCon "String") (TyCon "String") (TyCon "Int"))) (variant "CRecordUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CVariantUpdate" (ConPos (TyCon "String") (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "CField")))) (variant "CArray" (ConPos (TyApp (TyCon "List") (TyCon "CExpr")))) (variant "CRangeList" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CRangeArray" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CStringIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CStringSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CListIndex" (ConPos (TyCon "CExpr") (TyCon "CExpr"))) (variant "CListSlice" (ConPos (TyCon "CExpr") (TyCon "CExpr") (TyCon "CExpr") (TyCon "Bool"))) (variant "CBlock" (ConPos (TyApp (TyCon "List") (TyCon "CStmt")))) (variant "CMethod" (ConPos (TyCon "String") (TyCon "MethodEvidence"))) (variant "CDict" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Route"))))) ())
@@ -833,9 +871,9 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DData Public "CTBranch" () ((variant "CTBranch" (ConPos (TyCon "CHead") (TyCon "CTree")))) ())
 (DData Public "CHead" () ((variant "HCon" (ConPos (TyCon "String") (TyCon "Int"))) (variant "HTuple" (ConPos (TyCon "Int"))) (variant "HCons" (ConPos)) (variant "HNil" (ConPos)) (variant "HUnit" (ConPos)) (variant "HLit" (ConPos (TyCon "Lit")))) ())
 (DData Public "CStmt" () ((variant "CSExpr" (ConPos (TyCon "CExpr"))) (variant "CSLet" (ConPos (TyCon "Bool") (TyCon "Pat") (TyCon "CExpr"))) (variant "CSAssign" (ConPos (TyCon "String") (TyCon "CExpr")))) ())
-(DData Public "CBind" () ((variant "CBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Loc")))) ())
+(DData Public "CBind" () ((variant "CBind" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "Loc") (TyCon "BinderId")))) ())
 (DTypeSig true "synthBind" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyCon "CBind"))))
-(DFunDef false "synthBind" ((PVar "name") (PVar "clauses")) (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "noDeclLoc")))
+(DFunDef false "synthBind" ((PVar "name") (PVar "clauses")) (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses")) (EVar "noDeclLoc")) (EVar "noBinderId")))
 (DTypeSig true "siteSentinelName" (TyCon "String"))
 (DFunDef false "siteSentinelName" () (ELit (LString "__site__")))
 (DData Public "CClause" () ((variant "CClause" (ConPos (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "CExpr")))) ())
@@ -848,7 +886,9 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DData Public "DeclFacts" () ((variant "DeclFacts" (ConNamed (field "factRequires" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factSupers" (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))) (field "factBinders" (TyApp (TyCon "List") (TyCon "BinderRow")))))) ())
 (DTypeSig true "noDeclFacts" (TyCon "DeclFacts"))
 (DFunDef false "noDeclFacts" () (ERecordCreate "DeclFacts" ((fa "factRequires" (EListLit)) (fa "factSupers" (EListLit)) (fa "factBinders" (EListLit)))))
-(DTypeAlias true "BinderVisit" () (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))
+(DTypeAlias true "BinderVisit" () (TyFun (TyCon "BinderSite") (TyFun (TyCon "String") (TyFun (TyCon "BinderId") (TyCon "BinderId")))))
+(DData Public "BinderSite" () ((variant "PatternBinder" (ConPos (TyApp (TyCon "Option") (TyCon "CExpr")))) (variant "FunctionBinder" (ConPos (TyApp (TyCon "List") (TyCon "CClause"))))) ())
+(DData Private "BinderPass" () ((variant "PatternPass" (ConPos)) (variant "FunctionPass" (ConPos))) ())
 (DTypeSig true "obviousRuntimeType" (TyFun (TyCon "CExpr") (TyApp (TyCon "Option") (TyCon "RuntimeType"))))
 (DFunDef false "obviousRuntimeType" ((PCon "CLit" (PCon "LInt" PWild))) (EVar "None"))
 (DFunDef false "obviousRuntimeType" ((PCon "CLit" (PVar "l"))) (EApp (EVar "Some") (EApp (EVar "litRuntimeType") (EVar "l"))))
@@ -865,33 +905,37 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "litRuntimeType" ((PCon "LU64" PWild PWild)) (EVar "RTU64"))
 (DFunDef false "litRuntimeType" ((PCon "LI64" PWild PWild)) (EVar "RTI64"))
 (DTypeSig true "mapProgramBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
-(DFunDef false "mapProgramBinders" ((PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapBindBinders") (EVar "f"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapEntryBinders") (EVar "f"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))
+(DFunDef false "mapProgramBinders" ((PVar "f") (PVar "prog")) (EApp (EApp (EApp (EVar "mapProgramPass") (EVar "FunctionPass")) (EVar "f")) (EApp (EApp (EApp (EVar "mapProgramPass") (EVar "PatternPass")) (EVar "f")) (EVar "prog"))))
+(DTypeSig false "mapProgramPass" (TyFun (TyCon "BinderPass") (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CProgram") (TyCon "CProgram")))))
+(DFunDef false "mapProgramPass" ((PVar "pass") (PVar "f") (PCon "CProgram" (PVar "binds") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "BinderWalk") (EVar "pass")) (EVar "f"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapBindBinders") (EVar "w"))) (EVar "binds"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapEntryBinders") (EVar "w"))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
+(DData Private "BinderWalk" () ((variant "BinderWalk" (ConPos (TyCon "BinderPass") (TyCon "BinderVisit")))) ())
 (DTypeSig true "withBinderRows" (TyFun (TyApp (TyCon "List") (TyCon "BinderRow")) (TyFun (TyCon "CProgram") (TyCon "CProgram"))))
 (DFunDef false "withBinderRows" ((PVar "rows") (PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EVar "groups")) (EVar "ctorArs")) (EVar "ctorTypes")) (EVar "impls")) (EVar "mctx")) (ERecordCreate "DeclFacts" ((fa "factRequires" (EFieldAccess (EVar "facts") "factRequires")) (fa "factSupers" (EFieldAccess (EVar "facts") "factSupers")) (fa "factBinders" (EVar "rows"))))))
 (DTypeSig true "programBinderIds" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "BinderId"))))
 (DFunDef false "programBinderIds" ((PVar "prog")) (EBlock (DoLet false false (PVar "seen") (EApp (EVar "Ref") (EListLit))) (DoLet false false PWild (EApp (EApp (EVar "mapProgramBinders") (ELam (PWild PWild (PVar "bid")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "seen")) (EBinOp "::" (EVar "bid") (EUnOp "!" (EVar "seen"))))) (DoExpr (EVar "bid"))))) (EVar "prog"))) (DoExpr (EApp (EVar "reverseL") (EUnOp "!" (EVar "seen"))))))
-(DTypeSig false "mapEntryBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
+(DTypeSig false "mapEntryBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CImplEntry") (TyCon "CImplEntry"))))
 (DFunDef false "mapEntryBinders" ((PVar "f") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplTagged" (PVar "tag") (PVar "key") (PVar "iface") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EBlock (DoLet false false (PVar "pats2") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "pats"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "tag")) (EVar "key")) (EVar "iface")) (EVar "sym")) (EVar "pos")) (EVar "pats2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "body")))))))
 (DFunDef false "mapEntryBinders" ((PVar "f") (PCon "CImplEntry" (PVar "m") (PVar "s") (PVar "d") (PCon "CImplDefault" (PVar "w") (PVar "tag") (PVar "key") (PVar "sym") (PVar "pos") (PVar "pats") (PVar "body")))) (EBlock (DoLet false false (PVar "pats2") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "pats"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EVar "d")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplDefault") (EVar "w")) (EVar "tag")) (EVar "key")) (EVar "sym")) (EVar "pos")) (EVar "pats2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "body")))))))
-(DTypeSig false "mapBindBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CBind") (TyCon "CBind"))))
-(DFunDef false "mapBindBinders" ((PVar "f") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site"))) (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapClauseBinders") (EVar "f"))) (EVar "clauses"))) (EVar "site")))
-(DTypeSig false "mapClauseBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CClause") (TyCon "CClause"))))
+(DTypeSig false "mapBindBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CBind") (TyCon "CBind"))))
+(DFunDef false "mapBindBinders" ((PVar "w") (PCon "CBind" (PVar "name") (PVar "clauses") (PVar "site") (PVar "bid"))) (EBlock (DoLet false false (PVar "clauses2") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapClauseBinders") (EVar "w"))) (EVar "clauses"))) (DoLet false false (PVar "bid2") (EMatch (EVar "w") (arm (PCon "BinderWalk" (PCon "FunctionPass") (PVar "f")) () (EApp (EApp (EApp (EVar "f") (EApp (EVar "FunctionBinder") (EVar "clauses2"))) (EVar "name")) (EVar "bid"))) (arm (PCon "BinderWalk" (PCon "PatternPass") PWild) () (EVar "bid")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CBind") (EVar "name")) (EVar "clauses2")) (EVar "site")) (EVar "bid2")))))
+(DTypeSig false "mapClauseBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CClause") (TyCon "CClause"))))
 (DFunDef false "mapClauseBinders" ((PVar "f") (PCon "CClause" (PVar "pats") (PVar "body"))) (EBlock (DoLet false false (PVar "pats2") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "pats"))) (DoExpr (EApp (EApp (EVar "CClause") (EVar "pats2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "body"))))))
-(DTypeSig false "mapPatBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "Pat") (TyCon "Pat")))))
-(DFunDef false "mapPatBinders" ((PVar "f") (PVar "hint") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EApp (EApp (EApp (EVar "f") (EVar "hint")) (EVar "x")) (EVar "bid"))))
+(DTypeSig false "mapPatBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyApp (TyCon "Option") (TyCon "CExpr")) (TyFun (TyCon "Pat") (TyCon "Pat")))))
+(DFunDef false "mapPatBinders" ((PCon "BinderWalk" (PCon "FunctionPass") PWild) PWild (PVar "p")) (EVar "p"))
+(DFunDef false "mapPatBinders" ((PCon "BinderWalk" (PCon "PatternPass") (PVar "f")) (PVar "hint") (PCon "PVar" (PVar "x") (PVar "l") (PVar "bid"))) (EApp (EApp (EApp (EVar "PVar") (EVar "x")) (EVar "l")) (EApp (EApp (EApp (EVar "f") (EApp (EVar "PatternBinder") (EVar "hint"))) (EVar "x")) (EVar "bid"))))
 (DFunDef false "mapPatBinders" (PWild PWild (PCon "PWild")) (EVar "PWild"))
 (DFunDef false "mapPatBinders" (PWild PWild (PCon "PLit" (PVar "l"))) (EApp (EVar "PLit") (EVar "l")))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PCon" (PVar "c") (PVar "ps"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "ps"))))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PCons" (PVar "a") (PVar "b"))) (EBlock (DoLet false false (PVar "a2") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "a"))) (DoExpr (EApp (EApp (EVar "PCons") (EVar "a2")) (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "b"))))))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PTuple" (PVar "ps"))) (EApp (EVar "PTuple") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "ps"))))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PList" (PVar "ps"))) (EApp (EVar "PList") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None"))) (EVar "ps"))))
-(DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PVar "bid2") (EApp (EApp (EApp (EVar "f") (EVar "None")) (EVar "x")) (EVar "bid"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid2")) (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "p"))))))
+(DFunDef false "mapPatBinders" ((PAs "w" (PCon "BinderWalk" PWild (PVar "f"))) PWild (PCon "PAs" (PVar "x") (PVar "l") (PVar "bid") (PVar "p"))) (EBlock (DoLet false false (PVar "bid2") (EApp (EApp (EApp (EVar "f") (EApp (EVar "PatternBinder") (EVar "None"))) (EVar "x")) (EVar "bid"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "PAs") (EVar "x")) (EVar "l")) (EVar "bid2")) (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "w")) (EVar "None")) (EVar "p"))))))
 (DFunDef false "mapPatBinders" (PWild PWild (PCon "PRng" (PVar "lo") (PVar "hi") (PVar "incl"))) (EApp (EApp (EApp (EVar "PRng") (EVar "lo")) (EVar "hi")) (EVar "incl")))
 (DFunDef false "mapPatBinders" ((PVar "f") PWild (PCon "PRec" (PVar "name") (PVar "fields") (PVar "rest"))) (EApp (EApp (EApp (EVar "PRec") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapRecFieldBinders") (EVar "f"))) (EVar "fields"))) (EVar "rest")))
-(DTypeSig false "mapRecFieldBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
-(DFunDef false "mapRecFieldBinders" ((PVar "f") (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EApp (EApp (EApp (EVar "f") (EVar "None")) (EVar "n")) (EVar "bid"))) (EVar "None")))
+(DTypeSig false "mapRecFieldBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "RecPatField") (TyCon "RecPatField"))))
+(DFunDef false "mapRecFieldBinders" ((PCon "BinderWalk" PWild (PVar "f")) (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "None"))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EApp (EApp (EApp (EVar "f") (EApp (EVar "PatternBinder") (EVar "None"))) (EVar "n")) (EVar "bid"))) (EVar "None")))
 (DFunDef false "mapRecFieldBinders" ((PVar "f") (PCon "RecPatField" (PVar "n") (PVar "l") (PVar "bid") (PCon "Some" (PVar "p")))) (EApp (EApp (EApp (EApp (EVar "RecPatField") (EVar "n")) (EVar "l")) (EVar "bid")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "p")))))
-(DTypeSig false "mapExprBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
+(DTypeSig false "mapExprBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CExpr") (TyCon "CExpr"))))
 (DFunDef false "mapExprBinders" (PWild (PCon "CLit" (PVar "l"))) (EApp (EVar "CLit") (EVar "l")))
 (DFunDef false "mapExprBinders" (PWild (PCon "CVar" (PVar "x") (PVar "addr"))) (EApp (EApp (EVar "CVar") (EVar "x")) (EVar "addr")))
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CApp" (PVar "h") (PVar "args") (PVar "site"))) (EBlock (DoLet false false (PVar "h2") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "h"))) (DoExpr (EApp (EApp (EApp (EVar "CApp") (EVar "h2")) (EApp (EApp (EMethodRef "map") (EApp (EVar "mapExprBinders") (EVar "f"))) (EVar "args"))) (EVar "site")))))
@@ -921,14 +965,14 @@ mapStmtBinders f (CSAssign x e) = CSAssign x (mapExprBinders f e)
 (DFunDef false "mapExprBinders" ((PVar "f") (PCon "CBlock" (PVar "stmts"))) (EApp (EVar "CBlock") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapStmtBinders") (EVar "f"))) (EVar "stmts"))))
 (DFunDef false "mapExprBinders" (PWild (PCon "CMethod" (PVar "name") (PVar "ev"))) (EApp (EApp (EVar "CMethod") (EVar "name")) (EVar "ev")))
 (DFunDef false "mapExprBinders" (PWild (PCon "CDict" (PVar "name") (PVar "rs"))) (EApp (EApp (EVar "CDict") (EVar "name")) (EVar "rs")))
-(DTypeSig false "mapFieldBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CField") (TyCon "CField"))))
+(DTypeSig false "mapFieldBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CField") (TyCon "CField"))))
 (DFunDef false "mapFieldBinders" ((PVar "f") (PCon "CField" (PVar "k") (PVar "o") (PVar "e"))) (EApp (EApp (EApp (EVar "CField") (EVar "k")) (EVar "o")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))
-(DTypeSig false "mapArmBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CArm") (TyCon "CArm"))))
+(DTypeSig false "mapArmBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CArm") (TyCon "CArm"))))
 (DFunDef false "mapArmBinders" ((PVar "f") (PCon "CArm" (PVar "pat") (PVar "guards") (PVar "body"))) (EBlock (DoLet false false (PVar "pat2") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "pat"))) (DoLet false false (PVar "guards2") (EApp (EApp (EMethodRef "map") (EApp (EVar "mapGuardBinders") (EVar "f"))) (EVar "guards"))) (DoExpr (EApp (EApp (EApp (EVar "CArm") (EVar "pat2")) (EVar "guards2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "body"))))))
-(DTypeSig false "mapGuardBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
+(DTypeSig false "mapGuardBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CGuard") (TyCon "CGuard"))))
 (DFunDef false "mapGuardBinders" ((PVar "f") (PCon "CGBool" (PVar "c"))) (EApp (EVar "CGBool") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "c"))))
 (DFunDef false "mapGuardBinders" ((PVar "f") (PCon "CGBind" (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "pat2") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EVar "None")) (EVar "pat"))) (DoExpr (EApp (EApp (EVar "CGBind") (EVar "pat2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))))
-(DTypeSig false "mapStmtBinders" (TyFun (TyCon "BinderVisit") (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
+(DTypeSig false "mapStmtBinders" (TyFun (TyCon "BinderWalk") (TyFun (TyCon "CStmt") (TyCon "CStmt"))))
 (DFunDef false "mapStmtBinders" ((PVar "f") (PCon "CSExpr" (PVar "e"))) (EApp (EVar "CSExpr") (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))
 (DFunDef false "mapStmtBinders" ((PVar "f") (PCon "CSLet" (PVar "recF") (PVar "pat") (PVar "e"))) (EBlock (DoLet false false (PVar "pat2") (EApp (EApp (EApp (EVar "mapPatBinders") (EVar "f")) (EApp (EVar "Some") (EVar "e"))) (EVar "pat"))) (DoExpr (EApp (EApp (EApp (EVar "CSLet") (EVar "recF")) (EVar "pat2")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))))
 (DFunDef false "mapStmtBinders" ((PVar "f") (PCon "CSAssign" (PVar "x") (PVar "e"))) (EApp (EApp (EVar "CSAssign") (EVar "x")) (EApp (EApp (EVar "mapExprBinders") (EVar "f")) (EVar "e"))))

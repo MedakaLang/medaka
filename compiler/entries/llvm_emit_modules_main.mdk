@@ -121,7 +121,7 @@ preludeSymsOf coreD = match lowerProgramEmit TargetNative coreD
   )
 
 cbindNameOf : CBind -> String
-cbindNameOf (CBind n _ _) = n
+cbindNameOf (CBind n _ _ _) = n
 
 -- Install the emitter side-tables + emit, from an already-elaborated program.
 -- [mods] is the loader's (module, path, decls), whose paths name each module's

@@ -19,7 +19,9 @@ import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{elaborateOne, grantWholeDomain}
 import types.runtime_types.{BinderRow(..), RuntimeType(..)}
-import frontend.ast.{BinderId(..), Lit(..), Pat(..), Addr(..), noDeclLoc}
+import frontend.ast.{
+  BinderId(..), Lit(..), Pat(..), Addr(..), noDeclLoc, noBinderId
+}
 import ir.core_ir.{
   CBind(..),
   CClause(..),
@@ -42,11 +44,17 @@ import list.{sortOn}
 -- A one-binding program whose body is [body].
 programOf : CExpr -> CProgram
 programOf body =
-  CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] [] [] noDeclFacts
+  CProgram
+    [CBind "main" [CClause [] body] noDeclLoc noBinderId]
+    []
+    []
+    []
+    []
+    noDeclFacts
 
 -- The body of the only binding of a parsed program.
 bodyOf : CProgram -> Option CExpr
-bodyOf (CProgram [CBind _ [CClause _ body] _] _ _ _ _ _) = Some body
+bodyOf (CProgram [CBind _ [CClause _ body] _ _] _ _ _ _ _) = Some body
 bodyOf _ = None
 
 roundTrip : CExpr -> Option CExpr
@@ -235,7 +243,8 @@ test "two occurrences of one binder id stay one binder" =
               [PVar "a" noDeclLoc shared, PVar "b" noDeclLoc shared]
               (CLit (LInt 0)),
           ]
-          noDeclLoc,
+          noDeclLoc
+          noBinderId,
       ]
       []
       []
@@ -254,17 +263,57 @@ test "two occurrences of one binder id stay one binder" =
         ],
       }
   let back = parseCProgram (cprogramToSexp prog)
-  expectAll [
-    labelFail "one row" (expectEqual ["a RTFloat None"] (rowsOf back)),
-    labelFail
-      "both occurrences name it"
-      (expectTrue (match programBinderIds back
-        [x, y] => idOrdinal x == idOrdinal y
-        _ => False)),
-    labelFail
-      "re-printed"
-      (expectEqual (cprogramToSexp prog) (cprogramToSexp back)),
-  ]
+  expectAll
+    [
+      labelFail "one row" (expectEqual ["a RTFloat None"] (rowsOf back)),
+      labelFail
+        "both occurrences name it"
+        (expectTrue
+          (match programBinderIds back
+            -- the two patterns, then the function `main`
+            [x, y, _] => idOrdinal x == idOrdinal y
+            _ => False)),
+      labelFail
+        "re-printed"
+        (expectEqual (cprogramToSexp prog) (cprogramToSexp back)),
+    ]
 
 idOrdinal : BinderId -> Int
 idOrdinal (BinderId _ n) = n
+
+-- A function returning Float, one returning Int and a where-function returning
+-- Float: each row names the type its function's body returns.
+fnSrc : String
+fnSrc =
+  "half x = 0.5\nnext x = x + (1 : Int)\nouter x = inner x\n  where\n    inner y = 2.5\nmain = next 1"
+
+test "a function's return type survives the round trip" =
+  let typed =
+    lowerProgramEmit
+      TargetNative
+      (elaborateOne [] (desugar (parse prelude)) (
+        "sexp",
+        grantWholeDomain (desugar (parse fnSrc)),
+      ))
+  let text = cprogramToSexp typed
+  let back = parseCProgram text
+  expectAll [
+    labelFail
+      "each function's row gives its return type"
+      (expectTextContainsAll
+        [
+          "\"half\" RTValue RTFloat)",
+          "\"next\" RTValue RTInt)",
+          "\"inner\" RTValue RTFloat)",
+        ]
+        text),
+    labelFail
+      "the dump is a fixpoint of parse then print"
+      (expectEqual text (cprogramToSexp back)),
+    labelFail
+      "the rows are the same"
+      (expectEqual (rowsOf typed) (rowsOf back)),
+    labelFail
+      "every function of the parsed program has a return type"
+      (expectEqual [] (validateBinderStamps back)),
+  ]

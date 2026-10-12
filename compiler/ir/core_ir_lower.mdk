@@ -77,6 +77,7 @@ import ir.core_ir.{
   FailSite(..),
   siteSentinelName,
   mapProgramBinders,
+  BinderSite(..),
   obviousRuntimeType,
   withBinderRows,
 }
@@ -766,8 +767,8 @@ lowerField : FieldAssign -> CField
 lowerField (FieldAssign k e) = CField k (-1) (lower e)
 
 lowerBind : LetBind -> CBind
-lowerBind (LetBind name clauses site _) =
-  CBind name (map lowerClause clauses) site
+lowerBind (LetBind name clauses site bid) =
+  CBind name (map lowerClause clauses) site bid
 
 lowerClause : FunClause -> CClause
 lowerClause (FunClause pats body) = CClause pats (lower body)
@@ -901,8 +902,8 @@ refoldProgram keep (CProgram groups ctorArs ctorTypes implEntries mctx facts) =
     facts
 
 refoldBind : (Pat -> Bool) -> CBind -> CBind
-refoldBind keep (CBind n clauses site) =
-  CBind n (map (refoldClause keep) clauses) site
+refoldBind keep (CBind n clauses site bid) =
+  CBind n (map (refoldClause keep) clauses) site bid
 
 refoldClause : (Pat -> Bool) -> CClause -> CClause
 refoldClause keep (CClause pats body) = CClause pats (refoldExpr keep body)
@@ -1107,14 +1108,15 @@ withDeclFacts : DeclFacts -> CProgram -> CProgram
 withDeclFacts facts (CProgram groups ctorArs ctorTypes impls mctx _) =
   CProgram groups ctorArs ctorTypes impls mctx facts
 
--- ── binder stamps: every binder pattern says what it holds ────────────────────
+-- ── binder stamps: every binder says what it holds ───────────────────────────
 -- Run last, so no later pass can mint a binder it has not stamped.  A binder that
 -- carries a source id is stamped from the typechecker's published table (a row
 -- the table lacks stays absent, which `core_validate.validateBinderStamps`
 -- refuses).  A binder with no id is synthesized, by the typechecker or by an
 -- earlier lowering pass: it gets a fresh id and a row of the type its right-hand
--- side states, else `RTValue`, the answer "no static fact".  The rows are
--- snapshotted into the program's `DeclFacts`, so a consumer never reads the
+-- side states, else `RTValue`, the answer "no static fact".  A synthesized
+-- function returns what its one clause's body states, else `RTValue`.  The rows
+-- are snapshotted into the program's `DeclFacts`, so a consumer never reads the
 -- typechecker's table, which the next elaboration replaces.
 stampBinders : CProgram -> CProgram
 stampBinders prog =
@@ -1123,11 +1125,11 @@ stampBinders prog =
   withBinderRows (BM.values !rows) stamped
 
 stampVisit : Ref (BM.Map Int BinderRow) ->
-  Option CExpr ->
+  BinderSite ->
   String ->
   BinderId ->
   BinderId
-stampVisit rows hint x (bid@(BinderId _ n)) =
+stampVisit rows site x (bid@(BinderId _ n)) =
   if n >= 0 then
     match binderRowIfInstalled bid
       Some row => rows := BM.set n row !rows
@@ -1137,16 +1139,25 @@ stampVisit rows hint x (bid@(BinderId _ n)) =
     let fresh = freshBinderId ""
     let ord = match fresh
       BinderId _ k => k
-    let row = BinderRow {
-      brId = fresh,
-      brName = x,
-      brType = match hint
-        Some rhs => optionOr RTValue (obviousRuntimeType rhs)
-        None => RTValue,
-      brReturns = None,
-    }
-    rows := BM.set ord row !rows
+    rows := BM.set ord (mintedRow fresh x site) !rows
     fresh
+
+mintedRow : BinderId -> String -> BinderSite -> BinderRow
+mintedRow bid x (PatternBinder hint) = BinderRow {
+  brId = bid,
+  brName = x,
+  brType = match hint
+    Some rhs => optionOr RTValue (obviousRuntimeType rhs)
+    None => RTValue,
+  brReturns = None,
+}
+mintedRow bid x (FunctionBinder clauses) =
+  let ret = match clauses
+    [CClause _ body] => optionOr RTValue (obviousRuntimeType body)
+    _ => RTValue
+  -- A function that takes parameters is itself a closure value.
+  let self = if allList clauseHasParams clauses then RTValue else ret
+  BinderRow { brId = bid, brName = x, brType = self, brReturns = Some ret }
 
 cprogramCtorTypes : CProgram -> List (String, String)
 cprogramCtorTypes (CProgram _ _ ctorTypes _ _ _) = ctorTypes
@@ -1186,7 +1197,7 @@ programArities (CProgram groups ctors _ impls _ _) =
     (leastEntryArities impls omEmpty)
 
 bindArityRow : CBind -> (String, Int)
-bindArityRow (CBind name clauses _) = (name, clausesArity clauses)
+bindArityRow (CBind name clauses _ _) = (name, clausesArity clauses)
 
 clausesArity : List CClause -> Int
 clausesArity ((CClause pats _) :: _) = listLen pats
@@ -1302,7 +1313,7 @@ bindRecFieldsScope ((RecPatField _ _ _ (Some p)) :: rest) s =
 export
 bindGroupScope : List CBind -> CallScope -> CallScope
 bindGroupScope [] s = s
-bindGroupScope ((CBind name clauses _) :: rest) s =
+bindGroupScope ((CBind name clauses _ _) :: rest) s =
   bindGroupScope rest (omInsert name (Some (clausesArity clauses)) s)
 
 -- ── the eta pass ──────────────────────────────────────────────────────────────
@@ -1391,9 +1402,9 @@ splitEntryGroups (ent :: rest) seen split =
   splitEntryGroups rest (omInsert key n seen) split2
 
 etaBind : ArityEnv -> CBind -> CBind
-etaBind env (b@(CBind name [CClause pats body] site)) =
+etaBind env (b@(CBind name [CClause pats body] site bid)) =
   let missing = etaMissing env (bindPatsScope pats omEmpty) body
-  if missing > 0 then CBind name [etaClause missing pats body] site else b
+  if missing > 0 then CBind name [etaClause missing pats body] site bid else b
 etaBind _ b = b
 
 etaEntry : ArityEnv -> CImplEntry -> CImplEntry
@@ -1465,7 +1476,7 @@ isAtomicArg (CApp (CMethod "fromInt" (MethodEvidence _ _ (RKey key _ _) _ _)) [C
 isAtomicArg _ = False
 
 isFunctionBind : CBind -> Bool
-isFunctionBind (CBind _ clauses _) = allList clauseHasParams clauses
+isFunctionBind (CBind _ clauses _ _) = allList clauseHasParams clauses
 
 clauseHasParams : CClause -> Bool
 clauseHasParams (CClause pats _) = isNonEmptyL pats
@@ -1505,8 +1516,8 @@ stampCallModes (prog@(CProgram groups ctors ctorTypes impls mctx facts)) =
     facts
 
 callsBind : ArityEnv -> CallScope -> CBind -> CBind
-callsBind env scope (CBind name clauses site) =
-  CBind name (map (callsClause env scope) clauses) site
+callsBind env scope (CBind name clauses site bid) =
+  CBind name (map (callsClause env scope) clauses) site bid
 
 callsClause : ArityEnv -> CallScope -> CClause -> CClause
 callsClause env scope (CClause pats body) =
@@ -1681,7 +1692,8 @@ markTailSites (CProgram groups ctors ctorTypes impls mctx facts) =
     facts
 
 tailBind : CBind -> CBind
-tailBind (CBind name clauses site) = CBind name (map tailClause clauses) site
+tailBind (CBind name clauses site bid) =
+  CBind name (map tailClause clauses) site bid
 
 tailClause : CClause -> CClause
 tailClause (CClause pats body) = CClause pats (tailExpr (isNonEmptyL pats) body)
@@ -2006,8 +2018,8 @@ rewriteProgramRecPats fo0 (CProgram groups ctorArs ctorTypes implEntries mctx fa
     facts
 
 rewriteBindRP : RecOrders -> CBind -> CBind
-rewriteBindRP fo (CBind n clauses site) =
-  CBind n (map (rewriteClauseRP fo) clauses) site
+rewriteBindRP fo (CBind n clauses site bid) =
+  CBind n (map (rewriteClauseRP fo) clauses) site bid
 
 rewriteClauseRP : RecOrders -> CClause -> CClause
 rewriteClauseRP fo (CClause pats body) =
@@ -2533,6 +2545,7 @@ memoCafBind (sel, key, method) =
           (MethodEvidence (ifaceWordOfKey key) 0 (RKey key [] []) [] [])),
     ]
     noDeclLoc
+    noBinderId
 
 -- #242: routed through the canonical O(n·log n) `support.util.dedupBy` (was a
 -- private O(n²) `List`-as-a-set scan).  Both components are unconstrained
@@ -2545,8 +2558,8 @@ memoRefKey : (String, String, String) -> String
 memoRefKey (sel, _, method) = lenKey sel ++ method
 
 hoistBind : LowerState -> CBind -> CBind
-hoistBind st (CBind n clauses site) =
-  CBind n (map (hoistClause st) clauses) site
+hoistBind st (CBind n clauses site bid) =
+  CBind n (map (hoistClause st) clauses) site bid
 
 hoistClause : LowerState -> CClause -> CClause
 hoistClause st (CClause pats body) = CClause pats (hoistExpr st body)
@@ -2671,7 +2684,7 @@ lowerGroupsRaw prog = lgGroup (bindSites prog omEmpty) (funClausesOf prog)
 -- clause order within a name AND first-occurrence order of names, via an
 -- index-carrying merge sort (no map, no typeclass dispatch). Replaces the old
 -- O(names·clauses) groupNames+clausesFor rescan. Elements are ((name, idx), clause).
-lgGroup : OrdMap Loc -> List (String, CClause) -> List CBind
+lgGroup : OrdMap (Loc, BinderId) -> List (String, CClause) -> List CBind
 lgGroup sites clauses =
   let groups = lgRuns (lgSortName (lgTag clauses 0))
   map (lgToBind sites) (lgSortIdx groups)
@@ -2749,27 +2762,33 @@ lgMergeIdx (((n1, i1), cs1) :: xs) (((n2, i2), cs2) :: ys) =
   else
     ((n2, i2), cs2) :: lgMergeIdx (((n1, i1), cs1) :: xs) ys
 
-lgToBind : OrdMap Loc -> ((String, Int), List CClause) -> CBind
+-- A coalesced binding takes its first clause's site and id.  Every clause of a
+-- multi-clause function has its own id, and the typechecker records the
+-- function's one return type under each, so the first answers for the binding.
+lgToBind : OrdMap (Loc, BinderId) -> ((String, Int), List CClause) -> CBind
 lgToBind sites ((n, _), cs) = match omLookup n sites
-  Some site => CBind n cs site
-  None => CBind n cs noDeclLoc
+  Some (site, bid) => CBind n cs site bid
+  None => CBind n cs noDeclLoc noBinderId
 
--- name -> the site of its first clause, over the decls `funClausesOf` reads.
-bindSites : List Decl -> OrdMap Loc -> OrdMap Loc
+-- name -> the site and id of its first clause, over the decls `funClausesOf` reads.
+bindSites : List Decl -> OrdMap (Loc, BinderId) -> OrdMap (Loc, BinderId)
 bindSites [] acc = acc
-bindSites ((DFunDef _ n _ _ site _) :: rest) acc =
-  bindSites rest (firstSite n site acc)
+bindSites ((DFunDef _ n _ _ site bid) :: rest) acc =
+  bindSites rest (firstSite n (site, bid) acc)
 bindSites ((DLetGroup _ binds) :: rest) acc =
   bindSites rest (letBindSites binds acc)
 bindSites ((DAttrib _ d) :: rest) acc = bindSites (d :: rest) acc
 bindSites (_ :: rest) acc = bindSites rest acc
 
-letBindSites : List LetBind -> OrdMap Loc -> OrdMap Loc
+letBindSites : List LetBind -> OrdMap (Loc, BinderId) -> OrdMap (Loc, BinderId)
 letBindSites [] acc = acc
-letBindSites ((LetBind n _ site _) :: rest) acc =
-  letBindSites rest (firstSite n site acc)
+letBindSites ((LetBind n _ site bid) :: rest) acc =
+  letBindSites rest (firstSite n (site, bid) acc)
 
-firstSite : String -> Loc -> OrdMap Loc -> OrdMap Loc
+firstSite : String ->
+  (Loc, BinderId) ->
+  OrdMap (Loc, BinderId) ->
+  OrdMap (Loc, BinderId)
 firstSite n site acc = if omHasKey n acc then acc else omInsert n site acc
 
 -- ── typeclass impls / interface defaults (slice 5) ─────────────────────────
@@ -3415,8 +3434,8 @@ specializeRow row (CListSlice a lo hi incl) =
 specializeRow row (CBlock stmts) = CBlock (map (specializeStmt row) stmts)
 
 specializeBind : DefaultRow -> CBind -> CBind
-specializeBind row (CBind n clauses site) =
-  CBind n (map (specializeClause row) clauses) site
+specializeBind row (CBind n clauses site bid) =
+  CBind n (map (specializeClause row) clauses) site bid
 
 specializeClause : DefaultRow -> CClause -> CClause
 specializeClause row (CClause pats body) = CClause pats (specializeRow row body)

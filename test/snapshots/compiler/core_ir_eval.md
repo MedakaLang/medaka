@@ -449,14 +449,14 @@ cevalLetGroup env binds body =
   ceval env2 body
 
 cBindCell : CBind -> (String, Ref (Value e))
-cBindCell (CBind name _ _) = (name, Ref VUnit)
+cBindCell (CBind name _ _ _) = (name, Ref VUnit)
 
 cInstallGroup : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
 cInstallGroup _ _ [] = ()
-cInstallGroup env cells ((CBind name clauses _) :: rest) =
+cInstallGroup env cells ((CBind name clauses _ _) :: rest) =
   findCell cells name := cGroupValue env clauses
   cInstallGroup env cells rest
 
@@ -552,14 +552,14 @@ cevalArgs env (a :: rest) =
   v :: cevalArgs env rest
 
 cBindName : CBind -> String
-cBindName (CBind n _ _) = n
+cBindName (CBind n _ _ _) = n
 
 cInstallTopGroups : EvalEnv (Value e) ->
   List (String, Ref (Value e)) ->
   List CBind ->
   <e> Unit
 cInstallTopGroups _ _ [] = ()
-cInstallTopGroups env cells ((CBind n clauses _) :: rest) =
+cInstallTopGroups env cells ((CBind n clauses _ _) :: rest) =
   findCell cells n := cTopGroupValue env clauses
   cInstallTopGroups env cells rest
 
@@ -932,10 +932,10 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "cevalLetGroup" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "cevalLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EVar "map") (EVar "cBindCell")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EVar "cells"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "cInstallGroup") (EVar "env2")) (EVar "cells")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "ceval") (EVar "env2")) (EVar "body")))))
 (DTypeSig false "cBindCell" (TyFun (TyCon "CBind") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "cBindCell" ((PCon "CBind" (PVar "name") PWild PWild)) (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "VUnit"))))
+(DFunDef false "cBindCell" ((PCon "CBind" (PVar "name") PWild PWild PWild)) (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "VUnit"))))
 (DTypeSig false "cInstallGroup" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyEffect () (Some "e") (TyCon "Unit"))))))
 (DFunDef false "cInstallGroup" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "cInstallGroup" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name"))) (EApp (EApp (EVar "cGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallGroup") (EVar "env")) (EVar "cells")) (EVar "rest")))))
+(DFunDef false "cInstallGroup" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name"))) (EApp (EApp (EVar "cGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallGroup") (EVar "env")) (EVar "cells")) (EVar "rest")))))
 (DTypeSig false "cGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cGroupValue" ((PVar "env") (PList (PCon "CClause" (PVar "pats") (PVar "body")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EVar "cClauseClosure") (EVar "env")) (EApp (EApp (EVar "CClause") (EVar "pats")) (EVar "body"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cGroupValue" ((PVar "env") (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EVar "map") (EApp (EVar "cClauseClosure") (EVar "env"))) (EVar "clauses"))))
@@ -963,10 +963,10 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "cevalArgs" (PWild (PList)) (EListLit))
 (DFunDef false "cevalArgs" ((PVar "env") (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (DoExpr (EBinOp "::" (EVar "v") (EApp (EApp (EVar "cevalArgs") (EVar "env")) (EVar "rest"))))))
 (DTypeSig false "cBindName" (TyFun (TyCon "CBind") (TyCon "String")))
-(DFunDef false "cBindName" ((PCon "CBind" (PVar "n") PWild PWild)) (EVar "n"))
+(DFunDef false "cBindName" ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "cInstallTopGroups" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyEffect () (Some "e") (TyCon "Unit"))))))
 (DFunDef false "cInstallTopGroups" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "cInstallTopGroups" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "n") (PVar "clauses") PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EVar "cTopGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "env")) (EVar "cells")) (EVar "rest")))))
+(DFunDef false "cInstallTopGroups" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "n") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EVar "cTopGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "env")) (EVar "cells")) (EVar "rest")))))
 (DTypeSig false "cTopGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "cTopGroupValue" ((PVar "env") (PList (PCon "CClause" (PVar "pats") (PVar "body")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EVar "pats")) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cTopGroupValue" ((PVar "env") (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EVar "map") (EApp (EVar "cClauseClosure") (EVar "env"))) (EVar "clauses"))))
@@ -1133,10 +1133,10 @@ cevalModulesOutput preludeDecls modules =
 (DTypeSig false "cevalLetGroup" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyFun (TyCon "CExpr") (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e")))))))
 (DFunDef false "cevalLetGroup" ((PVar "env") (PVar "binds") (PVar "body")) (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EMethodRef "map") (EVar "cBindCell")) (EVar "binds"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "pushFrame") (EVar "env")) (EVar "cells"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "cInstallGroup") (EVar "env2")) (EVar "cells")) (EVar "binds"))) (DoExpr (EApp (EApp (EVar "ceval") (EVar "env2")) (EVar "body")))))
 (DTypeSig false "cBindCell" (TyFun (TyCon "CBind") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))))
-(DFunDef false "cBindCell" ((PCon "CBind" (PVar "name") PWild PWild)) (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "VUnit"))))
+(DFunDef false "cBindCell" ((PCon "CBind" (PVar "name") PWild PWild PWild)) (ETuple (EVar "name") (EApp (EVar "Ref") (EVar "VUnit"))))
 (DTypeSig false "cInstallGroup" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyEffect () (Some "e") (TyCon "Unit"))))))
 (DFunDef false "cInstallGroup" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "cInstallGroup" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name"))) (EApp (EApp (EVar "cGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallGroup") (EVar "env")) (EVar "cells")) (EVar "rest")))))
+(DFunDef false "cInstallGroup" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "name") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "name"))) (EApp (EApp (EVar "cGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallGroup") (EVar "env")) (EVar "cells")) (EVar "rest")))))
 (DTypeSig false "cGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyEffect () (Some "e") (TyApp (TyCon "Value") (TyVar "e"))))))
 (DFunDef false "cGroupValue" ((PVar "env") (PList (PCon "CClause" (PVar "pats") (PVar "body")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EVar "cClauseClosure") (EVar "env")) (EApp (EApp (EVar "CClause") (EVar "pats")) (EVar "body"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cGroupValue" ((PVar "env") (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EMethodRef "map") (EApp (EVar "cClauseClosure") (EVar "env"))) (EVar "clauses"))))
@@ -1164,10 +1164,10 @@ cevalModulesOutput preludeDecls modules =
 (DFunDef false "cevalArgs" (PWild (PList)) (EListLit))
 (DFunDef false "cevalArgs" ((PVar "env") (PCons (PVar "a") (PVar "rest"))) (EBlock (DoLet false false (PVar "v") (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "a"))) (DoExpr (EBinOp "::" (EVar "v") (EApp (EApp (EVar "cevalArgs") (EVar "env")) (EVar "rest"))))))
 (DTypeSig false "cBindName" (TyFun (TyCon "CBind") (TyCon "String")))
-(DFunDef false "cBindName" ((PCon "CBind" (PVar "n") PWild PWild)) (EVar "n"))
+(DFunDef false "cBindName" ((PCon "CBind" (PVar "n") PWild PWild PWild)) (EVar "n"))
 (DTypeSig false "cInstallTopGroups" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "Ref") (TyApp (TyCon "Value") (TyVar "e"))))) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyEffect () (Some "e") (TyCon "Unit"))))))
 (DFunDef false "cInstallTopGroups" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "cInstallTopGroups" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "n") (PVar "clauses") PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EVar "cTopGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "env")) (EVar "cells")) (EVar "rest")))))
+(DFunDef false "cInstallTopGroups" ((PVar "env") (PVar "cells") (PCons (PCon "CBind" (PVar "n") (PVar "clauses") PWild PWild) (PVar "rest"))) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EApp (EApp (EVar "findCell") (EVar "cells")) (EVar "n"))) (EApp (EApp (EVar "cTopGroupValue") (EVar "env")) (EVar "clauses")))) (DoExpr (EApp (EApp (EApp (EVar "cInstallTopGroups") (EVar "env")) (EVar "cells")) (EVar "rest")))))
 (DTypeSig false "cTopGroupValue" (TyFun (TyApp (TyCon "EvalEnv") (TyApp (TyCon "Value") (TyVar "e"))) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "Value") (TyVar "e")))))
 (DFunDef false "cTopGroupValue" ((PVar "env") (PList (PCon "CClause" (PVar "pats") (PVar "body")))) (EIf (EApp (EVar "isNullary") (EVar "pats")) (EApp (EVar "VThunk") (ELam (PWild) (EApp (EApp (EVar "ceval") (EVar "env")) (EVar "body")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "VClosureF") (EVar "env")) (EVar "pats")) (ELam ((PVar "e")) (EApp (EApp (EVar "ceval") (EVar "e")) (EVar "body")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "cTopGroupValue" ((PVar "env") (PVar "clauses")) (EApp (EVar "VMulti") (EApp (EApp (EMethodRef "map") (EApp (EVar "cClauseClosure") (EVar "env"))) (EVar "clauses"))))
