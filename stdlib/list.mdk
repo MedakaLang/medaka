@@ -841,11 +841,54 @@ containsSub sub (xs@(_ :: rest))
    [3, 2, 1] -}
 export
 sortBy : (a -> a -> <e> Ordering) -> List a -> <e> List a
-sortBy _ [] = []
-sortBy _ [x] = [x]
-sortBy cmp xs =
-  let (l, r) = splitAt (length xs / 2) xs
-  merge cmp (sortBy cmp l) (sortBy cmp r)
+sortBy cmp xs = sortMergeAll cmp (sortRuns cmp xs)
+
+-- > sortBy compare ([] : List Int)
+-- []
+-- > sortBy compare [7]
+-- [7]
+-- > sortBy compare [1, 1, 1]
+-- [1, 1, 1]
+-- > sortBy compare [1, 2, 3, 2, 1]
+-- [1, 1, 2, 2, 3]
+
+-- Maximal non-decreasing prefix, accumulated reversed; the caller reverses it.
+sortRunAsc : (a -> a -> <e> Ordering) ->
+  List a ->
+  a ->
+  List a ->
+  <e> (List a, List a)
+sortRunAsc _ acc x [] = (x :: acc, [])
+sortRunAsc cmp acc x (y :: ys) = match cmp x y
+  Gt => (x :: acc, y :: ys)
+  _ => sortRunAsc cmp (x :: acc) y ys
+
+-- Maximal strictly descending prefix; prepending while descending leaves it ascending.
+sortRunDesc : (a -> a -> <e> Ordering) ->
+  List a ->
+  a ->
+  List a ->
+  <e> (List a, List a)
+sortRunDesc _ acc x [] = (x :: acc, [])
+sortRunDesc cmp acc x (y :: ys) = match cmp x y
+  Gt => sortRunDesc cmp (x :: acc) y ys
+  _ => (x :: acc, y :: ys)
+
+sortRunsFrom : (a -> a -> <e> Ordering) -> a -> List a -> <e> List (List a)
+sortRunsFrom _ x [] = [[x]]
+sortRunsFrom cmp x (y :: ys) = match cmp x y
+  Gt =>
+    let (run, after) = sortRunDesc cmp [] x (y :: ys) in
+      run :: sortRuns cmp after
+  _ =>
+    let (run, after) = sortRunAsc cmp [] x (y :: ys) in
+      reverse run :: sortRuns cmp after
+
+-- The maximal runs of `xs`, in input order. A strictly descending run is the only
+-- one reversed, so no equal elements change their relative order.
+sortRuns : (a -> a -> <e> Ordering) -> List a -> <e> List (List a)
+sortRuns _ [] = []
+sortRuns cmp (x :: rest) = sortRunsFrom cmp x rest
 
 -- Merge two sorted runs, taking from the left on ties so the sort stays stable.
 merge : (a -> a -> <e> Ordering) -> List a -> List a -> <e> List a
@@ -854,6 +897,16 @@ merge _ xs [] = xs
 merge cmp (xs@(x :: xs')) (ys@(y :: ys')) = match cmp x y
   Gt => y :: merge cmp xs ys'
   _ => x :: merge cmp xs' ys
+
+-- Merge adjacent pairs of runs; an odd trailing run passes through unchanged.
+sortMergePairs : (a -> a -> <e> Ordering) -> List (List a) -> <e> List (List a)
+sortMergePairs cmp (a :: b :: rest) = merge cmp a b :: sortMergePairs cmp rest
+sortMergePairs _ rs = rs
+
+sortMergeAll : (a -> a -> <e> Ordering) -> List (List a) -> <e> List a
+sortMergeAll _ [] = []
+sortMergeAll _ [r] = r
+sortMergeAll cmp rs = sortMergeAll cmp (sortMergePairs cmp rs)
 
 {- | The list sorted in ascending order.
 
@@ -1172,6 +1225,25 @@ prop "span ++ recovers the list" (xs : List Int) =
 prop "sort is ascending and length-preserving" (xs : List Int) =
   let ys = sort xs
   isSorted ys && length ys == length xs
+
+-- Reference stable sort: insert each element after the last element that does not compare greater.
+refInsert : (a -> a -> <e> Ordering) -> a -> List a -> <e> List a
+refInsert _ x [] = [x]
+refInsert cmp x (y :: ys) = match cmp y x
+  Gt => x :: y :: ys
+  _ => y :: refInsert cmp x ys
+
+refGo : (a -> a -> <e> Ordering) -> List a -> List a -> <e> List a
+refGo _ acc [] = acc
+refGo cmp acc (x :: rest) = refGo cmp (refInsert cmp x acc) rest
+
+prop "sortBy is stable: key-only comparator matches a reference insertion sort" (xs : List Int) =
+  let keyed = zip (map (x => x % 7) xs) (range 0 (length xs))
+  let byKey = (ka, _) (kb, _) => compare ka kb
+  eq (sortBy byKey keyed) (refGo byKey [] keyed)
+
+prop "sortBy agrees with a reference insertion sort on Int" (xs : List Int) =
+  eq (sortBy compare xs) (refGo compare [] xs)
 
 prop "partition splits by the predicate" (xs : List Int) =
   let (yes, no) = partition (x => x > 0) xs
