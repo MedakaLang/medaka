@@ -53620,6 +53620,25 @@ checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
 checkOneToLinesWithRuntime runtimeDecls coreProg userProg =
   checkModulesEntryReport runtimeDecls coreProg [("__user__", userProg)]
 
+-- `checkOneToLinesWithRuntime` with the prelude key for the core-check memo (see
+-- `checkCoreMemoized`): same contract as `checkOneSchemeFullK`.  Same render as
+-- `checkModulesEntryReport`, over the keyed driver.
+export
+checkOneToLinesWithRuntimeK : Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List Decl ->
+  String
+checkOneToLinesWithRuntimeK preludeKey runtimeDecls coreProg userProg =
+  let (schemes, errs, warns) = checkModulesEntryFullK
+    preludeKey
+    runtimeDecls
+    coreProg
+    [("__user__", userProg)]
+  match errs
+    [] => joinNl (schemeLines schemes ++ map tcMsg warns)
+    _ => joinNl (typeErrorLines (map tcMsg errs))
+
 export
 checkOneToLines : List Decl -> String
 checkOneToLines userProg =

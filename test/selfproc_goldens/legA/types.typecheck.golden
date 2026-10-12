@@ -495,6 +495,7 @@ checkOneSchemeFull : List Decl -> List Decl -> (String, List Decl) -> (List (Str
 checkOneSchemeFullK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
 checkOneToLines : List Decl -> String
 checkOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String
+checkOneToLinesWithRuntimeK : Option (Int, Int) -> List Decl -> List Decl -> List Decl -> String
 checkPhantomAuthorityExport : DataVis -> String -> List String -> List Variant -> Unit
 checkPhantomMethods : ClassEnv -> Int -> Unit
 checkRecBindNonFunction : String -> Expr -> Unit
