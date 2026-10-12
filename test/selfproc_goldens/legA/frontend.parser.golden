@@ -432,7 +432,7 @@ optTrailingCommaFor : Token -> ParserE <> Unit
 optTrailingCommaTuple : List a -> ParserE <> Unit
 orElse : ParserE <> a -> ParserE <> a -> ParserE <> a
 orElseR : ParserE <> a -> ParserE <> a -> Array Token -> Int -> PR a
-orElseRb : String -> Int -> PR a -> PR a
+orElseRb : PFail -> Int -> PR a -> PR a
 paramsForCtor : String -> Expr -> List Pat
 paramsForHead : Expr -> Expr -> List Pat
 parenFor : Token -> ParserE <> Expr
@@ -606,6 +606,7 @@ recordRemovedMsg : String
 recordTrailingComma : Int -> ParserE <> Unit
 recordUnitStart : Int -> Int -> ParserE <> Unit
 recordUpdateText : String -> List String -> String
+renderFail : PFail -> String
 reservedIdentKeyword : Token -> Option String
 reservedKeywordMsg : String -> String
 reservedOrPatFail : Token -> ParserE <> Pat

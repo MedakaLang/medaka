@@ -1,0 +1,115 @@
+{- | Recoverable parse failures stay unrendered until they become a
+   diagnostic: the text of `unexpected X; expected Y`, the furthest-failure
+   choice between two failed alternatives, and the tie rule. -}
+
+import frontend.lexer.{Token(..)}
+import frontend.parser.{
+  PR(..),
+  PFail(..),
+  ParserE(..),
+  Parser,
+  failP,
+  expectTok,
+  orElse,
+  runP,
+  renderFail,
+  parseResult,
+  parseErrorMessage,
+}
+import test.{expectEqual}
+
+-- The rendered message of a recoverable failure, or the marker text for any
+-- other outcome so a wrong outcome shows up in the assertion's diff.
+failText : PR a -> String
+failText (PErr f _) = renderFail f
+failText (PFatal m _) = "fatal: \{m}"
+failText (POk _ _) = "ok"
+
+failPos : PR a -> Int
+failPos (PErr _ q) = q
+failPos _ = -1
+
+expectAt : Token -> List Token -> PR Unit
+expectAt t toks = runP (expectTok t) (arrayFromList toks) 0
+
+parseMsg : String -> String
+parseMsg src = match parseResult src
+  Err e => parseErrorMessage e
+  Ok _ => "parsed"
+
+-- Reverting to eager rendering leaves these equal; they pin the TEXT, which
+-- must not move when rendering is deferred.
+test "expect failure text: layout tokens" =
+  expectEqual
+    [
+      "unexpected indentation; expected `)`",
+      "unexpected end of block; expected an indented block",
+      "unexpected indentation; expected the end of the block",
+    ]
+    [
+      failText (expectAt TRParen [TIndent]),
+      failText (expectAt TIndent [TDedent]),
+      failText (expectAt TDedent [TIndent]),
+    ]
+
+test "expect failure text: identifier and punctuation tokens" =
+  expectEqual
+    [
+      "unexpected `x`; expected `)`",
+      "unexpected `)`; expected `(`",
+      "unexpected line break; expected `]`",
+    ]
+    [
+      failText (expectAt TRParen [TIdent "x"]),
+      failText (expectAt TLParen [TRParen]),
+      failText (expectAt TRBracket [TNewline]),
+    ]
+
+-- Reverting `PErr` to carry a String changes nothing visible here; the test
+-- pins that the end-to-end text still comes out of `renderFail`.
+test "expect failure text survives to the diagnostic" =
+  expectEqual
+    [
+      "unexpected line break; expected `)`",
+      "unexpected `=`; expected the end of the block",
+    ]
+    [
+      parseMsg "main = (1 + 2\n",
+      parseMsg "main =\n  let x = 1\n    y = 2\n  x\n",
+    ]
+
+test "renderFail of a plain message is that message" =
+  expectEqual "boom" (renderFail (FailMsg "boom"))
+
+-- `far` fails at token index 1 (after "consuming" one token), `near` at 0.
+far : Parser Unit
+far = ParserE (toks pos => runP (expectTok TRParen) toks (pos + 1))
+
+near : Parser Unit
+near = failP "near"
+
+twoToks : Array Token
+twoToks = arrayFromList [TIdent "y", TIdent "x"]
+
+-- The first alternative failed further (qa > qb): its message is kept.
+-- Reverting to "always the second alternative" would give "near".
+test "farthest failure wins when it is the first alternative" =
+  expectEqual
+    ("unexpected `x`; expected `)`", 1)
+    (
+      failText (runP (orElse far near) twoToks 0),
+      failPos (runP (orElse far near) twoToks 0),
+    )
+
+-- The second alternative failed further: it is kept.
+test "farthest failure wins when it is the second alternative" =
+  expectEqual
+    "unexpected `x`; expected `)`"
+    (failText (runP (orElse near far) twoToks 0))
+
+-- Equal positions: the later alternative (`otherwise = PErr eb qb`) wins.
+-- Reverting the tie to the first alternative would give "first".
+test "a tie goes to the later alternative" =
+  expectEqual
+    "second"
+    (failText (runP (orElse (failP "first") (failP "second")) twoToks 0))

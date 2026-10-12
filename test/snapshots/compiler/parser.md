@@ -1,5 +1,5 @@
 # META
-source_lines=6549
+source_lines=6563
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -104,7 +104,19 @@ import support.char.{isUpper}
 -- Without this channel a deep, well-worded rejection (e.g. the #171 bare-2^62
 -- literal) is discarded by the enclosing `many (appArg …)` and the user sees a
 -- generic "unexpected INT" from the leftover-token path instead.
-public export data PR a = POk a Int | PErr String Int | PFatal String Int
+public export data PR a = POk a Int | PErr PFail Int | PFatal String Int
+
+-- A recoverable failure, kept unrendered: `orElse`/`many` discard almost all of
+-- them, so the message text is built only where one becomes a diagnostic
+-- (`renderFail`).
+public export data PFail = FailMsg String | FailExpect Token Token
+
+export
+renderFail : PFail -> String
+renderFail (FailMsg m) = m
+renderFail (FailExpect x t) =
+  "\{unexpectedTokenMsg x}; expected \{expectedTokenMsg t}"
+
 -- A parser STORES its continuation under the stepping arrow rather than running
 -- it, so the honest type indexes the container by the row that arrow performs:
 -- `ParserE e a` is the DEFERRED family's shape (core.mdk `Deferred*`, #825), and
@@ -118,6 +130,7 @@ public export data ParserE (e : Effect) a =
 
 export type Parser a = ParserE <> a
 
+export
 runP : ParserE e a -> Array Token -> Int -> <e> PR a
 runP (ParserE f) toks pos = f toks pos
 
@@ -154,8 +167,9 @@ peekTok toks pos
   | pos < arrayLength toks = arrayGetUnsafe pos toks
   | otherwise = TEof
 
+export
 failP : String -> Parser a
-failP msg = ParserE (toks pos => PErr msg pos)
+failP msg = ParserE (toks pos => PErr (FailMsg msg) pos)
 
 -- A COMMITTED failure at the current token (see `PR`).  Use only where no other
 -- production could possibly claim the token — the message is guaranteed to reach
@@ -267,7 +281,7 @@ advance : Parser Token
 advance = ParserE (toks pos => advanceR (peekTok toks pos) pos)
 
 advanceR : Token -> Int -> PR Token
-advanceR TEof pos = PErr "unexpected end of input" pos
+advanceR TEof pos = PErr (FailMsg "unexpected end of input") pos
 advanceR t pos = POk t (pos + 1)
 
 -- consume one token, yield the given value
@@ -276,6 +290,7 @@ emit x = defer
   advance
   deferPure x
 
+export
 expectTok : Token -> Parser Unit
 expectTok t = defer
   x <- peekP
@@ -283,10 +298,7 @@ expectTok t = defer
 
 expectGo : Token -> Token -> Parser Unit
 expectGo t x =
-  if x == t then
-    emit ()
-  else
-    failP "\{unexpectedTokenMsg x}; expected \{expectedTokenMsg t}"
+  if x == t then emit () else ParserE (_toks pos => PErr (FailExpect x t) pos)
 
 -- The "unexpected X" half of a parse error.  A description that carries an
 -- article (`a number`) or names a layout event (`a dedent`) reads badly after
@@ -324,6 +336,7 @@ identNameFor (TIdent x) = emit x
 identNameFor _ = failP "expected an identifier"
 
 -- ── Combinators ─────────────────────────────────────────────────────────
+export
 orElse : Parser a -> Parser a -> Parser a
 orElse pa pb = ParserE (toks pos => orElseR pa pb toks pos)
 
@@ -341,7 +354,7 @@ orElseR pa pb toks pos = match runP pa toks pos
   PFatal ea qa => PFatal ea qa
   PErr ea qa => orElseRb ea qa (runP pb toks pos)
 
-orElseRb : String -> Int -> PR a -> PR a
+orElseRb : PFail -> Int -> PR a -> PR a
 orElseRb _ _ (POk y q) = POk y q
 orElseRb _ _ (PFatal eb qb) = PFatal eb qb
 orElseRb ea qa (PErr eb qb)
@@ -5750,8 +5763,8 @@ resultDeclsResult : String ->
   Int ->
   PR (List Decl) ->
   Result ParseError (List Decl)
-resultDeclsResult src toks offs srcLen (PErr msg pos) =
-  Err (mkLocated src toks offs srcLen msg pos)
+resultDeclsResult src toks offs srcLen (PErr f pos) =
+  Err (mkLocated src toks offs srcLen (renderFail f) pos)
 resultDeclsResult src toks offs srcLen (PFatal msg pos) =
   Err (mkLocated src toks offs srcLen msg pos)
 resultDeclsResult src toks offs srcLen (POk ds pos)
@@ -5770,7 +5783,8 @@ resultDeclsResult src toks offs srcLen (POk ds pos)
 deepenLeftover : String -> Array Token -> Array Int -> Int -> Int -> ParseError
 deepenLeftover src toks offs srcLen pos = match runP parseDecl toks pos
   PFatal msg2 pos2 => mkLocated src toks offs srcLen msg2 pos2
-  PErr msg2 pos2 if pos2 > pos => mkLocated src toks offs srcLen msg2 pos2
+  PErr f2 pos2 if pos2 > pos =>
+    mkLocated src toks offs srcLen (renderFail f2) pos2
   _ =>
     mkLocated
       src
@@ -6557,10 +6571,14 @@ parseResultWith src tokList offList =
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
-(DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "String") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "PFail") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "PFail" () ((variant "FailMsg" (ConPos (TyCon "String"))) (variant "FailExpect" (ConPos (TyCon "Token") (TyCon "Token")))) ())
+(DTypeSig true "renderFail" (TyFun (TyCon "PFail") (TyCon "String")))
+(DFunDef false "renderFail" ((PCon "FailMsg" (PVar "m"))) (EVar "m"))
+(DFunDef false "renderFail" ((PCon "FailExpect" (PVar "x") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "unexpectedTokenMsg") (EVar "x")))) (ELit (LString "; expected "))) (EApp (EVar "display") (EApp (EVar "expectedTokenMsg") (EVar "t")))) (ELit (LString ""))))
 (DData Public "ParserE" ("e" "a") ((variant "ParserE" (ConPos (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))) ())
 (DTypeAlias true "Parser" ("a") (TyApp (TyApp (TyCon "ParserE") (TyRow () None)) (TyVar "a")))
-(DTypeSig false "runP" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))
+(DTypeSig true "runP" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))
 (DFunDef false "runP" ((PCon "ParserE" (PVar "f")) (PVar "toks") (PVar "pos")) (EApp (EApp (EVar "f") (EVar "toks")) (EVar "pos")))
 (DTypeSig false "mapPR" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "PR") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "b"))))))
 (DFunDef false "mapPR" ((PVar "f") (PCon "POk" (PVar "a") (PVar "pos"))) (EApp (EApp (EVar "POk") (EApp (EVar "f") (EVar "a"))) (EVar "pos")))
@@ -6575,8 +6593,8 @@ parseResultWith src tokList offList =
 (DImpl false "DeferredThenable" ((TyCon "ParserE")) () ((im "deferThen" ((PVar "pa") (PVar "k")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EApp (EApp (EVar "bindPR") (EVar "pa")) (EVar "k")) (EVar "toks")) (EVar "pos")))))))
 (DTypeSig false "peekTok" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Token"))))
 (DFunDef false "peekTok" ((PVar "toks") (PVar "pos")) (EIf (EBinOp "<" (EVar "pos") (EApp (EVar "arrayLength") (EVar "toks"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "toks")) (EIf (EVar "otherwise") (EVar "TEof") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "failP" (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyVar "a"))))
-(DFunDef false "failP" ((PVar "msg")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "PErr") (EVar "msg")) (EVar "pos")))))
+(DTypeSig true "failP" (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyVar "a"))))
+(DFunDef false "failP" ((PVar "msg")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "PErr") (EApp (EVar "FailMsg") (EVar "msg"))) (EVar "pos")))))
 (DTypeSig false "fatalP" (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyVar "a"))))
 (DFunDef false "fatalP" ((PVar "msg")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "PFatal") (EVar "msg")) (EVar "pos")))))
 (DTypeSig false "fatalAtP" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyVar "a")))))
@@ -6608,14 +6626,14 @@ parseResultWith src tokList offList =
 (DTypeSig false "advance" (TyApp (TyCon "Parser") (TyCon "Token")))
 (DFunDef false "advance" () (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "advanceR") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "pos")))))
 (DTypeSig false "advanceR" (TyFun (TyCon "Token") (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Token")))))
-(DFunDef false "advanceR" ((PCon "TEof") (PVar "pos")) (EApp (EApp (EVar "PErr") (ELit (LString "unexpected end of input"))) (EVar "pos")))
+(DFunDef false "advanceR" ((PCon "TEof") (PVar "pos")) (EApp (EApp (EVar "PErr") (EApp (EVar "FailMsg") (ELit (LString "unexpected end of input")))) (EVar "pos")))
 (DFunDef false "advanceR" ((PVar "t") (PVar "pos")) (EApp (EApp (EVar "POk") (EVar "t")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))
 (DTypeSig false "emit" (TyFun (TyVar "a") (TyApp (TyCon "Parser") (TyVar "a"))))
 (DFunDef false "emit" ((PVar "x")) (EApp (EApp (EVar "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EVar "deferPure") (EVar "x")))))
-(DTypeSig false "expectTok" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit"))))
+(DTypeSig true "expectTok" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit"))))
 (DFunDef false "expectTok" ((PVar "t")) (EApp (EApp (EVar "deferThen") (EVar "peekP")) (ELam ((PVar "x")) (EApp (EApp (EVar "expectGo") (EVar "t")) (EVar "x")))))
 (DTypeSig false "expectGo" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit")))))
-(DFunDef false "expectGo" ((PVar "t") (PVar "x")) (EIf (EBinOp "==" (EVar "x") (EVar "t")) (EApp (EVar "emit") (ELit LUnit)) (EApp (EVar "failP") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "unexpectedTokenMsg") (EVar "x")))) (ELit (LString "; expected "))) (EApp (EVar "display") (EApp (EVar "expectedTokenMsg") (EVar "t")))) (ELit (LString ""))))))
+(DFunDef false "expectGo" ((PVar "t") (PVar "x")) (EIf (EBinOp "==" (EVar "x") (EVar "t")) (EApp (EVar "emit") (ELit LUnit)) (EApp (EVar "ParserE") (ELam ((PVar "_toks") (PVar "pos")) (EApp (EApp (EVar "PErr") (EApp (EApp (EVar "FailExpect") (EVar "x")) (EVar "t"))) (EVar "pos"))))))
 (DTypeSig false "unexpectedTokenMsg" (TyFun (TyCon "Token") (TyCon "String")))
 (DFunDef false "unexpectedTokenMsg" ((PVar "t")) (EBinOp "++" (ELit (LString "unexpected ")) (EApp (EVar "unexpectedTokenText") (EVar "t"))))
 (DTypeSig false "unexpectedTokenText" (TyFun (TyCon "Token") (TyCon "String")))
@@ -6640,11 +6658,11 @@ parseResultWith src tokList offList =
 (DTypeSig false "identNameFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "String"))))
 (DFunDef false "identNameFor" ((PCon "TIdent" (PVar "x"))) (EApp (EVar "emit") (EVar "x")))
 (DFunDef false "identNameFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected an identifier"))))
-(DTypeSig false "orElse" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyApp (TyCon "Parser") (TyVar "a")))))
+(DTypeSig true "orElse" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyApp (TyCon "Parser") (TyVar "a")))))
 (DFunDef false "orElse" ((PVar "pa") (PVar "pb")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EApp (EApp (EVar "orElseR") (EVar "pa")) (EVar "pb")) (EVar "toks")) (EVar "pos")))))
 (DTypeSig false "orElseR" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyVar "a")))))))
 (DFunDef false "orElseR" ((PVar "pa") (PVar "pb") (PVar "toks") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runP") (EVar "pa")) (EVar "toks")) (EVar "pos")) (arm (PCon "POk" (PVar "x") (PVar "q")) () (EApp (EApp (EVar "POk") (EVar "x")) (EVar "q"))) (arm (PCon "PFatal" (PVar "ea") (PVar "qa")) () (EApp (EApp (EVar "PFatal") (EVar "ea")) (EVar "qa"))) (arm (PCon "PErr" (PVar "ea") (PVar "qa")) () (EApp (EApp (EApp (EVar "orElseRb") (EVar "ea")) (EVar "qa")) (EApp (EApp (EApp (EVar "runP") (EVar "pb")) (EVar "toks")) (EVar "pos"))))))
-(DTypeSig false "orElseRb" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "PR") (TyVar "a")) (TyApp (TyCon "PR") (TyVar "a"))))))
+(DTypeSig false "orElseRb" (TyFun (TyCon "PFail") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "PR") (TyVar "a")) (TyApp (TyCon "PR") (TyVar "a"))))))
 (DFunDef false "orElseRb" (PWild PWild (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EVar "POk") (EVar "y")) (EVar "q")))
 (DFunDef false "orElseRb" (PWild PWild (PCon "PFatal" (PVar "eb") (PVar "qb"))) (EApp (EApp (EVar "PFatal") (EVar "eb")) (EVar "qb")))
 (DFunDef false "orElseRb" ((PVar "ea") (PVar "qa") (PCon "PErr" (PVar "eb") (PVar "qb"))) (EIf (EBinOp ">" (EVar "qa") (EVar "qb")) (EApp (EApp (EVar "PErr") (EVar "ea")) (EVar "qa")) (EIf (EVar "otherwise") (EApp (EApp (EVar "PErr") (EVar "eb")) (EVar "qb")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -8324,11 +8342,11 @@ parseResultWith src tokList offList =
 (DTypeSig false "locateOffset" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "locateOffset" ((PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "srcLen") (EIf (EApp (EVar "isEofTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "srcLen") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "offsetAt") (EVar "offs")) (EVar "srcLen")) (EVar "pos")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "resultDeclsResult" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "PR") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "resultDeclsResult" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PCon "PErr" (PVar "msg") (PVar "pos"))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg")) (EVar "pos"))))
+(DFunDef false "resultDeclsResult" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PCon "PErr" (PVar "f") (PVar "pos"))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EVar "renderFail") (EVar "f"))) (EVar "pos"))))
 (DFunDef false "resultDeclsResult" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PCon "PFatal" (PVar "msg") (PVar "pos"))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg")) (EVar "pos"))))
 (DFunDef false "resultDeclsResult" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PCon "POk" (PVar "ds") (PVar "pos"))) (EIf (EApp (EVar "isEofTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EApp (EVar "Ok") (EVar "ds")) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "deepenLeftover") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "deepenLeftover" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "ParseError")))))))
-(DFunDef false "deepenLeftover" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runP") (EVar "parseDecl")) (EVar "toks")) (EVar "pos")) (arm (PCon "PFatal" (PVar "msg2") (PVar "pos2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg2")) (EVar "pos2"))) (arm (PCon "PErr" (PVar "msg2") (PVar "pos2")) ((GBool (EBinOp ">" (EVar "pos2") (EVar "pos")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg2")) (EVar "pos2"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EApp (EApp (EApp (EApp (EVar "unexpectedLeftoverMsg") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (EVar "pos")))))
+(DFunDef false "deepenLeftover" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runP") (EVar "parseDecl")) (EVar "toks")) (EVar "pos")) (arm (PCon "PFatal" (PVar "msg2") (PVar "pos2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg2")) (EVar "pos2"))) (arm (PCon "PErr" (PVar "f2") (PVar "pos2")) ((GBool (EBinOp ">" (EVar "pos2") (EVar "pos")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EVar "renderFail") (EVar "f2"))) (EVar "pos2"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EApp (EApp (EApp (EApp (EVar "unexpectedLeftoverMsg") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (EVar "pos")))))
 (DTypeSig false "mkLocated" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "ParseError"))))))))
 (DFunDef false "mkLocated" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "msg") (PVar "pos")) (EMatch (EApp (EApp (EVar "offsetToLineCol") (EVar "src")) (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (arm (PTuple (PVar "line") (PVar "col")) () (EApp (EApp (EApp (EVar "ParseError") (EVar "line")) (EVar "col")) (EVar "msg")))))
 (DTypeSig false "leadingIndentAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
@@ -8482,10 +8500,14 @@ parseResultWith src tokList offList =
 (DUse false (UseGroup ("support" "util") ((mem "reverseL" false) (mem "joinWith" false))))
 (DUse false (UseGroup ("list") ((mem "last" false))))
 (DUse false (UseGroup ("support" "char") ((mem "isUpper" false))))
-(DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "String") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "PR" ("a") ((variant "POk" (ConPos (TyVar "a") (TyCon "Int"))) (variant "PErr" (ConPos (TyCon "PFail") (TyCon "Int"))) (variant "PFatal" (ConPos (TyCon "String") (TyCon "Int")))) ())
+(DData Public "PFail" () ((variant "FailMsg" (ConPos (TyCon "String"))) (variant "FailExpect" (ConPos (TyCon "Token") (TyCon "Token")))) ())
+(DTypeSig true "renderFail" (TyFun (TyCon "PFail") (TyCon "String")))
+(DFunDef false "renderFail" ((PCon "FailMsg" (PVar "m"))) (EVar "m"))
+(DFunDef false "renderFail" ((PCon "FailExpect" (PVar "x") (PVar "t"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "unexpectedTokenMsg") (EVar "x")))) (ELit (LString "; expected "))) (EApp (EMethodRef "display") (EApp (EVar "expectedTokenMsg") (EVar "t")))) (ELit (LString ""))))
 (DData Public "ParserE" ("e" "a") ((variant "ParserE" (ConPos (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))) ())
 (DTypeAlias true "Parser" ("a") (TyApp (TyApp (TyCon "ParserE") (TyRow () None)) (TyVar "a")))
-(DTypeSig false "runP" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))
+(DTypeSig true "runP" (TyFun (TyApp (TyApp (TyCon "ParserE") (TyVar "e")) (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "a")))))))
 (DFunDef false "runP" ((PCon "ParserE" (PVar "f")) (PVar "toks") (PVar "pos")) (EApp (EApp (EVar "f") (EVar "toks")) (EVar "pos")))
 (DTypeSig false "mapPR" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "PR") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "PR") (TyVar "b"))))))
 (DFunDef false "mapPR" ((PVar "f") (PCon "POk" (PVar "a") (PVar "pos"))) (EApp (EApp (EVar "POk") (EApp (EVar "f") (EVar "a"))) (EVar "pos")))
@@ -8500,8 +8522,8 @@ parseResultWith src tokList offList =
 (DImpl false "DeferredThenable" ((TyCon "ParserE")) () ((im "deferThen" ((PVar "pa") (PVar "k")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EApp (EApp (EVar "bindPR") (EVar "pa")) (EVar "k")) (EVar "toks")) (EVar "pos")))))))
 (DTypeSig false "peekTok" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyCon "Token"))))
 (DFunDef false "peekTok" ((PVar "toks") (PVar "pos")) (EIf (EBinOp "<" (EVar "pos") (EApp (EVar "arrayLength") (EVar "toks"))) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "pos")) (EVar "toks")) (EIf (EVar "otherwise") (EVar "TEof") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "failP" (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyVar "a"))))
-(DFunDef false "failP" ((PVar "msg")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "PErr") (EVar "msg")) (EVar "pos")))))
+(DTypeSig true "failP" (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyVar "a"))))
+(DFunDef false "failP" ((PVar "msg")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "PErr") (EApp (EVar "FailMsg") (EVar "msg"))) (EVar "pos")))))
 (DTypeSig false "fatalP" (TyFun (TyCon "String") (TyApp (TyCon "Parser") (TyVar "a"))))
 (DFunDef false "fatalP" ((PVar "msg")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "PFatal") (EVar "msg")) (EVar "pos")))))
 (DTypeSig false "fatalAtP" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Parser") (TyVar "a")))))
@@ -8533,14 +8555,14 @@ parseResultWith src tokList offList =
 (DTypeSig false "advance" (TyApp (TyCon "Parser") (TyCon "Token")))
 (DFunDef false "advance" () (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EVar "advanceR") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "pos")))))
 (DTypeSig false "advanceR" (TyFun (TyCon "Token") (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyCon "Token")))))
-(DFunDef false "advanceR" ((PCon "TEof") (PVar "pos")) (EApp (EApp (EVar "PErr") (ELit (LString "unexpected end of input"))) (EVar "pos")))
+(DFunDef false "advanceR" ((PCon "TEof") (PVar "pos")) (EApp (EApp (EVar "PErr") (EApp (EVar "FailMsg") (ELit (LString "unexpected end of input")))) (EVar "pos")))
 (DFunDef false "advanceR" ((PVar "t") (PVar "pos")) (EApp (EApp (EVar "POk") (EVar "t")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))))
 (DTypeSig false "emit" (TyFun (TyVar "a") (TyApp (TyCon "Parser") (TyVar "a"))))
 (DFunDef false "emit" ((PVar "x")) (EApp (EApp (EMethodRef "deferThen") (EVar "advance")) (ELam (PWild) (EApp (EMethodRef "deferPure") (EVar "x")))))
-(DTypeSig false "expectTok" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit"))))
+(DTypeSig true "expectTok" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit"))))
 (DFunDef false "expectTok" ((PVar "t")) (EApp (EApp (EMethodRef "deferThen") (EVar "peekP")) (ELam ((PVar "x")) (EApp (EApp (EVar "expectGo") (EVar "t")) (EVar "x")))))
 (DTypeSig false "expectGo" (TyFun (TyCon "Token") (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "Unit")))))
-(DFunDef false "expectGo" ((PVar "t") (PVar "x")) (EIf (EBinOp "==" (EVar "x") (EVar "t")) (EApp (EVar "emit") (ELit LUnit)) (EApp (EVar "failP") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "unexpectedTokenMsg") (EVar "x")))) (ELit (LString "; expected "))) (EApp (EMethodRef "display") (EApp (EVar "expectedTokenMsg") (EVar "t")))) (ELit (LString ""))))))
+(DFunDef false "expectGo" ((PVar "t") (PVar "x")) (EIf (EBinOp "==" (EVar "x") (EVar "t")) (EApp (EVar "emit") (ELit LUnit)) (EApp (EVar "ParserE") (ELam ((PVar "_toks") (PVar "pos")) (EApp (EApp (EVar "PErr") (EApp (EApp (EVar "FailExpect") (EVar "x")) (EVar "t"))) (EVar "pos"))))))
 (DTypeSig false "unexpectedTokenMsg" (TyFun (TyCon "Token") (TyCon "String")))
 (DFunDef false "unexpectedTokenMsg" ((PVar "t")) (EBinOp "++" (ELit (LString "unexpected ")) (EApp (EVar "unexpectedTokenText") (EVar "t"))))
 (DTypeSig false "unexpectedTokenText" (TyFun (TyCon "Token") (TyCon "String")))
@@ -8565,11 +8587,11 @@ parseResultWith src tokList offList =
 (DTypeSig false "identNameFor" (TyFun (TyCon "Token") (TyApp (TyCon "Parser") (TyCon "String"))))
 (DFunDef false "identNameFor" ((PCon "TIdent" (PVar "x"))) (EApp (EVar "emit") (EVar "x")))
 (DFunDef false "identNameFor" (PWild) (EApp (EVar "failP") (ELit (LString "expected an identifier"))))
-(DTypeSig false "orElse#shadow" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyApp (TyCon "Parser") (TyVar "a")))))
+(DTypeSig true "orElse#shadow" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyApp (TyCon "Parser") (TyVar "a")))))
 (DFunDef false "orElse#shadow" ((PVar "pa") (PVar "pb")) (EApp (EVar "ParserE") (ELam ((PVar "toks") (PVar "pos")) (EApp (EApp (EApp (EApp (EVar "orElseR") (EVar "pa")) (EVar "pb")) (EVar "toks")) (EVar "pos")))))
 (DTypeSig false "orElseR" (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Parser") (TyVar "a")) (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyCon "Int") (TyApp (TyCon "PR") (TyVar "a")))))))
 (DFunDef false "orElseR" ((PVar "pa") (PVar "pb") (PVar "toks") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runP") (EVar "pa")) (EVar "toks")) (EVar "pos")) (arm (PCon "POk" (PVar "x") (PVar "q")) () (EApp (EApp (EVar "POk") (EVar "x")) (EVar "q"))) (arm (PCon "PFatal" (PVar "ea") (PVar "qa")) () (EApp (EApp (EVar "PFatal") (EVar "ea")) (EVar "qa"))) (arm (PCon "PErr" (PVar "ea") (PVar "qa")) () (EApp (EApp (EApp (EVar "orElseRb") (EVar "ea")) (EVar "qa")) (EApp (EApp (EApp (EVar "runP") (EVar "pb")) (EVar "toks")) (EVar "pos"))))))
-(DTypeSig false "orElseRb" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "PR") (TyVar "a")) (TyApp (TyCon "PR") (TyVar "a"))))))
+(DTypeSig false "orElseRb" (TyFun (TyCon "PFail") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "PR") (TyVar "a")) (TyApp (TyCon "PR") (TyVar "a"))))))
 (DFunDef false "orElseRb" (PWild PWild (PCon "POk" (PVar "y") (PVar "q"))) (EApp (EApp (EVar "POk") (EVar "y")) (EVar "q")))
 (DFunDef false "orElseRb" (PWild PWild (PCon "PFatal" (PVar "eb") (PVar "qb"))) (EApp (EApp (EVar "PFatal") (EVar "eb")) (EVar "qb")))
 (DFunDef false "orElseRb" ((PVar "ea") (PVar "qa") (PCon "PErr" (PVar "eb") (PVar "qb"))) (EIf (EBinOp ">" (EVar "qa") (EVar "qb")) (EApp (EApp (EVar "PErr") (EVar "ea")) (EVar "qa")) (EIf (EVar "otherwise") (EApp (EApp (EVar "PErr") (EVar "eb")) (EVar "qb")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -10249,11 +10271,11 @@ parseResultWith src tokList offList =
 (DTypeSig false "locateOffset" (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "locateOffset" ((PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EIf (EBinOp ">=" (EVar "pos") (EApp (EVar "arrayLength") (EVar "toks"))) (EVar "srcLen") (EIf (EApp (EVar "isEofTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EVar "srcLen") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "offsetAt") (EVar "offs")) (EVar "srcLen")) (EVar "pos")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "resultDeclsResult" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "PR") (TyApp (TyCon "List") (TyCon "Decl"))) (TyApp (TyApp (TyCon "Result") (TyCon "ParseError")) (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "resultDeclsResult" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PCon "PErr" (PVar "msg") (PVar "pos"))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg")) (EVar "pos"))))
+(DFunDef false "resultDeclsResult" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PCon "PErr" (PVar "f") (PVar "pos"))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EVar "renderFail") (EVar "f"))) (EVar "pos"))))
 (DFunDef false "resultDeclsResult" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PCon "PFatal" (PVar "msg") (PVar "pos"))) (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg")) (EVar "pos"))))
 (DFunDef false "resultDeclsResult" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PCon "POk" (PVar "ds") (PVar "pos"))) (EIf (EApp (EVar "isEofTok") (EApp (EApp (EVar "peekTok") (EVar "toks")) (EVar "pos"))) (EApp (EVar "Ok") (EVar "ds")) (EIf (EVar "otherwise") (EApp (EVar "Err") (EApp (EApp (EApp (EApp (EApp (EVar "deepenLeftover") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "deepenLeftover" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "ParseError")))))))
-(DFunDef false "deepenLeftover" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runP") (EVar "parseDecl")) (EVar "toks")) (EVar "pos")) (arm (PCon "PFatal" (PVar "msg2") (PVar "pos2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg2")) (EVar "pos2"))) (arm (PCon "PErr" (PVar "msg2") (PVar "pos2")) ((GBool (EBinOp ">" (EVar "pos2") (EVar "pos")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg2")) (EVar "pos2"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EApp (EApp (EApp (EApp (EVar "unexpectedLeftoverMsg") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (EVar "pos")))))
+(DFunDef false "deepenLeftover" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "pos")) (EMatch (EApp (EApp (EApp (EVar "runP") (EVar "parseDecl")) (EVar "toks")) (EVar "pos")) (arm (PCon "PFatal" (PVar "msg2") (PVar "pos2")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "msg2")) (EVar "pos2"))) (arm (PCon "PErr" (PVar "f2") (PVar "pos2")) ((GBool (EBinOp ">" (EVar "pos2") (EVar "pos")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EVar "renderFail") (EVar "f2"))) (EVar "pos2"))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkLocated") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EApp (EApp (EApp (EApp (EApp (EVar "unexpectedLeftoverMsg") (EVar "src")) (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (EVar "pos")))))
 (DTypeSig false "mkLocated" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Token")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "ParseError"))))))))
 (DFunDef false "mkLocated" ((PVar "src") (PVar "toks") (PVar "offs") (PVar "srcLen") (PVar "msg") (PVar "pos")) (EMatch (EApp (EApp (EVar "offsetToLineCol") (EVar "src")) (EApp (EApp (EApp (EApp (EVar "locateOffset") (EVar "toks")) (EVar "offs")) (EVar "srcLen")) (EVar "pos"))) (arm (PTuple (PVar "line") (PVar "col")) () (EApp (EApp (EApp (EVar "ParseError") (EVar "line")) (EVar "col")) (EVar "msg")))))
 (DTypeSig false "leadingIndentAt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))

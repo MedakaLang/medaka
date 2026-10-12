@@ -354,6 +354,12 @@ inlang-frontend-resolve:
 inlang-frontend-resolve-test:
 	./medaka test --native compiler/frontend/resolve_test.mdk
 
+## compiler/frontend/parser_test.mdk is a `*_test.mdk` sibling, outside every
+## entry's import closure ([W-MODULE-BLIND]): the unrendered-failure text and
+## the furthest-failure choice would otherwise never run.
+inlang-frontend-parser-test:
+	./medaka test compiler/frontend/parser_test.mdk
+
 ## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole
 ## in-language suite (lib + main) has no floor gate of any kind, and a
 ## directory target already grades every assertion in it with one exit
