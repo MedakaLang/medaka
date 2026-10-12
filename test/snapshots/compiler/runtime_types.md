@@ -1,5 +1,5 @@
 # META
-source_lines=210
+source_lines=187
 stages=DESUGAR,MARK
 # SOURCE
 -- What each source binder holds at run time, as the typechecker decided it.
@@ -151,29 +151,6 @@ builtinRuntimeType "__tuple4__" = RTCon
 builtinRuntimeType "__tuple5__" = RTCon
 builtinRuntimeType _ = RTValue
 
--- What a function of type [t] returns after [arity] parameters.  A type that
--- does not have that many arrows (an arity the solved type cannot confirm)
--- fixes nothing.
-export
-returnRuntimeTypeOf : (String -> TyConOrigin -> Bool) ->
-  Int ->
-  Mono ->
-  RuntimeType
-returnRuntimeTypeOf isCell arity t = match peelArrows arity t
-  Some r => runtimeTypeOf isCell r
-  None => RTValue
-
-peelArrows : Int -> Mono -> Option Mono
-peelArrows n t
-  | n <= 0 = Some t
-  | otherwise = match t
-    TVar cell => match !cell
-      Link t2 => peelArrows n t2
-      Unbound _ _ => None
-    TQual inner _ => peelArrows n inner
-    TFun _ _ r => peelArrows (n - 1) r
-    _ => None
-
 -- ── the installed table ───────────────────────────────────────────────────
 -- Exactly one table is installed per elaboration, beside the evidence and
 -- disposition tables and under the same ordering: every read of it completes
@@ -261,10 +238,6 @@ installedBinderRows _ = match !binderTypesRef
 (DFunDef false "builtinRuntimeType" ((PLit (LString "__tuple4__"))) (EVar "RTCon"))
 (DFunDef false "builtinRuntimeType" ((PLit (LString "__tuple5__"))) (EVar "RTCon"))
 (DFunDef false "builtinRuntimeType" (PWild) (EVar "RTValue"))
-(DTypeSig true "returnRuntimeTypeOf" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "RuntimeType")))))
-(DFunDef false "returnRuntimeTypeOf" ((PVar "isCell") (PVar "arity") (PVar "t")) (EMatch (EApp (EApp (EVar "peelArrows") (EVar "arity")) (EVar "t")) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "r"))) (arm (PCon "None") () (EVar "RTValue"))))
-(DTypeSig false "peelArrows" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
-(DFunDef false "peelArrows" ((PVar "n") (PVar "t")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "t")) (EIf (EVar "otherwise") (EMatch (EVar "t") (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" (PVar "t2")) () (EApp (EApp (EVar "peelArrows") (EVar "n")) (EVar "t2"))) (arm (PCon "Unbound" PWild PWild) () (EVar "None")))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EVar "peelArrows") (EVar "n")) (EVar "inner"))) (arm (PCon "TFun" PWild PWild (PVar "r")) () (EApp (EApp (EVar "peelArrows") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "r"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "binderTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))))
 (DFunDef false "binderTypesRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "installBinderTypes" (TyFun (TyCon "BinderTypeTable") (TyCon "Unit")))
@@ -322,10 +295,6 @@ installedBinderRows _ = match !binderTypesRef
 (DFunDef false "builtinRuntimeType" ((PLit (LString "__tuple4__"))) (EVar "RTCon"))
 (DFunDef false "builtinRuntimeType" ((PLit (LString "__tuple5__"))) (EVar "RTCon"))
 (DFunDef false "builtinRuntimeType" (PWild) (EVar "RTValue"))
-(DTypeSig true "returnRuntimeTypeOf" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyCon "RuntimeType")))))
-(DFunDef false "returnRuntimeTypeOf" ((PVar "isCell") (PVar "arity") (PVar "t")) (EMatch (EApp (EApp (EVar "peelArrows") (EVar "arity")) (EVar "t")) (arm (PCon "Some" (PVar "r")) () (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "r"))) (arm (PCon "None") () (EVar "RTValue"))))
-(DTypeSig false "peelArrows" (TyFun (TyCon "Int") (TyFun (TyCon "Mono") (TyApp (TyCon "Option") (TyCon "Mono")))))
-(DFunDef false "peelArrows" ((PVar "n") (PVar "t")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "t")) (EIf (EVar "otherwise") (EMatch (EVar "t") (arm (PCon "TVar" (PVar "cell")) () (EMatch (EUnOp "!" (EVar "cell")) (arm (PCon "Link" (PVar "t2")) () (EApp (EApp (EVar "peelArrows") (EVar "n")) (EVar "t2"))) (arm (PCon "Unbound" PWild PWild) () (EVar "None")))) (arm (PCon "TQual" (PVar "inner") PWild) () (EApp (EApp (EVar "peelArrows") (EVar "n")) (EVar "inner"))) (arm (PCon "TFun" PWild PWild (PVar "r")) () (EApp (EApp (EVar "peelArrows") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "r"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "binderTypesRef" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "BinderTypeTable"))))
 (DFunDef false "binderTypesRef" () (EApp (EVar "Ref") (EVar "None")))
 (DTypeSig true "installBinderTypes" (TyFun (TyCon "BinderTypeTable") (TyCon "Unit")))

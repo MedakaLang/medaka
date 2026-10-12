@@ -1,5 +1,5 @@
 # META
-source_lines=55923
+source_lines=55928
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -521,7 +521,7 @@ import types.runtime_types.{
   addBinderRow,
   emptyBinderTypes,
   installBinderTypes,
-  returnRuntimeTypeOf,
+  RuntimeType(..),
   runtimeTypeOf,
 }
 
@@ -55501,7 +55501,12 @@ materializeBinder isCell (PendingBinder bid name t arity) = BinderRow {
   brId = bid,
   brName = name,
   brType = runtimeTypeOf isCell t,
-  brReturns = map (n => returnRuntimeTypeOf isCell n t) arity,
+  -- A solved type with fewer arrows than the declared parameters fixes nothing.
+  brReturns =
+    map
+      (n =>
+        optionOr RTValue (map (runtimeTypeOf isCell) (resultAfterArrows n t)))
+      arity,
 }
 
 -- The type heads whose values are constructor cells: every `data` and `newtype`
@@ -55959,7 +55964,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false) (mem "selectedProfile" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "BinderTypeTable" false) (mem "addBinderRow" false) (mem "emptyBinderTypes" false) (mem "installBinderTypes" false) (mem "returnRuntimeTypeOf" false) (mem "runtimeTypeOf" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "BinderTypeTable" false) (mem "addBinderRow" false) (mem "emptyBinderTypes" false) (mem "installBinderTypes" false) (mem "RuntimeType" true) (mem "runtimeTypeOf" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "tconBuiltin" ((PVar "n")) (EApp (EApp (EVar "TCon") (EVar "n")) (EVar "OriginBuiltin")))
 (DTypeSig false "tconTupleHead" (TyFun (TyCon "Int") (TyCon "Mono")))
@@ -65152,7 +65157,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "materializeBinderTypes" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "materializeBinderTypes" (PWild) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "g") "binderPending") "value") (arm (PList) () (ELit LUnit)) (arm (PVar "pending") () (EBlock (DoLet false false (PVar "cells") (EApp (EVar "cellTypeHeads") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deAllDecls"))) (DoLet false false (PVar "isCell") (ELam ((PVar "n") (PVar "o")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "cellHeadKey") (EVar "n")) (EVar "o"))) (EVar "cells")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "binderRows")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EVar "addBinderRow") (EApp (EApp (EVar "materializeBinder") (EVar "isCell")) (EVar "p"))) (EVar "acc")))) (EFieldAccess (EFieldAccess (EVar "g") "binderRows") "value")) (EApp (EVar "reverseL") (EVar "pending"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "binderPending")) (EListLit)))))))))
 (DTypeSig false "materializeBinder" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "PendingBinder") (TyCon "BinderRow"))))
-(DFunDef false "materializeBinder" ((PVar "isCell") (PCon "PendingBinder" (PVar "bid") (PVar "name") (PVar "t") (PVar "arity"))) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "name")) (fa "brType" (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "t"))) (fa "brReturns" (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "returnRuntimeTypeOf") (EVar "isCell")) (EVar "n")) (EVar "t")))) (EVar "arity"))))))
+(DFunDef false "materializeBinder" ((PVar "isCell") (PCon "PendingBinder" (PVar "bid") (PVar "name") (PVar "t") (PVar "arity"))) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "name")) (fa "brType" (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "t"))) (fa "brReturns" (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EApp (EApp (EVar "optionOr") (EVar "RTValue")) (EApp (EApp (EVar "map") (EApp (EVar "runtimeTypeOf") (EVar "isCell"))) (EApp (EApp (EVar "resultAfterArrows") (EVar "n")) (EVar "t")))))) (EVar "arity"))))))
 (DTypeSig false "cellTypeHeads" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "cellTypeHeads" ((PVar "decls")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PVar "d")) (EApp (EApp (EVar "addCellHead") (EVar "d")) (EVar "acc")))) (EVar "omEmpty")) (EVar "decls")))
 (DTypeSig false "addCellHead" (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))
@@ -65261,7 +65266,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "route_key") ((mem "typeTagOf" false) (mem "implRouteKeyWord" false) (mem "ifaceWordOf" false) (mem "funHeadTag" false) (mem "installEvidence" false) (mem "evDictRoutes" false))))
 (DUse false (UseGroup ("types" "disposition") ((mem "InstId" true) (mem "MethodDisposition" true) (mem "DispositionTable" false) (mem "InstanceShape" true) (mem "buildDispositionTableWithShapes" false) (mem "installDispositions" false) (mem "installedDispositionsOpt" false) (mem "restoreDispositions" false) (mem "validateDispositionTable" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "hostLabels" false) (mem "ioJoinGrants" false) (mem "profileName" false) (mem "selectedProfile" false))))
-(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "BinderTypeTable" false) (mem "addBinderRow" false) (mem "emptyBinderTypes" false) (mem "installBinderTypes" false) (mem "returnRuntimeTypeOf" false) (mem "runtimeTypeOf" false))))
+(DUse false (UseGroup ("types" "runtime_types") ((mem "BinderRow" true) (mem "BinderTypeTable" false) (mem "addBinderRow" false) (mem "emptyBinderTypes" false) (mem "installBinderTypes" false) (mem "RuntimeType" true) (mem "runtimeTypeOf" false))))
 (DTypeSig false "tconBuiltin" (TyFun (TyCon "String") (TyCon "Mono")))
 (DFunDef false "tconBuiltin" ((PVar "n")) (EApp (EApp (EVar "TCon") (EVar "n")) (EVar "OriginBuiltin")))
 (DTypeSig false "tconTupleHead" (TyFun (TyCon "Int") (TyCon "Mono")))
@@ -74454,7 +74459,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "materializeBinderTypes" (TyFun (TyCon "Unit") (TyCon "Unit")))
 (DFunDef false "materializeBinderTypes" (PWild) (EBlock (DoLet false false (PVar "g") (EFieldAccess (EVar "graphRun") "value")) (DoExpr (EMatch (EFieldAccess (EFieldAccess (EVar "g") "binderPending") "value") (arm (PList) () (ELit LUnit)) (arm (PVar "pending") () (EBlock (DoLet false false (PVar "cells") (EApp (EVar "cellTypeHeads") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deAllDecls"))) (DoLet false false (PVar "isCell") (ELam ((PVar "n") (PVar "o")) (EApp (EApp (EVar "omHasKey") (EApp (EApp (EVar "cellHeadKey") (EVar "n")) (EVar "o"))) (EVar "cells")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "binderRows")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "p")) (EApp (EApp (EVar "addBinderRow") (EApp (EApp (EVar "materializeBinder") (EVar "isCell")) (EVar "p"))) (EVar "acc")))) (EFieldAccess (EFieldAccess (EVar "g") "binderRows") "value")) (EApp (EVar "reverseL") (EVar "pending"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "g") "binderPending")) (EListLit)))))))))
 (DTypeSig false "materializeBinder" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyCon "Bool"))) (TyFun (TyCon "PendingBinder") (TyCon "BinderRow"))))
-(DFunDef false "materializeBinder" ((PVar "isCell") (PCon "PendingBinder" (PVar "bid") (PVar "name") (PVar "t") (PVar "arity"))) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "name")) (fa "brType" (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "t"))) (fa "brReturns" (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EApp (EVar "returnRuntimeTypeOf") (EVar "isCell")) (EVar "n")) (EVar "t")))) (EVar "arity"))))))
+(DFunDef false "materializeBinder" ((PVar "isCell") (PCon "PendingBinder" (PVar "bid") (PVar "name") (PVar "t") (PVar "arity"))) (ERecordCreate "BinderRow" ((fa "brId" (EVar "bid")) (fa "brName" (EVar "name")) (fa "brType" (EApp (EApp (EVar "runtimeTypeOf") (EVar "isCell")) (EVar "t"))) (fa "brReturns" (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EApp (EApp (EVar "optionOr") (EVar "RTValue")) (EApp (EApp (EMethodRef "map") (EApp (EVar "runtimeTypeOf") (EVar "isCell"))) (EApp (EApp (EVar "resultAfterArrows") (EVar "n")) (EVar "t")))))) (EVar "arity"))))))
 (DTypeSig false "cellTypeHeads" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))
 (DFunDef false "cellTypeHeads" ((PVar "decls")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PVar "d")) (EApp (EApp (EVar "addCellHead") (EVar "d")) (EVar "acc")))) (EVar "omEmpty")) (EVar "decls")))
 (DTypeSig false "addCellHead" (TyFun (TyCon "Decl") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")))))

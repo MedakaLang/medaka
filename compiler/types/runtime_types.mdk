@@ -147,29 +147,6 @@ builtinRuntimeType "__tuple4__" = RTCon
 builtinRuntimeType "__tuple5__" = RTCon
 builtinRuntimeType _ = RTValue
 
--- What a function of type [t] returns after [arity] parameters.  A type that
--- does not have that many arrows (an arity the solved type cannot confirm)
--- fixes nothing.
-export
-returnRuntimeTypeOf : (String -> TyConOrigin -> Bool) ->
-  Int ->
-  Mono ->
-  RuntimeType
-returnRuntimeTypeOf isCell arity t = match peelArrows arity t
-  Some r => runtimeTypeOf isCell r
-  None => RTValue
-
-peelArrows : Int -> Mono -> Option Mono
-peelArrows n t
-  | n <= 0 = Some t
-  | otherwise = match t
-    TVar cell => match !cell
-      Link t2 => peelArrows n t2
-      Unbound _ _ => None
-    TQual inner _ => peelArrows n inner
-    TFun _ _ r => peelArrows (n - 1) r
-    _ => None
-
 -- ── the installed table ───────────────────────────────────────────────────
 -- Exactly one table is installed per elaboration, beside the evidence and
 -- disposition tables and under the same ordering: every read of it completes

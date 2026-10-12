@@ -517,7 +517,7 @@ import types.runtime_types.{
   addBinderRow,
   emptyBinderTypes,
   installBinderTypes,
-  returnRuntimeTypeOf,
+  RuntimeType(..),
   runtimeTypeOf,
 }
 
@@ -55497,7 +55497,12 @@ materializeBinder isCell (PendingBinder bid name t arity) = BinderRow {
   brId = bid,
   brName = name,
   brType = runtimeTypeOf isCell t,
-  brReturns = map (n => returnRuntimeTypeOf isCell n t) arity,
+  -- A solved type with fewer arrows than the declared parameters fixes nothing.
+  brReturns =
+    map
+      (n =>
+        optionOr RTValue (map (runtimeTypeOf isCell) (resultAfterArrows n t)))
+      arity,
 }
 
 -- The type heads whose values are constructor cells: every `data` and `newtype`
