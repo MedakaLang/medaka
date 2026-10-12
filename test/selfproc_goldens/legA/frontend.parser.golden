@@ -42,7 +42,14 @@ authTermP : ParserE <> EffParamTy
 backtickInfixMsg : String
 bareMinusSection : ParserE <> Expr
 benchRemovedMsg : String
-binOp : Token -> String -> ParserE <> (Expr -> Expr -> Expr)
+binLevel : Int -> Array Token -> Int -> PR Expr
+binLevelOf : Token -> Int
+binLevelRest : Int -> Array Token -> PR Expr -> PR Expr
+binNext : Int -> Array Token -> PR Expr -> PR Expr
+binOpName : Token -> String
+binRhs : Int -> Array Token -> Expr -> Int -> Token -> PR Expr -> PR Expr
+binRhsLevel : Int -> Int
+binTry : Int -> Array Token -> PR Expr -> Expr -> Int -> Token -> PR Expr
 bindAnnot : Expr -> Ty -> Expr -> List DoStmt
 bindPR : ParserE a b -> (b -> <a> ParserE a c) -> Array Token -> Int -> <a> PR c
 bindStmts : Expr -> Expr -> List DoStmt
@@ -69,22 +76,17 @@ chainOpLinesAt : Array Token -> Array Int -> String -> Int -> Int -> Int -> Toke
 chainOpLinesGo : Array Token -> Array Int -> String -> Int -> Int -> Int -> List Int
 chainOpTokEq : String -> Token -> Bool
 chainOperandLines : Array Token -> Array Int -> String -> Int -> Int -> List Int
-chainl1 : ParserE <> a -> ParserE <> (a -> a -> a) -> ParserE <> a
-chainl1More : ParserE <> a -> ParserE <> (a -> a -> a) -> a -> ParserE <> a
-chainl1Rest : ParserE <> a -> ParserE <> (a -> a -> a) -> a -> ParserE <> a
 charBound : ParserE <> Lit
 charBoundFor : Token -> ParserE <> Lit
 charPatRest : Lit -> ParserE <> Pat
-choice : List (ParserE <> a) -> ParserE <> a
 classifyBrace : String -> List KvItem -> Expr
-cmpOp : ParserE <> (Expr -> Expr -> Expr)
 coalesceClauses : List (String, List Pat, Expr, Loc) -> List LetBind
 coalesceGo : String -> Loc -> List FunClause -> List (String, List Pat, Expr, Loc) -> List LetBind
 coalesceStep : String -> Loc -> List FunClause -> String -> List Pat -> Expr -> Loc -> List (String, List Pat, Expr, Loc) -> List LetBind
 combineDerives : List DeriveRef -> List DeriveRef -> List DeriveRef
 concatMapC : List Ty -> List Constraint
 consField : RecPatField -> (List RecPatField, Bool) -> (List RecPatField, Bool)
-consTail : Expr -> ParserE <> Expr
+consLevel : Int
 constraintTail : Ty -> ParserE <> Ty
 contextualKwName : Token -> String
 continuationBlockShape : Array Token -> Int -> Int -> Int -> Bool
@@ -406,6 +408,7 @@ mkEffect : (List EffAtomTy, List String) -> Ty -> Ty
 mkLocated : String -> Array Token -> Array Int -> Int -> String -> Int -> ParseError
 mkRec : String -> (List RecPatField, Bool) -> Pat
 mkRow : (List EffAtomTy, List String) -> Loc -> Ty
+mulLevel : Int
 namedArgNeedsArrowMsg : String
 namedImplRemovedMsg : String
 namesOrAuthJoin : String -> List EffParamTy -> Option Loc -> Ty
@@ -439,10 +442,7 @@ parenFor : Token -> ParserE <> Expr
 parenResult : List Expr -> Expr
 parenSectionOr : Token -> ParserE <> Expr
 parse : String -> List Decl
-parseAdd : ParserE <> Expr
-parseAnd : ParserE <> Expr
 parseApp : ParserE <> Expr
-parseAppend : ParserE <> Expr
 parseArm : ParserE <> Arm
 parseArms : ParserE <> (List Arm)
 parseArray : ParserE <> Expr
@@ -463,9 +463,6 @@ parseBodyExpr : ParserE <> Expr
 parseBracketBlock : ParserE <> Expr
 parseBracketElem : ParserE <> Expr
 parseBranch : ParserE <> Expr
-parseCmp : ParserE <> Expr
-parseCompose : ParserE <> Expr
-parseCons : ParserE <> Expr
 parseData : DataVis -> ParserE <> Decl
 parseDecl : ParserE <> Decl
 parseDefer : ParserE <> Expr
@@ -506,7 +503,6 @@ parseListE : ParserE <> Expr
 parseLocated : String -> List Decl
 parseLocatedResult : String -> Result ParseError (List Decl)
 parseMatch : ParserE <> Expr
-parseMul : ParserE <> Expr
 parseNamedFields : ParserE <> (List Field)
 parseNamedPayload : ParserE <> ConPayload
 parseNewtype : Bool -> ParserE <> Decl
