@@ -81,74 +81,80 @@ running doctests in stdlib/list.mdk
   ok   stdlib/list.mdk:636: dropWhile (x => x < 0) [1, 2, 3]
   ok   stdlib/list.mdk:638: dropWhile (x => x < 3) ([] : List Int)
   ok   stdlib/list.mdk:645: span (x => x < 3) [1, 2, 3, 1]
-  ok   stdlib/list.mdk:654: span (x => x < 9) [1, 2, 3]
-  ok   stdlib/list.mdk:656: span (x => x < 0) [1, 2, 3]
-  ok   stdlib/list.mdk:658: span (x => x < 3) ([] : List Int)
-  ok   stdlib/list.mdk:666: break (x => x > 2) [1, 2, 3, 1]
-  ok   stdlib/list.mdk:672: break (x => x > 9) [1, 2, 3]
-  ok   stdlib/list.mdk:674: break (x => x > 0) [1, 2, 3]
-  ok   stdlib/list.mdk:676: break (x => x > 2) ([] : List Int)
-  ok   stdlib/list.mdk:683: splitAt 2 [1, 2, 3, 4]
-  ok   stdlib/list.mdk:697: sliceClamped 1 3 [10, 20, 30, 40]
-  ok   stdlib/list.mdk:703: sliceClamped 5 9 [1, 2]
-  ok   stdlib/list.mdk:711: chunks 2 [1, 2, 3, 4, 5]
-  ok   stdlib/list.mdk:720: chunks 0 [1, 2]
-  ok   stdlib/list.mdk:725: dropWhileEnd (x => x == 0) [1, 2, 0, 0]
-  ok   stdlib/list.mdk:731: dropWhileEnd (x => x == 0) [0, 1, 0]
-  ok   stdlib/list.mdk:733: dropWhileEnd (x => x == 0) [0, 0]
-  ok   stdlib/list.mdk:738: takeWhileEnd (x => x > 1) [1, 2, 3]
-  ok   stdlib/list.mdk:744: takeWhileEnd (x => x > 9) [1, 2, 3]
-  ok   stdlib/list.mdk:746: takeWhileEnd (x => x > 0) [1, 2]
-  ok   stdlib/list.mdk:755: split [0] [1, 0, 2, 0, 3]
-  ok   stdlib/list.mdk:757: split [0] [0, 1]
-  ok   stdlib/list.mdk:774: split [0, 0] [1, 0, 0, 2]
-  ok   stdlib/list.mdk:776: split [9] [1, 2]
-  ok   stdlib/list.mdk:792: startsWith [1, 2] [1, 2, 3]
-  ok   stdlib/list.mdk:794: startsWith [2, 3] [1, 2, 3]
-  ok   stdlib/list.mdk:802: startsWith ([] : List Int) [1]
-  ok   stdlib/list.mdk:807: endsWith [2, 3] [1, 2, 3]
-  ok   stdlib/list.mdk:809: endsWith [1, 2] [1, 2, 3]
-  ok   stdlib/list.mdk:819: containsSub [2, 3] [1, 2, 3, 4]
-  ok   stdlib/list.mdk:821: containsSub [2, 4] [1, 2, 3, 4]
-  ok   stdlib/list.mdk:830: containsSub ([] : List Int) [1]
-  ok   stdlib/list.mdk:840: sortBy (x y => compare y x) [3, 1, 2]
-  ok   stdlib/list.mdk:862: sort [3, 1, 2, 1]
-  ok   stdlib/list.mdk:873: sortOn (x => 0 - x) [1, 3, 2]
-  ok   stdlib/list.mdk:886: nubBy (x y => x == y) [1, 2, 1, 3, 2]
-  ok   stdlib/list.mdk:902: nub [1, 2, 1, 3, 2, 1]
-  ok   stdlib/list.mdk:912: deleteBy (x y => x == y) 2 [1, 2, 3, 2]
-  ok   stdlib/list.mdk:925: delete 2 [1, 2, 3, 2]
-  ok   stdlib/list.mdk:931: delete 9 [1, 2]
-  ok   stdlib/list.mdk:944: groupBy (x y => x == y) [1, 1, 2, 3, 3, 3]
-  ok   stdlib/list.mdk:955: group [1, 1, 2, 3, 3]
-  ok   stdlib/list.mdk:965: partition (x => x > 2) [1, 2, 3, 4]
-  ok   stdlib/list.mdk:976: somes [Some 1, None, Some 3]
-  ok   stdlib/list.mdk:984: somes ([] : List (Option Int))
-  ok   stdlib/list.mdk:989: oks [Ok 1, Err "boom", Ok 3]
-  ok   stdlib/list.mdk:999: errs [Ok 1, Err "boom", Ok 3]
-  ok   stdlib/list.mdk:1009: partitionResults [Ok 1, Err "boom", Ok 3]
-  ok   stdlib/list.mdk:1027: tally [1, 2, 1, 3, 1, 2]
-  ok   stdlib/list.mdk:1047: zip [1, 2, 3] [10, 20]
-  ok   stdlib/list.mdk:1055: zip ([] : List Int) [1, 2]
-  ok   stdlib/list.mdk:1062: zip3 [1, 2] [3, 4] [5, 6]
-  ok   stdlib/list.mdk:1071: zip3 [1, 2, 3] [4, 5] [6]
-  ok   stdlib/list.mdk:1079: zipWith (x y => x + y) [1, 2, 3] [10, 20, 30]
-  ok   stdlib/list.mdk:1087: zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
-  ok   stdlib/list.mdk:1094: zip4 [1, 2] [3, 4] [5, 6] [7, 8]
-  ok   stdlib/list.mdk:1104: zip4 [1, 2] [3] [5, 6] [7, 8]
-  ok   stdlib/list.mdk:1111: zipWith3 (x y z => x + y + z) [1, 2] [10, 20] [100, 200]
-  ok   stdlib/list.mdk:1120: zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
-  ok   stdlib/list.mdk:1125: unzip [(1, 2), (3, 4)]
-  ok   stdlib/list.mdk:1132: unzip ([] : List (Int, Int))
-  ok   stdlib/list.mdk:1137: unzip3 [(1, 2, 3), (4, 5, 6)]
-  ok   stdlib/list.mdk:1145: unzip3 ([] : List (Int, Int, Int))
+  ok   stdlib/list.mdk:656: span (x => x < 9) [1, 2, 3]
+  ok   stdlib/list.mdk:658: span (x => x < 0) [1, 2, 3]
+  ok   stdlib/list.mdk:660: span (x => x < 3) ([] : List Int)
+  ok   stdlib/list.mdk:668: break (x => x > 2) [1, 2, 3, 1]
+  ok   stdlib/list.mdk:674: break (x => x > 9) [1, 2, 3]
+  ok   stdlib/list.mdk:676: break (x => x > 0) [1, 2, 3]
+  ok   stdlib/list.mdk:678: break (x => x > 2) ([] : List Int)
+  ok   stdlib/list.mdk:685: splitAt 2 [1, 2, 3, 4]
+  ok   stdlib/list.mdk:699: sliceClamped 1 3 [10, 20, 30, 40]
+  ok   stdlib/list.mdk:705: sliceClamped 5 9 [1, 2]
+  ok   stdlib/list.mdk:713: chunks 2 [1, 2, 3, 4, 5]
+  ok   stdlib/list.mdk:722: chunks 0 [1, 2]
+  ok   stdlib/list.mdk:727: dropWhileEnd (x => x == 0) [1, 2, 0, 0]
+  ok   stdlib/list.mdk:733: dropWhileEnd (x => x == 0) [0, 1, 0]
+  ok   stdlib/list.mdk:735: dropWhileEnd (x => x == 0) [0, 0]
+  ok   stdlib/list.mdk:740: takeWhileEnd (x => x > 1) [1, 2, 3]
+  ok   stdlib/list.mdk:746: takeWhileEnd (x => x > 9) [1, 2, 3]
+  ok   stdlib/list.mdk:748: takeWhileEnd (x => x > 0) [1, 2]
+  ok   stdlib/list.mdk:757: split [0] [1, 0, 2, 0, 3]
+  ok   stdlib/list.mdk:759: split [0] [0, 1]
+  ok   stdlib/list.mdk:776: split [0, 0] [1, 0, 0, 2]
+  ok   stdlib/list.mdk:778: split [9] [1, 2]
+  ok   stdlib/list.mdk:794: startsWith [1, 2] [1, 2, 3]
+  ok   stdlib/list.mdk:796: startsWith [2, 3] [1, 2, 3]
+  ok   stdlib/list.mdk:804: startsWith ([] : List Int) [1]
+  ok   stdlib/list.mdk:809: endsWith [2, 3] [1, 2, 3]
+  ok   stdlib/list.mdk:811: endsWith [1, 2] [1, 2, 3]
+  ok   stdlib/list.mdk:821: containsSub [2, 3] [1, 2, 3, 4]
+  ok   stdlib/list.mdk:823: containsSub [2, 4] [1, 2, 3, 4]
+  ok   stdlib/list.mdk:832: containsSub ([] : List Int) [1]
+  ok   stdlib/list.mdk:842: sortBy (x y => compare y x) [3, 1, 2]
+  ok   stdlib/list.mdk:848: sortBy compare ([] : List Int)
+  ok   stdlib/list.mdk:850: sortBy compare [7]
+  ok   stdlib/list.mdk:852: sortBy compare [1, 1, 1]
+  ok   stdlib/list.mdk:854: sortBy compare [1, 2, 3, 2, 1]
+  ok   stdlib/list.mdk:917: sort [3, 1, 2, 1]
+  ok   stdlib/list.mdk:928: sortOn (x => 0 - x) [1, 3, 2]
+  ok   stdlib/list.mdk:941: nubBy (x y => x == y) [1, 2, 1, 3, 2]
+  ok   stdlib/list.mdk:957: nub [1, 2, 1, 3, 2, 1]
+  ok   stdlib/list.mdk:967: deleteBy (x y => x == y) 2 [1, 2, 3, 2]
+  ok   stdlib/list.mdk:980: delete 2 [1, 2, 3, 2]
+  ok   stdlib/list.mdk:986: delete 9 [1, 2]
+  ok   stdlib/list.mdk:999: groupBy (x y => x == y) [1, 1, 2, 3, 3, 3]
+  ok   stdlib/list.mdk:1010: group [1, 1, 2, 3, 3]
+  ok   stdlib/list.mdk:1020: partition (x => x > 2) [1, 2, 3, 4]
+  ok   stdlib/list.mdk:1031: somes [Some 1, None, Some 3]
+  ok   stdlib/list.mdk:1039: somes ([] : List (Option Int))
+  ok   stdlib/list.mdk:1044: oks [Ok 1, Err "boom", Ok 3]
+  ok   stdlib/list.mdk:1054: errs [Ok 1, Err "boom", Ok 3]
+  ok   stdlib/list.mdk:1064: partitionResults [Ok 1, Err "boom", Ok 3]
+  ok   stdlib/list.mdk:1082: tally [1, 2, 1, 3, 1, 2]
+  ok   stdlib/list.mdk:1102: zip [1, 2, 3] [10, 20]
+  ok   stdlib/list.mdk:1110: zip ([] : List Int) [1, 2]
+  ok   stdlib/list.mdk:1117: zip3 [1, 2] [3, 4] [5, 6]
+  ok   stdlib/list.mdk:1126: zip3 [1, 2, 3] [4, 5] [6]
+  ok   stdlib/list.mdk:1134: zipWith (x y => x + y) [1, 2, 3] [10, 20, 30]
+  ok   stdlib/list.mdk:1142: zipWith (x y => x * y) [1, 2, 3, 4] [10, 20]
+  ok   stdlib/list.mdk:1149: zip4 [1, 2] [3, 4] [5, 6] [7, 8]
+  ok   stdlib/list.mdk:1159: zip4 [1, 2] [3] [5, 6] [7, 8]
+  ok   stdlib/list.mdk:1166: zipWith3 (x y z => x + y + z) [1, 2] [10, 20] [100, 200]
+  ok   stdlib/list.mdk:1175: zipWith3 (x y z => x + y + z) [1, 2, 3] [10, 20] [100]
+  ok   stdlib/list.mdk:1180: unzip [(1, 2), (3, 4)]
+  ok   stdlib/list.mdk:1187: unzip ([] : List (Int, Int))
+  ok   stdlib/list.mdk:1192: unzip3 [(1, 2, 3), (4, 5, 6)]
+  ok   stdlib/list.mdk:1200: unzip3 ([] : List (Int, Int, Int))
 
-stdlib/list.mdk: 143/143 passed
+stdlib/list.mdk: 147/147 passed
 Testing "reverse is an involution" [eval] ... OK (100 tests passed)
 Testing "take n ++ drop n recovers the list" [eval] ... OK (100 tests passed)
 Testing "splitAt agrees with take/drop" [eval] ... OK (100 tests passed)
 Testing "span ++ recovers the list" [eval] ... OK (100 tests passed)
 Testing "sort is ascending and length-preserving" [eval] ... OK (100 tests passed)
+Testing "sortBy is stable: key-only comparator matches a reference insertion sort" [eval] ... OK (100 tests passed)
+Testing "sortBy agrees with a reference insertion sort on Int" [eval] ... OK (100 tests passed)
 Testing "partition splits by the predicate" [eval] ... OK (100 tests passed)
 Testing "somes length is at most the input length" [eval] ... OK (100 tests passed)
 Testing "partitionResults sizes sum to the input length" [eval] ... OK (100 tests passed)
@@ -159,3 +165,7 @@ Testing "span prefix all satisfies, and concatenates back" [eval] ... OK (100 te
 Testing "takeWhile ++ dropWhile recovers the list" [eval] ... OK (100 tests passed)
 Testing "break equals span of the negated predicate" [eval] ... OK (100 tests passed)
 Testing "range length is max 0 (hi - lo)" [eval] ... OK (100 tests passed)
+Testing "span agrees with a plain reference on all, none, mixed, [] and singletons" [eval] ... OK (100 tests passed)
+Testing "break agrees with a plain reference on all, none, mixed, [] and singletons" [eval] ... OK (100 tests passed)
+Testing "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" [eval] ... OK (100 tests passed)
+Testing "elemIndices agrees with findIndices on [] and singletons" [eval] ... OK (100 tests passed)
