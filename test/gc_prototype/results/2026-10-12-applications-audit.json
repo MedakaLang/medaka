@@ -1,0 +1,403 @@
+{
+  "bounded_guard_checks": [
+    {
+      "check": "correct CAR size oracle accepted",
+      "status": "passed"
+    },
+    {
+      "check": "CAR correct count but wrong byte length",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "timed CAR output mismatch: 'CAR 16 700\\n'"
+    },
+    {
+      "check": "valid gzip containing wrong decoded bytes",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "timed gzip oracle mismatch: deflate-review"
+    },
+    {
+      "check": "application inflate wrong output bytes",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "timed inflate oracle mismatch: inflate-review"
+    },
+    {
+      "check": "stale correct output plus successful child that writes nothing",
+      "exception": "FileNotFoundError",
+      "status": "passed",
+      "witness": "[Errno 2] No such file or directory: '/var/tmp/medaka-scratch/medaka-applications-independent-6eg499ea/decoded.out'"
+    },
+    {
+      "check": "--repeats=0 before build",
+      "exception": "SystemExit",
+      "status": "passed",
+      "witness": "2"
+    },
+    {
+      "check": "--timeout=0 before build",
+      "exception": "SystemExit",
+      "status": "passed",
+      "witness": "2"
+    },
+    {
+      "check": "valid owned manifest reaches measurement guard",
+      "exception": "AssertionError",
+      "status": "passed",
+      "witness": "measurement guard reached"
+    },
+    {
+      "check": "tampered correctness provenance rejected before measurement",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "source/toolchain/driver provenance changed since correctness manifest; rerun --correctness-only in a fresh scratch"
+    },
+    {
+      "check": "tampered input rejected before measurement",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "input changed since correctness manifest: /var/tmp/medaka-scratch/medaka-applications-independent-6eg499ea/owned-manifest/input"
+    },
+    {
+      "check": "tampered binary rejected before measurement",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "binary pds changed since correctness manifest; rerun --correctness-only"
+    },
+    {
+      "check": "tampered decoded seed rejected before measurement",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "decoded seed changed since correctness manifest"
+    },
+    {
+      "check": "recompressed seed with same payload rejected before measurement",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "committed seed gzip changed since correctness manifest"
+    },
+    {
+      "check": "GC heap KiB and millisecond/nanosecond units parsed correctly",
+      "status": "passed"
+    },
+    {
+      "check": "missing GC diagnostics",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "GC_PRINT_STATS produced no collection boundary diagnostics"
+    },
+    {
+      "check": "truncated GC timing diagnostics",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "incomplete collection timing diagnostics: 1 cycles, 0 durations"
+    },
+    {
+      "check": "truncated GC heap diagnostics",
+      "exception": "RuntimeError",
+      "status": "passed",
+      "witness": "incomplete collection heap diagnostics: 1 cycles, 0 heap rows"
+    },
+    {
+      "check": "inherited GC/MEDAKA variables cleared and cohort settings exact",
+      "status": "passed"
+    }
+  ],
+  "driver_sha256": "c2eb33bdc51b574eabf79a8984444acd6a126182835d372a12a7082fbcabd6ea",
+  "guard_check_count": 18,
+  "guard_check_scope": "No PDS/gzip application performance jobs or builds. Stale-output guard uses a successful no-write Python child; resume guards use owned small fixtures and a mocked stable provenance provider plus blocked measurement function to isolate each guard.",
+  "measured_driver_source": "#!/usr/bin/env python3\n\"\"\"Opt-in Boehm application smoke/performance driver; not a CI gate.\n\nCorrectness mode builds the PDS and gzip CLI applications, then checks their\noutputs against independent oracles. Measure mode times fresh CLI processes in\ntwo explicitly named Boehm heap-policy cohorts. GC_PRINT_STATS is collected in\nseparate untimed processes so diagnostics never contaminate wall samples.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\nimport platform\nimport re\nimport signal\nimport shutil\nimport statistics\nimport subprocess\nimport sys\nimport time\n\n\nROOT = Path(__file__).resolve().parents[2]\nDEFAULT_SCRATCH = Path(\"/tmp/pool-verify-applications\")\nAPP_SOURCES = {\n    \"pds\": ROOT / \"pds/test/performance_resource_main.mdk\",\n    \"deflate\": ROOT / \"gzip/deflate_demo.mdk\",\n    \"inflate\": ROOT / \"gzip/inflate_demo.mdk\",\n}\nSEED_GZIP = ROOT / \"compiler/seed/emitter.ll.gz\"\nRUNTIME = ROOT / \"runtime/medaka_rt.c\"\nEMITTER_SOURCE = ROOT / \"compiler/backend/llvm_emit.mdk\"\nMEDAKA = ROOT / \"medaka\"\nEMITTER = ROOT / \"medaka_emitter\"\ndef git(*args: str) -> str:\n    return subprocess.run([\"git\", \"-C\", str(ROOT), *args], check=True,\n                          stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()\n\n\ndef sha256(path: Path) -> str:\n    h = hashlib.sha256()\n    with path.open(\"rb\") as f:\n        for block in iter(lambda: f.read(1024 * 1024), b\"\"):\n            h.update(block)\n    return h.hexdigest()\n\n\ndef source_manifest() -> dict[str, str]:\n    paths = {\"pds/test/performance_resource_main.mdk\", \"gzip/deflate_demo.mdk\", \"gzip/inflate_demo.mdk\",\n             \"runtime/medaka_rt.c\", \"compiler/backend/llvm_emit.mdk\"}\n    for source_root in (ROOT / \"compiler\", ROOT / \"stdlib\"):\n        for path in source_root.rglob(\"*.mdk\"):\n            if not path.name.endswith(\"_test.mdk\"):\n                paths.add(path.relative_to(ROOT).as_posix())\n    for project in (ROOT / \"pds\", ROOT / \"gzip\"):\n        paths.update(path.relative_to(ROOT).as_posix() for path in project.rglob(\"*.mdk\"))\n    return {rel: sha256(ROOT / rel) for rel in sorted(paths)}\n\n\ndef provenance(scratch: Path) -> dict[str, object]:\n    try:\n        pkg = subprocess.run([\"pkg-config\", \"--modversion\", \"bdw-gc\"], check=True,\n                             text=True, capture_output=True)\n        gc_version = pkg.stdout.strip()\n        gc_link_flags = subprocess.run([\"pkg-config\", \"--libs\", \"--static\", \"bdw-gc\"], check=True,\n                                       text=True, capture_output=True).stdout.strip()\n        libdir = subprocess.run([\"pkg-config\", \"--variable=libdir\", \"bdw-gc\"], check=True,\n                                text=True, capture_output=True).stdout.strip()\n        archive = Path(libdir) / \"libgc.a\"\n    except (OSError, subprocess.CalledProcessError):\n        prefix = subprocess.run([\"brew\", \"--prefix\", \"bdw-gc\"], check=True,\n                                text=True, capture_output=True).stdout.strip()\n        gc_version = \"Homebrew headers; runtime version in linked artifact\"\n        gc_link_flags = f\"-L{prefix}/lib -lgc\"\n        archive = Path(prefix) / \"lib/libgc.a\"\n    clang_bin = shutil.which(\"clang\")\n    if not clang_bin:\n        raise RuntimeError(\"clang is required for application provenance\")\n    clang_version = subprocess.run([clang_bin, \"--version\"], check=True, text=True,\n                                   capture_output=True).stdout.splitlines()[0]\n    linkage_rows = []\n    for name in (\"performance_resource\", \"deflate_demo\", \"inflate_demo\"):\n        binary = scratch / name\n        linkage_command = ([\"otool\", \"-L\", str(binary)] if sys.platform == \"darwin\"\n                           else [\"ldd\", str(binary)])\n        linkage = subprocess.run(linkage_command, check=False, text=True, capture_output=True)\n        if linkage.returncode != 0:\n            raise RuntimeError(f\"dependency inspection failed for {binary}: {linkage.stderr}\")\n        stable_output = re.sub(r\"\\s+\\(0x[0-9a-fA-F]+\\)\", \"\", linkage.stdout)\n        linkage_rows.append({\"binary\": str(binary), \"command\": linkage_command,\n                             \"output\": stable_output.strip(), \"returncode\": linkage.returncode})\n    if any(\"libgc\" in row[\"output\"] for row in linkage_rows):\n        raise RuntimeError(\"an application unexpectedly dynamically links libgc\")\n    return {\n        \"source_commit\": git(\"rev-parse\", \"HEAD\"),\n        \"platform\": platform.platform(), \"machine\": platform.machine(),\n        \"source_sha256\": source_manifest(), \"applications_driver_sha256\": sha256(Path(__file__).resolve()),\n        \"medaka_binary\": str(MEDAKA), \"medaka_binary_sha256\": sha256(MEDAKA),\n        \"emitter_binary\": str(EMITTER), \"emitter_binary_sha256\": sha256(EMITTER),\n        \"emitter_source\": str(EMITTER_SOURCE), \"emitter_source_sha256\": sha256(EMITTER_SOURCE),\n        \"runtime_source\": str(RUNTIME), \"runtime_source_sha256\": sha256(RUNTIME),\n        \"clang_binary\": clang_bin, \"clang_version\": clang_version,\n        \"libgc_pkg_config_version\": gc_version,\n        \"libgc_pkg_config_link_flags\": gc_link_flags,\n        \"libgc_archive\": str(archive) if archive.is_file() else None,\n        \"libgc_archive_sha256\": sha256(archive) if archive.is_file() else None,\n        \"application_linkage\": \"static libgc (libgc absent from platform dependency output)\",\n        \"application_dependencies\": linkage_rows,\n        \"build_environment\": {\"CC\": \"clang\", \"MEDAKA_STRICT\": \"1\", \"MEDAKA_CLANG_OPT\": \"-O2\"},\n    }\n\n\ndef run(argv: list[str], *, env: dict[str, str], timeout: int,\n        capture: bool = True) -> subprocess.CompletedProcess[str]:\n    child = subprocess.Popen(argv, cwd=ROOT, env=env, text=True,\n                             stdout=subprocess.PIPE if capture else None,\n                             stderr=subprocess.PIPE if capture else None,\n                             start_new_session=True)\n    try:\n        stdout, stderr = child.communicate(timeout=timeout)\n    except subprocess.TimeoutExpired:\n        try:\n            os.killpg(child.pid, signal.SIGKILL)\n        except ProcessLookupError:\n            pass\n        stdout, stderr = child.communicate()\n        raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr)\n    return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)\n\n\ndef clean_env() -> dict[str, str]:\n    env = os.environ.copy()\n    for key in list(env):\n        if key.startswith((\"GC_\", \"MEDAKA_\")):\n            del env[key]\n    return env\n\n\ndef app_env(cohort: str, *, stats: bool = False) -> dict[str, str]:\n    env = clean_env()\n    env[\"GC_FREE_SPACE_DIVISOR\"] = \"1\"\n    if cohort == \"fixed128m\":\n        env[\"GC_INITIAL_HEAP_SIZE\"] = \"134217728\"\n    elif cohort != \"default\":\n        raise ValueError(f\"unknown heap cohort: {cohort}\")\n    if stats:\n        env[\"GC_PRINT_STATS\"] = \"1\"\n    return env\n\n\ndef write_incompressible(path: Path, size: int) -> None:\n    # SHA-256(counter) is deterministic across Python implementations and does\n    # not depend on the platform's PRNG implementation.\n    out = bytearray()\n    counter = 0\n    while len(out) < size:\n        out.extend(hashlib.sha256(b\"medaka-app-input-v1:\" + counter.to_bytes(8, \"big\")).digest())\n        counter += 1\n    path.write_bytes(out[:size])\n\n\ndef command_record(argv: list[str], env: dict[str, str]) -> dict[str, object]:\n    return {\"argv\": argv, \"cwd\": str(ROOT), \"environment\": {\n        k: env[k] for k in sorted(env) if k.startswith((\"GC_\", \"MEDAKA_\")) or k == \"CC\"\n    }}\n\n\ndef checked(argv: list[str], env: dict[str, str], timeout: int,\n            label: str) -> subprocess.CompletedProcess[str]:\n    p = run(argv, env=env, timeout=timeout)\n    if p.returncode != 0:\n        raise RuntimeError(f\"{label} failed ({p.returncode}): {p.stderr[-3000:]}\")\n    return p\n\n\ndef build_apps(scratch: Path, timeout: int) -> dict[str, object]:\n    env = clean_env()\n    env.update({\"CC\": \"clang\", \"MEDAKA_STRICT\": \"1\", \"MEDAKA_CLANG_OPT\": \"-O2\"})\n    fresh = [str(MEDAKA), \"check\", str(APP_SOURCES[\"pds\"])]\n    p = checked(fresh, env, timeout, \"strict freshness check\")\n    builds = []\n    bins = {\n        \"pds\": scratch / \"performance_resource\",\n        \"deflate\": scratch / \"deflate_demo\",\n        \"inflate\": scratch / \"inflate_demo\",\n    }\n    for name, source in APP_SOURCES.items():\n        argv = [str(MEDAKA), \"build\", str(source), \"-o\", str(bins[name])]\n        bp = checked(argv, env, timeout, f\"build {name}\")\n        builds.append({\"name\": name, \"command\": command_record(argv, env),\n                       \"stdout\": bp.stdout.strip(), \"stderr\": bp.stderr.strip(),\n                       \"binary\": str(bins[name]), \"binary_sha256\": sha256(bins[name])})\n    return {\n        \"freshness_check\": {\"command\": command_record(fresh, env),\n                            \"returncode\": p.returncode,\n                            \"stdout\": p.stdout.strip(), \"stderr\": p.stderr.strip()},\n        \"builds\": builds,\n        \"binaries\": {k: str(v) for k, v in bins.items()},\n    }\n\n\ndef app_cases(scratch: Path) -> tuple[list[dict[str, object]], dict[str, object]]:\n    repeated = scratch / \"repeated-101700.txt\"\n    phrase = b\"The quick brown fox jumps over the lazy dog.\\n\"\n    repeated.write_bytes((phrase * ((101700 + len(phrase) - 1) // len(phrase)))[:101700])\n    noisy50 = scratch / \"sha256-counter-50000.bin\"\n    noisy200 = scratch / \"sha256-counter-200000.bin\"\n    write_incompressible(noisy50, 50_000)\n    write_incompressible(noisy200, 200_000)\n    inputs = [repeated, noisy50, noisy200]\n    records = [{\"path\": str(p), \"size_bytes\": p.stat().st_size, \"sha256\": sha256(p)} for p in inputs]\n    seed_out = scratch / \"emitter.ll.from-seed.gz\"\n    with seed_out.open(\"wb\") as f:\n        subprocess.run([\"/usr/bin/gzip\", \"-dc\", str(SEED_GZIP)], stdout=f, check=True,\n                       env=clean_env(), timeout=120)\n    return ([{\"name\": p.stem, \"input\": str(p)} for p in inputs], {\n        \"inputs\": records,\n        \"seed_gzip\": {\"path\": str(SEED_GZIP), \"sha256\": sha256(SEED_GZIP),\n                      \"decoded_path\": str(seed_out), \"decoded_size_bytes\": seed_out.stat().st_size,\n                      \"decoded_sha256\": sha256(seed_out)},\n    })\n\n\ndef correctness(scratch: Path, bins: dict[str, str], timeout: int) -> list[dict[str, object]]:\n    env = app_env(\"default\")\n    results: list[dict[str, object]] = []\n    pds = bins[\"pds\"]\n    for n in (16, 1000, 2000):\n        p = checked([pds, \"car\", str(n)], env, timeout, f\"CAR {n}\")\n        m = re.fullmatch(r\"CAR (\\d+) (\\d+)\", p.stdout.strip())\n        expected_bytes = 59 + 40 * n\n        if not m or int(m.group(1)) != n or int(m.group(2)) != expected_bytes:\n            raise RuntimeError(f\"unexpected CAR output for n={n}: {p.stdout!r}\")\n        results.append({\"case\": f\"car-{n}\", \"argv\": [pds, \"car\", str(n)], \"stdout\": p.stdout.strip(),\n                        \"car_bytes\": int(m.group(2)), \"expected_car_bytes_59_plus_40n\": expected_bytes,\n                        \"car_size_formula_passed\": True, \"returncode\": p.returncode})\n    for n in (1000, 2000):\n        argv = [pds, \"mst-insert\", str(n)]\n        p = checked(argv, env, timeout, f\"MST insert {n}\")\n        m = re.fullmatch(r\"MSTINSERT (\\d+) (\\d+) allocBytes=(\\d+)\", p.stdout.strip())\n        if not m or int(m.group(1)) != n or int(m.group(2)) != n:\n            raise RuntimeError(f\"unexpected MST insert output for n={n}: {p.stdout!r}\")\n        results.append({\"case\": f\"mst-insert-{n}\", \"argv\": argv, \"stdout\": p.stdout.strip(),\n                        \"entry_count\": int(m.group(2)), \"alloc_bytes\": int(m.group(3)),\n                        \"entry_count_scope\": \"CLI reports length(mstEntries tree); this does not inspect all key/CID/root contents\",\n                        \"alloc_bytes_scope\": \"native allocBytes delta from Boehm accounting; not logical payload bytes or live bytes\",\n                        \"returncode\": p.returncode})\n\n    for input_info in sorted(scratch.glob(\"repeated-101700.txt\")) + sorted(scratch.glob(\"sha256-counter-*.bin\")):\n        label = input_info.stem\n        app_gz = scratch / f\"{label}.application.gz\"\n        decoded_app = scratch / f\"{label}.application.decoded\"\n        system_gz = scratch / f\"{label}.system.gz\"\n        decoded_system = scratch / f\"{label}.system.decoded\"\n        argv = [bins[\"deflate\"], str(input_info), str(app_gz)]\n        p = checked(argv, env, timeout, f\"application deflate {label}\")\n        checked([\"/usr/bin/gzip\", \"-t\", str(app_gz)], env, timeout, f\"system gzip test {label}\")\n        with decoded_app.open(\"wb\") as f:\n            sys_dec = subprocess.run([\"/usr/bin/gzip\", \"-dc\", str(app_gz)],\n                                     stdout=f, stderr=subprocess.PIPE, check=False, timeout=timeout,\n                                     env=clean_env())\n        if sys_dec.returncode != 0:\n            raise RuntimeError(f\"system gzip decode failed {label}: {sys_dec.stderr.decode(errors='replace')}\")\n        checked([\"cmp\", \"-s\", str(input_info), str(decoded_app)], env, timeout,\n                f\"compare app gzip with system gunzip {label}\")\n        decoded_app.unlink()\n        checked([bins[\"inflate\"], str(app_gz), str(decoded_app)], env, timeout, f\"application inflate app gzip {label}\")\n        checked([\"cmp\", \"-s\", str(input_info), str(decoded_app)], env, timeout, f\"compare app roundtrip {label}\")\n        # -n fixes header timestamps and original filename for reproducibility.\n        with system_gz.open(\"wb\") as f:\n            sp = subprocess.run([\"/usr/bin/gzip\", \"-n\", \"-c\", str(input_info)],\n                                stdout=f, stderr=subprocess.PIPE, check=False, timeout=timeout,\n                                env=clean_env())\n        if sp.returncode:\n            raise RuntimeError(f\"system gzip failed {label}: {sp.stderr.decode(errors='replace')}\")\n        checked([bins[\"inflate\"], str(system_gz), str(decoded_system)], env, timeout,\n                f\"application inflate system gzip {label}\")\n        checked([\"cmp\", \"-s\", str(input_info), str(decoded_system)], env, timeout,\n                f\"compare system gzip decode {label}\")\n        results.append({\"case\": f\"gzip-{label}\", \"input_sha256\": sha256(input_info),\n                        \"input_bytes\": input_info.stat().st_size,\n                        \"application_gzip_sha256\": sha256(app_gz), \"application_gzip_bytes\": app_gz.stat().st_size,\n                        \"system_gzip_sha256\": sha256(system_gz), \"system_gzip_bytes\": system_gz.stat().st_size,\n                        \"application_deflate_then_system_gzip_test_and_system_gunzip_cmp\": True,\n                        \"application_deflate_then_application_inflate_cmp\": True,\n                        \"system_gzip_then_application_inflate_cmp\": True})\n\n    seed_gz = SEED_GZIP\n    seed_out = scratch / \"emitter.ll.from-app-inflate.gz\"\n    expected = scratch / \"emitter.ll.from-seed.gz\"\n    checked([bins[\"inflate\"], str(seed_gz), str(seed_out)], env, timeout, \"inflate committed seed\")\n    checked([\"cmp\", \"-s\", str(expected), str(seed_out)], env, timeout, \"compare seed inflate\")\n    results.append({\"case\": \"inflate-committed-seed\", \"input_sha256\": sha256(seed_gz),\n                    \"output_sha256\": sha256(seed_out), \"output_bytes\": seed_out.stat().st_size,\n                    \"system_gzip_decode_cmp\": True})\n    return results\n\n\ndef measurement_cases(scratch: Path, bins: dict[str, str]) -> list[dict[str, object]]:\n    cases: list[dict[str, object]] = []\n    for n in (16, 1000, 2000):\n        expected_bytes = 59 + 40 * n\n        cases.append({\"name\": f\"car-{n}\", \"argv\": [bins[\"pds\"], \"car\", str(n)],\n                      \"expected_car_bytes\": expected_bytes,\n                      \"oracle\": f\"CAR {n} {expected_bytes} (59 + 40*n)\"})\n    for n in (1000, 2000):\n        cases.append({\"name\": f\"mst-insert-{n}\", \"argv\": [bins[\"pds\"], \"mst-insert\", str(n)],\n                      \"oracle\": f\"MSTINSERT {n} {n} allocBytes=<nonnegative>\"})\n    for source in sorted(scratch.glob(\"repeated-101700.txt\")) + sorted(scratch.glob(\"sha256-counter-*.bin\")):\n        app_gz = scratch / f\"{source.stem}.measured.application.gz\"\n        cases.append({\"name\": f\"deflate-{source.stem}\", \"argv\": [bins[\"deflate\"], str(source), str(app_gz)],\n                      \"output_gzip\": str(app_gz), \"input\": str(source), \"oracle\": \"gzip -t and gunzip -c cmp input\"})\n        # Use the system-created gzip as the input for measured application inflate.\n        sys_gz = scratch / f\"{source.stem}.measured.system.gz\"\n        with sys_gz.open(\"wb\") as f:\n            subprocess.run([\"/usr/bin/gzip\", \"-n\", \"-c\", str(source)], stdout=f, check=True,\n                           env=clean_env(), timeout=120)\n        app_out = scratch / f\"{source.stem}.measured.inflate.out\"\n        cases.append({\"name\": f\"inflate-{source.stem}\", \"argv\": [bins[\"inflate\"], str(sys_gz), str(app_out)],\n                      \"output\": str(app_out), \"input\": str(source), \"compressed_input\": str(sys_gz),\n                      \"compressed_input_sha256\": sha256(sys_gz), \"oracle\": \"cmp output input\"})\n    seed_out = scratch / \"emitter.ll.measured.inflate.out\"\n    cases.append({\"name\": \"inflate-committed-seed\", \"argv\": [bins[\"inflate\"], str(SEED_GZIP), str(seed_out)],\n                  \"output\": str(seed_out), \"compressed_input_sha256\": sha256(SEED_GZIP),\n                  \"oracle_sha256\": sha256(scratch / \"emitter.ll.from-seed.gz\")})\n    return cases\n\n\ndef verify_output(case: dict[str, object], stdout: str, scratch: Path) -> None:\n    name = str(case[\"name\"])\n    if name.startswith(\"car-\"):\n        n = name.split(\"-\")[-1]\n        expected = int(case[\"expected_car_bytes\"])\n        if not re.fullmatch(rf\"CAR {n} {expected}\", stdout.strip()):\n            raise RuntimeError(f\"timed CAR output mismatch: {stdout!r}\")\n    elif name.startswith(\"mst-insert-\"):\n        n = name.split(\"-\")[-1]\n        if not re.fullmatch(rf\"MSTINSERT {n} {n} allocBytes=\\d+\", stdout.strip()):\n            raise RuntimeError(f\"timed MST output mismatch: {stdout!r}\")\n    elif \"output_gzip\" in case:\n        gz = Path(str(case[\"output_gzip\"]))\n        subprocess.run([\"/usr/bin/gzip\", \"-t\", str(gz)], check=True, timeout=60, env=clean_env())\n        decoded = subprocess.run([\"/usr/bin/gzip\", \"-dc\", str(gz)], check=True,\n                                 stdout=subprocess.PIPE, timeout=60, env=clean_env()).stdout\n        if decoded != Path(str(case[\"input\"])).read_bytes():\n            raise RuntimeError(f\"timed gzip oracle mismatch: {name}\")\n    elif \"output\" in case:\n        output = Path(str(case[\"output\"]))\n        if name == \"inflate-committed-seed\":\n            if sha256(output) != case[\"oracle_sha256\"]:\n                raise RuntimeError(\"timed seed inflate hash mismatch\")\n        elif output.read_bytes() != Path(str(case[\"input\"])).read_bytes():\n            raise RuntimeError(f\"timed inflate oracle mismatch: {name}\")\n\n\ndef gc_stats(text: str) -> dict[str, object]:\n    cycles = re.findall(r\"Marking for collection #(\\d+) after (\\d+) allocated bytes\", text)\n    durations = re.findall(r\"Complete collection took (\\d+) ms (\\d+) ns\", text)\n    heaps = re.findall(r\"GC #\\d+ freed (-?\\d+) bytes, heap (\\d+) KiB\", text)\n    if not cycles:\n        raise RuntimeError(\"GC_PRINT_STATS produced no collection boundary diagnostics\")\n    if len(cycles) != len(durations):\n        raise RuntimeError(f\"incomplete collection timing diagnostics: {len(cycles)} cycles, {len(durations)} durations\")\n    if len(cycles) != len(heaps):\n        raise RuntimeError(f\"incomplete collection heap diagnostics: {len(cycles)} cycles, {len(heaps)} heap rows\")\n    return {\n        \"collections_logged\": len(cycles),\n        \"collection_numbers\": [int(number) for number, _ in cycles],\n        \"allocated_bytes_at_collection_boundaries\": sum(int(size) for _, size in cycles),\n        \"collection_boundary_allocated_bytes\": [int(size) for _, size in cycles],\n        \"reported_freed_bytes\": sum(int(size) for size, _ in heaps),\n        \"max_logged_heap_bytes\": max((int(size) * 1024 for _, size in heaps), default=0),\n        \"full_collection_wall_seconds\": sum(int(ms) / 1000 + int(ns) / 1e9 for ms, ns in durations),\n        \"limitations\": \"Boehm counters stop at collection boundaries; not exact total allocation or live bytes and omit the final allocation tail.\",\n    }\n\n\ndef timed_process(argv: list[str], env: dict[str, str], scratch: Path,\n                  label: str, timeout: int) -> dict[str, object]:\n    stdout_path = scratch / f\"{label}.stdout\"\n    stderr_path = scratch / f\"{label}.stderr\"\n    for path in (stdout_path, stderr_path):\n        path.unlink(missing_ok=True)\n    start = time.perf_counter()\n    with stdout_path.open(\"wb\") as stdout, stderr_path.open(\"wb\") as stderr:\n        child = subprocess.Popen(argv, cwd=ROOT, env=env, stdout=stdout, stderr=stderr,\n                                  start_new_session=True)\n        previous = signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError()))\n        signal.setitimer(signal.ITIMER_REAL, timeout)\n        try:\n            _, status, usage = os.wait4(child.pid, 0)\n        except TimeoutError:\n            try:\n                os.killpg(child.pid, signal.SIGKILL)\n            except ProcessLookupError:\n                pass\n            os.wait4(child.pid, 0)\n            child.returncode = -signal.SIGKILL\n            raise RuntimeError(f\"workload timed out after {timeout}s: {argv}\")\n        finally:\n            signal.setitimer(signal.ITIMER_REAL, 0)\n            signal.signal(signal.SIGALRM, previous)\n    elapsed = time.perf_counter() - start\n    returncode = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status)\n    child.returncode = returncode\n    if returncode != 0:\n        raise RuntimeError(f\"command failed ({returncode}): {argv}; stderr={stderr_path.read_text(errors='replace')[-3000:]}\")\n    # ru_maxrss is KiB on Linux, bytes on macOS.\n    peak_rss_bytes = int(usage.ru_maxrss * (1024 if sys.platform.startswith(\"linux\") else 1))\n    return {\"returncode\": returncode, \"elapsed_seconds\": elapsed, \"maxrss_bytes\": peak_rss_bytes,\n            \"stdout_path\": str(stdout_path), \"stderr_path\": str(stderr_path),\n            \"stdout\": stdout_path.read_text(errors=\"replace\"),\n            \"stderr\": stderr_path.read_text(errors=\"replace\")}\n\n\ndef measure(scratch: Path, bins: dict[str, str], repeats: int, timeout: int) -> dict[str, object]:\n    driver_hash_start = sha256(Path(__file__).resolve())\n    if repeats < 1:\n        raise ValueError(\"--repeats must be positive\")\n    if timeout <= 0:\n        raise ValueError(\"--timeout must be positive\")\n    cases = measurement_cases(scratch, bins)\n    samples = []\n    stats_records = []\n    for cohort in (\"default\", \"fixed128m\"):\n        env = app_env(cohort)\n        stats_env = app_env(cohort, stats=True)\n        for case in cases:\n            for output_key in (\"output_gzip\", \"output\"):\n                if output_key in case:\n                    Path(str(case[output_key])).unlink(missing_ok=True)\n            stats = run(case[\"argv\"], env=stats_env, timeout=timeout)\n            if stats.returncode != 0:\n                raise RuntimeError(f\"GC_PRINT_STATS run failed {case['name']}: {stats.stderr[-3000:]}\")\n            verify_output(case, stats.stdout, scratch)\n            stats_path = scratch / f\"gc-stats-{cohort}-{case['name']}.txt\"\n            stats_text = stats.stderr + stats.stdout\n            stats_path.write_text(stats_text)\n            stats_parsed = gc_stats(stats_text)\n            stats_records.append({\n                \"cohort\": cohort, \"case\": case[\"name\"], \"argv\": case[\"argv\"],\n                \"env_gc\": {k: stats_env[k] for k in sorted(stats_env) if k.startswith(\"GC_\")},\n                \"returncode\": stats.returncode, \"stdout\": stats.stdout.strip(),\n                \"gc_stats_sha256\": hashlib.sha256(stats_text.encode()).hexdigest(),\n                \"raw_path\": str(stats_path), \"stats\": stats_parsed,\n            })\n    # Alternate heap-policy cohorts within each repeated case to limit order bias.\n    execution_order = []\n    for case in cases:\n        for rep in range(repeats):\n            cohort_order = (\"default\", \"fixed128m\") if rep % 2 == 0 else (\"fixed128m\", \"default\")\n            for cohort in cohort_order:\n                env = app_env(cohort)\n                for output_key in (\"output_gzip\", \"output\"):\n                    if output_key in case:\n                        Path(str(case[output_key])).unlink(missing_ok=True)\n                label = f\"timed-{case['name']}-{rep}-{cohort}\"\n                p = timed_process(case[\"argv\"], env, scratch, label, timeout)\n                verify_output(case, p[\"stdout\"], scratch)\n                execution_order.append({\"case\": case[\"name\"], \"repeat\": rep, \"cohort\": cohort})\n                samples.append({\"cohort\": cohort, \"case\": case[\"name\"], \"repeat\": rep,\n                                \"execution_order\": len(execution_order) - 1,\n                                \"argv\": case[\"argv\"], \"env_gc\": {k: env[k] for k in sorted(env) if k.startswith(\"GC_\")},\n                                \"elapsed_seconds\": p[\"elapsed_seconds\"], \"maxrss_bytes\": p[\"maxrss_bytes\"],\n                                \"returncode\": p[\"returncode\"], \"stdout\": p[\"stdout\"].strip(),\n                                \"stdout_path\": p[\"stdout_path\"], \"stderr_path\": p[\"stderr_path\"],\n                                \"stdout_sha256\": sha256(Path(p[\"stdout_path\"])),\n                                \"stderr_sha256\": sha256(Path(p[\"stderr_path\"])),\n                                \"output_file\": (str(case[\"output_gzip\"]) if \"output_gzip\" in case else\n                                                str(case[\"output\"]) if \"output\" in case else None),\n                                \"output_size_bytes\": (Path(str(case[\"output_gzip\"])).stat().st_size\n                                                      if \"output_gzip\" in case else\n                                                      Path(str(case[\"output\"])).stat().st_size\n                                                      if \"output\" in case else None),\n                                \"output_sha256\": (sha256(Path(str(case[\"output_gzip\"])))\n                                                  if \"output_gzip\" in case else\n                                                  sha256(Path(str(case[\"output\"]))) if \"output\" in case else None),\n                                \"output_oracle_passed\": True})\n    summary = []\n    for cohort in (\"default\", \"fixed128m\"):\n        for case in cases:\n            rows = [row for row in samples if row[\"cohort\"] == cohort and row[\"case\"] == case[\"name\"]]\n            elapsed = [float(row[\"elapsed_seconds\"]) for row in rows]\n            rss = [int(row[\"maxrss_bytes\"]) for row in rows]\n            summary.append({\"cohort\": cohort, \"case\": case[\"name\"], \"n\": len(rows),\n                            \"elapsed_min_seconds\": min(elapsed), \"elapsed_median_seconds\": statistics.median(elapsed),\n                            \"elapsed_max_seconds\": max(elapsed), \"maxrss_min_bytes\": min(rss),\n                            \"maxrss_median_bytes\": statistics.median(rss), \"maxrss_max_bytes\": max(rss)})\n    driver_hash_end = sha256(Path(__file__).resolve())\n    if driver_hash_start != driver_hash_end:\n        raise RuntimeError(\"applications.py changed during measured execution\")\n    return {\n        \"timing_boundary\": \"fresh application process including CLI startup, input read, computation, and output write; build and input generation outside timing\",\n        \"timing_tool\": \"Python time.perf_counter around fresh Popen child; os.wait4 rusage\",\n        \"repeats_per_case_per_cohort\": repeats,\n        \"cohorts\": {\n            \"default\": \"GC_* inherited variables cleared; GC_FREE_SPACE_DIVISOR=1; no GC_INITIAL_HEAP_SIZE override (runtime resizeable default policy)\",\n            \"fixed128m\": \"GC_* inherited variables cleared; GC_FREE_SPACE_DIVISOR=1; GC_INITIAL_HEAP_SIZE=134217728\",\n        },\n        \"environment_policy\": \"clear inherited GC_* and MEDAKA_* for built app processes; build pins MEDAKA_STRICT=1 and MEDAKA_CLANG_OPT=-O2\",\n        \"gc_print_stats_captured_in_separate_untimed_process\": True,\n        \"applications_driver_sha256_start\": driver_hash_start,\n        \"applications_driver_sha256_end\": driver_hash_end,\n        \"gc_stats\": stats_records, \"execution_order\": execution_order, \"summary_min_median_max\": summary,\n        \"cases\": cases, \"samples\": samples,\n    }\n\n\ndef main() -> int:\n    ap = argparse.ArgumentParser(description=__doc__)\n    mode = ap.add_mutually_exclusive_group(required=True)\n    mode.add_argument(\"--correctness-only\", action=\"store_true\")\n    mode.add_argument(\"--measure\", action=\"store_true\")\n    ap.add_argument(\"--scratch\", type=Path, default=DEFAULT_SCRATCH)\n    ap.add_argument(\"--resume\", action=\"store_true\",\n                    help=\"reuse an existing scratch directory after validating its correctness manifest\")\n    ap.add_argument(\"--output\", type=Path)\n    ap.add_argument(\"--repeats\", type=int, default=5)\n    ap.add_argument(\"--timeout\", type=int, default=120)\n    args = ap.parse_args()\n    if args.repeats < 1:\n        ap.error(\"--repeats must be positive\")\n    if args.timeout <= 0:\n        ap.error(\"--timeout must be positive\")\n    scratch = args.scratch.resolve()\n    if args.measure and not args.resume:\n        ap.error(\"--measure requires --resume to make scratch reuse explicit\")\n    if args.correctness_only and scratch.exists() and any(scratch.iterdir()):\n        ap.error(f\"scratch directory is nonempty; choose an empty path: {scratch}\")\n    scratch.mkdir(parents=True, exist_ok=True)\n    report_path = args.output.resolve() if args.output else scratch / (\"correctness.json\" if args.correctness_only else \"measurements.json\")\n\n    if args.correctness_only:\n        build = build_apps(scratch, args.timeout)\n        _, inputs = app_cases(scratch)\n        correctness_results = correctness(scratch, build[\"binaries\"], args.timeout)\n        report = {\n            \"schema\": \"medaka.application-benchmark.v1\", \"mode\": \"correctness-only\",\n            \"provenance\": provenance(scratch),\n            \"source_commit\": git(\"rev-parse\", \"HEAD\"),\n            \"toolchain\": {\"medaka_binary\": str(MEDAKA), \"medaka_sha256\": sha256(MEDAKA),\n                          \"emitter_binary\": str(EMITTER), \"emitter_sha256\": sha256(EMITTER),\n                          \"emitter_source\": str(EMITTER_SOURCE), \"emitter_source_sha256\": sha256(EMITTER_SOURCE),\n                          \"runtime_source\": str(RUNTIME), \"runtime_source_sha256\": sha256(RUNTIME),\n                          \"initial_heap_policy\": \"weak runtime constant 0 for application links; no runtime GC_expand_hp unless GC_INITIAL_HEAP_SIZE is set\"},\n            \"inputs\": inputs, \"build\": build, \"correctness\": correctness_results,\n            \"measurement_authorized\": False,\n        }\n    else:\n        correctness_path = scratch / \"correctness.json\"\n        prior = json.loads(correctness_path.read_text())\n        if prior.get(\"mode\") != \"correctness-only\":\n            raise RuntimeError(f\"scratch manifest is not correctness-only: {correctness_path}\")\n        current_commit = subprocess.run([\"git\", \"rev-parse\", \"HEAD\"], cwd=ROOT,\n                                        text=True, capture_output=True, check=True).stdout.strip()\n        if current_commit != prior[\"source_commit\"]:\n            raise RuntimeError(\"source commit changed since correctness manifest; rerun --correctness-only in a fresh scratch\")\n        if provenance(scratch) != prior[\"provenance\"]:\n            raise RuntimeError(\"source/toolchain/driver provenance changed since correctness manifest; rerun --correctness-only in a fresh scratch\")\n        for entry in prior[\"inputs\"][\"inputs\"]:\n            input_path = Path(entry[\"path\"])\n            if not input_path.is_file() or input_path.stat().st_size != entry[\"size_bytes\"] or sha256(input_path) != entry[\"sha256\"]:\n                raise RuntimeError(f\"input changed since correctness manifest: {input_path}\")\n        decoded_seed = Path(prior[\"inputs\"][\"seed_gzip\"][\"decoded_path\"])\n        if not decoded_seed.is_file() or sha256(decoded_seed) != prior[\"inputs\"][\"seed_gzip\"][\"decoded_sha256\"]:\n            raise RuntimeError(\"decoded seed changed since correctness manifest\")\n        if not SEED_GZIP.is_file() or sha256(SEED_GZIP) != prior[\"inputs\"][\"seed_gzip\"][\"sha256\"]:\n            raise RuntimeError(\"committed seed gzip changed since correctness manifest\")\n        bins = prior[\"build\"][\"binaries\"]\n        for name, path in bins.items():\n            if not Path(path).is_file():\n                raise RuntimeError(f\"missing built binary {name}: {path}; rerun --correctness-only\")\n            expected_hash = next(row[\"binary_sha256\"] for row in prior[\"build\"][\"builds\"] if row[\"name\"] == name)\n            if sha256(Path(path)) != expected_hash:\n                raise RuntimeError(f\"binary {name} changed since correctness manifest; rerun --correctness-only\")\n        report = {\"schema\": \"medaka.application-benchmark.v1\", \"mode\": \"measure\",\n                  \"source_commit\": prior[\"source_commit\"], \"provenance\": prior[\"provenance\"],\n                  \"toolchain\": prior[\"toolchain\"], \"correctness_manifest\": prior,\n                  \"inputs\": prior[\"inputs\"], \"binaries\": {k: {\"path\": v, \"sha256\": sha256(Path(v))}\n                                                               for k, v in bins.items()},\n                  \"measurement\": measure(scratch, bins, args.repeats, args.timeout)}\n    report_path.parent.mkdir(parents=True, exist_ok=True)\n    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + \"\\n\")\n    print(report_path)\n    return 0\n\n\nif __name__ == \"__main__\":\n    try:\n        raise SystemExit(main())\n    except (OSError, subprocess.TimeoutExpired, RuntimeError, ValueError) as exc:\n        print(f\"applications.py: {exc}\", file=sys.stderr)\n        raise SystemExit(1)\n",
+  "post_measure_cli_routing_check": {
+    "delta": "correctness mode always writes scratch/correctness.json and optionally copies identical report to --output",
+    "driver_sha256": "2ee8f1ed8cff76b95ad3eb652c393a9ee19f2621799557bb747238b0cec18de8",
+    "scope": "Independent unit routing check with build/application/toolchain calls mocked; no workload rerun.",
+    "status": "passed"
+  },
+  "schema": "medaka.application-independent-audit.v1",
+  "source_commit": "dcd09a442850838ba56acb6fc426c9fed0234666",
+  "timing_artifact_audit": {
+    "all_timed_and_stats_output_oracles_passed": true,
+    "alternating_cohort_order_verified": true,
+    "application_cases": 12,
+    "artifact": "2026-10-12-applications-boehm.json",
+    "artifact_sha256": "1fe8f03d008f49a0235c251c54e09f7feb561ab39f33f862a722e8012c4f9dc0",
+    "correctness_cases": 9,
+    "driver_start_end_and_preserved_source_match": true,
+    "gc_boundary_counts_and_time_units_recomputed": true,
+    "independently_recomputed_min_median_max": [
+      {
+        "case": "car-16",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.004261596128344536,
+        "elapsed_median_seconds": 0.002833377569913864,
+        "elapsed_min_seconds": 0.0026529552415013313,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "car-1000",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.018687049858272076,
+        "elapsed_median_seconds": 0.01628857385367155,
+        "elapsed_min_seconds": 0.013542642816901207,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "car-2000",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.03165946900844574,
+        "elapsed_median_seconds": 0.028348692692816257,
+        "elapsed_min_seconds": 0.023085580207407475,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "mst-insert-1000",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.16900404822081327,
+        "elapsed_median_seconds": 0.14971138909459114,
+        "elapsed_min_seconds": 0.1277410350739956,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "mst-insert-2000",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.4006458781659603,
+        "elapsed_median_seconds": 0.35328316036611795,
+        "elapsed_min_seconds": 0.3086243011057377,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "deflate-repeated-101700",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.008266848511993885,
+        "elapsed_median_seconds": 0.007444300688803196,
+        "elapsed_min_seconds": 0.00712693203240633,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "inflate-repeated-101700",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.007945866324007511,
+        "elapsed_median_seconds": 0.007567894645035267,
+        "elapsed_min_seconds": 0.007003970444202423,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "deflate-sha256-counter-200000",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.03349988255649805,
+        "elapsed_median_seconds": 0.03199123032391071,
+        "elapsed_min_seconds": 0.029426132328808308,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "inflate-sha256-counter-200000",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.02801214624196291,
+        "elapsed_median_seconds": 0.025246345438063145,
+        "elapsed_min_seconds": 0.021428975276648998,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "deflate-sha256-counter-50000",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.011752668768167496,
+        "elapsed_median_seconds": 0.011382668279111385,
+        "elapsed_min_seconds": 0.010091776959598064,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "inflate-sha256-counter-50000",
+        "cohort": "default",
+        "elapsed_max_seconds": 0.011886188760399818,
+        "elapsed_median_seconds": 0.010659836232662201,
+        "elapsed_min_seconds": 0.007552470080554485,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "inflate-committed-seed",
+        "cohort": "default",
+        "elapsed_max_seconds": 2.190685640089214,
+        "elapsed_median_seconds": 2.1157372538000345,
+        "elapsed_min_seconds": 1.9574277447536588,
+        "maxrss_max_bytes": 1288290304,
+        "maxrss_median_bytes": 1286008832,
+        "maxrss_min_bytes": 1076219904,
+        "n": 5
+      },
+      {
+        "case": "car-16",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.0031551318243145943,
+        "elapsed_median_seconds": 0.003004106692969799,
+        "elapsed_min_seconds": 0.002847069874405861,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "car-1000",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.01529697049409151,
+        "elapsed_median_seconds": 0.014178679324686527,
+        "elapsed_min_seconds": 0.012215343303978443,
+        "maxrss_max_bytes": 24670208,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "car-2000",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.02904604561626911,
+        "elapsed_median_seconds": 0.023266603238880634,
+        "elapsed_min_seconds": 0.020086724311113358,
+        "maxrss_max_bytes": 44195840,
+        "maxrss_median_bytes": 43130880,
+        "maxrss_min_bytes": 42692608,
+        "n": 5
+      },
+      {
+        "case": "mst-insert-1000",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.13059463631361723,
+        "elapsed_median_seconds": 0.09746566507965326,
+        "elapsed_min_seconds": 0.09530012309551239,
+        "maxrss_max_bytes": 148758528,
+        "maxrss_median_bytes": 148676608,
+        "maxrss_min_bytes": 148353024,
+        "n": 5
+      },
+      {
+        "case": "mst-insert-2000",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.3220844119787216,
+        "elapsed_median_seconds": 0.2948777284473181,
+        "elapsed_min_seconds": 0.2692714584991336,
+        "maxrss_max_bytes": 148856832,
+        "maxrss_median_bytes": 148508672,
+        "maxrss_min_bytes": 148283392,
+        "n": 5
+      },
+      {
+        "case": "deflate-repeated-101700",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.005995229817926884,
+        "elapsed_median_seconds": 0.005677172914147377,
+        "elapsed_min_seconds": 0.005098775960505009,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "inflate-repeated-101700",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.007484122179448605,
+        "elapsed_median_seconds": 0.007063134573400021,
+        "elapsed_min_seconds": 0.005751418881118298,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "deflate-sha256-counter-200000",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.028629683889448643,
+        "elapsed_median_seconds": 0.02705297339707613,
+        "elapsed_min_seconds": 0.02597665786743164,
+        "maxrss_max_bytes": 29925376,
+        "maxrss_median_bytes": 29044736,
+        "maxrss_min_bytes": 27664384,
+        "n": 5
+      },
+      {
+        "case": "inflate-sha256-counter-200000",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.027912631630897522,
+        "elapsed_median_seconds": 0.023378819227218628,
+        "elapsed_min_seconds": 0.02022329717874527,
+        "maxrss_max_bytes": 58011648,
+        "maxrss_median_bytes": 57556992,
+        "maxrss_min_bytes": 56156160,
+        "n": 5
+      },
+      {
+        "case": "deflate-sha256-counter-50000",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.011061194352805614,
+        "elapsed_median_seconds": 0.009772918187081814,
+        "elapsed_min_seconds": 0.007802329957485199,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "inflate-sha256-counter-50000",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 0.009367422200739384,
+        "elapsed_median_seconds": 0.007903330028057098,
+        "elapsed_min_seconds": 0.007687161676585674,
+        "maxrss_max_bytes": 23826432,
+        "maxrss_median_bytes": 23826432,
+        "maxrss_min_bytes": 23826432,
+        "n": 5
+      },
+      {
+        "case": "inflate-committed-seed",
+        "cohort": "fixed128m",
+        "elapsed_max_seconds": 2.217184577137232,
+        "elapsed_median_seconds": 2.1564637888222933,
+        "elapsed_min_seconds": 2.018376645632088,
+        "maxrss_max_bytes": 1294331904,
+        "maxrss_median_bytes": 1288568832,
+        "maxrss_min_bytes": 1287315456,
+        "n": 5
+      }
+    ],
+    "limits": "Linux measurements only. CAR oracle checks encoded length; MST checks reported entry count, not every key/CID. Boehm boundary allocation counters omit the final tail and are not exact liveness. Small-process RSS is an inherited launcher floor; no compiler-level or custom-GC performance result.",
+    "medaka_emitter_static_libgc_hashes_match": true,
+    "repeats_per_case_per_cohort": 5,
+    "samples": 120,
+    "source_and_binary_hashes_match": true,
+    "source_hashes_verified": 415,
+    "status": "passed",
+    "stdout_stderr_output_hashes_match": true,
+    "untimed_complete_gc_logs": 24
+  }
+}

@@ -387,3 +387,56 @@ are measured again in the same rounds. Lists are faster than Boehm at the offset
 capacity and about 2% slower when aligned; trees remain 11–23% slower. Full
 interpretation and medians are in
 [GC feasibility](../../docs/design/GC-FEASIBILITY.md).
+
+The next collector change splits tracing-queue pushes into an inline hit and an
+out-of-line growth path. Growth, traversal order, and accounting are unchanged:
+
+- [Promotion-optimized collector CPU profile](results/2026-10-12-promotion-profile.json)
+- [Queue comparison, 262,136-byte nursery](results/2026-10-12-queue-5m-offset.jsonl)
+- [Queue comparison, 262,144-byte nursery](results/2026-10-12-queue-5m-aligned.jsonl)
+- [Queue audit, exact patch, and measurement scripts](results/2026-10-12-queue-audit.json)
+- [Full queue-change correctness record](results/2026-10-12-queue-correctness.json)
+
+The baseline is `dcd09a442850838ba56acb6fc426c9fed0234666`. Four arms, seven profiles,
+and eight cyclic rounds produce 224 samples per nursery capacity. All 112 paired
+custom counter comparisons match exactly. Median list time improves 3–6%; tree
+time changes only about 1%, an inconclusive difference. Lists beat both measured
+Boehm variants in these runs, while trees remain 5–31% slower. Short-lived effects
+are mixed, with small regressions as well as gains. The audit retains every sample
+and reconstruction input; no uniform improvement across profiles is claimed.
+
+## Application baselines
+
+`applications.py` builds and tests the existing PDS resource driver and gzip
+compression/decompression programs with production Boehm. Choose an empty scratch
+directory, then reuse its verified binaries for measurement:
+
+```console
+python3 /absolute/path/to/medaka/test/gc_prototype/applications.py --correctness-only --scratch /tmp/medaka-gc-applications
+python3 /absolute/path/to/medaka/test/gc_prototype/applications.py --measure --resume --scratch /tmp/medaka-gc-applications --repeats 5
+```
+
+The driver verifies source/toolchain, binary, and input hashes before resuming.
+Builds use strict source freshness and `-O2`. CAR checks the independently derived
+`59 + 40*n` output size; MST insertion checks the requested entry count, not the
+complete tree contents. gzip outputs are compared byte-for-byte against system
+gzip, including decompression of the committed compiler seed. Output files are
+removed before each run so a successful process that writes nothing cannot pass
+using an earlier result.
+
+Timing includes process startup, computation, and file I/O, but excludes building,
+input generation, and output verification. Each case has five fresh processes
+under each of two initial-heap policies: the ordinary application default and an
+explicit 128 MiB initial heap. Both use free-space divisor 1; inherited `GC_*`
+settings are cleared. Cohort order alternates by repetition. Neither policy caps
+heap growth. Separate diagnostic runs record complete Boehm collection logs;
+their allocation counts stop at collection boundaries and omit the final tail.
+
+The [application measurements](results/2026-10-12-applications-boehm.json) retain
+120 samples, 24 diagnostic transcripts, input hashes, correctness results, and
+build provenance. The [independent audit](results/2026-10-12-applications-audit.json)
+includes the exact measured driver source and checks that malformed outputs and
+stale inputs are rejected. RSS comes from child-process high-water measurements;
+small values are obscured by an approximately 24 MB inherited launcher floor.
+These are Boehm baselines, not application comparisons against the custom collector.
+Linux was measured; macOS remains untested.

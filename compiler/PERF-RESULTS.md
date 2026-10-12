@@ -1842,3 +1842,27 @@ results, with medians rather than the preceding experiment's minima. Full
 ablation samples and reconstruction patches are linked from the
 [experiment README](../test/gc_prototype/README.md); interpretation is in
 [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).
+
+## GC application baselines and queue experiment (2026-10-12)
+
+The standalone collector's tracing-queue append now inlines while growth remains
+out of line. Against the preceding promotion-optimized collector, eight balanced
+rounds at each nursery capacity improve retained-list medians 3–6%, with identical
+counters and memory accounting. Trees change only about 1%, which is inconclusive;
+they remain 5–31% slower than the fastest measured Boehm alternative. Small effects
+elsewhere are mixed. Full correctness and independent reviews pass.
+
+Real PDS/gzip native programs now have reusable **Boehm-only** baselines: 120 fresh
+process timings and 24 separate GC diagnostic runs, with independent output checks.
+MST insertion at 2,000 entries takes 353 ms median under the default initial heap
+policy and 295 ms with a 128 MiB initial heap, at higher RSS. Compiler-seed inflate
+produces 26.3 MB in about 2.1 seconds with about 1.29 GB peak RSS under either policy.
+Its diagnostics record over 3.6 GB allocated by the last collection. Source
+inspection identifies word-per-byte vector storage and several large conversions;
+exact live storage and collector-specific retention remain unmeasured.
+
+These are application and standalone-collector measurements, not evidence that
+the applications run with custom GC. Sample ranges, heap-policy caveats, source
+and binary hashes, audits, and reusable commands are in the
+[experiment README](../test/gc_prototype/README.md) and
+[GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).

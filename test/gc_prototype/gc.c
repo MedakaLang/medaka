@@ -171,15 +171,16 @@ static uintptr_t descriptor_info(size_t words, uint64_t mask) {
   descriptor_hash[slot] = (uint32_t)++descriptor_count;
   account_peak(); return (uintptr_t)descriptor_count << 3;
 }
-static void queue_push(Queue *q, Header *h, size_t *bytes) {
-  if (q->count == q->capacity) {
-    size_t capacity = q->capacity ? q->capacity * 2 : 64;
-    Header **items = malloc(capacity * sizeof *items); assert(items);
-    account_peak_extra(capacity * sizeof *items);
-    if (q->count) memcpy(items, q->items, q->count * sizeof *items);
-    free(q->items); q->items = items; q->capacity = capacity;
-    *bytes = capacity * sizeof *items; account_peak();
-  }
+static __attribute__((noinline)) void queue_grow(Queue *q, size_t *bytes) {
+  size_t capacity = q->capacity ? q->capacity * 2 : 64;
+  Header **items = malloc(capacity * sizeof *items); assert(items);
+  account_peak_extra(capacity * sizeof *items);
+  if (q->count) memcpy(items, q->items, q->count * sizeof *items);
+  free(q->items); q->items = items; q->capacity = capacity;
+  *bytes = capacity * sizeof *items; account_peak();
+}
+static inline __attribute__((always_inline)) void queue_push(Queue *q, Header *h, size_t *bytes) {
+  if (q->count == q->capacity) queue_grow(q, bytes);
   q->items[q->count++] = h;
 }
 void heap_init(size_t bytes) {

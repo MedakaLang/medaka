@@ -449,7 +449,7 @@ compiler checking. These are identified targets, not custom-GC measurements:
 | gzip decompression | `gzip/inflate_demo.mdk`, committed `compiler/seed/emitter.ll.gz` | Byte-for-byte agreement with system `gunzip` |
 
 A focused Medaka entry around the existing CAR algorithm, starting with 16
-blocks, is the preferred first broader integration target. The full resource
+blocks, is an application integration target. The full resource
 driver also imports signing and handler machinery; a smaller entry can run the
 actual CAR library without unrelated startup. Even that target needs rooted
 control flow and recursion, ADT/list layouts, closures and dictionaries, packed
@@ -458,3 +458,121 @@ builder keeps a backing block in a mutable `Ref`, requiring barriers and valid
 buffer bases across growth. gzip adds mutable numeric arrays, bit cursors, and
 vector growth. These requirements should extend the native R5a implementation
 plan while consuming F5's settled semantic facts.
+
+Inspection of the application dependencies identifies a smaller first execution
+target: `pds/lib/multiformats.mdk:uvarintEncode`, the real PDS framing algorithm.
+Its independent unsigned-LEB128 answers include `0 → 00`, `127 → 7f`,
+`128 → 8001`, `300 → ac02`, and `16384 → 808001`. It already reaches recursive
+lists, byte builders, mutable backing-block references, packed bytes, and buffer
+growth. A focused CAR entry still has 27 statically imported modules, versus 15
+for this varint entry; these counts do not describe emitted reachable functions.
+
+At the inspected emitter sprint commit
+`2a3ef1283254993aa9f816ab267c7996f62736f1`, the runtime-type domain, binder identities,
+`DeclFacts.factBinders` snapshot, and binder-stamp validator exist. The LLVM
+consumer has not yet switched to those facts. The first compiler integration
+slice should consume that carrier and export native allocation layouts, operand
+storage classes, and collection-call contracts from their producing operations,
+with Boehm still collecting. This removes the closed transformer's handwritten
+application layout authority before enabling movement. Missing facts or helper
+contracts must reject the experimental path.
+
+Moving execution then needs temporary roots and reloads, balanced tail transfers,
+the backing-Ref barrier, and a ByteBlock-copy contract that roots its source
+across allocation. Experimental TRMC must either use rooted base-plus-offset
+destinations or be disabled in that mode. Constants and globals need explicit
+ownership contracts. After the varint/builder path passes forced relocation and
+mutation controls, expand to CAR and then the broader gzip runtime surface.
+
+### Measured application baselines (2026-10-12)
+
+The real PDS and gzip native executables now have a reproducible production-Boehm
+baseline. Independent checks pass for CAR sizes, MST entry counts, compression
+round trips through system gzip, and decompression of the committed compiler seed.
+MST's check covers entry count, not a full independent tree-content model. The
+CAR and MST probes will need content-level oracles before comparing execution
+under a moving collector; unchanged lengths alone cannot establish correct data.
+The driver records 120 fresh-process measurements and 24 separate GC diagnostic runs,
+with source, compiler, binary, and input hashes. Each case has five timing samples
+per heap policy, alternating cohort order. Builds and output verification are
+outside timing; startup and file I/O are included.
+
+| Application workload | Default initial heap, median (ms) | 128 MiB initial heap, median (ms) |
+|---|---:|---:|
+| CAR, 1,000 blocks | 16.29 | 14.18 |
+| CAR, 2,000 blocks | 28.35 | 23.27 |
+| MST insertion, 1,000 entries | 149.71 | 97.47 |
+| MST insertion, 2,000 entries | 353.28 | 294.88 |
+| Deflate, 101,700 repeated-text bytes | 7.44 | 5.68 |
+| Deflate, 200,000 deterministic incompressible bytes | 31.99 | 27.05 |
+| Inflate, 200,000 incompressible bytes from system gzip | 25.25 | 23.38 |
+| Inflate compiler seed, 26,301,788 output bytes | 2,115.74 | 2,156.46 |
+
+The default application link starts without the compiler's pre-expansion policy;
+both cohorts use free-space divisor 1. The 128 MiB setting fixes the initial size,
+not the maximum heap. It reduces MST collection frequency at a memory cost:
+the 2,000-entry diagnostic runs log 236 versus five collections, while the timed
+128 MiB runs have about 149 MB median peak RSS. The insertion-only allocation
+counter reports about 187.7 MB at 1,000 entries and 608.6 MB at 2,000; it is not
+the whole-process allocation total.
+
+Seed decompression has roughly 1.29 GB median peak RSS under either policy. The
+separate diagnostic runs log 3.654/3.683 GB allocated at collection boundaries,
+25/18 collections, and 120/113 ms of collection duration. These counters omit the
+final allocation tail and do not measure exact liveness; diagnostic collection
+durations must not be treated as a wall-time decomposition of the separate timed
+runs. The larger initial heap gives no useful improvement in this sample. The
+allocation and representation costs warrant investigation before attributing
+that memory footprint to collector policy.
+
+Short cases include process-startup overhead, and their RSS is often obscured by
+the roughly 24 MB inherited launcher high-water floor. Full samples, minima,
+medians, ranges, independent audits, and reusable commands are in the
+[experiment README](../../test/gc_prototype/README.md). None of these applications
+has yet run under the custom collector.
+
+Source inspection gives a concrete representation hypothesis for the gzip
+footprint. `gzip/lib/inflate.mdk` retains all output in a `Vector Int`, using it
+as the back-reference window. At this output size its doubling capacity reaches
+33,554,432 word slots (about 268 MB). Finishing makes a roughly 210 MB exact-size
+word array and a packed 26 MB byte block; the CLI converts the result back to a
+word array for `writeFileBytes`. Those copies and historical vector backing
+arrays explain substantial allocation. They do not establish which allocations
+are simultaneously live or conservatively retained. A packed output/window and
+packed file-I/O path are separate application/runtime optimization candidates;
+their benefit must be measured independently of changing collectors.
+
+### Tracing-queue allocation experiment (2026-10-12)
+
+A fresh profile of the promotion-optimized collector attributes 8.1% of retained
+tree CPU samples and 9.6% of list samples to `queue_push`. Assembly shows that the
+old shared function saves six registers and reserves stack space even when no
+growth occurs. The queue now inlines its capacity check and append, with the
+unchanged growth sequence in a separate out-of-line function. It preserves
+traversal order, allocation sizes, overlap accounting during growth, assertions,
+and all counters.
+
+Eight cyclic rounds compare the previous collector, the queue variant, and both
+Boehm alternatives at five million allocations. Each arm occupies each position
+twice. Medians below show offset/aligned nursery capacities:
+
+| Workload | Previous custom (ms) | Queue variant (ms) | Fastest of two Boehm arms (ms) |
+|---|---:|---:|---:|
+| Entire list retained | 175.77 / 200.33 | 170.12 / 187.89 | 179.34 / 193.52 |
+| Entire tree retained | 322.94 / 358.39 | 319.75 / 354.22 | 305.86 / 269.97 |
+| Varied sizes and lifetimes | 120.10 / 128.05 | 119.67 / 118.67 | 750.59 / 736.24 |
+
+Lists improve 3–6% against the same-run baseline and beat the measured Boehm
+alternatives by 3–5%. Trees improve only about 1%, which is inconclusive on this
+shared machine, and remain 5–31% slower than Boehm. The different Boehm tree
+times across runs underline the need to retain both capacities and all samples.
+Other effects are mixed: offset ephemeral and aligned mutation regress about
+1% and 2%; a 7% aligned varied-size gain does not repeat at the offset capacity.
+This is a small list improvement, not a general solution to the retained-tree gap.
+
+All 112 paired custom measurements have exactly matching deterministic counters
+and memory accounting. The full correctness/sanitizer and mutation matrix passes,
+including remembered and tracing queue growth beyond their initial 64 slots.
+Independent source and artifact reviews check the growth order, reconstruction
+patch, identities, sample order, and timing summaries. The
+[experiment README](../../test/gc_prototype/README.md) links the evidence.
