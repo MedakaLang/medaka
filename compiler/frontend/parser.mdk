@@ -82,12 +82,12 @@ import frontend.ast.{
 import frontend.lexer.{
   Token(..),
   tokenize,
-  tokenizeWithLines,
   tokenizeWithOffsets,
   tokenizeWithOffsetPairs,
   offsetToLineCol,
   lineStartsOf,
   offsetToLineColFast,
+  offsetsToLines,
   describeToken,
 }
 import support.util.{reverseL, joinWith}
@@ -4752,7 +4752,7 @@ parseProgram = defer
 --                        in decl order;
 --   * last_content_line — the line of the last non-trivia token in the file.
 -- These are computed *out of band* from the token/line arrays produced by
--- `tokenizeWithLines`: parsing itself is untouched (the AST has no `loc`).  Each
+-- `tokenizeWithOffsetPairs`: parsing itself is untouched (the AST has no `loc`).  Each
 -- decl is parsed with its start/end token index captured via `getPos`; lines
 -- come from the parallel line array; variant start lines are re-derived from the
 -- decl's token span (the data-body's depth-0 `=`/`|` separators).
@@ -5674,42 +5674,44 @@ parseWithPositionsLocated src = parseWithPositions src
 -- files are unparseable constantly mid-edit.
 export
 parseWithPositionsOpt : String -> Option (List Decl, Positions)
-parseWithPositionsOpt src = match tokenizeWithLines src
-  (tokList, lineList) =>
-    let toks = arrayFromList tokList
-    let lines = arrayFromList lineList
-    -- #331/#649 (increment 3, I6): a second tokenize pass for the (start,end)
-    -- offset pairs the decl NAME-span finder needs (`declNameSpanOf`).  Its
-    -- token stream is byte-identical to `tokenizeWithLines`'s (both documented
-    -- as such), so the indices line up with `toks`/`spans` below.  The SAME
-    -- `offs` also primes `setLocState`, so `located`'s expression `ELoc`s
-    -- carry real spans too — this used to be deliberately skipped (see the old
-    -- `locOfSpanWith` header note, now stale) so that `parseWithPositionsOpt`
-    -- and `parseWithPositionsLocated` stayed two different-fidelity entries;
-    -- unifying them (I6) is the whole point of this increment, so every
-    -- caller — LSP `documentSymbols`/`definition`/`inlayHint` included — now
-    -- gets real sub-expression positions for free, at the SAME one-extra-pass
-    -- cost this function already paid.
-    match tokenizeWithOffsetPairs src
-      (_, offPairList) =>
-        let offs = arrayFromList offPairList
-        let nameLineStarts = lineStartsOf src
-        let _ = setLocState src offs
-        trailingCommaLocsRef := []
-        unitStartsRef := []
-        match runP programWithSpans toks 0
-          PErr _ _ => None
-          PFatal _ _ => None
-          POk spans pos =>
-            if isEofTok (peekTok toks pos) then
-              let decls = map ((d, _s, _e) => d) spans
-              let dps = map (declPosOf toks lines offs nameLineStarts) spans
-              let vls = allVariantLines toks lines spans
-              let lcl = lastContentLineOf toks lines spans
-              let cls = allChainLines toks lines spans
-              Some (decls, Positions dps vls lcl cls)
-            else
-              None
+parseWithPositionsOpt src = match tokenizeWithOffsetPairs src
+  (tokList, offPairList) => parseWithPositionsOptPairs src tokList offPairList
+
+-- `parseWithPositionsOpt` over an ALREADY-tokenized stream: `tokList` and
+-- `offPairList` must be `tokenizeWithOffsetPairs src`.  Lets a caller that has
+-- lexed the source once (fmt) parse it without a second lexing pass.
+export
+parseWithPositionsOptPairs : String ->
+  List Token ->
+  List (Int, Int) ->
+  Option (List Decl, Positions)
+parseWithPositionsOptPairs src tokList offPairList =
+  -- One tokenize pass feeds the token array, the (start,end) offsets and the
+  -- per-token lines: `tokenizeWithOffsetPairs` yields the same token stream as
+  -- the line-only entry, and its pair starts are the offsets the lines are
+  -- derived from.  The SAME offsets prime `setLocState`, so `located`'s
+  -- expression `ELoc`s carry real spans for every caller (LSP included).
+  let toks = arrayFromList tokList
+  let offs = arrayFromList offPairList
+  let lines =
+    arrayFromList (offsetsToLines (stringToChars src) (map fst offPairList))
+  let nameLineStarts = lineStartsOf src
+  let _ = setLocState src offs
+  trailingCommaLocsRef := []
+  unitStartsRef := []
+  match runP programWithSpans toks 0
+    PErr _ _ => None
+    PFatal _ _ => None
+    POk spans pos =>
+      if isEofTok (peekTok toks pos) then
+        let decls = map ((d, _s, _e) => d) spans
+        let dps = map (declPosOf toks lines offs nameLineStarts) spans
+        let vls = allVariantLines toks lines spans
+        let lcl = lastContentLineOf toks lines spans
+        let cls = allChainLines toks lines spans
+        Some (decls, Positions dps vls lcl cls)
+      else
+        None
 
 -- Check that the parse consumed all tokens (no trailing garbage), panic on error.
 resultDecls : Array Token -> PR (List Decl) -> List Decl
@@ -6500,6 +6502,17 @@ parseResult : String -> Result ParseError (List Decl)
 parseResult src = match tokenizeWithOffsets src
   (tokList, offList) => parseResultWith src tokList offList
 
+-- `parseResult` over an ALREADY-tokenized stream: `tokList` and `offPairs` must
+-- be `tokenizeWithOffsetPairs src` (its pair starts are `tokenizeWithOffsets`'s
+-- offsets).  Lets a caller that has lexed the source once reuse the tokens.
+export
+parseResultPairs : String ->
+  List Token ->
+  List (Int, Int) ->
+  Result ParseError (List Decl)
+parseResultPairs src tokList offPairs =
+  parseResultWith src tokList (map fst offPairs)
+
 -- Non-panicking located parse: the `parseResult` of `parseLocated`.  Sets the
 -- loc-state refs from the (start, end) offset pairs — so the ELoc wrappers carry
 -- REAL line/col, exactly as `parseLocated` does — then runs the SAME scanners and
@@ -6518,17 +6531,14 @@ parseLocatedResult src = match tokenizeWithOffsetPairs src
     let _ = setLocState src (arrayFromList offPairs)
     parseResultWith src tokList (map fst offPairs)
 
--- Shared body of `parseResult` / `parseLocatedResult`: the removed-construct and
--- lex-error pre-scans, then the grammar, over an ALREADY-tokenized stream.  Split
--- out so the located entry does not have to tokenize a second time (the loader
--- parses every module in the graph through it).
-parseResultWith : String ->
-  List Token ->
-  List Int ->
-  Result ParseError (List Decl)
-parseResultWith src tokList offList =
-  let toks = arrayFromList tokList
-  let offs = arrayFromList offList
+-- The removed-construct and lex-error pre-scans over an ALREADY-tokenized
+-- stream, in the order the diagnostics take precedence: the first one that
+-- fires is the error.  `None` means no pre-scan fired and the grammar decides.
+-- Exported so `medaka fmt` can run the same pre-scans without the separate
+-- grammar pass of `parseResultWith` (see `formatSourceChecked`).
+export
+prescanError : String -> Array Token -> Array Int -> Option ParseError
+prescanError src toks offs =
   let srcLen = stringLength src
   let beIdx = firstBangEqIdx toks 0
   let lmIdx = firstMutIdx toks 0
@@ -6550,10 +6560,10 @@ parseResultWith src tokList offList =
     Some (leIdx, leMsg) =>
       let leMsg2 =
         if leMsg == "unexpected character `;`" then semicolonMsg else leMsg
-      Err (mkLocated src toks offs srcLen leMsg2 leIdx)
+      Some (mkLocated src toks offs srcLen leMsg2 leIdx)
     None =>
       if beIdx >= 0 then
-        Err
+        Some
           (mkLocated
             src
             toks
@@ -6562,11 +6572,11 @@ parseResultWith src tokList offList =
             "unexpected `!=`; did you mean `/=`?"
             beIdx)
       else if lmIdx >= 0 then
-        Err (mkLocated src toks offs srcLen letMutRemovedMsg lmIdx)
+        Some (mkLocated src toks offs srcLen letMutRemovedMsg lmIdx)
       else if recIdx >= 0 then
-        Err (mkLocated src toks offs srcLen recordRemovedMsg recIdx)
+        Some (mkLocated src toks offs srcLen recordRemovedMsg recIdx)
       else if ckIdx >= 0 then
-        Err
+        Some
           (mkLocated
             src
             toks
@@ -6575,29 +6585,29 @@ parseResultWith src tokList offList =
             (reservedKeywordMsg (contextualKwName (peekTok toks ckIdx)))
             ckIdx)
       else if fnIdx >= 0 then
-        Err (mkLocated src toks offs srcLen functionRemovedMsg fnIdx)
+        Some (mkLocated src toks offs srcLen functionRemovedMsg fnIdx)
       else if ilIdx >= 0 then
-        Err (mkLocated src toks offs srcLen inlineLetMissingInMsg ilIdx)
+        Some (mkLocated src toks offs srcLen inlineLetMissingInMsg ilIdx)
       else if coIdx >= 0 then
-        Err (mkLocated src toks offs srcLen hsCaseOfMsg coIdx)
+        Some (mkLocated src toks offs srcLen hsCaseOfMsg coIdx)
       else if btIdx >= 0 then
-        Err (mkLocated src toks offs srcLen backtickInfixMsg btIdx)
+        Some (mkLocated src toks offs srcLen backtickInfixMsg btIdx)
       else if mwIdx >= 0 then
-        Err (mkLocated src toks offs srcLen matchWithMsg mwIdx)
+        Some (mkLocated src toks offs srcLen matchWithMsg mwIdx)
       else if wiIdx >= 0 then
-        Err (mkLocated src toks offs srcLen letRecWithRemovedMsg wiIdx)
+        Some (mkLocated src toks offs srcLen letRecWithRemovedMsg wiIdx)
       else if bcIdx >= 0 then
         -- Before the `**` hint: a `/**` or `(**` comment opener lexes as a
         -- `**` token, and the comment diagnosis is the true one.
-        Err (mkLocated src toks offs srcLen blockCommentMsg bcIdx)
+        Some (mkLocated src toks offs srcLen blockCommentMsg bcIdx)
       else if ssIdx >= 0 then
-        Err (mkLocated src toks offs srcLen starStarMsg ssIdx)
+        Some (mkLocated src toks offs srcLen starStarMsg ssIdx)
       else if sigIdx >= 0 then
-        Err (mkLocated src toks offs srcLen hsSigMsg sigIdx)
+        Some (mkLocated src toks offs srcLen hsSigMsg sigIdx)
       else if bbIdx >= 0 then
-        Err (mkLocated src toks offs srcLen braceBlockMsg bbIdx)
+        Some (mkLocated src toks offs srcLen braceBlockMsg bbIdx)
       else if fkwIdx >= 0 then
-        Err
+        Some
           (mkLocated
             src
             toks
@@ -6606,7 +6616,34 @@ parseResultWith src tokList offList =
             (foreignKwMsg (peekTok toks fkwIdx))
             fkwIdx)
       else if forIdx >= 0 then
-        Err (mkLocated src toks offs srcLen forLoopMsg forIdx)
+        Some (mkLocated src toks offs srcLen forLoopMsg forIdx)
       else
-        let _ = primeGuardPos src offs
-        resultDeclsResult src toks offs srcLen (runP parseProgram toks 0)
+        None
+
+-- `prescanError` over the `tokenizeWithOffsetPairs` shape that `fmt` holds.
+export
+prescanErrorPairs : String -> List Token -> List (Int, Int) -> Option ParseError
+prescanErrorPairs src tokList offPairs =
+  prescanError src (arrayFromList tokList) (arrayFromList (map fst offPairs))
+
+-- Shared body of `parseResult` / `parseLocatedResult`: the pre-scans, then the
+-- grammar, over an ALREADY-tokenized stream.  Split out so the located entry
+-- does not have to tokenize a second time (the loader parses every module in
+-- the graph through it).
+parseResultWith : String ->
+  List Token ->
+  List Int ->
+  Result ParseError (List Decl)
+parseResultWith src tokList offList =
+  let toks = arrayFromList tokList
+  let offs = arrayFromList offList
+  match prescanError src toks offs
+    Some e => Err e
+    None =>
+      let _ = primeGuardPos src offs
+      resultDeclsResult
+        src
+        toks
+        offs
+        (stringLength src)
+        (runP parseProgram toks 0)

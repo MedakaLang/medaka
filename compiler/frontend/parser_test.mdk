@@ -5,7 +5,7 @@
    right operand fails. -}
 
 import frontend.ast.{Expr(..), Decl(..)}
-import frontend.lexer.{Token(..)}
+import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.parser.{
   PR(..),
   PFail(..),
@@ -17,8 +17,13 @@ import frontend.parser.{
   renderFail,
   parseResult,
   parseErrorMessage,
+  parseErrorLine,
+  parseErrorCol,
+  prescanErrorPairs,
 }
-import test.{expectEqual}
+import test.{
+  expectEqual, expectEach, expectAll, expectSome, expectNone, Expectation
+}
 import frontend.parser as P
 
 -- The rendered message of a recoverable failure, or the marker text for any
@@ -234,3 +239,63 @@ test "an operator with no right operand is left for the diagnostic" =
       parseMsg "x = a || b |>\n",
       parseMsg "x = (a > b) >\n",
     ]
+
+-- ── fmt's parse check: prescanError vs parseResult ────────────────────────
+-- `medaka fmt` runs `prescanErrorPairs` in place of the full check parse.
+-- It must give the same verdict as `parseResult` on every input, and the
+-- pre-scan that fires must be the one the trigger was written for.  One row
+-- per pre-scan (17), plus a clean program and a record form that is not a
+-- removed construct.
+prescanVerdict : String -> Option (Int, Int, String)
+prescanVerdict src = match tokenizeWithOffsetPairs src
+  (toks, pairs) =>
+    map
+      (e => (parseErrorLine e, parseErrorCol e, parseErrorMessage e))
+      (prescanErrorPairs src toks pairs)
+
+parseVerdict : String -> Option (Int, Int, String)
+parseVerdict src = match parseResult src
+  Err e => Some (parseErrorLine e, parseErrorCol e, parseErrorMessage e)
+  Ok _ => None
+
+prescanTriggers : List (String, String)
+prescanTriggers = [
+  ("lexerr_unterminated_string", "main = println \"abc\n"),
+  ("bangeq", "main = println (1 != 2)\n"),
+  ("let_mut", "main =\n  let mut x = 1\n  println x\n"),
+  ("record_decl_oneline", "record P : Int\n\nmain = println 1\n"),
+  ("ctxkw_let_toplevel", "let = 5\n\nmain = println 1\n"),
+  ("function_keyword", "f = function x => x\n\nmain = println 1\n"),
+  (
+    "inline_let_missing_in",
+    "f x = if x then 1 else let y = 2 y\n\nmain = println 1\n",
+  ),
+  ("hs_case_of", "f x = case x of\n  1 => 2\n\nmain = println 1\n"),
+  ("backtick_infix", "main = println (1 `add` 2)\n"),
+  ("match_with", "f x = match x with\n  1 => 2\n\nmain = println 1\n"),
+  ("let_rec_with", "f = let rec g = 1 with h = 2 in g\n\nmain = println 1\n"),
+  ("block_comment", "/* hi */\n\nmain = println 1\n"),
+  ("star_star", "main = println (2 ** 3)\n"),
+  ("hs_sig_coloncolon", "f :: Int\n\nmain = println 1\n"),
+  ("brace_block", "f x = if x { 1 } else 2\n\nmain = println 1\n"),
+  ("foreign_kw_def", "def f():\n  1\n\nmain = println 1\n"),
+  ("for_loop", "main =\n  for x in [1, 2]\n    println x\n"),
+]
+
+prescanParityRow : (String, String) -> (String, Expectation)
+prescanParityRow (name, src) = (
+  name,
+  expectAll [
+    expectSome (prescanVerdict src),
+    expectEqual (parseVerdict src) (prescanVerdict src),
+  ],
+)
+
+test "prescanError fires on each removed-construct trigger, agreeing with parseResult" =
+  expectEach (map prescanParityRow prescanTriggers)
+
+test "prescanError is silent on a clean program and on a record used as an identifier" = expectAll
+  [
+    expectNone (prescanVerdict "main = println 1\n"),
+    expectNone (prescanVerdict "record = 3\n\nmain = println 1\n"),
+  ]

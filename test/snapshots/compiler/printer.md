@@ -1,5 +1,5 @@
 # META
-source_lines=2671
+source_lines=2679
 stages=DESUGAR,MARK
 # SOURCE
 -- Pretty printer for Medaka, producing parseable source from the AST
@@ -244,11 +244,19 @@ restEndsLine ((Item _ _ (LineComment _)) :: _) = False
 restEndsLine ((Item i m (Fill sf ds)) :: z) =
   restEndsLine (Item i m (fillFlatDoc sf ds) :: z)
 
--- `n` spaces.
+-- `n` spaces.  Indents up to `spaceRunLen` are one slice of a shared run (one
+-- allocation); deeper ones chain whole runs.
+spaceRunLen : Int
+spaceRunLen = 64
+
+spaceRun : String
+spaceRun = stringFromChars (arrayMake spaceRunLen ' ')
+
 spaces : Int -> String
 spaces n
   | n <= 0 = ""
-  | otherwise = " " ++ spaces (n - 1)
+  | n <= spaceRunLen = stringSlice 0 n spaceRun
+  | otherwise = spaceRun ++ spaces (n - spaceRunLen)
 
 newlineStr : Int -> String
 newlineStr i = "\n" ++ spaces i
@@ -2746,8 +2754,12 @@ effAxesDoc axes =
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EApp (EVar "restEndsLine") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (EVar "z"))))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild PWild (PCon "LineComment" PWild)) PWild)) (EVar "False"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Fill" (PVar "sf") (PVar "ds"))) (PVar "z"))) (EApp (EVar "restEndsLine") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EApp (EApp (EVar "fillFlatDoc") (EVar "sf")) (EVar "ds"))) (EVar "z"))))
+(DTypeSig false "spaceRunLen" (TyCon "Int"))
+(DFunDef false "spaceRunLen" () (ELit (LInt 64)))
+(DTypeSig false "spaceRun" (TyCon "String"))
+(DFunDef false "spaceRun" () (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMake") (EVar "spaceRunLen")) (ELit (LChar " ")))))
 (DTypeSig false "spaces" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "spaces" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "spaces") (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "spaces" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EBinOp "<=" (EVar "n") (EVar "spaceRunLen")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "n")) (EVar "spaceRun")) (EIf (EVar "otherwise") (EBinOp "++" (EVar "spaceRun") (EApp (EVar "spaces") (EBinOp "-" (EVar "n") (EVar "spaceRunLen")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "newlineStr" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "newlineStr" ((PVar "i")) (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "spaces") (EVar "i"))))
 (DTypeSig false "itemBroken" (TyFun (TyCon "Item") (TyCon "Item")))
@@ -3695,8 +3707,12 @@ effAxesDoc axes =
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Hang" (PVar "sep") (PVar "d"))) (PVar "z"))) (EApp (EVar "restEndsLine") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EApp (EApp (EVar "hangInline") (EVar "sep")) (EVar "d"))) (EVar "z"))))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" PWild PWild (PCon "LineComment" PWild)) PWild)) (EVar "False"))
 (DFunDef false "restEndsLine" ((PCons (PCon "Item" (PVar "i") (PVar "m") (PCon "Fill" (PVar "sf") (PVar "ds"))) (PVar "z"))) (EApp (EVar "restEndsLine") (EBinOp "::" (EApp (EApp (EApp (EVar "Item") (EVar "i")) (EVar "m")) (EApp (EApp (EVar "fillFlatDoc") (EVar "sf")) (EVar "ds"))) (EVar "z"))))
+(DTypeSig false "spaceRunLen" (TyCon "Int"))
+(DFunDef false "spaceRunLen" () (ELit (LInt 64)))
+(DTypeSig false "spaceRun" (TyCon "String"))
+(DFunDef false "spaceRun" () (EApp (EVar "stringFromChars") (EApp (EApp (EVar "arrayMake") (EVar "spaceRunLen")) (ELit (LChar " ")))))
 (DTypeSig false "spaces" (TyFun (TyCon "Int") (TyCon "String")))
-(DFunDef false "spaces" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EVar "otherwise") (EBinOp "++" (ELit (LString " ")) (EApp (EVar "spaces") (EBinOp "-" (EVar "n") (ELit (LInt 1))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "spaces" ((PVar "n")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ELit (LString "")) (EIf (EBinOp "<=" (EVar "n") (EVar "spaceRunLen")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "n")) (EVar "spaceRun")) (EIf (EVar "otherwise") (EBinOp "++" (EVar "spaceRun") (EApp (EVar "spaces") (EBinOp "-" (EVar "n") (EVar "spaceRunLen")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "newlineStr" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "newlineStr" ((PVar "i")) (EBinOp "++" (ELit (LString "\n")) (EApp (EVar "spaces") (EVar "i"))))
 (DTypeSig false "itemBroken" (TyFun (TyCon "Item") (TyCon "Item")))

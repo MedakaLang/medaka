@@ -5491,9 +5491,10 @@ scalarTagIsFloat tag = match fieldNameToLTy tag
 -- any other tag leaves the comparison on the runtime-discriminated path.
 -- A fixed-width head (`U8`/`U16`/`U32`) is a witness too: its value is a tagged
 -- Int word held in `0 .. 2^n - 1`, never negative, so the signed word compare
--- orders it exactly as `Int` does; and so is `I32`, held sign-extended.
+-- orders it exactly as `Int` does; and so is `I32`, held sign-extended.  A `Char`
+-- is the immediate `(cp << 1) | 1` (runtime mdk_char_from_code), monotone in cp.
 scalarTagIsInt : String -> Bool
-scalarTagIsInt tag = tag == "Int" || isTaggedFixedHead tag
+scalarTagIsInt tag = tag == "Int" || tag == "Char" || isTaggedFixedHead tag
 
 -- [site] is the node's trap site, the location an overflow or zero-divisor abort
 -- prints.
