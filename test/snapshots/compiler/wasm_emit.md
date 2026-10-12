@@ -12118,9 +12118,9 @@ ctag (CRangeList _ _ _) = "CRangeList (W7)"
 ctag (CRangeArray _ _ _) = "CRangeArray (W7)"
 ctag (CIndex _ _) = "CIndex (W7)"
 ctag (CSlice _ _ _ _) = "CSlice (W7)"
-ctag (CMethod _ _) = "CMethod (dispatch — W5) (MethodEvidence "
-ctag (CDict _ _) = " CDict (dispatch — W5) "
-ctag (CLetGroup _ _) = " CLetGroup) (where/let-group — W4)"
+ctag (CMethod _ _) = "CMethod (dispatch — W5)"
+ctag (CDict _ _) = "CDict (dispatch — W5)"
+ctag (CLetGroup _ _) = "CLetGroup (where/let-group — W4)"
 ctag _ = "?"
 
 -- a readable tag for an unsupported pattern.
@@ -14443,9 +14443,9 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "ctag" ((PCon "CRangeArray" PWild PWild PWild)) (ELit (LString "CRangeArray (W7)")))
 (DFunDef false "ctag" ((PCon "CIndex" PWild PWild)) (ELit (LString "CIndex (W7)")))
 (DFunDef false "ctag" ((PCon "CSlice" PWild PWild PWild PWild)) (ELit (LString "CSlice (W7)")))
-(DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (dispatch — W5) (MethodEvidence ")))
-(DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString " CDict (dispatch — W5) ")))
-(DFunDef false "ctag" ((PCon "CLetGroup" PWild PWild)) (ELit (LString " CLetGroup) (where/let-group — W4)")))
+(DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (dispatch — W5)")))
+(DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString "CDict (dispatch — W5)")))
+(DFunDef false "ctag" ((PCon "CLetGroup" PWild PWild)) (ELit (LString "CLetGroup (where/let-group — W4)")))
 (DFunDef false "ctag" (PWild) (ELit (LString "?")))
 (DTypeSig false "ptag" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "ptag" ((PCon "PVar" PWild PWild)) (ELit (LString "PVar")))
@@ -16762,9 +16762,9 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "ctag" ((PCon "CRangeArray" PWild PWild PWild)) (ELit (LString "CRangeArray (W7)")))
 (DFunDef false "ctag" ((PCon "CIndex" PWild PWild)) (ELit (LString "CIndex (W7)")))
 (DFunDef false "ctag" ((PCon "CSlice" PWild PWild PWild PWild)) (ELit (LString "CSlice (W7)")))
-(DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (dispatch — W5) (MethodEvidence ")))
-(DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString " CDict (dispatch — W5) ")))
-(DFunDef false "ctag" ((PCon "CLetGroup" PWild PWild)) (ELit (LString " CLetGroup) (where/let-group — W4)")))
+(DFunDef false "ctag" ((PCon "CMethod" PWild PWild)) (ELit (LString "CMethod (dispatch — W5)")))
+(DFunDef false "ctag" ((PCon "CDict" PWild PWild)) (ELit (LString "CDict (dispatch — W5)")))
+(DFunDef false "ctag" ((PCon "CLetGroup" PWild PWild)) (ELit (LString "CLetGroup (where/let-group — W4)")))
 (DFunDef false "ctag" (PWild) (ELit (LString "?")))
 (DTypeSig false "ptag" (TyFun (TyCon "Pat") (TyCon "String")))
 (DFunDef false "ptag" ((PCon "PVar" PWild PWild)) (ELit (LString "PVar")))

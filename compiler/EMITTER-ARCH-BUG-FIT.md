@@ -100,8 +100,8 @@ S0/S1 counts above are still those of 2026-09-03 and only the F3 and F6 rows mov
 
 | Fact | State in the tree on 2026-10-11 |
 |---|---|
-| F3 identity on dispatch nodes | Landed (slice S-impl-symbol): every impl entry carries its stamped symbol words and qualified interface word, and `core_validate.validateImplSymbols` refuses an entry without them. Witness: `test/llvm_fixtures_modules/iface_returns_self_samename/` (two modules' same-spelled interfaces). The F3 issues in the 2026-09-03 table are not re-read here. |
-| F6 evidence and dispositions | Landed (slices S-dict-miss-loud, S-method-constraint-evidence, S-evidence-carrier-A and -B): `CMethod` carries `MethodEvidence`, `CProgram` carries `DeclFacts`, and `core_validate.validateDispatchEvidence` holds both on the emit path. The column held no open issue. Witnesses: `compiler/backend/core_validate_test.mdk` cases (u), (v) and (w), and `test/engine_fixtures/nullary_memo_requires_unused.mdk` with its value pin (a requires-bearing nullary CAF whose effect runs once on every engine). |
+| F3 identity on dispatch nodes | Landed (sprint dispatch-names-its-target, 2026-10-11): every impl entry carries its stamped symbol words and qualified interface word, and `core_validate.validateImplSymbols` refuses an entry without them. Witness: `test/llvm_fixtures_modules/iface_returns_self_samename/` (two modules' same-spelled interfaces). The F3 issues in the 2026-09-03 table are not re-read here. |
+| F6 evidence and dispositions | Landed (sprint dispatch-names-its-target, 2026-10-11): `CMethod` carries `MethodEvidence`, `CProgram` carries `DeclFacts`, and `core_validate.validateDispatchEvidence` holds both on the emit path. The column held no open issue. Witnesses: `compiler/backend/core_validate_test.mdk` cases (u), (v) and (w), and `test/engine_fixtures/nullary_memo_requires_unused.mdk` with its value pin (a requires-bearing nullary CAF whose effect runs once on every engine). |
 
 ### 0.3 What this ledger is for now
 

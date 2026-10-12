@@ -1,5 +1,5 @@
 # META
-source_lines=920
+source_lines=915
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -74,6 +74,7 @@ import ir.core_ir.{
   DeclFacts(..),
   CallMode(..),
   CallSite(..),
+  givenNames,
 }
 import ir.core_ir_lower.{
   ArityEnv,
@@ -588,15 +589,7 @@ unboundFaults scope routes =
         []
       else
         ["reads dictionary `\{d}`, which is not bound here"])
-    (flatMap routeGivens routes)
-
-routeGivens : Route -> List String
-routeGivens (RDict d) = [d]
-routeGivens (RDictFwd d) = [d]
-routeGivens (RKey _ reqs sups) = flatMap routeGivens (reqs ++ sups)
-routeGivens (RLocal _ ds) = flatMap routeGivens ds
-routeGivens (RProj r _) = routeGivens r
-routeGivens _ = []
+    (flatMap givenNames routes)
 
 routeShapeFaults : Route -> List String
 routeShapeFaults (RScalar tag) = ["carries scalar route `\{tag}`"]
@@ -610,6 +603,8 @@ routeShapeFaults (RKey _ reqs sups) = flatMap routeShapeFaults (reqs ++ sups)
 routeShapeFaults (RLocal _ ds) = flatMap routeShapeFaults ds
 routeShapeFaults _ = []
 
+-- Stricter than core_ir.isGivenRooted, which accepts any projection: a projection
+-- is rooted only when the route it projects from is.
 givenRooted : Route -> Bool
 givenRooted (RDict _) = True
 givenRooted (RDictFwd _) = True
@@ -923,7 +918,7 @@ tailStmt b (CSExpr e) acc = tailE b False e acc
 tailStmt b (CSLet _ _ e) acc = tailE b False e acc
 tailStmt b (CSAssign _ e) acc = tailE b False e acc
 # DESUGAR
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "CallMode" true) (mem "CallSite" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "CallMode" true) (mem "CallSite" true) (mem "givenNames" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true))))
@@ -1083,14 +1078,7 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DFunDef false "noRouteFault" ((PCon "RNone")) (EListLit (ELit (LString "has a dictionary slot with no route"))))
 (DFunDef false "noRouteFault" (PWild) (EListLit))
 (DTypeSig false "unboundFaults" (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "unboundFaults" ((PVar "scope") (PVar "routes")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "scope")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "reads dictionary `")) (EApp (EVar "display") (EVar "d"))) (ELit (LString "`, which is not bound here"))))))) (EApp (EApp (EVar "flatMap") (EVar "routeGivens")) (EVar "routes"))))
-(DTypeSig false "routeGivens" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "routeGivens" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
-(DFunDef false "routeGivens" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
-(DFunDef false "routeGivens" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EVar "flatMap") (EVar "routeGivens")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
-(DFunDef false "routeGivens" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EVar "flatMap") (EVar "routeGivens")) (EVar "ds")))
-(DFunDef false "routeGivens" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "routeGivens") (EVar "r")))
-(DFunDef false "routeGivens" (PWild) (EListLit))
+(DFunDef false "unboundFaults" ((PVar "scope") (PVar "routes")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "d")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "scope")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "reads dictionary `")) (EApp (EVar "display") (EVar "d"))) (ELit (LString "`, which is not bound here"))))))) (EApp (EApp (EVar "flatMap") (EVar "givenNames")) (EVar "routes"))))
 (DTypeSig false "routeShapeFaults" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "routeShapeFaults" ((PCon "RScalar" (PVar "tag"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "carries scalar route `")) (EApp (EVar "display") (EVar "tag"))) (ELit (LString "`")))))
 (DFunDef false "routeShapeFaults" ((PCon "RProj" (PVar "r") PWild)) (EBinOp "++" (EIf (EApp (EVar "givenRooted") (EVar "r")) (EListLit) (EListLit (ELit (LString "projects from a route that is not a given dictionary")))) (EApp (EVar "routeShapeFaults") (EVar "r"))))
@@ -1233,7 +1221,7 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSLet" PWild PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 (DFunDef false "tailStmt" ((PVar "b") (PCon "CSAssign" PWild (PVar "e")) (PVar "acc")) (EApp (EApp (EApp (EApp (EVar "tailE") (EVar "b")) (EVar "False")) (EVar "e")) (EVar "acc")))
 # MARK
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "CallMode" true) (mem "CallSite" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CExpr" true) (mem "CField" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CBind" true) (mem "CClause" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "MethodEvidence" true) (mem "CProgram" true) (mem "DeclFacts" true) (mem "CallMode" true) (mem "CallSite" true) (mem "givenNames" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "CallScope" false) (mem "bindGroupScope" false) (mem "bindLetScope" false) (mem "bindPatScope" false) (mem "bindPatsScope" false) (mem "callModeFor" false) (mem "definedArityOf" false) (mem "entryArityRow" false) (mem "programArities" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false) (mem "leadingDictParams" false))))
 (DUse false (UseGroup ("ir" "core_ir_sexp") ((mem "callModeSexp" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Pat" true) (mem "Route" true))))
@@ -1393,14 +1381,7 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DFunDef false "noRouteFault" ((PCon "RNone")) (EListLit (ELit (LString "has a dictionary slot with no route"))))
 (DFunDef false "noRouteFault" (PWild) (EListLit))
 (DTypeSig false "unboundFaults" (TyFun (TyCon "CallScope") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "unboundFaults" ((PVar "scope") (PVar "routes")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "scope")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "reads dictionary `")) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString "`, which is not bound here"))))))) (EApp (EApp (EDictApp "flatMap") (EVar "routeGivens")) (EVar "routes"))))
-(DTypeSig false "routeGivens" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "routeGivens" ((PCon "RDict" (PVar "d"))) (EListLit (EVar "d")))
-(DFunDef false "routeGivens" ((PCon "RDictFwd" (PVar "d"))) (EListLit (EVar "d")))
-(DFunDef false "routeGivens" ((PCon "RKey" PWild (PVar "reqs") (PVar "sups"))) (EApp (EApp (EDictApp "flatMap") (EVar "routeGivens")) (EBinOp "++" (EVar "reqs") (EVar "sups"))))
-(DFunDef false "routeGivens" ((PCon "RLocal" PWild (PVar "ds"))) (EApp (EApp (EDictApp "flatMap") (EVar "routeGivens")) (EVar "ds")))
-(DFunDef false "routeGivens" ((PCon "RProj" (PVar "r") PWild)) (EApp (EVar "routeGivens") (EVar "r")))
-(DFunDef false "routeGivens" (PWild) (EListLit))
+(DFunDef false "unboundFaults" ((PVar "scope") (PVar "routes")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "d")) (EIf (EApp (EApp (EVar "omHasKey") (EVar "d")) (EVar "scope")) (EListLit) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "reads dictionary `")) (EApp (EMethodRef "display") (EVar "d"))) (ELit (LString "`, which is not bound here"))))))) (EApp (EApp (EDictApp "flatMap") (EVar "givenNames")) (EVar "routes"))))
 (DTypeSig false "routeShapeFaults" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "routeShapeFaults" ((PCon "RScalar" (PVar "tag"))) (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "carries scalar route `")) (EApp (EMethodRef "display") (EVar "tag"))) (ELit (LString "`")))))
 (DFunDef false "routeShapeFaults" ((PCon "RProj" (PVar "r") PWild)) (EBinOp "++" (EIf (EApp (EVar "givenRooted") (EVar "r")) (EListLit) (EListLit (ELit (LString "projects from a route that is not a given dictionary")))) (EApp (EVar "routeShapeFaults") (EVar "r"))))

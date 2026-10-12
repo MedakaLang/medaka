@@ -2763,7 +2763,8 @@ ifaceImplHeadEntries _ = []
 -- ── emitted impl symbols: the one rule, and its collision guard (#1950) ───────
 -- An impl method is emitted as `mdk_impl_<symTag>_<method>`, where `symTag` is the
 -- encoded head tag when that head is the SOLE impl of (method, head), and otherwise
--- (TYPECHECK-AUDIT C7) the encoded canonical dispatch key.  `stampImplSymbols` is
+-- the encoded canonical dispatch key (the key that tells apart same-head impls whose
+-- type arguments differ).  `stampImplSymbols` is
 -- the only place that rule is written: it stamps every entry with its `ImplSym`, and
 -- both emitters read the stamp.  The encoding is `private_mangle.injectiveIdent`,
 -- which is injective, so two distinct keys can never reach one symbol through the
@@ -3631,20 +3632,6 @@ ifaceWordOfKey : String -> String
 ifaceWordOfKey key = match splitOnChar '|' key
   w :: _ => w
   [] => key
-
--- The interface SPELLING an `ifaceWordOf` word names: the part after
--- `<module>::`, or the whole word when no origin was stamped (a module id never
--- contains `:`).
---
--- > ifaceNameOfWord "core::Show"
--- "Show"
--- > ifaceNameOfWord "Show"
--- "Show"
-export
-ifaceNameOfWord : String -> String
-ifaceNameOfWord word = match reverseL (splitOnChar ':' word)
-  name :: _ => name
-  [] => word
 
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
 -- Per interface method that carries a method-level `=>` constraint (foldMap's

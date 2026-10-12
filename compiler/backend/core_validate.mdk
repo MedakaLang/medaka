@@ -70,6 +70,7 @@ import ir.core_ir.{
   DeclFacts(..),
   CallMode(..),
   CallSite(..),
+  givenNames,
 }
 import ir.core_ir_lower.{
   ArityEnv,
@@ -584,15 +585,7 @@ unboundFaults scope routes =
         []
       else
         ["reads dictionary `\{d}`, which is not bound here"])
-    (flatMap routeGivens routes)
-
-routeGivens : Route -> List String
-routeGivens (RDict d) = [d]
-routeGivens (RDictFwd d) = [d]
-routeGivens (RKey _ reqs sups) = flatMap routeGivens (reqs ++ sups)
-routeGivens (RLocal _ ds) = flatMap routeGivens ds
-routeGivens (RProj r _) = routeGivens r
-routeGivens _ = []
+    (flatMap givenNames routes)
 
 routeShapeFaults : Route -> List String
 routeShapeFaults (RScalar tag) = ["carries scalar route `\{tag}`"]
@@ -606,6 +599,8 @@ routeShapeFaults (RKey _ reqs sups) = flatMap routeShapeFaults (reqs ++ sups)
 routeShapeFaults (RLocal _ ds) = flatMap routeShapeFaults ds
 routeShapeFaults _ = []
 
+-- Stricter than core_ir.isGivenRooted, which accepts any projection: a projection
+-- is rooted only when the route it projects from is.
 givenRooted : Route -> Bool
 givenRooted (RDict _) = True
 givenRooted (RDictFwd _) = True
