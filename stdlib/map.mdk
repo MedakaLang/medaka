@@ -44,7 +44,7 @@ import core.{
   FromEntries,
   Index,
 }
-import list.{intersperse, reverse, take}
+import list.{intersperse, reverse, take, sort}
 
 {- | The map type.
 
@@ -72,6 +72,33 @@ balance k v l r
   | size r > 3 * size l = rotateL k v l r
   | size l > 3 * size r = rotateR k v l r
   | otherwise = bin k v l r
+
+-- `balanceL` repairs a node whose left subtree may have grown (an insert into
+-- `l`) or whose right subtree may have shrunk (a delete from `r`). Only the
+-- left-heavy check can fire, so the right side is never inspected for a
+-- rotation. Matching each child once reads the cached sizes directly; the
+-- result is identical to `balance` under that precondition.
+balanceL : k -> v -> Map k v -> Map k v -> Map k v
+balanceL k v Tip r = Bin (size r + 1) k v Tip r
+balanceL k v (l@(Bin sl _ _ _ _)) Tip =
+  if sl <= 1 then Bin (sl + 1) k v l Tip else rotateR k v l Tip
+balanceL k v (l@(Bin sl _ _ _ _)) (r@(Bin sr _ _ _ _)) =
+  if sl > 3 * sr && sl + sr > 1 then
+    rotateR k v l r
+  else
+    Bin (sl + sr + 1) k v l r
+
+-- Mirror of `balanceL`: the right subtree may have grown (an insert into `r`)
+-- or the left subtree may have shrunk (a delete from `l`).
+balanceR : k -> v -> Map k v -> Map k v -> Map k v
+balanceR k v l Tip = Bin (size l + 1) k v l Tip
+balanceR k v Tip (r@(Bin sr _ _ _ _)) =
+  if sr <= 1 then Bin (sr + 1) k v Tip r else rotateL k v Tip r
+balanceR k v (l@(Bin sl _ _ _ _)) (r@(Bin sr _ _ _ _)) =
+  if sr > 3 * sl && sl + sr > 1 then
+    rotateL k v l r
+  else
+    Bin (sl + sr + 1) k v l r
 
 -- Right subtree too heavy: single left rotation, or double if its left
 -- grandchild outweighs its right.
@@ -128,7 +155,38 @@ singleton k v = Bin 1 k v Tip Tip
    20 -}
 export
 fromList : Ord k => List (k, v) -> Map k v
-fromList xs = fold (m (k, v) => set k v m) Tip xs
+fromList xs =
+  let n = ascendingRunLength xs
+  let (m, rest) = buildAscending n xs
+  fold (acc (k, v) => set k v acc) m rest
+
+-- Length of the longest prefix whose keys are strictly ascending.
+ascendingRunLength : Ord k => List (k, v) -> Int
+ascendingRunLength [] = 0
+ascendingRunLength ((k, _) :: rest) = ascendingRunFrom k 1 rest
+
+ascendingRunFrom : Ord k => k -> Int -> List (k, v) -> Int
+ascendingRunFrom _ n [] = n
+ascendingRunFrom prev n ((k, _) :: rest) =
+  if lt prev k then ascendingRunFrom k (n + 1) rest else n
+
+-- Builds a perfectly balanced tree from the first `n` pairs and returns it
+-- with the pairs that follow. The first `n` keys must be strictly ascending.
+buildAscending : Int -> List (k, v) -> (Map k v, List (k, v))
+buildAscending n xs
+  | n <= 0 = (Tip, xs)
+  | otherwise = buildNode n xs
+
+buildNode : Int -> List (k, v) -> (Map k v, List (k, v))
+buildNode n xs =
+  let nl = (n - 1) / 2
+  let nr = n - 1 - nl
+  let (l, rest) = buildAscending nl xs
+  match rest
+    (k, v) :: rest2 =>
+      let (r, rest3) = buildAscending nr rest2
+      (Bin n k v l r, rest3)
+    [] => panic "Map.buildNode: fewer pairs than the run length"
 
 -- > size (Map { 1 => 10, 2 => 20, 3 => 30 })
 -- 3
@@ -217,8 +275,8 @@ export
 set : Ord k => k -> v -> Map k v -> Map k v
 set k v Tip = singleton k v
 set k v (Bin s k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (set k v l) r
-  Gt => balance k2 v2 l (set k v r)
+  Lt => balanceL k2 v2 (set k v l) r
+  Gt => balanceR k2 v2 l (set k v r)
   Eq => Bin s k v l r
 
 {- | The map with `v` stored at `k`, combining with an existing value.
@@ -232,8 +290,8 @@ export
 insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
 insertWith f k v Tip = singleton k v
 insertWith f k v (Bin s k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (insertWith f k v l) r
-  Gt => balance k2 v2 l (insertWith f k v r)
+  Lt => balanceL k2 v2 (insertWith f k v l) r
+  Gt => balanceR k2 v2 l (insertWith f k v r)
   Eq => Bin s k2 (f v v2) l r
 
 {- | The map with `f` applied to the value at `k`.
@@ -262,8 +320,8 @@ export
 delete : Ord k => k -> Map k v -> Map k v
 delete k Tip = Tip
 delete k (Bin _ k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (delete k l) r
-  Gt => balance k2 v2 l (delete k r)
+  Lt => balanceR k2 v2 (delete k l) r
+  Gt => balanceL k2 v2 l (delete k r)
   Eq => glue l r
 
 -- > size (delete 9 (fromList [(1, 10), (2, 20)]))
@@ -280,15 +338,17 @@ glue l r
   | size l > size r = glueMax l r
   | otherwise = glueMin l r
 
+-- `glueMax` removes the maximum of `l`, so only the left subtree shrinks and
+-- only the right-heavy check can fire; `glueMin` is the mirror image.
 glueMax : Map k v -> Map k v -> Map k v
-glueMax l r = match maxView l
+glueMax l r = match getMax l
   None => r
-  Some (k, v, l') => balance k v l' r
+  Some (k, v) => balanceR k v (deleteMax l) r
 
 glueMin : Map k v -> Map k v -> Map k v
-glueMin l r = match minView r
+glueMin l r = match getMin r
   None => l
-  Some (k, v, r') => balance k v l r'
+  Some (k, v) => balanceL k v l (deleteMin r)
 
 -- # Minimum and maximum
 
@@ -300,9 +360,11 @@ glueMin l r = match minView r
 export
 minView : Map k v -> Option (k, v, Map k v)
 minView Tip = None
-minView (Bin _ k v l r) = match minView l
-  None => Some (k, v, r)
-  Some (km, vm, l') => Some (km, vm, balance k v l' r)
+-- The explicit match avoids the closure that `map` would allocate per call.
+-- lint-disable-next-line rule-match-to-map
+minView m = match getMin m
+  None => None
+  Some (k, v) => Some (k, v, deleteMin m)
 
 {- | The largest entry and the map without it, or `None` when the map is
    empty.
@@ -312,9 +374,11 @@ minView (Bin _ k v l r) = match minView l
 export
 maxView : Map k v -> Option (k, v, Map k v)
 maxView Tip = None
-maxView (Bin _ k v l r) = match maxView r
-  None => Some (k, v, l)
-  Some (km, vm, r') => Some (km, vm, balance k v l r')
+-- The explicit match avoids the closure that `map` would allocate per call.
+-- lint-disable-next-line rule-match-to-map
+maxView m = match getMax m
+  None => None
+  Some (k, v) => Some (k, v, deleteMax m)
 
 {- | The entry with the smallest key, or `None` when the map is empty.
 
@@ -322,7 +386,9 @@ maxView (Bin _ k v l r) = match maxView r
    Some (1, 0) -}
 export
 getMin : Map k v -> Option (k, v)
-getMin m = map ((k, v, _) => (k, v)) (minView m)
+getMin Tip = None
+getMin (Bin _ k v Tip _) = Some (k, v)
+getMin (Bin _ _ _ l _) = getMin l
 
 {- | The entry with the largest key, or `None` when the map is empty.
 
@@ -330,7 +396,9 @@ getMin m = map ((k, v, _) => (k, v)) (minView m)
    Some (3, 0) -}
 export
 getMax : Map k v -> Option (k, v)
-getMax m = map ((k, v, _) => (k, v)) (maxView m)
+getMax Tip = None
+getMax (Bin _ k v _ Tip) = Some (k, v)
+getMax (Bin _ _ _ _ r) = getMax r
 
 {- | The map without its smallest entry.
 
@@ -340,9 +408,9 @@ getMax m = map ((k, v, _) => (k, v)) (maxView m)
    [2, 3] -}
 export
 deleteMin : Map k v -> Map k v
-deleteMin m = match minView m
-  None => Tip
-  Some (_, _, m') => m'
+deleteMin Tip = Tip
+deleteMin (Bin _ _ _ Tip r) = r
+deleteMin (Bin _ k v l r) = balanceR k v (deleteMin l) r
 
 {- | The map without its largest entry.
 
@@ -352,9 +420,9 @@ deleteMin m = match minView m
    [1, 2] -}
 export
 deleteMax : Map k v -> Map k v
-deleteMax m = match maxView m
-  None => Tip
-  Some (_, _, m') => m'
+deleteMax Tip = Tip
+deleteMax (Bin _ _ _ l Tip) = l
+deleteMax (Bin _ k v l r) = balanceL k v l (deleteMax r)
 
 -- # Folds and traversal
 
@@ -510,11 +578,11 @@ mapWithKey f (Bin s k v l r) = Bin s k (f k v) (mapWithKey f l) (mapWithKey f r)
 -- the key still has to be pushed down to its extreme and rebalanced.
 insertMin : k -> v -> Map k v -> Map k v
 insertMin k v Tip = singleton k v
-insertMin k v (Bin _ k2 v2 l r) = balance k2 v2 (insertMin k v l) r
+insertMin k v (Bin _ k2 v2 l r) = balanceL k2 v2 (insertMin k v l) r
 
 insertMax : k -> v -> Map k v -> Map k v
 insertMax k v Tip = singleton k v
-insertMax k v (Bin _ k2 v2 l r) = balance k2 v2 l (insertMax k v r)
+insertMax k v (Bin _ k2 v2 l r) = balanceR k2 v2 l (insertMax k v r)
 
 {- `link` joins `l < k,v < r` for arbitrarily unbalanced `l`/`r`.  When one side
    outweighs the other by more than `delta` we cannot just `bin` them: we
@@ -595,10 +663,27 @@ export
 union : Ord k => Map k v -> Map k v -> Map k v
 union Tip b = b
 union a Tip = a
-union (Bin _ k v l r) b =
+-- A side at most a sixteenth the size of the other is cheaper to insert entry by entry.
+union a b
+  | size b * 16 <= size a = foldlWithKey (acc k v => insertAbsent k v acc) a b
+  | size a * 16 <= size b = foldlWithKey (acc k v => set k v acc) b a
+  | otherwise = unionSplit a b
+
+-- `insertAbsent` adds `k` only when it is missing; an existing entry is kept.
+insertAbsent : Ord k => k -> v -> Map k v -> Map k v
+insertAbsent k v Tip = singleton k v
+insertAbsent k v (m@(Bin _ k2 v2 l r)) = match compare k k2
+  Lt => balanceL k2 v2 (insertAbsent k v l) r
+  Gt => balanceR k2 v2 l (insertAbsent k v r)
+  Eq => m
+
+unionSplit : Ord k => Map k v -> Map k v -> Map k v
+unionSplit Tip b = b
+unionSplit a Tip = a
+unionSplit (Bin _ k v l r) b =
   let (bl, br) = splitAt k b
   -- `k`'s own entry in `b` was dropped by `splitAt`, so the left map wins.
-  link k v (union l bl) (union r br)
+  link k v (unionSplit l bl) (unionSplit r br)
 
 -- > size (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
 -- 2
@@ -611,12 +696,30 @@ export
 unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
 unionWith f Tip b = b
 unionWith f a Tip = a
-unionWith f (Bin _ k v l r) b =
+unionWith f a b
+  | size b * 16 <= size a =
+    foldlWithKey (acc k w => insertWith (x y => f y x) k w acc) a b
+  | size a * 16 <= size b = foldlWithKey (acc k v => setWith f k v acc) b a
+  | otherwise = unionWithSplit f a b
+
+-- `insertWith` that stores the given key on a collision, so a key of the first
+-- map survives a union even when `Eq`-equal keys are distinguishable.
+setWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+setWith f k v Tip = singleton k v
+setWith f k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balanceL k2 v2 (setWith f k v l) r
+  Gt => balanceR k2 v2 l (setWith f k v r)
+  Eq => Bin s k (f v v2) l r
+
+unionWithSplit : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
+unionWithSplit f Tip b = b
+unionWithSplit f a Tip = a
+unionWithSplit f (Bin _ k v l r) b =
   let (bl, found, br) = splitLookup k b
   let v2 = match found
     None => v
     Some w => f v w
-  link k v2 (unionWith f l bl) (unionWith f r br)
+  link k v2 (unionWithSplit f l bl) (unionWithSplit f r br)
 
 {- | The entries of the first map whose keys are absent from the second.
 
@@ -853,10 +956,291 @@ naiveFilterWithKey p m = foldrWithKey (naiveFilterStep p) Tip m
 naiveFilterStep : Ord k => (k -> v -> Bool) -> k -> v -> Map k v -> Map k v
 naiveFilterStep p k v acc = if p k v then set k v acc else acc
 
+-- Reference bodies built on `balance` alone, for the shape props below, which
+-- compare node for node.
+setOld : Ord k => k -> v -> Map k v -> Map k v
+setOld k v Tip = singleton k v
+setOld k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (setOld k v l) r
+  Gt => balance k2 v2 l (setOld k v r)
+  Eq => Bin s k v l r
+
+insertWithOld : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+insertWithOld f k v Tip = singleton k v
+insertWithOld f k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (insertWithOld f k v l) r
+  Gt => balance k2 v2 l (insertWithOld f k v r)
+  Eq => Bin s k2 (f v v2) l r
+
+deleteOld : Ord k => k -> Map k v -> Map k v
+deleteOld k Tip = Tip
+deleteOld k (Bin _ k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (deleteOld k l) r
+  Gt => balance k2 v2 l (deleteOld k r)
+  Eq => glueOld l r
+
+insertMinOld : k -> v -> Map k v -> Map k v
+insertMinOld k v Tip = singleton k v
+insertMinOld k v (Bin _ k2 v2 l r) = balance k2 v2 (insertMinOld k v l) r
+
+insertMaxOld : k -> v -> Map k v -> Map k v
+insertMaxOld k v Tip = singleton k v
+insertMaxOld k v (Bin _ k2 v2 l r) = balance k2 v2 l (insertMaxOld k v r)
+
+glueOld : Map k v -> Map k v -> Map k v
+glueOld Tip r = r
+glueOld l Tip = l
+glueOld l r
+  | size l > size r = glueMaxOld l r
+  | otherwise = glueMinOld l r
+
+glueMaxOld : Map k v -> Map k v -> Map k v
+glueMaxOld l r = match maxViewOld l
+  None => r
+  Some (k, v, l') => balance k v l' r
+
+glueMinOld : Map k v -> Map k v -> Map k v
+glueMinOld l r = match minViewOld r
+  None => l
+  Some (k, v, r') => balance k v l r'
+
+minViewOld : Map k v -> Option (k, v, Map k v)
+minViewOld Tip = None
+minViewOld (Bin _ k v l r) = match minViewOld l
+  None => Some (k, v, r)
+  Some (km, vm, l') => Some (km, vm, balance k v l' r)
+
+maxViewOld : Map k v -> Option (k, v, Map k v)
+maxViewOld Tip = None
+maxViewOld (Bin _ k v l r) = match maxViewOld r
+  None => Some (k, v, l)
+  Some (km, vm, r') => Some (km, vm, balance k v l r')
+
+getMinOld : Map k v -> Option (k, v)
+getMinOld m = map ((k, v, _) => (k, v)) (minViewOld m)
+
+getMaxOld : Map k v -> Option (k, v)
+getMaxOld m = map ((k, v, _) => (k, v)) (maxViewOld m)
+
+deleteMinOld : Map k v -> Map k v
+deleteMinOld m = match minViewOld m
+  None => Tip
+  Some (_, _, m') => m'
+
+deleteMaxOld : Map k v -> Map k v
+deleteMaxOld m = match maxViewOld m
+  None => Tip
+  Some (_, _, m') => m'
+
+-- Structural equality: same shape, cached sizes, keys and values at every node.
+sameShape : (Eq k, Eq v) => Map k v -> Map k v -> Bool
+sameShape Tip Tip = True
+sameShape (Bin s1 k1 v1 l1 r1) (Bin s2 k2 v2 l2 r2) =
+  s1 == s2 && eq k1 k2 && eq v1 v2 && sameShape l1 l2 && sameShape r1 r2
+sameShape _ _ = False
+
+-- Applies `step` to each pair in order, left to right.
+foldInserts : (k -> v -> Map k v -> Map k v) ->
+  List (k, v) ->
+  Map k v ->
+  Map k v
+foldInserts step [] m = m
+foldInserts step ((k, v) :: rest) m = foldInserts step rest (step k v m)
+
+-- Folds each key through `step` in order, for the delete props.
+foldDeletes : (k -> Map k v -> Map k v) -> List k -> Map k v -> Map k v
+foldDeletes step [] m = m
+foldDeletes step (k :: rest) m = foldDeletes step rest (step k m)
+
+-- Collapses keys onto 0..7 so that the props hit the duplicate (`Eq`) paths.
+modKeys : List (Int, Int) -> List (Int, Int)
+modKeys [] = []
+modKeys ((k, v) :: rest) = (k % 8, v) :: modKeys rest
+
+fstKeys : List (Int, Int) -> List Int
+fstKeys [] = []
+fstKeys ((k, _) :: rest) = k :: fstKeys rest
+
+prop "set builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
+  let got = foldInserts set xs Tip
+  sameShape got (foldInserts setOld xs Tip) && wellFormed got
+
+prop "set on duplicate keys builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
+  let ys = modKeys xs
+  let got = foldInserts set ys Tip
+  sameShape got (foldInserts setOld ys Tip) && wellFormed got
+
+prop "insertWith builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
+  let ys = modKeys xs
+  let got = foldInserts (k v m => insertWith (a b => a + b) k v m) ys Tip
+  sameShape
+      got
+      (foldInserts (k v m => insertWithOld (a b => a + b) k v m) ys Tip)
+    && wellFormed got
+
+prop "insertMin and insertMax match the balance-only body shape" (xs : List (Int, Int)) =
+  let got = foldInserts (k v m => insertMin k v m) xs Tip
+  let gotMax = foldInserts (k v m => insertMax k v m) xs Tip
+  sameShape got (foldInserts (k v m => insertMinOld k v m) xs Tip)
+    && sameShape gotMax (foldInserts (k v m => insertMaxOld k v m) xs Tip)
+
+prop "delete matches the balance-only body shape" (xs : List (Int, Int)) (ks : List Int) =
+  let ys = modKeys xs
+  let base = foldInserts set ys Tip
+  let got = foldDeletes delete ks (foldDeletes delete (fstKeys ys) base)
+  sameShape
+      got
+      (foldDeletes deleteOld ks (foldDeletes deleteOld (fstKeys ys) base))
+    && wellFormed got
+
+-- Walks the new tree and the balance-only tree through repeated removals of
+-- the minimum (or maximum) in lockstep, so every intermediate shape is compared.
+minChainOk : Map Int Int -> Map Int Int -> Bool
+minChainOk got old =
+  if isEmpty old then
+    isEmpty got
+  else
+    sameShape got old
+      && wellFormed got
+      && minChainOk (deleteMin got) (deleteMinOld old)
+
+maxChainOk : Map Int Int -> Map Int Int -> Bool
+maxChainOk got old =
+  if isEmpty old then
+    isEmpty got
+  else
+    sameShape got old
+      && wellFormed got
+      && maxChainOk (deleteMax got) (deleteMaxOld old)
+
+-- Checks `glue` at every node of a tree, where its two arguments are siblings.
+glueAgrees : Map Int Int -> Bool
+glueAgrees Tip = True
+glueAgrees (Bin _ _ _ l r) =
+  sameShape (glue l r) (glueOld l r)
+    && wellFormed (glue l r)
+    && glueAgrees l
+    && glueAgrees r
+
+minViewAgrees : Map Int Int -> Bool
+minViewAgrees m = match minView m
+  None => isEmpty m
+  Some (k, v, rest) =>
+    eq (getMinOld m) (Some (k, v))
+      && sameShape rest (deleteMinOld m)
+      && wellFormed rest
+
+maxViewAgrees : Map Int Int -> Bool
+maxViewAgrees m = match maxView m
+  None => isEmpty m
+  Some (k, v, rest) =>
+    eq (getMaxOld m) (Some (k, v))
+      && sameShape rest (deleteMaxOld m)
+      && wellFormed rest
+
+prop "deleteMin matches the balance-only body shape at every step" (xs : List (Int, Int)) =
+  let m = foldInserts set xs Tip
+  minChainOk m m
+
+prop "deleteMax matches the balance-only body shape at every step" (xs : List (Int, Int)) =
+  let m = foldInserts set xs Tip
+  maxChainOk m m
+
+prop "getMin, getMax, minView and maxView agree with the balance-only bodies" (xs : List (Int, Int)) =
+  let m = foldInserts set xs Tip
+  eq (getMin m) (getMinOld m)
+    && eq (getMax m) (getMaxOld m)
+    && minViewAgrees m
+    && maxViewAgrees m
+
+prop "glue matches the balance-only body shape at every node" (xs : List (Int, Int)) =
+  glueAgrees (foldInserts set xs Tip) && glueAgrees (fromList xs)
+
+prop "glue on duplicate-heavy inserts matches the balance-only body shape" (xs : List (Int, Int)) =
+  glueAgrees (foldInserts set (modKeys xs) Tip)
+
+naiveFromList : Ord k => List (k, v) -> Map k v
+naiveFromList xs = fold (m (k, v) => set k v m) Tip xs
+
+prop "fromList agrees with naive fold-insert" (xs : List (Int, Int)) =
+  eq (entries (fromList xs)) (entries (naiveFromList xs))
+    && wellFormed (fromList xs)
+
+prop "fromList agrees with naive on sorted input" (xs : List (Int, Int)) =
+  let ys = sort xs
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "fromList agrees with naive on sorted duplicate-heavy input" (xs : List (Int, Int)) =
+  let ys = sort (map (p => (fst p % 50, snd p)) xs)
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "fromList agrees with naive on sorted prefix then unsorted tail" (xs : List (Int, Int)) =
+  let ys = sort xs ++ xs
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "fromList agrees with naive on sorted prefix then duplicate-heavy tail" (xs : List (Int, Int)) =
+  let ys = sort xs ++ map (p => (fst p % 50, snd p)) xs
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "a later pair overrides an entry from the ascending prefix" (k : Int) (v : Int) (xs : List (Int, Int)) =
+  let ys = sort xs ++ [(k, v)]
+  eq (get k (fromList ys)) (Some v) && wellFormed (fromList ys)
+
 prop "union agrees with naive fold-insert" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
   let b = fromList ys
   eq (entries (union a b)) (entries (naiveUnion a b))
+
+prop "union with a tiny side agrees with naive in both orders" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  let big = fromList (map (i => (i, i)) [0..=63] ++ xs)
+  let small = fromList (map ((k, v) => (k % 64, v)) (take 2 ys))
+  eq (entries (union big small)) (entries (naiveUnion big small))
+    && eq (entries (union small big)) (entries (naiveUnion small big))
+    && wellFormed (union big small)
+    && wellFormed (union small big)
+
+prop "unionWith with a tiny side agrees with naive in both orders" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  let big = fromList (map (i => (i, i)) [0..=63] ++ xs)
+  let small = fromList (map ((k, v) => (k % 64, v)) (take 2 ys))
+  let f = x y => 2 * x + y
+  eq (entries (unionWith f big small)) (entries (naiveUnionWith f big small))
+    && eq
+      (entries (unionWith f small big))
+      (entries (naiveUnionWith f small big))
+    && wellFormed (unionWith f big small)
+    && wellFormed (unionWith f small big)
+
+-- A key whose `Eq` and `Ord` ignore the tag, so two keys can be equal yet
+-- distinguishable by which map they came from.
+data Tagged = Tagged Int Int
+
+impl Eq Tagged where
+  eq (Tagged a _) (Tagged b _) = a == b
+
+impl Ord Tagged where
+  compare (Tagged a _) (Tagged b _) = compare a b
+
+taggedAt : Int -> Map Tagged Int -> List Int
+taggedAt n m = filterMap (tagIfAt n) (keys m)
+
+tagIfAt : Int -> Tagged -> Option Int
+tagIfAt n (Tagged i t) = if i == n then Some t else None
+
+prop "union and unionWith keep the first map's key on a shared key" (j : Int) =
+  let n = (j % 64 + 64) % 64
+  let big = fromList (map (i => (Tagged i 0, i)) [0..=63])
+  let small = fromList [(Tagged n 1, 7)]
+  let sameSize = fromList (map (i => (Tagged i 1, i)) [0..=63])
+  eq (taggedAt n (union small big)) [1]
+    && eq (taggedAt n (union big small)) [0]
+    && eq (taggedAt n (unionWith (x y => x + y) small big)) [1]
+    && eq (taggedAt n (unionWith (x y => x + y) big small)) [0]
+    && eq (taggedAt n (union sameSize big)) [1]
+    && eq (taggedAt n (unionWith (x y => x + y) sameSize big)) [1]
 
 prop "union keys stay strictly ascending" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   ascending (keys (union (fromList xs) (fromList ys)))

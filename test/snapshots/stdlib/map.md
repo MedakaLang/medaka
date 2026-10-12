@@ -1,5 +1,5 @@
 # META
-source_lines=950
+source_lines=1334
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -48,7 +48,7 @@ import core.{
   FromEntries,
   Index,
 }
-import list.{intersperse, reverse, take}
+import list.{intersperse, reverse, take, sort}
 
 {- | The map type.
 
@@ -76,6 +76,33 @@ balance k v l r
   | size r > 3 * size l = rotateL k v l r
   | size l > 3 * size r = rotateR k v l r
   | otherwise = bin k v l r
+
+-- `balanceL` repairs a node whose left subtree may have grown (an insert into
+-- `l`) or whose right subtree may have shrunk (a delete from `r`). Only the
+-- left-heavy check can fire, so the right side is never inspected for a
+-- rotation. Matching each child once reads the cached sizes directly; the
+-- result is identical to `balance` under that precondition.
+balanceL : k -> v -> Map k v -> Map k v -> Map k v
+balanceL k v Tip r = Bin (size r + 1) k v Tip r
+balanceL k v (l@(Bin sl _ _ _ _)) Tip =
+  if sl <= 1 then Bin (sl + 1) k v l Tip else rotateR k v l Tip
+balanceL k v (l@(Bin sl _ _ _ _)) (r@(Bin sr _ _ _ _)) =
+  if sl > 3 * sr && sl + sr > 1 then
+    rotateR k v l r
+  else
+    Bin (sl + sr + 1) k v l r
+
+-- Mirror of `balanceL`: the right subtree may have grown (an insert into `r`)
+-- or the left subtree may have shrunk (a delete from `l`).
+balanceR : k -> v -> Map k v -> Map k v -> Map k v
+balanceR k v l Tip = Bin (size l + 1) k v l Tip
+balanceR k v Tip (r@(Bin sr _ _ _ _)) =
+  if sr <= 1 then Bin (sr + 1) k v Tip r else rotateL k v Tip r
+balanceR k v (l@(Bin sl _ _ _ _)) (r@(Bin sr _ _ _ _)) =
+  if sr > 3 * sl && sl + sr > 1 then
+    rotateL k v l r
+  else
+    Bin (sl + sr + 1) k v l r
 
 -- Right subtree too heavy: single left rotation, or double if its left
 -- grandchild outweighs its right.
@@ -132,7 +159,38 @@ singleton k v = Bin 1 k v Tip Tip
    20 -}
 export
 fromList : Ord k => List (k, v) -> Map k v
-fromList xs = fold (m (k, v) => set k v m) Tip xs
+fromList xs =
+  let n = ascendingRunLength xs
+  let (m, rest) = buildAscending n xs
+  fold (acc (k, v) => set k v acc) m rest
+
+-- Length of the longest prefix whose keys are strictly ascending.
+ascendingRunLength : Ord k => List (k, v) -> Int
+ascendingRunLength [] = 0
+ascendingRunLength ((k, _) :: rest) = ascendingRunFrom k 1 rest
+
+ascendingRunFrom : Ord k => k -> Int -> List (k, v) -> Int
+ascendingRunFrom _ n [] = n
+ascendingRunFrom prev n ((k, _) :: rest) =
+  if lt prev k then ascendingRunFrom k (n + 1) rest else n
+
+-- Builds a perfectly balanced tree from the first `n` pairs and returns it
+-- with the pairs that follow. The first `n` keys must be strictly ascending.
+buildAscending : Int -> List (k, v) -> (Map k v, List (k, v))
+buildAscending n xs
+  | n <= 0 = (Tip, xs)
+  | otherwise = buildNode n xs
+
+buildNode : Int -> List (k, v) -> (Map k v, List (k, v))
+buildNode n xs =
+  let nl = (n - 1) / 2
+  let nr = n - 1 - nl
+  let (l, rest) = buildAscending nl xs
+  match rest
+    (k, v) :: rest2 =>
+      let (r, rest3) = buildAscending nr rest2
+      (Bin n k v l r, rest3)
+    [] => panic "Map.buildNode: fewer pairs than the run length"
 
 -- > size (Map { 1 => 10, 2 => 20, 3 => 30 })
 -- 3
@@ -221,8 +279,8 @@ export
 set : Ord k => k -> v -> Map k v -> Map k v
 set k v Tip = singleton k v
 set k v (Bin s k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (set k v l) r
-  Gt => balance k2 v2 l (set k v r)
+  Lt => balanceL k2 v2 (set k v l) r
+  Gt => balanceR k2 v2 l (set k v r)
   Eq => Bin s k v l r
 
 {- | The map with `v` stored at `k`, combining with an existing value.
@@ -236,8 +294,8 @@ export
 insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
 insertWith f k v Tip = singleton k v
 insertWith f k v (Bin s k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (insertWith f k v l) r
-  Gt => balance k2 v2 l (insertWith f k v r)
+  Lt => balanceL k2 v2 (insertWith f k v l) r
+  Gt => balanceR k2 v2 l (insertWith f k v r)
   Eq => Bin s k2 (f v v2) l r
 
 {- | The map with `f` applied to the value at `k`.
@@ -266,8 +324,8 @@ export
 delete : Ord k => k -> Map k v -> Map k v
 delete k Tip = Tip
 delete k (Bin _ k2 v2 l r) = match compare k k2
-  Lt => balance k2 v2 (delete k l) r
-  Gt => balance k2 v2 l (delete k r)
+  Lt => balanceR k2 v2 (delete k l) r
+  Gt => balanceL k2 v2 l (delete k r)
   Eq => glue l r
 
 -- > size (delete 9 (fromList [(1, 10), (2, 20)]))
@@ -284,15 +342,17 @@ glue l r
   | size l > size r = glueMax l r
   | otherwise = glueMin l r
 
+-- `glueMax` removes the maximum of `l`, so only the left subtree shrinks and
+-- only the right-heavy check can fire; `glueMin` is the mirror image.
 glueMax : Map k v -> Map k v -> Map k v
-glueMax l r = match maxView l
+glueMax l r = match getMax l
   None => r
-  Some (k, v, l') => balance k v l' r
+  Some (k, v) => balanceR k v (deleteMax l) r
 
 glueMin : Map k v -> Map k v -> Map k v
-glueMin l r = match minView r
+glueMin l r = match getMin r
   None => l
-  Some (k, v, r') => balance k v l r'
+  Some (k, v) => balanceL k v l (deleteMin r)
 
 -- # Minimum and maximum
 
@@ -304,9 +364,11 @@ glueMin l r = match minView r
 export
 minView : Map k v -> Option (k, v, Map k v)
 minView Tip = None
-minView (Bin _ k v l r) = match minView l
-  None => Some (k, v, r)
-  Some (km, vm, l') => Some (km, vm, balance k v l' r)
+-- The explicit match avoids the closure that `map` would allocate per call.
+-- lint-disable-next-line rule-match-to-map
+minView m = match getMin m
+  None => None
+  Some (k, v) => Some (k, v, deleteMin m)
 
 {- | The largest entry and the map without it, or `None` when the map is
    empty.
@@ -316,9 +378,11 @@ minView (Bin _ k v l r) = match minView l
 export
 maxView : Map k v -> Option (k, v, Map k v)
 maxView Tip = None
-maxView (Bin _ k v l r) = match maxView r
-  None => Some (k, v, l)
-  Some (km, vm, r') => Some (km, vm, balance k v l r')
+-- The explicit match avoids the closure that `map` would allocate per call.
+-- lint-disable-next-line rule-match-to-map
+maxView m = match getMax m
+  None => None
+  Some (k, v) => Some (k, v, deleteMax m)
 
 {- | The entry with the smallest key, or `None` when the map is empty.
 
@@ -326,7 +390,9 @@ maxView (Bin _ k v l r) = match maxView r
    Some (1, 0) -}
 export
 getMin : Map k v -> Option (k, v)
-getMin m = map ((k, v, _) => (k, v)) (minView m)
+getMin Tip = None
+getMin (Bin _ k v Tip _) = Some (k, v)
+getMin (Bin _ _ _ l _) = getMin l
 
 {- | The entry with the largest key, or `None` when the map is empty.
 
@@ -334,7 +400,9 @@ getMin m = map ((k, v, _) => (k, v)) (minView m)
    Some (3, 0) -}
 export
 getMax : Map k v -> Option (k, v)
-getMax m = map ((k, v, _) => (k, v)) (maxView m)
+getMax Tip = None
+getMax (Bin _ k v _ Tip) = Some (k, v)
+getMax (Bin _ _ _ _ r) = getMax r
 
 {- | The map without its smallest entry.
 
@@ -344,9 +412,9 @@ getMax m = map ((k, v, _) => (k, v)) (maxView m)
    [2, 3] -}
 export
 deleteMin : Map k v -> Map k v
-deleteMin m = match minView m
-  None => Tip
-  Some (_, _, m') => m'
+deleteMin Tip = Tip
+deleteMin (Bin _ _ _ Tip r) = r
+deleteMin (Bin _ k v l r) = balanceR k v (deleteMin l) r
 
 {- | The map without its largest entry.
 
@@ -356,9 +424,9 @@ deleteMin m = match minView m
    [1, 2] -}
 export
 deleteMax : Map k v -> Map k v
-deleteMax m = match maxView m
-  None => Tip
-  Some (_, _, m') => m'
+deleteMax Tip = Tip
+deleteMax (Bin _ _ _ l Tip) = l
+deleteMax (Bin _ k v l r) = balanceL k v l (deleteMax r)
 
 -- # Folds and traversal
 
@@ -514,11 +582,11 @@ mapWithKey f (Bin s k v l r) = Bin s k (f k v) (mapWithKey f l) (mapWithKey f r)
 -- the key still has to be pushed down to its extreme and rebalanced.
 insertMin : k -> v -> Map k v -> Map k v
 insertMin k v Tip = singleton k v
-insertMin k v (Bin _ k2 v2 l r) = balance k2 v2 (insertMin k v l) r
+insertMin k v (Bin _ k2 v2 l r) = balanceL k2 v2 (insertMin k v l) r
 
 insertMax : k -> v -> Map k v -> Map k v
 insertMax k v Tip = singleton k v
-insertMax k v (Bin _ k2 v2 l r) = balance k2 v2 l (insertMax k v r)
+insertMax k v (Bin _ k2 v2 l r) = balanceR k2 v2 l (insertMax k v r)
 
 {- `link` joins `l < k,v < r` for arbitrarily unbalanced `l`/`r`.  When one side
    outweighs the other by more than `delta` we cannot just `bin` them: we
@@ -599,10 +667,27 @@ export
 union : Ord k => Map k v -> Map k v -> Map k v
 union Tip b = b
 union a Tip = a
-union (Bin _ k v l r) b =
+-- A side at most a sixteenth the size of the other is cheaper to insert entry by entry.
+union a b
+  | size b * 16 <= size a = foldlWithKey (acc k v => insertAbsent k v acc) a b
+  | size a * 16 <= size b = foldlWithKey (acc k v => set k v acc) b a
+  | otherwise = unionSplit a b
+
+-- `insertAbsent` adds `k` only when it is missing; an existing entry is kept.
+insertAbsent : Ord k => k -> v -> Map k v -> Map k v
+insertAbsent k v Tip = singleton k v
+insertAbsent k v (m@(Bin _ k2 v2 l r)) = match compare k k2
+  Lt => balanceL k2 v2 (insertAbsent k v l) r
+  Gt => balanceR k2 v2 l (insertAbsent k v r)
+  Eq => m
+
+unionSplit : Ord k => Map k v -> Map k v -> Map k v
+unionSplit Tip b = b
+unionSplit a Tip = a
+unionSplit (Bin _ k v l r) b =
   let (bl, br) = splitAt k b
   -- `k`'s own entry in `b` was dropped by `splitAt`, so the left map wins.
-  link k v (union l bl) (union r br)
+  link k v (unionSplit l bl) (unionSplit r br)
 
 -- > size (union (fromList [(1, 1)]) (fromList [(1, 2), (2, 2)]))
 -- 2
@@ -615,12 +700,30 @@ export
 unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
 unionWith f Tip b = b
 unionWith f a Tip = a
-unionWith f (Bin _ k v l r) b =
+unionWith f a b
+  | size b * 16 <= size a =
+    foldlWithKey (acc k w => insertWith (x y => f y x) k w acc) a b
+  | size a * 16 <= size b = foldlWithKey (acc k v => setWith f k v acc) b a
+  | otherwise = unionWithSplit f a b
+
+-- `insertWith` that stores the given key on a collision, so a key of the first
+-- map survives a union even when `Eq`-equal keys are distinguishable.
+setWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+setWith f k v Tip = singleton k v
+setWith f k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balanceL k2 v2 (setWith f k v l) r
+  Gt => balanceR k2 v2 l (setWith f k v r)
+  Eq => Bin s k (f v v2) l r
+
+unionWithSplit : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
+unionWithSplit f Tip b = b
+unionWithSplit f a Tip = a
+unionWithSplit f (Bin _ k v l r) b =
   let (bl, found, br) = splitLookup k b
   let v2 = match found
     None => v
     Some w => f v w
-  link k v2 (unionWith f l bl) (unionWith f r br)
+  link k v2 (unionWithSplit f l bl) (unionWithSplit f r br)
 
 {- | The entries of the first map whose keys are absent from the second.
 
@@ -857,10 +960,291 @@ naiveFilterWithKey p m = foldrWithKey (naiveFilterStep p) Tip m
 naiveFilterStep : Ord k => (k -> v -> Bool) -> k -> v -> Map k v -> Map k v
 naiveFilterStep p k v acc = if p k v then set k v acc else acc
 
+-- Reference bodies built on `balance` alone, for the shape props below, which
+-- compare node for node.
+setOld : Ord k => k -> v -> Map k v -> Map k v
+setOld k v Tip = singleton k v
+setOld k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (setOld k v l) r
+  Gt => balance k2 v2 l (setOld k v r)
+  Eq => Bin s k v l r
+
+insertWithOld : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+insertWithOld f k v Tip = singleton k v
+insertWithOld f k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (insertWithOld f k v l) r
+  Gt => balance k2 v2 l (insertWithOld f k v r)
+  Eq => Bin s k2 (f v v2) l r
+
+deleteOld : Ord k => k -> Map k v -> Map k v
+deleteOld k Tip = Tip
+deleteOld k (Bin _ k2 v2 l r) = match compare k k2
+  Lt => balance k2 v2 (deleteOld k l) r
+  Gt => balance k2 v2 l (deleteOld k r)
+  Eq => glueOld l r
+
+insertMinOld : k -> v -> Map k v -> Map k v
+insertMinOld k v Tip = singleton k v
+insertMinOld k v (Bin _ k2 v2 l r) = balance k2 v2 (insertMinOld k v l) r
+
+insertMaxOld : k -> v -> Map k v -> Map k v
+insertMaxOld k v Tip = singleton k v
+insertMaxOld k v (Bin _ k2 v2 l r) = balance k2 v2 l (insertMaxOld k v r)
+
+glueOld : Map k v -> Map k v -> Map k v
+glueOld Tip r = r
+glueOld l Tip = l
+glueOld l r
+  | size l > size r = glueMaxOld l r
+  | otherwise = glueMinOld l r
+
+glueMaxOld : Map k v -> Map k v -> Map k v
+glueMaxOld l r = match maxViewOld l
+  None => r
+  Some (k, v, l') => balance k v l' r
+
+glueMinOld : Map k v -> Map k v -> Map k v
+glueMinOld l r = match minViewOld r
+  None => l
+  Some (k, v, r') => balance k v l r'
+
+minViewOld : Map k v -> Option (k, v, Map k v)
+minViewOld Tip = None
+minViewOld (Bin _ k v l r) = match minViewOld l
+  None => Some (k, v, r)
+  Some (km, vm, l') => Some (km, vm, balance k v l' r)
+
+maxViewOld : Map k v -> Option (k, v, Map k v)
+maxViewOld Tip = None
+maxViewOld (Bin _ k v l r) = match maxViewOld r
+  None => Some (k, v, l)
+  Some (km, vm, r') => Some (km, vm, balance k v l r')
+
+getMinOld : Map k v -> Option (k, v)
+getMinOld m = map ((k, v, _) => (k, v)) (minViewOld m)
+
+getMaxOld : Map k v -> Option (k, v)
+getMaxOld m = map ((k, v, _) => (k, v)) (maxViewOld m)
+
+deleteMinOld : Map k v -> Map k v
+deleteMinOld m = match minViewOld m
+  None => Tip
+  Some (_, _, m') => m'
+
+deleteMaxOld : Map k v -> Map k v
+deleteMaxOld m = match maxViewOld m
+  None => Tip
+  Some (_, _, m') => m'
+
+-- Structural equality: same shape, cached sizes, keys and values at every node.
+sameShape : (Eq k, Eq v) => Map k v -> Map k v -> Bool
+sameShape Tip Tip = True
+sameShape (Bin s1 k1 v1 l1 r1) (Bin s2 k2 v2 l2 r2) =
+  s1 == s2 && eq k1 k2 && eq v1 v2 && sameShape l1 l2 && sameShape r1 r2
+sameShape _ _ = False
+
+-- Applies `step` to each pair in order, left to right.
+foldInserts : (k -> v -> Map k v -> Map k v) ->
+  List (k, v) ->
+  Map k v ->
+  Map k v
+foldInserts step [] m = m
+foldInserts step ((k, v) :: rest) m = foldInserts step rest (step k v m)
+
+-- Folds each key through `step` in order, for the delete props.
+foldDeletes : (k -> Map k v -> Map k v) -> List k -> Map k v -> Map k v
+foldDeletes step [] m = m
+foldDeletes step (k :: rest) m = foldDeletes step rest (step k m)
+
+-- Collapses keys onto 0..7 so that the props hit the duplicate (`Eq`) paths.
+modKeys : List (Int, Int) -> List (Int, Int)
+modKeys [] = []
+modKeys ((k, v) :: rest) = (k % 8, v) :: modKeys rest
+
+fstKeys : List (Int, Int) -> List Int
+fstKeys [] = []
+fstKeys ((k, _) :: rest) = k :: fstKeys rest
+
+prop "set builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
+  let got = foldInserts set xs Tip
+  sameShape got (foldInserts setOld xs Tip) && wellFormed got
+
+prop "set on duplicate keys builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
+  let ys = modKeys xs
+  let got = foldInserts set ys Tip
+  sameShape got (foldInserts setOld ys Tip) && wellFormed got
+
+prop "insertWith builds the same tree shape as the balance-only body" (xs : List (Int, Int)) =
+  let ys = modKeys xs
+  let got = foldInserts (k v m => insertWith (a b => a + b) k v m) ys Tip
+  sameShape
+      got
+      (foldInserts (k v m => insertWithOld (a b => a + b) k v m) ys Tip)
+    && wellFormed got
+
+prop "insertMin and insertMax match the balance-only body shape" (xs : List (Int, Int)) =
+  let got = foldInserts (k v m => insertMin k v m) xs Tip
+  let gotMax = foldInserts (k v m => insertMax k v m) xs Tip
+  sameShape got (foldInserts (k v m => insertMinOld k v m) xs Tip)
+    && sameShape gotMax (foldInserts (k v m => insertMaxOld k v m) xs Tip)
+
+prop "delete matches the balance-only body shape" (xs : List (Int, Int)) (ks : List Int) =
+  let ys = modKeys xs
+  let base = foldInserts set ys Tip
+  let got = foldDeletes delete ks (foldDeletes delete (fstKeys ys) base)
+  sameShape
+      got
+      (foldDeletes deleteOld ks (foldDeletes deleteOld (fstKeys ys) base))
+    && wellFormed got
+
+-- Walks the new tree and the balance-only tree through repeated removals of
+-- the minimum (or maximum) in lockstep, so every intermediate shape is compared.
+minChainOk : Map Int Int -> Map Int Int -> Bool
+minChainOk got old =
+  if isEmpty old then
+    isEmpty got
+  else
+    sameShape got old
+      && wellFormed got
+      && minChainOk (deleteMin got) (deleteMinOld old)
+
+maxChainOk : Map Int Int -> Map Int Int -> Bool
+maxChainOk got old =
+  if isEmpty old then
+    isEmpty got
+  else
+    sameShape got old
+      && wellFormed got
+      && maxChainOk (deleteMax got) (deleteMaxOld old)
+
+-- Checks `glue` at every node of a tree, where its two arguments are siblings.
+glueAgrees : Map Int Int -> Bool
+glueAgrees Tip = True
+glueAgrees (Bin _ _ _ l r) =
+  sameShape (glue l r) (glueOld l r)
+    && wellFormed (glue l r)
+    && glueAgrees l
+    && glueAgrees r
+
+minViewAgrees : Map Int Int -> Bool
+minViewAgrees m = match minView m
+  None => isEmpty m
+  Some (k, v, rest) =>
+    eq (getMinOld m) (Some (k, v))
+      && sameShape rest (deleteMinOld m)
+      && wellFormed rest
+
+maxViewAgrees : Map Int Int -> Bool
+maxViewAgrees m = match maxView m
+  None => isEmpty m
+  Some (k, v, rest) =>
+    eq (getMaxOld m) (Some (k, v))
+      && sameShape rest (deleteMaxOld m)
+      && wellFormed rest
+
+prop "deleteMin matches the balance-only body shape at every step" (xs : List (Int, Int)) =
+  let m = foldInserts set xs Tip
+  minChainOk m m
+
+prop "deleteMax matches the balance-only body shape at every step" (xs : List (Int, Int)) =
+  let m = foldInserts set xs Tip
+  maxChainOk m m
+
+prop "getMin, getMax, minView and maxView agree with the balance-only bodies" (xs : List (Int, Int)) =
+  let m = foldInserts set xs Tip
+  eq (getMin m) (getMinOld m)
+    && eq (getMax m) (getMaxOld m)
+    && minViewAgrees m
+    && maxViewAgrees m
+
+prop "glue matches the balance-only body shape at every node" (xs : List (Int, Int)) =
+  glueAgrees (foldInserts set xs Tip) && glueAgrees (fromList xs)
+
+prop "glue on duplicate-heavy inserts matches the balance-only body shape" (xs : List (Int, Int)) =
+  glueAgrees (foldInserts set (modKeys xs) Tip)
+
+naiveFromList : Ord k => List (k, v) -> Map k v
+naiveFromList xs = fold (m (k, v) => set k v m) Tip xs
+
+prop "fromList agrees with naive fold-insert" (xs : List (Int, Int)) =
+  eq (entries (fromList xs)) (entries (naiveFromList xs))
+    && wellFormed (fromList xs)
+
+prop "fromList agrees with naive on sorted input" (xs : List (Int, Int)) =
+  let ys = sort xs
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "fromList agrees with naive on sorted duplicate-heavy input" (xs : List (Int, Int)) =
+  let ys = sort (map (p => (fst p % 50, snd p)) xs)
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "fromList agrees with naive on sorted prefix then unsorted tail" (xs : List (Int, Int)) =
+  let ys = sort xs ++ xs
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "fromList agrees with naive on sorted prefix then duplicate-heavy tail" (xs : List (Int, Int)) =
+  let ys = sort xs ++ map (p => (fst p % 50, snd p)) xs
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "a later pair overrides an entry from the ascending prefix" (k : Int) (v : Int) (xs : List (Int, Int)) =
+  let ys = sort xs ++ [(k, v)]
+  eq (get k (fromList ys)) (Some v) && wellFormed (fromList ys)
+
 prop "union agrees with naive fold-insert" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
   let b = fromList ys
   eq (entries (union a b)) (entries (naiveUnion a b))
+
+prop "union with a tiny side agrees with naive in both orders" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  let big = fromList (map (i => (i, i)) [0..=63] ++ xs)
+  let small = fromList (map ((k, v) => (k % 64, v)) (take 2 ys))
+  eq (entries (union big small)) (entries (naiveUnion big small))
+    && eq (entries (union small big)) (entries (naiveUnion small big))
+    && wellFormed (union big small)
+    && wellFormed (union small big)
+
+prop "unionWith with a tiny side agrees with naive in both orders" (xs : List (Int, Int)) (ys : List (Int, Int)) =
+  let big = fromList (map (i => (i, i)) [0..=63] ++ xs)
+  let small = fromList (map ((k, v) => (k % 64, v)) (take 2 ys))
+  let f = x y => 2 * x + y
+  eq (entries (unionWith f big small)) (entries (naiveUnionWith f big small))
+    && eq
+      (entries (unionWith f small big))
+      (entries (naiveUnionWith f small big))
+    && wellFormed (unionWith f big small)
+    && wellFormed (unionWith f small big)
+
+-- A key whose `Eq` and `Ord` ignore the tag, so two keys can be equal yet
+-- distinguishable by which map they came from.
+data Tagged = Tagged Int Int
+
+impl Eq Tagged where
+  eq (Tagged a _) (Tagged b _) = a == b
+
+impl Ord Tagged where
+  compare (Tagged a _) (Tagged b _) = compare a b
+
+taggedAt : Int -> Map Tagged Int -> List Int
+taggedAt n m = filterMap (tagIfAt n) (keys m)
+
+tagIfAt : Int -> Tagged -> Option Int
+tagIfAt n (Tagged i t) = if i == n then Some t else None
+
+prop "union and unionWith keep the first map's key on a shared key" (j : Int) =
+  let n = (j % 64 + 64) % 64
+  let big = fromList (map (i => (Tagged i 0, i)) [0..=63])
+  let small = fromList [(Tagged n 1, 7)]
+  let sameSize = fromList (map (i => (Tagged i 1, i)) [0..=63])
+  eq (taggedAt n (union small big)) [1]
+    && eq (taggedAt n (union big small)) [0]
+    && eq (taggedAt n (unionWith (x y => x + y) small big)) [1]
+    && eq (taggedAt n (unionWith (x y => x + y) big small)) [0]
+    && eq (taggedAt n (union sameSize big)) [1]
+    && eq (taggedAt n (unionWith (x y => x + y) sameSize big)) [1]
 
 prop "union keys stay strictly ascending" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   ascending (keys (union (fromList xs) (fromList ys)))
@@ -954,12 +1338,20 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
       (filter ((key, _) => gte key k) (entries m))
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
-(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false) (mem "sort" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "bin" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))
 (DTypeSig false "balance" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "balance" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EIf (EBinOp "<=" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "bin") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "r")) (EBinOp "*" (ELit (LInt 3)) (EApp (EVar "size") (EVar "l")))) (EApp (EApp (EApp (EApp (EVar "rotateL") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EBinOp "*" (ELit (LInt 3)) (EApp (EVar "size") (EVar "r")))) (EApp (EApp (EApp (EApp (EVar "rotateR") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "bin") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "balanceL" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "balanceL" ((PVar "k") (PVar "v") (PCon "Tip") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EApp (EVar "size") (EVar "r")) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "r")))
+(DFunDef false "balanceL" ((PVar "k") (PVar "v") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild PWild)) (PCon "Tip")) (EIf (EBinOp "<=" (EVar "sl") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EVar "sl") (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "Tip")) (EApp (EApp (EApp (EApp (EVar "rotateR") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "Tip"))))
+(DFunDef false "balanceL" ((PVar "k") (PVar "v") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild PWild)) (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild PWild))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "sl") (EBinOp "*" (ELit (LInt 3)) (EVar "sr"))) (EBinOp ">" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "rotateR") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r"))))
+(DTypeSig false "balanceR" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "balanceR" ((PVar "k") (PVar "v") (PVar "l") (PCon "Tip")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EApp (EVar "size") (EVar "l")) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "Tip")))
+(DFunDef false "balanceR" ((PVar "k") (PVar "v") (PCon "Tip") (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild PWild))) (EIf (EBinOp "<=" (EVar "sr") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EVar "sr") (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "r")) (EApp (EApp (EApp (EApp (EVar "rotateL") (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "r"))))
+(DFunDef false "balanceR" ((PVar "k") (PVar "v") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild PWild)) (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild PWild))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "sr") (EBinOp "*" (ELit (LInt 3)) (EVar "sl"))) (EBinOp ">" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "rotateL") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r"))))
 (DTypeSig false "rotateL" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "rotateL" ((PVar "k") (PVar "v") (PVar "l") (PAs "r" (PCon "Bin" PWild PWild PWild (PVar "rl") (PVar "rr")))) (EIf (EBinOp "<" (EApp (EVar "size") (EVar "rl")) (EBinOp "*" (ELit (LInt 2)) (EApp (EVar "size") (EVar "rr")))) (EApp (EApp (EApp (EApp (EVar "singleL") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EVar "doubleL") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r"))))
 (DFunDef false "rotateL" ((PVar "k") (PVar "v") (PVar "l") (PCon "Tip")) (EApp (EVar "panic") (ELit (LString "Map.rotateL: empty right subtree"))))
@@ -981,7 +1373,17 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DTypeSig true "singleton" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "singleton" ((PVar "k") (PVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "fromList" ((PVar "xs")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "Tip")) (EVar "xs")))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "m") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "acc") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "m")) (EVar "rest")))))
+(DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Int"))))
+(DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
+(DFunDef false "ascendingRunLength" ((PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EApp (EApp (EApp (EVar "ascendingRunFrom") (EVar "k")) (ELit (LInt 1))) (EVar "rest")))
+(DTypeSig false "ascendingRunFrom" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Int"))))))
+(DFunDef false "ascendingRunFrom" (PWild (PVar "n") (PList)) (EVar "n"))
+(DFunDef false "ascendingRunFrom" ((PVar "prev") (PVar "n") (PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "lt") (EVar "prev")) (EVar "k")) (EApp (EApp (EApp (EVar "ascendingRunFrom") (EVar "k")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "rest")) (EVar "n")))
+(DTypeSig false "buildAscending" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyTuple (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))))
+(DFunDef false "buildAscending" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ETuple (EVar "Tip") (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "buildNode") (EVar "n")) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "buildNode" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyTuple (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))))
+(DFunDef false "buildNode" ((PVar "n") (PVar "xs")) (EBlock (DoLet false false (PVar "nl") (EBinOp "/" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (ELit (LInt 2)))) (DoLet false false (PVar "nr") (EBinOp "-" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (EVar "nl"))) (DoLet false false (PTuple (PVar "l") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "nl")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest2")) () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "rest3")) (EApp (EApp (EVar "buildAscending") (EVar "nr")) (EVar "rest2"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "n")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EVar "rest3"))))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "Map.buildNode: fewer pairs than the run length"))))))))
 (DTypeSig true "size" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "Tip")) (ELit (LInt 0)))
 (DFunDef false "size" ((PCon "Bin" (PVar "s") PWild PWild PWild PWild)) (EVar "s"))
@@ -999,38 +1401,46 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "findWithDefault" ((PVar "d") (PVar "k") (PVar "m")) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "None") () (EVar "d")) (arm (PCon "Some" (PVar "v")) () (EVar "v"))))
 (DTypeSig true "set" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
-(DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))))
+(DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))))
 (DTypeSig true "insertWith" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))))
 (DFunDef false "insertWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
-(DFunDef false "insertWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EApp (EVar "insertWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "insertWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "v2"))) (EVar "l")) (EVar "r")))))
+(DFunDef false "insertWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EApp (EVar "insertWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "insertWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "v2"))) (EVar "l")) (EVar "r")))))
 (DTypeSig true "adjust" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyVar "v")) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "adjust" ((PVar "f") (PVar "k") (PCon "Tip")) (EVar "Tip"))
 (DFunDef false "adjust" ((PVar "f") (PVar "k") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "adjust") (EVar "f")) (EVar "k")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "adjust") (EVar "f")) (EVar "k")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EApp (EVar "f") (EVar "v2"))) (EVar "l")) (EVar "r")))))
 (DTypeSig true "delete" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "delete" ((PVar "k") (PCon "Tip")) (EVar "Tip"))
-(DFunDef false "delete" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EVar "delete") (EVar "k")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EVar "delete") (EVar "k")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))))
+(DFunDef false "delete" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EApp (EApp (EVar "delete") (EVar "k")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EVar "delete") (EVar "k")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))))
 (DTypeSig false "glue" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "glue" ((PCon "Tip") (PVar "r")) (EVar "r"))
 (DFunDef false "glue" ((PVar "l") (PCon "Tip")) (EVar "l"))
 (DFunDef false "glue" ((PVar "l") (PVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (EApp (EApp (EVar "glueMax") (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EVar "glueMin") (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "glueMax" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "glueMax" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "maxView") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "l'"))) () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l'")) (EVar "r")))))
+(DFunDef false "glueMax" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "getMax") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v"))) () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k")) (EVar "v")) (EApp (EVar "deleteMax") (EVar "l"))) (EVar "r")))))
 (DTypeSig false "glueMin" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "glueMin" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "minView") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "r'"))) () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r'")))))
+(DFunDef false "glueMin" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "getMin") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v"))) () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k")) (EVar "v")) (EVar "l")) (EApp (EVar "deleteMin") (EVar "r"))))))
 (DTypeSig true "minView" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "minView" ((PCon "Tip")) (EVar "None"))
-(DFunDef false "minView" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "minView") (EVar "l")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EVar "r")))) (arm (PCon "Some" (PTuple (PVar "km") (PVar "vm") (PVar "l'"))) () (EApp (EVar "Some") (ETuple (EVar "km") (EVar "vm") (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l'")) (EVar "r")))))))
+(DFunDef false "minView" ((PVar "m")) (EMatch (EApp (EVar "getMin") (EVar "m")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v"))) () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EApp (EVar "deleteMin") (EVar "m")))))))
 (DTypeSig true "maxView" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "maxView" ((PCon "Tip")) (EVar "None"))
-(DFunDef false "maxView" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "maxView") (EVar "r")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EVar "l")))) (arm (PCon "Some" (PTuple (PVar "km") (PVar "vm") (PVar "r'"))) () (EApp (EVar "Some") (ETuple (EVar "km") (EVar "vm") (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r'")))))))
+(DFunDef false "maxView" ((PVar "m")) (EMatch (EApp (EVar "getMax") (EVar "m")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v"))) () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EApp (EVar "deleteMax") (EVar "m")))))))
 (DTypeSig true "getMin" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v")))))
-(DFunDef false "getMin" ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v") PWild)) (ETuple (EVar "k") (EVar "v")))) (EApp (EVar "minView") (EVar "m"))))
+(DFunDef false "getMin" ((PCon "Tip")) (EVar "None"))
+(DFunDef false "getMin" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PCon "Tip") PWild)) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v"))))
+(DFunDef false "getMin" ((PCon "Bin" PWild PWild PWild (PVar "l") PWild)) (EApp (EVar "getMin") (EVar "l")))
 (DTypeSig true "getMax" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v")))))
-(DFunDef false "getMax" ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v") PWild)) (ETuple (EVar "k") (EVar "v")))) (EApp (EVar "maxView") (EVar "m"))))
+(DFunDef false "getMax" ((PCon "Tip")) (EVar "None"))
+(DFunDef false "getMax" ((PCon "Bin" PWild (PVar "k") (PVar "v") PWild (PCon "Tip"))) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v"))))
+(DFunDef false "getMax" ((PCon "Bin" PWild PWild PWild PWild (PVar "r"))) (EApp (EVar "getMax") (EVar "r")))
 (DTypeSig true "deleteMin" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))
-(DFunDef false "deleteMin" ((PVar "m")) (EMatch (EApp (EVar "minView") (EVar "m")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild PWild (PVar "m'"))) () (EVar "m'"))))
+(DFunDef false "deleteMin" ((PCon "Tip")) (EVar "Tip"))
+(DFunDef false "deleteMin" ((PCon "Bin" PWild PWild PWild (PCon "Tip") (PVar "r"))) (EVar "r"))
+(DFunDef false "deleteMin" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k")) (EVar "v")) (EApp (EVar "deleteMin") (EVar "l"))) (EVar "r")))
 (DTypeSig true "deleteMax" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))
-(DFunDef false "deleteMax" ((PVar "m")) (EMatch (EApp (EVar "maxView") (EVar "m")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild PWild (PVar "m'"))) () (EVar "m'"))))
+(DFunDef false "deleteMax" ((PCon "Tip")) (EVar "Tip"))
+(DFunDef false "deleteMax" ((PCon "Bin" PWild PWild PWild (PVar "l") (PCon "Tip"))) (EVar "l"))
+(DFunDef false "deleteMax" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k")) (EVar "v")) (EVar "l")) (EApp (EVar "deleteMax") (EVar "r"))))
 (DTypeSig true "foldrWithKey" (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b"))))) (TyFun (TyVar "b") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyEffect () (Some "e") (TyVar "b"))))))
 (DFunDef false "foldrWithKey" ((PVar "f") (PVar "z") (PCon "Tip")) (EVar "z"))
 (DFunDef false "foldrWithKey" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldrWithKey") (EVar "f")) (EApp (EApp (EApp (EVar "f") (EVar "k")) (EVar "v")) (EApp (EApp (EApp (EVar "foldrWithKey") (EVar "f")) (EVar "z")) (EVar "r")))) (EVar "l")))
@@ -1064,10 +1474,10 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EApp (EVar "f") (EVar "k")) (EVar "v"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "l"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "r"))))
 (DTypeSig false "insertMin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "insertMin" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
-(DFunDef false "insertMin" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "insertMin") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r")))
+(DFunDef false "insertMin" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "insertMin") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r")))
 (DTypeSig false "insertMax" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "insertMax" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
-(DFunDef false "insertMax" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "insertMax") (EVar "k")) (EVar "v")) (EVar "r"))))
+(DFunDef false "insertMax" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "insertMax") (EVar "k")) (EVar "v")) (EVar "r"))))
 (DTypeSig false "link" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "link" ((PVar "k") (PVar "v") (PCon "Tip") (PVar "r")) (EApp (EApp (EApp (EVar "insertMin") (EVar "k")) (EVar "v")) (EVar "r")))
 (DFunDef false "link" ((PVar "k") (PVar "v") (PVar "l") (PCon "Tip")) (EApp (EApp (EApp (EVar "insertMax") (EVar "k")) (EVar "v")) (EVar "l")))
@@ -1088,11 +1498,25 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DTypeSig true "union" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "union" ((PCon "Tip") (PVar "b")) (EVar "b"))
 (DFunDef false "union" ((PVar "a") (PCon "Tip")) (EVar "a"))
-(DFunDef false "union" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "br")) (EApp (EApp (EVar "splitAt") (EVar "k")) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "v")) (EApp (EApp (EVar "union") (EVar "l")) (EVar "bl"))) (EApp (EApp (EVar "union") (EVar "r")) (EVar "br"))))))
+(DFunDef false "union" ((PVar "a") (PVar "b")) (EIf (EBinOp "<=" (EBinOp "*" (EApp (EVar "size") (EVar "b")) (ELit (LInt 16))) (EApp (EVar "size") (EVar "a"))) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") (PVar "k") (PVar "v")) (EApp (EApp (EApp (EVar "insertAbsent") (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "a")) (EVar "b")) (EIf (EBinOp "<=" (EBinOp "*" (EApp (EVar "size") (EVar "a")) (ELit (LInt 16))) (EApp (EVar "size") (EVar "b"))) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") (PVar "k") (PVar "v")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "b")) (EVar "a")) (EIf (EVar "otherwise") (EApp (EApp (EVar "unionSplit") (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "insertAbsent" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "insertAbsent" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "insertAbsent" ((PVar "k") (PVar "v") (PAs "m" (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r")))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "insertAbsent") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "insertAbsent") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EVar "m"))))
+(DTypeSig false "unionSplit" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "unionSplit" ((PCon "Tip") (PVar "b")) (EVar "b"))
+(DFunDef false "unionSplit" ((PVar "a") (PCon "Tip")) (EVar "a"))
+(DFunDef false "unionSplit" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "br")) (EApp (EApp (EVar "splitAt") (EVar "k")) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "v")) (EApp (EApp (EVar "unionSplit") (EVar "l")) (EVar "bl"))) (EApp (EApp (EVar "unionSplit") (EVar "r")) (EVar "br"))))))
 (DTypeSig true "unionWith" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "unionWith" ((PVar "f") (PCon "Tip") (PVar "b")) (EVar "b"))
 (DFunDef false "unionWith" ((PVar "f") (PVar "a") (PCon "Tip")) (EVar "a"))
-(DFunDef false "unionWith" ((PVar "f") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "found") (PVar "br")) (EApp (EApp (EVar "splitLookup") (EVar "k")) (EVar "b"))) (DoLet false false (PVar "v2") (EMatch (EVar "found") (arm (PCon "None") () (EVar "v")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EVar "f") (EVar "v")) (EVar "w"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "v2")) (EApp (EApp (EApp (EVar "unionWith") (EVar "f")) (EVar "l")) (EVar "bl"))) (EApp (EApp (EApp (EVar "unionWith") (EVar "f")) (EVar "r")) (EVar "br"))))))
+(DFunDef false "unionWith" ((PVar "f") (PVar "a") (PVar "b")) (EIf (EBinOp "<=" (EBinOp "*" (EApp (EVar "size") (EVar "b")) (ELit (LInt 16))) (EApp (EVar "size") (EVar "a"))) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") (PVar "k") (PVar "w")) (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "x") (PVar "y")) (EApp (EApp (EVar "f") (EVar "y")) (EVar "x")))) (EVar "k")) (EVar "w")) (EVar "acc")))) (EVar "a")) (EVar "b")) (EIf (EBinOp "<=" (EBinOp "*" (EApp (EVar "size") (EVar "a")) (ELit (LInt 16))) (EApp (EVar "size") (EVar "b"))) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") (PVar "k") (PVar "v")) (EApp (EApp (EApp (EApp (EVar "setWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "b")) (EVar "a")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "unionWithSplit") (EVar "f")) (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "setWith" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))))
+(DFunDef false "setWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "setWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EApp (EVar "setWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "setWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "v2"))) (EVar "l")) (EVar "r")))))
+(DTypeSig false "unionWithSplit" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "unionWithSplit" ((PVar "f") (PCon "Tip") (PVar "b")) (EVar "b"))
+(DFunDef false "unionWithSplit" ((PVar "f") (PVar "a") (PCon "Tip")) (EVar "a"))
+(DFunDef false "unionWithSplit" ((PVar "f") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "found") (PVar "br")) (EApp (EApp (EVar "splitLookup") (EVar "k")) (EVar "b"))) (DoLet false false (PVar "v2") (EMatch (EVar "found") (arm (PCon "None") () (EVar "v")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EVar "f") (EVar "v")) (EVar "w"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "v2")) (EApp (EApp (EApp (EVar "unionWithSplit") (EVar "f")) (EVar "l")) (EVar "bl"))) (EApp (EApp (EApp (EVar "unionWithSplit") (EVar "f")) (EVar "r")) (EVar "br"))))))
 (DTypeSig true "difference" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "w")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "difference" ((PCon "Tip") (PVar "b")) (EVar "Tip"))
 (DFunDef false "difference" ((PVar "a") (PCon "Tip")) (EVar "a"))
@@ -1148,7 +1572,99 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "naiveFilterWithKey" ((PVar "p") (PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (EApp (EVar "naiveFilterStep") (EVar "p"))) (EVar "Tip")) (EVar "m")))
 (DTypeSig false "naiveFilterStep" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyCon "Bool"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))))
 (DFunDef false "naiveFilterStep" ((PVar "p") (PVar "k") (PVar "v") (PVar "acc")) (EIf (EApp (EApp (EVar "p") (EVar "k")) (EVar "v")) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "acc")) (EVar "acc")))
+(DTypeSig false "setOld" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "setOld" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "setOld" ((PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "setOld") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "setOld") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))))
+(DTypeSig false "insertWithOld" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))))
+(DFunDef false "insertWithOld" ((PVar "f") (PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "insertWithOld" ((PVar "f") (PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EApp (EVar "insertWithOld") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EApp (EVar "insertWithOld") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "v2"))) (EVar "l")) (EVar "r")))))
+(DTypeSig false "deleteOld" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "deleteOld" ((PVar "k") (PCon "Tip")) (EVar "Tip"))
+(DFunDef false "deleteOld" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EVar "deleteOld") (EVar "k")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EVar "deleteOld") (EVar "k")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glueOld") (EVar "l")) (EVar "r")))))
+(DTypeSig false "insertMinOld" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "insertMinOld" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "insertMinOld" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "insertMinOld") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r")))
+(DTypeSig false "insertMaxOld" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "insertMaxOld" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "insertMaxOld" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "insertMaxOld") (EVar "k")) (EVar "v")) (EVar "r"))))
+(DTypeSig false "glueOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "glueOld" ((PCon "Tip") (PVar "r")) (EVar "r"))
+(DFunDef false "glueOld" ((PVar "l") (PCon "Tip")) (EVar "l"))
+(DFunDef false "glueOld" ((PVar "l") (PVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (EApp (EApp (EVar "glueMaxOld") (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EVar "glueMinOld") (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "glueMaxOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "glueMaxOld" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "maxViewOld") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "l'"))) () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l'")) (EVar "r")))))
+(DTypeSig false "glueMinOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "glueMinOld" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "minViewOld") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "r'"))) () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r'")))))
+(DTypeSig false "minViewOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "minViewOld" ((PCon "Tip")) (EVar "None"))
+(DFunDef false "minViewOld" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "minViewOld") (EVar "l")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EVar "r")))) (arm (PCon "Some" (PTuple (PVar "km") (PVar "vm") (PVar "l'"))) () (EApp (EVar "Some") (ETuple (EVar "km") (EVar "vm") (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l'")) (EVar "r")))))))
+(DTypeSig false "maxViewOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "maxViewOld" ((PCon "Tip")) (EVar "None"))
+(DFunDef false "maxViewOld" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "maxViewOld") (EVar "r")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EVar "l")))) (arm (PCon "Some" (PTuple (PVar "km") (PVar "vm") (PVar "r'"))) () (EApp (EVar "Some") (ETuple (EVar "km") (EVar "vm") (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r'")))))))
+(DTypeSig false "getMinOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v")))))
+(DFunDef false "getMinOld" ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v") PWild)) (ETuple (EVar "k") (EVar "v")))) (EApp (EVar "minViewOld") (EVar "m"))))
+(DTypeSig false "getMaxOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v")))))
+(DFunDef false "getMaxOld" ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v") PWild)) (ETuple (EVar "k") (EVar "v")))) (EApp (EVar "maxViewOld") (EVar "m"))))
+(DTypeSig false "deleteMinOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))
+(DFunDef false "deleteMinOld" ((PVar "m")) (EMatch (EApp (EVar "minViewOld") (EVar "m")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild PWild (PVar "m'"))) () (EVar "m'"))))
+(DTypeSig false "deleteMaxOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))
+(DFunDef false "deleteMaxOld" ((PVar "m")) (EMatch (EApp (EVar "maxViewOld") (EVar "m")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild PWild (PVar "m'"))) () (EVar "m'"))))
+(DTypeSig false "sameShape" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Eq" (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
+(DFunDef false "sameShape" ((PCon "Tip") (PCon "Tip")) (EVar "True"))
+(DFunDef false "sameShape" ((PCon "Bin" (PVar "s1") (PVar "k1") (PVar "v1") (PVar "l1") (PVar "r1")) (PCon "Bin" (PVar "s2") (PVar "k2") (PVar "v2") (PVar "l2") (PVar "r2"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "s1") (EVar "s2")) (EApp (EApp (EVar "eq") (EVar "k1")) (EVar "k2"))) (EApp (EApp (EVar "eq") (EVar "v1")) (EVar "v2"))) (EApp (EApp (EVar "sameShape") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EVar "sameShape") (EVar "r1")) (EVar "r2"))))
+(DFunDef false "sameShape" (PWild PWild) (EVar "False"))
+(DTypeSig false "foldInserts" (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "foldInserts" ((PVar "step") (PList) (PVar "m")) (EVar "m"))
+(DFunDef false "foldInserts" ((PVar "step") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EApp (EApp (EApp (EVar "foldInserts") (EVar "step")) (EVar "rest")) (EApp (EApp (EApp (EVar "step") (EVar "k")) (EVar "v")) (EVar "m"))))
+(DTypeSig false "foldDeletes" (TyFun (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))) (TyFun (TyApp (TyCon "List") (TyVar "k")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "foldDeletes" ((PVar "step") (PList) (PVar "m")) (EVar "m"))
+(DFunDef false "foldDeletes" ((PVar "step") (PCons (PVar "k") (PVar "rest")) (PVar "m")) (EApp (EApp (EApp (EVar "foldDeletes") (EVar "step")) (EVar "rest")) (EApp (EApp (EVar "step") (EVar "k")) (EVar "m"))))
+(DTypeSig false "modKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "modKeys" ((PList)) (EListLit))
+(DFunDef false "modKeys" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBinOp "::" (ETuple (EBinOp "%" (EVar "k") (ELit (LInt 8))) (EVar "v")) (EApp (EVar "modKeys") (EVar "rest"))))
+(DTypeSig false "fstKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "fstKeys" ((PList)) (EListLit))
+(DFunDef false "fstKeys" ((PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EBinOp "::" (EVar "k") (EApp (EVar "fstKeys") (EVar "rest"))))
+(DProp false "set builds the same tree shape as the balance-only body" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldInserts") (EVar "set")) (EVar "xs")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldInserts") (EVar "setOld")) (EVar "xs")) (EVar "Tip"))) (EApp (EVar "wellFormed") (EVar "got"))))))
+(DProp false "set on duplicate keys builds the same tree shape as the balance-only body" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "modKeys") (EVar "xs"))) (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldInserts") (EVar "set")) (EVar "ys")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldInserts") (EVar "setOld")) (EVar "ys")) (EVar "Tip"))) (EApp (EVar "wellFormed") (EVar "got"))))))
+(DProp false "insertWith builds the same tree shape as the balance-only body" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "modKeys") (EVar "xs"))) (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EApp (EVar "insertWith") (ELam ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b")))) (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "ys")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EApp (EVar "insertWithOld") (ELam ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b")))) (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "ys")) (EVar "Tip"))) (EApp (EVar "wellFormed") (EVar "got"))))))
+(DProp false "insertMin and insertMax match the balance-only body shape" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "insertMin") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "xs")) (EVar "Tip"))) (DoLet false false (PVar "gotMax") (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "insertMax") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "xs")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "insertMinOld") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "xs")) (EVar "Tip"))) (EApp (EApp (EVar "sameShape") (EVar "gotMax")) (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "insertMaxOld") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "xs")) (EVar "Tip")))))))
+(DProp false "delete matches the balance-only body shape" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ks" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "modKeys") (EVar "xs"))) (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "foldInserts") (EVar "set")) (EVar "ys")) (EVar "Tip"))) (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldDeletes") (EVar "delete")) (EVar "ks")) (EApp (EApp (EApp (EVar "foldDeletes") (EVar "delete")) (EApp (EVar "fstKeys") (EVar "ys"))) (EVar "base")))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldDeletes") (EVar "deleteOld")) (EVar "ks")) (EApp (EApp (EApp (EVar "foldDeletes") (EVar "deleteOld")) (EApp (EVar "fstKeys") (EVar "ys"))) (EVar "base")))) (EApp (EVar "wellFormed") (EVar "got"))))))
+(DTypeSig false "minChainOk" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "minChainOk" ((PVar "got") (PVar "old")) (EIf (EApp (EVar "isEmpty") (EVar "old")) (EApp (EVar "isEmpty") (EVar "got")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "sameShape") (EVar "got")) (EVar "old")) (EApp (EVar "wellFormed") (EVar "got"))) (EApp (EApp (EVar "minChainOk") (EApp (EVar "deleteMin") (EVar "got"))) (EApp (EVar "deleteMinOld") (EVar "old"))))))
+(DTypeSig false "maxChainOk" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "maxChainOk" ((PVar "got") (PVar "old")) (EIf (EApp (EVar "isEmpty") (EVar "old")) (EApp (EVar "isEmpty") (EVar "got")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "sameShape") (EVar "got")) (EVar "old")) (EApp (EVar "wellFormed") (EVar "got"))) (EApp (EApp (EVar "maxChainOk") (EApp (EVar "deleteMax") (EVar "got"))) (EApp (EVar "deleteMaxOld") (EVar "old"))))))
+(DTypeSig false "glueAgrees" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "glueAgrees" ((PCon "Tip")) (EVar "True"))
+(DFunDef false "glueAgrees" ((PCon "Bin" PWild PWild PWild (PVar "l") (PVar "r"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "sameShape") (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r"))) (EApp (EApp (EVar "glueOld") (EVar "l")) (EVar "r"))) (EApp (EVar "wellFormed") (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))) (EApp (EVar "glueAgrees") (EVar "l"))) (EApp (EVar "glueAgrees") (EVar "r"))))
+(DTypeSig false "minViewAgrees" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "minViewAgrees" ((PVar "m")) (EMatch (EApp (EVar "minView") (EVar "m")) (arm (PCon "None") () (EApp (EVar "isEmpty") (EVar "m"))) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "rest"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "getMinOld") (EVar "m"))) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v")))) (EApp (EApp (EVar "sameShape") (EVar "rest")) (EApp (EVar "deleteMinOld") (EVar "m")))) (EApp (EVar "wellFormed") (EVar "rest"))))))
+(DTypeSig false "maxViewAgrees" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "maxViewAgrees" ((PVar "m")) (EMatch (EApp (EVar "maxView") (EVar "m")) (arm (PCon "None") () (EApp (EVar "isEmpty") (EVar "m"))) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "rest"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "getMaxOld") (EVar "m"))) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v")))) (EApp (EApp (EVar "sameShape") (EVar "rest")) (EApp (EVar "deleteMaxOld") (EVar "m")))) (EApp (EVar "wellFormed") (EVar "rest"))))))
+(DProp false "deleteMin matches the balance-only body shape at every step" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EApp (EApp (EVar "foldInserts") (EVar "set")) (EVar "xs")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "minChainOk") (EVar "m")) (EVar "m")))))
+(DProp false "deleteMax matches the balance-only body shape at every step" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EApp (EApp (EVar "foldInserts") (EVar "set")) (EVar "xs")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "maxChainOk") (EVar "m")) (EVar "m")))))
+(DProp false "getMin, getMax, minView and maxView agree with the balance-only bodies" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EApp (EApp (EVar "foldInserts") (EVar "set")) (EVar "xs")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "getMin") (EVar "m"))) (EApp (EVar "getMinOld") (EVar "m"))) (EApp (EApp (EVar "eq") (EApp (EVar "getMax") (EVar "m"))) (EApp (EVar "getMaxOld") (EVar "m")))) (EApp (EVar "minViewAgrees") (EVar "m"))) (EApp (EVar "maxViewAgrees") (EVar "m"))))))
+(DProp false "glue matches the balance-only body shape at every node" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBinOp "&&" (EApp (EVar "glueAgrees") (EApp (EApp (EApp (EVar "foldInserts") (EVar "set")) (EVar "xs")) (EVar "Tip"))) (EApp (EVar "glueAgrees") (EApp (EVar "fromList") (EVar "xs")))))
+(DProp false "glue on duplicate-heavy inserts matches the balance-only body shape" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EApp (EVar "glueAgrees") (EApp (EApp (EApp (EVar "foldInserts") (EVar "set")) (EApp (EVar "modKeys") (EVar "xs"))) (EVar "Tip"))))
+(DTypeSig false "naiveFromList" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "naiveFromList" ((PVar "xs")) (EApp (EApp (EApp (EVar "fold") (ELam ((PVar "m") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EVar "set") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "Tip")) (EVar "xs")))
+(DProp false "fromList agrees with naive fold-insert" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EVar "fromList") (EVar "xs")))) (EApp (EVar "entries") (EApp (EVar "naiveFromList") (EVar "xs")))) (EApp (EVar "wellFormed") (EApp (EVar "fromList") (EVar "xs")))))
+(DProp false "fromList agrees with naive on sorted input" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "sort") (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EVar "fromList") (EVar "ys")))) (EApp (EVar "entries") (EApp (EVar "naiveFromList") (EVar "ys")))) (EApp (EVar "wellFormed") (EApp (EVar "fromList") (EVar "ys")))))))
+(DProp false "fromList agrees with naive on sorted duplicate-heavy input" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "sort") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EBinOp "%" (EApp (EVar "fst") (EVar "p")) (ELit (LInt 50))) (EApp (EVar "snd") (EVar "p"))))) (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EVar "fromList") (EVar "ys")))) (EApp (EVar "entries") (EApp (EVar "naiveFromList") (EVar "ys")))) (EApp (EVar "wellFormed") (EApp (EVar "fromList") (EVar "ys")))))))
+(DProp false "fromList agrees with naive on sorted prefix then unsorted tail" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EBinOp "++" (EApp (EVar "sort") (EVar "xs")) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EVar "fromList") (EVar "ys")))) (EApp (EVar "entries") (EApp (EVar "naiveFromList") (EVar "ys")))) (EApp (EVar "wellFormed") (EApp (EVar "fromList") (EVar "ys")))))))
+(DProp false "fromList agrees with naive on sorted prefix then duplicate-heavy tail" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EBinOp "++" (EApp (EVar "sort") (EVar "xs")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EBinOp "%" (EApp (EVar "fst") (EVar "p")) (ELit (LInt 50))) (EApp (EVar "snd") (EVar "p"))))) (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EVar "fromList") (EVar "ys")))) (EApp (EVar "entries") (EApp (EVar "naiveFromList") (EVar "ys")))) (EApp (EVar "wellFormed") (EApp (EVar "fromList") (EVar "ys")))))))
+(DProp false "a later pair overrides an entry from the ascending prefix" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EBinOp "++" (EApp (EVar "sort") (EVar "xs")) (EListLit (ETuple (EVar "k") (EVar "v"))))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EVar "get") (EVar "k")) (EApp (EVar "fromList") (EVar "ys")))) (EApp (EVar "Some") (EVar "v"))) (EApp (EVar "wellFormed") (EApp (EVar "fromList") (EVar "ys")))))))
 (DProp false "union agrees with naive fold-insert" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "ys"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EApp (EVar "union") (EVar "a")) (EVar "b")))) (EApp (EVar "entries") (EApp (EApp (EVar "naiveUnion") (EVar "a")) (EVar "b")))))))
+(DProp false "union with a tiny side agrees with naive in both orders" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "big") (EApp (EVar "fromList") (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "i")) (ETuple (EVar "i") (EVar "i")))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)) (EVar "xs")))) (DoLet false false (PVar "small") (EApp (EVar "fromList") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (ETuple (EBinOp "%" (EVar "k") (ELit (LInt 64))) (EVar "v")))) (EApp (EApp (EVar "take") (ELit (LInt 2))) (EVar "ys"))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EApp (EVar "union") (EVar "big")) (EVar "small")))) (EApp (EVar "entries") (EApp (EApp (EVar "naiveUnion") (EVar "big")) (EVar "small")))) (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EApp (EVar "union") (EVar "small")) (EVar "big")))) (EApp (EVar "entries") (EApp (EApp (EVar "naiveUnion") (EVar "small")) (EVar "big"))))) (EApp (EVar "wellFormed") (EApp (EApp (EVar "union") (EVar "big")) (EVar "small")))) (EApp (EVar "wellFormed") (EApp (EApp (EVar "union") (EVar "small")) (EVar "big")))))))
+(DProp false "unionWith with a tiny side agrees with naive in both orders" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "big") (EApp (EVar "fromList") (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "i")) (ETuple (EVar "i") (EVar "i")))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)) (EVar "xs")))) (DoLet false false (PVar "small") (EApp (EVar "fromList") (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (ETuple (EBinOp "%" (EVar "k") (ELit (LInt 64))) (EVar "v")))) (EApp (EApp (EVar "take") (ELit (LInt 2))) (EVar "ys"))))) (DoLet false false (PVar "f") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EVar "x")) (EVar "y")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EApp (EApp (EVar "unionWith") (EVar "f")) (EVar "big")) (EVar "small")))) (EApp (EVar "entries") (EApp (EApp (EApp (EVar "naiveUnionWith") (EVar "f")) (EVar "big")) (EVar "small")))) (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EApp (EApp (EApp (EVar "unionWith") (EVar "f")) (EVar "small")) (EVar "big")))) (EApp (EVar "entries") (EApp (EApp (EApp (EVar "naiveUnionWith") (EVar "f")) (EVar "small")) (EVar "big"))))) (EApp (EVar "wellFormed") (EApp (EApp (EApp (EVar "unionWith") (EVar "f")) (EVar "big")) (EVar "small")))) (EApp (EVar "wellFormed") (EApp (EApp (EApp (EVar "unionWith") (EVar "f")) (EVar "small")) (EVar "big")))))))
+(DData Private "Tagged" () ((variant "Tagged" (ConPos (TyCon "Int") (TyCon "Int")))) ())
+(DImpl false "Eq" ((TyCon "Tagged")) () ((im "eq" ((PCon "Tagged" (PVar "a") PWild) (PCon "Tagged" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))))
+(DImpl false "Ord" ((TyCon "Tagged")) () ((im "compare" ((PCon "Tagged" (PVar "a") PWild) (PCon "Tagged" (PVar "b") PWild)) (EApp (EApp (EVar "compare") (EVar "a")) (EVar "b")))))
+(DTypeSig false "taggedAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Tagged")) (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "taggedAt" ((PVar "n") (PVar "m")) (EApp (EApp (EVar "filterMap") (EApp (EVar "tagIfAt") (EVar "n"))) (EApp (EVar "keys") (EVar "m"))))
+(DTypeSig false "tagIfAt" (TyFun (TyCon "Int") (TyFun (TyCon "Tagged") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "tagIfAt" ((PVar "n") (PCon "Tagged" (PVar "i") (PVar "t"))) (EIf (EBinOp "==" (EVar "i") (EVar "n")) (EApp (EVar "Some") (EVar "t")) (EVar "None")))
+(DProp false "union and unionWith keep the first map's key on a shared key" ((pp "j" (TyCon "Int"))) (EBlock (DoLet false false (PVar "n") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "j") (ELit (LInt 64))) (ELit (LInt 64))) (ELit (LInt 64)))) (DoLet false false (PVar "big") (EApp (EVar "fromList") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (ETuple (EApp (EApp (EVar "Tagged") (EVar "i")) (ELit (LInt 0))) (EVar "i")))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)))) (DoLet false false (PVar "small") (EApp (EVar "fromList") (EListLit (ETuple (EApp (EApp (EVar "Tagged") (EVar "n")) (ELit (LInt 1))) (ELit (LInt 7)))))) (DoLet false false (PVar "sameSize") (EApp (EVar "fromList") (EApp (EApp (EVar "map") (ELam ((PVar "i")) (ETuple (EApp (EApp (EVar "Tagged") (EVar "i")) (ELit (LInt 1))) (EVar "i")))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EVar "union") (EVar "small")) (EVar "big")))) (EListLit (ELit (LInt 1)))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EVar "union") (EVar "big")) (EVar "small")))) (EListLit (ELit (LInt 0))))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EApp (EVar "unionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "small")) (EVar "big")))) (EListLit (ELit (LInt 1))))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EApp (EVar "unionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "big")) (EVar "small")))) (EListLit (ELit (LInt 0))))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EVar "union") (EVar "sameSize")) (EVar "big")))) (EListLit (ELit (LInt 1))))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EApp (EVar "unionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "sameSize")) (EVar "big")))) (EListLit (ELit (LInt 1))))))))
 (DProp false "union keys stay strictly ascending" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EApp (EVar "ascending") (EApp (EVar "keys") (EApp (EApp (EVar "union") (EApp (EVar "fromList") (EVar "xs"))) (EApp (EVar "fromList") (EVar "ys"))))))
 (DProp false "unionWith agrees with naive and stays well-formed" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "ys"))) (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "unionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EVar "got"))) (EApp (EVar "entries") (EApp (EApp (EApp (EVar "naiveUnionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "a")) (EVar "b")))) (EApp (EVar "wellFormed") (EVar "got"))))))
 (DProp false "difference agrees with naive and stays well-formed" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "ys"))) (DoLet false false (PVar "got") (EApp (EApp (EVar "difference") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EVar "got"))) (EApp (EVar "entries") (EApp (EApp (EVar "naiveDifference") (EVar "a")) (EVar "b")))) (EApp (EVar "wellFormed") (EVar "got"))))))
@@ -1165,12 +1681,20 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DProp false "entriesFrom bounded on one side only still agrees with entries" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EVar "None")) (EVar "m"))) (EApp (EVar "entries") (EVar "m"))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EVar "entries") (EVar "m"))))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EVar "None")) (EVar "m"))) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EVar "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
-(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false))))
+(DUse false (UseGroup ("list") ((mem "intersperse" false) (mem "reverse" false) (mem "take" false) (mem "sort" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "bin" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))
 (DTypeSig false "balance" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "balance" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EIf (EBinOp "<=" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EVar "bin") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "r")) (EBinOp "*" (ELit (LInt 3)) (EApp (EVar "size") (EVar "l")))) (EApp (EApp (EApp (EApp (EVar "rotateL") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EBinOp "*" (ELit (LInt 3)) (EApp (EVar "size") (EVar "r")))) (EApp (EApp (EApp (EApp (EVar "rotateR") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "bin") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DTypeSig false "balanceL" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "balanceL" ((PVar "k") (PVar "v") (PCon "Tip") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EApp (EVar "size") (EVar "r")) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "r")))
+(DFunDef false "balanceL" ((PVar "k") (PVar "v") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild PWild)) (PCon "Tip")) (EIf (EBinOp "<=" (EVar "sl") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EVar "sl") (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "Tip")) (EApp (EApp (EApp (EApp (EVar "rotateR") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "Tip"))))
+(DFunDef false "balanceL" ((PVar "k") (PVar "v") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild PWild)) (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild PWild))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "sl") (EBinOp "*" (ELit (LInt 3)) (EVar "sr"))) (EBinOp ">" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "rotateR") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r"))))
+(DTypeSig false "balanceR" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "balanceR" ((PVar "k") (PVar "v") (PVar "l") (PCon "Tip")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EApp (EVar "size") (EVar "l")) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "Tip")))
+(DFunDef false "balanceR" ((PVar "k") (PVar "v") (PCon "Tip") (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild PWild))) (EIf (EBinOp "<=" (EVar "sr") (ELit (LInt 1))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EVar "sr") (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "r")) (EApp (EApp (EApp (EApp (EVar "rotateL") (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "r"))))
+(DFunDef false "balanceR" ((PVar "k") (PVar "v") (PAs "l" (PCon "Bin" (PVar "sl") PWild PWild PWild PWild)) (PAs "r" (PCon "Bin" (PVar "sr") PWild PWild PWild PWild))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "sr") (EBinOp "*" (ELit (LInt 3)) (EVar "sl"))) (EBinOp ">" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "rotateL") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EVar "sl") (EVar "sr")) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r"))))
 (DTypeSig false "rotateL" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "rotateL" ((PVar "k") (PVar "v") (PVar "l") (PAs "r" (PCon "Bin" PWild PWild PWild (PVar "rl") (PVar "rr")))) (EIf (EBinOp "<" (EApp (EVar "size") (EVar "rl")) (EBinOp "*" (ELit (LInt 2)) (EApp (EVar "size") (EVar "rr")))) (EApp (EApp (EApp (EApp (EVar "singleL") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EApp (EApp (EApp (EApp (EVar "doubleL") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r"))))
 (DFunDef false "rotateL" ((PVar "k") (PVar "v") (PVar "l") (PCon "Tip")) (EApp (EVar "panic") (ELit (LString "Map.rotateL: empty right subtree"))))
@@ -1192,7 +1716,17 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DTypeSig true "singleton" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "singleton" ((PVar "k") (PVar "v")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (ELit (LInt 1))) (EVar "k")) (EVar "v")) (EVar "Tip")) (EVar "Tip")))
 (DTypeSig true "fromList" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "fromList" ((PVar "xs")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "Tip")) (EVar "xs")))
+(DFunDef false "fromList" ((PVar "xs")) (EBlock (DoLet false false (PVar "n") (EApp (EDictApp "ascendingRunLength") (EVar "xs"))) (DoLet false false (PTuple (PVar "m") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "n")) (EVar "xs"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "acc") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "m")) (EVar "rest")))))
+(DTypeSig false "ascendingRunLength" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Int"))))
+(DFunDef false "ascendingRunLength" ((PList)) (ELit (LInt 0)))
+(DFunDef false "ascendingRunLength" ((PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EApp (EApp (EApp (EDictApp "ascendingRunFrom") (EVar "k")) (ELit (LInt 1))) (EVar "rest")))
+(DTypeSig false "ascendingRunFrom" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyCon "Int"))))))
+(DFunDef false "ascendingRunFrom" (PWild (PVar "n") (PList)) (EVar "n"))
+(DFunDef false "ascendingRunFrom" ((PVar "prev") (PVar "n") (PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EIf (EApp (EApp (EMethodRef "lt") (EVar "prev")) (EVar "k")) (EApp (EApp (EApp (EDictApp "ascendingRunFrom") (EVar "k")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "rest")) (EVar "n")))
+(DTypeSig false "buildAscending" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyTuple (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))))
+(DFunDef false "buildAscending" ((PVar "n") (PVar "xs")) (EIf (EBinOp "<=" (EVar "n") (ELit (LInt 0))) (ETuple (EVar "Tip") (EVar "xs")) (EIf (EVar "otherwise") (EApp (EApp (EVar "buildNode") (EVar "n")) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "buildNode" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyTuple (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))))
+(DFunDef false "buildNode" ((PVar "n") (PVar "xs")) (EBlock (DoLet false false (PVar "nl") (EBinOp "/" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (ELit (LInt 2)))) (DoLet false false (PVar "nr") (EBinOp "-" (EBinOp "-" (EVar "n") (ELit (LInt 1))) (EVar "nl"))) (DoLet false false (PTuple (PVar "l") (PVar "rest")) (EApp (EApp (EVar "buildAscending") (EVar "nl")) (EVar "xs"))) (DoExpr (EMatch (EVar "rest") (arm (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest2")) () (EBlock (DoLet false false (PTuple (PVar "r") (PVar "rest3")) (EApp (EApp (EVar "buildAscending") (EVar "nr")) (EVar "rest2"))) (DoExpr (ETuple (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "n")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")) (EVar "rest3"))))) (arm (PList) () (EApp (EVar "panic") (ELit (LString "Map.buildNode: fewer pairs than the run length"))))))))
 (DTypeSig true "size" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "Int")))
 (DFunDef false "size" ((PCon "Tip")) (ELit (LInt 0)))
 (DFunDef false "size" ((PCon "Bin" (PVar "s") PWild PWild PWild PWild)) (EVar "s"))
@@ -1210,38 +1744,46 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "findWithDefault" ((PVar "d") (PVar "k") (PVar "m")) (EMatch (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "m")) (arm (PCon "None") () (EVar "d")) (arm (PCon "Some" (PVar "v")) () (EVar "v"))))
 (DTypeSig true "set" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
-(DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))))
+(DFunDef false "set" ((PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))))
 (DTypeSig true "insertWith" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))))
 (DFunDef false "insertWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
-(DFunDef false "insertWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EApp (EDictApp "insertWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EApp (EDictApp "insertWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "v2"))) (EVar "l")) (EVar "r")))))
+(DFunDef false "insertWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EApp (EDictApp "insertWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EApp (EDictApp "insertWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "v2"))) (EVar "l")) (EVar "r")))))
 (DTypeSig true "adjust" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyVar "v")) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "adjust" ((PVar "f") (PVar "k") (PCon "Tip")) (EVar "Tip"))
 (DFunDef false "adjust" ((PVar "f") (PVar "k") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EDictApp "adjust") (EVar "f")) (EVar "k")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EDictApp "adjust") (EVar "f")) (EVar "k")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EApp (EVar "f") (EVar "v2"))) (EVar "l")) (EVar "r")))))
 (DTypeSig true "delete" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "delete" ((PVar "k") (PCon "Tip")) (EVar "Tip"))
-(DFunDef false "delete" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EDictApp "delete") (EVar "k")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EDictApp "delete") (EVar "k")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))))
+(DFunDef false "delete" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EApp (EApp (EDictApp "delete") (EVar "k")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EDictApp "delete") (EVar "k")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))))
 (DTypeSig false "glue" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
 (DFunDef false "glue" ((PCon "Tip") (PVar "r")) (EVar "r"))
 (DFunDef false "glue" ((PVar "l") (PCon "Tip")) (EVar "l"))
 (DFunDef false "glue" ((PVar "l") (PVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (EApp (EApp (EVar "glueMax") (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EVar "glueMin") (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "glueMax" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "glueMax" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "maxView") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "l'"))) () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l'")) (EVar "r")))))
+(DFunDef false "glueMax" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "getMax") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v"))) () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k")) (EVar "v")) (EApp (EVar "deleteMax") (EVar "l"))) (EVar "r")))))
 (DTypeSig false "glueMin" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
-(DFunDef false "glueMin" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "minView") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "r'"))) () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r'")))))
+(DFunDef false "glueMin" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "getMin") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v"))) () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k")) (EVar "v")) (EVar "l")) (EApp (EVar "deleteMin") (EVar "r"))))))
 (DTypeSig true "minView" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "minView" ((PCon "Tip")) (EVar "None"))
-(DFunDef false "minView" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "minView") (EVar "l")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EVar "r")))) (arm (PCon "Some" (PTuple (PVar "km") (PVar "vm") (PVar "l'"))) () (EApp (EVar "Some") (ETuple (EVar "km") (EVar "vm") (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l'")) (EVar "r")))))))
+(DFunDef false "minView" ((PVar "m")) (EMatch (EApp (EVar "getMin") (EVar "m")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v"))) () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EApp (EVar "deleteMin") (EVar "m")))))))
 (DTypeSig true "maxView" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "maxView" ((PCon "Tip")) (EVar "None"))
-(DFunDef false "maxView" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "maxView") (EVar "r")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EVar "l")))) (arm (PCon "Some" (PTuple (PVar "km") (PVar "vm") (PVar "r'"))) () (EApp (EVar "Some") (ETuple (EVar "km") (EVar "vm") (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r'")))))))
+(DFunDef false "maxView" ((PVar "m")) (EMatch (EApp (EVar "getMax") (EVar "m")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v"))) () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EApp (EVar "deleteMax") (EVar "m")))))))
 (DTypeSig true "getMin" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v")))))
-(DFunDef false "getMin" ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v") PWild)) (ETuple (EVar "k") (EVar "v")))) (EApp (EVar "minView") (EVar "m"))))
+(DFunDef false "getMin" ((PCon "Tip")) (EVar "None"))
+(DFunDef false "getMin" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PCon "Tip") PWild)) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v"))))
+(DFunDef false "getMin" ((PCon "Bin" PWild PWild PWild (PVar "l") PWild)) (EApp (EVar "getMin") (EVar "l")))
 (DTypeSig true "getMax" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v")))))
-(DFunDef false "getMax" ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v") PWild)) (ETuple (EVar "k") (EVar "v")))) (EApp (EVar "maxView") (EVar "m"))))
+(DFunDef false "getMax" ((PCon "Tip")) (EVar "None"))
+(DFunDef false "getMax" ((PCon "Bin" PWild (PVar "k") (PVar "v") PWild (PCon "Tip"))) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v"))))
+(DFunDef false "getMax" ((PCon "Bin" PWild PWild PWild PWild (PVar "r"))) (EApp (EVar "getMax") (EVar "r")))
 (DTypeSig true "deleteMin" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))
-(DFunDef false "deleteMin" ((PVar "m")) (EMatch (EApp (EVar "minView") (EVar "m")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild PWild (PVar "m'"))) () (EVar "m'"))))
+(DFunDef false "deleteMin" ((PCon "Tip")) (EVar "Tip"))
+(DFunDef false "deleteMin" ((PCon "Bin" PWild PWild PWild (PCon "Tip") (PVar "r"))) (EVar "r"))
+(DFunDef false "deleteMin" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k")) (EVar "v")) (EApp (EVar "deleteMin") (EVar "l"))) (EVar "r")))
 (DTypeSig true "deleteMax" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))
-(DFunDef false "deleteMax" ((PVar "m")) (EMatch (EApp (EVar "maxView") (EVar "m")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild PWild (PVar "m'"))) () (EVar "m'"))))
+(DFunDef false "deleteMax" ((PCon "Tip")) (EVar "Tip"))
+(DFunDef false "deleteMax" ((PCon "Bin" PWild PWild PWild (PVar "l") (PCon "Tip"))) (EVar "l"))
+(DFunDef false "deleteMax" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k")) (EVar "v")) (EVar "l")) (EApp (EVar "deleteMax") (EVar "r"))))
 (DTypeSig true "foldrWithKey" (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyVar "b") (TyEffect () (Some "e") (TyVar "b"))))) (TyFun (TyVar "b") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyEffect () (Some "e") (TyVar "b"))))))
 (DFunDef false "foldrWithKey" ((PVar "f") (PVar "z") (PCon "Tip")) (EVar "z"))
 (DFunDef false "foldrWithKey" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldrWithKey") (EVar "f")) (EApp (EApp (EApp (EVar "f") (EVar "k")) (EVar "v")) (EApp (EApp (EApp (EVar "foldrWithKey") (EVar "f")) (EVar "z")) (EVar "r")))) (EVar "l")))
@@ -1275,10 +1817,10 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "mapWithKey" ((PVar "f") (PCon "Bin" (PVar "s") (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EApp (EVar "f") (EVar "k")) (EVar "v"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "l"))) (EApp (EApp (EVar "mapWithKey") (EVar "f")) (EVar "r"))))
 (DTypeSig false "insertMin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "insertMin" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
-(DFunDef false "insertMin" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "insertMin") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r")))
+(DFunDef false "insertMin" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "insertMin") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r")))
 (DTypeSig false "insertMax" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "insertMax" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
-(DFunDef false "insertMax" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "insertMax") (EVar "k")) (EVar "v")) (EVar "r"))))
+(DFunDef false "insertMax" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "insertMax") (EVar "k")) (EVar "v")) (EVar "r"))))
 (DTypeSig false "link" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "link" ((PVar "k") (PVar "v") (PCon "Tip") (PVar "r")) (EApp (EApp (EApp (EVar "insertMin") (EVar "k")) (EVar "v")) (EVar "r")))
 (DFunDef false "link" ((PVar "k") (PVar "v") (PVar "l") (PCon "Tip")) (EApp (EApp (EApp (EVar "insertMax") (EVar "k")) (EVar "v")) (EVar "l")))
@@ -1299,11 +1841,25 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DTypeSig true "union" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "union" ((PCon "Tip") (PVar "b")) (EVar "b"))
 (DFunDef false "union" ((PVar "a") (PCon "Tip")) (EVar "a"))
-(DFunDef false "union" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "br")) (EApp (EApp (EDictApp "splitAt") (EVar "k")) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "v")) (EApp (EApp (EDictApp "union") (EVar "l")) (EVar "bl"))) (EApp (EApp (EDictApp "union") (EVar "r")) (EVar "br"))))))
+(DFunDef false "union" ((PVar "a") (PVar "b")) (EIf (EBinOp "<=" (EBinOp "*" (EApp (EVar "size") (EVar "b")) (ELit (LInt 16))) (EApp (EVar "size") (EVar "a"))) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") (PVar "k") (PVar "v")) (EApp (EApp (EApp (EDictApp "insertAbsent") (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "a")) (EVar "b")) (EIf (EBinOp "<=" (EBinOp "*" (EApp (EVar "size") (EVar "a")) (ELit (LInt 16))) (EApp (EVar "size") (EVar "b"))) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") (PVar "k") (PVar "v")) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "b")) (EVar "a")) (EIf (EVar "otherwise") (EApp (EApp (EDictApp "unionSplit") (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "insertAbsent" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "insertAbsent" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "insertAbsent" ((PVar "k") (PVar "v") (PAs "m" (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r")))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EDictApp "insertAbsent") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EDictApp "insertAbsent") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EVar "m"))))
+(DTypeSig false "unionSplit" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "unionSplit" ((PCon "Tip") (PVar "b")) (EVar "b"))
+(DFunDef false "unionSplit" ((PVar "a") (PCon "Tip")) (EVar "a"))
+(DFunDef false "unionSplit" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "br")) (EApp (EApp (EDictApp "splitAt") (EVar "k")) (EVar "b"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "v")) (EApp (EApp (EDictApp "unionSplit") (EVar "l")) (EVar "bl"))) (EApp (EApp (EDictApp "unionSplit") (EVar "r")) (EVar "br"))))))
 (DTypeSig true "unionWith" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "unionWith" ((PVar "f") (PCon "Tip") (PVar "b")) (EVar "b"))
 (DFunDef false "unionWith" ((PVar "f") (PVar "a") (PCon "Tip")) (EVar "a"))
-(DFunDef false "unionWith" ((PVar "f") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "found") (PVar "br")) (EApp (EApp (EDictApp "splitLookup") (EVar "k")) (EVar "b"))) (DoLet false false (PVar "v2") (EMatch (EVar "found") (arm (PCon "None") () (EVar "v")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EVar "f") (EVar "v")) (EVar "w"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "v2")) (EApp (EApp (EApp (EDictApp "unionWith") (EVar "f")) (EVar "l")) (EVar "bl"))) (EApp (EApp (EApp (EDictApp "unionWith") (EVar "f")) (EVar "r")) (EVar "br"))))))
+(DFunDef false "unionWith" ((PVar "f") (PVar "a") (PVar "b")) (EIf (EBinOp "<=" (EBinOp "*" (EApp (EVar "size") (EVar "b")) (ELit (LInt 16))) (EApp (EVar "size") (EVar "a"))) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") (PVar "k") (PVar "w")) (EApp (EApp (EApp (EApp (EDictApp "insertWith") (ELam ((PVar "x") (PVar "y")) (EApp (EApp (EVar "f") (EVar "y")) (EVar "x")))) (EVar "k")) (EVar "w")) (EVar "acc")))) (EVar "a")) (EVar "b")) (EIf (EBinOp "<=" (EBinOp "*" (EApp (EVar "size") (EVar "a")) (ELit (LInt 16))) (EApp (EVar "size") (EVar "b"))) (EApp (EApp (EApp (EVar "foldlWithKey") (ELam ((PVar "acc") (PVar "k") (PVar "v")) (EApp (EApp (EApp (EApp (EDictApp "setWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "acc")))) (EVar "b")) (EVar "a")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EDictApp "unionWithSplit") (EVar "f")) (EVar "a")) (EVar "b")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "setWith" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))))
+(DFunDef false "setWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "setWith" ((PVar "f") (PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balanceL") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EApp (EDictApp "setWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balanceR") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EApp (EDictApp "setWith") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "v2"))) (EVar "l")) (EVar "r")))))
+(DTypeSig false "unionWithSplit" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "unionWithSplit" ((PVar "f") (PCon "Tip") (PVar "b")) (EVar "b"))
+(DFunDef false "unionWithSplit" ((PVar "f") (PVar "a") (PCon "Tip")) (EVar "a"))
+(DFunDef false "unionWithSplit" ((PVar "f") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "b")) (EBlock (DoLet false false (PTuple (PVar "bl") (PVar "found") (PVar "br")) (EApp (EApp (EDictApp "splitLookup") (EVar "k")) (EVar "b"))) (DoLet false false (PVar "v2") (EMatch (EVar "found") (arm (PCon "None") () (EVar "v")) (arm (PCon "Some" (PVar "w")) () (EApp (EApp (EVar "f") (EVar "v")) (EVar "w"))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (EVar "v2")) (EApp (EApp (EApp (EDictApp "unionWithSplit") (EVar "f")) (EVar "l")) (EVar "bl"))) (EApp (EApp (EApp (EDictApp "unionWithSplit") (EVar "f")) (EVar "r")) (EVar "br"))))))
 (DTypeSig true "difference" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "w")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
 (DFunDef false "difference" ((PCon "Tip") (PVar "b")) (EVar "Tip"))
 (DFunDef false "difference" ((PVar "a") (PCon "Tip")) (EVar "a"))
@@ -1359,7 +1915,99 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DFunDef false "naiveFilterWithKey" ((PVar "p") (PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (EApp (EDictApp "naiveFilterStep") (EVar "p"))) (EVar "Tip")) (EVar "m")))
 (DTypeSig false "naiveFilterStep" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyCon "Bool"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))))
 (DFunDef false "naiveFilterStep" ((PVar "p") (PVar "k") (PVar "v") (PVar "acc")) (EIf (EApp (EApp (EVar "p") (EVar "k")) (EVar "v")) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "acc")) (EVar "acc")))
+(DTypeSig false "setOld" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "setOld" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "setOld" ((PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EDictApp "setOld") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EDictApp "setOld") (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))))
+(DTypeSig false "insertWithOld" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyFun (TyVar "v") (TyFun (TyVar "v") (TyVar "v"))) (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))))
+(DFunDef false "insertWithOld" ((PVar "f") (PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "insertWithOld" ((PVar "f") (PVar "k") (PVar "v") (PCon "Bin" (PVar "s") (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EApp (EDictApp "insertWithOld") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EApp (EDictApp "insertWithOld") (EVar "f")) (EVar "k")) (EVar "v")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EVar "s")) (EVar "k2")) (EApp (EApp (EVar "f") (EVar "v")) (EVar "v2"))) (EVar "l")) (EVar "r")))))
+(DTypeSig false "deleteOld" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "deleteOld" ((PVar "k") (PCon "Tip")) (EVar "Tip"))
+(DFunDef false "deleteOld" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EDictApp "deleteOld") (EVar "k")) (EVar "l"))) (EVar "r"))) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EDictApp "deleteOld") (EVar "k")) (EVar "r")))) (arm (PCon "Eq") () (EApp (EApp (EVar "glueOld") (EVar "l")) (EVar "r")))))
+(DTypeSig false "insertMinOld" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "insertMinOld" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "insertMinOld" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EApp (EApp (EApp (EVar "insertMinOld") (EVar "k")) (EVar "v")) (EVar "l"))) (EVar "r")))
+(DTypeSig false "insertMaxOld" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "insertMaxOld" ((PVar "k") (PVar "v") (PCon "Tip")) (EApp (EApp (EVar "singleton") (EVar "k")) (EVar "v")))
+(DFunDef false "insertMaxOld" ((PVar "k") (PVar "v") (PCon "Bin" PWild (PVar "k2") (PVar "v2") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k2")) (EVar "v2")) (EVar "l")) (EApp (EApp (EApp (EVar "insertMaxOld") (EVar "k")) (EVar "v")) (EVar "r"))))
+(DTypeSig false "glueOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "glueOld" ((PCon "Tip") (PVar "r")) (EVar "r"))
+(DFunDef false "glueOld" ((PVar "l") (PCon "Tip")) (EVar "l"))
+(DFunDef false "glueOld" ((PVar "l") (PVar "r")) (EIf (EBinOp ">" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (EApp (EApp (EVar "glueMaxOld") (EVar "l")) (EVar "r")) (EIf (EVar "otherwise") (EApp (EApp (EVar "glueMinOld") (EVar "l")) (EVar "r")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "glueMaxOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "glueMaxOld" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "maxViewOld") (EVar "l")) (arm (PCon "None") () (EVar "r")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "l'"))) () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l'")) (EVar "r")))))
+(DTypeSig false "glueMinOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "glueMinOld" ((PVar "l") (PVar "r")) (EMatch (EApp (EVar "minViewOld") (EVar "r")) (arm (PCon "None") () (EVar "l")) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "r'"))) () (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r'")))))
+(DTypeSig false "minViewOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "minViewOld" ((PCon "Tip")) (EVar "None"))
+(DFunDef false "minViewOld" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "minViewOld") (EVar "l")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EVar "r")))) (arm (PCon "Some" (PTuple (PVar "km") (PVar "vm") (PVar "l'"))) () (EApp (EVar "Some") (ETuple (EVar "km") (EVar "vm") (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l'")) (EVar "r")))))))
+(DTypeSig false "maxViewOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "maxViewOld" ((PCon "Tip")) (EVar "None"))
+(DFunDef false "maxViewOld" ((PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EVar "maxViewOld") (EVar "r")) (arm (PCon "None") () (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v") (EVar "l")))) (arm (PCon "Some" (PTuple (PVar "km") (PVar "vm") (PVar "r'"))) () (EApp (EVar "Some") (ETuple (EVar "km") (EVar "vm") (EApp (EApp (EApp (EApp (EVar "balance") (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r'")))))))
+(DTypeSig false "getMinOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v")))))
+(DFunDef false "getMinOld" ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v") PWild)) (ETuple (EVar "k") (EVar "v")))) (EApp (EVar "minViewOld") (EVar "m"))))
+(DTypeSig false "getMaxOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyTuple (TyVar "k") (TyVar "v")))))
+(DFunDef false "getMaxOld" ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v") PWild)) (ETuple (EVar "k") (EVar "v")))) (EApp (EVar "maxViewOld") (EVar "m"))))
+(DTypeSig false "deleteMinOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))
+(DFunDef false "deleteMinOld" ((PVar "m")) (EMatch (EApp (EVar "minViewOld") (EVar "m")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild PWild (PVar "m'"))) () (EVar "m'"))))
+(DTypeSig false "deleteMaxOld" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))
+(DFunDef false "deleteMaxOld" ((PVar "m")) (EMatch (EApp (EVar "maxViewOld") (EVar "m")) (arm (PCon "None") () (EVar "Tip")) (arm (PCon "Some" (PTuple PWild PWild (PVar "m'"))) () (EVar "m'"))))
+(DTypeSig false "sameShape" (TyConstrained ((cstr "Eq" (TyVar "k")) (cstr "Eq" (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
+(DFunDef false "sameShape" ((PCon "Tip") (PCon "Tip")) (EVar "True"))
+(DFunDef false "sameShape" ((PCon "Bin" (PVar "s1") (PVar "k1") (PVar "v1") (PVar "l1") (PVar "r1")) (PCon "Bin" (PVar "s2") (PVar "k2") (PVar "v2") (PVar "l2") (PVar "r2"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "s1") (EVar "s2")) (EApp (EApp (EMethodRef "eq") (EVar "k1")) (EVar "k2"))) (EApp (EApp (EMethodRef "eq") (EVar "v1")) (EVar "v2"))) (EApp (EApp (EDictApp "sameShape") (EVar "l1")) (EVar "l2"))) (EApp (EApp (EDictApp "sameShape") (EVar "r1")) (EVar "r2"))))
+(DFunDef false "sameShape" (PWild PWild) (EVar "False"))
+(DTypeSig false "foldInserts" (TyFun (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "foldInserts" ((PVar "step") (PList) (PVar "m")) (EVar "m"))
+(DFunDef false "foldInserts" ((PVar "step") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest")) (PVar "m")) (EApp (EApp (EApp (EVar "foldInserts") (EVar "step")) (EVar "rest")) (EApp (EApp (EApp (EVar "step") (EVar "k")) (EVar "v")) (EVar "m"))))
+(DTypeSig false "foldDeletes" (TyFun (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))) (TyFun (TyApp (TyCon "List") (TyVar "k")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "foldDeletes" ((PVar "step") (PList) (PVar "m")) (EVar "m"))
+(DFunDef false "foldDeletes" ((PVar "step") (PCons (PVar "k") (PVar "rest")) (PVar "m")) (EApp (EApp (EApp (EVar "foldDeletes") (EVar "step")) (EVar "rest")) (EApp (EApp (EVar "step") (EVar "k")) (EVar "m"))))
+(DTypeSig false "modKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "modKeys" ((PList)) (EListLit))
+(DFunDef false "modKeys" ((PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EBinOp "::" (ETuple (EBinOp "%" (EVar "k") (ELit (LInt 8))) (EVar "v")) (EApp (EVar "modKeys") (EVar "rest"))))
+(DTypeSig false "fstKeys" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))
+(DFunDef false "fstKeys" ((PList)) (EListLit))
+(DFunDef false "fstKeys" ((PCons (PTuple (PVar "k") PWild) (PVar "rest"))) (EBinOp "::" (EVar "k") (EApp (EVar "fstKeys") (EVar "rest"))))
+(DProp false "set builds the same tree shape as the balance-only body" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "set")) (EVar "xs")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EApp (EApp (EDictApp "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "setOld")) (EVar "xs")) (EVar "Tip"))) (EApp (EDictApp "wellFormed") (EVar "got"))))))
+(DProp false "set on duplicate keys builds the same tree shape as the balance-only body" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "modKeys") (EVar "xs"))) (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "set")) (EVar "ys")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EApp (EApp (EDictApp "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "setOld")) (EVar "ys")) (EVar "Tip"))) (EApp (EDictApp "wellFormed") (EVar "got"))))))
+(DProp false "insertWith builds the same tree shape as the balance-only body" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "modKeys") (EVar "xs"))) (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EApp (EDictApp "insertWith") (ELam ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b")))) (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "ys")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EApp (EApp (EDictApp "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EApp (EDictApp "insertWithOld") (ELam ((PVar "a") (PVar "b")) (EBinOp "+" (EVar "a") (EVar "b")))) (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "ys")) (EVar "Tip"))) (EApp (EDictApp "wellFormed") (EVar "got"))))))
+(DProp false "insertMin and insertMax match the balance-only body shape" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "insertMin") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "xs")) (EVar "Tip"))) (DoLet false false (PVar "gotMax") (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "insertMax") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "xs")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EApp (EApp (EDictApp "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "insertMinOld") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "xs")) (EVar "Tip"))) (EApp (EApp (EDictApp "sameShape") (EVar "gotMax")) (EApp (EApp (EApp (EVar "foldInserts") (ELam ((PVar "k") (PVar "v") (PVar "m")) (EApp (EApp (EApp (EVar "insertMaxOld") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "xs")) (EVar "Tip")))))))
+(DProp false "delete matches the balance-only body shape" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ks" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "modKeys") (EVar "xs"))) (DoLet false false (PVar "base") (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "set")) (EVar "ys")) (EVar "Tip"))) (DoLet false false (PVar "got") (EApp (EApp (EApp (EVar "foldDeletes") (EDictApp "delete")) (EVar "ks")) (EApp (EApp (EApp (EVar "foldDeletes") (EDictApp "delete")) (EApp (EVar "fstKeys") (EVar "ys"))) (EVar "base")))) (DoExpr (EBinOp "&&" (EApp (EApp (EDictApp "sameShape") (EVar "got")) (EApp (EApp (EApp (EVar "foldDeletes") (EDictApp "deleteOld")) (EVar "ks")) (EApp (EApp (EApp (EVar "foldDeletes") (EDictApp "deleteOld")) (EApp (EVar "fstKeys") (EVar "ys"))) (EVar "base")))) (EApp (EDictApp "wellFormed") (EVar "got"))))))
+(DTypeSig false "minChainOk" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "minChainOk" ((PVar "got") (PVar "old")) (EIf (EApp (EVar "isEmpty#shadow") (EVar "old")) (EApp (EVar "isEmpty#shadow") (EVar "got")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EDictApp "sameShape") (EVar "got")) (EVar "old")) (EApp (EDictApp "wellFormed") (EVar "got"))) (EApp (EApp (EVar "minChainOk") (EApp (EVar "deleteMin") (EVar "got"))) (EApp (EVar "deleteMinOld") (EVar "old"))))))
+(DTypeSig false "maxChainOk" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "maxChainOk" ((PVar "got") (PVar "old")) (EIf (EApp (EVar "isEmpty#shadow") (EVar "old")) (EApp (EVar "isEmpty#shadow") (EVar "got")) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EDictApp "sameShape") (EVar "got")) (EVar "old")) (EApp (EDictApp "wellFormed") (EVar "got"))) (EApp (EApp (EVar "maxChainOk") (EApp (EVar "deleteMax") (EVar "got"))) (EApp (EVar "deleteMaxOld") (EVar "old"))))))
+(DTypeSig false "glueAgrees" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "glueAgrees" ((PCon "Tip")) (EVar "True"))
+(DFunDef false "glueAgrees" ((PCon "Bin" PWild PWild PWild (PVar "l") (PVar "r"))) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EDictApp "sameShape") (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r"))) (EApp (EApp (EVar "glueOld") (EVar "l")) (EVar "r"))) (EApp (EDictApp "wellFormed") (EApp (EApp (EVar "glue") (EVar "l")) (EVar "r")))) (EApp (EVar "glueAgrees") (EVar "l"))) (EApp (EVar "glueAgrees") (EVar "r"))))
+(DTypeSig false "minViewAgrees" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "minViewAgrees" ((PVar "m")) (EMatch (EApp (EVar "minView") (EVar "m")) (arm (PCon "None") () (EApp (EVar "isEmpty#shadow") (EVar "m"))) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "rest"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "getMinOld") (EVar "m"))) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v")))) (EApp (EApp (EDictApp "sameShape") (EVar "rest")) (EApp (EVar "deleteMinOld") (EVar "m")))) (EApp (EDictApp "wellFormed") (EVar "rest"))))))
+(DTypeSig false "maxViewAgrees" (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Int")) (TyCon "Int")) (TyCon "Bool")))
+(DFunDef false "maxViewAgrees" ((PVar "m")) (EMatch (EApp (EVar "maxView") (EVar "m")) (arm (PCon "None") () (EApp (EVar "isEmpty#shadow") (EVar "m"))) (arm (PCon "Some" (PTuple (PVar "k") (PVar "v") (PVar "rest"))) () (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "getMaxOld") (EVar "m"))) (EApp (EVar "Some") (ETuple (EVar "k") (EVar "v")))) (EApp (EApp (EDictApp "sameShape") (EVar "rest")) (EApp (EVar "deleteMaxOld") (EVar "m")))) (EApp (EDictApp "wellFormed") (EVar "rest"))))))
+(DProp false "deleteMin matches the balance-only body shape at every step" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "set")) (EVar "xs")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "minChainOk") (EVar "m")) (EVar "m")))))
+(DProp false "deleteMax matches the balance-only body shape at every step" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "set")) (EVar "xs")) (EVar "Tip"))) (DoExpr (EApp (EApp (EVar "maxChainOk") (EVar "m")) (EVar "m")))))
+(DProp false "getMin, getMax, minView and maxView agree with the balance-only bodies" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "set")) (EVar "xs")) (EVar "Tip"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "getMin") (EVar "m"))) (EApp (EVar "getMinOld") (EVar "m"))) (EApp (EApp (EMethodRef "eq") (EApp (EVar "getMax") (EVar "m"))) (EApp (EVar "getMaxOld") (EVar "m")))) (EApp (EVar "minViewAgrees") (EVar "m"))) (EApp (EVar "maxViewAgrees") (EVar "m"))))))
+(DProp false "glue matches the balance-only body shape at every node" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBinOp "&&" (EApp (EVar "glueAgrees") (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "set")) (EVar "xs")) (EVar "Tip"))) (EApp (EVar "glueAgrees") (EApp (EDictApp "fromList") (EVar "xs")))))
+(DProp false "glue on duplicate-heavy inserts matches the balance-only body shape" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EApp (EVar "glueAgrees") (EApp (EApp (EApp (EVar "foldInserts") (EDictApp "set")) (EApp (EVar "modKeys") (EVar "xs"))) (EVar "Tip"))))
+(DTypeSig false "naiveFromList" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))
+(DFunDef false "naiveFromList" ((PVar "xs")) (EApp (EApp (EApp (EMethodRef "fold") (ELam ((PVar "m") (PTuple (PVar "k") (PVar "v"))) (EApp (EApp (EApp (EDictApp "set") (EVar "k")) (EVar "v")) (EVar "m")))) (EVar "Tip")) (EVar "xs")))
+(DProp false "fromList agrees with naive fold-insert" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EDictApp "fromList") (EVar "xs")))) (EApp (EVar "entries") (EApp (EDictApp "naiveFromList") (EVar "xs")))) (EApp (EDictApp "wellFormed") (EApp (EDictApp "fromList") (EVar "xs")))))
+(DProp false "fromList agrees with naive on sorted input" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "sort") (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EDictApp "fromList") (EVar "ys")))) (EApp (EVar "entries") (EApp (EDictApp "naiveFromList") (EVar "ys")))) (EApp (EDictApp "wellFormed") (EApp (EDictApp "fromList") (EVar "ys")))))))
+(DProp false "fromList agrees with naive on sorted duplicate-heavy input" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "sort") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EBinOp "%" (EApp (EVar "fst") (EVar "p")) (ELit (LInt 50))) (EApp (EVar "snd") (EVar "p"))))) (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EDictApp "fromList") (EVar "ys")))) (EApp (EVar "entries") (EApp (EDictApp "naiveFromList") (EVar "ys")))) (EApp (EDictApp "wellFormed") (EApp (EDictApp "fromList") (EVar "ys")))))))
+(DProp false "fromList agrees with naive on sorted prefix then unsorted tail" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EBinOp "++" (EApp (EVar "sort") (EVar "xs")) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EDictApp "fromList") (EVar "ys")))) (EApp (EVar "entries") (EApp (EDictApp "naiveFromList") (EVar "ys")))) (EApp (EDictApp "wellFormed") (EApp (EDictApp "fromList") (EVar "ys")))))))
+(DProp false "fromList agrees with naive on sorted prefix then duplicate-heavy tail" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EBinOp "++" (EApp (EVar "sort") (EVar "xs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EBinOp "%" (EApp (EVar "fst") (EVar "p")) (ELit (LInt 50))) (EApp (EVar "snd") (EVar "p"))))) (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EDictApp "fromList") (EVar "ys")))) (EApp (EVar "entries") (EApp (EDictApp "naiveFromList") (EVar "ys")))) (EApp (EDictApp "wellFormed") (EApp (EDictApp "fromList") (EVar "ys")))))))
+(DProp false "a later pair overrides an entry from the ascending prefix" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "ys") (EBinOp "++" (EApp (EVar "sort") (EVar "xs")) (EListLit (ETuple (EVar "k") (EVar "v"))))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EApp (EDictApp "get") (EVar "k")) (EApp (EDictApp "fromList") (EVar "ys")))) (EApp (EVar "Some") (EVar "v"))) (EApp (EDictApp "wellFormed") (EApp (EDictApp "fromList") (EVar "ys")))))))
 (DProp false "union agrees with naive fold-insert" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EDictApp "fromList") (EVar "ys"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EApp (EDictApp "union") (EVar "a")) (EVar "b")))) (EApp (EVar "entries") (EApp (EApp (EDictApp "naiveUnion") (EVar "a")) (EVar "b")))))))
+(DProp false "union with a tiny side agrees with naive in both orders" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "big") (EApp (EDictApp "fromList") (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (ETuple (EVar "i") (EVar "i")))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)) (EVar "xs")))) (DoLet false false (PVar "small") (EApp (EDictApp "fromList") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (ETuple (EBinOp "%" (EVar "k") (ELit (LInt 64))) (EVar "v")))) (EApp (EApp (EVar "take") (ELit (LInt 2))) (EVar "ys"))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EApp (EDictApp "union") (EVar "big")) (EVar "small")))) (EApp (EVar "entries") (EApp (EApp (EDictApp "naiveUnion") (EVar "big")) (EVar "small")))) (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EApp (EDictApp "union") (EVar "small")) (EVar "big")))) (EApp (EVar "entries") (EApp (EApp (EDictApp "naiveUnion") (EVar "small")) (EVar "big"))))) (EApp (EDictApp "wellFormed") (EApp (EApp (EDictApp "union") (EVar "big")) (EVar "small")))) (EApp (EDictApp "wellFormed") (EApp (EApp (EDictApp "union") (EVar "small")) (EVar "big")))))))
+(DProp false "unionWith with a tiny side agrees with naive in both orders" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "big") (EApp (EDictApp "fromList") (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (ETuple (EVar "i") (EVar "i")))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)) (EVar "xs")))) (DoLet false false (PVar "small") (EApp (EDictApp "fromList") (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "k") (PVar "v"))) (ETuple (EBinOp "%" (EVar "k") (ELit (LInt 64))) (EVar "v")))) (EApp (EApp (EVar "take") (ELit (LInt 2))) (EVar "ys"))))) (DoLet false false (PVar "f") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EBinOp "*" (ELit (LInt 2)) (EVar "x")) (EVar "y")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EApp (EApp (EDictApp "unionWith") (EVar "f")) (EVar "big")) (EVar "small")))) (EApp (EVar "entries") (EApp (EApp (EApp (EDictApp "naiveUnionWith") (EVar "f")) (EVar "big")) (EVar "small")))) (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EApp (EApp (EApp (EDictApp "unionWith") (EVar "f")) (EVar "small")) (EVar "big")))) (EApp (EVar "entries") (EApp (EApp (EApp (EDictApp "naiveUnionWith") (EVar "f")) (EVar "small")) (EVar "big"))))) (EApp (EDictApp "wellFormed") (EApp (EApp (EApp (EDictApp "unionWith") (EVar "f")) (EVar "big")) (EVar "small")))) (EApp (EDictApp "wellFormed") (EApp (EApp (EApp (EDictApp "unionWith") (EVar "f")) (EVar "small")) (EVar "big")))))))
+(DData Private "Tagged" () ((variant "Tagged" (ConPos (TyCon "Int") (TyCon "Int")))) ())
+(DImpl false "Eq" ((TyCon "Tagged")) () ((im "eq" ((PCon "Tagged" (PVar "a") PWild) (PCon "Tagged" (PVar "b") PWild)) (EBinOp "==" (EVar "a") (EVar "b")))))
+(DImpl false "Ord" ((TyCon "Tagged")) () ((im "compare" ((PCon "Tagged" (PVar "a") PWild) (PCon "Tagged" (PVar "b") PWild)) (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "b")))))
+(DTypeSig false "taggedAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Map") (TyCon "Tagged")) (TyCon "Int")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "taggedAt" ((PVar "n") (PVar "m")) (EApp (EApp (EMethodRef "filterMap") (EApp (EVar "tagIfAt") (EVar "n"))) (EApp (EVar "keys") (EVar "m"))))
+(DTypeSig false "tagIfAt" (TyFun (TyCon "Int") (TyFun (TyCon "Tagged") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "tagIfAt" ((PVar "n") (PCon "Tagged" (PVar "i") (PVar "t"))) (EIf (EBinOp "==" (EVar "i") (EVar "n")) (EApp (EVar "Some") (EVar "t")) (EVar "None")))
+(DProp false "union and unionWith keep the first map's key on a shared key" ((pp "j" (TyCon "Int"))) (EBlock (DoLet false false (PVar "n") (EBinOp "%" (EBinOp "+" (EBinOp "%" (EVar "j") (ELit (LInt 64))) (ELit (LInt 64))) (ELit (LInt 64)))) (DoLet false false (PVar "big") (EApp (EDictApp "fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (ETuple (EApp (EApp (EVar "Tagged") (EVar "i")) (ELit (LInt 0))) (EVar "i")))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)))) (DoLet false false (PVar "small") (EApp (EDictApp "fromList") (EListLit (ETuple (EApp (EApp (EVar "Tagged") (EVar "n")) (ELit (LInt 1))) (ELit (LInt 7)))))) (DoLet false false (PVar "sameSize") (EApp (EDictApp "fromList") (EApp (EApp (EMethodRef "map") (ELam ((PVar "i")) (ETuple (EApp (EApp (EVar "Tagged") (EVar "i")) (ELit (LInt 1))) (EVar "i")))) (ERangeList (ELit (LInt 0)) (ELit (LInt 63)) true)))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EDictApp "union") (EVar "small")) (EVar "big")))) (EListLit (ELit (LInt 1)))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EDictApp "union") (EVar "big")) (EVar "small")))) (EListLit (ELit (LInt 0))))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EApp (EDictApp "unionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "small")) (EVar "big")))) (EListLit (ELit (LInt 1))))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EApp (EDictApp "unionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "big")) (EVar "small")))) (EListLit (ELit (LInt 0))))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EDictApp "union") (EVar "sameSize")) (EVar "big")))) (EListLit (ELit (LInt 1))))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "taggedAt") (EVar "n")) (EApp (EApp (EApp (EDictApp "unionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "sameSize")) (EVar "big")))) (EListLit (ELit (LInt 1))))))))
 (DProp false "union keys stay strictly ascending" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EApp (EDictApp "ascending") (EApp (EVar "keys") (EApp (EApp (EDictApp "union") (EApp (EDictApp "fromList") (EVar "xs"))) (EApp (EDictApp "fromList") (EVar "ys"))))))
 (DProp false "unionWith agrees with naive and stays well-formed" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EDictApp "fromList") (EVar "ys"))) (DoLet false false (PVar "got") (EApp (EApp (EApp (EDictApp "unionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EVar "got"))) (EApp (EVar "entries") (EApp (EApp (EApp (EDictApp "naiveUnionWith") (ELam ((PVar "x") (PVar "y")) (EBinOp "+" (EVar "x") (EVar "y")))) (EVar "a")) (EVar "b")))) (EApp (EDictApp "wellFormed") (EVar "got"))))))
 (DProp false "difference agrees with naive and stays well-formed" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int")))) (pp "ys" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "a") (EApp (EDictApp "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EDictApp "fromList") (EVar "ys"))) (DoLet false false (PVar "got") (EApp (EApp (EDictApp "difference") (EVar "a")) (EVar "b"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EVar "got"))) (EApp (EVar "entries") (EApp (EApp (EDictApp "naiveDifference") (EVar "a")) (EVar "b")))) (EApp (EDictApp "wellFormed") (EVar "got"))))))

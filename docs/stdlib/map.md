@@ -214,6 +214,7 @@ False
 
 ```
 minView : Map k v -> Option (k, v, Map k v)
+minView m
 ```
 
 The smallest entry and the map without it, or `None` when the map is
@@ -228,6 +229,7 @@ Some (1, "a", fromList [(2, "b")])
 
 ```
 maxView : Map k v -> Option (k, v, Map k v)
+maxView m
 ```
 
 The largest entry and the map without it, or `None` when the map is
@@ -242,7 +244,6 @@ Some (2, "b", fromList [(1, "a")])
 
 ```
 getMin : Map k v -> Option (k, v)
-getMin m
 ```
 
 The entry with the smallest key, or `None` when the map is empty.
@@ -256,7 +257,6 @@ Some (1, 0)
 
 ```
 getMax : Map k v -> Option (k, v)
-getMax m
 ```
 
 The entry with the largest key, or `None` when the map is empty.
@@ -270,7 +270,6 @@ Some (3, 0)
 
 ```
 deleteMin : Map k v -> Map k v
-deleteMin m
 ```
 
 The map without its smallest entry.
@@ -286,7 +285,6 @@ Unchanged when the map is empty.
 
 ```
 deleteMax : Map k v -> Map k v
-deleteMax m
 ```
 
 The map without its largest entry.
