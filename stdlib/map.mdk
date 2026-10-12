@@ -663,7 +663,7 @@ export
 union : Ord k => Map k v -> Map k v -> Map k v
 union Tip b = b
 union a Tip = a
--- A side under a sixteenth of the other is cheaper to insert entry by entry.
+-- A side at most a sixteenth the size of the other is cheaper to insert entry by entry.
 union a b
   | size b * 16 <= size a = foldlWithKey (acc k v => insertAbsent k v acc) a b
   | size a * 16 <= size b = foldlWithKey (acc k v => set k v acc) b a
@@ -699,8 +699,17 @@ unionWith f a Tip = a
 unionWith f a b
   | size b * 16 <= size a =
     foldlWithKey (acc k w => insertWith (x y => f y x) k w acc) a b
-  | size a * 16 <= size b = foldlWithKey (acc k v => insertWith f k v acc) b a
+  | size a * 16 <= size b = foldlWithKey (acc k v => setWith f k v acc) b a
   | otherwise = unionWithSplit f a b
+
+-- `insertWith` that stores the given key on a collision, so a key of the first
+-- map survives a union even when `Eq`-equal keys are distinguishable.
+setWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+setWith f k v Tip = singleton k v
+setWith f k v (Bin s k2 v2 l r) = match compare k k2
+  Lt => balanceL k2 v2 (setWith f k v l) r
+  Gt => balanceR k2 v2 l (setWith f k v r)
+  Eq => Bin s k (f v v2) l r
 
 unionWithSplit : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
 unionWithSplit f Tip b = b
@@ -947,8 +956,8 @@ naiveFilterWithKey p m = foldrWithKey (naiveFilterStep p) Tip m
 naiveFilterStep : Ord k => (k -> v -> Bool) -> k -> v -> Map k v -> Map k v
 naiveFilterStep p k v acc = if p k v then set k v acc else acc
 
--- The `balance`-only bodies that the `balanceL`/`balanceR` paths replaced.
--- The shape props below compare against them node for node.
+-- Reference bodies built on `balance` alone, for the shape props below, which
+-- compare node for node.
 setOld : Ord k => k -> v -> Map k v -> Map k v
 setOld k v Tip = singleton k v
 setOld k v (Bin s k2 v2 l r) = match compare k k2
@@ -1188,7 +1197,7 @@ prop "union agrees with naive fold-insert" (xs : List (Int, Int)) (ys : List (In
 
 prop "union with a tiny side agrees with naive in both orders" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let big = fromList (map (i => (i, i)) [0..=63] ++ xs)
-  let small = fromList (take 2 ys)
+  let small = fromList (map ((k, v) => (k % 64, v)) (take 2 ys))
   eq (entries (union big small)) (entries (naiveUnion big small))
     && eq (entries (union small big)) (entries (naiveUnion small big))
     && wellFormed (union big small)
@@ -1196,7 +1205,7 @@ prop "union with a tiny side agrees with naive in both orders" (xs : List (Int, 
 
 prop "unionWith with a tiny side agrees with naive in both orders" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let big = fromList (map (i => (i, i)) [0..=63] ++ xs)
-  let small = fromList (take 2 ys)
+  let small = fromList (map ((k, v) => (k % 64, v)) (take 2 ys))
   let f = x y => 2 * x + y
   eq (entries (unionWith f big small)) (entries (naiveUnionWith f big small))
     && eq
@@ -1204,6 +1213,34 @@ prop "unionWith with a tiny side agrees with naive in both orders" (xs : List (I
       (entries (naiveUnionWith f small big))
     && wellFormed (unionWith f big small)
     && wellFormed (unionWith f small big)
+
+-- A key whose `Eq` and `Ord` ignore the tag, so two keys can be equal yet
+-- distinguishable by which map they came from.
+data Tagged = Tagged Int Int
+
+impl Eq Tagged where
+  eq (Tagged a _) (Tagged b _) = a == b
+
+impl Ord Tagged where
+  compare (Tagged a _) (Tagged b _) = compare a b
+
+taggedAt : Int -> Map Tagged Int -> List Int
+taggedAt n m = filterMap (tagIfAt n) (keys m)
+
+tagIfAt : Int -> Tagged -> Option Int
+tagIfAt n (Tagged i t) = if i == n then Some t else None
+
+prop "union and unionWith keep the first map's key on a shared key" (j : Int) =
+  let n = (j % 64 + 64) % 64
+  let big = fromList (map (i => (Tagged i 0, i)) [0..=63])
+  let small = fromList [(Tagged n 1, 7)]
+  let sameSize = fromList (map (i => (Tagged i 1, i)) [0..=63])
+  eq (taggedAt n (union small big)) [1]
+    && eq (taggedAt n (union big small)) [0]
+    && eq (taggedAt n (unionWith (x y => x + y) small big)) [1]
+    && eq (taggedAt n (unionWith (x y => x + y) big small)) [0]
+    && eq (taggedAt n (union sameSize big)) [1]
+    && eq (taggedAt n (unionWith (x y => x + y) sameSize big)) [1]
 
 prop "union keys stay strictly ascending" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   ascending (keys (union (fromList xs) (fromList ys)))
