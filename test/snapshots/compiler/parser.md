@@ -4734,7 +4734,7 @@ parseProgram = defer
 --                        in decl order;
 --   * last_content_line — the line of the last non-trivia token in the file.
 -- These are computed *out of band* from the token/line arrays produced by
--- `tokenizeWithLines`: parsing itself is untouched (the AST has no `loc`).  Each
+-- `tokenizeWithOffsetPairs`: parsing itself is untouched (the AST has no `loc`).  Each
 -- decl is parsed with its start/end token index captured via `getPos`; lines
 -- come from the parallel line array; variant start lines are re-derived from the
 -- decl's token span (the data-body's depth-0 `=`/`|` separators).

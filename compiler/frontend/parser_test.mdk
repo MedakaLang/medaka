@@ -24,7 +24,6 @@ import frontend.parser.{
 import test.{
   expectEqual, expectEach, expectAll, expectSome, expectNone, Expectation
 }
-import test.{expectEqual}
 import frontend.parser as P
 
 -- The rendered message of a recoverable failure, or the marker text for any
