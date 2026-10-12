@@ -1192,7 +1192,7 @@ long long mdk_string_concat(long long list) {
        exactly what a rescan would have returned - PROVIDED every producer of a
        String cell stores a count that agrees with mdk_utf8_cp_count's definition.
        That count is the true codepoint count, and the one mdk_string_to_chars
-       and mdk_utf8_byte_offset walk by, only because every cell holds well-formed
+       and mdk_utf8_cursor_offset walk by, only because every cell holds well-formed
        UTF-8: two well-formed spans concatenate to a well-formed span, and every
        producer of a cell keeps the rule, so the invariant holds by induction:
          - mdk_str_lit, which calls mdk_utf8_cp_count outright, over bytes the
@@ -1572,14 +1572,34 @@ long long mdk_char_to_str(long long tagged) {
 /* String↔Char + codepoint slicing (native extern catalog slice 9).
  * Char = immediate codepoint word (cp << 1) | 1 (same as Int).
  * String cell: [i64 header | i64 byte_len@8 | i64 cp_count@16 | bytes@24 | NUL]. */
-static long long mdk_utf8_byte_offset(const char *p, long long byte_len,
-                                      long long cpi) {
+/* One-entry cursor for non-ASCII slicing: the last (cell, codepoint index,
+ * byte offset) resolved.  A loop that slices a string at nearby indices
+ * (either direction) resumes the walk there instead of rescanning from byte 0.  The static slot
+ * lives in .bss, which the collector scans, so the cell it names cannot be
+ * freed and its address reused while cached.  Cells are immutable, and the
+ * program runs on a single mutator thread. */
+static const char *mdk_cur_cell = 0;
+static long long mdk_cur_cpi = 0, mdk_cur_b = 0;
+static long long mdk_utf8_cursor_offset(const char *cell, const char *p,
+                                        long long byte_len, long long cpi) {
   long long b = 0, c = 0;
+  if (mdk_cur_cell == cell) {
+    if (mdk_cur_cpi <= cpi) { b = mdk_cur_b; c = mdk_cur_cpi; }
+    else if (mdk_cur_cpi - cpi < cpi) {
+      b = mdk_cur_b; c = mdk_cur_cpi;
+      while (c > cpi) {
+        b--;
+        while (b > 0 && ((unsigned char)p[b] & 0xC0) == 0x80) b--;
+        c--;
+      }
+    }
+  }
   while (b < byte_len && c < cpi) {
     b++;
     while (b < byte_len && ((unsigned char)p[b] & 0xC0) == 0x80) b++;
     c++;
   }
+  mdk_cur_cell = cell; mdk_cur_cpi = c; mdk_cur_b = b;
   return b;
 }
 /* Decode the codepoint at p[b], of a cell's `byte_len` bytes.  The cell is
@@ -1660,8 +1680,8 @@ long long mdk_string_slice(long long lo_t, long long hi_t, long long s) {
   long long blo, bhi;
   if (cp_count == byte_len) { blo = lo; bhi = hi; }
   else {
-    blo = mdk_utf8_byte_offset(bytes, byte_len, lo);
-    bhi = mdk_utf8_byte_offset(bytes, byte_len, hi);
+    blo = mdk_utf8_cursor_offset(cell, bytes, byte_len, lo);
+    bhi = mdk_utf8_cursor_offset(cell, bytes, byte_len, hi);
   }
   return mdk_str_lit(bytes + blo, bhi - blo);
 }
