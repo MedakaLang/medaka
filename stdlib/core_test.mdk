@@ -103,3 +103,25 @@ test "indexing the last codepoint of a wide-character string" =
 
 test "indexing an ASCII string reads the first and last character" =
   expectEqual ('a', 'f') ("abcdef"[0], "abcdef"[5])
+
+-- # Folding and comparing lists
+
+prop "foldMap over a List monoid agrees with the left-nested reference" (xs : List Int) =
+  eq (foldMap (x => [x, x]) xs) (fold (acc x => acc ++ [x, x]) [] xs)
+
+prop "foldMap over a String monoid agrees with the left-nested reference" (xs : List Int) =
+  foldMap (x => display x) xs == fold (acc x => acc ++ display x) "" xs
+
+test "foldMap of an empty list is the monoid identity" =
+  expectEqual ([] : List Int) (foldMap (x => [x]) ([] : List Int))
+
+test "foldMap applies the function in element order" =
+  expectEqual [1, 2, 3] (foldMap (x => [x]) [1, 2, 3])
+
+test "list compare decides on the first differing element" =
+  expectEqual
+    (Lt, Gt, Eq)
+    (compare [1, 2, 9] [1, 3], compare [2] [1, 9], compare [4, 4] [4, 4])
+
+prop "list compare is Eq exactly when the lists are equal" (xs : List Int) (ys : List Int) =
+  compare xs ys == Eq == eq xs ys
