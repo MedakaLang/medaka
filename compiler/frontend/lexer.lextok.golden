@@ -5269,7 +5269,10 @@ PIPE
 IDENT "otherwise"
 EQUAL
 INDENT
-IDENT "scanStr"
+LET
+IDENT "q"
+EQUAL
+IDENT "plainRunEnd"
 IDENT "src"
 IDENT "len"
 LPAREN
@@ -5277,21 +5280,78 @@ IDENT "p"
 PLUS
 INT 1
 RPAREN
+NEWLINE
+IDENT "scanStr"
+IDENT "src"
+IDENT "len"
+IDENT "q"
 IDENT "startQ"
 IDENT "depth"
 IDENT "id"
 LPAREN
 IDENT "acc"
 PLUSPLUS
-IDENT "charToStr"
+IDENT "substr"
+IDENT "src"
+IDENT "p"
+IDENT "q"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "plainRunEnd"
+COLON
+UPPER "Array"
+UPPER "Char"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "plainRunEnd"
+IDENT "src"
+IDENT "len"
+IDENT "p"
+INDENT
+PIPE
+IDENT "p"
+GEQ
+IDENT "len"
+EQUAL
+IDENT "len"
+NEWLINE
+PIPE
+IDENT "isQuote"
 LPAREN
 IDENT "at"
 IDENT "src"
 IDENT "p"
 RPAREN
+OR
+IDENT "isBackslash"
+LPAREN
+IDENT "at"
+IDENT "src"
+IDENT "p"
 RPAREN
+EQUAL
+IDENT "p"
 NEWLINE
-DEDENT
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "plainRunEnd"
+IDENT "src"
+IDENT "len"
+LPAREN
+IDENT "p"
+PLUS
+INT 1
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE
@@ -5715,7 +5775,10 @@ PIPE
 IDENT "otherwise"
 EQUAL
 INDENT
-IDENT "scanInterpCont"
+LET
+IDENT "q"
+EQUAL
+IDENT "plainRunEnd"
 IDENT "src"
 IDENT "len"
 LPAREN
@@ -5723,16 +5786,19 @@ IDENT "p"
 PLUS
 INT 1
 RPAREN
+NEWLINE
+IDENT "scanInterpCont"
+IDENT "src"
+IDENT "len"
+IDENT "q"
 IDENT "depth"
 LPAREN
 IDENT "acc"
 PLUSPLUS
-IDENT "charToStr"
-LPAREN
-IDENT "at"
+IDENT "substr"
 IDENT "src"
 IDENT "p"
-RPAREN
+IDENT "q"
 RPAREN
 NEWLINE
 DEDENT
@@ -16252,7 +16318,7 @@ IDENT "src"
 NEWLINE
 IDENT "elseFilterToks"
 LPAREN
-IDENT "layout"
+IDENT "layoutToks"
 LPAREN
 IDENT "dedentTripleInterp"
 LPAREN
@@ -16269,7 +16335,7 @@ INT 0
 RBRACKET
 LBRACKET
 RBRACKET
-UPPER "None"
+UPPER "TNewline"
 UPPER "False"
 RPAREN
 NEWLINE
@@ -16278,72 +16344,42 @@ NEWLINE
 IDENT "elseFilterToks"
 COLON
 UPPER "List"
-LPAREN
 UPPER "Token"
-COMMA
-UPPER "Int"
-RPAREN
 ARROW
 UPPER "List"
 UPPER "Token"
 NEWLINE
 IDENT "elseFilterToks"
 LPAREN
-LPAREN
 UPPER "TNewline"
-COMMA
-UNDERSCORE
-RPAREN
 CONS
-LPAREN
 UPPER "TElse"
-COMMA
-UNDERSCORE
-RPAREN
 CONS
 IDENT "rest"
 RPAREN
 EQUAL
-INDENT
 UPPER "TElse"
 CONS
 IDENT "elseFilterToks"
 IDENT "rest"
 NEWLINE
-DEDENT
-NEWLINE
 IDENT "elseFilterToks"
 LPAREN
-LPAREN
 UPPER "TNewline"
-COMMA
-UNDERSCORE
-RPAREN
 CONS
-LPAREN
 UPPER "TThen"
-COMMA
-UNDERSCORE
-RPAREN
 CONS
 IDENT "rest"
 RPAREN
 EQUAL
-INDENT
 UPPER "TThen"
 CONS
 IDENT "elseFilterToks"
 IDENT "rest"
 NEWLINE
-DEDENT
-NEWLINE
 IDENT "elseFilterToks"
-LPAREN
 LPAREN
 IDENT "t"
-COMMA
-UNDERSCORE
-RPAREN
 CONS
 IDENT "rest"
 RPAREN
@@ -16359,6 +16395,1270 @@ RBRACKET
 EQUAL
 LBRACKET
 RBRACKET
+NEWLINE
+IDENT "armsHeraldTok"
+COLON
+UPPER "Bool"
+ARROW
+UPPER "Token"
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "armsHeraldTok"
+UNDERSCORE
+UPPER "TDo"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "armsHeraldTok"
+UNDERSCORE
+UPPER "TDefer"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "armsHeraldTok"
+UNDERSCORE
+UPPER "TFatArrow"
+EQUAL
+UPPER "True"
+NEWLINE
+IDENT "armsHeraldTok"
+IDENT "opener"
+UNDERSCORE
+EQUAL
+IDENT "opener"
+NEWLINE
+IDENT "layoutToks"
+COLON
+UPPER "List"
+UPPER "RawTok"
+ARROW
+INDENT
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutToks"
+LBRACKET
+RBRACKET
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+IDENT "closeAllToks"
+IDENT "stack"
+NEWLINE
+IDENT "layoutToks"
+LPAREN
+LPAREN
+UPPER "RTok"
+IDENT "t"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "bracketOpener"
+IDENT "t"
+EQUAL
+INDENT
+IDENT "t"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+UPPER "BracketFrame"
+INT 0
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+CONS
+IDENT "frames"
+RPAREN
+IDENT "t"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "bracketCloser"
+IDENT "t"
+EQUAL
+IDENT "flushCloseToks"
+IDENT "t"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "t"
+EQ_EQ
+UPPER "TComma"
+AND
+IDENT "frameHasLive"
+IDENT "frames"
+EQUAL
+IDENT "flushSepToks"
+IDENT "t"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "t"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "t"
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutToks"
+LPAREN
+LPAREN
+UPPER "RComment"
+UNDERSCORE
+UNDERSCORE
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "layoutToks"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "layoutToks"
+LPAREN
+LPAREN
+UPPER "RNewline"
+IDENT "col"
+UNDERSCORE
+RPAREN
+CONS
+IDENT "rest"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlToks"
+IDENT "col"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "closeAllToks"
+COLON
+UPPER "List"
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Token"
+NEWLINE
+IDENT "closeAllToks"
+IDENT "stack"
+EQUAL
+UPPER "TNewline"
+CONS
+IDENT "closeDedentsToks"
+IDENT "stack"
+NEWLINE
+IDENT "closeDedentsToks"
+COLON
+UPPER "List"
+UPPER "Int"
+ARROW
+UPPER "List"
+UPPER "Token"
+NEWLINE
+IDENT "closeDedentsToks"
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+UPPER "TEof"
+RBRACKET
+NEWLINE
+IDENT "closeDedentsToks"
+LBRACKET
+UNDERSCORE
+RBRACKET
+EQUAL
+LBRACKET
+UPPER "TEof"
+RBRACKET
+NEWLINE
+IDENT "closeDedentsToks"
+LPAREN
+UNDERSCORE
+CONS
+IDENT "tl"
+RPAREN
+EQUAL
+UPPER "TDedent"
+CONS
+UPPER "TNewline"
+CONS
+IDENT "closeDedentsToks"
+IDENT "tl"
+NEWLINE
+IDENT "flushCloseToks"
+COLON
+UPPER "Token"
+ARROW
+INDENT
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushCloseToks"
+IDENT "t"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "t"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "t"
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushCloseToks"
+IDENT "t"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+UNDERSCORE
+EQUAL
+INDENT
+IDENT "flushCloseGoToks"
+IDENT "t"
+IDENT "rest"
+IDENT "stack"
+IDENT "f"
+IDENT "fs"
+IDENT "saved"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushCloseGoToks"
+COLON
+UPPER "Token"
+ARROW
+INDENT
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushCloseGoToks"
+IDENT "t"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "f"
+IDENT "fs"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "t"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "fs"
+IDENT "t"
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushCloseGoToks"
+IDENT "t"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "f"
+IDENT "fs"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "f"
+LEQ
+INT 0
+EQUAL
+IDENT "t"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "fs"
+IDENT "t"
+LPAREN
+IDENT "opener"
+OR
+IDENT "isOpener"
+IDENT "t"
+RPAREN
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+UPPER "TNewline"
+CONS
+UPPER "TDedent"
+CONS
+IDENT "flushCloseGoToks"
+IDENT "t"
+IDENT "rest"
+IDENT "tl"
+LPAREN
+IDENT "f"
+MINUS
+INT 1
+RPAREN
+IDENT "fs"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepToks"
+COLON
+UPPER "Token"
+ARROW
+INDENT
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepToks"
+IDENT "t"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "opener"
+EQUAL
+IDENT "t"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+IDENT "stack"
+LBRACKET
+RBRACKET
+IDENT "t"
+IDENT "opener"
+NEWLINE
+IDENT "flushSepToks"
+IDENT "t"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "flushSepGoToks"
+IDENT "t"
+IDENT "rest"
+IDENT "stack"
+IDENT "f"
+LPAREN
+UPPER "BracketFrame"
+INT 0
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepGoToks"
+COLON
+UPPER "Token"
+ARROW
+INDENT
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepGoToks"
+IDENT "t"
+IDENT "rest"
+LBRACKET
+RBRACKET
+UNDERSCORE
+IDENT "frames"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "t"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+IDENT "t"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "flushSepGoToks"
+IDENT "t"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "f"
+IDENT "frames"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "f"
+LEQ
+INT 0
+EQUAL
+IDENT "t"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+IDENT "t"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+UPPER "TNewline"
+CONS
+UPPER "TDedent"
+CONS
+IDENT "flushSepGoToks"
+IDENT "t"
+IDENT "rest"
+IDENT "tl"
+LPAREN
+IDENT "f"
+MINUS
+INT 1
+RPAREN
+IDENT "frames"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlToks"
+COLON
+UPPER "Int"
+ARROW
+INDENT
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlToks"
+IDENT "col"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+UPPER "TNewline"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlToks"
+IDENT "col"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlFrameToks"
+IDENT "col"
+IDENT "top"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlFrameToks"
+COLON
+UPPER "Int"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlFrameToks"
+IDENT "col"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "applyNlTopToks"
+IDENT "col"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlFrameToks"
+IDENT "col"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+LPAREN
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+RPAREN
+CONS
+IDENT "fs"
+RPAREN
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "f"
+GT
+INT 0
+EQUAL
+INDENT
+IDENT "applyNlTopToks"
+IDENT "col"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "col"
+GT
+IDENT "top"
+AND
+IDENT "not"
+LPAREN
+IDENT "isTrailingContinuationOp"
+IDENT "prev"
+RPAREN
+AND
+IDENT "armsHeraldTok"
+IDENT "opener"
+IDENT "prev"
+EQUAL
+INDENT
+UPPER "TIndent"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+LPAREN
+IDENT "col"
+CONS
+IDENT "stack"
+RPAREN
+LPAREN
+UPPER "BracketFrame"
+INT 1
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "layoutToks"
+IDENT "rest"
+IDENT "stack"
+LPAREN
+UPPER "BracketFrame"
+IDENT "f"
+IDENT "saved"
+CONS
+IDENT "fs"
+RPAREN
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlTopToks"
+COLON
+UPPER "Int"
+ARROW
+INDENT
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "applyNlTopToks"
+IDENT "col"
+IDENT "top"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "col"
+GT
+IDENT "top"
+EQUAL
+IDENT "wouldIndentToks"
+IDENT "col"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "col"
+EQ_EQ
+IDENT "top"
+EQUAL
+UPPER "TNewline"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+UPPER "TNewline"
+CONS
+IDENT "popDedentsToks"
+IDENT "col"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "wouldIndentToks"
+COLON
+UPPER "Int"
+ARROW
+INDENT
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "wouldIndentToks"
+IDENT "col"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "isTrailingContinuationOp"
+IDENT "prev"
+EQUAL
+IDENT "layoutToks"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "opener"
+OR
+IDENT "not"
+LPAREN
+IDENT "canEndExpr"
+IDENT "prev"
+RPAREN
+EQUAL
+INDENT
+UPPER "TIndent"
+CONS
+IDENT "layoutToks"
+IDENT "rest"
+LPAREN
+IDENT "col"
+CONS
+IDENT "stack"
+RPAREN
+LPAREN
+IDENT "bumpFrame"
+IDENT "frames"
+RPAREN
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "resolveContToks"
+IDENT "col"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "resolveContToks"
+COLON
+UPPER "Int"
+ARROW
+INDENT
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "Token"
+ARROW
+NEWLINE
+UPPER "Bool"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "resolveContToks"
+IDENT "col"
+IDENT "stack"
+LPAREN
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+RPAREN
+CONS
+IDENT "more"
+RPAREN
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+INDENT
+PIPE
+IDENT "canStartAtom"
+IDENT "t"
+EQUAL
+INDENT
+IDENT "layoutToks"
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+CONS
+IDENT "more"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "t"
+EQ_EQ
+UPPER "TThen"
+EQUAL
+IDENT "layoutToks"
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+CONS
+IDENT "more"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "t"
+EQ_EQ
+UPPER "TElse"
+EQUAL
+IDENT "layoutToks"
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+CONS
+IDENT "more"
+RPAREN
+IDENT "stack"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+UPPER "TIndent"
+CONS
+IDENT "layoutToks"
+LPAREN
+UPPER "RTok"
+IDENT "t"
+IDENT "toff"
+IDENT "tend"
+CONS
+IDENT "more"
+RPAREN
+LPAREN
+IDENT "col"
+CONS
+IDENT "stack"
+RPAREN
+LPAREN
+IDENT "bumpFrame"
+IDENT "frames"
+RPAREN
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "resolveContToks"
+IDENT "col"
+IDENT "stack"
+IDENT "rest"
+IDENT "frames"
+IDENT "prev"
+IDENT "opener"
+EQUAL
+INDENT
+IDENT "layoutToks"
+IDENT "rest"
+IDENT "stack"
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "popDedentsToks"
+COLON
+UPPER "Int"
+ARROW
+INDENT
+UPPER "List"
+UPPER "Int"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "RawTok"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "BracketFrame"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "Token"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "popDedentsToks"
+IDENT "col"
+LBRACKET
+RBRACKET
+IDENT "rest"
+IDENT "frames"
+EQUAL
+IDENT "layoutToks"
+IDENT "rest"
+LBRACKET
+RBRACKET
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+IDENT "popDedentsToks"
+IDENT "col"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "rest"
+IDENT "frames"
+INDENT
+PIPE
+IDENT "top"
+GT
+IDENT "col"
+EQUAL
+INDENT
+UPPER "TDedent"
+CONS
+UPPER "TNewline"
+CONS
+IDENT "popDedentsToks"
+IDENT "col"
+IDENT "tl"
+IDENT "rest"
+LPAREN
+IDENT "dropFrame"
+IDENT "frames"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+IDENT "layoutToks"
+IDENT "rest"
+LPAREN
+IDENT "top"
+CONS
+IDENT "tl"
+RPAREN
+IDENT "frames"
+UPPER "TNewline"
+UPPER "False"
+NEWLINE
+DEDENT
 NEWLINE
 EXPORT
 NEWLINE
