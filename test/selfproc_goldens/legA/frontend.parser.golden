@@ -436,6 +436,7 @@ optTrailingCommaTuple : List a -> ParserE <> Unit
 orElse : ParserE <> a -> ParserE <> a -> ParserE <> a
 orElseR : ParserE <> a -> ParserE <> a -> Array Token -> Int -> PR a
 orElseRb : PFail -> Int -> PR a -> PR a
+orLevel : Int
 paramsForCtor : String -> Expr -> List Pat
 paramsForHead : Expr -> Expr -> List Pat
 parenFor : Token -> ParserE <> Expr
@@ -570,6 +571,7 @@ peek2P : ParserE <> Token
 peek3P : ParserE <> Token
 peekP : ParserE <> Token
 peekTok : Array Token -> Int -> Token
+pipeLevel : Int
 pipeTail : ParserE <> (List String)
 pipeTailFor : Token -> ParserE <> (List String)
 positionsChainLines : Positions -> List (List Int)

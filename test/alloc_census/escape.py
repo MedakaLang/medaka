@@ -111,12 +111,17 @@ class Func:
                 self.users[v].append(k)
 
 
+toplevel = []      # every line outside a function body (globals, declares, metadata)
+
+
 def parse(path):
     funcs, order = {}, []
     cur = None
     with open(path) as fh:
         for raw in fh:
             if cur is None:
+                if not raw.startswith('define '):
+                    toplevel.append(raw)
                 if raw.startswith('define '):
                     m = DEFINE.match(raw)
                     name = m.group(1).strip('"')
@@ -314,6 +319,15 @@ def main():
                     for g in re.findall(r'@("[^"]*"|[-\w.$]+)', a):
                         if g.strip('"') in funcs:
                             addr_taken.add(g.strip('"'))
+
+    # a function named anywhere outside a function body (a static closure
+    # constant, a vtable) can be called indirectly
+    for ln in toplevel:
+        if ln.startswith('declare '):
+            continue
+        for g in re.findall(r'@("[^"]*"|[-\w.$]+)', ln):
+            if g.strip('"') in funcs:
+                addr_taken.add(g.strip('"'))
 
     ret_local_cache = {}
 

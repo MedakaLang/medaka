@@ -21,8 +21,9 @@
 #
 # Env: MEDAKA_TREE (default: this repo root; needs a built ./medaka),
 #      CENSUS_WORK (default: a fresh dir under $TMPDIR), CENSUS_REUSE=1 to
-#      reuse medaka.opt.ll from CENSUS_WORK. Needs clang, python3, pkg-config
-#      bdw-gc. Linux and macOS; macOS skips C-runtime caller symbolization.
+#      reuse a build from CENSUS_WORK (refused unless made at this HEAD + diff),
+#      CENSUS_RT (runtime C file to instrument; default runtime/medaka_rt.c).
+#      Needs clang, python3, pkg-config bdw-gc. Linux and macOS; macOS skips C-runtime caller symbolization.
 set -u
 D=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 H="$D/alloc_census"
@@ -50,7 +51,13 @@ else
   command -v addr2line >/dev/null 2>&1 || SYM=nosym
 fi
 
+# Identity of the source a build came from: HEAD plus the uncommitted diff.
+stamp() { printf '%s %s' "$(git -C "$WT" rev-parse HEAD 2>/dev/null)" "$(git -C "$WT" diff HEAD 2>/dev/null | cksum | cut -d' ' -f1)"; }
 if [ "${CENSUS_REUSE:-0}" = 1 ] && [ -f "$S/cli/medaka.opt.ll" ] && [ -x "$S/cli/medaka" ]; then
+  if [ "$(cat "$S/cli/built.stamp" 2>/dev/null)" != "$(stamp)" ]; then
+    echo "alloc-census: INVALID (reused build in $S/cli is from '$(cat "$S/cli/built.stamp" 2>/dev/null)', tree is at '$(stamp)'); rebuild without CENSUS_REUSE"
+    exit 0
+  fi
   echo "alloc-census: reusing $S/cli/medaka.opt.ll"
 else
   echo "alloc-census: [1/5] building non-LTO CLI with --keep-ir"
@@ -60,6 +67,7 @@ else
   echo "alloc-census: [2/5] clang -O2 over the kept IR"
   clang -O2 -S -emit-llvm "$S/cli/medaka.ll" -o "$S/cli/medaka.opt.ll" 2> "$S/cli/opt.err" \
     || { tail -8 "$S/cli/opt.err"; fail "clang -O2 failed"; }
+  stamp > "$S/cli/built.stamp"
 fi
 
 echo "alloc-census: [3/5] classifying sites and linking the instrumented CLI"
@@ -69,7 +77,12 @@ N=$(( $(wc -l < "$S/cli/sites.tsv") - 1 ))
 # alloc_count.c supplies the allocator definitions, so drop the runtime's own
 sed -e 's|^void \*mdk_alloc(long long n) { return GC_malloc((size_t)n); }$|void *mdk_alloc(long long n);|' \
     -e 's|^void \*mdk_alloc_atomic(long long n) { return GC_malloc_atomic((size_t)n); }$|void *mdk_alloc_atomic(long long n);|' \
-    "$WT/runtime/medaka_rt.c" > "$S/cli/rt_copy.c"
+    "${CENSUS_RT:-$WT/runtime/medaka_rt.c}" > "$S/cli/rt_copy.c"
+if [ "$(grep -c '^void \*mdk_alloc\(_atomic\)\{0,1\}(long long n);$' "$S/cli/rt_copy.c")" != 2 ]; then
+  echo "alloc-census: runtime allocator lines not found"
+  echo "alloc-census: INVALID (runtime/medaka_rt.c allocator definitions changed; update the sed in test/alloc_census.sh)"
+  exit 1
+fi
 # shellcheck disable=SC2086
 clang -O2 $PIE -pthread $GCF -DNSITES="$N" -I"$WT/runtime" \
   "$S/cli/medaka.inst.ll" "$S/cli/rt_copy.c" "$H/alloc_count.c" $GCL -lm -o "$S/cli/medaka_inst" 2> "$S/cli/link.err" \
@@ -80,10 +93,12 @@ echo "alloc-census: [4/5] check of $TARGET: plain vs instrumented"
 cd "$WT" || exit 0
 export MEDAKA_ROOT="$WT"
 "$S/cli/medaka" check "$TARGET" > "$S/cli/check.plain.out" 2> "$S/cli/check.plain.err"
-echo "plain rc=$?"
+PRC=$?
+echo "plain rc=$PRC"
 ALLOC_COUNT_OUT="$S/cli/check.counts" "$S/cli/medaka_inst" check "$TARGET" > "$S/cli/check.inst.out" 2> "$S/cli/check.inst.err"
-echo "instrumented rc=$?"
-sh "$H/compare.sh" "$S/cli/check.plain.out" "$S/cli/check.inst.out"
+IRC=$?
+echo "instrumented rc=$IRC"
+sh "$H/compare.sh" "$S/cli/check.plain.out" "$S/cli/check.inst.out" "$PRC" "$IRC"
 if command -v perf >/dev/null 2>&1; then
   perf stat -x, -e instructions -o "$S/cli/perf.txt" "$S/cli/medaka" check "$TARGET" > /dev/null 2>&1
   echo "plain check instructions (perf stat): $(awk -F, '/instructions/ {print $1}' "$S/cli/perf.txt")"

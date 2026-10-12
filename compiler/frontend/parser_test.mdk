@@ -13,13 +13,13 @@ import frontend.parser.{
   Parser,
   failP,
   expectTok,
-  orElse,
   runP,
   renderFail,
   parseResult,
   parseErrorMessage,
 }
 import test.{expectEqual}
+import frontend.parser as P
 
 -- The rendered message of a recoverable failure, or the marker text for any
 -- other outcome so a wrong outcome shows up in the assertion's diff.
@@ -100,22 +100,22 @@ test "farthest failure wins when it is the first alternative" =
   expectEqual
     ("unexpected `x`; expected `)`", 1)
     (
-      failText (runP (orElse far near) twoToks 0),
-      failPos (runP (orElse far near) twoToks 0),
+      failText (runP (P.orElse far near) twoToks 0),
+      failPos (runP (P.orElse far near) twoToks 0),
     )
 
 -- The second alternative failed further: it is kept.
 test "farthest failure wins when it is the second alternative" =
   expectEqual
     "unexpected `x`; expected `)`"
-    (failText (runP (orElse near far) twoToks 0))
+    (failText (runP (P.orElse near far) twoToks 0))
 
 -- Equal positions: the later alternative (`otherwise = PErr eb qb`) wins.
 -- Reverting the tie to the first alternative would give "first".
 test "a tie goes to the later alternative" =
   expectEqual
     "second"
-    (failText (runP (orElse (failP "first") (failP "second")) twoToks 0))
+    (failText (runP (P.orElse (failP "first") (failP "second")) twoToks 0))
 
 -- ── The binary-operator ladder ──────────────────────────────────────────
 -- Expected values follow the ladder `binLevelOf` encodes, which is the one the

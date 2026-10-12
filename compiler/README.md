@@ -49,7 +49,7 @@ diff with `lib/`:
 | `lex_main.mdk` | Runnable entry: `medaka run compiler/entries/lex_main.mdk <src.mdk>` reads the file, tokenizes, prints one token per line in the canonical reference form. |
 | `ast.mdk` | The self-host AST — a Medaka mirror of `lib/ast.ml`'s surface (pre-desugar) nodes; the target the parser builds. Constructor names match `ast.ml`. |
 | `sexp.mdk` | `programToSexp` — a canonical structural S-expression dump of the AST, mirroring `dev/astdump.ml` byte-for-byte; the parser's validation format (the `tokenToString` analog). |
-| `parser.mdk` | Port of `lib/parser.mly`. A **monadic combinator** parser over `List Token` — a `Parser` monad (`Mappable`/`Applicative`/`Thenable`) with `do`-notation + `many`/`sepBy1`/`choice`/`chainl1`; `parse : String -> List Decl`. Precedence is the stratified ladder, one function per level. |
+| `parser.mdk` | Port of `lib/parser.mly`. A **monadic combinator** parser over `List Token` — a `Parser` monad (`Mappable`/`Applicative`/`Thenable`) with `do`-notation + `many`/`sepBy1`/`orElse`; `parse : String -> List Decl`. Precedence is the stratified ladder, one `binLevel` per level. |
 | `parse_main.mdk` | Runnable entry: `medaka run compiler/entries/parse_main.mdk <src.mdk>` reads the file, parses, and prints the structural S-expression. |
 | `desugar.mdk` | Port of `lib/desugar.ml`. Lowers surface sugar to core: the bottom-up `mapExpr`/`mapDecl` engine + the passes `merge_iface_defaults → expand_decl (deriving) → list-comps → questions → do-blocks → sugar`; `desugar : List Decl -> List Decl`. |
 | `desugar_main.mdk` | Runnable entry: parse + desugar a file, print the structural S-expression (diffs against `astdump --desugar`). |
