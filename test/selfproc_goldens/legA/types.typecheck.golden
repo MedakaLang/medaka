@@ -10,6 +10,7 @@ activeDictVarOfEncl : Option PredicateRequest -> Mono -> String -> ScopeId -> Op
 activeFunDictPredOf : PredicateRequest -> ScopeId -> Option AssumAnswer
 activeFunDictPredOfResidual : String -> List Mono -> ScopeId -> Option AssumAnswer
 addAliasDecl : String -> TyConOrigin -> List String -> Ty -> Int -> Bool -> Bool -> DataEnv -> DataEnv
+addCellHead : Decl -> Map String Unit -> Map String Unit
 addCtor : TcEnv -> String -> Scheme -> TcEnv
 addCtorIdentRaw : String -> TyConOrigin -> String -> ConPayload -> DataEnv -> DataEnv
 addDataTypeDecl : String -> TyConOrigin -> List String -> List Variant -> DataEnv -> DataEnv
@@ -288,7 +289,7 @@ binopPrimitiveHead : String -> Bool
 binopRouteSplit : Route -> (Route, List Route)
 binopSpanLoc : Expr -> Expr -> Option Loc
 blockLet : TcEnv -> Pat -> Expr -> TcEnv
-blockRecLet : TcEnv -> String -> Option Loc -> Expr -> TcEnv
+blockRecLet : TcEnv -> String -> Option Loc -> BinderId -> Expr -> TcEnv
 bodyRDictNames : Expr -> List String
 boolOp : Mono -> Mono -> Mono
 borrowedEffectCells : Mono -> Map Int (Ref Effvar) -> Map Int (Ref Effvar)
@@ -389,8 +390,10 @@ ceSuperEq : Super
 ceSuperHead : Super -> String
 ceSuperOrigin : Super -> String
 ceSuperParams : Super -> List String
+cellHeadKey : String -> TyConOrigin -> String
 cellIdSet : List (Ref Effvar) -> Map Int Unit
 cellIdSetGo : List (Ref Effvar) -> Map Int Unit -> Map Int Unit
+cellTypeHeads : List Decl -> Map String Unit
 censusSuperClose : List (IfaceRef, Int) -> List (IfaceRef, Int)
 censusSuperCloseVec : List VecObl -> List VecObl
 censusSuperStep : List String -> Int -> Super -> Option Int
@@ -1681,7 +1684,7 @@ inferOneImpl : TcEnv -> List String -> ClassEnv -> Int -> Decl -> Unit
 inferParamPolarities : List (TabKey, List Polarity) -> List String -> List (Option KindAnn) -> List Variant -> List Polarity
 inferParamRowAtoms : List String -> List Variant -> List (List Atom)
 inferPat : TcEnv -> Pat -> (Mono, List (String, Scheme))
-inferPatAs : TcEnv -> String -> Loc -> Pat -> (Mono, List (String, Scheme))
+inferPatAs : TcEnv -> String -> Loc -> BinderId -> Pat -> (Mono, List (String, Scheme))
 inferPatCon : TcEnv -> String -> List Pat -> (Mono, List (String, Scheme))
 inferPatConWith : TcEnv -> Scheme -> List Pat -> (Mono, List (String, Scheme))
 inferPatCons : TcEnv -> Pat -> Pat -> (Mono, List (String, Scheme))
@@ -1695,9 +1698,9 @@ inferPlainImpl : TcEnv -> ClassEnv -> Int -> IfaceRef -> List Ty -> List ImplMet
 inferProduced : TcEnv -> List Expr -> List (Option Loc, Mono)
 inferPropBodies : TcEnv -> List Decl -> Unit
 inferPropBodiesGo : TcEnv -> List Decl -> Unit
-inferRecLet : TcEnv -> String -> Option Loc -> Expr -> Expr -> Mono
-inferRecPatField : TcEnv -> String -> List (String, Mono) -> String -> Option Pat -> List (String, Scheme)
-inferRecPatFieldWith : TcEnv -> Mono -> String -> Option Pat -> List (String, Scheme)
+inferRecLet : TcEnv -> String -> Option Loc -> BinderId -> Expr -> Expr -> Mono
+inferRecPatField : TcEnv -> String -> List (String, Mono) -> String -> BinderId -> Option Pat -> List (String, Scheme)
+inferRecPatFieldWith : TcEnv -> Mono -> String -> BinderId -> Option Pat -> List (String, Scheme)
 inferRecPatFields : TcEnv -> String -> List (String, Mono) -> List RecPatField -> List (String, Scheme)
 inferRecordCreate : TcEnv -> String -> List FieldAssign -> Mono
 inferRecordCreateWith : TcEnv -> String -> RecordInfo -> List FieldAssign -> Mono
@@ -1977,6 +1980,8 @@ matchOneSided : (a -> b -> MStep c a b) -> (c -> c -> Bool) -> (b -> b -> Bool) 
 matchStep : Ty -> Mono -> MStep String Ty Mono
 matchTyMono : Ty -> Mono -> Option (List (String, Mono))
 matchTyMonos : List Ty -> List Mono -> Option (List (String, Mono))
+materializeBinder : (String -> TyConOrigin -> Bool) -> PendingBinder -> BinderRow
+materializeBinderTypes : Unit -> Unit
 maybeInferConstraint : List (String, Ty) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> String -> ScopeId -> Scheme -> Unit
 maybeStandaloneValueMono : TcEnv -> String -> Option Mono
 memberAliasCands : List Decl -> List (String, String, String, Ident, Loc)
@@ -2568,6 +2573,7 @@ recordAbsorptions : List Atom -> Ref Effvar -> Unit
 recordArgSiteFn : String -> Int -> Mono -> Unit
 recordArgStamp : String -> Ref Route -> Ref (List Route) -> Int -> Mono -> Unit
 recordAuthCells : List Int -> Mono -> List (String, Mono) -> Map Int (Ref Authvar)
+recordBinderType : BinderId -> String -> Mono -> Option Int -> Unit
 recordBinopGoals : String -> Ref Route -> Mono -> Unit
 recordBinopSite : String -> Ref Route -> Mono -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
@@ -2599,7 +2605,8 @@ recordIfaceObligation : BuiltinClass -> Mono -> Unit
 recordImplObligation : String -> Mono -> Mono
 recordInstantiatedMethodLevelSlots : List PredicateSlot -> Option Loc -> ScopeId -> Unit
 recordInvocationView : TcEnv -> Unit
-recordLocalBind : String -> Option Loc -> Mono -> Unit
+recordLetBindType : (LetBind, (String, BindingSummary)) -> Unit
+recordLocalBind : String -> Option Loc -> BinderId -> Mono -> Unit
 recordLocalQuantified : Scheme -> Unit
 recordLocalRecOcc : String -> EvId -> Unit
 recordMethodDicts : String -> Ref (List Route) -> List (Int, Mono) -> Unit
@@ -2635,6 +2642,9 @@ recordShadowStandaloneObls : TcEnv -> String -> List (Int, Mono) -> Unit
 recordSite : TcEnv -> String -> Scheme -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono -> MethodInstantiationSubst -> Mono
 recordStandaloneAt : String -> Expr -> SelectedValueOccurrence -> Unit
 recordStandaloneGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Int -> Unit
+recordTopBinderTypes : Map String Scheme -> List Decl -> Unit
+recordTopDeclBinderTypes : Map String Scheme -> Decl -> Unit
+recordTopFunBinderType : Map String Scheme -> String -> BinderId -> Int -> Unit
 recordTopGrants : String -> List (String, Scheme) -> Map String (List (List Pat, Expr)) -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit

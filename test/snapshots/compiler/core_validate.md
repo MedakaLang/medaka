@@ -244,7 +244,7 @@ declaredMethodContext table iface method =
 
 -- How many of [pats], from the front, are `$dict_<method>_0`, `$dict_<method>_1`, ….
 leadingMethodDicts : String -> Int -> List Pat -> Int
-leadingMethodDicts method k ((PVar x _) :: rest) =
+leadingMethodDicts method k ((PVar x _ _) :: rest) =
   if x == "$dict_\{method}_\{intToString k}" then
     leadingMethodDicts method (k + 1) rest
   else
@@ -1036,7 +1036,7 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DTypeSig false "declaredMethodContext" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int")))))
 (DFunDef false "declaredMethodContext" ((PVar "table") (PVar "iface") (PVar "method")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "iface")) (EVar "method"))) (EVar "table"))))
 (DTypeSig false "leadingMethodDicts" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))
-(DFunDef false "leadingMethodDicts" ((PVar "method") (PVar "k") (PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "leadingMethodDicts") (EVar "method")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EVar "k")))
+(DFunDef false "leadingMethodDicts" ((PVar "method") (PVar "k") (PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EVar "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "leadingMethodDicts") (EVar "method")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EVar "k")))
 (DFunDef false "leadingMethodDicts" (PWild (PVar "k") PWild) (EVar "k"))
 (DTypeSig true "validateImplSymbols" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateImplSymbols" ((PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EApp (EApp (EVar "flatMap") (EVar "implSymbolFaults")) (EVar "impls")))
@@ -1365,7 +1365,7 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DTypeSig false "declaredMethodContext" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Int")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Int")))))
 (DFunDef false "declaredMethodContext" ((PVar "table") (PVar "iface") (PVar "method")) (EApp (EApp (EVar "optionOr") (ELit (LInt 0))) (EApp (EApp (EVar "omLookup") (EApp (EApp (EVar "ifaceMethodArityKey") (EVar "iface")) (EVar "method"))) (EVar "table"))))
 (DTypeSig false "leadingMethodDicts" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))))
-(DFunDef false "leadingMethodDicts" ((PVar "method") (PVar "k") (PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "leadingMethodDicts") (EVar "method")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EVar "k")))
+(DFunDef false "leadingMethodDicts" ((PVar "method") (PVar "k") (PCons (PCon "PVar" (PVar "x") PWild PWild) (PVar "rest"))) (EIf (EBinOp "==" (EVar "x") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$dict_")) (EApp (EMethodRef "display") (EVar "method"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "k")))) (ELit (LString "")))) (EApp (EApp (EApp (EVar "leadingMethodDicts") (EVar "method")) (EBinOp "+" (EVar "k") (ELit (LInt 1)))) (EVar "rest")) (EVar "k")))
 (DFunDef false "leadingMethodDicts" (PWild (PVar "k") PWild) (EVar "k"))
 (DTypeSig true "validateImplSymbols" (TyFun (TyCon "CProgram") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "validateImplSymbols" ((PCon "CProgram" PWild PWild PWild (PVar "impls") PWild PWild)) (EApp (EApp (EDictApp "flatMap") (EVar "implSymbolFaults")) (EVar "impls")))

@@ -2,7 +2,9 @@
 -- analysis and LLVM closure capture.
 
 import test.{expectAll, expectEqual, expectFalse, expectTrue}
-import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..), noDeclLoc}
+import frontend.ast.{
+  Addr(..), Lit(..), Loc(..), Pat(..), Route(..), noDeclLoc, noBinderId
+}
 import ir.core_ir.{
   CBind(..),
   CClause(..),
@@ -22,7 +24,7 @@ multiClauseGroup =
     [
       synthBind "g" [
         CClause
-          [PVar "p" loc]
+          [PVar "p" loc noBinderId]
           (CTuple [
             CVar "outer" AGlobal,
             CVar "p" AGlobal,
@@ -32,7 +34,7 @@ multiClauseGroup =
               (MethodEvidence "" 2 (RDict "$d0") [] [RDictFwd "$d1"]),
           ]),
         CClause
-          [PVar "q" loc]
+          [PVar "q" loc noBinderId]
           (CTuple [
             CVar "q" AGlobal,
             CVar "g" AGlobal,
@@ -80,7 +82,7 @@ trmcEligibleWith innerBody =
     (_ => 0)
     (SelfByVar "loop")
     1
-    [([PVar "xs" loc], trmcBody innerBody)]
+    [([PVar "xs" loc noBinderId], trmcBody innerBody)]
 
 test "TRMC rejects a hidden self-call but keeps an ordinary capture eligible" = expectAll
   [

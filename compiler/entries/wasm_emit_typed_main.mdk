@@ -26,6 +26,7 @@
 -- dispatch nodes the emitter can lower.
 
 import frontend.ast.{
+  noBinderId,
   Decl,
   Lit(..),
   Loc(..),
@@ -343,13 +344,13 @@ trmcStateProgram name marker =
       (CBinPrim "::" (CLit (LInt marker)) recursive "" noDeclLoc)
   cprogram
     [
-      synthBind name [CClause [PVar "n" trmcStateLoc] body],
+      synthBind name [CClause [PVar "n" trmcStateLoc noBinderId] body],
       synthBind "main" [
         CClause
           []
           (CLet
             False
-            (PCons (PVar "head" trmcStateLoc) PWild)
+            (PCons (PVar "head" trmcStateLoc noBinderId) PWild)
             (mkApp (CVar name AGlobal) [CLit (LInt 2000000)])
             (CVar "head" (ALocal 0 0))),
       ],
@@ -364,7 +365,7 @@ trmcStateCensusProgram =
     [
       synthBind "pTrmc" [
         CClause
-          [PVar "n" trmcStateLoc]
+          [PVar "n" trmcStateLoc noBinderId]
           (CIf
             (CBinPrim
               "=="
@@ -432,9 +433,9 @@ lambdaStateLoc = Loc "<lambda-state>" 1 1 1 1
 
 lambdaStateProgram : Int -> CProgram
 lambdaStateProgram result =
-  let arg = PVar "arg" lambdaStateLoc
-  let local = PVar "local" lambdaStateLoc
-  let nestedName = PVar "nested" lambdaStateLoc
+  let arg = PVar "arg" lambdaStateLoc noBinderId
+  let local = PVar "local" lambdaStateLoc noBinderId
+  let nestedName = PVar "nested" lambdaStateLoc noBinderId
   let identity = CLam [arg] (CVar "arg" (ALocal 0 0))
   let nested =
     CLam [arg] (mkApp (CVar "local" (ALocal 0 0)) [CVar "arg" (ALocal 0 0)])
@@ -472,7 +473,9 @@ lambdaStateCensusProgram =
   cprogram
     [
       synthBind "lambdaCensus" [
-        CClause [] (CLam [PVar "x" lambdaStateLoc] (CVar "x" (ALocal 0 0))),
+        CClause
+          []
+          (CLam [PVar "x" lambdaStateLoc noBinderId] (CVar "x" (ALocal 0 0))),
       ],
       synthBind "lambdaIntentionalGap" [
         CClause [] (CVar "missingLambdaCensus" AGlobal),
@@ -545,7 +548,7 @@ featureStateLoc : Loc
 featureStateLoc = Loc "<feature-state>" 1 1 1 1
 
 featureStateArg : Pat
-featureStateArg = PVar "x" featureStateLoc
+featureStateArg = PVar "x" featureStateLoc noBinderId
 
 featureStateRecord : CExpr
 featureStateRecord = CRecord "FeatureRecord" [
@@ -876,7 +879,7 @@ leafRuntimeLoc : Loc
 leafRuntimeLoc = Loc "<leaf-runtime-state>" 1 1 1 1
 
 leafRuntimeArg : Pat
-leafRuntimeArg = PVar "x" leafRuntimeLoc
+leafRuntimeArg = PVar "x" leafRuntimeLoc noBinderId
 
 leafRuntimeProgram : List CBind -> CProgram
 leafRuntimeProgram groups =
@@ -1173,7 +1176,7 @@ trapStateProgram =
     [
       synthBind "trapRoute" [
         CClause
-          [PVar "n" lambdaStateLoc]
+          [PVar "n" lambdaStateLoc noBinderId]
           (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
       synthBind "main" [CClause [] (CLit (LInt 17))],
@@ -1198,7 +1201,7 @@ trapStateCensusProgram =
     [
       synthBind "trapCensusRoute" [
         CClause
-          [PVar "n" lambdaStateLoc]
+          [PVar "n" lambdaStateLoc noBinderId]
           (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
       synthBind "trapIntentionalGap" [
@@ -1248,7 +1251,7 @@ refTrapStateProgram =
     [
       synthBind "refTrapRoute" [
         CClause
-          [PVar "n" lambdaStateLoc]
+          [PVar "n" lambdaStateLoc noBinderId]
           (CBinPrim "/" (CLit (LInt 1)) (CLit (LInt 0)) "Int" noDeclLoc),
       ],
       synthBind "main" [CClause [] (CLit (LInt 17))],
@@ -1316,7 +1319,7 @@ implSelfProgram tag base depth =
           tag
           noImplSym
           [0]
-          [PVar "self" implSelfLoc, PVar "n" implSelfLoc]
+          [PVar "self" implSelfLoc noBinderId, PVar "n" implSelfLoc noBinderId]
           body),
     ]
 
@@ -1446,10 +1449,10 @@ defaultStateProgram tag bodyConstant =
   cprogram
     [
       synthBind "defaultRequestOne" [
-        CClause [PVar "one" defaultStateLoc] (defaultStateCall tag),
+        CClause [PVar "one" defaultStateLoc noBinderId] (defaultStateCall tag),
       ],
       synthBind "defaultRequestTwo" [
-        CClause [PVar "two" defaultStateLoc] (defaultStateCall tag),
+        CClause [PVar "two" defaultStateLoc noBinderId] (defaultStateCall tag),
       ],
       synthBind "main" [CClause [] (CLit (LInt 0))],
     ]
@@ -1467,8 +1470,8 @@ defaultStateProgram tag bodyConstant =
           noImplSym
           []
           [
-            PVar "$dict_synthDefault_0" defaultStateLoc,
-            PVar "value" defaultStateLoc,
+            PVar "$dict_synthDefault_0" defaultStateLoc noBinderId,
+            PVar "value" defaultStateLoc noBinderId,
           ]
           (CLit (LInt bodyConstant))),
     ]
@@ -1484,10 +1487,14 @@ defaultStateCensusProgramU =
   cprogram
     [
       synthBind "defaultRequestOne" [
-        CClause [PVar "one" defaultStateLoc] (defaultStateCall "UDefault"),
+        CClause
+          [PVar "one" defaultStateLoc noBinderId]
+          (defaultStateCall "UDefault"),
       ],
       synthBind "defaultRequestTwo" [
-        CClause [PVar "two" defaultStateLoc] (defaultStateCall "UDefault"),
+        CClause
+          [PVar "two" defaultStateLoc noBinderId]
+          (defaultStateCall "UDefault"),
       ],
       synthBind "defaultCensusGap" [
         CClause [] (CVar "missingDefaultCensus" AGlobal),
@@ -1508,8 +1515,8 @@ defaultStateCensusProgramU =
           noImplSym
           []
           [
-            PVar "$dict_synthDefault_0" defaultStateLoc,
-            PVar "value" defaultStateLoc,
+            PVar "$dict_synthDefault_0" defaultStateLoc noBinderId,
+            PVar "value" defaultStateLoc noBinderId,
           ]
           (CLit (LInt 29))),
     ]
@@ -1548,7 +1555,9 @@ bindingProgram groups = cprogram groups bindingRefCtorArs bindingRefCtorTypes []
 
 bindingSensitiveProgram : String -> CProgram
 bindingSensitiveProgram name = bindingProgram [
-  synthBind name [CClause [PVar "x" bindingLoc] bindingSensitiveExpr],
+  synthBind name [
+    CClause [PVar "x" bindingLoc noBinderId] bindingSensitiveExpr,
+  ],
   bindingMain,
 ]
 
@@ -1558,7 +1567,9 @@ bindingNoWriterProgram =
 
 bindingWriterProgram : CProgram
 bindingWriterProgram = bindingProgram [
-  synthBind "U" [CClause [PVar "x" bindingLoc] (CVar "x" (ALocal 0 0))],
+  synthBind "U" [
+    CClause [PVar "x" bindingLoc noBinderId] (CVar "x" (ALocal 0 0)),
+  ],
   bindingMain,
 ]
 
@@ -1587,9 +1598,13 @@ captureCurrentBinding "lifted" =
   let program = bindingProgram [
     synthBind "outer" [
       CClause
-        [PVar "x" bindingLoc]
+        [PVar "x" bindingLoc noBinderId]
         (CLetGroup
-          [synthBind "P" [CClause [PVar "y" bindingLoc] bindingSensitiveExpr]]
+          [
+            synthBind "P" [
+              CClause [PVar "y" bindingLoc noBinderId] bindingSensitiveExpr,
+            ],
+          ]
           (mkApp (CVar "P" (ALocal 0 0)) [CLit (LInt 0)])),
     ],
     bindingMain,
@@ -1611,11 +1626,11 @@ captureCurrentBinding "post-lift" =
   let program = bindingProgram [
     synthBind "P" [
       CClause
-        [PVar "x" bindingLoc]
+        [PVar "x" bindingLoc noBinderId]
         (CLetGroup
           [
             synthBind "L" [
-              CClause [PVar "y" bindingLoc] (CVar "y" (ALocal 0 0)),
+              CClause [PVar "y" bindingLoc noBinderId] (CVar "y" (ALocal 0 0)),
             ],
           ]
           (mkApp (CVar "L" (ALocal 0 0)) [bindingSensitiveExpr])),

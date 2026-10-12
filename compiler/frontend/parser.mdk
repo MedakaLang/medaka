@@ -20,6 +20,7 @@
 -- forms, and the rest of the operator ladder come in later slices.
 
 import frontend.ast.{
+  noBinderId,
   intMinLiteralMsg,
   negateLiteral,
   DeriveRef(..),
@@ -565,14 +566,14 @@ exprToPat (EBinOp "::" a b _) = PCons (exprToPat a) (exprToPat b)
 -- (parenResult/leftSectionOrExpr); recover it as a cons pattern (mirrors the
 -- reference `expr_to_pat`'s `SecLeft (a, "::")` case).
 exprToPat (ESection (SecLeft a "::")) = PCons (exprToPat a) PWild
-exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) (exprToPat sub)
+exprToPat (EAsPat x sub) = PAs x (Loc "" 0 0 0 0) noBinderId (exprToPat sub)
 exprToPat (EApp f x) = appToPat (EApp f x)
 exprToPat _ = PWild
 
 ctorOrVar : String -> Pat
 ctorOrVar x
   | isCtorName x = PCon x []
-  | otherwise = PVar x (Loc "" 0 0 0 0)
+  | otherwise = PVar x (Loc "" 0 0 0 0) noBinderId
 
 -- constructor-application pattern: the spine head must be uppercase
 appToPat : Expr -> Pat
@@ -1642,19 +1643,21 @@ letIdentExprRest name nameLoc [] TColon = defer
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  deferPure (ELet noDeclLoc False (PVar name nameLoc) (EAnnot e1 ty) e2)
+  deferPure
+    (ELet noDeclLoc False (PVar name nameLoc noBinderId) (EAnnot e1 ty) e2)
 letIdentExprRest name nameLoc [] TEqual = defer
   advance
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  deferPure (ELet noDeclLoc False (PVar name nameLoc) e1 e2)
+  deferPure (ELet noDeclLoc False (PVar name nameLoc noBinderId) e1 e2)
 letIdentExprRest name nameLoc params TEqual = defer
   advance
   e1 <- parseExpr
   expectTok TIn
   e2 <- parseExpr
-  deferPure (ELet noDeclLoc True (PVar name nameLoc) (curryLam params e1) e2)
+  deferPure
+    (ELet noDeclLoc True (PVar name nameLoc noBinderId) (curryLam params e1) e2)
 letIdentExprRest _ _ _ _ = failP "expected `:` or `=` after the `let` name"
 
 -- non-IDENT pattern: `let (a, b) = e in e2`, `let Some x = e in e2`, …
@@ -1889,7 +1892,7 @@ parseAsPat = defer
   q <- getPos
   expectTok TAsAt
   sub <- parsePatApp
-  deferPure (PAs x (locOfSpan s q) sub)
+  deferPure (PAs x (locOfSpan s q) noBinderId sub)
 
 parsePatCons : Parser Pat
 parsePatCons = defer
@@ -1972,8 +1975,9 @@ recordPatFieldRest : String -> Loc -> Token -> Parser RecPatField
 recordPatFieldRest name nameLoc TEqual = defer
   advance
   p <- parsePat
-  deferPure (RecPatField name nameLoc (Some p))
-recordPatFieldRest name nameLoc _ = deferPure (RecPatField name nameLoc None)
+  deferPure (RecPatField name nameLoc noBinderId (Some p))
+recordPatFieldRest name nameLoc _ =
+  deferPure (RecPatField name nameLoc noBinderId None)
 
 -- A reserved keyword sitting where a pattern-variable / identifier is expected is
 -- ALWAYS an error — no keyword starts a legal pattern — and the generic "expected
@@ -2077,7 +2081,7 @@ parsePatAtomRaw = defer
     TIdent x => defer
       s <- getPos
       advance
-      deferPure (PVar x (locOfSpan s (s + 1)))
+      deferPure (PVar x (locOfSpan s (s + 1)) noBinderId)
     TUnderscore => emit PWild
     TInt n _ if isIntMinLit n => fatalP intLitTooBigMsg
     TInt n _ => intPatRest (LInt n)
@@ -2115,7 +2119,7 @@ parseParamAsPat = defer
   q <- getPos
   expectTok TAsAt
   sub <- parsePatAtom
-  deferPure (PAs x (locOfSpan s q) sub)
+  deferPure (PAs x (locOfSpan s q) noBinderId sub)
 
 -- an int literal pattern, or a range pattern `lo..hi` / `lo..=hi`
 intPatRest : Lit -> Parser Pat
@@ -2987,18 +2991,18 @@ parseFunOrSig pub = defer
       advance
       body <- parseBody
       skipNewlines
-      deferPure (DFunDef pub name params body site)
+      deferPure (DFunDef pub name params body site noBinderId)
     TIndent => defer
       advance
       arms <- parseGuardArms
       body <- guardArmsWhereOpt arms
       expectTok TDedent
       skipNewlines
-      deferPure (DFunDef pub name params body site)
+      deferPure (DFunDef pub name params body site noBinderId)
     TPipe => defer
       arm <- parseGuardArm
       skipNewlines
-      deferPure (DFunDef pub name params (EGuards [arm]) site)
+      deferPure (DFunDef pub name params (EGuards [arm]) site noBinderId)
     _ => failP "expected `:` or `=` after the definition head"
 
 -- ── extern + import declarations ─────────────────────────────────────────
@@ -4378,7 +4382,7 @@ coalesceGo : String ->
   List FunClause ->
   List (String, List Pat, Expr, Loc) ->
   List LetBind
-coalesceGo name site acc [] = [LetBind name (reverseL acc) site]
+coalesceGo name site acc [] = [LetBind name (reverseL acc) site noBinderId]
 coalesceGo name site acc ((n, ps, b, nsite) :: rest) =
   coalesceStep name site acc n ps b nsite rest
 
@@ -4394,7 +4398,8 @@ coalesceStep : String ->
 coalesceStep name site acc n ps b nsite rest
   | n == name = coalesceGo name site (FunClause ps b :: acc) rest
   | otherwise =
-    LetBind name (reverseL acc) site :: coalesceGo n nsite [FunClause ps b] rest
+    LetBind name (reverseL acc) site noBinderId
+      :: coalesceGo n nsite [FunClause ps b] rest
 
 -- Same offside-block production as `parseBracketBlock` (#602: the two must not
 -- fork into independently-maintained byte-identical copies — one backing decl
@@ -4580,7 +4585,7 @@ letIdentBody name nameLoc pats _ = defer
 letIdentRest : String -> Loc -> List Pat -> Expr -> Parser DoStmt
 letIdentRest name nameLoc [] e1 = defer
   t <- peekP
-  letTailFor (PVar name nameLoc) e1 t
+  letTailFor (PVar name nameLoc noBinderId) e1 t
 letIdentRest name nameLoc pats e1 = defer
   t <- peekP
   letFunTailFor name nameLoc pats e1 t
@@ -4591,9 +4596,21 @@ letFunTailFor name nameLoc pats e1 TIn = defer
   advance
   e2 <- parseExpr
   deferPure
-    (DoExpr (ELet noDeclLoc True (PVar name nameLoc) (curryLam pats e1) e2))
+    (DoExpr
+      (ELet
+        noDeclLoc
+        True
+        (PVar name nameLoc noBinderId)
+        (curryLam pats e1)
+        e2))
 letFunTailFor name nameLoc pats e1 _ =
-  deferPure (DoLet False True (PVar name nameLoc) (curryLam pats e1) noDeclLoc)
+  deferPure
+    (DoLet
+      False
+      True
+      (PVar name nameLoc noBinderId)
+      (curryLam pats e1)
+      noDeclLoc)
 
 -- non-IDENT-led pattern: `let (a, b) = e`, `let Some v = e`, …
 letPat : Parser DoStmt
@@ -4649,8 +4666,13 @@ bindStmts lhs rhs = match stripLoc lhs
 bindAnnot : Expr -> Ty -> Expr -> List DoStmt
 bindAnnot inner ty rhs = match stripLoc inner
   EVar x => [
-    DoBind (PVar x (Loc "" 0 0 0 0)) rhs,
-    DoLet False False (PVar x (Loc "" 0 0 0 0)) (EAnnot (EVar x) ty) noDeclLoc,
+    DoBind (PVar x (Loc "" 0 0 0 0) noBinderId) rhs,
+    DoLet
+      False
+      False
+      (PVar x (Loc "" 0 0 0 0) noBinderId)
+      (EAnnot (EVar x) ty)
+      noDeclLoc,
   ]
   other => [DoBind (exprToPat other) rhs]
 
@@ -5095,7 +5117,7 @@ declNameTokIdxAt toks (DAttrib _ inner) i =
       i2
   declNameTokIdx toks inner i3
 declNameTokIdxAt toks (DTypeSig _ _ _ _) i = tokIdxOrNone toks i
-declNameTokIdxAt toks (DFunDef _ _ _ _ _) i = tokIdxOrNone toks i
+declNameTokIdxAt toks (DFunDef _ _ _ _ _ _) i = tokIdxOrNone toks i
 declNameTokIdxAt toks (DExtern _ _ _) i =
   tokIdxOrNone toks (skipLeadingModifiers toks (i + 1))
 declNameTokIdxAt toks (DData { dataOrigin = _ }) i =
@@ -5471,7 +5493,7 @@ chainOpTokEq _ _ = False
 -- outermost EBinOp is the lowest-precedence / top operator the parser built).
 declChainTopOp : Decl -> Option String
 declChainTopOp (DAttrib _ inner) = declChainTopOp inner
-declChainTopOp (DFunDef _ _ _ body _) = bodyChainTopOp body
+declChainTopOp (DFunDef _ _ _ body _ _) = bodyChainTopOp body
 declChainTopOp _ = None
 
 bodyChainTopOp : Expr -> Option String
@@ -5544,7 +5566,7 @@ chainOpLinesAt toks lines op i e depth t
 
 declBlockRhs : Decl -> Bool
 declBlockRhs (DAttrib _ inner) = declBlockRhs inner
-declBlockRhs (DFunDef _ _ _ body _) = bodyIsBlock body
+declBlockRhs (DFunDef _ _ _ body _ _) = bodyIsBlock body
 declBlockRhs _ = False
 
 bodyIsBlock : Expr -> Bool

@@ -9,6 +9,8 @@
 -- post-order (children first, then the node).
 
 import frontend.ast.{
+  noBinderId,
+  BinderId(..),
   KindAnn(..),
   Lit(..),
   Ty(..),
@@ -130,8 +132,8 @@ mapGuardArm : (Expr -> Expr) -> GuardArm -> GuardArm
 mapGuardArm g (GuardArm gs b) = GuardArm (map (mapGuard g) gs) (g b)
 
 mapLetBind : (Expr -> Expr) -> LetBind -> LetBind
-mapLetBind g (LetBind n clauses site) =
-  LetBind n (map (mapFunClause g) clauses) site
+mapLetBind g (LetBind n clauses site bid) =
+  LetBind n (map (mapFunClause g) clauses) site bid
 
 mapFunClause : (Expr -> Expr) -> FunClause -> FunClause
 mapFunClause g (FunClause ps b) = FunClause ps (g b)
@@ -152,7 +154,8 @@ mapInterp g (InterpExpr e) = InterpExpr (g e)
 
 export
 mapDecl : (Expr -> Expr) -> Decl -> Decl
-mapDecl f (DFunDef pub n ps e site) = DFunDef pub n ps (mapExpr f e) site
+mapDecl f (DFunDef pub n ps e site bid) =
+  DFunDef pub n ps (mapExpr f e) site bid
 mapDecl f (d@(DInterface { methods, ... })) =
   DInterface { d | methods = map (mapIfaceMethod f) methods }
 mapDecl f (d@(DImpl { methods, ... })) =
@@ -201,7 +204,10 @@ derivedImpl iface tyName methods =
 -- two-parameter impl method: `m a b = body`
 binMethod : String -> String -> String -> Expr -> ImplMethod
 binMethod m a b body =
-  ImplMethod m [PVar a (Loc "" 0 0 0 0), PVar b (Loc "" 0 0 0 0)] body
+  ImplMethod
+    m
+    [PVar a (Loc "" 0 0 0 0) noBinderId, PVar b (Loc "" 0 0 0 0) noBinderId]
+    body
 
 -- ── Pass: desugar_sugar (guards / function / sections / interpolation) ────
 -- Applied bottom-up by mapProg.
@@ -271,12 +277,15 @@ armChain ((GBind p e) :: qs) body els =
 sectionToCore : Section -> Expr
 sectionToCore (SecBare op) =
   ELam
-    [PVar "_a" (Loc "" 0 0 0 0), PVar "_b" (Loc "" 0 0 0 0)]
+    [
+      PVar "_a" (Loc "" 0 0 0 0) noBinderId,
+      PVar "_b" (Loc "" 0 0 0 0) noBinderId,
+    ]
     (binOp op (EVar "_a") (EVar "_b"))
 sectionToCore (SecRight op e) =
-  ELam [PVar "_s" (Loc "" 0 0 0 0)] (binOp op (EVar "_s") e)
+  ELam [PVar "_s" (Loc "" 0 0 0 0) noBinderId] (binOp op (EVar "_s") e)
 sectionToCore (SecLeft e op) =
-  ELam [PVar "_s" (Loc "" 0 0 0 0)] (binOp op e (EVar "_s"))
+  ELam [PVar "_s" (Loc "" 0 0 0 0) noBinderId] (binOp op e (EVar "_s"))
 
 -- `"a\{e}b"` → `"a" ++ display e ++ "b"` (left-associated `++`)
 interpToCore : List InterpPart -> Expr
@@ -380,12 +389,12 @@ doCont : Pat -> Expr -> Expr
 doCont pat body
   | isRefutable pat =
     ELam
-      [PVar "__do_x" (Loc "" 0 0 0 0)]
+      [PVar "__do_x" (Loc "" 0 0 0 0) noBinderId]
       (EMatch (EVar "__do_x") [Arm pat [] body, Arm PWild [] fallthrough])
   | otherwise = ELam [pat] body
 
 isRefutable : Pat -> Bool
-isRefutable (PVar _ _) = False
+isRefutable (PVar _ _ _) = False
 isRefutable PWild = False
 isRefutable (PLit _) = True
 isRefutable (PCon _ _) = True
@@ -394,7 +403,7 @@ isRefutable (PList _) = True
 isRefutable (PRng _ _ _) = True
 isRefutable (PRec _ _ _) = True
 isRefutable (PTuple ps) = anyRefutable ps
-isRefutable (PAs _ _ p) = isRefutable p
+isRefutable (PAs _ _ _ p) = isRefutable p
 
 anyRefutable : List Pat -> Bool
 anyRefutable [] = False
@@ -674,7 +683,7 @@ genVarsGo prefix i n
 -- emitter accepts both — so PRec makes the derived match work in BOTH pipelines.
 conBindPat : Variant -> List String -> Pat
 conBindPat (Variant cname (ConPos _)) vars =
-  PCon cname (map (v => PVar v (Loc "" 0 0 0 0)) vars)
+  PCon cname (map (v => PVar v (Loc "" 0 0 0 0) noBinderId) vars)
 conBindPat (Variant cname (ConNamed fs _)) vars =
   PRec cname (recPatFields fs vars) False
 
@@ -682,7 +691,11 @@ recPatFields : List Field -> List String -> List RecPatField
 recPatFields [] _ = []
 recPatFields _ [] = []
 recPatFields ((Field n _) :: fs) (v :: vs) =
-  RecPatField n (Loc "" 0 0 0 0) (Some (PVar v (Loc "" 0 0 0 0)))
+  RecPatField
+      n
+      (Loc "" 0 0 0 0)
+      noBinderId
+      (Some (PVar v (Loc "" 0 0 0 0) noBinderId))
     :: recPatFields fs vs
 
 -- Debug and Display share the rendering ("Con " ++ <call> a0 ++ " " ++ …);
@@ -691,7 +704,7 @@ deriveShowData : String -> String -> String -> List Variant -> Decl
 deriveShowData iface callName name variants = derivedImpl iface name [
   ImplMethod
     callName
-    [PVar "__x" (Loc "" 0 0 0 0)]
+    [PVar "__x" (Loc "" 0 0 0 0) noBinderId]
     (EMatch (EVar "__x") (map (showArm callName) variants)),
 ]
 
@@ -840,7 +853,7 @@ lexCompareExprs [] = EVar "Eq"
 lexCompareExprs [(ea, eb)] = callBin "compare" ea eb
 lexCompareExprs ((ea, eb) :: rest) = EMatch (callBin "compare" ea eb) [
   Arm (PCon "Eq" []) [] (lexCompareExprs rest),
-  Arm (PVar "__c" (Loc "" 0 0 0 0)) [] (EVar "__c"),
+  Arm (PVar "__c" (Loc "" 0 0 0 0) noBinderId) [] (EVar "__c"),
 ]
 
 -- Hashable: the djb2-style fold core.mdk's `Hashable` doc specifies — seed the
@@ -860,7 +873,7 @@ deriveHashData : String -> List Variant -> Decl
 deriveHashData name variants = derivedImpl "Hashable" name [
   ImplMethod
     "hash"
-    [PVar "__x" (Loc "" 0 0 0 0)]
+    [PVar "__x" (Loc "" 0 0 0 0) noBinderId]
     (EMatch (EVar "__x") (map hashArm (indexFrom 0 variants))),
 ]
 
@@ -883,7 +896,7 @@ deriveGenericData : String -> List Variant -> Decl
 deriveGenericData name variants = derivedImpl "Generic" name [
   ImplMethod
     "to_rep"
-    [PVar "__x" (Loc "" 0 0 0 0)]
+    [PVar "__x" (Loc "" 0 0 0 0) noBinderId]
     (EMatch (EVar "__x") (map genericArm variants)),
 ]
 
@@ -1130,9 +1143,15 @@ qualifiedAt _ _ e = e
 -- Ported in the reference order (later passes run last): merge_iface_defaults →
 -- expand_decl → desugar_record_puns → lower_container_literals →
 -- desugar_list_comps → desugar_questions → lower_do_blocks → desugar_sugar.
+-- The last step mints every binder's id (`stampBinderIds`), with `""` as the
+-- module half; `desugarIn` is the same pipeline for a caller that knows the module.
 export
 desugar : List Decl -> List Decl
-desugar prog =
+desugar prog = desugarIn "" prog
+
+export
+desugarIn : String -> List Decl -> List Decl
+desugarIn mid prog =
   qualifyAliasRefs prog
     |> mergeIfaceDefaults
     |> concatMapDecl expandDecl
@@ -1141,3 +1160,131 @@ desugar prog =
     |> mapProg rewriteDo
     |> mapProg rewriteAssignIndex
     |> mapProg rewriteSugar
+    |> stampBinderIds mid
+
+-- ── Pass: binder ids ──────────────────────────────────────────────────────
+-- Every binder node gets a fresh `BinderId` (`frontend/ast.mdk`), whatever id it
+-- carried before.  It runs LAST because the passes above copy subtrees: a guard
+-- chain's fall-through expression lands in two arms, so a binder minted any
+-- earlier would reach the typechecker twice under one id.  This walk rebuilds
+-- each copy separately and gives each its own.
+--
+-- The ordinal comes from one process-global counter that nothing resets, so a
+-- tree minted once and reused by later elaborations (the desugared-prelude
+-- cache) can never collide with a tree minted after it.
+binderOrdinalRef : Ref Int
+binderOrdinalRef = Ref 0
+
+freshBinderId : String -> BinderId
+freshBinderId mid =
+  let n = !binderOrdinalRef
+  binderOrdinalRef := n + 1
+  BinderId mid n
+
+stampBinderIds : String -> List Decl -> List Decl
+stampBinderIds mid prog = map (stampDecl mid) prog
+
+stampDecl : String -> Decl -> Decl
+stampDecl mid (DFunDef pub n ps e site _) =
+  DFunDef
+    pub
+    n
+    (map (stampPat mid) ps)
+    (stampExpr mid e)
+    site
+    (freshBinderId mid)
+stampDecl mid (DLetGroup pub binds) =
+  DLetGroup pub (map (stampLetBind mid) binds)
+stampDecl mid (d@(DInterface { methods, ... })) =
+  DInterface { d | methods = map (stampIfaceMethod mid) methods }
+stampDecl mid (d@(DImpl { methods, ... })) =
+  DImpl { d | methods = map (stampImplMethod mid) methods }
+stampDecl mid (DProp pub name params body) =
+  DProp pub name params (stampExpr mid body)
+stampDecl mid (DTest pub name body) = DTest pub name (stampExpr mid body)
+stampDecl mid (DAttrib attrs d) = DAttrib attrs (stampDecl mid d)
+stampDecl _ d = d
+
+stampIfaceMethod : String -> IfaceMethod -> IfaceMethod
+stampIfaceMethod _ (IfaceMethod n ty None mloc) = IfaceMethod n ty None mloc
+stampIfaceMethod mid (IfaceMethod n ty (Some (MethodDefault ps e)) mloc) =
+  IfaceMethod
+    n
+    ty
+    (Some (MethodDefault (map (stampPat mid) ps) (stampExpr mid e)))
+    mloc
+
+stampImplMethod : String -> ImplMethod -> ImplMethod
+stampImplMethod mid (ImplMethod n ps e) =
+  ImplMethod n (map (stampPat mid) ps) (stampExpr mid e)
+
+stampExpr : String -> Expr -> Expr
+stampExpr mid e = mapExpr (stampNode mid) e
+
+-- One node's own binder positions; `mapExpr` reaches every node, so each binder
+-- is minted exactly once.
+stampNode : String -> Expr -> Expr
+stampNode mid (ELam ps b) = ELam (map (stampPat mid) ps) b
+stampNode mid (ELet m r p e1 e2) = ELet m r (stampPat mid p) e1 e2
+stampNode mid (ELetGroup bs e2) = ELetGroup (map (stampLetBindHead mid) bs) e2
+stampNode mid (EMatch e0 arms) = EMatch e0 (map (stampArm mid) arms)
+stampNode mid (EGuards arms) = EGuards (map (stampGuardArm mid) arms)
+stampNode mid (EBlock stmts) = EBlock (map (stampStmt mid) stmts)
+stampNode mid (EDo d stmts) = EDo d (map (stampStmt mid) stmts)
+stampNode _ e = e
+
+-- A top-level group's clause bodies are walked here; an `ELetGroup`'s are
+-- already `mapExpr` children of the group, so `stampNode` mints only the heads.
+stampLetBind : String -> LetBind -> LetBind
+stampLetBind mid (LetBind n clauses site _) =
+  LetBind
+    n
+    (map
+      (c => match c
+        FunClause ps b => FunClause (map (stampPat mid) ps) (stampExpr mid b))
+      clauses)
+    site
+    (freshBinderId mid)
+
+stampLetBindHead : String -> LetBind -> LetBind
+stampLetBindHead mid (LetBind n clauses site _) =
+  LetBind
+    n
+    (map
+      (c => match c
+        FunClause ps b => FunClause (map (stampPat mid) ps) b)
+      clauses)
+    site
+    (freshBinderId mid)
+
+stampArm : String -> Arm -> Arm
+stampArm mid (Arm p gs b) = Arm (stampPat mid p) (map (stampGuard mid) gs) b
+
+stampGuardArm : String -> GuardArm -> GuardArm
+stampGuardArm mid (GuardArm gs b) = GuardArm (map (stampGuard mid) gs) b
+
+stampGuard : String -> Guard -> Guard
+stampGuard mid (GBind p e) = GBind (stampPat mid p) e
+stampGuard _ g = g
+
+stampStmt : String -> DoStmt -> DoStmt
+stampStmt mid (DoBind p e) = DoBind (stampPat mid p) e
+stampStmt mid (DoLet m r p e site) = DoLet m r (stampPat mid p) e site
+stampStmt _ s = s
+
+stampPat : String -> Pat -> Pat
+stampPat mid (PVar x l _) = PVar x l (freshBinderId mid)
+stampPat mid (PAs x l _ p) = PAs x l (freshBinderId mid) (stampPat mid p)
+stampPat mid (PCon c ps) = PCon c (map (stampPat mid) ps)
+stampPat mid (PCons h t) = PCons (stampPat mid h) (stampPat mid t)
+stampPat mid (PTuple ps) = PTuple (map (stampPat mid) ps)
+stampPat mid (PList ps) = PList (map (stampPat mid) ps)
+stampPat mid (PRec n fields isOpen) =
+  PRec n (map (stampRecField mid) fields) isOpen
+stampPat _ p = p
+
+stampRecField : String -> RecPatField -> RecPatField
+stampRecField mid (RecPatField l loc _ None) =
+  RecPatField l loc (freshBinderId mid) None
+stampRecField mid (RecPatField l loc _ (Some p)) =
+  RecPatField l loc noBinderId (Some (stampPat mid p))

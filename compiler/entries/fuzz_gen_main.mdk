@@ -42,6 +42,7 @@
 --   (30/30 seeds build crash-free).
 
 import frontend.ast.{
+  noBinderId,
   Lit(..),
   Loc(..),
   noDeclLoc,
@@ -383,7 +384,7 @@ genLet ctx t depth =
   let _ = setScope ctx ((name, bt) :: saved)
   let body = genExpr ctx t (depth - 1)
   let _ = setScope ctx saved
-  ELet noDeclLoc False (PVar name (Loc "" 0 0 0 0)) rhs body
+  ELet noDeclLoc False (PVar name (Loc "" 0 0 0 0) noBinderId) rhs body
 
 -- construct an ADT value: pick a variant, fill positional fields.
 applyFields : Ctx -> Int -> Expr -> List Gty -> <Rand> Expr
@@ -402,7 +403,7 @@ zipScope (n :: nr) (ty :: tr) = (n, ty) :: zipScope nr tr
 zipScope _ _ = []
 
 pvarOf : String -> Pat
-pvarOf n = PVar n (Loc "" 0 0 0 0)
+pvarOf n = PVar n (Loc "" 0 0 0 0) noBinderId
 
 -- one fresh pattern var per field type (named helper, not an inline ctx-closure —
 -- the native backend mis-lowers a closure capturing ctx in some recursive sites).
@@ -483,7 +484,13 @@ genFunDecl ctx =
   let _ = setScope ctx [(pname, pt)]
   let body = genExpr ctx rt 3
   let _ = setScope ctx saved
-  DFunDef False fname [PVar pname (Loc "" 0 0 0 0)] body noDeclLoc
+  DFunDef
+    False
+    fname
+    [PVar pname (Loc "" 0 0 0 0) noBinderId]
+    body
+    noDeclLoc
+    noBinderId
 
 -- ── invariant assertions (Tier-A) — each MUST evaluate True by construction ──
 invArith : Ctx -> <Rand> List Expr
@@ -558,13 +565,14 @@ genValDecl ctx i =
   let name = freshName ctx "g"
   let e = genExpr ctx t 3
   let _ = setScope ctx ((name, t) :: ctxScope ctx)
-  DFunDef False name [] e noDeclLoc
+  DFunDef False name [] e noDeclLoc noBinderId
 
 -- hoist an expr into a fresh top-level binding `oN = e`, recording (name, decl, isInv)
 hoistOut : Ctx -> Ref (List Out) -> Bool -> Expr -> Unit
 hoistOut ctx outsRef isInv e =
   let name = freshName ctx "o"
-  outsRef := !outsRef ++ [Out name (DFunDef False name [] e noDeclLoc) isInv]
+  outsRef :=
+    !outsRef ++ [Out name (DFunDef False name [] e noDeclLoc noBinderId) isInv]
 
 -- emit Eq + Ord invariants for one derived ADT (no-op for non-derived)
 hoistAdtInvs : Ctx -> Ref (List Out) -> Gadt -> <Rand> Unit
@@ -648,7 +656,8 @@ genProgram ctx nblocks =
   let allDeclsRef = Ref []
   let allBodyRef = Ref []
   let _ = times nblocks (appendBlock ctx allDeclsRef allBodyRef)
-  let mainDecl = DFunDef False "main" [] (EBlock !allBodyRef) noDeclLoc
+  let mainDecl =
+    DFunDef False "main" [] (EBlock !allBodyRef) noDeclLoc noBinderId
   !allDeclsRef ++ [mainDecl]
 
 -- ── CLI ──────────────────────────────────────────────────────────────────────

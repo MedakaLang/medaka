@@ -360,7 +360,7 @@ oGetArity oracle c
 export
 desugarPat : Oracle -> Pat -> Pat
 desugarPat _ PWild = PWild
-desugarPat _ (PVar _ _) = PWild
+desugarPat _ (PVar _ _ _) = PWild
 desugarPat _ (PLit (LBool True)) = PCon "True" []
 desugarPat _ (PLit (LBool False)) = PCon "False" []
 desugarPat _ (PLit LUnit) = PCon unitCtor []
@@ -374,7 +374,7 @@ desugarPat oracle (PCons h t) =
 desugarPat _ (PList []) = PCon listNilCtor []
 desugarPat oracle (PList (h :: rest)) =
   PCon listConsCtor [desugarPat oracle h, desugarPat oracle (PList rest)]
-desugarPat oracle (PAs _ _ p) = desugarPat oracle p
+desugarPat oracle (PAs _ _ _ p) = desugarPat oracle p
 desugarPat oracle (PRec name fields _) =
   desugarRecPat oracle (oracleCtorName oracle name) fields
 desugarPat _ (PRng _ _ _) = PWild
@@ -427,7 +427,7 @@ lookupRecField oracle fields fn = match findRecField fn fields
 
 findRecField : String -> List RecPatField -> Option (Option Pat)
 findRecField _ [] = None
-findRecField fn ((RecPatField f _ mPat) :: rest)
+findRecField fn ((RecPatField f _ _ mPat) :: rest)
   | f == fn = Some mPat
   | otherwise = findRecField fn rest
 
@@ -669,13 +669,13 @@ patHasRange (PCon _ args) = anyList patHasRange args
 patHasRange (PCons h t) = patHasRange h || patHasRange t
 patHasRange (PTuple ps) = anyList patHasRange ps
 patHasRange (PList ps) = anyList patHasRange ps
-patHasRange (PAs _ _ p) = patHasRange p
+patHasRange (PAs _ _ _ p) = patHasRange p
 patHasRange (PRec _ fields _) = anyList recFieldHasRange fields
 patHasRange _ = False
 
 recFieldHasRange : RecPatField -> Bool
-recFieldHasRange (RecPatField _ _ None) = False
-recFieldHasRange (RecPatField _ _ (Some p)) = patHasRange p
+recFieldHasRange (RecPatField _ _ _ None) = False
+recFieldHasRange (RecPatField _ _ _ (Some p)) = patHasRange p
 
 -- ── witness extraction (the Maranget `I` algorithm) ───────────────────────
 -- A witness-producing companion to `useful`: when the ALL-WILDCARD query of
@@ -800,16 +800,16 @@ parenWrapWit False s = s
 
 -- ── guard totality ────────────────────────────────────────────────────────
 isIrrefutablePat : Pat -> Bool
-isIrrefutablePat (PVar _ _) = True
+isIrrefutablePat (PVar _ _ _) = True
 isIrrefutablePat PWild = True
 isIrrefutablePat (PTuple ps) = allList isIrrefutablePat ps
-isIrrefutablePat (PAs _ _ p) = isIrrefutablePat p
+isIrrefutablePat (PAs _ _ _ p) = isIrrefutablePat p
 isIrrefutablePat (PRec _ fields _) = allList recFieldIrrefutable fields
 isIrrefutablePat _ = False
 
 recFieldIrrefutable : RecPatField -> Bool
-recFieldIrrefutable (RecPatField _ _ None) = True
-recFieldIrrefutable (RecPatField _ _ (Some p)) = isIrrefutablePat p
+recFieldIrrefutable (RecPatField _ _ _ None) = True
+recFieldIrrefutable (RecPatField _ _ _ (Some p)) = isIrrefutablePat p
 
 boolAlwaysTrue : Expr -> Bool
 -- strip ELoc: guard conditions arrive
@@ -1021,7 +1021,7 @@ letGroupWarnings oracle body =
   flatMap (checkLetBind oracle) (collectLetBinds body)
 
 checkLetBind : Oracle -> LetBind -> List (String, Option Loc)
-checkLetBind oracle (LetBind name funclauses _) =
+checkLetBind oracle (LetBind name funclauses _ _) =
   checkGroup oracle name (map funClauseToClause funclauses)
 
 funClauseToClause : FunClause -> (List Pat, Expr)
@@ -1068,7 +1068,8 @@ collectLetBinds (EDoOrigin _ e) = collectLetBinds e
 collectLetBinds _ = []
 
 collectLetBindInner : LetBind -> List LetBind
-collectLetBindInner (LetBind _ funclauses _) = flatMap funClauseBinds funclauses
+collectLetBindInner (LetBind _ funclauses _ _) =
+  flatMap funClauseBinds funclauses
 
 funClauseBinds : FunClause -> List LetBind
 funClauseBinds (FunClause _ body) = collectLetBinds body
@@ -1138,12 +1139,12 @@ checkGuardExhaustiveness prog = map fst (checkGuardExhaustivenessWith prog prog)
 
 topFunDefClauses : List Decl -> List (String, (List Pat, Expr))
 topFunDefClauses [] = []
-topFunDefClauses ((DFunDef _ n pats body _) :: rest) =
+topFunDefClauses ((DFunDef _ n pats body _ _) :: rest) =
   (n, (pats, body)) :: topFunDefClauses rest
 topFunDefClauses (_ :: rest) = topFunDefClauses rest
 
 declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
-declBodyWarnings oracle (DFunDef _ _ _ body _) = letGroupWarnings oracle body
+declBodyWarnings oracle (DFunDef _ _ _ body _ _) = letGroupWarnings oracle body
 declBodyWarnings oracle (DImpl { methods, ... }) =
   flatMap (checkNamedGroup oracle) (groupByName (implClauses methods))
     ++ flatMap (implMethodBodyWarnings oracle) methods

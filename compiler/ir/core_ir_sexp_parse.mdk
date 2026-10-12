@@ -9,6 +9,7 @@
 -- CallDynamic.
 
 import frontend.ast.{
+  noBinderId,
   Lit(..),
   Pat(..),
   RecPatField(..),
@@ -226,14 +227,15 @@ toLit other = panic ("core_ir_sexp_parse: bad Lit: " ++ sexprToStr other)
 
 toRecPatField : SExp -> RecPatField
 toRecPatField (SList ((SAtom "rf") :: [f, SAtom "None"])) =
-  RecPatField (toStr f) (Loc "" 0 0 0 0) None
+  RecPatField (toStr f) (Loc "" 0 0 0 0) noBinderId None
 toRecPatField (SList ((SAtom "rf") :: [f, p])) =
-  RecPatField (toStr f) (Loc "" 0 0 0 0) (Some (toPat p))
+  RecPatField (toStr f) (Loc "" 0 0 0 0) noBinderId (Some (toPat p))
 toRecPatField other =
   panic ("core_ir_sexp_parse: bad RecPatField: " ++ sexprToStr other)
 
 toPat : SExp -> Pat
-toPat (SList ((SAtom "PVar") :: [n])) = PVar (toStr n) (Loc "" 0 0 0 0)
+toPat (SList ((SAtom "PVar") :: [n])) =
+  PVar (toStr n) (Loc "" 0 0 0 0) noBinderId
 toPat (SAtom "PWild") = PWild
 toPat (SList ((SAtom "PLit") :: [l])) = PLit (toLit l)
 toPat (SList ((SAtom "PCon") :: name :: args)) =
@@ -242,7 +244,7 @@ toPat (SList ((SAtom "PCons") :: [h, t])) = PCons (toPat h) (toPat t)
 toPat (SList ((SAtom "PTuple") :: ps)) = PTuple (map toPat ps)
 toPat (SList ((SAtom "PList") :: ps)) = PList (map toPat ps)
 toPat (SList ((SAtom "PAs") :: [n, p])) =
-  PAs (toStr n) (Loc "" 0 0 0 0) (toPat p)
+  PAs (toStr n) (Loc "" 0 0 0 0) noBinderId (toPat p)
 toPat (SList ((SAtom "PRng") :: [lo, hi, incl])) =
   PRng (toLit lo) (toLit hi) (toBool incl)
 toPat (SList ((SAtom "PRec") :: [name, SList fields, rest])) =

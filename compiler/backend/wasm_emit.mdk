@@ -186,6 +186,7 @@
 -- on the stack is always `(ref eq)`; in scalar-mode it is i32.
 
 import frontend.ast.{
+  noBinderId,
   Lit(..),
   Pat(..),
   Addr(..),
@@ -2210,7 +2211,7 @@ scanPatW7 emit (PTuple ps) =
   let _ = noteTupleArity emit (listLen ps) in
     forEachU (p => scanPatW7 emit p) ps
 scanPatW7 emit (PCon _ args) = forEachU (p => scanPatW7 emit p) args
-scanPatW7 emit (PAs _ _ p) = scanPatW7 emit p
+scanPatW7 emit (PAs _ _ _ p) = scanPatW7 emit p
 scanPatW7 _ _ = ()
 
 -- a decision tree's match heads (the lowered shape of list/tuple patterns).
@@ -2250,7 +2251,7 @@ multiOrPatternClauses [CClause pats _] =
 multiOrPatternClauses _ = True
 
 isPlainParam : Pat -> Bool
-isPlainParam (PVar _ _) = True
+isPlainParam (PVar _ _ _) = True
 isPlainParam PWild = True
 isPlainParam _ = False
 
@@ -2684,7 +2685,7 @@ emitScalarTail emit fnNames valNames env (CIf c t f) =
     ++ ["else"]
     ++ indent fi
     ++ ["end", "unreachable"]
-emitScalarTail emit fnNames valNames env (CLet False (PVar x _) e1 e2) =
+emitScalarTail emit fnNames valNames env (CLet False (PVar x _ _) e1 e2) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env e1
   i1
     ++ ["local.set $" ++ gname x]
@@ -2962,7 +2963,7 @@ emitLetI32 : WasmEmit ->
   CExpr ->
   CExpr ->
   (List String, WTy)
-emitLetI32 emit fnNames valNames env False (PVar x _) e1 e2 =
+emitLetI32 emit fnNames valNames env False (PVar x _ _) e1 e2 =
   let (i1, _) = emitScalarExpr emit fnNames valNames env e1
   let (i2, ty2) = emitScalarExpr emit fnNames valNames (omInsert x () env) e2
   (i1 ++ ["local.set $" ++ gname x] ++ i2, ty2)
@@ -2985,7 +2986,7 @@ emitBlockI32 emit fnNames valNames env ((CSExpr ex) :: rest) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env ex
   let (i2, ty) = emitBlockI32 emit fnNames valNames env rest
   (i1 ++ ["drop"] ++ i2, ty)
-emitBlockI32 emit fnNames valNames env ((CSLet _ (PVar x _) ex) :: rest) =
+emitBlockI32 emit fnNames valNames env ((CSLet _ (PVar x _ _) ex) :: rest) =
   let (i1, _) = emitScalarExpr emit fnNames valNames env ex
   let (i2, ty) = emitBlockI32 emit fnNames valNames (omInsert x () env) rest
   (i1 ++ ["local.set $" ++ gname x] ++ i2, ty)
@@ -4203,7 +4204,7 @@ headParamNames [] _ _ = []
 headParamNames (p :: ps) inner i =
   let name = "__wparg" ++ intToString i
   let chosen = match p
-    PVar x _ => if startsWith "__" x || contains x inner then name else x
+    PVar x _ _ => if startsWith "__" x || contains x inner then name else x
     _ => name
   chosen :: headParamNames ps inner (i + 1)
 
@@ -4277,7 +4278,7 @@ bindParamAliases prog pats params =
   flatMap (aliasOne prog) (zipPats pats params)
 
 aliasOne : Prog -> (Pat, String) -> List String
-aliasOne _ (PVar x _, a) =
+aliasOne _ (PVar x _ _, a) =
   if x == a then [] else ["local.get $" ++ gname a, "local.set $" ++ gname x]
 aliasOne _ (PWild, _) = []
 aliasOne prog _ = gapLP prog "ref-mode: non-plain param in fast-path alias"
@@ -4380,7 +4381,7 @@ patTestBind : Prog ->
   List String ->
   (List String, List String, List String)
 patTestBind prog PWild occ clLabel env = ([], [], env)
-patTestBind prog (PVar x _) occ clLabel env =
+patTestBind prog (PVar x _ _) occ clLabel env =
   ([], occ ++ ["local.set $" ++ gname x], x :: env)
 -- #759: unbox the scrutinee through the $mdk_unbox_int seam (i31 OR $boxint) and
 -- compare at full i64 width.  An `i31.get_s` + `i32.const n` path truncates to
@@ -4464,7 +4465,7 @@ patTestBind prog (PCon c args) occ clLabel env =
       ]
   let (ft, fb, env2) = patTestBindCon prog c args occ clLabel env 0
   (ctest ++ ft, fb, env2)
-patTestBind prog (PAs x _ p) occ clLabel env =
+patTestBind prog (PAs x _ _ p) occ clLabel env =
   let setX = occ ++ ["local.set $" ++ gname x]
   let (t, b, env2) = patTestBind prog p occ clLabel (x :: env)
   (t, setX ++ b, env2)
@@ -5274,7 +5275,7 @@ emitMethodValueRef prog env d name iface siteArity route implRoutes methRoutes =
       CallValueW
   else
     let names = etaValNames arity
-    let ps = map (n => PVar n (Loc "" 0 0 0 0)) names
+    let ps = map (n => PVar n (Loc "" 0 0 0 0) noBinderId) names
     let body = stampedAppW prog node (map (n => CVar n AGlobal) names)
     emitClosure prog env d ps body
 
@@ -5308,7 +5309,7 @@ emitDictValueRef prog env d name routes =
       emitDictRef prog env d name routes [] CallExact CallValueW
     else
       let names = etaValNames valArity
-      let ps = map (n => PVar n (Loc "" 0 0 0 0)) names
+      let ps = map (n => PVar n (Loc "" 0 0 0 0) noBinderId) names
       let body =
         stampedAppW prog (CDict name routes) (map (n => CVar n AGlobal) names)
       emitClosure prog env d ps body
@@ -5449,7 +5450,7 @@ gatherImplGroup prog entries (m, key) =
 -- count of leading `$dict_…` param patterns the dict-pass prepends ahead of the
 -- source value params (mirror of llvm_emit's leadingDictPats; uses wIsDictParamName).
 wLeadingDictPats : List Pat -> Int
-wLeadingDictPats ((PVar x _) :: rest) =
+wLeadingDictPats ((PVar x _ _) :: rest) =
   if wIsDictParamName x then 1 + wLeadingDictPats rest else 0
 wLeadingDictPats _ = 0
 
@@ -5534,9 +5535,9 @@ floatClausePatVars ptys (CClause pats _) = floatPatsAt ptys pats
 -- names this as the G3 root cause ("x's LTNum seed was read at the dict's index →
 -- missed").  wasm never got the same guard; see numPolyPatsAt for what it cost.
 floatPatsAt : List String -> List Pat -> List String
-floatPatsAt tys ((PVar x _) :: ps)
+floatPatsAt tys ((PVar x _ _) :: ps)
   | isDictParamName x = floatPatsAt tys ps
-floatPatsAt (ty :: tys) ((PVar x _) :: ps) =
+floatPatsAt (ty :: tys) ((PVar x _ _) :: ps) =
   (if ty == "Float" then [x] else []) ++ floatPatsAt tys ps
 floatPatsAt (_ :: tys) (_ :: ps) = floatPatsAt tys ps
 floatPatsAt _ _ = []
@@ -5568,9 +5569,9 @@ numPolyClausePatVars ptys (CClause pats body) = numPolyPatsAt ptys pats body
 -- $float at runtime — i.e. the explicit `Num a =>` signature, the one thing that should
 -- have GUARANTEED runtime dispatch, was precisely what disabled it.
 numPolyPatsAt : List String -> List Pat -> CExpr -> List String
-numPolyPatsAt tys ((PVar x _) :: ps) body
+numPolyPatsAt tys ((PVar x _ _) :: ps) body
   | isDictParamName x = numPolyPatsAt tys ps body
-numPolyPatsAt (ty :: tys) ((PVar x _) :: ps) body =
+numPolyPatsAt (ty :: tys) ((PVar x _ _) :: ps) body =
   (if isTypeVarName ty && paramUsedInNumBinop x body then [x] else [])
     ++ numPolyPatsAt tys ps body
 numPolyPatsAt (_ :: tys) (_ :: ps) body = numPolyPatsAt tys ps body
@@ -5582,7 +5583,7 @@ noSigNumPolyPatVars : CClause -> List String
 noSigNumPolyPatVars (CClause pats body) =
   flatMap
     (p => match p
-      PVar x _ => if paramUsedInNumBinop x body then [x] else []
+      PVar x _ _ => if paramUsedInNumBinop x body then [x] else []
       _ => [])
     pats
 
@@ -5592,7 +5593,7 @@ lamPolyParamNames : List Pat -> CExpr -> List String
 lamPolyParamNames pats body =
   flatMap
     (p => match p
-      PVar x _ => if paramUsedInNumBinop x body then [x] else []
+      PVar x _ _ => if paramUsedInNumBinop x body then [x] else []
       _ => [])
     pats
 
@@ -6763,7 +6764,7 @@ cexprIsFloat prog env (CBinPrim op l r tag _) =
     && tag /= "I64"
     && (tag == "Float" || cexprIsFloat prog env l || cexprIsFloat prog env r)
 cexprIsFloat prog env (CUnOp "-" x) = cexprIsFloat prog env x
-cexprIsFloat prog env (CLet _ (PVar x _) _ b) = cexprIsFloat prog (x :: env) b
+cexprIsFloat prog env (CLet _ (PVar x _ _) _ b) = cexprIsFloat prog (x :: env) b
 cexprIsFloat prog env (CLet _ _ _ b) = cexprIsFloat prog env b
 cexprIsFloat prog env (CBlock stmts) = cexprIsFloatBlock prog env stmts
 cexprIsFloat prog env (CIf _ t f) =
@@ -6803,7 +6804,7 @@ ctorPatFloatBinders _ _ = []
 
 ctorPatFloatBindersGo : String -> List Int -> List Pat -> Int -> List String
 ctorPatFloatBindersGo _ _ [] _ = []
-ctorPatFloatBindersGo c floatIdxs ((PVar x _) :: rest) i =
+ctorPatFloatBindersGo c floatIdxs ((PVar x _ _) :: rest) i =
   (if containsInt i floatIdxs then [x] else [])
     ++ ctorPatFloatBindersGo c floatIdxs rest (i + 1)
 ctorPatFloatBindersGo c floatIdxs (_ :: rest) i =
@@ -6838,7 +6839,7 @@ armNumPolyBinders prog pat body =
 cexprIsFloatBlock : Prog -> List String -> List CStmt -> Bool
 cexprIsFloatBlock _ _ [] = False
 cexprIsFloatBlock prog env [CSExpr e] = cexprIsFloat prog env e
-cexprIsFloatBlock prog env ((CSLet _ (PVar x _) _) :: rest) =
+cexprIsFloatBlock prog env ((CSLet _ (PVar x _ _) _) :: rest) =
   cexprIsFloatBlock prog (x :: env) rest
 cexprIsFloatBlock prog env (_ :: rest) = cexprIsFloatBlock prog env rest
 
@@ -6907,7 +6908,7 @@ emitLetWith : Prog ->
   CExpr ->
   CExpr ->
   List String
-emitLetWith prog env d body False (PVar x _) e1 e2 =
+emitLetWith prog env d body False (PVar x _ _) e1 e2 =
   let i1 = emitRefExpr prog env d e1
   let i2 = body (x :: env) e2
   i1 ++ ["local.set $" ++ gname x] ++ i2
@@ -6927,7 +6928,7 @@ emitLetWith prog env d body False pat e1 e2 =
 -- the self-call resolves), rebuild `go`'s closure into local `$go`, then emit `e2`
 -- with `go` bound.  `collectExprLocals` already declares `$go` (its CLet clause
 -- wildcards the rec flag), so no locals change is needed.
-emitLetWith prog env _ body True (PVar x _) (CLam pats lamBody) e2 =
+emitLetWith prog env _ body True (PVar x _ _) (CLam pats lamBody) e2 =
   emitSelfRecLocalBind prog env x pats lamBody ++ body (x :: env) e2
 -- a recursive NON-function `let` (`let x = … x … in e2`) is a value knot that no
 -- backend ties: the native emitter's rec clause likewise matches only `(PVar f)
@@ -6941,10 +6942,10 @@ emitBlockRef prog env d [CSExpr ex] = emitRefExpr prog env d ex
 emitBlockRef prog env d ((CSExpr ex) :: rest) =
   emitRefExpr prog env d ex ++ ["drop"] ++ emitBlockRef prog env d rest
 -- #314: a recursive block-statement function-`let` (see emitSelfRecLocalBind).
-emitBlockRef prog env d ((CSLet _ (PVar x _) (CLam pats body)) :: rest) =
+emitBlockRef prog env d ((CSLet _ (PVar x _ _) (CLam pats body)) :: rest) =
   emitSelfRecLocalBind prog env x pats body
     ++ emitBlockRef prog (x :: env) d rest
-emitBlockRef prog env d ((CSLet _ (PVar x _) ex) :: rest) =
+emitBlockRef prog env d ((CSLet _ (PVar x _ _) ex) :: rest) =
   emitRefExpr prog env d ex
     ++ ["local.set $" ++ gname x]
     ++ emitBlockRef prog (x :: env) d rest
@@ -8374,7 +8375,7 @@ emitRefTailWrap prog env arity other =
 -- takes as a base leaf: computed as a value and stored into the destination.
 isWTrmcWrapper : CExpr -> Bool
 isWTrmcWrapper (CIf _ _ _) = True
-isWTrmcWrapper (CLet False (PVar _ _) _ _) = True
+isWTrmcWrapper (CLet False (PVar _ _ _) _ _) = True
 isWTrmcWrapper (CLet False PWild _ _) = True
 isWTrmcWrapper (CBlock _) = True
 isWTrmcWrapper (CDecision _ _ _) = True
@@ -9305,10 +9306,10 @@ emitBlockTail prog env arity [CSExpr ex] = emitRefTail prog env arity ex
 emitBlockTail prog env arity ((CSExpr ex) :: rest) =
   emitRefExpr prog env 0 ex ++ ["drop"] ++ emitBlockTail prog env arity rest
 -- #314: a recursive block-statement function-`let` (see emitSelfRecLocalBind).
-emitBlockTail prog env arity ((CSLet _ (PVar x _) (CLam pats body)) :: rest) =
+emitBlockTail prog env arity ((CSLet _ (PVar x _ _) (CLam pats body)) :: rest) =
   emitSelfRecLocalBind prog env x pats body
     ++ emitBlockTail prog (x :: env) arity rest
-emitBlockTail prog env arity ((CSLet _ (PVar x _) ex) :: rest) =
+emitBlockTail prog env arity ((CSLet _ (PVar x _ _) ex) :: rest) =
   emitRefExpr prog env 0 ex
     ++ ["local.set $" ++ gname x]
     ++ emitBlockTail prog (x :: env) arity rest
@@ -11172,7 +11173,7 @@ bindPatRef : Prog ->
   (List String, List String)
 bindPatRef prog env PWild v = ([], env)
 bindPatRef prog env (PLit _) v = ([], env)
-bindPatRef prog env (PVar x _) v = (v ++ ["local.set $" ++ gname x], x :: env)
+bindPatRef prog env (PVar x _ _) v = (v ++ ["local.set $" ++ gname x], x :: env)
 bindPatRef prog env (PCon c args) v = bindConFields prog env c args v
 -- W7: a cons cell — field 1 = head, field 2 = tail (struct $C_Cons).
 bindPatRef prog env (PCons h t) v =
@@ -11186,7 +11187,7 @@ bindPatRef prog env (PList ps) v = bindListPat prog env ps v
 -- W7: a tuple pattern — field i+1 of the $C_Tup<n> struct.
 bindPatRef prog env (PTuple ps) v =
   bindTupleFields prog env (tupleCtorName (listLen ps)) ps v 0
-bindPatRef prog env (PAs x _ p) v =
+bindPatRef prog env (PAs x _ _ p) v =
   let setX = v ++ ["local.set $" ++ gname x]
   let (inner, env2) = bindPatRef prog (x :: env) p v
   (setX ++ inner, env2)
@@ -11308,7 +11309,7 @@ collectBindLocals (CBind _ [CClause _ body] _) = collectExprLocals body
 collectBindLocals _ = []
 
 patName : WasmEmit -> Pat -> String
-patName _ (PVar x _) = x
+patName _ (PVar x _ _) = x
 patName _ PWild = "_"
 patName emit _ =
   gapS
@@ -11322,7 +11323,7 @@ patName emit _ =
 -- every `let`-bound / block-let-bound PVar AND (W3) every PATTERN-bound var in a
 -- CDecision arm (the leaf re-match binds them into locals).
 collectExprLocals : CExpr -> List String
-collectExprLocals (CLet _ (PVar x _) e1 e2) =
+collectExprLocals (CLet _ (PVar x _ _) e1 e2) =
   x :: collectExprLocals e1 ++ collectExprLocals e2
 collectExprLocals (CLet _ pat e1 e2) =
   patVars pat ++ (collectExprLocals e1 ++ collectExprLocals e2)
@@ -11381,7 +11382,7 @@ collectLgValLocals _ = []
 
 collectStmtLocals : CStmt -> List String
 collectStmtLocals (CSExpr ex) = collectExprLocals ex
-collectStmtLocals (CSLet _ (PVar x _) ex) = x :: collectExprLocals ex
+collectStmtLocals (CSLet _ (PVar x _ _) ex) = x :: collectExprLocals ex
 collectStmtLocals (CSLet _ pat ex) = patVars pat ++ collectExprLocals ex
 collectStmtLocals (CSAssign _ ex) = collectExprLocals ex
 
@@ -11492,14 +11493,14 @@ collectGuardLocals (CGBind p e) =
 
 -- the variables a pattern binds (for local declaration).
 patVars : Pat -> List String
-patVars (PVar x _) = [x]
+patVars (PVar x _ _) = [x]
 patVars PWild = []
 patVars (PLit _) = []
 patVars (PCon _ args) = flatMap patVars args
 patVars (PTuple ps) = flatMap patVars ps
 patVars (PCons h t) = patVars h ++ patVars t
 patVars (PList ps) = flatMap patVars ps
-patVars (PAs x _ p) = x :: patVars p
+patVars (PAs x _ _ p) = x :: patVars p
 patVars _ = []
 
 -- ── distinct locals for shadowing binders ────────────────────────────────────
@@ -11585,12 +11586,12 @@ ubExtend : OrdMap Int -> List Pat -> OrdMap Int
 ubExtend sc pats = ubBumpAll sc (flatMap patVars pats)
 
 ubPat : OrdMap Int -> Pat -> Pat
-ubPat sc (PVar x l) = PVar (ubNew sc x) l
+ubPat sc (PVar x l bid) = PVar (ubNew sc x) l bid
 ubPat sc (PCon c ps) = PCon c (map (ubPat sc) ps)
 ubPat sc (PCons h t) = PCons (ubPat sc h) (ubPat sc t)
 ubPat sc (PTuple ps) = PTuple (map (ubPat sc) ps)
 ubPat sc (PList ps) = PList (map (ubPat sc) ps)
-ubPat sc (PAs x l p) = PAs (ubNew sc x) l (ubPat sc p)
+ubPat sc (PAs x l bid p) = PAs (ubNew sc x) l bid (ubPat sc p)
 ubPat _ p = p
 
 ubBind : OrdMap Int -> CBind -> CBind
@@ -12220,7 +12221,7 @@ maxIndexAtStmt (CSAssign _ e) d = maxIndexAt e d
 -- whatever the RHS itself uses, so the stash never collides with the RHS's own
 -- scratch and is live only while the sub-patterns extract their fields.
 letStashIndex : Pat -> CExpr -> Int -> Int
-letStashIndex (PVar _ _) _ d = d - 1
+letStashIndex (PVar _ _ _) _ d = d - 1
 letStashIndex PWild _ d = d - 1
 letStashIndex _ e d = maxIndexAt e d + 1
 
@@ -12396,7 +12397,7 @@ ctag _ = "?"
 
 -- a readable tag for an unsupported pattern.
 ptag : Pat -> String
-ptag (PVar _ _) = "PVar"
+ptag (PVar _ _ _) = "PVar"
 ptag PWild = "PWild"
 ptag (PLit (LInt _)) = "PLit-LInt"
 ptag (PLit (LFloat _)) = "PLit-LFloat"
@@ -12408,7 +12409,7 @@ ptag (PCon _ _) = "PCon"
 ptag (PTuple _) = "PTuple (W7)"
 ptag (PCons _ _) = "PCons (list — W7)"
 ptag (PList _) = "PList (list — W7)"
-ptag (PAs _ _ _) = "PAs"
+ptag (PAs _ _ _ _) = "PAs"
 -- #380 (first half): without this arm a range-shaped residual gap fell to `_ = "?"` and
 -- named no construct — which is why the #379 ledger rows read `… literal): ?`.
 ptag (PRng _ _ _) = "PRng"

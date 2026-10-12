@@ -246,20 +246,20 @@ headIsUpper s = match arrayGet 0 (stringToChars s)
 -- (`RecPatField name l None`) now carries the field-name token `Loc` too (#913
 -- Inc 2b), so the `fb` (fallback) Loc is used only for compiler-synthetic binders.
 patBinders : Loc -> Pat -> List (String, Loc)
-patBinders _ (PVar x l) = [(x, l)]
+patBinders _ (PVar x l _) = [(x, l)]
 patBinders _ PWild = []
 patBinders _ (PLit _) = []
 patBinders fb (PCon _ ps) = flatMap (patBinders fb) ps
 patBinders fb (PCons a b) = patBinders fb a ++ patBinders fb b
 patBinders fb (PTuple ps) = flatMap (patBinders fb) ps
 patBinders fb (PList ps) = flatMap (patBinders fb) ps
-patBinders fb (PAs x l p) = (x, l) :: patBinders fb p
+patBinders fb (PAs x l _ p) = (x, l) :: patBinders fb p
 patBinders _ (PRng _ _ _) = []
 patBinders fb (PRec _ fields _) = flatMap (recFieldBinders fb) fields
 
 recFieldBinders : Loc -> RecPatField -> List (String, Loc)
-recFieldBinders _ (RecPatField name l None) = [(name, l)]
-recFieldBinders fb (RecPatField _ _ (Some p)) = patBinders fb p
+recFieldBinders _ (RecPatField name l _ None) = [(name, l)]
+recFieldBinders fb (RecPatField _ _ _ (Some p)) = patBinders fb p
 
 -- a bare name list (let-group binds, prop params — neither carries a token `Loc`
 -- in the AST) paired with the enclosing `Loc` as a fallback: those binder sites
@@ -696,7 +696,7 @@ walkGuards w scope curLoc ((GBind p e) :: rest) =
 
 walkBinds : W -> List (List (String, String)) -> Loc -> List LetBind -> Unit
 walkBinds _ _ _ [] = ()
-walkBinds w scope curLoc ((LetBind _ clauses _) :: rest) =
+walkBinds w scope curLoc ((LetBind _ clauses _ _) :: rest) =
   let _ = walkClauses w scope curLoc clauses
   walkBinds w scope curLoc rest
 
@@ -760,7 +760,7 @@ locWithUriOf : W -> Loc -> Loc
 locWithUriOf w l = withUri (uriOf w) l
 
 letBindName : LetBind -> String
-letBindName (LetBind n _ _) = n
+letBindName (LetBind n _ _ _) = n
 
 -- a prop param paired with its OWN name-token `Loc` (#913 Inc 2b): renaming a
 -- prop param must land on its token, not the prop's DProp decl loc.
@@ -807,7 +807,7 @@ collectExpValGo _ _ [] = ()
 collectExpValGo ctx s ((DTypeSig True n _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
-collectExpValGo ctx s ((DFunDef True n _ _ _) :: rest) =
+collectExpValGo ctx s ((DFunDef True n _ _ _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectExpValGo ctx s rest
 collectExpValGo ctx s ((DExtern True n _) :: rest) =
@@ -822,7 +822,7 @@ collectExpValGo ctx s (_ :: rest) = collectExpValGo ctx s rest
 
 collectLetNames : Ctx -> HashMap String Unit -> List LetBind -> Unit
 collectLetNames _ _ [] = ()
-collectLetNames ctx s ((LetBind n _ _) :: rest) =
+collectLetNames ctx s ((LetBind n _ _ _) :: rest) =
   let _ = hmSetC ctx s n ()
   collectLetNames ctx s rest
 
@@ -850,7 +850,7 @@ defsOfDecl : Ctx ->
   Loc ->
   DeclPos ->
   List DefEntry
-defsOfDecl ctx expSet mid uri (DFunDef pub n _ _ _) loc _ = [
+defsOfDecl ctx expSet mid uri (DFunDef pub n _ _ _ _) loc _ = [
   emitDef
     ctx
     uri
@@ -898,7 +898,7 @@ letGroupDef : Ctx ->
   Bool ->
   LetBind ->
   DefEntry
-letGroupDef ctx expSet mid uri loc pub (LetBind n _ _) =
+letGroupDef ctx expSet mid uri loc pub (LetBind n _ _ _) =
   emitDef
     ctx
     uri
@@ -1098,7 +1098,7 @@ recordImplHead w ifaceMid n loc =
   recordDef (ctxOf w) (mkKey ifaceMid nsMethod n) (uriOf w) loc
 
 walkDeclBody : W -> Decl -> Loc -> Unit
-walkDeclBody w (DFunDef _ _ pats body _) loc =
+walkDeclBody w (DFunDef _ _ pats body _ _) loc =
   let frame = mkNamedFrame w (flatMap (patBinders loc) pats)
   walkExpr w [frame] loc body
 walkDeclBody w (DTypeSig _ _ ty _) loc = walkTy w loc ty
@@ -1376,7 +1376,7 @@ preludeDefsOfDecl : HashMap String Unit ->
   String ->
   Decl ->
   List (String, String, String)
-preludeDefsOfDecl expSet mid (DFunDef pub n _ _ _) = valEntry expSet mid pub n
+preludeDefsOfDecl expSet mid (DFunDef pub n _ _ _ _) = valEntry expSet mid pub n
 preludeDefsOfDecl expSet mid (DExtern pub n _) = valEntry expSet mid pub n
 preludeDefsOfDecl _ mid (DData { dataVis = vis, dataName = n, dataCtors = variants }) =
   consIf

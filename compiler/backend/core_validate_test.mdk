@@ -33,7 +33,7 @@ import ir.core_ir.{
   CallMode(..),
   CallSite(..),
 }
-import frontend.ast.{Lit(..), Pat(..), Route(..), noDeclLoc}
+import frontend.ast.{Lit(..), Pat(..), Route(..), noDeclLoc, noBinderId}
 import ir.core_ir_lower.{
   EmitTarget(..),
   ctorFieldTypeNames,
@@ -780,9 +780,16 @@ widenEntries m ((ent@(CImplEntry n s d body)) :: rest) =
 
 widenBody : CImplBody -> CImplBody
 widenBody (CImplTagged tag key iface sym pos pats body) =
-  CImplTagged tag key iface sym pos (pats ++ [PVar "w" noDeclLoc]) body
+  CImplTagged
+    tag
+    key
+    iface
+    sym
+    pos
+    (pats ++ [PVar "w" noDeclLoc noBinderId])
+    body
 widenBody (CImplDefault w tag key sym pos pats body) =
-  CImplDefault w tag key sym pos (pats ++ [PVar "w" noDeclLoc]) body
+  CImplDefault w tag key sym pos (pats ++ [PVar "w" noDeclLoc noBinderId]) body
 
 test "(q) the impl entries of one method and route word take one arity" = expectEach
   [
@@ -962,9 +969,23 @@ addEntryDictOne m (ent@(CImplEntry n s d body)) =
 
 addFirstPat : String -> CImplBody -> CImplBody
 addFirstPat m (CImplTagged tag key iface sym pos pats body) =
-  CImplTagged tag key iface sym pos (PVar "$dict_\{m}_0" noDeclLoc :: pats) body
+  CImplTagged
+    tag
+    key
+    iface
+    sym
+    pos
+    (PVar "$dict_\{m}_0" noDeclLoc noBinderId :: pats)
+    body
 addFirstPat m (CImplDefault w tag key sym pos pats body) =
-  CImplDefault w tag key sym pos (PVar "$dict_\{m}_0" noDeclLoc :: pats) body
+  CImplDefault
+    w
+    tag
+    key
+    sym
+    pos
+    (PVar "$dict_\{m}_0" noDeclLoc noBinderId :: pats)
+    body
 
 test "(x) a method with no declared context takes no context dictionary" = expectEach
   [
@@ -1003,9 +1024,12 @@ evidenceProg body =
     [
       CBind
         "g"
-        [CClause [PVar "$dict_g_0" noDeclLoc] (CLit (LInt 1))]
+        [CClause [PVar "$dict_g_0" noDeclLoc noBinderId] (CLit (LInt 1))]
         noDeclLoc,
-      CBind "main" [CClause [PVar "$dict_m_0" noDeclLoc] body] noDeclLoc,
+      CBind
+        "main"
+        [CClause [PVar "$dict_m_0" noDeclLoc noBinderId] body]
+        noDeclLoc,
     ]
     []
     []

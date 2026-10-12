@@ -116,7 +116,7 @@ alphaSyntax top env lets (EVar x) = varAuthority top env lets x
 alphaSyntax top env lets (EVarId x _) = varAuthority top env lets x
 alphaSyntax top env lets (EVarAt x _) = varAuthority top env lets x
 alphaSyntax top env lets (EDictAt x _) = varAuthority top env lets x
-alphaSyntax top env lets (ELet _ _ (PVar x _) e1 e2) =
+alphaSyntax top env lets (ELet _ _ (PVar x _ _) e1 e2) =
   alphaSyntax top env ((x, ALet e1) :: lets) e2
 alphaSyntax top env lets (ELet _ _ pat _ e2) =
   alphaUnder top env lets (patBoundNames pat) e2
@@ -185,7 +185,7 @@ blockAuthority top env lets (s :: rest@(_ :: _)) =
 blockAuthority _ _ _ _ = None
 
 stmtScope : DoStmt -> List (String, AlphaBinder) -> List (String, AlphaBinder)
-stmtScope (DoLet _ _ (PVar x _) e _) lets = (x, ALet e) :: lets
+stmtScope (DoLet _ _ (PVar x _ _) e _) lets = (x, ALet e) :: lets
 stmtScope (DoLet _ _ pat _ _) lets = shadowed (patBoundNames pat) lets
 stmtScope (DoBind pat _) lets = shadowed (patBoundNames pat) lets
 stmtScope (DoAssign x _) lets = shadowed [x] lets
@@ -200,7 +200,7 @@ armAuthority : Param ->
   Expr ->
   Arm ->
   Option Authority
-armAuthority top env lets scrut (Arm (PVar x _) _ rhs) =
+armAuthority top env lets scrut (Arm (PVar x _ _) _ rhs) =
   alphaSyntax top env ((x, ALet scrut) :: lets) rhs
 armAuthority top env lets _ (Arm pat _ rhs) =
   alphaUnder top env lets (patBoundNames pat) rhs
@@ -223,7 +223,7 @@ shadowed : List String ->
 shadowed names lets = map (n => (n, AOpaque)) names ++ lets
 
 letBindName : LetBind -> List String
-letBindName (LetBind n _ _) = [n]
+letBindName (LetBind n _ _ _) = [n]
 
 -- A domain element from a literal: a Prefix pattern, a singleton Set, or a
 -- product's primary axis; an atomic label abstracts every value to its top.
@@ -327,6 +327,6 @@ collectBinds : List LetBind ->
   List (String, AlphaBinder) ->
   List (String, AlphaBinder)
 collectBinds [] acc = acc
-collectBinds ((LetBind n clauses _) :: rest) acc = match clauses
+collectBinds ((LetBind n clauses _ _) :: rest) acc = match clauses
   [FunClause [] rhs] => collectBinds rest ((n, ALet rhs) :: acc)
   _ => collectBinds rest acc
