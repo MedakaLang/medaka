@@ -41,6 +41,7 @@ aliasDictNamesOfDecl : Map String Unit -> List (String, List Decl) -> Decl -> Li
 aliasDictNamesOfPath : Map String Unit -> List (String, List Decl) -> String -> UsePath -> List String
 aliasDictNamesOfUnit : Map String Unit -> List (String, List Decl) -> List Decl -> List String
 aliasEntriesFor : String -> UsePath -> List ((String, String), a) -> List (String, a)
+aliasExpansionStep : List (TabKey, (List String, Ty)) -> Ty -> Option (TabKey, Ty)
 aliasFixtureAttribCore : Decl
 aliasFixtureEnv : DataEnv
 aliasFixturePrivCore : Decl
@@ -1359,6 +1360,8 @@ grantVarParams : List GrantBinder -> List (Ref Authvar) -> List String -> Option
 grantWholeDomain : List Decl -> List Decl
 grantsEnabled : Unit -> Bool
 graphAliasEntry : String -> List ((String, String), a) -> (String, (String, String)) -> List (String, a)
+graphAliasRow : Decl -> List (TabKey, (List String, Ty))
+graphAliasRows : List Decl -> List (TabKey, (List String, Ty))
 graphAmbigValues : String -> List (String, List String)
 graphCarriesMangledFunDefs : List (String, List Decl) -> Bool
 graphCollect : GraphOut -> Bool -> String -> (List Decl, List (String, Scheme), List TcDiag, List TcDiag) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag))) -> (List (String, List Decl), List (String, (List (String, Scheme), List TcDiag, List TcDiag)))
@@ -1542,6 +1545,7 @@ implHeadKindClause : String -> Int -> List Kind -> String
 implHeadLabel : String -> KeyEntry -> String
 implHeadMatchesArgs : List Ty -> List Mono -> Bool
 implHeadMonos : List Ty -> (List (String, Mono), List Mono)
+implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
 implHeadParametric : Decl -> Bool
 implHeadSubst : List Ty -> List Mono -> Option (List (String, Mono))
 implHeadTypeVarRoots : List (String, Mono) -> List (String, Int)
@@ -1916,6 +1920,7 @@ localRole : Bool -> BindingRole
 localSlotArgs : List (Int, Mono) -> PredicateSlot -> List Mono
 localSlotLead : List (Int, Mono) -> PredicateSlot -> Mono
 localSourceName : String -> String
+locateTyAt : Option Loc -> Ty -> Ty
 lookupBinding : TcEnv -> String -> Option EnvBinding
 lookupBy : (a -> a -> Bool) -> a -> List (a, b) -> Option b
 lookupCtor : TcEnv -> String -> Option Scheme
@@ -3034,6 +3039,7 @@ splitOnComma : String -> List String
 splitOnCommaGo : String -> Int -> Int -> List String -> List String
 stableMinimum : List Mono -> List ImplRow -> ImplRow -> Bool
 stampCtxOf : String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
+stampGraphDecls : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 stampGroupClauses : ModuleMarking -> List String -> Map String (List (List Pat, Expr)) -> Map String (List (List Pat, Expr))
 stampMethodArities : List (Ref (Option Int)) -> Int -> Unit
 stampOpRouteVal : Bool -> String -> ScopeId -> String -> Mono -> String -> Route
@@ -3144,6 +3150,8 @@ tupleCallSpanLoc : Expr -> Expr -> Option Loc
 tupleMono : List Mono -> Mono
 tupleSpineOf : Mono -> List Mono -> Mono
 tupleUnifyClash : Mono -> Mono -> Bool
+tyAliasNormalForm : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
+tyAliasNormalFormKids : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
 tyAlphaConstraint : List (String, String) -> Constraint -> Constraint -> Option (List (String, String))
 tyAlphaConstraints : List (String, String) -> List Constraint -> List Constraint -> Option (List (String, String))
 tyAlphaEq : Ty -> Ty -> Bool

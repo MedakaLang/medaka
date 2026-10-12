@@ -6702,8 +6702,10 @@ instRefSeq (InstRef _ _ s) = s
 -- unreachable re-arms the same trap on `ImplEnv`.
 --
 -- Fields, in order: the declaring module's ordinal (A-3.1's `demOrd` — the scope);
--- the instance identity; the interface identity; the full head; the context; and
--- the explicit/synthesized impl method table.  The table is not a selection key;
+-- the instance identity; the interface identity; the full head, in alias normal
+-- form (`stampGraphDecls` rewrote the `DImpl` before any row was built, so no
+-- reader of it expands an alias); the context; and the explicit/synthesized impl
+-- method table.  The table is not a selection key;
 -- after exact row selection it also supplies the method route-word collision set.
 --
 -- ⚠️ NO `Loc`, and that is a second DEPARTURE from the §9.4 data shape with a
@@ -6952,6 +6954,10 @@ ieSameOrdRun o (r :: rest) acc
 -- rowRouteKey whether any method this exact row implements is
 -- shared by another row at the same head.  It deliberately does not add inherited
 -- cross-module defaults, whose RDict routing is a separate backend contract.
+--
+-- The head is taken as the decl holds it, already in alias normal form
+-- (`stampGraphDecls`); normalising here as well would give the engines, which
+-- read the same `DImpl`, a different head from the one selection chose.
 implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String)
 implDeclFacts prog = flatMap implDeclFact prog
 
@@ -29638,7 +29644,7 @@ data CohImpl = CohImpl IfaceRef (List Mono) String (Option Loc)
 -- callers at deletion time (`grep -rn 'cohCollectImpls\|cohCollectModuleImpls\|
 -- cohImplsOf' --include=*.mdk .` → definitions and comments only).  The `#414` span
 -- derivation they carried is preserved below, because `cohImplOfRow` still calls
--- `firstTyLocList` on the row's raw head and inherits every word of it.
+-- `firstTyLocList` on the row's head and inherits every word of it.
 --
 -- #414: the span to blame for an impl comes from its head types, via
 -- `firstTyLocList` (`frontend/ast.mdk`), which folds `firstTyLoc` — that inner
@@ -29648,7 +29654,8 @@ data CohImpl = CohImpl IfaceRef (List Mono) String (Option Loc)
 -- carrying one inline) — but the parser stamps every `TyCon` leaf with its span
 -- (`parser.mdk`'s parseTyAtom: `tyConUnresolved c (Some (locOfSpan s q))`), so the head's
 -- own tycon IS the impl's location.  Pre-order, so `impl C (Pair a Int)` blames
--- `Pair` — the head — not the argument.
+-- `Pair` — the head — not the argument.  An alias head's expansion is located at
+-- the alias occurrence (`locateTyAt`), so `impl C LB` still blames `LB`.
 --
 -- ⚠️ RESIDUAL (#414): only `TyCon` leaves carry spans, so a head with NO tycon —
 -- the fully-parametric `impl Foo a` — still yields `None` and falls back to the
@@ -29721,14 +29728,18 @@ implHeadIndexMsg head written =
 --     `cohImplsOfMid` built by hand from `iface`+`implOrigin`, because `implDeclFact`
 --     builds it with the identical expression.  That is why this relocation is not an
 --     acceptance change: `cohSameIface` (3.7-4) sees the same pair of `IfaceRef`s.
---   * the head is `cohFreshTys` of the row's raw `List Ty`, the same call the decl
+--   * the head is `cohFreshTys` of the row's `List Ty`, the same call the decl
 --     adapter made.  Effectful (fresh tyvars), exactly as the decl adapter was.
+--     The head is already in alias normal form (`stampGraphDecls`), so
+--     coherence compares the head selection reads, and `fromAstTypeE` finds no
+--     alias left on it to expand with the checked module's alias table (the
+--     wrong table for another module's head).
 --   * the owner module id is `instRefMid` of the row's `InstRef` — this is where
 --     `InstRef` acquires its FIRST judgment reader in this tree.
---   * the blame span is `firstTyLocList` of that same raw head.
+--   * the blame span is `firstTyLocList` of that same head.
 -- ⚠️ `ieLoc` IS NOT OWED FOR THIS.  `ImplRow`'s "no location field" note argues from
 -- `Decl` carrying no `Loc`, which is true and beside the point: the row carries the
--- raw `List Ty`, and the parser stamps every `TyCon` leaf with its span, so the span
+-- head's `List Ty`, and the parser stamps every `TyCon` leaf with its span, so the span
 -- coherence uses today is recoverable with no new field and no `DImpl` change.
 cohImplOfRow : ImplRow -> CohImpl
 cohImplOfRow r = match ieRowTriple r
@@ -42332,6 +42343,73 @@ substAliasArgs : List (String, Ty) -> Ty -> Ty
 substAliasArgs sub rhs =
   substTyVars sub (fst (mapTyFull (substRowTailsAt sub) rhs))
 
+-- A type with every saturated alias occurrence replaced by its expansion, top
+-- down, so an alias inside an expansion expands too: the type the written one
+-- denotes (DICT-SEMANTICS §8 I4.3).  Type constructors keep the identity resolve
+-- stamped on them, and an expansion is located at the occurrence it replaces.
+-- An alias applied at the wrong arity stays as written, as `fromAstTypeApp`
+-- leaves it, so its `T-ALIAS-ARITY` is still reported where the head elaborates.
+-- [seen] holds the aliases expanded on the current path, so a cyclic alias
+-- stops; `rejectCyclicAliases` reports it.
+tyAliasNormalForm : List (TabKey, (List String, Ty)) -> List TabKey -> Ty -> Ty
+tyAliasNormalForm aliases seen ty = match aliasExpansionStep aliases ty
+  Some (key, rhs) if not (anyList (k => tabKeyEq k key) seen) =>
+    tyAliasNormalForm aliases (key :: seen) (locateTyAt (firstTyLoc ty) rhs)
+  _ => tyAliasNormalFormKids aliases seen ty
+
+-- The children of a type that is not itself an alias occurrence.  An applied
+-- constructor's arguments are visited but its partial applications are not,
+-- since `fromAstTypeApp` reads an alias's arity off the whole spine.
+tyAliasNormalFormKids : List (TabKey, (List String, Ty)) ->
+  List TabKey ->
+  Ty ->
+  Ty
+tyAliasNormalFormKids aliases seen (TyApp a b) = match tyAppSpine (TyApp a b)
+  (h@(TyCon { tyConName = _ }), args) =>
+    fold (acc arg => TyApp acc (tyAliasNormalForm aliases seen arg)) h args
+  _ =>
+    TyApp (tyAliasNormalForm aliases seen a) (tyAliasNormalForm aliases seen b)
+tyAliasNormalFormKids aliases seen (TyFun a b) =
+  TyFun (tyAliasNormalForm aliases seen a) (tyAliasNormalForm aliases seen b)
+tyAliasNormalFormKids aliases seen (TyTuple ts) =
+  TyTuple (map (tyAliasNormalForm aliases seen) ts)
+tyAliasNormalFormKids aliases seen (TyEffect es tails t) =
+  TyEffect es tails (tyAliasNormalForm aliases seen t)
+tyAliasNormalFormKids aliases seen (TyNamed n t d) =
+  TyNamed n (tyAliasNormalForm aliases seen t) d
+tyAliasNormalFormKids aliases seen (TyQual t ps l) =
+  TyQual (tyAliasNormalForm aliases seen t) ps l
+tyAliasNormalFormKids aliases seen (TyConstrained cs t) =
+  TyConstrained cs (tyAliasNormalForm aliases seen t)
+tyAliasNormalFormKids _ _ t = t
+
+-- One saturated alias application at the root of [ty], expanded once: the
+-- alias's key and its right-hand side with the arguments substituted.
+aliasExpansionStep : List (TabKey, (List String, Ty)) ->
+  Ty ->
+  Option (TabKey, Ty)
+aliasExpansionStep aliases ty = match tyAppSpine ty
+  (TyCon { tyConName = n, tyConOrigin = o }, args) =>
+    let key = tyTabKey o n
+    match lookupTab key aliases
+      Some (params, rhs) if listLen params == listLen args =>
+        Some (key, substAliasArgs (zipL params args) rhs)
+      _ => None
+  _ => None
+
+-- [ty] with each constructor that has no span of its own located at [loc].
+-- `substAliasArgs` clears the spans of an alias's right-hand side, which was
+-- written at the alias declaration, not where the expansion now stands.
+locateTyAt : Option Loc -> Ty -> Ty
+locateTyAt None ty = ty
+locateTyAt loc ty =
+  fst
+    (mapTyFull
+      (t => match t
+        TyCon { tyConLoc = None } => (TyCon { t | tyConLoc = loc }, True)
+        _ => (t, False))
+      ty)
+
 substRowTailsAt : List (String, Ty) -> Ty -> (Ty, Bool)
 substRowTailsAt sub (TyEffect atoms tails t) =
   let (extra, tails2) = spliceRowTails sub tails
@@ -52566,6 +52644,44 @@ cmCheckWorker mid seed _accData _accAll prog =
   let (schemes, _) = checkBodyImpl seed mid [] prog
   (schemes, schemes.mbSchemes)
 
+-- The graph every Module-mode driver typechecks: type-constructor identity
+-- acquired over the whole graph (`stampGraphTyOrigins`), then every impl head in
+-- alias normal form (`tyAliasNormalForm`).  An impl head enters the instance
+-- environment here, once, as the type it denotes, so instance selection,
+-- coherence, the super-context checks and both engines read the same head, and
+-- none of them expands an alias on it.  The alias table is the whole graph's,
+-- keyed by declaration identity, so a head expands with the aliases of the
+-- module that wrote it.
+stampGraphDecls : List Decl ->
+  List (String, List Decl) ->
+  (List Decl, List (String, List Decl))
+stampGraphDecls coreDecls0 modules0 =
+  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+  let aliases = flatMap graphAliasRows (coreDecls :: map snd modules)
+  if isEmptyL aliases then
+    (coreDecls, modules)
+  else
+    (
+      map (implHeadNormalDecl aliases) coreDecls,
+      map (m => (fst m, map (implHeadNormalDecl aliases) (snd m))) modules,
+    )
+
+graphAliasRows : List Decl -> List (TabKey, (List String, Ty))
+graphAliasRows decls = flatMap graphAliasRow decls
+
+graphAliasRow : Decl -> List (TabKey, (List String, Ty))
+graphAliasRow (DAttrib _ d) = graphAliasRow d
+graphAliasRow (DTypeAlias { tyAliasName = n, tyAliasParams = ps, tyAliasRhs = rhs, tyAliasOrigin = o }) =
+  [(tyTabKey o n, (ps, rhs))]
+graphAliasRow _ = []
+
+implHeadNormalDecl : List (TabKey, (List String, Ty)) -> Decl -> Decl
+implHeadNormalDecl aliases (DAttrib a d) =
+  DAttrib a (implHeadNormalDecl aliases d)
+implHeadNormalDecl aliases (d@(DImpl { tys = tys })) =
+  DImpl { d | tys = map (tyAliasNormalForm aliases []) tys }
+implHeadNormalDecl _ d = d
+
 -- check every module in dependency order against a shared prelude + runtime.
 -- modules = (moduleId, desugared program) in dependency-first order.
 export
@@ -52597,7 +52713,7 @@ checkModulesK preludeKey runtimeDecls coreDecls0 modules0 =
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  See `checkModulesPreambleK` for why it is here and not there.
-  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+  let (coreDecls, modules) = stampGraphDecls coreDecls0 modules0
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: cmCheckWorker reads NEITHER accData (checkModuleFull → Module path, where
@@ -53117,7 +53233,7 @@ checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0
   -- that renames.  A module's rewrite reads only its dependencies' method sets, so
   -- it is stable under the prefix the step memo resumes from.
   let (coreDecls, modules) =
-    stampGraphTyOrigins coreDecls0 (renameAliasedMethods coreDecls0 modules0)
+    stampGraphDecls coreDecls0 (renameAliasedMethods coreDecls0 modules0)
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
   let fullKey =
@@ -53413,7 +53529,7 @@ driveGraphK sel preludeKey runtimeDecls coreDecls0 modulesIn =
   -- and `build` different trees.  Method-alias renaming comes first: it is a name
   -- rewrite on VALUES and cannot move a type head, so the graph reaches identity
   -- minting in its final shape and no later pass has to re-mint.
-  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modulesAliased
+  let (coreDecls, modules) = stampGraphDecls coreDecls0 modulesAliased
   let (runtimeSeed, coreSchemes, coreTree, ms) =
     graphPreamble sel preludeKey runtimeDecls coreDecls modules
   -- #154 PR-C: the worker reads BOTH accData (buildOracle `prog ++ accData` +
