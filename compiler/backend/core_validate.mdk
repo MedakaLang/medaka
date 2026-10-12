@@ -20,15 +20,16 @@
 -- one method and route word that take different value arities: they are the
 -- clauses of one define.
 --
--- The method-context check: an interface method whose declared `=>` context has
--- slots (the program's method-context table, which lowering reads off the
--- signature) takes one dictionary per slot.  A `CMethod` occurrence of it supplies
--- that many method routes; an impl entry for it opens with that many
--- `$dict_<method>_<k>` parameters, k counting from 0 (a supplied method may take
--- its instance's `requires` dictionaries after them, an inherited default takes
--- exactly one more, its receiver).  The emitters size a call by the routes and an
--- entry by its patterns, so the two must agree with the declaration, not only with
--- each other.  A method the table has no row for is not checked.
+-- The method-context check: an interface method takes one dictionary per slot of
+-- its declared `=>` context (the program's method-context table, which lowering
+-- reads off the signature; a method the table has no row for declares none).  A
+-- `CMethod` occurrence of it supplies exactly that many method routes; an impl
+-- entry for it opens with that many `$dict_<method>_<k>` parameters, k counting
+-- from 0 (a supplied method follows them with all of its instance's `requires`
+-- dictionaries or none, as the declaration facts count them; an inherited default
+-- takes exactly one more, its receiver).  The emitters size a call by the routes
+-- and an entry by its patterns, so the two must agree with the declaration, not
+-- only with each other.
 --
 -- The dispatch-evidence check: a `CMethod` or `CDict` occurrence must denote
 -- dictionaries its callee binds.  Every given dictionary a route names is bound
@@ -199,35 +200,41 @@ splitGroupFaults ((ent@(CImplEntry method _ _ body)) :: rest) seen acc =
 -- the method's declared context (see the header), in program order.
 export
 validateMethodContexts : CProgram -> List String
-validateMethodContexts (prog@(CProgram _ _ _ impls mctx _)) =
+validateMethodContexts (prog@(CProgram _ _ _ impls mctx facts)) =
   match walkProgram LlvmBackend prog
     Walk _ _ _ _ bad _ =>
       reverseL bad
-        ++ flatMap (entryContextFaults (omFromPairs mctx omEmpty)) impls
+        ++ flatMap
+          (entryContextFaults
+            (omFromPairs mctx omEmpty)
+            (omFromPairs facts.factRequires omEmpty))
+          impls
 
-entryContextFaults : OrdMap Int -> CImplEntry -> List String
-entryContextFaults table (CImplEntry method _ _ (CImplTagged tag _ iface _ _ pats _)) =
-  match omLookup (ifaceMethodArityKey iface method) table
-    Some k =>
-      let n = leadingMethodDicts method 0 pats
-      if n >= k then
-        []
-      else
-        [
-          "method context: impl entry opens with \{intToString n} `$dict_\{method}_k` parameters, `\{iface}` declares \{intToString k} [in impl \{method}@\{tag}]",
-        ]
-    None => []
-entryContextFaults table (CImplEntry method _ _ (CImplDefault iface tag _ _ _ pats _)) =
-  match omLookup (ifaceMethodArityKey iface method) table
-    Some k =>
-      let n = leadingMethodDicts method 0 pats
-      if n == k + 1 then
-        []
-      else
-        [
-          "method context: default entry opens with \{intToString n} `$dict_\{method}_k` parameters, `\{iface}` declares \{intToString k} and a receiver [in impl \{method}@\{tag}]",
-        ]
-    None => []
+entryContextFaults : OrdMap Int -> OrdMap Int -> CImplEntry -> List String
+entryContextFaults table reqs (CImplEntry method _ _ (CImplTagged tag key iface _ _ pats _)) =
+  let k = declaredMethodContext table iface method
+  let r = optionOr 0 (omLookup key reqs)
+  let n = leadingMethodDicts method 0 pats
+  if n == k || n == k + r then
+    []
+  else
+    [
+      "method context: impl entry opens with \{intToString n} `$dict_\{method}_k` parameters, `\{iface}` declares \{intToString k} and its instance requires \{intToString r} [in impl \{method}@\{tag}]",
+    ]
+entryContextFaults table _ (CImplEntry method _ _ (CImplDefault iface tag _ _ _ pats _)) =
+  let k = declaredMethodContext table iface method
+  let n = leadingMethodDicts method 0 pats
+  if n == k + 1 then
+    []
+  else
+    [
+      "method context: default entry opens with \{intToString n} `$dict_\{method}_k` parameters, `\{iface}` declares \{intToString k} and a receiver [in impl \{method}@\{tag}]",
+    ]
+
+-- The slot count of [method]'s declared context; no row declares none.
+declaredMethodContext : OrdMap Int -> String -> String -> Int
+declaredMethodContext table iface method =
+  optionOr 0 (omLookup (ifaceMethodArityKey iface method) table)
 
 -- How many of [pats], from the front, are `$dict_<method>_0`, `$dict_<method>_1`, ….
 leadingMethodDicts : String -> Int -> List Pat -> Int
@@ -608,20 +615,18 @@ givenRooted _ = False
 -- A method occurrence supplies one route per slot of its declared context.
 noteMethodContext : Ctx -> String -> String -> Int -> Walk -> Walk
 noteMethodContext (Ctx _ _ _ mctx _ _ binding) name iface n (w@(Walk seen found bad calls ctxs evs)) =
-  match omLookup (ifaceMethodArityKey iface name) mctx
-    Some k =>
-      if n == k then
-        w
-      else
-        Walk
-          seen
-          found
-          bad
-          calls
-          ("method context: method \{name} supplies \{intToString n} method routes, `\{iface}` declares \{intToString k} [in \{binding}]"
-            :: ctxs)
-          evs
-    None => w
+  let k = declaredMethodContext mctx iface name
+  if n == k then
+    w
+  else
+    Walk
+      seen
+      found
+      bad
+      calls
+      ("method context: method \{name} supplies \{intToString n} method routes, `\{iface}` declares \{intToString k} [in \{binding}]"
+        :: ctxs)
+      evs
 
 -- A field access is stamped, or reads a `Ref` cell through `.value`, which is
 -- never stamped: an emitter reading a stamped `.value` as a record field would

@@ -1466,7 +1466,10 @@ defaultStateProgram tag bodyConstant =
           "DefaultFace|\{tag}|"
           noImplSym
           []
-          [PVar "value" defaultStateLoc]
+          [
+            PVar "$dict_synthDefault_0" defaultStateLoc,
+            PVar "value" defaultStateLoc,
+          ]
           (CLit (LInt bodyConstant))),
     ]
 
@@ -1504,7 +1507,10 @@ defaultStateCensusProgramU =
           "DefaultFace|UDefault|"
           noImplSym
           []
-          [PVar "value" defaultStateLoc]
+          [
+            PVar "$dict_synthDefault_0" defaultStateLoc,
+            PVar "value" defaultStateLoc,
+          ]
           (CLit (LInt 29))),
     ]
 

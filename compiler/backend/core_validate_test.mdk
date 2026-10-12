@@ -752,12 +752,83 @@ test "(u) a method's dictionaries match its declared context" = expectEach [
     "an impl entry that takes no dictionary for the context is refused",
     expectEqual
       [
-        "method context: impl entry opens with 0 `$dict_desc_k` parameters, `calls::Desc` declares 1 [in impl desc@calls.Pair]",
+        "method context: impl entry opens with 0 `$dict_desc_k` parameters, `calls::Desc` declares 1 and its instance requires 0 [in impl desc@calls.Pair]",
       ]
       (validateMethodContexts
         (dropEntryDict "desc" (typedLowered i2078Prelude paramContextSrc))),
   ),
 ]
+
+-- `size` declares no context, so the method-context table has no row for it.
+contextFreeSrc : String
+contextFreeSrc =
+  "interface Size a where\n  size : a -> Int\nimpl Size Int where\n  size n = n\nmain = size (3 : Int)"
+
+-- [prog] with one more method route on every top-level application of method
+-- [name], as an elaboration that read another declaration's context would leave it.
+addMethodRoute : String -> CProgram -> CProgram
+addMethodRoute name (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (addRouteBind name) groups) ctors ctorTypes impls mctx facts
+
+addRouteBind : String -> CBind -> CBind
+addRouteBind name (CBind n clauses site) =
+  CBind n (map (addRouteClause name) clauses) site
+
+addRouteClause : String -> CClause -> CClause
+addRouteClause name (CClause pats body) = CClause pats (addRouteExpr name body)
+
+addRouteExpr : String -> CExpr -> CExpr
+addRouteExpr name (CApp hd args site) =
+  CApp (addRouteExpr name hd) (map (addRouteExpr name) args) site
+addRouteExpr name (m@(CMethod n (MethodEvidence iface arity route impls meths))) =
+  if n == name then
+    CMethod n (MethodEvidence iface arity route impls (meths ++ [route]))
+  else
+    m
+addRouteExpr _ e = e
+
+-- [prog] with a leading `$dict_<m>_0` parameter on every impl entry of method [m].
+addEntryDict : String -> CProgram -> CProgram
+addEntryDict m (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (map (addEntryDictOne m) impls) mctx facts
+
+addEntryDictOne : String -> CImplEntry -> CImplEntry
+addEntryDictOne m (ent@(CImplEntry n s d body)) =
+  if n == m then CImplEntry n s d (addFirstPat m body) else ent
+
+addFirstPat : String -> CImplBody -> CImplBody
+addFirstPat m (CImplTagged tag key iface sym pos pats body) =
+  CImplTagged tag key iface sym pos (PVar "$dict_\{m}_0" noDeclLoc :: pats) body
+addFirstPat m (CImplDefault w tag key sym pos pats body) =
+  CImplDefault w tag key sym pos (PVar "$dict_\{m}_0" noDeclLoc :: pats) body
+
+test "(x) a method with no declared context takes no context dictionary" = expectEach
+  [
+    (
+      "lowered, a context-free method validates clean",
+      expectEqual
+        []
+        (validateMethodContexts (typedLowered i2078Prelude contextFreeSrc)),
+    ),
+    (
+      "a call that supplies a method route to it is refused",
+      expectEqual
+        [
+          "method context: method size supplies 1 method routes, `calls::Size` declares 0 [in main]",
+        ]
+        (validateMethodContexts
+          (addMethodRoute "size" (typedLowered i2078Prelude contextFreeSrc))),
+    ),
+    (
+      "an impl entry that opens with a context dictionary for it is refused",
+      expectEqual
+        [
+          "method context: impl entry opens with 1 `$dict_size_k` parameters, `calls::Size` declares 0 and its instance requires 0 [in impl size@Int]",
+        ]
+        (validateMethodContexts
+          (addEntryDict "size" (typedLowered i2078Prelude contextFreeSrc))),
+    ),
+  ]
 
 -- A program whose `g` takes one dictionary and whose `main` binds `$dict_m_0`,
 -- with `body` as main's body.  Instance `K` requires nothing and its interface has

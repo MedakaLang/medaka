@@ -1,0 +1,9 @@
+-- Two modules each declare an interface `Desc` with a method `desc`.  `ma`'s
+-- carries a context over its parameter; `mb`'s carries none, and `mb.useB` calls
+-- it.  `ma` is imported first, so its method-context row is in the table when
+-- `mb`'s own same-spelled method is checked.  Expected, from mb's impl:
+-- useB 20 = desc 20 + 1 = 20 * 2 + 1 = "41".
+import method_context_samename_xmod.ma.{Show2}
+import method_context_samename_xmod.mb.{useB}
+
+main = println (useB 20)

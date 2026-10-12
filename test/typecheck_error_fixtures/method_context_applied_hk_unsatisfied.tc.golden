@@ -1,0 +1,1 @@
+TYPE ERROR: no impl of Show2 for Opt Tok; write `impl Show2 Opt`

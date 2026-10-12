@@ -1,0 +1,17 @@
+-- The same spellings with the contexts swapped: `desc` has none, `tag` has one.
+export interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "B\{n}"
+
+export interface Desc a where
+  desc : a -> c -> String
+  tag : Show2 c => a -> c -> String
+
+impl Desc Int where
+  desc n _ = "b:" ++ show2 n
+  tag _ c = "tagB" ++ show2 c
+
+export useB : Int -> String
+useB n = desc n n ++ tag n n

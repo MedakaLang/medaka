@@ -1,0 +1,17 @@
+-- `desc` has a context over `c`; `tag` has none.
+export interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "A\{n}"
+
+export interface Desc a where
+  desc : Show2 c => a -> c -> String
+  tag : a -> c -> String
+
+impl Desc Int where
+  desc _ c = "a:" ++ show2 c
+  tag _ _ = "tagA"
+
+export useA : Int -> String
+useA n = desc n n ++ tag n n

@@ -1,0 +1,12 @@
+-- `desc` here has a context over the interface parameter.
+export interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "A\{n}"
+
+export interface Desc a where
+  desc : Show2 a => a -> String
+
+impl Desc Int where
+  desc n = show2 n
