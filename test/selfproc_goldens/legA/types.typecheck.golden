@@ -33,9 +33,9 @@ aliasArgBindings : SigVars -> List (String, Mono) -> List String -> List Kind ->
 aliasArgScope : SigVars -> List (String, Mono) -> TabKey -> List String -> List Ty -> (SigVars, List (String, Mono))
 aliasArityMsg : String -> Int -> Int -> String
 aliasConstraintEntries : List Decl -> List ((String, String), a) -> List (String, a)
-aliasDfsVisit : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> String -> Unit
-aliasDfsVisitAll : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> List String -> Unit
-aliasDfsVisitNeighbors : List (String, List String) -> Ref (List String) -> Ref (List String) -> Ref (List String) -> List String -> Unit
+aliasDfsVisit : Map String (List String) -> Ref (Map String Unit) -> Ref (List String) -> Ref (Map String Unit) -> Ref (List String) -> String -> Unit
+aliasDfsVisitAll : Map String (List String) -> Ref (Map String Unit) -> Ref (List String) -> Ref (Map String Unit) -> Ref (List String) -> List String -> Unit
+aliasDfsVisitNeighbors : Map String (List String) -> Ref (Map String Unit) -> Ref (List String) -> Ref (Map String Unit) -> Ref (List String) -> List String -> Unit
 aliasDictNames : List String -> List (String, List Decl) -> List (String, List Decl) -> List String
 aliasDictNamesOfDecl : Map String Unit -> List (String, List Decl) -> Decl -> List String
 aliasDictNamesOfPath : Map String Unit -> List (String, List Decl) -> String -> UsePath -> List String
@@ -128,10 +128,12 @@ appFallback : SigVars -> List (String, Mono) -> TyConOrigin -> String -> List Ty
 appNodeArg : Expr -> Expr
 appSpineArgCount : Expr -> Int
 appSpineExpr : Expr -> (Expr, List Expr)
+appSpineExprGo : Expr -> List Expr -> (Expr, List Expr)
 appSpineHead : Expr -> Expr
 appSpineHeadLoc : Expr -> Option Loc
 appSpineName : Expr -> Option String
 appSpineNodes : Expr -> List Expr
+appSpineNodesGo : Expr -> List Expr -> List Expr
 appendDataUniverse : String -> List Decl -> Unit
 appendOp : Mono -> Mono -> Mono
 appendUniverseAccums : String -> List Decl -> Unit
@@ -302,7 +304,7 @@ bucketArgsMatch : List (List Ty, List Require) -> List Mono -> Bool
 bucketArgsMatchReqs : List (List Ty, List Require) -> List Mono -> Bool
 bucketRecvMatch : List (List Ty, List Require) -> Mono -> Bool
 buildAdj : List String -> Map String Unit -> Map String (List (List Pat, Expr)) -> Map String (List String) -> Map String (List String)
-buildAliasGraphEntry : List String -> (TabKey, (List String, Ty)) -> (String, List String)
+buildAliasGraphEntry : Map String Unit -> (TabKey, (List String, Ty)) -> (String, List String)
 buildClassEnv : List DeclEnvModule -> ClassEnv
 buildClassEnvGo : List DeclEnvModule -> ClassEnv -> ClassEnv
 buildDataEnv : List DeclEnvModule -> DataEnv
@@ -784,7 +786,7 @@ declEnvVisibleTo : Int -> Int -> Bool -> Bool
 declEnvsOrdOf : String -> DeclEnvs -> Int
 declGradedScope : List String -> List (Option KindAnn) -> List IfaceMethod -> List (String, List Kind)
 declGradedScopeAdd : String -> List Kind -> List (String, List Kind) -> List (String, List Kind)
-declHasPolarityEntry : List (TabKey, List Polarity) -> Decl -> Bool
+declHasPolarityEntry : Map String (List TabKey) -> Decl -> Bool
 declIsOwnedType : String -> String -> Decl -> Bool
 declKindEntry : Decl -> Option (TyConOrigin, String, List Kind)
 declMethodIdents : List Decl -> List (String, Ident)
@@ -811,7 +813,7 @@ declaredEffectsAt : MethodTrackedInstantiation -> Option CDeclared -> Option CDe
 declaredEffectsOpen : Ty -> Bool
 declaredIfacesOn : String -> Ty -> List String
 declaredOblArgId : List Int -> Mono -> List Int
-declaredOblArgOk : List Int -> Mono -> Bool
+declaredOblArgOk : (Int -> Bool) -> Mono -> Bool
 declaredOblMixed : List Int -> IfaceRef -> List (String, Mono) -> List Ty -> List VecObl
 declaredOblOne : List Int -> List (String, Mono) -> Constraint -> List VecObl
 declaredPairOne : (IfaceRef, List Mono) -> List (IfaceRef, Int)
@@ -823,10 +825,12 @@ declaresStandalone : String -> List Decl -> Bool
 decodeSetParam : String -> List String
 decodeWrittenParam : EffLabel -> EffParamTy -> Result String Param
 dedupBinders : List (String, Param) -> List (String, Param) -> List (String, Param)
+dedupBindersGo : List (String, Param) -> Map String Unit -> List (String, Param) -> List (String, Param)
 dedupI : List Int -> List Int
 dedupIGo : List Int -> Map Int Unit -> List Int -> List Int
 dedupIfacePairs : List (IfaceRef, Int) -> List (IfaceRef, Int)
 dedupLocated : List (String, Option Loc) -> List (String, Option Loc) -> List (String, Option Loc)
+dedupLocatedGo : List (String, Option Loc) -> Map String Unit -> List (String, Option Loc) -> List (String, Option Loc)
 dedupPredicateSlotEntry : (String, List PredicateSlot) -> (String, List PredicateSlot)
 dedupPredicateSlotsTable : Unit -> Unit
 dedupSlotVecs : List (CSlot, List Mono) -> List (CSlot, List Mono)
@@ -1382,7 +1386,7 @@ hasDupI : List Int -> Bool
 hasFileBoundValue : Mono -> Bool
 hasImportDefiner : String -> Bool
 hasMethodLevelConstraint : List String -> Ty -> Bool
-hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
+hasPredicateSlots : String -> Map String (List PredicateSlot) -> Bool
 hasVectorArgs : UObligation -> Bool
 headAnnotTy : Ty -> Mono
 headAtomsOr : List (List Atom) -> List Atom
@@ -1408,6 +1412,7 @@ headlessBucketKey : RegKey
 headsUnifier : Map String Unit -> List Mono -> List Mono -> Option (Ref (List (Int, Mono)))
 i64RangeText : String
 idConflictHelp : (String, TyConOrigin, TyConOrigin) -> String
+idSetInsertAll : List Int -> Map Int Unit -> Map Int Unit
 idSetOf : List Int -> Map Int Unit -> Map Int Unit
 identKeysByName : Map String (List String) -> List (String, Ident) -> Map String (List String)
 ieAddRows : List ImplRow -> ImplEnv -> ImplEnv
@@ -1915,7 +1920,7 @@ lookupLocalFlag : TcEnv -> String -> Bool
 lookupMethodPredicateSlots : String -> List (String, List MethodPredicateSlot) -> Option (List MethodPredicateSlot)
 lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
 lookupMethodRowById : IfaceRef -> String -> Registry MethodSchemeRow -> Option MethodSchemeRow
-lookupPredicateSlots : String -> List (String, List PredicateSlot) -> Option (List PredicateSlot)
+lookupPredicateSlots : String -> Map String (List PredicateSlot) -> Option (List PredicateSlot)
 lookupQualPayload : String -> String -> List ((String, String), a) -> Option a
 lookupRecordByName : String -> Option RecordInfo
 lookupRecordForReceiver : Mono -> String -> Option RecordInfo
@@ -2376,7 +2381,7 @@ phantomMethodMsg : String -> List String -> (String, Ty, List (String, List Kind
 phantomMethodMsgs : CeRow -> List String
 pickMostSpecificEntry : List Mono -> List KeyEntry -> Option KeyEntry
 pickNumLitRow : IfaceRef -> String -> List MethodSchemeRow -> Option MethodSchemeRow
-pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
+pickSchemes : List String -> Map String Scheme -> List (String, Scheme)
 pickSchemesByDecl : List String -> List (String, Scheme) -> Registry MethodSchemeRow -> Map String Scheme -> List (String, EnvBinding)
 pinUnboundIds : List Int -> List (Int, Mono) -> List (Int, Mono)
 pinsTyvarMsg : String -> Ty -> List String -> String
@@ -2423,7 +2428,7 @@ predicateSlotArgs : List PredicateSlot -> List (List Mono)
 predicateSlotCSlots : List PredicateSlot -> List CSlot
 predicateSlotFromExpanded : Map String PredicateSlot -> (CSlot, List Mono) -> PredicateSlot
 predicateSlotIds : List PredicateSlot -> List Int
-predicateSlotIdsAt : String -> List (String, List PredicateSlot) -> List Int
+predicateSlotIdsAt : String -> Map String (List PredicateSlot) -> List Int
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
 predicateSlotKnownSupers : PredicateSlot -> List (PredicateSlot, List Int)
 predicateSlotOfNode : SuperNode (List Mono) -> PredicateSlot
@@ -2784,7 +2789,7 @@ resolveArgStamps : List PendingEntry -> Unit
 resolveArithSite : Ref Route -> Mono -> Unit
 resolveArithSites : List (Ref Route, Mono) -> Unit
 resolveDictApps : List PendingDictApp -> Unit
-resolveExactReturnSite : List String -> String -> Ref Route -> Ref (List Route) -> Mono -> MethodReturnRequest -> String -> Option Loc -> ScopeId -> Unit
+resolveExactReturnSite : Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> MethodReturnRequest -> String -> Option Loc -> ScopeId -> Unit
 resolveFieldAmbiguous : Mono -> String -> List String -> Option (String, RecordInfo)
 resolveFieldByOwners : Mono -> String -> Option (String, RecordInfo)
 resolveFieldOwnersNarrowed : Mono -> String -> List String -> Option (String, RecordInfo)
@@ -2792,7 +2797,7 @@ resolveFieldRecord : Mono -> String -> Option (String, RecordInfo)
 resolveFieldUnknownReceiver : String -> List String -> Option (String, RecordInfo)
 resolveMemberRows : (String, String) -> List (String, a) -> List (String, a)
 resolveMethodDicts : List PendingMethodDict -> Unit
-resolveNumLitSite : List String -> String -> Ref Route -> Mono -> Mono -> ClassPredicate -> String -> Option Loc -> ScopeId -> Unit
+resolveNumLitSite : Map String Unit -> String -> Ref Route -> Mono -> Mono -> ClassPredicate -> String -> Option Loc -> ScopeId -> Unit
 resolveOpSite : Bool -> String -> Ref Route -> Mono -> Bool -> String -> ScopeId -> Unit
 resolveOpSites : Bool -> List PendingEntry -> Unit
 resolvePendingJoin : PendingJoin -> Unit
@@ -2801,8 +2806,8 @@ resolvePredicateOpSite : Bool -> String -> Ref Route -> Mono -> Bool -> ClassPre
 resolveRLocalSite : String -> Ref Route -> Mono -> String -> ScopeId -> String -> List Mono -> List IfaceRef -> List (List Mono) -> Unit
 resolveRLocalSites : List PendingEntry -> Unit
 resolveRecMono : String -> ScopeId -> IfaceRef -> Mono -> Route
-resolveSite : List String -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
-resolveSites : List String -> List PendingEntry -> Unit
+resolveSite : Map String Unit -> String -> Ref Route -> Ref (List Route) -> Mono -> Mono -> String -> Option Loc -> ScopeId -> Unit
+resolveSites : Map String Unit -> List PendingEntry -> Unit
 restAtoms : List (List Atom) -> List (List Atom)
 restoreCoreDriverFields : DriverState -> Unit
 resultAfterArrows : Int -> Mono -> Option Mono
@@ -2934,6 +2939,7 @@ selfQualEntries : String -> Map String Unit -> List ((String, String), a) -> Lis
 setCoherenceUserDecls : List Decl -> Unit
 setDictEligible : List String -> Unit
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
+setFunPredicateSlots : List (String, List PredicateSlot) -> Unit
 setGrantOcc : EvId -> GrantOcc -> Unit
 setLocIfSome : Option Loc -> Unit
 setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
@@ -3085,7 +3091,9 @@ survivorNameOf : Mono -> List (String, Mono) -> Option String
 survivorNameOfId : Int -> List (String, Mono) -> Option String
 survivorObligationEntailed : String -> List String -> String -> String -> Ty -> Bool
 synthesizedAdmissions : List (String, List String) -> List Decl -> List (String, String)
-tabKeyElem : List TabKey -> TabKey -> Bool
+tabKeyIndex : List TabKey -> Map String (List TabKey)
+tabKeyIndexGo : List TabKey -> Map String (List TabKey) -> Map String (List TabKey)
+tabKeyIndexHas : Map String (List TabKey) -> TabKey -> Bool
 tagAllLitLocs : Mono -> JoinContext -> Unit
 tagLitLocsWithRoot : Int -> JoinContext -> List (Mono, Loc) -> Unit
 tagModuleExports : Map String Scheme -> List (String, Scheme) -> List (String, ExportBinding)

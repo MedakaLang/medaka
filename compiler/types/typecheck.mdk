@@ -5095,7 +5095,8 @@ polarityEntriesPublicOnly : List Decl ->
   List (TabKey, List Polarity)
 polarityEntriesPublicOnly decls entries =
   let keys = polarityPublicKeys decls
-  filterList (e => tabKeyElem keys (fst e)) entries
+  let index = tabKeyIndex keys
+  filterList (e => tabKeyIndexHas index (fst e)) entries
 
 -- The keys of [decls] that leave the module.  Arm for arm with
 -- `kindPublicDataDecl`, plus `DTypeAlias`; `DAttrib` unwraps as everywhere else
@@ -5113,9 +5114,26 @@ polarityPublicKeys ((DTypeAlias { tyAliasPub = True, tyAliasName = n, tyAliasOri
   tyTabKey o n :: polarityPublicKeys rest
 polarityPublicKeys (_ :: rest) = polarityPublicKeys rest
 
-tabKeyElem : List TabKey -> TabKey -> Bool
-tabKeyElem [] _ = False
-tabKeyElem (k :: rest) key = tabKeyEq k key || tabKeyElem rest key
+-- Membership index over a `TabKey` list, bucketed by the bare name: the probe
+-- reads the name already stored in the key (no rendering, no allocation), and
+-- `tabKeyEq` decides inside the bucket, so `tabKeyIndexHas (tabKeyIndex ks) k`
+-- answers exactly "some `k2` in `ks` has `tabKeyEq k2 k`".
+tabKeyIndex : List TabKey -> OrdMap (List TabKey)
+tabKeyIndex keys = tabKeyIndexGo keys omEmpty
+
+tabKeyIndexGo : List TabKey -> OrdMap (List TabKey) -> OrdMap (List TabKey)
+tabKeyIndexGo [] index = index
+tabKeyIndexGo (k :: rest) index =
+  let name = tabKeyName k
+  let bucket = match omLookup name index
+    Some b => b
+    None => []
+  tabKeyIndexGo rest (omInsert name (k :: bucket) index)
+
+tabKeyIndexHas : OrdMap (List TabKey) -> TabKey -> Bool
+tabKeyIndexHas index key = match omLookup (tabKeyName key) index
+  None => False
+  Some bucket => anyList (k => tabKeyEq k key) bucket
 
 -- ── S0-3: the TRANSITIVE FIXPOINT the single fold above cannot reach ──────
 -- `declEnvPolarityEntries` (below) is ONE in-order pass, so a wrapper declared
@@ -9302,20 +9320,17 @@ predicateSlotArgs (slot :: rest) = match slot.psArgs
   PSArgsUnknown => []
   PSArgsKnown args => args :: predicateSlotArgs rest
 
+-- `idx` is the first-wins index `funPredicateSlotsIdxRef` mirrors from `funPredicateSlotsRef`.
 lookupPredicateSlots : String ->
-  List (String, List PredicateSlot) ->
+  OrdMap (List PredicateSlot) ->
   Option (List PredicateSlot)
-lookupPredicateSlots _ [] = None
-lookupPredicateSlots k ((k2, slots) :: rest)
-  | k == k2 = Some slots
-  | otherwise = lookupPredicateSlots k rest
+lookupPredicateSlots k idx = omLookup k idx
 
-hasPredicateSlots : String -> List (String, List PredicateSlot) -> Bool
-hasPredicateSlots k table = isSome (lookupPredicateSlots k table)
+hasPredicateSlots : String -> OrdMap (List PredicateSlot) -> Bool
+hasPredicateSlots k idx = omHasKey k idx
 
-predicateSlotIdsAt : String -> List (String, List PredicateSlot) -> List Int
-predicateSlotIdsAt name table =
-  predicateSlotIds (optionOr [] (lookupPredicateSlots name table))
+predicateSlotIdsAt : String -> OrdMap (List PredicateSlot) -> List Int
+predicateSlotIdsAt name idx = predicateSlotIds (optionOr [] (omLookup name idx))
 
 predicateSlotWithoutArgs : PredicateSlot -> PredicateSlot
 predicateSlotWithoutArgs s = PredicateSlot {
@@ -11940,7 +11955,7 @@ data PerRun = PerRun {
   aliasMethodOriginsRef : Ref (OrdMap String),  -- #1386: the alias-qualified method spellings this module's imports bring into scope (`import m as A` ⇒ `A.mth`, `import m.{mth as loc}` ⇒ `loc`), each mapped to the ORIGIN method name.  A projection of the same candidate rows that supply `methodAliasEntriesRef`, UNFILTERED (the supply drops ambiguous and unresolvable keys; see `aliasMethodSpellings`), so this table is a superset of the supply's key set; read through `originMethodName`.
   implObls : Windowed UObligation,  -- #841: pendingImplObligations/N, ported onto Windowed; #991: onto UObligation
   poisonedVars : Ref (List Int),
-  deferrableVarIds : Ref (List Int),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — `undeterminedGoalExempt` defers a goal on these into the scheme
+  deferrableVarIds : Ref (Map Int Unit),  -- #838 I2: QUANTIFIED (forwarded) var ids of every generalized scheme — `undeterminedGoalExempt` defers a goal on these into the scheme
   liveMemberMonosRef : Ref (List Mono),  -- the types of the module's closed top-level members that generalization left a variable open in: a later group can still ground it (DICT-SEMANTICS §6.2 T2), so no boundary judges a goal on it (`liveMemberIds`)
   quiescentGoalsRef : Ref (List (OrdMap Unit, GoalWindow, UObligation)),  -- the goals on such a variable, newest first, each with its boundary's rigid variables and window (`judgeQuiescentGoals`)
   determinedRowsRef : Ref (Map Int (List (ImplRow, List Mono))),  -- the instance each determination commit chose, with the committed goal's arguments, filed under the variable heading the goal (`fileDeterminedRow`)
@@ -11959,6 +11974,7 @@ data PerRun = PerRun {
   localSchemesOut : Ref (List (String, Option Loc, Scheme)),
   seedSchemesOut : Ref (List (String, Scheme)),
   funPredicateSlotsRef : Ref (List (String, List PredicateSlot)),
+  funPredicateSlotsIdxRef : Ref (OrdMap (List PredicateSlot)),  -- first-wins index over funPredicateSlotsRef; written only through setFunPredicateSlots (or omInsert alongside the cons at setFunConstraintEntry)
   funConstraintDeclaredRef : Ref (List (String, CDeclaredPrefix)),
   currentImportDefinersRef : Ref (OrdMap String),
   currentImportOriginsRef : Ref (OrdMap String),
@@ -12054,7 +12070,7 @@ freshPerRun _ = PerRun {
   aliasMethodOriginsRef = Ref omEmpty,
   implObls = wNew (),
   poisonedVars = Ref [],
-  deferrableVarIds = Ref [],
+  deferrableVarIds = Ref Tip,
   liveMemberMonosRef = Ref [],
   quiescentGoalsRef = Ref [],
   determinedRowsRef = Ref Tip,
@@ -12073,6 +12089,7 @@ freshPerRun _ = PerRun {
   localSchemesOut = Ref [],
   seedSchemesOut = Ref [],
   funPredicateSlotsRef = Ref [],
+  funPredicateSlotsIdxRef = Ref omEmpty,
   funConstraintDeclaredRef = Ref [],
   currentImportDefinersRef = Ref omEmpty,
   currentImportOriginsRef = Ref omEmpty,
@@ -12131,6 +12148,10 @@ resetState _ =
 containsI : Int -> List Int -> Bool
 containsI _ [] = False
 containsI x (y :: ys) = x == y || containsI x ys
+
+idSetInsertAll : List Int -> Map Int Unit -> Map Int Unit
+idSetInsertAll [] m = m
+idSetInsertAll (i :: rest) m = idSetInsertAll rest (IdMap.set i () m)
 
 -- `support/util`'s `anyList` takes a PURE predicate, so it cannot carry the
 -- path-compressing (hence effectful) mono predicates below — `monoIsFunction`,
@@ -14257,64 +14278,72 @@ takeUntilInclusiveS target (x :: xs) =
 --   * it feeds `emitCyclicAliasErrors`, whose OUTPUT ORDER is observable in
 --     goldens (see the enumeration-order bullet in `types/registry.mdk`).
 -- `tabKeyName` is what makes the bare half explicit here rather than implicit.
-buildAliasGraphEntry : List String ->
+buildAliasGraphEntry : OrdMap Unit ->
   (TabKey, (List String, Ty)) ->
   (String, List String)
-buildAliasGraphEntry aliasKeys (key, paramsRhs) =
+buildAliasGraphEntry aliasSet (key, paramsRhs) =
   let rhs = snd paramsRhs
   (
     tabKeyName key,
-    filterList (k => contains k aliasKeys) (dedup (tyConNamesInTy rhs)),
+    filterList (k => omHasKey k aliasSet) (dedup (tyConNamesInTy rhs)),
   )
 
 -- DFS over the alias dependency graph.  Detects back-edges (a node is reached
 -- while it is already on the current path) → cycle.  On a back-edge to `target`,
 -- marks every node on the stack from the head down to and including `target` as
 -- cyclic (they are all on the same cycle path).
-aliasDfsVisit : List (String, List String) ->
+-- `onStackRef` keeps the path in order (for `takeUntilInclusiveS`); `onStackSetRef`
+-- mirrors it as a set for the membership test.  Both are updated together.
+aliasDfsVisit : OrdMap (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
-  Ref (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
   String ->
   Unit
-aliasDfsVisit graph visitedRef onStackRef cyclicOut name =
-  if contains name !visitedRef then
+aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut name =
+  if omHasKey name !visitedRef then
     ()
-  else if contains name !onStackRef then
+  else if omHasKey name !onStackSetRef then
     cyclicOut := dedup (takeUntilInclusiveS name !onStackRef ++ !cyclicOut)
   else
     onStackRef := name :: !onStackRef
+    onStackSetRef := omInsert name () !onStackSetRef
     let _ =
       aliasDfsVisitNeighbors
         graph
         visitedRef
         onStackRef
+        onStackSetRef
         cyclicOut
-        (optionOr [] (lookupAssoc name graph))
+        (optionOr [] (omLookup name graph))
     onStackRef := filterList (/= name) !onStackRef
-    visitedRef := name :: !visitedRef
+    onStackSetRef := omDelete name !onStackSetRef
+    visitedRef := omInsert name () !visitedRef
 
-aliasDfsVisitNeighbors : List (String, List String) ->
+aliasDfsVisitNeighbors : OrdMap (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
-  Ref (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
   List String ->
   Unit
-aliasDfsVisitNeighbors _ _ _ _ [] = ()
-aliasDfsVisitNeighbors graph visitedRef onStackRef cyclicOut (n :: ns) =
-  let _ = aliasDfsVisit graph visitedRef onStackRef cyclicOut n
-  aliasDfsVisitNeighbors graph visitedRef onStackRef cyclicOut ns
+aliasDfsVisitNeighbors _ _ _ _ _ [] = ()
+aliasDfsVisitNeighbors graph visitedRef onStackRef onStackSetRef cyclicOut (n :: ns) =
+  let _ = aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut n
+  aliasDfsVisitNeighbors graph visitedRef onStackRef onStackSetRef cyclicOut ns
 
-aliasDfsVisitAll : List (String, List String) ->
+aliasDfsVisitAll : OrdMap (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
-  Ref (List String) ->
+  Ref (OrdMap Unit) ->
   Ref (List String) ->
   List String ->
   Unit
-aliasDfsVisitAll _ _ _ _ [] = ()
-aliasDfsVisitAll graph visitedRef onStackRef cyclicOut (k :: ks) =
-  let _ = aliasDfsVisit graph visitedRef onStackRef cyclicOut k
-  aliasDfsVisitAll graph visitedRef onStackRef cyclicOut ks
+aliasDfsVisitAll _ _ _ _ _ [] = ()
+aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut (k :: ks) =
+  let _ = aliasDfsVisit graph visitedRef onStackRef onStackSetRef cyclicOut k
+  aliasDfsVisitAll graph visitedRef onStackRef onStackSetRef cyclicOut ks
 
 emitCyclicAliasErrors : List String -> Unit
 emitCyclicAliasErrors [] = ()
@@ -14344,16 +14373,30 @@ rejectCyclicAliases _ =
   let table = perRun.value.aliasTableRef.value
   -- BARE NAMES on purpose — see `buildAliasGraphEntry`.
   let aliasKeys = map (e => tabKeyName (fst e)) table
-  let graph = map (buildAliasGraphEntry aliasKeys) table
-  let visitedRef = Ref []
+  let aliasSet = omFromNames aliasKeys omEmpty
+  -- first entry wins a duplicate key, as `lookupAssoc` did over the list
+  let graph =
+    omFromPairs (reverseL (map (buildAliasGraphEntry aliasSet) table)) omEmpty
+  let visitedRef = Ref omEmpty
   let onStackRef = Ref []
+  let onStackSetRef = Ref omEmpty
   let cyclicOut = Ref []
-  let _ = aliasDfsVisitAll graph visitedRef onStackRef cyclicOut aliasKeys
+  let _ =
+    aliasDfsVisitAll
+      graph
+      visitedRef
+      onStackRef
+      onStackSetRef
+      cyclicOut
+      aliasKeys
   let cyclic = !cyclicOut
   let _ = emitCyclicAliasErrors cyclic
+  let cyclicSet = omFromNames cyclic omEmpty
   setRef
     perRun.value.aliasTableRef
-    (filterList (entry => not (contains (tabKeyName (fst entry)) cyclic)) table)
+    (filterList
+      (entry => not (omHasKey (tabKeyName (fst entry)) cyclicSet))
+      table)
 
 -- like astTypeFresh but also returns the name→fresh-tyvar map (the same fresh
 -- vars used in the Mono), so a caller can check post-unify whether each
@@ -14613,12 +14656,18 @@ joinDomainMsg ns =
 dedupLocated : List (String, Option Loc) ->
   List (String, Option Loc) ->
   List (String, Option Loc)
-dedupLocated [] acc = reverseL acc
-dedupLocated ((n, l) :: rest) acc =
-  if isSome (lookupAssoc n acc) then
-    dedupLocated rest acc
+dedupLocated xs acc = dedupLocatedGo xs (omFromNames (map fst acc) omEmpty) acc
+
+dedupLocatedGo : List (String, Option Loc) ->
+  OrdMap Unit ->
+  List (String, Option Loc) ->
+  List (String, Option Loc)
+dedupLocatedGo [] _ acc = reverseL acc
+dedupLocatedGo ((n, l) :: rest) seen acc =
+  if omHasKey n seen then
+    dedupLocatedGo rest seen acc
   else
-    dedupLocated rest ((n, l) :: acc)
+    dedupLocatedGo rest (omInsert n () seen) ((n, l) :: acc)
 
 -- Every qualifier the type writes, its names with its span.
 writtenQualifiers : Ty -> List (List String, Option Loc)
@@ -14791,12 +14840,18 @@ kauthArgVarNames _ _ = []
 dedupBinders : List (String, Param) ->
   List (String, Param) ->
   List (String, Param)
-dedupBinders [] acc = reverseL acc
-dedupBinders ((n, top) :: rest) acc =
-  if isSome (lookupAssoc n acc) then
-    dedupBinders rest acc
+dedupBinders xs acc = dedupBindersGo xs (omFromNames (map fst acc) omEmpty) acc
+
+dedupBindersGo : List (String, Param) ->
+  OrdMap Unit ->
+  List (String, Param) ->
+  List (String, Param)
+dedupBindersGo [] _ acc = reverseL acc
+dedupBindersGo ((n, top) :: rest) seen acc =
+  if omHasKey n seen then
+    dedupBindersGo rest seen acc
   else
-    dedupBinders rest ((n, top) :: acc)
+    dedupBindersGo rest (omInsert n () seen) ((n, top) :: acc)
 
 namedAtomBinders : Ty -> List (String, Param)
 namedAtomBinders ty = atomBindersIn namedAtomBinder ty
@@ -18000,7 +18055,7 @@ declaredConstraintIds name = match qualConstraintIds name
     if hasImportDefiner name then
       []
     else
-      predicateSlotIdsAt name perRun.value.funPredicateSlotsRef.value
+      predicateSlotIdsAt name perRun.value.funPredicateSlotsIdxRef.value
 
 qualConstraintIds : String -> Option (List Int)
 qualConstraintIds name = match qualConstraintKey name
@@ -18093,7 +18148,7 @@ localDeclaredConstraintFor name =
   let stored =
     optionOr
       []
-      (lookupPredicateSlots name perRun.value.funPredicateSlotsRef.value)
+      (lookupPredicateSlots name perRun.value.funPredicateSlotsIdxRef.value)
   let slots = predicateSlotCSlots stored
   CDeclared {
     cdSlots = slots,
@@ -18136,7 +18191,7 @@ inferDictAtFound name ev inst =
   let declaredIds = declaredConstraintIds name
   let known = match q
     Some _ => True
-    None => hasPredicateSlots name perRun.value.funPredicateSlotsRef.value
+    None => hasPredicateSlots name perRun.value.funPredicateSlotsIdxRef.value
   -- #739: an explicitly-imported callee with NO cross-module constraint (declaredIds empty
   -- and source-exact per Fix A above) is genuinely UNCONSTRAINED — it only reached this
   -- EDictAt path because the marker's dict-name set is source-blind and a DIFFERENT module
@@ -18394,8 +18449,16 @@ constraintMonosOf (id :: rest) subst = match lookupAssocI id subst
 -- slots) see the same slot sequence.
 dedupPredicateSlotsTable : Unit -> Unit
 dedupPredicateSlotsTable _ =
-  perRun.value.funPredicateSlotsRef :=
-    map dedupPredicateSlotEntry perRun.value.funPredicateSlotsRef.value
+  setFunPredicateSlots
+    (map dedupPredicateSlotEntry perRun.value.funPredicateSlotsRef.value)
+
+-- The one whole-table writer for `funPredicateSlotsRef`: it keeps the first-wins index
+-- `funPredicateSlotsIdxRef` in step with the list, so every lookup answers what a
+-- first-match scan of the list would.
+setFunPredicateSlots : List (String, List PredicateSlot) -> Unit
+setFunPredicateSlots table =
+  perRun.value.funPredicateSlotsRef := table
+  perRun.value.funPredicateSlotsIdxRef := omFromPairs (reverseL table) omEmpty
 
 dedupPredicateSlotEntry : (String, List PredicateSlot) ->
   (String, List PredicateSlot)
@@ -21812,9 +21875,14 @@ appSpineHeadLoc e = exprLoc e
 -- argument i.  ELoc wrappers are peeled off the nodes themselves (the argument keeps
 -- its own, which is what `appArgLoc` reads for the error span).
 appSpineNodes : Expr -> List Expr
-appSpineNodes (ELoc _ e) = appSpineNodes e
-appSpineNodes (EApp f x) = appSpineNodes f ++ [EApp f x]
-appSpineNodes _ = []
+appSpineNodes e = appSpineNodesGo e []
+
+-- Walks from the outermost node inward, prepending, so the list comes out in
+-- application order with no reverse.
+appSpineNodesGo : Expr -> List Expr -> List Expr
+appSpineNodesGo (ELoc _ e) acc = appSpineNodesGo e acc
+appSpineNodesGo (EApp f x) acc = appSpineNodesGo f (EApp f x :: acc)
+appSpineNodesGo _ acc = acc
 
 -- the argument an application node supplies.  Total only over nodes `appSpineNodes`
 -- returned; anything else has no argument and yields itself, which cannot happen.
@@ -21938,11 +22006,14 @@ inferExpected env e expected =
 -- through the location wrappers that sit between one application node and
 -- the next.  A non-application returns itself with no arguments.
 appSpineExpr : Expr -> (Expr, List Expr)
-appSpineExpr (EApp f x) =
-  let s = appSpineExpr f
-  (fst s, snd s ++ [x])
-appSpineExpr (ELoc _ (EApp f x)) = appSpineExpr (EApp f x)
-appSpineExpr e = (e, [])
+appSpineExpr e = appSpineExprGo e []
+
+-- Outermost node first, so each argument is prepended as it is met and the list
+-- is already in application order.
+appSpineExprGo : Expr -> List Expr -> (Expr, List Expr)
+appSpineExprGo (EApp f x) args = appSpineExprGo f (x :: args)
+appSpineExprGo (ELoc _ (EApp f x)) args = appSpineExprGo (EApp f x) args
+appSpineExprGo e args = (e, args)
 
 -- a head `inferAppExpr` would take through its plain arm: an ordinary variable
 -- that is neither a standalone shadow nor a definer shadow.  Anything else
@@ -28017,7 +28088,7 @@ constraintSlotDispatchVar typarams (Constraint { constraintArgs = args }) =
       n :: _ => [n]
       [] => []
 
-resolveSites : List String -> List PendingEntry -> Unit
+resolveSites : OrdMap Unit -> List PendingEntry -> Unit
 resolveSites _ [] = goalSiteLoc := None
 resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _) :: rest) =
   goalSiteLoc := loc
@@ -28070,7 +28141,7 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
 -- site keys off the RESULT mono (`isEmpty`'s `Bool`), which never names the receiver's
 -- impl, so this gate would mis-route every shadow method.  RLocal is stamped by the
 -- arg-position resolveRLocalSites (keyed on the RECEIVER mono) AFTER resolveSites.
-resolveSite : List String ->
+resolveSite : OrdMap Unit ->
   String ->
   Ref Route ->
   Ref (List Route) ->
@@ -28099,13 +28170,13 @@ resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
       resultMono
       encl
       scope
-      (EKReturn fullMono (contains name rpNames))
+      (EKReturn fullMono (omHasKey name rpNames))
   let _ = match route
     RNone => ()
     _ => tagRef := route
   implRef := routes
 
-resolveExactReturnSite : List String ->
+resolveExactReturnSite : OrdMap Unit ->
   String ->
   Ref Route ->
   Ref (List Route) ->
@@ -28140,7 +28211,7 @@ resolveExactReturnSite rpNames name tagRef implRef resultMono request encl origi
         else
           panic "ordinary return route received invalid solver evidence"
       let (route, routes) =
-        exactReturnRoutes name encl scope (contains name rpNames) resolution
+        exactReturnRoutes name encl scope (omHasKey name rpNames) resolution
       let _ = noteMethodReturnTrace MRTStamped request (Some route) routes
       let _ = match route
         RNone => ()
@@ -28208,7 +28279,7 @@ methodReturnEvidenceRoute encl scope prerequisite =
         (reqWalkStart ())
     [] => RNone
 
-resolveNumLitSite : List String ->
+resolveNumLitSite : OrdMap Unit ->
   String ->
   Ref Route ->
   Mono ->
@@ -28225,7 +28296,7 @@ resolveNumLitSite rpNames name tagRef resultMono fullMono predicate encl origin 
       resultMono
       encl
       scope
-      (EKNumReturn predicate fullMono (contains name rpNames) origin)
+      (EKNumReturn predicate fullMono (omHasKey name rpNames) origin)
   let _ = match route
     RNone => ()
     _ => tagRef := numericReturnRoute route routes
@@ -28987,7 +29058,7 @@ enclSlotIndex (Some request) target encl =
 
 enclSlotIds : String -> List Int
 enclSlotIds encl =
-  predicateSlotIdsAt encl perRun.value.funPredicateSlotsRef.value
+  predicateSlotIdsAt encl perRun.value.funPredicateSlotsIdxRef.value
 
 -- [encl]'s own constraint slots as PREDICATES, in slot order: each slot's interface
 -- and the argument vector its signature recorded, paired with every bound tyvar id.
@@ -28995,7 +29066,7 @@ enclPreds : String -> List PredicateSlot
 enclPreds encl =
   optionOr
     []
-    (lookupPredicateSlots encl perRun.value.funPredicateSlotsRef.value)
+    (lookupPredicateSlots encl perRun.value.funPredicateSlotsIdxRef.value)
 
 -- Stable one-pass predicate lookup.  Known/Known vector disagreement cannot downgrade
 -- to interface-only or scalar matching.
@@ -32558,7 +32629,7 @@ reportOverlapForIface iface goals cands =
 goalsClosed : List Mono -> Bool
 goalsClosed goals =
   allList
-    (i => containsI i perRun.value.deferrableVarIds.value)
+    (i => IdMap.has i perRun.value.deferrableVarIds.value)
     (flatMap monoUnboundIds goals)
 
 -- the ONE interface all candidates implement, or None if they disagree (see the
@@ -34264,7 +34335,7 @@ realizeRecDictApps ((RecDictApp routesRef callee encl mono scope _) :: rest) =
   let slots =
     optionOr
       []
-      (lookupPredicateSlots callee perRun.value.funPredicateSlotsRef.value)
+      (lookupPredicateSlots callee perRun.value.funPredicateSlotsIdxRef.value)
   let routes = recRoutes encl scope mono slots
   routesRef := routes
   realizeRecDictApps rest
@@ -34331,7 +34402,7 @@ enclSlot encl m = match normalize m
   TVar cell =>
     indexOfId
       (tyvarId cell)
-      (predicateSlotIdsAt encl perRun.value.funPredicateSlotsRef.value)
+      (predicateSlotIdsAt encl perRun.value.funPredicateSlotsIdxRef.value)
   _ => None
 
 indexOfId : Int -> List Int -> Option Int
@@ -35581,7 +35652,7 @@ dictArityOf n =
   listLen
     (optionOr
       []
-      (lookupPredicateSlots n perRun.value.funPredicateSlotsRef.value))
+      (lookupPredicateSlots n perRun.value.funPredicateSlotsIdxRef.value))
 
 dictParams : String -> Int -> List Pat
 dictParams n k = dictParamsGo n 0 k
@@ -35972,8 +36043,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
     driverState.value.methodDispatchIdxByIdRef :=
       crossRun.value.universeMethodDispatchIdxByIdRef.value
-    perRun.value.funPredicateSlotsRef :=
-      crossRun.value.crossModuleFunPredicateSlotsRef.value
+    setFunPredicateSlots crossRun.value.crossModuleFunPredicateSlotsRef.value
     -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
     -- whole-table replacement of `funConstraintsRef` owes one of these.
     perRun.value.funConstraintDeclaredRef :=
@@ -35987,8 +36057,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- The graph-wide bare-name snapshot below remains vector-free because it lacks
     -- this source identity.
     let _ =
-      setRef
-        perRun.value.funPredicateSlotsRef
+      setFunPredicateSlots
         (aliasConstraintEntries
             prog
             crossRun.value.crossModuleFunPredicateSlotsQualRef.value
@@ -36007,8 +36076,7 @@ checkBodyImpl moduleSeed mid implDecls prog0 =
     -- Three writes, in lockstep, per B-2.2-f (#1113): the declared-prefix sidecar rides the
     -- IDS table, and this is a whole-table replacement of all three.
     let _ =
-      setRef
-        perRun.value.funPredicateSlotsRef
+      setFunPredicateSlots
         (selfDeclArities
           mid
           prog
@@ -38259,7 +38327,9 @@ undeterminedGoalExempt iface args scope =
   iface.irName == "Num"
     || monoVectorClosed args
     || anyIn (flatMap monoUnboundIds args) perRun.value.poisonedVars.value
-    || allList (declaredOblArgOk perRun.value.deferrableVarIds.value) args
+    || allList
+      (declaredOblArgOk (i => IdMap.has i perRun.value.deferrableVarIds.value))
+      args
     || allList (a => isSome (activeDictVarOf a scope)) args
     || goalGivenAt iface args scope
 
@@ -38371,7 +38441,7 @@ reportMixedGoalAmbiguity rigidIds window iface args loc =
 boundaryOwnsOpen : OrdMap Unit -> Int -> Bool
 boundaryOwnsOpen rigidIds i =
   not (omHasKey (intToString i) rigidIds)
-    && not (containsI i perRun.value.deferrableVarIds.value)
+    && not (IdMap.has i perRun.value.deferrableVarIds.value)
 
 -- The variables a later group can still ground (§6.2 T2): those no scheme
 -- quantifies in the types of this group's members [monos] and of every earlier
@@ -38389,7 +38459,7 @@ liveMemberIds monos =
 liveVarIdsOf : Mono -> List Int
 liveVarIdsOf m =
   filterList
-    (i => not (containsI i perRun.value.deferrableVarIds.value))
+    (i => not (IdMap.has i perRun.value.deferrableVarIds.value))
     (monoUnboundIds m)
 
 -- The prerequisites of the instances [obls]' goals select, as goals of the same
@@ -44005,18 +44075,17 @@ kindIsDeclared _ = True
 seedParamPolarityFixpointScoped : List Decl -> List Decl -> Unit
 seedParamPolarityFixpointScoped ds allDs =
   let cur = perRun.value.dataParamPolarityRef.value
-  let fresh = filterList (d => not (declHasPolarityEntry cur d)) allDs
+  let curIndex = tabKeyIndex (map fst cur)
+  let fresh = filterList (d => not (declHasPolarityEntry curIndex d)) allDs
   let full = declEnvPolarityEntriesFix cur fresh
-  let keys = declPolarityKeys ds
-  let kept = filterList (e => tabKeyElem keys (fst e)) full
+  let keyIndex = tabKeyIndex (declPolarityKeys ds)
+  let kept = filterList (e => tabKeyIndexHas keyIndex (fst e)) full
   perRun.value.dataParamPolarityRef := kept ++ cur
 
-declHasPolarityEntry : List (TabKey, List Polarity) -> Decl -> Bool
-declHasPolarityEntry tab d = match declPolarityKeys [d]
+declHasPolarityEntry : OrdMap (List TabKey) -> Decl -> Bool
+declHasPolarityEntry index d = match declPolarityKeys [d]
   [] => False
-  k :: _ => match lookupTab k tab
-    Some _ => True
-    None => False
+  k :: _ => tabKeyIndexHas index k
 
 -- every key `declEnvPolarityEntries` would record for [ds], public or not —
 -- the input-side counterpart of `polarityPublicKeys`.
@@ -44946,6 +45015,8 @@ setFunConstraintEntry : String -> List PredicateSlot -> Unit
 setFunConstraintEntry m slots =
   perRun.value.funPredicateSlotsRef :=
     (m, slots) :: perRun.value.funPredicateSlotsRef.value
+  perRun.value.funPredicateSlotsIdxRef :=
+    omInsert m slots perRun.value.funPredicateSlotsIdxRef.value
   -- B-2.2-f (#1113): the DECLARED-prefix sidecar, written in the SAME op as the ids it
   -- describes so the two can never be written apart.
   --
@@ -45766,7 +45837,7 @@ registerSchemeObligations memberDefIds sigTvMaps callObls addedObls ((m, sch) ::
   -- `mk : Int -> a`) does NOT quantify its var (`Forall []`), so an escaped ambiguous
   -- var never enters this set and the undetermined-goal verdict rejects it (a1_greet/a1_letleak).
   perRun.value.deferrableVarIds :=
-    schemeIds sch ++ perRun.value.deferrableVarIds.value
+    idSetInsertAll (schemeIds sch) perRun.value.deferrableVarIds.value
   let obs =
     dedupVecObls (schemeOblsForMember sigTvMaps callObls addedObls m sch)
   let _ =
@@ -45858,7 +45929,8 @@ declaredOblMixed : List Int ->
 declaredOblMixed boundIds ifref tvMap args =
   let monos = map (fromAstType tvMap) args
   let ids = flatMap (declaredOblArgId boundIds) monos
-  if isEmptyL ids || not (allList (declaredOblArgOk boundIds) monos) then
+  if isEmptyL ids
+    || not (allList (declaredOblArgOk (i => containsI i boundIds)) monos) then
     []
   else
     [VecObl { voIface = ifref, voIds = ids, voArgs = monos }]
@@ -45881,10 +45953,10 @@ declaredOblArgId boundIds m = match normalize m
 -- the two halves are a single change (admitting without it substitutes to a
 -- wrong-but-CONCRETE goal, strictly worse than the missing one it replaces).  An
 -- UNBOUND tyvar anywhere in the argument is still refused — it has no id to defer on.
-declaredOblArgOk : List Int -> Mono -> Bool
-declaredOblArgOk boundIds m = match normalize m
-  TVar cell => containsI (tyvarId cell) boundIds
-  _ => allList (id => containsI id boundIds) (monoTyvarIds m)
+declaredOblArgOk : (Int -> Bool) -> Mono -> Bool
+declaredOblArgOk isBound m = match normalize m
+  TVar cell => isBound (tyvarId cell)
+  _ => allList isBound (monoTyvarIds m)
 
 -- the monos a predicate's arguments resolve to under a tyvar-name -> mono map, in
 -- declaration order; None if ANY argument is not a plain tyvar or is absent from the
@@ -46555,7 +46627,7 @@ goalDefersOpenWorld scope iface args =
     && allList monoHeadIsDecl args
     && isNonEmptyL (flatMap monoUnboundIds args)
     && allList
-      (i => containsI i perRun.value.deferrableVarIds.value)
+      (i => IdMap.has i perRun.value.deferrableVarIds.value)
       (flatMap monoUnboundIds args)
     && (goalMatchesGiven scope iface args || goalSlotStillOpen args)
 
@@ -47267,7 +47339,7 @@ methodReturnProbeStamp ownedRow foreignRow impls =
   let resultMono = stripArrows request.mrrOccurrence
   let _ =
     resolveExactReturnSite
-      []
+      omEmpty
       "make"
       tagRef
       implRef
@@ -49386,9 +49458,9 @@ kindPublicDataDecl _ = False
 -- superinterface existence query (checkSuperImpls/superImplExists) must see an
 -- imported module's `impl Semigroup T` even when it isn't `export`-marked — else
 -- `impl Monoid T` in an importer is falsely rejected for a "missing" super impl.
-pickSchemes : List String -> List (String, Scheme) -> List (String, Scheme)
+pickSchemes : List String -> OrdMap Scheme -> List (String, Scheme)
 pickSchemes [] _ = []
-pickSchemes (n :: ns) table = match lookupAssoc n table
+pickSchemes (n :: ns) table = match omLookup n table
   Some s => (n, s) :: pickSchemes ns table
   None => pickSchemes ns table
 
@@ -49647,7 +49719,9 @@ publicModuleExports prog bindings =
     ))
     (tagModuleExports
       standalones
-      (pickSchemes (publicValNames prog) bindings.mbSchemes))
+      (pickSchemes
+        (publicValNames prog)
+        (omFromPairs (reverseL bindings.mbSchemes) omEmpty)))
 
 -- The first row for a name wins, unless a second import supplies a different
 -- declaration of the same name: then the occurrence is the ambiguity the
@@ -53939,8 +54013,8 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
   let allModDecls = flatMap snd modules2
   let promotedQ = crossRun.value.crossModuleFunPredicateSlotsQualRef.value
   let allMods = namesToSet (map fst modules2) omEmpty
-  perRun.value.funPredicateSlotsRef :=
-    scopePredicateSlots promotedQ allMods (core2 ++ allModDecls)
+  setFunPredicateSlots
+    (scopePredicateSlots promotedQ allMods (core2 ++ allModDecls))
   -- 🚨 B-2.2-b1: THE SIDECAR IS CLEARED, NOT LEFT ALONE.  `f` shipped arguing that
   -- writing no companion here is "absence, which is correct"; it is not — FAIL-CLOSED
   -- REQUIRES WRITING `[]`.  `resetState ()` fires at exactly two sites and neither runs
@@ -54015,8 +54089,7 @@ dictPassModulesScoped dictNames promotedQ importerReach core2 allModules ((mid, 
   -- this module's phantom dict param; `selfDeclArities` is what puts the identity back for
   -- the one set of names this module can answer authoritatively — its own.
   let _ =
-    setRef
-      perRun.value.funPredicateSlotsRef
+    setFunPredicateSlots
       (selfDeclArities
         mid
         prog
@@ -55151,7 +55224,9 @@ runStampSteps ctx (s :: rest) =
 runStampStep : StampCtx -> StampStep -> Unit
 runStampStep ctx SSNumlitFloats = setNumlitFloatsGo ctx.scNumlits
 runStampStep ctx SSReturnSites =
-  resolveSites ctx.scRpNames (siteGoalsIn GKReturnSite ctx.scGoals)
+  resolveSites
+    (omFromNames ctx.scRpNames omEmpty)
+    (siteGoalsIn GKReturnSite ctx.scGoals)
 runStampStep ctx SSBinopSites =
   resolveOpSites True (siteGoalsIn GKBinopSite ctx.scGoals)
 runStampStep ctx SSUnopSites =
