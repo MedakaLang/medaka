@@ -3823,8 +3823,8 @@ eqGuardShapeFrom : Array Token -> Int -> Int -> Bool
 eqGuardShapeFrom toks i depth
   | i >= arrayLength toks = False
   | depth == 0 && isLineEndTok (peekTok toks i) = False
-  | depth == 0 && peekTok toks i == TThen = False
-  | depth == 0 && peekTok toks i == TEqual = True
+  | depth == 0 && isThenTok (peekTok toks i) = False
+  | depth == 0 && isEqualTok (peekTok toks i) = True
   | isBracketOpenTok (peekTok toks i) =
     eqGuardShapeFrom toks (i + 1) (depth + 1)
   | isBracketCloseTok (peekTok toks i) =
@@ -4412,7 +4412,7 @@ doBlockResult : Token -> Int -> List DoStmt -> Parser Expr
 doBlockResult herald lastStart stmts = match last stmts
   Some (DoLet _ _ _ _ _) => fatalAtP (doEndsInBindingMsg herald) lastStart
   Some (DoBind _ _) => fatalAtP (doEndsInBindingMsg herald) lastStart
-  _ => deferPure (EDo (herald == TDefer) stmts)
+  _ => deferPure (EDo (isDeferTok herald) stmts)
 
 doEndsInBindingMsg : Token -> String
 doEndsInBindingMsg herald =
@@ -4789,6 +4789,126 @@ isNoiseTok TIndent = True
 isNoiseTok TDedent = True
 isNoiseTok _ = False
 
+isBangEqTok : Token -> Bool
+isBangEqTok TBangEq = True
+isBangEqTok _ = False
+
+isColonTok : Token -> Bool
+isColonTok TColon = True
+isColonTok _ = False
+
+isCommaTok : Token -> Bool
+isCommaTok TComma = True
+isCommaTok _ = False
+
+isConsTok : Token -> Bool
+isConsTok TCons = True
+isConsTok _ = False
+
+isDedentTok : Token -> Bool
+isDedentTok TDedent = True
+isDedentTok _ = False
+
+isDeferTok : Token -> Bool
+isDeferTok TDefer = True
+isDeferTok _ = False
+
+isElseTok : Token -> Bool
+isElseTok TElse = True
+isElseTok _ = False
+
+isEofTok : Token -> Bool
+isEofTok TEof = True
+isEofTok _ = False
+
+isEqualTok : Token -> Bool
+isEqualTok TEqual = True
+isEqualTok _ = False
+
+isExportTok : Token -> Bool
+isExportTok TExport = True
+isExportTok _ = False
+
+isFunctionTok : Token -> Bool
+isFunctionTok TFunction = True
+isFunctionTok _ = False
+
+isIfTok : Token -> Bool
+isIfTok TIf = True
+isIfTok _ = False
+
+isImplTok : Token -> Bool
+isImplTok TImpl = True
+isImplTok _ = False
+
+isInTok : Token -> Bool
+isInTok TIn = True
+isInTok _ = False
+
+isIndentTok : Token -> Bool
+isIndentTok TIndent = True
+isIndentTok _ = False
+
+isLBraceTok : Token -> Bool
+isLBraceTok TLBrace = True
+isLBraceTok _ = False
+
+isLetTok : Token -> Bool
+isLetTok TLet = True
+isLetTok _ = False
+
+isMatchTok : Token -> Bool
+isMatchTok TMatch = True
+isMatchTok _ = False
+
+isMutTok : Token -> Bool
+isMutTok TMut = True
+isMutTok _ = False
+
+isNewlineTok : Token -> Bool
+isNewlineTok TNewline = True
+isNewlineTok _ = False
+
+isOfTok : Token -> Bool
+isOfTok TOf = True
+isOfTok _ = False
+
+isPipeTok : Token -> Bool
+isPipeTok TPipe = True
+isPipeTok _ = False
+
+isPublicTok : Token -> Bool
+isPublicTok TPublic = True
+isPublicTok _ = False
+
+isRBraceTok : Token -> Bool
+isRBraceTok TRBrace = True
+isRBraceTok _ = False
+
+isRequiresTok : Token -> Bool
+isRequiresTok TRequires = True
+isRequiresTok _ = False
+
+isSlashTok : Token -> Bool
+isSlashTok TSlash = True
+isSlashTok _ = False
+
+isStarTok : Token -> Bool
+isStarTok TStar = True
+isStarTok _ = False
+
+isThenTok : Token -> Bool
+isThenTok TThen = True
+isThenTok _ = False
+
+isWhereTok : Token -> Bool
+isWhereTok TWhere = True
+isWhereTok _ = False
+
+isWithTok : Token -> Bool
+isWithTok TWith = True
+isWithTok _ = False
+
 -- Last content (non-noise) token index strictly below `e`, scanning back from
 -- e-1 down to `s`.  Returns `s` if none (degenerate; a decl always has content).
 lastContentIdx : Array Token -> Int -> Int -> Int
@@ -4905,7 +5025,7 @@ implHeadTokStep toks i depth t
   | isOpenDelim t = implHeadTokGo toks (i + 1) (depth + 1)
   | isCloseDelim t = implHeadTokGo toks (i + 1) (depth - 1)
   | isTUpperTok t = Some i
-  | depth == 0 && (t == TWhere || t == TRequires || isNoiseTok t) = None
+  | depth == 0 && (isWhereTok t || isRequiresTok t || isNoiseTok t) = None
   | otherwise = implHeadTokGo toks (i + 1) depth
 
 isTUpperTok : Token -> Bool
@@ -5034,11 +5154,11 @@ variantBoundaryAt : Array Token ->
 variantBoundaryAt toks i e depth seenEq t
   | isOpenDelim t = variantBoundaryGo toks (i + 1) e (depth + 1) seenEq
   | isCloseDelim t = variantBoundaryGo toks (i + 1) e (depth - 1) seenEq
-  | depth == 0 && not seenEq && t == TEqual && nextSigIsPipe toks e (i + 1) =
+  | depth == 0 && not seenEq && isEqualTok t && nextSigIsPipe toks e (i + 1) =
     variantBoundaryGo toks (i + 1) e depth True
-  | depth == 0 && not seenEq && t == TEqual =
+  | depth == 0 && not seenEq && isEqualTok t =
     firstContentAt toks (i + 1) e :: variantBoundaryGo toks (i + 1) e depth True
-  | depth == 0 && seenEq && t == TPipe =
+  | depth == 0 && seenEq && isPipeTok t =
     firstContentAt toks (i + 1) e
       :: variantBoundaryGo toks (i + 1) e depth seenEq
   | otherwise = variantBoundaryGo toks (i + 1) e depth seenEq
@@ -5090,7 +5210,7 @@ fieldNameStep : Array Token -> Int -> Int -> Int -> Bool -> Token -> List Int
 fieldNameStep toks i e depth atStart t
   | isOpenDelim t = fieldNameGo toks (i + 1) e (depth + 1) False
   | isCloseDelim t = fieldNameGo toks (i + 1) e (depth - 1) False
-  | depth == 1 && t == TComma = fieldNameGo toks (i + 1) e depth True
+  | depth == 1 && isCommaTok t = fieldNameGo toks (i + 1) e depth True
   | isNoiseTok t = fieldNameGo toks (i + 1) e depth atStart
   | atStart && depth == 1 = i :: fieldNameGo toks (i + 1) e depth False
   | otherwise = fieldNameGo toks (i + 1) e depth False
@@ -5113,7 +5233,7 @@ methodNameIdxs toks s e = match findWhereIdx toks s e
   None => []
   Some w =>
     let after = skipNewlineToks toks (w + 1) e
-    if after < e && arrayGetUnsafe after toks == TIndent then
+    if after < e && isIndentTok (arrayGetUnsafe after toks) then
       methodNameGo toks (after + 1) e 1 True
     else
       []
@@ -5121,14 +5241,15 @@ methodNameIdxs toks s e = match findWhereIdx toks s e
 findWhereIdx : Array Token -> Int -> Int -> Option Int
 findWhereIdx toks i e
   | i >= e = None
-  | arrayGetUnsafe i toks == TWhere = Some i
+  | isWhereTok (arrayGetUnsafe i toks) = Some i
   | otherwise = findWhereIdx toks (i + 1) e
 
 -- Skip only NEWLINE tokens (not INDENT/DEDENT) — used to reach the opening
 -- INDENT of a `where` body without stepping over it.
 skipNewlineToks : Array Token -> Int -> Int -> Int
 skipNewlineToks toks i e
-  | i < e && arrayGetUnsafe i toks == TNewline = skipNewlineToks toks (i + 1) e
+  | i < e && isNewlineTok (arrayGetUnsafe i toks) =
+    skipNewlineToks toks (i + 1) e
   | otherwise = i
 
 methodNameGo : Array Token -> Int -> Int -> Int -> Bool -> List (Option Int)
@@ -5216,14 +5337,14 @@ variantStartsAt : Array Token ->
 variantStartsAt toks lines i e depth seenEq t
   | isOpenDelim t = variantStartsGo toks lines (i + 1) e (depth + 1) seenEq
   | isCloseDelim t = variantStartsGo toks lines (i + 1) e (depth - 1) seenEq
-  | depth == 0 && not seenEq && t == TEqual && nextSigIsPipe toks e (i + 1) =
+  | depth == 0 && not seenEq && isEqualTok t && nextSigIsPipe toks e (i + 1) =
     -- New `data Foo =\n  | …` form: the first variant is introduced by a `|`,
     -- not by `=`, so record NO line here (the leading `|` records it below).
     variantStartsGo toks lines (i + 1) e depth True
-  | depth == 0 && not seenEq && t == TEqual =
+  | depth == 0 && not seenEq && isEqualTok t =
     -- Old/inline form: a constructor follows `=`, so record the line after `=`.
     lineAt lines (i + 1) :: variantStartsGo toks lines (i + 1) e depth True
-  | depth == 0 && seenEq && t == TPipe =
+  | depth == 0 && seenEq && isPipeTok t =
     lineAt lines (i + 1) :: variantStartsGo toks lines (i + 1) e depth seenEq
   | otherwise = variantStartsGo toks lines (i + 1) e depth seenEq
 
@@ -5234,7 +5355,7 @@ nextSigIsPipe : Array Token -> Int -> Int -> Bool
 nextSigIsPipe toks e j
   | j >= e = False
   | isLayoutTok (arrayGetUnsafe j toks) = nextSigIsPipe toks e (j + 1)
-  | otherwise = arrayGetUnsafe j toks == TPipe
+  | otherwise = isPipeTok (arrayGetUnsafe j toks)
 
 isLayoutTok : Token -> Bool
 isLayoutTok TNewline = True
@@ -5334,7 +5455,7 @@ rhsStartIdx toks i e depth
   | isOpenDelim (arrayGetUnsafe i toks) = rhsStartIdx toks (i + 1) e (depth + 1)
   | isCloseDelim (arrayGetUnsafe i toks) =
     rhsStartIdx toks (i + 1) e (depth - 1)
-  | depth == 0 && arrayGetUnsafe i toks == TEqual = i + 1
+  | depth == 0 && isEqualTok (arrayGetUnsafe i toks) = i + 1
   | otherwise = rhsStartIdx toks (i + 1) e depth
 
 -- Operand lines of the top-`op` chain in the RHS [rs, e): the head's first
@@ -5396,7 +5517,7 @@ bodyIsBlock _ = False
 firstIndentIdx : Array Token -> Int -> Int -> Int
 firstIndentIdx toks i e
   | i >= e = e
-  | arrayGetUnsafe i toks == TIndent = i + 1
+  | isIndentTok (arrayGetUnsafe i toks) = i + 1
   | otherwise = firstIndentIdx toks (i + 1) e
 
 blockStmtLines : Array Token -> Array Int -> Int -> Int -> List Int
@@ -5423,9 +5544,9 @@ blockStmtAt : Array Token ->
   Token ->
   List Int
 blockStmtAt toks lines i e ind atStart t
-  | t == TIndent = blockStmtGo toks lines (i + 1) e (ind + 1) False
-  | t == TDedent = blockStmtGo toks lines (i + 1) e (ind - 1) False
-  | t == TNewline = blockStmtGo toks lines (i + 1) e ind (ind == 1)
+  | isIndentTok t = blockStmtGo toks lines (i + 1) e (ind + 1) False
+  | isDedentTok t = blockStmtGo toks lines (i + 1) e (ind - 1) False
+  | isNewlineTok t = blockStmtGo toks lines (i + 1) e ind (ind == 1)
   | atStart && ind == 1 =
     lineAt lines i :: blockStmtGo toks lines (i + 1) e ind False
   | otherwise = blockStmtGo toks lines (i + 1) e ind False
@@ -5518,7 +5639,7 @@ parseWithPositionsOpt src = match tokenizeWithLines src
           PErr _ _ => None
           PFatal _ _ => None
           POk spans pos =>
-            if peekTok toks pos == TEof then
+            if isEofTok (peekTok toks pos) then
               let decls = map ((d, _s, _e) => d) spans
               let dps = map (declPosOf toks lines offs nameLineStarts) spans
               let vls = allVariantLines toks lines spans
@@ -5533,7 +5654,7 @@ resultDecls : Array Token -> PR (List Decl) -> List Decl
 resultDecls _ (PErr _ _) = panic "parse error"
 resultDecls _ (PFatal _ _) = panic "parse error"
 resultDecls toks (POk ds pos)
-  | peekTok toks pos == TEof = ds
+  | isEofTok (peekTok toks pos) = ds
   | otherwise = panic "parse error"
 
 -- A lexer error (unterminated string / block comment, invalid escape, stray
@@ -5612,7 +5733,7 @@ offsetAt offs srcLen i
 locateOffset : Array Token -> Array Int -> Int -> Int -> Int
 locateOffset toks offs srcLen pos
   | pos >= arrayLength toks = srcLen
-  | peekTok toks pos == TEof = srcLen
+  | isEofTok (peekTok toks pos) = srcLen
   | otherwise = offsetAt offs srcLen pos
 
 -- Non-panicking analog of `resultDecls`: turn a finished parse into a structured
@@ -5630,7 +5751,7 @@ resultDeclsResult src toks offs srcLen (PErr msg pos) =
 resultDeclsResult src toks offs srcLen (PFatal msg pos) =
   Err (mkLocated src toks offs srcLen msg pos)
 resultDeclsResult src toks offs srcLen (POk ds pos)
-  | peekTok toks pos == TEof = Ok ds
+  | isEofTok (peekTok toks pos) = Ok ds
   | otherwise = Err (deepenLeftover src toks offs srcLen pos)
 
 -- A leftover-token `POk` means `many declThenNoise` stopped: the next decl failed
@@ -5766,7 +5887,7 @@ firstLexError toks i
 firstBangEqIdx : Array Token -> Int -> Int
 firstBangEqIdx toks i
   | i >= arrayLength toks = 0 - 1
-  | peekTok toks i == TBangEq = i
+  | isBangEqTok (peekTok toks i) = i
   | otherwise = firstBangEqIdx toks (i + 1)
 
 -- beta mutability model: `let mut` has been removed. `mut` (TMut) is a keyword
@@ -5777,7 +5898,7 @@ firstBangEqIdx toks i
 firstMutIdx : Array Token -> Int -> Int
 firstMutIdx toks i
   | i >= arrayLength toks = 0 - 1
-  | peekTok toks i == TMut = i
+  | isMutTok (peekTok toks i) = i
   | otherwise = firstMutIdx toks (i + 1)
 
 -- `record` has been removed as a declaration keyword (records are now the
@@ -5840,9 +5961,9 @@ firstMutIdx toks i
 braceHasBarAtTop : Array Token -> Int -> Int -> Bool
 braceHasBarAtTop toks i depth
   | i >= arrayLength toks = True
-  | peekTok toks i == TEof = True
-  | peekTok toks i == TPipe && depth == 0 = True
-  | peekTok toks i == TRBrace && depth == 0 = False
+  | isEofTok (peekTok toks i) = True
+  | isPipeTok (peekTok toks i) && depth == 0 = True
+  | isRBraceTok (peekTok toks i) && depth == 0 = False
   | isBracketOpenTok (peekTok toks i) =
     braceHasBarAtTop toks (i + 1) (depth + 1)
   | isBracketCloseTok (peekTok toks i) =
@@ -5853,8 +5974,8 @@ braceHasBarAtTop toks i depth
 -- between them (`record Person =⏎  { … }` lexes as `= INDENT {`), or -1.
 braceAfterEq : Array Token -> Int -> Int
 braceAfterEq toks i
-  | peekTok toks (i + 1) == TLBrace = i + 1
-  | isLineEndTok (peekTok toks (i + 1)) && peekTok toks (i + 2) == TLBrace =
+  | isLBraceTok (peekTok toks (i + 1)) = i + 1
+  | isLineEndTok (peekTok toks (i + 1)) && isLBraceTok (peekTok toks (i + 2)) =
     i + 2
   | otherwise = 0 - 1
 
@@ -5865,12 +5986,12 @@ lineIsRecordBody : Array Token -> Int -> Int -> Bool -> Bool
 lineIsRecordBody toks i depth sawField
   | i >= arrayLength toks = sawField
   | depth == 0 && isLineEndTok (peekTok toks i) = sawField
-  | depth == 0 && peekTok toks i == TEqual =
+  | depth == 0 && isEqualTok (peekTok toks i) =
     let b = braceAfterEq toks i
     if b < 0 then False else not (braceHasBarAtTop toks (b + 1) 0)
-  | depth == 0 && peekTok toks i == TColon =
+  | depth == 0 && isColonTok (peekTok toks i) =
     lineIsRecordBody toks (i + 1) depth True
-  | depth == 0 && peekTok toks i == TLBrace =
+  | depth == 0 && isLBraceTok (peekTok toks i) =
     lineIsRecordBody
       toks
       (i + 1)
@@ -5887,7 +6008,7 @@ lineIsRecordBody toks i depth sawField
 -- starting at `i`, or -1 if this head does not start one.
 recordHeadIdx : Array Token -> Int -> Int
 recordHeadIdx toks i
-  | peekTok toks i == TExport || peekTok toks i == TPublic =
+  | isExportTok (peekTok toks i) || isPublicTok (peekTok toks i) =
     recordHeadIdx toks (i + 1)
   | peekTok toks i == TIdent "record"
     && isTUpperTok (peekTok toks (i + 1))
@@ -5901,9 +6022,11 @@ firstRecordDeclIdx : Array Token -> Int -> Int -> Bool -> Int
 firstRecordDeclIdx toks i depth lineStart
   | i >= arrayLength toks = 0 - 1
   | lineStart && depth == 0 && recordHeadIdx toks i >= 0 = recordHeadIdx toks i
-  | peekTok toks i == TIndent = firstRecordDeclIdx toks (i + 1) (depth + 1) True
-  | peekTok toks i == TDedent = firstRecordDeclIdx toks (i + 1) (depth - 1) True
-  | peekTok toks i == TNewline = firstRecordDeclIdx toks (i + 1) depth True
+  | isIndentTok (peekTok toks i) =
+    firstRecordDeclIdx toks (i + 1) (depth + 1) True
+  | isDedentTok (peekTok toks i) =
+    firstRecordDeclIdx toks (i + 1) (depth - 1) True
+  | isNewlineTok (peekTok toks i) = firstRecordDeclIdx toks (i + 1) depth True
   | otherwise = firstRecordDeclIdx toks (i + 1) depth False
 
 -- #935.  `let`/`rec`/`if`/`then`/`else` are reserved, but they are deliberately
@@ -5948,9 +6071,11 @@ firstCtxKwDeclIdx toks i depth lineStart
     && depth == 0
     && isContextualKw (peekTok toks i)
     && isBinderTok (peekTok toks (i + 1)) = i
-  | peekTok toks i == TIndent = firstCtxKwDeclIdx toks (i + 1) (depth + 1) True
-  | peekTok toks i == TDedent = firstCtxKwDeclIdx toks (i + 1) (depth - 1) True
-  | peekTok toks i == TNewline = firstCtxKwDeclIdx toks (i + 1) depth True
+  | isIndentTok (peekTok toks i) =
+    firstCtxKwDeclIdx toks (i + 1) (depth + 1) True
+  | isDedentTok (peekTok toks i) =
+    firstCtxKwDeclIdx toks (i + 1) (depth - 1) True
+  | isNewlineTok (peekTok toks i) = firstCtxKwDeclIdx toks (i + 1) depth True
   | otherwise = firstCtxKwDeclIdx toks (i + 1) depth False
 
 -- `function` has been removed as a keyword: a point-free one-arg match is
@@ -5962,7 +6087,7 @@ firstCtxKwDeclIdx toks i depth lineStart
 firstFunctionIdx : Array Token -> Int -> Int
 firstFunctionIdx toks i
   | i >= arrayLength toks = 0 - 1
-  | peekTok toks i == TFunction = i
+  | isFunctionTok (peekTok toks i) = i
   | otherwise = firstFunctionIdx toks (i + 1)
 
 -- Scan forward from token index `i` (depth=accumulated INDENT/DEDENT) looking
@@ -5972,11 +6097,11 @@ firstFunctionIdx toks i
 scanForLetIn : Array Token -> Int -> Int -> Bool
 scanForLetIn toks i depth
   | i >= arrayLength toks = False
-  | peekTok toks i == TIn && depth == 0 = True
-  | peekTok toks i == TIndent = scanForLetIn toks (i + 1) (depth + 1)
-  | peekTok toks i == TDedent && depth == 0 = False
-  | peekTok toks i == TDedent = scanForLetIn toks (i + 1) (depth - 1)
-  | peekTok toks i == TEof = False
+  | isInTok (peekTok toks i) && depth == 0 = True
+  | isIndentTok (peekTok toks i) = scanForLetIn toks (i + 1) (depth + 1)
+  | isDedentTok (peekTok toks i) && depth == 0 = False
+  | isDedentTok (peekTok toks i) = scanForLetIn toks (i + 1) (depth - 1)
+  | isEofTok (peekTok toks i) = False
   | otherwise = scanForLetIn toks (i + 1) depth
 
 -- Find the first inline `let` that follows `else` or `then` and is missing
@@ -5987,8 +6112,8 @@ scanForLetIn toks i depth
 firstInlineLetMissingIn : Array Token -> Int -> Int
 firstInlineLetMissingIn toks i
   | i + 1 >= arrayLength toks = 0 - 1
-  | (peekTok toks i == TElse || peekTok toks i == TThen)
-    && peekTok toks (i + 1) == TLet =
+  | (isElseTok (peekTok toks i) || isThenTok (peekTok toks i))
+    && isLetTok (peekTok toks (i + 1)) =
     if scanForLetIn toks (i + 2) 0 then
       firstInlineLetMissingIn toks (i + 1)
     else
@@ -6010,12 +6135,14 @@ inlineLetMissingInMsg =
 caseHasOfBeforeBoundary : Array Token -> Int -> Int -> Bool
 caseHasOfBeforeBoundary toks i depth
   | i >= arrayLength toks = False
-  | peekTok toks i == TOf = True
-  | peekTok toks i == TImpl = False
-  | peekTok toks i == TIndent = caseHasOfBeforeBoundary toks (i + 1) (depth + 1)
-  | peekTok toks i == TDedent && depth == 0 = False
-  | peekTok toks i == TDedent = caseHasOfBeforeBoundary toks (i + 1) (depth - 1)
-  | peekTok toks i == TEof = False
+  | isOfTok (peekTok toks i) = True
+  | isImplTok (peekTok toks i) = False
+  | isIndentTok (peekTok toks i) =
+    caseHasOfBeforeBoundary toks (i + 1) (depth + 1)
+  | isDedentTok (peekTok toks i) && depth == 0 = False
+  | isDedentTok (peekTok toks i) =
+    caseHasOfBeforeBoundary toks (i + 1) (depth - 1)
+  | isEofTok (peekTok toks i) = False
   | otherwise = caseHasOfBeforeBoundary toks (i + 1) depth
 
 -- Index of the first `case` ident that resolves to a Haskell `case … of`
@@ -6058,15 +6185,15 @@ backtickInfixMsg = "Medaka has no infix backticks; write `f x y`"
 firstWithIdx : Array Token -> Int -> Bool -> Bool -> Int
 firstWithIdx toks i inMatch wantMatch
   | i >= arrayLength toks = 0 - 1
-  | peekTok toks i == TWith =
+  | isWithTok (peekTok toks i) =
     if inMatch == wantMatch then
       i
     else
       firstWithIdx toks (i + 1) False wantMatch
-  | peekTok toks i == TMatch = firstWithIdx toks (i + 1) True wantMatch
-  | peekTok toks i == TNewline
-    || peekTok toks i == TIndent
-    || peekTok toks i == TDedent = firstWithIdx toks (i + 1) False wantMatch
+  | isMatchTok (peekTok toks i) = firstWithIdx toks (i + 1) True wantMatch
+  | isNewlineTok (peekTok toks i)
+    || isIndentTok (peekTok toks i)
+    || isDedentTok (peekTok toks i) = firstWithIdx toks (i + 1) False wantMatch
   | otherwise = firstWithIdx toks (i + 1) inMatch wantMatch
 
 matchWithMsg : String
@@ -6078,8 +6205,8 @@ matchWithMsg =
 firstStarStarIdx : Array Token -> Array Int -> Int -> Int
 firstStarStarIdx toks offs i
   | i + 1 >= arrayLength toks = 0 - 1
-  | peekTok toks i == TStar
-    && peekTok toks (i + 1) == TStar
+  | isStarTok (peekTok toks i)
+    && isStarTok (peekTok toks (i + 1))
     && arrayGetUnsafe (i + 1) offs == arrayGetUnsafe i offs + 1 = i
   | otherwise = firstStarStarIdx toks offs (i + 1)
 
@@ -6092,7 +6219,7 @@ starStarMsg = "Medaka has no `**`; write `pow x y`"
 forLoopHeadTail : Array Token -> Int -> Bool -> Bool
 forLoopHeadTail toks i sawPat
   | i >= arrayLength toks = False
-  | peekTok toks i == TIn = sawPat
+  | isInTok (peekTok toks i) = sawPat
   | isForPatTok (peekTok toks i) = forLoopHeadTail toks (i + 1) True
   | otherwise = False
 
@@ -6110,9 +6237,9 @@ firstForLoopIdx toks i lineStart
   | lineStart
     && peekTok toks i == TIdent "for"
     && forLoopHeadTail toks (i + 1) False = i
-  | peekTok toks i == TNewline
-    || peekTok toks i == TIndent
-    || peekTok toks i == TDedent = firstForLoopIdx toks (i + 1) True
+  | isNewlineTok (peekTok toks i)
+    || isIndentTok (peekTok toks i)
+    || isDedentTok (peekTok toks i) = firstForLoopIdx toks (i + 1) True
   | otherwise = firstForLoopIdx toks (i + 1) False
 
 forLoopMsg : String
@@ -6146,11 +6273,12 @@ firstHsSigIdx toks i depth boundary
   | boundary
     && depth == 0
     && isPlainIdentTok (peekTok toks i)
-    && peekTok toks (i + 1) == TCons = i + 1
-  | peekTok toks i == TIndent = firstHsSigIdx toks (i + 1) (depth + 1) False
-  | peekTok toks i == TDedent =
+    && isConsTok (peekTok toks (i + 1)) = i + 1
+  | isIndentTok (peekTok toks i) = firstHsSigIdx toks (i + 1) (depth + 1) False
+  | isDedentTok (peekTok toks i) =
     firstHsSigIdx toks (i + 1) (depth - 1) (depth - 1 == 0)
-  | peekTok toks i == TNewline = firstHsSigIdx toks (i + 1) depth (depth == 0)
+  | isNewlineTok (peekTok toks i) =
+    firstHsSigIdx toks (i + 1) depth (depth == 0)
   | otherwise = firstHsSigIdx toks (i + 1) depth False
 
 hsSigMsg : String
@@ -6185,7 +6313,7 @@ isBracketCloseTok _ = False
 firstBlockCommentIdx : Array Token -> Int -> Int
 firstBlockCommentIdx toks i
   | i + 1 >= arrayLength toks = 0 - 1
-  | peekTok toks i == TSlash && peekTok toks (i + 1) == TStar = i
+  | isSlashTok (peekTok toks i) && isStarTok (peekTok toks (i + 1)) = i
   | otherwise = firstBlockCommentIdx toks (i + 1)
 
 blockCommentMsg : String
@@ -6204,10 +6332,11 @@ blockCommentMsg =
 braceBlockFrom : Array Token -> Int -> Int -> Int -> Int
 braceBlockFrom toks i depth cand
   | i >= arrayLength toks = if depth == 0 then cand else 0 - 1
-  | peekTok toks i == TThen && depth == 0 = 0 - 1
-  | peekTok toks i == TElse && depth == 0 = cand
-  | (peekTok toks i == TNewline || peekTok toks i == TEof) && depth == 0 = cand
-  | peekTok toks i == TLBrace && depth == 0 && cand < 0 =
+  | isThenTok (peekTok toks i) && depth == 0 = 0 - 1
+  | isElseTok (peekTok toks i) && depth == 0 = cand
+  | (isNewlineTok (peekTok toks i) || isEofTok (peekTok toks i)) && depth == 0 =
+    cand
+  | isLBraceTok (peekTok toks i) && depth == 0 && cand < 0 =
     braceBlockFrom toks (i + 1) (depth + 1) i
   | isBracketOpenTok (peekTok toks i) =
     braceBlockFrom toks (i + 1) (depth + 1) cand
@@ -6218,7 +6347,7 @@ braceBlockFrom toks i depth cand
 firstBraceBlockIdx : Array Token -> Int -> Int
 firstBraceBlockIdx toks i
   | i >= arrayLength toks = 0 - 1
-  | peekTok toks i == TIf =
+  | isIfTok (peekTok toks i) =
     if braceBlockFrom toks (i + 1) 0 (0 - 1) >= 0 then
       braceBlockFrom toks (i + 1) 0 (0 - 1)
     else
@@ -6253,13 +6382,13 @@ lineTrailingColonNoEq : Array Token -> Int -> Int -> Bool -> Bool -> Bool
 lineTrailingColonNoEq toks i depth lastColon sawEq
   | i >= arrayLength toks = lastColon && not sawEq
   | depth == 0
-    && (peekTok toks i == TNewline
-      || peekTok toks i == TEof
-      || peekTok toks i == TIndent
-      || peekTok toks i == TDedent) = lastColon && not sawEq
-  | peekTok toks i == TEqual && depth == 0 =
+    && (isNewlineTok (peekTok toks i)
+      || isEofTok (peekTok toks i)
+      || isIndentTok (peekTok toks i)
+      || isDedentTok (peekTok toks i)) = lastColon && not sawEq
+  | isEqualTok (peekTok toks i) && depth == 0 =
     lineTrailingColonNoEq toks (i + 1) depth False True
-  | peekTok toks i == TColon && depth == 0 =
+  | isColonTok (peekTok toks i) && depth == 0 =
     lineTrailingColonNoEq toks (i + 1) depth True sawEq
   | isBracketOpenTok (peekTok toks i) =
     lineTrailingColonNoEq toks (i + 1) (depth + 1) False sawEq
@@ -6273,9 +6402,9 @@ firstForeignKwIdx toks i lineStart
   | lineStart
     && isForeignKwTok (peekTok toks i)
     && lineTrailingColonNoEq toks i 0 False False = i
-  | peekTok toks i == TNewline
-    || peekTok toks i == TIndent
-    || peekTok toks i == TDedent = firstForeignKwIdx toks (i + 1) True
+  | isNewlineTok (peekTok toks i)
+    || isIndentTok (peekTok toks i)
+    || isDedentTok (peekTok toks i) = firstForeignKwIdx toks (i + 1) True
   | otherwise = firstForeignKwIdx toks (i + 1) False
 
 foreignKwMsg : Token -> String

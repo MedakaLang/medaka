@@ -139,7 +139,7 @@ SKIP_CLI_LINK_IF_FRESH="${SKIP_CLI_LINK_IF_FRESH:-0}"
 # Every partition imports from runtime/medaka_rt.c, so anything that changes that
 # file's summary hash changes every partition's cache key. The three build-provenance
 # stamps are the standing instance: they change on every compiler edit, so they live
-# in a generated three-line provenance.c compiled WITHOUT -flto (see stage B) and
+# in a generated provenance.c compiled WITHOUT -flto (see stage B) and
 # medaka_rt.c stays byte-identical across builds. Measured on identical partitions
 # and one edit, varying only the fingerprint: unchanged — 4s, 5 entries written, 68
 # reused; changed — 23s, 73 written, 0 reused. Moving medaka_rt.c itself out of the
@@ -1110,20 +1110,25 @@ else
   # partially-written $OUT, only last-writer-wins on which COMPLETE build stuck.
   OUT_NEW="$OUT.new.$$"
   rm -f "$OUT_NEW"
-  # PROVENANCE OBJECT: the three stamps live in their OWN translation unit, built
+  # PROVENANCE OBJECT: the stamps live in their OWN translation unit, built
   # here and linked into ./medaka alone. runtime/medaka_rt.c declares them weak and
-  # empty, so every other consumer of that file — stage A, bootstrap_from_seed.sh,
-  # selfcompile_fixpoint.sh, build_cmd.mdk's rt.o for user builds — links no
-  # provenance object and reads "", which is the contract those paths already had.
+  # empty (the heap size weak 0), so every other consumer of that file — stage A,
+  # bootstrap_from_seed.sh, selfcompile_fixpoint.sh, build_cmd.mdk's rt.o for user
+  # builds — links no provenance object and reads "" / 0, the contract those paths
+  # already had.
   #
   # It is compiled WITHOUT -flto for the reason the whole codegen path exists: these
-  # three strings change on every compiler edit, and anything inside the LTO unit
+  # stamps change on every compiler edit, and anything inside the LTO unit
   # that changes puts a fresh ThinLTO cache key on every partition importing it.
   # medaka_rt.c stays in the LTO unit (taking it out cost ~7.7% of interpreter
-  # runtime); only this three-line file leaves. See "PARALLEL CODEGEN" above.
+  # runtime); only this generated file leaves. See "PARALLEL CODEGEN" above.
   PROV_C="$WORK/provenance.c"
   PROV_O="$WORK/provenance.o"
-  printf 'const char mdk_build_fingerprint_str[] = "%s";\nconst char mdk_build_commit_str[] = "%s";\nconst char mdk_build_date_str[] = "%s";\n' \
+  # The fourth line is the compiler-only GC heap pre-expansion (runtime/medaka_rt.c
+  # mdk_gc_init). 128 MiB: measured on this box, the trivial `check` and parser.mdk
+  # `check` CPU drop ~20-30% at 128M-256M, while 16M-32M leave most of it behind.
+  # Only ./medaka carries this; user programs and the emitter stay at the weak 0.
+  printf 'const char mdk_build_fingerprint_str[] = "%s";\nconst char mdk_build_commit_str[] = "%s";\nconst char mdk_build_date_str[] = "%s";\nconst long long mdk_gc_initial_heap_bytes = 134217728;\n' \
     "$FP_COMPILER" "$BUILD_COMMIT" "$BUILD_DATE" > "$PROV_C"
   if ! "$CC" -c -O2 $GC_SECTION_CFLAGS "$PROV_C" -o "$PROV_O" 2>"$WORK/prov.err"; then
     rm -f "$OUT_NEW"
