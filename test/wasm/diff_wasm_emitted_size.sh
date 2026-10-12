@@ -107,8 +107,14 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    shapes of #1349 and #2577 at a depth that needs constant stack) is 101544 B
 #    and 142 funcs on its own; the other 59 programs measure 3105426 B and 5716
 #    funcs, inside the previous ceilings.
-MODULES_BYTES_CEIL=3206970
-MODULES_FUNCS_CEIL=5858
+#    The modules figures are 2834125 B, 6109 funcs and F1-floor ratio 4024.  The
+#    funcs ceiling is exact: each distinct fixed trap text a program streams is one
+#    `$trapmsg_K` function called from every site, which is the 251 funcs over
+#    5858 across the 60 programs.  Those helpers are reachable, so the unit-kept
+#    ratio is 2693/23199.  The bytes ceiling is the measured size rounded up to the
+#    next 10000 B, so unrelated corpus growth does not trip it.
+MODULES_BYTES_CEIL=2840000
+MODULES_FUNCS_CEIL=6109
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)
 
 PLAIN_BYTES_CEIL=495000
@@ -125,7 +131,7 @@ TYPED_FUNCS_CEIL=145
 # when they're actually fixtures dropping out). A gap appearing at all here is
 # itself the regression signal this gate exists to catch.
 MODULES_OK_EXACT=60
-PLAIN_OK_EXACT=167
+PLAIN_OK_EXACT=168
 TYPED_OK_EXACT=9
 
 # ── F1's wasm-opt-derived function-count floor (F2/S2-4) ───────────────────
@@ -137,7 +143,7 @@ TYPED_OK_EXACT=9
 # ("emitted-vs-reachable FUNCTION ratio") — the existing reach-ratio is a UNIT
 # ratio (S1's own notion), not this.
 F1_MODULES_FUNCS_FLOOR=1518
-MODULES_F1_RATIO_CEIL_X1000=3859  # emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
+MODULES_F1_RATIO_CEIL_X1000=4024  # 6109 * 1000 / 1518 = 4024.4, see the ceilings above; emitted-funcs/F1-floor * 1000; measured with the entry marker, see the ceilings above
 
 command -v wasm-tools >/dev/null 2>&1 || { echo "wasm-tools not on PATH — skipping S5 emitted-size gate"; exit 2; }
 NODE=node
