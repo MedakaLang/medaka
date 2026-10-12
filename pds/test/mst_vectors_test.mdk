@@ -42,13 +42,15 @@ import test.vector_runner.{
   Engine(..),
   Row(..),
   buildNative,
+  buildNativeBatch,
   expectRow,
   inScratch,
   runSeconds,
   spawn,
+  spawnBatch,
   spawnFindings,
 }
-import list.{replicate, somes}
+import list.{replicate, somes, zip, zipWith}
 import string.{contains, lines, startsWith, toInt, words}
 import test.{Expectation, expectNoFindings}
 import test.mst_vectors_support.{mstCorpora, routeNeeds}
@@ -368,21 +370,51 @@ costCurve bin args =
   let envs = ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_STRICT=1"]
   spawnFindings label "the built driver" (spawn runSeconds envs bin args)
 
--- Builds one synthetic corpus of `records` records and `blobs` blobs into
--- `dir`.
-synthCorpus : String -> String -> String -> String -> <Exec> List String
-synthCorpus synth dir records blobs =
-  let label = "\{gate} (native synth-repo \{records})"
-  match spawnFindings label "mkdir -p" (spawn 60 [] "mkdir" ["-p", dir])
-    (_, []) =>
-      snd
-        (spawnFindings
-          label
-          "the built driver"
-          (spawn runSeconds [] synth [
-            "build", "one-collection", dir, records, blobs, "1"
-          ]))
-    (_, fs) => fs
+-- The label that heads the findings of a synthetic corpus of `records`.
+synthLabel : String -> String
+synthLabel records = "\{gate} (native synth-repo \{records})"
+
+{- | Builds each synthetic corpus of `rows`, a `(dir, records, blobs)` triple
+   apiece, side by side. A corpus whose directory cannot be made is not built;
+   the findings come out in row order, as one corpus after another would give. -}
+synthCorpora : String -> List (String, String, String) -> <Exec, IO> List String
+synthCorpora synth rows =
+  let mkdirs =
+    spawnBatch (map ((dir, _, _) => (60, [], "mkdir", ["-p", dir])) rows)
+  let mkdirFs =
+    zipWith
+      ((_, records, _) run =>
+        snd (spawnFindings (synthLabel records) "mkdir -p" run))
+      rows
+      mkdirs
+  let ready = map fst (filter ((_, fs) => fs == []) (zip rows mkdirFs))
+  let builds =
+    spawnBatch
+      (map
+        ((dir, records, blobs) => (
+          runSeconds,
+          [],
+          synth,
+          ["build", "one-collection", dir, records, blobs, "1"],
+        ))
+        ready)
+  let buildFs =
+    zipWith
+      ((_, records, _) run =>
+        snd (spawnFindings (synthLabel records) "the built driver" run))
+      ready
+      builds
+  mergeCorpusFindings mkdirFs buildFs
+
+-- The findings of each corpus in order: its `mkdir` findings, or, when its
+-- directory was made, the findings of its build, which is the next of
+-- `builds`.
+mergeCorpusFindings : List (List String) -> List (List String) -> List String
+mergeCorpusFindings [] _ = []
+mergeCorpusFindings (fs :: rest) builds = match (fs, builds)
+  ([], b :: bs) => b ++ mergeCorpusFindings rest bs
+  ([], []) => mergeCorpusFindings rest []
+  _ => fs ++ mergeCorpusFindings rest builds
 
 -- `pageCostRuns` runs of the probe at `args`: every output, and the findings
 -- of every run that failed.
@@ -396,8 +428,7 @@ costCorpora scratch synth =
   let small = "\{scratch}/cost-corpus-small"
   let large = "\{scratch}/cost-corpus-large"
   let cost = "\{scratch}/cost_curve"
-  match (synthCorpus synth small "1000" "200"
-    ++ synthCorpus synth large "10000" "12800")
+  match synthCorpora synth [(small, "1000", "200"), (large, "10000", "12800")]
     [] => match (
       costRuns cost [small, "bulk.synth.record", "50"],
       costRuns cost [large, "bulk.synth.record", "50"],
@@ -420,9 +451,10 @@ pageFindings scratch =
   let cost = "\{scratch}/cost_curve"
   let synth = "\{scratch}/synth_repo"
   let label = "\{gate} (native page cost)"
-  let built =
-    buildNative label "\{medakaRoot}/pds/test/cost_curve_main.mdk" cost
-      ++ buildNative label "\{medakaRoot}/pds/test/synth_repo_main.mdk" synth
+  let built = buildNativeBatch [
+    (label, "\{medakaRoot}/pds/test/cost_curve_main.mdk", cost),
+    (label, "\{medakaRoot}/pds/test/synth_repo_main.mdk", synth),
+  ]
   match built
     [] => costCorpora scratch synth
     fs => fs

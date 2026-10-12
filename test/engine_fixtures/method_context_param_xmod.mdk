@@ -1,0 +1,6 @@
+-- #3800 across modules: `desc`'s context over the interface parameter is declared
+-- in `descmod`, and this module's call supplies its dictionary.  Expected, from
+-- descmod's impls: "int 1".
+import method_context_param_xmod.descmod.{Pair(..), Desc, Show2, desc, show2}
+
+main = println (desc (Pair (1 : Int) 2))

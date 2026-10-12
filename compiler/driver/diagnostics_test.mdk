@@ -1,0 +1,66 @@
+{- | `analyzeToLines` over the resolve, exhaust and check_match fixture
+   corpora, called in-process. Replaces the `diagnostics_main` probe row of
+   `test/diff_compiler_fmt_test.mdk`.
+
+   Each fixture's diagnostic lines are sorted and compared with its
+   `.analyze.golden`, with `stdlib/runtime.mdk` and `stdlib/core.mdk` as the
+   prelude pair. Does NOT cover the project-level analysis
+   (`diagnostics_project_main`). -}
+
+import driver.diagnostics.{analyzeToLines}
+import fs.{fixtureFiles}
+import list.{sort, somes}
+import path.{dirname, stem}
+import string.{endsWith, lines, trim, unlines}
+import test.{Expectation, expectAll, expectEqual, expectNoFindings, fail}
+
+sortedLines : String -> String
+sortedLines text = trim (unlines (sort (lines text)))
+
+corpora : List String
+corpora = [
+  "test/resolve_fixtures",
+  "test/exhaust_fixtures",
+  "test/check_match_fixtures",
+]
+
+sourcesIn : String -> <FileRead> Result String (List String)
+sourcesIn dir = match fixtureFiles dir
+  Err e => Err "\{dir}: \{e}"
+  Ok files => Ok (sort (filter (f => endsWith ".mdk" f) files))
+
+allSources : List String -> <FileRead> Result String (List String)
+allSources [] = Ok []
+allSources (d :: rest) = match sourcesIn d
+  Err e => Err e
+  Ok here => map (here ++ _) (allSources rest)
+
+failureOf : String -> String -> String -> <FileRead> Option String
+failureOf rsrc csrc path = match readFile path
+  Err e => Some "\{stem path}: could not read: \{e}"
+  Ok src => match readFile "\{dirname path}/\{stem path}.analyze.golden"
+    Err e => Some "\{stem path}: no readable golden: \{e}"
+    Ok want =>
+      let got = sortedLines (analyzeToLines rsrc csrc src)
+      let expected = sortedLines want
+      if got == expected then
+        None
+      else
+        Some "\{stem path}: expected \{debug expected} but got \{debug got}"
+
+check : <FileRead> Expectation
+check = match readFile "stdlib/runtime.mdk"
+  Err e => fail "could not read stdlib/runtime.mdk: \{e}"
+  Ok rsrc => match readFile "stdlib/core.mdk"
+    Err e => fail "could not read stdlib/core.mdk: \{e}"
+    Ok csrc => match allSources corpora
+      Err e => fail "could not list the corpora: \{e}"
+      Ok srcs => expectAll [
+        expectEqual 42 (length srcs),
+        expectNoFindings
+          "diagnostics fixtures"
+          (Ok (somes (map (failureOf rsrc csrc) srcs))),
+      ]
+
+test "diagnostics: analyze output matches each fixture's .analyze.golden" =
+  check

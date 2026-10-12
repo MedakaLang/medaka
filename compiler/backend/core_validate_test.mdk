@@ -24,12 +24,16 @@ import ir.core_ir.{
   CField(..),
   CImplBody(..),
   CImplEntry(..),
+  MethodEvidence(..),
   CProgram(..),
+  DeclFacts(..),
+  noDeclFacts,
+  noImplSym,
   CStmt(..),
   CallMode(..),
   CallSite(..),
 }
-import frontend.ast.{Lit(..), Pat(..), noDeclLoc}
+import frontend.ast.{Lit(..), Pat(..), Route(..), noDeclLoc}
 import ir.core_ir_lower.{
   EmitTarget(..),
   ctorFieldTypeNames,
@@ -45,7 +49,10 @@ import backend.core_validate.{
   missingRowsMessage,
   renderExternFinding,
   validateCalls,
+  validateDispatchEvidence,
   validateExterns,
+  validateImplSymbols,
+  validateMethodContexts,
   validateRecords,
   validateTails,
 }
@@ -252,7 +259,8 @@ recordFindings : EmitTarget -> String -> List String
 recordFindings target src = validateRecords (lowered target src)
 
 unstamped : CExpr -> CProgram
-unstamped body = CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] []
+unstamped body =
+  CProgram [CBind "main" [CClause [] body] noDeclLoc] [] [] [] [] noDeclFacts
 
 zero : CExpr
 zero = CLit (LInt 0)
@@ -355,8 +363,8 @@ typedLowered preludeSrc src =
 -- [prog] with every application whose head is the variable [name] re-stamped
 -- [mode], in top-level bindings.
 restamp : String -> CallMode -> CProgram -> CProgram
-restamp name mode (CProgram groups ctors ctorTypes impls) =
-  CProgram (map (restampBind name mode) groups) ctors ctorTypes impls
+restamp name mode (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (restampBind name mode) groups) ctors ctorTypes impls mctx facts
 
 restampBind : String -> CallMode -> CBind -> CBind
 restampBind name mode (CBind n clauses site) =
@@ -467,8 +475,8 @@ test "(m) an application with no arguments, or whose head is an application, is 
 -- [prog] with the tail flag of every application whose head is the variable
 -- [name] set to [flag], in top-level bindings.
 reflag : String -> Bool -> CProgram -> CProgram
-reflag name flag (CProgram groups ctors ctorTypes impls) =
-  CProgram (map (reflagBind name flag) groups) ctors ctorTypes impls
+reflag name flag (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (reflagBind name flag) groups) ctors ctorTypes impls mctx facts
 
 reflagBind : String -> Bool -> CBind -> CBind
 reflagBind name flag (CBind n clauses site) =
@@ -595,8 +603,8 @@ mixedGroupSrc =
 
 -- [prog] with one more parameter on the first impl entry of method [m].
 widenFirstEntry : String -> CProgram -> CProgram
-widenFirstEntry m (CProgram groups ctors ctorTypes impls) =
-  CProgram groups ctors ctorTypes (widenEntries m impls)
+widenFirstEntry m (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (widenEntries m impls) mctx facts
 
 widenEntries : String -> List CImplEntry -> List CImplEntry
 widenEntries _ [] = []
@@ -607,10 +615,10 @@ widenEntries m ((ent@(CImplEntry n s d body)) :: rest) =
     ent :: widenEntries m rest
 
 widenBody : CImplBody -> CImplBody
-widenBody (CImplTagged tag key iface pos pats body) =
-  CImplTagged tag key iface pos (pats ++ [PVar "w" noDeclLoc]) body
-widenBody (CImplDefault w tag key pos pats body) =
-  CImplDefault w tag key pos (pats ++ [PVar "w" noDeclLoc]) body
+widenBody (CImplTagged tag key iface sym pos pats body) =
+  CImplTagged tag key iface sym pos (pats ++ [PVar "w" noDeclLoc]) body
+widenBody (CImplDefault w tag key sym pos pats body) =
+  CImplDefault w tag key sym pos (pats ++ [PVar "w" noDeclLoc]) body
 
 test "(q) the impl entries of one method and route word take one arity" = expectEach
   [
@@ -626,6 +634,369 @@ test "(q) the impl entries of one method and route word take one arity" = expect
         ]
         (validateCalls
           (widenFirstEntry "foo" (typedLowered i2078Prelude mixedGroupSrc))),
+    ),
+  ]
+
+-- [prog] with every impl entry's stamped symbol cleared, as a lowering that
+-- never stamped would leave it.
+unstampImpls : CProgram -> CProgram
+unstampImpls (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (map unstampEntry impls) mctx facts
+
+unstampEntry : CImplEntry -> CImplEntry
+unstampEntry (CImplEntry n s d (CImplTagged tag key iface _ pos pats body)) =
+  CImplEntry n s d (CImplTagged tag key iface noImplSym pos pats body)
+unstampEntry (CImplEntry n s d (CImplDefault w tag key _ pos pats body)) =
+  CImplEntry n s d (CImplDefault w tag key noImplSym pos pats body)
+
+-- [prog] with every supplied method's interface word replaced by [word].
+reword : String -> CProgram -> CProgram
+reword word (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (map (rewordEntry word) impls) mctx facts
+
+rewordEntry : String -> CImplEntry -> CImplEntry
+rewordEntry word (CImplEntry n s d (CImplTagged tag key _ sym pos pats body)) =
+  CImplEntry n s d (CImplTagged tag key word sym pos pats body)
+rewordEntry _ ent = ent
+
+test "(t) every impl entry carries its stamped symbol and its qualified interface word" = expectEach
+  [
+    (
+      "lowering stamps both, so a lowered program validates clean",
+      expectEqual [] (validateImplSymbols (lowered TargetNative mixedGroupSrc)),
+    ),
+    (
+      "an entry with no stamped symbol is refused",
+      expectEqual
+        [
+          "impl symbol: entry has no stamped symbol [in impl foo@T]",
+          "impl symbol: entry has no stamped symbol [in impl foo@T]",
+        ]
+        (validateImplSymbols
+          (unstampImpls (lowered TargetNative mixedGroupSrc))),
+    ),
+    (
+      "an interface word that is not the qualified word of the entry's key is refused",
+      expectEqual
+        [
+          "impl symbol: interface word `Other` is not the qualified word `Foo` of its key [in impl foo@T]",
+          "impl symbol: interface word `Other` is not the qualified word `Foo` of its key [in impl foo@T]",
+        ]
+        (validateImplSymbols
+          (reword "Other" (lowered TargetNative mixedGroupSrc))),
+    ),
+  ]
+
+-- ── method contexts ─────────────────────────────────────────────────────────
+
+-- `desc`'s declared context constrains only the interface parameter, so each
+-- call supplies the `Show2 (Pair b)` dictionary and the impl entry takes it.
+paramContextSrc : String
+paramContextSrc =
+  "data Pair a = Pair a a\ninterface Show2 a where\n  show2 : a -> String\nimpl Show2 Int where\n  show2 n = \"int\"\nimpl Show2 (Pair b) requires Show2 b where\n  show2 (Pair x _) = show2 x\ninterface Desc a where\n  desc : Show2 a => a -> String\nimpl Desc (Pair b) where\n  desc p = show2 p\nmain = desc (Pair (1 : Int) 2)"
+
+-- [prog] with the method routes of every top-level application of method [name]
+-- dropped, as an elaboration that posed no goal for the context would leave it.
+dropMethodRoutes : String -> CProgram -> CProgram
+dropMethodRoutes name (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (dropRoutesBind name) groups) ctors ctorTypes impls mctx facts
+
+dropRoutesBind : String -> CBind -> CBind
+dropRoutesBind name (CBind n clauses site) =
+  CBind n (map (dropRoutesClause name) clauses) site
+
+dropRoutesClause : String -> CClause -> CClause
+dropRoutesClause name (CClause pats body) =
+  CClause pats (dropRoutesExpr name body)
+
+dropRoutesExpr : String -> CExpr -> CExpr
+dropRoutesExpr name (CApp hd args site) =
+  CApp (dropRoutesExpr name hd) (map (dropRoutesExpr name) args) site
+dropRoutesExpr name (m@(CMethod n (MethodEvidence iface arity route impls _))) =
+  if n == name then CMethod n (MethodEvidence iface arity route impls []) else m
+dropRoutesExpr _ e = e
+
+-- [prog] with the leading parameter of every impl entry of method [m] dropped.
+dropEntryDict : String -> CProgram -> CProgram
+dropEntryDict m (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (map (dropEntryDictOne m) impls) mctx facts
+
+dropEntryDictOne : String -> CImplEntry -> CImplEntry
+dropEntryDictOne m (ent@(CImplEntry n s d body)) =
+  if n == m then CImplEntry n s d (dropFirstPat body) else ent
+
+dropFirstPat : CImplBody -> CImplBody
+dropFirstPat (CImplTagged tag key iface sym pos (_ :: pats) body) =
+  CImplTagged tag key iface sym pos pats body
+dropFirstPat (CImplDefault w tag key sym pos (_ :: pats) body) =
+  CImplDefault w tag key sym pos pats body
+dropFirstPat b = b
+
+test "(u) a method's dictionaries match its declared context" = expectEach [
+  (
+    "a context over only the interface parameter: lowered, it validates clean",
+    expectEqual
+      []
+      (validateMethodContexts (typedLowered i2078Prelude paramContextSrc)),
+  ),
+  (
+    "a call that supplies no route for the context is refused",
+    expectEqual
+      [
+        "method context: method desc supplies 0 method routes, `calls::Desc` declares 1 [in main]",
+      ]
+      (validateMethodContexts
+        (dropMethodRoutes "desc" (typedLowered i2078Prelude paramContextSrc))),
+  ),
+  (
+    "an impl entry that takes no dictionary for the context is refused",
+    expectEqual
+      [
+        "method context: impl entry opens with 0 `$dict_desc_k` parameters, `calls::Desc` declares 1 and its instance requires 0 [in impl desc@calls.Pair]",
+      ]
+      (validateMethodContexts
+        (dropEntryDict "desc" (typedLowered i2078Prelude paramContextSrc))),
+  ),
+]
+
+-- `size` declares no context, so the method-context table has no row for it.
+contextFreeSrc : String
+contextFreeSrc =
+  "interface Size a where\n  size : a -> Int\nimpl Size Int where\n  size n = n\nmain = size (3 : Int)"
+
+-- [prog] with one more method route on every top-level application of method
+-- [name], as an elaboration that read another declaration's context would leave it.
+addMethodRoute : String -> CProgram -> CProgram
+addMethodRoute name (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (addRouteBind name) groups) ctors ctorTypes impls mctx facts
+
+addRouteBind : String -> CBind -> CBind
+addRouteBind name (CBind n clauses site) =
+  CBind n (map (addRouteClause name) clauses) site
+
+addRouteClause : String -> CClause -> CClause
+addRouteClause name (CClause pats body) = CClause pats (addRouteExpr name body)
+
+addRouteExpr : String -> CExpr -> CExpr
+addRouteExpr name (CApp hd args site) =
+  CApp (addRouteExpr name hd) (map (addRouteExpr name) args) site
+addRouteExpr name (m@(CMethod n (MethodEvidence iface arity route impls meths))) =
+  if n == name then
+    CMethod n (MethodEvidence iface arity route impls (meths ++ [route]))
+  else
+    m
+addRouteExpr _ e = e
+
+-- [prog] with a leading `$dict_<m>_0` parameter on every impl entry of method [m].
+addEntryDict : String -> CProgram -> CProgram
+addEntryDict m (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram groups ctors ctorTypes (map (addEntryDictOne m) impls) mctx facts
+
+addEntryDictOne : String -> CImplEntry -> CImplEntry
+addEntryDictOne m (ent@(CImplEntry n s d body)) =
+  if n == m then CImplEntry n s d (addFirstPat m body) else ent
+
+addFirstPat : String -> CImplBody -> CImplBody
+addFirstPat m (CImplTagged tag key iface sym pos pats body) =
+  CImplTagged tag key iface sym pos (PVar "$dict_\{m}_0" noDeclLoc :: pats) body
+addFirstPat m (CImplDefault w tag key sym pos pats body) =
+  CImplDefault w tag key sym pos (PVar "$dict_\{m}_0" noDeclLoc :: pats) body
+
+test "(x) a method with no declared context takes no context dictionary" = expectEach
+  [
+    (
+      "lowered, a context-free method validates clean",
+      expectEqual
+        []
+        (validateMethodContexts (typedLowered i2078Prelude contextFreeSrc)),
+    ),
+    (
+      "a call that supplies a method route to it is refused",
+      expectEqual
+        [
+          "method context: method size supplies 1 method routes, `calls::Size` declares 0 [in main]",
+        ]
+        (validateMethodContexts
+          (addMethodRoute "size" (typedLowered i2078Prelude contextFreeSrc))),
+    ),
+    (
+      "an impl entry that opens with a context dictionary for it is refused",
+      expectEqual
+        [
+          "method context: impl entry opens with 1 `$dict_size_k` parameters, `calls::Size` declares 0 and its instance requires 0 [in impl size@Int]",
+        ]
+        (validateMethodContexts
+          (addEntryDict "size" (typedLowered i2078Prelude contextFreeSrc))),
+    ),
+  ]
+
+-- A program whose `g` takes one dictionary and whose `main` binds `$dict_m_0`,
+-- with `body` as main's body.  Instance `K` requires nothing and its interface has
+-- no supers; instance `S` requires nothing and its interface has one super.
+evidenceProg : CExpr -> CProgram
+evidenceProg body =
+  CProgram
+    [
+      CBind
+        "g"
+        [CClause [PVar "$dict_g_0" noDeclLoc] (CLit (LInt 1))]
+        noDeclLoc,
+      CBind "main" [CClause [PVar "$dict_m_0" noDeclLoc] body] noDeclLoc,
+    ]
+    []
+    []
+    []
+    []
+    DeclFacts {
+      factRequires = [("K", 0), ("S", 0)],
+      factSupers = [("K", 0), ("S", 1)],
+    }
+
+evidenceOf : Route -> CExpr
+evidenceOf route = CMethod "show" (MethodEvidence "I" 1 route [] [])
+
+test "(v) a dispatch node's evidence denotes dictionaries its callee binds" = expectEach
+  [
+    (
+      "a lowered program validates clean",
+      expectEqual
+        []
+        (validateDispatchEvidence (typedLowered i2078Prelude paramContextSrc)),
+    ),
+    (
+      "hand-built evidence over a bound given validates clean",
+      expectEqual
+        []
+        (validateDispatchEvidence
+          (evidenceProg (CDict "g" [RProj (RDict "$dict_m_0") [0]]))),
+    ),
+    (
+      "a dictionary the occurrence does not bind is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) reads dictionary `$dict_zz`, which is not bound here [in main]",
+        ]
+        (validateDispatchEvidence (evidenceProg (CDict "g" [RDict "$dict_zz"]))),
+    ),
+    (
+      "a projection over an instance is refused",
+      expectEqual
+        [
+          "dispatch evidence: method show projects from a route that is not a given dictionary [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (evidenceOf (RProj (RKey "K" [] []) [0])))),
+    ),
+    (
+      "a head instance key with no entry is refused",
+      expectEqual
+        [
+          "dispatch evidence: method show names instance `Nope` that has no entry for `show` [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (evidenceOf (RKey "Nope" [] [])))),
+    ),
+    (
+      "a dictionary application with an extra slot is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) supplies 2 dictionaries, `g` takes 1 [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (CDict "g" [RDict "$dict_m_0", RDict "$dict_m_0"]))),
+    ),
+    (
+      "a scalar route in a slot is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) carries scalar route `Int` [in main]",
+        ]
+        (validateDispatchEvidence (evidenceProg (CDict "g" [RScalar "Int"]))),
+    ),
+    (
+      "a dictionary slot with no route is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) has a dictionary slot with no route [in main]",
+        ]
+        (validateDispatchEvidence (evidenceProg (CDict "g" [RNone]))),
+    ),
+  ]
+
+-- [prog] with the prerequisite routes of every dictionary built in the method
+-- routes of each top-level occurrence of method [name] dropped.
+dropBuiltPrereqs : String -> CProgram -> CProgram
+dropBuiltPrereqs name (CProgram groups ctors ctorTypes impls mctx facts) =
+  CProgram (map (dropPrereqsBind name) groups) ctors ctorTypes impls mctx facts
+
+dropPrereqsBind : String -> CBind -> CBind
+dropPrereqsBind name (CBind n clauses site) =
+  CBind n (map (dropPrereqsClause name) clauses) site
+
+dropPrereqsClause : String -> CClause -> CClause
+dropPrereqsClause name (CClause pats body) =
+  CClause pats (dropPrereqsExpr name body)
+
+dropPrereqsExpr : String -> CExpr -> CExpr
+dropPrereqsExpr name (CApp hd args site) =
+  CApp (dropPrereqsExpr name hd) (map (dropPrereqsExpr name) args) site
+dropPrereqsExpr name (m@(CMethod n (MethodEvidence iface arity route impls meths))) =
+  if n == name then
+    CMethod n (MethodEvidence iface arity route impls (map dropReqs meths))
+  else
+    m
+dropPrereqsExpr _ e = e
+
+dropReqs : Route -> Route
+dropReqs (RKey key _ sups) = RKey key [] sups
+dropReqs r = r
+
+test "(w) a built dictionary matches the declarations, and a dispatch names its interface" = expectEach
+  [
+    (
+      "a dictionary built with a prerequisite its instance does not require is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) builds instance `K` from 1 prerequisite dictionaries, it requires 0 [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (CDict "g" [RKey "K" [RDict "$dict_m_0"] []]))),
+    ),
+    (
+      "a dictionary built without its interface's super is refused",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) builds instance `S` with 0 super dictionaries, `S` has 1 [in main]",
+        ]
+        (validateDispatchEvidence (evidenceProg (CDict "g" [RKey "S" [] []]))),
+    ),
+    (
+      "a dictionary of an undeclared instance stores nothing",
+      expectEqual
+        [
+          "dispatch evidence: g (constrained) builds instance `Q` from 1 prerequisite dictionaries, it requires 0 [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg (CDict "g" [RKey "Q" [RDict "$dict_m_0"] []]))),
+    ),
+    (
+      "a dispatch through a given with no interface word is refused",
+      expectEqual
+        [
+          "dispatch evidence: method show dispatches with no interface word [in main]",
+        ]
+        (validateDispatchEvidence
+          (evidenceProg
+            (CMethod "show" (MethodEvidence "" 1 (RDict "$dict_m_0") [] [])))),
+    ),
+    (
+      "a lowered dictionary missing its prerequisite is refused",
+      expectEqual
+        [
+          "dispatch evidence: method desc builds instance `calls::Show2|(calls.Pair b)|` from 0 prerequisite dictionaries, it requires 1 [in main]",
+        ]
+        (validateDispatchEvidence
+          (dropBuiltPrereqs "desc" (typedLowered i2078Prelude paramContextSrc))),
     ),
   ]
 

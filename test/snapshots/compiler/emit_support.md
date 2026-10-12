@@ -388,7 +388,7 @@ bindNameMap (b :: rest) = omInsert (bindName b) b (bindNameMap rest)
 -- through the ordinary reach fold if the callee itself dispatches.
 eagerHasMethod : CExpr -> Bool
 eagerHasMethod (CLam _ _) = False
-eagerHasMethod (CMethod _ _ _ _ _ _) = True
+eagerHasMethod (CMethod _ _) = True
 eagerHasMethod (CDict _ _) = False
 eagerHasMethod (CVar _ _) = False
 eagerHasMethod (CLit _) = False
@@ -797,7 +797,7 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
 (DTypeSig false "eagerHasMethod" (TyFun (TyCon "CExpr") (TyCon "Bool")))
 (DFunDef false "eagerHasMethod" ((PCon "CLam" PWild PWild)) (EVar "False"))
-(DFunDef false "eagerHasMethod" ((PCon "CMethod" PWild PWild PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "eagerHasMethod" ((PCon "CMethod" PWild PWild)) (EVar "True"))
 (DFunDef false "eagerHasMethod" ((PCon "CDict" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CVar" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CLit" PWild)) (EVar "False"))
@@ -1027,7 +1027,7 @@ implEntryDeclaredArity (CImplEntry _ _ declared _) = declared
 (DFunDef false "bindNameMap" ((PCons (PVar "b") (PVar "rest"))) (EApp (EApp (EApp (EVar "omInsert") (EApp (EVar "bindName") (EVar "b"))) (EVar "b")) (EApp (EVar "bindNameMap") (EVar "rest"))))
 (DTypeSig false "eagerHasMethod" (TyFun (TyCon "CExpr") (TyCon "Bool")))
 (DFunDef false "eagerHasMethod" ((PCon "CLam" PWild PWild)) (EVar "False"))
-(DFunDef false "eagerHasMethod" ((PCon "CMethod" PWild PWild PWild PWild PWild PWild)) (EVar "True"))
+(DFunDef false "eagerHasMethod" ((PCon "CMethod" PWild PWild)) (EVar "True"))
 (DFunDef false "eagerHasMethod" ((PCon "CDict" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CVar" PWild PWild)) (EVar "False"))
 (DFunDef false "eagerHasMethod" ((PCon "CLit" PWild)) (EVar "False"))

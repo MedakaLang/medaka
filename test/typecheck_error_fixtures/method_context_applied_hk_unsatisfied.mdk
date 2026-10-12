@@ -1,0 +1,20 @@
+-- #3800: a method's context over an applied higher-kinded parameter is posed at the
+-- whole applied type.  `cshow (Opt Tok)` instantiates `f := Opt`, so the call
+-- needs `Show2 (Opt Tok)`, and no impl of `Show2` covers `Opt`.
+data Opt a = Opt a
+
+data Tok = Tok
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Tok where
+  show2 _ = "tok"
+
+interface Cont f where
+  cshow : Show2 (f Tok) => f Tok -> String
+
+impl Cont Opt where
+  cshow _ = "opt"
+
+main = cshow (Opt Tok)

@@ -116,12 +116,12 @@
    feeds all three; the failure message names which axis each row failed on,
    so an emitter-verdict regression is legible on its own. -}
 
-import compiler_cli_test_support.{boundedInTree, emitterBin}
+import compiler_cli_test_support.{emitterBin, inFreshDirOf, spawnEach, stageRun}
 import fs.{fixtureDirs, fixtureFiles, mkdirAll}
 import io.{runVerb}
 import list.{
-  drop, errs, indexed, lookup, mapWithIndex, nub, oks, permutations, range,
-  reverse, somes, sort, zip
+  chunks, drop, errs, indexed, lookup, mapWithIndex, nub, oks, permutations,
+  range, reverse, somes, sort, zip
 }
 import path.{basename}
 import string.{
@@ -132,7 +132,7 @@ import regex.{
   Regex, Match, mustCompile, isMatch, find as reFind, findAll as reFindAll
 }
 import test.{Expectation, fail, pass}
-import test_process.{medakaBin, medakaRoot, missingUnits, scratchDir}
+import test_process.{medakaBin, medakaRoot, missingUnits, testJobs}
 
 -- Everything is located through MEDAKA_ROOT rather than the working
 -- directory: a gate runner exports it and inherits whatever cwd its caller
@@ -280,74 +280,188 @@ schemeLine line = isMatch schemeLineRe line
    signature, and whether its `build` produced a binary. -}
 data Trial = Trial { sigText : String, emitText : String, madeBinary : Bool }
 
-verb : List String -> <Exec, IO> Result String (Int, String, String)
-verb args = boundedInTree perSpawnSeconds medakaBin args
+-- The argv `boundedInTree` gives a spawn in the tree under test: the `env`
+-- prefix names MEDAKA_ROOT and MEDAKA_EMITTER, so a batch row and a serial
+-- spawn run the same command.
+inTreeRow : String -> String -> String -> List String -> (String, List String)
+inTreeRow root emitter cmd args =
+  ("env", ["MEDAKA_ROOT=\{root}", "MEDAKA_EMITTER=\{emitter}", cmd] ++ args)
 
-executed : Int ->
-  String ->
-  <Exec, FileRead, IO> Result String (Option (Int, String))
-executed 0 binPath =
-  if fileExists binPath then
-    map
-      ((code, out, _) => Some (code, out))
-      (boundedInTree perSpawnSeconds binPath [])
-  else
-    Ok None
-executed _ _ = Ok None
+-- One stage of an ordering's chain, its live spawns bounded by `perSpawnSeconds`.
+-- An ordering already settled by an earlier stage passes through and spawns
+-- nothing; the live ones spawn as one batch.
+stage : (List s -> <Exec, IO> List (List (Result String (Int, String, String)))) ->
+  (s -> List (Result String (Int, String, String)) -> <Exec, FileRead, IO> Result String t) ->
+  List (Result String s) ->
+  <Exec, FileRead, IO> List (Result String t)
+stage spawn grade states = stageRun spawn (msg => msg) grade states
 
-signatureFor : String ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Result String (String, Bool)
-signatureFor work entry binPath =
-  let path = "\{work}/\{entry}"
-  match verb ["check", "--json", path]
-    Err e => Err "`medaka check --json` could not run: \{e}"
-    Ok (checkCode, jsonOut, jsonErr) => match verb ["check", path]
-      Err e => Err "`medaka check` could not run: \{e}"
-      Ok (_, checkOut, _) => match verb ["run", path]
-        Err e => Err "`medaka run` could not run: \{e}"
-        Ok (runCode, runOut, _) => match verb ["build", path, "-o", binPath]
-          Err e => Err "`medaka build` could not run: \{e}"
-          Ok (buildCode, _, _) => match executed buildCode binPath
-            Err e => Err "the built binary could not run: \{e}"
-            Ok ran =>
-              let execCode = match ran
-                Some (c, _) => intToString c
-                None => "-"
-              let execOut = match ran
-                Some (_, o) => escapeCell o
-                None => ""
-              let codes = codesIn (jsonOut ++ jsonErr)
-              let schemes = escapeCell (schemeDump checkOut)
-              let checkCells =
-                "check=\{intToString checkCode};codes=\{codes};schemes=\{schemes}"
-              let runCells = "run=\{intToString runCode}:\{escapeCell runOut}"
-              let buildCells =
-                "build=\{intToString buildCode}/\{execCode}:\{execOut}"
-              Ok ("\{checkCells};\{runCells};\{buildCells}", isSome ran)
+-- What one ordering has observed so far. Each stage fills in its own fields.
+data Work = Work {
+  workDir : String,
+  workEntry : String,
+  workJsonCode : Int,
+  workJson : String,
+  workCheckOut : String,
+  workRunCode : Int,
+  workRunOut : String,
+  workBuildCode : Int,
+  workHasBinary : Bool,
+  workExec : Option (Int, String),
+}
 
-{- | The raw emitter's own verdict on one ordering.
+freshWork : String -> String -> Work
+freshWork dir entry = Work {
+  workDir = dir,
+  workEntry = entry,
+  workJsonCode = 0,
+  workJson = "",
+  workCheckOut = "",
+  workRunCode = 0,
+  workRunOut = "",
+  workBuildCode = 0,
+  workHasBinary = False,
+  workExec = None,
+}
 
-   The extra `stdlib` root gives it the same root set `check`/`run`/`build`
-   get through `MEDAKA_ROOT`: without it any case importing a non-`core`
-   stdlib module exits 1 "unknown module" for the emitter alone, which would
-   classify as DISAGREE for a root-set reason that has nothing to do with a
-   compiler defect. -}
-emitVerdictFor : String -> String -> <Exec, IO> Result String String
-emitVerdictFor work entry =
+workPathOf : Work -> String
+workPathOf w = "\{w.workDir}/\{w.workEntry}"
+
+workBinOf : Work -> String
+workBinOf w = "\{w.workDir}/.bin"
+
+gradeJson : Work ->
+  List (Result String (Int, String, String)) ->
+  <Exec, FileRead, IO> Result String Work
+gradeJson w [r] = match r
+  Err e => Err "`medaka check --json` could not run: \{e}"
+  Ok (code, out, err) => Ok ({ w | workJsonCode = code, workJson = out ++ err })
+gradeJson _ _ = Err "internal: an ordering had no check --json result"
+
+gradeCheck : Work ->
+  List (Result String (Int, String, String)) ->
+  <Exec, FileRead, IO> Result String Work
+gradeCheck w [r] = match r
+  Err e => Err "`medaka check` could not run: \{e}"
+  Ok (_, out, _) => Ok ({ w | workCheckOut = out })
+gradeCheck _ _ = Err "internal: an ordering had no check result"
+
+gradeRun : Work ->
+  List (Result String (Int, String, String)) ->
+  <Exec, FileRead, IO> Result String Work
+gradeRun w [r] = match r
+  Err e => Err "`medaka run` could not run: \{e}"
+  Ok (code, out, _) => Ok ({ w | workRunCode = code, workRunOut = out })
+gradeRun _ _ = Err "internal: an ordering had no run result"
+
+gradeBuild : Work ->
+  List (Result String (Int, String, String)) ->
+  <Exec, FileRead, IO> Result String Work
+gradeBuild w [r] = match r
+  Err e => Err "`medaka build` could not run: \{e}"
+  Ok (code, _, _) => Ok ({ w |
+    workBuildCode = code,
+    workHasBinary = code == 0 && fileExists (workBinOf w),
+  })
+gradeBuild _ _ = Err "internal: an ordering had no build result"
+
+-- The built binary runs only when its build exited 0 and left a file behind.
+execSpawns : String -> String -> Work -> List (String, List String)
+execSpawns root emitter w =
+  if w.workHasBinary then [inTreeRow root emitter (workBinOf w) []] else []
+
+gradeExec : Work ->
+  List (Result String (Int, String, String)) ->
+  <Exec, FileRead, IO> Result String Work
+gradeExec w [] = Ok w
+gradeExec w [r] = match r
+  Err e => Err "the built binary could not run: \{e}"
+  Ok (code, out, _) => Ok ({ w | workExec = Some (code, out) })
+gradeExec _ _ = Err "internal: an ordering had too many binary results"
+
+emitSpawns : String -> String -> Work -> List (String, List String)
+emitSpawns root emitter w =
   let roots = [
-    "\{medakaRoot}/stdlib/runtime.mdk",
-    "\{medakaRoot}/stdlib/core.mdk",
-    "\{work}/\{entry}",
-    work,
-    "\{medakaRoot}/stdlib",
+    "\{root}/stdlib/runtime.mdk",
+    "\{root}/stdlib/core.mdk",
+    workPathOf w,
+    w.workDir,
+    "\{root}/stdlib",
   ]
-  match boundedInTree perSpawnSeconds emitterBin roots
-    Err e => Err "the raw emitter could not run: \{e}"
-    Ok (code, out, _) =>
-      let ir = if out == "" then "noir" else "ir"
-      Ok "emit=\{intToString code}:\{ir}"
+  [inTreeRow root emitter emitter roots]
+
+-- The signature of one ordering, as `check`, `run` and `build` observed it.
+signatureOf : Work -> String
+signatureOf w =
+  let execCode = match w.workExec
+    Some (c, _) => intToString c
+    None => "-"
+  let execOut = match w.workExec
+    Some (_, o) => escapeCell o
+    None => ""
+  let codes = codesIn w.workJson
+  let schemes = escapeCell (schemeDump w.workCheckOut)
+  let checkCells =
+    "check=\{intToString w.workJsonCode};codes=\{codes};schemes=\{schemes}"
+  let runCells = "run=\{intToString w.workRunCode}:\{escapeCell w.workRunOut}"
+  let buildCells = "build=\{intToString w.workBuildCode}/\{execCode}:\{execOut}"
+  "\{checkCells};\{runCells};\{buildCells}"
+
+-- The emitter's verdict is read only when the emitter ran at all.
+gradeEmitted : Work ->
+  List (Result String (Int, String, String)) ->
+  <Exec, FileRead, IO> Result String Trial
+gradeEmitted w [r] = match r
+  Err e => Err "the raw emitter could not run: \{e}"
+  Ok (code, out, _) =>
+    let ir = if out == "" then "noir" else "ir"
+    let sig = signatureOf w
+    Ok Trial {
+      sigText = sig,
+      emitText = "\{checkCell sig};emit=\{intToString code}:\{ir}",
+      madeBinary = isSome w.workExec,
+    }
+gradeEmitted _ _ = Err "internal: an ordering had no emitter result"
+
+-- Every ordering of one group, through the five verbs and the emitter, each
+-- verb one batch over the orderings still standing.
+runWorks : List (Result String Work) ->
+  <Exec, FileRead, IO> List (Result String Trial)
+runWorks works =
+  let bin = medakaBin
+  let root = medakaRoot
+  let emitter = emitterBin
+  let s1 =
+    stage
+      (spawnEach perSpawnSeconds (w => [
+        inTreeRow root emitter bin ["check", "--json", workPathOf w],
+      ]))
+      gradeJson
+      works
+  let s2 =
+    stage
+      (spawnEach perSpawnSeconds (w => [
+        inTreeRow root emitter bin ["check", workPathOf w],
+      ]))
+      gradeCheck
+      s1
+  let s3 =
+    stage
+      (spawnEach perSpawnSeconds (w => [
+        inTreeRow root emitter bin ["run", workPathOf w],
+      ]))
+      gradeRun
+      s2
+  let s4 =
+    stage
+      (spawnEach perSpawnSeconds (w => [
+        inTreeRow root emitter bin ["build", workPathOf w, "-o", workBinOf w],
+      ]))
+      gradeBuild
+      s3
+  let s5 =
+    stage (spawnEach perSpawnSeconds (execSpawns root emitter)) gradeExec s4
+  stage (spawnEach perSpawnSeconds (emitSpawns root emitter)) gradeEmitted s5
 
 -- The `check=` cell of a signature, which is what the emitter-verdict
 -- classification is computed against.
@@ -418,29 +532,22 @@ stageCase dir work = match mkdirAll work
             Err
               "case-directory copy truncated: \{intToString (length srcFiles)} file(s) in, \{intToString (length dstFiles)} out"
 
-trialFor : String ->
+-- One ordering staged into its own directory, with its entry permuted. The
+-- only part of an ordering that spawns nothing.
+prepWork : String ->
   String ->
   String ->
   Source ->
   Int ->
   List Int ->
-  <Exec, FileRead, FileWrite, IO> Result String Trial
-trialFor caseScratch dir entry src k order =
+  <Exec, FileRead, FileWrite, IO> Result String Work
+prepWork caseScratch dir entry src k order =
   let work = "\{caseScratch}/p\{intToString k}"
   match stageCase dir work
     Err e => Err e
     Ok _ => match writeFile "\{work}/\{entry}" (permutedText src order)
       Err e => Err "could not write the permuted entry: \{e}"
-      Ok _ => match signatureFor work entry "\{work}/.bin"
-        Err e => Err e
-        Ok (sig, built) =>
-          map
-            (emitted => Trial {
-              sigText = sig,
-              emitText = "\{checkCell sig};\{emitted}",
-              madeBinary = built,
-            })
-            (emitVerdictFor work entry)
+      Ok _ => Ok (freshWork work entry)
 
 runCase : String -> String -> <Exec, FileRead, FileWrite, IO> Case
 runCase scratch unit =
@@ -466,9 +573,13 @@ runCase scratch unit =
           else
             let plan = ordersFor n
             let outcomes =
-              mapWithIndex
-                (trialFor "\{scratch}/\{unit}" dir entry src)
-                plan.allOrders
+              flatMap
+                runWorks
+                (chunks
+                  testJobs
+                  (mapWithIndex
+                    (prepWork "\{scratch}/\{unit}" dir entry src)
+                    plan.allOrders))
             match errs outcomes
               e :: _ => brokenCase unit e
               [] =>
@@ -830,20 +941,28 @@ gradedCorpus = match corpusUnits
   Ok units => match (readLedger orderLedgerPath 2, readLedger emitLedgerPath 3)
     (Err e, _) => fail e
     (_, Err e) => fail e
-    (Ok orderRows, Ok emitRows) => match scratchDir
-      Err e => fail "could not make a scratch directory: \{e}"
-      Ok scratch =>
-        let cases = map (runCase scratch) units
-        let _ = runVerb "rm" ["-rf", scratch]
-        summarizeCensus
-          cases
-          (section
-              "the answer depends on import-clause order"
-              (somes (map (gradeOrder orderRows) cases))
-            ++ section
-              "a case's declared diagnostic codes are not what it produced"
-              (somes (map gradeCodes cases))
-            ++ section
-              "the emitter's verdict is not what the sidecar ledger pins"
-              (somes (map (gradeEmit emitRows) cases))
-            ++ section "an arm graded nothing" (witnessFailures cases))
+    (Ok orderRows, Ok emitRows) =>
+      inFreshDirOf
+        (scratch => gradeCorpus scratch units orderRows emitRows)
+        fail
+
+-- Every case run in `scratch`, which the caller removes once this returns.
+gradeCorpus : String ->
+  List String ->
+  List Row ->
+  List Row ->
+  <Exec, FileRead, FileWrite, IO> Expectation
+gradeCorpus scratch units orderRows emitRows =
+  let cases = map (runCase scratch) units
+  summarizeCensus
+    cases
+    (section
+        "the answer depends on import-clause order"
+        (somes (map (gradeOrder orderRows) cases))
+      ++ section
+        "a case's declared diagnostic codes are not what it produced"
+        (somes (map gradeCodes cases))
+      ++ section
+        "the emitter's verdict is not what the sidecar ledger pins"
+        (somes (map (gradeEmit emitRows) cases))
+      ++ section "an arm graded nothing" (witnessFailures cases))

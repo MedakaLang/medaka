@@ -610,7 +610,8 @@ stderrRuntimeLines = [
 --                       both cp_counts, since UTF-8 concat preserves codepoints).
 --   $mdk_char_to_str  — encode one codepoint (i32) to a fresh 1..4-byte $str
 --                       (mdk_utf8_encode + cp_count 1).
---   $mdk_str_slice    — codepoint-indexed [lo,hi) slice, clamped, UTF-8 byte-walk
+--   $mdk_str_slice    — codepoint-indexed [lo,hi) slice, clamped; an all-ASCII
+--                       string indexes bytes directly, else a UTF-8 byte-walk
 --                       (mdk_string_slice).
 --   $mdk_str_upper /
 --   $mdk_str_lower    — ASCII-only case map over BYTES (mdk_string_to_upper/lower).
@@ -698,8 +699,11 @@ strLeafRuntimeLines = [
   "      (else (if (i32.gt_s (local.get $lo) (local.get $cpc)) (then (local.set $lo (local.get $cpc))))))",
   "    (if (i32.lt_s (local.get $hi) (local.get $lo)) (then (local.set $hi (local.get $lo)))",
   "      (else (if (i32.gt_s (local.get $hi) (local.get $cpc)) (then (local.set $hi (local.get $cpc))))))",
-  "    (local.set $blo (call $mdk_byte_off (local.get $b) (local.get $n) (local.get $lo)))",
-  "    (local.set $bhi (call $mdk_byte_off (local.get $b) (local.get $n) (local.get $hi)))",
+  "    (if (i32.eq (local.get $cpc) (local.get $n))",
+  "      (then (local.set $blo (local.get $lo)) (local.set $bhi (local.get $hi)))",
+  "      (else",
+  "        (local.set $blo (call $mdk_byte_off (local.get $b) (local.get $n) (local.get $lo)))",
+  "        (local.set $bhi (call $mdk_byte_off (local.get $b) (local.get $n) (local.get $hi)))))",
   "    (local.set $len (i32.sub (local.get $bhi) (local.get $blo)))",
   "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $len)))",
   "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (local.get $blo) (local.get $len))",

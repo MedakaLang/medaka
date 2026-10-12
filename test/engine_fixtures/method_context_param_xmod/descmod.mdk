@@ -1,0 +1,18 @@
+-- The interfaces and impls of `method_context_param_xmod.mdk`, in their own
+-- module so the call's dictionary crosses a module boundary.
+public export data Pair a = Pair a a
+
+export interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show2 (Pair b) requires Show2 b where
+  show2 (Pair x _) = show2 x
+
+export interface Desc a where
+  desc : Show2 a => a -> String
+
+impl Desc (Pair b) where
+  desc p = show2 p

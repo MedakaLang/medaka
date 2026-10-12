@@ -40,10 +40,10 @@
 -- native-grading clause now follows a gate's project-local imports one hop
 -- (`gateReaches`/`relaysFor`), so a spawn routed through that shared module
 -- is graded via the importing gate rather than invisible to it.
--- `rowScratch` stays local — a fourth byte-identical copy with
--- `writer_oracle_test.mdk`.
+-- `rowScratch` and the batched build (`buildBatch`) are `test.oracle_support`'s
+-- shared helpers too.
 import io.{runVerb}
-import list.{replicate}
+import list.{lookup, replicate}
 import string.{contains, join, startsWith, trim}
 import test.{
   Expectation(..),
@@ -54,9 +54,10 @@ import test.{
   labelFail,
 }
 import test.oracle_support.{
-  Seed(..), flatLines, outLines, seedDb, spawnOut, spawnRaw
+  Seed(..), buildBatch, buildFor, flatLines, outLines, rowScratch, seedDb,
+  spawnOut, spawnRaw
 }
-import test_process.{medakaBin, scratchDir, underRoot}
+import test_process.{underRoot}
 
 -- # Spawning
 --
@@ -64,43 +65,45 @@ import test_process.{medakaBin, scratchDir, underRoot}
 -- This file needs the TOLERANT form (`spawnRaw`) too, for the `dml_oracle`
 -- sections, which legitimately expect either engine to REFUSE a statement —
 -- a non-zero exit there is data, not a spawn failure.
-buildTimeoutSeconds : Int
-buildTimeoutSeconds = 600
-
 queryTimeoutSeconds : Int
 queryTimeoutSeconds = 120
 
 -- # Small process-backed primitives every row below is built from.
 
-rowScratch : String -> <Exec> Result String String
--- deliberate copy of writer_oracle_test.mdk's own, see the header note
--- above the imports
--- lint-disable-next-line rule-duplicate-body
-rowScratch name = match scratchDir
-  Err e => Err "\{name}: \{e}"
-  Ok dir => Ok "\{dir}/\{name}"
+-- Every demo this file runs, built together in ONE batch by
+-- `test.oracle_support.buildBatch`. A top-level nullary is evaluated once per
+-- process, so the batch runs once. No row writes to a binary after its build,
+-- and no row's cleanup list names one.
+sharedDemos : List (String, List String)
+sharedDemos = [
+  ("sqlite/main.mdk", []),
+  ("sqlite/delete_demo.mdk", []),
+  ("sqlite/update_demo.mdk", []),
+  ("sqlite/update_expr_demo.mdk", ["--allow-internal"]),
+  ("sqlite/dml_probe.mdk", []),
+]
 
-buildBin : List String -> String -> String -> <Exec, IO> Result String Unit
-buildBin flags entry bin =
-  map
-    (_ => ())
-    (spawnOut
-      buildTimeoutSeconds
-      medakaBin
-      (["build"] ++ flags ++ [underRoot entry, "-o", bin]))
+sharedBuilds : <Exec, IO> List (String, Result String String)
+sharedBuilds =
+  buildBatch (map ((entry, flags) => (entry, entry, flags)) sharedDemos)
 
--- Rows that read or write through the same build share it: a top-level
--- nullary is evaluated once per process, and the binary lives under the
--- shared scratch root, outside every row's own cleanup list.
+sharedBin : String -> <Exec, IO> Result String String
+sharedBin = buildFor sharedBuilds
+
 mainBin : <Exec, IO> Result String String
-mainBin = match rowScratch "shared-main"
-  Err e => Err e
-  Ok bin => map (_ => bin) (buildBin [] "sqlite/main.mdk" bin)
+mainBin = sharedBin "sqlite/main.mdk"
 
 deleteDemoBin : <Exec, IO> Result String String
-deleteDemoBin = match rowScratch "shared-delete-demo"
-  Err e => Err e
-  Ok bin => map (_ => bin) (buildBin [] "sqlite/delete_demo.mdk" bin)
+deleteDemoBin = sharedBin "sqlite/delete_demo.mdk"
+
+updateDemoBin : <Exec, IO> Result String String
+updateDemoBin = sharedBin "sqlite/update_demo.mdk"
+
+updateExprDemoBin : <Exec, IO> Result String String
+updateExprDemoBin = sharedBin "sqlite/update_expr_demo.mdk"
+
+dmlProbeBin : <Exec, IO> Result String String
+dmlProbeBin = sharedBin "sqlite/dml_probe.mdk"
 
 copyFile : String -> String -> <Exec, IO> Result String Unit
 copyFile src dst = map (_ => ()) (spawnOut queryTimeoutSeconds "cp" [src, dst])
@@ -382,20 +385,16 @@ updateResult = match rowScratch "dml-update"
   Ok prefix =>
     let db = "\{prefix}.db"
     let dbIpk = "\{prefix}-ipk.db"
-    let updater = "\{prefix}-updater"
-    let out = runUpdate db dbIpk updater
-    let _ = runVerb "rm" ["-rf", db, dbIpk, updater]
+    let out = runUpdate db dbIpk
+    let _ = runVerb "rm" ["-rf", db, dbIpk]
     out
 
-runUpdate : String ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Result String UpdateRun
-runUpdate db dbIpk updater = do
+runUpdate : String -> String -> <Exec, FileRead, IO> Result String UpdateRun
+runUpdate db dbIpk = do
+  updater <- updateDemoBin
   let usersArgs = [db, "users", "age", "int", "99", "age", "ge", "30"]
   let kvArgs = [db, "kv", "v", "int", "0", "v", "gt", "25"]
   let ipkArgs = [dbIpk, "users", "id", "int", "999", "age", "ge", "0"]
-  _ <- buildBin [] "sqlite/update_demo.mdk" updater
   _ <- seedDb db [SeedSql updateSeedSql]
   usersOut <- spawnOut queryTimeoutSeconds updater usersArgs
   kvOut <- spawnOut queryTimeoutSeconds updater kvArgs
@@ -479,17 +478,15 @@ updateExprResult = match rowScratch "dml-update-expr"
   Ok prefix =>
     let dbm = "\{prefix}-m.db"
     let dbs = "\{prefix}-s.db"
-    let probe = "\{prefix}-probe"
-    let out = runUpdateExpr dbm dbs probe
-    let _ = runVerb "rm" ["-rf", dbm, dbs, probe]
+    let out = runUpdateExpr dbm dbs
+    let _ = runVerb "rm" ["-rf", dbm, dbs]
     out
 
 runUpdateExpr : String ->
   String ->
-  String ->
   <Exec, FileRead, IO> Result String UpdateExprRun
-runUpdateExpr dbm dbs probe = do
-  _ <- buildBin ["--allow-internal"] "sqlite/update_expr_demo.mdk" probe
+runUpdateExpr dbm dbs = do
+  probe <- updateExprDemoBin
   _ <- seedDb dbm [SeedSql updateExprSeedSql]
   _ <- copyFile dbm dbs
   probeOut <- spawnOut queryTimeoutSeconds probe [dbm]
@@ -987,7 +984,7 @@ dmlOutcome = match rowScratch "dml"
 
 runDmlOutcome : String -> <Exec, FileRead, IO> Result String DmlOutcome
 runDmlOutcome prefix = do
-  let probe = "\{prefix}-probe"
+  probe <- dmlProbeBin
   let m1 = "\{prefix}-m1.db"
   let s1 = "\{prefix}-s1.db"
   let m2 = "\{prefix}-m2.db"
@@ -1008,7 +1005,6 @@ runDmlOutcome prefix = do
     "DELETE FROM docs WHERE id = 1",
   ]
   cli <- mainBin
-  _ <- buildBin [] "sqlite/dml_probe.mdk" probe
   e1 <- runCorpusSection cli "dml corpus" m1 s1 dmlCorpus
   _ <- seedDb m2 [SeedSql dmlAuthoredSeedSql]
   _ <- seedDb s2 [SeedSql dmlAuthoredSeedSql]
@@ -1041,7 +1037,7 @@ runDmlOutcome prefix = do
     m7
     "INSERT INTO t VALUES (2, 'y')"
   eProbe <- parseProbeExpectation probe
-  let _ = runVerb "rm" ["-rf", probe, m1, s1, m2, s2, m3, s3, m5, m6, m7]
+  let _ = runVerb "rm" ["-rf", m1, s1, m2, s2, m3, s3, m5, m6, m7]
   Ok DmlOutcome {
     corpusAuthoredOverflow = expectAll [e1, e2, e3, e3b],
     cliSelect = eSelect,

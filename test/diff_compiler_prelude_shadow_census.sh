@@ -37,13 +37,10 @@
 # from core.mdk, or a core.mdk standalone has no ledger row (a new prelude
 # function shipping with no census coverage).
 #
-# COST: measured 2026-08-28 on the sprint implementer's cold-built binary,
-# this worktree: all 57 names x (check + run + build [+ running the binary])
-# = up to 171 compiler invocations, up to 57 of them a full `clang` link,
-# ran in ~90s wall-clock, single-threaded, no fan-out knob. That is cheap
-# enough to run in full on every PR (no cheap-verbs-only / nightly-build
-# split was needed) -- see the sprint report for the exact timing and the
-# shard this was placed in.
+# COST: the names fan out over xargs -P (PRELUDE_SHADOW_JOBS, default
+# min(4, NCPU/2), at least 1). Each name's probe runs in its own directory;
+# per-name results are written to $TMP and replayed in derivation order, so
+# the printed table and the counters match the old serial loop.
 #
 # Usage:  sh test/diff_compiler_prelude_shadow_census.sh
 set -u
@@ -51,11 +48,81 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
 CORE="$ROOT/stdlib/core.mdk"
 LEDGER="$ROOT/test/prelude_shadow_census.ledger"
+SELF="$ROOT/test/diff_compiler_prelude_shadow_census.sh"
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
 [ -f "$CORE" ] || { echo "missing $CORE"; exit 2; }
 [ -f "$LEDGER" ] || { echo "missing ledger: $LEDGER"; exit 2; }
 
 bound() { perl -e 'alarm 60; exec @ARGV' "$@"; }
+
+# worker_one N — the per-name probe for line N of $TMP/names. Writes the table row to
+# $TMP/r.N.line and the verdict (PASS|FAIL) to $TMP/r.N.res. Runs under xargs -P.
+worker_one() {
+  n="$1"
+  name="$(sed -n "${n}p" "$TMP/names")"
+  d="$TMP/d.$n"
+  mkdir -p "$d"
+  cat > "$d/main.mdk" <<EOF
+interface Ifc c where
+  $name : c -> Int
+
+impl Ifc Int where
+  $name v = v
+
+main = println ($name 1)
+EOF
+
+  bound "$MEDAKA" check "$d/main.mdk" >/dev/null 2>"$d/chk.err"
+  check_code=$?
+  bound "$MEDAKA" run "$d/main.mdk" >"$d/run.out" 2>"$d/run.err"
+  run_code=$?
+  bound "$MEDAKA" build "$d/main.mdk" -o "$d/bin" >"$d/build.err" 2>&1
+  build_code=$?
+
+  if [ "$check_code" -eq 0 ]; then check_v='ACCEPT'; else check_v='REJECT'; fi
+  if [ "$run_code" -eq 0 ]; then run_v='ACCEPT'; else run_v='REJECT'; fi
+
+  runval='-'
+  [ "$run_v" = 'ACCEPT' ] && runval="$(tr -d '[:space:]' < "$d/run.out")"
+
+  binval='-'
+  if [ "$build_code" -eq 0 ] && [ -x "$d/bin" ]; then
+    build_v='ACCEPT'
+    bound "$d/bin" >"$d/bin.out" 2>"$d/bin.err"
+    binval="$(tr -d '[:space:]' < "$d/bin.out")"
+  else
+    build_v='REJECT'
+  fi
+
+  if [ "$check_v" = 'ACCEPT' ] && [ "$run_v" = 'ACCEPT' ] && [ "$build_v" = 'ACCEPT' ] \
+     && [ "$runval" = '1' ] && [ "$binval" = '1' ]; then
+    verdict='PASS'
+  elif [ "$check_v" = 'ACCEPT' ] && [ "$run_v" = 'ACCEPT' ] && [ "$build_v" = 'REJECT' ]; then
+    verdict='FAIL_BUILD'
+  elif [ "$check_v" = 'ACCEPT' ] && [ "$run_v" = 'REJECT' ] && [ "$build_v" = 'ACCEPT' ] && [ "$binval" = '1' ]; then
+    verdict='SPECIAL_RUN_REJECT'
+  else
+    verdict="UNKNOWN:$check_v/$run_v/$build_v/run=$runval/bin=$binval"
+  fi
+
+  expected="$(awk -F'|' -v n="$name" 'NF>1 && $1==n{print $2; exit}' "$LEDGER")"
+  [ -z "$expected" ] && expected='(no ledger row)'
+
+  if [ "$verdict" = "$expected" ]; then
+    result='PASS'
+  else
+    result='FAIL'
+  fi
+  printf '%-20s %-6s %-6s %-6s %-6s %-6s %-20s %-20s %s\n' "$name" "$check_v" "$run_v" "$build_v" "$runval" "$binval" "$verdict" "$expected" "$result" > "$TMP/r.$n.line"
+  printf '%s\n' "$result" > "$TMP/r.$n.res"
+}
+
+# --worker mode: xargs re-invokes this script as `sh "$SELF" --worker "$TMP" <n>`.
+if [ "${1:-}" = "--worker" ]; then
+  TMP="$2"
+  worker_one "$3"
+  exit 0
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -124,64 +191,38 @@ echo
 printf '%-20s %-6s %-6s %-6s %-6s %-6s %-20s %-20s %s\n' 'name' 'check' 'run' 'build' 'runv' 'binv' 'verdict' 'expected' 'result'
 printf '%-20s %-6s %-6s %-6s %-6s %-6s %-20s %-20s %s\n' '--------------------' '------' '------' '------' '------' '------' '--------------------' '--------------------' '------'
 
-for name in $derived_names; do
-  d="$TMP/$name"
-  mkdir -p "$d"
-  cat > "$d/main.mdk" <<EOF
-interface Ifc c where
-  $name : c -> Int
+# Fan out one worker per name. Names are numbered in derivation order; the replay
+# below prints rows in exactly that order.
+: > "$TMP/names"
+for name in $derived_names; do printf '%s\n' "$name" >> "$TMP/names"; done
+N="$(wc -l < "$TMP/names" | tr -d ' ')"
 
-impl Ifc Int where
-  $name v = v
+NCPU="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+JOBS=$(( NCPU / 2 ))
+[ "$JOBS" -gt 4 ] && JOBS=4
+[ "$JOBS" -lt 1 ] && JOBS=1
+JOBS="${PRELUDE_SHADOW_JOBS:-$JOBS}"
 
-main = println ($name 1)
-EOF
+if [ "$N" -gt 0 ]; then
+  i=1
+  while [ "$i" -le "$N" ]; do echo "$i"; i=$((i + 1)); done \
+    | xargs -P "$JOBS" -n 1 sh "$SELF" --worker "$TMP"
+fi
 
-  bound "$MEDAKA" check "$d/main.mdk" >/dev/null 2>"$d/chk.err"
-  check_code=$?
-  bound "$MEDAKA" run "$d/main.mdk" >"$d/run.out" 2>"$d/run.err"
-  run_code=$?
-  bound "$MEDAKA" build "$d/main.mdk" -o "$d/bin" >"$d/build.err" 2>&1
-  build_code=$?
-
-  if [ "$check_code" -eq 0 ]; then check_v='ACCEPT'; else check_v='REJECT'; fi
-  if [ "$run_code" -eq 0 ]; then run_v='ACCEPT'; else run_v='REJECT'; fi
-
-  runval='-'
-  [ "$run_v" = 'ACCEPT' ] && runval="$(tr -d '[:space:]' < "$d/run.out")"
-
-  binval='-'
-  if [ "$build_code" -eq 0 ] && [ -x "$d/bin" ]; then
-    build_v='ACCEPT'
-    bound "$d/bin" >"$d/bin.out" 2>"$d/bin.err"
-    binval="$(tr -d '[:space:]' < "$d/bin.out")"
+i=1
+while [ "$i" -le "$N" ]; do
+  if [ -s "$TMP/r.$i.line" ]; then
+    cat "$TMP/r.$i.line"
   else
-    build_v='REJECT'
-  fi
-
-  if [ "$check_v" = 'ACCEPT' ] && [ "$run_v" = 'ACCEPT' ] && [ "$build_v" = 'ACCEPT' ] \
-     && [ "$runval" = '1' ] && [ "$binval" = '1' ]; then
-    verdict='PASS'
-  elif [ "$check_v" = 'ACCEPT' ] && [ "$run_v" = 'ACCEPT' ] && [ "$build_v" = 'REJECT' ]; then
-    verdict='FAIL_BUILD'
-  elif [ "$check_v" = 'ACCEPT' ] && [ "$run_v" = 'REJECT' ] && [ "$build_v" = 'ACCEPT' ] && [ "$binval" = '1' ]; then
-    verdict='SPECIAL_RUN_REJECT'
-  else
-    verdict="UNKNOWN:$check_v/$run_v/$build_v/run=$runval/bin=$binval"
-  fi
-
-  expected="$(awk -F'|' -v n="$name" 'NF>1 && $1==n{print $2; exit}' "$LEDGER")"
-  [ -z "$expected" ] && expected='(no ledger row)'
-
-  if [ "$verdict" = "$expected" ]; then
-    result='PASS'
-    pass=$((pass+1))
-  else
-    result='FAIL'
-    fail=$((fail+1))
+    printf '%s: no result (worker produced none)\n' "$(sed -n "${i}p" "$TMP/names")"
   fi
   asserts=$((asserts+1))
-  printf '%-20s %-6s %-6s %-6s %-6s %-6s %-20s %-20s %s\n' "$name" "$check_v" "$run_v" "$build_v" "$runval" "$binval" "$verdict" "$expected" "$result"
+  if [ "$(cat "$TMP/r.$i.res" 2>/dev/null)" = 'PASS' ]; then
+    pass=$((pass+1))
+  else
+    fail=$((fail+1))
+  fi
+  i=$((i + 1))
 done
 
 echo

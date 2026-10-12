@@ -10,7 +10,7 @@
 
    | retired gate | probe | corpus | golden |
    |---|---|---|---|
-   | `diff_compiler_diagnostics` | `diagnostics_main` | `resolve`/`exhaust`/`check_match` fixtures | `.analyze.golden` |
+   | `diff_compiler_diagnostics` | (in-process: `compiler/driver/diagnostics_test.mdk`) | `resolve`/`exhaust`/`check_match` fixtures | `.analyze.golden` |
    | `diff_compiler_exhaust` | (in-process: `compiler/frontend/exhaust_test.mdk`) | `test/exhaust_fixtures` | `.expected` |
    | `diff_compiler_fmt` | `fmt_main` | `test/fmt_fixtures` + `test/parse_fixtures` | `.fmt.golden` |
    | `diff_compiler_lex_files` | `lex_main` | the lexer and twelve stdlib modules | `.lextok.golden` |
@@ -38,9 +38,6 @@
    block below instead, over the SAME two predicates as a `Row`: a spawn's
    exit code and stderr, and its stdout against a golden.
 
-   - `diff_compiler_draft_semantic` grades FIVE spawns per fixture (a
-     baseline plus four `MEDAKA_DRAFT_MUTATION`-controlled runs), only the
-     first of which is diffed against a golden.
    - `diff_compiler_references_correctness` dumps a whole 1-4-module
      project per fixture via `refindex_main --dump`, not a per-file corpus
      loop, over twelve fixture directories.
@@ -96,11 +93,24 @@
    A corpus that grew reds until the number beside it is updated to match,
    which is the price of a corpus that shrinks reding too. -}
 
-import compiler_cli_test_support.{chompNewlines, stripUnitAutoPrint}
+import compiler_cli_test_support.{
+  boundedVerbsSeconds, chompNewlines, stripUnitAutoPrint
+}
 import fs.{fixtureDirs, fixtureFiles}
 import io.{runVerb}
 import json.{Json, asArray, asInt, asString, get, parse}
-import list.{dropWhile, lookup, partitionResults, somes, sort, span, take}
+import list.{
+  chunks,
+  dropWhile,
+  lookup,
+  partitionResults,
+  reverse,
+  somes,
+  sort,
+  span,
+  splitAt,
+  take,
+}
 import path.{basename, dirname, stem}
 import probe_runner.{
   Row, countFloor, diffNote, errorPathFailures, gradeProbeRows, processFailure,
@@ -111,7 +121,8 @@ import string.{
   toInt, toLower, trim, unlines
 }
 import test_process.{
-  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
+  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, scratchDir,
+  spawnTimeoutSeconds, testJobs, underRoot
 }
 
 -- | The stdlib modules `diff_compiler_lex_files` lexed, in its own order.
@@ -134,19 +145,6 @@ lexCorpus = [
 
 rows : List Row
 rows = [
-  Row {
-    gate = "diff_compiler_diagnostics",
-    probe = "test/bin/diagnostics_main",
-    corpus = [
-      "test/resolve_fixtures", "test/exhaust_fixtures",
-      "test/check_match_fixtures"
-    ],
-    prelude = ["stdlib/runtime.mdk", "stdlib/core.mdk"],
-    goldenSuffix = ".analyze.golden",
-    sorted = True,
-    stripUnit = True,
-    fixtures = 42,
-  },
   Row {
     gate = "diff_compiler_fmt",
     probe = "test/bin/fmt_main",
@@ -200,19 +198,6 @@ test "entry-probe error paths exit nonzero with an empty artifact" =
   report "error-path" (errorPathFailures "test/bin/llvm_emit_modules_main" 6)
 
 -- # Shared helpers for the rows below that do not fit `Row`
-
-{- | Runs `cmd` with `name=value` set in its environment, on top of
-   `boundedVerb`'s own `env`-then-`perl` wrapping (`test_process.mdk`): a
-   bare `env` first argument is itself a valid command name, so `env` sees
-   it, re-execs `env name=value cmd args...`, and the variable reaches
-   `cmd`. -}
-withEnv : String ->
-  String ->
-  String ->
-  List String ->
-  <Exec> Result String (Int, String, String)
-withEnv name value cmd args =
-  boundedVerb "env" (["\{name}=\{value}", cmd] ++ args)
 
 -- | `text` contains every string in `needles`.
 containsAll : String -> List String -> Bool
@@ -278,213 +263,6 @@ effectTypesSuperset snapshotRel host rt core fix =
               else
                 let body = unlines (map (l => "  missing: \{l}") missing)
                 Some "native-host TYPES missing # TYPES_USER lines:\n\{body}"
-
--- # `diff_compiler_draft_semantic`
-
-draftSemanticFixturesDir : String
-draftSemanticFixturesDir = "test/draft_semantic_fixtures"
-
-{- | The one `main_*.mdk` entry directly under `dir`, or an error naming how
-   many were found — the fixture is malformed unless there is exactly
-   one. -}
-draftSemanticEntry : String -> <FileRead> Result String String
-draftSemanticEntry dir = match fixtureFiles dir
-  Err e => Err "\{dir}: \{e}"
-  Ok paths =>
-    match (filter
-      (p => startsWith "main_" (basename p) && endsWith ".mdk" p)
-      paths)
-      [e] => Ok e
-      es =>
-        Err
-          "\{dir}: expected exactly one main_*.mdk entry, found \{intToString (length es)}"
-
-{- | Runs the probe under `mutation` (unmutated when `""`) and asserts
-   `wantReceipt` appears in its output, plus `wantDiffCount` when given —
-   the shared shape of every `MEDAKA_DRAFT_MUTATION` check the retired
-   script ran. `wantDiffCount` is `None` for the positive control, whose
-   difference count is asserted NONZERO by its own caller instead of a
-   fixed string here. -}
-draftSemanticAssert : String ->
-  String ->
-  String ->
-  Option String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, IO> Result String String
-draftSemanticAssert label mutation wantReceipt wantDiffCount bin rt core entry =
-  let spawn =
-    if mutation == "" then
-      boundedVerb bin [rt, core, entry]
-    else
-      withEnv "MEDAKA_DRAFT_MUTATION" mutation bin [rt, core, entry]
-  match spawn
-    Err e => Err "\{label}: could not spawn: \{e}"
-    Ok (code, out, _) =>
-      if code /= 0 then
-        Err
-          "\{label}: exited \{intToString code} instead of producing a receipt"
-      else
-        let text = chompNewlines out
-        if not (contains wantReceipt text) then
-          Err "\{label}: expected receipt not found: \{wantReceipt}"
-        else match wantDiffCount
-          Some needle =>
-            if contains needle text then
-              Ok text
-            else
-              Err
-                "\{label}: expected difference-count summary not found: \{needle}"
-          None => Ok text
-
-methodIfaceReceipt : String
-methodIfaceReceipt =
-  "(receipt method-iface methodIfaceTable elaborated-graph DIFFERENT)"
-
-{- | Everything wrong with one `draft_semantic_fixtures/<name>/` fixture:
-   the baseline draft (diffed against its golden), and the four mutation
-   controls that prove the golden's comparator can actually observe a
-   copied-field mismatch rather than only ever printing MATCH. -}
-draftSemanticFixtureFailure : String -> <Exec, FileRead, IO> Option String
-draftSemanticFixtureFailure dir = match draftSemanticEntry dir
-  Err e => Some e
-  Ok entry =>
-    let name = basename dir
-    let bin = underRoot "test/bin/draft_semantic_main"
-    let rt = underRoot "stdlib/runtime.mdk"
-    let core = underRoot "stdlib/core.mdk"
-    match boundedVerb bin [rt, core, entry, dir]
-      Err e => Some "\{name}: could not spawn draft_semantic_main: \{e}"
-      Ok (code, out, err) => match processFailure (basename bin) name code err
-        Some m => Some m
-        None =>
-          let baseline = chompNewlines out
-          if not (contains "(different 0)" baseline) then
-            Some
-              "\{name}: baseline draft has a transport mismatch (or no summary)"
-          else
-            draftSemanticChecks name bin rt core entry dir baseline
-
-draftSemanticChecks : String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Option String
-draftSemanticChecks name bin rt core entry dir baseline =
-  let malformed =
-    draftSemanticAssert
-      "\{name}: malformed-field control"
-      "method-iface"
-      methodIfaceReceipt
-      (Some "(different 1)")
-      bin
-      rt
-      core
-      entry
-  match malformed
-    Err e => Some e
-    Ok _ =>
-      let provenance =
-        draftSemanticAssert
-          "\{name}: provenance control"
-          "method-iface-provenance"
-          methodIfaceReceipt
-          (Some "(different 1)")
-          bin
-          rt
-          core
-          entry
-      match provenance
-        Err e => Some e
-        Ok _ =>
-          let control =
-            draftSemanticAssert
-              "\{name}: unrelated positive control"
-              "unrelated-control"
-              "(receipt module-emitter-projection elaborateModules elaborated-modules DIFFERENT)"
-              None
-              bin
-              rt
-              core
-              entry
-          match control
-            Err e => Some e
-            Ok text =>
-              if contains "(different 0)" text then
-                Some
-                  "\{name}: unrelated positive control could not observe its unrelated module"
-              else
-                draftSemanticTableControls name bin rt core entry dir baseline
-
--- The two installed-table facts (#1403) must each observe a copy that disagrees
--- with what the engines read: a dropped inherited-default row, and a method
--- occurrence whose arity was skewed.
-draftSemanticTableControls : String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Option String
-draftSemanticTableControls name bin rt core entry dir baseline =
-  let dispositions =
-    draftSemanticAssert
-      "\{name}: method-dispositions control"
-      "method-dispositions"
-      "(receipt method-dispositions X-E.P:dispositions installed-table DIFFERENT)"
-      (Some "(different 1)")
-      bin
-      rt
-      core
-      entry
-  match dispositions
-    Err e => Some e
-    Ok _ =>
-      let evidence =
-        draftSemanticAssert
-          "\{name}: evidence control"
-          "evidence"
-          "(receipt evidence X-E.P:evidence installed-table DIFFERENT)"
-          (Some "(different 1)")
-          bin
-          rt
-          core
-          entry
-      match evidence
-        Err e => Some e
-        Ok _ => draftSemanticIsolation name bin rt core entry dir baseline
-
-draftSemanticIsolation : String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Option String
-draftSemanticIsolation name bin rt core entry dir baseline =
-  match withEnv "MEDAKA_DRAFT_MUTATION" "same-process" bin [rt, core, entry]
-    Err e => Some "\{name}: P -> P+U -> P control could not spawn: \{e}"
-    Ok (code, out, _) =>
-      if code /= 0 then
-        Some "\{name}: P -> P+U -> P control exited \{intToString code}"
-      else if chompNewlines out /= baseline then
-        Some
-          "\{name}: P changed after constructing unrelated P+U in the same process"
-      else match readFile "\{dir}/draft.golden"
-        Err e => Some "\{name}: no readable golden: \{e}"
-        Ok raw =>
-          let want = chompNewlines raw
-          if want == baseline then
-            None
-          else
-            Some "\{name}: \{diffNote want baseline}"
 
 -- # `diff_compiler_references_correctness`
 
@@ -626,7 +404,7 @@ effectHoleRejectOuterComputedSrc = unlines [
 {- | Writes `name`.mdk under `scratch` as `src`, then runs `use` on its
    path. `scratch` is shared across every synthesized fixture this test
    needs — `test_process.scratchDir` is a top-level nullary, evaluated ONCE
-   per process (`probe_runner.ownScratch`'s own warning), so a helper that
+   per process, so a helper that
    called `scratchDir` and then `rm -rf`ed it per fixture would delete the
    ONE shared directory out from under every fixture after the first. -}
 withScratchFile : String ->
@@ -755,7 +533,7 @@ typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
    rules out an EMPTY scan — a corpus that lost fifty fixtures still reports
    nothing. -}
 typecheckErrorFixtureCount : Int
-typecheckErrorFixtureCount = 153
+typecheckErrorFixtureCount = 155
 
 {- | Fixtures whose documented error depends on the prelude (#11: an integer
    literal desugars to `fromInt`, so the no-prelude driver structurally
@@ -857,53 +635,97 @@ typecheckPreludeDep = [
 sortedText : String -> String
 sortedText s = chompNewlines (unlines (sort (lines (chompNewlines s))))
 
-{- | One driver's grading of one fixture against its golden — both sides
-   `LC_ALL=C`-sorted the way the retired script's `sort` was, since the
-   single-error fixtures' line order carries no meaning. -}
-typecheckDriverFailure : String ->
+{- | One driver's grading of one fixture against its golden, given the
+   result of its spawn — both sides `LC_ALL=C`-sorted the way the retired
+   script's `sort` was, since the single-error fixtures' line order carries no
+   meaning. -}
+typecheckDriverGrade : String ->
   String ->
-  List String ->
   String ->
-  <Exec, IO> Option String
-typecheckDriverFailure driver bin args want = match boundedVerb bin args
-  Err e => Some "\{driver}: could not spawn: \{e}"
-  Ok (code, out, err) => match processFailure (basename bin) driver code err
+  Result String (Int, String, String) ->
+  Option String
+typecheckDriverGrade driver _ _ (Err e) =
+  Some "\{driver}: could not spawn: \{e}"
+typecheckDriverGrade driver bin want (Ok (code, out, err)) =
+  match processFailure (basename bin) driver code err
     Some m => Some m
     None =>
       let got = sortedText (stripUnitAutoPrint out)
       if got == want then None else Some "\{driver}: \{diffNote want got}"
 
-{- | One `typecheck_error_fixtures/*.mdk`'s driver(s), routed by
-   `typecheckPreludeDep`: prelude-dependent fixtures run ONLY `check_main`;
-   every other fixture runs `typecheck_main` and `check_main` both. -}
-typecheckErrorFixtureFailures : String -> <Exec, FileRead, IO> List String
-typecheckErrorFixtureFailures path =
+{- | One `typecheck_error_fixtures/*.mdk`'s plan: its golden, sorted, and the
+   driver runs it owes as `(prefix, driver, bin, args)` rows, in spawn order.
+   Prelude-dependent fixtures run ONLY `check_main` (`typecheckPreludeDep`);
+   every other fixture runs `check_main` and `typecheck_main` both. An
+   unreadable golden is the plan's `Err`, and spawns nothing. -}
+typecheckErrorPlan : String ->
+  <FileRead, IO> Result String (String, List (String, String, String, List String))
+typecheckErrorPlan path =
   let name = basename path
   let golden = "\{dirname path}/\{stem path}.tc.golden"
   match readFile golden
-    Err e => ["\{name}: no readable golden \{golden}: \{e}"]
+    Err e => Err "\{name}: no readable golden \{golden}: \{e}"
     Ok raw =>
-      let want = sortedText raw
       let rt = underRoot "stdlib/runtime.mdk"
       let core = underRoot "stdlib/core.mdk"
-      let checkMain = underRoot "test/bin/check_main"
-      let checkArgs = [rt, core, path]
-      let checkResult =
-        map
-          (m => "check/\{name}: \{m}")
-          (typecheckDriverFailure "check" checkMain checkArgs want)
+      let checkBin = underRoot "test/bin/check_main"
+      let checkRun = ("check/\{name}", "check", checkBin, [rt, core, path])
       if elem name typecheckPreludeDep then
-        somes [checkResult]
+        Ok (sortedText raw, [checkRun])
       else
-        let tcMain = underRoot "test/bin/typecheck_main"
-        let tcResult =
-          map
-            (m => "tc_main/\{name}: \{m}")
-            (typecheckDriverFailure "tc_main" tcMain [path] want)
-        somes [tcResult, checkResult]
+        let tcBin = underRoot "test/bin/typecheck_main"
+        let tcRun = ("tc_main/\{name}", "tc_main", tcBin, [path])
+        Ok (sortedText raw, [checkRun, tcRun])
+
+-- The `(bin, args)` rows a plan spawns, in spawn order.
+typecheckPlanRows : Result String (String, List (String, String, String, List String)) ->
+  List (String, List String)
+typecheckPlanRows (Err _) = []
+typecheckPlanRows (Ok (_, runs)) = map ((_, _, bin, args) => (bin, args)) runs
+
+-- Each run of one fixture graded against its share of `results`, in spawn
+-- order, a missing result being an `Err` rather than a skipped run.
+typecheckRunFailures : (String -> String -> String -> Result String (Int, String, String) -> Option String) ->
+  String ->
+  List (String, String, String, List String) ->
+  List (Result String (Int, String, String)) ->
+  List (Option String)
+typecheckRunFailures _ _ [] _ = []
+typecheckRunFailures grade want ((prefix, driver, bin, _) :: runs) (r :: rs) =
+  map (m => "\{prefix}: \{m}") (grade driver bin want r)
+    :: typecheckRunFailures grade want runs rs
+typecheckRunFailures grade want ((prefix, driver, bin, _) :: runs) [] =
+  map
+      (m => "\{prefix}: \{m}")
+      (grade driver bin want (Err "the batch returned no result"))
+    :: typecheckRunFailures grade want runs []
+
+-- The failures of `plans`, in input order, consuming `results` as the rows
+-- of `typecheckPlanRows` were spawned. A fixture's runs are graded in spawn
+-- order and reported in reverse, `typecheck_main` before `check_main`.
+gradeTypecheckPlans : (String -> String -> String -> Result String (Int, String, String) -> Option String) ->
+  List (Result String (String, List (String, String, String, List String))) ->
+  List (Result String (Int, String, String)) ->
+  List String
+gradeTypecheckPlans _ [] _ = []
+gradeTypecheckPlans grade ((Err e) :: rest) results =
+  e :: gradeTypecheckPlans grade rest results
+gradeTypecheckPlans grade ((Ok (want, runs)) :: rest) results =
+  let (mine, others) = splitAt (length runs) results
+  reverse (somes (typecheckRunFailures grade want runs mine))
+    ++ gradeTypecheckPlans grade rest others
+
+-- One `testJobs`-wide group of fixtures: every driver run of the group spawns
+-- as one batch, then the group is graded in input order.
+typecheckErrorGroup : List String -> <Exec, FileRead, IO> List String
+typecheckErrorGroup paths =
+  let plans = map typecheckErrorPlan paths
+  let spawned =
+    boundedVerbsSeconds spawnTimeoutSeconds (flatMap typecheckPlanRows plans)
+  gradeTypecheckPlans typecheckDriverGrade plans spawned
 
 -- | Every `.mdk` fixture directly under `typecheckErrorFixturesDir`,
--- against its two (or one) drivers.
+-- against its two (or one) drivers, `testJobs` fixtures at a time.
 typecheckErrorFailures : <Exec, FileRead, IO> List String
 typecheckErrorFailures =
   match fixtureFiles (underRoot typecheckErrorFixturesDir)
@@ -911,7 +733,7 @@ typecheckErrorFailures =
     Ok paths =>
       let fixtures = sort (filter (endsWith ".mdk") paths)
       countFloor typecheckErrorFixturesDir typecheckErrorFixtureCount fixtures
-        ++ fold (acc p => acc ++ typecheckErrorFixtureFailures p) [] fixtures
+        ++ flatMap typecheckErrorGroup (chunks testJobs fixtures)
 
 -- # `diff_compiler_repl`
 
@@ -1634,14 +1456,6 @@ evalPropertyWorkerFailures = somes [
     ]
     ["interpreter property worker batch aborted"],
 ]
-
-test "draft-semantic transport survives every current emitter input" = report
-  "draft-semantic"
-  (match fixtureDirs (underRoot draftSemanticFixturesDir)
-    Err e => ["\{draftSemanticFixturesDir}: \{e}"]
-    Ok dirs =>
-      countFloor draftSemanticFixturesDir 1 dirs
-        ++ somes (map draftSemanticFixtureFailure (sort dirs)))
 
 {- | The words of the shell statement in `capture_goldens.sh` that starts at
    the first line containing `marker` and runs through its backslash

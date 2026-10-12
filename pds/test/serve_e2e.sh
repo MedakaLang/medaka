@@ -72,44 +72,57 @@ require_owner_only() {
 # into the binary, which is how a deployed pdsd is built and therefore how this
 # gate builds one; case 59 reads them back off `--version`. Every other case
 # below exercises that same stamped binary rather than a variant of it.
-if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SERVE_SRC" -o "$WORK/pdsd" \
-  --stamp-build > "$WORK/build_serve.log" 2>&1
-then
+# The six builds write distinct outputs and logs, so they run concurrently
+# (concurrent `medaka build` is safe; two `make medaka` runs are not). Every
+# build is waited on and its status kept before any failure is reported, so
+# the failure reported is the first one in the list below, as it was serially.
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SERVE_SRC" -o "$WORK/pdsd" \
+  --stamp-build > "$WORK/build_serve.log" 2>&1 &
+PID_BUILD_SERVE=$!
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$CLIENT_SRC" -o "$WORK/client" \
+  > "$WORK/build_client.log" 2>&1 &
+PID_BUILD_CLIENT=$!
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SUBSCRIBE_SRC" \
+  -o "$WORK/subclient" > "$WORK/build_subclient.log" 2>&1 &
+PID_BUILD_SUBCLIENT=$!
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$STUB_SRC" \
+  -o "$WORK/appview" > "$WORK/build_appview.log" 2>&1 &
+PID_BUILD_APPVIEW=$!
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$CRAWL_STUB_SRC" \
+  -o "$WORK/crawlstub" > "$WORK/build_crawlstub.log" 2>&1 &
+PID_BUILD_CRAWLSTUB=$!
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$RACE_SRC" \
+  -o "$WORK/race" > "$WORK/build_race.log" 2>&1 &
+PID_BUILD_RACE=$!
+
+RC_BUILD_SERVE=0; wait "$PID_BUILD_SERVE" || RC_BUILD_SERVE=$?
+RC_BUILD_CLIENT=0; wait "$PID_BUILD_CLIENT" || RC_BUILD_CLIENT=$?
+RC_BUILD_SUBCLIENT=0; wait "$PID_BUILD_SUBCLIENT" || RC_BUILD_SUBCLIENT=$?
+RC_BUILD_APPVIEW=0; wait "$PID_BUILD_APPVIEW" || RC_BUILD_APPVIEW=$?
+RC_BUILD_CRAWLSTUB=0; wait "$PID_BUILD_CRAWLSTUB" || RC_BUILD_CRAWLSTUB=$?
+RC_BUILD_RACE=0; wait "$PID_BUILD_RACE" || RC_BUILD_RACE=$?
+
+if [ "$RC_BUILD_SERVE" -ne 0 ]; then
   cat "$WORK/build_serve.log" >&2
   fail 'native serve.mdk build failed'
 fi
-
-if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$CLIENT_SRC" -o "$WORK/client" \
-  > "$WORK/build_client.log" 2>&1
-then
+if [ "$RC_BUILD_CLIENT" -ne 0 ]; then
   cat "$WORK/build_client.log" >&2
   fail 'native serve_client_main.mdk build failed'
 fi
-
-if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SUBSCRIBE_SRC" \
-  -o "$WORK/subclient" > "$WORK/build_subclient.log" 2>&1
-then
+if [ "$RC_BUILD_SUBCLIENT" -ne 0 ]; then
   cat "$WORK/build_subclient.log" >&2
   fail 'native serve_subscribe_main.mdk build failed'
 fi
-
-if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$STUB_SRC" \
-  -o "$WORK/appview" > "$WORK/build_appview.log" 2>&1
-then
+if [ "$RC_BUILD_APPVIEW" -ne 0 ]; then
   cat "$WORK/build_appview.log" >&2
   fail 'native appview_stub_main.mdk build failed'
 fi
-
-if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$CRAWL_STUB_SRC" \
-  -o "$WORK/crawlstub" > "$WORK/build_crawlstub.log" 2>&1
-then
+if [ "$RC_BUILD_CRAWLSTUB" -ne 0 ]; then
   cat "$WORK/build_crawlstub.log" >&2
   fail 'native crawl_stub_main.mdk build failed'
 fi
-
-if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$RACE_SRC" \
-  -o "$WORK/race" > "$WORK/build_race.log" 2>&1
-then
+if [ "$RC_BUILD_RACE" -ne 0 ]; then
   cat "$WORK/build_race.log" >&2
   fail 'native dirlock_race_main.mdk build failed'
 fi
