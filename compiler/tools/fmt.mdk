@@ -720,14 +720,22 @@ tripleStringSubs ((True, raw) :: is) ((s, e) :: ss) =
 tripleStringSubs ((False, _) :: is) (_ :: ss) = tripleStringSubs is ss
 tripleStringSubs _ _ = []
 
--- Apply substitutions HIGHEST-OFFSET-FIRST so an earlier substitution's
--- offsets are never invalidated by a later one.
+-- Apply substitutions to `out` in one pass.  `subs` is in ASCENDING offset
+-- order and its spans never overlap (they are the formatted output's own
+-- token spans), so each chunk is the untouched text between two spans.
 applyTripleSubs : List (Int, Int, String) -> String -> String
-applyTripleSubs [] out = out
-applyTripleSubs ((s, e, raw) :: rest) out =
-  applyTripleSubs
-    rest
-    (stringSlice 0 s out ++ raw ++ stringSlice e (stringLength out) out)
+applyTripleSubs subs out = stringConcat (applyTripleGo subs out 0 [])
+
+-- Chunks are collected reversed and flipped once at the end.
+applyTripleGo : List (Int, Int, String) ->
+  String ->
+  Int ->
+  List String ->
+  List String
+applyTripleGo [] out cursor acc =
+  reverseL (stringSlice cursor (stringLength out) out :: acc)
+applyTripleGo ((s, e, raw) :: rest) out cursor acc =
+  applyTripleGo rest out e (raw :: stringSlice cursor s out :: acc)
 
 -- A source with no `"""` substring has no triple-quoted token, so there is
 -- nothing to restore and both tokenizations are skipped.
@@ -739,6 +747,4 @@ restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
       (fmtToks, fmtSpans) =>
         let origInfo = stringTokenInfo src origToks origSpans
         let fmtStrSpans = stringTokenSpans fmtToks fmtSpans
-        applyTripleSubs
-          (reverseL (tripleStringSubs origInfo fmtStrSpans))
-          formatted
+        applyTripleSubs (tripleStringSubs origInfo fmtStrSpans) formatted
