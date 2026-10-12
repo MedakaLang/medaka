@@ -107,29 +107,12 @@ FIXDIR_MODULES="$ROOT/test/wasm/fixtures_modules"
 #    shapes of #1349 and #2577 at a depth that needs constant stack) is 101544 B
 #    and 142 funcs on its own; the other 59 programs measure 3105426 B and 5716
 #    funcs, inside the previous ceilings.
-#    Re-baselined to the measured 2862355 B / 6109 funcs (F1-floor ratio 4024),
-#    with no headroom, for the coded-trap helpers of wasm_emit.mdk.  Each
-#    distinct fixed trap text a program streams is one `$trapmsg_K` function
-#    (its body is the unrolled byte writes, called from every site), so the
-#    funcs grow by exactly the helpers: 251 over the 60 modules programs, which
-#    is 6109 - 5858 and equals the `  (func $trapmsg_` definitions counted per
-#    program.  Those helpers are reachable (each is called), so the unit-kept
-#    ratio above is unchanged (2693/23199), and the F1 ratio moves only with
-#    the helper count.  The bytes fall by 344615 B (-10.7%) from the
-#    pre-change 3206970 B: each trap text is spelled once rather than at every
-#    site, and the `E-CYCLIC-VALUE` name is the only per-site text left.
-#    Re-baselined to the measured 2843854 B, with no headroom, for the interned
-#    string-literal segments: one `(data $strseg_N)` per distinct payload, shared
-#    by every site that spells those bytes.  Funcs, the F1 ratio and the unit-kept
-#    ratio are unchanged (6109, 4024, 2693/23199).
-#    Re-baselined to the measured 2832707 B, with no headroom, for the source-named
-#    wasm params of single all-PVar clauses (no `local.get $__wparg<i>; local.set $x`
-#    copy); the 11147 B fall is the removed copy pairs at about 4 bytes each.
-#    Funcs, the F1 ratio and the unit-kept ratio are unchanged.
-#    After merging main the measured size is 2833785 B (+1078 B from main's own
-#    corpus growth), so a ceiling at the measured value trips on unrelated PRs.
-#    The ceiling is the measured value rounded up to the next 10000 B (about 0.2%
-#    headroom); the saving this series made is about 370000 B below the old ceiling.
+#    The modules figures are 2834125 B, 6109 funcs and F1-floor ratio 4024.  The
+#    funcs ceiling is exact: each distinct fixed trap text a program streams is one
+#    `$trapmsg_K` function called from every site, which is the 251 funcs over
+#    5858 across the 60 programs.  Those helpers are reachable, so the unit-kept
+#    ratio is 2693/23199.  The bytes ceiling is the measured size rounded up to the
+#    next 10000 B, so unrelated corpus growth does not trip it.
 MODULES_BYTES_CEIL=2840000
 MODULES_FUNCS_CEIL=6109
 MODULES_RATIO_CEIL_X1000=150   # ratio * 1000, integer-only arithmetic (no bc/awk float compare)

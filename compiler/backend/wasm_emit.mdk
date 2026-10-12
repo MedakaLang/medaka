@@ -6567,7 +6567,9 @@ wasmTrap emit code msg =
 -- `after` (which ends in its newline).  The prefix and `after` are interned like
 -- any fixed text, so sites that differ only in `name` share their two helpers and
 -- only the name bytes are unrolled at the site.  `name` is an identifier known at
--- emission; the stderr bytes are the same as the whole message spelled out.
+-- emission; the stderr bytes are the same as the whole message spelled out.  The name
+-- bytes call the error-byte import themselves, so the import flag is set here rather
+-- than left to the interned prefix.
 wasmTrapNamed : WasmEmit -> String -> String -> String -> List String
 wasmTrapNamed emit code name after =
   let _ = setRef emit.trapImportNeeded True
@@ -10001,7 +10003,9 @@ emitLgLifted prog gid names groupCaps binds (CBind name clauses bindLoc) =
   let lamName = "$mdk_lg\{intToString gid}_\{gname name}"
   let _ = noteFuncRef (progEmit prog) lamName
   let arity = clauseArityOf clauses
-  let params = clauseParamNames clauses arity
+  -- synthetic names: this member also declares its group captures and sibling
+  -- names as locals, so a source-named param could collide with either.
+  let params = synthParams arity
   let w7Outer = w7ScopeOpen (progEmit prog)
   let capPrologue = flatMap capLoadAt (zipIdx groupCaps 0)
   let memberRebuilds = liftedMemberRebuilds prog gid groupCaps binds
