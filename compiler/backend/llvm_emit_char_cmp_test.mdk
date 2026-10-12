@@ -1,0 +1,78 @@
+-- Char comparisons must order by code point under the native emitter.  A Char is
+-- the immediate word (cp << 1) | 1, so the typecheck-stamped scalar route
+-- (RScalar "Char") lets the emitter compare the two words with one signed icmp.
+-- The operands flow through parameters so each comparison is a real runtime
+-- compare, not a folded constant.  Cases cover ASCII order, non-ASCII versus
+-- ASCII (the code point, not the UTF-8 bytes, decides), an astral code point,
+-- and the largest scalar value.
+--
+-- Run it: medaka test --native compiler/backend/llvm_emit_char_cmp_test.mdk
+
+import test.{expectEqual}
+
+charLt : Char -> Char -> Bool
+charLt a b = a < b
+
+charLe : Char -> Char -> Bool
+charLe a b = a <= b
+
+charGt : Char -> Char -> Bool
+charGt a b = a > b
+
+charGe : Char -> Char -> Bool
+charGe a b = a >= b
+
+charEq : Char -> Char -> Bool
+charEq a b = a == b
+
+charNe : Char -> Char -> Bool
+charNe a b = a /= b
+
+-- The six verdicts for one pair, in the order lt, le, gt, ge, eq, ne.
+cmpRow : Char -> Char -> List Bool
+cmpRow a b =
+  [charLt a b, charLe a b, charGt a b, charGe a b, charEq a b, charNe a b]
+
+maxChar : Char
+maxChar = match charFromCode 1114111
+  Some c => c
+  None => panic "no char at U+10FFFF"
+
+minChar : Char
+minChar = match charFromCode 0
+  Some c => c
+  None => panic "no char at U+0000"
+
+test "ASCII order: a < b" =
+  expectEqual [True, True, False, False, False, True] (cmpRow 'a' 'b')
+
+test "ASCII order: b > a" =
+  expectEqual [False, False, True, True, False, True] (cmpRow 'b' 'a')
+
+test "equal chars" =
+  expectEqual [False, True, False, True, True, False] (cmpRow 'q' 'q')
+
+-- U+00E9 is above 'z' (U+007A) even though its UTF-8 lead byte is 0xC3.
+test "non-ASCII versus ASCII orders by code point" =
+  expectEqual [False, False, True, True, False, True] (cmpRow 'é' 'z')
+
+test "non-ASCII equal chars" =
+  expectEqual [False, True, False, True, True, False] (cmpRow 'é' 'é')
+
+test "astral code point is above every BMP char" =
+  expectEqual [False, False, True, True, False, True] (cmpRow '😀' 'é')
+
+test "extremes of the code point range" =
+  expectEqual
+    [True, True, True, True, True, True]
+    [
+      charLt minChar 'a',
+      charLe minChar 'a',
+      charGt maxChar '😀',
+      charGe maxChar minChar,
+      charLt 'z' maxChar,
+      charNe 'z' maxChar,
+    ]
+
+test "the largest scalar equals itself and orders above the rest" =
+  expectEqual [False, True, False, True, True, False] (cmpRow maxChar maxChar)

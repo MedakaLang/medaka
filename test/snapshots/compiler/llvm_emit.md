@@ -1,5 +1,5 @@
 # META
-source_lines=15555
+source_lines=15556
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -5493,9 +5493,10 @@ scalarTagIsFloat tag = match fieldNameToLTy tag
 -- any other tag leaves the comparison on the runtime-discriminated path.
 -- A fixed-width head (`U8`/`U16`/`U32`) is a witness too: its value is a tagged
 -- Int word held in `0 .. 2^n - 1`, never negative, so the signed word compare
--- orders it exactly as `Int` does; and so is `I32`, held sign-extended.
+-- orders it exactly as `Int` does; and so is `I32`, held sign-extended.  A `Char`
+-- is the immediate `(cp << 1) | 1` (runtime mdk_char_from_code), monotone in cp.
 scalarTagIsInt : String -> Bool
-scalarTagIsInt tag = tag == "Int" || isTaggedFixedHead tag
+scalarTagIsInt tag = tag == "Int" || tag == "Char" || isTaggedFixedHead tag
 
 -- [site] is the node's trap site, the location an overflow or zero-divisor abort
 -- prints.
@@ -16631,7 +16632,7 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DTypeSig false "scalarTagIsFloat" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "scalarTagIsFloat" ((PVar "tag")) (EMatch (EApp (EVar "fieldNameToLTy") (EVar "tag")) (arm (PCon "Some" (PCon "LTFloat")) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "scalarTagIsInt" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "scalarTagIsInt" ((PVar "tag")) (EBinOp "||" (EBinOp "==" (EVar "tag") (ELit (LString "Int"))) (EApp (EVar "isTaggedFixedHead") (EVar "tag"))))
+(DFunDef false "scalarTagIsInt" ((PVar "tag")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "tag") (ELit (LString "Int"))) (EBinOp "==" (EVar "tag") (ELit (LString "Char")))) (EApp (EVar "isTaggedFixedHead") (EVar "tag"))))
 (DTypeSig false "emitArith" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
 (DFunDef false "emitArith" ((PVar "e") (PVar "env") (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site")) (EIf (EApp (EVar "isBoxed64Head") (EVar "tag")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64Arith") (EVar "e")) (EVar "env")) (EApp (EVar "isI64Head") (EVar "tag"))) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "site")) (EIf (EApp (EVar "isW32Head") (EVar "tag")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "rawKindOfHead") (EVar "tag"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "tagW32") (EVar "e")) (EVar "k")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU32RawArith") (EVar "e")) (EVar "env")) (EApp (EVar "isI32Head") (EVar "tag"))) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "site"))) (EVar "LTInt")))) (EMatch (EApp (EVar "fixedWidthMask") (EVar "tag")) (arm (PCon "Some" (PVar "mask")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFixedWidthArith") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "mask")) (EVar "site"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArithUnsized") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EVar "site")))))))
 (DTypeSig false "emitU64Arith" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "Loc") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
@@ -19471,7 +19472,7 @@ emitTopBindsGaps e env ((CBind name _ _) :: rest) =
 (DTypeSig false "scalarTagIsFloat" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "scalarTagIsFloat" ((PVar "tag")) (EMatch (EApp (EVar "fieldNameToLTy") (EVar "tag")) (arm (PCon "Some" (PCon "LTFloat")) () (EVar "True")) (arm PWild () (EVar "False"))))
 (DTypeSig false "scalarTagIsInt" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "scalarTagIsInt" ((PVar "tag")) (EBinOp "||" (EBinOp "==" (EVar "tag") (ELit (LString "Int"))) (EApp (EVar "isTaggedFixedHead") (EVar "tag"))))
+(DFunDef false "scalarTagIsInt" ((PVar "tag")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "tag") (ELit (LString "Int"))) (EBinOp "==" (EVar "tag") (ELit (LString "Char")))) (EApp (EVar "isTaggedFixedHead") (EVar "tag"))))
 (DTypeSig false "emitArith" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "String") (TyFun (TyCon "Loc") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
 (DFunDef false "emitArith" ((PVar "e") (PVar "env") (PVar "op") (PVar "l") (PVar "r") (PVar "tag") (PVar "site")) (EIf (EApp (EVar "isBoxed64Head") (EVar "tag")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU64Arith") (EVar "e")) (EVar "env")) (EApp (EVar "isI64Head") (EVar "tag"))) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "site")) (EIf (EApp (EVar "isW32Head") (EVar "tag")) (EBlock (DoLet false false (PVar "k") (EApp (EVar "rawKindOfHead") (EVar "tag"))) (DoExpr (ETuple (EApp (EApp (EApp (EVar "tagW32") (EVar "e")) (EVar "k")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitU32RawArith") (EVar "e")) (EVar "env")) (EApp (EVar "isI32Head") (EVar "tag"))) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "site"))) (EVar "LTInt")))) (EMatch (EApp (EVar "fixedWidthMask") (EVar "tag")) (arm (PCon "Some" (PVar "mask")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitFixedWidthArith") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "mask")) (EVar "site"))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitArithUnsized") (EVar "e")) (EVar "env")) (EVar "op")) (EVar "l")) (EVar "r")) (EVar "tag")) (EVar "site")))))))
 (DTypeSig false "emitU64Arith" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "CExpr") (TyFun (TyCon "CExpr") (TyFun (TyCon "Loc") (TyTuple (TyCon "String") (TyCon "LTy"))))))))))
