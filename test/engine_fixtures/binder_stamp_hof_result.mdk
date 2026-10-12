@@ -1,0 +1,15 @@
+-- The result of a polymorphic higher-order function is a word of the caller's
+-- type: arithmetic on it, and a binder holding it, read that type.
+-- Expected, derived from the source:
+-- `apply (x => x + 1) 41` = `42`; `apply (x => x * 0.5) 5.0` = `2.5`;
+-- r = 0.25 + 1.5 = 1.75, so `r + r` = `3.5`;
+-- `fold (acc x => acc + x) 0.5 [1.0, 2.0]` + 0.25 = `3.75`.
+apply : (a -> b) -> a -> b
+apply f x = f x
+
+main =
+  println (apply (x => x + 1) 41)
+  println (apply (x => x * 0.5) 5.0)
+  let r = apply (x => x + 1.5) 0.25
+  println (r + r)
+  println (fold (acc x => acc + x) 0.5 [1.0, 2.0] + 0.25)

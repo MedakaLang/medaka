@@ -46,7 +46,7 @@ import ir.core_ir_lower.{
   selfFnParamTable,
   methodIfaceTable,
   ctorFieldTypeNames,
-  declSigTypeNames,
+  externArities,
   validateFfiExternTypeNames,
 }
 import backend.llvm_emit.{
@@ -157,7 +157,7 @@ emitTail mods runtimeDecls coreD modules1 =
         (selfFnParamTable allDecls)
         (methodIfaceTable allDecls)
         (ctorFieldTypeNames allDecls)
-        (declSigTypeNames runtimeDecls ++ declSigTypeNames allDecls)
+        (externArities runtimeDecls)
         (mainTypeIsUnit ())
         (mainTypeIsFloat ())
         half

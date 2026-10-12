@@ -530,7 +530,11 @@ toBinderRow (SList ((SAtom "b") :: d :: m :: name :: ty :: rest)) =
       brType = toRuntimeType ty,
       brReturns = match rest
         [] => None
-        [r] => Some (toRuntimeType r)
+        r :: _ => Some (toRuntimeType r),
+      brSigned = match rest
+        [] => False
+        [_] => False
+        [_, SAtom "signed"] => True
         _ => panic "core_ir_sexp_parse: bad binder row",
     },
   )

@@ -1,0 +1,19 @@
+-- A binder whose type comes from `Num` defaulting is an Int, and a function
+-- generalized over `Num` serves each use at that use's own type.
+-- Expected, derived from the source:
+-- `k` defaults to Int, so `k / 4` is integer division: `2`.
+-- `twice 7` = `14`; `twice 1.25` = `2.5`.
+-- `let m = twice 3` is an Int: `m * m` = `36`.
+twice x = x + x
+
+defaulted : Unit -> String
+defaulted _ =
+  let k = 10
+  debug (k / 4)
+
+main =
+  println (defaulted ())
+  println (twice 7)
+  println (twice 1.25)
+  let m = twice 3
+  println (m * m)

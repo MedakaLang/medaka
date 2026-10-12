@@ -294,10 +294,40 @@ conyes56:
   %t84 = inttoptr i64 %t80 to ptr
   %t85 = getelementptr i8, ptr %t84, i64 16
   %t86 = load i64, ptr %t85
-  %t87 = call i64 @mdk_num_add(i64 %t65, i64 %t71)
-  %t88 = call i64 @mdk_num_add(i64 %t87, i64 %t77)
-  %t89 = call i64 @mdk_num_add(i64 %t88, i64 %t83)
-  store i64 %t89, ptr %t1
+  %t87 = sub i64 %t71, 1
+  %t88 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t65, i64 %t87)
+  %t89 = extractvalue { i64, i1 } %t88, 0
+  %t90 = extractvalue { i64, i1 } %t88, 1
+  br i1 %t90, label %intovf91, label %intok91
+intovf91:
+  %t92 = ashr i64 %t65, 1
+  %t93 = ashr i64 %t71, 1
+  call void @mdk_int_overflow(i64 0, i64 %t92, i64 %t93)
+  unreachable
+intok91:
+  %t94 = sub i64 %t77, 1
+  %t95 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t89, i64 %t94)
+  %t96 = extractvalue { i64, i1 } %t95, 0
+  %t97 = extractvalue { i64, i1 } %t95, 1
+  br i1 %t97, label %intovf98, label %intok98
+intovf98:
+  %t99 = ashr i64 %t89, 1
+  %t100 = ashr i64 %t77, 1
+  call void @mdk_int_overflow(i64 0, i64 %t99, i64 %t100)
+  unreachable
+intok98:
+  %t101 = sub i64 %t83, 1
+  %t102 = call { i64, i1 } @llvm.sadd.with.overflow.i64(i64 %t96, i64 %t101)
+  %t103 = extractvalue { i64, i1 } %t102, 0
+  %t104 = extractvalue { i64, i1 } %t102, 1
+  br i1 %t104, label %intovf105, label %intok105
+intovf105:
+  %t106 = ashr i64 %t96, 1
+  %t107 = ashr i64 %t83, 1
+  call void @mdk_int_overflow(i64 0, i64 %t106, i64 %t107)
+  unreachable
+intok105:
+  store i64 %t103, ptr %t1
   br label %decend2
 connext56:
   store i64 1, ptr %t1
@@ -312,9 +342,9 @@ connext11:
   store i64 1, ptr %t1
   br label %decend2
 decend2:
-  %t90 = load i64, ptr %t1
-  %t91 = ashr i64 %t90, 1
-  call void @mdk_print_int(i64 %t91)
+  %t108 = load i64, ptr %t1
+  %t109 = ashr i64 %t108, 1
+  call void @mdk_print_int(i64 %t109)
   ret i32 0
 }
 ; mdk-module impl:List_append

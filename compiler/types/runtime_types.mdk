@@ -58,11 +58,15 @@ public export data RuntimeType =
 -- is the function's type, which is `RTValue` whenever it takes parameters, and
 -- what its body returns after its declared parameters is a second fact.  Every
 -- clause of a multi-clause function carries the function's one return type.
+-- `brSigned` is whether the source function has a declared type signature: an
+-- inferred type and a declared one stamp alike, and a backend that gives only
+-- declared functions a different calling convention needs to tell them apart.
 public export data BinderRow = BinderRow {
   brId : BinderId,
   brName : String,
   brType : RuntimeType,
   brReturns : Option RuntimeType,
+  brSigned : Bool,
 }
 
 -- The table, keyed by the id's ordinal.  Ordinals come from one process-global
