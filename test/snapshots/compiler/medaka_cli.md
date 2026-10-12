@@ -1,5 +1,5 @@
 # META
-source_lines=4738
+source_lines=4743
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -75,7 +75,7 @@ import support.timer.{
 }
 import list.{sortOn}
 import toml.{parse as parseToml}
-import support.manifest.{targetProfile}
+import support.manifest.{targetProfile, statesTargetSection}
 import types.target_profile.{
   Backend(..),
   buildableNames,
@@ -1438,7 +1438,8 @@ runTargetGo acc [] = acc
 -- The manifest's `[target] profile` for the project holding `entry`; `Err`
 -- when a manifest exists but its `[target]` cannot be read.  The walk-up
 -- starts from the entry's absolute directory: a relative entry's `dirOf2` is
--- `.`, whose parent is itself.
+-- `.`, whose parent is itself.  A manifest the TOML reader rejects with no
+-- `[target]` header reads as no target: its other readers judge it.
 manifestProfileOf : String -> <IO> Result String (Option String)
 manifestProfileOf entry =
   match findProjectRoot (canonicalizePath (dirOf2 entry))
@@ -1448,7 +1449,11 @@ manifestProfileOf entry =
       let read = match readFile path
         Err e => Err e
         Ok text => match parseToml text
-          Err e => Err "not valid TOML: \{e}"
+          Err e =>
+            if statesTargetSection text then
+              Err "not valid TOML: \{e}"
+            else
+              Ok None
           Ok doc => targetProfile doc
       mapErr (why => "cannot read `[target]` in \{path}: \{why}") read
 
@@ -4753,7 +4758,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfArm" false) (mem "emitAbortTotal" false) (mem "perfSinkOn" false) (mem "flushPerfSinkProse" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))
 (DUse false (UseGroup ("toml") ((mem "parse" false "parseToml"))))
-(DUse false (UseGroup ("support" "manifest") ((mem "targetProfile" false))))
+(DUse false (UseGroup ("support" "manifest") ((mem "targetProfile" false) (mem "statesTargetSection" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "Backend" true) (mem "buildableNames" false) (mem "lookupProfile" false) (mem "profileBackend" false) (mem "runProfile" false) (mem "selectProfile" false) (mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "target_check") ((mem "targetRefusal" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
@@ -4889,7 +4894,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runTargetGo" ((PVar "acc") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--target="))) (EVar "x")) (EApp (EApp (EVar "runTargetGo") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 9))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x")))) (EVar "rest")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "x") (ELit (LString "--json"))) (EBinOp "==" (EVar "x") (ELit (LString "--release")))) (EBinOp "==" (EVar "x") (ELit (LString "--allow-internal")))) (EBinOp "==" (EVar "x") (ELit (LString "--types")))) (EApp (EApp (EVar "runTargetGo") (EVar "acc")) (EVar "rest")) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "runTargetGo" ((PVar "acc") (PList)) (EVar "acc"))
 (DTypeSig false "manifestProfileOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "manifestProfileOf" ((PVar "entry")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "canonicalizePath") (EApp (EVar "dirOf2") (EVar "entry")))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "root")) () (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EVar "root") (ELit (LString "/medaka.toml")))) (DoLet false false (PVar "read") (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "parseToml") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "not valid TOML: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "targetProfile") (EVar "doc"))))))) (DoExpr (EApp (EApp (EVar "mapErr") (ELam ((PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read `[target]` in ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString ""))))) (EVar "read")))))))
+(DFunDef false "manifestProfileOf" ((PVar "entry")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "canonicalizePath") (EApp (EVar "dirOf2") (EVar "entry")))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "root")) () (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EVar "root") (ELit (LString "/medaka.toml")))) (DoLet false false (PVar "read") (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "parseToml") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EVar "statesTargetSection") (EVar "text")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "not valid TOML: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "None")))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "targetProfile") (EVar "doc"))))))) (DoExpr (EApp (EApp (EVar "mapErr") (ELam ((PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read `[target]` in ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString ""))))) (EVar "read")))))))
 (DTypeSig false "carryTargetProfile" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "carryTargetProfile" ((PVar "flagValue") (PVar "entry")) (EBlock (DoLet false false (PVar "fromManifest") (EMatch (EVar "flagValue") (arm (PCon "Some" PWild) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "None") () (EApp (EVar "manifestProfileOf") (EVar "entry"))))) (DoExpr (EMatch (EApp (EApp (EVar "andThen") (EVar "fromManifest")) (EApp (EVar "selectProfile") (EVar "flagValue"))) (arm (PCon "Ok" (PVar "p")) () (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "p"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: ")) (EVar "m"))))))))
 (DTypeSig false "runFlagGiven" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
@@ -5260,7 +5265,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("support" "timer") ((mem "perfEnabled" false) (mem "now" false) (mem "emitPhase" false) (mem "emitTotal" false) (mem "perfArm" false) (mem "emitAbortTotal" false) (mem "perfSinkOn" false) (mem "flushPerfSinkProse" false))))
 (DUse false (UseGroup ("list") ((mem "sortOn" false))))
 (DUse false (UseGroup ("toml") ((mem "parse" false "parseToml"))))
-(DUse false (UseGroup ("support" "manifest") ((mem "targetProfile" false))))
+(DUse false (UseGroup ("support" "manifest") ((mem "targetProfile" false) (mem "statesTargetSection" false))))
 (DUse false (UseGroup ("types" "target_profile") ((mem "Backend" true) (mem "buildableNames" false) (mem "lookupProfile" false) (mem "profileBackend" false) (mem "runProfile" false) (mem "selectProfile" false) (mem "selectedProfile" false))))
 (DUse false (UseGroup ("tools" "target_check") ((mem "targetRefusal" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
@@ -5396,7 +5401,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runTargetGo" ((PVar "acc") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--target="))) (EVar "x")) (EApp (EApp (EVar "runTargetGo") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 9))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x")))) (EVar "rest")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "x") (ELit (LString "--json"))) (EBinOp "==" (EVar "x") (ELit (LString "--release")))) (EBinOp "==" (EVar "x") (ELit (LString "--allow-internal")))) (EBinOp "==" (EVar "x") (ELit (LString "--types")))) (EApp (EApp (EVar "runTargetGo") (EVar "acc")) (EVar "rest")) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "runTargetGo" ((PVar "acc") (PList)) (EVar "acc"))
 (DTypeSig false "manifestProfileOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
-(DFunDef false "manifestProfileOf" ((PVar "entry")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "canonicalizePath") (EApp (EVar "dirOf2") (EVar "entry")))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "root")) () (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EVar "root") (ELit (LString "/medaka.toml")))) (DoLet false false (PVar "read") (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "parseToml") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "not valid TOML: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "targetProfile") (EVar "doc"))))))) (DoExpr (EApp (EApp (EVar "mapErr") (ELam ((PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read `[target]` in ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString ""))))) (EVar "read")))))))
+(DFunDef false "manifestProfileOf" ((PVar "entry")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "canonicalizePath") (EApp (EVar "dirOf2") (EVar "entry")))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "root")) () (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EVar "root") (ELit (LString "/medaka.toml")))) (DoLet false false (PVar "read") (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "parseToml") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EVar "statesTargetSection") (EVar "text")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "not valid TOML: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))) (EApp (EVar "Ok") (EVar "None")))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "targetProfile") (EVar "doc"))))))) (DoExpr (EApp (EApp (EVar "mapErr") (ELam ((PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read `[target]` in ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString ""))))) (EVar "read")))))))
 (DTypeSig false "carryTargetProfile" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "carryTargetProfile" ((PVar "flagValue") (PVar "entry")) (EBlock (DoLet false false (PVar "fromManifest") (EMatch (EVar "flagValue") (arm (PCon "Some" PWild) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "None") () (EApp (EVar "manifestProfileOf") (EVar "entry"))))) (DoExpr (EMatch (EApp (EApp (EMethodRef "andThen") (EVar "fromManifest")) (EApp (EVar "selectProfile") (EVar "flagValue"))) (arm (PCon "Ok" (PVar "p")) () (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "p"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: ")) (EVar "m"))))))))
 (DTypeSig false "runFlagGiven" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))

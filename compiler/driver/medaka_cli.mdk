@@ -71,7 +71,7 @@ import support.timer.{
 }
 import list.{sortOn}
 import toml.{parse as parseToml}
-import support.manifest.{targetProfile}
+import support.manifest.{targetProfile, statesTargetSection}
 import types.target_profile.{
   Backend(..),
   buildableNames,
@@ -1434,7 +1434,8 @@ runTargetGo acc [] = acc
 -- The manifest's `[target] profile` for the project holding `entry`; `Err`
 -- when a manifest exists but its `[target]` cannot be read.  The walk-up
 -- starts from the entry's absolute directory: a relative entry's `dirOf2` is
--- `.`, whose parent is itself.
+-- `.`, whose parent is itself.  A manifest the TOML reader rejects with no
+-- `[target]` header reads as no target: its other readers judge it.
 manifestProfileOf : String -> <IO> Result String (Option String)
 manifestProfileOf entry =
   match findProjectRoot (canonicalizePath (dirOf2 entry))
@@ -1444,7 +1445,11 @@ manifestProfileOf entry =
       let read = match readFile path
         Err e => Err e
         Ok text => match parseToml text
-          Err e => Err "not valid TOML: \{e}"
+          Err e =>
+            if statesTargetSection text then
+              Err "not valid TOML: \{e}"
+            else
+              Ok None
           Ok doc => targetProfile doc
       mapErr (why => "cannot read `[target]` in \{path}: \{why}") read
 

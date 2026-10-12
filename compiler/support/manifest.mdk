@@ -19,7 +19,7 @@
 
 import toml.{Toml(..), TomlValue(..), getString, getArray, parse}
 import list.{lookup}
-import string.{startsWith}
+import string.{startsWith, trim, lines}
 
 {- | `name` from a parsed `[package]` section, or `None` when it is absent.
 
@@ -95,6 +95,23 @@ targetProfile (Toml kvs) =
       None =>
         Err
           "it states no `profile`; write one, such as `profile = \"wasmgc/node\"`"
+
+{- | True if the manifest text has a `[target]` header line.  A manifest the
+   TOML subset reader rejects is only a `[target]` refusal when it states one;
+   otherwise its other readers (`allow-internal`, the loader's scanner) keep
+   their own verdicts on it.
+
+   > statesTargetSection "[package]\nname = \"x\"\n[target]\nprofile = \"a\""
+   True
+
+   > statesTargetSection "[package]\nname = \"x\"\nallow-internal = true-ish"
+   False
+
+   > statesTargetSection "[target.extra]\nk = 1"
+   True -}
+export
+statesTargetSection : String -> Bool
+statesTargetSection text = any (l => startsWith "[target" (trim l)) (lines text)
 
 -- Doctest helper: parse a known-good TOML source.  A parse failure here would
 -- be a bug in the fixture, not in the accessor under test, so it panics rather
