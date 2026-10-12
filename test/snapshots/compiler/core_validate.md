@@ -1,5 +1,5 @@
 # META
-source_lines=982
+source_lines=987
 stages=DESUGAR,MARK
 # SOURCE
 -- Checks a lowered program must pass before an emitter writes any of it.  Each
@@ -321,11 +321,10 @@ renderExternRefusal : List ExternFinding -> String
 renderExternRefusal findings = renderExternRefusalUnder !checkedTarget findings
 
 -- A refusal is partitioned by what `check` already judged against the target.
--- An extern behind a label the profile does not reach (`reachesLabel`) is an
--- internal error: `check` refuses every program that performs it.  An extern
--- whose labels the profile reaches and whose row is a ratchet gap is a
--- lowering still owed, by #3666.  Any other finding, a label-less extern among
--- them, reads as it does with no target.
+-- An extern behind a label the profile does not reach (`reachesLabel`) says so
+-- (`withheldExternNote`).  An extern whose labels the profile reaches and whose
+-- row is a ratchet gap is a lowering still owed, by #3666.  Any other finding,
+-- a label-less extern among them, reads as it does with no target.
 export
 renderExternRefusalUnder : Option CheckedTarget -> List ExternFinding -> String
 renderExternRefusalUnder None findings =
@@ -335,23 +334,29 @@ renderExternRefusalUnder (Some t) findings =
 
 renderFindingUnder : CheckedTarget -> ExternFinding -> String
 renderFindingUnder (t@(CheckedTarget profile labels)) (f@(ExternFinding name backend kind _ _)) =
-  if not (all (reachesLabel profile) (optionOr [] (omLookup name labels))) then
-    uncheckedExternMessage backend name t
-  else if isRatchetGap backend kind then
-    "\{renderExternFinding f}; `\{profileName profile}` grants its labels, so this is a lowering still owed (#3666)"
-  else
-    renderExternFinding f
+  let declared = optionOr [] (omLookup name labels)
+  match filter (l => not (reachesLabel profile l)) declared
+    [] =>
+      if isRatchetGap backend kind then
+        "\{renderExternFinding f}; `\{profileName profile}` grants its labels, so this is a lowering still owed (#3666)"
+      else
+        renderExternFinding f
+    withheld =>
+      "\{renderExternFinding f}; \{withheldExternNote backend name withheld t}"
 
 isRatchetGap : Backend -> GapKind -> Bool
 isRatchetGap WasmBackend GapUnported = True
 isRatchetGap _ _ = False
 
--- The internal error of an emitter that reaches an extern `check` refuses on
--- the target the build checked.
+-- Why an extern the profile withholds reached the lowering of a program that
+-- passed the target check.  `check` judges what `main` performs, so it admits
+-- a program that names the extern without performing it (a value never
+-- applied); a call it failed to see would arrive here the same way, and the
+-- lowering cannot tell the two apart, so the note claims neither.
 export
-uncheckedExternMessage : Backend -> String -> CheckedTarget -> String
-uncheckedExternMessage backend name (CheckedTarget profile _) =
-  "internal error: extern `\{name}` reached `\{backendName backend}` lowering with disposition NotProvided; `check` should have refused this program (profile `\{profileName profile}`)"
+withheldExternNote : Backend -> String -> List String -> CheckedTarget -> String
+withheldExternNote backend name withheld (CheckedTarget profile _) =
+  "the target `\{profileName profile}` does not grant \{joinWith ", " withheld}, which `\{name}` performs; `check` admits a program that names it without performing it, but the \{backendName backend} backend cannot lower even the name"
 
 -- What `medaka build` checked the program against before lowering: the
 -- selected profile, and each runtime extern's declared labels.
@@ -1057,12 +1062,12 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
-(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EIf (EApp (EVar "not") (EApp (EApp (EVar "all") (EApp (EVar "reachesLabel") (EVar "profile"))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels"))))) (EApp (EApp (EApp (EVar "uncheckedExternMessage") (EVar "backend")) (EVar "name")) (EVar "t")) (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))))
+(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EVar "filter") (ELam ((PVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "reachesLabel") (EVar "profile")) (EVar "l"))))) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
 (DTypeSig false "isRatchetGap" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyCon "Bool"))))
 (DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
 (DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))
-(DTypeSig true "uncheckedExternMessage" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyCon "CheckedTarget") (TyCon "String")))))
-(DFunDef false "uncheckedExternMessage" ((PVar "backend") (PVar "name") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: extern `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` reached `"))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString "` lowering with disposition NotProvided; `check` should have refused this program (profile `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "`)"))))
+(DTypeSig true "withheldExternNote" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CheckedTarget") (TyCon "String"))))))
+(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` performs; `check` admits a program that names it without performing it, but the "))) (EApp (EVar "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend cannot lower even the name"))))
 (DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))
@@ -1386,12 +1391,12 @@ tailStmt b (CSAssign _ e) acc = tailE b False e acc
 (DFunDef false "renderExternRefusalUnder" ((PCon "None") (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EVar "renderExternFinding")) (EVar "findings"))))
 (DFunDef false "renderExternRefusalUnder" ((PCon "Some" (PVar "t")) (PVar "findings")) (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderFindingUnder") (EVar "t"))) (EVar "findings"))))
 (DTypeSig false "renderFindingUnder" (TyFun (TyCon "CheckedTarget") (TyFun (TyCon "ExternFinding") (TyCon "String"))))
-(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EIf (EApp (EVar "not") (EApp (EApp (EDictApp "all") (EApp (EVar "reachesLabel") (EVar "profile"))) (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels"))))) (EApp (EApp (EApp (EVar "uncheckedExternMessage") (EVar "backend")) (EVar "name")) (EVar "t")) (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))))
+(DFunDef false "renderFindingUnder" ((PAs "t" (PCon "CheckedTarget" (PVar "profile") (PVar "labels"))) (PAs "f" (PCon "ExternFinding" (PVar "name") (PVar "backend") (PVar "kind") PWild PWild))) (EBlock (DoLet false false (PVar "declared") (EApp (EApp (EVar "optionOr") (EListLit)) (EApp (EApp (EVar "omLookup") (EVar "name")) (EVar "labels")))) (DoExpr (EMatch (EApp (EApp (EMethodRef "filter") (ELam ((PVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "reachesLabel") (EVar "profile")) (EVar "l"))))) (EVar "declared")) (arm (PList) () (EIf (EApp (EApp (EVar "isRatchetGap") (EVar "backend")) (EVar "kind")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` grants its labels, so this is a lowering still owed (#3666)"))) (EApp (EVar "renderExternFinding") (EVar "f")))) (arm (PVar "withheld") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "renderExternFinding") (EVar "f")))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "backend")) (EVar "name")) (EVar "withheld")) (EVar "t")))) (ELit (LString ""))))))))
 (DTypeSig false "isRatchetGap" (TyFun (TyCon "Backend") (TyFun (TyCon "GapKind") (TyCon "Bool"))))
 (DFunDef false "isRatchetGap" ((PCon "WasmBackend") (PCon "GapUnported")) (EVar "True"))
 (DFunDef false "isRatchetGap" (PWild PWild) (EVar "False"))
-(DTypeSig true "uncheckedExternMessage" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyCon "CheckedTarget") (TyCon "String")))))
-(DFunDef false "uncheckedExternMessage" ((PVar "backend") (PVar "name") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "internal error: extern `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` reached `"))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString "` lowering with disposition NotProvided; `check` should have refused this program (profile `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "`)"))))
+(DTypeSig true "withheldExternNote" (TyFun (TyCon "Backend") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "CheckedTarget") (TyCon "String"))))))
+(DFunDef false "withheldExternNote" ((PVar "backend") (PVar "name") (PVar "withheld") (PCon "CheckedTarget" (PVar "profile") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "the target `")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "withheld")))) (ELit (LString ", which `"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` performs; `check` admits a program that names it without performing it, but the "))) (EApp (EMethodRef "display") (EApp (EVar "backendName") (EVar "backend")))) (ELit (LString " backend cannot lower even the name"))))
 (DData Public "CheckedTarget" () ((variant "CheckedTarget" (ConPos (TyCon "TargetProfile") (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "checkedTargetOf" (TyFun (TyCon "TargetProfile") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "CheckedTarget"))))
 (DFunDef false "checkedTargetOf" ((PVar "profile") (PVar "runtimeDecls")) (EApp (EApp (EVar "CheckedTarget") (EVar "profile")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "externLabels") (EVar "runtimeDecls"))) (EVar "omEmpty"))))

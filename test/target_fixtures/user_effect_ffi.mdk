@@ -1,0 +1,7 @@
+-- A module label spelled `FFI` is not the foreign-call effect, so an extern
+-- whose row names it does not say it calls foreign code, and is refused.
+effect FFI
+
+extern ffiAddInts : Int -> Int -> <FFI> Int
+
+main = println (ffiAddInts 20 22)

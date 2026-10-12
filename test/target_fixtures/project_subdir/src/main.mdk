@@ -1,0 +1,9 @@
+-- The project's manifest is one directory up and selects wasmgc/node.  Named
+-- by a relative path from this directory, the entry is still in the project,
+-- so `Net` is refused here exactly as from the project root.
+import resolver.{lookup}
+
+main : <Net, Stdout> Unit
+main = match lookup "example.com"
+  Ok _ => println "resolved"
+  Err e => println e

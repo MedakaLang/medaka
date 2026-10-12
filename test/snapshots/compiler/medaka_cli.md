@@ -1,5 +1,5 @@
 # META
-source_lines=4727
+source_lines=4736
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -1435,24 +1435,31 @@ runTargetGo acc (x :: rest)
   | otherwise = acc
 runTargetGo acc [] = acc
 
--- The manifest's `[target] profile` for the project holding `entry`.
-manifestProfileOf : String -> <IO> Option String
-manifestProfileOf entry = match findProjectRoot (dirOf2 entry)
-  None => None
-  Some root => match readFile (root ++ "/medaka.toml")
-    Err _ => None
-    Ok text => match parseToml text
-      Ok doc => targetProfile doc
-      Err _ => None
+-- The manifest's `[target] profile` for the project holding `entry`; `Err`
+-- when a manifest exists but its `[target]` cannot be read.  The walk-up
+-- starts from the entry's absolute directory: a relative entry's `dirOf2` is
+-- `.`, whose parent is itself.
+manifestProfileOf : String -> <IO> Result String (Option String)
+manifestProfileOf entry =
+  match findProjectRoot (canonicalizePath (dirOf2 entry))
+    None => Ok None
+    Some root =>
+      let path = root ++ "/medaka.toml"
+      let read = match readFile path
+        Err e => Err e
+        Ok text => match parseToml text
+          Err e => Err "not valid TOML: \{e}"
+          Ok doc => targetProfile doc
+      mapErr (why => "cannot read `[target]` in \{path}: \{why}") read
 
 -- Resolve `--target` (over the manifest) and carry the profile; a name the
 -- table does not know aborts.
 carryTargetProfile : Option String -> String -> <IO> Unit
 carryTargetProfile flagValue entry =
   let fromManifest = match flagValue
-    Some _ => None
+    Some _ => Ok None
     None => manifestProfileOf entry
-  match selectProfile flagValue fromManifest
+  match andThen fromManifest (selectProfile flagValue)
     Ok p => selectedProfile := p
     Err m => dieMsg ("error: " ++ m)
 
@@ -2820,16 +2827,18 @@ parseTarget name = match lookupProfile name
 -- emitter child, which checks the program against it before lowering.
 selectBuildProfile : Args -> String -> <IO> Result String BuildTarget
 selectBuildProfile a input =
-  let name = match lastValue "--target" a
-    Some v => v
-    None => optionOr "llvm/native-posix" (manifestProfileOf input)
-  match lookupProfile name
+  let named = match lastValue "--target" a
+    Some v => Ok v
+    None => map (optionOr "llvm/native-posix") (manifestProfileOf input)
+  match named
     Err m => Err ("error: " ++ m)
-    Ok p => match parseTarget name
-      Err m => Err m
-      Ok target =>
-        selectedProfile := Some p
-        Ok target
+    Ok name => match lookupProfile name
+      Err m => Err ("error: " ++ m)
+      Ok p => match parseTarget name
+        Err m => Err m
+        Ok target =>
+          selectedProfile := Some p
+          Ok target
 
 buildTargetOrDie : Args -> String -> <IO> BuildTarget
 buildTargetOrDie a input = match selectBuildProfile a input
@@ -4877,10 +4886,10 @@ runMcpServerFromEnv _ =
 (DFunDef false "runTargetGo" (PWild (PCons (PLit (LString "--target")) (PCons (PVar "v") (PVar "rest")))) (EApp (EApp (EVar "runTargetGo") (EApp (EVar "Some") (EVar "v"))) (EVar "rest")))
 (DFunDef false "runTargetGo" ((PVar "acc") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--target="))) (EVar "x")) (EApp (EApp (EVar "runTargetGo") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 9))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x")))) (EVar "rest")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "x") (ELit (LString "--json"))) (EBinOp "==" (EVar "x") (ELit (LString "--release")))) (EBinOp "==" (EVar "x") (ELit (LString "--allow-internal")))) (EBinOp "==" (EVar "x") (ELit (LString "--types")))) (EApp (EApp (EVar "runTargetGo") (EVar "acc")) (EVar "rest")) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "runTargetGo" ((PVar "acc") (PList)) (EVar "acc"))
-(DTypeSig false "manifestProfileOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "manifestProfileOf" ((PVar "entry")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "dirOf2") (EVar "entry"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "root")) () (EMatch (EApp (EVar "readFile") (EBinOp "++" (EVar "root") (ELit (LString "/medaka.toml")))) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "parseToml") (EVar "text")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "targetProfile") (EVar "doc"))) (arm (PCon "Err" PWild) () (EVar "None"))))))))
+(DTypeSig false "manifestProfileOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "manifestProfileOf" ((PVar "entry")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "canonicalizePath") (EApp (EVar "dirOf2") (EVar "entry")))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "root")) () (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EVar "root") (ELit (LString "/medaka.toml")))) (DoLet false false (PVar "read") (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "parseToml") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "not valid TOML: ")) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "targetProfile") (EVar "doc"))))))) (DoExpr (EApp (EApp (EVar "mapErr") (ELam ((PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read `[target]` in ")) (EApp (EVar "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "why"))) (ELit (LString ""))))) (EVar "read")))))))
 (DTypeSig false "carryTargetProfile" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "carryTargetProfile" ((PVar "flagValue") (PVar "entry")) (EBlock (DoLet false false (PVar "fromManifest") (EMatch (EVar "flagValue") (arm (PCon "Some" PWild) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "manifestProfileOf") (EVar "entry"))))) (DoExpr (EMatch (EApp (EApp (EVar "selectProfile") (EVar "flagValue")) (EVar "fromManifest")) (arm (PCon "Ok" (PVar "p")) () (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "p"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: ")) (EVar "m"))))))))
+(DFunDef false "carryTargetProfile" ((PVar "flagValue") (PVar "entry")) (EBlock (DoLet false false (PVar "fromManifest") (EMatch (EVar "flagValue") (arm (PCon "Some" PWild) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "None") () (EApp (EVar "manifestProfileOf") (EVar "entry"))))) (DoExpr (EMatch (EApp (EApp (EVar "andThen") (EVar "fromManifest")) (EApp (EVar "selectProfile") (EVar "flagValue"))) (arm (PCon "Ok" (PVar "p")) () (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "p"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: ")) (EVar "m"))))))))
 (DTypeSig false "runFlagGiven" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "runFlagGiven" (PWild (PList)) (EVar "False"))
 (DFunDef false "runFlagGiven" ((PVar "nm") (PCons (PLit (LString "--target")) (PCons PWild (PVar "rest")))) (EApp (EApp (EVar "runFlagGiven") (EVar "nm")) (EVar "rest")))
@@ -5047,7 +5056,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "parseTarget" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BuildTarget"))))
 (DFunDef false "parseTarget" ((PVar "name")) (EMatch (EApp (EVar "lookupProfile") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (arm (PCon "Ok" (PVar "p")) () (EMatch (EApp (EVar "profileBackend") (EVar "p")) (arm (PCon "BackendLlvm") () (EApp (EVar "Ok") (EVar "TNative"))) (arm (PCon "BackendWasmgc") () (EApp (EVar "Ok") (EVar "TWasm"))) (arm (PCon "BackendEval") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` is not buildable (buildable: "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "buildableNames")))) (ELit (LString ")")))))))))
 (DTypeSig false "selectBuildProfile" (TyFun (TyCon "Args") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BuildTarget"))))))
-(DFunDef false "selectBuildProfile" ((PVar "a") (PVar "input")) (EBlock (DoLet false false (PVar "name") (EMatch (EApp (EApp (EVar "lastValue") (ELit (LString "--target"))) (EVar "a")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EApp (EVar "optionOr") (ELit (LString "llvm/native-posix"))) (EApp (EVar "manifestProfileOf") (EVar "input")))))) (DoExpr (EMatch (EApp (EVar "lookupProfile") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (arm (PCon "Ok" (PVar "p")) () (EMatch (EApp (EVar "parseTarget") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "target")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EApp (EVar "Some") (EVar "p")))) (DoExpr (EApp (EVar "Ok") (EVar "target")))))))))))
+(DFunDef false "selectBuildProfile" ((PVar "a") (PVar "input")) (EBlock (DoLet false false (PVar "named") (EMatch (EApp (EApp (EVar "lastValue") (ELit (LString "--target"))) (EVar "a")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "Ok") (EVar "v"))) (arm (PCon "None") () (EApp (EApp (EVar "map") (EApp (EVar "optionOr") (ELit (LString "llvm/native-posix")))) (EApp (EVar "manifestProfileOf") (EVar "input")))))) (DoExpr (EMatch (EVar "named") (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (arm (PCon "Ok" (PVar "name")) () (EMatch (EApp (EVar "lookupProfile") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (arm (PCon "Ok" (PVar "p")) () (EMatch (EApp (EVar "parseTarget") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "target")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EApp (EVar "Some") (EVar "p")))) (DoExpr (EApp (EVar "Ok") (EVar "target")))))))))))))
 (DTypeSig false "buildTargetOrDie" (TyFun (TyCon "Args") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "BuildTarget")))))
 (DFunDef false "buildTargetOrDie" ((PVar "a") (PVar "input")) (EMatch (EApp (EApp (EVar "selectBuildProfile") (EVar "a")) (EVar "input")) (arm (PCon "Ok" (PVar "target")) () (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "dieMsg") (EVar "msg"))) (DoExpr (EVar "TNative"))))))
 (DTypeSig false "finishBuildArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "BuildTarget") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "BuildTarget")))))))
@@ -5384,10 +5393,10 @@ runMcpServerFromEnv _ =
 (DFunDef false "runTargetGo" (PWild (PCons (PLit (LString "--target")) (PCons (PVar "v") (PVar "rest")))) (EApp (EApp (EVar "runTargetGo") (EApp (EVar "Some") (EVar "v"))) (EVar "rest")))
 (DFunDef false "runTargetGo" ((PVar "acc") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "--target="))) (EVar "x")) (EApp (EApp (EVar "runTargetGo") (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 9))) (EApp (EVar "stringLength") (EVar "x"))) (EVar "x")))) (EVar "rest")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "x") (ELit (LString "--json"))) (EBinOp "==" (EVar "x") (ELit (LString "--release")))) (EBinOp "==" (EVar "x") (ELit (LString "--allow-internal")))) (EBinOp "==" (EVar "x") (ELit (LString "--types")))) (EApp (EApp (EVar "runTargetGo") (EVar "acc")) (EVar "rest")) (EIf (EVar "otherwise") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "runTargetGo" ((PVar "acc") (PList)) (EVar "acc"))
-(DTypeSig false "manifestProfileOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String")))))
-(DFunDef false "manifestProfileOf" ((PVar "entry")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "dirOf2") (EVar "entry"))) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "root")) () (EMatch (EApp (EVar "readFile") (EBinOp "++" (EVar "root") (ELit (LString "/medaka.toml")))) (arm (PCon "Err" PWild) () (EVar "None")) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "parseToml") (EVar "text")) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "targetProfile") (EVar "doc"))) (arm (PCon "Err" PWild) () (EVar "None"))))))))
+(DTypeSig false "manifestProfileOf" (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "manifestProfileOf" ((PVar "entry")) (EMatch (EApp (EVar "findProjectRoot") (EApp (EVar "canonicalizePath") (EApp (EVar "dirOf2") (EVar "entry")))) (arm (PCon "None") () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Some" (PVar "root")) () (EBlock (DoLet false false (PVar "path") (EBinOp "++" (EVar "root") (ELit (LString "/medaka.toml")))) (DoLet false false (PVar "read") (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PVar "text")) () (EMatch (EApp (EVar "parseToml") (EVar "text")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "not valid TOML: ")) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "doc")) () (EApp (EVar "targetProfile") (EVar "doc"))))))) (DoExpr (EApp (EApp (EVar "mapErr") (ELam ((PVar "why")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read `[target]` in ")) (EApp (EMethodRef "display") (EVar "path"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "why"))) (ELit (LString ""))))) (EVar "read")))))))
 (DTypeSig false "carryTargetProfile" (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))
-(DFunDef false "carryTargetProfile" ((PVar "flagValue") (PVar "entry")) (EBlock (DoLet false false (PVar "fromManifest") (EMatch (EVar "flagValue") (arm (PCon "Some" PWild) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "manifestProfileOf") (EVar "entry"))))) (DoExpr (EMatch (EApp (EApp (EVar "selectProfile") (EVar "flagValue")) (EVar "fromManifest")) (arm (PCon "Ok" (PVar "p")) () (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "p"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: ")) (EVar "m"))))))))
+(DFunDef false "carryTargetProfile" ((PVar "flagValue") (PVar "entry")) (EBlock (DoLet false false (PVar "fromManifest") (EMatch (EVar "flagValue") (arm (PCon "Some" PWild) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "None") () (EApp (EVar "manifestProfileOf") (EVar "entry"))))) (DoExpr (EMatch (EApp (EApp (EMethodRef "andThen") (EVar "fromManifest")) (EApp (EVar "selectProfile") (EVar "flagValue"))) (arm (PCon "Ok" (PVar "p")) () (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EVar "p"))) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "dieMsg") (EBinOp "++" (ELit (LString "error: ")) (EVar "m"))))))))
 (DTypeSig false "runFlagGiven" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "runFlagGiven" (PWild (PList)) (EVar "False"))
 (DFunDef false "runFlagGiven" ((PVar "nm") (PCons (PLit (LString "--target")) (PCons PWild (PVar "rest")))) (EApp (EApp (EVar "runFlagGiven") (EVar "nm")) (EVar "rest")))
@@ -5554,7 +5563,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "parseTarget" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BuildTarget"))))
 (DFunDef false "parseTarget" ((PVar "name")) (EMatch (EApp (EVar "lookupProfile") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (arm (PCon "Ok" (PVar "p")) () (EMatch (EApp (EVar "profileBackend") (EVar "p")) (arm (PCon "BackendLlvm") () (EApp (EVar "Ok") (EVar "TNative"))) (arm (PCon "BackendWasmgc") () (EApp (EVar "Ok") (EVar "TWasm"))) (arm (PCon "BackendEval") () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "error: `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` is not buildable (buildable: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "buildableNames")))) (ELit (LString ")")))))))))
 (DTypeSig false "selectBuildProfile" (TyFun (TyCon "Args") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "BuildTarget"))))))
-(DFunDef false "selectBuildProfile" ((PVar "a") (PVar "input")) (EBlock (DoLet false false (PVar "name") (EMatch (EApp (EApp (EVar "lastValue") (ELit (LString "--target"))) (EVar "a")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EApp (EVar "optionOr") (ELit (LString "llvm/native-posix"))) (EApp (EVar "manifestProfileOf") (EVar "input")))))) (DoExpr (EMatch (EApp (EVar "lookupProfile") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (arm (PCon "Ok" (PVar "p")) () (EMatch (EApp (EVar "parseTarget") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "target")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EApp (EVar "Some") (EVar "p")))) (DoExpr (EApp (EVar "Ok") (EVar "target")))))))))))
+(DFunDef false "selectBuildProfile" ((PVar "a") (PVar "input")) (EBlock (DoLet false false (PVar "named") (EMatch (EApp (EApp (EVar "lastValue") (ELit (LString "--target"))) (EVar "a")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "Ok") (EVar "v"))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (EApp (EVar "optionOr") (ELit (LString "llvm/native-posix")))) (EApp (EVar "manifestProfileOf") (EVar "input")))))) (DoExpr (EMatch (EVar "named") (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (arm (PCon "Ok" (PVar "name")) () (EMatch (EApp (EVar "lookupProfile") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EBinOp "++" (ELit (LString "error: ")) (EVar "m")))) (arm (PCon "Ok" (PVar "p")) () (EMatch (EApp (EVar "parseTarget") (EVar "name")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "Err") (EVar "m"))) (arm (PCon "Ok" (PVar "target")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "selectedProfile")) (EApp (EVar "Some") (EVar "p")))) (DoExpr (EApp (EVar "Ok") (EVar "target")))))))))))))
 (DTypeSig false "buildTargetOrDie" (TyFun (TyCon "Args") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "BuildTarget")))))
 (DFunDef false "buildTargetOrDie" ((PVar "a") (PVar "input")) (EMatch (EApp (EApp (EVar "selectBuildProfile") (EVar "a")) (EVar "input")) (arm (PCon "Ok" (PVar "target")) () (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "dieMsg") (EVar "msg"))) (DoExpr (EVar "TNative"))))))
 (DTypeSig false "finishBuildArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "BuildTarget") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "BuildTarget")))))))

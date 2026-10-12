@@ -1,0 +1,5 @@
+[package]
+name = "profile_not_string"
+
+[target]
+profile = 42

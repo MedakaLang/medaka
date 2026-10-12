@@ -164,7 +164,7 @@ test "(b) the manifest's [target] profile is what the accessor reads" =
     Ok doc =>
       expectEqual
         (Ok (Some "wasmgc/edge"))
-        (nameOf (selectProfile None (targetProfile doc)))
+        (nameOf (andThen (targetProfile doc) (selectProfile None)))
 
 -- The profile `run` checks against, as (name, granted labels).
 runView : Option String -> Result String (String, List String)

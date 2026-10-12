@@ -1,0 +1,4 @@
+-- The manifest's `[target]` names no profile it can read, which is refused
+-- rather than read as no target.
+main : <Stdout> Unit
+main = println "hi"

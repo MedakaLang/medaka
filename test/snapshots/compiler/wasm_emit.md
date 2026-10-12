@@ -1,5 +1,5 @@
 # META
-source_lines=12244
+source_lines=12243
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -248,7 +248,7 @@ import backend.core_validate.{
   validateTails,
   validateRecords,
   unrefusedExternMessage,
-  uncheckedExternMessage,
+  withheldExternNote,
   checkedTarget,
   validateExterns,
 }
@@ -793,17 +793,16 @@ isFfiExternW prog name = match ffiSigOfW prog name
   None => False
 
 -- What a reference to a user FFI extern meets: foreign C calls have no WasmGC
--- equivalent.  `build` refuses `FFI` on every wasm profile before lowering, so
--- under a checked target reaching one is an internal error.
+-- equivalent.  No wasm profile grants `FFI`, so under a checked target the
+-- program names the extern without performing it (`withheldExternNote`).
 ffiWallW : Prog -> String -> List String
-ffiWallW prog name = match !checkedTarget
-  Some t => panic (uncheckedExternMessage WasmBackend name t)
-  None =>
-    gapLP
-      prog
-      ("wasm: FFI extern '"
-        ++ name
-        ++ "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")
+ffiWallW prog name =
+  let wall =
+    "wasm: FFI extern '\{name}' is native-only — foreign C calls have no WasmGC equivalent"
+  match !checkedTarget
+    Some t =>
+      gapLP prog "\{wall}; \{withheldExternNote WasmBackend name ["FFI"] t}"
+    None => gapLP prog "\{wall}. Build for a native target instead."
 
 declRetTypeOf : Prog -> String -> String
 declRetTypeOf prog name = match declRetLookupW prog name
@@ -12251,7 +12250,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false) (mem "wasmUses" false))))
-(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "uncheckedExternMessage" false) (mem "checkedTarget" false) (mem "validateExterns" false))))
+(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "withheldExternNote" false) (mem "checkedTarget" false) (mem "validateExterns" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
@@ -12344,7 +12343,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "isFfiExternW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isFfiExternW" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "ffiSigOfW") (EVar "prog")) (EVar "name")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "ffiWallW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ffiWallW" ((PVar "prog") (PVar "name")) (EMatch (EUnOp "!" (EVar "checkedTarget")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "panic") (EApp (EApp (EApp (EVar "uncheckedExternMessage") (EVar "WasmBackend")) (EVar "name")) (EVar "t")))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "name")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))))))
+(DFunDef false "ffiWallW" ((PVar "prog") (PVar "name")) (EBlock (DoLet false false (PVar "wall") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent")))) (DoExpr (EMatch (EUnOp "!" (EVar "checkedTarget")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "wall"))) (ELit (LString "; "))) (EApp (EVar "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "WasmBackend")) (EVar "name")) (EListLit (ELit (LString "FFI")))) (EVar "t")))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "wall"))) (ELit (LString ". Build for a native target instead.")))))))))
 (DTypeSig false "declRetTypeOf" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "declRetTypeOf" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declRetLookupW") (EVar "prog")) (EVar "name")) (arm (PCon "Some" (PTuple PWild (PVar "ret"))) () (EVar "ret")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "declParamTypesOf" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
@@ -14586,7 +14585,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "noDeclFacts" false) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "instanceWord" false) (mem "receiverEvidence" false) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "ImplSym" true) (mem "CField" true) (mem "FailSite" true) (mem "CallMode" true) (mem "CallSite" true) (mem "siteSentinelName" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("backend" "extern_catalog") ((mem "WasmFamily" true) (mem "WasmUse" true) (mem "isWasmExternFamily" false) (mem "wasmFamily" false) (mem "wasmUses" false))))
-(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "uncheckedExternMessage" false) (mem "checkedTarget" false) (mem "validateExterns" false))))
+(DUse false (UseGroup ("backend" "core_validate") ((mem "Backend" true) (mem "findingBinding" false) (mem "isUnprovidedOn" false) (mem "renderExternFinding" false) (mem "renderExternRefusal" false) (mem "renderRecordRefusal" false) (mem "renderCallRefusal" false) (mem "renderTailRefusal" false) (mem "validateCalls" false) (mem "validateImplSymbols" false) (mem "validateMethodContexts" false) (mem "validateDispatchEvidence" false) (mem "validateTails" false) (mem "validateRecords" false) (mem "unrefusedExternMessage" false) (mem "withheldExternNote" false) (mem "checkedTarget" false) (mem "validateExterns" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omKeys" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false) (mem "omDelete" false) (mem "omSize" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "allList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "endsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false) (mem "u64HalvesHex" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ArityEnv" false) (mem "callModeFor" false) (mem "isPartialMode" false) (mem "definedArityOf" false) (mem "programArities" false))))
@@ -14679,7 +14678,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "isFfiExternW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "isFfiExternW" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "ffiSigOfW") (EVar "prog")) (EVar "name")) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))
 (DTypeSig false "ffiWallW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "ffiWallW" ((PVar "prog") (PVar "name")) (EMatch (EUnOp "!" (EVar "checkedTarget")) (arm (PCon "Some" (PVar "t")) () (EApp (EVar "panic") (EApp (EApp (EApp (EVar "uncheckedExternMessage") (EVar "WasmBackend")) (EVar "name")) (EVar "t")))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EVar "name")) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent. Build for a native target instead.")))))))
+(DFunDef false "ffiWallW" ((PVar "prog") (PVar "name")) (EBlock (DoLet false false (PVar "wall") (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: FFI extern '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' is native-only — foreign C calls have no WasmGC equivalent")))) (DoExpr (EMatch (EUnOp "!" (EVar "checkedTarget")) (arm (PCon "Some" (PVar "t")) () (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "wall"))) (ELit (LString "; "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EApp (EVar "withheldExternNote") (EVar "WasmBackend")) (EVar "name")) (EListLit (ELit (LString "FFI")))) (EVar "t")))) (ELit (LString ""))))) (arm (PCon "None") () (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "wall"))) (ELit (LString ". Build for a native target instead.")))))))))
 (DTypeSig false "declRetTypeOf" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "declRetTypeOf" ((PVar "prog") (PVar "name")) (EMatch (EApp (EApp (EVar "declRetLookupW") (EVar "prog")) (EVar "name")) (arm (PCon "Some" (PTuple PWild (PVar "ret"))) () (EVar "ret")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "declParamTypesOf" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))

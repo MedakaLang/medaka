@@ -1,0 +1,4 @@
+-- The extern and its module-declared `FFI` label live in an imported module.
+import cbind.{cAdd}
+
+main = println (cAdd 20 22)

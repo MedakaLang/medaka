@@ -1,0 +1,7 @@
+[package]
+name = "bad_manifest_target"
+
+[target]
+profile = "wasmgc/node"
+
+[dependencies

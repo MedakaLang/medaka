@@ -1,0 +1,6 @@
+-- `netResolve` is named but never applied, so `main` performs only `Stdout`
+-- and every profile that grants `Stdout` admits the program.
+fns : List (String -> <Net> Result String (List String))
+fns = [netResolve]
+
+main = println (length fns)

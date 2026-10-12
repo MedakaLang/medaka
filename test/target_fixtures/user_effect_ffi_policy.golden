@@ -1,0 +1,8 @@
+exit=1
+--- stdout
+--- stderr
+rejected. compiler analysis failed before policy evaluation; `medaka check <fixtures>/user_effect_ffi.mdk` reports:
+error: <fixtures>/user_effect_ffi.mdk:5:20: foreign declaration `ffiAddInts` names `FFI` in its result row, but that `FFI` is a label declared with `effect FFI`, not the foreign-call effect; rename the declared label so `FFI` here means the foreign call
+  |
+5 | extern ffiAddInts : Int -> Int -> <FFI> Int
+  |                     ^

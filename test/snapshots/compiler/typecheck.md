@@ -1,5 +1,5 @@
 # META
-source_lines=55699
+source_lines=55729
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -42408,7 +42408,27 @@ ffiResultRowHasFFI _ = False
 -- so `<Net "a.com/*", FFI>` prints as `<FFI, Net "a.com/*">`.
 ffiHasAtom : List EffAtomTy -> Bool
 ffiHasAtom [] = False
-ffiHasAtom (a :: rest) = a.eatLabel == "FFI" || ffiHasAtom rest
+ffiHasAtom (a :: rest) = isForeignCallAtom a || ffiHasAtom rest
+
+-- The foreign-call effect itself.  A label a module declares with `effect FFI`
+-- is spelled the same but is a user label, which the target check never gates,
+-- so it cannot be what makes a declaration honest about calling foreign code.
+isForeignCallAtom : EffAtomTy -> Bool
+isForeignCallAtom a = match a.eatOrigin
+  OriginModule _ => False
+  _ => a.eatLabel == "FFI"
+
+-- Does the declared result row spell `FFI` as a module's own label?  The walk
+-- `ffiRowHasFFITy` takes; it only picks `T-FFI-UNLABELLED`'s wording.
+ffiRowNamesDeclaredFfi : Ty -> Bool
+ffiRowNamesDeclaredFfi (TyConstrained _ t) = ffiRowNamesDeclaredFfi t
+ffiRowNamesDeclaredFfi (TyFun _ r) = ffiRowNamesDeclaredFfi r
+ffiRowNamesDeclaredFfi (TyEffect ls _ _) =
+  anyListM (a => a.eatLabel == "FFI" && not (isForeignCallAtom a)) ls
+ffiRowNamesDeclaredFfi t = match expandAliasHeadTy t
+  TyFun _ r => ffiRowNamesDeclaredFfi r
+  TyConstrained _ inner => ffiRowNamesDeclaredFfi inner
+  _ => False
 
 -- ── the FFI-ABI.md §1 CROSSABLE SET ─────────────────────────────────────────
 --
@@ -43330,13 +43350,23 @@ ffiCheckLabelsGo (_ :: rest) = ffiCheckLabelsGo rest
 -- option that is definitely wrong.
 ffiCheckExternLabel : String -> Option Loc -> Ty -> Unit
 ffiCheckExternLabel n fb ty = match ffiRowHasFFITy ty
-  Some False => pushTypeErrorAt "T-FFI-UNLABELLED" fb (ffiUnlabelledMsg n)
+  Some False =>
+    let msg =
+      if ffiRowNamesDeclaredFfi ty then
+        ffiDeclaredLabelMsg n
+      else
+        ffiUnlabelledMsg n
+    pushTypeErrorAt "T-FFI-UNLABELLED" fb msg
   Some True => ()
   None => pushTypeErrorAt "T-FFI-NULLARY" fb (ffiNullaryMsg n)
 
 ffiNullaryMsg : String -> String
 ffiNullaryMsg n =
   "foreign declaration `\{n}` has no arrow in its signature, so it declares a foreign value rather than a foreign call; declare a call instead, `extern \{n} : Unit -> <FFI> T`, invoked as `\{n} ()`"
+
+ffiDeclaredLabelMsg : String -> String
+ffiDeclaredLabelMsg n =
+  "foreign declaration `\{n}` names `FFI` in its result row, but that `FFI` is a label declared with `effect FFI`, not the foreign-call effect; rename the declared label so `FFI` here means the foreign call"
 
 ffiUnlabelledMsg : String -> String
 ffiUnlabelledMsg n =
@@ -62970,7 +63000,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ffiResultRowHasFFI" (PWild) (EVar "False"))
 (DTypeSig false "ffiHasAtom" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyCon "Bool")))
 (DFunDef false "ffiHasAtom" ((PList)) (EVar "False"))
-(DFunDef false "ffiHasAtom" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))) (EApp (EVar "ffiHasAtom") (EVar "rest"))))
+(DFunDef false "ffiHasAtom" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "||" (EApp (EVar "isForeignCallAtom") (EVar "a")) (EApp (EVar "ffiHasAtom") (EVar "rest"))))
+(DTypeSig false "isForeignCallAtom" (TyFun (TyCon "EffAtomTy") (TyCon "Bool")))
+(DFunDef false "isForeignCallAtom" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatOrigin") (arm (PCon "OriginModule" PWild) () (EVar "False")) (arm PWild () (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))))
+(DTypeSig false "ffiRowNamesDeclaredFfi" (TyFun (TyCon "Ty") (TyCon "Bool")))
+(DFunDef false "ffiRowNamesDeclaredFfi" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "t")))
+(DFunDef false "ffiRowNamesDeclaredFfi" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "r")))
+(DFunDef false "ffiRowNamesDeclaredFfi" ((PCon "TyEffect" (PVar "ls") PWild PWild)) (EApp (EApp (EVar "anyListM") (ELam ((PVar "a")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))) (EApp (EVar "not") (EApp (EVar "isForeignCallAtom") (EVar "a")))))) (EVar "ls")))
+(DFunDef false "ffiRowNamesDeclaredFfi" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PCon "TyFun" PWild (PVar "r")) () (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "r"))) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "inner"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "ffiCrossableTy" (TyFun (TyCon "Ty") (TyCon "Bool")))
 (DFunDef false "ffiCrossableTy" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EApp (EVar "ffiCrossableConName") (EVar "n"))) (arm (PCon "TyNamed" PWild (PVar "inner") PWild) () (EApp (EVar "ffiCrossableTy") (EVar "inner"))) (arm (PCon "TyQual" (PVar "inner") PWild PWild) () (EApp (EVar "ffiCrossableTy") (EVar "inner"))) (arm (PCon "TyApp" (PVar "a") (PVar "b")) () (EMatch (ETuple (EApp (EVar "expandAliasHeadTy") (EVar "a")) (EApp (EVar "expandAliasHeadTy") (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Array")))) false) (PRec "TyCon" ((rf "tyConName" (PLit (LString "Int")))) false)) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "ffiCrossableConName" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -63131,9 +63168,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ffiCheckLabelsGo" ((PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EApp (EVar "ffiIsBuiltinExternName") (EVar "n")) (ELit LUnit) (EApp (EApp (EApp (EVar "ffiCheckExternLabel") (EVar "n")) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EVar "ty")))) (DoExpr (EApp (EVar "ffiCheckLabelsGo") (EVar "rest")))))
 (DFunDef false "ffiCheckLabelsGo" ((PCons PWild (PVar "rest"))) (EApp (EVar "ffiCheckLabelsGo") (EVar "rest")))
 (DTypeSig false "ffiCheckExternLabel" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit")))))
-(DFunDef false "ffiCheckExternLabel" ((PVar "n") (PVar "fb") (PVar "ty")) (EMatch (EApp (EVar "ffiRowHasFFITy") (EVar "ty")) (arm (PCon "Some" (PCon "False")) () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiUnlabelledMsg") (EVar "n")))) (arm (PCon "Some" (PCon "True")) () (ELit LUnit)) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-NULLARY"))) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EVar "n"))))))
+(DFunDef false "ffiCheckExternLabel" ((PVar "n") (PVar "fb") (PVar "ty")) (EMatch (EApp (EVar "ffiRowHasFFITy") (EVar "ty")) (arm (PCon "Some" (PCon "False")) () (EBlock (DoLet false false (PVar "msg") (EIf (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "ty")) (EApp (EVar "ffiDeclaredLabelMsg") (EVar "n")) (EApp (EVar "ffiUnlabelledMsg") (EVar "n")))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EVar "msg"))))) (arm (PCon "Some" (PCon "True")) () (ELit LUnit)) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-NULLARY"))) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EVar "n"))))))
 (DTypeSig false "ffiNullaryMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ffiNullaryMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` has no arrow in its signature, so it declares a foreign value rather than a foreign call; declare a call instead, `extern "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString " : Unit -> <FFI> T`, invoked as `"))) (EApp (EVar "display") (EVar "n"))) (ELit (LString " ()`"))))
+(DTypeSig false "ffiDeclaredLabelMsg" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ffiDeclaredLabelMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` names `FFI` in its result row, but that `FFI` is a label declared with `effect FFI`, not the foreign-call effect; rename the declared label so `FFI` here means the foreign call"))))
 (DTypeSig false "ffiUnlabelledMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ffiUnlabelledMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "` does not name the `FFI` effect in its result row; write `<FFI>` joined with whatever else the row names, such as `<FFI, Net \"a.com/*\">`"))))
 (DTypeSig false "externDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
@@ -72228,7 +72267,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ffiResultRowHasFFI" (PWild) (EVar "False"))
 (DTypeSig false "ffiHasAtom" (TyFun (TyApp (TyCon "List") (TyCon "EffAtomTy")) (TyCon "Bool")))
 (DFunDef false "ffiHasAtom" ((PList)) (EVar "False"))
-(DFunDef false "ffiHasAtom" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))) (EApp (EVar "ffiHasAtom") (EVar "rest"))))
+(DFunDef false "ffiHasAtom" ((PCons (PVar "a") (PVar "rest"))) (EBinOp "||" (EApp (EVar "isForeignCallAtom") (EVar "a")) (EApp (EVar "ffiHasAtom") (EVar "rest"))))
+(DTypeSig false "isForeignCallAtom" (TyFun (TyCon "EffAtomTy") (TyCon "Bool")))
+(DFunDef false "isForeignCallAtom" ((PVar "a")) (EMatch (EFieldAccess (EVar "a") "eatOrigin") (arm (PCon "OriginModule" PWild) () (EVar "False")) (arm PWild () (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))))))
+(DTypeSig false "ffiRowNamesDeclaredFfi" (TyFun (TyCon "Ty") (TyCon "Bool")))
+(DFunDef false "ffiRowNamesDeclaredFfi" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "t")))
+(DFunDef false "ffiRowNamesDeclaredFfi" ((PCon "TyFun" PWild (PVar "r"))) (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "r")))
+(DFunDef false "ffiRowNamesDeclaredFfi" ((PCon "TyEffect" (PVar "ls") PWild PWild)) (EApp (EApp (EVar "anyListM") (ELam ((PVar "a")) (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "a") "eatLabel") (ELit (LString "FFI"))) (EApp (EVar "not") (EApp (EVar "isForeignCallAtom") (EVar "a")))))) (EVar "ls")))
+(DFunDef false "ffiRowNamesDeclaredFfi" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PCon "TyFun" PWild (PVar "r")) () (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "r"))) (arm (PCon "TyConstrained" PWild (PVar "inner")) () (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "inner"))) (arm PWild () (EVar "False"))))
 (DTypeSig false "ffiCrossableTy" (TyFun (TyCon "Ty") (TyCon "Bool")))
 (DFunDef false "ffiCrossableTy" ((PVar "t")) (EMatch (EApp (EVar "expandAliasHeadTy") (EVar "t")) (arm (PRec "TyCon" ((rf "tyConName" (PVar "n"))) false) () (EApp (EVar "ffiCrossableConName") (EVar "n"))) (arm (PCon "TyNamed" PWild (PVar "inner") PWild) () (EApp (EVar "ffiCrossableTy") (EVar "inner"))) (arm (PCon "TyQual" (PVar "inner") PWild PWild) () (EApp (EVar "ffiCrossableTy") (EVar "inner"))) (arm (PCon "TyApp" (PVar "a") (PVar "b")) () (EMatch (ETuple (EApp (EVar "expandAliasHeadTy") (EVar "a")) (EApp (EVar "expandAliasHeadTy") (EVar "b"))) (arm (PTuple (PRec "TyCon" ((rf "tyConName" (PLit (LString "Array")))) false) (PRec "TyCon" ((rf "tyConName" (PLit (LString "Int")))) false)) () (EVar "True")) (arm PWild () (EVar "False")))) (arm PWild () (EVar "False"))))
 (DTypeSig false "ffiCrossableConName" (TyFun (TyCon "String") (TyCon "Bool")))
@@ -72389,9 +72435,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ffiCheckLabelsGo" ((PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest"))) (EBlock (DoLet false false PWild (EIf (EApp (EVar "ffiIsBuiltinExternName") (EVar "n")) (ELit LUnit) (EApp (EApp (EApp (EVar "ffiCheckExternLabel") (EVar "n")) (EApp (EVar "firstTyLoc") (EVar "ty"))) (EVar "ty")))) (DoExpr (EApp (EVar "ffiCheckLabelsGo") (EVar "rest")))))
 (DFunDef false "ffiCheckLabelsGo" ((PCons PWild (PVar "rest"))) (EApp (EVar "ffiCheckLabelsGo") (EVar "rest")))
 (DTypeSig false "ffiCheckExternLabel" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Ty") (TyCon "Unit")))))
-(DFunDef false "ffiCheckExternLabel" ((PVar "n") (PVar "fb") (PVar "ty")) (EMatch (EApp (EVar "ffiRowHasFFITy") (EVar "ty")) (arm (PCon "Some" (PCon "False")) () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EApp (EVar "ffiUnlabelledMsg") (EVar "n")))) (arm (PCon "Some" (PCon "True")) () (ELit LUnit)) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-NULLARY"))) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EVar "n"))))))
+(DFunDef false "ffiCheckExternLabel" ((PVar "n") (PVar "fb") (PVar "ty")) (EMatch (EApp (EVar "ffiRowHasFFITy") (EVar "ty")) (arm (PCon "Some" (PCon "False")) () (EBlock (DoLet false false (PVar "msg") (EIf (EApp (EVar "ffiRowNamesDeclaredFfi") (EVar "ty")) (EApp (EVar "ffiDeclaredLabelMsg") (EVar "n")) (EApp (EVar "ffiUnlabelledMsg") (EVar "n")))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-UNLABELLED"))) (EVar "fb")) (EVar "msg"))))) (arm (PCon "Some" (PCon "True")) () (ELit LUnit)) (arm (PCon "None") () (EApp (EApp (EApp (EVar "pushTypeErrorAt") (ELit (LString "T-FFI-NULLARY"))) (EVar "fb")) (EApp (EVar "ffiNullaryMsg") (EVar "n"))))))
 (DTypeSig false "ffiNullaryMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ffiNullaryMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` has no arrow in its signature, so it declares a foreign value rather than a foreign call; declare a call instead, `extern "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " : Unit -> <FFI> T`, invoked as `"))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString " ()`"))))
+(DTypeSig false "ffiDeclaredLabelMsg" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "ffiDeclaredLabelMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` names `FFI` in its result row, but that `FFI` is a label declared with `effect FFI`, not the foreign-call effect; rename the declared label so `FFI` here means the foreign call"))))
 (DTypeSig false "ffiUnlabelledMsg" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "ffiUnlabelledMsg" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "foreign declaration `")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "` does not name the `FFI` effect in its result row; write `<FFI>` joined with whatever else the row names, such as `<FFI, Net \"a.com/*\">`"))))
 (DTypeSig false "externDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))

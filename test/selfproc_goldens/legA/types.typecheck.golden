@@ -1095,6 +1095,7 @@ ffiCheckShadowGo : List Decl -> Unit
 ffiCheckSpineRow : String -> Ty -> List (String, Int) -> List (String, Ty) -> String -> (List EffAtomTy, List String) -> (List EffAtomTy, List String) -> Unit
 ffiCrossableConName : String -> Bool
 ffiCrossableTy : Ty -> Bool
+ffiDeclaredLabelMsg : String -> String
 ffiExpandTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 ffiExternTypeRowsWith : List (TabKey, (List String, Ty)) -> List Decl -> List (String, (List String, String))
 ffiHasAtom : List EffAtomTy -> Bool
@@ -1115,6 +1116,7 @@ ffiReservedMsg : String -> String
 ffiResultRowHasFFI : Ty -> Bool
 ffiRowBody : Ty -> Ty
 ffiRowHasFFITy : Ty -> Option Bool
+ffiRowNamesDeclaredFfi : Ty -> Bool
 ffiRowParts : Ty -> (List EffAtomTy, List String, Ty)
 ffiSameAtom : EffAtomTy -> EffAtomTy -> Bool
 ffiSameNames : List String -> List String -> Bool
@@ -1798,6 +1800,7 @@ isEPProduct : EffParamTy -> Bool
 isEPSet : EffParamTy -> Bool
 isEmptyStringLit : Expr -> Bool
 isExemptInPlaceSetIndex : Mono -> Expr -> Bool
+isForeignCallAtom : EffAtomTy -> Bool
 isGrantOnlyEv : EvId -> Bool
 isLegacyPredicateAnswer : Option AssumAnswer -> Bool
 isLetrecGroup : List String -> Bool
