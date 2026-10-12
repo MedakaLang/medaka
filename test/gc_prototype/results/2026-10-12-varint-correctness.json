@@ -1,0 +1,1453 @@
+{
+  "application_set": "varint",
+  "build": {
+    "binaries": {
+      "varint": "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint"
+    },
+    "builds": [
+      {
+        "binary": "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+        "binary_sha256": "800d7182fd1a957fdd311057b04484185f1682645053cc3b33ef5ac4be9b3e24",
+        "command": {
+          "argv": [
+            "/root/.codex/worktrees/f396/medaka/medaka",
+            "build",
+            "/root/.codex/worktrees/f396/medaka/pds/test/gc_varint_main.mdk",
+            "-o",
+            "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint"
+          ],
+          "cwd": "/root/.codex/worktrees/f396/medaka",
+          "environment": {
+            "CC": "clang",
+            "MEDAKA_CLANG_OPT": "-O2",
+            "MEDAKA_STRICT": "1"
+          }
+        },
+        "name": "varint",
+        "stderr": "",
+        "stdout": "built /root/.codex/worktrees/f396/medaka/pds/test/gc_varint_main.mdk -> /tmp/medaka-gc-varint-final-06e4bc273/gc_varint"
+      }
+    ],
+    "freshness_check": {
+      "command": {
+        "argv": [
+          "/root/.codex/worktrees/f396/medaka/medaka",
+          "check",
+          "/root/.codex/worktrees/f396/medaka/pds/test/gc_varint_main.mdk"
+        ],
+        "cwd": "/root/.codex/worktrees/f396/medaka",
+        "environment": {
+          "CC": "clang",
+          "MEDAKA_CLANG_OPT": "-O2",
+          "MEDAKA_STRICT": "1"
+        }
+      },
+      "returncode": 0,
+      "stderr": "",
+      "stdout": "parseInt : String -> Int\nchecksumByte : Int -> U8 -> Int\nrepeatEncode : Int -> Int -> Int -> Int -> (Int, Int)\nrunEncode : Int -> <IO> Unit\nrunRepeat : Int -> Int -> <IO> Unit\nmain : <Env, IO> Unit"
+    }
+  },
+  "correctness": {
+    "builder_growth": "real bytebuilder starts at capacity 0; nine-byte encodings grow through 1, 2, 4, 8, 16; no runtime allocation counts inferred",
+    "collector": "production Boehm; custom collector execution is not established",
+    "encode_cases": 29,
+    "inputs": [
+      0,
+      1,
+      127,
+      128,
+      129,
+      255,
+      300,
+      16383,
+      16384,
+      16385,
+      2097151,
+      2097152,
+      2097153,
+      268435455,
+      268435456,
+      268435457,
+      34359738367,
+      34359738368,
+      34359738369,
+      4398046511103,
+      4398046511104,
+      4398046511105,
+      562949953421311,
+      562949953421312,
+      562949953421313,
+      72057594037927935,
+      72057594037927936,
+      72057594037927937,
+      4611686018427387903
+    ],
+    "invalid_repeat_counts": [
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "repeat",
+          "0",
+          "128"
+        ],
+        "count": 0,
+        "rejected": true,
+        "required_diagnostic": "gc_varint: repeat count must be positive",
+        "returncode": 1,
+        "stderr": "/root/.codex/worktrees/f396/medaka/pds/test/gc_varint_main.mdk:35:4: runtime error [E-PANIC]: gc_varint: repeat count must be positive\n",
+        "stdout": ""
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "repeat",
+          "-1",
+          "128"
+        ],
+        "count": -1,
+        "rejected": true,
+        "required_diagnostic": "gc_varint: repeat count must be positive",
+        "returncode": 1,
+        "stderr": "/root/.codex/worktrees/f396/medaka/pds/test/gc_varint_main.mdk:35:4: runtime error [E-PANIC]: gc_varint: repeat count must be positive\n",
+        "stdout": ""
+      }
+    ],
+    "negative_input": {
+      "argv": [
+        "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+        "encode",
+        "-1"
+      ],
+      "rejected": true,
+      "required_diagnostic": "uvarint: negative value -1 (unsigned-varint encodes non-negative values only)",
+      "returncode": 1,
+      "stderr": "/root/.codex/worktrees/f396/medaka/pds/lib/multiformats.mdk:101:4: runtime error [E-PANIC]: uvarint: negative value -1 (unsigned-varint encodes non-negative values only)\n",
+      "stdout": ""
+    },
+    "oracle": "independent Python unsigned LEB128 via divmod(128); exact hex and rolling byte checksum",
+    "repetition_cases": 4,
+    "results": [
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "0"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-0",
+        "encoded_length": 1,
+        "expected_hex": "00",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 0 00\n",
+        "value": 0
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "1"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-1",
+        "encoded_length": 1,
+        "expected_hex": "01",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 1 01\n",
+        "value": 1
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "127"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-127",
+        "encoded_length": 1,
+        "expected_hex": "7f",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 127 7f\n",
+        "value": 127
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "128"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-128",
+        "encoded_length": 2,
+        "expected_hex": "8001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 128 8001\n",
+        "value": 128
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "129"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-129",
+        "encoded_length": 2,
+        "expected_hex": "8101",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 129 8101\n",
+        "value": 129
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "255"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-255",
+        "encoded_length": 2,
+        "expected_hex": "ff01",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 255 ff01\n",
+        "value": 255
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "300"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-300",
+        "encoded_length": 2,
+        "expected_hex": "ac02",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 300 ac02\n",
+        "value": 300
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "16383"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-16383",
+        "encoded_length": 2,
+        "expected_hex": "ff7f",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 16383 ff7f\n",
+        "value": 16383
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "16384"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-16384",
+        "encoded_length": 3,
+        "expected_hex": "808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 16384 808001\n",
+        "value": 16384
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "16385"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-16385",
+        "encoded_length": 3,
+        "expected_hex": "818001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 16385 818001\n",
+        "value": 16385
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "2097151"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-2097151",
+        "encoded_length": 3,
+        "expected_hex": "ffff7f",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 2097151 ffff7f\n",
+        "value": 2097151
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "2097152"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-2097152",
+        "encoded_length": 4,
+        "expected_hex": "80808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 2097152 80808001\n",
+        "value": 2097152
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "2097153"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-2097153",
+        "encoded_length": 4,
+        "expected_hex": "81808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 2097153 81808001\n",
+        "value": 2097153
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "268435455"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-268435455",
+        "encoded_length": 4,
+        "expected_hex": "ffffff7f",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 268435455 ffffff7f\n",
+        "value": 268435455
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "268435456"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-268435456",
+        "encoded_length": 5,
+        "expected_hex": "8080808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 268435456 8080808001\n",
+        "value": 268435456
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "268435457"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-268435457",
+        "encoded_length": 5,
+        "expected_hex": "8180808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 268435457 8180808001\n",
+        "value": 268435457
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "34359738367"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-34359738367",
+        "encoded_length": 5,
+        "expected_hex": "ffffffff7f",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 34359738367 ffffffff7f\n",
+        "value": 34359738367
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "34359738368"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-34359738368",
+        "encoded_length": 6,
+        "expected_hex": "808080808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 34359738368 808080808001\n",
+        "value": 34359738368
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "34359738369"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-34359738369",
+        "encoded_length": 6,
+        "expected_hex": "818080808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 34359738369 818080808001\n",
+        "value": 34359738369
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "4398046511103"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-4398046511103",
+        "encoded_length": 6,
+        "expected_hex": "ffffffffff7f",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 4398046511103 ffffffffff7f\n",
+        "value": 4398046511103
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "4398046511104"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-4398046511104",
+        "encoded_length": 7,
+        "expected_hex": "80808080808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 4398046511104 80808080808001\n",
+        "value": 4398046511104
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "4398046511105"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-4398046511105",
+        "encoded_length": 7,
+        "expected_hex": "81808080808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 4398046511105 81808080808001\n",
+        "value": 4398046511105
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "562949953421311"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-562949953421311",
+        "encoded_length": 7,
+        "expected_hex": "ffffffffffff7f",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 562949953421311 ffffffffffff7f\n",
+        "value": 562949953421311
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "562949953421312"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-562949953421312",
+        "encoded_length": 8,
+        "expected_hex": "8080808080808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 562949953421312 8080808080808001\n",
+        "value": 562949953421312
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "562949953421313"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-562949953421313",
+        "encoded_length": 8,
+        "expected_hex": "8180808080808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 562949953421313 8180808080808001\n",
+        "value": 562949953421313
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "72057594037927935"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-72057594037927935",
+        "encoded_length": 8,
+        "expected_hex": "ffffffffffffff7f",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 72057594037927935 ffffffffffffff7f\n",
+        "value": 72057594037927935
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "72057594037927936"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-72057594037927936",
+        "encoded_length": 9,
+        "expected_hex": "808080808080808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 72057594037927936 808080808080808001\n",
+        "value": 72057594037927936
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "72057594037927937"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-72057594037927937",
+        "encoded_length": 9,
+        "expected_hex": "818080808080808001",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 72057594037927937 818080808080808001\n",
+        "value": 72057594037927937
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "encode",
+          "4611686018427387903"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-4611686018427387903",
+        "encoded_length": 9,
+        "expected_hex": "ffffffffffffffff3f",
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINT 4611686018427387903 ffffffffffffffff3f\n",
+        "value": 4611686018427387903
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "repeat",
+          "256",
+          "0"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-repeat-256-0",
+        "count": 256,
+        "encoded_length": 1,
+        "expected_checksum": 0,
+        "expected_hex": "00",
+        "expected_total_bytes": 256,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINTREPEAT 256 0 256 0\n",
+        "value": 0
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "repeat",
+          "256",
+          "128"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-repeat-256-128",
+        "count": 256,
+        "encoded_length": 2,
+        "expected_checksum": 878574811,
+        "expected_hex": "8001",
+        "expected_total_bytes": 512,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINTREPEAT 256 128 512 878574811\n",
+        "value": 128
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "repeat",
+          "256",
+          "72057594037927936"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-repeat-256-72057594037927936",
+        "count": 256,
+        "encoded_length": 9,
+        "expected_checksum": 714660274,
+        "expected_hex": "808080808080808001",
+        "expected_total_bytes": 2304,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINTREPEAT 256 72057594037927936 2304 714660274\n",
+        "value": 72057594037927936
+      },
+      {
+        "argv": [
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+          "repeat",
+          "256",
+          "4611686018427387903"
+        ],
+        "byte_content_oracle_passed": true,
+        "case": "varint-repeat-256-4611686018427387903",
+        "count": 256,
+        "encoded_length": 9,
+        "expected_checksum": 313939648,
+        "expected_hex": "ffffffffffffffff3f",
+        "expected_total_bytes": 2304,
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "VARINTREPEAT 256 4611686018427387903 2304 313939648\n",
+        "value": 4611686018427387903
+      }
+    ],
+    "validator_controls": [
+      {
+        "control": "wrong_byte",
+        "reason": "varint oracle mismatch: expected 'VARINT 128 8001\\n', exit=0, stdout='VARINT 128 8101\\n', stderr=''",
+        "rejected": true
+      },
+      {
+        "control": "wrong_value",
+        "reason": "varint oracle mismatch: expected 'VARINT 128 8001\\n', exit=0, stdout='VARINT 129 8001\\n', stderr=''",
+        "rejected": true
+      },
+      {
+        "control": "missing_stdout",
+        "reason": "varint oracle mismatch: expected 'VARINT 128 8001\\n', exit=0, stdout='', stderr=''",
+        "rejected": true
+      },
+      {
+        "control": "truncated_stdout",
+        "reason": "varint oracle mismatch: expected 'VARINT 128 8001\\n', exit=0, stdout='VARINT 128 8001', stderr=''",
+        "rejected": true
+      },
+      {
+        "control": "duplicate_stdout",
+        "reason": "varint oracle mismatch: expected 'VARINT 128 8001\\n', exit=0, stdout='VARINT 128 8001\\nVARINT 128 8001\\n', stderr=''",
+        "rejected": true
+      },
+      {
+        "control": "extra_stdout",
+        "reason": "varint oracle mismatch: expected 'VARINT 128 8001\\n', exit=0, stdout='VARINT 128 8001\\nextra\\n', stderr=''",
+        "rejected": true
+      },
+      {
+        "control": "nonzero_exit",
+        "reason": "varint oracle mismatch: expected 'VARINT 128 8001\\n', exit=1, stdout='VARINT 128 8001\\n', stderr=''",
+        "rejected": true
+      },
+      {
+        "control": "stderr_output",
+        "reason": "varint oracle mismatch: expected 'VARINT 128 8001\\n', exit=0, stdout='VARINT 128 8001\\n', stderr='unexpected diagnostic\\n'",
+        "rejected": true
+      },
+      {
+        "control": "wrong_repeat_count",
+        "reason": "varint oracle mismatch: expected 'VARINTREPEAT 256 128 512 878574811\\n', exit=0, stdout='VARINTREPEAT 257 128 512 878574811\\n', stderr=''",
+        "rejected": true
+      },
+      {
+        "control": "wrong_byte_count",
+        "reason": "varint oracle mismatch: expected 'VARINTREPEAT 256 128 512 878574811\\n', exit=0, stdout='VARINTREPEAT 256 128 513 878574811\\n', stderr=''",
+        "rejected": true
+      },
+      {
+        "control": "wrong_checksum",
+        "reason": "varint oracle mismatch: expected 'VARINTREPEAT 256 128 512 878574811\\n', exit=0, stdout='VARINTREPEAT 256 128 512 878574812\\n', stderr=''",
+        "rejected": true
+      }
+    ]
+  },
+  "evidence": {
+    "cli_controls": [
+      {
+        "argv": [
+          "/usr/bin/python3",
+          "/root/.codex/worktrees/f396/medaka/test/gc_prototype/applications.py",
+          "--measure",
+          "--varint-only",
+          "--resume",
+          "--scratch",
+          "/tmp/medaka-gc-varint-final-06e4bc273"
+        ],
+        "control": "explicit_measurement_rejection",
+        "rejected": true,
+        "returncode": 2,
+        "stderr": "usage: applications.py [-h] (--correctness-only | --measure) [--varint-only]\n                       [--scratch SCRATCH] [--resume] [--output OUTPUT]\n                       [--repeats REPEATS] [--timeout TIMEOUT]\napplications.py: error: --varint-only supports --correctness-only; varint measurement is not enabled\n",
+        "stdout": ""
+      },
+      {
+        "argv": [
+          "/usr/bin/python3",
+          "/root/.codex/worktrees/f396/medaka/test/gc_prototype/applications.py",
+          "--measure",
+          "--resume",
+          "--scratch",
+          "/tmp/medaka-gc-varint-final-06e4bc273"
+        ],
+        "control": "manifest_measurement_rejection",
+        "rejected": true,
+        "returncode": 1,
+        "stderr": "applications.py: varint measurement is not enabled; this manifest is correctness-only\n",
+        "stdout": ""
+      },
+      {
+        "argv": [
+          "/usr/bin/python3",
+          "/root/.codex/worktrees/f396/medaka/test/gc_prototype/applications.py",
+          "--correctness-only",
+          "--varint-only",
+          "--scratch",
+          "/tmp/medaka-gc-varint-final-06e4bc273"
+        ],
+        "control": "nonempty_scratch_rejection",
+        "rejected": true,
+        "returncode": 2,
+        "stderr": "usage: applications.py [-h] (--correctness-only | --measure) [--varint-only]\n                       [--scratch SCRATCH] [--resume] [--output OUTPUT]\n                       [--repeats REPEATS] [--timeout TIMEOUT]\napplications.py: error: scratch directory is nonempty; choose an empty path: /tmp/medaka-gc-varint-final-06e4bc273\n",
+        "stdout": ""
+      },
+      {
+        "argv": [
+          "/usr/bin/python3",
+          "/root/.codex/worktrees/f396/medaka/test/gc_prototype/applications.py",
+          "--correctness-only",
+          "--varint-only",
+          "--resume",
+          "--scratch",
+          "/tmp/medaka-gc-varint-final-06e4bc273"
+        ],
+        "control": "varint_resume_rejection",
+        "rejected": true,
+        "returncode": 2,
+        "stderr": "usage: applications.py [-h] (--correctness-only | --measure) [--varint-only]\n                       [--scratch SCRATCH] [--resume] [--output OUTPUT]\n                       [--repeats REPEATS] [--timeout TIMEOUT]\napplications.py: error: --varint-only requires fresh scratch; --resume is not supported\n",
+        "stdout": ""
+      }
+    ],
+    "default_regression": {
+      "baseline_commit": "06e4bc273ce91e620b562750b1fc2e81a8261414",
+      "baseline_driver_sha256": "2ee8f1ed8cff76b95ad3eb652c393a9ee19f2621799557bb747238b0cec18de8",
+      "checks": [
+        {
+          "check": "existing_application_inputs_oracles_timing_and_report_functions_unchanged",
+          "functions": [
+            "clean_env",
+            "app_env",
+            "app_cases",
+            "correctness",
+            "measurement_cases",
+            "verify_output",
+            "timed_process",
+            "measure",
+            "write_report"
+          ],
+          "passed": true
+        },
+        {
+          "check": "default_build_commands_environments_outputs_unchanged",
+          "mocked_calls": [
+            {
+              "argv": [
+                "/root/.codex/worktrees/f396/medaka/medaka",
+                "check",
+                "/root/.codex/worktrees/f396/medaka/pds/test/performance_resource_main.mdk"
+              ],
+              "env": {
+                "CC": "clang",
+                "MEDAKA_CLANG_OPT": "-O2",
+                "MEDAKA_STRICT": "1",
+                "mock-inherited": "kept"
+              },
+              "label": "strict freshness check",
+              "timeout": 120
+            },
+            {
+              "argv": [
+                "/root/.codex/worktrees/f396/medaka/medaka",
+                "build",
+                "/root/.codex/worktrees/f396/medaka/pds/test/performance_resource_main.mdk",
+                "-o",
+                "/tmp/medaka-varint-default-mock/performance_resource"
+              ],
+              "env": {
+                "CC": "clang",
+                "MEDAKA_CLANG_OPT": "-O2",
+                "MEDAKA_STRICT": "1",
+                "mock-inherited": "kept"
+              },
+              "label": "build pds",
+              "timeout": 120
+            },
+            {
+              "argv": [
+                "/root/.codex/worktrees/f396/medaka/medaka",
+                "build",
+                "/root/.codex/worktrees/f396/medaka/gzip/deflate_demo.mdk",
+                "-o",
+                "/tmp/medaka-varint-default-mock/deflate_demo"
+              ],
+              "env": {
+                "CC": "clang",
+                "MEDAKA_CLANG_OPT": "-O2",
+                "MEDAKA_STRICT": "1",
+                "mock-inherited": "kept"
+              },
+              "label": "build deflate",
+              "timeout": 120
+            },
+            {
+              "argv": [
+                "/root/.codex/worktrees/f396/medaka/medaka",
+                "build",
+                "/root/.codex/worktrees/f396/medaka/gzip/inflate_demo.mdk",
+                "-o",
+                "/tmp/medaka-varint-default-mock/inflate_demo"
+              ],
+              "env": {
+                "CC": "clang",
+                "MEDAKA_CLANG_OPT": "-O2",
+                "MEDAKA_STRICT": "1",
+                "mock-inherited": "kept"
+              },
+              "label": "build inflate",
+              "timeout": 120
+            }
+          ],
+          "passed": true
+        },
+        {
+          "check": "default_provenance_roster_and_output_unchanged_linux",
+          "mocked_calls": [
+            [
+              "pkg-config",
+              "--modversion",
+              "bdw-gc"
+            ],
+            [
+              "pkg-config",
+              "--libs",
+              "--static",
+              "bdw-gc"
+            ],
+            [
+              "pkg-config",
+              "--variable=libdir",
+              "bdw-gc"
+            ],
+            [
+              "/mock/clang",
+              "--version"
+            ],
+            [
+              "ldd",
+              "/tmp/medaka-varint-default-mock/performance_resource"
+            ],
+            [
+              "ldd",
+              "/tmp/medaka-varint-default-mock/deflate_demo"
+            ],
+            [
+              "ldd",
+              "/tmp/medaka-varint-default-mock/inflate_demo"
+            ]
+          ],
+          "passed": true
+        },
+        {
+          "check": "default_provenance_roster_and_output_unchanged_darwin",
+          "mocked_calls": [
+            [
+              "pkg-config",
+              "--modversion",
+              "bdw-gc"
+            ],
+            [
+              "pkg-config",
+              "--libs",
+              "--static",
+              "bdw-gc"
+            ],
+            [
+              "pkg-config",
+              "--variable=libdir",
+              "bdw-gc"
+            ],
+            [
+              "/mock/clang",
+              "--version"
+            ],
+            [
+              "otool",
+              "-L",
+              "/tmp/medaka-varint-default-mock/performance_resource"
+            ],
+            [
+              "otool",
+              "-L",
+              "/tmp/medaka-varint-default-mock/deflate_demo"
+            ],
+            [
+              "otool",
+              "-L",
+              "/tmp/medaka-varint-default-mock/inflate_demo"
+            ]
+          ],
+          "passed": true
+        }
+      ],
+      "current_driver_sha256": "2bb957d6373ae92b6955c2d1deeea25102dcad8822c0222159292224f002326b",
+      "new_application_builds_or_measurements": false
+    },
+    "default_regression_script_fulltext": "import ast, hashlib, json, pathlib, subprocess, sys, types\nfrom unittest import mock\n\nsys.dont_write_bytecode = True\nroot = pathlib.Path('/root/.codex/worktrees/f396/medaka')\npath = root / 'test/gc_prototype/applications.py'\nbaseline_commit = subprocess.run(['git', 'rev-parse', 'HEAD'], cwd=root, check=True,\n                                 text=True, capture_output=True).stdout.strip()\nbaseline_source = subprocess.run(['git', 'show', baseline_commit + ':test/gc_prototype/applications.py'],\n                                 cwd=root, check=True, text=True, capture_output=True).stdout\nbaseline = {'__name__': 'prior_driver', '__file__': str(path)}\nexec(compile(baseline_source, str(path), 'exec'), baseline)\ncurrent = {'__name__': 'current_driver', '__file__': str(path)}\nexec(compile(path.read_text(), str(path), 'exec'), current)\nresults = []\nold_functions = {node.name: ast.dump(node) for node in ast.parse(baseline_source).body if isinstance(node, ast.FunctionDef)}\nnew_functions = {node.name: ast.dump(node) for node in ast.parse(path.read_text()).body if isinstance(node, ast.FunctionDef)}\nunchanged = ['clean_env', 'app_env', 'app_cases', 'correctness', 'measurement_cases', 'verify_output', 'timed_process', 'measure', 'write_report']\nassert all(old_functions[name] == new_functions[name] for name in unchanged)\nresults.append({'check': 'existing_application_inputs_oracles_timing_and_report_functions_unchanged',\n                'passed': True, 'functions': unchanged})\nscratch = pathlib.Path('/tmp/medaka-varint-default-mock')\nbuild_calls = []\nbuild_outputs = []\nfor namespace in (baseline, current):\n    calls = []\n    def checked(argv, env, timeout, label):\n        calls.append({'argv': argv, 'env': env.copy(), 'timeout': timeout, 'label': label})\n        return subprocess.CompletedProcess(argv, 0, 'ok\\n', '')\n    namespace['clean_env'] = lambda: {'mock-inherited': 'kept'}\n    namespace['checked'] = checked\n    namespace['sha256'] = lambda p: 'sha:' + p.name\n    with mock.patch.object(subprocess, 'Popen', side_effect=AssertionError('mock escaped into a real process')):\n        build_outputs.append(namespace['build_apps'](scratch, 120))\n    build_calls.append(calls)\nassert build_calls[0] == build_calls[1]\nassert build_outputs[0] == build_outputs[1]\nassert len(build_calls[0]) == 4\nassert list(build_outputs[1]['binaries']) == ['pds', 'deflate', 'inflate']\nassert current['APP_SOURCES'] == baseline['APP_SOURCES']\nresults.append({'check': 'default_build_commands_environments_outputs_unchanged', 'passed': True,\n                'mocked_calls': build_calls[1]})\nfor operating_system in ['linux', 'darwin']:\n    calls_by_version = []\n    outputs = []\n    for namespace in (baseline, current):\n        calls = []\n        def fake_run(argv, **kwargs):\n            calls.append(argv)\n            if argv[:2] == ['pkg-config', '--modversion']:\n                out = '8.2.8\\n'\n            elif argv[:2] == ['pkg-config', '--libs']:\n                out = '-lgc -lpthread -ldl\\n'\n            elif argv[:2] == ['pkg-config', '--variable=libdir']:\n                out = '/tmp/medaka-varint-no-archive\\n'\n            elif argv[0] == '/mock/clang':\n                out = 'mock clang\\n'\n            elif argv[0] in ['ldd', 'otool']:\n                out = 'libc.so => /mock/libc.so (0x12345678)\\n'\n            else:\n                raise AssertionError(argv)\n            return subprocess.CompletedProcess(argv, 0, out, '')\n        namespace['git'] = lambda *args: 'pinned'\n        namespace['source_manifest'] = lambda: {'fixture.mdk': 'unchanged'}\n        namespace['sys'] = types.SimpleNamespace(platform=operating_system)\n        namespace['platform'] = types.SimpleNamespace(platform=lambda: 'mock-platform', machine=lambda: 'mock-machine')\n        with mock.patch.object(subprocess, 'run', fake_run), mock.patch('shutil.which', return_value='/mock/clang'):\n            outputs.append(namespace['provenance'](scratch))\n        calls_by_version.append(calls)\n    assert outputs[0] == outputs[1]\n    assert calls_by_version[0] == calls_by_version[1]\n    assert [pathlib.Path(row['binary']).name for row in outputs[1]['application_dependencies']] == ['performance_resource', 'deflate_demo', 'inflate_demo']\n    assert all('libgc' not in row['output'] for row in outputs[1]['application_dependencies'])\n    results.append({'check': 'default_provenance_roster_and_output_unchanged_' + operating_system,\n                    'passed': True, 'mocked_calls': calls_by_version[1]})\nprint(json.dumps({'baseline_commit': baseline_commit,\n                  'baseline_driver_sha256': hashlib.sha256(baseline_source.encode()).hexdigest(),\n                  'current_driver_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),\n                  'checks': results, 'new_application_builds_or_measurements': False}))\n",
+    "default_regression_script_sha256": "e42633e14166c3566d1aa40b1c36670e63a8ae93840c99c099bf6f57c09bb296",
+    "execution_command": [
+      "python3",
+      "/root/.codex/worktrees/f396/medaka/test/gc_prototype/applications.py",
+      "--correctness-only",
+      "--varint-only",
+      "--scratch",
+      "/tmp/medaka-gc-varint-final-06e4bc273",
+      "--timeout",
+      "120"
+    ],
+    "format_lint": [
+      {
+        "command": [
+          "/root/.codex/worktrees/f396/medaka/medaka",
+          "fmt",
+          "--write",
+          "/root/.codex/worktrees/f396/medaka/pds/test/gc_varint_main.mdk"
+        ],
+        "returncode": 0,
+        "stderr": "",
+        "stdout": "already formatted\n"
+      },
+      {
+        "command": [
+          "/root/.codex/worktrees/f396/medaka/medaka",
+          "lint",
+          "/root/.codex/worktrees/f396/medaka/pds/test/gc_varint_main.mdk"
+        ],
+        "returncode": 0,
+        "stderr": "",
+        "stdout": ""
+      }
+    ],
+    "raw_report_sha256": "06ba8a41de546d214ea3291705abbc97010bdbdfb176fe8e1adca77085150b71",
+    "source_snapshots": {
+      "pds/lib/multiformats.mdk": {
+        "fulltext": "{- multiformats.mdk \u2014 unsigned-varint (LEB128), multicodec prefix constants,\n   and multibase `z`-prefixed base58btc and `b`-prefixed lowercase base32.\n\n   This name collides with other varints in this tree, and the schemes are\n   not interchangeable. This is the multiformats\n   unsigned-varint (unsigned LEB128): 7 bits per byte **starting with the\n   LEAST significant**, continuation flag in the high bit, **minimally\n   encoded** (a non-minimal encoding MUST be rejected), practical maximum 9\n   bytes / 63 bits (multiformats/unsigned-varint README.md, pinned commit\n   dd184f1ce89c81808503bb719b5fcb13844d08f3).\n\n   This implementation's ceiling is lower than the spec's. The citation\n   above is faithful: upstream permits 63 payload bits, i.e. the whole range\n   `[0, 2^63-1]`. Medaka's `Int` is a 63-bit SIGNED fixnum whose maximum is\n   `intMaxBound = 2^62 - 1 = 4611686018427387903`, so the spec-legal values\n   in `[2^62, 2^63-1]` are NOT representable here and `uvarintDecode`\n   REJECTS them with `\"uvarint: value exceeds the representable Int range\n   (max 2^62-1)\"`. This is a restriction of ours, not a defect in the spec \u2014\n   do not \"fix\" it by widening the citation.\n\n   **It is NOT `sqlite/lib/varint.mdk`.**\n   That is SQLite's own scheme: the decoded value is the **BIG-endian**\n   concatenation of the payload groups, byte 9 carries all 8 bits, and it\n   imposes no minimality requirement. The two share a name and nothing else;\n   they must never be shared, substituted, or \"unified\".\n\n   Multicodec codes: multiformats/multicodec table.csv, pinned commit\n   38e3bf3e38f613679d76ef2041d73a8060f8622a (pds/test/vectors/multicodec_table.csv).\n   `secp256k1-pub` (0xe7) and `p256-pub` (0x1200) carry table `status: draft`;\n   `sha2-256` (0x12), `raw` (0x55) and `dag-cbor` (0x71) are `permanent`.\n\n   The multibase `z` prefix for base58btc is fixed by the multiformats\n   authority with status `final` (multiformats/multibase README.md, pinned\n   commit d7406cdea189b82a0b3937f5737b440f5fa92f92, table row: \"U+007a, z,\n   base58btc, Base58 Bitcoin, final\"). -}\n\nimport bytes.{Bytes, get, fromU8Array}\nimport bytes as B\nimport bytebuilder.{Builder, newBuilder, emitU8, buildBytes}\nimport string.{stripPrefix}\nimport u8 as U8\nimport lib.base58.{base58btcEncode, base58btcDecode}\nimport base32.{base32Encode, base32Decode}\n\nbyteAt : Int -> Bytes -> Int\nbyteAt i bs =\n  U8.toInt (optionOrPanic \"multiformats: byte index out of bounds\" (get i bs))\n\n-- \u2500\u2500 unsigned-varint (LEB128) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n-- | Practical maximum byte length of an unsigned-varint (63 usable bits).\nexport\nuvarintMaxBytes : Int\nuvarintMaxBytes = 9\n\nuvarintEncodeGo : Int -> List Int\nuvarintEncodeGo n =\n  if n < 128 then\n    [n]\n  else\n    bitOr (bitAnd n 0x7f) 0x80 :: uvarintEncodeGo (shiftRight n 7)\n\n-- Every element of `uvarintEncodeGo`'s result is `bitAnd _ 0x7f` bitOr'd with\n-- `0x80` or `0`, so each is in the byte domain by construction.\nemitDigitBytes : List Int -> Builder -> Unit\nemitDigitBytes [] _ = ()\nemitDigitBytes (x :: rest) buf =\n  emitU8 (U8.truncate x) buf\n  emitDigitBytes rest buf\n\n{- | Non-negative `Int` -> minimal unsigned-varint bytes (LSB-first, 7 bits\n   per byte, continuation bit `0x80` set on every byte but the last).\n\n   > debug (uvarintEncode 1)\n   \"Bytes \\\"01\\\"\"\n   > debug (uvarintEncode 127)\n   \"Bytes \\\"7f\\\"\"\n   > debug (uvarintEncode 128)\n   \"Bytes \\\"8001\\\"\"\n   > debug (uvarintEncode 255)\n   \"Bytes \\\"ff01\\\"\"\n   > debug (uvarintEncode 300)\n   \"Bytes \\\"ac02\\\"\"\n   > debug (uvarintEncode 16384)\n   \"Bytes \\\"808001\\\"\" -}\nexport\nuvarintEncode : Int -> Bytes\nuvarintEncode n =\n  if n < 0 then\n    -- unsigned-varint encodes non-negative values only, and\n    -- `uvarintEncodeGo`'s `n < 128` test is TRUE for every negative `n`, so\n    -- without this guard a negative argument silently produces a 1-element\n    -- encoding of that negative value. Not `Result`-typed (the signature is\n    -- `Int -> Bytes` and `multicodecPrefix` is total on constants), so this\n    -- panics \u2014 same in-family precedent as `pds/lib/field.mdk`'s\n    -- `feFromBytesReduce`.\n    --\n    -- `uvarintDecode` must never reach this panic: it is `Result`-typed,\n    -- and turning a correct `Err` into a process abort would break its own\n    -- type-level promise. That is what its explicit `value < 0` arm is for.\n    panic\n      \"uvarint: negative value \\{intToString n} (unsigned-varint encodes non-negative values only)\"\n  else\n    let buf = newBuilder ()\n    emitDigitBytes (uvarintEncodeGo n) buf\n    buildBytes buf\n\n-- Read one varint from `bytes` starting at `idx`, accumulating `acc` with\n-- `shift` bits already placed. `Err` on truncation (ran out of input while\n-- the continuation bit was still set) or over-length (more than\n-- `uvarintMaxBytes` bytes).\nuvarintDecodeGo : Bytes -> Int -> Int -> Int -> Int -> Result String (Int, Int)\nuvarintDecodeGo bytes idx n shift acc =\n  if idx >= uvarintMaxBytes then\n    Err \"uvarint: over-long (more than 9 bytes)\"\n  else if idx >= n then\n    Err \"uvarint: truncated (input ended with the continuation bit still set)\"\n  else\n    let b = byteAt idx bytes\n    let acc2 = acc + shiftLeft (bitAnd b 0x7f) shift\n    if bitAnd b 0x80 == 0 then\n      Ok (acc2, idx + 1)\n    else\n      uvarintDecodeGo bytes (idx + 1) n (shift + 7) acc2\n\n-- Byte-for-byte comparison of `bytes[0 .. len)` against `expected`, used to\n-- confirm a decoded value's canonical (minimal) re-encoding matches what\n-- was actually consumed.\nprefixEquals : Bytes -> Bytes -> Int -> Int -> Bool\nprefixEquals a b i len =\n  if i >= len then\n    True\n  else if byteAt i a /= byteAt i b then\n    False\n  else\n    prefixEquals a b (i + 1) len\n\n{- | Decode one unsigned-varint from the front of `bytes`. `Ok (value,\n   bytesConsumed)`. `Err` on a non-minimal encoding (the published\n   `{0x81, 0x00}` case \u2014 a longer-than-necessary encoding of `1`),\n   a truncated encoding, an over-long (>9 byte) encoding, or a value outside\n   the representable `Int` range (see the module header: spec-legal values in\n   `[2^62, 2^63-1]` do not fit Medaka's 63-bit signed `Int`).\n\n   > uvarintDecode (fromU8Array [|172, 2|])\n   Ok (300, 2)\n   > uvarintDecode (fromU8Array [|0x81, 0x00|])\n   Err \"uvarint: non-minimal encoding\" -}\nexport\nuvarintDecode : Bytes -> Result String (Int, Int)\nuvarintDecode bytes = match uvarintDecodeGo bytes 0 (B.length bytes) 0 0\n  Err e => Err e\n  Ok (value, consumed) =>\n    -- RANGE, checked FIRST and EXPLICITLY. Only the 9th byte can shift a\n    -- payload past `intMaxBound` (shifts of 49 or less contribute < 2^56),\n    -- and the accumulator wraps into the negatives exactly when the true\n    -- value is >= 2^62 \u2014 so `value < 0` is a total, exact discriminator for\n    -- \"out of representable range\", not a heuristic.\n    --\n    -- The check belongs here and not in the minimality arm below: a value\n    -- above the representable range can be perfectly minimal, so diagnosing\n    -- it as \"non-minimal\" would name the wrong defect. Deleting this arm\n    -- does not make the value decode: a negative `value` would reach the\n    -- minimality arm's `uvarintEncode value` call below, which panics on\n    -- its own `n < 0` guard -- turning this function's `Err` into a process\n    -- abort, exactly the promise its `Result` signature exists to keep.\n    if value < 0 then\n      Err \"uvarint: value exceeds the representable Int range (max 2^62-1)\"\n    else\n      -- MINIMALITY, and after the arm above it covers minimality ONLY. Do\n      -- not refactor it away as redundant with the range check: it is the\n      -- sole enforcement of the spec's MUST-reject-non-minimal-encoding\n      -- requirement (the published `{0x81, 0x00}` case), which the range\n      -- check does not touch.\n      let reencoded = uvarintEncode value\n      if B.length reencoded /= consumed\n        || not (prefixEquals reencoded bytes 0 consumed) then\n        Err \"uvarint: non-minimal encoding\"\n      else\n        Ok (value, consumed)\n\n{- | `uvarintDecode`, additionally requiring the WHOLE input be consumed.\n\n   > uvarintDecodeAll (fromU8Array [|172, 2|])\n   Ok 300 -}\nexport\nuvarintDecodeAll : Bytes -> Result String Int\nuvarintDecodeAll bytes = match uvarintDecode bytes\n  Err e => Err e\n  Ok (value, consumed) =>\n    if consumed /= B.length bytes then\n      Err \"uvarint: trailing bytes after value\"\n    else\n      Ok value\n\n-- \u2500\u2500 multicodec constants (multicodec_table.csv, pinned commit above) \u2500\u2500\u2500\u2500\u2500\n\n-- | `sha2-256`, tag `multihash`, `permanent`.\nexport\nmulticodecSha2_256 : Int\nmulticodecSha2_256 = 0x12\n\n-- | `raw`, tag `ipld`, `permanent`.\nexport\nmulticodecRaw : Int\nmulticodecRaw = 0x55\n\n-- | `dag-cbor`, tag `ipld`, `permanent`.\nexport\nmulticodecDagCbor : Int\nmulticodecDagCbor = 0x71\n\n-- | `secp256k1-pub`, tag `key`, table status `draft`.\nexport\nmulticodecSecp256k1Pub : Int\nmulticodecSecp256k1Pub = 0xe7\n\n-- | `p256-pub`, tag `key`, table status `draft`.\nexport\nmulticodecP256Pub : Int\nmulticodecP256Pub = 0x1200\n\n{- | A multicodec code's unsigned-varint prefix bytes.\n\n   > debug (multicodecPrefix multicodecSecp256k1Pub)\n   \"Bytes \\\"e701\\\"\"\n   > debug (multicodecPrefix multicodecP256Pub)\n   \"Bytes \\\"8024\\\"\" -}\nexport\nmulticodecPrefix : Int -> Bytes\nmulticodecPrefix code = uvarintEncode code\n\n-- \u2500\u2500 multibase base58btc (`z` prefix, status final) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n{- | Bytes -> multibase-prefixed base58btc string (`\"z\" ++ base58btcEncode`).\n\n   > multibaseBase58btc (fromU8Array [||])\n   \"z\" -}\nexport\nmultibaseBase58btc : Bytes -> String\nmultibaseBase58btc bytes = \"z\" ++ base58btcEncode bytes\n\n{- | The exact inverse of `multibaseBase58btc`. `Err` when the leading `z`\n   is missing, or when the remainder is not valid base58btc.\n\n   > debug (multibaseBase58btcDecode \"z\")\n   \"Ok (Bytes \\\"\\\")\" -}\nexport\nmultibaseBase58btcDecode : String -> Result String Bytes\nmultibaseBase58btcDecode s = match stripPrefix \"z\" s\n  Some rest => base58btcDecode rest\n  None =>\n    Err \"multibaseBase58btcDecode: missing 'z' (base58btc) multibase prefix\"\n\n-- \u2500\u2500 multibase base32 (`b` prefix, lowercase, unpadded) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n{- | Bytes -> multibase-prefixed lowercase base32 string\n   (`\"b\" ++ base32Encode`), used by atproto CIDs.\n\n   > multibaseBase32Lower (fromU8Array [||])\n   \"b\" -}\nexport\nmultibaseBase32Lower : Bytes -> String\nmultibaseBase32Lower bytes = \"b\" ++ base32Encode bytes\n\n{- | The exact inverse of `multibaseBase32Lower`. `Err` when the leading `b`\n   is missing, or when the remainder is not canonical base32.\n\n   > debug (multibaseBase32LowerDecode \"b\")\n   \"Ok (Bytes \\\"\\\")\" -}\nexport\nmultibaseBase32LowerDecode : String -> Result String Bytes\nmultibaseBase32LowerDecode s = match stripPrefix \"b\" s\n  Some rest => base32Decode rest\n  None =>\n    Err \"multibaseBase32LowerDecode: missing 'b' (base32) multibase prefix\"\n",
+        "sha256": "3ed6b1ccb4de8f3d2036b1857cad320f111cd342b248106bb59f9ff7c5af609c"
+      },
+      "pds/test/gc_varint_main.mdk": {
+        "fulltext": "{- | On-demand native GC integration workload around the PDS varint encoder.\n\n   `applications.py --varint-only` owns the independent byte oracle. -}\n\nimport lib.multiformats.{uvarintEncode}\nimport bytes as B\nimport hex.{encode}\nimport string.{toInt}\nimport u8.{toInt as byteToInt}\n\nparseInt : String -> Int\nparseInt text = optionOrPanic \"gc_varint: invalid integer\" (toInt text)\n\nchecksumByte : Int -> U8 -> Int\nchecksumByte acc byte = (acc * 257 + byteToInt byte) % 1000000007\n\nrepeatEncode : Int -> Int -> Int -> Int -> (Int, Int)\nrepeatEncode remaining value byteCount checksum =\n  if remaining == 0 then\n    (byteCount, checksum)\n  else\n    let bytes = uvarintEncode value\n    let nextCount = byteCount + B.length bytes\n    let nextChecksum = B.fold checksumByte checksum bytes\n    repeatEncode (remaining - 1) value nextCount nextChecksum\n\nrunEncode : Int -> <IO> Unit\nrunEncode value =\n  let bytes = uvarintEncode value\n  println \"VARINT \\{value} \\{encode bytes}\"\n\nrunRepeat : Int -> Int -> <IO> Unit\nrunRepeat count value =\n  if count <= 0 then\n    panic \"gc_varint: repeat count must be positive\"\n  else\n    let (byteCount, checksum) = repeatEncode count value 0 0\n    println \"VARINTREPEAT \\{count} \\{value} \\{byteCount} \\{checksum}\"\n\nmain : <Env, IO> Unit\nmain = match args ()\n  [\"encode\", value] => runEncode (parseInt value)\n  [\"repeat\", count, value] => runRepeat (parseInt count) (parseInt value)\n  _ => panic \"usage: gc_varint (encode <value> | repeat <count> <value>)\"\n",
+        "sha256": "6e1b847fafc8f47c6baf2a18db0f3ca546e5b018db1c700e7e1143b0e9658723"
+      },
+      "stdlib/bytebuilder.mdk": {
+        "fulltext": "{- | A buffer for building byte arrays.\n\n   A `Builder` collects bytes in emission order. Create one with\n   `newBuilder`, append with the emit functions, and take the result with\n   `buildArray` or `buildBytes`. Each emit function writes the byte order\n   that `byteparser`'s matching reader expects, so a value written here and\n   read there comes back unchanged. -}\n\n-- Representation: `Builder backing len` where `!backing` is a packed\n-- `ByteBlock` (its `byteBlockLength` is the capacity) and `!len` is the\n-- number of bytes emitted so far (`0 <= len <= capacity`).  Both are `Ref`s,\n-- mutated in place.  This is `vector.Vector`'s growth shape with a byte block\n-- standing in for the element array, so a byte costs a byte rather than a\n-- boxed machine word.  Bytes `[len, capacity)` are scratch, never read; they\n-- hold whatever a previous grow left there.  Both `build` functions copy\n-- exactly `[0, len)`, in emission order, with no reverse pass.\n\nimport array.{reverse as arrayReverse}\nimport byteparser.{\n  runByteParser, beUint, beSint, leUint, leSint, takeBytes, beU16, beU32, beU64,\n  leU16, leU32, leU64\n}\nimport bytes.{\n  Bytes, fromArrayAssumeByteDomain, fromByteBlockPrefix, lendByteBlockUnsafe,\n  encodeUtf8, toArray\n}\nimport mut_bytes as MB\nimport mut_bytes.{MutBytes}\nimport u8 as U8\nimport u16 as U16\nimport u32 as U32\nimport u64 as U64\n\n-- # The builder\n\n-- | A byte buffer. Build one with `newBuilder`.\nexport data Builder = Builder (Ref ByteBlock) (Ref Int)\n\n-- | A new, empty builder. The backing block grows on the first emit.\nexport\nnewBuilder : Unit -> Builder\nnewBuilder _ = Builder (Ref (byteBlockMake 0)) (Ref 0)\n\n-- | The bytes emitted so far, as an array.\nexport\nbuildArray : Builder -> Array Int\nbuildArray (Builder backing len) =\n  let bb = !backing\n  arrayMakeWith !len (i => byteBlockGetUnsafe i bb)\n\n{- | The bytes emitted so far, as a `Bytes`.\n\n   The packed counterpart of `buildArray`: the same bytes in the same order,\n   one byte each rather than one boxed machine word each. The result is a\n   copy, so emitting more afterwards does not reach it.\n\n   > let buf = newBuilder () in let _ = emitBytes (fromArrayAssumeByteDomain [|0, 128, 255|]) buf in debug (buildBytes buf)\n   \"Bytes \\\"0080ff\\\"\" -}\nexport\nbuildBytes : Builder -> Bytes\nbuildBytes (Builder backing len) = fromByteBlockPrefix !len !backing\n\n-- > let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) /= debug (buildArray buf)\n-- True\n\n-- # Emitting\n\n-- | Appends one byte.\nexport\nemitU8 : U8 -> Builder -> Unit\nemitU8 v (Builder backing len) =\n  let b = U8.toInt v\n  if !len < byteBlockLength !backing then\n    byteBlockSetUnsafe !len b !backing\n    len := !len + 1\n  else\n    -- Capacity doubles, so the blit cost amortizes to O(1) per byte, exactly\n    -- as `vector.push`'s does.\n    let oldBlock = !backing\n    let oldLen = !len\n    let newCap = if oldLen == 0 then 1 else oldLen * 2\n    let newBlock = byteBlockMake newCap\n    byteBlockBlit oldBlock 0 newBlock 0 oldLen\n    byteBlockSetUnsafe oldLen b newBlock\n    backing := newBlock\n    len := oldLen + 1\n\n-- Appends the low 8 bits of `v`. The multi-byte emitters split an `Int` into\n-- its bytes with it; the bits above the width they write are dropped.\nemitLowByte : Int -> Builder -> Unit\nemitLowByte v buf = emitU8 (U8.truncate v) buf\n\n-- The smallest doubling of `cap` that is at least `needed`, starting from 1\n-- when `cap` is 0.  `emitU8` only ever needs one `* 2` step because it adds\n-- one byte at a time; `emitBytes` can jump several capacity classes in a\n-- single call, so this loops the same way `emitU8`'s own doubling would if it\n-- had to.  It is `vector.growTo`'s arithmetic, on a byte block's capacity\n-- rather than an array's, and not shared with it: that one is module-private,\n-- and importing `vector` here would put `Vector` and its instances into\n-- dispatch scope for every module that imports this one, none of which holds\n-- a vector.\ngrowTo : Int -> Int -> Int\n-- lint-disable-next-line rule-duplicate-body\ngrowTo cap needed =\n  if cap >= needed then cap else growTo (if cap == 0 then 1 else cap * 2) needed\n\n{- | Appends every byte of `src`, in order.\n\n   The backing block grows at most once per call, so appending `n` bytes\n   costs `O(n)` whatever the builder's current capacity.\n\n   > let buf = newBuilder () in let _ = emitBytes (encodeUtf8 \"hi\") buf in let _ = emitBytes (encodeUtf8 \"!\") buf in debug (buildBytes buf)\n   \"Bytes \\\"686921\\\"\"\n   > let buf = newBuilder () in let _ = emitBytes (encodeUtf8 \"\") buf in debug (buildBytes buf)\n   \"Bytes \\\"\\\"\" -}\nexport\nemitBytes : Bytes -> Builder -> Unit\nemitBytes src (Builder backing len) =\n  let srcBlock = lendByteBlockUnsafe src\n  let n = byteBlockLength srcBlock\n  let needed = !len + n\n  let () =\n    if needed > byteBlockLength !backing then\n      let newBlock = byteBlockMake (growTo (byteBlockLength !backing) needed)\n      byteBlockBlit !backing 0 newBlock 0 !len\n      backing := newBlock\n  let () = byteBlockBlit srcBlock 0 !backing !len n\n  len := needed\n\n{- | The builder's backing block, and the number of bytes emitted so far,\n   without copying.\n\n   The block is the builder's own, so it may be longer than the count, and\n   bytes at or past the count are unwritten scratch. A later emit writes\n   into that block or replaces it, so read the counted bytes before emitting\n   again. It is a `MutBytes` rather than a `Bytes` because it changes under\n   the builder: it cannot be compared, hashed or kept as a value.\n   `buildBytes` is the copying form.\n\n   > let buf = newBuilder () in let _ = emitBytes (encodeUtf8 \"hey\") buf in let (_, n) = builderParts buf in n\n   3 -}\nexport\nbuilderParts : Builder -> (MutBytes, Int)\nbuilderParts (Builder backing len) = (MB.adoptByteBlockUnsafe !backing, !len)\n\n-- | Appends a `U16` as two bytes, most significant byte first. The inverse\n-- of `byteparser.beU16`.\nexport\nemitU16BE : U16 -> Builder -> Unit\nemitU16BE v buf =\n  let n = U16.toInt v\n  emitLowByte (shiftRight n 8) buf\n  emitLowByte n buf\n\n-- | Appends a three-byte unsigned integer, most significant byte first.\n-- The inverse of `beUint 3`.\nexport\nemitU24BE : Int -> Builder -> Unit\nemitU24BE v buf =\n  emitLowByte (shiftRight v 16) buf\n  emitLowByte (shiftRight v 8) buf\n  emitLowByte v buf\n\n-- | Appends a `U32` as four bytes, most significant byte first. The inverse\n-- of `byteparser.beU32`.\nexport\nemitU32BE : U32 -> Builder -> Unit\nemitU32BE v buf =\n  let n = U32.toInt v\n  emitLowByte (shiftRight n 24) buf\n  emitLowByte (shiftRight n 16) buf\n  emitLowByte (shiftRight n 8) buf\n  emitLowByte n buf\n\n-- | Appends a `U64` as eight bytes, most significant byte first. The inverse\n-- of `byteparser.beU64`.\nexport\nemitU64BE : U64 -> Builder -> Unit\nemitU64BE v buf =\n  emitU32BE (U32.truncateU64 (U64.shiftRight v 32)) buf\n  emitU32BE (U32.truncateU64 v) buf\n\n-- | Appends a `U16` as two bytes, least significant byte first. The inverse\n-- of `byteparser.leU16`.\nexport\nemitU16LE : U16 -> Builder -> Unit\nemitU16LE v buf =\n  let n = U16.toInt v\n  emitLowByte n buf\n  emitLowByte (shiftRight n 8) buf\n\n-- | Appends a three-byte unsigned integer, least significant byte first.\n-- The inverse of `leUint 3`.\nexport\nemitU24LE : Int -> Builder -> Unit\nemitU24LE v buf =\n  emitLowByte v buf\n  emitLowByte (shiftRight v 8) buf\n  emitLowByte (shiftRight v 16) buf\n\n-- | Appends a `U32` as four bytes, least significant byte first. The inverse\n-- of `byteparser.leU32`.\nexport\nemitU32LE : U32 -> Builder -> Unit\nemitU32LE v buf =\n  let n = U32.toInt v\n  emitLowByte n buf\n  emitLowByte (shiftRight n 8) buf\n  emitLowByte (shiftRight n 16) buf\n  emitLowByte (shiftRight n 24) buf\n\n-- | Appends a `U64` as eight bytes, least significant byte first. The inverse\n-- of `byteparser.leU64`.\nexport\nemitU64LE : U64 -> Builder -> Unit\nemitU64LE v buf =\n  emitU32LE (U32.truncateU64 v) buf\n  emitU32LE (U32.truncateU64 (U64.shiftRight v 32)) buf\n\n-- `beSint n` reads `n` bytes as unsigned, then if the value >= 2^(8n-1)\n-- (sign bit set) subtracts 2^(8n) to get the negative.  Inverse: for v >= 0,\n-- emit as unsigned; for v < 0, emit (v + 2^(8*nbytes)) as unsigned.  This is\n-- the standard two's-complement encoding.\n\n-- | Appends a signed integer as `nbytes` bytes in two's complement, most\n-- significant byte first. The inverse of `beSint nbytes`.\nexport\nemitBeSint : Int -> Int -> Builder -> Unit\nemitBeSint nbytes v buf\n  | nbytes >= 8 =\n    emitSignFill (nbytes - 8) v buf\n    emitU64BE (U64.truncate v) buf\n  | otherwise =\n    let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)\n    emitBeUint nbytes unsigned buf\n\n-- At eight bytes or more, 2^(8n) no longer fits `Int`: the low eight bytes are\n-- the value's 64-bit two's-complement pattern (`U64.truncate`), and every byte\n-- above them repeats the sign.\nemitSignFill : Int -> Int -> Builder -> Unit\nemitSignFill n v buf =\n  if n <= 0 then\n    ()\n  else\n    emitLowByte (if v < 0 then 255 else 0) buf\n    emitSignFill (n - 1) v buf\n\n-- | Appends a non-negative integer as `nbytes` bytes, most significant\n-- byte first. The inverse of `beUint nbytes`.\nexport\nemitBeUint : Int -> Int -> Builder -> Unit\nemitBeUint 0 _ _ = ()\nemitBeUint n v buf =\n  emitBeUint (n - 1) (shiftRight v 8) buf\n  emitLowByte v buf\n\n-- | Appends a signed integer as `nbytes` bytes in two's complement, least\n-- significant byte first. The inverse of `leSint nbytes`.\nexport\nemitLeSint : Int -> Int -> Builder -> Unit\nemitLeSint nbytes v buf\n  | nbytes >= 8 =\n    emitU64LE (U64.truncate v) buf\n    emitSignFill (nbytes - 8) v buf\n  | otherwise =\n    let unsigned = if v >= 0 then v else v + shiftLeft 1 (8 * nbytes)\n    emitLeUint nbytes unsigned buf\n\n-- | Appends a non-negative integer as `nbytes` bytes, least significant\n-- byte first. The inverse of `leUint nbytes`.\nexport\nemitLeUint : Int -> Int -> Builder -> Unit\nemitLeUint 0 _ _ = ()\nemitLeUint n v buf =\n  emitLowByte v buf\n  emitLeUint (n - 1) (shiftRight v 8) buf\n\n-- ---------------------------------------------------------------------------\n-- Doctest helpers\n-- ---------------------------------------------------------------------------\n\n-- Build bytes by running an emit action on a fresh builder and return the\n-- resulting `Bytes`.  Used in round-trip doctests below.\nbuild1 : (Builder -> Unit) -> Bytes\nbuild1 f =\n  let buf = newBuilder ()\n  f buf\n  buildBytes buf\n\n-- ---------------------------------------------------------------------------\n-- Doctests \u2014 round-trip: emit \u2192 buildBytes \u2192 runByteParser decoder == value\n-- ---------------------------------------------------------------------------\n\n-- emitU8 \u2194 beUint 1\n-- > runByteParser (beUint 1) (build1 (emitU8 0))\n-- Ok 0\n-- > runByteParser (beUint 1) (build1 (emitU8 255))\n-- Ok 255\n-- > runByteParser (beUint 1) (build1 (emitU8 127))\n-- Ok 127\n\n-- emitU16BE \u2194 beU16\n-- > runByteParser beU16 (build1 (emitU16BE 0))\n-- Ok 0\n-- > runByteParser beU16 (build1 (emitU16BE 256))\n-- Ok 256\n-- > runByteParser beU16 (build1 (emitU16BE 65535))\n-- Ok 65535\n-- > runByteParser beU16 (build1 (emitU16BE 258))\n-- Ok 258\n\n-- emitU24BE \u2194 beUint 3\n-- > runByteParser (beUint 3) (build1 (emitU24BE 0))\n-- Ok 0\n-- > runByteParser (beUint 3) (build1 (emitU24BE 16777215))\n-- Ok 16777215\n-- > runByteParser (beUint 3) (build1 (emitU24BE 65536))\n-- Ok 65536\n\n-- emitU32BE \u2194 beU32\n-- > runByteParser beU32 (build1 (emitU32BE 0))\n-- Ok 0\n-- > runByteParser beU32 (build1 (emitU32BE 4294967295))\n-- Ok 4294967295\n-- > runByteParser beU32 (build1 (emitU32BE 1048576))\n-- Ok 1048576\n\n-- emitU16LE \u2194 leU16\n-- > runByteParser leU16 (build1 (emitU16LE 0))\n-- Ok 0\n-- > runByteParser leU16 (build1 (emitU16LE 256))\n-- Ok 256\n-- > runByteParser leU16 (build1 (emitU16LE 65535))\n-- Ok 65535\n-- > runByteParser leU16 (build1 (emitU16LE 258))\n-- Ok 258\n\n-- emitU24LE \u2194 leUint 3\n-- > runByteParser (leUint 3) (build1 (emitU24LE 0))\n-- Ok 0\n-- > runByteParser (leUint 3) (build1 (emitU24LE 16777215))\n-- Ok 16777215\n-- > runByteParser (leUint 3) (build1 (emitU24LE 65536))\n-- Ok 65536\n\n-- emitU32LE \u2194 leU32\n-- > runByteParser leU32 (build1 (emitU32LE 0))\n-- Ok 0\n-- > runByteParser leU32 (build1 (emitU32LE 4294967295))\n-- Ok 4294967295\n-- > runByteParser leU32 (build1 (emitU32LE 1048576))\n-- Ok 1048576\n\n-- LE emits the reverse byte sequence of the matching BE emit:\n-- emitU16LE 0x0102 -> [2, 1]; emitU16BE 0x0102 -> [1, 2].\n-- > runByteParser (takeBytes 2) (build1 (emitU16LE 0x0102))\n-- Ok (Bytes \"0201\")\n-- > runByteParser (takeBytes 2) (build1 (emitU16BE 0x0102))\n-- Ok (Bytes \"0102\")\n-- > runByteParser (takeBytes 4) (build1 (emitU32LE 0x01020304))\n-- Ok (Bytes \"04030201\")\n-- > runByteParser (takeBytes 4) (build1 (emitU32BE 0x01020304))\n-- Ok (Bytes \"01020304\")\n-- > runByteParser (takeBytes 8) (build1 (emitU64LE 0x0102030405060708))\n-- Ok (Bytes \"0807060504030201\")\n-- > runByteParser (takeBytes 8) (build1 (emitU64BE 0x0102030405060708))\n-- Ok (Bytes \"0102030405060708\")\n\n-- emitU64BE \u2194 beU64 and emitU64LE \u2194 leU64, at values above `Int`'s range\n-- > runByteParser beU64 (build1 (emitU64BE 0x9E3779B97F4A7C15))\n-- Ok 11400714819323198485\n-- > runByteParser leU64 (build1 (emitU64LE 0xFFFFFFFFFFFFFFFF))\n-- Ok 18446744073709551615\n-- > runByteParser leU64 (build1 (emitU64LE 0x8000000000000001))\n-- Ok 9223372036854775809\n\n-- emitBytes \u2194 takeBytes\n-- > runByteParser (takeBytes 3) (build1 (emitBytes (fromArrayAssumeByteDomain [|10, 20, 30|])))\n-- Ok (Bytes \"0a141e\")\n-- > runByteParser (takeBytes 0) (build1 (emitBytes (fromArrayAssumeByteDomain [||])))\n-- Ok (Bytes \"\")\n-- > runByteParser (takeBytes 4) (build1 (emitBytes (fromArrayAssumeByteDomain [|0, 128, 255, 1|])))\n-- Ok (Bytes \"0080ff01\")\n\n-- emitBeSint \u2194 beSint  (1-byte)\n-- > runByteParser (beSint 1) (build1 (emitBeSint 1 127))\n-- Ok 127\n-- > runByteParser (beSint 1) (build1 (emitBeSint 1 (-1)))\n-- Ok (-1)\n-- > runByteParser (beSint 1) (build1 (emitBeSint 1 (-128)))\n-- Ok (-128)\n-- > runByteParser (beSint 1) (build1 (emitBeSint 1 0))\n-- Ok 0\n\n-- emitBeSint \u2194 beSint  (2-byte)\n-- > runByteParser (beSint 2) (build1 (emitBeSint 2 32767))\n-- Ok 32767\n-- > runByteParser (beSint 2) (build1 (emitBeSint 2 (-32768)))\n-- Ok (-32768)\n-- > runByteParser (beSint 2) (build1 (emitBeSint 2 (-1)))\n-- Ok (-1)\n\n-- emitBeSint \u2194 beSint  (8-byte, the Int bounds) and emitLeSint \u2194 leSint (9-byte)\n-- > runByteParser (beSint 8) (build1 (emitBeSint 8 (-4611686018427387904)))\n-- Ok (-4611686018427387904)\n-- > runByteParser (beSint 8) (build1 (emitBeSint 8 (-1)))\n-- Ok (-1)\n-- > runByteParser (beSint 8) (build1 (emitBeSint 8 4611686018427387903))\n-- Ok 4611686018427387903\n-- > runByteParser (leSint 9) (build1 (emitLeSint 9 (-2)))\n-- Ok (-2)\n\n-- emitBeSint \u2194 beSint  (4-byte)\n-- > runByteParser (beSint 4) (build1 (emitBeSint 4 2147483647))\n-- Ok 2147483647\n-- > runByteParser (beSint 4) (build1 (emitBeSint 4 (-2147483648)))\n-- Ok (-2147483648)\n-- > runByteParser (beSint 4) (build1 (emitBeSint 4 (-1)))\n-- Ok (-1)\n\n-- emitBeUint \u2194 beUint  (variable-width unsigned)\n-- > runByteParser (beUint 1) (build1 (emitBeUint 1 0))\n-- Ok 0\n-- > runByteParser (beUint 1) (build1 (emitBeUint 1 255))\n-- Ok 255\n-- > runByteParser (beUint 2) (build1 (emitBeUint 2 256))\n-- Ok 256\n-- > runByteParser (beUint 3) (build1 (emitBeUint 3 65536))\n-- Ok 65536\n-- > runByteParser (beUint 4) (build1 (emitBeUint 4 4294967295))\n-- Ok 4294967295\n\n-- emitLeSint \u2194 leSint  (1-byte)\n-- > runByteParser (leSint 1) (build1 (emitLeSint 1 127))\n-- Ok 127\n-- > runByteParser (leSint 1) (build1 (emitLeSint 1 (-1)))\n-- Ok (-1)\n-- > runByteParser (leSint 1) (build1 (emitLeSint 1 (-128)))\n-- Ok (-128)\n-- > runByteParser (leSint 1) (build1 (emitLeSint 1 0))\n-- Ok 0\n\n-- emitLeSint \u2194 leSint  (2-byte)\n-- > runByteParser (leSint 2) (build1 (emitLeSint 2 32767))\n-- Ok 32767\n-- > runByteParser (leSint 2) (build1 (emitLeSint 2 (-32768)))\n-- Ok (-32768)\n-- > runByteParser (leSint 2) (build1 (emitLeSint 2 (-1)))\n-- Ok (-1)\n\n-- emitLeSint \u2194 leSint  (4-byte)\n-- > runByteParser (leSint 4) (build1 (emitLeSint 4 2147483647))\n-- Ok 2147483647\n-- > runByteParser (leSint 4) (build1 (emitLeSint 4 (-2147483648)))\n-- Ok (-2147483648)\n-- > runByteParser (leSint 4) (build1 (emitLeSint 4 (-1)))\n-- Ok (-1)\n\n-- emitLeUint \u2194 leUint  (variable-width unsigned)\n-- > runByteParser (leUint 1) (build1 (emitLeUint 1 0))\n-- Ok 0\n-- > runByteParser (leUint 1) (build1 (emitLeUint 1 255))\n-- Ok 255\n-- > runByteParser (leUint 2) (build1 (emitLeUint 2 256))\n-- Ok 256\n-- > runByteParser (leUint 3) (build1 (emitLeUint 3 65536))\n-- Ok 65536\n-- > runByteParser (leUint 4) (build1 (emitLeUint 4 4294967295))\n-- Ok 4294967295\n\n-- ---------------------------------------------------------------------------\n-- Cross round-trip props \u2014 LE emit/parse agree with each other and with BE\n-- ---------------------------------------------------------------------------\n--\n-- Values are kept in-width (0..65535 for 16-bit, signed range for the signed\n-- prop) to avoid masking surprises from out-of-range inputs.\n\n-- emitU16LE \u2192 leU16 recovers the original value.\nprop \"emitU16LE/leU16 round-trip\" (v : Int) =\n  let w = U16.truncate v\n  match runByteParser leU16 (build1 (emitU16LE w))\n    Ok got => got == w\n    Err _ => False\n\n-- emitU32LE \u2192 leU32 recovers the original value.\nprop \"emitU32LE/leU32 round-trip\" (v : Int) =\n  let w = U32.truncate v\n  match runByteParser leU32 (build1 (emitU32LE w))\n    Ok got => got == w\n    Err _ => False\n\n-- emitU64LE \u2192 leU64 and emitU64BE \u2192 beU64 recover the original value, which\n-- spans all 64 bits: `v` and a shifted copy of it fill both halves.\nprop \"emitU64LE/leU64 round-trip\" (v : Int) =\n  let w = U64.bitXor (U64.truncate v) (U64.shiftLeft (U64.truncate v) 33)\n  match runByteParser leU64 (build1 (emitU64LE w))\n    Ok got => got == w\n    Err _ => False\n\nprop \"emitU64BE/beU64 round-trip\" (v : Int) =\n  let w = U64.bitXor (U64.truncate v) (U64.shiftLeft (U64.truncate v) 33)\n  match runByteParser beU64 (build1 (emitU64BE w))\n    Ok got => got == w\n    Err _ => False\n\n-- emitLeSint 2 \u2192 leSint 2 recovers a value clamped to the 16-bit signed\n-- two's-complement range.\nprop \"emitLeSint 2/leSint 2 round-trip\" (v : Int) =\n  let w = bitAnd v 65535 - 32768\n  match runByteParser (leSint 2) (build1 (emitLeSint 2 w))\n    Ok got => got == w\n    Err _ => False\n\n-- BE emit followed by byte-reversal then LE parse agrees with a direct BE\n-- parse of the same bytes, i.e. reversing a BE encoding and reading it LE\n-- reproduces the original value (16-bit width).\nprop \"emitU16BE reversed bytes, leU16 agrees with beU16\" (v : Int) =\n  let w = U16.truncate v\n  match runByteParser (takeBytes 2) (build1 (emitU16BE w))\n    Err _ => False\n    Ok bytes =>\n      let reversed = fromArrayAssumeByteDomain (arrayReverse (toArray bytes))\n      match runByteParser leU16 reversed\n        Ok got => got == w\n        Err _ => False\n",
+        "sha256": "e089466250cc8a2d4f20e21906c97b564503c9590906502dc97b72f713532b31"
+      },
+      "test/gc_prototype/applications.py": {
+        "fulltext": "#!/usr/bin/env python3\n\"\"\"Opt-in Boehm application smoke/performance driver; not a CI gate.\n\nCorrectness mode builds the PDS and gzip CLI applications, then checks their\noutputs against independent oracles. Measure mode times fresh CLI processes in\ntwo explicitly named Boehm heap-policy cohorts. GC_PRINT_STATS is collected in\nseparate untimed processes so diagnostics never contaminate wall samples.\nThe opt-in --varint-only path builds the actual PDS varint encoder entry and\nchecks byte content and repeated consumption; measurement is not enabled there.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nimport hashlib\nimport json\nimport os\nfrom pathlib import Path\nimport platform\nimport re\nimport signal\nimport shutil\nimport statistics\nimport subprocess\nimport sys\nimport time\n\n\nROOT = Path(__file__).resolve().parents[2]\nDEFAULT_SCRATCH = Path(\"/tmp/pool-verify-applications\")\nAPP_SOURCES = {\n    \"pds\": ROOT / \"pds/test/performance_resource_main.mdk\",\n    \"deflate\": ROOT / \"gzip/deflate_demo.mdk\",\n    \"inflate\": ROOT / \"gzip/inflate_demo.mdk\",\n}\nVARINT_SOURCE = ROOT / \"pds/test/gc_varint_main.mdk\"\nSEED_GZIP = ROOT / \"compiler/seed/emitter.ll.gz\"\nRUNTIME = ROOT / \"runtime/medaka_rt.c\"\nEMITTER_SOURCE = ROOT / \"compiler/backend/llvm_emit.mdk\"\nMEDAKA = ROOT / \"medaka\"\nEMITTER = ROOT / \"medaka_emitter\"\ndef git(*args: str) -> str:\n    return subprocess.run([\"git\", \"-C\", str(ROOT), *args], check=True,\n                          stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()\n\n\ndef sha256(path: Path) -> str:\n    h = hashlib.sha256()\n    with path.open(\"rb\") as f:\n        for block in iter(lambda: f.read(1024 * 1024), b\"\"):\n            h.update(block)\n    return h.hexdigest()\n\n\ndef source_manifest() -> dict[str, str]:\n    paths = {\"pds/test/performance_resource_main.mdk\", \"gzip/deflate_demo.mdk\", \"gzip/inflate_demo.mdk\",\n             \"runtime/medaka_rt.c\", \"compiler/backend/llvm_emit.mdk\"}\n    for source_root in (ROOT / \"compiler\", ROOT / \"stdlib\"):\n        for path in source_root.rglob(\"*.mdk\"):\n            if not path.name.endswith(\"_test.mdk\"):\n                paths.add(path.relative_to(ROOT).as_posix())\n    for project in (ROOT / \"pds\", ROOT / \"gzip\"):\n        paths.update(path.relative_to(ROOT).as_posix() for path in project.rglob(\"*.mdk\"))\n    return {rel: sha256(ROOT / rel) for rel in sorted(paths)}\n\n\ndef provenance(scratch: Path, binary_names: tuple[str, ...] =\n               (\"performance_resource\", \"deflate_demo\", \"inflate_demo\")) -> dict[str, object]:\n    try:\n        pkg = subprocess.run([\"pkg-config\", \"--modversion\", \"bdw-gc\"], check=True,\n                             text=True, capture_output=True)\n        gc_version = pkg.stdout.strip()\n        gc_link_flags = subprocess.run([\"pkg-config\", \"--libs\", \"--static\", \"bdw-gc\"], check=True,\n                                       text=True, capture_output=True).stdout.strip()\n        libdir = subprocess.run([\"pkg-config\", \"--variable=libdir\", \"bdw-gc\"], check=True,\n                                text=True, capture_output=True).stdout.strip()\n        archive = Path(libdir) / \"libgc.a\"\n    except (OSError, subprocess.CalledProcessError):\n        prefix = subprocess.run([\"brew\", \"--prefix\", \"bdw-gc\"], check=True,\n                                text=True, capture_output=True).stdout.strip()\n        gc_version = \"Homebrew headers; runtime version in linked artifact\"\n        gc_link_flags = f\"-L{prefix}/lib -lgc\"\n        archive = Path(prefix) / \"lib/libgc.a\"\n    clang_bin = shutil.which(\"clang\")\n    if not clang_bin:\n        raise RuntimeError(\"clang is required for application provenance\")\n    clang_version = subprocess.run([clang_bin, \"--version\"], check=True, text=True,\n                                   capture_output=True).stdout.splitlines()[0]\n    linkage_rows = []\n    for name in binary_names:\n        binary = scratch / name\n        linkage_command = ([\"otool\", \"-L\", str(binary)] if sys.platform == \"darwin\"\n                           else [\"ldd\", str(binary)])\n        linkage = subprocess.run(linkage_command, check=False, text=True, capture_output=True)\n        if linkage.returncode != 0:\n            raise RuntimeError(f\"dependency inspection failed for {binary}: {linkage.stderr}\")\n        stable_output = re.sub(r\"\\s+\\(0x[0-9a-fA-F]+\\)\", \"\", linkage.stdout)\n        linkage_rows.append({\"binary\": str(binary), \"command\": linkage_command,\n                             \"output\": stable_output.strip(), \"returncode\": linkage.returncode})\n    if any(\"libgc\" in row[\"output\"] for row in linkage_rows):\n        raise RuntimeError(\"an application unexpectedly dynamically links libgc\")\n    return {\n        \"source_commit\": git(\"rev-parse\", \"HEAD\"),\n        \"platform\": platform.platform(), \"machine\": platform.machine(),\n        \"source_sha256\": source_manifest(), \"applications_driver_sha256\": sha256(Path(__file__).resolve()),\n        \"medaka_binary\": str(MEDAKA), \"medaka_binary_sha256\": sha256(MEDAKA),\n        \"emitter_binary\": str(EMITTER), \"emitter_binary_sha256\": sha256(EMITTER),\n        \"emitter_source\": str(EMITTER_SOURCE), \"emitter_source_sha256\": sha256(EMITTER_SOURCE),\n        \"runtime_source\": str(RUNTIME), \"runtime_source_sha256\": sha256(RUNTIME),\n        \"clang_binary\": clang_bin, \"clang_version\": clang_version,\n        \"libgc_pkg_config_version\": gc_version,\n        \"libgc_pkg_config_link_flags\": gc_link_flags,\n        \"libgc_archive\": str(archive) if archive.is_file() else None,\n        \"libgc_archive_sha256\": sha256(archive) if archive.is_file() else None,\n        \"application_linkage\": \"static libgc (libgc absent from platform dependency output)\",\n        \"application_dependencies\": linkage_rows,\n        \"build_environment\": {\"CC\": \"clang\", \"MEDAKA_STRICT\": \"1\", \"MEDAKA_CLANG_OPT\": \"-O2\"},\n    }\n\n\ndef run(argv: list[str], *, env: dict[str, str], timeout: int,\n        capture: bool = True) -> subprocess.CompletedProcess[str]:\n    child = subprocess.Popen(argv, cwd=ROOT, env=env, text=True,\n                             stdout=subprocess.PIPE if capture else None,\n                             stderr=subprocess.PIPE if capture else None,\n                             start_new_session=True)\n    try:\n        stdout, stderr = child.communicate(timeout=timeout)\n    except subprocess.TimeoutExpired:\n        try:\n            os.killpg(child.pid, signal.SIGKILL)\n        except ProcessLookupError:\n            pass\n        stdout, stderr = child.communicate()\n        raise subprocess.TimeoutExpired(argv, timeout, output=stdout, stderr=stderr)\n    return subprocess.CompletedProcess(argv, child.returncode, stdout, stderr)\n\n\ndef clean_env() -> dict[str, str]:\n    env = os.environ.copy()\n    for key in list(env):\n        if key.startswith((\"GC_\", \"MEDAKA_\")):\n            del env[key]\n    return env\n\n\ndef app_env(cohort: str, *, stats: bool = False) -> dict[str, str]:\n    env = clean_env()\n    env[\"GC_FREE_SPACE_DIVISOR\"] = \"1\"\n    if cohort == \"fixed128m\":\n        env[\"GC_INITIAL_HEAP_SIZE\"] = \"134217728\"\n    elif cohort != \"default\":\n        raise ValueError(f\"unknown heap cohort: {cohort}\")\n    if stats:\n        env[\"GC_PRINT_STATS\"] = \"1\"\n    return env\n\n\ndef write_incompressible(path: Path, size: int) -> None:\n    # SHA-256(counter) is deterministic across Python implementations and does\n    # not depend on the platform's PRNG implementation.\n    out = bytearray()\n    counter = 0\n    while len(out) < size:\n        out.extend(hashlib.sha256(b\"medaka-app-input-v1:\" + counter.to_bytes(8, \"big\")).digest())\n        counter += 1\n    path.write_bytes(out[:size])\n\n\ndef command_record(argv: list[str], env: dict[str, str]) -> dict[str, object]:\n    return {\"argv\": argv, \"cwd\": str(ROOT), \"environment\": {\n        k: env[k] for k in sorted(env) if k.startswith((\"GC_\", \"MEDAKA_\")) or k == \"CC\"\n    }}\n\n\ndef checked(argv: list[str], env: dict[str, str], timeout: int,\n            label: str) -> subprocess.CompletedProcess[str]:\n    p = run(argv, env=env, timeout=timeout)\n    if p.returncode != 0:\n        raise RuntimeError(f\"{label} failed ({p.returncode}): {p.stderr[-3000:]}\")\n    return p\n\n\ndef build_apps(scratch: Path, timeout: int, *, varint_only: bool = False) -> dict[str, object]:\n    env = clean_env()\n    env.update({\"CC\": \"clang\", \"MEDAKA_STRICT\": \"1\", \"MEDAKA_CLANG_OPT\": \"-O2\"})\n    sources = {\"varint\": VARINT_SOURCE} if varint_only else APP_SOURCES\n    fresh = [str(MEDAKA), \"check\", str(next(iter(sources.values())))]\n    p = checked(fresh, env, timeout, \"strict freshness check\")\n    builds = []\n    bins = {\"varint\": scratch / \"gc_varint\"} if varint_only else {\n        \"pds\": scratch / \"performance_resource\",\n        \"deflate\": scratch / \"deflate_demo\",\n        \"inflate\": scratch / \"inflate_demo\",\n    }\n    for name, source in sources.items():\n        argv = [str(MEDAKA), \"build\", str(source), \"-o\", str(bins[name])]\n        bp = checked(argv, env, timeout, f\"build {name}\")\n        builds.append({\"name\": name, \"command\": command_record(argv, env),\n                       \"stdout\": bp.stdout.strip(), \"stderr\": bp.stderr.strip(),\n                       \"binary\": str(bins[name]), \"binary_sha256\": sha256(bins[name])})\n    return {\n        \"freshness_check\": {\"command\": command_record(fresh, env),\n                            \"returncode\": p.returncode,\n                            \"stdout\": p.stdout.strip(), \"stderr\": p.stderr.strip()},\n        \"builds\": builds,\n        \"binaries\": {k: str(v) for k, v in bins.items()},\n    }\n\n\ndef unsigned_leb128(value: int) -> bytes:\n    if not 0 <= value <= (1 << 62) - 1:\n        raise ValueError(\"varint oracle input is outside Medaka's nonnegative Int range\")\n    output = bytearray()\n    while True:\n        value, digit = divmod(value, 128)\n        output.append(digit + (128 if value else 0))\n        if not value:\n            return bytes(output)\n\n\ndef varint_expected(value: int, count: int | None = None) -> tuple[str, dict[str, object]]:\n    encoded = unsigned_leb128(value)\n    oracle = {\"value\": value, \"expected_hex\": encoded.hex(), \"encoded_length\": len(encoded)}\n    if count is None:\n        return f\"VARINT {value} {encoded.hex()}\\n\", oracle\n    checksum = 0\n    for _ in range(count):\n        for byte in encoded:\n            checksum = (checksum * 257 + byte) % 1_000_000_007\n    oracle.update({\"count\": count, \"expected_total_bytes\": count * len(encoded),\n                   \"expected_checksum\": checksum})\n    return f\"VARINTREPEAT {count} {value} {count * len(encoded)} {checksum}\\n\", oracle\n\n\ndef verify_varint(p: subprocess.CompletedProcess[str], value: int,\n                  count: int | None = None) -> dict[str, object]:\n    expected, oracle = varint_expected(value, count)\n    if p.returncode != 0 or p.stderr or p.stdout != expected:\n        raise RuntimeError(f\"varint oracle mismatch: expected {expected!r}, \"\n                           f\"exit={p.returncode}, stdout={p.stdout!r}, stderr={p.stderr!r}\")\n    return {**oracle, \"stdout\": p.stdout, \"stderr\": p.stderr,\n            \"returncode\": p.returncode, \"byte_content_oracle_passed\": True}\n\n\ndef varint_validator_controls() -> list[dict[str, object]]:\n    encoded, _ = varint_expected(128)\n    repeated, _ = varint_expected(128, 256)\n    repeat_fields = repeated.strip().split(\" \")\n    controls = [(\"wrong_byte\", \"VARINT 128 8101\\n\", 128, None, 0, \"\"),\n                (\"wrong_value\", \"VARINT 129 8001\\n\", 128, None, 0, \"\"),\n                (\"missing_stdout\", \"\", 128, None, 0, \"\"),\n                (\"truncated_stdout\", encoded[:-1], 128, None, 0, \"\"),\n                (\"duplicate_stdout\", encoded * 2, 128, None, 0, \"\"),\n                (\"extra_stdout\", encoded + \"extra\\n\", 128, None, 0, \"\"),\n                (\"nonzero_exit\", encoded, 128, None, 1, \"\"),\n                (\"stderr_output\", encoded, 128, None, 0, \"unexpected diagnostic\\n\")]\n    for label, index in [(\"wrong_repeat_count\", 1), (\"wrong_byte_count\", 3), (\"wrong_checksum\", 4)]:\n        fields = repeat_fields.copy()\n        fields[index] = str(int(fields[index]) + 1)\n        controls.append((label, \" \".join(fields) + \"\\n\", 128, 256, 0, \"\"))\n    results = []\n    for name, stdout, value, count, code, stderr in controls:\n        p = subprocess.CompletedProcess([\"validator-control\", name], code, stdout, stderr)\n        try:\n            verify_varint(p, value, count)\n        except RuntimeError as exc:\n            results.append({\"control\": name, \"rejected\": True, \"reason\": str(exc)})\n        else:\n            raise RuntimeError(f\"varint validator accepted its {name} control\")\n    return results\n\n\ndef varint_correctness(binary: str, timeout: int) -> dict[str, object]:\n    values = sorted({0, 1, 255, 300, (1 << 62) - 1} |\n                    {boundary + offset for k in range(1, 9)\n                     for boundary in [1 << (7 * k)] for offset in (-1, 0, 1)})\n    env = app_env(\"default\")\n    results = []\n    for value in values:\n        argv = [binary, \"encode\", str(value)]\n        p = run(argv, env=env, timeout=timeout)\n        results.append({\"case\": f\"varint-{value}\", \"argv\": argv, **verify_varint(p, value)})\n    for value in (0, 128, 1 << 56, (1 << 62) - 1):\n        argv = [binary, \"repeat\", \"256\", str(value)]\n        p = run(argv, env=env, timeout=timeout)\n        results.append({\"case\": f\"varint-repeat-256-{value}\", \"argv\": argv,\n                        **verify_varint(p, value, 256)})\n    negative_argv = [binary, \"encode\", \"-1\"]\n    negative = run(negative_argv, env=env, timeout=timeout)\n    diagnostic = \"uvarint: negative value -1 (unsigned-varint encodes non-negative values only)\"\n    if negative.returncode != 1 or negative.stdout or diagnostic not in negative.stderr:\n        raise RuntimeError(f\"varint negative-input contract failed: {negative}\")\n    invalid_repeats = []\n    repeat_diagnostic = \"gc_varint: repeat count must be positive\"\n    for count in (0, -1):\n        argv = [binary, \"repeat\", str(count), \"128\"]\n        p = run(argv, env=env, timeout=timeout)\n        if p.returncode != 1 or p.stdout or repeat_diagnostic not in p.stderr:\n            raise RuntimeError(f\"varint repeat-count contract failed: {p}\")\n        invalid_repeats.append({\"argv\": argv, \"count\": count, \"returncode\": p.returncode,\n                                \"stdout\": p.stdout, \"stderr\": p.stderr,\n                                \"required_diagnostic\": repeat_diagnostic, \"rejected\": True})\n    return {\"oracle\": \"independent Python unsigned LEB128 via divmod(128); exact hex and rolling byte checksum\",\n            \"inputs\": values, \"encode_cases\": len(values), \"repetition_cases\": 4,\n            \"results\": results, \"negative_input\": {\"argv\": negative_argv,\n                \"returncode\": negative.returncode, \"stdout\": negative.stdout,\n                \"stderr\": negative.stderr, \"required_diagnostic\": diagnostic, \"rejected\": True},\n            \"invalid_repeat_counts\": invalid_repeats,\n            \"validator_controls\": varint_validator_controls(),\n            \"builder_growth\": \"real bytebuilder starts at capacity 0; nine-byte encodings grow through 1, 2, 4, 8, 16; no runtime allocation counts inferred\",\n            \"collector\": \"production Boehm; custom collector execution is not established\"}\n\n\ndef app_cases(scratch: Path) -> tuple[list[dict[str, object]], dict[str, object]]:\n    repeated = scratch / \"repeated-101700.txt\"\n    phrase = b\"The quick brown fox jumps over the lazy dog.\\n\"\n    repeated.write_bytes((phrase * ((101700 + len(phrase) - 1) // len(phrase)))[:101700])\n    noisy50 = scratch / \"sha256-counter-50000.bin\"\n    noisy200 = scratch / \"sha256-counter-200000.bin\"\n    write_incompressible(noisy50, 50_000)\n    write_incompressible(noisy200, 200_000)\n    inputs = [repeated, noisy50, noisy200]\n    records = [{\"path\": str(p), \"size_bytes\": p.stat().st_size, \"sha256\": sha256(p)} for p in inputs]\n    seed_out = scratch / \"emitter.ll.from-seed.gz\"\n    with seed_out.open(\"wb\") as f:\n        subprocess.run([\"/usr/bin/gzip\", \"-dc\", str(SEED_GZIP)], stdout=f, check=True,\n                       env=clean_env(), timeout=120)\n    return ([{\"name\": p.stem, \"input\": str(p)} for p in inputs], {\n        \"inputs\": records,\n        \"seed_gzip\": {\"path\": str(SEED_GZIP), \"sha256\": sha256(SEED_GZIP),\n                      \"decoded_path\": str(seed_out), \"decoded_size_bytes\": seed_out.stat().st_size,\n                      \"decoded_sha256\": sha256(seed_out)},\n    })\n\n\ndef correctness(scratch: Path, bins: dict[str, str], timeout: int) -> list[dict[str, object]]:\n    env = app_env(\"default\")\n    results: list[dict[str, object]] = []\n    pds = bins[\"pds\"]\n    for n in (16, 1000, 2000):\n        p = checked([pds, \"car\", str(n)], env, timeout, f\"CAR {n}\")\n        m = re.fullmatch(r\"CAR (\\d+) (\\d+)\", p.stdout.strip())\n        expected_bytes = 59 + 40 * n\n        if not m or int(m.group(1)) != n or int(m.group(2)) != expected_bytes:\n            raise RuntimeError(f\"unexpected CAR output for n={n}: {p.stdout!r}\")\n        results.append({\"case\": f\"car-{n}\", \"argv\": [pds, \"car\", str(n)], \"stdout\": p.stdout.strip(),\n                        \"car_bytes\": int(m.group(2)), \"expected_car_bytes_59_plus_40n\": expected_bytes,\n                        \"car_size_formula_passed\": True, \"returncode\": p.returncode})\n    for n in (1000, 2000):\n        argv = [pds, \"mst-insert\", str(n)]\n        p = checked(argv, env, timeout, f\"MST insert {n}\")\n        m = re.fullmatch(r\"MSTINSERT (\\d+) (\\d+) allocBytes=(\\d+)\", p.stdout.strip())\n        if not m or int(m.group(1)) != n or int(m.group(2)) != n:\n            raise RuntimeError(f\"unexpected MST insert output for n={n}: {p.stdout!r}\")\n        results.append({\"case\": f\"mst-insert-{n}\", \"argv\": argv, \"stdout\": p.stdout.strip(),\n                        \"entry_count\": int(m.group(2)), \"alloc_bytes\": int(m.group(3)),\n                        \"entry_count_scope\": \"CLI reports length(mstEntries tree); this does not inspect all key/CID/root contents\",\n                        \"alloc_bytes_scope\": \"native allocBytes delta from Boehm accounting; not logical payload bytes or live bytes\",\n                        \"returncode\": p.returncode})\n\n    for input_info in sorted(scratch.glob(\"repeated-101700.txt\")) + sorted(scratch.glob(\"sha256-counter-*.bin\")):\n        label = input_info.stem\n        app_gz = scratch / f\"{label}.application.gz\"\n        decoded_app = scratch / f\"{label}.application.decoded\"\n        system_gz = scratch / f\"{label}.system.gz\"\n        decoded_system = scratch / f\"{label}.system.decoded\"\n        argv = [bins[\"deflate\"], str(input_info), str(app_gz)]\n        p = checked(argv, env, timeout, f\"application deflate {label}\")\n        checked([\"/usr/bin/gzip\", \"-t\", str(app_gz)], env, timeout, f\"system gzip test {label}\")\n        with decoded_app.open(\"wb\") as f:\n            sys_dec = subprocess.run([\"/usr/bin/gzip\", \"-dc\", str(app_gz)],\n                                     stdout=f, stderr=subprocess.PIPE, check=False, timeout=timeout,\n                                     env=clean_env())\n        if sys_dec.returncode != 0:\n            raise RuntimeError(f\"system gzip decode failed {label}: {sys_dec.stderr.decode(errors='replace')}\")\n        checked([\"cmp\", \"-s\", str(input_info), str(decoded_app)], env, timeout,\n                f\"compare app gzip with system gunzip {label}\")\n        decoded_app.unlink()\n        checked([bins[\"inflate\"], str(app_gz), str(decoded_app)], env, timeout, f\"application inflate app gzip {label}\")\n        checked([\"cmp\", \"-s\", str(input_info), str(decoded_app)], env, timeout, f\"compare app roundtrip {label}\")\n        # -n fixes header timestamps and original filename for reproducibility.\n        with system_gz.open(\"wb\") as f:\n            sp = subprocess.run([\"/usr/bin/gzip\", \"-n\", \"-c\", str(input_info)],\n                                stdout=f, stderr=subprocess.PIPE, check=False, timeout=timeout,\n                                env=clean_env())\n        if sp.returncode:\n            raise RuntimeError(f\"system gzip failed {label}: {sp.stderr.decode(errors='replace')}\")\n        checked([bins[\"inflate\"], str(system_gz), str(decoded_system)], env, timeout,\n                f\"application inflate system gzip {label}\")\n        checked([\"cmp\", \"-s\", str(input_info), str(decoded_system)], env, timeout,\n                f\"compare system gzip decode {label}\")\n        results.append({\"case\": f\"gzip-{label}\", \"input_sha256\": sha256(input_info),\n                        \"input_bytes\": input_info.stat().st_size,\n                        \"application_gzip_sha256\": sha256(app_gz), \"application_gzip_bytes\": app_gz.stat().st_size,\n                        \"system_gzip_sha256\": sha256(system_gz), \"system_gzip_bytes\": system_gz.stat().st_size,\n                        \"application_deflate_then_system_gzip_test_and_system_gunzip_cmp\": True,\n                        \"application_deflate_then_application_inflate_cmp\": True,\n                        \"system_gzip_then_application_inflate_cmp\": True})\n\n    seed_gz = SEED_GZIP\n    seed_out = scratch / \"emitter.ll.from-app-inflate.gz\"\n    expected = scratch / \"emitter.ll.from-seed.gz\"\n    checked([bins[\"inflate\"], str(seed_gz), str(seed_out)], env, timeout, \"inflate committed seed\")\n    checked([\"cmp\", \"-s\", str(expected), str(seed_out)], env, timeout, \"compare seed inflate\")\n    results.append({\"case\": \"inflate-committed-seed\", \"input_sha256\": sha256(seed_gz),\n                    \"output_sha256\": sha256(seed_out), \"output_bytes\": seed_out.stat().st_size,\n                    \"system_gzip_decode_cmp\": True})\n    return results\n\n\ndef measurement_cases(scratch: Path, bins: dict[str, str]) -> list[dict[str, object]]:\n    cases: list[dict[str, object]] = []\n    for n in (16, 1000, 2000):\n        expected_bytes = 59 + 40 * n\n        cases.append({\"name\": f\"car-{n}\", \"argv\": [bins[\"pds\"], \"car\", str(n)],\n                      \"expected_car_bytes\": expected_bytes,\n                      \"oracle\": f\"CAR {n} {expected_bytes} (59 + 40*n)\"})\n    for n in (1000, 2000):\n        cases.append({\"name\": f\"mst-insert-{n}\", \"argv\": [bins[\"pds\"], \"mst-insert\", str(n)],\n                      \"oracle\": f\"MSTINSERT {n} {n} allocBytes=<nonnegative>\"})\n    for source in sorted(scratch.glob(\"repeated-101700.txt\")) + sorted(scratch.glob(\"sha256-counter-*.bin\")):\n        app_gz = scratch / f\"{source.stem}.measured.application.gz\"\n        cases.append({\"name\": f\"deflate-{source.stem}\", \"argv\": [bins[\"deflate\"], str(source), str(app_gz)],\n                      \"output_gzip\": str(app_gz), \"input\": str(source), \"oracle\": \"gzip -t and gunzip -c cmp input\"})\n        # Use the system-created gzip as the input for measured application inflate.\n        sys_gz = scratch / f\"{source.stem}.measured.system.gz\"\n        with sys_gz.open(\"wb\") as f:\n            subprocess.run([\"/usr/bin/gzip\", \"-n\", \"-c\", str(source)], stdout=f, check=True,\n                           env=clean_env(), timeout=120)\n        app_out = scratch / f\"{source.stem}.measured.inflate.out\"\n        cases.append({\"name\": f\"inflate-{source.stem}\", \"argv\": [bins[\"inflate\"], str(sys_gz), str(app_out)],\n                      \"output\": str(app_out), \"input\": str(source), \"compressed_input\": str(sys_gz),\n                      \"compressed_input_sha256\": sha256(sys_gz), \"oracle\": \"cmp output input\"})\n    seed_out = scratch / \"emitter.ll.measured.inflate.out\"\n    cases.append({\"name\": \"inflate-committed-seed\", \"argv\": [bins[\"inflate\"], str(SEED_GZIP), str(seed_out)],\n                  \"output\": str(seed_out), \"compressed_input_sha256\": sha256(SEED_GZIP),\n                  \"oracle_sha256\": sha256(scratch / \"emitter.ll.from-seed.gz\")})\n    return cases\n\n\ndef verify_output(case: dict[str, object], stdout: str, scratch: Path) -> None:\n    name = str(case[\"name\"])\n    if name.startswith(\"car-\"):\n        n = name.split(\"-\")[-1]\n        expected = int(case[\"expected_car_bytes\"])\n        if not re.fullmatch(rf\"CAR {n} {expected}\", stdout.strip()):\n            raise RuntimeError(f\"timed CAR output mismatch: {stdout!r}\")\n    elif name.startswith(\"mst-insert-\"):\n        n = name.split(\"-\")[-1]\n        if not re.fullmatch(rf\"MSTINSERT {n} {n} allocBytes=\\d+\", stdout.strip()):\n            raise RuntimeError(f\"timed MST output mismatch: {stdout!r}\")\n    elif \"output_gzip\" in case:\n        gz = Path(str(case[\"output_gzip\"]))\n        subprocess.run([\"/usr/bin/gzip\", \"-t\", str(gz)], check=True, timeout=60, env=clean_env())\n        decoded = subprocess.run([\"/usr/bin/gzip\", \"-dc\", str(gz)], check=True,\n                                 stdout=subprocess.PIPE, timeout=60, env=clean_env()).stdout\n        if decoded != Path(str(case[\"input\"])).read_bytes():\n            raise RuntimeError(f\"timed gzip oracle mismatch: {name}\")\n    elif \"output\" in case:\n        output = Path(str(case[\"output\"]))\n        if name == \"inflate-committed-seed\":\n            if sha256(output) != case[\"oracle_sha256\"]:\n                raise RuntimeError(\"timed seed inflate hash mismatch\")\n        elif output.read_bytes() != Path(str(case[\"input\"])).read_bytes():\n            raise RuntimeError(f\"timed inflate oracle mismatch: {name}\")\n\n\ndef gc_stats(text: str) -> dict[str, object]:\n    cycles = re.findall(r\"Marking for collection #(\\d+) after (\\d+) allocated bytes\", text)\n    durations = re.findall(r\"Complete collection took (\\d+) ms (\\d+) ns\", text)\n    heaps = re.findall(r\"GC #\\d+ freed (-?\\d+) bytes, heap (\\d+) KiB\", text)\n    if not cycles:\n        raise RuntimeError(\"GC_PRINT_STATS produced no collection boundary diagnostics\")\n    if len(cycles) != len(durations):\n        raise RuntimeError(f\"incomplete collection timing diagnostics: {len(cycles)} cycles, {len(durations)} durations\")\n    if len(cycles) != len(heaps):\n        raise RuntimeError(f\"incomplete collection heap diagnostics: {len(cycles)} cycles, {len(heaps)} heap rows\")\n    return {\n        \"collections_logged\": len(cycles),\n        \"collection_numbers\": [int(number) for number, _ in cycles],\n        \"allocated_bytes_at_collection_boundaries\": sum(int(size) for _, size in cycles),\n        \"collection_boundary_allocated_bytes\": [int(size) for _, size in cycles],\n        \"reported_freed_bytes\": sum(int(size) for size, _ in heaps),\n        \"max_logged_heap_bytes\": max((int(size) * 1024 for _, size in heaps), default=0),\n        \"full_collection_wall_seconds\": sum(int(ms) / 1000 + int(ns) / 1e9 for ms, ns in durations),\n        \"limitations\": \"Boehm counters stop at collection boundaries; not exact total allocation or live bytes and omit the final allocation tail.\",\n    }\n\n\ndef timed_process(argv: list[str], env: dict[str, str], scratch: Path,\n                  label: str, timeout: int) -> dict[str, object]:\n    stdout_path = scratch / f\"{label}.stdout\"\n    stderr_path = scratch / f\"{label}.stderr\"\n    for path in (stdout_path, stderr_path):\n        path.unlink(missing_ok=True)\n    start = time.perf_counter()\n    with stdout_path.open(\"wb\") as stdout, stderr_path.open(\"wb\") as stderr:\n        child = subprocess.Popen(argv, cwd=ROOT, env=env, stdout=stdout, stderr=stderr,\n                                  start_new_session=True)\n        previous = signal.signal(signal.SIGALRM, lambda *_: (_ for _ in ()).throw(TimeoutError()))\n        signal.setitimer(signal.ITIMER_REAL, timeout)\n        try:\n            _, status, usage = os.wait4(child.pid, 0)\n        except TimeoutError:\n            try:\n                os.killpg(child.pid, signal.SIGKILL)\n            except ProcessLookupError:\n                pass\n            os.wait4(child.pid, 0)\n            child.returncode = -signal.SIGKILL\n            raise RuntimeError(f\"workload timed out after {timeout}s: {argv}\")\n        finally:\n            signal.setitimer(signal.ITIMER_REAL, 0)\n            signal.signal(signal.SIGALRM, previous)\n    elapsed = time.perf_counter() - start\n    returncode = os.WEXITSTATUS(status) if os.WIFEXITED(status) else -os.WTERMSIG(status)\n    child.returncode = returncode\n    if returncode != 0:\n        raise RuntimeError(f\"command failed ({returncode}): {argv}; stderr={stderr_path.read_text(errors='replace')[-3000:]}\")\n    # ru_maxrss is KiB on Linux, bytes on macOS.\n    peak_rss_bytes = int(usage.ru_maxrss * (1024 if sys.platform.startswith(\"linux\") else 1))\n    return {\"returncode\": returncode, \"elapsed_seconds\": elapsed, \"maxrss_bytes\": peak_rss_bytes,\n            \"stdout_path\": str(stdout_path), \"stderr_path\": str(stderr_path),\n            \"stdout\": stdout_path.read_text(errors=\"replace\"),\n            \"stderr\": stderr_path.read_text(errors=\"replace\")}\n\n\ndef measure(scratch: Path, bins: dict[str, str], repeats: int, timeout: int) -> dict[str, object]:\n    driver_hash_start = sha256(Path(__file__).resolve())\n    if repeats < 1:\n        raise ValueError(\"--repeats must be positive\")\n    if timeout <= 0:\n        raise ValueError(\"--timeout must be positive\")\n    cases = measurement_cases(scratch, bins)\n    samples = []\n    stats_records = []\n    for cohort in (\"default\", \"fixed128m\"):\n        env = app_env(cohort)\n        stats_env = app_env(cohort, stats=True)\n        for case in cases:\n            for output_key in (\"output_gzip\", \"output\"):\n                if output_key in case:\n                    Path(str(case[output_key])).unlink(missing_ok=True)\n            stats = run(case[\"argv\"], env=stats_env, timeout=timeout)\n            if stats.returncode != 0:\n                raise RuntimeError(f\"GC_PRINT_STATS run failed {case['name']}: {stats.stderr[-3000:]}\")\n            verify_output(case, stats.stdout, scratch)\n            stats_path = scratch / f\"gc-stats-{cohort}-{case['name']}.txt\"\n            stats_text = stats.stderr + stats.stdout\n            stats_path.write_text(stats_text)\n            stats_parsed = gc_stats(stats_text)\n            stats_records.append({\n                \"cohort\": cohort, \"case\": case[\"name\"], \"argv\": case[\"argv\"],\n                \"env_gc\": {k: stats_env[k] for k in sorted(stats_env) if k.startswith(\"GC_\")},\n                \"returncode\": stats.returncode, \"stdout\": stats.stdout.strip(),\n                \"gc_stats_sha256\": hashlib.sha256(stats_text.encode()).hexdigest(),\n                \"raw_path\": str(stats_path), \"stats\": stats_parsed,\n            })\n    # Alternate heap-policy cohorts within each repeated case to limit order bias.\n    execution_order = []\n    for case in cases:\n        for rep in range(repeats):\n            cohort_order = (\"default\", \"fixed128m\") if rep % 2 == 0 else (\"fixed128m\", \"default\")\n            for cohort in cohort_order:\n                env = app_env(cohort)\n                for output_key in (\"output_gzip\", \"output\"):\n                    if output_key in case:\n                        Path(str(case[output_key])).unlink(missing_ok=True)\n                label = f\"timed-{case['name']}-{rep}-{cohort}\"\n                p = timed_process(case[\"argv\"], env, scratch, label, timeout)\n                verify_output(case, p[\"stdout\"], scratch)\n                execution_order.append({\"case\": case[\"name\"], \"repeat\": rep, \"cohort\": cohort})\n                samples.append({\"cohort\": cohort, \"case\": case[\"name\"], \"repeat\": rep,\n                                \"execution_order\": len(execution_order) - 1,\n                                \"argv\": case[\"argv\"], \"env_gc\": {k: env[k] for k in sorted(env) if k.startswith(\"GC_\")},\n                                \"elapsed_seconds\": p[\"elapsed_seconds\"], \"maxrss_bytes\": p[\"maxrss_bytes\"],\n                                \"returncode\": p[\"returncode\"], \"stdout\": p[\"stdout\"].strip(),\n                                \"stdout_path\": p[\"stdout_path\"], \"stderr_path\": p[\"stderr_path\"],\n                                \"stdout_sha256\": sha256(Path(p[\"stdout_path\"])),\n                                \"stderr_sha256\": sha256(Path(p[\"stderr_path\"])),\n                                \"output_file\": (str(case[\"output_gzip\"]) if \"output_gzip\" in case else\n                                                str(case[\"output\"]) if \"output\" in case else None),\n                                \"output_size_bytes\": (Path(str(case[\"output_gzip\"])).stat().st_size\n                                                      if \"output_gzip\" in case else\n                                                      Path(str(case[\"output\"])).stat().st_size\n                                                      if \"output\" in case else None),\n                                \"output_sha256\": (sha256(Path(str(case[\"output_gzip\"])))\n                                                  if \"output_gzip\" in case else\n                                                  sha256(Path(str(case[\"output\"]))) if \"output\" in case else None),\n                                \"output_oracle_passed\": True})\n    summary = []\n    for cohort in (\"default\", \"fixed128m\"):\n        for case in cases:\n            rows = [row for row in samples if row[\"cohort\"] == cohort and row[\"case\"] == case[\"name\"]]\n            elapsed = [float(row[\"elapsed_seconds\"]) for row in rows]\n            rss = [int(row[\"maxrss_bytes\"]) for row in rows]\n            summary.append({\"cohort\": cohort, \"case\": case[\"name\"], \"n\": len(rows),\n                            \"elapsed_min_seconds\": min(elapsed), \"elapsed_median_seconds\": statistics.median(elapsed),\n                            \"elapsed_max_seconds\": max(elapsed), \"maxrss_min_bytes\": min(rss),\n                            \"maxrss_median_bytes\": statistics.median(rss), \"maxrss_max_bytes\": max(rss)})\n    driver_hash_end = sha256(Path(__file__).resolve())\n    if driver_hash_start != driver_hash_end:\n        raise RuntimeError(\"applications.py changed during measured execution\")\n    return {\n        \"timing_boundary\": \"fresh application process including CLI startup, input read, computation, and output write; build and input generation outside timing\",\n        \"timing_tool\": \"Python time.perf_counter around fresh Popen child; os.wait4 rusage\",\n        \"repeats_per_case_per_cohort\": repeats,\n        \"cohorts\": {\n            \"default\": \"GC_* inherited variables cleared; GC_FREE_SPACE_DIVISOR=1; no GC_INITIAL_HEAP_SIZE override (runtime resizeable default policy)\",\n            \"fixed128m\": \"GC_* inherited variables cleared; GC_FREE_SPACE_DIVISOR=1; GC_INITIAL_HEAP_SIZE=134217728\",\n        },\n        \"environment_policy\": \"clear inherited GC_* and MEDAKA_* for built app processes; build pins MEDAKA_STRICT=1 and MEDAKA_CLANG_OPT=-O2\",\n        \"gc_print_stats_captured_in_separate_untimed_process\": True,\n        \"applications_driver_sha256_start\": driver_hash_start,\n        \"applications_driver_sha256_end\": driver_hash_end,\n        \"gc_stats\": stats_records, \"execution_order\": execution_order, \"summary_min_median_max\": summary,\n        \"cases\": cases, \"samples\": samples,\n    }\n\n\ndef write_report(report: dict[str, object], scratch: Path, requested: Path | None,\n                 correctness_only: bool) -> Path:\n    canonical = scratch / \"correctness.json\"\n    if correctness_only:\n        canonical.parent.mkdir(parents=True, exist_ok=True)\n        serialized = json.dumps(report, indent=2, sort_keys=True) + \"\\n\"\n        canonical.write_text(serialized)\n        if requested is not None and requested.resolve() != canonical.resolve():\n            requested.parent.mkdir(parents=True, exist_ok=True)\n            requested.write_text(serialized)\n        return canonical\n    target = requested if requested is not None else scratch / \"measurements.json\"\n    target.parent.mkdir(parents=True, exist_ok=True)\n    target.write_text(json.dumps(report, indent=2, sort_keys=True) + \"\\n\")\n    return target\n\n\ndef main() -> int:\n    ap = argparse.ArgumentParser(description=__doc__)\n    mode = ap.add_mutually_exclusive_group(required=True)\n    mode.add_argument(\"--correctness-only\", action=\"store_true\")\n    mode.add_argument(\"--measure\", action=\"store_true\")\n    ap.add_argument(\"--varint-only\", action=\"store_true\",\n                    help=\"correctness-only PDS varint integration workload; measurement is not enabled\")\n    ap.add_argument(\"--scratch\", type=Path, default=DEFAULT_SCRATCH)\n    ap.add_argument(\"--resume\", action=\"store_true\",\n                    help=\"reuse an existing scratch directory after validating its correctness manifest\")\n    ap.add_argument(\"--output\", type=Path)\n    ap.add_argument(\"--repeats\", type=int, default=5)\n    ap.add_argument(\"--timeout\", type=int, default=120)\n    args = ap.parse_args()\n    if args.repeats < 1:\n        ap.error(\"--repeats must be positive\")\n    if args.timeout <= 0:\n        ap.error(\"--timeout must be positive\")\n    if args.varint_only and args.measure:\n        ap.error(\"--varint-only supports --correctness-only; varint measurement is not enabled\")\n    if args.varint_only and args.resume:\n        ap.error(\"--varint-only requires fresh scratch; --resume is not supported\")\n    scratch = args.scratch.resolve()\n    if args.measure and not args.resume:\n        ap.error(\"--measure requires --resume to make scratch reuse explicit\")\n    if args.correctness_only and scratch.exists() and any(scratch.iterdir()):\n        ap.error(f\"scratch directory is nonempty; choose an empty path: {scratch}\")\n    scratch.mkdir(parents=True, exist_ok=True)\n    requested_report_path = args.output.resolve() if args.output else None\n\n    if args.varint_only:\n        build = build_apps(scratch, args.timeout, varint_only=True)\n        report = {\"schema\": \"medaka.varint-correctness.v1\", \"mode\": \"correctness-only\",\n                  \"application_set\": \"varint\", \"source_commit\": git(\"rev-parse\", \"HEAD\"),\n                  \"provenance\": provenance(scratch, (\"gc_varint\",)), \"build\": build,\n                  \"correctness\": varint_correctness(build[\"binaries\"][\"varint\"], args.timeout),\n                  \"measurement_supported\": False}\n    elif args.correctness_only:\n        build = build_apps(scratch, args.timeout)\n        _, inputs = app_cases(scratch)\n        correctness_results = correctness(scratch, build[\"binaries\"], args.timeout)\n        report = {\n            \"schema\": \"medaka.application-benchmark.v1\", \"mode\": \"correctness-only\",\n            \"provenance\": provenance(scratch),\n            \"source_commit\": git(\"rev-parse\", \"HEAD\"),\n            \"toolchain\": {\"medaka_binary\": str(MEDAKA), \"medaka_sha256\": sha256(MEDAKA),\n                          \"emitter_binary\": str(EMITTER), \"emitter_sha256\": sha256(EMITTER),\n                          \"emitter_source\": str(EMITTER_SOURCE), \"emitter_source_sha256\": sha256(EMITTER_SOURCE),\n                          \"runtime_source\": str(RUNTIME), \"runtime_source_sha256\": sha256(RUNTIME),\n                          \"initial_heap_policy\": \"weak runtime constant 0 for application links; no runtime GC_expand_hp unless GC_INITIAL_HEAP_SIZE is set\"},\n            \"inputs\": inputs, \"build\": build, \"correctness\": correctness_results,\n            \"measurement_authorized\": False,\n        }\n    else:\n        correctness_path = scratch / \"correctness.json\"\n        prior = json.loads(correctness_path.read_text())\n        if prior.get(\"mode\") != \"correctness-only\":\n            raise RuntimeError(f\"scratch manifest is not correctness-only: {correctness_path}\")\n        if prior.get(\"application_set\") == \"varint\":\n            raise RuntimeError(\"varint measurement is not enabled; this manifest is correctness-only\")\n        current_commit = subprocess.run([\"git\", \"rev-parse\", \"HEAD\"], cwd=ROOT,\n                                        text=True, capture_output=True, check=True).stdout.strip()\n        if current_commit != prior[\"source_commit\"]:\n            raise RuntimeError(\"source commit changed since correctness manifest; rerun --correctness-only in a fresh scratch\")\n        if provenance(scratch) != prior[\"provenance\"]:\n            raise RuntimeError(\"source/toolchain/driver provenance changed since correctness manifest; rerun --correctness-only in a fresh scratch\")\n        for entry in prior[\"inputs\"][\"inputs\"]:\n            input_path = Path(entry[\"path\"])\n            if not input_path.is_file() or input_path.stat().st_size != entry[\"size_bytes\"] or sha256(input_path) != entry[\"sha256\"]:\n                raise RuntimeError(f\"input changed since correctness manifest: {input_path}\")\n        decoded_seed = Path(prior[\"inputs\"][\"seed_gzip\"][\"decoded_path\"])\n        if not decoded_seed.is_file() or sha256(decoded_seed) != prior[\"inputs\"][\"seed_gzip\"][\"decoded_sha256\"]:\n            raise RuntimeError(\"decoded seed changed since correctness manifest\")\n        if not SEED_GZIP.is_file() or sha256(SEED_GZIP) != prior[\"inputs\"][\"seed_gzip\"][\"sha256\"]:\n            raise RuntimeError(\"committed seed gzip changed since correctness manifest\")\n        bins = prior[\"build\"][\"binaries\"]\n        for name, path in bins.items():\n            if not Path(path).is_file():\n                raise RuntimeError(f\"missing built binary {name}: {path}; rerun --correctness-only\")\n            expected_hash = next(row[\"binary_sha256\"] for row in prior[\"build\"][\"builds\"] if row[\"name\"] == name)\n            if sha256(Path(path)) != expected_hash:\n                raise RuntimeError(f\"binary {name} changed since correctness manifest; rerun --correctness-only\")\n        report = {\"schema\": \"medaka.application-benchmark.v1\", \"mode\": \"measure\",\n                  \"source_commit\": prior[\"source_commit\"], \"provenance\": prior[\"provenance\"],\n                  \"toolchain\": prior[\"toolchain\"], \"correctness_manifest\": prior,\n                  \"inputs\": prior[\"inputs\"], \"binaries\": {k: {\"path\": v, \"sha256\": sha256(Path(v))}\n                                                               for k, v in bins.items()},\n                  \"measurement\": measure(scratch, bins, args.repeats, args.timeout)}\n    report_path = write_report(report, scratch, requested_report_path, args.correctness_only)\n    print(report_path)\n    return 0\n\n\nif __name__ == \"__main__\":\n    try:\n        raise SystemExit(main())\n    except (OSError, subprocess.TimeoutExpired, RuntimeError, ValueError) as exc:\n        print(f\"applications.py: {exc}\", file=sys.stderr)\n        raise SystemExit(1)\n",
+        "sha256": "2bb957d6373ae92b6955c2d1deeea25102dcad8822c0222159292224f002326b"
+      }
+    }
+  },
+  "measurement_supported": false,
+  "mode": "correctness-only",
+  "provenance": {
+    "application_dependencies": [
+      {
+        "binary": "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint",
+        "command": [
+          "ldd",
+          "/tmp/medaka-gc-varint-final-06e4bc273/gc_varint"
+        ],
+        "output": "linux-vdso.so.1\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6\n\t/lib64/ld-linux-x86-64.so.2",
+        "returncode": 0
+      }
+    ],
+    "application_linkage": "static libgc (libgc absent from platform dependency output)",
+    "applications_driver_sha256": "2bb957d6373ae92b6955c2d1deeea25102dcad8822c0222159292224f002326b",
+    "build_environment": {
+      "CC": "clang",
+      "MEDAKA_CLANG_OPT": "-O2",
+      "MEDAKA_STRICT": "1"
+    },
+    "clang_binary": "/usr/bin/clang",
+    "clang_version": "Debian clang version 19.1.7 (3+b1)",
+    "emitter_binary": "/root/.codex/worktrees/f396/medaka/medaka_emitter",
+    "emitter_binary_sha256": "8ad05430b9a8f5b082479475fd765bdef12e274071053512ae1a867e0b7d944d",
+    "emitter_source": "/root/.codex/worktrees/f396/medaka/compiler/backend/llvm_emit.mdk",
+    "emitter_source_sha256": "f866b13a4e9a1f8f36f06b1aaa36e0b012238870042e61af5d288a414aa43b7d",
+    "libgc_archive": "/usr/lib/x86_64-linux-gnu/libgc.a",
+    "libgc_archive_sha256": "337a7cf7e9ff4a161025fc07b67ea0b613338dfc14ea510033d9c4e102a37045",
+    "libgc_pkg_config_link_flags": "-lgc -lpthread -ldl",
+    "libgc_pkg_config_version": "8.2.8",
+    "machine": "x86_64",
+    "medaka_binary": "/root/.codex/worktrees/f396/medaka/medaka",
+    "medaka_binary_sha256": "992cdeeb7111f37d2dd9de21a832307fa4cd1b9774f5bf79780fed276eec2863",
+    "platform": "Linux-6.12.95+deb13-amd64-x86_64-with-glibc2.41",
+    "runtime_source": "/root/.codex/worktrees/f396/medaka/runtime/medaka_rt.c",
+    "runtime_source_sha256": "5ca4ce0a019cabf73ae24ce576223ff13c7536a9ae98f472c5c8371ce45b7667",
+    "source_commit": "06e4bc273ce91e620b562750b1fc2e81a8261414",
+    "source_sha256": {
+      "compiler/backend/core_validate.mdk": "51425a75fbfea985f4ce111104da4d4a4997b90662cd6ab04a1e6d174e439e28",
+      "compiler/backend/emit_support.mdk": "9e6137a3dadcb06e1a9e37558807c0e127ce8e86e06b9c16c30ac806cb910b91",
+      "compiler/backend/extern_catalog.mdk": "200f5fd833a2a058b92b7aad42fb2dcb14a2f8ef2ff2f18a97c29b5207d30dd3",
+      "compiler/backend/llvm_emit.mdk": "f866b13a4e9a1f8f36f06b1aaa36e0b012238870042e61af5d288a414aa43b7d",
+      "compiler/backend/llvm_preamble.mdk": "af406f247157d91e0ea9066d3715bb41a20cfc8d196b692a1d3655c1a5a70099",
+      "compiler/backend/private_mangle.mdk": "77a3f8a5b8def5da29824cee87eea4c9e3abec4c85772878a6f227f96214085e",
+      "compiler/backend/trmc_analysis.mdk": "4088548d5321563dd3943571cf71a5814aa4682de0d6fedae610d0ef061d3a58",
+      "compiler/backend/wasm_emit.mdk": "1b72adf61ba5f91f7d3837af39c4b1f676de3cbd7746e45cfdef0df9455f2482",
+      "compiler/backend/wasm_file_grants.mdk": "73fa6969c3465f1f3aecdf469772540516e35278981f6ed8bf066e64d6118b7c",
+      "compiler/backend/wasm_preamble.mdk": "707c64bd6a822ef1371122c8ed494c231abce1435aa4e03e63c3138e885917aa",
+      "compiler/backend/wasm_reach.mdk": "5e51a8c77b92b18b74d9c332dc4cafe60fc8bf3e4dbb61220c02570b29eaa18d",
+      "compiler/driver/build_cmd.mdk": "4ae51eccf7013ece7881090db6f36fd39f030bf8510d1dbdb01dbfbbc90978c2",
+      "compiler/driver/diagnostics.mdk": "52924d57a75953cfc6084e8ae347cc50cfd969a5745eac47223d704da347441d",
+      "compiler/driver/loader.mdk": "92cbeea9cf07982119f0c0c3d8c970cc556d9017bb0b45f2e09832b860eeb4f3",
+      "compiler/driver/main_autoprint.mdk": "299fc5f72f89adfa50bb606dc1cc16efa32b5b2190c775729009af83cd5a915a",
+      "compiler/driver/medaka_cli.mdk": "574502b6d6eeed75efd05b4e88ea9e8c2fb83ee6b8d1e5ea248eea97f41a4940",
+      "compiler/entries/all_modules_entry.mdk": "14ef78f282dbc99dd55329cf7a3a1621180329658a7b9abfe2a150275619b660",
+      "compiler/entries/build_main.mdk": "5cddab81f89f80dd31c066a793097d590ecb3b4b277625307116557c4e628ae8",
+      "compiler/entries/check_all_main.mdk": "4ece35fb47b8d18895c8d597b112951c82898528739ebfb53dad5df094d52a98",
+      "compiler/entries/check_batch.mdk": "6cb4bee0cd1ce38ba9036d0bb16997aa7765f37a1ca077cbcca6205bbb771552",
+      "compiler/entries/check_main.mdk": "a64be29e9389c1391703f4eeeeec89e0b29b4e065c23c9207f12c0c452a445d0",
+      "compiler/entries/check_match_main.mdk": "b894f5bebce2d9c3905ddcb31853b24d70131598c3e5b7c7b3b3f3caa927bf2a",
+      "compiler/entries/check_modules_main.mdk": "fb27af162370c405a27b7a5db3965e3b3089b055a25b7c3d769b120b84b8fa64",
+      "compiler/entries/check_one_diags_main.mdk": "ebcc4aac89975663fdfcb65228ed636e13f25e4c4030ae3ed75b1cc99b9a6621",
+      "compiler/entries/core_ir_dict_pp_main.mdk": "4c734c6ba3ee0c0f488fcb67f65c0693ae962024661b9b3040f93aa927c5dcec",
+      "compiler/entries/core_ir_dump_main.mdk": "8d5633110255ee72ded9659c259ba3165529df9575d1a7381a9e8e3acbc81179",
+      "compiler/entries/core_ir_main.mdk": "e9c6034a018bcb733bec68d7f22e28dc28a9ce86a63f817f87d7438b607b9aed",
+      "compiler/entries/core_ir_modules_main.mdk": "46d2fbba6a57513df04ca9267cbe9be4d09c155bc7333de38df11e6214f58316",
+      "compiler/entries/core_ir_prelude_main.mdk": "6b8b0a2a7496b3f4d1b79775404f5e80992500364a4cee5a8a6840bc6777b52c",
+      "compiler/entries/core_ir_roundtrip_main.mdk": "239fa16d9f8353e5481158ef6f94e250365c1abe3c3c1a9dc344bf3731d208cd",
+      "compiler/entries/core_ir_run_main.mdk": "ab250d04c8c82b6c7efdcc717df3b14cc6f91c2477fdb3ed553eaf302247ff61",
+      "compiler/entries/core_ir_typed_main.mdk": "49d4f93bf7f018bf91a0e92c9e60cc191983a0adfafbda54962df2912c1f7707",
+      "compiler/entries/core_ir_typed_modules_dump_main.mdk": "1f695f1eba4659a67e8b56eccba0ed9c30bfc6f6f887f865479a23c251843aa9",
+      "compiler/entries/core_ir_typed_modules_main.mdk": "6934b7ad2bb1a2cb6f2746535e0400b9d2eb0e8bc15997b553b8692236af4cb4",
+      "compiler/entries/diagnostics_project_main.mdk": "f1da7d1278578a4ff4df9f4ade74410fa6dc76d2b05f7602852bb6e399961cb4",
+      "compiler/entries/entry_support.mdk": "711ccd08ea9252185fcf973655b15739a37c77ac32f048751266f9356eb88931",
+      "compiler/entries/eval_autoprint_main.mdk": "dc11eb83ed3fb3bdf6573506f0b9e02047cea7ad5bb2b31101f7e18a6716b2ed",
+      "compiler/entries/eval_dict_batch.mdk": "aad864f9a606525f51d8c7783cea6758937633fb0fb58c95280902bd68bdc864",
+      "compiler/entries/eval_dict_main.mdk": "63b8fc1b49818299678f356a79a7af2621322e6f31c09c410d17ac0b2dee49f7",
+      "compiler/entries/eval_main.mdk": "a9e2ee98d74b69c4dddd8d87b8cd53571d7501bb9f516342ca4108e87e06ca7a",
+      "compiler/entries/eval_modules_main.mdk": "e109a4483db8fce79df496db796f34f9e0cff97f6c54af8117d1783e481d4240",
+      "compiler/entries/eval_prelude_batch.mdk": "cdef64337a5f71c2b61e0580e5e0fccc966887441c65abfd51519ec360d57a3e",
+      "compiler/entries/eval_prelude_main.mdk": "6c70aaa2cae878644c55c8ab9212b0824fca7e6179532a5e836609a09dc7628d",
+      "compiler/entries/eval_run_batch.mdk": "d0a974b106bc6a02fb57c24f9eca2cf0173e42ae2c451d6d3b5cdce933a2f8b8",
+      "compiler/entries/eval_run_main.mdk": "f18d3c6a8fa814dec2ed491118869ae6da808b889c8c9a2ed16c676cee8b5a00",
+      "compiler/entries/eval_typed_batch.mdk": "c68d68d53b150e1e00243daeebd32a9a1c53420e53aa43ba9ae2c89ce7ec0623",
+      "compiler/entries/eval_typed_main.mdk": "ce09aea223df6cbd526203876934da6ee0e875cee89cad3aa4c88fa904733031",
+      "compiler/entries/eval_typed_modules_main.mdk": "f550efab277e97108df03be375ab1433e6c8e7f7675b0e5395c3a88db9de58b1",
+      "compiler/entries/fmt_main.mdk": "f62ff9d039cf3389ec96b5e4fb85a7e0f34f0f78db34128a9e7ca71dc10a04c9",
+      "compiler/entries/fuzz_gen_main.mdk": "0f61c8a6717fcf885e97f34767b7e836ffa4254cb8bd820c53622d5c7f7c14fd",
+      "compiler/entries/lex_main.mdk": "eafcbd247ce55d7ae599132f255e123a9d2de62d3b2ebf6d59aa6a3848d9bac9",
+      "compiler/entries/lint_fix_main.mdk": "82273d830f3c25c49d762f68982ad89cda736c184f5292fdc4c07a83b2207be2",
+      "compiler/entries/lint_main.mdk": "f52966200502fc6a302dc454429bc68cd8e36711985183dbce6268b0248b9eaf",
+      "compiler/entries/llvm_bootstrap_lex_main.mdk": "796e78c2759e2d70cd4444a55270fd159a4ae97dd9d8456d07d13a4c822d7fb0",
+      "compiler/entries/llvm_emit_main.mdk": "56a97df5119ddc3db4519b88e5805d289a4ae13b6ddf54ce4f10ec648310ad9f",
+      "compiler/entries/llvm_emit_modules_main.mdk": "cbb3e5c551cef21826455f3a2f5ba03175fa9e423f78f47cae78d06f5c84080c",
+      "compiler/entries/llvm_emit_typed_main.mdk": "74d0ebb274e61bae29fd958734cf2a7f79d38ccf30408e5d0b06d6c1e6d8cb84",
+      "compiler/entries/lsp_harness_main.mdk": "d4216a60bdd8730f54956058ff3fe76337562d8837cb1a127a8f5851f55972b2",
+      "compiler/entries/lsp_main.mdk": "f96acd19091afeb8d96bda503267c51a7670d580720600002d41eeebcfbb1052",
+      "compiler/entries/module_closure_probe.mdk": "bf1b2a80bf3e4b75b00110e8806d2982ff8dee24178967d9748507c937024457",
+      "compiler/entries/native_doctest_probe_main.mdk": "ee5561d7daadb45cc69c13600a7d80e43b7e4c50e4e00e30caeec719e25823a6",
+      "compiler/entries/new_main.mdk": "ec539d0d3a3d2f1a5312191ee5189025ec8219abca1dd245cdc4eb249200b258",
+      "compiler/entries/oracle_multicall.mdk": "3944afbb11bb8f0e9eff27b471716c3d42dfa528ee905d68871cba0866ca9e34",
+      "compiler/entries/parse_main.mdk": "ee3e1bed7cda5a3bd219b2ae031ddeea3cb4c652e6bc5c73d69d5e40c96020ac",
+      "compiler/entries/parse_result_main.mdk": "51c4ff7f7e24ec08eb3dd55deee366324c9ec832fa008e4a5a9a83d2fa009e72",
+      "compiler/entries/playground_main.mdk": "0d243d5bb54265490fa2b7afd51742183226d237a4c1823ee4cb8b9cfbdb9079",
+      "compiler/entries/profile_eval_main.mdk": "66224307dbffc236d0b48be296077ddd555d30eddf7e7577d01f61399a90e9a9",
+      "compiler/entries/profile_main.mdk": "b416a4533df0c716567a6a422ae92d6d7cfe3fc6535a626501786205604f37f5",
+      "compiler/entries/profile_modules_main.mdk": "a329b7afdef97d417c24602f23d1d0b512a63564ca54bfe8fceabf9200ef2d60",
+      "compiler/entries/refindex_main.mdk": "83b9d043cdc4bcf5b1269e1ce311d54260050f71b6485e18bf68efd9b34d8e4f",
+      "compiler/entries/repl_main.mdk": "5bbb396631fcc41a1f79f9922577154c2bcae05319d06cf904742356b5b61cd1",
+      "compiler/entries/resolve_batch.mdk": "c45b5835d62dbd47be66469db2743ec1bffb958af20b03f5c971cae5aada6182",
+      "compiler/entries/resolve_main.mdk": "8003e0b24dffdc483915897f33e64da15b3cc24b45fb37d2b6532740b035f408",
+      "compiler/entries/resolve_modules_main.mdk": "692fdc507a144ea5e90f1670afeb1d0ecc8d4fc2652ac208ba77c3ebe8a10e51",
+      "compiler/entries/selfproc_lex_probe.mdk": "a147646be0b543c11432a99f3274fe0be5463cdb30a2ef1274260e8b263b9ecd",
+      "compiler/entries/selfproc_parse_probe.mdk": "cca7470d8b8f547010c0b09b3b1a3018b70fc316149cf891d4af00f3dd77d410",
+      "compiler/entries/selfproc_tc_probe.mdk": "07a2346f44071b747988477f6c2df9500883335fa1c5fb44715a3227f72449b5",
+      "compiler/entries/test_main.mdk": "677ce5387994377748654c2a044d91924d610c603e43041954729d3d2788c02a",
+      "compiler/entries/typecheck_main.mdk": "2f6c778285932acbf500f9e323835ed6e9daf1c606fa5e2c29b22ee6419b495b",
+      "compiler/entries/wasm_emit_gaps_main.mdk": "e45f2903510c78cace79e46ac480b053557bd2a0fff80742a2002647f1212c6e",
+      "compiler/entries/wasm_emit_main.mdk": "c18fdd6984f6562f2a42a7d752591d8c7e64de46605090d39737327bfdd13b42",
+      "compiler/entries/wasm_emit_modules_main.mdk": "7f54b09dce91172fbaf760062068a2a035a0e8fecdc1b91b128c6c5b5f3b8afa",
+      "compiler/entries/wasm_emit_typed_main.mdk": "d17f0f85dbceb60d745da1c4afa27b33a0e90c51562826d691e660c9a6a328cd",
+      "compiler/eval/eval.mdk": "93991f7f353024e518c2e02733106d8183f82ab07fc23527052813a6e33a5d32",
+      "compiler/eval/u64_halves.mdk": "70ed84ef17990c1ca6872ef6c925384bd4453c9dea942dc7699ea29754f6220b",
+      "compiler/frontend/ast.mdk": "d0f87fd455b23d6a3f3434f8ce41cd6a90a498ed7009adcba7a3d90e6006a6e3",
+      "compiler/frontend/desugar.mdk": "13349b82f1f1d0b9d7f7530a8d76d44cb403f7b6c5fe74d8fdc125c40f27640e",
+      "compiler/frontend/desugar_cache.mdk": "bc3c8155b814e55159791511ceb463cd8a0c872266a51662ba39a5726ee3d86c",
+      "compiler/frontend/exhaust.mdk": "40e99fe553d4be31b916586b441621446ee019cdf07e3b8432b33af43bf3a56e",
+      "compiler/frontend/lexer.mdk": "fbfd7e8753241c901d37d6c9a2f0331d530e3b4def78bddc88ab5199f2932399",
+      "compiler/frontend/marker.mdk": "94d0e8af9408fb068af657f814b3bbc257050d6ffe96ce55404d1850d4841efc",
+      "compiler/frontend/parse_cache.mdk": "8bf4edcbb2bdaec9bc56ca8fc35634e5b81dd0e9ec9d07f8247c7731e4e608d2",
+      "compiler/frontend/parser.mdk": "5a7fcb9e8b2c4ccf586f7bf1c0f5157c0919d8f0b3c7e78a5dd0745eb7fffdff",
+      "compiler/frontend/resolve.mdk": "da4684ac1bf70593dcf848506a7b1b2d785b48ce47e5e6111da4b77993101cb9",
+      "compiler/ir/core_ir.mdk": "b860795fb3ec59db1e572c616019a828f4cfbaee91b8c76cd051698c182f504c",
+      "compiler/ir/core_ir_eval.mdk": "3b07920cdc76ac19812d89d48a9b0aceff1348d503df8cdb1ba7077011669ec5",
+      "compiler/ir/core_ir_lower.mdk": "6d01589f33ad4c6328fc64c7142b26ac05542215fbb6c09378748c4cd930adee",
+      "compiler/ir/core_ir_sexp.mdk": "19fb5bf08e4fc4501b6a616fd48b30cf622414b917b51815cc3dc2bd2a49a4cb",
+      "compiler/ir/core_ir_sexp_parse.mdk": "673b68d0085568a1699bc25c9804467d68319b8ac063f875cc107074aa52512d",
+      "compiler/ir/dce.mdk": "e36284cf320d3665d617a8399a61fd67e4b7fef36289bdbdf9f547b60749eee1",
+      "compiler/ir/sexp.mdk": "db742db921fe05e886087237d1cf9d44ab48a4f0bf9119751649d685ec7e679c",
+      "compiler/support/char.mdk": "3615fe928df7d21ee52b6304e8f677f358668b0226225b8f15984f2c81f1c92c",
+      "compiler/support/cli_targets.mdk": "1d5aa79e62d8f50529c78c52bb15d42d7fb7b9438d8f838d216b2dfb283be412",
+      "compiler/support/manifest.mdk": "218c0accc1172b396db05289f3d7f5ef540df23e254db8b18037e0049a3d3a35",
+      "compiler/support/opcount.mdk": "a211731377a49d404cfaedf34e92774f0ed6903d2941d45028e32175fc812903",
+      "compiler/support/ordmap.mdk": "6d654cfc3c049900242046b233248be77a4da70cf304e996c21e5d0ec0f3fbf6",
+      "compiler/support/path.mdk": "c0ec6483f5d050586b50a83576a93a813881730b8d7d071cd28466f3fe1a7413",
+      "compiler/support/scc.mdk": "fb47381678ea4446f12800ec2cd684e4e3b5b17dd1860c1e4927c346b08f75fa",
+      "compiler/support/timer.mdk": "55e28c93afa49141dd789e7a3f9ed01e6694e5993d60561d2dc99e6ce047cf67",
+      "compiler/support/util.mdk": "07bcf9c3f2849bca835bf982d5ffa6d8f9128ece3c7d9d0d08232f3465c30cf9",
+      "compiler/tools/check.mdk": "17f000ae682227431bfe181416c103176b57601c7716ba41a002ebba1d731c56",
+      "compiler/tools/check_policy.mdk": "928c6ca51b50a92e64a9c06ae71f2e113cdedc2a3c779b3faa0702d6a1d9fd97",
+      "compiler/tools/codemod.mdk": "ec68637f2bbf2d51b0ad5d86430d70bfe9ff0a9c229b1ed2c5ff3b0cf77c5f4c",
+      "compiler/tools/doc.mdk": "49cb3c51e51b5be78f739c491e8fdddc26497e7fd100489a76e89c2b0b1f2d93",
+      "compiler/tools/doctest.mdk": "a1bccd7b496cf1ae1f83c242d2e62a977439c8189cc98bfe83b0a56503cb6b8b",
+      "compiler/tools/eval_props.mdk": "ba672e6b93dbd0f1eed8934050c379fb8219281f972c0fa0a18b37fc503f91d0",
+      "compiler/tools/fmt.mdk": "ce0e9b875b4d1f1a60c5f310e8f2e57deb681f6be3ac8e35a7c5a2b0b6737029",
+      "compiler/tools/gate_cmd.mdk": "49b99a86208276fc25e5481eefd9a7397d972ff4145ce2546e16a7067d816e92",
+      "compiler/tools/gate_cost.mdk": "1c34d5898c740f7f2be3042c6632982ef9ad931968b5f3c15192d80d2310dacd",
+      "compiler/tools/gate_pack.mdk": "007b6b99ac0e3aca4888d3b2435a7f860f6936f0cb3d8812eb04f3f810eeb119",
+      "compiler/tools/gate_registry.mdk": "e4c6f2108c367d601a13c66f120fc78e9d183c0c53d6aa3833715836ee95935c",
+      "compiler/tools/lint.mdk": "644f08a433525521641608012b059fdddcf837aeb19b4c7d79b5f44345581022",
+      "compiler/tools/lint_baseline.mdk": "0a747d1506ec41376a4022052fd9958bb7bbea862d682a6fbfb8af68689ce256",
+      "compiler/tools/lint_cache.mdk": "d24e63b57302c7de881bf63570c13d9b89f930091aabd28a0430157e44c75424",
+      "compiler/tools/lint_cmd.mdk": "6d1b43450babebe5dc2c80403145e15ada8418c5b2190cdce5d044a5182d454f",
+      "compiler/tools/lsp.mdk": "96267c7315a810ea9351e92cc11c94ff4ad638099abb6e2e501ac9d66c9a9ba2",
+      "compiler/tools/lsp_harness.mdk": "f0cb0f547dd2c48819db6645f0ce42384f311c367731fd750b0321179bce0569",
+      "compiler/tools/mcp.mdk": "bf63aeb6e10cb705ee272ad11f3739b646e13eef57ab3ede837ccd053aac5a6c",
+      "compiler/tools/native_doctest.mdk": "9772efe64d38fe39f4b759eb25e730b05e085f58c16f785f12c6481525043db6",
+      "compiler/tools/native_props.mdk": "afeaf6a23187a7dbc5251ae7801b206259914644194ea46aee0903556323d7d3",
+      "compiler/tools/native_test_decls.mdk": "6a05a4fbc6d28e7a6631d8924bfe6dfc5877a50314050ed8d899529694b9ac6e",
+      "compiler/tools/new_cmd.mdk": "f51bc91f261556c6fc44bc9257c21a447c1ffdfcbf5c0ea3ef59ecdac22e3d0d",
+      "compiler/tools/printer.mdk": "b24a3a37669bca2270e380b898171cf297f94f423a30cfdb52b7b6224f925979",
+      "compiler/tools/probe_transcript.mdk": "64d8a1a0abd00e7cc1c7290da9965cd3b6a6af1667e8c1c909e31bd7074f1c3f",
+      "compiler/tools/prop_helpers.mdk": "b60c8f54a0d21dbb7e6bf5ad32942995516d955e2e10a8b41a38bc9e6a7ac98d",
+      "compiler/tools/prop_plan.mdk": "e1811e43f65b4edf80f03da780fda299a9da6281b9f8bd7cedf91972e40567d4",
+      "compiler/tools/prop_runner.mdk": "c5c7048068a6e10b3749ce33bcfdb66dc7691cc6e174d301d37a2abc23825803",
+      "compiler/tools/refindex.mdk": "dbff0f39ef934fe40fe08712ccb4ee5b2134ec16e23f7757cd7be59e28d91647",
+      "compiler/tools/repl.mdk": "16fb0cc5b40fb823daca9d9bda7d7d81e3128bb466ea07e48c1261ae0b97ad4f",
+      "compiler/tools/snapshot.mdk": "7359793a91f1a8511e6575ebb8683536d051b4901fd6b267ec2e9487ecc9cc06",
+      "compiler/tools/target_check.mdk": "51c9fb22eaf9d1e468aa008eb8a101329c0dc57fbef4867cb10410dea0eb84a4",
+      "compiler/tools/test_cmd.mdk": "4113df8390277054058fcfbf37e8ae20f5e9ae8c566386bba31c8f0444db8db0",
+      "compiler/tools/test_pins.mdk": "0d29ed56eea638bdb02d2e6faf43e994e8a04bc6ef46281836dbbe8b6babc487",
+      "compiler/tools/test_pins_io.mdk": "d9eb5b7051d99d7dad13af755a092114685cf9a8fd830306f599052a12472cbd",
+      "compiler/tools/test_pins_report.mdk": "bc90ce2442b8c1b3d5df33eaae5f1b857d9827c013e3691028bf1416e9871125",
+      "compiler/tools/test_runner.mdk": "7f31aad4a6f0f16002be7d8633a03af98ddc41f340f565f6e59d54840f1d819c",
+      "compiler/types/annotate.mdk": "08432bcaa1dee28457a35fc1ed76f893ef73fd7d4d73d2294ad29bf73d78a47f",
+      "compiler/types/disposition.mdk": "a95409c833589969a2e69945111a6bee38b0c52fb9c717dc3e2947a701e62673",
+      "compiler/types/effect_authority.mdk": "9c51d0e354c566e31f7b0036444eb54e81305f20791ab8752ad056997676d736",
+      "compiler/types/effect_bindings.mdk": "3ac4e17f9446e932a9d4b6badd76180cfa619ecbec0e0c16fb474651be9e3728",
+      "compiler/types/effect_domain.mdk": "ae7162e56535211f0466a97dbaad51d86872f3bdfe2cebd4404ba631a0b61050",
+      "compiler/types/effect_infer.mdk": "31c52109875a5005a5e618ac8002268e74347e4e0c1d0af4c028be0fdcb4c229",
+      "compiler/types/effect_invocation.mdk": "523847aae6b6c3288c731530570dfbbec06c272befcc275200b9ff4eaad71422",
+      "compiler/types/effect_policy.mdk": "c657733118508f24d18a7750b33434aff1d711156ee860356ade9faa508ee537",
+      "compiler/types/effect_rows.mdk": "3326decda3f44486c1c9231eab8f2f7da8b149952d026ad2ba2c3670c0b869b2",
+      "compiler/types/effect_solver.mdk": "c4236b75812390d3cab73265c26a40b818abfefadb21467c7d920b4bcf19446a",
+      "compiler/types/effect_values.mdk": "d33bdbb22c419aac00d1464673671f38cf674857649c0982f26dd2b95e99550b",
+      "compiler/types/evidence.mdk": "eee8639407f6afbff8f4a9c20452d7149159a0ef7194f4ee4d4aa8eb73be8697",
+      "compiler/types/registry.mdk": "0a9449e6d51870f43240cefeb3ce8dc85e15a5b335cd619243ba05464f9ad371",
+      "compiler/types/repr.mdk": "d7f506219801841865809493537b929dfb912284a295fda83648a4dc1cab6927",
+      "compiler/types/route_key.mdk": "26e8f3cde5944eada26824886409245c534be809d3a02a42bcf2eecf24909fc4",
+      "compiler/types/scopes.mdk": "b533a4b2b56924f18edecb4a94df82411a7fb0c409f7ff60d8909b7bf030e175",
+      "compiler/types/solver_contract.mdk": "00edb2ec7cb9ff9a9d3f97ecefce343ce0d253aa757873f604aa25315481786a",
+      "compiler/types/superclass.mdk": "17c8715e4f243b5d1d273c508c5117b858b08e2b8fc77eb2baedec766334d55d",
+      "compiler/types/target_profile.mdk": "87cadc5f3d696b8ae001513a4cbfa91ac6795a8bd732b092226a361650cf55c4",
+      "compiler/types/typecheck.mdk": "bdab3bf86ec852c73ad89dcb7650b323365a61c3448a0939ab0a6e5876e13be8",
+      "gzip/deflate_demo.mdk": "cb70f3aac30a517dff6479efbefed0a1e806a39e1fde958c25b7507c48df1960",
+      "gzip/inflate_demo.mdk": "f5a61658afe67bb0152f31b427f8445e4b5560f5f2f8fdf068cd6bc2a668e130",
+      "gzip/lib/bitio.mdk": "9fad4e4b405389503c57f20c22e540ffe3bce46bff2dd9c45636cf81d07c8c7b",
+      "gzip/lib/container.mdk": "f6f207aeb2f8d75f2c6c763d6c541b26365c7281854544ab91f1e615ab571ce6",
+      "gzip/lib/crc32.mdk": "c097003acdda4efda98ba693a52609e446d07defbc75d55e1f15ee7250046374",
+      "gzip/lib/deflate.mdk": "ee9b11141b0634371818039b3a948be29526feb3bb48fcb6eed5ee9f0c67422f",
+      "gzip/lib/huffman.mdk": "2113849f9881d078ab4aa6171ac121fc00d2f4ac6d51beccfdd6d0898cd435b4",
+      "gzip/lib/inflate.mdk": "1fd70c92e38979b4dc7afd89bce2cb8df9cb7c33404ea1732d20e1a812a6415e",
+      "gzip/main.mdk": "113bb2758b682b2572f6b908599eae8dbc65574d352af91fe995cd586954e5ac",
+      "gzip/test/deflate_oracle_test.mdk": "24c13fda81a37a17e8a723b5165c9b1923499c7fb067891282fa2b4afad67a6a",
+      "gzip/test/inflate_oracle_test.mdk": "3cf3daf2c0f2ccf45e2a24f74b875ca657a7d5e13a453e1b3f761877c7acd5cc",
+      "pds/lib/accesslog.mdk": "8bb8d12c13c1e98d9a6741ed374b8d60ca6ea98401a94485d123e586e9b8cbd5",
+      "pds/lib/atsyntax.mdk": "9ecef97425bf02dfd1ef2d5827319a66287dfa5cd99be69deed851c5334e04ec",
+      "pds/lib/base58.mdk": "b38bb3b12503cf06258bd2abf007d310f4111ef1d34c731d826cb59cdaf6c613",
+      "pds/lib/blob.mdk": "4d04169799cf6246cecc397685cca9ca7f05bd32aa1a28f67190fff97ff6108e",
+      "pds/lib/blockstore.mdk": "878f2035f880efc0e6782935e4c007c90fa2a84ebe855b6420b458531545cd7e",
+      "pds/lib/car.mdk": "a4e52120f19d033c8fb23d9474224e3783e72ba8c5d6626b2cefd2dfb033eacc",
+      "pds/lib/cid.mdk": "89e36e33b1c87c541a0bd16a11df118e6b3f194316af2052e7cd75e4c2a9bc2c",
+      "pds/lib/cors.mdk": "3ecf956c8c99eeeb2fc36043f1f11f97a2f0ba34a2f9b5febb85ef621f3a960e",
+      "pds/lib/credential.mdk": "c4184399f1b7cf2c420f34b935e2befd6124a03e6cab3d4e52127dc1cf7761e1",
+      "pds/lib/dagcbor.mdk": "8fddaed473f46e34c3886f917a4c6ef0d3abb2c7c7316d8268b01fad251c05d9",
+      "pds/lib/did_key.mdk": "70144dffe74b2bc220ee8834d01dce75e457138e2f44fc37c79d4d8b0a445e10",
+      "pds/lib/event_log_record.mdk": "99645ba848a2f572b724a97db78d8534d5ca64c2cbc25dabddbbf1617e9b0653",
+      "pds/lib/field.mdk": "5449b2d0c9776d91c92fbfd7d56daf7da6f14467b0ec4fec48b639ba64ac0e8a",
+      "pds/lib/handlers.mdk": "fdbf20ea0449e569fd3fc67cd0e9cd1146105c42d19a1c58b267c3689212798b",
+      "pds/lib/hmac_sha256.mdk": "36e2bff68dba934bd012aecc6fbf7f58539aff0de0c16ae7810c6be5d3117257",
+      "pds/lib/httpclient.mdk": "7dc3991b533f82917bb0642f0d135b40d555c0ab0eb7d76013d855f04af7bab2",
+      "pds/lib/jwt.mdk": "f4d8bcd1f67e8a9f7c41778215629e19a5580cba851a7b0dca10ff5a82f1cb37",
+      "pds/lib/lexicon.mdk": "7f2b11a60f165bcf659413124b19115c213b597aaf398b36adc5172284bc3eb1",
+      "pds/lib/lexicon_schemas.mdk": "2f3c9886570e17d85785bb60a480c382b047d966e3a4df4e302fafa47b8e61d8",
+      "pds/lib/lexjson.mdk": "5300e6c91bc16eff3e6bd3a6b437f2e831e855befc33a04575cf5b6925d5d39f",
+      "pds/lib/mst.mdk": "93b0e339441dc74034183d5b4e8ffdfff456f18671b2b2cea9cb7e3916222cb1",
+      "pds/lib/multiformats.mdk": "3ed6b1ccb4de8f3d2036b1857cad320f111cd342b248106bb59f9ff7c5af609c",
+      "pds/lib/nsid.mdk": "bcd08116665742b5287e1e1193ce5f29b148e1e3ff532162df7c49ad5b3c1f6d",
+      "pds/lib/pbkdf2.mdk": "57dcd99a84dadf0c9fee4dda823e6df5e16a02c72c831565d73a66757877f1d5",
+      "pds/lib/proxy.mdk": "d7d9cd4535462c5dc33fcd527a5257590b79d60c53c4c9fc30ffcecdf5ffa19d",
+      "pds/lib/query_params.mdk": "c67d2b5da2edf7cb23d5f92bbf01e9f380dafdf16c7cf6b82274aa9d0173801f",
+      "pds/lib/ratelimit.mdk": "16ab3b1bc5e92ebcd770f943d081dd15cec497289a16533088122d869dc9a8b0",
+      "pds/lib/repo.mdk": "52d4b7b599486f3a89eccfec66ba4f0db35710968beb613b4e2fb5ac178f109d",
+      "pds/lib/resource_limits.mdk": "7566cc7fdadce3cd7cd2015a176eebb1e1a279ff8a63e26842f4cc833b44f41e",
+      "pds/lib/scalar.mdk": "8894a578cf73413495ce52538458e91f4780aa360fcb6e32a31d76f0cb16c89e",
+      "pds/lib/secp256k1.mdk": "9a57ba479ed1f4d6453fe7605e68eccaeeb01820b7f1a752d768e515fd45783a",
+      "pds/lib/server_core.mdk": "fa891090e15067ab0f8c15d8800bce4af680c2b34575f3d1d0263d393295a2ef",
+      "pds/lib/sha1.mdk": "925476d178da0aaf5ce21661796007708ff700853574478bb62f85569329288a",
+      "pds/lib/sign.mdk": "526eed933b39f4de64550ac5b1948bfa03964646071e1ac7f558629727376aaf",
+      "pds/lib/store.mdk": "c6b8b769988cba64e976ea0f1a7ee6eadc63cca7793e6ad3bfae9d2e2fab2116",
+      "pds/lib/sync_event.mdk": "2501883a76507119b2b50a8b1dc23e847999a1a7faea3199ddb2ec88fddb9cf9",
+      "pds/lib/tid.mdk": "5dc18dbe99312f2395f4157962dda81f981f860a486e18b18f714cfae32d0db1",
+      "pds/lib/websocket.mdk": "1c5a73cbe31e00c8939903bfcd86c49f6f9318488b1312529b79f678e73463f8",
+      "pds/lib/xrpc.mdk": "b951e198157d274af54e010ab6ed9bc3a431d916ce115c422082c91cfaa29f66",
+      "pds/nightly/did_key_eval_engine_test.mdk": "ae9c80c2778830c32ceba3a1ca25e8cdc96061e165e18e8add9f584f84794872",
+      "pds/nightly/inlang_eval_engine_test.mdk": "f87b1a75c0803c470bbada358ad0082cfdeaa2ef98de0df9ed5ee2a200d9dfa5",
+      "pds/nightly/mst_vectors_eval_engine_test.mdk": "71749694a8f2632a55e88b72fc33ddf385fa25c8ca0c539885229ebf5b418a9c",
+      "pds/nightly/read_routes_eval_engine_test.mdk": "d4cc4b74e5af55a688081a3c19cbc7c8287a231019b9276f3a8b11d4eb15d8e6",
+      "pds/nightly/repo_vectors_eval_engine_test.mdk": "cb209b0eaf76813733feeec936cc327e4757b799a6c32eb373dbc12d6781a080",
+      "pds/nightly/secp256k1_point_eval_engine_test.mdk": "e993efe95e3672284486d9d93498bd40dbedf80bb3390d058750fa9db48f756a",
+      "pds/serve.mdk": "82b56875523a240248f8076436978ef794ec741364bc66584868808c5eb8a1df",
+      "pds/shell/blobfile.mdk": "36e0cde59de015744e2bef65c42652a66ba05cebb23b62f1c674030b8667ad9b",
+      "pds/shell/blockfile.mdk": "f37eb781edbbc9a1187e166b0743ea55e25652865f6cda0ca370f71e037cb4dc",
+      "pds/shell/crawl.mdk": "1ac4f5e9513d38c712d58c4ae9b60a040607507cb74caf96435587a0eda63a2e",
+      "pds/shell/datadir.mdk": "e739edc5e562bee40f9e10fc37f0fd57e22b4d6b2fcf4c60e213d702fa3f96b6",
+      "pds/shell/dirlock.mdk": "d2d77f758d07caa164a357af592f1f7f4d1ac1672c8e199e795f9847e9d83d6f",
+      "pds/shell/egress.mdk": "5dc25abdd70029fb13cc13ddd0ab9aaff80f0e1af1cfdef067ecfabd8c5e348c",
+      "pds/shell/eventlog.mdk": "07d80f0c1183657c76bc1a40450bbc194e85fe58ed800d3d82fab88536b3a14f",
+      "pds/shell/keygen.mdk": "9265bb6b658bbb28a3b58ddfe18f07b6ad523808c397a32f10ae86f1a602e54c",
+      "pds/shell/persist.mdk": "f34ff9f97b66c15b32f288895c7ba4f76407b48d838aaab09d41c098fad112c9",
+      "pds/shell/rows.mdk": "b4502099e92f97819ed87c41a674ba88c420cc03fdad82c0b8fed87d4877b328",
+      "pds/shell/server.mdk": "aadd1ce794cc112ead75deffc6fa663b562b3339b1995d40999116d0d856b9aa",
+      "pds/shell/subscribe.mdk": "137cd17e84aee4263e9942fa9495faa6cdbe9a176e4a95b9218ec0b800b4bd8c",
+      "pds/test/activation_event_vectors_main.mdk": "a37177127cb1150d36bc686145228592c26704892c08297e3b7571b92bb44de3",
+      "pds/test/algebra_support.mdk": "46ede9cfb82de63b3e2b6412619e072297bebe010813c24bcf01fd6361da22c3",
+      "pds/test/appview_stub_main.mdk": "7d4b9a5e47063da0450c1ac1e1f61d1e7c8a418de4e72d3d9ec6a445351bb44c",
+      "pds/test/atsyntax_vectors_main.mdk": "67f12ae73b0af0a8d49616d053ab309222f955de42b6de2b40293cfea947b94d",
+      "pds/test/atsyntax_vectors_test.mdk": "531d2f29a7dfd3140d3f49157a0a460e508e0f3325573a0046d7a03857c95f5b",
+      "pds/test/auth_seam_test.mdk": "3580f019f1c651323969713553cf9a94e63ba0a97acce69db09e4b9750857aab",
+      "pds/test/authority_pins/blocks_into_data.mdk": "6e71ce25802822f9c912644b3612a0f0984b107ce65cab364c1610115901a9a8",
+      "pds/test/authority_pins/blocks_into_secrets.mdk": "d2857d044c810f5a9ceca065eef3b7c0ccbfe505ec1ec9f07773c6adbe4ac909",
+      "pds/test/authority_pins/egress_right_host.mdk": "ab69888e3fe08b12d10914e6462ab5a3f16937069efc3238196a080cfe69160e",
+      "pds/test/authority_pins/egress_wrong_host.mdk": "341b5b4dd87b3eff3c7f48a918620c8c7f8aadc0e743107fa859bbbf3b2fbc7a",
+      "pds/test/authority_pins/kdf_labelled.mdk": "29299238e9748ffefdedfa643fdc3d444e98146b48102aa39361d1e933a82aa4",
+      "pds/test/authority_pins/kdf_pure.mdk": "0193468c69ae5afe02f81adaf3bf817b040e784e2bd79938e510643aae7a992a",
+      "pds/test/authority_pins/mint_labelled.mdk": "c11259ced3df9c23357f169df9a8d70c8d31e01273acafd1ca5d028951bc6fa0",
+      "pds/test/authority_pins/mint_pure.mdk": "e81ddbf674f28da7f12c98e78b99b9515908bd0ec77fd05d91785b9fc70643d3",
+      "pds/test/authority_pins/server_labelled.mdk": "2e571ae8ae6965f71c3d983b6388c86ee558a07f67d6172fddc2ef51a51f8cf8",
+      "pds/test/authority_pins/server_pure.mdk": "c1d342ce1b8c2cc5dcaf05e9b4c6d34159b1fcad78433eaf5ba387a3e6724ef6",
+      "pds/test/authority_pins/service_auth_labelled.mdk": "9f3ba93c3c2ce28ba512cba35649e5a90d52999803d98870a47b9e8d7d7ca54e",
+      "pds/test/authority_pins/service_auth_pure.mdk": "a7210030a54a050fdb40f197096d52f2b196010680605c811029df10ddc4a34e",
+      "pds/test/authority_pins/sign_labelled.mdk": "7c37f0be9a31cea9b367dcb2b6f6018e3a9b6ff1763e9c246a922193d58dc49b",
+      "pds/test/authority_pins/sign_pure.mdk": "372aa9266d0912f331054a8060098f650705b54ac9fafec2c1d637c1234be88b",
+      "pds/test/authority_pins_test.mdk": "8fc03272644a51d0bc4e023e712f782046faa9c104289559ad28b56aacfe6a88",
+      "pds/test/batch_handlers_main.mdk": "a05922ac1a574292f85c13bf760afa44ab27a6fbf9b8da3f2845e1ef8bd8f146",
+      "pds/test/blob_handlers_main.mdk": "70e1dfb28cc1101b371f10894d796fbd2fafafdb4177265d1483513428cd62f4",
+      "pds/test/blob_routes_test.mdk": "fc1c6471136f5835acf06a7a0b746b33af2f7cd6b11633b1034747077063e941",
+      "pds/test/car_store_test.mdk": "8e95c509af854c0ecd4d82ab698c4f0049473d43997eacd526de6bd018e90b62",
+      "pds/test/car_vectors_main.mdk": "600d4ce8f9474607cf1418df240c8ac2bebb60ab6331c8adfafbb02eeb5ffdda",
+      "pds/test/car_vectors_test.mdk": "3fc5627dda40285cf5e7bf5285c9c3bfd688f8f6433d1a99781936bb110e0481",
+      "pds/test/commit_event_vectors_main.mdk": "41747a30ec13c80e2504bdd5a47c0d92355d0708a553786d218da76b3c1de0af",
+      "pds/test/constant_time_parity_main.mdk": "57e518e575d8735d9ada488c3f09b798f85f29804794993db425b7c05e69f7d3",
+      "pds/test/constant_time_public_key_main.mdk": "e5066d3009acdc6793f2ecde8e80a7d041da1a7ad25d2ed5f70515c83b1a125d",
+      "pds/test/constant_time_signing_main.mdk": "039c19978acb5e3e579182047a5635b1ef80cbb221c9fd328314000044ac71ac",
+      "pds/test/constant_time_signing_public_main.mdk": "d67a4887a8c0ccf74e2b68d3a5cc4b84642fc5d66390f34a352fbfa09a81a241",
+      "pds/test/cost_curve_main.mdk": "11fe71c11b5ae11f5d49e4ce761c61ad11c2f6b61a3b34d090ed51a04518de9d",
+      "pds/test/crawl_stub_main.mdk": "206851363eaac7aef5a5c896e993fd843a9d10746637db72ee6c501eed95ed4f",
+      "pds/test/credential_test.mdk": "9aaae24f56ae8eb96d5e2bdd1bcd5a82e6bb148d65219c7672c4ac68dc8b1bc8",
+      "pds/test/dagcbor_cid_test.mdk": "74157acf162cd0360877c2b7e4e2e955842ab1e0ff22c414659c59aa89154374",
+      "pds/test/dagcbor_cid_vectors_main.mdk": "5bbe63e49252618c24d37eaa730c1a72c3ebb7ae47f51bf14d2cde46255dd641",
+      "pds/test/dagcbor_cid_vectors_test.mdk": "b240731defcef2989d68ba4d5a9ace34ac6abfde1de761d5ab0b33384f75a72e",
+      "pds/test/deploy_config_lint_test.mdk": "ef6d034ae0579ec474b77c5cc88dd7f8c5da6793717483cf12ffb1a4de14e3ce",
+      "pds/test/did_key_all_engines_main.mdk": "fa00608224ba8d52eda8f9df3c673a4d1ecb3dfa3641d4eb7ab87304073a1f83",
+      "pds/test/did_key_all_engines_test.mdk": "a3ebc12711b7809cb832fd428702bf97eebc8c1ece9d82b71427226c79304ac1",
+      "pds/test/did_key_support.mdk": "c536d88d701ca2bca5e5fabbc2264c3066132b23b4d0cc31a5b1ecf09f3a076a",
+      "pds/test/dirlock_race_main.mdk": "580def2c238002dcc1527306401ba032ee69c822cf392ea4912a5737200e759a",
+      "pds/test/ecdsa_test.mdk": "0d08b04d921782319d6690c20fce5e267c640944befe5cd26fa1acc8b7cf58f9",
+      "pds/test/ecdsa_vectors_main.mdk": "fe0f2e17134c64006ee41039d6038b7b0a53794976185c60aef0fbcdc645bdc9",
+      "pds/test/ecdsa_vectors_test.mdk": "94f5f845c966077b0f1bef53a8f42ad810cad2f63b12251991cd379f38746262",
+      "pds/test/egress_census_test.mdk": "1944c1eb703dca6293a5411f25cb91969ca3d26910739a4eba131afd921ae132",
+      "pds/test/encodings_test.mdk": "54fe73a1954f233d77da19874764177f5f17cca5de10541e2e2bbd1346779d4d",
+      "pds/test/encodings_vectors_main.mdk": "f0f5069b1f42366ce0ce89869ef9a427ac1e44a9c3349d27a66a422586b33d10",
+      "pds/test/encodings_vectors_test.mdk": "cdabe491782c4db7b680137b6dc779472c85bb42c6eea6a2a0e8fa43d1365268",
+      "pds/test/event_log_test.mdk": "e02935c20f0677dc0757b1bf7540fdf248af293a71b2b84a468e97873329aae2",
+      "pds/test/field_test.mdk": "3972e5c805dff0e6b04d34a69eac68e85ae9da85679cc424a66f5c2b3f08da64",
+      "pds/test/field_vectors_main.mdk": "a576581d956eb5b2a8afe23681fced4c950e316ee719b89a1ff2078257a918a8",
+      "pds/test/field_vectors_test.mdk": "5859593696e0c266bbf83e70482db60dbfb45b79e5da741101eddfdc9c5c79fb",
+      "pds/test/fixture_support.mdk": "ca2275676ba2a7482662970e378dda1fe9e957759e3ad5d891490ed56a2da8bb",
+      "pds/test/gc_varint_main.mdk": "6e1b847fafc8f47c6baf2a18db0f3ca546e5b018db1c700e7e1143b0e9658723",
+      "pds/test/guard_probes_main.mdk": "50f41f4af99938112227f250348a379ad14eb810fdfc7eb9ae9e8c5df50ca5ed",
+      "pds/test/hmac_vectors_main.mdk": "37f026d23f6a26375f4b5c1f290c40b080190a3412f6d80b50334e940e68237f",
+      "pds/test/hmac_vectors_test.mdk": "46a1969520d2d6f10ad091f9c7e2c99f6151ee15faf5146b6dfc3b010012f8f8",
+      "pds/test/http_test.mdk": "6e37dd5d4e507bb56bb0388a592901b86a87965b80467044bb68bc5afc7f49ea",
+      "pds/test/httpclient_test.mdk": "ce12c81cf3532732b6a2a5764c05f5422aeb0225e1f3870ded0cdd046cbc0eb6",
+      "pds/test/inlang_roster_support.mdk": "fd0e16e97383d1c423d33d507a879ef5d20fa09d603e1b18a6809424dafe312c",
+      "pds/test/inlang_test_oracle_test.mdk": "4fc824810aaafbd351b7c343f5d1a7beb13b5f3790de81de6a65daaf1f8dfb15",
+      "pds/test/jwt_test.mdk": "60fa9aa3e964c7ab9cc61cee18b40639073dabc50d3da2bd54f37e34d1273600",
+      "pds/test/lexicon_corpus_test.mdk": "5ed34c6a384904bc50f6d52999747870bde445c3de9040dd5862c689978507f0",
+      "pds/test/lexicon_schemas_test.mdk": "e0cc25a9bb9a729af43463e58bd218bc706622f710f7db1eb8ebcfd6dabc0706",
+      "pds/test/lexicon_write_test.mdk": "8e44b7dd4479923cc3a8423c360dd3ecc564c0214f628c2c74edc429109100c9",
+      "pds/test/lexjson_vectors_main.mdk": "6aa8ae1c689b48cc70bc12792f06ea8118e0bd23329fa0ed92fe934f964a06fe",
+      "pds/test/lexjson_vectors_test.mdk": "17d25ccc692c2dd473c75e3d6e752e2b5ce416b12193224b8cbbebf667714a88",
+      "pds/test/lib_boundary_test.mdk": "7e0a073f1d146e76762511534c3c1fcabe1637389a3049e0f04e7d434af7d701",
+      "pds/test/load_client_main.mdk": "fdced2c5ec609d77fa17008c2a73b1a50dc8c2b3fc601db106b0af3d502055ef",
+      "pds/test/mst_test.mdk": "3a80073b281364ed46ed05129b6e0ef014b711207607b47f3482ed88e58e860d",
+      "pds/test/mst_vectors_main.mdk": "66dbfe6f39e81f181f0fc074ee2210b3cb2fc912d052831b0c1c0f21eb35e3dc",
+      "pds/test/mst_vectors_support.mdk": "73d4a1e3f2bf6137bf733221ec40f9f8945351929b4eda5b07c87f37d2240bb5",
+      "pds/test/mst_vectors_test.mdk": "055ffbacd78ebb3a2f41c89f595003a77fcde93e2d646a2279bffe2a7cbcb16d",
+      "pds/test/opaque_field_constructor_import.mdk": "9b3e26042db0f7b3fb798716977cd1d7ce2b535cc0ddaecc16b763145929a125",
+      "pds/test/opaque_field_raw_forgery.mdk": "347e01f967acf684e3e0c6bae9a16c922e3d42ed222b0f2817a692e9702ea70c",
+      "pds/test/opaque_field_scalar_control.mdk": "268200936c55c7057c7e87c6f34b8fef29020af60614a0ff87e10e96767cb01f",
+      "pds/test/opaque_field_scalar_test.mdk": "1b782492f0ecd2cf3c86c6af5444adf98beeca2195df069fdf920aa4ed71e1be",
+      "pds/test/opaque_field_sentinel_attack.mdk": "de1ddbb6caa7779910341494d0ca753ab527448b2468c96893a65e2061082082",
+      "pds/test/opaque_scalar_constructor_import.mdk": "dcb896d52fc13f0fea4ffff5508e50b90992dac19abc7064585895a512a80278",
+      "pds/test/opaque_scalar_raw_forgery.mdk": "bb58c4a12ac7040f41aade2cc9e8bda3ed18c6c8666a3d8ecd6f22a06b5c7120",
+      "pds/test/opaque_scalar_sentinel_attack.mdk": "afc26851720ea8d2916290082d2a6260b6d3b2b157fb336978c3e6e9414932f3",
+      "pds/test/opaque_signature_constructor_import.mdk": "b2034057a92437b14cf8b626f4fe95781e1ca4febbcff1610865ce3bac9917c8",
+      "pds/test/opaque_signature_control.mdk": "742eab12827c5a46de73e02ab223e05221ebc20ef4e23995626f57ad2b36bab5",
+      "pds/test/pbkdf2_test.mdk": "2fdaa0f71ac87f9945916e230c360efb2794b7c226bb34db432fbb5a583b7b5e",
+      "pds/test/performance_resource_main.mdk": "8406e108e434f6758ffe67149040c1677fbd07c8b34d24fe53f3bdb91ef7f3c7",
+      "pds/test/protocol_all_engines_main.mdk": "c00f113879716373ab4858c8b2f8fb3fbaf8553c395159204f8b8466f867b0dc",
+      "pds/test/protocol_all_engines_test.mdk": "64105b4c1df10569ee607422b6940aae2b2b1efe41a46d6776fa82347a30ab99",
+      "pds/test/ratelimit_test.mdk": "db1cb8808a78565486def2c4e70d2d77eba5b9f15da636f8f4ae13ed603b90e8",
+      "pds/test/read_buffer_test.mdk": "9e6395ac991a10a62b7ac86101b381a64a41846ea03532d0be1bc266c699f158",
+      "pds/test/read_handlers_main.mdk": "496c22ba5ecee893a717801ebe9319a4f11c396421aec92ccc48a505110e5805",
+      "pds/test/read_routes_all_engines_main.mdk": "79666c1a25588b5f5a8e702815843ea420c5ced2a883ac3d64d7bcb84db8f5cd",
+      "pds/test/read_routes_all_engines_test.mdk": "76bb4068a9bcb1afa016b6fe1b179e139e36879a12844c4feeb1e86ab6a955aa",
+      "pds/test/read_routes_support.mdk": "6141c642ffc60f5c21f2b36a83177ee3d960759185dfa63a888093b38be134c7",
+      "pds/test/record_handlers_main.mdk": "06e4b4defc74ed6c10738d453012c9ff47778babe2b5697434427d67bef6e151",
+      "pds/test/repo_tid_test.mdk": "acade44860dd2748b218316b658e79536a02a156c39613273091d2b57b615d05",
+      "pds/test/repo_vectors_main.mdk": "26053266a5ceae57fc17e348cfaabe5bc1fa81d492def7a0a259e8eacf98221f",
+      "pds/test/repo_vectors_test.mdk": "d01b0812172bfb918a7507c72f62a11633d39ed94c703c6f568bcee3df113451",
+      "pds/test/request_support.mdk": "b7f192d564c9a2dac625e62fb6eaf3d5b3d22ecad8374c75ced1a67e8f1cf3ba",
+      "pds/test/response_support.mdk": "4445c6e3b9d99020b60e93f72210a4c82ec74664f013ec89b163b6441f81f857",
+      "pds/test/rfc6979_test.mdk": "bba1679a457c7cf3bc9aab5502c0dcd7ce37b2299533e4ce4f9ca91b05a5e725",
+      "pds/test/rfc6979_vectors_main.mdk": "97376cf6fc8d1ceec9b00a3faf157d28180db014000f729d817282fc054da77e",
+      "pds/test/rfc6979_vectors_test.mdk": "9de00655c49ce48de3386b5a7b1cc2a326b7d3e80cbdc548777a507c0d27e881",
+      "pds/test/route_policy_test.mdk": "a863222bb264c68251d147441035ee2a9d2c8b54b8580b7ffd0612b9b5b0e648",
+      "pds/test/sandbox_agreement_test.mdk": "ec0da849d928b5aeb2fd8a8e4c9979b3e6ede1bd155e5c4e293ed636c29568ae",
+      "pds/test/scalar_test.mdk": "41f6329a7e8403ad942875b28bfb72dad89ce417c28814179b69cf62287f1bfa",
+      "pds/test/scalar_vectors_main.mdk": "cef5d20c4ab6799300340eb0f4a38207e8ce7da82db9673d2b379c339a5c5931",
+      "pds/test/scalar_vectors_test.mdk": "9727963145cd97e6d2a7bfb6464a1f49dbd54a9d15e9ccdddc8f606110126818",
+      "pds/test/secp256k1_point_support.mdk": "1ff7cb427a2944f1f253d80ba4e03f21adf91fe8f2257a4920a2d2843cb4393b",
+      "pds/test/secp256k1_point_test.mdk": "6ad8e95b9c358d0591c17862dc2be701c9b69c3768633a813a015df032c24df1",
+      "pds/test/secp256k1_point_vectors_main.mdk": "26fdf571b268daa15c4d239610cb0736aeb42541dbfbe74e926e5e518532e98c",
+      "pds/test/secp256k1_point_vectors_test.mdk": "ef870bcddf6a1e8ae5cdaa26deef1bebbadd7d2a992a8fad55ee12a496236ea0",
+      "pds/test/secp256k1_public_key_checks.mdk": "b9bad0acb3bb4cde5843ed5866db2201f566ea33f7d0d9d208c554b02aca01c9",
+      "pds/test/secp256k1_public_key_main.mdk": "9f174b9281f349ec8302c20f52e6acd10b9ce31f17a18ea3ef76fdb516558739",
+      "pds/test/secp256k1_public_key_test.mdk": "d825c02febd79a2814993e1da1c8f16ab6573601b87c3b8391755728452cdfc4",
+      "pds/test/serve_client_main.mdk": "a4e7f882fd4cee512937c21c0f3a282d40ace7ae6d4dbecab725e90a81826496",
+      "pds/test/serve_subscribe_main.mdk": "ce89e3515a706c093f3e57645ad4104103f4dd3ec2dff5bf7556473f9fa15b08",
+      "pds/test/server_core_test.mdk": "4814378416cd092906a1e13f6edf7f4b33ce7d4dbd7ea8dcef3434e058174561",
+      "pds/test/service_jwt_interop_main.mdk": "40d7d6d440ce4e73d46983b3ba13073cba8c53b082bf5fd63d76abd9df174624",
+      "pds/test/session_routes_test.mdk": "cf056489615141433a5dde14268ad69ded731aad05da061f646483f207d0802f",
+      "pds/test/sha256_vector_driver.mdk": "864b4a868d288af5eec7697a7a1540573e2aef3a0940579440bda6823a3ba36f",
+      "pds/test/sha256_vectors_test.mdk": "5b4c6d1538bfa5c416cc4bd979d79a2d7b2d9998b6912f08db1257b80f399784",
+      "pds/test/sign_key_test.mdk": "c286d7ce18ffc2c7eb97a047521e18f07106bd4ab13b37489a098ddeb653ae4d",
+      "pds/test/signing_parity_test.mdk": "e02c706559ecf215d5a11ca338d4bb8e647a25c081eff0f09f8a7460ee0e3ee3",
+      "pds/test/skeleton_test.mdk": "b183cb4a9e399a0c1928d1e8f3706d0c686afa27f03956d1807bcb93d1173475",
+      "pds/test/store_persistence_main.mdk": "facdc88865fc765cdeb228711934f3215b60a689b26ec979ccc1b908cd6a099e",
+      "pds/test/store_persistence_test.mdk": "7110991f8e2c558b4c0ad3370d0acfe4d1e6a29203bbfb2a0d0305b90bff25d7",
+      "pds/test/sync_car_shapes_main.mdk": "e47ac6976de4e8d5902ed9365cbe0202fc0a8b0e42d2829b9b3e4d754184bf34",
+      "pds/test/sync_event_test.mdk": "8102a12f42551f09d9f3ed82af96d08100aa2ce7e38d6e383d165e23ba39463a",
+      "pds/test/synth_repo_main.mdk": "f7b5913254957bbde01486f0ecc691754fd765a11bb3d95daa7d6cf930bba561",
+      "pds/test/trust_boundary_guards_test.mdk": "fbda97b84d8c1c46f8b03b01670411773a1198af31208c35689678dfadb1868d",
+      "pds/test/vector_ledger.mdk": "6a2f322a643ce090be26ad84f128a6d5f0a81de9decbeca0bdbb3b41ba788f21",
+      "pds/test/vector_provenance_test.mdk": "7ace4e927d864dca6c4fd9c1275bd7270995e2fc25b34a2c08b4037dbcc2348f",
+      "pds/test/vector_runner.mdk": "9d1b889849197a5f27ec6a3e47dad649523a6e1ad31e9d2a55b69cfc24c8494d",
+      "pds/test/vector_support.mdk": "3651ee3d4b7428c6f605b5785a6f68dded15766b923bc70e5829d07a219f311e",
+      "pds/test/websocket_test.mdk": "d901c429a9ec8013aa75b854a72e0e0e332ab277bd5bc497a855ef6b7ad09cd9",
+      "pds/test/xrpc_test.mdk": "a73256efc78b39979bba413a5f5c9f73c5a9390a5f60ec17a8c1776caa8bfde2",
+      "runtime/medaka_rt.c": "5ca4ce0a019cabf73ae24ce576223ff13c7536a9ae98f472c5c8371ce45b7667",
+      "stdlib/args.mdk": "0e094fd464c69cd7d9597bb526e4aa0259853c3a5d4a5318b4cf976207383088",
+      "stdlib/array.mdk": "2f48d2d7bd614ff6b91b8b99a0994a4038330b2a590513cde9c17ee71ea9b75d",
+      "stdlib/async.mdk": "3092dfcdb4e6529e2c9d511653c99ffc068fdd018cb644d73ff7191e4af17f6f",
+      "stdlib/base32.mdk": "b4d3483d1f5b65b99187b8bcdcf1bbda4b0c54bc4ed61d2b60877fbf2cdaa34c",
+      "stdlib/base64.mdk": "bf3863508eff02181f860fd31f108f82cb67653a11f680b35ea99e4a09bdc651",
+      "stdlib/bytebuilder.mdk": "e089466250cc8a2d4f20e21906c97b564503c9590906502dc97b72f713532b31",
+      "stdlib/byteparser.mdk": "a67bbdebbb283fcb58f748bbc91855b2fb3f444e4f29820d13145bb604fed42e",
+      "stdlib/bytes.mdk": "9f6da0c4b532f413b6a98e63ebf83696fbd7541318bf1fd6e1d554242c170cf4",
+      "stdlib/core.mdk": "b50226cef3b61fa3a63d4bef27ee5c86a919dd27893b5d6feaab34583dc6769f",
+      "stdlib/crypto/hmac.mdk": "2674c0a31ea659d82f7d6fec280bf95735992d8e32da93bb8b4c29d753134b32",
+      "stdlib/crypto/sha256.mdk": "7a23c1e15c7cf7f5625f52f1931bdff6fcab77e0feaf7d0cb5f74ee4ffca7068",
+      "stdlib/fs.mdk": "b9418a25116558ffb6b836ad027c453f0b097bea80b87bb6e8d823d6b522bd71",
+      "stdlib/hash_map.mdk": "bdfb04b070906bc99dce01e75958566394d6ade8f1487fc0986afa99fe178550",
+      "stdlib/hash_set.mdk": "b9cc1cb14c9549801a2c2c78adec94957c1ab68ce744b274cd12fb0d1cb5549f",
+      "stdlib/hex.mdk": "55fb8a7d76413f109bd71dfa4cb8bf9c0189a8809c174ae470bd0258927d8d17",
+      "stdlib/http.mdk": "c1dcb96963551fe1d32240c11ce93c920b49f77ef6021077714cd520393a22db",
+      "stdlib/i32.mdk": "ad06599108e80821e7078e41481292460a9755962402f2c058ff8149af6e2842",
+      "stdlib/i64.mdk": "6bf0edca3c8581c041a0a93822ba98fa8c90a3d5dec6604b50fa5d9c857ff500",
+      "stdlib/io.mdk": "c8a8bf2abcddbb913dd99abe3174a53c461e8dd395c612704affe7c280c41112",
+      "stdlib/json.mdk": "a16e0a31cc6ba6631ff3856fd8efb240ee3add9c13c135545b93d55467e65d58",
+      "stdlib/list.mdk": "e9d6bab4c44df421f209e3ebd6de45e92df8f6dfad25496abf4ff65bd021a190",
+      "stdlib/map.mdk": "886dff7d83570bee17618a302cae78d0cf280e01076b8bf24f314c93e96a3613",
+      "stdlib/math.mdk": "614b5357f3dd62856909eedfb901afafcdf2dc79eb11a9c9a2e317cc99de1159",
+      "stdlib/mut_bytes.mdk": "053299f963cc9c27a583889a59fb7dba9f31a64dafd83b3c00dcd7fd497cfd0f",
+      "stdlib/net.mdk": "19aa7de4f167f1007eeca1fa8e333665725b501177c77c24df82bc3706599791",
+      "stdlib/net_async.mdk": "d50213ee5156e1262b8e62ecc93accbaad333cb14e1ae2615ccdeab61a13fc84",
+      "stdlib/nonempty.mdk": "ae2f2742610d96ac76e9d2b914f68d289242b0cd3f548b942b55e509ed8056a9",
+      "stdlib/path.mdk": "095aaaec9af68da1102dcf88f7d2128e7bf4082129abbdeda799a55b1bbd4022",
+      "stdlib/regex.mdk": "ee518afb4d585c005f366fafc8db15a18c7c6a323a498936228735095dfa3d8e",
+      "stdlib/runtime.mdk": "c350f0425ab8716daf3341683cc82389bcaa2e10e30e5975a29e870985e216eb",
+      "stdlib/set.mdk": "d0f6d7e92f9d2cb04727d02c8ae49f05d84d76433f10ed09b1d085c422b363cf",
+      "stdlib/string.mdk": "9ed0017bb182eeaa094683a6d15eeb7b02d1cb7f64caaabbf0cf6c0b7a123ee9",
+      "stdlib/test.mdk": "c52c9f036b2eadee8bf10b238fa42fbf2883aecbf68bcbd2011e84d8db88c454",
+      "stdlib/test_process.mdk": "819f7ca8f64b1c1fc1bb2057bf2ad4dbf4ff1cd3a1bedde1eea927a6941839da",
+      "stdlib/time.mdk": "8d687e45a226e4d9539bc5a438766ee871fc53fd3c0f06ce5efa07119d1f020a",
+      "stdlib/toml.mdk": "29e791975ae3a5981465d31930658d6bfde4a2323e8ff64afa49ae4d4b99bd42",
+      "stdlib/u16.mdk": "0460aabaec02cb97e07c86ad11fca4e1bd74618e9074de423d98f12880837727",
+      "stdlib/u32.mdk": "9ad21bd7bb4ba0ee3153288809f4ff2c1a85e60aae1def22ca842e7cfcfb064e",
+      "stdlib/u64.mdk": "46f94bd2bf3405b78055aef9d5db3fc795abd38a5b8265072df8959246495b53",
+      "stdlib/u8.mdk": "ef8e61e287c35129b85b22aaa355d266089e81487503b95c3dc5ef162554262f",
+      "stdlib/validation.mdk": "80675e51c532b329c4bd898b89021f465ac556690961016f0738b1cce7981b6e",
+      "stdlib/vector.mdk": "699778b31f279d773191926a997284d1d920661b1f743e25533aa4e412769a1f"
+    }
+  },
+  "schema": "medaka.varint-correctness.v1",
+  "source_commit": "06e4bc273ce91e620b562750b1fc2e81a8261414"
+}

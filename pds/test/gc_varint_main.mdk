@@ -1,0 +1,44 @@
+{- | On-demand native GC integration workload around the PDS varint encoder.
+
+   `applications.py --varint-only` owns the independent byte oracle. -}
+
+import lib.multiformats.{uvarintEncode}
+import bytes as B
+import hex.{encode}
+import string.{toInt}
+import u8.{toInt as byteToInt}
+
+parseInt : String -> Int
+parseInt text = optionOrPanic "gc_varint: invalid integer" (toInt text)
+
+checksumByte : Int -> U8 -> Int
+checksumByte acc byte = (acc * 257 + byteToInt byte) % 1000000007
+
+repeatEncode : Int -> Int -> Int -> Int -> (Int, Int)
+repeatEncode remaining value byteCount checksum =
+  if remaining == 0 then
+    (byteCount, checksum)
+  else
+    let bytes = uvarintEncode value
+    let nextCount = byteCount + B.length bytes
+    let nextChecksum = B.fold checksumByte checksum bytes
+    repeatEncode (remaining - 1) value nextCount nextChecksum
+
+runEncode : Int -> <IO> Unit
+runEncode value =
+  let bytes = uvarintEncode value
+  println "VARINT \{value} \{encode bytes}"
+
+runRepeat : Int -> Int -> <IO> Unit
+runRepeat count value =
+  if count <= 0 then
+    panic "gc_varint: repeat count must be positive"
+  else
+    let (byteCount, checksum) = repeatEncode count value 0 0
+    println "VARINTREPEAT \{count} \{value} \{byteCount} \{checksum}"
+
+main : <Env, IO> Unit
+main = match args ()
+  ["encode", value] => runEncode (parseInt value)
+  ["repeat", count, value] => runRepeat (parseInt count) (parseInt value)
+  _ => panic "usage: gc_varint (encode <value> | repeat <count> <value>)"

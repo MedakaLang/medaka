@@ -573,6 +573,163 @@ This is a small list improvement, not a general solution to the retained-tree ga
 All 112 paired custom measurements have exactly matching deterministic counters
 and memory accounting. The full correctness/sanitizer and mutation matrix passes,
 including remembered and tracing queue growth beyond their initial 64 slots.
+
+### Retained-tree phase attribution and marking (2026-10-12)
+
+Three additional clock reads divide the tree workload into construction (including
+root setup and collections triggered during allocation), checksum traversal, and
+the final major collection plus root cleanup. There is no per-allocation timing.
+Eight balanced rounds compare commit `06e4bc273`, forced-inline marking, and both
+Boehm adapters at five million nodes and two nursery capacities: 128 samples.
+
+| Median milliseconds, nursery capacity | 262,136 bytes | 262,144 bytes |
+|---|---:|---:|
+| Custom tree total, before → after | 323.96 → 317.50 | 340.13 → 326.84 |
+| Custom final major plus cleanup, before → after | 38.98 → 29.91 | 37.24 → 29.78 |
+| Custom construction, after | 206.07 | 213.90 |
+| Boehm caller-inline construction | 136.97 | 113.23 |
+| Custom checksum traversal, after | 73.59 | 74.85 |
+| Boehm caller-inline checksum traversal | 104.16 | 100.04 |
+| Fastest Boehm tree total (caller-inline in both columns) | 292.69 | 260.51 |
+| Custom list total, before → after | 180.14 → 166.54 | 179.56 → 174.46 |
+| Fastest Boehm list total | 200.83 | 196.37 |
+
+Each row is a separately computed median; phase medians need not sum to the
+median total. Marking now inlines its common path while retaining the existing
+queue growth slow path, assertions, traversal order, and counters. Assembly
+confirms the two calls to `mark` disappear. Final collection improves 20–23%,
+while total tree medians improve only 2–4% with overlapping ranges. Lists improve
+3–8% in this sample. All 32 paired custom counter comparisons match exactly.
+
+Trees remain 8–25% slower than the fastest measured Boehm arm. Their remaining
+cost is concentrated in construction, which includes promotion and intervening
+collections; these measurements do not separate those costs from root handling
+or allocation. Final collection and subsequent traversal are already faster in
+this workload. This directs the next investigation toward the allocation and
+promotion paths rather than treating the entire gap as final marking time.
+
+The [raw samples](../../test/gc_prototype/results/2026-10-12-mark-inline-results.jsonl),
+[reconstruction and timing audit](../../test/gc_prototype/results/2026-10-12-mark-inline-audit.json),
+and [correctness record](../../test/gc_prototype/results/2026-10-12-mark-inline-correctness.json)
+retain phase boundaries, provenance, and the corrected fastest-Boehm reduction.
+
+### PDS varint integration workload (2026-10-12)
+
+`pds/test/gc_varint_main.mdk` calls the real `uvarintEncode` implementation.
+The opt-in `applications.py --correctness-only --varint-only` path checks 29
+exact encodings against a Python unsigned-LEB128 oracle using `divmod(128)`.
+Cases span every seven-bit length boundary through `intMaxBound`; nine-byte
+outputs exercise builder capacities 1, 2, 4, 8, and 16. Four repetition cases
+consume every emitted byte into an order-sensitive checksum. Negative input and
+zero/negative repetition counts must fail with the intended diagnostics.
+
+The [correctness artifact](../../test/gc_prototype/results/2026-10-12-varint-correctness.json)
+records all 33 positive executions, three negative executions, eleven malformed
+output controls, CLI mode guards, and default-driver compatibility checks. This
+is a production-Boehm executable with an independent content oracle, ready for
+later compiler-contract integration; it does not yet execute with custom GC.
+The existing larger application baseline mode retains its inputs and behavior.
+
+### Lessons from OCaml's compiler/runtime contract (2026-10-12)
+
+This source review pins OCaml 5.4.0 at commit
+`907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16`; it makes no claim about the latest
+release or comparative performance. OCaml 5 rewrote the runtime for parallel
+domains, so OCaml 4's established sequential-GC reputation is not evidence for
+the performance of every OCaml 5 mechanism. Medaka's single-mutator experiment
+does not need the parallel coordination described in the
+[OCaml 5.4 GC manual](https://ocaml.org/manual/5.4/parallelism.html#s:parallel-gc).
+
+The useful lessons cross the compiler/runtime boundary:
+
+- The [AMD64 emitter](https://github.com/ocaml/ocaml/blob/907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16/asmcomp/amd64/emit.mlp)
+  generates a downward bump using a dedicated register, a limit comparison, and
+  a cold collection branch. Header and field initialization follow separately.
+  The limit also participates in runtime interrupt handling. Our C fast path
+  still performs epoch/header checks, zeroing, statistics, and an old-limit test;
+  removing any of these requires a replacement contract, not disabled diagnostics.
+- [Liveness analysis](https://github.com/ocaml/ocaml/blob/907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16/asmcomp/liveness.ml)
+  and [stack scanning](https://github.com/ocaml/ocaml/blob/907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16/runtime/fiber.c)
+  connect live tagged values at safepoints to relocatable register/stack slots.
+  Raw interior addresses cannot substitute for traced base pointers. Medaka needs
+  validated physical root provenance and intermediate-operand liveness in addition
+  to the binder-type carrier; a frame per scope is only a first implementation.
+- OCaml's [initialization contract](https://ocaml.org/manual/5.4/intfc.html)
+  permits uninitialized low-level allocation fields only until the next allocation.
+  Its [barriers](https://github.com/ocaml/ocaml/blob/907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16/runtime/memory.c)
+  distinguish young initialization, major initialization, and general mutation.
+  Major initialization still remembers young children. General mutation also
+  preserves major marking, beyond the old-to-young invariant our prototype needs.
+- [Minor promotion](https://github.com/ocaml/ocaml/blob/907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16/runtime/minor_gc.c)
+  temporarily uses evacuated-object fields for an intrusive pending-work list,
+  preserving the first original field in the destination and recovering the
+  remaining fields from the source. This avoids a separate queue
+  append for each ordinary promoted object, but adds a temporary-layout invariant.
+- [Mature pools](https://github.com/ocaml/ocaml/blob/907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16/runtime/shared_heap.c)
+  use size-class lookup and support sweeping on demand. [Major collection](https://github.com/ocaml/ocaml/blob/907eec0b75c5bcf0fe6da5f4b9f11c5c22995a16/runtime/major_gc.c)
+  includes pacing and prefetch mechanisms. These address different throughput and
+  latency costs; they are hypotheses for measurement, not features to copy wholesale.
+
+The next runtime-only candidate is caching object bytes and mature size class in
+the interned descriptor. This removes repeated promotion work without changing
+roots or collection semantics, but must charge increased descriptor storage and
+show a repeatable construction-time benefit across both nursery capacities and
+mixed sizes. The phase measurements make it a stronger immediate candidate than
+another final-marking optimization.
+
+Compiler integration should then test explicit allocation/initialization windows
+and compact live-root frames. Keep the generic zeroed allocation API, reload
+inputs after collecting slow paths, initialize every traced field before another
+safepoint, and retain barriers on direct-old objects. Boehm must receive the same
+initialization affordances in comparisons. These changes belong in the planned
+native physical contracts, after the F5 carrier consumer is available.
+
+Intrusive promotion work is a separate higher-risk experiment: cycles, aliases,
+one-word objects, atomic payloads, complete field restoration, and draining before
+mutator resumption need independent checks. Measure threshold-major work and
+bounded heap-headroom policies before adding incremental collection. Always
+charge the final drain; a larger nursery cannot avoid eventual copying of a fully
+retained tree. Incremental major GC would require an additional major-marking
+barrier contract. None of these proposed experiments has been implemented here.
+
+### Packed gzip inflater output (2026-10-12)
+
+The inflater now accumulates decoded output in the existing packed byte builder.
+Backreferences read newly emitted bytes when their ranges overlap, and refresh
+the backing view when an append grows the buffer. Stored blocks append into the
+same buffer so later compressed blocks can reference them. Finalization copies
+only the initialized prefix. The exported `copyBack` retains its existing
+arbitrary-`Int` vector behavior; the decoder uses a private packed helper.
+
+Five fresh processes per variant, case, and initial-heap policy yield 80 timed
+executions, followed by 16 separate GC diagnostic executions. Before and after
+use the same compiler, emitter, runtime, `-O2`, static Boehm, inputs, and independent
+system-gzip byte oracle. Variant and cohort orders alternate. Only the inflater
+module differs between application source snapshots.
+
+| Compiler-seed inflate, 26,301,788 decoded bytes | Default initial heap | 128 MiB initial heap |
+|---|---:|---:|
+| Median elapsed time, before → after | 1.935 → 1.649 s | 1.907 → 1.651 s |
+| Median peak RSS, before → after (decimal MB) | 1,286.8 → 348.0 | 1,285.6 → 358.5 |
+| Time reduction | 14.8% | 13.4% |
+| RSS reduction | 73.0% | 72.1% |
+
+This is a representation improvement under production Boehm, not a custom-GC
+application result. The CLI still converts packed output to a word array for
+file writing. Smaller cases have mixed timing changes, including regressions;
+their RSS is largely hidden by a 55.9 MB inherited launcher floor. The seed's
+RSS is well above that floor in both arms. Observed RSS reductions cannot be
+equated with exact simultaneously live object bytes.
+
+All 96 measured/diagnostic outputs match the independent bytes. Native tests
+cover growth, overlap, high bytes, invalid distances without mutation, arbitrary
+public `copyBack` values, and stored-to-fixed-block references. The latter fixture
+also decodes independently with zlib. The
+[complete artifact](../../test/gc_prototype/results/2026-10-12-gzip-packed-before-after.json)
+contains samples, ranges, source snapshots, frozen measurement helpers, commands,
+and full GC logs. An initial incomplete batch was discarded after an overly
+strict stderr check rejected Boehm's nonfatal large-allocation warning; the full
+matrix was rerun with an exact warning allowlist and all stderr retained.
 Independent source and artifact reviews check the growth order, reconstruction
 patch, identities, sample order, and timing summaries. The
 [experiment README](../../test/gc_prototype/README.md) links the evidence.

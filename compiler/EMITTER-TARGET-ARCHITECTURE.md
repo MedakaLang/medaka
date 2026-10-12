@@ -222,6 +222,14 @@ change to the default collector. The revised Core-plus-Plan model still applies.
   placement are native decisions. TRMC interior destinations require a rooted
   base plus offset or a stable-address contract; array builders must reload their
   bases after allocating callbacks.
+- **Initialization windows are explicit.** An optimized constructor may omit
+  redundant zeroing only when every traced field receives a valid value before
+  another safepoint or publication. Register input roots before allocation and
+  reload them after a collecting slow path. Young initialization and direct-old
+  initialization have different barrier obligations; a fresh old object can
+  already contain young children. Preserve the generic zeroed allocator for
+  callers without this proof. Compact root frames or later stack maps must use
+  the same physical liveness facts, including intermediate operands.
 
 F5 does not provide complete field/capture layouts or object scan maps. Reuse
 Core's existing ordinals and call/tail facts. Additional semantic field or capture

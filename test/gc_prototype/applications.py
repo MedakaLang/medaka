@@ -5,6 +5,8 @@ Correctness mode builds the PDS and gzip CLI applications, then checks their
 outputs against independent oracles. Measure mode times fresh CLI processes in
 two explicitly named Boehm heap-policy cohorts. GC_PRINT_STATS is collected in
 separate untimed processes so diagnostics never contaminate wall samples.
+The opt-in --varint-only path builds the actual PDS varint encoder entry and
+checks byte content and repeated consumption; measurement is not enabled there.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ APP_SOURCES = {
     "deflate": ROOT / "gzip/deflate_demo.mdk",
     "inflate": ROOT / "gzip/inflate_demo.mdk",
 }
+VARINT_SOURCE = ROOT / "pds/test/gc_varint_main.mdk"
 SEED_GZIP = ROOT / "compiler/seed/emitter.ll.gz"
 RUNTIME = ROOT / "runtime/medaka_rt.c"
 EMITTER_SOURCE = ROOT / "compiler/backend/llvm_emit.mdk"
@@ -61,7 +64,8 @@ def source_manifest() -> dict[str, str]:
     return {rel: sha256(ROOT / rel) for rel in sorted(paths)}
 
 
-def provenance(scratch: Path) -> dict[str, object]:
+def provenance(scratch: Path, binary_names: tuple[str, ...] =
+               ("performance_resource", "deflate_demo", "inflate_demo")) -> dict[str, object]:
     try:
         pkg = subprocess.run(["pkg-config", "--modversion", "bdw-gc"], check=True,
                              text=True, capture_output=True)
@@ -83,7 +87,7 @@ def provenance(scratch: Path) -> dict[str, object]:
     clang_version = subprocess.run([clang_bin, "--version"], check=True, text=True,
                                    capture_output=True).stdout.splitlines()[0]
     linkage_rows = []
-    for name in ("performance_resource", "deflate_demo", "inflate_demo"):
+    for name in binary_names:
         binary = scratch / name
         linkage_command = (["otool", "-L", str(binary)] if sys.platform == "darwin"
                            else ["ldd", str(binary)])
@@ -177,18 +181,19 @@ def checked(argv: list[str], env: dict[str, str], timeout: int,
     return p
 
 
-def build_apps(scratch: Path, timeout: int) -> dict[str, object]:
+def build_apps(scratch: Path, timeout: int, *, varint_only: bool = False) -> dict[str, object]:
     env = clean_env()
     env.update({"CC": "clang", "MEDAKA_STRICT": "1", "MEDAKA_CLANG_OPT": "-O2"})
-    fresh = [str(MEDAKA), "check", str(APP_SOURCES["pds"])]
+    sources = {"varint": VARINT_SOURCE} if varint_only else APP_SOURCES
+    fresh = [str(MEDAKA), "check", str(next(iter(sources.values())))]
     p = checked(fresh, env, timeout, "strict freshness check")
     builds = []
-    bins = {
+    bins = {"varint": scratch / "gc_varint"} if varint_only else {
         "pds": scratch / "performance_resource",
         "deflate": scratch / "deflate_demo",
         "inflate": scratch / "inflate_demo",
     }
-    for name, source in APP_SOURCES.items():
+    for name, source in sources.items():
         argv = [str(MEDAKA), "build", str(source), "-o", str(bins[name])]
         bp = checked(argv, env, timeout, f"build {name}")
         builds.append({"name": name, "command": command_record(argv, env),
@@ -201,6 +206,110 @@ def build_apps(scratch: Path, timeout: int) -> dict[str, object]:
         "builds": builds,
         "binaries": {k: str(v) for k, v in bins.items()},
     }
+
+
+def unsigned_leb128(value: int) -> bytes:
+    if not 0 <= value <= (1 << 62) - 1:
+        raise ValueError("varint oracle input is outside Medaka's nonnegative Int range")
+    output = bytearray()
+    while True:
+        value, digit = divmod(value, 128)
+        output.append(digit + (128 if value else 0))
+        if not value:
+            return bytes(output)
+
+
+def varint_expected(value: int, count: int | None = None) -> tuple[str, dict[str, object]]:
+    encoded = unsigned_leb128(value)
+    oracle = {"value": value, "expected_hex": encoded.hex(), "encoded_length": len(encoded)}
+    if count is None:
+        return f"VARINT {value} {encoded.hex()}\n", oracle
+    checksum = 0
+    for _ in range(count):
+        for byte in encoded:
+            checksum = (checksum * 257 + byte) % 1_000_000_007
+    oracle.update({"count": count, "expected_total_bytes": count * len(encoded),
+                   "expected_checksum": checksum})
+    return f"VARINTREPEAT {count} {value} {count * len(encoded)} {checksum}\n", oracle
+
+
+def verify_varint(p: subprocess.CompletedProcess[str], value: int,
+                  count: int | None = None) -> dict[str, object]:
+    expected, oracle = varint_expected(value, count)
+    if p.returncode != 0 or p.stderr or p.stdout != expected:
+        raise RuntimeError(f"varint oracle mismatch: expected {expected!r}, "
+                           f"exit={p.returncode}, stdout={p.stdout!r}, stderr={p.stderr!r}")
+    return {**oracle, "stdout": p.stdout, "stderr": p.stderr,
+            "returncode": p.returncode, "byte_content_oracle_passed": True}
+
+
+def varint_validator_controls() -> list[dict[str, object]]:
+    encoded, _ = varint_expected(128)
+    repeated, _ = varint_expected(128, 256)
+    repeat_fields = repeated.strip().split(" ")
+    controls = [("wrong_byte", "VARINT 128 8101\n", 128, None, 0, ""),
+                ("wrong_value", "VARINT 129 8001\n", 128, None, 0, ""),
+                ("missing_stdout", "", 128, None, 0, ""),
+                ("truncated_stdout", encoded[:-1], 128, None, 0, ""),
+                ("duplicate_stdout", encoded * 2, 128, None, 0, ""),
+                ("extra_stdout", encoded + "extra\n", 128, None, 0, ""),
+                ("nonzero_exit", encoded, 128, None, 1, ""),
+                ("stderr_output", encoded, 128, None, 0, "unexpected diagnostic\n")]
+    for label, index in [("wrong_repeat_count", 1), ("wrong_byte_count", 3), ("wrong_checksum", 4)]:
+        fields = repeat_fields.copy()
+        fields[index] = str(int(fields[index]) + 1)
+        controls.append((label, " ".join(fields) + "\n", 128, 256, 0, ""))
+    results = []
+    for name, stdout, value, count, code, stderr in controls:
+        p = subprocess.CompletedProcess(["validator-control", name], code, stdout, stderr)
+        try:
+            verify_varint(p, value, count)
+        except RuntimeError as exc:
+            results.append({"control": name, "rejected": True, "reason": str(exc)})
+        else:
+            raise RuntimeError(f"varint validator accepted its {name} control")
+    return results
+
+
+def varint_correctness(binary: str, timeout: int) -> dict[str, object]:
+    values = sorted({0, 1, 255, 300, (1 << 62) - 1} |
+                    {boundary + offset for k in range(1, 9)
+                     for boundary in [1 << (7 * k)] for offset in (-1, 0, 1)})
+    env = app_env("default")
+    results = []
+    for value in values:
+        argv = [binary, "encode", str(value)]
+        p = run(argv, env=env, timeout=timeout)
+        results.append({"case": f"varint-{value}", "argv": argv, **verify_varint(p, value)})
+    for value in (0, 128, 1 << 56, (1 << 62) - 1):
+        argv = [binary, "repeat", "256", str(value)]
+        p = run(argv, env=env, timeout=timeout)
+        results.append({"case": f"varint-repeat-256-{value}", "argv": argv,
+                        **verify_varint(p, value, 256)})
+    negative_argv = [binary, "encode", "-1"]
+    negative = run(negative_argv, env=env, timeout=timeout)
+    diagnostic = "uvarint: negative value -1 (unsigned-varint encodes non-negative values only)"
+    if negative.returncode != 1 or negative.stdout or diagnostic not in negative.stderr:
+        raise RuntimeError(f"varint negative-input contract failed: {negative}")
+    invalid_repeats = []
+    repeat_diagnostic = "gc_varint: repeat count must be positive"
+    for count in (0, -1):
+        argv = [binary, "repeat", str(count), "128"]
+        p = run(argv, env=env, timeout=timeout)
+        if p.returncode != 1 or p.stdout or repeat_diagnostic not in p.stderr:
+            raise RuntimeError(f"varint repeat-count contract failed: {p}")
+        invalid_repeats.append({"argv": argv, "count": count, "returncode": p.returncode,
+                                "stdout": p.stdout, "stderr": p.stderr,
+                                "required_diagnostic": repeat_diagnostic, "rejected": True})
+    return {"oracle": "independent Python unsigned LEB128 via divmod(128); exact hex and rolling byte checksum",
+            "inputs": values, "encode_cases": len(values), "repetition_cases": 4,
+            "results": results, "negative_input": {"argv": negative_argv,
+                "returncode": negative.returncode, "stdout": negative.stdout,
+                "stderr": negative.stderr, "required_diagnostic": diagnostic, "rejected": True},
+            "invalid_repeat_counts": invalid_repeats,
+            "validator_controls": varint_validator_controls(),
+            "builder_growth": "real bytebuilder starts at capacity 0; nine-byte encodings grow through 1, 2, 4, 8, 16; no runtime allocation counts inferred",
+            "collector": "production Boehm; custom collector execution is not established"}
 
 
 def app_cases(scratch: Path) -> tuple[list[dict[str, object]], dict[str, object]]:
@@ -532,6 +641,8 @@ def main() -> int:
     mode = ap.add_mutually_exclusive_group(required=True)
     mode.add_argument("--correctness-only", action="store_true")
     mode.add_argument("--measure", action="store_true")
+    ap.add_argument("--varint-only", action="store_true",
+                    help="correctness-only PDS varint integration workload; measurement is not enabled")
     ap.add_argument("--scratch", type=Path, default=DEFAULT_SCRATCH)
     ap.add_argument("--resume", action="store_true",
                     help="reuse an existing scratch directory after validating its correctness manifest")
@@ -543,6 +654,10 @@ def main() -> int:
         ap.error("--repeats must be positive")
     if args.timeout <= 0:
         ap.error("--timeout must be positive")
+    if args.varint_only and args.measure:
+        ap.error("--varint-only supports --correctness-only; varint measurement is not enabled")
+    if args.varint_only and args.resume:
+        ap.error("--varint-only requires fresh scratch; --resume is not supported")
     scratch = args.scratch.resolve()
     if args.measure and not args.resume:
         ap.error("--measure requires --resume to make scratch reuse explicit")
@@ -551,7 +666,14 @@ def main() -> int:
     scratch.mkdir(parents=True, exist_ok=True)
     requested_report_path = args.output.resolve() if args.output else None
 
-    if args.correctness_only:
+    if args.varint_only:
+        build = build_apps(scratch, args.timeout, varint_only=True)
+        report = {"schema": "medaka.varint-correctness.v1", "mode": "correctness-only",
+                  "application_set": "varint", "source_commit": git("rev-parse", "HEAD"),
+                  "provenance": provenance(scratch, ("gc_varint",)), "build": build,
+                  "correctness": varint_correctness(build["binaries"]["varint"], args.timeout),
+                  "measurement_supported": False}
+    elif args.correctness_only:
         build = build_apps(scratch, args.timeout)
         _, inputs = app_cases(scratch)
         correctness_results = correctness(scratch, build["binaries"], args.timeout)
@@ -572,6 +694,8 @@ def main() -> int:
         prior = json.loads(correctness_path.read_text())
         if prior.get("mode") != "correctness-only":
             raise RuntimeError(f"scratch manifest is not correctness-only: {correctness_path}")
+        if prior.get("application_set") == "varint":
+            raise RuntimeError("varint measurement is not enabled; this manifest is correctness-only")
         current_commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT,
                                         text=True, capture_output=True, check=True).stdout.strip()
         if current_commit != prior["source_commit"]:

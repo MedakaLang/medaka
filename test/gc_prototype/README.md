@@ -440,3 +440,37 @@ stale inputs are rejected. RSS comes from child-process high-water measurements;
 small values are obscured by an approximately 24 MB inherited launcher floor.
 These are Boehm baselines, not application comparisons against the custom collector.
 Linux was measured; macOS remains untested.
+
+The next retained-graph experiment inlines marking and attributes tree time to
+construction, checksum traversal, and final collection. It uses three extra clock
+reads per tree process, with no per-allocation instrumentation. The
+[128 samples](results/2026-10-12-mark-inline-results.jsonl),
+[reconstruction audit](results/2026-10-12-mark-inline-audit.json), and
+[full correctness record](results/2026-10-12-mark-inline-correctness.json)
+show a 20–23% reduction in final-collection medians, but only 2–4% in total tree
+time with overlapping ranges. Trees still trail the fastest Boehm arm by 8–25%;
+construction accounts for the remaining deficit. All 32 custom counter pairs
+match. The audit distinguishes the measured driver from its corrected posthoc
+fastest-Boehm reduction; no timings were regenerated for that correction.
+
+For the smaller real PDS integration target, use a separate empty scratch directory:
+
+```console
+python3 /absolute/path/to/medaka/test/gc_prototype/applications.py --correctness-only --varint-only --scratch /tmp/medaka-gc-varint
+```
+
+This builds `pds/test/gc_varint_main.mdk`, which calls the actual PDS varint
+encoder. An independent Python unsigned-LEB128 oracle checks exact bytes around
+every seven-bit boundary through Medaka's largest nonnegative `Int`, plus
+repeated byte consumption and invalid inputs. The target exercises byte-builder
+growth. It currently runs with production Boehm; moving-GC execution and varint
+timings are not implemented in this driver.
+
+The [varint correctness artifact](results/2026-10-12-varint-correctness.json)
+records exact inputs, outputs, source snapshots, and malformed-output controls.
+The [paired packed-inflater experiment](results/2026-10-12-gzip-packed-before-after.json)
+preserves its complete measurement script and before/after gzip source snapshots.
+Across 80 timings and 16 separate diagnostic executions, every output matches
+system gzip. Seed inflate improves 13–15% in median time and 72–73% in median
+peak RSS under both initial-heap policies. Smaller timings are mixed and small
+RSS values are obscured by the launcher floor. Both application arms use Boehm.

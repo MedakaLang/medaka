@@ -1866,3 +1866,23 @@ the applications run with custom GC. Sample ranges, heap-policy caveats, source
 and binary hashes, audits, and reusable commands are in the
 [experiment README](../test/gc_prototype/README.md) and
 [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).
+
+## Packed inflate and retained-tree phases (2026-10-12)
+
+The gzip inflater now uses a packed byte builder internally. In paired runs with
+the same compiler and production Boehm, compiler-seed inflate drops from about
+1.29 GB median peak RSS to 348–359 MB, a 72–73% reduction. Median elapsed time
+improves 13–15%, from 1.91–1.94 s to about 1.65 s under default/128 MiB initial
+heap policies. All 80 timing and 16 separate diagnostic executions match system
+gzip's output bytes. Small-input timing effects are mixed, and their RSS is
+mostly hidden by the launcher floor. File output still converts to a word array.
+
+Separately, forced-inline marking improves the custom collector's final tree
+collection by 20–23% but total tree time by only 2–4%, with overlapping ranges.
+Trees remain 8–25% slower than the fastest same-run Boehm arm; construction,
+which includes promotion, accounts for the deficit, while final collection and
+checksum traversal already outperform Boehm. All 32 paired custom counter sets
+match. The actual PDS
+varint encoder now has independent exact-byte boundary and repetition oracles,
+but still runs under production Boehm. Full evidence and OCaml-informed follow-up
+experiments are recorded in [GC-FEASIBILITY.md](../docs/design/GC-FEASIBILITY.md).

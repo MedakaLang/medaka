@@ -318,7 +318,7 @@ void minor_collect(void) {
   while (work.count) scan_promote(work.items[--work.count]);
   memset(gc_fast.nursery, 0xa5, gc_fast.used); gc_fast.used = 0;
 }
-static void mark(Word word) {
+static inline __attribute__((always_inline)) void mark(Word word) {
   if (!pointer(word)) return;
   assert(!is_young(word)); Header *h = header(word);
   (void)descriptor(h);
