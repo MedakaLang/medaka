@@ -69,6 +69,15 @@ hostLabels = [
   "Signal",
 ]
 
+-- What `IO` joins under a profile: its grants of host labels, each with the
+-- parameter it grants.  With no profile it is every host label over its whole
+-- domain.
+export
+ioJoinGrants : Option TargetProfile -> List (String, EffParamTy)
+ioJoinGrants None = wholeDomain hostLabels
+ioJoinGrants (Some p) =
+  filter (g => any (== fst g) hostLabels) (profileGrants p)
+
 -- `wasmgc/edge` does not grant `Net`: §8.1 routes it through a fetch binding,
 -- and no such binding exists until T3 (#3668).
 -- `wasmgc/wasi-p2` is a seam with nothing built, so it grants nothing.

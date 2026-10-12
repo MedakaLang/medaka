@@ -102,6 +102,7 @@ import types.typecheck.{
   tcMsg,
   walkGoalSameProbe,
 }
+import types.target_profile.{selectProfile, selectedProfile}
 import support.util.{contains, joinNl, joinWith, listLen, lookupAssoc}
 
 data NumericTraceView = NumericTraceView {
@@ -4101,3 +4102,176 @@ test "an undetermined goal's prerequisites are judged in work linear in depth" =
 -- solving walks' memo must not, in either order.
 test "the solving-walk memo keeps goals that differ only in an effect row apart" =
   expectEqual [True, True, False, False, True] (walkGoalSameProbe ())
+
+-- ── what `IO` joins follows the selected target profile ──────────────────────
+-- The label set of `wasmgc/node` excludes `Exec`, so there an `<IO>` bound does
+-- not cover `runIt`; with no profile, and on `llvm/native-posix`, it does.
+
+ioJoinPrelude : String
+ioJoinPrelude =
+  "effect Audit\nextern runIt : String -> <Exec> Unit\nextern say : String -> <Stdout> Unit\nextern emitAudit : Unit -> <Audit> Unit\n"
+
+-- Runs `k` with `name` selected the way `check --target` selects it, then puts
+-- back no selection, so no other test sees the profile.
+underTarget : Option String -> (Unit -> a) -> a
+underTarget name k =
+  let _ = match selectProfile name None
+    Ok p => selectedProfile := p
+    Err m => panic m
+  let r = k ()
+  selectedProfile := None
+  r
+
+-- Each error as (module, line, code, message).
+ioJoinErrors : List ModDiags -> List (String, Int, String, String)
+ioJoinErrors results = flatMap moduleIoJoinErrors results
+
+moduleIoJoinErrors : ModDiags -> List (String, Int, String, String)
+moduleIoJoinErrors (mid, (_, errors, _)) =
+  map (d => (mid, diagLine d, tcCode d, tcMsg d)) errors
+
+diagLine : TcDiag -> Int
+diagLine (TcDiag _ _ (Some (Loc _ line _ _ _)) _ _ _) = line
+diagLine _ = 0
+
+ioJoinCheck : Option String ->
+  List (String, String) ->
+  List (String, Int, String, String)
+ioJoinCheck name sources = underTarget name (_ =>
+  ioJoinErrors
+    (checkModulesDiagsChain
+      None
+      ""
+      []
+      []
+      (desugar (parseLocated ioJoinPrelude))
+      (map (s => (fst s, desugar (parseLocated (snd s)))) sources)))
+
+nodeJoinClause : String
+nodeJoinClause =
+  "; `IO` on `wasmgc/node` is <Clock, Env, FileRead, FileWrite, Rand, Stderr, Stdin, Stdout>"
+
+test "an <IO> entry performing only granted labels is admitted on wasm" =
+  let source = "main : <IO> Unit\nmain = say \"hi\"\n"
+  expectEach [
+    ("none", expectEqual [] (ioJoinCheck None [("entry", source)])),
+    ("wasm", expectEqual [] (ioJoinCheck (Some "wasm") [("entry", source)])),
+  ]
+
+test "an <IO> function running a command is refused on wasm at the call" =
+  let source =
+    "listDir : Unit -> <IO> Unit\nlistDir _ = runIt \"ls\"\n\nmain : <IO> Unit\nmain = listDir ()\n"
+  expectEach [
+    ("none", expectEqual [] (ioJoinCheck None [("entry", source)])),
+    (
+      "native",
+      expectEqual [] (ioJoinCheck (Some "native") [("entry", source)]),
+    ),
+    (
+      "wasm",
+      expectEqual
+        [
+          (
+            "entry",
+            2,
+            "T-EFFECT-LEAK",
+            "performs <Exec> where only <IO> is allowed" ++ nodeJoinClause,
+          ),
+        ]
+        (ioJoinCheck (Some "wasm") [("entry", source)]),
+    ),
+  ]
+
+test "an unused <IO> library function running a command is refused on wasm" =
+  let lib =
+    "export\ndouble : Int -> Int\ndouble x = x * 2\n\nexport\nlistDir : Unit -> <IO> Unit\nlistDir _ = runIt \"ls\"\n"
+  let entry = "import lib.{double}\n\nmain : <Stdout> Unit\nmain = say \"hi\"\n"
+  let sources = [("lib", lib), ("entry", entry)]
+  expectEach [
+    ("none", expectEqual [] (ioJoinCheck None sources)),
+    (
+      "wasm",
+      expectEqual
+        [
+          (
+            "lib",
+            7,
+            "T-EFFECT-LEAK",
+            "performs <Exec> where only <IO> is allowed" ++ nodeJoinClause,
+          ),
+        ]
+        (ioJoinCheck (Some "wasm") sources),
+    ),
+  ]
+
+test "a leak past an <IO> bound names what IO joins on a narrowed target only" =
+  let source = "audit : Unit -> <IO> Unit\naudit _ = emitAudit ()\n"
+  let bare = "performs <Audit> where only <IO> is allowed"
+  expectEach [
+    (
+      "none",
+      expectEqual
+        [("entry", 2, "T-EFFECT-LEAK", bare)]
+        (ioJoinCheck None [("entry", source)]),
+    ),
+    (
+      "native",
+      expectEqual
+        [("entry", 2, "T-EFFECT-LEAK", bare)]
+        (ioJoinCheck (Some "native") [("entry", source)]),
+    ),
+    (
+      "edge",
+      expectEqual
+        [
+          (
+            "entry",
+            2,
+            "T-EFFECT-LEAK",
+            bare ++ "; `IO` on `wasmgc/edge` is <Clock, Rand, Stderr, Stdout>",
+          ),
+        ]
+        (ioJoinCheck (Some "wasmgc/edge") [("entry", source)]),
+    ),
+  ]
+
+-- The keyed drive resumes from the module-chain memo, so `lib`'s result under
+-- one profile must not be replayed under another.
+ioJoinKeyedCheck : Option String -> List (String, Int, String, String)
+ioJoinKeyedCheck name =
+  let lib = "export\nlistDir : Unit -> <IO> Unit\nlistDir _ = runIt \"ls\"\n"
+  let entry = "import lib.{listDir}\n\nmain : <IO> Unit\nmain = say \"hi\"\n"
+  underTarget name (_ =>
+    ioJoinErrors
+      (checkModulesDiagsChain
+        (Some (4032, 4033))
+        "io-join-profile-key"
+        [Some "lib-v1", None]
+        []
+        (desugar (parseLocated ioJoinPrelude))
+        [
+          ("lib", desugar (parseLocated lib)),
+          ("entry", desugar (parseLocated entry)),
+        ]))
+
+test "the memoized drive gives each profile its own result in one process" =
+  let first = ioJoinKeyedCheck None
+  let onWasm = ioJoinKeyedCheck (Some "wasm")
+  let again = ioJoinKeyedCheck None
+  expectEach [
+    ("none first", expectEqual [] first),
+    (
+      "wasm after none",
+      expectEqual
+        [
+          (
+            "lib",
+            3,
+            "T-EFFECT-LEAK",
+            "performs <Exec> where only <IO> is allowed" ++ nodeJoinClause,
+          ),
+        ]
+        onWasm,
+    ),
+    ("none after wasm", expectEqual [] again),
+  ]
