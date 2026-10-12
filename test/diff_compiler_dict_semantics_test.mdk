@@ -4911,7 +4911,7 @@ table = [
   Row {
     entry = "requires-super-head-parametric-box-rejected.mdk",
     label =
-      "§3 W-super at a parametric head: `impl Sub (Box a)` needs `Sup (Box a)`, and the only `Sup` impl is `Sup (Box Int)`, which does not cover the rigid `a`; T-MISSING-SUPER-IMPL at the impl on every verb (accepted, then `useSup (Box True)` found no `Sup` dictionary)",
+      "§3 W-super at a parametric head: `impl Sub (Box a)` needs `Sup (Box a)`, and the only `Sup` impl is `Sup (Box Int)`, which does not cover the rigid `a`; T-MISSING-SUPER-IMPL at the impl on every verb, because no `Sub (Box a)` dictionary could carry a `Sup` one",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -4951,6 +4951,72 @@ table = [
     mode = NoValue,
     pinned = "",
     codes = [Present "T-NO-IMPL", Absent "T-MISSING-SUPER-IMPL"],
+  },
+  Row {
+    entry = "requires-super-head-nonlinear-rejected.mdk",
+    label =
+      "§3 W-super, the match is linear: `impl Sup (Pair a a)` binds its repeated `a` to one type, so it does not cover the rigid `Sup (Pair a b)` that `impl Sub (Pair a b)` needs; T-MISSING-SUPER-IMPL at the impl on every verb, as the direct `sup (Pair 1 True)` is T-NO-IMPL",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-SUPER-IMPL"],
+  },
+  Row {
+    entry = "requires-super-head-nonlinear-concrete-rejected.mdk",
+    label =
+      "§3 W-super at a concrete head, the same linear match: `impl Sup (Pair a a)` does not cover `Sup (Pair Int Bool)`, so `impl Sub (Pair Int Bool)` is T-MISSING-SUPER-IMPL at the impl on every verb",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-SUPER-IMPL"],
+  },
+  Row {
+    entry = "requires-super-head-nonlinear-context-rejected.mdk",
+    label =
+      "§3 W-super, linear match with a context: `impl Sup (Pair a a) requires Display a` does not cover `Sup (Pair a b)`, so `impl Sub (Pair a b)` is T-MISSING-SUPER-IMPL at the impl on every verb, and no use reaches a `Sup` dictionary built for `Pair Int String`",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-SUPER-IMPL"],
+  },
+  Row {
+    entry = "requires-super-head-nonlinear-consistent-accepted.mdk",
+    label =
+      "§3 W-super, the accepting half of the linear match: `impl Sup (Pair a a)` covers `Sup (Pair a a)` and `Sup (Pair Int Int)`, so both `Sub` impls are accepted and each runs its own instance on every engine",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "samesub\nsameint\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-head-concrete-given-accepted.mdk",
+    label =
+      "§3 W-super at a concrete head: `requires Sup (Box Int)` is a given that answers the super goal, so `impl Sub (Box Int)` is accepted with no `Sup` impl, as at a parametric head",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok\n",
+    codes = [],
+  },
+  Row {
+    entry = "requires-super-derived-ord-without-eq-rejected.mdk",
+    label =
+      "§3 W-super on a derived impl: `deriving (Ord)` without `Eq` leaves `Eq (Box a)` uncovered; T-MISSING-SUPER-IMPL at the `data` line on every verb, naming the `deriving` clause and the hand-written impl as remedies",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-SUPER-IMPL"],
   },
   Row {
     entry = "xmod-super-impl-downstream-accepted/main.mdk",
@@ -4999,7 +5065,7 @@ table = [
   Row {
     entry = "requires-super-carried-generalized-rejected.mdk",
     label =
-      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), generalizing binder: the more specific super instance `Sub (Box (Two x))`'s construction selects requires `Show2 x`, so `f : Show2 a => a -> String` and `f True` is T-NO-IMPL at the call on every verb. Was ACCEPT printing `suptisub` twice, `Bool` through `Show2 Int`",
+      "§6.1.4 pt 4 R-SUPER-CARRY, generalizing binder: the more specific super instance `Sub (Box (Two x))`'s construction selects requires `Show2 x`, so `f : Show2 a => a -> String` and `f True` is T-NO-IMPL at the call on every verb, rather than running `Bool` through `Show2 Int`",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -5010,7 +5076,7 @@ table = [
   Row {
     entry = "requires-super-carried-signed-rejected.mdk",
     label =
-      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), signed binder: `f : a -> String` does not declare the carried `Show2 a`: T-MISSING-CONSTRAINT at `f` on every verb. Was ACCEPT printing `suptisub` twice",
+      "§6.1.4 pt 4 R-SUPER-CARRY, signed binder: `f : a -> String` does not declare the carried `Show2 a`: T-MISSING-CONSTRAINT at `f` on every verb, because a signature must declare what its body's dictionaries need",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -5021,7 +5087,7 @@ table = [
   Row {
     entry = "requires-super-carried-local-let-rejected.mdk",
     label =
-      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), local `let`: the `let` generalizes the carried `Show2 a`, so `f True` is T-NO-IMPL at the call on every verb. Was ACCEPT printing `suptisub` twice",
+      "§6.1.4 pt 4 R-SUPER-CARRY, local `let`: the `let` generalizes the carried `Show2 a`, so `f True` is T-NO-IMPL at the call on every verb",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -5032,7 +5098,7 @@ table = [
   Row {
     entry = "requires-super-carried-impl-body-rejected.mdk",
     label =
-      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), impl body: `go`'s goal on the head variable carries `Show2 a`, which `impl Run (Box a)` does not declare: T-IMPL-MISSING-REQUIRES naming `requires Show2 a` on every verb. Was ACCEPT printing `suptisub` twice",
+      "§6.1.4 pt 4 R-SUPER-CARRY, impl body: `go`'s goal on the head variable carries `Show2 a`, which `impl Run (Box a)` does not declare: T-IMPL-MISSING-REQUIRES naming `requires Show2 a` on every verb",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -5043,7 +5109,7 @@ table = [
   Row {
     entry = "requires-super-carried-both-instances-accepted.mdk",
     label =
-      "§6.1.4 pt 4 R-SUPER-CARRY (#4010), the positive half: `Show2 Bool` is declared, the carried `Show2 a` is satisfied at both calls, and each runs its own instance on every engine. The built binary used to segfault (rc 139)",
+      "§6.1.4 pt 4 R-SUPER-CARRY, the positive half: `Show2 Bool` is declared, the carried `Show2 a` is satisfied at both calls, and each runs its own instance on every engine, the built binary included",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -5142,7 +5208,7 @@ table = [
   Row {
     entry = "s6-1-prelude-display-string-impl-rejected.mdk",
     label =
-      "§6.1 a program `impl Display String` is α-equal to the prelude's, so the pair has no unique ⊑-minimum: a located reject on check, run AND build (#3633 (user impl Display String silently loses to the prelude's) -- was exit 0 printing the prelude's rendering)",
+      "§6.1 a program `impl Display String` is α-equal to the prelude's, so the pair has no unique ⊑-minimum: a located reject on check, run AND build, because a program impl cannot replace the prelude's",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -5153,7 +5219,7 @@ table = [
   Row {
     entry = "s6-1-prelude-mappable-list-impl-rejected.mdk",
     label =
-      "§6.1 a program `impl Mappable List` is α-equal to the prelude's: reject on every verb (#3872 (user impls of prelude interfaces ignored) -- was exit 0 printing the prelude's answer)",
+      "§6.1 a program `impl Mappable List` is α-equal to the prelude's: reject on every verb, because a program impl cannot replace the prelude's",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -5164,7 +5230,7 @@ table = [
   Row {
     entry = "s6-1-prelude-semigroup-array-impl-rejected.mdk",
     label =
-      "§6.1 a program `impl Semigroup (Array a)` is α-equal to the prelude's: reject on every verb (#3872 (user impls of prelude interfaces ignored) -- was exit 0 printing the prelude's answer)",
+      "§6.1 a program `impl Semigroup (Array a)` is α-equal to the prelude's: reject on every verb, because a program impl cannot replace the prelude's",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -5175,7 +5241,7 @@ table = [
   Row {
     entry = "s6-1-prelude-foldable-array-impl-rejected.mdk",
     label =
-      "§6.1 a program `impl Foldable Array` is α-equal to the prelude's: reject on every verb (#3872 (user impls of prelude interfaces ignored) -- was exit 0 with `length [|1|]` printing the prelude's 1; drained from the must_fail pin)",
+      "§6.1 a program `impl Foldable Array` is α-equal to the prelude's: reject on every verb, because a program impl cannot replace the prelude's",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -5186,7 +5252,7 @@ table = [
   Row {
     entry = "s6-1-prelude-eq-array-impl-rejected.mdk",
     label =
-      "§6.1 a program `impl Eq (Array a)` is α-equal to the prelude's: reject on every verb (#3872 (user impls of prelude interfaces ignored) -- was check exit 0 then a run-time E-NOT-A-FUNCTION and a trapping binary)",
+      "§6.1 a program `impl Eq (Array a)` is α-equal to the prelude's: reject on every verb, because a program impl cannot replace the prelude's",
     expCheck = "REJECT",
     expRun = "REJECT",
     expBuild = "REJECT",
@@ -5216,7 +5282,7 @@ table = [
    an `n == 0` check. Growing the corpus is expected: add the row and raise
    the number in the same commit. -}
 tableRows : Int
-tableRows = 461
+tableRows = 467
 
 {- | One row's graded outcome. `note` carries a structural failure — a row
    naming a fixture that is not there, a spawn that could not start —
@@ -6640,7 +6706,7 @@ data SpanRow = SpanRow { entry : String, label : String, want : String }
 {- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
    is written down rather than discovered. -}
 spanRows : Int
-spanRows = 36
+spanRows = 40
 
 spanTable : List SpanRow
 spanTable = [
@@ -6852,6 +6918,30 @@ spanTable = [
     entry = "determine-vector-ambiguous-unused-dictionary.mdk",
     label = "§3 the verdict lands on the `useMk 3` call",
     want = "18:16",
+  },
+  SpanRow {
+    entry = "requires-super-head-nonlinear-rejected.mdk",
+    label =
+      "§3 W-super: the missing super impl is reported at the interface token of `impl Sub (Pair a b)`",
+    want = "8:5",
+  },
+  SpanRow {
+    entry = "requires-super-head-nonlinear-concrete-rejected.mdk",
+    label =
+      "§3 W-super at a concrete head: reported at the interface token of `impl Sub (Pair Int Bool)`, as at a parametric head",
+    want = "8:5",
+  },
+  SpanRow {
+    entry = "requires-super-head-nonlinear-context-rejected.mdk",
+    label =
+      "§3 W-super: reported at the interface token of `impl Sub (Pair a b)`, not at any use",
+    want = "8:5",
+  },
+  SpanRow {
+    entry = "requires-super-derived-ord-without-eq-rejected.mdk",
+    label =
+      "§3 W-super on a derived impl, which has no interface token: reported at the `data` declaration that derives it",
+    want = "1:5",
   },
 ]
 

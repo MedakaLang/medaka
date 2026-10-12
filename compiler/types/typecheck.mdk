@@ -4623,7 +4623,7 @@ declEnvVisibleAt cur entryOrd = entryOrd <= cur
 -- precisely so the name-scoping tables keep their ordinal filter, and
 -- `DICT-SEMANTICS.md:2025-2033` forbids extending I5's licence to names.  The
 -- SUPERS themselves still come from `CE` at the reading ordinal (`ceLookupAt` in
--- `superImplMsgsOf`); only the row set the existence query scans moved.
+-- `checkImplSuperContexts`); only the row set the existence query scans moved.
 ieCandidacyVisibleAt : Int -> Int -> Bool
 ieCandidacyVisibleAt _ _ = True
 
@@ -7169,12 +7169,12 @@ ieSnapAt cur ((o, u) :: rest) acc
 -- `ieCandidacyVisibleAt` keeps its two unused arguments: the flip's whole diff is
 -- one predicate name, so the acceptance delta is attributable to that alone, and
 -- one line changes back if super-existence is ever re-scoped.  `cur` is still LIVE
--- in this check's other half — `superImplMsgsOf` resolves the interface and its
--- supers through `ceLookupAt … cur`, which is name-scoped and did NOT move.
+-- in this check's other half — `checkImplSuperContexts` resolves the interface and
+-- its supers through `ceLookupAt … cur`, which is name-scoped and did NOT move.
 -- ⚠️ WHAT DID NOT MOVE EITHER, and must not: this returns `ImplRow`s, not an
 -- `ImplUniverse`.  `ieUniverseAt` above answers "what does the obligation channel
 -- know about impls here"; this answers "which impl DECLARATIONS exist", and its
--- consumer matches AST `Ty`s with `tyMatchesAst` where an `ImplUniverse` holds
+-- consumer matches AST `Ty`s with `superHeadCovers` where an `ImplUniverse` holds
 -- `Mono`s matched by `matchStep`.  Routing this through `ieUniverseAt` to reach the
 -- same scope would swap the MATCHER as well as the table — a second, unbudgeted
 -- acceptance delta riding on the ruled one.  Widen the PREDICATE, never the table.
@@ -7182,7 +7182,7 @@ ieSnapAt cur ((o, u) :: rest) acc
 -- walk rebuilds #1438 in this substrate.
 --
 -- 🚨 PERF: THIS IS O(rows) PER CALL AND ITS CALLER RUNS PER (impl x super).  Bind it
--- ONCE per whole-module check and thread the list; calling it inside `superMsgFor`
+-- ONCE per whole-module check and thread the list; calling it in `superRowExists`
 -- would be O(user impls x supers x all impls) — the same class as A-3.4 PR2's first
 -- cut, which `diff_compiler_perf_scaling.sh` caught at r2=3.35 on the `modules` shape
 -- (see `ieUnivSnaps`).  `checkSuperImpls` is the one binding site; keep it that way.
@@ -30180,8 +30180,7 @@ cohKeepFirst None y = y
 -- coherence case, D3/WS-2 — which is exactly the duplicate-instance class).
 cohHardMsg : CohImpl -> List Mono -> List Mono -> String -> String -> String
 cohHardMsg e1 xs ys mid1 mid2
-  | mid1 == cohPreludeMid || mid2 == cohPreludeMid =
-    cohPreludeOverlapMsg (cohImplIfaceName e1) xs ys
+  | cohPairsPrelude mid1 mid2 = cohPreludeOverlapMsg (cohImplIfaceName e1) xs ys
   | cohIsCrossModule mid1 mid2 =
     cohCrossModuleMsg (cohImplIfaceName e1) mid1 mid2
   | otherwise = cohOverlapMsg (cohImplIfaceName e1) xs ys
@@ -30189,6 +30188,11 @@ cohHardMsg e1 xs ys mid1 mid2
 -- the prelude's module id in `buildDeclEnvs`' module list.
 cohPreludeMid : String
 cohPreludeMid = "core"
+
+-- Whether one impl of the pair is the prelude's.  The per-module sweep pairs a
+-- module's own rows (first) with the prelude's (second), so the prelude's is [mid2].
+cohPairsPrelude : String -> String -> Bool
+cohPairsPrelude mid1 mid2 = mid1 == cohPreludeMid || mid2 == cohPreludeMid
 
 -- a program impl α-equal to a prelude impl.  The prelude cannot be edited, so the
 -- remedy is the newtype, not disjointness of the program's two impls.
@@ -30208,6 +30212,8 @@ cohIsCrossModule mid1 mid2 = mid1 /= "" && mid2 /= "" && mid1 /= mid2
 -- not be — and puts the SPEC's remedy first.  The old error's advice ("make them
 -- disjoint, or wrap one type in a newtype") is #614's S2: it is the wrong fix here
 -- and, as that issue's own control shows, adding the ranking impl changed nothing.
+-- A pair with the prelude names the prelude's impl as such rather than by module id,
+-- as `cohPreludeOverlapMsg` does: the program's own module id differs between verbs.
 cohIncomparableMsg : String ->
   List Mono ->
   List Mono ->
@@ -30216,7 +30222,10 @@ cohIncomparableMsg : String ->
   String
 cohIncomparableMsg iface xs ys mid1 mid2 = match cohPpPair xs ys
   (s1, s2) =>
-    "Warning: overlapping impls of \{iface}\{cohWhereSuffix mid1 mid2}: neither \{s1} nor \{s2} is more specific than the other, so a goal matching both has no impl to pick"
+    if cohPairsPrelude mid1 mid2 then
+      "Warning: overlapping impls of \{iface}: neither \{s1} nor the prelude's \{s2} is more specific than the other, so a goal matching both has no impl to pick"
+    else
+      "Warning: overlapping impls of \{iface}\{cohWhereSuffix mid1 mid2}: neither \{s1} nor \{s2} is more specific than the other, so a goal matching both has no impl to pick"
 
 cohWhereSuffix : String -> String -> String
 cohWhereSuffix mid1 mid2
@@ -30314,52 +30323,20 @@ cohPushSoft : Option (String, Option Loc) -> Unit
 cohPushSoft None = ()
 cohPushSoft (Some (msg, loc)) = pushCoherenceWarning loc msg
 
--- ── D1 WS-1a: superinterface-existence gate ────────────────────────────────
--- An
--- `impl C T` whose interface declares `interface C a requires D a` is unsound
--- unless a matching `impl D T` also exists.  This post-pass iterates the USER
--- impls (so a user impl that overrides a prelude impl isn't double-flagged) and,
--- for each, looks up its interface's supers in the FULL decl universe
--- ([allDecls], prelude included — the SUPER impl it needs may be a prelude impl).
--- It fires ONLY when the impl head's type args are all CONCRETE/ground (mirrors
--- the oracle's `is_concrete` gate); a parametric head like `impl Monoid (Bag a)`
--- (free tyvar) is deferred exactly as the oracle defers it.  Error wording is
--- byte-identical to the oracle's MissingSuperImpl message.
--- [userDecls] = the impls to check.
+-- ── the superinterface rule for impl declarations (DICT-SEMANTICS §3 W-super) ──
+-- Checks each impl in [userDecls] against every direct super of its interface; see
+-- `checkImplSuperContexts`.  The supers come from `CE` at the reading ordinal [cur],
+-- keyed by the impl's `implOrigin`.  Existence of a super impl is asked of every
+-- `IE` row in the graph (`ieRowsVisibleAt` reads `ieCandidacyVisibleAt`, the
+-- predicate instance candidacy reads), so a super impl declared in a later module
+-- counts, as it does for dispatch; a row counts only when its own interface identity
+-- is the super's `superOrigin`, never a same-spelled interface.
 --
--- #1557 A-3.5b: the two BARE-NAME lookups this check used to make over a decl list
--- are relocated onto stage K.  WAS: `ifaceSupersOf allDecls iface` (a first-match scan
--- keyed `name == target`) for the supers, and `superImplExists allDecls superName`
--- (whose impl test was the bare `iface == superName`) for existence.  NOW: the supers
--- come from `ceLookupAt` at the reading ordinal, keyed by the naming `DImpl`'s
--- `implOrigin` — the SAME mint `implCompletenessMsgsOfMap` (A-3.5a) and
--- `ifaceDfsCycleOneSuper` (A-3.5c) use — and existence is a query over `IE`'s rows,
--- comparing the row's own `IfaceRef` identity against the SUPER's `superOrigin`.
---
--- ⚖️ RUN-055 (SA-3), owner ruling, 2026-08-12: THE EXISTENCE QUERY IS GRAPH-GLOBAL.
--- It used to scan `IE`'s rows visible at the reading ORDINAL while A-3.6 had already
--- made instance CANDIDACY graph-global, and the two scopes were measured to
--- contradict each other inside one program: with `impl Sub W` in an earlier module
--- and `impl Sup W` in a later one, a `Sup W` goal RESOLVES beside this check
--- reporting that same impl missing.  Both channels now read `ieCandidacyVisibleAt`.
--- ⚠️ ONLY THE SCOPE MOVED.  The supers still come from `CE` at the reading ordinal
--- ([cur] → `ceLookupAt` in `superImplMsgsOf`), the head test is still `tyMatchesAst`
--- over `ImplRow`'s AST `Ty`s, and the interface test is still the IDENTITY leg.  The
--- widening therefore accepts exactly the programs whose super impl EXISTS in the
--- graph and matches by identity — never one that merely shares a spelling.
---
--- 🚨 THE ROW LIST IS BOUND HERE, ONCE, AND THAT IS A PERF REQUIREMENT.  It is
--- O(rows); `superImplExists` runs per (impl x super).  See its header.
---
--- The visible-row list replaces [allDecls] for EXISTENCE only.  The supers themselves
--- come from `CE`, as every superclass reader's do (`superLookup`).
+-- The row list is bound here, once: it is O(rows), and the existence test runs per
+-- (impl x super).
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
 checkSuperImpls userDecls ce ie cur =
   let rows = ieRowsVisibleAt cur ie
-  let _ =
-    foreachUnit
-      (pushTypeError "T-MISSING-SUPER-IMPL")
-      (flatMap (superImplMsgsOf ce cur rows) userDecls)
   foreachUnit (checkImplSuperContexts userDecls ce cur rows) userDecls
 
 -- DICT-SEMANTICS §3, the declaration rule for supers: a dictionary for `C ts` carries
@@ -30369,14 +30346,14 @@ checkSuperImpls userDecls ce ie cur =
 -- head variables rigid, or every binder that reduces `C ts` drops it.  A goal of the
 -- selected instance's context is reduced through the instances as W3-inst's are; a
 -- leaf that is no given is reported at the impl.  A super goal no given answers and
--- no instance selects is a missing super impl: at a concrete head
--- `superImplMsgsOf` reports it, at a parametric head it is reported here, against the
--- same graph-wide rows.  Direct supers suffice because every impl is checked, the
--- super's own impl included.
+-- no impl row covers (`superRowExists`) is a missing super impl, reported at the impl
+-- whether its head is concrete or parametric.  Direct supers suffice because every
+-- impl is checked, the super's own impl included.
 --
 -- A parsed `impl` always records its interface token's span; a derived one records
 -- none, so it is reported at the `data`/`newtype` declaration that produced it, and
--- its remedy is the hand-written impl, since a `deriving` clause takes no `requires`.
+-- its remedies are a `deriving` clause or a hand-written impl, since a `deriving`
+-- clause takes no `requires`.
 checkImplSuperContexts : List Decl ->
   ClassEnv ->
   Int ->
@@ -30397,7 +30374,6 @@ checkImplSuperContexts decls ce cur rows (DImpl { iface, tys, reqs, implOrigin =
       let givens =
         declared ++ flatMap (s => map fst (predicateSlotKnownSupers s)) declared
       let subject = "impl \{iface} \{joinWith " " (map ppTyAtom tys)}"
-      let parametric = not (allList tyIsConcrete tys)
       let subst = zipL (ceRowTyparams r) tys
       let argsOf =
         sup =>
@@ -30406,17 +30382,16 @@ checkImplSuperContexts decls ce cur rows (DImpl { iface, tys, reqs, implOrigin =
             (superParamsOf sup)
       fold
         (_ sup => match argsOf sup
-          Some supArgs =>
-            checkSuperInstanceContext
-              subject
-              roots
-              headIds
-              givens
-              loc
-              derived
-              (superIfaceRef sup)
-              supArgs
-              (parametric && not (superRowExists rows subst sup))
+          Some supArgs => checkSuperInstanceContext
+            subject
+            roots
+            headIds
+            givens
+            loc
+            derived
+            (superIfaceRef sup)
+            supArgs
+            (_ => superRowExists rows subst sup)
           None => ())
         ()
         (ceRowSupers r)
@@ -30447,13 +30422,13 @@ checkSuperInstanceContext : String ->
   Bool ->
   IfaceRef ->
   List Mono ->
-  Bool ->
+  (Unit -> Bool) ->
   Unit
-checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs absent
+checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs covered
   | anyList (givenAnswers sup supArgs) givens = ()
   | otherwise = match rigidHeadInstanceContext headIds sup supArgs
     None =>
-      if absent then
+      if not (covered ()) then
         reportMissingSuperImpl subject roots loc derived sup supArgs
     Some ctx =>
       let walk = reqWalkStart ()
@@ -30467,14 +30442,17 @@ checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs a
         ()
         leaves
 
--- Whether some impl row of the super matches the super goal at the impl's head, head
--- variables rigid (`tyMatchesAst` lets a target variable match only a pattern
--- variable).  Rows are graph-wide, so a super impl declared downstream counts.
+-- Whether some impl row of the super covers the super goal at the impl's head
+-- (`superHeadCovers`).  Rows are graph-wide, so a super impl declared downstream
+-- counts.
 superRowExists : List ImplRow -> List (String, Ty) -> Super -> Bool
 superRowExists rows subst (Super { superHead = n, superParams = ps, superOrigin = so }) =
   let tys = substParams ps subst
   listLen tys /= listLen ps || superImplExists rows (ifaceTabKey so n) n tys
 
+-- The super is named by its spelling, as the checked impl's own interface is, so
+-- the text is the same on every verb and at every head.  A derived impl's remedy is
+-- the `deriving` clause when the super is derivable, else the hand-written impl.
 reportMissingSuperImpl : String ->
   List (String, Int) ->
   Option Loc ->
@@ -30484,14 +30462,14 @@ reportMissingSuperImpl : String ->
   Unit
 reportMissingSuperImpl subject roots loc derived sup supArgs =
   let named = Ref (map (p => (snd p, fst p)) roots)
-  let goal =
-    "\{qualifiedIfaceLabel sup} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
-  let goalBare =
-    "\{sup.irName} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
-  pushTypeErrorOnceAt "T-MISSING-SUPER-IMPL" loc (if derived then
-    "`\{subject}` (derived) requires the superinterface `\{goal}`, which no impl covers; add `impl \{goalBare}`"
+  let goal = "\{sup.irName} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
+  let missing = "requires the superinterface `\{goal}`, which no impl covers"
+  pushTypeErrorOnceAt "T-MISSING-SUPER-IMPL" loc (if not derived then
+    "`\{subject}` \{missing}; add an `impl \{goal}` covering it, or add `requires \{goal}` to the impl"
+  else if derivableIface sup.irName then
+    "`\{subject}` (derived) \{missing}; add `\{sup.irName}` to the type's `deriving` clause, or add an `impl \{goal}`"
   else
-    "`\{subject}` requires the superinterface `\{goal}`, which no impl covers; add an `impl \{goalBare}` covering it, or add `requires \{goalBare}` to the impl")
+    "`\{subject}` (derived) \{missing}; add an `impl \{goal}`")
 
 -- The context of the instance [iface] [args] selects with the head variables
 -- [headIds] held rigid (`sigRigidBindings`), as goals over those variables again.
@@ -30618,8 +30596,8 @@ foreachUnit f (x :: xs) =
 -- The interface decl is resolved out of stage K's `CE` at the reading module's
 -- ordinal (`ceRequiredAt`), so an IMPORTED interface resolves exactly as a local one
 -- does; [iterDecls] (this module's own decls) are the impls to check.  Unknown
--- interface (not in scope) → skip (a distinct error is reported elsewhere),
--- mirroring superImplMsgsOf.
+-- interface (not in scope) → skip (a distinct error is reported elsewhere), as
+-- `checkImplSuperContexts` skips one.
 --
 -- #1557 A-3.5a: there is now ONE checker for both driver modes.  There used to be
 -- two — `checkImplCompleteness`, whose retired arm looked the interface up by a bare
@@ -31938,63 +31916,6 @@ cyclicSuperIfaceMsg : List String -> String
 cyclicSuperIfaceMsg path =
   "cyclic superinterface: " ++ joinWith " requires " (map backticked path)
 
--- the missing-superinterface error messages for one user decl (a DImpl, possibly
--- wrapped in DAttrib); [] for any non-impl decl or when every super impl exists.
--- Only an impl with a concrete head is asked here; `checkImplSuperContexts` asks the
--- same question of a parametric head, where a `requires` can answer it.
---
--- OCCURRENCE MINT (#1110/#1111 A-2.4, the `implCompletenessMsgsOfMap` discipline):
--- `implOrigin` is destructured beside `iface` in the SAME record pattern, so the
--- identity and the name it qualifies cannot drift apart.
---
--- ⚠️ THE MISS ARM IS AN ABSTENTION AND IT IS THE ONE LOUD→SILENT RISK HERE.  A
--- `ceLookupAt` miss yields `[]` — no diagnostic — where the bare scan found the
--- interface by spelling regardless.  This is deliberately the SAME disposition
--- `ifaceSupersOf`'s `None` arm had ("unknown interface, reported elsewhere") and the
--- same one A-3.5a/A-3.5c took at their peers; making it loud instead would be a new
--- rejection class (an acceptance NARROWING) that no ruling licenses.  What guards it
--- is that a super-bearing impl MUST still reject: flat and 2-module
--- `T-MISSING-SUPER-IMPL` were measured before and after this relocation, and an
--- identity miss turns both GREEN, which is the direction that matters.
-superImplMsgsOf : ClassEnv -> Int -> List ImplRow -> Decl -> List String
-superImplMsgsOf ce cur rows (DAttrib _ d) = superImplMsgsOf ce cur rows d
-superImplMsgsOf ce cur rows (DImpl { iface, tys, implOrigin = o, ... }) =
-  match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
-    None => []  -- unknown interface (already reported elsewhere) → skip
-    Some r =>
-      if listLen (ceRowTyparams r) == listLen tys
-        && allList tyIsConcrete tys then
-        flatMap
-          (superMsgFor rows iface tys (zipL (ceRowTyparams r) tys))
-          (ceRowSupers r)
-      else
-        []  -- arity mismatch, or a non-concrete head (deferred, like the oracle)
-superImplMsgsOf _ _ _ _ = []
-
--- check one `Super superName params` against the substitution: map each super
--- param name through [subst] to its concrete Ty; if every param mapped, all are
--- concrete, AND no matching `impl superName <concrete>` exists, emit the error.
---
--- #1557 A-3.5b: the super's IDENTITY key is minted ONCE here, from `superOrigin` —
--- the same field and the same `ifaceTabKey` mint A-3.5c's cycle walk uses, which is
--- the point: two units, one key discipline.  `Super` has carried `superOrigin` since
--- #1110 Stage A-1.
-superMsgFor : List ImplRow ->
-  String ->
-  List Ty ->
-  List (String, Ty) ->
-  Super ->
-  List String
-superMsgFor rows iface implTys subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
-  let concrete = substParams params subst
-  if listLen concrete == listLen params
-    && allList tyIsConcrete concrete
-    && not
-      (superImplExists rows (ifaceTabKey so superName) superName concrete) then
-    [missingSuperImplMsg iface implTys superName concrete]
-  else
-    []
-
 -- map each super-param NAME through [subst] to its Ty, dropping any unmapped (so a
 -- short result vs [params] signals an incomplete substitution → caller skips).
 substParams : List String -> List (String, Ty) -> List Ty
@@ -32002,13 +31923,6 @@ substParams [] _ = []
 substParams (p :: rest) subst = match lookupAssoc p subst
   Some t => t :: substParams rest subst
   None => substParams rest subst
-
--- Both the impl
--- head and the super are printed with the same space-joined atom-position args.
-missingSuperImplMsg : String -> List Ty -> String -> List Ty -> String
-missingSuperImplMsg iface implTys superName superTys =
-  let superHead = "impl \{superName} \{joinWith " " (map ppTyAtom superTys)}"
-  "`impl \{iface} \{joinWith " " (map ppTyAtom implTys)}` requires the superinterface `\{superHead}`, which is missing; add `\{superHead}`"
 
 -- The type parameters and direct supers of one interface, by identity.
 superLookup : IfaceRef -> Option (List String, List Super)
@@ -32030,85 +31944,46 @@ ifaceSupersOf ((DInterface { pub, def, name, typarams, supers, methods }) :: res
   | otherwise = ifaceSupersOf rest target
 ifaceSupersOf (_ :: rest) target = ifaceSupersOf rest target
 
--- does any `impl superName <head>` with a head matching [concrete] exist? (head
--- may be parametric — a free tyvar in the impl head matches any concrete arg,
--- mirroring the oracle's mono_matches: pattern=impl head, concrete=super args.)
+-- does an `impl superName <head>` covering [goal] exist among [rows]?  [rows] are
+-- `IE`'s rows, bound once by `checkSuperImpls`; [superKey] is the super's identity and
+-- [superName] its bare spelling.
 --
--- #1557 A-3.5b: [rows] are `IE`'s rows, bound once by `checkSuperImpls`; [superKey]
--- is the super's identity and [superName] its bare spelling.  This replaced a scan of
--- the whole decl list whose interface test was the bare `iface == superName`.
--- ⚠️ [rows] WAS "the rows visible at the reading ordinal" until RUN-055 (SA-3) widened
--- the scope to the whole graph, to match instance candidacy.  Nothing in THIS function
--- changed: it was and is a scan of whatever population its caller binds, and the two
--- tests below (identity, then `tyMatchesAst`) are what keep the wider population from
--- admitting a super it should not.
---
--- 🚨 IT COMPARES THE IDENTITY LEG, NEVER THE BUCKETS.  `ieInsertRow` indexes every row
--- under `oblIfaceKeys`, which mints TWO keys — the identity key AND a bare-spelling
+-- It compares the identity leg, never the buckets.  `ieInsertRow` indexes every row
+-- under `oblIfaceKeys`, which mints two keys: the identity key and a bare-spelling
 -- compatibility leg that #1438 still rides on.  Looking [superKey] up in
--- `ieConcrete`/`ieHeadless` would therefore answer with BOTH same-spelled interfaces'
--- rows, rebuilding in the new substrate exactly the collapse this relocation removes.
--- Reading `ieRows` and testing each row's own `IfaceRef` cannot reach the bare bucket.
---
--- ⚠️ AND IT KEEPS `tyMatchesAst`.  The head match is unchanged, deliberately: `IE`'s
--- rows carry AST `Ty`s (`ImplRow`'s 4th position), so the existing predicate applies
--- verbatim.  Routing this through `ImplUniverse`/`matchStep` instead would carry a
--- second, unbudgeted acceptance delta on top of the intended re-key.
+-- `ieConcrete`/`ieHeadless` would therefore answer with both same-spelled interfaces'
+-- rows.  Reading `ieRows` and testing each row's own `IfaceRef` cannot reach the bare
+-- bucket.
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
-superImplExists rows superKey superName concrete =
-  anyList (implRowMatchesSuper superKey superName concrete) rows
+superImplExists rows superKey superName goal =
+  anyList (implRowMatchesSuper superKey superName goal) rows
 
--- NAME FIRST, then IDENTITY — the discipline `tabKeyEq` states for itself in
--- `types/registry.mdk`, applied here for a second reason: `ifaceTabKey` ALLOCATES (it
--- goes through `mkIdent`), and this runs once per visible row per (impl x super) in a
--- GC-bound stage.  Bare-name equality is a NECESSARY condition for key equality —
--- `tabKeyOf` puts the same [name] into both the `TkIdent` and the `TkBare` arm — so
--- gating on it is sound, and it bounds the minting to the set the OLD bare scan already
--- let through.  The DECIDING test is still the identity compare; the name test decides
--- nothing on its own.
+-- Name first, then identity: `ifaceTabKey` allocates (it goes through `mkIdent`), and
+-- this runs once per row per (impl x super) in a GC-bound stage.  Bare-name equality
+-- is a necessary condition for key equality (`tabKeyOf` puts the same name into both
+-- the `TkIdent` and the `TkBare` arm), so gating on it is sound; the identity compare
+-- decides.
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
-implRowMatchesSuper superKey superName concrete (ImplRow _ _ ir tys _ _) =
+implRowMatchesSuper superKey superName goal (ImplRow _ _ ir tys _ _) =
   ir.irName == superName
-    && listLen tys == listLen concrete
+    && listLen tys == listLen goal
     && ifaceTabKey ir.irOrigin ir.irName == superKey
-    && allList (p => tyMatchesAst (fst p) (snd p)) (zipL tys concrete)
+    && superHeadCovers tys goal
 
--- a Ty is concrete iff it contains no TyVar (mirror of the oracle's is_concrete,
--- which treats effect rows as transparent — TyEffect ignores its row).
-tyIsConcrete : Ty -> Bool
-tyIsConcrete (TyVar _) = False
-tyIsConcrete (TyCon { tyConName = _ }) = True
-tyIsConcrete (TyApp a b) = tyIsConcrete a && tyIsConcrete b
-tyIsConcrete (TyFun a b) = tyIsConcrete a && tyIsConcrete b
-tyIsConcrete (TyTuple ts) = allList tyIsConcrete ts
-tyIsConcrete (TyEffect _ _ t) = tyIsConcrete t
-tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
--- Same "effect rows are transparent" treatment as `TyEffect` above (the
--- comment on this function): a row's own tail var never counts against
--- concreteness even for a wrapping `TyEffect`, so a bare row atom — with no
--- wrapped type at all — is vacuously concrete too.
-tyIsConcrete (TyRow _ _ _) = True
-tyIsConcrete (TyAuth _ _) = True
-tyIsConcrete (TyNamed _ t _) = tyIsConcrete t
-tyIsConcrete (TyQual t _ _) = tyIsConcrete t
+-- Whether the impl head [pats] covers the super goal [goal], which is the checked
+-- impl's own head with its variables rigid: one substitution for the whole vector
+-- (`matchOneSided`, as the min⊑ selector's `tySubsumesV` and the use site's
+-- `implHeadSubst` match), so a variable [pats] repeats must bind equal types, and a
+-- variable of [goal] matches only a variable of [pats].  `impl D (Pair a a)` does not
+-- cover `D (Pair a b)` or `D (Pair Int Bool)`.  Effect rows are transparent on both
+-- sides.  Type constructors compare by spelling (`tyStep`), where the use site
+-- compares identity.
+superHeadCovers : List Ty -> List Ty -> Bool
+superHeadCovers pats goal =
+  isSome (matchOneSided superHeadStep eqStr tyStructEq (zipL pats goal) [])
 
--- one-directional structural match (pattern may carry free TyVar wildcards;
--- concrete is fully ground).
-tyMatchesAst : Ty -> Ty -> Bool
-tyMatchesAst (TyVar _) _ = True
-tyMatchesAst (TyCon { tyConName = a }) (TyCon { tyConName = b }) = a == b
-tyMatchesAst (TyApp f1 a1) (TyApp f2 a2) =
-  tyMatchesAst f1 f2 && tyMatchesAst a1 a2
-tyMatchesAst (TyFun a1 b1) (TyFun a2 b2) =
-  tyMatchesAst a1 a2 && tyMatchesAst b1 b2
-tyMatchesAst (TyTuple ts1) (TyTuple ts2) =
-  listLen ts1 == listLen ts2
-    && allList (p => tyMatchesAst (fst p) (snd p)) (zipL ts1 ts2)
-tyMatchesAst (TyEffect _ _ t1) t2 = tyMatchesAst t1 t2
-tyMatchesAst t1 (TyEffect _ _ t2) = tyMatchesAst t1 t2
-tyMatchesAst (TyConstrained _ t1) t2 = tyMatchesAst t1 t2
-tyMatchesAst t1 (TyConstrained _ t2) = tyMatchesAst t1 t2
-tyMatchesAst _ _ = False
+superHeadStep : Ty -> Ty -> MStep String Ty Ty
+superHeadStep pat t = tyStep pat (stripTyWrap t)
 
 -- ── D3 / WS-2 part-2: GLOBAL (cross-module) coherence ──────────────────────
 -- Per-module coherence accepts two DIFFERENT modules that
@@ -32122,9 +31997,9 @@ tyMatchesAst _ _ = False
 -- no occurrence-dedup needed.  A conflict between two distinct modules is reported
 -- naming BOTH (cohCrossModuleMsg via cohHardMsg's cross-module branch, or the
 -- `(defined in …)` suffix `cohWhereSuffix` adds to the F-3d soft warning).
--- #1559 A-3.7: "the joint impl set over ALL USER modules" is now `cohRowsOf` over
--- the whole-graph `IE` — the prelude exclusion is the `True`, and the one-entry-per-
--- definition property is `ieRows`' by construction (imports copy no rows either).
+-- The joint impl set is `cohRowsOf` over the whole-graph `IE`, which leaves out the
+-- prelude's rows, and the one-entry-per-definition property is `ieRows`' by
+-- construction (imports copy no rows either).
 --
 -- the first cross-module coherence conflict of EACH CLASS (if any) as bare messages
 -- — `(hard, soft)`, the same split `checkCoherence` reports, so the cross-module path
@@ -39125,7 +39000,9 @@ data SuperGoalEntry = SuperGoalEntry {
 -- spent fuel reported at [loc].  A super goal [answered] gives, itself or through its
 -- supers, is not entered: the construction's ladder tries `assum` before `inst`.  A
 -- super goal with no constructed argument is answered by a given, and one no instance
--- matches is the impl declaration's error (`checkSuperImpls`).
+-- matches is the impl declaration's error (`checkImplSuperContexts`): the
+-- declaration's existence match (`superHeadCovers`) holds the head variables rigid and
+-- binds a repeated impl variable consistently, as `implMatchesU` does here.
 superGoalsEntered : ImplUniverse ->
   ReqWalk ->
   Option Loc ->

@@ -1,5 +1,5 @@
 # META
-source_lines=55620
+source_lines=55497
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -4627,7 +4627,7 @@ declEnvVisibleAt cur entryOrd = entryOrd <= cur
 -- precisely so the name-scoping tables keep their ordinal filter, and
 -- `DICT-SEMANTICS.md:2025-2033` forbids extending I5's licence to names.  The
 -- SUPERS themselves still come from `CE` at the reading ordinal (`ceLookupAt` in
--- `superImplMsgsOf`); only the row set the existence query scans moved.
+-- `checkImplSuperContexts`); only the row set the existence query scans moved.
 ieCandidacyVisibleAt : Int -> Int -> Bool
 ieCandidacyVisibleAt _ _ = True
 
@@ -7173,12 +7173,12 @@ ieSnapAt cur ((o, u) :: rest) acc
 -- `ieCandidacyVisibleAt` keeps its two unused arguments: the flip's whole diff is
 -- one predicate name, so the acceptance delta is attributable to that alone, and
 -- one line changes back if super-existence is ever re-scoped.  `cur` is still LIVE
--- in this check's other half — `superImplMsgsOf` resolves the interface and its
--- supers through `ceLookupAt … cur`, which is name-scoped and did NOT move.
+-- in this check's other half — `checkImplSuperContexts` resolves the interface and
+-- its supers through `ceLookupAt … cur`, which is name-scoped and did NOT move.
 -- ⚠️ WHAT DID NOT MOVE EITHER, and must not: this returns `ImplRow`s, not an
 -- `ImplUniverse`.  `ieUniverseAt` above answers "what does the obligation channel
 -- know about impls here"; this answers "which impl DECLARATIONS exist", and its
--- consumer matches AST `Ty`s with `tyMatchesAst` where an `ImplUniverse` holds
+-- consumer matches AST `Ty`s with `superHeadCovers` where an `ImplUniverse` holds
 -- `Mono`s matched by `matchStep`.  Routing this through `ieUniverseAt` to reach the
 -- same scope would swap the MATCHER as well as the table — a second, unbudgeted
 -- acceptance delta riding on the ruled one.  Widen the PREDICATE, never the table.
@@ -7186,7 +7186,7 @@ ieSnapAt cur ((o, u) :: rest) acc
 -- walk rebuilds #1438 in this substrate.
 --
 -- 🚨 PERF: THIS IS O(rows) PER CALL AND ITS CALLER RUNS PER (impl x super).  Bind it
--- ONCE per whole-module check and thread the list; calling it inside `superMsgFor`
+-- ONCE per whole-module check and thread the list; calling it in `superRowExists`
 -- would be O(user impls x supers x all impls) — the same class as A-3.4 PR2's first
 -- cut, which `diff_compiler_perf_scaling.sh` caught at r2=3.35 on the `modules` shape
 -- (see `ieUnivSnaps`).  `checkSuperImpls` is the one binding site; keep it that way.
@@ -30184,8 +30184,7 @@ cohKeepFirst None y = y
 -- coherence case, D3/WS-2 — which is exactly the duplicate-instance class).
 cohHardMsg : CohImpl -> List Mono -> List Mono -> String -> String -> String
 cohHardMsg e1 xs ys mid1 mid2
-  | mid1 == cohPreludeMid || mid2 == cohPreludeMid =
-    cohPreludeOverlapMsg (cohImplIfaceName e1) xs ys
+  | cohPairsPrelude mid1 mid2 = cohPreludeOverlapMsg (cohImplIfaceName e1) xs ys
   | cohIsCrossModule mid1 mid2 =
     cohCrossModuleMsg (cohImplIfaceName e1) mid1 mid2
   | otherwise = cohOverlapMsg (cohImplIfaceName e1) xs ys
@@ -30193,6 +30192,11 @@ cohHardMsg e1 xs ys mid1 mid2
 -- the prelude's module id in `buildDeclEnvs`' module list.
 cohPreludeMid : String
 cohPreludeMid = "core"
+
+-- Whether one impl of the pair is the prelude's.  The per-module sweep pairs a
+-- module's own rows (first) with the prelude's (second), so the prelude's is [mid2].
+cohPairsPrelude : String -> String -> Bool
+cohPairsPrelude mid1 mid2 = mid1 == cohPreludeMid || mid2 == cohPreludeMid
 
 -- a program impl α-equal to a prelude impl.  The prelude cannot be edited, so the
 -- remedy is the newtype, not disjointness of the program's two impls.
@@ -30212,6 +30216,8 @@ cohIsCrossModule mid1 mid2 = mid1 /= "" && mid2 /= "" && mid1 /= mid2
 -- not be — and puts the SPEC's remedy first.  The old error's advice ("make them
 -- disjoint, or wrap one type in a newtype") is #614's S2: it is the wrong fix here
 -- and, as that issue's own control shows, adding the ranking impl changed nothing.
+-- A pair with the prelude names the prelude's impl as such rather than by module id,
+-- as `cohPreludeOverlapMsg` does: the program's own module id differs between verbs.
 cohIncomparableMsg : String ->
   List Mono ->
   List Mono ->
@@ -30220,7 +30226,10 @@ cohIncomparableMsg : String ->
   String
 cohIncomparableMsg iface xs ys mid1 mid2 = match cohPpPair xs ys
   (s1, s2) =>
-    "Warning: overlapping impls of \{iface}\{cohWhereSuffix mid1 mid2}: neither \{s1} nor \{s2} is more specific than the other, so a goal matching both has no impl to pick"
+    if cohPairsPrelude mid1 mid2 then
+      "Warning: overlapping impls of \{iface}: neither \{s1} nor the prelude's \{s2} is more specific than the other, so a goal matching both has no impl to pick"
+    else
+      "Warning: overlapping impls of \{iface}\{cohWhereSuffix mid1 mid2}: neither \{s1} nor \{s2} is more specific than the other, so a goal matching both has no impl to pick"
 
 cohWhereSuffix : String -> String -> String
 cohWhereSuffix mid1 mid2
@@ -30318,52 +30327,20 @@ cohPushSoft : Option (String, Option Loc) -> Unit
 cohPushSoft None = ()
 cohPushSoft (Some (msg, loc)) = pushCoherenceWarning loc msg
 
--- ── D1 WS-1a: superinterface-existence gate ────────────────────────────────
--- An
--- `impl C T` whose interface declares `interface C a requires D a` is unsound
--- unless a matching `impl D T` also exists.  This post-pass iterates the USER
--- impls (so a user impl that overrides a prelude impl isn't double-flagged) and,
--- for each, looks up its interface's supers in the FULL decl universe
--- ([allDecls], prelude included — the SUPER impl it needs may be a prelude impl).
--- It fires ONLY when the impl head's type args are all CONCRETE/ground (mirrors
--- the oracle's `is_concrete` gate); a parametric head like `impl Monoid (Bag a)`
--- (free tyvar) is deferred exactly as the oracle defers it.  Error wording is
--- byte-identical to the oracle's MissingSuperImpl message.
--- [userDecls] = the impls to check.
+-- ── the superinterface rule for impl declarations (DICT-SEMANTICS §3 W-super) ──
+-- Checks each impl in [userDecls] against every direct super of its interface; see
+-- `checkImplSuperContexts`.  The supers come from `CE` at the reading ordinal [cur],
+-- keyed by the impl's `implOrigin`.  Existence of a super impl is asked of every
+-- `IE` row in the graph (`ieRowsVisibleAt` reads `ieCandidacyVisibleAt`, the
+-- predicate instance candidacy reads), so a super impl declared in a later module
+-- counts, as it does for dispatch; a row counts only when its own interface identity
+-- is the super's `superOrigin`, never a same-spelled interface.
 --
--- #1557 A-3.5b: the two BARE-NAME lookups this check used to make over a decl list
--- are relocated onto stage K.  WAS: `ifaceSupersOf allDecls iface` (a first-match scan
--- keyed `name == target`) for the supers, and `superImplExists allDecls superName`
--- (whose impl test was the bare `iface == superName`) for existence.  NOW: the supers
--- come from `ceLookupAt` at the reading ordinal, keyed by the naming `DImpl`'s
--- `implOrigin` — the SAME mint `implCompletenessMsgsOfMap` (A-3.5a) and
--- `ifaceDfsCycleOneSuper` (A-3.5c) use — and existence is a query over `IE`'s rows,
--- comparing the row's own `IfaceRef` identity against the SUPER's `superOrigin`.
---
--- ⚖️ RUN-055 (SA-3), owner ruling, 2026-08-12: THE EXISTENCE QUERY IS GRAPH-GLOBAL.
--- It used to scan `IE`'s rows visible at the reading ORDINAL while A-3.6 had already
--- made instance CANDIDACY graph-global, and the two scopes were measured to
--- contradict each other inside one program: with `impl Sub W` in an earlier module
--- and `impl Sup W` in a later one, a `Sup W` goal RESOLVES beside this check
--- reporting that same impl missing.  Both channels now read `ieCandidacyVisibleAt`.
--- ⚠️ ONLY THE SCOPE MOVED.  The supers still come from `CE` at the reading ordinal
--- ([cur] → `ceLookupAt` in `superImplMsgsOf`), the head test is still `tyMatchesAst`
--- over `ImplRow`'s AST `Ty`s, and the interface test is still the IDENTITY leg.  The
--- widening therefore accepts exactly the programs whose super impl EXISTS in the
--- graph and matches by identity — never one that merely shares a spelling.
---
--- 🚨 THE ROW LIST IS BOUND HERE, ONCE, AND THAT IS A PERF REQUIREMENT.  It is
--- O(rows); `superImplExists` runs per (impl x super).  See its header.
---
--- The visible-row list replaces [allDecls] for EXISTENCE only.  The supers themselves
--- come from `CE`, as every superclass reader's do (`superLookup`).
+-- The row list is bound here, once: it is O(rows), and the existence test runs per
+-- (impl x super).
 checkSuperImpls : List Decl -> ClassEnv -> ImplEnv -> Int -> Unit
 checkSuperImpls userDecls ce ie cur =
   let rows = ieRowsVisibleAt cur ie
-  let _ =
-    foreachUnit
-      (pushTypeError "T-MISSING-SUPER-IMPL")
-      (flatMap (superImplMsgsOf ce cur rows) userDecls)
   foreachUnit (checkImplSuperContexts userDecls ce cur rows) userDecls
 
 -- DICT-SEMANTICS §3, the declaration rule for supers: a dictionary for `C ts` carries
@@ -30373,14 +30350,14 @@ checkSuperImpls userDecls ce ie cur =
 -- head variables rigid, or every binder that reduces `C ts` drops it.  A goal of the
 -- selected instance's context is reduced through the instances as W3-inst's are; a
 -- leaf that is no given is reported at the impl.  A super goal no given answers and
--- no instance selects is a missing super impl: at a concrete head
--- `superImplMsgsOf` reports it, at a parametric head it is reported here, against the
--- same graph-wide rows.  Direct supers suffice because every impl is checked, the
--- super's own impl included.
+-- no impl row covers (`superRowExists`) is a missing super impl, reported at the impl
+-- whether its head is concrete or parametric.  Direct supers suffice because every
+-- impl is checked, the super's own impl included.
 --
 -- A parsed `impl` always records its interface token's span; a derived one records
 -- none, so it is reported at the `data`/`newtype` declaration that produced it, and
--- its remedy is the hand-written impl, since a `deriving` clause takes no `requires`.
+-- its remedies are a `deriving` clause or a hand-written impl, since a `deriving`
+-- clause takes no `requires`.
 checkImplSuperContexts : List Decl ->
   ClassEnv ->
   Int ->
@@ -30401,7 +30378,6 @@ checkImplSuperContexts decls ce cur rows (DImpl { iface, tys, reqs, implOrigin =
       let givens =
         declared ++ flatMap (s => map fst (predicateSlotKnownSupers s)) declared
       let subject = "impl \{iface} \{joinWith " " (map ppTyAtom tys)}"
-      let parametric = not (allList tyIsConcrete tys)
       let subst = zipL (ceRowTyparams r) tys
       let argsOf =
         sup =>
@@ -30410,17 +30386,16 @@ checkImplSuperContexts decls ce cur rows (DImpl { iface, tys, reqs, implOrigin =
             (superParamsOf sup)
       fold
         (_ sup => match argsOf sup
-          Some supArgs =>
-            checkSuperInstanceContext
-              subject
-              roots
-              headIds
-              givens
-              loc
-              derived
-              (superIfaceRef sup)
-              supArgs
-              (parametric && not (superRowExists rows subst sup))
+          Some supArgs => checkSuperInstanceContext
+            subject
+            roots
+            headIds
+            givens
+            loc
+            derived
+            (superIfaceRef sup)
+            supArgs
+            (_ => superRowExists rows subst sup)
           None => ())
         ()
         (ceRowSupers r)
@@ -30451,13 +30426,13 @@ checkSuperInstanceContext : String ->
   Bool ->
   IfaceRef ->
   List Mono ->
-  Bool ->
+  (Unit -> Bool) ->
   Unit
-checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs absent
+checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs covered
   | anyList (givenAnswers sup supArgs) givens = ()
   | otherwise = match rigidHeadInstanceContext headIds sup supArgs
     None =>
-      if absent then
+      if not (covered ()) then
         reportMissingSuperImpl subject roots loc derived sup supArgs
     Some ctx =>
       let walk = reqWalkStart ()
@@ -30471,14 +30446,17 @@ checkSuperInstanceContext subject roots headIds givens loc derived sup supArgs a
         ()
         leaves
 
--- Whether some impl row of the super matches the super goal at the impl's head, head
--- variables rigid (`tyMatchesAst` lets a target variable match only a pattern
--- variable).  Rows are graph-wide, so a super impl declared downstream counts.
+-- Whether some impl row of the super covers the super goal at the impl's head
+-- (`superHeadCovers`).  Rows are graph-wide, so a super impl declared downstream
+-- counts.
 superRowExists : List ImplRow -> List (String, Ty) -> Super -> Bool
 superRowExists rows subst (Super { superHead = n, superParams = ps, superOrigin = so }) =
   let tys = substParams ps subst
   listLen tys /= listLen ps || superImplExists rows (ifaceTabKey so n) n tys
 
+-- The super is named by its spelling, as the checked impl's own interface is, so
+-- the text is the same on every verb and at every head.  A derived impl's remedy is
+-- the `deriving` clause when the super is derivable, else the hand-written impl.
 reportMissingSuperImpl : String ->
   List (String, Int) ->
   Option Loc ->
@@ -30488,14 +30466,14 @@ reportMissingSuperImpl : String ->
   Unit
 reportMissingSuperImpl subject roots loc derived sup supArgs =
   let named = Ref (map (p => (snd p, fst p)) roots)
-  let goal =
-    "\{qualifiedIfaceLabel sup} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
-  let goalBare =
-    "\{sup.irName} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
-  pushTypeErrorOnceAt "T-MISSING-SUPER-IMPL" loc (if derived then
-    "`\{subject}` (derived) requires the superinterface `\{goal}`, which no impl covers; add `impl \{goalBare}`"
+  let goal = "\{sup.irName} \{joinWith " " (ppEach named (Ref 0) 3 supArgs)}"
+  let missing = "requires the superinterface `\{goal}`, which no impl covers"
+  pushTypeErrorOnceAt "T-MISSING-SUPER-IMPL" loc (if not derived then
+    "`\{subject}` \{missing}; add an `impl \{goal}` covering it, or add `requires \{goal}` to the impl"
+  else if derivableIface sup.irName then
+    "`\{subject}` (derived) \{missing}; add `\{sup.irName}` to the type's `deriving` clause, or add an `impl \{goal}`"
   else
-    "`\{subject}` requires the superinterface `\{goal}`, which no impl covers; add an `impl \{goalBare}` covering it, or add `requires \{goalBare}` to the impl")
+    "`\{subject}` (derived) \{missing}; add an `impl \{goal}`")
 
 -- The context of the instance [iface] [args] selects with the head variables
 -- [headIds] held rigid (`sigRigidBindings`), as goals over those variables again.
@@ -30622,8 +30600,8 @@ foreachUnit f (x :: xs) =
 -- The interface decl is resolved out of stage K's `CE` at the reading module's
 -- ordinal (`ceRequiredAt`), so an IMPORTED interface resolves exactly as a local one
 -- does; [iterDecls] (this module's own decls) are the impls to check.  Unknown
--- interface (not in scope) → skip (a distinct error is reported elsewhere),
--- mirroring superImplMsgsOf.
+-- interface (not in scope) → skip (a distinct error is reported elsewhere), as
+-- `checkImplSuperContexts` skips one.
 --
 -- #1557 A-3.5a: there is now ONE checker for both driver modes.  There used to be
 -- two — `checkImplCompleteness`, whose retired arm looked the interface up by a bare
@@ -31942,63 +31920,6 @@ cyclicSuperIfaceMsg : List String -> String
 cyclicSuperIfaceMsg path =
   "cyclic superinterface: " ++ joinWith " requires " (map backticked path)
 
--- the missing-superinterface error messages for one user decl (a DImpl, possibly
--- wrapped in DAttrib); [] for any non-impl decl or when every super impl exists.
--- Only an impl with a concrete head is asked here; `checkImplSuperContexts` asks the
--- same question of a parametric head, where a `requires` can answer it.
---
--- OCCURRENCE MINT (#1110/#1111 A-2.4, the `implCompletenessMsgsOfMap` discipline):
--- `implOrigin` is destructured beside `iface` in the SAME record pattern, so the
--- identity and the name it qualifies cannot drift apart.
---
--- ⚠️ THE MISS ARM IS AN ABSTENTION AND IT IS THE ONE LOUD→SILENT RISK HERE.  A
--- `ceLookupAt` miss yields `[]` — no diagnostic — where the bare scan found the
--- interface by spelling regardless.  This is deliberately the SAME disposition
--- `ifaceSupersOf`'s `None` arm had ("unknown interface, reported elsewhere") and the
--- same one A-3.5a/A-3.5c took at their peers; making it loud instead would be a new
--- rejection class (an acceptance NARROWING) that no ruling licenses.  What guards it
--- is that a super-bearing impl MUST still reject: flat and 2-module
--- `T-MISSING-SUPER-IMPL` were measured before and after this relocation, and an
--- identity miss turns both GREEN, which is the direction that matters.
-superImplMsgsOf : ClassEnv -> Int -> List ImplRow -> Decl -> List String
-superImplMsgsOf ce cur rows (DAttrib _ d) = superImplMsgsOf ce cur rows d
-superImplMsgsOf ce cur rows (DImpl { iface, tys, implOrigin = o, ... }) =
-  match ceLookupAt (regKeyOfTab (ifaceTabKey o iface)) cur ce
-    None => []  -- unknown interface (already reported elsewhere) → skip
-    Some r =>
-      if listLen (ceRowTyparams r) == listLen tys
-        && allList tyIsConcrete tys then
-        flatMap
-          (superMsgFor rows iface tys (zipL (ceRowTyparams r) tys))
-          (ceRowSupers r)
-      else
-        []  -- arity mismatch, or a non-concrete head (deferred, like the oracle)
-superImplMsgsOf _ _ _ _ = []
-
--- check one `Super superName params` against the substitution: map each super
--- param name through [subst] to its concrete Ty; if every param mapped, all are
--- concrete, AND no matching `impl superName <concrete>` exists, emit the error.
---
--- #1557 A-3.5b: the super's IDENTITY key is minted ONCE here, from `superOrigin` —
--- the same field and the same `ifaceTabKey` mint A-3.5c's cycle walk uses, which is
--- the point: two units, one key discipline.  `Super` has carried `superOrigin` since
--- #1110 Stage A-1.
-superMsgFor : List ImplRow ->
-  String ->
-  List Ty ->
-  List (String, Ty) ->
-  Super ->
-  List String
-superMsgFor rows iface implTys subst (Super { superHead = superName, superParams = params, superOrigin = so }) =
-  let concrete = substParams params subst
-  if listLen concrete == listLen params
-    && allList tyIsConcrete concrete
-    && not
-      (superImplExists rows (ifaceTabKey so superName) superName concrete) then
-    [missingSuperImplMsg iface implTys superName concrete]
-  else
-    []
-
 -- map each super-param NAME through [subst] to its Ty, dropping any unmapped (so a
 -- short result vs [params] signals an incomplete substitution → caller skips).
 substParams : List String -> List (String, Ty) -> List Ty
@@ -32006,13 +31927,6 @@ substParams [] _ = []
 substParams (p :: rest) subst = match lookupAssoc p subst
   Some t => t :: substParams rest subst
   None => substParams rest subst
-
--- Both the impl
--- head and the super are printed with the same space-joined atom-position args.
-missingSuperImplMsg : String -> List Ty -> String -> List Ty -> String
-missingSuperImplMsg iface implTys superName superTys =
-  let superHead = "impl \{superName} \{joinWith " " (map ppTyAtom superTys)}"
-  "`impl \{iface} \{joinWith " " (map ppTyAtom implTys)}` requires the superinterface `\{superHead}`, which is missing; add `\{superHead}`"
 
 -- The type parameters and direct supers of one interface, by identity.
 superLookup : IfaceRef -> Option (List String, List Super)
@@ -32034,85 +31948,46 @@ ifaceSupersOf ((DInterface { pub, def, name, typarams, supers, methods }) :: res
   | otherwise = ifaceSupersOf rest target
 ifaceSupersOf (_ :: rest) target = ifaceSupersOf rest target
 
--- does any `impl superName <head>` with a head matching [concrete] exist? (head
--- may be parametric — a free tyvar in the impl head matches any concrete arg,
--- mirroring the oracle's mono_matches: pattern=impl head, concrete=super args.)
+-- does an `impl superName <head>` covering [goal] exist among [rows]?  [rows] are
+-- `IE`'s rows, bound once by `checkSuperImpls`; [superKey] is the super's identity and
+-- [superName] its bare spelling.
 --
--- #1557 A-3.5b: [rows] are `IE`'s rows, bound once by `checkSuperImpls`; [superKey]
--- is the super's identity and [superName] its bare spelling.  This replaced a scan of
--- the whole decl list whose interface test was the bare `iface == superName`.
--- ⚠️ [rows] WAS "the rows visible at the reading ordinal" until RUN-055 (SA-3) widened
--- the scope to the whole graph, to match instance candidacy.  Nothing in THIS function
--- changed: it was and is a scan of whatever population its caller binds, and the two
--- tests below (identity, then `tyMatchesAst`) are what keep the wider population from
--- admitting a super it should not.
---
--- 🚨 IT COMPARES THE IDENTITY LEG, NEVER THE BUCKETS.  `ieInsertRow` indexes every row
--- under `oblIfaceKeys`, which mints TWO keys — the identity key AND a bare-spelling
+-- It compares the identity leg, never the buckets.  `ieInsertRow` indexes every row
+-- under `oblIfaceKeys`, which mints two keys: the identity key and a bare-spelling
 -- compatibility leg that #1438 still rides on.  Looking [superKey] up in
--- `ieConcrete`/`ieHeadless` would therefore answer with BOTH same-spelled interfaces'
--- rows, rebuilding in the new substrate exactly the collapse this relocation removes.
--- Reading `ieRows` and testing each row's own `IfaceRef` cannot reach the bare bucket.
---
--- ⚠️ AND IT KEEPS `tyMatchesAst`.  The head match is unchanged, deliberately: `IE`'s
--- rows carry AST `Ty`s (`ImplRow`'s 4th position), so the existing predicate applies
--- verbatim.  Routing this through `ImplUniverse`/`matchStep` instead would carry a
--- second, unbudgeted acceptance delta on top of the intended re-key.
+-- `ieConcrete`/`ieHeadless` would therefore answer with both same-spelled interfaces'
+-- rows.  Reading `ieRows` and testing each row's own `IfaceRef` cannot reach the bare
+-- bucket.
 superImplExists : List ImplRow -> TabKey -> String -> List Ty -> Bool
-superImplExists rows superKey superName concrete =
-  anyList (implRowMatchesSuper superKey superName concrete) rows
+superImplExists rows superKey superName goal =
+  anyList (implRowMatchesSuper superKey superName goal) rows
 
--- NAME FIRST, then IDENTITY — the discipline `tabKeyEq` states for itself in
--- `types/registry.mdk`, applied here for a second reason: `ifaceTabKey` ALLOCATES (it
--- goes through `mkIdent`), and this runs once per visible row per (impl x super) in a
--- GC-bound stage.  Bare-name equality is a NECESSARY condition for key equality —
--- `tabKeyOf` puts the same [name] into both the `TkIdent` and the `TkBare` arm — so
--- gating on it is sound, and it bounds the minting to the set the OLD bare scan already
--- let through.  The DECIDING test is still the identity compare; the name test decides
--- nothing on its own.
+-- Name first, then identity: `ifaceTabKey` allocates (it goes through `mkIdent`), and
+-- this runs once per row per (impl x super) in a GC-bound stage.  Bare-name equality
+-- is a necessary condition for key equality (`tabKeyOf` puts the same name into both
+-- the `TkIdent` and the `TkBare` arm), so gating on it is sound; the identity compare
+-- decides.
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
-implRowMatchesSuper superKey superName concrete (ImplRow _ _ ir tys _ _) =
+implRowMatchesSuper superKey superName goal (ImplRow _ _ ir tys _ _) =
   ir.irName == superName
-    && listLen tys == listLen concrete
+    && listLen tys == listLen goal
     && ifaceTabKey ir.irOrigin ir.irName == superKey
-    && allList (p => tyMatchesAst (fst p) (snd p)) (zipL tys concrete)
+    && superHeadCovers tys goal
 
--- a Ty is concrete iff it contains no TyVar (mirror of the oracle's is_concrete,
--- which treats effect rows as transparent — TyEffect ignores its row).
-tyIsConcrete : Ty -> Bool
-tyIsConcrete (TyVar _) = False
-tyIsConcrete (TyCon { tyConName = _ }) = True
-tyIsConcrete (TyApp a b) = tyIsConcrete a && tyIsConcrete b
-tyIsConcrete (TyFun a b) = tyIsConcrete a && tyIsConcrete b
-tyIsConcrete (TyTuple ts) = allList tyIsConcrete ts
-tyIsConcrete (TyEffect _ _ t) = tyIsConcrete t
-tyIsConcrete (TyConstrained _ t) = tyIsConcrete t
--- Same "effect rows are transparent" treatment as `TyEffect` above (the
--- comment on this function): a row's own tail var never counts against
--- concreteness even for a wrapping `TyEffect`, so a bare row atom — with no
--- wrapped type at all — is vacuously concrete too.
-tyIsConcrete (TyRow _ _ _) = True
-tyIsConcrete (TyAuth _ _) = True
-tyIsConcrete (TyNamed _ t _) = tyIsConcrete t
-tyIsConcrete (TyQual t _ _) = tyIsConcrete t
+-- Whether the impl head [pats] covers the super goal [goal], which is the checked
+-- impl's own head with its variables rigid: one substitution for the whole vector
+-- (`matchOneSided`, as the min⊑ selector's `tySubsumesV` and the use site's
+-- `implHeadSubst` match), so a variable [pats] repeats must bind equal types, and a
+-- variable of [goal] matches only a variable of [pats].  `impl D (Pair a a)` does not
+-- cover `D (Pair a b)` or `D (Pair Int Bool)`.  Effect rows are transparent on both
+-- sides.  Type constructors compare by spelling (`tyStep`), where the use site
+-- compares identity.
+superHeadCovers : List Ty -> List Ty -> Bool
+superHeadCovers pats goal =
+  isSome (matchOneSided superHeadStep eqStr tyStructEq (zipL pats goal) [])
 
--- one-directional structural match (pattern may carry free TyVar wildcards;
--- concrete is fully ground).
-tyMatchesAst : Ty -> Ty -> Bool
-tyMatchesAst (TyVar _) _ = True
-tyMatchesAst (TyCon { tyConName = a }) (TyCon { tyConName = b }) = a == b
-tyMatchesAst (TyApp f1 a1) (TyApp f2 a2) =
-  tyMatchesAst f1 f2 && tyMatchesAst a1 a2
-tyMatchesAst (TyFun a1 b1) (TyFun a2 b2) =
-  tyMatchesAst a1 a2 && tyMatchesAst b1 b2
-tyMatchesAst (TyTuple ts1) (TyTuple ts2) =
-  listLen ts1 == listLen ts2
-    && allList (p => tyMatchesAst (fst p) (snd p)) (zipL ts1 ts2)
-tyMatchesAst (TyEffect _ _ t1) t2 = tyMatchesAst t1 t2
-tyMatchesAst t1 (TyEffect _ _ t2) = tyMatchesAst t1 t2
-tyMatchesAst (TyConstrained _ t1) t2 = tyMatchesAst t1 t2
-tyMatchesAst t1 (TyConstrained _ t2) = tyMatchesAst t1 t2
-tyMatchesAst _ _ = False
+superHeadStep : Ty -> Ty -> MStep String Ty Ty
+superHeadStep pat t = tyStep pat (stripTyWrap t)
 
 -- ── D3 / WS-2 part-2: GLOBAL (cross-module) coherence ──────────────────────
 -- Per-module coherence accepts two DIFFERENT modules that
@@ -32126,9 +32001,9 @@ tyMatchesAst _ _ = False
 -- no occurrence-dedup needed.  A conflict between two distinct modules is reported
 -- naming BOTH (cohCrossModuleMsg via cohHardMsg's cross-module branch, or the
 -- `(defined in …)` suffix `cohWhereSuffix` adds to the F-3d soft warning).
--- #1559 A-3.7: "the joint impl set over ALL USER modules" is now `cohRowsOf` over
--- the whole-graph `IE` — the prelude exclusion is the `True`, and the one-entry-per-
--- definition property is `ieRows`' by construction (imports copy no rows either).
+-- The joint impl set is `cohRowsOf` over the whole-graph `IE`, which leaves out the
+-- prelude's rows, and the one-entry-per-definition property is `ieRows`' by
+-- construction (imports copy no rows either).
 --
 -- the first cross-module coherence conflict of EACH CLASS (if any) as bare messages
 -- — `(hard, soft)`, the same split `checkCoherence` reports, so the cross-module path
@@ -39129,7 +39004,9 @@ data SuperGoalEntry = SuperGoalEntry {
 -- spent fuel reported at [loc].  A super goal [answered] gives, itself or through its
 -- supers, is not entered: the construction's ladder tries `assum` before `inst`.  A
 -- super goal with no constructed argument is answered by a given, and one no instance
--- matches is the impl declaration's error (`checkSuperImpls`).
+-- matches is the impl declaration's error (`checkImplSuperContexts`): the
+-- declaration's existence match (`superHeadCovers`) holds the head variables rigid and
+-- binds a repeated impl variable consistently, as `implMatchesU` does here.
 superGoalsEntered : ImplUniverse ->
   ReqWalk ->
   Option Loc ->
@@ -61017,15 +60894,17 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohKeepFirst" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x")))
 (DFunDef false "cohKeepFirst" ((PCon "None") (PVar "y")) (EVar "y"))
 (DTypeSig false "cohHardMsg" (TyFun (TyCon "CohImpl") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
-(DFunDef false "cohHardMsg" ((PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EIf (EBinOp "||" (EBinOp "==" (EVar "mid1") (EVar "cohPreludeMid")) (EBinOp "==" (EVar "mid2") (EVar "cohPreludeMid"))) (EApp (EApp (EApp (EVar "cohPreludeOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohCrossModuleMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "mid1")) (EVar "mid2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "cohHardMsg" ((PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EIf (EApp (EApp (EVar "cohPairsPrelude") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohPreludeOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohCrossModuleMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "mid1")) (EVar "mid2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "cohPreludeMid" (TyCon "String"))
 (DFunDef false "cohPreludeMid" () (ELit (LString "core")))
+(DTypeSig false "cohPairsPrelude" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "cohPairsPrelude" ((PVar "mid1") (PVar "mid2")) (EBinOp "||" (EBinOp "==" (EVar "mid1") (EVar "cohPreludeMid")) (EBinOp "==" (EVar "mid2") (EVar "cohPreludeMid"))))
 (DTypeSig false "cohPreludeOverlapMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String")))))
 (DFunDef false "cohPreludeOverlapMsg" ((PVar "iface") (PVar "xs") (PVar "ys")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "overlapping impls of ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "s1"))) (ELit (LString " and the prelude's "))) (EApp (EVar "display") (EVar "s2"))) (ELit (LString " can match the same type; the prelude's impl cannot be replaced, so wrap the type in a newtype and implement "))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " for that"))))))
 (DTypeSig false "cohIsCrossModule" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "cohIsCrossModule" ((PVar "mid1") (PVar "mid2")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "mid1") (ELit (LString ""))) (EBinOp "/=" (EVar "mid2") (ELit (LString "")))) (EBinOp "/=" (EVar "mid1") (EVar "mid2"))))
 (DTypeSig false "cohIncomparableMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
-(DFunDef false "cohIncomparableMsg" ((PVar "iface") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: overlapping impls of ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "cohWhereSuffix") (EVar "mid1")) (EVar "mid2")))) (ELit (LString ": neither "))) (EApp (EVar "display") (EVar "s1"))) (ELit (LString " nor "))) (EApp (EVar "display") (EVar "s2"))) (ELit (LString " is more specific than the other, so a goal matching both has no impl to pick"))))))
+(DFunDef false "cohIncomparableMsg" ((PVar "iface") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EIf (EApp (EApp (EVar "cohPairsPrelude") (EVar "mid1")) (EVar "mid2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: overlapping impls of ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ": neither "))) (EApp (EVar "display") (EVar "s1"))) (ELit (LString " nor the prelude's "))) (EApp (EVar "display") (EVar "s2"))) (ELit (LString " is more specific than the other, so a goal matching both has no impl to pick"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: overlapping impls of ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "cohWhereSuffix") (EVar "mid1")) (EVar "mid2")))) (ELit (LString ": neither "))) (EApp (EVar "display") (EVar "s1"))) (ELit (LString " nor "))) (EApp (EVar "display") (EVar "s2"))) (ELit (LString " is more specific than the other, so a goal matching both has no impl to pick")))))))
 (DTypeSig false "cohWhereSuffix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cohWhereSuffix" ((PVar "mid1") (PVar "mid2")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (defined in `")) (EApp (EVar "display") (EVar "mid2"))) (ELit (LString "` and `"))) (EApp (EVar "display") (EVar "mid1"))) (ELit (LString "`)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohIncomparableHelp" (TyCon "String"))
@@ -61049,10 +60928,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohPushSoft" ((PCon "None")) (ELit LUnit))
 (DFunDef false "cohPushSoft" ((PCon "Some" (PTuple (PVar "msg") (PVar "loc")))) (EApp (EApp (EVar "pushCoherenceWarning") (EVar "loc")) (EVar "msg")))
 (DTypeSig false "checkSuperImpls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "checkSuperImpls" ((PVar "userDecls") (PVar "ce") (PVar "ie") (PVar "cur")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "ieRowsVisibleAt") (EVar "cur")) (EVar "ie"))) (DoLet false false PWild (EApp (EApp (EVar "foreachUnit") (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-SUPER-IMPL")))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "superImplMsgsOf") (EVar "ce")) (EVar "cur")) (EVar "rows"))) (EVar "userDecls")))) (DoExpr (EApp (EApp (EVar "foreachUnit") (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "userDecls")) (EVar "ce")) (EVar "cur")) (EVar "rows"))) (EVar "userDecls")))))
+(DFunDef false "checkSuperImpls" ((PVar "userDecls") (PVar "ce") (PVar "ie") (PVar "cur")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "ieRowsVisibleAt") (EVar "cur")) (EVar "ie"))) (DoExpr (EApp (EApp (EVar "foreachUnit") (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "userDecls")) (EVar "ce")) (EVar "cur")) (EVar "rows"))) (EVar "userDecls")))))
 (DTypeSig false "checkImplSuperContexts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "Decl") (TyCon "Unit")))))))
 (DFunDef false "checkImplSuperContexts" ((PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "decls")) (EVar "ce")) (EVar "cur")) (EVar "rows")) (EVar "d")))
-(DFunDef false "checkImplSuperContexts" ((PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "ifaceLoc"))) true)) (EBlock (DoLet false false (PVar "derived") (EApp (EVar "isNone") (EVar "ifaceLoc"))) (DoLet false false (PVar "loc") (EIf (EVar "derived") (EApp (EApp (EVar "derivedImplDeclLoc") (EVar "decls")) (EVar "tys")) (EVar "ifaceLoc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "r")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))))) (EBlock (DoLet false false (PTuple (PVar "implTvMap") (PVar "headMonos")) (EApp (EVar "implHeadMonos") (EVar "tys"))) (DoLet false false (PVar "roots") (EApp (EVar "implHeadTypeVarRoots") (EVar "implTvMap"))) (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "map") (EApp (EVar "requirePredicateSlot") (EVar "implTvMap"))) (EVar "reqs"))) (DoLet false false (PVar "givens") (EBinOp "++" (EVar "declared") (EApp (EApp (EVar "flatMap") (ELam ((PVar "s")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "predicateSlotKnownSupers") (EVar "s"))))) (EVar "declared")))) (DoLet false false (PVar "subject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "")))) (DoLet false false (PVar "parametric") (EApp (EVar "not") (EApp (EApp (EVar "allList") (EVar "tyIsConcrete")) (EVar "tys")))) (DoLet false false (PVar "subst") (EApp (EApp (EVar "zipL") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys"))) (DoLet false false (PVar "argsOf") (ELam ((PVar "sup")) (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "headMonos")))) (EApp (EVar "superParamsOf") (EVar "sup"))))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "sup")) (EMatch (EApp (EVar "argsOf") (EVar "sup")) (arm (PCon "Some" (PVar "supArgs")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperInstanceContext") (EVar "subject")) (EVar "roots")) (EVar "headIds")) (EVar "givens")) (EVar "loc")) (EVar "derived")) (EApp (EVar "superIfaceRef") (EVar "sup"))) (EVar "supArgs")) (EBinOp "&&" (EVar "parametric") (EApp (EVar "not") (EApp (EApp (EApp (EVar "superRowExists") (EVar "rows")) (EVar "subst")) (EVar "sup")))))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "ceRowSupers") (EVar "r")))))) (arm PWild () (ELit LUnit))))))
+(DFunDef false "checkImplSuperContexts" ((PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "ifaceLoc"))) true)) (EBlock (DoLet false false (PVar "derived") (EApp (EVar "isNone") (EVar "ifaceLoc"))) (DoLet false false (PVar "loc") (EIf (EVar "derived") (EApp (EApp (EVar "derivedImplDeclLoc") (EVar "decls")) (EVar "tys")) (EVar "ifaceLoc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "r")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))))) (EBlock (DoLet false false (PTuple (PVar "implTvMap") (PVar "headMonos")) (EApp (EVar "implHeadMonos") (EVar "tys"))) (DoLet false false (PVar "roots") (EApp (EVar "implHeadTypeVarRoots") (EVar "implTvMap"))) (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoLet false false (PVar "declared") (EApp (EApp (EVar "map") (EApp (EVar "requirePredicateSlot") (EVar "implTvMap"))) (EVar "reqs"))) (DoLet false false (PVar "givens") (EBinOp "++" (EVar "declared") (EApp (EApp (EVar "flatMap") (ELam ((PVar "s")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "predicateSlotKnownSupers") (EVar "s"))))) (EVar "declared")))) (DoLet false false (PVar "subject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "")))) (DoLet false false (PVar "subst") (EApp (EApp (EVar "zipL") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys"))) (DoLet false false (PVar "argsOf") (ELam ((PVar "sup")) (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "headMonos")))) (EApp (EVar "superParamsOf") (EVar "sup"))))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "sup")) (EMatch (EApp (EVar "argsOf") (EVar "sup")) (arm (PCon "Some" (PVar "supArgs")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperInstanceContext") (EVar "subject")) (EVar "roots")) (EVar "headIds")) (EVar "givens")) (EVar "loc")) (EVar "derived")) (EApp (EVar "superIfaceRef") (EVar "sup"))) (EVar "supArgs")) (ELam (PWild) (EApp (EApp (EApp (EVar "superRowExists") (EVar "rows")) (EVar "subst")) (EVar "sup"))))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "ceRowSupers") (EVar "r")))))) (arm PWild () (ELit LUnit))))))
 (DFunDef false "checkImplSuperContexts" (PWild PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "derivedImplDeclLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "derivedImplDeclLoc" ((PVar "decls") (PVar "tys")) (EMatch (EApp (EApp (EVar "flatMap") (EVar "tyConNamesInTy")) (EVar "tys")) (arm (PList (PVar "n")) () (EMatch (EApp (EApp (EVar "flatMap") (EApp (EVar "declNameLocs") (EVar "n"))) (EVar "decls")) (arm (PCons (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PList) () (EVar "None")))) (arm PWild () (EVar "None"))))
@@ -61061,12 +60940,12 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declNameLocs" ((PVar "n") (PRec "DData" ((rf "dataName" None) (rf "dataNameLoc" (PCon "Some" (PVar "l")))) true)) (EIf (EBinOp "==" (EVar "dataName") (EVar "n")) (EListLit (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "declNameLocs" ((PVar "n") (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeNameLoc" (PCon "Some" (PVar "l")))) true)) (EIf (EBinOp "==" (EVar "newtypeName") (EVar "n")) (EListLit (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "declNameLocs" (PWild PWild) (EListLit))
-(DTypeSig false "checkSuperInstanceContext" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Bool") (TyCon "Unit")))))))))))
-(DFunDef false "checkSuperInstanceContext" ((PVar "subject") (PVar "roots") (PVar "headIds") (PVar "givens") (PVar "loc") (PVar "derived") (PVar "sup") (PVar "supArgs") (PVar "absent")) (EIf (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "givenAnswers") (EVar "sup")) (EVar "supArgs"))) (EVar "givens")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "rigidHeadInstanceContext") (EVar "headIds")) (EVar "sup")) (EVar "supArgs")) (arm (PCon "None") () (EIf (EVar "absent") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportMissingSuperImpl") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "derived")) (EVar "sup")) (EVar "supArgs")) (ELit LUnit))) (arm (PCon "Some" (PVar "ctx")) () (EBlock (DoLet false false (PVar "walk") (EApp (EVar "reqWalkStart") (ELit LUnit))) (DoLet false false (PVar "leaves") (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "superContextLeaves") (EVar "walk")) (EVar "headIds")) (EVar "givens")) (EVar "loc")) (EApp (EVar "fst") (EVar "g"))) (EApp (EVar "snd") (EVar "g"))))) (EVar "ctx"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "leaf")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportSuperContextLeaf") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "derived")) (EVar "sup")) (EVar "supArgs")) (EVar "leaf")))) (ELit LUnit)) (EVar "leaves")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "checkSuperInstanceContext" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyFun (TyCon "Unit") (TyCon "Bool")) (TyCon "Unit")))))))))))
+(DFunDef false "checkSuperInstanceContext" ((PVar "subject") (PVar "roots") (PVar "headIds") (PVar "givens") (PVar "loc") (PVar "derived") (PVar "sup") (PVar "supArgs") (PVar "covered")) (EIf (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "givenAnswers") (EVar "sup")) (EVar "supArgs"))) (EVar "givens")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "rigidHeadInstanceContext") (EVar "headIds")) (EVar "sup")) (EVar "supArgs")) (arm (PCon "None") () (EIf (EApp (EVar "not") (EApp (EVar "covered") (ELit LUnit))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportMissingSuperImpl") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "derived")) (EVar "sup")) (EVar "supArgs")) (ELit LUnit))) (arm (PCon "Some" (PVar "ctx")) () (EBlock (DoLet false false (PVar "walk") (EApp (EVar "reqWalkStart") (ELit LUnit))) (DoLet false false (PVar "leaves") (EApp (EApp (EVar "flatMap") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "superContextLeaves") (EVar "walk")) (EVar "headIds")) (EVar "givens")) (EVar "loc")) (EApp (EVar "fst") (EVar "g"))) (EApp (EVar "snd") (EVar "g"))))) (EVar "ctx"))) (DoExpr (EApp (EApp (EApp (EVar "fold") (ELam (PWild (PVar "leaf")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportSuperContextLeaf") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "derived")) (EVar "sup")) (EVar "supArgs")) (EVar "leaf")))) (ELit LUnit)) (EVar "leaves")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "superRowExists" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Super") (TyCon "Bool")))))
 (DFunDef false "superRowExists" ((PVar "rows") (PVar "subst") (PRec "Super" ((rf "superHead" (PVar "n")) (rf "superParams" (PVar "ps")) (rf "superOrigin" (PVar "so"))) false)) (EBlock (DoLet false false (PVar "tys") (EApp (EApp (EVar "substParams") (EVar "ps")) (EVar "subst"))) (DoExpr (EBinOp "||" (EBinOp "/=" (EApp (EVar "listLen") (EVar "tys")) (EApp (EVar "listLen") (EVar "ps"))) (EApp (EApp (EApp (EApp (EVar "superImplExists") (EVar "rows")) (EApp (EApp (EVar "ifaceTabKey") (EVar "so")) (EVar "n"))) (EVar "n")) (EVar "tys"))))))
 (DTypeSig false "reportMissingSuperImpl" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit"))))))))
-(DFunDef false "reportMissingSuperImpl" ((PVar "subject") (PVar "roots") (PVar "loc") (PVar "derived") (PVar "sup") (PVar "supArgs")) (EBlock (DoLet false false (PVar "named") (EApp (EVar "Ref") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EVar "roots")))) (DoLet false false (PVar "goal") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "qualifiedIfaceLabel") (EVar "sup")))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EApp (EVar "ppEach") (EVar "named")) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EVar "supArgs"))))) (ELit (LString "")))) (DoLet false false (PVar "goalBare") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "sup") "irName"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EApp (EVar "ppEach") (EVar "named")) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EVar "supArgs"))))) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-MISSING-SUPER-IMPL"))) (EVar "loc")) (EIf (EVar "derived") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` (derived) requires the superinterface `"))) (EApp (EVar "display") (EVar "goal"))) (ELit (LString "`, which no impl covers; add `impl "))) (EApp (EVar "display") (EVar "goalBare"))) (ELit (LString "`"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` requires the superinterface `"))) (EApp (EVar "display") (EVar "goal"))) (ELit (LString "`, which no impl covers; add an `impl "))) (EApp (EVar "display") (EVar "goalBare"))) (ELit (LString "` covering it, or add `requires "))) (EApp (EVar "display") (EVar "goalBare"))) (ELit (LString "` to the impl"))))))))
+(DFunDef false "reportMissingSuperImpl" ((PVar "subject") (PVar "roots") (PVar "loc") (PVar "derived") (PVar "sup") (PVar "supArgs")) (EBlock (DoLet false false (PVar "named") (EApp (EVar "Ref") (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EVar "roots")))) (DoLet false false (PVar "goal") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "sup") "irName"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EApp (EVar "ppEach") (EVar "named")) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EVar "supArgs"))))) (ELit (LString "")))) (DoLet false false (PVar "missing") (EBinOp "++" (EBinOp "++" (ELit (LString "requires the superinterface `")) (EApp (EVar "display") (EVar "goal"))) (ELit (LString "`, which no impl covers")))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-MISSING-SUPER-IMPL"))) (EVar "loc")) (EIf (EApp (EVar "not") (EVar "derived")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` "))) (EApp (EVar "display") (EVar "missing"))) (ELit (LString "; add an `impl "))) (EApp (EVar "display") (EVar "goal"))) (ELit (LString "` covering it, or add `requires "))) (EApp (EVar "display") (EVar "goal"))) (ELit (LString "` to the impl"))) (EIf (EApp (EVar "derivableIface") (EFieldAccess (EVar "sup") "irName")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` (derived) "))) (EApp (EVar "display") (EVar "missing"))) (ELit (LString "; add `"))) (EApp (EVar "display") (EFieldAccess (EVar "sup") "irName"))) (ELit (LString "` to the type's `deriving` clause, or add an `impl "))) (EApp (EVar "display") (EVar "goal"))) (ELit (LString "`"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "display") (EVar "subject"))) (ELit (LString "` (derived) "))) (EApp (EVar "display") (EVar "missing"))) (ELit (LString "; add an `impl "))) (EApp (EVar "display") (EVar "goal"))) (ELit (LString "`")))))))))
 (DTypeSig false "rigidHeadInstanceContext" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))))))))
 (DFunDef false "rigidHeadInstanceContext" ((PVar "headIds") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EVar "sigCellsOf") (EVar "headIds")) (EApp (EApp (EVar "flatMap") (EVar "monoVarCells")) (EVar "args")))) (DoLet false false (PVar "toRigid") (EApp (EApp (EVar "sigRigidBindings") (EVar "headIds")) (EVar "cells"))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "m")) (EApp (EApp (EVar "map") (ELam ((PVar "r")) (EMatch (EApp (EApp (EVar "reqToObligation") (EApp (EVar "fst") (EVar "m"))) (EVar "r")) (arm (PTuple (PVar "ri") (PVar "rargs")) () (ETuple (EVar "ri") (EApp (EApp (EVar "map") (EApp (EVar "unrigidSig") (EVar "cells"))) (EVar "rargs"))))))) (EApp (EVar "snd") (EVar "m"))))) (EApp (EApp (EApp (EVar "findMatchingImplReqsU") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef") "value")) (EVar "iface")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "substMono") (EVar "toRigid")) (EListLit)) (EListLit))) (EVar "args")))))))
 (DTypeSig false "superContextLeaves" (TyFun (TyCon "ReqWalk") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))))))))))
@@ -61299,17 +61178,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "containsRowKey" ((PVar "k") (PCons (PVar "r") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ceRowDoneKey") (EVar "r")) (EVar "k")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "containsRowKey") (EVar "k")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cyclicSuperIfaceMsg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "cyclicSuperIfaceMsg" ((PVar "path")) (EBinOp "++" (ELit (LString "cyclic superinterface: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " requires "))) (EApp (EApp (EVar "map") (EVar "backticked")) (EVar "path")))))
-(DTypeSig false "superImplMsgsOf" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "superImplMsgsOf" ((PVar "ce") (PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "superImplMsgsOf") (EVar "ce")) (EVar "cur")) (EVar "rows")) (EVar "d")))
-(DFunDef false "superImplMsgsOf" ((PVar "ce") (PVar "cur") (PVar "rows") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "implOrigin" (PVar "o"))) true)) (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "r")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))) (EApp (EApp (EVar "allList") (EVar "tyIsConcrete")) (EVar "tys"))) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EApp (EVar "superMsgFor") (EVar "rows")) (EVar "iface")) (EVar "tys")) (EApp (EApp (EVar "zipL") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys")))) (EApp (EVar "ceRowSupers") (EVar "r"))) (EListLit)))))
-(DFunDef false "superImplMsgsOf" (PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "superMsgFor" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "superMsgFor" ((PVar "rows") (PVar "iface") (PVar "implTys") (PVar "subst") (PRec "Super" ((rf "superHead" (PVar "superName")) (rf "superParams" (PVar "params")) (rf "superOrigin" (PVar "so"))) false)) (EBlock (DoLet false false (PVar "concrete") (EApp (EApp (EVar "substParams") (EVar "params")) (EVar "subst"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "concrete")) (EApp (EVar "listLen") (EVar "params"))) (EApp (EApp (EVar "allList") (EVar "tyIsConcrete")) (EVar "concrete"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "superImplExists") (EVar "rows")) (EApp (EApp (EVar "ifaceTabKey") (EVar "so")) (EVar "superName"))) (EVar "superName")) (EVar "concrete")))) (EListLit (EApp (EApp (EApp (EApp (EVar "missingSuperImplMsg") (EVar "iface")) (EVar "implTys")) (EVar "superName")) (EVar "concrete"))) (EListLit)))))
 (DTypeSig false "substParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "List") (TyCon "Ty")))))
 (DFunDef false "substParams" ((PList) PWild) (EListLit))
 (DFunDef false "substParams" ((PCons (PVar "p") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "p")) (EVar "subst")) (arm (PCon "Some" (PVar "t")) () (EBinOp "::" (EVar "t") (EApp (EApp (EVar "substParams") (EVar "rest")) (EVar "subst")))) (arm (PCon "None") () (EApp (EApp (EVar "substParams") (EVar "rest")) (EVar "subst")))))
-(DTypeSig false "missingSuperImplMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String"))))))
-(DFunDef false "missingSuperImplMsg" ((PVar "iface") (PVar "implTys") (PVar "superName") (PVar "superTys")) (EBlock (DoLet false false (PVar "superHead") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "display") (EVar "superName"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "ppTyAtom")) (EVar "superTys"))))) (ELit (LString "")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EVar "map") (EVar "ppTyAtom")) (EVar "implTys"))))) (ELit (LString "` requires the superinterface `"))) (EApp (EVar "display") (EVar "superHead"))) (ELit (LString "`, which is missing; add `"))) (EApp (EVar "display") (EVar "superHead"))) (ELit (LString "`"))))))
 (DTypeSig false "superLookup" (TyFun (TyCon "IfaceRef") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super"))))))
 (DFunDef false "superLookup" ((PVar "ir")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "row")) (ETuple (EApp (EVar "ceRowTyparams") (EVar "row")) (EApp (EVar "ceRowSupers") (EVar "row"))))) (EApp (EApp (EVar "ceLookupGraph") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deIfaces"))))))
 (DTypeSig false "ifaceSupersOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super")))))))
@@ -61318,32 +61189,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ifaceSupersOf" ((PCons (PRec "DInterface" ((rf "pub" None) (rf "def" None) (rf "name" None) (rf "typarams" None) (rf "supers" None) (rf "methods" None)) false) (PVar "rest")) (PVar "target")) (EIf (EBinOp "==" (EVar "name") (EVar "target")) (EApp (EVar "Some") (ETuple (EVar "typarams") (EVar "supers"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceSupersOf") (EVar "rest")) (EVar "target")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "ifaceSupersOf" ((PCons PWild (PVar "rest")) (PVar "target")) (EApp (EApp (EVar "ifaceSupersOf") (EVar "rest")) (EVar "target")))
 (DTypeSig false "superImplExists" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "TabKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))))
-(DFunDef false "superImplExists" ((PVar "rows") (PVar "superKey") (PVar "superName") (PVar "concrete")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "implRowMatchesSuper") (EVar "superKey")) (EVar "superName")) (EVar "concrete"))) (EVar "rows")))
+(DFunDef false "superImplExists" ((PVar "rows") (PVar "superKey") (PVar "superName") (PVar "goal")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "implRowMatchesSuper") (EVar "superKey")) (EVar "superName")) (EVar "goal"))) (EVar "rows")))
 (DTypeSig false "implRowMatchesSuper" (TyFun (TyCon "TabKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "ImplRow") (TyCon "Bool"))))))
-(DFunDef false "implRowMatchesSuper" ((PVar "superKey") (PVar "superName") (PVar "concrete") (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild PWild)) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "ir") "irName") (EVar "superName")) (EBinOp "==" (EApp (EVar "listLen") (EVar "tys")) (EApp (EVar "listLen") (EVar "concrete")))) (EBinOp "==" (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")) (EVar "superKey"))) (EApp (EApp (EVar "allList") (ELam ((PVar "p")) (EApp (EApp (EVar "tyMatchesAst") (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zipL") (EVar "tys")) (EVar "concrete")))))
-(DTypeSig false "tyIsConcrete" (TyFun (TyCon "Ty") (TyCon "Bool")))
-(DFunDef false "tyIsConcrete" ((PCon "TyVar" PWild)) (EVar "False"))
-(DFunDef false "tyIsConcrete" ((PRec "TyCon" ((rf "tyConName" PWild)) false)) (EVar "True"))
-(DFunDef false "tyIsConcrete" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "&&" (EApp (EVar "tyIsConcrete") (EVar "a")) (EApp (EVar "tyIsConcrete") (EVar "b"))))
-(DFunDef false "tyIsConcrete" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "&&" (EApp (EVar "tyIsConcrete") (EVar "a")) (EApp (EVar "tyIsConcrete") (EVar "b"))))
-(DFunDef false "tyIsConcrete" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "allList") (EVar "tyIsConcrete")) (EVar "ts")))
-(DFunDef false "tyIsConcrete" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "tyIsConcrete") (EVar "t")))
-(DFunDef false "tyIsConcrete" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyIsConcrete") (EVar "t")))
-(DFunDef false "tyIsConcrete" ((PCon "TyRow" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "tyIsConcrete" ((PCon "TyAuth" PWild PWild)) (EVar "True"))
-(DFunDef false "tyIsConcrete" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "tyIsConcrete") (EVar "t")))
-(DFunDef false "tyIsConcrete" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "tyIsConcrete") (EVar "t")))
-(DTypeSig false "tyMatchesAst" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyCon "Bool"))))
-(DFunDef false "tyMatchesAst" ((PCon "TyVar" PWild) PWild) (EVar "True"))
-(DFunDef false "tyMatchesAst" ((PRec "TyCon" ((rf "tyConName" (PVar "a"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b"))) false)) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "tyMatchesAst" ((PCon "TyApp" (PVar "f1") (PVar "a1")) (PCon "TyApp" (PVar "f2") (PVar "a2"))) (EBinOp "&&" (EApp (EApp (EVar "tyMatchesAst") (EVar "f1")) (EVar "f2")) (EApp (EApp (EVar "tyMatchesAst") (EVar "a1")) (EVar "a2"))))
-(DFunDef false "tyMatchesAst" ((PCon "TyFun" (PVar "a1") (PVar "b1")) (PCon "TyFun" (PVar "a2") (PVar "b2"))) (EBinOp "&&" (EApp (EApp (EVar "tyMatchesAst") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "tyMatchesAst") (EVar "b1")) (EVar "b2"))))
-(DFunDef false "tyMatchesAst" ((PCon "TyTuple" (PVar "ts1")) (PCon "TyTuple" (PVar "ts2"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "ts1")) (EApp (EVar "listLen") (EVar "ts2"))) (EApp (EApp (EVar "allList") (ELam ((PVar "p")) (EApp (EApp (EVar "tyMatchesAst") (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zipL") (EVar "ts1")) (EVar "ts2")))))
-(DFunDef false "tyMatchesAst" ((PCon "TyEffect" PWild PWild (PVar "t1")) (PVar "t2")) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
-(DFunDef false "tyMatchesAst" ((PVar "t1") (PCon "TyEffect" PWild PWild (PVar "t2"))) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
-(DFunDef false "tyMatchesAst" ((PCon "TyConstrained" PWild (PVar "t1")) (PVar "t2")) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
-(DFunDef false "tyMatchesAst" ((PVar "t1") (PCon "TyConstrained" PWild (PVar "t2"))) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
-(DFunDef false "tyMatchesAst" (PWild PWild) (EVar "False"))
+(DFunDef false "implRowMatchesSuper" ((PVar "superKey") (PVar "superName") (PVar "goal") (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild PWild)) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "ir") "irName") (EVar "superName")) (EBinOp "==" (EApp (EVar "listLen") (EVar "tys")) (EApp (EVar "listLen") (EVar "goal")))) (EBinOp "==" (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")) (EVar "superKey"))) (EApp (EApp (EVar "superHeadCovers") (EVar "tys")) (EVar "goal"))))
+(DTypeSig false "superHeadCovers" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))
+(DFunDef false "superHeadCovers" ((PVar "pats") (PVar "goal")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "superHeadStep")) (EVar "eqStr")) (EVar "tyStructEq")) (EApp (EApp (EVar "zipL") (EVar "pats")) (EVar "goal"))) (EListLit))))
+(DTypeSig false "superHeadStep" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "String")) (TyCon "Ty")) (TyCon "Ty")))))
+(DFunDef false "superHeadStep" ((PVar "pat") (PVar "t")) (EApp (EApp (EVar "tyStep") (EVar "pat")) (EApp (EVar "stripTyWrap") (EVar "t"))))
 (DTypeSig false "globalCoherenceConflict" (TyFun (TyCon "ImplEnv") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "globalCoherenceConflict" ((PVar "env")) (EMatch (EApp (EApp (EApp (EVar "cohScan") (EVar "CohSweepGlobal")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "cohImplOfRow")) (EApp (EVar "cohRowsOf") (EVar "env"))))) (EListLit)) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (ETuple (EApp (EApp (EVar "map") (EVar "fst")) (EVar "hard")) (EApp (EApp (EVar "map") (EVar "fst")) (EVar "soft"))))))
 (DTypeSig true "setCoherenceUserDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
@@ -70274,15 +70126,17 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohKeepFirst" ((PCon "Some" (PVar "x")) PWild) (EApp (EVar "Some") (EVar "x")))
 (DFunDef false "cohKeepFirst" ((PCon "None") (PVar "y")) (EVar "y"))
 (DTypeSig false "cohHardMsg" (TyFun (TyCon "CohImpl") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
-(DFunDef false "cohHardMsg" ((PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EIf (EBinOp "||" (EBinOp "==" (EVar "mid1") (EVar "cohPreludeMid")) (EBinOp "==" (EVar "mid2") (EVar "cohPreludeMid"))) (EApp (EApp (EApp (EVar "cohPreludeOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohCrossModuleMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "mid1")) (EVar "mid2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "cohHardMsg" ((PVar "e1") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EIf (EApp (EApp (EVar "cohPairsPrelude") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohPreludeOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EApp (EApp (EApp (EVar "cohCrossModuleMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "mid1")) (EVar "mid2")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "cohOverlapMsg") (EApp (EVar "cohImplIfaceName") (EVar "e1"))) (EVar "xs")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "cohPreludeMid" (TyCon "String"))
 (DFunDef false "cohPreludeMid" () (ELit (LString "core")))
+(DTypeSig false "cohPairsPrelude" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "cohPairsPrelude" ((PVar "mid1") (PVar "mid2")) (EBinOp "||" (EBinOp "==" (EVar "mid1") (EVar "cohPreludeMid")) (EBinOp "==" (EVar "mid2") (EVar "cohPreludeMid"))))
 (DTypeSig false "cohPreludeOverlapMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "String")))))
 (DFunDef false "cohPreludeOverlapMsg" ((PVar "iface") (PVar "xs") (PVar "ys")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "overlapping impls of ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "s1"))) (ELit (LString " and the prelude's "))) (EApp (EMethodRef "display") (EVar "s2"))) (ELit (LString " can match the same type; the prelude's impl cannot be replaced, so wrap the type in a newtype and implement "))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " for that"))))))
 (DTypeSig false "cohIsCrossModule" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "cohIsCrossModule" ((PVar "mid1") (PVar "mid2")) (EBinOp "&&" (EBinOp "&&" (EBinOp "/=" (EVar "mid1") (ELit (LString ""))) (EBinOp "/=" (EVar "mid2") (ELit (LString "")))) (EBinOp "/=" (EVar "mid1") (EVar "mid2"))))
 (DTypeSig false "cohIncomparableMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))))
-(DFunDef false "cohIncomparableMsg" ((PVar "iface") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: overlapping impls of ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "cohWhereSuffix") (EVar "mid1")) (EVar "mid2")))) (ELit (LString ": neither "))) (EApp (EMethodRef "display") (EVar "s1"))) (ELit (LString " nor "))) (EApp (EMethodRef "display") (EVar "s2"))) (ELit (LString " is more specific than the other, so a goal matching both has no impl to pick"))))))
+(DFunDef false "cohIncomparableMsg" ((PVar "iface") (PVar "xs") (PVar "ys") (PVar "mid1") (PVar "mid2")) (EMatch (EApp (EApp (EVar "cohPpPair") (EVar "xs")) (EVar "ys")) (arm (PTuple (PVar "s1") (PVar "s2")) () (EIf (EApp (EApp (EVar "cohPairsPrelude") (EVar "mid1")) (EVar "mid2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: overlapping impls of ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ": neither "))) (EApp (EMethodRef "display") (EVar "s1"))) (ELit (LString " nor the prelude's "))) (EApp (EMethodRef "display") (EVar "s2"))) (ELit (LString " is more specific than the other, so a goal matching both has no impl to pick"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Warning: overlapping impls of ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "cohWhereSuffix") (EVar "mid1")) (EVar "mid2")))) (ELit (LString ": neither "))) (EApp (EMethodRef "display") (EVar "s1"))) (ELit (LString " nor "))) (EApp (EMethodRef "display") (EVar "s2"))) (ELit (LString " is more specific than the other, so a goal matching both has no impl to pick")))))))
 (DTypeSig false "cohWhereSuffix" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cohWhereSuffix" ((PVar "mid1") (PVar "mid2")) (EIf (EApp (EApp (EVar "cohIsCrossModule") (EVar "mid1")) (EVar "mid2")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString " (defined in `")) (EApp (EMethodRef "display") (EVar "mid2"))) (ELit (LString "` and `"))) (EApp (EMethodRef "display") (EVar "mid1"))) (ELit (LString "`)"))) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cohIncomparableHelp" (TyCon "String"))
@@ -70306,10 +70160,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "cohPushSoft" ((PCon "None")) (ELit LUnit))
 (DFunDef false "cohPushSoft" ((PCon "Some" (PTuple (PVar "msg") (PVar "loc")))) (EApp (EApp (EVar "pushCoherenceWarning") (EVar "loc")) (EVar "msg")))
 (DTypeSig false "checkSuperImpls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyCon "Unit"))))))
-(DFunDef false "checkSuperImpls" ((PVar "userDecls") (PVar "ce") (PVar "ie") (PVar "cur")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "ieRowsVisibleAt") (EVar "cur")) (EVar "ie"))) (DoLet false false PWild (EApp (EApp (EVar "foreachUnit") (EApp (EVar "pushTypeError") (ELit (LString "T-MISSING-SUPER-IMPL")))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "superImplMsgsOf") (EVar "ce")) (EVar "cur")) (EVar "rows"))) (EVar "userDecls")))) (DoExpr (EApp (EApp (EVar "foreachUnit") (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "userDecls")) (EVar "ce")) (EVar "cur")) (EVar "rows"))) (EVar "userDecls")))))
+(DFunDef false "checkSuperImpls" ((PVar "userDecls") (PVar "ce") (PVar "ie") (PVar "cur")) (EBlock (DoLet false false (PVar "rows") (EApp (EApp (EVar "ieRowsVisibleAt") (EVar "cur")) (EVar "ie"))) (DoExpr (EApp (EApp (EVar "foreachUnit") (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "userDecls")) (EVar "ce")) (EVar "cur")) (EVar "rows"))) (EVar "userDecls")))))
 (DTypeSig false "checkImplSuperContexts" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "Decl") (TyCon "Unit")))))))
 (DFunDef false "checkImplSuperContexts" ((PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EApp (EVar "checkImplSuperContexts") (EVar "decls")) (EVar "ce")) (EVar "cur")) (EVar "rows")) (EVar "d")))
-(DFunDef false "checkImplSuperContexts" ((PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "ifaceLoc"))) true)) (EBlock (DoLet false false (PVar "derived") (EApp (EVar "isNone") (EVar "ifaceLoc"))) (DoLet false false (PVar "loc") (EIf (EVar "derived") (EApp (EApp (EVar "derivedImplDeclLoc") (EVar "decls")) (EVar "tys")) (EVar "ifaceLoc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "r")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))))) (EBlock (DoLet false false (PTuple (PVar "implTvMap") (PVar "headMonos")) (EApp (EVar "implHeadMonos") (EVar "tys"))) (DoLet false false (PVar "roots") (EApp (EVar "implHeadTypeVarRoots") (EVar "implTvMap"))) (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoLet false false (PVar "declared") (EApp (EApp (EMethodRef "map") (EApp (EVar "requirePredicateSlot") (EVar "implTvMap"))) (EVar "reqs"))) (DoLet false false (PVar "givens") (EBinOp "++" (EVar "declared") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "predicateSlotKnownSupers") (EVar "s"))))) (EVar "declared")))) (DoLet false false (PVar "subject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "")))) (DoLet false false (PVar "parametric") (EApp (EVar "not") (EApp (EApp (EVar "allList") (EVar "tyIsConcrete")) (EVar "tys")))) (DoLet false false (PVar "subst") (EApp (EApp (EVar "zipL") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys"))) (DoLet false false (PVar "argsOf") (ELam ((PVar "sup")) (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "headMonos")))) (EApp (EVar "superParamsOf") (EVar "sup"))))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "sup")) (EMatch (EApp (EVar "argsOf") (EVar "sup")) (arm (PCon "Some" (PVar "supArgs")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperInstanceContext") (EVar "subject")) (EVar "roots")) (EVar "headIds")) (EVar "givens")) (EVar "loc")) (EVar "derived")) (EApp (EVar "superIfaceRef") (EVar "sup"))) (EVar "supArgs")) (EBinOp "&&" (EVar "parametric") (EApp (EVar "not") (EApp (EApp (EApp (EVar "superRowExists") (EVar "rows")) (EVar "subst")) (EVar "sup")))))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "ceRowSupers") (EVar "r")))))) (arm PWild () (ELit LUnit))))))
+(DFunDef false "checkImplSuperContexts" ((PVar "decls") (PVar "ce") (PVar "cur") (PVar "rows") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "reqs" None) (rf "implOrigin" (PVar "o")) (rf "implIfaceLoc" (PVar "ifaceLoc"))) true)) (EBlock (DoLet false false (PVar "derived") (EApp (EVar "isNone") (EVar "ifaceLoc"))) (DoLet false false (PVar "loc") (EIf (EVar "derived") (EApp (EApp (EVar "derivedImplDeclLoc") (EVar "decls")) (EVar "tys")) (EVar "ifaceLoc"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PVar "r")) ((GBool (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))))) (EBlock (DoLet false false (PTuple (PVar "implTvMap") (PVar "headMonos")) (EApp (EVar "implHeadMonos") (EVar "tys"))) (DoLet false false (PVar "roots") (EApp (EVar "implHeadTypeVarRoots") (EVar "implTvMap"))) (DoLet false false (PVar "headIds") (EApp (EApp (EVar "omFromNames") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (EApp (EVar "intToString") (EApp (EVar "snd") (EVar "p"))))) (EVar "roots"))) (EVar "omEmpty"))) (DoLet false false (PVar "declared") (EApp (EApp (EMethodRef "map") (EApp (EVar "requirePredicateSlot") (EVar "implTvMap"))) (EVar "reqs"))) (DoLet false false (PVar "givens") (EBinOp "++" (EVar "declared") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "s")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "predicateSlotKnownSupers") (EVar "s"))))) (EVar "declared")))) (DoLet false false (PVar "subject") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "ppTyAtom")) (EVar "tys"))))) (ELit (LString "")))) (DoLet false false (PVar "subst") (EApp (EApp (EVar "zipL") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys"))) (DoLet false false (PVar "argsOf") (ELam ((PVar "sup")) (EApp (EApp (EVar "mapAll") (ELam ((PVar "p")) (EApp (EApp (EApp (EVar "lookupPos") (EVar "p")) (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "headMonos")))) (EApp (EVar "superParamsOf") (EVar "sup"))))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "sup")) (EMatch (EApp (EVar "argsOf") (EVar "sup")) (arm (PCon "Some" (PVar "supArgs")) () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSuperInstanceContext") (EVar "subject")) (EVar "roots")) (EVar "headIds")) (EVar "givens")) (EVar "loc")) (EVar "derived")) (EApp (EVar "superIfaceRef") (EVar "sup"))) (EVar "supArgs")) (ELam (PWild) (EApp (EApp (EApp (EVar "superRowExists") (EVar "rows")) (EVar "subst")) (EVar "sup"))))) (arm (PCon "None") () (ELit LUnit))))) (ELit LUnit)) (EApp (EVar "ceRowSupers") (EVar "r")))))) (arm PWild () (ELit LUnit))))))
 (DFunDef false "checkImplSuperContexts" (PWild PWild PWild PWild PWild) (ELit LUnit))
 (DTypeSig false "derivedImplDeclLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyCon "Loc")))))
 (DFunDef false "derivedImplDeclLoc" ((PVar "decls") (PVar "tys")) (EMatch (EApp (EApp (EDictApp "flatMap") (EVar "tyConNamesInTy")) (EVar "tys")) (arm (PList (PVar "n")) () (EMatch (EApp (EApp (EDictApp "flatMap") (EApp (EVar "declNameLocs") (EVar "n"))) (EVar "decls")) (arm (PCons (PVar "l") PWild) () (EApp (EVar "Some") (EVar "l"))) (arm (PList) () (EVar "None")))) (arm PWild () (EVar "None"))))
@@ -70318,12 +70172,12 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "declNameLocs" ((PVar "n") (PRec "DData" ((rf "dataName" None) (rf "dataNameLoc" (PCon "Some" (PVar "l")))) true)) (EIf (EBinOp "==" (EVar "dataName") (EVar "n")) (EListLit (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "declNameLocs" ((PVar "n") (PRec "DNewtype" ((rf "newtypeName" None) (rf "newtypeNameLoc" (PCon "Some" (PVar "l")))) true)) (EIf (EBinOp "==" (EVar "newtypeName") (EVar "n")) (EListLit (EVar "l")) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "declNameLocs" (PWild PWild) (EListLit))
-(DTypeSig false "checkSuperInstanceContext" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "Bool") (TyCon "Unit")))))))))))
-(DFunDef false "checkSuperInstanceContext" ((PVar "subject") (PVar "roots") (PVar "headIds") (PVar "givens") (PVar "loc") (PVar "derived") (PVar "sup") (PVar "supArgs") (PVar "absent")) (EIf (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "givenAnswers") (EVar "sup")) (EVar "supArgs"))) (EVar "givens")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "rigidHeadInstanceContext") (EVar "headIds")) (EVar "sup")) (EVar "supArgs")) (arm (PCon "None") () (EIf (EVar "absent") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportMissingSuperImpl") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "derived")) (EVar "sup")) (EVar "supArgs")) (ELit LUnit))) (arm (PCon "Some" (PVar "ctx")) () (EBlock (DoLet false false (PVar "walk") (EApp (EVar "reqWalkStart") (ELit LUnit))) (DoLet false false (PVar "leaves") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "superContextLeaves") (EVar "walk")) (EVar "headIds")) (EVar "givens")) (EVar "loc")) (EApp (EVar "fst") (EVar "g"))) (EApp (EVar "snd") (EVar "g"))))) (EVar "ctx"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "leaf")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportSuperContextLeaf") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "derived")) (EVar "sup")) (EVar "supArgs")) (EVar "leaf")))) (ELit LUnit)) (EVar "leaves")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "checkSuperInstanceContext" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyFun (TyCon "Unit") (TyCon "Bool")) (TyCon "Unit")))))))))))
+(DFunDef false "checkSuperInstanceContext" ((PVar "subject") (PVar "roots") (PVar "headIds") (PVar "givens") (PVar "loc") (PVar "derived") (PVar "sup") (PVar "supArgs") (PVar "covered")) (EIf (EApp (EApp (EVar "anyList") (EApp (EApp (EVar "givenAnswers") (EVar "sup")) (EVar "supArgs"))) (EVar "givens")) (ELit LUnit) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EApp (EVar "rigidHeadInstanceContext") (EVar "headIds")) (EVar "sup")) (EVar "supArgs")) (arm (PCon "None") () (EIf (EApp (EVar "not") (EApp (EVar "covered") (ELit LUnit))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportMissingSuperImpl") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "derived")) (EVar "sup")) (EVar "supArgs")) (ELit LUnit))) (arm (PCon "Some" (PVar "ctx")) () (EBlock (DoLet false false (PVar "walk") (EApp (EVar "reqWalkStart") (ELit LUnit))) (DoLet false false (PVar "leaves") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "g")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "superContextLeaves") (EVar "walk")) (EVar "headIds")) (EVar "givens")) (EVar "loc")) (EApp (EVar "fst") (EVar "g"))) (EApp (EVar "snd") (EVar "g"))))) (EVar "ctx"))) (DoExpr (EApp (EApp (EApp (EMethodRef "fold") (ELam (PWild (PVar "leaf")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reportSuperContextLeaf") (EVar "subject")) (EVar "roots")) (EVar "loc")) (EVar "derived")) (EVar "sup")) (EVar "supArgs")) (EVar "leaf")))) (ELit LUnit)) (EVar "leaves")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "superRowExists" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Super") (TyCon "Bool")))))
 (DFunDef false "superRowExists" ((PVar "rows") (PVar "subst") (PRec "Super" ((rf "superHead" (PVar "n")) (rf "superParams" (PVar "ps")) (rf "superOrigin" (PVar "so"))) false)) (EBlock (DoLet false false (PVar "tys") (EApp (EApp (EVar "substParams") (EVar "ps")) (EVar "subst"))) (DoExpr (EBinOp "||" (EBinOp "/=" (EApp (EVar "listLen") (EVar "tys")) (EApp (EVar "listLen") (EVar "ps"))) (EApp (EApp (EApp (EApp (EVar "superImplExists") (EVar "rows")) (EApp (EApp (EVar "ifaceTabKey") (EVar "so")) (EVar "n"))) (EVar "n")) (EVar "tys"))))))
 (DTypeSig false "reportMissingSuperImpl" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Bool") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Unit"))))))))
-(DFunDef false "reportMissingSuperImpl" ((PVar "subject") (PVar "roots") (PVar "loc") (PVar "derived") (PVar "sup") (PVar "supArgs")) (EBlock (DoLet false false (PVar "named") (EApp (EVar "Ref") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EVar "roots")))) (DoLet false false (PVar "goal") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "qualifiedIfaceLabel") (EVar "sup")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EApp (EVar "ppEach") (EVar "named")) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EVar "supArgs"))))) (ELit (LString "")))) (DoLet false false (PVar "goalBare") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "sup") "irName"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EApp (EVar "ppEach") (EVar "named")) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EVar "supArgs"))))) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-MISSING-SUPER-IMPL"))) (EVar "loc")) (EIf (EVar "derived") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` (derived) requires the superinterface `"))) (EApp (EMethodRef "display") (EVar "goal"))) (ELit (LString "`, which no impl covers; add `impl "))) (EApp (EMethodRef "display") (EVar "goalBare"))) (ELit (LString "`"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` requires the superinterface `"))) (EApp (EMethodRef "display") (EVar "goal"))) (ELit (LString "`, which no impl covers; add an `impl "))) (EApp (EMethodRef "display") (EVar "goalBare"))) (ELit (LString "` covering it, or add `requires "))) (EApp (EMethodRef "display") (EVar "goalBare"))) (ELit (LString "` to the impl"))))))))
+(DFunDef false "reportMissingSuperImpl" ((PVar "subject") (PVar "roots") (PVar "loc") (PVar "derived") (PVar "sup") (PVar "supArgs")) (EBlock (DoLet false false (PVar "named") (EApp (EVar "Ref") (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "snd") (EVar "p")) (EApp (EVar "fst") (EVar "p"))))) (EVar "roots")))) (DoLet false false (PVar "goal") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "sup") "irName"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EApp (EApp (EVar "ppEach") (EVar "named")) (EApp (EVar "Ref") (ELit (LInt 0)))) (ELit (LInt 3))) (EVar "supArgs"))))) (ELit (LString "")))) (DoLet false false (PVar "missing") (EBinOp "++" (EBinOp "++" (ELit (LString "requires the superinterface `")) (EApp (EMethodRef "display") (EVar "goal"))) (ELit (LString "`, which no impl covers")))) (DoExpr (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-MISSING-SUPER-IMPL"))) (EVar "loc")) (EIf (EApp (EVar "not") (EVar "derived")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` "))) (EApp (EMethodRef "display") (EVar "missing"))) (ELit (LString "; add an `impl "))) (EApp (EMethodRef "display") (EVar "goal"))) (ELit (LString "` covering it, or add `requires "))) (EApp (EMethodRef "display") (EVar "goal"))) (ELit (LString "` to the impl"))) (EIf (EApp (EVar "derivableIface") (EFieldAccess (EVar "sup") "irName")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` (derived) "))) (EApp (EMethodRef "display") (EVar "missing"))) (ELit (LString "; add `"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "sup") "irName"))) (ELit (LString "` to the type's `deriving` clause, or add an `impl "))) (EApp (EMethodRef "display") (EVar "goal"))) (ELit (LString "`"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EMethodRef "display") (EVar "subject"))) (ELit (LString "` (derived) "))) (EApp (EMethodRef "display") (EVar "missing"))) (ELit (LString "; add an `impl "))) (EApp (EMethodRef "display") (EVar "goal"))) (ELit (LString "`")))))))))
 (DTypeSig false "rigidHeadInstanceContext" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))))))))
 (DFunDef false "rigidHeadInstanceContext" ((PVar "headIds") (PVar "iface") (PVar "args")) (EBlock (DoLet false false (PVar "cells") (EApp (EApp (EVar "sigCellsOf") (EVar "headIds")) (EApp (EApp (EDictApp "flatMap") (EVar "monoVarCells")) (EVar "args")))) (DoLet false false (PVar "toRigid") (EApp (EApp (EVar "sigRigidBindings") (EVar "headIds")) (EVar "cells"))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "r")) (EMatch (EApp (EApp (EVar "reqToObligation") (EApp (EVar "fst") (EVar "m"))) (EVar "r")) (arm (PTuple (PVar "ri") (PVar "rargs")) () (ETuple (EVar "ri") (EApp (EApp (EMethodRef "map") (EApp (EVar "unrigidSig") (EVar "cells"))) (EVar "rargs"))))))) (EApp (EVar "snd") (EVar "m"))))) (EApp (EApp (EApp (EVar "findMatchingImplReqsU") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef") "value")) (EVar "iface")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "substMono") (EVar "toRigid")) (EListLit)) (EListLit))) (EVar "args")))))))
 (DTypeSig false "superContextLeaves" (TyFun (TyCon "ReqWalk") (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "PredicateSlot")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono")))))))))))
@@ -70556,17 +70410,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "containsRowKey" ((PVar "k") (PCons (PVar "r") (PVar "rest"))) (EIf (EBinOp "==" (EApp (EVar "ceRowDoneKey") (EVar "r")) (EVar "k")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "containsRowKey") (EVar "k")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "cyclicSuperIfaceMsg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DFunDef false "cyclicSuperIfaceMsg" ((PVar "path")) (EBinOp "++" (ELit (LString "cyclic superinterface: ")) (EApp (EApp (EVar "joinWith") (ELit (LString " requires "))) (EApp (EApp (EMethodRef "map") (EVar "backticked")) (EVar "path")))))
-(DTypeSig false "superImplMsgsOf" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "superImplMsgsOf" ((PVar "ce") (PVar "cur") (PVar "rows") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "superImplMsgsOf") (EVar "ce")) (EVar "cur")) (EVar "rows")) (EVar "d")))
-(DFunDef false "superImplMsgsOf" ((PVar "ce") (PVar "cur") (PVar "rows") (PRec "DImpl" ((rf "iface" None) (rf "tys" None) (rf "implOrigin" (PVar "o"))) true)) (EMatch (EApp (EApp (EApp (EVar "ceLookupAt") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EVar "o")) (EVar "iface")))) (EVar "cur")) (EVar "ce")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "r")) () (EIf (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EApp (EVar "listLen") (EVar "tys"))) (EApp (EApp (EVar "allList") (EVar "tyIsConcrete")) (EVar "tys"))) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EApp (EVar "superMsgFor") (EVar "rows")) (EVar "iface")) (EVar "tys")) (EApp (EApp (EVar "zipL") (EApp (EVar "ceRowTyparams") (EVar "r"))) (EVar "tys")))) (EApp (EVar "ceRowSupers") (EVar "r"))) (EListLit)))))
-(DFunDef false "superImplMsgsOf" (PWild PWild PWild PWild) (EListLit))
-(DTypeSig false "superMsgFor" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "String"))))))))
-(DFunDef false "superMsgFor" ((PVar "rows") (PVar "iface") (PVar "implTys") (PVar "subst") (PRec "Super" ((rf "superHead" (PVar "superName")) (rf "superParams" (PVar "params")) (rf "superOrigin" (PVar "so"))) false)) (EBlock (DoLet false false (PVar "concrete") (EApp (EApp (EVar "substParams") (EVar "params")) (EVar "subst"))) (DoExpr (EIf (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "concrete")) (EApp (EVar "listLen") (EVar "params"))) (EApp (EApp (EVar "allList") (EVar "tyIsConcrete")) (EVar "concrete"))) (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "superImplExists") (EVar "rows")) (EApp (EApp (EVar "ifaceTabKey") (EVar "so")) (EVar "superName"))) (EVar "superName")) (EVar "concrete")))) (EListLit (EApp (EApp (EApp (EApp (EVar "missingSuperImplMsg") (EVar "iface")) (EVar "implTys")) (EVar "superName")) (EVar "concrete"))) (EListLit)))))
 (DTypeSig false "substParams" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyApp (TyCon "List") (TyCon "Ty")))))
 (DFunDef false "substParams" ((PList) PWild) (EListLit))
 (DFunDef false "substParams" ((PCons (PVar "p") (PVar "rest")) (PVar "subst")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "p")) (EVar "subst")) (arm (PCon "Some" (PVar "t")) () (EBinOp "::" (EVar "t") (EApp (EApp (EVar "substParams") (EVar "rest")) (EVar "subst")))) (arm (PCon "None") () (EApp (EApp (EVar "substParams") (EVar "rest")) (EVar "subst")))))
-(DTypeSig false "missingSuperImplMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "String"))))))
-(DFunDef false "missingSuperImplMsg" ((PVar "iface") (PVar "implTys") (PVar "superName") (PVar "superTys")) (EBlock (DoLet false false (PVar "superHead") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EMethodRef "display") (EVar "superName"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "ppTyAtom")) (EVar "superTys"))))) (ELit (LString "")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EApp (EApp (EMethodRef "map") (EVar "ppTyAtom")) (EVar "implTys"))))) (ELit (LString "` requires the superinterface `"))) (EApp (EMethodRef "display") (EVar "superHead"))) (ELit (LString "`, which is missing; add `"))) (EApp (EMethodRef "display") (EVar "superHead"))) (ELit (LString "`"))))))
 (DTypeSig false "superLookup" (TyFun (TyCon "IfaceRef") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super"))))))
 (DFunDef false "superLookup" ((PVar "ir")) (EBlock (DoLet false false (PVar "key") (EApp (EVar "regKeyOfTab") (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (ETuple (EApp (EVar "ceRowTyparams") (EVar "row")) (EApp (EVar "ceRowSupers") (EVar "row"))))) (EApp (EApp (EVar "ceLookupGraph") (EVar "key")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deIfaces"))))))
 (DTypeSig false "ifaceSupersOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Super")))))))
@@ -70575,32 +70421,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ifaceSupersOf" ((PCons (PRec "DInterface" ((rf "pub" None) (rf "def" None) (rf "name" None) (rf "typarams" None) (rf "supers" None) (rf "methods" None)) false) (PVar "rest")) (PVar "target")) (EIf (EBinOp "==" (EVar "name") (EVar "target")) (EApp (EVar "Some") (ETuple (EVar "typarams") (EVar "supers"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "ifaceSupersOf") (EVar "rest")) (EVar "target")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "ifaceSupersOf" ((PCons PWild (PVar "rest")) (PVar "target")) (EApp (EApp (EVar "ifaceSupersOf") (EVar "rest")) (EVar "target")))
 (DTypeSig false "superImplExists" (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "TabKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))))
-(DFunDef false "superImplExists" ((PVar "rows") (PVar "superKey") (PVar "superName") (PVar "concrete")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "implRowMatchesSuper") (EVar "superKey")) (EVar "superName")) (EVar "concrete"))) (EVar "rows")))
+(DFunDef false "superImplExists" ((PVar "rows") (PVar "superKey") (PVar "superName") (PVar "goal")) (EApp (EApp (EVar "anyList") (EApp (EApp (EApp (EVar "implRowMatchesSuper") (EVar "superKey")) (EVar "superName")) (EVar "goal"))) (EVar "rows")))
 (DTypeSig false "implRowMatchesSuper" (TyFun (TyCon "TabKey") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "ImplRow") (TyCon "Bool"))))))
-(DFunDef false "implRowMatchesSuper" ((PVar "superKey") (PVar "superName") (PVar "concrete") (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild PWild)) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "ir") "irName") (EVar "superName")) (EBinOp "==" (EApp (EVar "listLen") (EVar "tys")) (EApp (EVar "listLen") (EVar "concrete")))) (EBinOp "==" (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")) (EVar "superKey"))) (EApp (EApp (EVar "allList") (ELam ((PVar "p")) (EApp (EApp (EVar "tyMatchesAst") (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zipL") (EVar "tys")) (EVar "concrete")))))
-(DTypeSig false "tyIsConcrete" (TyFun (TyCon "Ty") (TyCon "Bool")))
-(DFunDef false "tyIsConcrete" ((PCon "TyVar" PWild)) (EVar "False"))
-(DFunDef false "tyIsConcrete" ((PRec "TyCon" ((rf "tyConName" PWild)) false)) (EVar "True"))
-(DFunDef false "tyIsConcrete" ((PCon "TyApp" (PVar "a") (PVar "b"))) (EBinOp "&&" (EApp (EVar "tyIsConcrete") (EVar "a")) (EApp (EVar "tyIsConcrete") (EVar "b"))))
-(DFunDef false "tyIsConcrete" ((PCon "TyFun" (PVar "a") (PVar "b"))) (EBinOp "&&" (EApp (EVar "tyIsConcrete") (EVar "a")) (EApp (EVar "tyIsConcrete") (EVar "b"))))
-(DFunDef false "tyIsConcrete" ((PCon "TyTuple" (PVar "ts"))) (EApp (EApp (EVar "allList") (EVar "tyIsConcrete")) (EVar "ts")))
-(DFunDef false "tyIsConcrete" ((PCon "TyEffect" PWild PWild (PVar "t"))) (EApp (EVar "tyIsConcrete") (EVar "t")))
-(DFunDef false "tyIsConcrete" ((PCon "TyConstrained" PWild (PVar "t"))) (EApp (EVar "tyIsConcrete") (EVar "t")))
-(DFunDef false "tyIsConcrete" ((PCon "TyRow" PWild PWild PWild)) (EVar "True"))
-(DFunDef false "tyIsConcrete" ((PCon "TyAuth" PWild PWild)) (EVar "True"))
-(DFunDef false "tyIsConcrete" ((PCon "TyNamed" PWild (PVar "t") PWild)) (EApp (EVar "tyIsConcrete") (EVar "t")))
-(DFunDef false "tyIsConcrete" ((PCon "TyQual" (PVar "t") PWild PWild)) (EApp (EVar "tyIsConcrete") (EVar "t")))
-(DTypeSig false "tyMatchesAst" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyCon "Bool"))))
-(DFunDef false "tyMatchesAst" ((PCon "TyVar" PWild) PWild) (EVar "True"))
-(DFunDef false "tyMatchesAst" ((PRec "TyCon" ((rf "tyConName" (PVar "a"))) false) (PRec "TyCon" ((rf "tyConName" (PVar "b"))) false)) (EBinOp "==" (EVar "a") (EVar "b")))
-(DFunDef false "tyMatchesAst" ((PCon "TyApp" (PVar "f1") (PVar "a1")) (PCon "TyApp" (PVar "f2") (PVar "a2"))) (EBinOp "&&" (EApp (EApp (EVar "tyMatchesAst") (EVar "f1")) (EVar "f2")) (EApp (EApp (EVar "tyMatchesAst") (EVar "a1")) (EVar "a2"))))
-(DFunDef false "tyMatchesAst" ((PCon "TyFun" (PVar "a1") (PVar "b1")) (PCon "TyFun" (PVar "a2") (PVar "b2"))) (EBinOp "&&" (EApp (EApp (EVar "tyMatchesAst") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "tyMatchesAst") (EVar "b1")) (EVar "b2"))))
-(DFunDef false "tyMatchesAst" ((PCon "TyTuple" (PVar "ts1")) (PCon "TyTuple" (PVar "ts2"))) (EBinOp "&&" (EBinOp "==" (EApp (EVar "listLen") (EVar "ts1")) (EApp (EVar "listLen") (EVar "ts2"))) (EApp (EApp (EVar "allList") (ELam ((PVar "p")) (EApp (EApp (EVar "tyMatchesAst") (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p"))))) (EApp (EApp (EVar "zipL") (EVar "ts1")) (EVar "ts2")))))
-(DFunDef false "tyMatchesAst" ((PCon "TyEffect" PWild PWild (PVar "t1")) (PVar "t2")) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
-(DFunDef false "tyMatchesAst" ((PVar "t1") (PCon "TyEffect" PWild PWild (PVar "t2"))) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
-(DFunDef false "tyMatchesAst" ((PCon "TyConstrained" PWild (PVar "t1")) (PVar "t2")) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
-(DFunDef false "tyMatchesAst" ((PVar "t1") (PCon "TyConstrained" PWild (PVar "t2"))) (EApp (EApp (EVar "tyMatchesAst") (EVar "t1")) (EVar "t2")))
-(DFunDef false "tyMatchesAst" (PWild PWild) (EVar "False"))
+(DFunDef false "implRowMatchesSuper" ((PVar "superKey") (PVar "superName") (PVar "goal") (PCon "ImplRow" PWild PWild (PVar "ir") (PVar "tys") PWild PWild)) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "ir") "irName") (EVar "superName")) (EBinOp "==" (EApp (EVar "listLen") (EVar "tys")) (EApp (EVar "listLen") (EVar "goal")))) (EBinOp "==" (EApp (EApp (EVar "ifaceTabKey") (EFieldAccess (EVar "ir") "irOrigin")) (EFieldAccess (EVar "ir") "irName")) (EVar "superKey"))) (EApp (EApp (EVar "superHeadCovers") (EVar "tys")) (EVar "goal"))))
+(DTypeSig false "superHeadCovers" (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Bool"))))
+(DFunDef false "superHeadCovers" ((PVar "pats") (PVar "goal")) (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "superHeadStep")) (EVar "eqStr")) (EVar "tyStructEq")) (EApp (EApp (EVar "zipL") (EVar "pats")) (EVar "goal"))) (EListLit))))
+(DTypeSig false "superHeadStep" (TyFun (TyCon "Ty") (TyFun (TyCon "Ty") (TyApp (TyApp (TyApp (TyCon "MStep") (TyCon "String")) (TyCon "Ty")) (TyCon "Ty")))))
+(DFunDef false "superHeadStep" ((PVar "pat") (PVar "t")) (EApp (EApp (EVar "tyStep") (EVar "pat")) (EApp (EVar "stripTyWrap") (EVar "t"))))
 (DTypeSig false "globalCoherenceConflict" (TyFun (TyCon "ImplEnv") (TyTuple (TyApp (TyCon "Option") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "globalCoherenceConflict" ((PVar "env")) (EMatch (EApp (EApp (EApp (EVar "cohScan") (EVar "CohSweepGlobal")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "cohImplOfRow")) (EApp (EVar "cohRowsOf") (EVar "env"))))) (EListLit)) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (ETuple (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "hard")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "soft"))))))
 (DTypeSig true "setCoherenceUserDecls" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
