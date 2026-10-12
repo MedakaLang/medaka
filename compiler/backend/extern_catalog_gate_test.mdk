@@ -46,19 +46,18 @@ import test.{
 }
 import test_process.{medakaRoot, underRoot, withScratchDir}
 import frontend.parser.{parse}
-import frontend.ast.{Decl(..), EffAtomTy(..), Ty(..)}
 import types.target_profile.{
   Backend(..),
   TargetProfile,
-  grantsLabel,
-  hostLabels,
   lookupProfile,
   profileBackend,
   profileGrants,
   profileName,
   profileNames,
+  reachesLabel,
 }
 import backend.extern_catalog_test.{externDeclNames, minus}
+import backend.core_validate.{externLabels}
 import backend.extern_catalog.{
   Disposition(..),
   ExternRow(..),
@@ -611,20 +610,6 @@ writeCells dir = do
 -- are the ratchet gaps (`GapUnported` on wasm, `GapBug` on eval), which may
 -- only be drained, and the reasoned exceptions below.
 
--- Each extern's result-row labels, read from the parsed declarations.
-export
-declLabels : List Decl -> List (String, List String)
-declLabels [] = []
-declLabels ((DExtern _ n ty) :: rest) = (n, resultLabels ty) :: declLabels rest
-declLabels ((DAttrib _ d) :: rest) = declLabels (d :: rest)
-declLabels (_ :: rest) = declLabels rest
-
-resultLabels : Ty -> List String
-resultLabels (TyFun _ r) = resultLabels r
-resultLabels (TyConstrained _ t) = resultLabels t
-resultLabels (TyEffect atoms _ _) = map (a => a.eatLabel) atoms
-resultLabels _ = []
-
 -- Externs that a backend does not lower although every profile on it that
 -- reaches them must: those with no label, which no grant gates, and those
 -- whose only label is `IO`, which every profile granting a host label reaches.
@@ -675,11 +660,7 @@ isRatchet _ _ = False
 -- extern.
 appliesTo : TargetProfile -> List String -> Bool
 appliesTo _ [] = True
-appliesTo p labels = any (reaches p) labels
-
-reaches : TargetProfile -> String -> Bool
-reaches p "IO" = any (grantsLabel p) hostLabels
-reaches p label = grantsLabel p label
+appliesTo p labels = any (reachesLabel p) labels
 
 -- The (profile, extern, gap, reason) cells a profile's grant reaches that its
 -- backend does not lower.
@@ -761,11 +742,14 @@ test "profiles: every extern a granted label reaches is bound, a ratchet gap or 
     Ok src => expectAll [
       labelFail
         "labels read from the declarations"
-        (expectAtLeast 100 (length (declLabels (parse src)))),
+        (expectAtLeast 100 (length (externLabels (parse src)))),
       expectNoFindings
         "profile coherence"
         (Ok
-          (coherenceFindings allProfiles (declLabels (parse src)) catalogRows)),
+          (coherenceFindings
+            allProfiles
+            (externLabels (parse src))
+            catalogRows)),
     ]
 
 test "red: a PERMANENT row under a granted label is named with extern and profile" =
@@ -790,7 +774,7 @@ test "profiles: every exception names an ungated extern with a gap" =
   match runtimeText
     Err e => expectEqual "read runtime.mdk" "failed: \{e}"
     Ok src =>
-      let labelsOf = declLabels (parse src)
+      let labelsOf = externLabels (parse src)
       expectNoFindings
         "stale exceptions"
         (Ok
@@ -822,4 +806,4 @@ test "profiles: the owed ratchet rows are at most 64" = match runtimeText
     expectAtMost
       64
       (length
-        (owedRatchetRows allProfiles (declLabels (parse src)) catalogRows))
+        (owedRatchetRows allProfiles (externLabels (parse src)) catalogRows))

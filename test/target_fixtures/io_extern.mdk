@@ -1,0 +1,5 @@
+-- An `<IO>` entry calling an `<IO>` extern.  `IO` joins the host labels the
+-- target grants: wasmgc/wasi-p2 grants none, so nothing performed as `IO` can
+-- run there, and the target check refuses the entry.
+main : <IO> Unit
+main = assertSnapshot "a" "b"

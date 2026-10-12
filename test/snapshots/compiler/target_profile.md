@@ -1,5 +1,5 @@
 # META
-source_lines=216
+source_lines=233
 stages=DESUGAR,MARK
 # SOURCE
 -- The one table of target profiles: a profile is a backend, the host ABI that
@@ -12,6 +12,7 @@ stages=DESUGAR,MARK
 
 import frontend.ast.{EffParamTy(..)}
 import support.ordmap.{OrdMap, omEmpty, omFromPairs, omLookup}
+import support.util.{isNonEmptyL}
 import string.{join}
 
 public export data Backend =
@@ -44,6 +45,14 @@ profileGrants (TargetProfile _ _ _ g) = g
 export
 grantsLabel : TargetProfile -> String -> Bool
 grantsLabel p label = any (g => fst g == label) (profileGrants p)
+
+-- Can a program performing this label run under the profile?  `IO` is the
+-- join of the host labels the profile grants (`ioJoinGrants`), so it is
+-- reached exactly when that join is non-empty.
+export
+reachesLabel : TargetProfile -> String -> Bool
+reachesLabel p "IO" = isNonEmptyL (ioJoinGrants (Some p))
+reachesLabel p label = grantsLabel p label
 
 export
 backendName : Backend -> String
@@ -214,13 +223,22 @@ runProfile (Some p) =
       (profileAbi evalRunProfile)
       (filter (g => grantsLabel evalRunProfile (fst g)) (profileGrants p))
 
--- The profile `check` and `run` resolved from `--target` or the manifest.
+-- The profile `check`, `run` and `build` resolved from `--target` or the
+-- manifest.  `build` always selects one, so its emitter child always checks.
 export
 selectedProfile : Ref (Option TargetProfile)
 selectedProfile = Ref None
+
+-- How `build` hands its emitter child the selected profile's name.  A child
+-- started without it checks nothing, as every direct caller of an emit entry
+-- expects.
+export
+targetProfileEnv : String
+targetProfileEnv = "MEDAKA_TARGET_PROFILE"
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "Backend" () ((variant "BackendLlvm" (ConPos)) (variant "BackendWasmgc" (ConPos)) (variant "BackendEval" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Backend")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "BackendLlvm") (PCon "BackendLlvm")) () (EVar "True")) (arm (PTuple (PCon "BackendWasmgc") (PCon "BackendWasmgc")) () (EVar "True")) (arm (PTuple (PCon "BackendEval") (PCon "BackendEval")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
@@ -236,6 +254,9 @@ selectedProfile = Ref None
 (DFunDef false "profileGrants" ((PCon "TargetProfile" PWild PWild PWild (PVar "g"))) (EVar "g"))
 (DTypeSig true "grantsLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "grantsLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EVar "any") (ELam ((PVar "g")) (EBinOp "==" (EApp (EVar "fst") (EVar "g")) (EVar "label")))) (EApp (EVar "profileGrants") (EVar "p"))))
+(DTypeSig true "reachesLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "reachesLabel" ((PVar "p") (PLit (LString "IO"))) (EApp (EVar "isNonEmptyL") (EApp (EVar "ioJoinGrants") (EApp (EVar "Some") (EVar "p")))))
+(DFunDef false "reachesLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EVar "grantsLabel") (EVar "p")) (EVar "label")))
 (DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))
 (DFunDef false "backendName" ((PCon "BackendLlvm")) (ELit (LString "llvm")))
 (DFunDef false "backendName" ((PCon "BackendWasmgc")) (ELit (LString "wasmgc")))
@@ -280,9 +301,12 @@ selectedProfile = Ref None
 (DFunDef false "runProfile" ((PCon "Some" (PVar "p"))) (EIf (EBinOp "==" (EApp (EVar "profileName") (EVar "p")) (EApp (EVar "profileName") (EVar "evalRunProfile"))) (EVar "p") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "evalRunProfile")))) (ELit (LString " ∩ "))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString "")))) (EVar "BackendEval")) (EApp (EVar "profileAbi") (EVar "evalRunProfile"))) (EApp (EApp (EVar "filter") (ELam ((PVar "g")) (EApp (EApp (EVar "grantsLabel") (EVar "evalRunProfile")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "profileGrants") (EVar "p"))))))
 (DTypeSig true "selectedProfile" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "TargetProfile"))))
 (DFunDef false "selectedProfile" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "targetProfileEnv" (TyCon "String"))
+(DFunDef false "targetProfileEnv" () (ELit (LString "MEDAKA_TARGET_PROFILE")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "EffParamTy" true))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omFromPairs" false) (mem "omLookup" false))))
+(DUse false (UseGroup ("support" "util") ((mem "isNonEmptyL" false))))
 (DUse false (UseGroup ("string") ((mem "join" false))))
 (DData Public "Backend" () ((variant "BackendLlvm" (ConPos)) (variant "BackendWasmgc" (ConPos)) (variant "BackendEval" (ConPos))) ())
 (DImpl true "Eq" ((TyCon "Backend")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "BackendLlvm") (PCon "BackendLlvm")) () (EVar "True")) (arm (PTuple (PCon "BackendWasmgc") (PCon "BackendWasmgc")) () (EVar "True")) (arm (PTuple (PCon "BackendEval") (PCon "BackendEval")) () (EVar "True")) (arm (PTuple PWild PWild) () (EVar "False"))))))
@@ -298,6 +322,9 @@ selectedProfile = Ref None
 (DFunDef false "profileGrants" ((PCon "TargetProfile" PWild PWild PWild (PVar "g"))) (EVar "g"))
 (DTypeSig true "grantsLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "grantsLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EDictApp "any") (ELam ((PVar "g")) (EBinOp "==" (EApp (EVar "fst") (EVar "g")) (EVar "label")))) (EApp (EVar "profileGrants") (EVar "p"))))
+(DTypeSig true "reachesLabel" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Bool"))))
+(DFunDef false "reachesLabel" ((PVar "p") (PLit (LString "IO"))) (EApp (EVar "isNonEmptyL") (EApp (EVar "ioJoinGrants") (EApp (EVar "Some") (EVar "p")))))
+(DFunDef false "reachesLabel" ((PVar "p") (PVar "label")) (EApp (EApp (EVar "grantsLabel") (EVar "p")) (EVar "label")))
 (DTypeSig true "backendName" (TyFun (TyCon "Backend") (TyCon "String")))
 (DFunDef false "backendName" ((PCon "BackendLlvm")) (ELit (LString "llvm")))
 (DFunDef false "backendName" ((PCon "BackendWasmgc")) (ELit (LString "wasmgc")))
@@ -342,3 +369,5 @@ selectedProfile = Ref None
 (DFunDef false "runProfile" ((PCon "Some" (PVar "p"))) (EIf (EBinOp "==" (EApp (EVar "profileName") (EVar "p")) (EApp (EVar "profileName") (EVar "evalRunProfile"))) (EVar "p") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "evalRunProfile")))) (ELit (LString " ∩ "))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString "")))) (EVar "BackendEval")) (EApp (EVar "profileAbi") (EVar "evalRunProfile"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "g")) (EApp (EApp (EVar "grantsLabel") (EVar "evalRunProfile")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "profileGrants") (EVar "p"))))))
 (DTypeSig true "selectedProfile" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "TargetProfile"))))
 (DFunDef false "selectedProfile" () (EApp (EVar "Ref") (EVar "None")))
+(DTypeSig true "targetProfileEnv" (TyCon "String"))
+(DFunDef false "targetProfileEnv" () (ELit (LString "MEDAKA_TARGET_PROFILE")))

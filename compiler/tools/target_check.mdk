@@ -4,7 +4,7 @@
 -- one located `T-TARGET-CAPABILITY` diagnostic.
 import frontend.ast.{Decl(..), Loc(..), TyConOrigin(..)}
 import types.target_profile.{
-  TargetProfile, profileName, profileGrants, isGatedLabel
+  TargetProfile, profileName, profileGrants, isGatedLabel, reachesLabel
 }
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
@@ -31,21 +31,42 @@ targetRefusal profile file analysis =
   match lookupAssoc "main" analysis.eaSchemes
     None => Some (missingEntryDiag profile file)
     Some sch =>
-      let atoms = filter isGatedAtom (invocationSummary analysis.eaOps sch)
+      let summary = invocationSummary analysis.eaOps sch
+      let atoms = filter isGatedAtom summary
+      let unjoined = filter (unjoinedIo profile) summary
+      let ioLabels = match unjoined
+        [] => []
+        _ => ["IO"]
       match policyRefusals atoms (profileGrants profile)
-        PolicyAdmitted => None
+        PolicyAdmitted => match unjoined
+          [] => None
+          _ => Some (refusalDiag profile analysis unjoined ioLabels [])
         PolicyRefused labels lines =>
-          Some (refusalDiag profile analysis atoms (dedup labels) lines)
+          Some
+            (refusalDiag
+              profile
+              analysis
+              (atoms ++ unjoined)
+              (dedup labels ++ ioLabels)
+              lines)
 
 -- A label a user module declares is never a host capability, whatever it is
 -- spelled: only a builtin host label or `FFI` is gated.  An `IO` atom is left
--- to the typechecker: `check` and `run` select the profile before they
--- typecheck, and the typechecker bounds every `IO` by that profile's join
--- (`ioJoinGrants`).
+-- to the typechecker: `check`, `run` and `build` select the profile before
+-- they typecheck, and the typechecker bounds every `IO` by that profile's join
+-- (`ioJoinGrants`).  `unjoinedIo` is the one exception.
 isGatedAtom : Atom -> Bool
 isGatedAtom a = match effLabelOrigin (atomLabelOf a)
   OriginModule _ => False
   _ => isGatedLabel (atomLabel a)
+
+-- The one `IO` the typechecker cannot refuse: an `IO` performed under an `IO`
+-- bound, on a profile whose join is empty.  Nothing performed as `IO` runs
+-- there.
+unjoinedIo : TargetProfile -> Atom -> Bool
+unjoinedIo profile a = match effLabelOrigin (atomLabelOf a)
+  OriginModule _ => False
+  _ => atomLabel a == "IO" && not (reachesLabel profile "IO")
 
 refusalDiag : TargetProfile ->
   EntryAnalysis ->
@@ -68,8 +89,13 @@ refusalDiag profile analysis atoms labels lines =
   mkDiag
     SevError
     targetCapabilityCode
-    "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " labels}\{notProven}"
+    "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " (map withheldName labels)}\{notProven}"
     (entryLoc analysis.eaEntryDecls)
+
+-- `IO` is refused only when the profile grants no host label for it to join.
+withheldName : String -> String
+withheldName "IO" = "any host label for `IO` to join"
+withheldName label = label
 
 missingEntryDiag : TargetProfile -> String -> Diag
 missingEntryDiag profile file =

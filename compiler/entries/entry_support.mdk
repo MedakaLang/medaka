@@ -16,6 +16,7 @@ import frontend.desugar.{desugar, mapProg}
 export import support.util.{rootsOrDefault}
 import support.util.{splitLast, startsWith}
 import types.typecheck.{
+  ElabResult,
   elaborateOne,
   elaborateModules,
   hadTypeErrors,
@@ -25,11 +26,20 @@ import types.typecheck.{
 import support.path.{dirOf, joinPath}
 import support.ordmap.{OrdMap, omFromPairs, omLookup, omEmpty}
 import driver.diagnostics.{
+  Diag,
   emitDiagExitCode,
   emitGateDiags,
+  ppDiagCliLines,
   renderTcDiags,
   residualOrGeneric,
+  srcLinesArr,
 }
+import types.target_profile.{
+  TargetProfile, selectProfile, selectedProfile, targetProfileEnv
+}
+import tools.check_policy.{EntryAnalysis(..), analyzeProgram}
+import tools.target_check.{targetRefusal}
+import backend.core_validate.{checkedTarget, checkedTargetOf}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
 import driver.loader.{
   dropPathTriple,
@@ -336,6 +346,59 @@ entryMidOf [] = ""
 entryMidOf [(mid, _, _)] = mid
 entryMidOf (_ :: rest) = entryMidOf rest
 
+-- ── the target check ─────────────────────────────────────────────────────────
+-- `medaka build` names the selected profile in the environment
+-- (`targetProfileEnv`), and every program it builds passes through
+-- `runEmitWith`, so the check sits here: after the type gate, before anything
+-- is lowered.  A child started without the variable checks nothing.
+
+-- The profile this emit is checked against, if `build` named one, selected as
+-- `check --target` selects it and published before the first elaboration: the
+-- typechecker bounds `IO` by the selected profile's join.  A name the table
+-- does not know is refused rather than read as no profile.
+selectTargetProfileOfEnv : Unit -> <IO> Option TargetProfile
+selectTargetProfileOfEnv _ = match selectProfile (getEnv targetProfileEnv) None
+  Ok p =>
+    selectedProfile := p
+    p
+  Err m =>
+    let _ = failWith ("error: " ++ m)
+    None
+
+-- One elaboration either way.  With a profile it is `check-policy`'s analysis,
+-- the same drive `elaborateModules` runs with the entry's schemes and
+-- invocation table kept, so the refusal costs no second drive.
+elaborateForTarget : Option TargetProfile ->
+  List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  (ElabResult, Option Diag)
+elaborateForTarget None _ runtimeDecls coreDecls modules =
+  (elaborateModules runtimeDecls coreDecls modules, None)
+elaborateForTarget (Some p) modsWithPath runtimeDecls coreDecls modules =
+  let analysis = analyzeProgram runtimeDecls coreDecls modules
+  (analysis.eaElab, targetRefusal p (entryPathOf modsWithPath) analysis)
+
+-- The refusal `check --target` gives, located in the entry file, under the
+-- exit code that tells `build` it is a diagnostic.  An admitted program's
+-- target is published for the backend's extern check (`checkedTarget`).
+emitTargetGate : List (String, String, List Decl) ->
+  List Decl ->
+  Option TargetProfile ->
+  Option Diag ->
+  <IO> Unit
+emitTargetGate _ _ None _ = ()
+emitTargetGate modsWithPath _ (Some _) (Some d) =
+  let file = entryPathOf modsWithPath
+  let src = match readFile file
+    Ok text => text
+    Err _ => ""
+  let _ = ePutStrLn (ppDiagCliLines (srcLinesArr src) file d)
+  exit emitDiagExitCode
+emitTargetGate _ runtimeDecls (Some p) None =
+  checkedTarget := Some (checkedTargetOf p runtimeDecls)
+
 export
 runEmitWith : String ->
   (List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
@@ -359,13 +422,16 @@ runEmitWith asyncDriver emitTail modsWithPath runtimeDecls coreDecls modules =
   -- `underivedMainDiags` re-check between them typechecks a synthetic program
   -- whose errors must not be read as that second elaboration's residual.
   let _ = resetTypeErrorsSticky ()
-  let (coreE, modulesE, perMod, residual, _, _) =
-    elaborateModules runtimeDecls coreDecls modules
+  let profile = selectTargetProfileOfEnv ()
+  let (elaborated, refusal) =
+    elaborateForTarget profile modsWithPath runtimeDecls coreDecls modules
+  let (coreE, modulesE, perMod, residual, _, _) = elaborated
   -- Both halves of the fold now read the trees the loader parsed: the elaboration
   -- above is the user's own program, so a diagnostic names the constructors and
   -- imports the user wrote (#2809).
   let _ =
     emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual
+  let _ = emitTargetGate modsWithPath runtimeDecls profile refusal
   if shouldAutoPrintMain coreDecls modules then
     -- the wrap's callee is a PRELUDE re-binding, so the core decl list has to
     -- carry it — see main_autoprint.autoPrintPinCore (#2185 / F1 / F2).

@@ -1,15 +1,17 @@
 {- | Gate for the target check: `medaka check` and `medaka run` refuse an entry
    whose invocation summary the selected target profile does not grant
-   (`T-TARGET-CAPABILITY`), and admit one it does.  Each case spawns the
-   native binary over a program in test/target_fixtures/ and compares its exit
-   code, stdout and stderr with a committed golden, so the refusal text, its
-   location and its via-chain are pinned as well as the verdict.
+   (`T-TARGET-CAPABILITY`), and admit one it does; `medaka build`'s emitter
+   child refuses it before lowering.  Each case spawns the native binary (or
+   the emitter child) over a program in test/target_fixtures/ and compares its
+   exit code, stdout and stderr with a committed golden, so the refusal text,
+   its location and its via-chain are pinned as well as the verdict.
 
    Runs under `medaka test --native`: it spawns subprocesses and reads
    goldens, neither of which the interpreter binds. -}
 
-import test_process.{medakaBin, underRoot, boundedVerb}
+import test_process.{medakaBin, medakaRoot, underRoot, boundedVerb}
 import test.{Expectation, expectEach, expectGolden, fail}
+import io.{getEnvOr}
 import string.{replaceAll}
 
 fixtureDir : String
@@ -35,10 +37,37 @@ targetCase stem verb flags fixture =
   (stem, runCase stem ([verb] ++ flags ++ ["\{fixtureDir}/\{fixture}"]))
 
 runCase : String -> List String -> <Exec, IO, FileRead> Expectation
-runCase stem argv = match boundedVerb medakaBin argv
+runCase stem argv = spawnCase stem medakaBin argv
+
+spawnCase : String -> String -> List String -> <Exec, IO, FileRead> Expectation
+spawnCase stem cmd argv = match boundedVerb cmd argv
   Err e => fail "\{stem}: could not spawn: \{e}"
   Ok (code, out, err) =>
     expectGolden "\{fixtureDir}/\{stem}.golden" (transcript code out err)
+
+-- One case of the emitter child `medaka build` spawns, started as `build`
+-- starts it: the selected profile in the environment, then the runtime, the
+-- prelude, the entry and the search roots.  The check sits in the child's
+-- shared seam, so the native emitter answers for both backends.
+emitterCase : String ->
+  String ->
+  String ->
+  <Exec, IO, FileRead> (String, Expectation)
+emitterCase stem profile fixture =
+  let emitter = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot}/medaka_emitter"
+  let stdlib = underRoot "stdlib"
+  (
+    stem,
+    spawnCase stem "env" [
+      "MEDAKA_TARGET_PROFILE=\{profile}",
+      emitter,
+      "\{stdlib}/runtime.mdk",
+      "\{stdlib}/core.mdk",
+      "\{fixtureDir}/\{fixture}",
+      fixtureDir,
+      stdlib,
+    ],
+  )
 
 test "target_fixtures: one admitted and one refused program per profile" = expectEach
   [
@@ -151,6 +180,16 @@ test "target_fixtures: the IO join, FFI and user labels" = expectEach [
     ["--target", "native"]
     "user_spelled_net.mdk",
 ]
+
+test "target_fixtures: build checks in its emitter child, and an empty IO join refuses IO" = expectEach
+  [
+    emitterCase "seam_refuses_net" "wasmgc/node" "net_reached.mdk",
+    targetCase
+      "wasi_refuses_io_extern"
+      "check"
+      ["--allow-internal", "--target", "wasmgc/wasi-p2"]
+      "io_extern.mdk",
+  ]
 
 test "target_fixtures: entries, manifests and the JSON envelope" = expectEach [
   targetCase
