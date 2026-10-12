@@ -1,5 +1,5 @@
--- A declared `<IO>` entry: `IO` is the join of all eleven host labels, so
--- only a profile granting all eleven admits it.  The refusal names the labels
--- the join brings in that the profile lacks and says to narrow the annotation.
+-- A declared `<IO>` entry: `IO` joins the host labels the target grants, and
+-- `main` performs only `Stdout`, so every profile granting `Stdout` admits it
+-- (wasmgc/node, llvm/native-posix, eval/run).
 main : <IO> Unit
 main = println "hi"

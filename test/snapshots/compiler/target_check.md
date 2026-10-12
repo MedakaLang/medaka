@@ -1,5 +1,5 @@
 # META
-source_lines=113
+source_lines=103
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/target_check.mdk — does a program's entry fit a target
@@ -8,8 +8,7 @@ stages=DESUGAR,MARK
 -- one located `T-TARGET-CAPABILITY` diagnostic.
 import frontend.ast.{Decl(..), Loc(..), TyConOrigin(..)}
 import types.target_profile.{
-  TargetProfile, profileName, profileGrants, grantsLabel, hostLabels,
-  isGatedLabel
+  TargetProfile, profileName, profileGrants, isGatedLabel
 }
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
@@ -43,7 +42,10 @@ targetRefusal profile file analysis =
           Some (refusalDiag profile analysis atoms (dedup labels) lines)
 
 -- A label a user module declares is never a host capability, whatever it is
--- spelled: only a builtin host label, `IO` or `FFI` is gated.
+-- spelled: only a builtin host label or `FFI` is gated.  An `IO` atom is left
+-- to the typechecker: `check` and `run` select the profile before they
+-- typecheck, and the typechecker bounds every `IO` by that profile's join
+-- (`ioJoinGrants`).
 isGatedAtom : Atom -> Bool
 isGatedAtom a = match effLabelOrigin (atomLabelOf a)
   OriginModule _ => False
@@ -63,27 +65,15 @@ refusalDiag profile analysis atoms labels lines =
       "main"
       (firstOr "" labels)
   let refused = filter (a => contains (atomLabel a) labels) atoms
-  let missing = dedup (flatMap (withheld profile) labels)
   let route = match chain
     _ :: _ :: _ => " via `\{joinWith " → " chain}`"
     _ => ""
   let notProven = stringConcat (map (l => "; " ++ trim l) lines)
-  let fix =
-    if contains "IO" labels then
-      "; `IO` is the join of every host label, so narrow the `<IO>` annotation to the labels `main` performs, such as `<Stdout>`"
-    else
-      ""
   mkDiag
     SevError
     targetCapabilityCode
-    "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " missing}\{notProven}\{fix}"
+    "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " labels}\{notProven}"
     (entryLoc analysis.eaEntryDecls)
-
--- The labels a refused label stands for that the profile withholds: `IO`
--- stands for each host label it joins.
-withheld : TargetProfile -> String -> List String
-withheld profile "IO" = filter (l => not (grantsLabel profile l)) hostLabels
-withheld _ label = [label]
 
 missingEntryDiag : TargetProfile -> String -> Diag
 missingEntryDiag profile file =
@@ -117,7 +107,7 @@ firstOr d [] = d
 firstOr _ (x :: _) = x
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true))))
-(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "profileName" false) (mem "profileGrants" false) (mem "grantsLabel" false) (mem "hostLabels" false) (mem "isGatedLabel" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "profileName" false) (mem "profileGrants" false) (mem "isGatedLabel" false))))
 (DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "invocationSummary" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "effLabelOrigin" false) (mem "renderAtom" false))))
@@ -132,10 +122,7 @@ firstOr _ (x :: _) = x
 (DTypeSig false "isGatedAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))
 (DFunDef false "isGatedAtom" ((PVar "a")) (EMatch (EApp (EVar "effLabelOrigin") (EApp (EVar "atomLabelOf") (EVar "a"))) (arm (PCon "OriginModule" PWild) () (EVar "False")) (arm PWild () (EApp (EVar "isGatedLabel") (EApp (EVar "atomLabel") (EVar "a"))))))
 (DTypeSig false "refusalDiag" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "EntryAnalysis") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Diag")))))))
-(DFunDef false "refusalDiag" ((PVar "profile") (PVar "analysis") (PVar "atoms") (PVar "labels") (PVar "lines")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "viaChain") (EApp (EVar "buildCallGraph") (EFieldAccess (EVar "analysis") "eaEntryDecls"))) (EApp (EVar "fnEffectsTable") (EFieldAccess (EVar "analysis") "eaSchemes"))) (ELit (LString "main"))) (EApp (EApp (EVar "firstOr") (ELit (LString ""))) (EVar "labels")))) (DoLet false false (PVar "refused") (EApp (EApp (EVar "filter") (ELam ((PVar "a")) (EApp (EApp (EVar "contains") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "labels")))) (EVar "atoms"))) (DoLet false false (PVar "missing") (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EApp (EVar "withheld") (EVar "profile"))) (EVar "labels")))) (DoLet false false (PVar "route") (EMatch (EVar "chain") (arm (PCons PWild (PCons PWild PWild)) () (EBinOp "++" (EBinOp "++" (ELit (LString " via `")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain")))) (ELit (LString "`")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "notProven") (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EBinOp "++" (ELit (LString "; ")) (EApp (EVar "trim") (EVar "l"))))) (EVar "lines")))) (DoLet false false (PVar "fix") (EIf (EApp (EApp (EVar "contains") (ELit (LString "IO"))) (EVar "labels")) (ELit (LString "; `IO` is the join of every host label, so narrow the `<IO>` annotation to the labels `main` performs, such as `<Stdout>`")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetCapabilityCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`main` performs <")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "renderAtom")) (EVar "refused"))))) (ELit (LString ">"))) (EApp (EVar "display") (EVar "route"))) (ELit (LString ", and the target `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "missing")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "notProven"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "fix"))) (ELit (LString "")))) (EApp (EVar "entryLoc") (EFieldAccess (EVar "analysis") "eaEntryDecls"))))))
-(DTypeSig false "withheld" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "withheld" ((PVar "profile") (PLit (LString "IO"))) (EApp (EApp (EVar "filter") (ELam ((PVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "grantsLabel") (EVar "profile")) (EVar "l"))))) (EVar "hostLabels")))
-(DFunDef false "withheld" (PWild (PVar "label")) (EListLit (EVar "label")))
+(DFunDef false "refusalDiag" ((PVar "profile") (PVar "analysis") (PVar "atoms") (PVar "labels") (PVar "lines")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "viaChain") (EApp (EVar "buildCallGraph") (EFieldAccess (EVar "analysis") "eaEntryDecls"))) (EApp (EVar "fnEffectsTable") (EFieldAccess (EVar "analysis") "eaSchemes"))) (ELit (LString "main"))) (EApp (EApp (EVar "firstOr") (ELit (LString ""))) (EVar "labels")))) (DoLet false false (PVar "refused") (EApp (EApp (EVar "filter") (ELam ((PVar "a")) (EApp (EApp (EVar "contains") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "labels")))) (EVar "atoms"))) (DoLet false false (PVar "route") (EMatch (EVar "chain") (arm (PCons PWild (PCons PWild PWild)) () (EBinOp "++" (EBinOp "++" (ELit (LString " via `")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain")))) (ELit (LString "`")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "notProven") (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (ELam ((PVar "l")) (EBinOp "++" (ELit (LString "; ")) (EApp (EVar "trim") (EVar "l"))))) (EVar "lines")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetCapabilityCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`main` performs <")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "renderAtom")) (EVar "refused"))))) (ELit (LString ">"))) (EApp (EVar "display") (EVar "route"))) (ELit (LString ", and the target `"))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labels")))) (ELit (LString ""))) (EApp (EVar "display") (EVar "notProven"))) (ELit (LString "")))) (EApp (EVar "entryLoc") (EFieldAccess (EVar "analysis") "eaEntryDecls"))))))
 (DTypeSig false "missingEntryDiag" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Diag"))))
 (DFunDef false "missingEntryDiag" ((PVar "profile") (PVar "file")) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetCapabilityCode")) (EBinOp "++" (EBinOp "++" (ELit (LString "no `main` entry found, so there is nothing to check against the target `")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "`; add `main = ...`")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))))
 (DTypeSig false "entryLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Loc"))))
@@ -155,7 +142,7 @@ firstOr _ (x :: _) = x
 (DFunDef false "firstOr" (PWild (PCons (PVar "x") PWild)) (EVar "x"))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Loc" true) (mem "TyConOrigin" true))))
-(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "profileName" false) (mem "profileGrants" false) (mem "grantsLabel" false) (mem "hostLabels" false) (mem "isGatedLabel" false))))
+(DUse false (UseGroup ("types" "target_profile") ((mem "TargetProfile" false) (mem "profileName" false) (mem "profileGrants" false) (mem "isGatedLabel" false))))
 (DUse false (UseGroup ("types" "effect_policy") ((mem "PolicyVerdict" true) (mem "policyRefusals" false) (mem "buildCallGraph" false) (mem "fnEffectsTable" false) (mem "viaChain" false))))
 (DUse false (UseGroup ("types" "effect_invocation") ((mem "invocationSummary" false))))
 (DUse false (UseGroup ("types" "effect_rows") ((mem "Atom" false) (mem "atomLabel" false) (mem "atomLabelOf" false) (mem "effLabelOrigin" false) (mem "renderAtom" false))))
@@ -170,10 +157,7 @@ firstOr _ (x :: _) = x
 (DTypeSig false "isGatedAtom" (TyFun (TyCon "Atom") (TyCon "Bool")))
 (DFunDef false "isGatedAtom" ((PVar "a")) (EMatch (EApp (EVar "effLabelOrigin") (EApp (EVar "atomLabelOf") (EVar "a"))) (arm (PCon "OriginModule" PWild) () (EVar "False")) (arm PWild () (EApp (EVar "isGatedLabel") (EApp (EVar "atomLabel") (EVar "a"))))))
 (DTypeSig false "refusalDiag" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "EntryAnalysis") (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Diag")))))))
-(DFunDef false "refusalDiag" ((PVar "profile") (PVar "analysis") (PVar "atoms") (PVar "labels") (PVar "lines")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "viaChain") (EApp (EVar "buildCallGraph") (EFieldAccess (EVar "analysis") "eaEntryDecls"))) (EApp (EVar "fnEffectsTable") (EFieldAccess (EVar "analysis") "eaSchemes"))) (ELit (LString "main"))) (EApp (EApp (EVar "firstOr") (ELit (LString ""))) (EVar "labels")))) (DoLet false false (PVar "refused") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "a")) (EApp (EApp (EVar "contains") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "labels")))) (EVar "atoms"))) (DoLet false false (PVar "missing") (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "withheld") (EVar "profile"))) (EVar "labels")))) (DoLet false false (PVar "route") (EMatch (EVar "chain") (arm (PCons PWild (PCons PWild PWild)) () (EBinOp "++" (EBinOp "++" (ELit (LString " via `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain")))) (ELit (LString "`")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "notProven") (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EBinOp "++" (ELit (LString "; ")) (EApp (EVar "trim") (EVar "l"))))) (EVar "lines")))) (DoLet false false (PVar "fix") (EIf (EApp (EApp (EVar "contains") (ELit (LString "IO"))) (EVar "labels")) (ELit (LString "; `IO` is the join of every host label, so narrow the `<IO>` annotation to the labels `main` performs, such as `<Stdout>`")) (ELit (LString "")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetCapabilityCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`main` performs <")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "renderAtom")) (EVar "refused"))))) (ELit (LString ">"))) (EApp (EMethodRef "display") (EVar "route"))) (ELit (LString ", and the target `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "missing")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "notProven"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "fix"))) (ELit (LString "")))) (EApp (EVar "entryLoc") (EFieldAccess (EVar "analysis") "eaEntryDecls"))))))
-(DTypeSig false "withheld" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "withheld" ((PVar "profile") (PLit (LString "IO"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "l")) (EApp (EVar "not") (EApp (EApp (EVar "grantsLabel") (EVar "profile")) (EVar "l"))))) (EVar "hostLabels")))
-(DFunDef false "withheld" (PWild (PVar "label")) (EListLit (EVar "label")))
+(DFunDef false "refusalDiag" ((PVar "profile") (PVar "analysis") (PVar "atoms") (PVar "labels") (PVar "lines")) (EBlock (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EVar "viaChain") (EApp (EVar "buildCallGraph") (EFieldAccess (EVar "analysis") "eaEntryDecls"))) (EApp (EVar "fnEffectsTable") (EFieldAccess (EVar "analysis") "eaSchemes"))) (ELit (LString "main"))) (EApp (EApp (EVar "firstOr") (ELit (LString ""))) (EVar "labels")))) (DoLet false false (PVar "refused") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "a")) (EApp (EApp (EVar "contains") (EApp (EVar "atomLabel") (EVar "a"))) (EVar "labels")))) (EVar "atoms"))) (DoLet false false (PVar "route") (EMatch (EVar "chain") (arm (PCons PWild (PCons PWild PWild)) () (EBinOp "++" (EBinOp "++" (ELit (LString " via `")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " → "))) (EVar "chain")))) (ELit (LString "`")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "notProven") (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (ELam ((PVar "l")) (EBinOp "++" (ELit (LString "; ")) (EApp (EVar "trim") (EVar "l"))))) (EVar "lines")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetCapabilityCode")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "`main` performs <")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "renderAtom")) (EVar "refused"))))) (ELit (LString ">"))) (EApp (EMethodRef "display") (EVar "route"))) (ELit (LString ", and the target `"))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "` does not grant "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EVar "labels")))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "notProven"))) (ELit (LString "")))) (EApp (EVar "entryLoc") (EFieldAccess (EVar "analysis") "eaEntryDecls"))))))
 (DTypeSig false "missingEntryDiag" (TyFun (TyCon "TargetProfile") (TyFun (TyCon "String") (TyCon "Diag"))))
 (DFunDef false "missingEntryDiag" ((PVar "profile") (PVar "file")) (EApp (EApp (EApp (EApp (EVar "mkDiag") (EVar "SevError")) (EVar "targetCapabilityCode")) (EBinOp "++" (EBinOp "++" (ELit (LString "no `main` entry found, so there is nothing to check against the target `")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "profile")))) (ELit (LString "`; add `main = ...`")))) (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "Loc") (EVar "file")) (ELit (LInt 1))) (ELit (LInt 0))) (ELit (LInt 1))) (ELit (LInt 0))))))
 (DTypeSig false "entryLoc" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyCon "Loc"))))

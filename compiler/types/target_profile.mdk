@@ -186,11 +186,12 @@ buildableNames =
       Err _ => False)
     knownNames
 
--- Is this label one a profile gates: a host label, their join `IO`, or `FFI`?
--- Any other label is a user effect, admitted on every profile.
+-- Is this label one a profile gates: a host label or `FFI`?  `IO` is not, since
+-- under a profile it joins only what the profile grants (`ioJoinGrants`).  Any
+-- other label is a user effect, admitted on every profile.
 export
 isGatedLabel : String -> Bool
-isGatedLabel l = l == "IO" || l == "FFI" || any (== l) hostLabels
+isGatedLabel l = l == "FFI" || any (== l) hostLabels
 
 -- What `medaka run` checks against: the interpreter's grants, narrowed to the
 -- labels the selected profile also grants.  `eval/run` grants each of its

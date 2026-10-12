@@ -4,8 +4,7 @@
 -- one located `T-TARGET-CAPABILITY` diagnostic.
 import frontend.ast.{Decl(..), Loc(..), TyConOrigin(..)}
 import types.target_profile.{
-  TargetProfile, profileName, profileGrants, grantsLabel, hostLabels,
-  isGatedLabel
+  TargetProfile, profileName, profileGrants, isGatedLabel
 }
 import types.effect_policy.{
   PolicyVerdict(..), policyRefusals, buildCallGraph, fnEffectsTable, viaChain
@@ -39,7 +38,10 @@ targetRefusal profile file analysis =
           Some (refusalDiag profile analysis atoms (dedup labels) lines)
 
 -- A label a user module declares is never a host capability, whatever it is
--- spelled: only a builtin host label, `IO` or `FFI` is gated.
+-- spelled: only a builtin host label or `FFI` is gated.  An `IO` atom is left
+-- to the typechecker: `check` and `run` select the profile before they
+-- typecheck, and the typechecker bounds every `IO` by that profile's join
+-- (`ioJoinGrants`).
 isGatedAtom : Atom -> Bool
 isGatedAtom a = match effLabelOrigin (atomLabelOf a)
   OriginModule _ => False
@@ -59,27 +61,15 @@ refusalDiag profile analysis atoms labels lines =
       "main"
       (firstOr "" labels)
   let refused = filter (a => contains (atomLabel a) labels) atoms
-  let missing = dedup (flatMap (withheld profile) labels)
   let route = match chain
     _ :: _ :: _ => " via `\{joinWith " → " chain}`"
     _ => ""
   let notProven = stringConcat (map (l => "; " ++ trim l) lines)
-  let fix =
-    if contains "IO" labels then
-      "; `IO` is the join of every host label, so narrow the `<IO>` annotation to the labels `main` performs, such as `<Stdout>`"
-    else
-      ""
   mkDiag
     SevError
     targetCapabilityCode
-    "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " missing}\{notProven}\{fix}"
+    "`main` performs <\{joinWith ", " (map renderAtom refused)}>\{route}, and the target `\{profileName profile}` does not grant \{joinWith ", " labels}\{notProven}"
     (entryLoc analysis.eaEntryDecls)
-
--- The labels a refused label stands for that the profile withholds: `IO`
--- stands for each host label it joins.
-withheld : TargetProfile -> String -> List String
-withheld profile "IO" = filter (l => not (grantsLabel profile l)) hostLabels
-withheld _ label = [label]
 
 missingEntryDiag : TargetProfile -> String -> Diag
 missingEntryDiag profile file =

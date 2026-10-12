@@ -773,7 +773,9 @@ expandIoInBound b = match findAtom (labelKey ioLabel) b
 
 -- A performed `IO` left over against a bound without `IO` stands for the labels
 -- it joins: a bound naming all of them admits it, a bound naming some refuses it
--- naming the labels it lacks, and a bound naming none leaves it as `IO`.
+-- naming the labels it lacks, and a bound naming none leaves it as `IO`.  Only a
+-- label of the join can cover a performed `IO`, so when the profile grants no
+-- host label the join is empty, the bound names none of it, and `IO` stands.
 narrowPerformedIo : List Atom -> List Atom -> List Atom
 narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
   None => diff
@@ -781,10 +783,10 @@ narrowPerformedIo diff bound = match findAtom (labelKey ioLabel) diff
     let rest = filterList (x => atomKey x /= labelKey ioLabel) diff
     let join = driverState.value.ioJoin.value
     let missing = atomsDiff join bound
-    if isEmptyL missing then
-      rest
-    else if listLen missing == listLen join then
+    if listLen missing == listLen join then
       diff
+    else if isEmptyL missing then
+      rest
     else
       atomsNorm (rest ++ missing)
 

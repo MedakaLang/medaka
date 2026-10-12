@@ -1,5 +1,5 @@
 # META
-source_lines=215
+source_lines=216
 stages=DESUGAR,MARK
 # SOURCE
 -- The one table of target profiles: a profile is a backend, the host ABI that
@@ -190,11 +190,12 @@ buildableNames =
       Err _ => False)
     knownNames
 
--- Is this label one a profile gates: a host label, their join `IO`, or `FFI`?
--- Any other label is a user effect, admitted on every profile.
+-- Is this label one a profile gates: a host label or `FFI`?  `IO` is not, since
+-- under a profile it joins only what the profile grants (`ioJoinGrants`).  Any
+-- other label is a user effect, admitted on every profile.
 export
 isGatedLabel : String -> Bool
-isGatedLabel l = l == "IO" || l == "FFI" || any (== l) hostLabels
+isGatedLabel l = l == "FFI" || any (== l) hostLabels
 
 -- What `medaka run` checks against: the interpreter's grants, narrowed to the
 -- labels the selected profile also grants.  `eval/run` grants each of its
@@ -273,7 +274,7 @@ selectedProfile = Ref None
 (DTypeSig true "buildableNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "buildableNames" () (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EMatch (EApp (EVar "lookupProfile") (EVar "n")) (arm (PCon "Ok" (PVar "p")) () (EApp (EVar "buildable") (EVar "p"))) (arm (PCon "Err" PWild) () (EVar "False"))))) (EVar "knownNames")))
 (DTypeSig true "isGatedLabel" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isGatedLabel" ((PVar "l")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "l") (ELit (LString "IO"))) (EBinOp "==" (EVar "l") (ELit (LString "FFI")))) (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "l")))) (EVar "hostLabels"))))
+(DFunDef false "isGatedLabel" ((PVar "l")) (EBinOp "||" (EBinOp "==" (EVar "l") (ELit (LString "FFI"))) (EApp (EApp (EVar "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "l")))) (EVar "hostLabels"))))
 (DTypeSig true "runProfile" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyCon "TargetProfile")))
 (DFunDef false "runProfile" ((PCon "None")) (EVar "evalRunProfile"))
 (DFunDef false "runProfile" ((PCon "Some" (PVar "p"))) (EIf (EBinOp "==" (EApp (EVar "profileName") (EVar "p")) (EApp (EVar "profileName") (EVar "evalRunProfile"))) (EVar "p") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "evalRunProfile")))) (ELit (LString " ∩ "))) (EApp (EVar "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString "")))) (EVar "BackendEval")) (EApp (EVar "profileAbi") (EVar "evalRunProfile"))) (EApp (EApp (EVar "filter") (ELam ((PVar "g")) (EApp (EApp (EVar "grantsLabel") (EVar "evalRunProfile")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "profileGrants") (EVar "p"))))))
@@ -335,7 +336,7 @@ selectedProfile = Ref None
 (DTypeSig true "buildableNames" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "buildableNames" () (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EMatch (EApp (EVar "lookupProfile") (EVar "n")) (arm (PCon "Ok" (PVar "p")) () (EApp (EVar "buildable") (EVar "p"))) (arm (PCon "Err" PWild) () (EVar "False"))))) (EVar "knownNames")))
 (DTypeSig true "isGatedLabel" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isGatedLabel" ((PVar "l")) (EBinOp "||" (EBinOp "||" (EBinOp "==" (EVar "l") (ELit (LString "IO"))) (EBinOp "==" (EVar "l") (ELit (LString "FFI")))) (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "l")))) (EVar "hostLabels"))))
+(DFunDef false "isGatedLabel" ((PVar "l")) (EBinOp "||" (EBinOp "==" (EVar "l") (ELit (LString "FFI"))) (EApp (EApp (EDictApp "any") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "l")))) (EVar "hostLabels"))))
 (DTypeSig true "runProfile" (TyFun (TyApp (TyCon "Option") (TyCon "TargetProfile")) (TyCon "TargetProfile")))
 (DFunDef false "runProfile" ((PCon "None")) (EVar "evalRunProfile"))
 (DFunDef false "runProfile" ((PCon "Some" (PVar "p"))) (EIf (EBinOp "==" (EApp (EVar "profileName") (EVar "p")) (EApp (EVar "profileName") (EVar "evalRunProfile"))) (EVar "p") (EApp (EApp (EApp (EApp (EVar "TargetProfile") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "evalRunProfile")))) (ELit (LString " ∩ "))) (EApp (EMethodRef "display") (EApp (EVar "profileName") (EVar "p")))) (ELit (LString "")))) (EVar "BackendEval")) (EApp (EVar "profileAbi") (EVar "evalRunProfile"))) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "g")) (EApp (EApp (EVar "grantsLabel") (EVar "evalRunProfile")) (EApp (EVar "fst") (EVar "g"))))) (EApp (EVar "profileGrants") (EVar "p"))))))

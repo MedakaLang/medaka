@@ -194,14 +194,13 @@ test "run checks against eval/run, narrowed by the selected profile" = expectEac
     ),
   ]
 
-test "a profile gates the host labels, IO and FFI, and no other label" = expectAll
-  [
-    expectEqual (map (_ => True) elevenLabels) (map isGatedLabel elevenLabels),
-    expectTrue (isGatedLabel "IO"),
-    expectTrue (isGatedLabel "FFI"),
-    expectFalse (isGatedLabel "Log"),
-    expectFalse (isGatedLabel "Cache"),
-  ]
+test "a profile gates the host labels and FFI, and no other label" = expectAll [
+  expectEqual (map (_ => True) elevenLabels) (map isGatedLabel elevenLabels),
+  expectFalse (isGatedLabel "IO"),
+  expectTrue (isGatedLabel "FFI"),
+  expectFalse (isGatedLabel "Log"),
+  expectFalse (isGatedLabel "Cache"),
+]
 
 -- What `IO` joins under a selection, as its labels and whether each is granted
 -- over its whole domain.

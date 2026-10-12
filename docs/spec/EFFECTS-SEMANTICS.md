@@ -1316,11 +1316,20 @@ effect label. See [`MUT-SCOPING-DESIGN.md`](../design/MUT-SCOPING-DESIGN.md) for
 the history.)
 
 **`IO` as a widening alias.** `IO` is not a primitive label but the **join of the
-security labels at `⊤`** (`Stdout ⊔ Stderr ⊔ … ⊔ Net⊤`). An inferred narrow row is
-`≤ <IO>`, so any `<IO>` annotation still typechecks (it widens), while inference
-yields tight narrow rows for the manifest. The join holds on both sides of the order: a
-performed `<IO>` fits a bound that names all eleven labels, and a policy that allows all
-eleven admits an `<IO>` entry. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
+host labels the program's target can honour**, each at what the target grants. With no
+target selected, on `llvm/native-posix`, and under `medaka run` without a target, that is
+all eleven security labels at `⊤` (`Stdout ⊔ Stderr ⊔ … ⊔ Net⊤`); under a narrower
+profile it is that profile's grants (on `wasmgc/node`, the eight labels it grants, without
+`Exec`, `Net` or `Signal`). One join holds for every module of the program, the shipped
+stdlib included. An inferred narrow row is `≤ <IO>` when the target grants its labels, so
+an `<IO>` annotation widens over what the target can do, while inference yields tight
+narrow rows for the manifest; an `<IO>` definition that performs a label the target does
+not grant is a type error at the site that performs it. The join holds on both sides of the
+order: a performed `<IO>` fits a bound that names every label of the join (and, when the
+join is empty, only a bound that names `IO` itself), and a policy given to `check-policy`,
+which has no target, admits an `<IO>` entry when it allows all eleven. Because the
+typechecker already bounds `IO` by the selected profile, a profile's target check gates
+only the host labels and `FFI`, never `IO`. `FFI` ([#2071](https://github.com/MedakaLang/medaka/issues/2071))
 is deliberately EXCLUDED from this join by design — `<IO>` does not subsume
 `<FFI>` — because FFI crosses a trust boundary the IO alias is not meant to
 paper over; see [`CAPABILITY-PLATFORM.md`](../design/CAPABILITY-PLATFORM.md) §8
