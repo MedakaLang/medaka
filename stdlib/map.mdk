@@ -44,7 +44,7 @@ import core.{
   FromEntries,
   Index,
 }
-import list.{intersperse, reverse, take}
+import list.{intersperse, reverse, take, sort}
 
 {- | The map type.
 
@@ -155,7 +155,38 @@ singleton k v = Bin 1 k v Tip Tip
    20 -}
 export
 fromList : Ord k => List (k, v) -> Map k v
-fromList xs = fold (m (k, v) => set k v m) Tip xs
+fromList xs =
+  let n = ascendingRunLength xs
+  let (m, rest) = buildAscending n xs
+  fold (acc (k, v) => set k v acc) m rest
+
+-- Length of the longest prefix whose keys are strictly ascending.
+ascendingRunLength : Ord k => List (k, v) -> Int
+ascendingRunLength [] = 0
+ascendingRunLength ((k, _) :: rest) = ascendingRunFrom k 1 rest
+
+ascendingRunFrom : Ord k => k -> Int -> List (k, v) -> Int
+ascendingRunFrom _ n [] = n
+ascendingRunFrom prev n ((k, _) :: rest) =
+  if lt prev k then ascendingRunFrom k (n + 1) rest else n
+
+-- Builds a perfectly balanced tree from the first `n` pairs and returns it
+-- with the pairs that follow. The first `n` keys must be strictly ascending.
+buildAscending : Int -> List (k, v) -> (Map k v, List (k, v))
+buildAscending n xs
+  | n <= 0 = (Tip, xs)
+  | otherwise = buildNode n xs
+
+buildNode : Int -> List (k, v) -> (Map k v, List (k, v))
+buildNode n xs =
+  let nl = (n - 1) / 2
+  let nr = n - 1 - nl
+  let (l, rest) = buildAscending nl xs
+  match rest
+    (k, v) :: rest2 =>
+      let (r, rest3) = buildAscending nr rest2
+      (Bin n k v l r, rest3)
+    [] => panic "Map.buildNode: fewer pairs than the run length"
 
 -- > size (Map { 1 => 10, 2 => 20, 3 => 30 })
 -- 3
@@ -971,6 +1002,37 @@ prop "delete matches the balance-only body shape" (xs : List (Int, Int)) (ks : L
       got
       (foldDeletes deleteOld ks (foldDeletes deleteOld (fstKeys ys) base))
     && wellFormed got
+
+naiveFromList : Ord k => List (k, v) -> Map k v
+naiveFromList xs = fold (m (k, v) => set k v m) Tip xs
+
+prop "fromList agrees with naive fold-insert" (xs : List (Int, Int)) =
+  eq (entries (fromList xs)) (entries (naiveFromList xs))
+    && wellFormed (fromList xs)
+
+prop "fromList agrees with naive on sorted input" (xs : List (Int, Int)) =
+  let ys = sort xs
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "fromList agrees with naive on sorted duplicate-heavy input" (xs : List (Int, Int)) =
+  let ys = sort (map (p => (fst p % 50, snd p)) xs)
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "fromList agrees with naive on sorted prefix then unsorted tail" (xs : List (Int, Int)) =
+  let ys = sort xs ++ xs
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "fromList agrees with naive on sorted prefix then duplicate-heavy tail" (xs : List (Int, Int)) =
+  let ys = sort xs ++ map (p => (fst p % 50, snd p)) xs
+  eq (entries (fromList ys)) (entries (naiveFromList ys))
+    && wellFormed (fromList ys)
+
+prop "a later pair overrides an entry from the ascending prefix" (k : Int) (v : Int) (xs : List (Int, Int)) =
+  let ys = sort xs ++ [(k, v)]
+  eq (get k (fromList ys)) (Some v) && wellFormed (fromList ys)
 
 prop "union agrees with naive fold-insert" (xs : List (Int, Int)) (ys : List (Int, Int)) =
   let a = fromList xs
