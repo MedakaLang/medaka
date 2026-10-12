@@ -1,5 +1,5 @@
 # META
-source_lines=740
+source_lines=744
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted comment-preserving formatter — `formatProgram`, the driver over
@@ -733,15 +733,19 @@ applyTripleSubs ((s, e, raw) :: rest) out =
     rest
     (stringSlice 0 s out ++ raw ++ stringSlice e (stringLength out) out)
 
+-- A source with no `"""` substring has no triple-quoted token, so there is
+-- nothing to restore and both tokenizations are skipped.
 restoreTripleQuotedStrings : String -> String -> String
-restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
-  (origToks, origSpans) => match tokenizeWithOffsetPairs formatted
-    (fmtToks, fmtSpans) =>
-      let origInfo = stringTokenInfo src origToks origSpans
-      let fmtStrSpans = stringTokenSpans fmtToks fmtSpans
-      applyTripleSubs
-        (reverseL (tripleStringSubs origInfo fmtStrSpans))
-        formatted
+restoreTripleQuotedStrings src formatted = match stringIndexOf "\"\"\"" src
+  None => formatted
+  Some _ => match tokenizeWithOffsetPairs src
+    (origToks, origSpans) => match tokenizeWithOffsetPairs formatted
+      (fmtToks, fmtSpans) =>
+        let origInfo = stringTokenInfo src origToks origSpans
+        let fmtStrSpans = stringTokenSpans fmtToks fmtSpans
+        applyTripleSubs
+          (reverseL (tripleStringSubs origInfo fmtStrSpans))
+          formatted
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "render" false) (mem "printDecl" false) (mem "printDataDeclCommented" false) (mem "printNamedFieldData" false) (mem "PComment" true) (mem "setComments" false) (mem "takeLeftoverComments" false) (mem "commentsPlaced" false) (mem "setTrailingCommas" false) (mem "setImportForced" false) (mem "setUnitStarts" false))))
@@ -917,7 +921,7 @@ restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
 (DFunDef false "applyTripleSubs" ((PList) (PVar "out")) (EVar "out"))
 (DFunDef false "applyTripleSubs" ((PCons (PTuple (PVar "s") (PVar "e") (PVar "raw")) (PVar "rest")) (PVar "out")) (EApp (EApp (EVar "applyTripleSubs") (EVar "rest")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "s")) (EVar "out")) (EVar "raw")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "e")) (EApp (EVar "stringLength") (EVar "out"))) (EVar "out")))))
 (DTypeSig false "restoreTripleQuotedStrings" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "restoreTripleQuotedStrings" ((PVar "src") (PVar "formatted")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "origToks") (PVar "origSpans")) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "formatted")) (arm (PTuple (PVar "fmtToks") (PVar "fmtSpans")) () (EBlock (DoLet false false (PVar "origInfo") (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "origToks")) (EVar "origSpans"))) (DoLet false false (PVar "fmtStrSpans") (EApp (EApp (EVar "stringTokenSpans") (EVar "fmtToks")) (EVar "fmtSpans"))) (DoExpr (EApp (EApp (EVar "applyTripleSubs") (EApp (EVar "reverseL") (EApp (EApp (EVar "tripleStringSubs") (EVar "origInfo")) (EVar "fmtStrSpans")))) (EVar "formatted")))))))))
+(DFunDef false "restoreTripleQuotedStrings" ((PVar "src") (PVar "formatted")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\"\"\""))) (EVar "src")) (arm (PCon "None") () (EVar "formatted")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "origToks") (PVar "origSpans")) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "formatted")) (arm (PTuple (PVar "fmtToks") (PVar "fmtSpans")) () (EBlock (DoLet false false (PVar "origInfo") (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "origToks")) (EVar "origSpans"))) (DoLet false false (PVar "fmtStrSpans") (EApp (EApp (EVar "stringTokenSpans") (EVar "fmtToks")) (EVar "fmtSpans"))) (DoExpr (EApp (EApp (EVar "applyTripleSubs") (EApp (EVar "reverseL") (EApp (EApp (EVar "tripleStringSubs") (EVar "origInfo")) (EVar "fmtStrSpans")))) (EVar "formatted")))))))))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Decl" true))))
 (DUse false (UseGroup ("tools" "printer") ((mem "render" false) (mem "printDecl" false) (mem "printDataDeclCommented" false) (mem "printNamedFieldData" false) (mem "PComment" true) (mem "setComments" false) (mem "takeLeftoverComments" false) (mem "commentsPlaced" false) (mem "setTrailingCommas" false) (mem "setImportForced" false) (mem "setUnitStarts" false))))
@@ -1093,4 +1097,4 @@ restoreTripleQuotedStrings src formatted = match tokenizeWithOffsetPairs src
 (DFunDef false "applyTripleSubs" ((PList) (PVar "out")) (EVar "out"))
 (DFunDef false "applyTripleSubs" ((PCons (PTuple (PVar "s") (PVar "e") (PVar "raw")) (PVar "rest")) (PVar "out")) (EApp (EApp (EVar "applyTripleSubs") (EVar "rest")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "s")) (EVar "out")) (EVar "raw")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "e")) (EApp (EVar "stringLength") (EVar "out"))) (EVar "out")))))
 (DTypeSig false "restoreTripleQuotedStrings" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
-(DFunDef false "restoreTripleQuotedStrings" ((PVar "src") (PVar "formatted")) (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "origToks") (PVar "origSpans")) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "formatted")) (arm (PTuple (PVar "fmtToks") (PVar "fmtSpans")) () (EBlock (DoLet false false (PVar "origInfo") (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "origToks")) (EVar "origSpans"))) (DoLet false false (PVar "fmtStrSpans") (EApp (EApp (EVar "stringTokenSpans") (EVar "fmtToks")) (EVar "fmtSpans"))) (DoExpr (EApp (EApp (EVar "applyTripleSubs") (EApp (EVar "reverseL") (EApp (EApp (EVar "tripleStringSubs") (EVar "origInfo")) (EVar "fmtStrSpans")))) (EVar "formatted")))))))))
+(DFunDef false "restoreTripleQuotedStrings" ((PVar "src") (PVar "formatted")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString "\"\"\""))) (EVar "src")) (arm (PCon "None") () (EVar "formatted")) (arm (PCon "Some" PWild) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "src")) (arm (PTuple (PVar "origToks") (PVar "origSpans")) () (EMatch (EApp (EVar "tokenizeWithOffsetPairs") (EVar "formatted")) (arm (PTuple (PVar "fmtToks") (PVar "fmtSpans")) () (EBlock (DoLet false false (PVar "origInfo") (EApp (EApp (EApp (EVar "stringTokenInfo") (EVar "src")) (EVar "origToks")) (EVar "origSpans"))) (DoLet false false (PVar "fmtStrSpans") (EApp (EApp (EVar "stringTokenSpans") (EVar "fmtToks")) (EVar "fmtSpans"))) (DoExpr (EApp (EApp (EVar "applyTripleSubs") (EApp (EVar "reverseL") (EApp (EApp (EVar "tripleStringSubs") (EVar "origInfo")) (EVar "fmtStrSpans")))) (EVar "formatted")))))))))))
