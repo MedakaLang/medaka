@@ -110,34 +110,45 @@ __attribute__((constructor)) static void mdk_gc_init(void) {
   if (!getenv("GC_FREE_SPACE_DIVISOR")) GC_set_free_space_divisor(1);
 }
 
-/* Allocate `n` bytes in the GC heap.  Routes to Boehm's GC_malloc (conservative,
+/* Allocate `n` bytes in the GC heap, with GC_malloc's semantics (conservative,
  * collected); every extern that RETURNS a Medaka value goes through this single
  * entry point, so the malloc->GC swap was one function (RUNTIME-DESIGN.md §2a).
- * GC_malloc returns >=8-byte-aligned, zeroed memory — satisfying the boxed-pointer
+ * The result is >=8-byte-aligned, zeroed memory — satisfying the boxed-pointer
  * alignment contract the value rep relies on.  The emitted IR declares this with
  * allockind("alloc,zeroed") and noalias, so LLVM may delete an unused cell and
  * forward its stores: the function must stay free of observable side effects
  * beyond the allocation, and must return zeroed memory.
  *
- * Small cells come from this thread's own free lists through Boehm's inline
- * allocator (gc_inline.h) rather than GC_malloc, which per call saves its
- * registers, looks up libgc's thread-local lists and goes through GC_malloc_kind
- * (#503).  The contract holds the same way GC_malloc's own thread-local path
- * keeps it, which uses the same macro:
+ * On libgc 8.2, small cells come from this thread's own free lists through
+ * Boehm's inline allocator (gc_inline.h) rather than GC_malloc, which per call
+ * saves its registers, looks up libgc's thread-local lists and goes through
+ * GC_malloc_kind (#503).  The contract holds the same way GC_malloc's own
+ * thread-local path keeps it, which uses the same macro:
  *   - size: a request takes the granule count GC_malloc would give it, `n` plus
  *     the one byte Boehm appends when interior pointers are recognised, rounded
  *     up to 16-byte granules.  gc_inline.h leaves that byte to the caller, and the
  *     collector does not trace an object's last word on the assumption it is
- *     there.  Requests of GC_TINY_FREELISTS granules or more go to GC_malloc.
+ *     there.  Any `n` that is not below MDK_ALLOC_INLINE_LIMIT as an unsigned
+ *     size, a negative one included, goes to GC_malloc unchanged.
  *   - zeroed: a NORMAL-kind free list holds cleared objects whose first word
- *     links to the next; the macro's `init` clears that word.
+ *     links to the next; the hit path clears that word.
  *   - retention: the list heads live in an uncollectable block, which the
  *     collector scans, so each list's first object is reachable from it and
  *     every later one from the link word of the one before.  A thread-local
  *     head alone would not do, since Boehm does not scan thread-local storage
- *     on every platform; the thread-local variable only finds the block.
+ *     on every platform; the thread-local variable only finds the block.  The
+ *     block is never freed, so each thread that allocates keeps one, and the
+ *     cells on its lists, for the life of the process.
  * Only the NORMAL kind takes this path.  A pointer-free object's link word is
- * never traced, so a PTRFREE list kept this way would lose all but its head. */
+ * never traced, so a PTRFREE list kept this way would lose all but its head.
+ * The hit path copies libgc 8.2's free-list encoding, so other versions use
+ * GC_malloc. */
+#if GC_VERSION_MAJOR == 8 && GC_VERSION_MINOR == 2
+
+/* The smallest request that does not fit an inline free list: n + 1 rounded up
+ * to granules must stay below GC_TINY_FREELISTS. */
+#define MDK_ALLOC_INLINE_LIMIT ((GC_TINY_FREELISTS - 1) * GC_GRANULE_BYTES)
+
 static __thread void **mdk_alloc_freelists;
 
 static void **mdk_alloc_freelists_init(void) {
@@ -149,14 +160,16 @@ static void **mdk_alloc_freelists_init(void) {
 /* The whole of gc_inline.h's allocation: refill an empty list, or fall back to
  * GC_malloc.  Kept out of line so mdk_alloc's hit path saves no registers. */
 static __attribute__((noinline)) void *mdk_alloc_refill(long long n) {
-  size_t granules = ((size_t)n + GC_GRANULE_BYTES) / GC_GRANULE_BYTES;
+  size_t size = (size_t)n;
+  if (size >= MDK_ALLOC_INLINE_LIMIT) return GC_malloc(size);
+  size_t granules = (size + GC_GRANULE_BYTES) / GC_GRANULE_BYTES;
   void **fl = mdk_alloc_freelists;
   void *r;
   if (fl == NULL) {
     fl = mdk_alloc_freelists_init();
-    if (fl == NULL) return GC_malloc((size_t)n);
+    if (fl == NULL) return GC_malloc(size);
   }
-  GC_FAST_MALLOC_GRANS(r, granules, fl, 0, GC_I_NORMAL, GC_malloc((size_t)n),
+  GC_FAST_MALLOC_GRANS(r, granules, fl, 0, GC_I_NORMAL, GC_malloc(size),
                        *(void **)r = 0);
   return r;
 }
@@ -167,10 +180,10 @@ static __attribute__((noinline)) void *mdk_alloc_refill(long long n) {
  * (mdk_num_sub) too large for ThinLTO to inline into emitted code, and keeping
  * those helpers inlinable is worth more than a call here. */
 __attribute__((noinline)) void *mdk_alloc(long long n) {
-  size_t granules = ((size_t)n + GC_GRANULE_BYTES) / GC_GRANULE_BYTES;
+  size_t size = (size_t)n;
   void **fl = mdk_alloc_freelists;
-  if (__builtin_expect(fl != NULL && granules < GC_TINY_FREELISTS, 1)) {
-    void **slot = fl + granules;
+  if (__builtin_expect(fl != NULL && size < MDK_ALLOC_INLINE_LIMIT, 1)) {
+    void **slot = fl + (size + GC_GRANULE_BYTES) / GC_GRANULE_BYTES;
     void *r = *slot;
     if (__builtin_expect((GC_word)r > GC_TINY_FREELISTS + 1, 1)) {
       void *next = *(void **)r;
@@ -184,6 +197,10 @@ __attribute__((noinline)) void *mdk_alloc(long long n) {
   }
   return mdk_alloc_refill(n);
 }
+
+#else
+void *mdk_alloc(long long n) { return GC_malloc((size_t)n); }
+#endif
 
 /* Allocate `n` bytes of POINTER-FREE memory (raw bytes / string cells).  Routes to
  * Boehm's GC_malloc_atomic: the block is never scanned for pointers during mark, so
@@ -499,7 +516,7 @@ void mdk_print_float(double d) {
  * pointer (low bit 0) Boehm tracks, and the inline bytes are scanned harmlessly.
  *
  * Per §2a, every extern that RETURNS a Medaka String allocates it here, through
- * mdk_alloc -> GC_malloc, with this exact layout — it never hands back a
+ * mdk_alloc, with this exact layout — it never hands back a
  * native-owned buffer.  mdk_int_to_string is the first such extern. */
 #define MDK_STR_TAG 1
 
