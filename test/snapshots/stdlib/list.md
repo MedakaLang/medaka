@@ -1,5 +1,5 @@
 # META
-source_lines=1212
+source_lines=1284
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `List a`.
@@ -845,11 +845,54 @@ containsSub sub (xs@(_ :: rest))
    [3, 2, 1] -}
 export
 sortBy : (a -> a -> <e> Ordering) -> List a -> <e> List a
-sortBy _ [] = []
-sortBy _ [x] = [x]
-sortBy cmp xs =
-  let (l, r) = splitAt (length xs / 2) xs
-  merge cmp (sortBy cmp l) (sortBy cmp r)
+sortBy cmp xs = sortMergeAll cmp (sortRuns cmp xs)
+
+-- > sortBy compare ([] : List Int)
+-- []
+-- > sortBy compare [7]
+-- [7]
+-- > sortBy compare [1, 1, 1]
+-- [1, 1, 1]
+-- > sortBy compare [1, 2, 3, 2, 1]
+-- [1, 1, 2, 2, 3]
+
+-- Maximal non-decreasing prefix, accumulated reversed; the caller reverses it.
+sortRunAsc : (a -> a -> <e> Ordering) ->
+  List a ->
+  a ->
+  List a ->
+  <e> (List a, List a)
+sortRunAsc _ acc x [] = (x :: acc, [])
+sortRunAsc cmp acc x (y :: ys) = match cmp x y
+  Gt => (x :: acc, y :: ys)
+  _ => sortRunAsc cmp (x :: acc) y ys
+
+-- Maximal strictly descending prefix; prepending while descending leaves it ascending.
+sortRunDesc : (a -> a -> <e> Ordering) ->
+  List a ->
+  a ->
+  List a ->
+  <e> (List a, List a)
+sortRunDesc _ acc x [] = (x :: acc, [])
+sortRunDesc cmp acc x (y :: ys) = match cmp x y
+  Gt => sortRunDesc cmp (x :: acc) y ys
+  _ => (x :: acc, y :: ys)
+
+sortRunsFrom : (a -> a -> <e> Ordering) -> a -> List a -> <e> List (List a)
+sortRunsFrom _ x [] = [[x]]
+sortRunsFrom cmp x (y :: ys) = match cmp x y
+  Gt =>
+    let (run, after) = sortRunDesc cmp [] x (y :: ys) in
+      run :: sortRuns cmp after
+  _ =>
+    let (run, after) = sortRunAsc cmp [] x (y :: ys) in
+      reverse run :: sortRuns cmp after
+
+-- The maximal runs of `xs`, in input order. A strictly descending run is the only
+-- one reversed, so no equal elements change their relative order.
+sortRuns : (a -> a -> <e> Ordering) -> List a -> <e> List (List a)
+sortRuns _ [] = []
+sortRuns cmp (x :: rest) = sortRunsFrom cmp x rest
 
 -- Merge two sorted runs, taking from the left on ties so the sort stays stable.
 merge : (a -> a -> <e> Ordering) -> List a -> List a -> <e> List a
@@ -858,6 +901,16 @@ merge _ xs [] = xs
 merge cmp (xs@(x :: xs')) (ys@(y :: ys')) = match cmp x y
   Gt => y :: merge cmp xs ys'
   _ => x :: merge cmp xs' ys
+
+-- Merge adjacent pairs of runs; an odd trailing run passes through unchanged.
+sortMergePairs : (a -> a -> <e> Ordering) -> List (List a) -> <e> List (List a)
+sortMergePairs cmp (a :: b :: rest) = merge cmp a b :: sortMergePairs cmp rest
+sortMergePairs _ rs = rs
+
+sortMergeAll : (a -> a -> <e> Ordering) -> List (List a) -> <e> List a
+sortMergeAll _ [] = []
+sortMergeAll _ [r] = r
+sortMergeAll cmp rs = sortMergeAll cmp (sortMergePairs cmp rs)
 
 {- | The list sorted in ascending order.
 
@@ -1177,6 +1230,25 @@ prop "sort is ascending and length-preserving" (xs : List Int) =
   let ys = sort xs
   isSorted ys && length ys == length xs
 
+-- Reference stable sort: insert each element after the last element that does not compare greater.
+refInsert : (a -> a -> <e> Ordering) -> a -> List a -> <e> List a
+refInsert _ x [] = [x]
+refInsert cmp x (y :: ys) = match cmp y x
+  Gt => x :: y :: ys
+  _ => y :: refInsert cmp x ys
+
+refGo : (a -> a -> <e> Ordering) -> List a -> List a -> <e> List a
+refGo _ acc [] = acc
+refGo cmp acc (x :: rest) = refGo cmp (refInsert cmp x acc) rest
+
+prop "sortBy is stable: key-only comparator matches a reference insertion sort" (xs : List Int) =
+  let keyed = zip (map (x => x % 7) xs) (range 0 (length xs))
+  let byKey = (ka, _) (kb, _) => compare ka kb
+  eq (sortBy byKey keyed) (refGo byKey [] keyed)
+
+prop "sortBy agrees with a reference insertion sort on Int" (xs : List Int) =
+  eq (sortBy compare xs) (refGo compare [] xs)
+
 prop "partition splits by the predicate" (xs : List Int) =
   let (yes, no) = partition (x => x > 0) xs
   all (x => x > 0) yes && all (x => x <= 0) no
@@ -1363,13 +1435,30 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "containsSub" ((PVar "sub") (PList)) (EApp (EApp (EVar "startsWith") (EVar "sub")) (EListLit)))
 (DFunDef false "containsSub" ((PVar "sub") (PAs "xs" (PCons PWild (PVar "rest")))) (EIf (EApp (EApp (EVar "startsWith") (EVar "sub")) (EVar "xs")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "containsSub") (EVar "sub")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sortBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))
-(DFunDef false "sortBy" (PWild (PList)) (EListLit))
-(DFunDef false "sortBy" (PWild (PList (PVar "x"))) (EListLit (EVar "x")))
-(DFunDef false "sortBy" ((PVar "cmp") (PVar "xs")) (EBlock (DoLet false false (PTuple (PVar "l") (PVar "r")) (EApp (EApp (EVar "splitAt") (EBinOp "/" (EApp (EVar "length") (EVar "xs")) (ELit (LInt 2)))) (EVar "xs"))) (DoExpr (EApp (EApp (EApp (EVar "merge") (EVar "cmp")) (EApp (EApp (EVar "sortBy") (EVar "cmp")) (EVar "l"))) (EApp (EApp (EVar "sortBy") (EVar "cmp")) (EVar "r"))))))
+(DFunDef false "sortBy" ((PVar "cmp") (PVar "xs")) (EApp (EApp (EVar "sortMergeAll") (EVar "cmp")) (EApp (EApp (EVar "sortRuns") (EVar "cmp")) (EVar "xs"))))
+(DTypeSig false "sortRunAsc" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))))
+(DFunDef false "sortRunAsc" (PWild (PVar "acc") (PVar "x") (PList)) (ETuple (EBinOp "::" (EVar "x") (EVar "acc")) (EListLit)))
+(DFunDef false "sortRunAsc" ((PVar "cmp") (PVar "acc") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "cmp") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (ETuple (EBinOp "::" (EVar "x") (EVar "acc")) (EBinOp "::" (EVar "y") (EVar "ys")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "sortRunAsc") (EVar "cmp")) (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "y")) (EVar "ys")))))
+(DTypeSig false "sortRunDesc" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))))
+(DFunDef false "sortRunDesc" (PWild (PVar "acc") (PVar "x") (PList)) (ETuple (EBinOp "::" (EVar "x") (EVar "acc")) (EListLit)))
+(DFunDef false "sortRunDesc" ((PVar "cmp") (PVar "acc") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "cmp") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "sortRunDesc") (EVar "cmp")) (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "y")) (EVar "ys"))) (arm PWild () (ETuple (EBinOp "::" (EVar "x") (EVar "acc")) (EBinOp "::" (EVar "y") (EVar "ys"))))))
+(DTypeSig false "sortRunsFrom" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))))))))
+(DFunDef false "sortRunsFrom" (PWild (PVar "x") (PList)) (EListLit (EListLit (EVar "x"))))
+(DFunDef false "sortRunsFrom" ((PVar "cmp") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "cmp") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (ELet false (PTuple (PVar "run") (PVar "after")) (EApp (EApp (EApp (EApp (EVar "sortRunDesc") (EVar "cmp")) (EListLit)) (EVar "x")) (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "run") (EApp (EApp (EVar "sortRuns") (EVar "cmp")) (EVar "after"))))) (arm PWild () (ELet false (PTuple (PVar "run") (PVar "after")) (EApp (EApp (EApp (EApp (EVar "sortRunAsc") (EVar "cmp")) (EListLit)) (EVar "x")) (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EApp (EVar "reverse") (EVar "run")) (EApp (EApp (EVar "sortRuns") (EVar "cmp")) (EVar "after")))))))
+(DTypeSig false "sortRuns" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "sortRuns" (PWild (PList)) (EListLit))
+(DFunDef false "sortRuns" ((PVar "cmp") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EVar "sortRunsFrom") (EVar "cmp")) (EVar "x")) (EVar "rest")))
 (DTypeSig false "merge" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "merge" (PWild (PList) (PVar "ys")) (EVar "ys"))
 (DFunDef false "merge" (PWild (PVar "xs") (PList)) (EVar "xs"))
 (DFunDef false "merge" ((PVar "cmp") (PAs "xs" (PCons (PVar "x") (PVar "xs'"))) (PAs "ys" (PCons (PVar "y") (PVar "ys'")))) (EMatch (EApp (EApp (EVar "cmp") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "merge") (EVar "cmp")) (EVar "xs")) (EVar "ys'")))) (arm PWild () (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "merge") (EVar "cmp")) (EVar "xs'")) (EVar "ys"))))))
+(DTypeSig false "sortMergePairs" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "sortMergePairs" ((PVar "cmp") (PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EBinOp "::" (EApp (EApp (EApp (EVar "merge") (EVar "cmp")) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "sortMergePairs") (EVar "cmp")) (EVar "rest"))))
+(DFunDef false "sortMergePairs" (PWild (PVar "rs")) (EVar "rs"))
+(DTypeSig false "sortMergeAll" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "sortMergeAll" (PWild (PList)) (EListLit))
+(DFunDef false "sortMergeAll" (PWild (PList (PVar "r"))) (EVar "r"))
+(DFunDef false "sortMergeAll" ((PVar "cmp") (PVar "rs")) (EApp (EApp (EVar "sortMergeAll") (EVar "cmp")) (EApp (EApp (EVar "sortMergePairs") (EVar "cmp")) (EVar "rs"))))
 (DTypeSig true "sort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "sort" ((PVar "xs")) (EApp (EApp (EVar "sortBy") (EVar "compare")) (EVar "xs")))
 (DTypeSig true "sortOn" (TyConstrained ((cstr "Ord" (TyVar "b"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
@@ -1448,6 +1537,14 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DProp false "splitAt agrees with take/drop" ((pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "a") (PVar "b")) (EApp (EApp (EVar "splitAt") (EVar "n")) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "a")) (EApp (EApp (EVar "take") (EVar "n")) (EVar "xs"))) (EApp (EApp (EVar "eq") (EVar "b")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "xs")))))))
 (DProp false "span ++ recovers the list" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "a") (PVar "b")) (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 5))))) (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EBinOp "++" (EVar "a") (EVar "b"))) (EVar "xs")))))
 (DProp false "sort is ascending and length-preserving" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ys") (EApp (EVar "sort") (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EVar "isSorted") (EVar "ys")) (EBinOp "==" (EApp (EVar "length") (EVar "ys")) (EApp (EVar "length") (EVar "xs")))))))
+(DTypeSig false "refInsert" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "refInsert" (PWild (PVar "x") (PList)) (EListLit (EVar "x")))
+(DFunDef false "refInsert" ((PVar "cmp") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "cmp") (EVar "y")) (EVar "x")) (arm (PCon "Gt") () (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys")))) (arm PWild () (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "refInsert") (EVar "cmp")) (EVar "x")) (EVar "ys"))))))
+(DTypeSig false "refGo" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "refGo" (PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "refGo" ((PVar "cmp") (PVar "acc") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EVar "refGo") (EVar "cmp")) (EApp (EApp (EApp (EVar "refInsert") (EVar "cmp")) (EVar "x")) (EVar "acc"))) (EVar "rest")))
+(DProp false "sortBy is stable: key-only comparator matches a reference insertion sort" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "keyed") (EApp (EApp (EVar "zip") (EApp (EApp (EVar "map") (ELam ((PVar "x")) (EBinOp "%" (EVar "x") (ELit (LInt 7))))) (EVar "xs"))) (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "xs"))))) (DoLet false false (PVar "byKey") (ELam ((PTuple (PVar "ka") PWild) (PTuple (PVar "kb") PWild)) (EApp (EApp (EVar "compare") (EVar "ka")) (EVar "kb")))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EVar "sortBy") (EVar "byKey")) (EVar "keyed"))) (EApp (EApp (EApp (EVar "refGo") (EVar "byKey")) (EListLit)) (EVar "keyed"))))))
+(DProp false "sortBy agrees with a reference insertion sort on Int" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "sortBy") (EVar "compare")) (EVar "xs"))) (EApp (EApp (EApp (EVar "refGo") (EVar "compare")) (EListLit)) (EVar "xs"))))
 (DProp false "partition splits by the predicate" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "yes") (PVar "no")) (EApp (EApp (EVar "partition") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "all") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "yes")) (EApp (EApp (EVar "all") (ELam ((PVar "x")) (EBinOp "<=" (EVar "x") (ELit (LInt 0))))) (EVar "no"))))))
 (DProp false "somes length is at most the input length" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "os") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))) (EApp (EVar "Some") (EVar "n")) (EVar "None")))) (EVar "xs"))) (DoExpr (EBinOp "<=" (EApp (EVar "length") (EApp (EVar "somes") (EVar "os"))) (EApp (EVar "length") (EVar "os"))))))
 (DProp false "partitionResults sizes sum to the input length" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "rs") (EApp (EApp (EVar "map") (ELam ((PVar "n")) (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))) (EApp (EVar "Ok") (EVar "n")) (EAnnot (EApp (EVar "Err") (EVar "n")) (TyApp (TyApp (TyCon "Result") (TyCon "Int")) (TyCon "Int")))))) (EVar "xs"))) (DoLet false false (PTuple (PVar "es") (PVar "os")) (EApp (EVar "partitionResults") (EVar "rs"))) (DoExpr (EBinOp "==" (EBinOp "+" (EApp (EVar "length") (EVar "es")) (EApp (EVar "length") (EVar "os"))) (EApp (EVar "length") (EVar "rs"))))))
@@ -1607,13 +1704,30 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "containsSub" ((PVar "sub") (PList)) (EApp (EApp (EDictApp "startsWith") (EMethodRef "sub")) (EListLit)))
 (DFunDef false "containsSub" ((PVar "sub") (PAs "xs" (PCons PWild (PVar "rest")))) (EIf (EApp (EApp (EDictApp "startsWith") (EMethodRef "sub")) (EVar "xs")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EDictApp "containsSub") (EMethodRef "sub")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "sortBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))
-(DFunDef false "sortBy" (PWild (PList)) (EListLit))
-(DFunDef false "sortBy" (PWild (PList (PVar "x"))) (EListLit (EVar "x")))
-(DFunDef false "sortBy" ((PVar "cmp") (PVar "xs")) (EBlock (DoLet false false (PTuple (PVar "l") (PVar "r")) (EApp (EApp (EVar "splitAt") (EBinOp "/" (EApp (EMethodRef "length") (EVar "xs")) (ELit (LInt 2)))) (EVar "xs"))) (DoExpr (EApp (EApp (EApp (EVar "merge") (EVar "cmp")) (EApp (EApp (EVar "sortBy") (EVar "cmp")) (EVar "l"))) (EApp (EApp (EVar "sortBy") (EVar "cmp")) (EVar "r"))))))
+(DFunDef false "sortBy" ((PVar "cmp") (PVar "xs")) (EApp (EApp (EVar "sortMergeAll") (EVar "cmp")) (EApp (EApp (EVar "sortRuns") (EVar "cmp")) (EVar "xs"))))
+(DTypeSig false "sortRunAsc" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))))
+(DFunDef false "sortRunAsc" (PWild (PVar "acc") (PVar "x") (PList)) (ETuple (EBinOp "::" (EVar "x") (EVar "acc")) (EListLit)))
+(DFunDef false "sortRunAsc" ((PVar "cmp") (PVar "acc") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "cmp") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (ETuple (EBinOp "::" (EVar "x") (EVar "acc")) (EBinOp "::" (EVar "y") (EVar "ys")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "sortRunAsc") (EVar "cmp")) (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "y")) (EVar "ys")))))
+(DTypeSig false "sortRunDesc" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))))
+(DFunDef false "sortRunDesc" (PWild (PVar "acc") (PVar "x") (PList)) (ETuple (EBinOp "::" (EVar "x") (EVar "acc")) (EListLit)))
+(DFunDef false "sortRunDesc" ((PVar "cmp") (PVar "acc") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "cmp") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EApp (EApp (EApp (EApp (EVar "sortRunDesc") (EVar "cmp")) (EBinOp "::" (EVar "x") (EVar "acc"))) (EVar "y")) (EVar "ys"))) (arm PWild () (ETuple (EBinOp "::" (EVar "x") (EVar "acc")) (EBinOp "::" (EVar "y") (EVar "ys"))))))
+(DTypeSig false "sortRunsFrom" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))))))))
+(DFunDef false "sortRunsFrom" (PWild (PVar "x") (PList)) (EListLit (EListLit (EVar "x"))))
+(DFunDef false "sortRunsFrom" ((PVar "cmp") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "cmp") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (ELet false (PTuple (PVar "run") (PVar "after")) (EApp (EApp (EApp (EApp (EVar "sortRunDesc") (EVar "cmp")) (EListLit)) (EVar "x")) (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EVar "run") (EApp (EApp (EVar "sortRuns") (EVar "cmp")) (EVar "after"))))) (arm PWild () (ELet false (PTuple (PVar "run") (PVar "after")) (EApp (EApp (EApp (EApp (EVar "sortRunAsc") (EVar "cmp")) (EListLit)) (EVar "x")) (EBinOp "::" (EVar "y") (EVar "ys"))) (EBinOp "::" (EApp (EVar "reverse") (EVar "run")) (EApp (EApp (EVar "sortRuns") (EVar "cmp")) (EVar "after")))))))
+(DTypeSig false "sortRuns" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "sortRuns" (PWild (PList)) (EListLit))
+(DFunDef false "sortRuns" ((PVar "cmp") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EVar "sortRunsFrom") (EVar "cmp")) (EVar "x")) (EVar "rest")))
 (DTypeSig false "merge" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "merge" (PWild (PList) (PVar "ys")) (EVar "ys"))
 (DFunDef false "merge" (PWild (PVar "xs") (PList)) (EVar "xs"))
 (DFunDef false "merge" ((PVar "cmp") (PAs "xs" (PCons (PVar "x") (PVar "xs'"))) (PAs "ys" (PCons (PVar "y") (PVar "ys'")))) (EMatch (EApp (EApp (EVar "cmp") (EVar "x")) (EVar "y")) (arm (PCon "Gt") () (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "merge") (EVar "cmp")) (EVar "xs")) (EVar "ys'")))) (arm PWild () (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EVar "merge") (EVar "cmp")) (EVar "xs'")) (EVar "ys"))))))
+(DTypeSig false "sortMergePairs" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "sortMergePairs" ((PVar "cmp") (PCons (PVar "a") (PCons (PVar "b") (PVar "rest")))) (EBinOp "::" (EApp (EApp (EApp (EVar "merge") (EVar "cmp")) (EVar "a")) (EVar "b")) (EApp (EApp (EVar "sortMergePairs") (EVar "cmp")) (EVar "rest"))))
+(DFunDef false "sortMergePairs" (PWild (PVar "rs")) (EVar "rs"))
+(DTypeSig false "sortMergeAll" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyApp (TyCon "List") (TyVar "a"))) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "sortMergeAll" (PWild (PList)) (EListLit))
+(DFunDef false "sortMergeAll" (PWild (PList (PVar "r"))) (EVar "r"))
+(DFunDef false "sortMergeAll" ((PVar "cmp") (PVar "rs")) (EApp (EApp (EVar "sortMergeAll") (EVar "cmp")) (EApp (EApp (EVar "sortMergePairs") (EVar "cmp")) (EVar "rs"))))
 (DTypeSig true "sort" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
 (DFunDef false "sort" ((PVar "xs")) (EApp (EApp (EVar "sortBy") (EMethodRef "compare")) (EVar "xs")))
 (DTypeSig true "sortOn" (TyConstrained ((cstr "Ord" (TyVar "b"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
@@ -1692,6 +1806,14 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DProp false "splitAt agrees with take/drop" ((pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "a") (PVar "b")) (EApp (EApp (EVar "splitAt") (EVar "n")) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "a")) (EApp (EApp (EVar "take") (EVar "n")) (EVar "xs"))) (EApp (EApp (EMethodRef "eq") (EVar "b")) (EApp (EApp (EVar "drop") (EVar "n")) (EVar "xs")))))))
 (DProp false "span ++ recovers the list" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "a") (PVar "b")) (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 5))))) (EVar "xs"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EBinOp "++" (EVar "a") (EVar "b"))) (EVar "xs")))))
 (DProp false "sort is ascending and length-preserving" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ys") (EApp (EDictApp "sort") (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EDictApp "isSorted") (EVar "ys")) (EBinOp "==" (EApp (EMethodRef "length") (EVar "ys")) (EApp (EMethodRef "length") (EVar "xs")))))))
+(DTypeSig false "refInsert" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "refInsert" (PWild (PVar "x") (PList)) (EListLit (EVar "x")))
+(DFunDef false "refInsert" ((PVar "cmp") (PVar "x") (PCons (PVar "y") (PVar "ys"))) (EMatch (EApp (EApp (EVar "cmp") (EVar "y")) (EVar "x")) (arm (PCon "Gt") () (EBinOp "::" (EVar "x") (EBinOp "::" (EVar "y") (EVar "ys")))) (arm PWild () (EBinOp "::" (EVar "y") (EApp (EApp (EApp (EVar "refInsert") (EVar "cmp")) (EVar "x")) (EVar "ys"))))))
+(DTypeSig false "refGo" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyVar "a")))))))
+(DFunDef false "refGo" (PWild (PVar "acc") (PList)) (EVar "acc"))
+(DFunDef false "refGo" ((PVar "cmp") (PVar "acc") (PCons (PVar "x") (PVar "rest"))) (EApp (EApp (EApp (EVar "refGo") (EVar "cmp")) (EApp (EApp (EApp (EVar "refInsert") (EVar "cmp")) (EVar "x")) (EVar "acc"))) (EVar "rest")))
+(DProp false "sortBy is stable: key-only comparator matches a reference insertion sort" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "keyed") (EApp (EApp (EVar "zip") (EApp (EApp (EMethodRef "map") (ELam ((PVar "x")) (EBinOp "%" (EVar "x") (ELit (LInt 7))))) (EVar "xs"))) (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EMethodRef "length") (EVar "xs"))))) (DoLet false false (PVar "byKey") (ELam ((PTuple (PVar "ka") PWild) (PTuple (PVar "kb") PWild)) (EApp (EApp (EMethodRef "compare") (EVar "ka")) (EVar "kb")))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "sortBy") (EVar "byKey")) (EVar "keyed"))) (EApp (EApp (EApp (EVar "refGo") (EVar "byKey")) (EListLit)) (EVar "keyed"))))))
+(DProp false "sortBy agrees with a reference insertion sort on Int" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "sortBy") (EMethodRef "compare")) (EVar "xs"))) (EApp (EApp (EApp (EVar "refGo") (EMethodRef "compare")) (EListLit)) (EVar "xs"))))
 (DProp false "partition splits by the predicate" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "yes") (PVar "no")) (EApp (EApp (EVar "partition") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EDictApp "all") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 0))))) (EVar "yes")) (EApp (EApp (EDictApp "all") (ELam ((PVar "x")) (EBinOp "<=" (EVar "x") (ELit (LInt 0))))) (EVar "no"))))))
 (DProp false "somes length is at most the input length" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "os") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))) (EApp (EVar "Some") (EVar "n")) (EVar "None")))) (EVar "xs"))) (DoExpr (EBinOp "<=" (EApp (EMethodRef "length") (EApp (EVar "somes") (EVar "os"))) (EApp (EMethodRef "length") (EVar "os"))))))
 (DProp false "partitionResults sizes sum to the input length" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "rs") (EApp (EApp (EMethodRef "map") (ELam ((PVar "n")) (EIf (EBinOp "==" (EBinOp "%" (EVar "n") (ELit (LInt 2))) (ELit (LInt 0))) (EApp (EVar "Ok") (EVar "n")) (EAnnot (EApp (EVar "Err") (EVar "n")) (TyApp (TyApp (TyCon "Result") (TyCon "Int")) (TyCon "Int")))))) (EVar "xs"))) (DoLet false false (PTuple (PVar "es") (PVar "os")) (EApp (EVar "partitionResults") (EVar "rs"))) (DoExpr (EBinOp "==" (EBinOp "+" (EApp (EMethodRef "length") (EVar "es")) (EApp (EMethodRef "length") (EVar "os"))) (EApp (EMethodRef "length") (EVar "rs"))))))
