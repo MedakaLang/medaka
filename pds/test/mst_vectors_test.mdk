@@ -29,6 +29,8 @@
    corpus's figure being the best of `pageCostRuns` runs of the probe, so a
    load spike during one run cannot fail it; `listRecords` and
    `persistTransition` keep an absolute ceiling beside their ratio.
+   `persistTransition` also prints the bytes it allocates per call, which the
+   test holds flat across the two corpora.
 
    A red naming a wall-clock bound with every other bound in range is load
    until a rerun on a quieter host says otherwise; a red on a ratio far past
@@ -328,6 +330,39 @@ persistRoute : PageCost
 persistRoute =
   PageCost { route = "persistTransition", ceiling = Some 60, ratio = 4.0 }
 
+-- Repetitions per `persist` run. A call costs a few microseconds, so the
+-- run must last long enough that a load spike cannot cover all of it and the
+-- whole-microsecond figure is not a quantisation of a handful of ticks.
+persistReps : String
+persistReps = "50000"
+
+-- Bytes `persistTransition` allocates per call do not depend on the
+-- repository, so the figure is graded on a ratio near 1; a decision that
+-- copied or rebuilt anything the size of the repository would move it.
+persistAllocRatio : Float
+persistAllocRatio = 1.5
+
+-- The smallest `allocBytes=` figure across `outs`, which every run prints
+-- to the byte.
+bestAlloc : List String -> Option Int
+bestAlloc outs = match somes (map (wordFigure "allocBytes=") outs)
+  [] => None
+  x :: xs => Some (fold min x xs)
+
+persistAllocFindings : List String -> List String -> List String
+persistAllocFindings smallOuts largeOuts = match (
+  bestAlloc smallOuts,
+  bestAlloc largeOuts,
+)
+  (Some small, Some large) =>
+    ratioFindings
+      "persistTransition allocation (bytes per request, small vs large corpus)"
+      (intToFloat small)
+      (intToFloat large)
+      persistAllocRatio
+  _ =>
+    ["\{gate}: cost-curve output has no persistTransition allocBytes= figure"]
+
 -- The smallest of the figures `route` printed across `outs`; a run that
 -- printed none makes the whole measurement absent.
 bestFigure : String -> List String -> Option Int
@@ -437,11 +472,13 @@ costCorpora scratch synth =
         let pages =
           flatMap (pc => pageCostFindings pc smallOuts largeOuts) pageRoutes
         match (
-          costRuns cost ["persist", small, "1000"],
-          costRuns cost ["persist", large, "1000"],
+          costRuns cost ["persist", small, persistReps],
+          costRuns cost ["persist", large, persistReps],
         )
           ((smallP, []), (largeP, [])) =>
-            pages ++ pageCostFindings persistRoute smallP largeP
+            pages
+              ++ pageCostFindings persistRoute smallP largeP
+              ++ persistAllocFindings smallP largeP
           ((_, fs1), (_, fs2)) => pages ++ fs1 ++ fs2
       ((_, fs1), (_, fs2)) => fs1 ++ fs2
     fs => fs

@@ -450,6 +450,12 @@ MIN_NET_FRAC="${STAGE_IR_MIN_NET_FRAC:-0.02}"
 # `parse`'s 681 584 196). A future refactor that routes fmt/lint back through `parse`
 # would silently fold a second linear term into this row — re-derive with
 # `nm $PROFILE | grep parse` if this row's margins ever move without a source cause.
+# `fmt` and `lint` ride the same listing like the frontend rows. They replace the
+# wall-clock arm of perf_scaling.sh, which is nightly-only. Shipped band, match: fmt
+# 2.04/2.02, lint 2.19/2.34; xref N=125: fmt 2.04/2.02, lint 2.14/2.22. The band is too small
+# to see their superlinear term: xref N=1000 (1000/2000/4000) reads fmt 2.03/2.74, lint
+# 2.53/2.89, climbing toward the 3.0 threshold. Re-measure at that band before narrowing a
+# ceiling on either row.
 STAGE_SYMS="parse=mdk_frontend_parser__parse \
 exhaust=mdk_frontend_exhaust__checkGuardExhaustivenessWith \
 desugar=mdk_frontend_desugar__desugar \
@@ -460,7 +466,9 @@ lower=mdk_ir_core_ir_lower__lowerProgramEmit \
 emit=mdk_backend_llvm_emit__emitProgram \
 mangle=mdk_backend_private_mangle__mangleUnits \
 dce=mdk_ir_dce__dceFilter \
-trmc=mdk_backend_trmc_analysis__detectDispatchGroups"
+trmc=mdk_backend_trmc_analysis__detectDispatchGroups \
+fmt=mdk_tools_fmt__formatSource \
+lint=mdk_tools_lint__lintProgram"
 
 # ── THE MULTI-MODULE ARM ─────────────────────────────────────────────────────
 #

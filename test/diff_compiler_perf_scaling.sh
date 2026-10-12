@@ -289,6 +289,16 @@ N="${PERF_N:-250}"
 # than silently narrowing the gate. Run it locally with PERF_DEEP=1.
 PERF_DEEP="${PERF_DEEP:-0}"
 
+# The wall-clock arm (per-stage TIME, min-of-K) runs only where PERF_DEEP=1, i.e. nightly,
+# or where PERF_TIME=1 forces it. A per-PR run grades allocation and op counts, which are
+# deterministic; per-stage instruction counts are graded by diff_compiler_stage_ir_scaling.sh.
+# Wall-clock ratios flap on shared runners (#2440, #3739, #1879), and a flap reds an
+# unrelated PR.
+TIME_ARM="${PERF_TIME:-$PERF_DEEP}"
+if [ "$TIME_ARM" != "1" ]; then
+  echo "NOTE: the TIME arm (per-stage wall clock) is OFF: nightly runs it (PERF_DEEP=1), or set PERF_TIME=1."
+fi
+
 # xref's band follows the mode: DEEP keeps resolve's 4000 (-> 16000 at 4N), QUICK uses
 # 2000 (-> 8000), which is also XREF_WASM_N — so in QUICK the wasm row rides the main
 # pass and costs no extra invocation at all (see grade_wasm_row).
@@ -3404,6 +3414,10 @@ for shape in $SHAPES; do
     *)
     # These are written to files rather than shell vars because there is one line
     # per stage per size and sh has no arrays.
+    if [ "$TIME_ARM" != "1" ]; then
+      time_lines="           time: (TIME arm off — nightly grades it, see TIME_ARM. Allocation and op counts below are deterministic; stage_ir_scaling grades the same stages in instructions.)
+"
+    else
     TF1="$WORK/${shape}_t1"; TF2="$WORK/${shape}_t2"; TF3="$WORK/${shape}_t3"
     # `match` is the ONLY shape whose wasm row rides the main pass — its band is the
     # shape's band and the stage is ~0.3 s there. Every other shape runs the main pass
@@ -3429,6 +3443,7 @@ for shape in $SHAPES; do
         "$n1" "$n2" "$n3"
     done
     grade_wasm_row "$shape" "$n1" "$n2" "$n3"
+    fi
     ;;
   esac
 
@@ -4187,9 +4202,12 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
     # (load/mark/desugar) scale linearly and sit under the 200ms floor at these N,
     # so typecheck is the one time signal worth grading — and the one the ledger
     # names.
+    mt1=""; mt2=""; mt3=""
+    if [ "$TIME_ARM" = "1" ]; then
     mt1="$(stage_times_min_modules "$md1/entry.mdk" "$md1" "$PERF_K" | awk '$1=="typecheck"{print $2}')"
     mt2="$(stage_times_min_modules "$md2/entry.mdk" "$md2" "$PERF_K" | awk '$1=="typecheck"{print $2}')"
     mt3="$(stage_times_min_modules "$md3/entry.mdk" "$md3" "$PERF_K" | awk '$1=="typecheck"{print $2}')"
+    fi
 
     mnet1="$(awk -v a="$ma1" -v b="$MBASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
     mnet2="$(awk -v a="$ma2" -v b="$MBASE_ALLOC" 'BEGIN{printf "%.1f", a-b}')"
@@ -4302,7 +4320,9 @@ case "$MBASE_ALLOC$ma1$ma2$ma3" in
     # ceiling it reds on WORSENING, under TFIXED it reds DEMANDING PROMOTION, and the Ir
     # arm's hard 2.45 ceiling on the same curve is untouched.  Still do not "fix" a red here
     # by raising THRESH or flooring the stage out.
-    if [ -z "$mt1" ] || [ -z "$mt2" ] || [ -z "$mt3" ]; then
+    if [ "$TIME_ARM" != "1" ]; then
+      echo "           time typecheck: (TIME arm off — nightly grades it, see TIME_ARM; stage_ir_scaling grades modules:typecheck in instructions)"
+    elif [ -z "$mt1" ] || [ -z "$mt2" ] || [ -z "$mt3" ]; then
       echo "           time typecheck: NO MEASUREMENT from the profiler (harness bug)"
       fail=$((fail+1))
     else
@@ -4976,6 +4996,9 @@ fi   # end PERF_ONLY unit: matchlits
 printf -- '---------------------------------------------------------------------\n'
 printf '%d ok, %d known-superlinear (ledgered), %d regressed (threshold %sx per doubling)\n' "$pass" "$known" "$fail" "$THRESH"
 
+if [ "$TIME_ARM" != "1" ]; then
+  echo "TIME arm: off in this run (nightly grades it); lower/emit are graded in instructions by stage_ir_scaling, wasm-emit only by the nightly TIME arm"
+fi
 printf 'backend TIME arm (issue #359): %d native lower/emit stage-ratios graded\n' "$backend_graded"
 # The wasm arm is NOT counted by backend_graded (see that counter's note: wasm-emit
 # clears the floor on most shapes, so counting it would make the counter unfailable).
@@ -5078,7 +5101,7 @@ fi
 # would come back SILENTLY (every lower/emit dropping under TIME_FLOOR reads as a
 # loud-but-harmless SKIP per stage, yet in aggregate it means the O(n^2) detector is
 # once again blind to the entire second half of the pipeline). N==0 is a FAILURE.
-if [ "$backend_graded" -eq 0 ]; then
+if [ "$TIME_ARM" = "1" ] && [ "$backend_graded" -eq 0 ]; then
   echo "FAIL: no backend stage (lower/emit) was graded on TIME — the #359 blind spot is back."
   echo "      Every lower/emit reading fell under the ${TIME_FLOOR}s TIME_FLOOR. Either the"
   echo "      profiler stopped emitting [perf] lower / [perf] emit, or the shapes shrank."
