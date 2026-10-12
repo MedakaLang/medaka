@@ -534,7 +534,7 @@ classEnvDeclFacts : List Decl -> List (String, List String, List (Option KindAnn
 classEnvFinish : ClassEnv -> ClassEnv
 classEnvRowsOf : Int -> List (String, List String, List (Option KindAnn), List IfaceMethod, List Super, TyConOrigin) -> List CeRow
 clauseEagerlyRefsGroup : List String -> FunClause -> Bool
-clauseImplDictUser : TyConOrigin -> Int -> ImplMethod -> List String
+clauseImplDictUser : IfaceRef -> Int -> ImplMethod -> List String
 clauseIsNonFunction : FunClause -> Bool
 clauseIsValue : TcEnv -> FunClause -> Bool
 clauseRefs : (List Pat, Expr) -> List String
@@ -632,16 +632,14 @@ constraintArgMono : Ty -> List (String, Mono) -> Option Mono
 constraintArgMonos : List Ty -> List (String, Mono) -> Option (List Mono)
 constraintArgVarName : Ty -> Option String
 constraintArgVarNames : Constraint -> List String
-constraintFirstNonParam : List String -> Constraint -> List String
 constraintIface : Constraint -> String
 constraintIsMethodLevel : List String -> Constraint -> Bool
 constraintMethodPredicateSlot : List String -> List (String, Mono) -> List Int -> Constraint -> List MethodPredicateSlot
 constraintMonosOf : List Int -> List (Int, Mono) -> List Mono
 constraintNameMonos : List String -> List (String, Mono) -> List Mono
-constraintNonParamVars : List String -> Constraint -> List String
 constraintPredicateSlot : List (String, Mono) -> Constraint -> PredicateSlot
+constraintSlotDispatchVar : List String -> Constraint -> List String
 constraintSlotId : List String -> List (String, Mono) -> Constraint -> List Int
-constraintSlotVarIface : List String -> Constraint -> List (String, IfaceRef)
 constraintTyVarArgs : Constraint -> List (List Ty)
 constraintTyVars : Constraint -> List (IfaceRef, List String)
 constraintVarArgMonos : List (IfaceRef, List String) -> List (List Ty) -> List (String, Mono) -> List (List Mono)
@@ -991,7 +989,7 @@ emptyImplAcc : ImplAcc
 emptyImplEnv : ImplEnv
 emptyImplUniverse : ImplUniverse
 emptyMethodEnv : MethodEnv
-emptyMethodModulePredicateSlot : String -> List String -> IfaceMethod -> List ((String, String), List MethodPredicateSlot)
+emptyMethodModulePredicateSlot : String -> IfaceRef -> List String -> IfaceMethod -> List ((String, String), List MethodPredicateSlot)
 emptyMethodModulePredicateSlots : String -> List Decl -> List ((String, String), List MethodPredicateSlot)
 emptyShadowDicts : ShadowDicts
 emptySigVars : SigVars
@@ -1494,6 +1492,7 @@ ifaceMethodRowOf : Decl -> List (String, List String)
 ifaceMethodRows : List Decl -> List (String, List String)
 ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
 ifaceMethodSigFor : String -> Option Ty -> List (String, List String) -> List Decl -> Option (String, Ty)
+ifaceMethodSlotKeys : List Decl -> List String
 ifaceMethodTyIn : String -> String -> List Decl -> Option Ty
 ifaceMethodTyOf : String -> List IfaceMethod -> Option Ty
 ifaceMethodVarApps : String -> IfaceMethod -> List (List Ty, List String)
@@ -1525,7 +1524,7 @@ implDeclFacts : List Decl -> List (IfaceRef, List Ty, List Require, List String)
 implDeclWithReqs : Decl -> List (IfaceRef, List Ty, List Require)
 implDeclsWithReqs : List Decl -> List (IfaceRef, List Ty, List Require)
 implDictNames : String -> Int -> Int -> List String
-implDictPassMethods : TyConOrigin -> Int -> List ImplMethod -> List ImplMethod
+implDictPassMethods : IfaceRef -> Int -> List ImplMethod -> List ImplMethod
 implDictRoutesForRow : String -> ScopeId -> List Mono -> ImplRow -> List Route
 implGoalFixesHeadMsg : String -> String -> List String -> String
 implGoalResiduals : ReqWalk -> Map String Unit -> List PredicateSlot -> IfaceRef -> List Mono -> List (IfaceRef, List Mono)
@@ -1546,6 +1545,7 @@ implMatchesArgsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesReceiverU : ImplUniverse -> IfaceRef -> Mono -> Bool
 implMatchesU : ImplUniverse -> IfaceRef -> List Mono -> Bool
 implMatchesWithReqsU : ImplUniverse -> IfaceRef -> List Mono -> Bool
+implMethodDictArity : IfaceRef -> String -> Int
 implMethodEVars : ImplMethod -> List String
 implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
@@ -2031,7 +2031,7 @@ methodIfaceHere : String -> Option IfaceRef
 methodImportedScope : Bool -> List Decl -> String -> List MethodRow -> MethodScope
 methodInterfacePredicateTemplate : List String -> List (String, Mono) -> List (Option Mono)
 methodLevelConstraintMonos : List String -> Ty -> List (String, Mono) -> List Mono
-methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
+methodLevelConstraintSlots : List String -> Ty -> List Constraint
 methodLevelConstraintVarNames : List String -> Ty -> List String
 methodLevelPredicateSlot : List String -> List (String, Mono) -> Constraint -> List PredicateSlot
 methodLevelPredicateSlots : List String -> Ty -> List (String, Mono) -> List PredicateSlot
@@ -2133,6 +2133,7 @@ methodSlotArgumentIds : List MethodPredicateSlot -> List (List Int)
 methodSlotArgumentIdsOne : MethodPredicateSlot -> List Int
 methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
 methodSlotIdsAtPositions : List Int -> List MethodPredicateSlot -> List (List Int)
+methodSlotKey : IfaceRef -> String -> String
 methodSlotPositions : List MethodPredicateSlot -> List (List Int)
 methodSlotSubst : List Int -> List Int -> List (Int, Mono) -> Option (List (Int, Mono))
 methodTemplateGivenScan : MethodPredicateTemplate -> List Int -> List GivenEntry -> MethodTemplateGivenResult -> MethodTemplateGivenResult
@@ -2448,7 +2449,7 @@ preludePreambleStore : (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamb
 preludeReturnPosDictNames : List Decl -> List Decl -> List String
 prependDiagOpt : String -> Int -> Option String -> Option String -> List TcDiag -> List TcDiag
 prependDictClause : String -> Int -> FunClause -> FunClause
-prependImplDictIfUser : TyConOrigin -> Int -> List String -> ImplMethod -> ImplMethod
+prependImplDictIfUser : IfaceRef -> Int -> List String -> ImplMethod -> ImplMethod
 prependLocalDictClause : List String -> FunClause -> FunClause
 prependLocalDicts : List String -> Expr -> Expr
 prependPredicateSlots : List PredicateSlot -> List PredicateSlot -> List PredicateSlot
@@ -2596,7 +2597,7 @@ recordMethodDictsFromSlots : List MethodPredicateSlot -> Ref (List Route) -> Lis
 recordMethodGrantOcc : String -> EvId -> Scheme -> List (Int, Authority) -> Unit
 recordMethodGrants : List MethodSchemeRow -> Unit
 recordMethodLevelObls : List String -> Ty -> Mono -> Unit
-recordMethodLevelSlotObls : List (String, IfaceRef) -> List (String, Mono) -> Unit
+recordMethodLevelSlotObls : List Constraint -> List (String, Mono) -> Unit
 recordMethodLevelSlotsOwned : MethodSchemeRow -> List (Int, Mono) -> Option Loc -> ScopeId -> Unit
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
 recordMethodObligationOwned : TcEnv -> String -> Scheme -> Mono -> MethodInstantiationSubst -> Option EvId -> Mono

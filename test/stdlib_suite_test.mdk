@@ -214,7 +214,7 @@ suites = [
   ("regex_test", (10, EvalAndNative)),
   ("runtime", (4, NativeCapability)),
   ("set", (64, EvalAndNative)),
-  ("string_test", (18, EvalAndNative)),
+  ("string_test", (21, EvalAndNative)),
   -- The assertion library every `*_test.mdk` in the tree imports, whose own
   -- doctests and props importing it never runs. Neither of the two vehicles
   -- named in the header reaches this module either.
@@ -502,7 +502,7 @@ test "stdlib/runtime.mdk executed >= 4 assertions" = floorExpectation "runtime"
 
 test "stdlib/set.mdk executed >= 64 assertions" = floorExpectation "set"
 
-test "stdlib/string_test.mdk executed >= 18 assertions" =
+test "stdlib/string_test.mdk executed >= 21 assertions" =
   floorExpectation "string_test"
 
 test "stdlib/test.mdk executed >= 72 assertions" = floorExpectation "test"

@@ -19,6 +19,7 @@ import frontend.ast.{
 }
 import ir.core_ir.{
   CExpr(..),
+  MethodEvidence(..),
   CArm(..),
   CGuard(..),
   CStmt(..),
@@ -27,7 +28,10 @@ import ir.core_ir.{
   CClause(..),
   CImplEntry(..),
   CImplBody(..),
+  ImplSym(..),
   CProgram(..),
+  DeclFacts(..),
+  noDeclFacts,
   CallMode(..),
   CallSite(..),
   CTree(..),
@@ -375,11 +379,12 @@ toCExpr (SList ((SAtom "CBlock") :: stmts)) = CBlock (map toCStmt stmts)
 toCExpr (SList ((SAtom "CMethod") :: [name, iface, arity, route, SList implRoutes, SList methRoutes])) =
   CMethod
     (toStr name)
-    (toStr iface)
-    (toInt arity)
-    (toRoute route)
-    (map toRoute implRoutes)
-    (map toRoute methRoutes)
+    (MethodEvidence
+      (toStr iface)
+      (toInt arity)
+      (toRoute route)
+      (map toRoute implRoutes)
+      (map toRoute methRoutes))
 toCExpr (SList ((SAtom "CDict") :: [name, SList routes])) =
   CDict (toStr name) (map toRoute routes)
 toCExpr other = panic ("core_ir_sexp_parse: bad CExpr: " ++ sexprToStr other)
@@ -395,20 +400,28 @@ toCBind (SList ((SAtom "CBind") :: name :: clauses)) =
   CBind (toStr name) (map toCClause clauses) noDeclLoc
 toCBind other = panic ("core_ir_sexp_parse: bad CBind: " ++ sexprToStr other)
 
+toImplSym : SExp -> ImplSym
+toImplSym (SList [tag, ifaceTag, keyTag]) =
+  ImplSym (toStr tag) (toStr ifaceTag) (toStr keyTag)
+toImplSym other =
+  panic ("core_ir_sexp_parse: bad ImplSym: " ++ sexprToStr other)
+
 toCImplBody : SExp -> CImplBody
-toCImplBody (SList ((SAtom "CImplTagged") :: [tag, key, iface, SList positions, SList pats, body])) =
+toCImplBody (SList ((SAtom "CImplTagged") :: [tag, key, iface, sym, SList positions, SList pats, body])) =
   CImplTagged
     (toStr tag)
     (toStr key)
     (toStr iface)
+    (toImplSym sym)
     (map toInt positions)
     (map toPat pats)
     (toCExpr body)
-toCImplBody (SList ((SAtom "CImplDefault") :: [ifaceId, tag, key, SList positions, SList pats, body])) =
+toCImplBody (SList ((SAtom "CImplDefault") :: [ifaceId, tag, key, sym, SList positions, SList pats, body])) =
   CImplDefault
     (toStr ifaceId)
     (toStr tag)
     (toStr key)
+    (toImplSym sym)
     (map toInt positions)
     (map toPat pats)
     (toCExpr body)
@@ -440,7 +453,47 @@ parseCProgram s = match parseAll s
       (map toCtorArity ctorArities)
       (map toCtorType ctorTypes)
       (map toCImplEntry impls)
+      []
+      noDeclFacts
+  SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls, SList mctx]) =>
+    CProgram
+      (map toCBind binds)
+      (map toCtorArity ctorArities)
+      (map toCtorType ctorTypes)
+      (map toCImplEntry impls)
+      (map toMethodContext mctx)
+      noDeclFacts
+  SList ((SAtom "CProgram") :: [SList binds, SList ctorArities, SList ctorTypes, SList impls, SList mctx, facts]) =>
+    CProgram
+      (map toCBind binds)
+      (map toCtorArity ctorArities)
+      (map toCtorType ctorTypes)
+      (map toCImplEntry impls)
+      (map toMethodContext mctx)
+      (toDeclFacts facts)
   other => panic ("core_ir_sexp_parse: bad CProgram: " ++ sexprToStr other)
+
+toDeclFacts : SExp -> DeclFacts
+toDeclFacts (SList ((SAtom "facts") :: [SList reqs, SList sups])) = DeclFacts {
+  factRequires = map (toFactPair "rq") reqs,
+  factSupers = map (toFactPair "sp") sups,
+}
+toDeclFacts other =
+  panic ("core_ir_sexp_parse: bad declaration facts: " ++ sexprToStr other)
+
+toFactPair : String -> SExp -> (String, Int)
+toFactPair tag (row@(SList ((SAtom t) :: [key, n]))) =
+  if t == tag then
+    (toStr key, toInt n)
+  else
+    panic ("core_ir_sexp_parse: bad declaration fact: " ++ sexprToStr row)
+toFactPair _ other =
+  panic ("core_ir_sexp_parse: bad declaration fact: " ++ sexprToStr other)
+
+toMethodContext : SExp -> (String, Int)
+toMethodContext (SList ((SAtom "mc") :: [key, n])) = (toStr key, toInt n)
+toMethodContext other =
+  panic ("core_ir_sexp_parse: bad method context: " ++ sexprToStr other)
 
 -- ── debug helper ─────────────────────────────────────────────────────────────
 

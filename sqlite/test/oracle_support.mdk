@@ -24,12 +24,23 @@
    the gate names the spawning binding and the grading evidence sits within
    that one hop — a spawn here is no longer invisible to it.
 
+   The batched build (`buildBatch`, one `runCommandBatch` over every demo a
+   runner needs) and `rowScratch` live here too: the three runners each held a
+   byte-identical copy of them.
+
    Import what you need: `import test.oracle_support.{OracleRow(..), Step(..)}`. -}
 
 import io.{getEnvOr}
-import list.{dropWhileEnd, intercalate}
+import list.{dropWhileEnd, indexed, intercalate, lookup, zipWith3}
 import string.{lines, split, trim, unwords}
-import test_process.{boundedVerbSeconds, medakaRoot, underRoot}
+import test_process.{
+  boundedVerbSeconds,
+  medakaBin,
+  medakaRoot,
+  scratchDir,
+  testJobs,
+  underRoot,
+}
 
 -- # One row
 
@@ -187,6 +198,82 @@ spawnOut secs cmd args = match spawnRaw secs cmd args
   Ok (code, out, err) =>
     Err
       "`\{unwords (cmd :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
+
+{- | A path `name` inside this process's scratch directory. `scratchDir` is
+   memoized, so every caller in one process shares the directory and must
+   separate its own files by name. -}
+export
+rowScratch : String -> <Exec> Result String String
+rowScratch name = match scratchDir
+  Err e => Err "\{name}: \{e}"
+  Ok dir => Ok "\{dir}/\{name}"
+
+-- A `medaka build` compiles and links a native binary, so its ceiling is
+-- minutes, not the query ceiling.
+buildTimeoutSeconds : Int
+buildTimeoutSeconds = 600
+
+buildArgs : List String -> String -> String -> <IO> List String
+buildArgs flags entry bin = ["build"] ++ flags ++ [underRoot entry, "-o", bin]
+
+-- The argv `spawnOut buildTimeoutSeconds medakaBin args` runs: `boundedVerbSeconds`
+-- wrapped around `env`, which sets the two spawn variables and runs the build.
+perlArgs : List String -> <IO> List String
+perlArgs args =
+  ["-e", "alarm \{intToString buildTimeoutSeconds}; exec @ARGV", "env", "env"]
+    ++ spawnEnv
+    ++ (medakaBin :: args)
+
+-- Grades one batched build exactly as `spawnRaw` and `spawnOut` grade a single
+-- one: a run that never started, or exit 127, is a spawn failure; any exit but
+-- 0 is a named failure.
+gradeBuild : List String ->
+  Result String (Int, String, String) ->
+  <IO> Result String Unit
+gradeBuild args (Err e) =
+  Err "spawn failed: could not start `\{unwords (medakaBin :: args)}`: \{e}"
+gradeBuild _ (Ok (0, _, _)) = Ok ()
+gradeBuild _ (Ok (127, _, err)) =
+  Err "spawn failed: \{medakaBin} not found on PATH: \{trim err}"
+gradeBuild args (Ok (code, out, err)) =
+  Err
+    "`\{unwords (medakaBin :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
+
+{- | Builds every `(key, entry, flags)` job in ONE batch under `testJobs`
+   (serial under `MEDAKA_TEST_JOBS=1`), each into its own binary in the shared
+   scratch directory, and returns `(key, Result bin)` in job order. A binary is
+   never written to after its build, so no caller can change what another runs.
+
+   Callers memoize the result in a top-level nullary, so the batch runs once
+   per process. -}
+export
+buildBatch : List (String, String, List String) ->
+  <Exec, IO> List (String, Result String String)
+buildBatch jobs = match scratchDir
+  Err e => map ((key, _, _) => (key, Err e)) jobs
+  Ok dir =>
+    let plans =
+      map
+        ((i, (key, entry, flags)) =>
+          (key, entry, flags, "\{dir}/demo-\{intToString i}"))
+        (indexed jobs)
+    let argvs = map ((_, entry, flags, bin) => buildArgs flags entry bin) plans
+    let spawned = runCommandBatch "perl" testJobs (map perlArgs argvs)
+    zipWith3
+      ((key, _, _, bin) args run => (
+        key,
+        map (_ => bin) (gradeBuild args (mapErr (e => "perl: \{e}") run)),
+      ))
+      plans
+      argvs
+      spawned
+
+-- The binary `buildBatch` produced for `entry`, or an error naming it.
+export
+buildFor : List (String, Result String String) -> String -> Result String String
+buildFor builds entry = match lookup entry builds
+  Some r => r
+  None => Err "no shared build for \{entry}"
 
 -- Every seed statement runs under the same ceiling a direct query gets: a
 -- hang here is a defect of the row, not of the harness.

@@ -49,8 +49,6 @@ import entries.parse_result_main.{oracleMain as parse_result_main}
 import entries.resolve_main.{oracleMain as resolve_main}
 import entries.resolve_batch.{oracleMain as resolve_batch}
 import entries.resolve_modules_main.{oracleMain as resolve_modules_main}
-import entries.draft_semantic_main.{oracleMain as draft_semantic_main}
-import entries.anf_identity_main.{oracleMain as anf_identity_main}
 import entries.typecheck_main.{oracleMain as typecheck_main}
 import entries.check_main.{oracleMain as check_main}
 import entries.check_batch.{oracleMain as check_batch}
@@ -60,7 +58,6 @@ import entries.check_match_main.{oracleMain as check_match_main}
 import entries.lint_main.{oracleMain as lint_main}
 import entries.lint_fix_main.{oracleMain as lint_fix_main}
 import entries.check_one_diags_main.{oracleMain as check_one_diags_main}
-import entries.diagnostics_main.{oracleMain as diagnostics_main}
 import entries.diagnostics_project_main.{oracleMain as diagnostics_project_main}
 import entries.fmt_main.{oracleMain as fmt_main}
 import entries.new_main.{oracleMain as new_main}
@@ -101,8 +98,6 @@ main = match basename (executablePath ())
   "resolve_main" => resolve_main ()
   "resolve_batch" => resolve_batch ()
   "resolve_modules_main" => resolve_modules_main ()
-  "draft_semantic_main" => draft_semantic_main ()
-  "anf_identity_main" => anf_identity_main ()
   "typecheck_main" => typecheck_main ()
   "check_main" => check_main ()
   "check_batch" => check_batch ()
@@ -112,7 +107,6 @@ main = match basename (executablePath ())
   "lint_main" => lint_main ()
   "lint_fix_main" => lint_fix_main ()
   "check_one_diags_main" => check_one_diags_main ()
-  "diagnostics_main" => diagnostics_main ()
   "diagnostics_project_main" => diagnostics_project_main ()
   "fmt_main" => fmt_main ()
   "new_main" => new_main ()

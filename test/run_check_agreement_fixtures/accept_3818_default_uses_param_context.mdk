@@ -1,0 +1,23 @@
+-- #3818 / #3800: a default body that uses the method's own context over the
+-- interface parameter.  The declared type `Show2 a => a -> String` gives the body
+-- `Show2 a`, so the default is accepted, and `impl Desc (Pair b)` inherits it with
+-- the call supplying `Show2 (Pair Int)`.  Expected, from the impls: `show2 (Pair 1 2)`
+-- = `show2 1` = "int 1" on every verb.
+data Pair a = Pair a a
+
+interface Show2 a where
+  show2 : a -> String
+
+impl Show2 Int where
+  show2 n = "int \{n}"
+
+impl Show2 (Pair b) requires Show2 b where
+  show2 (Pair x _) = show2 x
+
+interface Desc a where
+  desc : Show2 a => a -> String
+  desc x = show2 x
+
+impl Desc (Pair b)
+
+main = println (desc (Pair (1 : Int) 2))

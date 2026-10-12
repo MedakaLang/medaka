@@ -257,11 +257,6 @@ fi
 #                         snapshot runner calls the stages in-process, so those five
 #                         gates need no probe binary at all.  parse_main survives only
 #                         because diff_compiler_check still drives it.)
-#   draft_semantic_main   — test/diff_compiler_fmt_test.mdk's `draftSemanticFixtureFailure`
-#                           (#1399 X-0D): builds the non-authoritative comparison carrier on
-#                           the real multi-module emit seam and prints transport receipts.
-#   anf_identity_main     — diff_compiler_anf_identity.sh (#1400 X-A): validates
-#                           and serializes the non-authoritative StableNodeId substrate.
 #   resolve_main          — diff_compiler_check, same file: a Row over resolveLeg.
 #   resolve_batch         — diff_compiler_check, same file, batched.
 #   resolve_modules_main  — diff_compiler_check, same file: a Row over the
@@ -284,8 +279,6 @@ fi
 #   check_match_main        — diff_compiler_check (match-exhaustiveness leg)
 #   lint_main               — diff_compiler_fmt (the lint row of
 #                             test/diff_compiler_fmt_test.mdk; added by the lint workstream)
-#   diagnostics_main        — diff_compiler_fmt (the diagnostics row of
-#                             test/diff_compiler_fmt_test.mdk)
 #   diagnostics_project_main — diff_compiler_fmt (analyzeProjectFixtureFailures,
 #                             test/diff_compiler_fmt_test.mdk)
 #   ── Phase 2 §2c tooling gates (fmt/new/test/repl/lsp) ──
@@ -306,11 +299,11 @@ core_ir_dict_pp_main \
 llvm_emit_main llvm_emit_typed_main llvm_emit_modules_main \
 llvm_bootstrap_lex_main \
 lex_main parse_main parse_result_main \
-resolve_main resolve_batch resolve_modules_main draft_semantic_main anf_identity_main \
+resolve_main resolve_batch resolve_modules_main \
 typecheck_main check_main check_batch \
 check_modules_main check_all_main check_match_main lint_main lint_fix_main \
 check_one_diags_main \
-diagnostics_main diagnostics_project_main \
+diagnostics_project_main \
 fmt_main new_main test_main repl_main fuzz_gen_main \
  profile_main profile_modules_main profile_eval_main refindex_main"
 
@@ -676,8 +669,16 @@ if [ "${1:-}" = "--for" ]; then
           set +f
           [ -n "$_glabel" ] || _glabel="$(basename "$_g")" ;;
       esac
-      echo "--for: $_glabel needs no oracles (drives ./medaka directly)."
+      if [ -n "$_foreign" ]; then
+        echo "--for: $_glabel needs no oracle this script builds."
+      else
+        echo "--for: $_glabel needs no oracles (drives ./medaka directly)."
+      fi
     done
+    if [ -n "$_foreign" ]; then
+      echo "note: these gates read probe binaries this script does not build:$_foreign"
+      echo "      build them with:  sh test/wasm/build_wasm_oracle.sh"
+    fi
     echo "nothing to build."
     exit 0
   fi

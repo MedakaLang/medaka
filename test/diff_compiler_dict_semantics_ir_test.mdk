@@ -21,14 +21,18 @@
    The grader itself (hitsOk) is self-checked by its own test block below.
 -}
 
+import compiler_cli_test_support.{
+  finalOf, freshDirFor, labelGrades, liveOf, mergeStage, okDir, spawnEach
+}
 import fs.{isFile}
-import list.{nub}
+import io.{runVerb}
+import list.{chunks, nub, somes}
 import regex.{Regex, compile, isMatch}
-import string.{lines, split}
+import string.{lines, split, trim}
 import test.{
   Expectation, expectAll, expectAtLeast, expectEach, expectTrue, fail, pass
 }
-import test_process.{boundedVerb, medakaBin, underRoot, withScratchDir}
+import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
 
 -- entry | label | HAS|LACKS|COUNT=<n> | extended-regex over the kept .ll
 table : List (String, String, String, String)
@@ -634,37 +638,82 @@ readIr entry dir = match readFile "\{dir}/ir.ll"
   Err e => fail "\{entry}: no IR emitted (build failed?): \{e}"
   Ok ir => expectAll (map (r => gradeRow entry ir r) (rowsFor entry))
 
-buildGrade : String ->
-  String ->
-  String ->
-  <Exec, IO, FileRead, FileWrite> Expectation
-buildGrade entry path dir =
-  match boundedVerb medakaBin ["build", "--keep-ir", path, "-o", "\{dir}/ir"]
-    Err e => fail "\{entry}: could not spawn medaka build: \{e}"
-    Ok (code, _, err) =>
-      if code /= 0 then
-        fail "\{entry}: build exited \{intToString code}: \{err}"
-      else
-        readIr entry dir
-
-irCheck : String -> String -> <Exec, IO, FileRead, FileWrite> Expectation
-irCheck entry dir =
+-- The entry's own state before its build, or the Expectation that settles it.
+prepEntry : String ->
+  Result String String ->
+  <FileRead, IO> Result Expectation (String, String, String)
+prepEntry entry (Err e) =
+  Err (fail "\{entry}: could not make a scratch directory: \{e}")
+prepEntry entry (Ok dir) =
   let path = underRoot "test/dict_fixtures/\{entry}"
   match isFile path
-    Err e => fail "\{entry}: could not stat fixture: \{e}"
-    Ok False => fail "\{entry}: MISSING FIXTURE FILE"
-    Ok True => buildGrade entry path dir
+    Err e => Err (fail "\{entry}: could not stat fixture: \{e}")
+    Ok False => Err (fail "\{entry}: MISSING FIXTURE FILE")
+    Ok True => Ok (entry, dir, path)
 
-entryCheck : String -> <Exec, IO, FileRead, FileWrite> Expectation
-entryCheck entry = withScratchDir (dir => irCheck entry dir)
+buildSpawn : String -> (String, String, String) -> List (String, List String)
+buildSpawn bin (_, dir, path) =
+  [(bin, ["build", "--keep-ir", path, "-o", "\{dir}/ir"])]
+
+gradeBuilt : (String, String, String) ->
+  List (Result String (Int, String, String)) ->
+  <FileRead, IO> Expectation
+gradeBuilt (entry, dir, _) [r] = match r
+  Err e => fail "\{entry}: could not spawn medaka build: \{e}"
+  Ok (code, _, err) =>
+    if code /= 0 then
+      fail "\{entry}: build exited \{intToString code}: \{err}"
+    else
+      readIr entry dir
+gradeBuilt (entry, _, _) _ = fail "\{entry}: internal: no single build result"
+
+-- One group of entries: every directory made, every fixture checked, the
+-- builds run as one batch, then the group's directories removed. A build the
+-- batch did not answer, or an entry that got no directory, is a failure row.
+groupEntries : List String -> <Exec, IO, FileRead> List (String, Expectation)
+groupEntries group =
+  let bin = medakaBin
+  let dirs = map freshDirFor group
+  let prepared = prepEntries group dirs
+  let live = somes (map liveOf prepared)
+  let graded =
+    gradeBuilts live (spawnEach spawnTimeoutSeconds (buildSpawn bin) live)
+  let settled = mergeStage fail prepared (map (g => Ok g) graded)
+  let _ = map (d => runVerb "rm" ["-rf", d]) (somes (map okDir dirs))
+  labelGrades group (map finalOf settled)
 
 entries : List String
 entries = nub (map entryOf table)
 
+-- `prepEntry` and `gradeBuilt` take effects, so they are applied by recursion.
+prepEntries : List String ->
+  List (Result String String) ->
+  <FileRead, IO> List (Result Expectation (String, String, String))
+prepEntries [] [] = []
+prepEntries (e :: es) (d :: ds) = prepEntry e d :: prepEntries es ds
+prepEntries (e :: es) [] =
+  Err (fail "\{e}: internal: no scratch directory was made")
+    :: prepEntries es []
+prepEntries [] (_ :: ds) =
+  Err (fail "internal: a scratch directory was made for no entry")
+    :: prepEntries [] ds
+
+gradeBuilts : List (String, String, String) ->
+  List (List (Result String (Int, String, String))) ->
+  <FileRead, IO> List Expectation
+gradeBuilts [] [] = []
+gradeBuilts (e :: es) (r :: rs) = gradeBuilt e r :: gradeBuilts es rs
+gradeBuilts ((entry, _, _) :: es) [] =
+  fail "\{entry}: internal: the build batch returned no result"
+    :: gradeBuilts es []
+gradeBuilts [] (_ :: rs) =
+  fail "internal: the build batch answered an entry that was not live"
+    :: gradeBuilts [] rs
+
 test "diff_compiler_dict_semantics_ir: section 3 emitted-LLVM IR rows" = expectAll
   [
     expectAtLeast 92 (length table),
-    expectEach (map (e => (e, entryCheck e)) entries),
+    expectEach (flatMap groupEntries (chunks testJobs entries)),
   ]
 
 test "diff_compiler_dict_semantics_ir: grader decides HAS, LACKS and COUNT= correctly" = expectAll

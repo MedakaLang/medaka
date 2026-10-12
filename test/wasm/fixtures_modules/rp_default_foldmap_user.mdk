@@ -3,7 +3,7 @@
 -- receiver given and shared by every inheriting instance; `Bag`'s disposition row
 -- is `InheritedDefault`, so the call reaches that shared body through `Bag`'s own
 -- entry rather than a per-instance specialization of `$mdk_impl_Bag_foldMap`,
--- emitted as an impl entry under `defaultFnNameW` (interface, method, instance).
+-- emitted as an impl entry under its stamped `ImplSym` symbol.
 --
 -- `foldMap f = fold (acc x => acc ++ f x) empty` is point-free in the container AND
 -- carries a leading `Monoid m =>` dict, so the dict-pass gives its clause pats

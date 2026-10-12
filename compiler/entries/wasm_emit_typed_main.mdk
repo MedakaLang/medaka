@@ -41,12 +41,15 @@ import backend.private_mangle.{mangleUnitsEv}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir.{
   CProgram(..),
+  noDeclFacts,
   CBind(..),
   CClause(..),
   CExpr(..),
+  MethodEvidence(..),
   CField(..),
   CImplEntry(..),
   CImplBody(..),
+  noImplSym,
   mkApp,
   synthBind,
 }
@@ -54,6 +57,7 @@ import ir.core_ir_lower.{
   lowerProgramEmit,
   markTailSites,
   stampCallModes,
+  stampImplSymbols,
   EmitTarget(..),
   declSigTypeNames,
   ctorFieldTypeNames,
@@ -137,7 +141,11 @@ cprogram : List CBind ->
   List CImplEntry ->
   CProgram
 cprogram groups ctorArs ctorTypes impls =
-  markTailSites (stampCallModes (CProgram groups ctorArs ctorTypes impls))
+  markTailSites
+    (stampCallModes
+      (stampImplSymbols
+        []
+        (CProgram groups ctorArs ctorTypes impls [] noDeclFacts)))
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
@@ -875,7 +883,7 @@ leafRuntimeProgram groups =
   cprogram (groups ++ [synthBind "main" [CClause [] (CLit (LInt 0))]]) [] [] []
 
 leafRuntimeCensus : CProgram -> String -> String -> CProgram
-leafRuntimeCensus (CProgram groups ctorArs ctorTypes impls) bindName missingName =
+leafRuntimeCensus (CProgram groups ctorArs ctorTypes impls _ _) bindName missingName =
   cprogram
     (groups
       ++ [
@@ -1176,7 +1184,13 @@ trapStateProgram =
 
 trapStateControlProgram : CProgram
 trapStateControlProgram =
-  CProgram [synthBind "main" [CClause [] (CLit (LInt 29))]] [] [] []
+  CProgram
+    [synthBind "main" [CClause [] (CLit (LInt 29))]]
+    []
+    []
+    []
+    []
+    noDeclFacts
 
 trapStateCensusProgram : CProgram
 trapStateCensusProgram =
@@ -1275,7 +1289,9 @@ implSelfProgram : String -> Int -> Int -> CProgram
 implSelfProgram tag base depth =
   let self = CVar "self" (ALocal 0 0)
   let n = CVar "n" (ALocal 0 1)
-  let recurse = mkApp (mkApp (CMethod "walk" "" 2 (RKey tag [] []) [] []) [
+  let recurse = mkApp (mkApp (CMethod
+    "walk"
+    (MethodEvidence tag 2 (RKey tag [] []) [] [])) [
     self,
   ]) [
     CBinPrim "-" n (CLit (LInt 1)) "Int" noDeclLoc,
@@ -1297,14 +1313,15 @@ implSelfProgram tag base depth =
         (CImplTagged
           tag
           tag
-          "Loop"
+          tag
+          noImplSym
           [0]
           [PVar "self" implSelfLoc, PVar "n" implSelfLoc]
           body),
     ]
 
 implSelfCensusProgram : CProgram -> CProgram
-implSelfCensusProgram (CProgram groups ctorArs ctorTypes impls) =
+implSelfCensusProgram (CProgram groups ctorArs ctorTypes impls _ _) =
   cprogram
     (groups
       ++ [
@@ -1420,11 +1437,7 @@ defaultStateInputU =
 defaultStateCall : String -> CExpr
 defaultStateCall tag = mkApp (CMethod
   "synthDefault"
-  "DefaultFace"
-  1
-  (RKey "DefaultFace|\{tag}|" [] [])
-  []
-  []) [
+  (MethodEvidence "DefaultFace" 1 (RKey "DefaultFace|\{tag}|" [] []) [] [])) [
   CLit LUnit,
 ]
 
@@ -1451,8 +1464,12 @@ defaultStateProgram tag bodyConstant =
           "DefaultFace"
           tag
           "DefaultFace|\{tag}|"
+          noImplSym
           []
-          [PVar "value" defaultStateLoc]
+          [
+            PVar "$dict_synthDefault_0" defaultStateLoc,
+            PVar "value" defaultStateLoc,
+          ]
           (CLit (LInt bodyConstant))),
     ]
 
@@ -1488,8 +1505,12 @@ defaultStateCensusProgramU =
           "DefaultFace"
           "UDefault"
           "DefaultFace|UDefault|"
+          noImplSym
           []
-          [PVar "value" defaultStateLoc]
+          [
+            PVar "$dict_synthDefault_0" defaultStateLoc,
+            PVar "value" defaultStateLoc,
+          ]
           (CLit (LInt 29))),
     ]
 

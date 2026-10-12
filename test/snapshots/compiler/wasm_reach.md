@@ -1,5 +1,5 @@
 # META
-source_lines=282
+source_lines=285
 stages=DESUGAR,MARK
 # SOURCE
 -- DISPATCH-ROOTED REACHABILITY for the WasmGC MODULES emit path (#2359 / #2377).
@@ -80,6 +80,7 @@ import frontend.ast.{Route(..)}
 import ir.core_ir.{
   CProgram(..),
   CExpr(..),
+  MethodEvidence(..),
   CBind(..),
   CClause(..),
   CArm(..),
@@ -99,13 +100,15 @@ import hash_map.{HashMap, new, setInPlace, has, findWithDefault}
 -- carry no code.
 export
 wasmReachFilter : CProgram -> CProgram
-wasmReachFilter (CProgram groups ctorArs ctorTypes impls) =
+wasmReachFilter (CProgram groups ctorArs ctorTypes impls mctx facts) =
   let reach = reachKeys groups impls
   CProgram
     (filterList (b => has (bindKey b) reach) groups)
     ctorArs
     ctorTypes
     (filterList (e => has (implKey e) reach) impls)
+    mctx
+    facts
 
 -- local peer of wasm_emit's forEachU (module-private there); the HashMap builders
 -- below are effectful folds, not value folds.
@@ -243,7 +246,7 @@ refsE (CListSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
 refsE (CBlock stmts) = flatMap refsStmt stmts
 -- a method occurrence names its METHOD KEY; its routes can additionally name a
 -- shadowing standalone (RLocal).
-refsE (CMethod name _ _ route implRoutes methRoutes) =
+refsE (CMethod name (MethodEvidence _ _ route implRoutes methRoutes)) =
   name :: flatMap refsRoute (route :: implRoutes ++ methRoutes)
 refsE (CDict name routes) = name :: flatMap refsRoute routes
 
@@ -282,15 +285,15 @@ refsField : CField -> List String
 refsField (CField _ _ e) = refsE e
 
 refsImplBody : CImplBody -> List String
-refsImplBody (CImplTagged _ _ _ _ _ body) = refsE body
-refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
+refsImplBody (CImplTagged _ _ _ _ _ _ body) = refsE body
+refsImplBody (CImplDefault _ _ _ _ _ _ body) = refsE body
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "wasmReachFilter" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "wasmReachFilter" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls"))) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachKeys") (EVar "groups")) (EVar "impls"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "has") (EApp (EVar "bindKey") (EVar "b"))) (EVar "reach")))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "has") (EApp (EVar "implKey") (EVar "e"))) (EVar "reach")))) (EVar "impls"))))))
+(DFunDef false "wasmReachFilter" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachKeys") (EVar "groups")) (EVar "impls"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "has") (EApp (EVar "bindKey") (EVar "b"))) (EVar "reach")))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "has") (EApp (EVar "implKey") (EVar "e"))) (EVar "reach")))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
 (DTypeSig false "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
 (DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))
@@ -345,7 +348,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
 (DFunDef false "refsE" ((PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
 (DFunDef false "refsE" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "refsStmt")) (EVar "stmts")))
-(DFunDef false "refsE" ((PCon "CMethod" (PVar "name") PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
+(DFunDef false "refsE" ((PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EBinOp "::" (EVar "name") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
 (DFunDef false "refsE" ((PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EVar "routes"))))
 (DTypeSig false "refsRoute" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsRoute" ((PCon "RNone")) (EListLit))
@@ -371,15 +374,15 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "refsField" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsField" ((PCon "CField" PWild PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DTypeSig false "refsImplBody" (TyFun (TyCon "CImplBody") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
-(DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
+(DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
+(DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Route" true))))
-(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
+(DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CExpr" true) (mem "MethodEvidence" true) (mem "CBind" true) (mem "CClause" true) (mem "CArm" true) (mem "CGuard" true) (mem "CStmt" true) (mem "CField" true) (mem "CImplEntry" true) (mem "CImplBody" true))))
 (DUse false (UseGroup ("support" "util") ((mem "filterList" false) (mem "startsWith" false))))
 (DUse false (UseGroup ("hash_map") ((mem "HashMap" false) (mem "new" false) (mem "setInPlace" false) (mem "has" false) (mem "findWithDefault" false))))
 (DTypeSig true "wasmReachFilter" (TyFun (TyCon "CProgram") (TyCon "CProgram")))
-(DFunDef false "wasmReachFilter" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls"))) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachKeys") (EVar "groups")) (EVar "impls"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "has") (EApp (EVar "bindKey") (EVar "b"))) (EVar "reach")))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "has") (EApp (EVar "implKey") (EVar "e"))) (EVar "reach")))) (EVar "impls"))))))
+(DFunDef false "wasmReachFilter" ((PCon "CProgram" (PVar "groups") (PVar "ctorArs") (PVar "ctorTypes") (PVar "impls") (PVar "mctx") (PVar "facts"))) (EBlock (DoLet false false (PVar "reach") (EApp (EApp (EVar "reachKeys") (EVar "groups")) (EVar "impls"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CProgram") (EApp (EApp (EVar "filterList") (ELam ((PVar "b")) (EApp (EApp (EVar "has") (EApp (EVar "bindKey") (EVar "b"))) (EVar "reach")))) (EVar "groups"))) (EVar "ctorArs")) (EVar "ctorTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "has") (EApp (EVar "implKey") (EVar "e"))) (EVar "reach")))) (EVar "impls"))) (EVar "mctx")) (EVar "facts")))))
 (DTypeSig false "forEachU" (TyFun (TyFun (TyVar "a") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "forEachU" (PWild (PList)) (ELit LUnit))
 (DFunDef false "forEachU" ((PVar "f") (PCons (PVar "x") (PVar "xs"))) (ELet false PWild (EApp (EVar "f") (EVar "x")) (EApp (EApp (EVar "forEachU") (EVar "f")) (EVar "xs"))))
@@ -434,7 +437,7 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
 (DFunDef false "refsE" ((PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
 (DFunDef false "refsE" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsStmt")) (EVar "stmts")))
-(DFunDef false "refsE" ((PCon "CMethod" (PVar "name") PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
+(DFunDef false "refsE" ((PCon "CMethod" (PVar "name") (PCon "MethodEvidence" PWild PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes")))) (EBinOp "::" (EVar "name") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
 (DFunDef false "refsE" ((PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EVar "routes"))))
 (DTypeSig false "refsRoute" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsRoute" ((PCon "RNone")) (EListLit))
@@ -460,5 +463,5 @@ refsImplBody (CImplDefault _ _ _ _ _ body) = refsE body
 (DTypeSig false "refsField" (TyFun (TyCon "CField") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsField" ((PCon "CField" PWild PWild (PVar "e"))) (EApp (EVar "refsE") (EVar "e")))
 (DTypeSig false "refsImplBody" (TyFun (TyCon "CImplBody") (TyApp (TyCon "List") (TyCon "String"))))
-(DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
-(DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
+(DFunDef false "refsImplBody" ((PCon "CImplTagged" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
+(DFunDef false "refsImplBody" ((PCon "CImplDefault" PWild PWild PWild PWild PWild PWild (PVar "body"))) (EApp (EVar "refsE") (EVar "body")))
