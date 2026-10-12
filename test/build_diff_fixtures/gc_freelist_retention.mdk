@@ -1,0 +1,62 @@
+-- Free-list retention under collection (runtime/medaka_rt.c mdk_alloc, #503).
+-- Each round keeps one array of every size 0..48, so every small size class
+-- of mdk_alloc's inline free lists plus its GC_malloc fallback, filled with a
+-- boxed value the collector must trace, then churns garbage of the same sizes
+-- through well over a hundred collections.  A kept cell reclaimed while live
+-- would be handed out again and its slots overwritten, so `bad` would leave 0.
+-- The golden follows from the program: 30 rounds of 49 arrays, and junk is
+-- 30 * sum over k in 1..20000 of ((if k % 49 == 0 then 0 else k) % 7 + 3).
+import array.{make, get}
+
+tag : Int -> Int -> Option Int
+tag r n = Some (r * 1000 + n)
+
+keepRound : Int ->
+  Int ->
+  List (Int, Int, Array (Option Int)) ->
+  List (Int, Int, Array (Option Int))
+keepRound r n acc =
+  if n > 48 then acc else keepRound r (n + 1) ((r, n, make n (tag r n)) :: acc)
+
+firstVal : Array (Option Int) -> Int
+firstVal a = match get 0 a
+  Some (Some v) => v
+  _ => 0
+
+churn : Int -> Int -> Int
+churn 0 acc = acc
+churn k acc =
+  let a = make (k % 49) (Some k)
+  let b = [k, k + 1, k + 2]
+  churn (k - 1) (acc + firstVal a % 7 + listLen b 0)
+
+listLen : List a -> Int -> Int
+listLen [] n = n
+listLen (_ :: rest) n = listLen rest (n + 1)
+
+slotOk : Int -> Int -> Array (Option Int) -> Int -> Bool
+slotOk r n a i =
+  if i == n then
+    get i a == None
+  else
+    get i a == Some (tag r n) && slotOk r n a (i + 1)
+
+countBad : List (Int, Int, Array (Option Int)) -> Int -> Int
+countBad [] bad = bad
+countBad ((r, n, a) :: rest) bad =
+  countBad rest (if slotOk r n a 0 then bad else bad + 1)
+
+loop : Int ->
+  Int ->
+  Int ->
+  List (Int, Int, Array (Option Int)) ->
+  (Int, Int, Int)
+loop r bad junk kept =
+  if r > 30 then
+    (listLen kept 0, bad, junk)
+  else
+    let kept2 = keepRound r 0 kept
+    let j = churn 20000 0
+    loop (r + 1) (countBad kept2 bad) (junk + j) kept2
+
+main = loop 1 0 0 []
