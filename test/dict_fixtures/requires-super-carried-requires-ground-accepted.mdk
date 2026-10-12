@@ -1,0 +1,23 @@
+-- R-SUPER-CARRY control: `impl Sub (Box a) requires Sup (Box a)` at ground uses, each
+-- selecting its own `Sup` instance: `supsub` then `suptisub`, on every engine.
+interface Show2 t where
+  show2 : t -> String
+impl Show2 Int where
+  show2 _ = "i"
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+data Two a = Two a
+impl Sup (Box a) where
+  sup _ = "sup"
+impl Sup (Box (Two a)) requires Show2 a where
+  sup (Box (Two x)) = "supt" ++ show2 x
+impl Sub (Box a) requires Sup (Box a) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+main =
+  println (useSup (Box (1 : Int)))
+  println (useSup (Box (Two (1 : Int))))

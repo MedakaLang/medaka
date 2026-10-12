@@ -1,0 +1,12 @@
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Pair a b = Pair a b
+impl Sup (Pair a a) where
+  sup _ = "same"
+impl Sub (Pair Int Bool) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+main = println (useSup (Pair (1 : Int) True))

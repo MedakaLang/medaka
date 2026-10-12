@@ -1,0 +1,12 @@
+-- DICT-SEMANTICS §6.1: a program's impls are compared with the prelude's.
+--
+-- SPEC ANSWER (hand-derived): the prelude has `impl Foldable Array`; the program's
+-- is α-equal to it, so the pair has no unique ⊑-minimum.  REJECTED at the program's
+-- impl on every verb (#3872).
+impl Foldable Array where
+  fold _ z _ = z
+  foldRight _ z _ = z
+  toList _ = []
+  length _ = 99
+
+main = println (length [|1|])
