@@ -1768,6 +1768,8 @@ interpEVars : InterpPart -> List String
 intersectDeclAtoms : List (List Atom) -> List Atom
 invocationHeadKey : Mono -> String
 ioAliasLabels : List String
+ioJoinAtoms : List (String, EffParamTy) -> List Atom
+ioJoinClause : List Atom -> String
 ioLabel : EffLabel
 isAliasDecl : Decl -> Bool
 isAliasMethodImport : List (List String, Loc) -> Decl -> Bool
@@ -2440,7 +2442,7 @@ preludeArgPosDictNames : List Decl -> List Decl -> List String
 preludeConstrainedBodyVars : List Decl -> List (String, List String)
 preludeMarkFactsOf : List Decl -> PreludeMarkFacts
 preludePreambleFor : Option (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
-preludePreambleMemoRef : Ref (Option ((Int, Int), PreludePreamble))
+preludePreambleMemoRef : Ref (Option (((Int, Int), String), PreludePreamble))
 preludePreambleOf : List Decl -> DeclEnvModule -> PreludePreamble
 preludePreambleStore : (Int, Int) -> List Decl -> DeclEnvModule -> PreludePreamble
 preludeReturnPosDictNames : List Decl -> List Decl -> List String
@@ -2934,6 +2936,7 @@ setCoherenceUserDecls : List Decl -> Unit
 setDictEligible : List String -> Unit
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 setGrantOcc : EvId -> GrantOcc -> Unit
+setIoJoin : Option TargetProfile -> Unit
 setLocIfSome : Option Loc -> Unit
 setMainSchemeIfEntry : Bool -> List (String, Scheme) -> Unit
 setMethodPredicateSlotEntry : String -> List MethodPredicateSlot -> Unit

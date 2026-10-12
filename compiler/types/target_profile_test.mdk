@@ -1,4 +1,6 @@
-import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
+import test.{
+  Expectation, expectAll, expectEach, expectEqual, expectFalse, expectTrue, fail
+}
 import frontend.ast.{EffParamTy(..)}
 import toml.{parse}
 import support.manifest.{targetProfile}
@@ -7,6 +9,7 @@ import types.target_profile.{
   backendName,
   buildableNames,
   grantsLabel,
+  ioJoinGrants,
   isGatedLabel,
   knownNames,
   lookupProfile,
@@ -199,3 +202,60 @@ test "a profile gates the host labels, IO and FFI, and no other label" = expectA
     expectFalse (isGatedLabel "Log"),
     expectFalse (isGatedLabel "Cache"),
   ]
+
+-- What `IO` joins under a selection, as its labels and whether each is granted
+-- over its whole domain.
+ioJoinView : Option TargetProfile -> (List String, Bool)
+ioJoinView sel =
+  let grants = ioJoinGrants sel
+  (map fst grants, all isTop grants)
+
+-- `run` takes the join from the profile `check` selected: `runProfile` keeps
+-- every host-label grant of it, since `eval/run` grants all eleven.
+runJoinAgrees : String -> Expectation
+runJoinAgrees name = match lookupProfile name
+  Ok p =>
+    expectEqual (ioJoinView (Some p)) (ioJoinView (Some (runProfile (Some p))))
+  Err m => fail m
+
+test "IO joins the selected profile's host-label grants" = expectEach [
+  ("none", expectEqual (elevenLabels, True) (ioJoinView None)),
+  (
+    "native drops FFI",
+    expectEqual
+      (Ok (elevenLabels, True))
+      (map (p => ioJoinView (Some p)) (lookupProfile "native")),
+  ),
+  (
+    "wasm",
+    expectEqual
+      (Ok (
+        [
+          "Stdout",
+          "Stderr",
+          "Stdin",
+          "Clock",
+          "Env",
+          "Rand",
+          "FileRead",
+          "FileWrite",
+        ],
+        True,
+      ))
+      (map (p => ioJoinView (Some p)) (lookupProfile "wasm")),
+  ),
+  (
+    "wasi-p2",
+    expectEqual
+      (Ok ([], True))
+      (map (p => ioJoinView (Some p)) (lookupProfile "wasmgc/wasi-p2")),
+  ),
+]
+
+test "run's IO join is the selected profile's own" =
+  expectEach
+    ((
+        "none",
+        expectEqual (ioJoinView None) (ioJoinView (Some (runProfile None))),
+      )
+      :: map (n => (n, runJoinAgrees n)) profileNames)
