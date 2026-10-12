@@ -6,105 +6,105 @@ running doctests in stdlib/core.mdk
   ok   stdlib/core.mdk:186: clamp 0 10 5
   ok   stdlib/core.mdk:188: clamp 0 10 99
   ok   stdlib/core.mdk:194: clamp 0 10 (-3)
-  ok   stdlib/core.mdk:411: debug [|1, 2, 3|]
-  ok   stdlib/core.mdk:492: length (empty : Array Int)
-  ok   stdlib/core.mdk:583: display [|1, 2, 3|]
-  ok   stdlib/core.mdk:806: rem (-7) 3
-  ok   stdlib/core.mdk:808: rem 5.5 2.0
-  ok   stdlib/core.mdk:883: (-7) % 3
-  ok   stdlib/core.mdk:885: 5.5 % 2.0
-  ok   stdlib/core.mdk:890: isEven 4
-  ok   stdlib/core.mdk:892: isEven 7
-  ok   stdlib/core.mdk:900: isOdd 3
-  ok   stdlib/core.mdk:906: isOdd 8
-  ok   stdlib/core.mdk:915: checkedAdd 2 3
-  ok   stdlib/core.mdk:917: checkedAdd intMaxBound 1
-  ok   stdlib/core.mdk:919: checkedAdd intMinBound (-1)
-  ok   stdlib/core.mdk:932: checkedSub 2 3
-  ok   stdlib/core.mdk:934: checkedSub intMinBound 1
-  ok   stdlib/core.mdk:936: checkedSub 0 intMinBound
-  ok   stdlib/core.mdk:949: checkedMul 6 7
-  ok   stdlib/core.mdk:951: checkedMul intMaxBound 2
-  ok   stdlib/core.mdk:953: checkedMul intMinBound (-1)
-  ok   stdlib/core.mdk:955: checkedMul (-1) intMaxBound
-  ok   stdlib/core.mdk:978: (minBound : Int) < (maxBound : Int)
-  ok   stdlib/core.mdk:986: charCode (maxBound : Char)
-  ok   stdlib/core.mdk:992: charCode (minBound : Char)
-  ok   stdlib/core.mdk:1022: mapConst 9 (Some 5)
-  ok   stdlib/core.mdk:1062: map2 (a b => a + b) (Some 3) (Some 4)
-  ok   stdlib/core.mdk:1064: map2 (a b => a + b) [1, 2] [10, 20]
-  ok   stdlib/core.mdk:1070: map2 (a b => a + b) (None : Option Int) (Some 4)
-  ok   stdlib/core.mdk:1076: map3 (a b c => a + b + c) (Some 1) (Some 2) (Some 3)
-  ok   stdlib/core.mdk:1082: map3 (a b c => a + b + c) [1] [10, 20] [100]
-  ok   stdlib/core.mdk:1170: foldThen (acc x => Some (acc + x)) 0 [1, 2, 3]
-  ok   stdlib/core.mdk:1181: repeatThen 3 (Some 7)
-  ok   stdlib/core.mdk:1191: filterThen (x => Some (x > 1)) [1, 2, 3]
-  ok   stdlib/core.mdk:1204: forEach (x => Some ()) [1, 2, 3]
-  ok   stdlib/core.mdk:1213: each (x => ()) [1, 2, 3]
-  ok   stdlib/core.mdk:1224: runEach [Some 1, Some 2]
-  ok   stdlib/core.mdk:1260: orElse None (Some 2)
-  ok   stdlib/core.mdk:1262: orElse [1, 2] [3]
-  ok   stdlib/core.mdk:1277: isSome (orElse (Some 1) (Some 2))
-  ok   stdlib/core.mdk:1279: isSome (orElse None (None : Option Int))
-  ok   stdlib/core.mdk:1281: isEmpty (orElse ([] : List Int) [1])
-  ok   stdlib/core.mdk:1289: (guard True : Option Unit)
-  ok   stdlib/core.mdk:1291: (guard False : Option Unit)
-  ok   stdlib/core.mdk:1305: bimap (n => n + 1) (n => n * 2) (Ok 5 : Result Int Int)
-  ok   stdlib/core.mdk:1307: bimap (n => n + 1) (n => n * 2) (Err 5 : Result Int Int)
-  ok   stdlib/core.mdk:1322: bimap (x => x + 1) (y => y * 2) (3, 4)
-  ok   stdlib/core.mdk:1324: mapFirst (x => x + 1) (3, 4)
-  ok   stdlib/core.mdk:1329: mapSecond (y => y * 2) (3, 4)
-  ok   stdlib/core.mdk:1342: fold (acc x => acc + x) 0 [1, 2, 3]
-  ok   stdlib/core.mdk:1344: length (Some 5)
-  ok   stdlib/core.mdk:1359: isEmpty (None : Option Int)
-  ok   stdlib/core.mdk:1471: slice [|10, 20, 30, 40, 50|] 1 3
-  ok   stdlib/core.mdk:1489: slice "hello" 1 4
-  ok   stdlib/core.mdk:1503: slice [10, 20, 30, 40] 1 3
-  ok   stdlib/core.mdk:1576: traverse (x => if x > 0 then Some x else None) [1, 2, 3]
-  ok   stdlib/core.mdk:1578: sequence [Ok 1, Err 99, Ok 3]
-  ok   stdlib/core.mdk:1591: traverse (x => if x > 0 then Some x else None) [1, -2, 3]
-  ok   stdlib/core.mdk:1593: traverse (x => if x > 0 then Some (x + 1) else None) (Some 5)
-  ok   stdlib/core.mdk:1595: traverse (x => if x > 0 then Ok x else Err x) [1, 2, 3]
-  ok   stdlib/core.mdk:1597: traverse (x => if x > 0 then Ok x else Err x) [1, -2, 3]
-  ok   stdlib/core.mdk:1599: sequence [Some 1, Some 2, Some 3]
-  ok   stdlib/core.mdk:1601: sequence [Some 1, None, Some 3]
-  ok   stdlib/core.mdk:1603: sequence [Ok 1, Ok 2, Ok 3]
-  ok   stdlib/core.mdk:1638: any (x => x > 2) [1, 2, 3]
-  ok   stdlib/core.mdk:1644: any (x => x > 10) [1, 2, 3]
-  ok   stdlib/core.mdk:1651: all (x => x > 0) [1, 2, 3]
-  ok   stdlib/core.mdk:1653: all (x => x > 0) []
-  ok   stdlib/core.mdk:1663: find (x => x > 1) [1, 2, 3]
-  ok   stdlib/core.mdk:1676: count isEven [1, 2, 3, 4]
-  ok   stdlib/core.mdk:1688: sum [1, 2, 3]
-  ok   stdlib/core.mdk:1696: product [2, 3, 4]
-  ok   stdlib/core.mdk:1704: elem 2 [1, 2, 3]
-  ok   stdlib/core.mdk:1717: maximum [3, 1, 2]
-  ok   stdlib/core.mdk:1726: maximum ([] : List Int)
-  ok   stdlib/core.mdk:1731: minimum [3, 1, 2]
-  ok   stdlib/core.mdk:1744: filter (x => x > 2) [1, 2, 3, 4]
-  ok   stdlib/core.mdk:1804: optionOr 0 (Some 42)
-  ok   stdlib/core.mdk:1806: optionOr 0 None
-  ok   stdlib/core.mdk:1819: optionOrPanic "the table is installed before any read" (Some 42)
-  ok   stdlib/core.mdk:1829: option 0 (x => x + 1) (Some 41)
-  ok   stdlib/core.mdk:1831: option 0 (x => x + 1) None
-  ok   stdlib/core.mdk:1840: toResult "missing" (Some 1)
-  ok   stdlib/core.mdk:1842: toResult "missing" None
-  ok   stdlib/core.mdk:1851: fromResult (Ok 1)
-  ok   stdlib/core.mdk:1853: fromResult (Err "boom")
-  ok   stdlib/core.mdk:1876: resultOr 0 (Ok 42)
-  ok   stdlib/core.mdk:1878: resultOr 0 (Err "boom")
-  ok   stdlib/core.mdk:1892: resultOrPanic "this name and value are literals" (Ok 42)
-  ok   stdlib/core.mdk:1902: result (e => 0) (x => x + 1) (Ok 41)
-  ok   stdlib/core.mdk:1904: result (e => e) (x => x + 1) (Err 7)
-  ok   stdlib/core.mdk:1915: mapErr (e => "failed: " ++ e) (Err "boom")
-  ok   stdlib/core.mdk:1931: fst (1, 2)
-  ok   stdlib/core.mdk:1939: snd ("a", True)
-  ok   stdlib/core.mdk:1947: map (const 0) [1, 2, 3]
-  ok   stdlib/core.mdk:1955: flip (a b => a - b) 1 10
-  ok   stdlib/core.mdk:1965: on compare fst (1, 9) (2, 8)
-  ok   stdlib/core.mdk:1974: curry fst 1 2
-  ok   stdlib/core.mdk:1983: uncurry (a b => a + b) (3, 4)
-  ok   stdlib/core.mdk:1993: discard (Some 5)
+  ok   stdlib/core.mdk:413: debug [|1, 2, 3|]
+  ok   stdlib/core.mdk:494: length (empty : Array Int)
+  ok   stdlib/core.mdk:585: display [|1, 2, 3|]
+  ok   stdlib/core.mdk:808: rem (-7) 3
+  ok   stdlib/core.mdk:810: rem 5.5 2.0
+  ok   stdlib/core.mdk:885: (-7) % 3
+  ok   stdlib/core.mdk:887: 5.5 % 2.0
+  ok   stdlib/core.mdk:892: isEven 4
+  ok   stdlib/core.mdk:894: isEven 7
+  ok   stdlib/core.mdk:902: isOdd 3
+  ok   stdlib/core.mdk:908: isOdd 8
+  ok   stdlib/core.mdk:917: checkedAdd 2 3
+  ok   stdlib/core.mdk:919: checkedAdd intMaxBound 1
+  ok   stdlib/core.mdk:921: checkedAdd intMinBound (-1)
+  ok   stdlib/core.mdk:934: checkedSub 2 3
+  ok   stdlib/core.mdk:936: checkedSub intMinBound 1
+  ok   stdlib/core.mdk:938: checkedSub 0 intMinBound
+  ok   stdlib/core.mdk:951: checkedMul 6 7
+  ok   stdlib/core.mdk:953: checkedMul intMaxBound 2
+  ok   stdlib/core.mdk:955: checkedMul intMinBound (-1)
+  ok   stdlib/core.mdk:957: checkedMul (-1) intMaxBound
+  ok   stdlib/core.mdk:980: (minBound : Int) < (maxBound : Int)
+  ok   stdlib/core.mdk:988: charCode (maxBound : Char)
+  ok   stdlib/core.mdk:994: charCode (minBound : Char)
+  ok   stdlib/core.mdk:1024: mapConst 9 (Some 5)
+  ok   stdlib/core.mdk:1064: map2 (a b => a + b) (Some 3) (Some 4)
+  ok   stdlib/core.mdk:1066: map2 (a b => a + b) [1, 2] [10, 20]
+  ok   stdlib/core.mdk:1072: map2 (a b => a + b) (None : Option Int) (Some 4)
+  ok   stdlib/core.mdk:1078: map3 (a b c => a + b + c) (Some 1) (Some 2) (Some 3)
+  ok   stdlib/core.mdk:1084: map3 (a b c => a + b + c) [1] [10, 20] [100]
+  ok   stdlib/core.mdk:1172: foldThen (acc x => Some (acc + x)) 0 [1, 2, 3]
+  ok   stdlib/core.mdk:1183: repeatThen 3 (Some 7)
+  ok   stdlib/core.mdk:1193: filterThen (x => Some (x > 1)) [1, 2, 3]
+  ok   stdlib/core.mdk:1206: forEach (x => Some ()) [1, 2, 3]
+  ok   stdlib/core.mdk:1215: each (x => ()) [1, 2, 3]
+  ok   stdlib/core.mdk:1226: runEach [Some 1, Some 2]
+  ok   stdlib/core.mdk:1262: orElse None (Some 2)
+  ok   stdlib/core.mdk:1264: orElse [1, 2] [3]
+  ok   stdlib/core.mdk:1279: isSome (orElse (Some 1) (Some 2))
+  ok   stdlib/core.mdk:1281: isSome (orElse None (None : Option Int))
+  ok   stdlib/core.mdk:1283: isEmpty (orElse ([] : List Int) [1])
+  ok   stdlib/core.mdk:1291: (guard True : Option Unit)
+  ok   stdlib/core.mdk:1293: (guard False : Option Unit)
+  ok   stdlib/core.mdk:1307: bimap (n => n + 1) (n => n * 2) (Ok 5 : Result Int Int)
+  ok   stdlib/core.mdk:1309: bimap (n => n + 1) (n => n * 2) (Err 5 : Result Int Int)
+  ok   stdlib/core.mdk:1324: bimap (x => x + 1) (y => y * 2) (3, 4)
+  ok   stdlib/core.mdk:1326: mapFirst (x => x + 1) (3, 4)
+  ok   stdlib/core.mdk:1331: mapSecond (y => y * 2) (3, 4)
+  ok   stdlib/core.mdk:1344: fold (acc x => acc + x) 0 [1, 2, 3]
+  ok   stdlib/core.mdk:1346: length (Some 5)
+  ok   stdlib/core.mdk:1361: isEmpty (None : Option Int)
+  ok   stdlib/core.mdk:1473: slice [|10, 20, 30, 40, 50|] 1 3
+  ok   stdlib/core.mdk:1491: slice "hello" 1 4
+  ok   stdlib/core.mdk:1505: slice [10, 20, 30, 40] 1 3
+  ok   stdlib/core.mdk:1580: traverse (x => if x > 0 then Some x else None) [1, 2, 3]
+  ok   stdlib/core.mdk:1582: sequence [Ok 1, Err 99, Ok 3]
+  ok   stdlib/core.mdk:1595: traverse (x => if x > 0 then Some x else None) [1, -2, 3]
+  ok   stdlib/core.mdk:1597: traverse (x => if x > 0 then Some (x + 1) else None) (Some 5)
+  ok   stdlib/core.mdk:1599: traverse (x => if x > 0 then Ok x else Err x) [1, 2, 3]
+  ok   stdlib/core.mdk:1601: traverse (x => if x > 0 then Ok x else Err x) [1, -2, 3]
+  ok   stdlib/core.mdk:1603: sequence [Some 1, Some 2, Some 3]
+  ok   stdlib/core.mdk:1605: sequence [Some 1, None, Some 3]
+  ok   stdlib/core.mdk:1607: sequence [Ok 1, Ok 2, Ok 3]
+  ok   stdlib/core.mdk:1642: any (x => x > 2) [1, 2, 3]
+  ok   stdlib/core.mdk:1648: any (x => x > 10) [1, 2, 3]
+  ok   stdlib/core.mdk:1655: all (x => x > 0) [1, 2, 3]
+  ok   stdlib/core.mdk:1657: all (x => x > 0) []
+  ok   stdlib/core.mdk:1667: find (x => x > 1) [1, 2, 3]
+  ok   stdlib/core.mdk:1680: count isEven [1, 2, 3, 4]
+  ok   stdlib/core.mdk:1692: sum [1, 2, 3]
+  ok   stdlib/core.mdk:1700: product [2, 3, 4]
+  ok   stdlib/core.mdk:1708: elem 2 [1, 2, 3]
+  ok   stdlib/core.mdk:1721: maximum [3, 1, 2]
+  ok   stdlib/core.mdk:1730: maximum ([] : List Int)
+  ok   stdlib/core.mdk:1735: minimum [3, 1, 2]
+  ok   stdlib/core.mdk:1748: filter (x => x > 2) [1, 2, 3, 4]
+  ok   stdlib/core.mdk:1808: optionOr 0 (Some 42)
+  ok   stdlib/core.mdk:1810: optionOr 0 None
+  ok   stdlib/core.mdk:1823: optionOrPanic "the table is installed before any read" (Some 42)
+  ok   stdlib/core.mdk:1833: option 0 (x => x + 1) (Some 41)
+  ok   stdlib/core.mdk:1835: option 0 (x => x + 1) None
+  ok   stdlib/core.mdk:1844: toResult "missing" (Some 1)
+  ok   stdlib/core.mdk:1846: toResult "missing" None
+  ok   stdlib/core.mdk:1855: fromResult (Ok 1)
+  ok   stdlib/core.mdk:1857: fromResult (Err "boom")
+  ok   stdlib/core.mdk:1880: resultOr 0 (Ok 42)
+  ok   stdlib/core.mdk:1882: resultOr 0 (Err "boom")
+  ok   stdlib/core.mdk:1896: resultOrPanic "this name and value are literals" (Ok 42)
+  ok   stdlib/core.mdk:1906: result (e => 0) (x => x + 1) (Ok 41)
+  ok   stdlib/core.mdk:1908: result (e => e) (x => x + 1) (Err 7)
+  ok   stdlib/core.mdk:1919: mapErr (e => "failed: " ++ e) (Err "boom")
+  ok   stdlib/core.mdk:1935: fst (1, 2)
+  ok   stdlib/core.mdk:1943: snd ("a", True)
+  ok   stdlib/core.mdk:1951: map (const 0) [1, 2, 3]
+  ok   stdlib/core.mdk:1959: flip (a b => a - b) 1 10
+  ok   stdlib/core.mdk:1969: on compare fst (1, 9) (2, 8)
+  ok   stdlib/core.mdk:1978: curry fst 1 2
+  ok   stdlib/core.mdk:1987: uncurry (a b => a + b) (3, 4)
+  ok   stdlib/core.mdk:1997: discard (Some 5)
 
 stdlib/core.mdk: 106/106 passed
 Testing "neq is the negation of eq" [eval] ... OK (100 tests passed)
