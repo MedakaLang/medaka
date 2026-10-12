@@ -35,15 +35,14 @@
    neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  chompNewlines, stripUnitAutoPrint, summarizeSweep, sweepUnits
+  chompNewlines, inFreshDirOf, stripUnitAutoPrint, summarizeSweep, sweepSpawns
 }
-import fs.{expectUnitCount, fixtureFiles, isFile, mkdirAll}
-import io.{runVerb}
+import fs.{expectUnitCount, fixtureFiles, isFile}
 import list.{somes, sort}
 import path.{dirname, stem, stripPrefix}
 import string.{contains, endsWith, lines, unlines}
 import test.{Expectation, expectEqualLines, expectationMessage, fail, pass}
-import test_process.{boundedVerb, medakaRoot, scratchDir}
+import test_process.{boundedVerb, medakaRoot}
 
 {- | One retired probe gate, as data.
 
@@ -209,16 +208,43 @@ data Outcome = Outcome { gate : String, graded : Int, failures : List String }
 argsFor : Row -> String -> <IO> List String
 argsFor r path = map (p => "\{medakaRoot}/\{p}") r.prelude ++ [path]
 
-oneFixture : Row -> String -> <Exec, FileRead, IO> Option String
-oneFixture r path =
-  match boundedVerb "\{medakaRoot}/\{r.probe}" (argsFor r path)
-    Err e => Some "\{labelOf path}: could not spawn \{r.probe}: \{e}"
-    Ok (code, out, err) => match processFailure r.probe (labelOf path) code err
-      Some m => Some m
-      None => valueFailure r path (comparable r out)
+-- One fixture's spawn, graded against its golden. `spawned` is what the batch
+-- returned for it; an unstartable spawn is a failure of its own row.
+fixtureFailure : Row ->
+  String ->
+  Result String (Int, String, String) ->
+  <Exec, FileRead, IO> Option String
+fixtureFailure r path (Err e) =
+  Some "\{labelOf path}: could not spawn \{r.probe}: \{e}"
+fixtureFailure r path (Ok (code, out, err)) =
+  match processFailure r.probe (labelOf path) code err
+    Some m => Some m
+    None => valueFailure r path (comparable r out)
 
-gradeRow : String -> Row -> <Exec, FileRead, IO> Outcome
-gradeRow _ r = match entriesOf r
+-- The fixtures' failures, in corpus order, consuming `results` one spawn per
+-- fixture as `rowSpawns` named them.
+fixtureFailures : Row ->
+  List String ->
+  List (Result String (Int, String, String)) ->
+  <Exec, FileRead, IO> List String
+fixtureFailures _ [] _ = []
+fixtureFailures r (path :: paths) (res :: rest) =
+  somes [fixtureFailure r path res] ++ fixtureFailures r paths rest
+fixtureFailures r (path :: paths) [] =
+  somes [fixtureFailure r path (Err "the batch returned no result")]
+    ++ fixtureFailures r paths []
+
+-- The spawns a row owes: its probe over each fixture, in corpus order. A
+-- corpus that does not read owes none, and `gradeRow` reports why.
+rowSpawns : String -> Row -> <FileRead, IO> List (String, List String)
+rowSpawns _ r = match entriesOf r
+  Err _ => []
+  Ok paths => map (path => ("\{medakaRoot}/\{r.probe}", argsFor r path)) paths
+
+gradeRow : Row ->
+  List (Result String (Int, String, String)) ->
+  <Exec, FileRead, IO> Outcome
+gradeRow r results = match entriesOf r
   Err e => Outcome { gate = r.gate, graded = 0, failures = [e] }
   Ok paths =>
     let found = length paths
@@ -232,7 +258,7 @@ gradeRow _ r = match entriesOf r
     Outcome {
       gate = r.gate,
       graded = found,
-      failures = counted ++ somes (map (oneFixture r) paths),
+      failures = counted ++ fixtureFailures r paths results,
     }
 
 rowFailure : Outcome -> Option String
@@ -246,29 +272,17 @@ rowFailure o = match o.failures
 {- | Grades every row: spawns its probe once per fixture, grades the spawn,
    and compares what it printed against that fixture's golden.
 
+   `testJobs` rows go at a time, all of a group's fixture spawns running side
+   by side, and each group is graded in row order before the next one spawns,
+   so under `MEDAKA_TEST_JOBS=1` the spawns come in exactly the order a loop
+   over the rows makes them.
+
    This is the whole of a migrated gate's body. A gate module adds rows to
    its own table and calls this; nothing else about a row is code. -}
 export
 gradeProbeRows : List Row -> <Exec, FileRead, IO> Expectation
-gradeProbeRows rows = sweepUnits rows gradeRow rowFailure summarizeSweep
-
--- # Scratch space
-
-{- | A directory of this test's own, named `name`, under the process's
-   scratch root.
-
-   `test_process.scratchDir` is a top-level nullary, so it is evaluated ONCE
-   per process and every test in a module is handed the same path —
-   including after `sweepUnits` has removed it, which is what it does when
-   it finishes. A test that writes therefore has to make its directory
-   rather than assume one; `mkdirAll` remakes the root on the way and is not
-   an error when it is still there. -}
-ownScratch : String -> <Exec, FileWrite> Result String String
-ownScratch name = match scratchDir
-  Err e => Err e
-  Ok root =>
-    let dir = "\{root}/\{name}"
-    map (() => dir) (mkdirAll dir)
+gradeProbeRows rows =
+  sweepSpawns rows rowSpawns gradeRow rowFailure summarizeSweep
 
 -- # The scaffolded tree
 
@@ -317,18 +331,26 @@ scaffoldFailures : String ->
   String ->
   Int ->
   <Exec, FileRead, FileWrite, IO> List String
-scaffoldFailures probe name golden files = match ownScratch "new"
-  Err e => ["\{name}: could not make a scratch directory: \{e}"]
-  Ok scratch =>
-    let bin = "\{medakaRoot}/\{probe}"
-    let found = match spawnIn scratch bin name
-      Err e => ["\{name}: could not spawn \{probe}: \{e}"]
-      Ok (code, _, err) => match processFailure probe name code err
-        Some m => [m]
-        None =>
-          treeFailures files "\{scratch}/\{name}" "\{medakaRoot}/\{golden}"
-    let _ = runVerb "rm" ["-rf", scratch]
-    found
+scaffoldFailures probe name golden files =
+  inFreshDirOf
+    (scratch => scaffoldIn scratch probe name golden files)
+    (m => ["\{name}: \{m}"])
+
+-- What `probe` scaffolds under `name` when started in `scratch`, graded
+-- against `golden`.
+scaffoldIn : String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  <Exec, FileRead, FileWrite, IO> List String
+scaffoldIn scratch probe name golden files =
+  let bin = "\{medakaRoot}/\{probe}"
+  match spawnIn scratch bin name
+    Err e => ["\{name}: could not spawn \{probe}: \{e}"]
+    Ok (code, _, err) => match processFailure probe name code err
+      Some m => [m]
+      None => treeFailures files "\{scratch}/\{name}" "\{medakaRoot}/\{golden}"
 
 treeFailures : Int -> String -> String -> <FileRead, IO> List String
 treeFailures files got want = match treeFiles want
@@ -427,36 +449,39 @@ undispSrc = "data Foo = Foo\n\nmain = Foo\n"
    from the literal below, which leaves a shorter list that still reports
    nothing. -}
 export
-errorPathFailures : String ->
+errorPathFailures : String -> Int -> <Exec, FileRead, FileWrite, IO> List String
+errorPathFailures probe checks =
+  inFreshDirOf (scratch => errorPathsIn scratch probe checks) (m => [m])
+
+-- The error paths and their control, with the synthesized sources written
+-- into `scratch`.
+errorPathsIn : String ->
+  String ->
   Int ->
   <Exec, FileRead, FileWrite, IO> List String
-errorPathFailures probe checks = match ownScratch "entry"
-  Err e => ["could not make a scratch directory: \{e}"]
-  Ok scratch =>
-    let bin = "\{medakaRoot}/\{probe}"
-    let good = "\{scratch}/good.mdk"
-    let undisp = "\{scratch}/undisp.mdk"
-    let nope = "\{scratch}/NOPE.mdk"
-    let runtime = "\{medakaRoot}/stdlib/runtime.mdk"
-    let core = "\{medakaRoot}/stdlib/core.mdk"
-    let found = match writeFile good goodSrc
-      Err e => ["could not write \{good}: \{e}"]
-      Ok () => match writeFile undisp undispSrc
-        Err e => ["could not write \{undisp}: \{e}"]
-        Ok () =>
-          let graded = [
-            expectFails "usage/arity (too few args)" bin [good],
-            expectFails "nonexistent runtime.mdk" bin [nope, core, good],
-            expectFails "nonexistent core.mdk" bin [runtime, nope, good],
-            expectFails "nonexistent entry.mdk" bin [runtime, core, nope],
-            expectFails "underived Display main (typecheck diagnostic)" bin [
-              runtime, core, undisp
-            ],
-            expectEmits bin [runtime, core, good] "define i32 @mdk_program_main",
-          ]
-          countFloor "error paths" checks graded ++ somes graded
-    let _ = runVerb "rm" ["-rf", scratch]
-    found
+errorPathsIn scratch probe checks =
+  let bin = "\{medakaRoot}/\{probe}"
+  let good = "\{scratch}/good.mdk"
+  let undisp = "\{scratch}/undisp.mdk"
+  let nope = "\{scratch}/NOPE.mdk"
+  let runtime = "\{medakaRoot}/stdlib/runtime.mdk"
+  let core = "\{medakaRoot}/stdlib/core.mdk"
+  match writeFile good goodSrc
+    Err e => ["could not write \{good}: \{e}"]
+    Ok () => match writeFile undisp undispSrc
+      Err e => ["could not write \{undisp}: \{e}"]
+      Ok () =>
+        let graded = [
+          expectFails "usage/arity (too few args)" bin [good],
+          expectFails "nonexistent runtime.mdk" bin [nope, core, good],
+          expectFails "nonexistent core.mdk" bin [runtime, nope, good],
+          expectFails "nonexistent entry.mdk" bin [runtime, core, nope],
+          expectFails "underived Display main (typecheck diagnostic)" bin [
+            runtime, core, undisp
+          ],
+          expectEmits bin [runtime, core, good] "define i32 @mdk_program_main",
+        ]
+        countFloor "error paths" checks graded ++ somes graded
 
 {- | A finding when a sweep covered a different number of units than the
    count written beside it, and nothing when it covered exactly that many.

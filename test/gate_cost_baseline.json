@@ -44,7 +44,6 @@
     {"name": "core_ir_run_main", "medianMs": 32756, "samples": 2, "ms": [37661, 32756], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},
     {"name": "core_ir_typed_main", "medianMs": 41036, "samples": 2, "ms": [49074, 41036], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},
     {"name": "core_ir_typed_modules_main", "medianMs": 43624, "samples": 2, "ms": [45875, 43624], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},
-    {"name": "diagnostics_main", "medianMs": 43403, "samples": 2, "ms": [43403, 43404], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},
     {"name": "diagnostics_project_main", "medianMs": 48754, "samples": 2, "ms": [48754, 49549], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},
     {"name": "eval_autoprint_main", "medianMs": 33529, "samples": 5, "ms": [23188, 48913, 31627, 34886, 33529], "sampleRuns": ["37970116792", "37970116792", "37970116792", "38112454485", "38112454485"], "jobs": [4, 4, 4, 4, 4]},
     {"name": "eval_dict_batch", "medianMs": 39199, "samples": 2, "ms": [49061, 39199], "sampleRuns": ["37970116792", "38112454485"], "jobs": [4, 4]},
