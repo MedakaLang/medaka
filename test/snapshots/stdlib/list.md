@@ -1,5 +1,5 @@
 # META
-source_lines=1212
+source_lines=1261
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `List a`.
@@ -410,12 +410,12 @@ findIndex p xs = go 0 xs
    [1, 3] -}
 export
 findIndices : (a -> <e> Bool) -> List a -> <e> List Int
-findIndices p xs = go 0 xs
+findIndices p xs = go 0 xs []
   where
-    go _ [] = []
-    go i (x :: rest)
-      | p x = i :: go (i + 1) rest
-      | otherwise = go (i + 1) rest
+    go _ [] acc = reverse acc
+    go i (x :: rest) acc
+      | p x = go (i + 1) rest (i :: acc)
+      | otherwise = go (i + 1) rest acc
 
 {- | The index of the first element equal to `x`, or `None`.
 
@@ -650,10 +650,12 @@ dropWhile p (xs@(x :: rest))
    ([1, 2], [3, 1]) -}
 export
 span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
-span _ [] = ([], [])
-span p (xs@(x :: rest))
-  | p x = let (a, b) = span p rest in (x :: a, b)
-  | otherwise = ([], xs)
+span p xs = go xs []
+  where
+    go [] acc = (reverse acc, [])
+    go (ys@(y :: rest)) acc
+      | p y = go rest (y :: acc)
+      | otherwise = (reverse acc, ys)
 
 -- > span (x => x < 9) [1, 2, 3]
 -- ([1, 2, 3], [])
@@ -1214,6 +1216,53 @@ prop "break equals span of the negated predicate" (xs : List Int) =
 
 prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
   length (range lo hi) == max 0 (hi - lo)
+
+-- Plain non-tail references for span and findIndices.
+spanRef : (a -> Bool) -> List a -> (List a, List a)
+spanRef _ [] = ([], [])
+spanRef p (x :: rest)
+  | p x = let (a, b) = spanRef p rest in (x :: a, b)
+  | otherwise = ([], x :: rest)
+
+findIndicesRef : (a -> Bool) -> List a -> List Int
+findIndicesRef p xs = findIndicesRefGo p 0 xs
+
+findIndicesRefGo : (a -> Bool) -> Int -> List a -> List Int
+findIndicesRefGo _ _ [] = []
+findIndicesRefGo p i (x :: rest)
+  | p x = i :: findIndicesRefGo p (i + 1) rest
+  | otherwise = findIndicesRefGo p (i + 1) rest
+
+prop "span agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
+  let none = [] : List Int
+  eq (span (x => True) xs) (spanRef (x => True) xs)
+    && eq (span (x => False) xs) (spanRef (x => False) xs)
+    && eq (span (x => x < k) xs) (spanRef (x => x < k) xs)
+    && eq (span (x => x < k) none) (spanRef (x => x < k) none)
+    && eq (span (x => x < k) [k]) (spanRef (x => x < k) [k])
+    && eq (span (x => x < 3) [1, 2, 3, 1]) (spanRef (x => x < 3) [1, 2, 3, 1])
+
+prop "break agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
+  let none = [] : List Int
+  eq (break (x => True) xs) (spanRef (x => False) xs)
+    && eq (break (x => False) xs) (spanRef (x => True) xs)
+    && eq (break (x => x > k) xs) (spanRef (x => not (x > k)) xs)
+    && eq (break (x => x > k) none) (spanRef (x => not (x > k)) none)
+    && eq (break (x => x > k) [k]) (spanRef (x => not (x > k)) [k])
+
+prop "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
+  let none = [] : List Int
+  eq (findIndices (x => True) xs) (findIndicesRef (x => True) xs)
+    && eq (findIndices (x => False) xs) (findIndicesRef (x => False) xs)
+    && eq (findIndices (x => x < k) xs) (findIndicesRef (x => x < k) xs)
+    && eq (findIndices (x => x < k) none) (findIndicesRef (x => x < k) none)
+    && eq (findIndices (x => x < k) [k]) (findIndicesRef (x => x < k) [k])
+    && eq (findIndices (x => x < 3) [1, 2, 3, 1]) [0, 1, 3]
+
+prop "elemIndices agrees with findIndices on [] and singletons" (k : Int) (xs : List Int) =
+  eq (elemIndices k []) (findIndicesRef (x => x == k) [])
+    && eq (elemIndices k [k]) [0]
+    && eq (elemIndices k xs) (findIndicesRef (x => x == k) xs)
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false) (mem "Result" false))))
 (DUse true (UseGroup ("core") ((mem "Filterable" false) (mem "filter" false) (mem "filterMap" false))))
@@ -1291,7 +1340,7 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DTypeSig true "findIndex" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "findIndex" ((PVar "p") (PVar "xs")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "xs"))))
 (DTypeSig true "findIndices" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "findIndices" ((PVar "p") (PVar "xs")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "i") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "x")) (EBinOp "::" (EVar "i") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "xs"))))
+(DFunDef false "findIndices" ((PVar "p") (PVar "xs")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "acc")) (EApp (EVar "reverse") (EVar "acc"))) (clause ((PVar "i") (PCons (PVar "x") (PVar "rest")) (PVar "acc")) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (EVar "i") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "xs")) (EListLit))))
 (DTypeSig true "elemIndex" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "elemIndex" ((PVar "x") (PVar "xs")) (EApp (EApp (EVar "findIndex") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "x")))) (EVar "xs")))
 (DTypeSig true "elemIndices" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -1334,8 +1383,7 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "dropWhile" (PWild (PList)) (EListLit))
 (DFunDef false "dropWhile" ((PVar "p") (PAs "xs" (PCons (PVar "x") (PVar "rest")))) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EApp (EVar "dropWhile") (EVar "p")) (EVar "rest")) (EIf (EVar "otherwise") (EVar "xs") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "span" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
-(DFunDef false "span" (PWild (PList)) (ETuple (EListLit) (EListLit)))
-(DFunDef false "span" ((PVar "p") (PAs "xs" (PCons (PVar "x") (PVar "rest")))) (EIf (EApp (EVar "p") (EVar "x")) (ELet false (PTuple (PVar "a") (PVar "b")) (EApp (EApp (EVar "span") (EVar "p")) (EVar "rest")) (ETuple (EBinOp "::" (EVar "x") (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (ETuple (EListLit) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "span" ((PVar "p") (PVar "xs")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (ETuple (EApp (EVar "reverse") (EVar "acc")) (EListLit))) (clause ((PAs "ys" (PCons (PVar "y") (PVar "rest"))) (PVar "acc")) (EIf (EApp (EVar "p") (EVar "y")) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "::" (EVar "y") (EVar "acc"))) (EIf (EVar "otherwise") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "xs")) (EListLit))))
 (DTypeSig true "break" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "break" ((PVar "p") (PVar "xs")) (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EApp (EVar "not") (EApp (EVar "p") (EVar "x"))))) (EVar "xs")))
 (DTypeSig true "splitAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
@@ -1458,6 +1506,18 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DProp false "takeWhile ++ dropWhile recovers the list" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EBinOp "++" (EApp (EApp (EVar "takeWhile") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 5))))) (EVar "xs")) (EApp (EApp (EVar "dropWhile") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 5))))) (EVar "xs")))) (EVar "xs")))
 (DProp false "break equals span of the negated predicate" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "a1") (PVar "b1")) (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 5))))) (EVar "xs"))) (DoLet false false (PTuple (PVar "a2") (PVar "b2")) (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EApp (EVar "not") (EBinOp ">" (EVar "x") (ELit (LInt 5)))))) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "eq") (EVar "b1")) (EVar "b2"))))))
 (DProp false "range length is max 0 (hi - lo)" ((pp "lo" (TyCon "Int")) (pp "hi" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "length") (EApp (EApp (EVar "range") (EVar "lo")) (EVar "hi"))) (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))))
+(DTypeSig false "spanRef" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "spanRef" (PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "spanRef" ((PVar "p") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "x")) (ELet false (PTuple (PVar "a") (PVar "b")) (EApp (EApp (EVar "spanRef") (EVar "p")) (EVar "rest")) (ETuple (EBinOp "::" (EVar "x") (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (ETuple (EListLit) (EBinOp "::" (EVar "x") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "findIndicesRef" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "findIndicesRef" ((PVar "p") (PVar "xs")) (EApp (EApp (EApp (EVar "findIndicesRefGo") (EVar "p")) (ELit (LInt 0))) (EVar "xs")))
+(DTypeSig false "findIndicesRefGo" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "findIndicesRefGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "findIndicesRefGo" ((PVar "p") (PVar "i") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "x")) (EBinOp "::" (EVar "i") (EApp (EApp (EApp (EVar "findIndicesRefGo") (EVar "p")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findIndicesRefGo") (EVar "p")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DProp false "span agrees with a plain reference on all, none, mixed, [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "none") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "xs")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "none"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "none")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EListLit (EVar "k")))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EListLit (EVar "k"))))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 3))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 1))))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 3))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 1)))))))))
+(DProp false "break agrees with a plain reference on all, none, mixed, [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "none") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (EVar "k")))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EApp (EVar "not") (EBinOp ">" (EVar "x") (EVar "k"))))) (EVar "xs")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (EVar "k")))) (EVar "none"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EApp (EVar "not") (EBinOp ">" (EVar "x") (EVar "k"))))) (EVar "none")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (EVar "k")))) (EListLit (EVar "k")))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EApp (EVar "not") (EBinOp ">" (EVar "x") (EVar "k"))))) (EListLit (EVar "k"))))))))
+(DProp false "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "none") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "xs")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "none"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "none")))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EListLit (EVar "k")))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EListLit (EVar "k"))))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 3))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 1))))) (EListLit (ELit (LInt 0)) (ELit (LInt 1)) (ELit (LInt 3))))))))
+(DProp false "elemIndices agrees with findIndices on [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EVar "elemIndices") (EVar "k")) (EListLit))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "==" (EVar "x") (EVar "k")))) (EListLit))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "elemIndices") (EVar "k")) (EListLit (EVar "k")))) (EListLit (ELit (LInt 0))))) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "elemIndices") (EVar "k")) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "==" (EVar "x") (EVar "k")))) (EVar "xs")))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false) (mem "Result" false))))
 (DUse true (UseGroup ("core") ((mem "Filterable" false) (mem "filter" false) (mem "filterMap" false))))
@@ -1535,7 +1595,7 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DTypeSig true "findIndex" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "findIndex" ((PVar "p") (PVar "xs")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "xs"))))
 (DTypeSig true "findIndices" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "findIndices" ((PVar "p") (PVar "xs")) (ELetGroup ((lgb "go" (clause (PWild (PList)) (EListLit)) (clause ((PVar "i") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "x")) (EBinOp "::" (EVar "i") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "xs"))))
+(DFunDef false "findIndices" ((PVar "p") (PVar "xs")) (ELetGroup ((lgb "go" (clause (PWild (PList) (PVar "acc")) (EApp (EVar "reverse") (EVar "acc"))) (clause ((PVar "i") (PCons (PVar "x") (PVar "rest")) (PVar "acc")) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EBinOp "::" (EVar "i") (EVar "acc"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "go") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EVar "acc")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EApp (EVar "go") (ELit (LInt 0))) (EVar "xs")) (EListLit))))
 (DTypeSig true "elemIndex" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Option") (TyCon "Int"))))))
 (DFunDef false "elemIndex" ((PVar "x") (PVar "xs")) (EApp (EApp (EVar "findIndex") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (EVar "x")))) (EVar "xs")))
 (DTypeSig true "elemIndices" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "Int"))))))
@@ -1578,8 +1638,7 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "dropWhile" (PWild (PList)) (EListLit))
 (DFunDef false "dropWhile" ((PVar "p") (PAs "xs" (PCons (PVar "x") (PVar "rest")))) (EIf (EApp (EVar "p") (EVar "x")) (EApp (EApp (EVar "dropWhile") (EVar "p")) (EVar "rest")) (EIf (EVar "otherwise") (EVar "xs") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig true "span" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
-(DFunDef false "span" (PWild (PList)) (ETuple (EListLit) (EListLit)))
-(DFunDef false "span" ((PVar "p") (PAs "xs" (PCons (PVar "x") (PVar "rest")))) (EIf (EApp (EVar "p") (EVar "x")) (ELet false (PTuple (PVar "a") (PVar "b")) (EApp (EApp (EVar "span") (EVar "p")) (EVar "rest")) (ETuple (EBinOp "::" (EVar "x") (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (ETuple (EListLit) (EVar "xs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "span" ((PVar "p") (PVar "xs")) (ELetGroup ((lgb "go" (clause ((PList) (PVar "acc")) (ETuple (EApp (EVar "reverse") (EVar "acc")) (EListLit))) (clause ((PAs "ys" (PCons (PVar "y") (PVar "rest"))) (PVar "acc")) (EIf (EApp (EVar "p") (EVar "y")) (EApp (EApp (EVar "go") (EVar "rest")) (EBinOp "::" (EVar "y") (EVar "acc"))) (EIf (EVar "otherwise") (ETuple (EApp (EVar "reverse") (EVar "acc")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (EApp (EApp (EVar "go") (EVar "xs")) (EListLit))))
 (DTypeSig true "break" (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Bool"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyEffect () (Some "e") (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "break" ((PVar "p") (PVar "xs")) (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EApp (EVar "not") (EApp (EVar "p") (EVar "x"))))) (EVar "xs")))
 (DTypeSig true "splitAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
@@ -1702,3 +1761,15 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DProp false "takeWhile ++ dropWhile recovers the list" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EMethodRef "eq") (EBinOp "++" (EApp (EApp (EVar "takeWhile") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 5))))) (EVar "xs")) (EApp (EApp (EVar "dropWhile") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 5))))) (EVar "xs")))) (EVar "xs")))
 (DProp false "break equals span of the negated predicate" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "a1") (PVar "b1")) (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 5))))) (EVar "xs"))) (DoLet false false (PTuple (PVar "a2") (PVar "b2")) (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EApp (EVar "not") (EBinOp ">" (EVar "x") (ELit (LInt 5)))))) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "a1")) (EVar "a2")) (EApp (EApp (EMethodRef "eq") (EVar "b1")) (EVar "b2"))))))
 (DProp false "range length is max 0 (hi - lo)" ((pp "lo" (TyCon "Int")) (pp "hi" (TyCon "Int"))) (EBinOp "==" (EApp (EMethodRef "length") (EApp (EApp (EVar "range") (EVar "lo")) (EVar "hi"))) (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))))
+(DTypeSig false "spanRef" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyTuple (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a"))))))
+(DFunDef false "spanRef" (PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "spanRef" ((PVar "p") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "x")) (ELet false (PTuple (PVar "a") (PVar "b")) (EApp (EApp (EVar "spanRef") (EVar "p")) (EVar "rest")) (ETuple (EBinOp "::" (EVar "x") (EVar "a")) (EVar "b"))) (EIf (EVar "otherwise") (ETuple (EListLit) (EBinOp "::" (EVar "x") (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "findIndicesRef" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "Int")))))
+(DFunDef false "findIndicesRef" ((PVar "p") (PVar "xs")) (EApp (EApp (EApp (EVar "findIndicesRefGo") (EVar "p")) (ELit (LInt 0))) (EVar "xs")))
+(DTypeSig false "findIndicesRefGo" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyCon "Int"))))))
+(DFunDef false "findIndicesRefGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "findIndicesRefGo" ((PVar "p") (PVar "i") (PCons (PVar "x") (PVar "rest"))) (EIf (EApp (EVar "p") (EVar "x")) (EBinOp "::" (EVar "i") (EApp (EApp (EApp (EVar "findIndicesRefGo") (EVar "p")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "findIndicesRefGo") (EVar "p")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DProp false "span agrees with a plain reference on all, none, mixed, [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "none") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "xs")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "none"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "none")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EListLit (EVar "k")))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EListLit (EVar "k"))))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 3))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 1))))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 3))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 1)))))))))
+(DProp false "break agrees with a plain reference on all, none, mixed, [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "none") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (EVar "k")))) (EVar "xs"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EApp (EVar "not") (EBinOp ">" (EVar "x") (EVar "k"))))) (EVar "xs")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (EVar "k")))) (EVar "none"))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EApp (EVar "not") (EBinOp ">" (EVar "x") (EVar "k"))))) (EVar "none")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (EVar "k")))) (EListLit (EVar "k")))) (EApp (EApp (EVar "spanRef") (ELam ((PVar "x")) (EApp (EVar "not") (EBinOp ">" (EVar "x") (EVar "k"))))) (EListLit (EVar "k"))))))))
+(DProp false "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "none") (EAnnot (EListLit) (TyApp (TyCon "List") (TyCon "Int")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EVar "True"))) (EVar "xs"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EVar "False"))) (EVar "xs")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "xs")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "none"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EVar "none")))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EListLit (EVar "k")))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (EVar "k")))) (EListLit (EVar "k"))))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EVar "findIndices") (ELam ((PVar "x")) (EBinOp "<" (EVar "x") (ELit (LInt 3))))) (EListLit (ELit (LInt 1)) (ELit (LInt 2)) (ELit (LInt 3)) (ELit (LInt 1))))) (EListLit (ELit (LInt 0)) (ELit (LInt 1)) (ELit (LInt 3))))))))
+(DProp false "elemIndices agrees with findIndices on [] and singletons" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EApp (EDictApp "elemIndices") (EVar "k")) (EListLit))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "==" (EVar "x") (EVar "k")))) (EListLit))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EDictApp "elemIndices") (EVar "k")) (EListLit (EVar "k")))) (EListLit (ELit (LInt 0))))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EDictApp "elemIndices") (EVar "k")) (EVar "xs"))) (EApp (EApp (EVar "findIndicesRef") (ELam ((PVar "x")) (EBinOp "==" (EVar "x") (EVar "k")))) (EVar "xs")))))

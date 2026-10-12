@@ -406,12 +406,12 @@ findIndex p xs = go 0 xs
    [1, 3] -}
 export
 findIndices : (a -> <e> Bool) -> List a -> <e> List Int
-findIndices p xs = go 0 xs
+findIndices p xs = go 0 xs []
   where
-    go _ [] = []
-    go i (x :: rest)
-      | p x = i :: go (i + 1) rest
-      | otherwise = go (i + 1) rest
+    go _ [] acc = reverse acc
+    go i (x :: rest) acc
+      | p x = go (i + 1) rest (i :: acc)
+      | otherwise = go (i + 1) rest acc
 
 {- | The index of the first element equal to `x`, or `None`.
 
@@ -646,10 +646,12 @@ dropWhile p (xs@(x :: rest))
    ([1, 2], [3, 1]) -}
 export
 span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
-span _ [] = ([], [])
-span p (xs@(x :: rest))
-  | p x = let (a, b) = span p rest in (x :: a, b)
-  | otherwise = ([], xs)
+span p xs = go xs []
+  where
+    go [] acc = (reverse acc, [])
+    go (ys@(y :: rest)) acc
+      | p y = go rest (y :: acc)
+      | otherwise = (reverse acc, ys)
 
 -- > span (x => x < 9) [1, 2, 3]
 -- ([1, 2, 3], [])
@@ -1210,3 +1212,50 @@ prop "break equals span of the negated predicate" (xs : List Int) =
 
 prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
   length (range lo hi) == max 0 (hi - lo)
+
+-- Plain non-tail references for span and findIndices.
+spanRef : (a -> Bool) -> List a -> (List a, List a)
+spanRef _ [] = ([], [])
+spanRef p (x :: rest)
+  | p x = let (a, b) = spanRef p rest in (x :: a, b)
+  | otherwise = ([], x :: rest)
+
+findIndicesRef : (a -> Bool) -> List a -> List Int
+findIndicesRef p xs = findIndicesRefGo p 0 xs
+
+findIndicesRefGo : (a -> Bool) -> Int -> List a -> List Int
+findIndicesRefGo _ _ [] = []
+findIndicesRefGo p i (x :: rest)
+  | p x = i :: findIndicesRefGo p (i + 1) rest
+  | otherwise = findIndicesRefGo p (i + 1) rest
+
+prop "span agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
+  let none = [] : List Int
+  eq (span (x => True) xs) (spanRef (x => True) xs)
+    && eq (span (x => False) xs) (spanRef (x => False) xs)
+    && eq (span (x => x < k) xs) (spanRef (x => x < k) xs)
+    && eq (span (x => x < k) none) (spanRef (x => x < k) none)
+    && eq (span (x => x < k) [k]) (spanRef (x => x < k) [k])
+    && eq (span (x => x < 3) [1, 2, 3, 1]) (spanRef (x => x < 3) [1, 2, 3, 1])
+
+prop "break agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
+  let none = [] : List Int
+  eq (break (x => True) xs) (spanRef (x => False) xs)
+    && eq (break (x => False) xs) (spanRef (x => True) xs)
+    && eq (break (x => x > k) xs) (spanRef (x => not (x > k)) xs)
+    && eq (break (x => x > k) none) (spanRef (x => not (x > k)) none)
+    && eq (break (x => x > k) [k]) (spanRef (x => not (x > k)) [k])
+
+prop "findIndices agrees with a plain reference on all, none, mixed, [] and singletons" (k : Int) (xs : List Int) =
+  let none = [] : List Int
+  eq (findIndices (x => True) xs) (findIndicesRef (x => True) xs)
+    && eq (findIndices (x => False) xs) (findIndicesRef (x => False) xs)
+    && eq (findIndices (x => x < k) xs) (findIndicesRef (x => x < k) xs)
+    && eq (findIndices (x => x < k) none) (findIndicesRef (x => x < k) none)
+    && eq (findIndices (x => x < k) [k]) (findIndicesRef (x => x < k) [k])
+    && eq (findIndices (x => x < 3) [1, 2, 3, 1]) [0, 1, 3]
+
+prop "elemIndices agrees with findIndices on [] and singletons" (k : Int) (xs : List Int) =
+  eq (elemIndices k []) (findIndicesRef (x => x == k) [])
+    && eq (elemIndices k [k]) [0]
+    && eq (elemIndices k xs) (findIndicesRef (x => x == k) xs)
