@@ -1698,6 +1698,7 @@ externArityW name =
       "intToString",
       "charToStr",
       "stringLength",
+      "stringByteLength",
       "putStr",
       "putStrLn",
       "ePutStr",
@@ -7050,6 +7051,11 @@ emitStrExternRef prog env d "stringLength" [a] =
     ++ ["ref.cast (ref $str)", "struct.get $str $cp_count", "ref.i31"]
 emitStrExternRef prog env d "stringLength" _ =
   gapLP prog "wasm W6: stringLength takes exactly one argument"
+emitStrExternRef prog env d "stringByteLength" [a] =
+  emitRefExpr prog env d a
+    ++ ["ref.cast (ref $str)", "struct.get $str $bytes", "array.len", "ref.i31"]
+emitStrExternRef prog env d "stringByteLength" _ =
+  gapLP prog "wasm W6: stringByteLength takes exactly one argument"
 emitStrExternRef prog env d "putStr" [a] =
   emitRefExpr prog env d a
     ++ ["ref.cast (ref $str)", "call $mdk_print_str", "i32.const 0", "ref.i31"]

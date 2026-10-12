@@ -201,7 +201,7 @@ byteLength s = utf8ByteLength s
    6 -}
 export
 utf8ByteLength : String -> Int
-utf8ByteLength s = arrayLength (toUtf8 s)
+utf8ByteLength s = stringByteLength s
 
 {- | The integer written in decimal in `s`, with an optional leading `-` or
    `+`.
@@ -948,7 +948,7 @@ center n c s =
 (DTypeSig true "byteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "byteLength" ((PVar "s")) (EApp (EVar "utf8ByteLength") (EVar "s")))
 (DTypeSig true "utf8ByteLength" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "arrayLength") (EApp (EVar "toUtf8") (EVar "s"))))
+(DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "stringByteLength") (EVar "s")))
 (DTypeSig true "toInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "toInt" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "parseInt") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))))))
 (DTypeSig false "parseInt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
@@ -1126,7 +1126,7 @@ center n c s =
 (DTypeSig true "byteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DFunDef false "byteLength" ((PVar "s")) (EApp (EVar "utf8ByteLength") (EVar "s")))
 (DTypeSig true "utf8ByteLength" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "arrayLength") (EApp (EVar "toUtf8") (EVar "s"))))
+(DFunDef false "utf8ByteLength" ((PVar "s")) (EApp (EVar "stringByteLength") (EVar "s")))
 (DTypeSig true "toInt" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
 (DFunDef false "toInt" ((PVar "s")) (EBlock (DoLet false false (PVar "a") (EApp (EVar "toChars") (EVar "s"))) (DoExpr (EApp (EApp (EVar "parseInt") (EVar "a")) (EApp (EVar "arrayLength") (EVar "a"))))))
 (DTypeSig false "parseInt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))

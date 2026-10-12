@@ -177,6 +177,7 @@ hashInt	TOTAL	total over Int
 hashString	TOTAL	total over String (incl. "")
 # String ops with a total domain.
 stringLength	TOTAL	total: length of any String
+stringByteLength	TOTAL	total: UTF-8 byte count of any String
 stringConcat	TOTAL	total: concatenation of any list of Strings
 stringCompare	TOTAL	total three-way compare of any two Strings
 stringIndexOf	TOTAL	total: Option Int, None when the needle is absent

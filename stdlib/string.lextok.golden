@@ -376,11 +376,8 @@ NEWLINE
 IDENT "utf8ByteLength"
 IDENT "s"
 EQUAL
-IDENT "arrayLength"
-LPAREN
-IDENT "toUtf8"
+IDENT "stringByteLength"
 IDENT "s"
-RPAREN
 NEWLINE
 EXPORT
 NEWLINE

@@ -4,9 +4,9 @@
 -- byte offset would show.
 
 import string.{
-  center, countOccurrences, drop, fromChars, indexOf, lastIndexOf, lines,
-  padLeft, padRight, replace, replaceAll, splitAt, take, trim, trimLeft,
-  trimRight, unlines
+  byteLength, center, countOccurrences, drop, fromChars, indexOf, lastIndexOf,
+  lines, padLeft, padRight, replace, replaceAll, splitAt, take, trim, trimLeft,
+  trimRight, unlines, utf8ByteLength
 }
 import test.{expectEqual}
 
@@ -111,6 +111,22 @@ test "stringSlice of the whole cell and of its ends" =
     ]
 
 -- # take, drop, splitAt
+
+test "byteLength of the empty string is 0" = expectEqual 0 (byteLength "")
+
+test "byteLength counts UTF-8 bytes, not codepoints" =
+  expectEqual 6 (byteLength "héllo")
+
+test "byteLength of a four-byte codepoint is 4" = expectEqual 4 (byteLength "😀")
+
+test "byteLength of ASCII equals its codepoint count" =
+  expectEqual 5 (byteLength "hello")
+
+test "utf8ByteLength agrees with byteLength" =
+  expectEqual (byteLength "a→b日") (utf8ByteLength "a→b日")
+
+test "byteLength of a string that is a slice of a multibyte cell" =
+  expectEqual 3 (byteLength (stringSlice 1 2 "é日本"))
 
 test "take 0 is empty" = expectEqual "" (take 0 "héllo")
 

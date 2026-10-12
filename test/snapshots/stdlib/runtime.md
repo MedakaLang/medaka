@@ -1,5 +1,5 @@
 # META
-source_lines=995
+source_lines=999
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -945,6 +945,10 @@ extern charFromCode : Int -> Option Char
 export
 extern stringLength : String -> Int
 
+-- | The number of UTF-8 bytes in a string.
+export
+extern stringByteLength : String -> Int
+
 -- | The characters at positions `[lo, hi)`, clamped to the string.
 export
 extern stringSlice : Int -> Int -> String -> String
@@ -1185,6 +1189,7 @@ extern stringToLower : String -> String
 (DExtern false "charCode" (TyFun (TyCon "Char") (TyCon "Int")))
 (DExtern true "charFromCode" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
 (DExtern true "stringLength" (TyFun (TyCon "String") (TyCon "Int")))
+(DExtern true "stringByteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DExtern true "stringSlice" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DExtern false "stringConcat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DExtern false "stringIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
@@ -1387,6 +1392,7 @@ extern stringToLower : String -> String
 (DExtern false "charCode" (TyFun (TyCon "Char") (TyCon "Int")))
 (DExtern true "charFromCode" (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Char"))))
 (DExtern true "stringLength" (TyFun (TyCon "String") (TyCon "Int")))
+(DExtern true "stringByteLength" (TyFun (TyCon "String") (TyCon "Int")))
 (DExtern true "stringSlice" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "String")))))
 (DExtern false "stringConcat" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
 (DExtern false "stringIndexOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))

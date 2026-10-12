@@ -197,7 +197,7 @@ byteLength s = utf8ByteLength s
    6 -}
 export
 utf8ByteLength : String -> Int
-utf8ByteLength s = arrayLength (toUtf8 s)
+utf8ByteLength s = stringByteLength s
 
 {- | The integer written in decimal in `s`, with an optional leading `-` or
    `+`.

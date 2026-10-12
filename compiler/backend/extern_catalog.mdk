@@ -1218,6 +1218,7 @@ catalogRows = [
     (Inline WasmStr)
     Interpreted,
   ExternRow "stringLength" (Inline LlvmStr) (Inline WasmStr) Interpreted,
+  ExternRow "stringByteLength" (Inline LlvmStr) (Inline WasmStr) Interpreted,
   ExternRow
     "stringSlice"
     (CSymbol LlvmStrChar "mdk_string_slice")

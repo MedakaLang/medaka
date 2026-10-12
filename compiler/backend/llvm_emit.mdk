@@ -2229,6 +2229,17 @@ emitStrExtern e env "stringLength" args = match emitArgs e env args
     let _ = emit e "  \{n} = load i64, ptr \{cpp}"
     (tagInt e n, LTInt)
   _ => panic "llvm: stringLength takes one argument"
+-- INTRINSIC: load byte_len@8, tag it
+emitStrExtern e env "stringByteLength" args = match emitArgs e env args
+  [a] =>
+    let p = freshReg e
+    let _ = emit e "  \{p} = inttoptr i64 \{a} to ptr"
+    let bp = freshReg e
+    let _ = emit e "  \{bp} = getelementptr i8, ptr \{p}, i64 8"
+    let n = freshReg e
+    let _ = emit e "  \{n} = load i64, ptr \{bp}"
+    (tagInt e n, LTInt)
+  _ => panic "llvm: stringByteLength takes one argument"
 -- INTRINSIC: load cp_count@16, tag it
 
 emitStrExtern e _ name _ = gapE e ("unsupported string extern " ++ name)

@@ -3560,6 +3560,7 @@ externBindings _ = [
   ("charToUpper", prim1 pCharToUpper),
   ("charToLower", prim1 pCharToLower),
   ("stringLength", prim1 pStringLength),
+  ("stringByteLength", prim1 pStringByteLength),
   ("stringConcat", prim1 pStringConcat),
   ("stringToChars", prim1 pStringToChars),
   ("stringFromChars", prim1 pStringFromChars),
@@ -3884,6 +3885,10 @@ pCharToLower _ = panic "charToLower: not a Char"
 pStringLength : Value e -> <e> Value e
 pStringLength (VString s) = VInt (stringLength s)
 pStringLength _ = panic "stringLength: not a String"
+
+pStringByteLength : Value e -> <e> Value e
+pStringByteLength (VString s) = VInt (arrayLength (stringToUtf8Bytes s))
+pStringByteLength _ = panic "stringByteLength: not a String"
 
 pStringConcat : Value e -> <e> Value e
 pStringConcat (VList vs) = VString (stringConcat (map unString vs))

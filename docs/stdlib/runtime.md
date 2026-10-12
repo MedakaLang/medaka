@@ -1237,6 +1237,14 @@ stringLength : String -> Int
 
 The number of codepoints in a string.
 
+### `stringByteLength`
+
+```
+stringByteLength : String -> Int
+```
+
+The number of UTF-8 bytes in a string.
+
 ### `stringSlice`
 
 ```

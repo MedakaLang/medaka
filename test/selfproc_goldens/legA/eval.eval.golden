@@ -425,6 +425,7 @@ pSliceError : Value a -> Value a -> <a> Value a
 pSqrt : Value a -> <a> Value a
 pStashRunStdout : Value a -> <a> Value a
 pStatFile : Value a -> <FileRead | a> Value a
+pStringByteLength : Value a -> <a> Value a
 pStringCompare : Value a -> Value a -> <a> Value a
 pStringConcat : Value a -> <a> Value a
 pStringFromChars : Value a -> <a> Value a

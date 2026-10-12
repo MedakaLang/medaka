@@ -941,6 +941,10 @@ extern charFromCode : Int -> Option Char
 export
 extern stringLength : String -> Int
 
+-- | The number of UTF-8 bytes in a string.
+export
+extern stringByteLength : String -> Int
+
 -- | The characters at positions `[lo, hi)`, clamped to the string.
 export
 extern stringSlice : Int -> Int -> String -> String
