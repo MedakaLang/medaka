@@ -21,17 +21,24 @@
 
    Floor: the derived set keeps at least 135 (fixture, interface) rows. Fewer
    means the derivation (enumeration or qualifying-interface scan) broke; the
-   floor catches that, not a change in which rows exist. Rows run sequentially,
-   each in its own scratch dir. Needs clang (build).
+   floor catches that, not a change in which rows exist. Rows are graded in
+   groups of `testJobs`: each group's spawns run as one batch, and each row
+   works in a scratch directory of its own, removed once its group is graded.
+   Under MEDAKA_TEST_JOBS=1 a group is one row, so its spawns run in the order
+   they are listed. Needs clang (build).
 
    Usage: medaka test <this file>
 -}
 
+import compiler_cli_test_support.{
+  finalOf, freshDirFor, labelGrades, okDir, spawnEach, stageRun
+}
 import fs.{fixtureFiles}
-import list.{dropWhile, nub, takeWhile}
-import string.{contains, endsWith, lines, replaceAll, split, startsWith}
+import io.{runVerb}
+import list.{chunks, dropWhile, nub, somes, takeWhile}
+import string.{contains, endsWith, lines, replaceAll, split, startsWith, trim}
 import test.{Expectation, expectAll, expectAtLeast, expectEach, fail, pass}
-import test_process.{boundedVerb, medakaBin, underRoot, withScratchDir}
+import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
 
 -- ── Permuter (pure; ports the script's perl PERMPL) ──────────────────────────
 
@@ -57,10 +64,10 @@ implName ("impl" :: n :: _) = n
 implName _ = ""
 
 -- (interface, lines) per top-level chunk; "" interface for non-impl chunks.
-chunks : List String -> List (String, List String)
-chunks [] = []
-chunks (l :: rest) =
-  (implIface l, l :: takeWhile isBody rest) :: chunks (dropWhile isBody rest)
+topChunks : List String -> List (String, List String)
+topChunks [] = []
+topChunks (l :: rest) =
+  (implIface l, l :: takeWhile isBody rest) :: topChunks (dropWhile isBody rest)
 
 bodiesOf : String -> List (String, List String) -> List (List String)
 bodiesOf _ [] = []
@@ -109,7 +116,7 @@ joinSemi [r] = r
 joinSemi (r :: rest) = "\{r}; \{joinSemi rest}"
 
 permuteText : String -> String -> String
-permuteText iface text = permuteChunks iface (chunks (lines text))
+permuteText iface text = permuteChunks iface (topChunks (lines text))
 
 permuteChunks : String -> List (String, List String) -> String
 permuteChunks iface cs =
@@ -216,178 +223,289 @@ buildReasons ob pb oOk pOk oo po =
 boolText : Bool -> String
 boolText b = if b then "1" else "0"
 
--- ── Spawning rows ────────────────────────────────────────────────────────────
+-- Per-row state, carried from stage to stage. Each record holds what the
+-- stages before it observed, so every message is graded from its own spawn.
+data Row = Row { rowDir : String, rowOrig : String, rowPerm : String }
 
--- Stdout of a built binary (both must be run only when both builds succeeded).
-binOut : String -> <Exec> Result String String
-binOut p = match boundedVerb p []
-  Err e => Err e
-  Ok (code, out, _) =>
-    if launchFail code then
-      Err "built binary could not launch (exit \{intToString code})"
-    else
-      Ok out
+data RunRec = RunRec {
+  runRow : Row,
+  runOrc : Int,
+  runOro : String,
+  runPrc : Int,
+  runPro : String,
+}
 
-bothOuts : Bool -> String -> String -> <Exec> Result String (String, String)
-bothOuts False _ _ = Ok ("", "")
-bothOuts True o p = match binOut o
-  Err e => Err e
-  Ok oo => withSecond oo (binOut p)
+data BuildRec = BuildRec { buildRun : RunRec, buildOb : Int, buildPb : Int }
 
-withSecond : String -> Result String String -> Result String (String, String)
-withSecond oo r = map (po => (oo, po)) r
+data TestRec = TestRec { testBuild : BuildRec, testOxc : Int, testPxc : Int }
 
--- Build both orderings, check each produced an executable, compare the binaries.
-buildAndCompare : String ->
-  String ->
-  List String ->
-  Int ->
-  Int ->
-  <Exec> Expectation
-buildAndCompare dir origBin runRs ob pb =
-  match boundedVerb "sh" ["-c", "test -x \"$1\"", "x", origBin]
-    Err e => fail "could not test -x \{origBin}: \{e}"
-    Ok (oxc, _, _) =>
-      if launchFail oxc then
-        fail "test -x could not launch on \{origBin}: exit \{intToString oxc}"
-      else match boundedVerb "sh" [
-        "-c",
-        "test -x \"$1\"",
-        "x",
-        "\{dir}/perm.bin",
-      ]
-        Err e => fail "could not test -x \{dir}/perm.bin: \{e}"
-        Ok (pxc, _, _) =>
-          if launchFail pxc then
-            fail
-              "test -x could not launch on \{dir}/perm.bin: exit \{intToString pxc}"
-          else
-            compareBuilds
-              dir
-              origBin
-              runRs
-              (ob == 0 && oxc == 0)
-              (pb == 0 && pxc == 0)
-              ob
-              pb
+origBinOf : Row -> String
+origBinOf r = "\{r.rowDir}/orig.bin"
 
-compareBuilds : String ->
-  String ->
-  List String ->
-  Bool ->
-  Bool ->
-  Int ->
-  Int ->
-  <Exec> Expectation
-compareBuilds dir origBin runRs oOk pOk ob pb =
-  match bothOuts (oOk && pOk) origBin "\{dir}/perm.bin"
-    Err e => fail "could not run a built binary: \{e}"
-    Ok (oo, po) => outcome (runRs ++ buildReasons ob pb oOk pOk oo po)
+permBinOf : Row -> String
+permBinOf r = "\{r.rowDir}/perm.bin"
 
--- The ACCEPT/ACCEPT arm: run both orderings, then build both and compare.
-acceptRows : String ->
-  String ->
-  String ->
-  String ->
-  <Exec, IO, FileRead, FileWrite> Expectation
-acceptRows bin dir origPath permPath = match boundedVerb bin ["run", origPath]
-  Err e => fail "could not spawn run on \{origPath}: \{e}"
-  Ok (orc, oro, _) =>
-    if launchFail orc then
-      fail "run could not launch on \{origPath}: exit \{intToString orc}"
-    else match boundedVerb bin ["run", permPath]
-      Err e => fail "could not spawn run on \{permPath}: \{e}"
-      Ok (prc, pro, _) =>
-        if launchFail prc then
-          fail "run could not launch on \{permPath}: exit \{intToString prc}"
-        else match boundedVerb bin ["build", origPath, "-o", "\{dir}/orig.bin"]
-          Err e => fail "could not spawn build on \{origPath}: \{e}"
-          Ok (ob, _, _) =>
-            if launchFail ob then
-              fail
-                "build could not launch on \{origPath}: exit \{intToString ob}"
-            else match boundedVerb bin [
-              "build",
-              permPath,
-              "-o",
-              "\{dir}/perm.bin",
-            ]
-              Err e => fail "could not spawn build on \{permPath}: \{e}"
-              Ok (pb, _, _) =>
-                if launchFail pb then
-                  fail
-                    "build could not launch on \{permPath}: exit \{intToString pb}"
-                else
-                  buildAndCompare
-                    dir
-                    "\{dir}/orig.bin"
-                    (runReasons orc oro prc pro)
-                    ob
-                    pb
-
-decide : String ->
-  String ->
-  String ->
-  String ->
-  (String, List String) ->
-  <Exec, IO, FileRead, FileWrite> Expectation
-decide bin dir origPath permPath verdictPair =
-  if fst verdictPair == "ACCEPT/ACCEPT" then
-    acceptRows bin dir origPath permPath
+-- The stdout of one built binary: a launch failure is an `Err`, as before.
+binOutOf : Result String (Int, String, String) -> Result String String
+binOutOf (Err e) = Err e
+binOutOf (Ok (code, out, _)) =
+  if launchFail code then
+    Err "built binary could not launch (exit \{intToString code})"
   else
-    outcome (snd verdictPair)
+    Ok out
 
-verdictRow : String ->
-  String ->
-  String ->
-  String ->
-  <Exec, IO, FileRead, FileWrite> Expectation
-verdictRow bin dir origPath permPath =
-  match boundedVerb bin ["check", "--json", origPath]
-    Err e => fail "could not spawn check on \{origPath}: \{e}"
-    Ok (oc, oo, oe) =>
-      if launchFail oc then
-        fail "check could not launch on \{origPath}: exit \{intToString oc}"
-      else match boundedVerb bin ["check", "--json", permPath]
-        Err e => fail "could not spawn check on \{permPath}: \{e}"
-        Ok (pc, po, pe) =>
-          if launchFail pc then
-            fail "check could not launch on \{permPath}: exit \{intToString pc}"
+-- Stage 1: `check --json` on both orderings. Only ACCEPT/ACCEPT goes on.
+checkSpawns : String -> Row -> List (String, List String)
+checkSpawns bin r =
+  [(bin, ["check", "--json", r.rowOrig]), (bin, ["check", "--json", r.rowPerm])]
+
+gradeCheck : Row ->
+  List (Result String (Int, String, String)) ->
+  Result Expectation Row
+gradeCheck r [oR, pR] = match oR
+  Err e => Err (fail "could not spawn check on \{r.rowOrig}: \{e}")
+  Ok (oCode, oo, oe) =>
+    if launchFail oCode then
+      Err
+        (fail
+          "check could not launch on \{r.rowOrig}: exit \{intToString oCode}")
+    else match pR
+      Err e => Err (fail "could not spawn check on \{r.rowPerm}: \{e}")
+      Ok (pCode, po, pe) =>
+        if launchFail pCode then
+          Err
+            (fail
+              "check could not launch on \{r.rowPerm}: exit \{intToString pCode}")
+        else
+          verdictGate r (checkVerdict oCode (oo ++ oe) pCode (po ++ pe))
+gradeCheck _ _ =
+  Err (fail "internal: a row was not answered by its two check spawns")
+
+verdictGate : Row -> (String, List String) -> Result Expectation Row
+verdictGate r (label, reasons) =
+  if label == "ACCEPT/ACCEPT" then Ok r else Err (outcome reasons)
+
+-- Stage 2: `run` on both orderings.
+runSpawns : String -> Row -> List (String, List String)
+runSpawns bin r = [(bin, ["run", r.rowOrig]), (bin, ["run", r.rowPerm])]
+
+gradeRun : Row ->
+  List (Result String (Int, String, String)) ->
+  Result Expectation RunRec
+gradeRun r [oR, pR] = match oR
+  Err e => Err (fail "could not spawn run on \{r.rowOrig}: \{e}")
+  Ok (oCode, oo, _) =>
+    if launchFail oCode then
+      Err
+        (fail "run could not launch on \{r.rowOrig}: exit \{intToString oCode}")
+    else match pR
+      Err e => Err (fail "could not spawn run on \{r.rowPerm}: \{e}")
+      Ok (pCode, po, _) =>
+        if launchFail pCode then
+          Err
+            (fail
+              "run could not launch on \{r.rowPerm}: exit \{intToString pCode}")
+        else
+          Ok RunRec {
+            runRow = r,
+            runOrc = oCode,
+            runOro = oo,
+            runPrc = pCode,
+            runPro = po,
+          }
+gradeRun _ _ =
+  Err (fail "internal: a row was not answered by its two run spawns")
+
+-- Stage 3: `build` both orderings, each to its own binary.
+buildSpawns : String -> RunRec -> List (String, List String)
+buildSpawns bin s =
+  let r = s.runRow
+  [
+    (bin, ["build", r.rowOrig, "-o", origBinOf r]),
+    (bin, ["build", r.rowPerm, "-o", permBinOf r]),
+  ]
+
+gradeBuild : RunRec ->
+  List (Result String (Int, String, String)) ->
+  Result Expectation BuildRec
+gradeBuild s [oR, pR] =
+  let r = s.runRow
+  match oR
+    Err e => Err (fail "could not spawn build on \{r.rowOrig}: \{e}")
+    Ok (oCode, _, _) =>
+      if launchFail oCode then
+        Err
+          (fail
+            "build could not launch on \{r.rowOrig}: exit \{intToString oCode}")
+      else match pR
+        Err e => Err (fail "could not spawn build on \{r.rowPerm}: \{e}")
+        Ok (pCode, _, _) =>
+          if launchFail pCode then
+            Err
+              (fail
+                "build could not launch on \{r.rowPerm}: exit \{intToString pCode}")
           else
-            decide
-              bin
-              dir
-              origPath
-              permPath
-              (checkVerdict oc (oo ++ oe) pc (po ++ pe))
+            Ok BuildRec { buildRun = s, buildOb = oCode, buildPb = pCode }
+gradeBuild _ _ =
+  Err (fail "internal: a row was not answered by its two build spawns")
 
-rowIn : String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, IO, FileRead, FileWrite> Expectation
-rowIn bin fixDir dir f iface =
-  rowPaths bin dir "\{fixDir}/\{f}" "\{dir}/\{f}__\{iface}_perm.mdk" iface
+-- Stage 4: `test -x` on both built binaries, whatever their build exit codes.
+testSpawns : BuildRec -> List (String, List String)
+testSpawns b =
+  let r = b.buildRun.runRow
+  [
+    ("sh", ["-c", "test -x \"$1\"", "x", origBinOf r]),
+    ("sh", ["-c", "test -x \"$1\"", "x", permBinOf r]),
+  ]
 
-rowPaths : String ->
-  String ->
-  String ->
-  String ->
-  String ->
-  <Exec, IO, FileRead, FileWrite> Expectation
-rowPaths bin dir origPath permPath iface = match readFile origPath
-  Err e => fail "could not read \{origPath}: \{e}"
-  Ok text => match writeFile permPath (permuteText iface text)
-    Err e => fail "could not write \{permPath}: \{e}"
-    Ok _ => verdictRow bin dir origPath permPath
+gradeTest : BuildRec ->
+  List (Result String (Int, String, String)) ->
+  Result Expectation TestRec
+gradeTest b [oR, pR] =
+  let r = b.buildRun.runRow
+  match oR
+    Err e => Err (fail "could not test -x \{origBinOf r}: \{e}")
+    Ok (oCode, _, _) =>
+      if launchFail oCode then
+        Err
+          (fail
+            "test -x could not launch on \{origBinOf r}: exit \{intToString oCode}")
+      else match pR
+        Err e => Err (fail "could not test -x \{permBinOf r}: \{e}")
+        Ok (pCode, _, _) =>
+          if launchFail pCode then
+            Err
+              (fail
+                "test -x could not launch on \{permBinOf r}: exit \{intToString pCode}")
+          else
+            Ok TestRec { testBuild = b, testOxc = oCode, testPxc = pCode }
+gradeTest _ _ =
+  Err (fail "internal: a row was not answered by its two test -x spawns")
 
-rowFor : String ->
-  String ->
+-- Stage 5: the built binaries' stdout, only when both builds and both `test -x`
+-- checks passed. Otherwise there is no binary to run, and nothing is spawned.
+bothBuilt : TestRec -> Bool
+bothBuilt t =
+  t.testBuild.buildOb == 0
+    && t.testOxc == 0
+    && t.testBuild.buildPb == 0
+    && t.testPxc == 0
+
+binSpawns : TestRec -> List (String, List String)
+binSpawns t =
+  if bothBuilt t then
+    let r = t.testBuild.buildRun.runRow
+    [(origBinOf r, []), (permBinOf r, [])]
+  else
+    []
+
+-- With no binary to run (`binSpawns` named none), the build verdict alone is
+-- graded. Any other answer count is a failure row, never that same grading.
+gradeBins : TestRec ->
+  List (Result String (Int, String, String)) ->
+  Result Expectation Expectation
+gradeBins t [oR, pR] = finishBins t (binOutOf oR) (binOutOf pR)
+gradeBins t [] =
+  if bothBuilt t then
+    Err (fail "internal: two built binaries were named but none was answered")
+  else
+    finishBins t (Ok "") (Ok "")
+gradeBins _ _ =
+  Err (fail "internal: a row was not answered by its two binary spawns")
+
+finishBins : TestRec ->
+  Result String String ->
+  Result String String ->
+  Result Expectation Expectation
+finishBins t (Err e) _ = Err (fail "could not run a built binary: \{e}")
+finishBins t (Ok oo) (Err e) = Err (fail "could not run a built binary: \{e}")
+finishBins t (Ok oo) (Ok po) =
+  let b = t.testBuild
+  let rs = b.buildRun
+  let oOk = b.buildOb == 0 && t.testOxc == 0
+  let pOk = b.buildPb == 0 && t.testPxc == 0
+  let runRs = runReasons rs.runOrc rs.runOro rs.runPrc rs.runPro
+  Ok (outcome (runRs ++ buildReasons b.buildOb b.buildPb oOk pOk oo po))
+
+-- The five stages of one batch of rows, each stage run over every row still
+-- standing. A stage's spawns run as one batch, so a group's `check`s all
+-- start before its first `run`.
+runGroup : String ->
+  List (Result Expectation Row) ->
+  <Exec, FileRead, IO> List Expectation
+runGroup bin rows =
+  let s1 =
+    stageRun
+      (spawnEach spawnTimeoutSeconds (checkSpawns bin))
+      fail
+      gradeCheck
+      rows
+  let s2 =
+    stageRun (spawnEach spawnTimeoutSeconds (runSpawns bin)) fail gradeRun s1
+  let s3 =
+    stageRun
+      (spawnEach spawnTimeoutSeconds (buildSpawns bin))
+      fail
+      gradeBuild
+      s2
+  let s4 = stageRun (spawnEach spawnTimeoutSeconds testSpawns) fail gradeTest s3
+  let s5 = stageRun (spawnEach spawnTimeoutSeconds binSpawns) fail gradeBins s4
+  map finalOf s5
+
+rowLabel : (String, String) -> String
+rowLabel (f, iface) = "\{f} [\{iface}]"
+
+prepRow : String ->
   (String, String) ->
-  <Exec, IO, FileRead, FileWrite> (String, Expectation)
-rowFor bin fixDir (f, iface) =
-  ("\{f} [\{iface}]", withScratchDir (dir => rowIn bin fixDir dir f iface))
+  Result String String ->
+  <Exec, IO, FileRead, FileWrite> Result Expectation Row
+prepRow fixDir (f, iface) (Err e) =
+  Err (fail "could not make a scratch directory: \{e}")
+prepRow fixDir (f, iface) (Ok dir) =
+  let origPath = "\{fixDir}/\{f}"
+  let permPath = "\{dir}/\{f}__\{iface}_perm.mdk"
+  match readFile origPath
+    Err e => Err (fail "could not read \{origPath}: \{e}")
+    Ok text => match writeFile permPath (permuteText iface text)
+      Err e => Err (fail "could not write \{permPath}: \{e}")
+      Ok _ => Ok Row { rowDir = dir, rowOrig = origPath, rowPerm = permPath }
+
+-- One `testJobs`-wide group of pairs: every row prepared, every stage run over
+-- the group, then the group's scratch directories removed. Under
+-- MEDAKA_TEST_JOBS=1 this is one row at a time, spawning in serial order.
+groupRows : String ->
+  String ->
+  List (String, String) ->
+  <Exec, IO, FileRead, FileWrite> List (String, Expectation)
+groupRows bin fixDir pairs =
+  let dirs = map freshDirFor pairs
+  let prepared = prepAll fixDir pairs dirs
+  let settled = runGroup bin prepared
+  let _ = map (d => runVerb "rm" ["-rf", d]) (somes (map okDir dirs))
+  labelGrades (map rowLabel pairs) settled
+
+groupedRows : String ->
+  String ->
+  List (String, String) ->
+  <Exec, IO, FileRead, FileWrite> List (String, Expectation)
+groupedRows bin fixDir pairs =
+  flatMap (groupRows bin fixDir) (chunks testJobs pairs)
+
+-- `prepRow` over every pair, each with its own directory result. A pair with
+-- no directory, or a directory with no pair, is a failure row rather than a
+-- row that is silently dropped.
+prepAll : String ->
+  List (String, String) ->
+  List (Result String String) ->
+  <Exec, IO, FileRead, FileWrite> List (Result Expectation Row)
+prepAll _ [] [] = []
+prepAll fixDir (p :: ps) (d :: ds) = prepRow fixDir p d :: prepAll fixDir ps ds
+prepAll fixDir (p :: ps) [] =
+  Err (fail "\{rowLabel p}: internal: no scratch directory was made")
+    :: prepAll fixDir ps []
+prepAll fixDir [] (_ :: ds) =
+  Err (fail "internal: a scratch directory was made for no row")
+    :: prepAll fixDir [] ds
 
 check : <Exec, IO, FileRead, FileWrite> Expectation
 check = checkIn medakaBin (underRoot "test/dict_fixtures")
@@ -408,7 +526,7 @@ checkIn bin fixDir = match fixtureFiles fixDir
     Err e => fail e
     Ok ps => expectAll [
       expectAtLeast 135 (length ps),
-      expectEach (map (p => rowFor bin fixDir p) ps),
+      expectEach (groupedRows bin fixDir ps),
     ]
 
 test "DICT-SEMANTICS section 4: declaration-order permutation keeps verdict, run and build" =

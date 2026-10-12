@@ -27,7 +27,7 @@
    Run: `medaka gate run sqlite/test/oracle`. -}
 
 import io.{runVerb}
-import list.{lookup}
+import list.{lookup, nubBy}
 import string.{join, trim}
 import test.{Expectation(..), expectEqualLines}
 import test.oracle_support.{
@@ -35,23 +35,20 @@ import test.oracle_support.{
   Piece(..),
   Seed(..),
   Step(..),
+  buildBatch,
   flatLines,
   outLines,
   seedDb,
   spawnOut,
   typedUserLine,
 }
-import test_process.{medakaBin, medakaRoot, scratchDir, underRoot}
+import test_process.{scratchDir, underRoot}
 
 -- # Spawning
 
--- A `medaka build` of a demo compiles and links a native binary, so its
--- ceiling is minutes; a `sqlite3` query and a built demo's own run are
--- bounded far below it, and get a ceiling that still names a hang as a
--- failure of the row rather than of the job.
-buildTimeoutSeconds : Int
-buildTimeoutSeconds = 600
-
+-- A `sqlite3` query and a built demo's own run are bounded far below a
+-- `medaka build`, and get a ceiling that still names a hang as a failure of
+-- the row rather than of the job.
 queryTimeoutSeconds : Int
 queryTimeoutSeconds = 120
 
@@ -65,37 +62,31 @@ queryTimeoutSeconds = 120
 -- One row's two line lists, ready to compare.
 data RowOutput = RowOutput { actual : List String, expected : List String }
 
-buildEntry : List String -> String -> String -> <Exec, IO> Result String Unit
-buildEntry flags entry bin =
-  let args = ["build"] ++ flags ++ [underRoot entry, "-o", bin]
-  map (_ => ()) (spawnOut buildTimeoutSeconds medakaBin args)
+-- # Building the demos
 
-buildDemo : OracleRow -> String -> <Exec, IO> Result String Unit
-buildDemo row bin = buildEntry row.buildFlags row.entry bin
+-- The key a build is shared under: its entry and its flags. Several rows run
+-- one demo (`sqlite/sql_demo.mdk` backs two), so a build is per key, not per
+-- row.
+buildKey : OracleRow -> String
+buildKey row = join " " (row.entry :: row.buildFlags)
 
--- The two builds more than one row runs, each built once per process: a
--- top-level nullary is memoized, and the binary sits in the shared scratch
--- directory, outside every row's own cleanup list.
-mainBin : <Exec, IO> Result String String
-mainBin = sharedBuild "shared-main" [] "sqlite/main.mdk"
+-- One build per distinct key, in the order the rows first name it.
+distinctBuildRows : List OracleRow
+distinctBuildRows = nubBy (a b => buildKey a == buildKey b) rows
 
-sqlDemoBin : <Exec, IO> Result String String
-sqlDemoBin = sharedBuild "shared-sql-demo" [] "sqlite/sql_demo.mdk"
+-- Every demo the rows run, built together in ONE batch by
+-- `test.oracle_support.buildBatch`. A top-level nullary is memoized, so the
+-- batch runs once per process; each row then reads its build from `demoBinFor`.
+demoBuilds : <Exec, IO> List (String, Result String String)
+demoBuilds =
+  buildBatch
+    (map (row => (buildKey row, row.entry, row.buildFlags)) distinctBuildRows)
 
-sharedBuild : String -> List String -> String -> <Exec, IO> Result String String
-sharedBuild name flags entry = match scratchDir
-  Err e => Err e
-  Ok dir =>
-    let bin = "\{dir}/\{name}"
-    map (_ => bin) (buildEntry flags entry bin)
-
--- The binary a row runs: a shared build when its entry and flags match one,
--- otherwise a build into the row's own path.
-demoBinFor : OracleRow -> String -> <Exec, IO> Result String String
-demoBinFor row own = match (row.entry, row.buildFlags)
-  ("sqlite/main.mdk", []) => mainBin
-  ("sqlite/sql_demo.mdk", []) => sqlDemoBin
-  _ => map (_ => own) (buildDemo row own)
+-- The binary a row runs, from the batch above.
+demoBinFor : OracleRow -> <Exec, IO> Result String String
+demoBinFor row = match lookup (buildKey row) demoBuilds
+  Some r => r
+  None => Err "no build for \{buildKey row} — is it in `rows`?"
 
 pieceLines : String -> String -> Piece -> <Exec, IO> Result String (List String)
 pieceLines _ _ (PLine l) = Ok [l]
@@ -113,13 +104,10 @@ stepLines db (NullRows sql) =
 stepLines db (TypedRows sql) =
   map (out => map typedUserLine (outLines out)) (sqlite3Rows db [sql])
 
-rowOutput : OracleRow ->
-  String ->
-  String ->
-  <Exec, FileRead, IO> Result String RowOutput
-rowOutput row db own = match seedDb db row.seed
+rowOutput : OracleRow -> String -> <Exec, FileRead, IO> Result String RowOutput
+rowOutput row db = match seedDb db row.seed
   Err e => Err "\{row.name}: seeding the database: \{e}"
-  Ok _ => match demoBinFor row own
+  Ok _ => match demoBinFor row
     Err e => Err "\{row.name}: building \{row.entry}: \{e}"
     Ok bin => match traverse (pieceLines bin db) row.pieces
       Err e => Err "\{row.name}: running the demo: \{e}"
@@ -133,8 +121,8 @@ rowOutput row db own = match seedDb db row.seed
 
    `test_process.scratchDir` is a nullary binding, so it is memoized: every
    caller in one process gets the SAME directory, not a fresh one per call.
-   Rows are therefore separated by file name and each removes only its own two
-   files — a row that removed the directory would delete the next row's
+   Rows are therefore separated by file name and each removes only its own
+   database file — a row that removed the directory would delete the next row's
    workspace out from under it. Concurrency across gate runs is still covered,
    since the directory itself is a per-process `mktemp -d`. -}
 rowPrefix : OracleRow -> <Exec> Result String String
@@ -149,8 +137,8 @@ runRow row = match rowPrefix row
 
 runRowIn : OracleRow -> String -> <Exec, FileRead, IO> Result String RowOutput
 runRowIn row prefix =
-  let out = rowOutput row "\{prefix}.db" "\{prefix}.demo"
-  let _ = runVerb "rm" ["-rf", "\{prefix}.db", "\{prefix}.demo"]
+  let out = rowOutput row "\{prefix}.db"
+  let _ = runVerb "rm" ["-rf", "\{prefix}.db"]
   out
 
 -- # The rows
@@ -592,8 +580,8 @@ typedRow = OracleRow {
 -- # Grading
 
 -- Every row run exactly once and shared by every assertion below: a top-level
--- nullary binding is memoized, so the ten builds happen once rather than once
--- per `test` block that reads them.
+-- nullary binding is memoized, so the demos are built once (see `demoBuilds`)
+-- and each row runs once rather than once per `test` block that reads it.
 results : <Exec, FileRead, IO> List (String, Result String RowOutput)
 results = map (r => (r.name, runRow r)) rows
 

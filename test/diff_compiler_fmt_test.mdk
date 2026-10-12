@@ -96,11 +96,24 @@
    A corpus that grew reds until the number beside it is updated to match,
    which is the price of a corpus that shrinks reding too. -}
 
-import compiler_cli_test_support.{chompNewlines, stripUnitAutoPrint}
+import compiler_cli_test_support.{
+  boundedVerbsSeconds, chompNewlines, stripUnitAutoPrint
+}
 import fs.{fixtureDirs, fixtureFiles}
 import io.{runVerb}
 import json.{Json, asArray, asInt, asString, get, parse}
-import list.{dropWhile, lookup, partitionResults, somes, sort, span, take}
+import list.{
+  chunks,
+  dropWhile,
+  lookup,
+  partitionResults,
+  reverse,
+  somes,
+  sort,
+  span,
+  splitAt,
+  take,
+}
 import path.{basename, dirname, stem}
 import probe_runner.{
   Row, countFloor, diffNote, errorPathFailures, gradeProbeRows, processFailure,
@@ -111,7 +124,8 @@ import string.{
   toInt, toLower, trim, unlines
 }
 import test_process.{
-  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
+  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, scratchDir,
+  spawnTimeoutSeconds, testJobs, underRoot
 }
 
 -- | The stdlib modules `diff_compiler_lex_files` lexed, in its own order.
@@ -613,7 +627,7 @@ effectHoleRejectOuterComputedSrc = unlines [
 {- | Writes `name`.mdk under `scratch` as `src`, then runs `use` on its
    path. `scratch` is shared across every synthesized fixture this test
    needs — `test_process.scratchDir` is a top-level nullary, evaluated ONCE
-   per process (`probe_runner.ownScratch`'s own warning), so a helper that
+   per process, so a helper that
    called `scratchDir` and then `rm -rf`ed it per fixture would delete the
    ONE shared directory out from under every fixture after the first. -}
 withScratchFile : String ->
@@ -844,53 +858,97 @@ typecheckPreludeDep = [
 sortedText : String -> String
 sortedText s = chompNewlines (unlines (sort (lines (chompNewlines s))))
 
-{- | One driver's grading of one fixture against its golden — both sides
-   `LC_ALL=C`-sorted the way the retired script's `sort` was, since the
-   single-error fixtures' line order carries no meaning. -}
-typecheckDriverFailure : String ->
+{- | One driver's grading of one fixture against its golden, given the
+   result of its spawn — both sides `LC_ALL=C`-sorted the way the retired
+   script's `sort` was, since the single-error fixtures' line order carries no
+   meaning. -}
+typecheckDriverGrade : String ->
   String ->
-  List String ->
   String ->
-  <Exec, IO> Option String
-typecheckDriverFailure driver bin args want = match boundedVerb bin args
-  Err e => Some "\{driver}: could not spawn: \{e}"
-  Ok (code, out, err) => match processFailure (basename bin) driver code err
+  Result String (Int, String, String) ->
+  Option String
+typecheckDriverGrade driver _ _ (Err e) =
+  Some "\{driver}: could not spawn: \{e}"
+typecheckDriverGrade driver bin want (Ok (code, out, err)) =
+  match processFailure (basename bin) driver code err
     Some m => Some m
     None =>
       let got = sortedText (stripUnitAutoPrint out)
       if got == want then None else Some "\{driver}: \{diffNote want got}"
 
-{- | One `typecheck_error_fixtures/*.mdk`'s driver(s), routed by
-   `typecheckPreludeDep`: prelude-dependent fixtures run ONLY `check_main`;
-   every other fixture runs `typecheck_main` and `check_main` both. -}
-typecheckErrorFixtureFailures : String -> <Exec, FileRead, IO> List String
-typecheckErrorFixtureFailures path =
+{- | One `typecheck_error_fixtures/*.mdk`'s plan: its golden, sorted, and the
+   driver runs it owes as `(prefix, driver, bin, args)` rows, in spawn order.
+   Prelude-dependent fixtures run ONLY `check_main` (`typecheckPreludeDep`);
+   every other fixture runs `check_main` and `typecheck_main` both. An
+   unreadable golden is the plan's `Err`, and spawns nothing. -}
+typecheckErrorPlan : String ->
+  <FileRead, IO> Result String (String, List (String, String, String, List String))
+typecheckErrorPlan path =
   let name = basename path
   let golden = "\{dirname path}/\{stem path}.tc.golden"
   match readFile golden
-    Err e => ["\{name}: no readable golden \{golden}: \{e}"]
+    Err e => Err "\{name}: no readable golden \{golden}: \{e}"
     Ok raw =>
-      let want = sortedText raw
       let rt = underRoot "stdlib/runtime.mdk"
       let core = underRoot "stdlib/core.mdk"
-      let checkMain = underRoot "test/bin/check_main"
-      let checkArgs = [rt, core, path]
-      let checkResult =
-        map
-          (m => "check/\{name}: \{m}")
-          (typecheckDriverFailure "check" checkMain checkArgs want)
+      let checkBin = underRoot "test/bin/check_main"
+      let checkRun = ("check/\{name}", "check", checkBin, [rt, core, path])
       if elem name typecheckPreludeDep then
-        somes [checkResult]
+        Ok (sortedText raw, [checkRun])
       else
-        let tcMain = underRoot "test/bin/typecheck_main"
-        let tcResult =
-          map
-            (m => "tc_main/\{name}: \{m}")
-            (typecheckDriverFailure "tc_main" tcMain [path] want)
-        somes [tcResult, checkResult]
+        let tcBin = underRoot "test/bin/typecheck_main"
+        let tcRun = ("tc_main/\{name}", "tc_main", tcBin, [path])
+        Ok (sortedText raw, [checkRun, tcRun])
+
+-- The `(bin, args)` rows a plan spawns, in spawn order.
+typecheckPlanRows : Result String (String, List (String, String, String, List String)) ->
+  List (String, List String)
+typecheckPlanRows (Err _) = []
+typecheckPlanRows (Ok (_, runs)) = map ((_, _, bin, args) => (bin, args)) runs
+
+-- Each run of one fixture graded against its share of `results`, in spawn
+-- order, a missing result being an `Err` rather than a skipped run.
+typecheckRunFailures : (String -> String -> String -> Result String (Int, String, String) -> Option String) ->
+  String ->
+  List (String, String, String, List String) ->
+  List (Result String (Int, String, String)) ->
+  List (Option String)
+typecheckRunFailures _ _ [] _ = []
+typecheckRunFailures grade want ((prefix, driver, bin, _) :: runs) (r :: rs) =
+  map (m => "\{prefix}: \{m}") (grade driver bin want r)
+    :: typecheckRunFailures grade want runs rs
+typecheckRunFailures grade want ((prefix, driver, bin, _) :: runs) [] =
+  map
+      (m => "\{prefix}: \{m}")
+      (grade driver bin want (Err "the batch returned no result"))
+    :: typecheckRunFailures grade want runs []
+
+-- The failures of `plans`, in input order, consuming `results` as the rows
+-- of `typecheckPlanRows` were spawned. A fixture's runs are graded in spawn
+-- order and reported in reverse, `typecheck_main` before `check_main`.
+gradeTypecheckPlans : (String -> String -> String -> Result String (Int, String, String) -> Option String) ->
+  List (Result String (String, List (String, String, String, List String))) ->
+  List (Result String (Int, String, String)) ->
+  List String
+gradeTypecheckPlans _ [] _ = []
+gradeTypecheckPlans grade ((Err e) :: rest) results =
+  e :: gradeTypecheckPlans grade rest results
+gradeTypecheckPlans grade ((Ok (want, runs)) :: rest) results =
+  let (mine, others) = splitAt (length runs) results
+  reverse (somes (typecheckRunFailures grade want runs mine))
+    ++ gradeTypecheckPlans grade rest others
+
+-- One `testJobs`-wide group of fixtures: every driver run of the group spawns
+-- as one batch, then the group is graded in input order.
+typecheckErrorGroup : List String -> <Exec, FileRead, IO> List String
+typecheckErrorGroup paths =
+  let plans = map typecheckErrorPlan paths
+  let spawned =
+    boundedVerbsSeconds spawnTimeoutSeconds (flatMap typecheckPlanRows plans)
+  gradeTypecheckPlans typecheckDriverGrade plans spawned
 
 -- | Every `.mdk` fixture directly under `typecheckErrorFixturesDir`,
--- against its two (or one) drivers.
+-- against its two (or one) drivers, `testJobs` fixtures at a time.
 typecheckErrorFailures : <Exec, FileRead, IO> List String
 typecheckErrorFailures =
   match fixtureFiles (underRoot typecheckErrorFixturesDir)
@@ -898,7 +956,7 @@ typecheckErrorFailures =
     Ok paths =>
       let fixtures = sort (filter (endsWith ".mdk") paths)
       countFloor typecheckErrorFixturesDir typecheckErrorFixtureCount fixtures
-        ++ fold (acc p => acc ++ typecheckErrorFixtureFailures p) [] fixtures
+        ++ flatMap typecheckErrorGroup (chunks testJobs fixtures)
 
 -- # `diff_compiler_repl`
 

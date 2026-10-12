@@ -42,27 +42,47 @@
    Runs under `medaka test --native`: every assertion but the derivation's
    own spawns `medaka`, and the interpreter binds no subprocess extern. -}
 
-import list.{somes}
-import string.{join, lines, startsWith, stripPrefix, words}
+import list.{lookup, somes, zip, zipWith}
+import string.{join, lines, startsWith, stripPrefix, unwords, words}
 import test.{Expectation(..), expectEqual, expectEqualLines}
-import test_process.{boundedVerb, medakaBin, underRoot}
+import test_process.{medakaBin, spawnTimeoutSeconds, testJobs, underRoot}
 
 -- # The subject
 
 serveSource : <IO> String
 serveSource = underRoot "pds/serve.mdk"
 
+-- # Spawning
+
+-- | The arguments to `perl` that run `bin` with `args` under the same `alarm`
+-- wrapper `boundedVerb` gives each spawn. `runCommandBatch` runs the batches
+-- below, `testJobs` at a time.
+boundedArgv : String -> List String -> List String
+boundedArgv bin args =
+  ["-e", "alarm \{intToString spawnTimeoutSeconds}; exec @ARGV", "env", bin]
+    ++ args
+
 -- # The checked-in manifests
+
+-- The two `medaka manifest` runs this suite grades, keyed by their extra
+-- arguments. Both run side by side, once, in one batch.
+manifestRuns : <Exec, IO> List (List String, Result String (Int, String, String))
+manifestRuns =
+  let bin = medakaBin
+  let src = serveSource
+  let extras = [[], ["--fn", "serve"]]
+  let argvs = map (extra => boundedArgv bin (["manifest", src] ++ extra)) extras
+  zip extras (runCommandBatch "perl" testJobs argvs)
 
 -- | What `medaka manifest pds/serve.mdk` prints on stdout with `extra`
 -- arguments, or why it printed nothing.
 manifestOf : List String -> <Exec, IO> Result String String
-manifestOf extra =
-  match boundedVerb medakaBin (["manifest", serveSource] ++ extra)
-    Err e => Err "could not run medaka manifest: \{e}"
-    Ok (0, out, _) => Ok out
-    Ok (code, out, err) =>
-      Err "medaka manifest exited \{intToString code}: \{out}\{err}"
+manifestOf extra = match lookup extra manifestRuns
+  None => Err "no medaka manifest run with \{unwords extra}"
+  Some (Err e) => Err "could not run medaka manifest: \{e}"
+  Some (Ok (0, out, _)) => Ok out
+  Some (Ok (code, out, err)) =>
+    Err "medaka manifest exited \{intToString code}: \{out}\{err}"
 
 -- | Passes when the file at `rel` is byte for byte what `medaka manifest`
 -- prints with `extra`.
@@ -164,32 +184,87 @@ test "the unit's sandbox derives the expected policy" =
 
 -- # Checking serve against it
 
+-- | The `check-policy` runs this suite grades, each named: the entry it
+-- checks and the policy it checks it under. A row whose policy cannot be read
+-- is still spawned, with an empty `--allow`, and its verdict is that read
+-- error (see `verdictGraded`), so the spawn's own result is never graded.
+policyRuns : <FileRead, IO> List (String, (String, Result String (List String)))
+policyRuns = [
+  ("serve", ("serve", servePolicy)),
+  ("mutation: ReadWritePaths narrowed", ("serve", narrowedReadWritePolicy)),
+  ("mutation: IPAddressAllow", ("serve", narrowedNetPolicy)),
+  ("runKeygen", ("runKeygen", everyReadPolicy)),
+]
+
+-- The unit's own policy, and the three variants the controls grade.
+servePolicy : <FileRead, IO> Result String (List String)
+servePolicy = policyOf identity
+
+narrowedReadWritePolicy : <FileRead, IO> Result String (List String)
+narrowedReadWritePolicy =
+  policyOf
+    (replacing
+      "ReadWritePaths=/opt/pds/data"
+      "ReadWritePaths=/opt/pds/data/blocks")
+
+narrowedNetPolicy : <FileRead, IO> Result String (List String)
+narrowedNetPolicy =
+  policyOf (replacing "IPAddressAllow=localhost" "IPAddressAllow=10.0.0.1")
+
+everyReadPolicy : <FileRead, IO> Result String (List String)
+everyReadPolicy = everyReadAllowed servePolicy
+
+{- | The verdict of every `policyRuns` row, in order, each as `verdictOf`
+   would report it. The checks run side by side, at most `testJobs` at once. -}
+policyVerdicts : <Exec, FileRead, IO> List (String, Result String (Int, String))
+policyVerdicts =
+  let bin = medakaBin
+  let src = serveSource
+  let argvs =
+    map
+      ((_, (entry, policy)) =>
+        boundedArgv bin (checkPolicyArgs src entry policy))
+      policyRuns
+  zipWith
+    ((name, (_, policy)) run => (name, verdictGraded policy run))
+    policyRuns
+    (runCommandBatch "perl" testJobs argvs)
+
+-- The `check-policy` arguments for `entry` under `policy`.
+checkPolicyArgs : String -> String -> Result String (List String) -> List String
+checkPolicyArgs src entry policy = [
+  "check-policy",
+  src,
+  "--fn",
+  entry,
+  "--allow",
+  allowList policy,
+]
+
+-- The `--allow` value a policy gives, or none when it cannot be read.
+allowList : Result String (List String) -> String
+allowList (Ok policy) = join "," policy
+allowList (Err _) = ""
+
 {- | The exit status of `medaka check-policy pds/serve.mdk --fn <entry>`
-   under `policy`, and the first word of its verdict line.
+   under `policy`, and the first word of its verdict line, graded from the
+   spawn `spawned`.
 
    The verdict word, not only the status, is graded: a run that could not
    read the policy also exits nonzero. -}
-verdictOf : String ->
-  Result String (List String) ->
-  <Exec, IO> Result String (Int, String)
-verdictOf _ (Err e) = Err e
-verdictOf entry (Ok policy) =
-  let args = [
-    "check-policy",
-    serveSource,
-    "--fn",
-    entry,
-    "--allow",
-    join "," policy,
-  ]
-  match boundedVerb medakaBin args
-    Err e => Err "could not run medaka check-policy: \{e}"
-    Ok (code, out, err) => Ok (code, verdictWord (lines (out ++ err)))
+verdictGraded : Result String (List String) ->
+  Result String (Int, String, String) ->
+  Result String (Int, String)
+verdictGraded (Err e) _ = Err e
+verdictGraded (Ok _) (Err e) = Err "could not run medaka check-policy: \{e}"
+verdictGraded (Ok _) (Ok (code, out, err)) =
+  Ok (code, verdictWord (lines (out ++ err)))
 
--- | `serve`'s verdict under `policy`.
-verdictUnder : Result String (List String) ->
-  <Exec, IO> Result String (Int, String)
-verdictUnder policy = verdictOf "serve" policy
+-- | The verdict of the `policyRuns` row named `name`.
+verdictNamed : String -> <Exec, FileRead, IO> Result String (Int, String)
+verdictNamed name = match lookup name policyVerdicts
+  Some verdict => verdict
+  None => Err "no check-policy run named \{name}"
 
 {- | `policy` with its `FileRead` entries replaced by `FileRead` whole: every
    read allowed, which is closer to what `ProtectSystem=strict` permits than
@@ -212,28 +287,18 @@ verdictWord (line :: rest) =
     verdictWord rest
 
 test "serve is accepted under the unit's sandbox" =
-  expectEqual (Ok (0, "accepted.")) (verdictUnder (policyOf identity))
+  expectEqual (Ok (0, "accepted.")) (verdictNamed "serve")
 
 test "mutation control: ReadWritePaths narrowed to data/blocks is rejected" =
   expectEqual
     (Ok (1, "rejected."))
-    (verdictUnder
-      (policyOf
-        (replacing
-          "ReadWritePaths=/opt/pds/data"
-          "ReadWritePaths=/opt/pds/data/blocks")))
+    (verdictNamed "mutation: ReadWritePaths narrowed")
 
 test "mutation control: IPAddressAllow=10.0.0.1 is rejected" =
-  expectEqual
-    (Ok (1, "rejected."))
-    (verdictUnder
-      (policyOf
-        (replacing "IPAddressAllow=localhost" "IPAddressAllow=10.0.0.1")))
+  expectEqual (Ok (1, "rejected.")) (verdictNamed "mutation: IPAddressAllow")
 
 -- `runKeygen` writes `secrets/key.hex` and `secrets/token.hex`, outside the
 -- one directory the unit lets the process write. With every read allowed,
 -- the writes are the only thing left to reject it for.
 test "control: runKeygen, which writes under secrets/, is rejected with every read allowed" =
-  expectEqual
-    (Ok (1, "rejected."))
-    (verdictOf "runKeygen" (everyReadAllowed (policyOf identity)))
+  expectEqual (Ok (1, "rejected.")) (verdictNamed "runKeygen")
