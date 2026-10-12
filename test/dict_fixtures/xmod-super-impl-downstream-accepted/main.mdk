@@ -1,0 +1,6 @@
+import a.{Sup, Box(..), useSup}
+
+impl Sup (Box Int) where
+  sup (Box n) = intToString n
+
+main = println (useSup (Box (1 : Int)))

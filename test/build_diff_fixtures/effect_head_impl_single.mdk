@@ -1,7 +1,7 @@
 -- #1618 — the filed repro verbatim: a LONE effect-carrying impl head.
 --
 -- Expected `2`, derived from the source: effect rows are transparent in impl
--- head position throughout this compiler (`tyIsConcrete`, `tyMatchesAst`,
+-- head position throughout this compiler (`superHeadCovers`,
 -- `tyStep`/`stripTyWrap`, and `fromAstTypeE`, which drops the row when the head
 -- becomes a `Mono` at all), so `impl Sz (<Stdout> Int)` IS an impl at head
 -- `Int` and the receiver `0 : Int` matches it.

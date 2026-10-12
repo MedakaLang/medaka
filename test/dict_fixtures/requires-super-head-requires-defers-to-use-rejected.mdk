@@ -1,0 +1,14 @@
+interface Sup a where
+  sup : a -> String
+interface Sub a requires Sup a where
+  sub : a -> String
+data Box a = Box a
+impl Sup (Box Int) where
+  sup (Box n) = intToString (n + 1)
+impl Sub (Box a) requires Sup (Box a) where
+  sub _ = "sub"
+useSup : Sub a => a -> String
+useSup x = sup x ++ sub x
+main =
+  println (useSup (Box (1 : Int)))
+  println (useSup (Box True))
