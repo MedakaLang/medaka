@@ -1,0 +1,10 @@
+-- `main` reaches `Net` through a helper: refused by every profile that does
+-- not grant `Net` (wasmgc/node here), with the via-chain; admitted by
+-- llvm/native-posix and eval/run.
+lookup : String -> <Net> Result String (List String)
+lookup h = netResolve h
+
+main : <Net, Stdout> Unit
+main = match lookup "example.com"
+  Ok _ => println "resolved"
+  Err e => println e

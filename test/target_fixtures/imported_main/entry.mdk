@@ -1,0 +1,3 @@
+-- The entry's `main` is imported, not its own: a program's entry is the entry
+-- file's own `main`, so there is no entry to check.
+import helper.{main}

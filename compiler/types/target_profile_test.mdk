@@ -1,4 +1,4 @@
-import test.{expectAll, expectEach, expectEqual, expectTrue}
+import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{EffParamTy(..)}
 import toml.{parse}
 import support.manifest.{targetProfile}
@@ -7,6 +7,7 @@ import types.target_profile.{
   backendName,
   buildableNames,
   grantsLabel,
+  isGatedLabel,
   knownNames,
   lookupProfile,
   profileAbi,
@@ -14,6 +15,7 @@ import types.target_profile.{
   profileGrants,
   profileName,
   profileNames,
+  runProfile,
   selectProfile,
 }
 
@@ -160,3 +162,40 @@ test "(b) the manifest's [target] profile is what the accessor reads" =
       expectEqual
         (Ok (Some "wasmgc/edge"))
         (nameOf (selectProfile None (targetProfile doc)))
+
+-- The profile `run` checks against, as (name, granted labels).
+runView : Option String -> Result String (String, List String)
+runView sel =
+  map
+    (p => (profileName p, map fst (profileGrants p)))
+    (map runProfile (selectProfile sel None))
+
+test "run checks against eval/run, narrowed by the selected profile" = expectEach
+  [
+    ("none", expectEqual (Ok ("eval/run", elevenLabels)) (runView None)),
+    (
+      "eval/run",
+      expectEqual (Ok ("eval/run", elevenLabels)) (runView (Some "eval/run")),
+    ),
+    (
+      "native drops FFI",
+      expectEqual
+        (Ok ("eval/run ∩ llvm/native-posix", elevenLabels))
+        (runView (Some "native")),
+    ),
+    (
+      "edge",
+      expectEqual
+        (Ok ("eval/run ∩ wasmgc/edge", ["Stdout", "Stderr", "Clock", "Rand"]))
+        (runView (Some "wasmgc/edge")),
+    ),
+  ]
+
+test "a profile gates the host labels, IO and FFI, and no other label" = expectAll
+  [
+    expectEqual (map (_ => True) elevenLabels) (map isGatedLabel elevenLabels),
+    expectTrue (isGatedLabel "IO"),
+    expectTrue (isGatedLabel "FFI"),
+    expectFalse (isGatedLabel "Log"),
+    expectFalse (isGatedLabel "Cache"),
+  ]

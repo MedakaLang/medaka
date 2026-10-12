@@ -77,9 +77,11 @@ import types.target_profile.{
   buildableNames,
   lookupProfile,
   profileBackend,
+  runProfile,
   selectProfile,
   selectedProfile,
 }
+import tools.target_check.{targetRefusal, targetCapabilityCode}
 import string.{toInt}
 -- S-cli-onto-args (#2355): the ONE argument parser.  Every verb's flag
 -- vocabulary below is an `ArgSpec` value, so its `(known: …)` roster, its
@@ -177,7 +179,6 @@ import driver.diagnostics.{
   optField,
   cjFixJson,
   mkDiag,
-  checkJsonFile,
   checkJsonFileParts,
   CheckJson(..),
   ppCheckJson,
@@ -696,7 +697,9 @@ checkHelpText = stringConcat [
   "                    under --json — the envelope carries diagnostics, not\n",
   "                    scheme dumps)\n",
   "  --allow-internal  permit internal-only externs outside stdlib/\n",
-  "  --target <name>   target profile to carry; nothing refuses yet\n"
+  "  --target <name>   refuse a program whose `main` performs a label this\n",
+  "                    target profile does not grant (default: [target] in\n",
+  "                    medaka.toml, else no target check)\n"
 ]
 
 -- C2: `check`'s whole flag vocabulary, as `checkHelpText` documents it.
@@ -717,7 +720,7 @@ checkArgSpec =
       switch
         ["--allow-internal"]
         "permit internal-only externs outside stdlib/",
-      value ["--target"] "NAME" "target profile to carry (nothing refuses yet)",
+      value ["--target"] "NAME" "target profile `main` must fit",
     ])
 
 runCheckCmd : List String -> <IO> Unit
@@ -1173,6 +1176,9 @@ checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decl
       let dump = stripWarningLines (runCheckFromDecls rsrc csrc decls)
       let filtered = userSchemeLines decls dump
       let report = if typesMode then dump else filtered
+      -- The target check elaborates the program again, so it runs once the
+      -- report is rendered (see the multi-module arm below).
+      let _ = checkTargetGate rsrc csrc tsrc target [(mid, decls)]
       let _ = putStrLn report
       -- #916: a clean single-file check gave no unambiguous success signal —
       -- "no error lines among the interface dump" was the only tell, and on a
@@ -1235,7 +1241,12 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
         let _ = putStr errText
         exit 1
       (None, projWarns, hiddenCount, perMod) =>
-        let _ = putStrLn (runCheckModulesFromDiags rtD coreD modsD perMod)
+        let report = runCheckModulesFromDiags rtD coreD modsD perMod
+        -- After the report is rendered: the target check elaborates the graph
+        -- again, and a report rendered after that drive can name a scheme's
+        -- type variables differently (`Speak b => a -> String`).
+        let _ = checkTargetGate rsrc csrc tsrc target mods
+        let _ = putStrLn report
         -- F-3d: an IMPORTED module's ⊑-incomparable pair, LOCATED against that
         -- module's own file.  The line above reaches the ENTRY's diagnostics only,
         -- which is why the entry triple is special-cased here (not the whole list)
@@ -1268,6 +1279,92 @@ lastModPair : List (String, List Decl) -> Option (String, List Decl)
 lastModPair [] = None
 lastModPair [p] = Some p
 lastModPair (_ :: rest) = lastModPair rest
+
+-- ── the target check ────────────────────────────────────────────────────────
+-- `check`'s refusal of a program its typecheck accepted, when a profile is
+-- selected: the refusal is the verdict, so it replaces the clean report.
+checkTargetGate : String ->
+  String ->
+  String ->
+  String ->
+  List (String, List Decl) ->
+  <IO> Unit
+checkTargetGate rsrc csrc tsrc target mods =
+  match checkTargetRefusal rsrc csrc target mods
+    None => ()
+    Some d =>
+      let _ = emitAbortTotal ()
+      let _ = ePutStrLn (ppDiagCliLines (srcLinesArr tsrc) target d)
+      exit 1
+
+-- The selected profile's refusal of a typechecked program, if any.
+checkTargetRefusal : String ->
+  String ->
+  String ->
+  List (String, List Decl) ->
+  <IO> Option Diag
+checkTargetRefusal rsrc csrc target mods = match !selectedProfile
+  None => None
+  Some profile =>
+    targetRefusal
+      profile
+      target
+      (analyzeProgram
+        (desugaredPrelude rsrc)
+        (desugaredPrelude csrc)
+        (map desugarPair mods))
+
+-- `check --json`'s copy of the same refusal, folded into the entry's file.
+-- The check already loaded this program, so a load failure here is not one
+-- the target check can pass over.
+checkTargetJson : String ->
+  String ->
+  String ->
+  String ->
+  CheckJson ->
+  <IO> Option CheckJson
+checkTargetJson rsrc csrc target stdlibDir cj = match !selectedProfile
+  None => None
+  Some _ =>
+    let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+    let refusal = match loadProgramFilesLocatedE (_ => None) target roots
+      Ok mp => checkTargetRefusal rsrc csrc target (map dropPathTriple mp)
+      Err _ =>
+        Some
+          (mkDiag
+            SevError
+            targetCapabilityCode
+            "`\{target}` could not be loaded again to check it against the target"
+            None)
+    match (refusal, cj)
+      (Some d, CjParts entry triples) =>
+        Some (CjParts entry (cjFoldIntoFile entry [d] triples))
+      _ => None
+
+-- `run`'s refusal, against `eval/run` and the selected profile together.  An
+-- entry `run` cannot start at all is left to `finishRunEval`'s own refusal.
+runTargetGate : Bool ->
+  String ->
+  String ->
+  List (String, List Decl) ->
+  EntryAnalysis ->
+  <IO> Unit
+runTargetGate jsonMode fileKey target mods analysis =
+  let startable = match lastModPair mods
+    Some (_, edecls) => isNone (mainEntryError edecls)
+    None => False
+  let refusal =
+    if startable then
+      targetRefusal (runProfile !selectedProfile) target analysis
+    else
+      None
+  match refusal
+    None => ()
+    Some d =>
+      let src = readFileSafe target
+      match jsonMode
+        True => runAbortJson [(fileKey, src, [d])]
+        False => runAbort (ppDiagCliLines (srcLinesArr src) target d)
 
 -- ── `run`'s argv filter — TrailingRaw semantics (S-5, #2355 residual B) ────
 -- S-cli-onto-args (#2355) migrated every other verb onto `stdlib/args.mdk`.
@@ -1426,8 +1523,8 @@ requireArgs sp argv = match parseArgs sp argv
 -- Exits 1 if any error diagnostic; 0 otherwise.
 -- The whole routing (parse-error / load-error / single / multi module) now lives
 -- in `checkJsonFile` (driver.diagnostics), shared with the `medaka mcp`
--- medaka_check tool.  This driver just prints the JSON and gates the exit code —
--- stdout is byte-identical to the old inline body (diff_native_cli golden).
+-- medaka_check tool.  This driver prints the JSON and gates the exit code, and
+-- on a clean program folds in the selected profile's refusal (`checkTargetJson`).
 -- #333: `target` is `readFile`'d FIRST (mirrors `medaka_check`'s MCP handler,
 -- `runCheckTool` in tools/mcp.mdk) so a nonexistent/unreadable path reports a
 -- file-not-found diagnostic instead of falling into `checkJsonFile`'s import
@@ -1443,10 +1540,17 @@ runCheckJsonCmd allowInternal rsrc csrc target stdlibDir =
       let _ = println (cjSourceReadJson target e)
       exit 1
     Ok _ =>
-      let (json, hasErr) =
-        checkJsonFile allowInternal rsrc csrc target stdlibDir
-      let _ = println json
-      if hasErr then exit 1
+      let (cj, hasErr) =
+        checkJsonFileParts allowInternal rsrc csrc target stdlibDir
+      let refused =
+        if hasErr then None else checkTargetJson rsrc csrc target stdlibDir cj
+      match refused
+        Some refusedCj =>
+          let _ = println (ppCheckJson refusedCj)
+          exit 1
+        None =>
+          let _ = println (ppCheckJson cj)
+          if hasErr then exit 1
 
 -- #1078: `medaka build --json`'s envelope for a build-STAGE failure — the
 -- emitter/clang step itself, AFTER the front-end gate (checkJsonFile, reused
@@ -2813,7 +2917,8 @@ runHelpText = stringConcat [
   "                    text on stderr and exits 1 with no envelope, so a\n",
   "                    consumer must handle both.\n",
   "  --allow-internal  permit internal-only externs outside stdlib/\n",
-  "  --target <name>   target profile to carry; nothing refuses yet\n",
+  "  --target <name>   target profile `main` must also fit; every run is\n",
+  "                    checked against eval/run\n",
   "  --release         accepted, ignored — the interpreter has no release mode.\n",
   "                    There is no `build --release`; a native build is always\n",
   "                    optimized. Kept so a `--release` in a shared script does\n",
@@ -2836,7 +2941,7 @@ runArgSpec = spec "run" [
   switch ["--json"] "emit the structured-diagnostics envelope on stderr",
   switch ["--allow-internal"] "permit internal-only externs outside stdlib/",
   switch ["--release"] "accepted and ignored (eval is never optimized)",
-  value ["--target"] "NAME" "target profile to carry (nothing refuses yet)",
+  value ["--target"] "NAME" "target profile `main` must also fit",
 ]
 
 -- The `eval` + `total` phase lines, as a named partially-applied function so the
@@ -3008,8 +3113,8 @@ runRunCmd argv =
                         (filter diagIsError surfaceDiags)))
             True =>
               let _ = resetTypeErrorsSticky ()
-              let (coreE, modsE, perMod, residual, _, _) =
-                elaborateRun rtD coreD modsD
+              let analysis = elaborateRun rtD coreD modsD
+              let (coreE, modsE, perMod, residual, _, _) = analysis.eaElab
               -- Read the sticky flag before `analyzeFinish`: the auto-print
               -- obligation re-check it runs typechecks a synthetic wrapped
               -- program, whose errors would otherwise land in this read.
@@ -3025,6 +3130,7 @@ runRunCmd argv =
                     False =>
                       runAbort (residualOrGeneric pathMap target residual)
                   False =>
+                    let _ = runTargetGate jsonMode target target mods analysis
                     let perfTCheck = now ()
                     let _ =
                       emitPhase perfOn "check" (perfTCheck - perfTLoad) target
@@ -3084,8 +3190,8 @@ runRunCmd argv =
             -- from a second, check-only pass over the same graph.
             "" =>
               let _ = resetTypeErrorsSticky ()
-              let (coreE, modsE, perMod, residual, _, _) =
-                elaborateRun rtD coreD modsD
+              let analysis = elaborateRun rtD coreD modsD
+              let (coreE, modsE, perMod, residual, _, _) = analysis.eaElab
               match elaboratedProjectDiags rtD coreD modsWithPath modsD perMod
                 (Some errText, _, _) => match jsonMode
                   True =>
@@ -3118,6 +3224,13 @@ runRunCmd argv =
                     False =>
                       runAbort (residualOrGeneric pathMap target residual)
                   False =>
+                    let _ =
+                      runTargetGate
+                        jsonMode
+                        (relDiagPath root target)
+                        target
+                        mods
+                        analysis
                     let perfTCheck = now ()
                     let _ =
                       emitPhase perfOn "check" (perfTCheck - perfTLoad) target
@@ -3162,20 +3275,26 @@ desugarPair (mid, p) = (mid, desugar p)
 elaborateRun : List Decl ->
   List Decl ->
   List (String, List Decl) ->
-  <IO> ElabResult
+  <IO> EntryAnalysis
 elaborateRun rtD coreD modsD =
-  let plain = elaborateModules rtD coreD modsD
+  let analysis = analyzeProgram rtD coreD modsD
   match asyncMainShapeError modsD
     Some msg =>
       let _ = runAbort msg
-      plain
+      analysis
     None =>
       if shouldAsyncWrapMain "runAsyncMain" modsD then
-        plainPerModuleOf
-          plain
-          (elaborateModules rtD coreD (asyncWrapModules "runAsyncMain" modsD))
+        { analysis |
+          eaElab =
+            plainPerModuleOf
+              analysis.eaElab
+              (elaborateModules
+                rtD
+                coreD
+                (asyncWrapModules "runAsyncMain" modsD)),
+        }
       else
-        plain
+        analysis
 
 -- The trees `run` evaluates for a zero-arg value `main` of a non-Unit type: the
 -- auto-print-wrapped program (driver/main_autoprint.mdk), so `run` prints the

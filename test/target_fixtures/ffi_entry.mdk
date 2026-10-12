@@ -1,0 +1,7 @@
+-- A foreign call: `FFI` is outside the `IO` join, granted on
+-- llvm/native-posix only, so `run` (eval/run) and every wasm profile refuse it
+-- at check, before the interpreter could reach the call.
+extern ffiAddInts : Int -> Int -> <FFI> Int
+
+main : <Stdout, FFI> Unit
+main = println (ffiAddInts 20 22)

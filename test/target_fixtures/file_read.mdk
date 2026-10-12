@@ -1,0 +1,6 @@
+-- `FileRead` with a literal path: granted by wasmgc/browser-worker, not by
+-- wasmgc/edge.
+main : <FileRead, Stdout> Unit
+main = match readFile "data.txt"
+  Ok s => println s
+  Err e => println e

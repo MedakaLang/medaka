@@ -1,0 +1,5 @@
+export
+main : <Net, Stdout> Unit
+main = match netResolve "example.com"
+  Ok _ => println "resolved"
+  Err e => println e

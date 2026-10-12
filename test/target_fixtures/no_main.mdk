@@ -1,0 +1,4 @@
+-- A file with no `main`: plain `check` accepts it, but with a profile
+-- selected there is no entry to check, which is a refusal.
+double : Int -> Int
+double n = n * 2

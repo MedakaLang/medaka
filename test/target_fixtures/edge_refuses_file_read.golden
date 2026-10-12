@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/file_read.mdk:3:0: `main` performs <FileRead>, and the target `wasmgc/edge` does not grant FileRead
+  |
+3 | main : <FileRead, Stdout> Unit
+  | ^

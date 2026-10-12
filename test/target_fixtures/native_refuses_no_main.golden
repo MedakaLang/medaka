@@ -1,0 +1,7 @@
+exit=1
+--- stdout
+--- stderr
+error: <fixtures>/no_main.mdk:1:0: no `main` entry found, so there is nothing to check against the target `llvm/native-posix`; add `main = ...`
+  |
+1 | -- A file with no `main`: plain `check` accepts it, but with a profile
+  | ^

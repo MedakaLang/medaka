@@ -51,6 +51,9 @@ backendName BackendEval = "eval"
 wholeDomain : List String -> List (String, EffParamTy)
 wholeDomain labels = map (l => (l, EPTop)) labels
 
+-- The eleven host labels: the labels `IO` is the join of, and with `FFI` the
+-- only labels a profile gates.
+export
 hostLabels : List String
 hostLabels = [
   "Stdout",
@@ -76,11 +79,7 @@ profileRows = [
     BackendLlvm
     "C symbols"
     (wholeDomain (hostLabels ++ ["FFI"])),
-  TargetProfile
-    "eval/run"
-    BackendEval
-    "ioExternBindings"
-    (wholeDomain hostLabels),
+  evalRunProfile,
   TargetProfile
     "wasmgc/node"
     BackendWasmgc
@@ -109,6 +108,14 @@ profileRows = [
     (wholeDomain ["Stdout", "Stderr", "Clock", "Rand"]),
   TargetProfile "wasmgc/wasi-p2" BackendWasmgc "WIT" [],
 ]
+
+evalRunProfile : TargetProfile
+evalRunProfile =
+  TargetProfile
+    "eval/run"
+    BackendEval
+    "ioExternBindings"
+    (wholeDomain hostLabels)
 
 aliasRows : List (String, String)
 aliasRows = [("native", "llvm/native-posix"), ("wasm", "wasmgc/node")]
@@ -170,8 +177,30 @@ buildableNames =
       Err _ => False)
     knownNames
 
+-- Is this label one a profile gates: a host label, their join `IO`, or `FFI`?
+-- Any other label is a user effect, admitted on every profile.
+export
+isGatedLabel : String -> Bool
+isGatedLabel l = l == "IO" || l == "FFI" || any (== l) hostLabels
+
+-- What `medaka run` checks against: the interpreter's grants, narrowed to the
+-- labels the selected profile also grants.  `eval/run` grants each of its
+-- labels over the whole domain, so the selected profile's own entries for
+-- those labels are the intersection.
+export
+runProfile : Option TargetProfile -> TargetProfile
+runProfile None = evalRunProfile
+runProfile (Some p) =
+  if profileName p == profileName evalRunProfile then
+    p
+  else
+    TargetProfile
+      "\{profileName evalRunProfile} ∩ \{profileName p}"
+      BackendEval
+      (profileAbi evalRunProfile)
+      (filter (g => grantsLabel evalRunProfile (fst g)) (profileGrants p))
+
 -- The profile `check` and `run` resolved from `--target` or the manifest.
--- Nothing reads it yet; it is the seam a later stage consults.
 export
 selectedProfile : Ref (Option TargetProfile)
 selectedProfile = Ref None

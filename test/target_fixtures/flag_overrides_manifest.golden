@@ -1,0 +1,4 @@
+exit=0
+--- stdout
+main : <Net, Stdout> Unit
+--- stderr
