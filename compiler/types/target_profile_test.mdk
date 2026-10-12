@@ -1,0 +1,162 @@
+import test.{expectAll, expectEach, expectEqual, expectTrue}
+import frontend.ast.{EffParamTy(..)}
+import toml.{parse}
+import support.manifest.{targetProfile}
+import types.target_profile.{
+  TargetProfile,
+  backendName,
+  buildableNames,
+  grantsLabel,
+  knownNames,
+  lookupProfile,
+  profileAbi,
+  profileBackend,
+  profileGrants,
+  profileName,
+  profileNames,
+  selectProfile,
+}
+
+isTop : (String, EffParamTy) -> Bool
+isTop (_, EPTop) = True
+isTop _ = False
+
+-- The labels a profile grants, or the lookup error.
+grantedBy : String -> Result String (List String)
+grantedBy name = map (p => map fst (profileGrants p)) (lookupProfile name)
+
+elevenLabels : List String
+elevenLabels = [
+  "Stdout",
+  "Stderr",
+  "Stdin",
+  "Clock",
+  "Env",
+  "Exec",
+  "Rand",
+  "FileRead",
+  "FileWrite",
+  "Net",
+  "Signal",
+]
+
+test "(a) the six grant sets are TARGETS-DESIGN 8.1" = expectEach [
+  (
+    "llvm/native-posix",
+    expectEqual (Ok (elevenLabels ++ ["FFI"])) (grantedBy "llvm/native-posix"),
+  ),
+  ("eval/run", expectEqual (Ok elevenLabels) (grantedBy "eval/run")),
+  (
+    "wasmgc/node",
+    expectEqual
+      (Ok [
+        "Stdout",
+        "Stderr",
+        "Stdin",
+        "Clock",
+        "Env",
+        "Rand",
+        "FileRead",
+        "FileWrite",
+      ])
+      (grantedBy "wasmgc/node"),
+  ),
+  (
+    "wasmgc/browser-worker",
+    expectEqual
+      (Ok ["Stdout", "Stderr", "Clock", "Rand", "FileRead", "FileWrite"])
+      (grantedBy "wasmgc/browser-worker"),
+  ),
+  (
+    "wasmgc/edge",
+    expectEqual
+      (Ok ["Stdout", "Stderr", "Clock", "Rand"])
+      (grantedBy "wasmgc/edge"),
+  ),
+  ("wasmgc/wasi-p2", expectEqual (Ok []) (grantedBy "wasmgc/wasi-p2")),
+]
+
+test "(a) every grant is a label's whole domain" =
+  expectEach
+    (map
+      (n => (
+        n,
+        expectEqual
+          (Ok True)
+          (map (p => all isTop (profileGrants p)) (lookupProfile n)),
+      ))
+      profileNames)
+
+test "(a) backend tags, host ABI and label lookup" = expectAll [
+  expectEqual
+    (Ok "llvm/C symbols")
+    (map
+      (p => backendName (profileBackend p) ++ "/" ++ profileAbi p)
+      (lookupProfile "native")),
+  expectEqual
+    (Ok "eval")
+    (map (p => backendName (profileBackend p)) (lookupProfile "eval/run")),
+  expectEqual
+    (Ok "wasmgc/WIT")
+    (map
+      (p => backendName (profileBackend p) ++ "/" ++ profileAbi p)
+      (lookupProfile "wasmgc/wasi-p2")),
+  expectEqual
+    (Ok True)
+    (map (p => grantsLabel p "Net") (lookupProfile "eval/run")),
+  expectEqual
+    (Ok False)
+    (map (p => grantsLabel p "Net") (lookupProfile "wasmgc/edge")),
+]
+
+test "(b) aliases resolve to their profile" = expectAll [
+  expectEqual
+    (Ok "llvm/native-posix")
+    (map profileName (lookupProfile "native")),
+  expectEqual (Ok "wasmgc/node") (map profileName (lookupProfile "wasm")),
+]
+
+test "(b) an unknown name is an error naming every known name" =
+  expectEqual
+    (Err
+      "unknown target `nosuch` (known: llvm/native-posix, eval/run, wasmgc/node, wasmgc/browser-worker, wasmgc/edge, wasmgc/wasi-p2, native, wasm)")
+    (map profileName (lookupProfile "nosuch"))
+
+test "(b) the known names are the profiles then the aliases" =
+  expectEqual (profileNames ++ ["native", "wasm"]) knownNames
+
+test "build can emit every non-eval name" =
+  expectEqual
+    [
+      "llvm/native-posix",
+      "wasmgc/node",
+      "wasmgc/browser-worker",
+      "wasmgc/edge",
+      "wasmgc/wasi-p2",
+      "native",
+      "wasm",
+    ]
+    buildableNames
+
+nameOf : Result String (Option TargetProfile) -> Result String (Option String)
+nameOf = map (map profileName)
+
+test "(b) the flag overrides the manifest, which overrides nothing" = expectAll
+  [
+    expectEqual
+      (Ok (Some "eval/run"))
+      (nameOf (selectProfile (Some "eval/run") (Some "wasmgc/edge"))),
+    expectEqual
+      (Ok (Some "wasmgc/edge"))
+      (nameOf (selectProfile None (Some "wasmgc/edge"))),
+    expectEqual (Ok None) (nameOf (selectProfile None None)),
+    expectTrue (isErr (selectProfile (Some "nosuch") (Some "eval/run"))),
+  ]
+
+test "(b) the manifest's [target] profile is what the accessor reads" =
+  match parse "[target]\nprofile = \"wasmgc/edge\"\n"
+    Err e => expectEqual "parse" e
+    Ok doc =>
+      expectEqual
+        (Ok (Some "wasmgc/edge"))
+        (nameOf (selectProfile None (targetProfile doc)))

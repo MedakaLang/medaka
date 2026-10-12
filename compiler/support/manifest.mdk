@@ -3,7 +3,7 @@
    `medaka.toml`'s field layout is the COMPILER's business, not the standard
    library's (I-1): a user reading `docs/stdlib/toml.md` should find a general
    TOML reader, not four functions about a file format they may never write.
-   These four accessors live here rather than in `stdlib/toml.mdk`, and must
+   These accessors live here rather than in `stdlib/toml.mdk`, and must
    not move back.
 
    The ruling that put them here is "manifest-schema accessors do not live in
@@ -63,6 +63,17 @@ packageEntry doc = getString "package.entry" doc
 export
 workspaceMembers : Toml -> Option (List String)
 workspaceMembers doc = getArray "workspace.members" doc
+
+{- | `profile` from a parsed `[target]` section, or `None` when it is absent.
+
+   > targetProfile (okDoc "[target]\nprofile = \"wasmgc/edge\"")
+   Some "wasmgc/edge"
+
+   > targetProfile (okDoc "[package]\nname = \"x\"")
+   None -}
+export
+targetProfile : Toml -> Option String
+targetProfile doc = getString "target.profile" doc
 
 -- Doctest helper: parse a known-good TOML source.  A parse failure here would
 -- be a bug in the fixture, not in the accessor under test, so it panics rather

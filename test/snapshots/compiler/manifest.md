@@ -1,5 +1,5 @@
 # META
-source_lines=74
+source_lines=85
 stages=DESUGAR,MARK
 # SOURCE
 {- manifest.mdk — typed accessors for `medaka.toml`'s own schema.
@@ -7,7 +7,7 @@ stages=DESUGAR,MARK
    `medaka.toml`'s field layout is the COMPILER's business, not the standard
    library's (I-1): a user reading `docs/stdlib/toml.md` should find a general
    TOML reader, not four functions about a file format they may never write.
-   These four accessors live here rather than in `stdlib/toml.mdk`, and must
+   These accessors live here rather than in `stdlib/toml.mdk`, and must
    not move back.
 
    The ruling that put them here is "manifest-schema accessors do not live in
@@ -68,6 +68,17 @@ export
 workspaceMembers : Toml -> Option (List String)
 workspaceMembers doc = getArray "workspace.members" doc
 
+{- | `profile` from a parsed `[target]` section, or `None` when it is absent.
+
+   > targetProfile (okDoc "[target]\nprofile = \"wasmgc/edge\"")
+   Some "wasmgc/edge"
+
+   > targetProfile (okDoc "[package]\nname = \"x\"")
+   None -}
+export
+targetProfile : Toml -> Option String
+targetProfile doc = getString "target.profile" doc
+
 -- Doctest helper: parse a known-good TOML source.  A parse failure here would
 -- be a bug in the fixture, not in the accessor under test, so it panics rather
 -- than degrading the doctest to a `None` that looks like an absent key.
@@ -86,6 +97,8 @@ okDoc src = match parse src
 (DFunDef false "packageEntry" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.entry"))) (EVar "doc")))
 (DTypeSig true "workspaceMembers" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "workspaceMembers" ((PVar "doc")) (EApp (EApp (EVar "getArray") (ELit (LString "workspace.members"))) (EVar "doc")))
+(DTypeSig true "targetProfile" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "targetProfile" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "target.profile"))) (EVar "doc")))
 (DTypeSig false "okDoc" (TyFun (TyCon "String") (TyCon "Toml")))
 (DFunDef false "okDoc" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Ok" (PVar "doc")) () (EVar "doc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EApp (EVar "stringConcat") (EListLit (ELit (LString "manifest doctest fixture failed to parse: ")) (EVar "e")))))))
 # MARK
@@ -98,5 +111,7 @@ okDoc src = match parse src
 (DFunDef false "packageEntry" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "package.entry"))) (EVar "doc")))
 (DTypeSig true "workspaceMembers" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "workspaceMembers" ((PVar "doc")) (EApp (EApp (EVar "getArray") (ELit (LString "workspace.members"))) (EVar "doc")))
+(DTypeSig true "targetProfile" (TyFun (TyCon "Toml") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "targetProfile" ((PVar "doc")) (EApp (EApp (EVar "getString") (ELit (LString "target.profile"))) (EVar "doc")))
 (DTypeSig false "okDoc" (TyFun (TyCon "String") (TyCon "Toml")))
 (DFunDef false "okDoc" ((PVar "src")) (EMatch (EApp (EVar "parse") (EVar "src")) (arm (PCon "Ok" (PVar "doc")) () (EVar "doc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "panic") (EApp (EVar "stringConcat") (EListLit (ELit (LString "manifest doctest fixture failed to parse: ")) (EVar "e")))))))
