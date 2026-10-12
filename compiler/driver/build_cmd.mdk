@@ -25,7 +25,7 @@
 -- the emitter's own diagnostic surfaced.
 
 import support.util.{stringTrim, joinWith, joinNl}
-import string.{words, contains, startsWith}
+import string.{words, contains, startsWith, endsWith}
 import io.{runCommandOk}
 import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{
@@ -418,6 +418,19 @@ gcArchiveIn libDir =
 export
 gcStaticLibs : String -> List String -> List String
 gcStaticLibs archive libs = map (t => if t == "-lgc" then archive else t) libs
+
+-- The inverse, for the link retry: each libgc archive path becomes `-L<its dir>
+-- -lgc`.  Flags with no archive come back unchanged.
+export
+gcSharedLibs : List String -> List String
+gcSharedLibs libs = flatMap gcSharedFlag libs
+
+gcSharedFlag : String -> List String
+gcSharedFlag t =
+  if t == "libgc.a" || endsWith "/libgc.a" t then
+    ["-L" ++ dirOf t, "-lgc"]
+  else
+    [t]
 
 -- Link flags for a Boehm GC install prefix: its archive if it has one.
 gcPrefixLibs : String -> <IO> List String
@@ -1790,25 +1803,40 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj profile pe
       -- Mach-O-only `-Wl,-stack_size` link flag is needed on either platform.
       -- `-pthread` (thread runtime) and `-lm` (math externs) go on every link.
       let sectionsLink = gcSectionsLinkFlag ()
-      let clangArgs =
-        [optFlag, "-pthread"]
-          ++ ltoLinkFlags lto
-          ++ gcSectionsCflags
-          ++ gcCflags
-          ++ linkInputs
-          ++ libFlags
-          ++ gcLibs
-          ++ [sectionsLink, "-lm", "-o", outPath]
+      let argsWith =
+        libs =>
+          [optFlag, "-pthread"]
+            ++ ltoLinkFlags lto
+            ++ gcSectionsCflags
+            ++ gcCflags
+            ++ linkInputs
+            ++ libFlags
+            ++ libs
+            ++ [sectionsLink, "-lm", "-o", outPath]
       -- Bound to a `let` (not matched directly) purely so the stopwatch can be read
       -- ONCE, after the clang child exits, without duplicating the row across three
       -- result arms.  Medaka is strict, so this runs clang exactly where the
       -- `match` would.
-      let ccRes = runCommandOk cc clangArgs
+      let ccRes = linkWithGcFallback cc argsWith gcLibs
       let tClang = now ()
       let _ = emitPhase perfOn "clang" (tClang - tRtObj) inputAbs
       match ccRes
         Err e => buildErr "error: linking \{inputAbs} failed\n\{e}"
         Ok _ => buildOk "built \{inputAbs} -> \{outPath}"
+
+-- A link against libgc.a that fails is retried once against the shared library,
+-- so an archive this toolchain cannot link (non-PIC, or another compiler's LTO
+-- objects) costs a second link instead of the build.  A failed retry reports its
+-- own error, the one a build that never saw the archive would have given.
+linkWithGcFallback : String ->
+  (List String -> List String) ->
+  List String ->
+  <IO> Result String (String, String)
+linkWithGcFallback cc argsWith gcLibs = match runCommandOk cc (argsWith gcLibs)
+  Ok out => Ok out
+  Err e =>
+    let shared = gcSharedLibs gcLibs
+    if shared == gcLibs then Err e else runCommandOk cc (argsWith shared)
 
 -- ---- the prelude object (issue #118) ---------------------------------------
 -- MEDAKA_PRELUDE_OBJ, honoured only when it names a file that exists (same
