@@ -14193,47 +14193,6 @@ EQUAL
 LBRACKET
 RBRACKET
 NEWLINE
-IDENT "stripComments"
-COLON
-UPPER "List"
-UPPER "RawTok"
-ARROW
-UPPER "List"
-UPPER "RawTok"
-NEWLINE
-IDENT "stripComments"
-LBRACKET
-RBRACKET
-EQUAL
-LBRACKET
-RBRACKET
-NEWLINE
-IDENT "stripComments"
-LPAREN
-LPAREN
-UPPER "RComment"
-UNDERSCORE
-UNDERSCORE
-RPAREN
-CONS
-IDENT "rest"
-RPAREN
-EQUAL
-IDENT "stripComments"
-IDENT "rest"
-NEWLINE
-IDENT "stripComments"
-LPAREN
-IDENT "r"
-CONS
-IDENT "rest"
-RPAREN
-EQUAL
-IDENT "r"
-CONS
-IDENT "stripComments"
-IDENT "rest"
-NEWLINE
 IDENT "layoutWithOffsets"
 COLON
 UPPER "Array"
@@ -14257,8 +14216,6 @@ IDENT "elseFilter"
 LPAREN
 IDENT "layout"
 LPAREN
-IDENT "stripComments"
-LPAREN
 IDENT "dedentTripleInterp"
 LPAREN
 IDENT "scan"
@@ -14267,7 +14224,6 @@ IDENT "len"
 INT 0
 INT 0
 INT 0
-RPAREN
 RPAREN
 RPAREN
 LBRACKET
@@ -16025,8 +15981,6 @@ IDENT "elseFilterPairs"
 LPAREN
 IDENT "layoutPairs"
 LPAREN
-IDENT "stripComments"
-LPAREN
 IDENT "dedentTripleInterp"
 LPAREN
 IDENT "scan"
@@ -16035,7 +15989,6 @@ IDENT "len"
 INT 0
 INT 0
 INT 0
-RPAREN
 RPAREN
 RPAREN
 LBRACKET

@@ -1,5 +1,5 @@
 # META
-source_lines=2830
+source_lines=2816
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka lexer.
@@ -364,7 +364,7 @@ describeToken (TLexError s) = s
 -- `RComment startPos text` carries a captured comment out-of-band: `startPos`
 -- is the source char offset of the opening `--`/`{-`, `text` the full lexeme
 -- (including the `--` / `{- … -}` delimiters).  These markers are produced by the comment arms of `scanAt` and
--- *stripped before the layout pass* (`stripComments`), so the Token stream the
+-- *skipped by the layout pass* (its `RComment` arms are no-ops), so the Token stream the
 -- parser consumes is byte-identical to before — comments are purely a side
 -- channel.  `collectComments` re-reads the raw stream to surface them.
 -- `RTok tok startOff endOff` carries the source char offsets of the token's
@@ -2398,24 +2398,15 @@ elseFilter ((TNewline, _) :: (TThen, eoff) :: rest) =
 elseFilter (t :: rest) = t :: elseFilter rest
 elseFilter [] = []
 
--- Drop the out-of-band `RComment` markers before the layout pass, so the Token
--- stream the parser consumes is byte-identical regardless of comment capture.
-stripComments : List RawTok -> List RawTok
-stripComments [] = []
-stripComments ((RComment _ _) :: rest) = stripComments rest
-stripComments (r :: rest) = r :: stripComments rest
-
 -- The layout pass over the raw stream, carrying offsets.  Shared by `tokenize`
 -- (which drops offsets) and `tokenizeWithOffsets` (the position side-channel).
+-- `RComment` markers pass through untouched: `layout` treats them as no-ops, and
+-- no lookahead in layout can reach one (a comment never directly follows an
+-- `RNewline`; `afterNl` suppresses the newline before a comment line).
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 layoutWithOffsets src len =
   elseFilter
-    (layout
-      (stripComments (dedentTripleInterp (scan src len 0 0 0)))
-      [0]
-      []
-      None
-      False)
+    (layout (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
 
 -- Layout variant that threads both START and END offsets per token, used by
 -- `tokenizeWithOffsetPairs`.  Real tokens carry their RTok start+end; synthetic
@@ -2642,12 +2633,7 @@ elseFilterPairs [] = []
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsetPairs src len =
   elseFilterPairs
-    (layoutPairs
-      (stripComments (dedentTripleInterp (scan src len 0 0 0)))
-      [0]
-      []
-      None
-      False)
+    (layoutPairs (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
 
 export
 tokenize : String -> List Token
@@ -2778,8 +2764,8 @@ advanceLine src target p line
 -- lexeme text (the `--…` / `{- … -}`, delimiters included).  Surfaced in
 -- SOURCE ORDER.
 -- `format_program`/the comment-preserving printer consume this
--- list keyed by position; the parser is unaffected (comments are stripped
--- before layout — see `stripComments`).
+-- list keyed by position; the parser is unaffected (the layout pass skips
+-- comment markers — see `layout`).
 export data Comment = Comment Int Int String
 
 export
@@ -3524,12 +3510,8 @@ collectComments s =
 (DFunDef false "elseFilter" ((PCons (PTuple (PCon "TNewline") PWild) (PCons (PTuple (PCon "TThen") (PVar "eoff")) (PVar "rest")))) (EBinOp "::" (ETuple (EVar "TThen") (EVar "eoff")) (EApp (EVar "elseFilter") (EVar "rest"))))
 (DFunDef false "elseFilter" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "elseFilter") (EVar "rest"))))
 (DFunDef false "elseFilter" ((PList)) (EListLit))
-(DTypeSig false "stripComments" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok"))))
-(DFunDef false "stripComments" ((PList)) (EListLit))
-(DFunDef false "stripComments" ((PCons (PCon "RComment" PWild PWild) (PVar "rest"))) (EApp (EVar "stripComments") (EVar "rest")))
-(DFunDef false "stripComments" ((PCons (PVar "r") (PVar "rest"))) (EBinOp "::" (EVar "r") (EApp (EVar "stripComments") (EVar "rest"))))
 (DTypeSig false "layoutWithOffsets" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int"))))))
-(DFunDef false "layoutWithOffsets" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilter") (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EApp (EVar "stripComments") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
+(DFunDef false "layoutWithOffsets" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilter") (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
 (DTypeSig false "layoutPairs" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))
 (DFunDef false "layoutPairs" ((PList) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EVar "closeAllPairs") (EVar "stack")) (ELit (LInt 0))))
 (DFunDef false "layoutPairs" ((PCons (PCon "RTok" (PVar "t") (PVar "s") (PVar "e")) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "bracketOpener") (EVar "t")) (EBinOp "::" (ETuple (EVar "t") (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 0))) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t")))) (EVar "frames"))) (EApp (EVar "Some") (EVar "t"))) (EVar "False"))) (EIf (EApp (EVar "bracketCloser") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushClosePairs") (EVar "t")) (EVar "s")) (EVar "e")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "t") (EVar "TComma")) (EApp (EVar "frameHasLive") (EVar "frames"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushSepPairs") (EVar "t")) (EVar "s")) (EVar "e")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "t") (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EApp (EVar "Some") (EVar "t"))) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
@@ -3575,7 +3557,7 @@ collectComments s =
 (DFunDef false "elseFilterPairs" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "elseFilterPairs") (EVar "rest"))))
 (DFunDef false "elseFilterPairs" ((PList)) (EListLit))
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "stripComments") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
+(DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
 (DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))))))
 (DTypeSig true "tokenizeWithLines" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))
@@ -4310,12 +4292,8 @@ collectComments s =
 (DFunDef false "elseFilter" ((PCons (PTuple (PCon "TNewline") PWild) (PCons (PTuple (PCon "TThen") (PVar "eoff")) (PVar "rest")))) (EBinOp "::" (ETuple (EVar "TThen") (EVar "eoff")) (EApp (EVar "elseFilter") (EVar "rest"))))
 (DFunDef false "elseFilter" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "elseFilter") (EVar "rest"))))
 (DFunDef false "elseFilter" ((PList)) (EListLit))
-(DTypeSig false "stripComments" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyApp (TyCon "List") (TyCon "RawTok"))))
-(DFunDef false "stripComments" ((PList)) (EListLit))
-(DFunDef false "stripComments" ((PCons (PCon "RComment" PWild PWild) (PVar "rest"))) (EApp (EVar "stripComments") (EVar "rest")))
-(DFunDef false "stripComments" ((PCons (PVar "r") (PVar "rest"))) (EBinOp "::" (EVar "r") (EApp (EVar "stripComments") (EVar "rest"))))
 (DTypeSig false "layoutWithOffsets" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int"))))))
-(DFunDef false "layoutWithOffsets" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilter") (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EApp (EVar "stripComments") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
+(DFunDef false "layoutWithOffsets" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilter") (EApp (EApp (EApp (EApp (EApp (EVar "layout") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
 (DTypeSig false "layoutPairs" (TyFun (TyApp (TyCon "List") (TyCon "RawTok")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "BracketFrame")) (TyFun (TyApp (TyCon "Option") (TyCon "Token")) (TyFun (TyCon "Bool") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int")))))))))
 (DFunDef false "layoutPairs" ((PList) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EApp (EApp (EVar "closeAllPairs") (EVar "stack")) (ELit (LInt 0))))
 (DFunDef false "layoutPairs" ((PCons (PCon "RTok" (PVar "t") (PVar "s") (PVar "e")) (PVar "rest")) (PVar "stack") (PVar "frames") (PVar "prev") (PVar "opener")) (EIf (EApp (EVar "bracketOpener") (EVar "t")) (EBinOp "::" (ETuple (EVar "t") (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EBinOp "::" (EApp (EApp (EVar "BracketFrame") (ELit (LInt 0))) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t")))) (EVar "frames"))) (EApp (EVar "Some") (EVar "t"))) (EVar "False"))) (EIf (EApp (EVar "bracketCloser") (EVar "t")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushClosePairs") (EVar "t")) (EVar "s")) (EVar "e")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "t") (EVar "TComma")) (EApp (EVar "frameHasLive") (EVar "frames"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "flushSepPairs") (EVar "t")) (EVar "s")) (EVar "e")) (EVar "rest")) (EVar "stack")) (EVar "frames")) (EVar "opener")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "t") (EVar "s") (EVar "e")) (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EVar "rest")) (EVar "stack")) (EVar "frames")) (EApp (EVar "Some") (EVar "t"))) (EBinOp "||" (EVar "opener") (EApp (EVar "isOpener") (EVar "t"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
@@ -4361,7 +4339,7 @@ collectComments s =
 (DFunDef false "elseFilterPairs" ((PCons (PVar "t") (PVar "rest"))) (EBinOp "::" (EVar "t") (EApp (EVar "elseFilterPairs") (EVar "rest"))))
 (DFunDef false "elseFilterPairs" ((PList)) (EListLit))
 (DTypeSig false "layoutWithOffsetPairs" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Token") (TyCon "Int") (TyCon "Int"))))))
-(DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "stripComments") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
+(DFunDef false "layoutWithOffsetPairs" ((PVar "src") (PVar "len")) (EApp (EVar "elseFilterPairs") (EApp (EApp (EApp (EApp (EApp (EVar "layoutPairs") (EApp (EVar "dedentTripleInterp") (EApp (EApp (EApp (EApp (EApp (EVar "scan") (EVar "src")) (EVar "len")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0))))) (EListLit (ELit (LInt 0)))) (EListLit)) (EVar "None")) (EVar "False"))))
 (DTypeSig true "tokenize" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Token"))))
 (DFunDef false "tokenize" ((PVar "s")) (EBlock (DoLet false false (PVar "src") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "src"))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "layoutWithOffsets") (EVar "src")) (EVar "len"))))))
 (DTypeSig true "tokenizeWithLines" (TyFun (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "Token")) (TyApp (TyCon "List") (TyCon "Int")))))

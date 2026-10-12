@@ -360,7 +360,7 @@ describeToken (TLexError s) = s
 -- `RComment startPos text` carries a captured comment out-of-band: `startPos`
 -- is the source char offset of the opening `--`/`{-`, `text` the full lexeme
 -- (including the `--` / `{- … -}` delimiters).  These markers are produced by the comment arms of `scanAt` and
--- *stripped before the layout pass* (`stripComments`), so the Token stream the
+-- *skipped by the layout pass* (its `RComment` arms are no-ops), so the Token stream the
 -- parser consumes is byte-identical to before — comments are purely a side
 -- channel.  `collectComments` re-reads the raw stream to surface them.
 -- `RTok tok startOff endOff` carries the source char offsets of the token's
@@ -2394,24 +2394,15 @@ elseFilter ((TNewline, _) :: (TThen, eoff) :: rest) =
 elseFilter (t :: rest) = t :: elseFilter rest
 elseFilter [] = []
 
--- Drop the out-of-band `RComment` markers before the layout pass, so the Token
--- stream the parser consumes is byte-identical regardless of comment capture.
-stripComments : List RawTok -> List RawTok
-stripComments [] = []
-stripComments ((RComment _ _) :: rest) = stripComments rest
-stripComments (r :: rest) = r :: stripComments rest
-
 -- The layout pass over the raw stream, carrying offsets.  Shared by `tokenize`
 -- (which drops offsets) and `tokenizeWithOffsets` (the position side-channel).
+-- `RComment` markers pass through untouched: `layout` treats them as no-ops, and
+-- no lookahead in layout can reach one (a comment never directly follows an
+-- `RNewline`; `afterNl` suppresses the newline before a comment line).
 layoutWithOffsets : Array Char -> Int -> List (Token, Int)
 layoutWithOffsets src len =
   elseFilter
-    (layout
-      (stripComments (dedentTripleInterp (scan src len 0 0 0)))
-      [0]
-      []
-      None
-      False)
+    (layout (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
 
 -- Layout variant that threads both START and END offsets per token, used by
 -- `tokenizeWithOffsetPairs`.  Real tokens carry their RTok start+end; synthetic
@@ -2638,12 +2629,7 @@ elseFilterPairs [] = []
 layoutWithOffsetPairs : Array Char -> Int -> List (Token, Int, Int)
 layoutWithOffsetPairs src len =
   elseFilterPairs
-    (layoutPairs
-      (stripComments (dedentTripleInterp (scan src len 0 0 0)))
-      [0]
-      []
-      None
-      False)
+    (layoutPairs (dedentTripleInterp (scan src len 0 0 0)) [0] [] None False)
 
 export
 tokenize : String -> List Token
@@ -2774,8 +2760,8 @@ advanceLine src target p line
 -- lexeme text (the `--…` / `{- … -}`, delimiters included).  Surfaced in
 -- SOURCE ORDER.
 -- `format_program`/the comment-preserving printer consume this
--- list keyed by position; the parser is unaffected (comments are stripped
--- before layout — see `stripComments`).
+-- list keyed by position; the parser is unaffected (the layout pass skips
+-- comment markers — see `layout`).
 export data Comment = Comment Int Int String
 
 export

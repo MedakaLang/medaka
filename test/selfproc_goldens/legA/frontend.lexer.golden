@@ -168,7 +168,6 @@ skipLineComment : Array Char -> Int -> Int -> Int
 splitInterpGroup : List RawTok -> (List String, List RawTok, List RawTok)
 splitLines : Array Char -> Int -> Int -> String -> List String
 startsWithNl : String -> Bool
-stripComments : List RawTok -> List RawTok
 stripFirstAware : Int -> Bool -> List String -> List String
 stripIndent : String -> String
 stripIndentCs : String -> Array Char -> Int -> String
