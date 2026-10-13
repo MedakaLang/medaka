@@ -621,6 +621,7 @@ collectRowEffvarIds : List Mono -> List Int
 collectTyIds : List Mono -> List Int
 collectValueAllowance : List EffRow -> EffRow
 commitImprovement : Map String Unit -> List (Mono, Mono) -> Unit
+committedSuperRoute : String -> ScopeId -> IfaceRef -> ReqWalk -> List Mono -> Route
 composeOp : Mono -> Mono -> Bool -> Mono
 computeMangledShadowMap : List Decl -> List (String, List Decl) -> List (String, String)
 concreteAtom : Atom -> Bool
@@ -1014,7 +1015,7 @@ entail : String -> Mono -> String -> ScopeId -> EntailKind -> (Route, List Route
 entailAssum : Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumVar : Option PredicateRequest -> Mono -> String -> String -> ScopeId -> EntailKind -> Option AssumAnswer
-entailFallback : ScopeId -> Mono -> EntailKind -> Route
+entailFallback : String -> ScopeId -> Mono -> EntailKind -> Route
 entailInst : String -> Mono -> String -> ScopeId -> String -> EntailKind -> (Route, List Route)
 entailedByDeclared : String -> String -> Ty -> Bool
 enterLevel : Unit -> Unit
@@ -2236,6 +2237,7 @@ negatedInI32 : Int -> Option Int
 nestedRequireGoals : Map String Unit -> Map String Unit -> List UObligation -> List UObligation
 nestedRequireGoalsGo : Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
 nestedRequireGoalsOnce : Map String Unit -> Map String Unit -> List (UObligation, ReqWalk) -> List UObligation
+nestedRowRoute : String -> ScopeId -> Mono -> List Mono -> ReqWalk -> ImplRow -> Route
 newEffvarId : Unit -> Int
 newTyvarId : Unit -> Int
 newWalkMemo : Unit -> WalkMemo
@@ -3044,6 +3046,7 @@ spineHeadMono : Mono -> Mono
 spliceRowTails : List (String, Ty) -> List String -> (List EffAtomTy, List String)
 splitOnComma : String -> List String
 splitOnCommaGo : String -> Int -> Int -> List String -> List String
+stableGoalReach : List Int -> IfaceRef -> List Mono -> GoalReach
 stableMinimum : List Mono -> List ImplRow -> ImplRow -> Bool
 stampCtxOf : String -> List Decl -> List Obligation -> List (Mono, Ref (Option Float), Int, Ref Route) -> StampCtx
 stampGraphDecls : List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
@@ -3216,7 +3219,7 @@ undeclaredImplPrerequisiteMsg : String -> String -> String -> String
 undeterminedGoalExempt : IfaceRef -> List Mono -> ScopeId -> Bool
 undeterminedNoImplMsg : String -> List Mono -> String
 undeterminedRetEffVars : List (String, List Kind) -> Ty -> List String
-undeterminedRoute : ScopeId -> Undetermined -> List Mono -> Route
+undeterminedRoute : String -> ScopeId -> IfaceRef -> Undetermined -> ReqWalk -> List Mono -> Route
 undeterminedRowRoute : ScopeId -> IfaceRef -> List Mono -> ImplRow -> Route
 undeterminedVectorVerdict : Map String Unit -> Map String Unit -> GoalWindow -> UObligation -> Unit
 unifiedRowReqs : Map String Unit -> List Mono -> ImplRow -> Option (List (String, Mono), List Int, List Require)

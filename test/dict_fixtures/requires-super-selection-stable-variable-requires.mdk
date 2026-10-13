@@ -1,0 +1,23 @@
+-- §6.1.3 R-STABLE, the super half, over a generalized variable alone (#4070):
+-- `g`'s goal `Sub (Wrap Bool) b` selects `impl Sub (Wrap a) b requires Show2 b`,
+-- and its super `Sup b` reaches only `impl Sup a requires Show2 a`, so the
+-- selection is stable and `g : Show2 a => a -> String`.  The super is built from
+-- that instance, carrying `g`'s own `Show2` dictionary, so `g True` prints
+-- `SUPbsub` on every engine.
+interface Show2 a where
+  show2 : a -> String
+impl Show2 Bool where
+  show2 _ = "b"
+interface Sup a where
+  sup : a -> String
+interface Sub a b requires Sup b where
+  sub : a -> b -> String
+data Wrap a = Wrap a
+impl Sup a requires Show2 a where
+  sup v = "SUP" ++ show2 v
+impl Sub (Wrap a) b requires Show2 b where
+  sub _ _ = "sub"
+useSub : Sub a b => a -> b -> String
+useSub x y = sup y ++ sub x y
+g y = useSub (Wrap True) y
+main = println (g True)

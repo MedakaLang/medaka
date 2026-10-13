@@ -1,0 +1,22 @@
+-- §6.1.3, a super goal over a rigid variable alone (#4065): the signed
+-- `g : b -> String` holds `b` rigid, so the construction goal `C (Box Bool) b`
+-- selects `impl C (Box a) b` and its super `D b` commits to the one instance that
+-- matches it, `impl D a`, when `g` is elaborated.  `impl D Int` never matches a
+-- rigid `b`, so `g (1 : Int)` prints `BLANKETc` on every engine.
+interface D a where
+  d : a -> String
+interface C a b requires D b where
+  c : a -> b -> String
+data Box a = Box a
+impl D a where
+  d _ = "BLANKET"
+impl D Int where
+  d _ = "INT"
+impl C (Box a) b where
+  c _ _ = "c"
+useC : C a b => a -> b -> String
+useC x y = d y ++ c x y
+g : b -> String
+g y = useC (Box True) y
+main =
+  println (g (1 : Int))
