@@ -1574,7 +1574,7 @@ captureCurrentBinding "top" =
   putStr (emitProgram bindingInput program)
 captureCurrentBinding "lifted" =
   -- emitLetGroupRef calls emitLgLifted before it emits this group's use-site
-  -- body, so the sensitive local member is reached while currentBinding is lg:P.
+  -- body, so the sensitive local member is reached while the FnCtx binding is lg:P.
   let program = bindingProgram [
     synthBind "outer" [
       CClause
@@ -1601,8 +1601,8 @@ captureCurrentBinding "no-writer" =
   putStr (emitProgram bindingInput bindingNoWriterProgram)
 captureCurrentBinding "post-lift" =
   -- The local member L emits successfully before the enclosing body reaches the
-  -- unsupported argument; the final strict call observes whichever binding the
-  -- existing backend leaves current, without choosing a verdict here.
+  -- unsupported argument; the final strict call observes the binding of the FnCtx of the body
+  -- being emitted (P), not the lifted member's.
   let program = bindingProgram [
     synthBind "P" [
       CClause
