@@ -844,6 +844,31 @@ is a production-Boehm executable with an independent content oracle, ready for
 later compiler-contract integration; it does not yet execute with custom GC.
 The existing larger application baseline mode retains its inputs and behavior.
 
+### Compiler-produced native inventory (2026-10-12)
+
+The experiment now consumes the emitter sprint's validated F5 binder facts.
+`compiler/backend/native_gc_contract.mdk` records native allocation layouts,
+physical operand classes, stores, derived addresses, and call contracts at their
+actual LLVM producers. The whole-module probe can write a deterministic report
+with `MEDAKA_NATIVE_GC_CONTRACT=/absolute/path/report.sexpr`. Split emission and
+simultaneous stats output are rejected. Ordinary emission avoids constructing
+report events, but the added state and branch overhead has not been benchmarked.
+
+Every report declares `boehm incomplete moving-safe=false`. Raw numeric fields,
+lengths, code addresses, and packed bytes are distinguished from tagged words;
+unknown helper/re-entry behavior remains explicit. This inventory does not
+provide root liveness, relocation reloads, static-object ownership, or complete
+runtime-helper coverage, and does not enable custom-GC application execution.
+
+Thirteen native tests include actual-emitter report/default LLVM equality and
+unrelated-program isolation. The real PDS varint program produces identical LLVM
+with reporting enabled or disabled; 29 exact encodings and four repeated byte
+checksums pass independent oracles. All 35 calls to the six ByteBlock helpers
+match the report. Self-compilation converges, and 62 typed LLVM fixtures plus
+78 module fixtures pass. The [reconstruction evidence](../../test/gc_prototype/results/2026-10-12-native-contract.json)
+preserves sources, report, commands, independent oracle, hashes, and the limits
+of the saved validation logs.
+
 ### Lessons from OCaml's compiler/runtime contract (2026-10-12)
 
 This source review pins OCaml 5.4.0 at commit

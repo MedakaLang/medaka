@@ -245,6 +245,16 @@ not require a new IR, a V/ANF/AP revival, or additional unboxing. Collector-side
 experiments can proceed alongside F5; compiler changes consume its settled
 carrier and follow the existing serialized landing lane.
 
+The GC experiment now includes an opt-in producer inventory in
+`compiler/backend/native_gc_contract.mdk`, consuming the F5 carrier after the
+LLVM consumer sprint. It records physical layouts and call observations during
+ordinary Boehm emission, with explicit incomplete coverage and
+`moving-safe=false`. Default/report LLVM equality and unrelated-program
+isolation are tested, including a real PDS varint program. This is an observation
+step toward R5a; root liveness, relocation reloads, managed/static ownership, and
+complete helper contracts remain required before moving execution. See the
+[evidence and limits](../docs/design/GC-FEASIBILITY.md#compiler-produced-native-inventory-2026-10-12).
+
 ### R6. The Core validator
 
 `coreValidate : EmitTarget -> CProgram -> Plan -> List CoreDefect`, run by every

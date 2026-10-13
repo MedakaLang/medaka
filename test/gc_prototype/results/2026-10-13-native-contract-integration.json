@@ -1,0 +1,44 @@
+{
+  "format": "native-contract-integration-v1",
+  "head": "260b96696",
+  "emitter_sprint_base": "a8fab67469c10e8f5cdad0d0dc5f9d02a3b13d2e",
+  "isolated_reporter_commit": "99d467ca262f48c4ea55876365402eb073a934e1",
+  "source_identity": {
+    "command": "git diff --name-only 99d467ca262f48c4ea55876365402eb073a934e1 HEAD -- compiler stdlib runtime",
+    "changed_paths": [
+      "compiler/EMITTER-TARGET-ARCHITECTURE.md",
+      "compiler/PERF-RESULTS.md",
+      "compiler/RUNTIME-DESIGN.md"
+    ],
+    "compiler_stdlib_runtime_code_identical": true
+  },
+  "checks": [
+    {
+      "command": "make -C /root/.codex/worktrees/f396/medaka medaka",
+      "exit": 0,
+      "observation": "Stage A restored from matching build cache; stage B emitted and linked locally."
+    },
+    {
+      "command": "env MEDAKA_STRICT=1 /root/.codex/worktrees/f396/medaka/medaka test /root/.codex/worktrees/f396/medaka/compiler/backend/native_gc_contract_test.mdk",
+      "exit": 0,
+      "engine_reported": "native",
+      "tests_passed": 13,
+      "tests_failed": 0
+    },
+    {
+      "command": "env MEDAKA_STRICT=1 /root/.codex/worktrees/f396/medaka/medaka test --native /root/.codex/worktrees/f396/medaka/gzip/lib/inflate.mdk",
+      "exit": 0,
+      "engine_reported": "native",
+      "tests_passed": 20,
+      "doctests_passed": 2,
+      "properties_passed": 2,
+      "cases_per_property": 100,
+      "tests_failed": 0
+    }
+  ],
+  "limitations": [
+    "These are parent-observed command outcomes; complete raw command output was returned in the session but was not separately saved here.",
+    "Broader isolated reporter validation and reconstruction inputs are in 2026-10-12-native-contract.json; those checks were not repeated on byte-identical compiler sources.",
+    "No custom-GC application execution or performance improvement is established by these checks."
+  ]
+}

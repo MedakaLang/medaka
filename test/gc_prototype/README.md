@@ -4,6 +4,13 @@ This is an on-demand C/LLVM test and synthetic benchmark, not a Medaka compiler
 backend, runtime option, or CI gate. Production keeps Boehm. The design decision
 and compiler profiling evidence live in [GC feasibility](../../docs/design/GC-FEASIBILITY.md).
 
+The separate LLVM whole-module probe now supports a compiler-produced inventory
+through `MEDAKA_NATIVE_GC_CONTRACT=/absolute/path/report.sexpr`. It observes
+ordinary Boehm emission and always reports incomplete coverage and
+`moving-safe=false`; it does not run applications with this collector. See the
+[inventory evidence](results/2026-10-12-native-contract.json) and
+[remaining integration requirements](../../compiler/EMITTER-TARGET-ARCHITECTURE.md#r5a-experimental-native-moving-gc-contract).
+
 Run from any directory, with Python 3, clang, and Boehm development headers
 installed (`pkg-config bdw-gc`, or Homebrew `bdw-gc`):
 
