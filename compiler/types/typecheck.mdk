@@ -29431,8 +29431,10 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
     -- ARCH B-2.1-h: graph-global, off `bodyImplEnvRef` — see `ieDefinesReqMethodAt`.
     -- The head projection is `headTyconMono operandMono`, i.e. the `HeadKey` whose
     -- `headKeyName` IS the `tag` this arm was passed (`entail` derives both from the
-    -- same mono, `headTyconNameMono`/`headTyconMono` classify the same nodes), so the
-    -- LOOKUP is the same question at the same key strength — only the POPULATION moved.
+    -- same mono, and on the nominal heads `TCon`/`TRigid` that carry a name the two
+    -- classifiers agree; they differ only on `TFun`, which `headTyconMono` keys and
+    -- `headTyconNameMono` does not), so the LOOKUP is the same question at the same
+    -- key strength — only the POPULATION moved.
     let dictMethod =
       if isBinop then
         if ieDefinesReqMethodAt
@@ -37764,9 +37766,8 @@ checkOneCallObligation deferNonGround univ iface occs loc scope =
     -- s-nary-truncated-goal-joint-rejects (reject).
     -- ⚡ PERF (#1974): the truncation gate and the match test below read THE SAME two
     -- buckets, so they are answered from ONE pair of lookups (`oblCallVerdict`) rather
-    -- than the two-then-two the separate `oblGoalIsTruncated` / `implMatchesArgsU` calls
-    -- performed.  Each `mregLookupK` is a full tree walk over the bucket map, and the
-    -- doubled lookups cost ~70 MB of extra garbage at N=400 modules and ~22% of the whole
+    -- than one pair per question.  Each `mregLookupK` is a full tree walk over the
+    -- bucket map, and the doubled lookups cost ~70 MB of extra garbage at N=400 modules and ~22% of the whole
     -- `typecheck` stage on `diff_compiler_perf_scaling.sh`'s `modules` shape — enough to
     -- push its TIME arm over the gate's 3.0x-per-doubling ceiling (measured 1.63 s -> 1.28 s
     -- at N=400 with the gate stubbed out).  The VERDICTS are byte-identical: same buckets,
@@ -37846,9 +37847,9 @@ checkOneCallObligationNoImpl iface args loc scope =
     reportNumOrNoImpl iface.irName args loc
 
 -- #1867 + PERF (#1974): the ONE call-obligation verdict, answered from ONE pair of
--- bucket lookups.  It fuses two questions the separate `oblGoalIsTruncated` /
--- `implMatchesArgsU` pair asked over THE SAME buckets, each re-minting (and re-RENDERING,
--- see `insertUnivImplAt`) its registry key:
+-- bucket lookups.  It fuses two questions over THE SAME buckets, the truncation test
+-- and the match test, which asked separately would each re-mint (and re-RENDER, see
+-- `insertUnivImplAt`) its registry key:
 --   `None`       — the goal is a TRUNCATION of a k-parameter predicate, k > its own
 --                  arity: some impl of [iface] this goal could reach declares more head
 --                  types than the goal carries.  Scoped to arity 1 because that is the
@@ -40924,7 +40925,10 @@ narrowsImplHeadMsg subject narrowed head =
 -- with their superinterfaces, and the method signature's own `=>` context.
 -- A residual that an instance answers only by binding a head variable is reported
 -- too, whatever other variables it mentions.  A goal no instance can answer even
--- with the head variables free is not reported here.
+-- with the head variables free is left to the obligation gate's no-impl verdict only
+-- when the gate decides it (`allConcreteHeads`, as `uOblIsDecidableNow` asks).  A
+-- vector the gate defers is a residual here: the head variable it waits on is rigid
+-- for the body and never binds, so no later reader judges it.
 checkImplHeadPrerequisites : String ->
   IfaceRef ->
   ImplBodySite ->
@@ -40987,7 +40991,8 @@ implGoalResiduals walk headIds givens iface args
           (map (substMono toRigid [] []) args))
           None =>
             if implMatchesU univ iface args
-              || answeredOnlyByBindingHead headIds iface args then
+              || answeredOnlyByBindingHead headIds iface args
+              || not (allConcreteHeads args) then
               [(iface, args)]
             else
               []
@@ -41067,7 +41072,9 @@ knownPredicateSlot iface args = PredicateSlot {
 
 -- A residual over head variables alone names the `requires` to add.  One that also
 -- mentions a variable of the body's own has no `requires` to name, so it is
--- reported only when an instance answers it by fixing a head variable.
+-- reported when an instance answers it only by fixing a head variable, and as
+-- `T-NO-IMPL` when no instance unifies with it at all: the head variable is rigid,
+-- so no later binding can give it an instance.
 reportImplHeadResidual : String ->
   List (String, Int) ->
   Option Loc ->
@@ -41097,6 +41104,8 @@ reportImplHeadResidual subject roots loc (iface, args) =
       "T-IMPL-MISSING-REQUIRES"
       loc
       (implGoalFixesHeadMsg subject pred fixed)
+  else if isEmptyL (goalCandidates omEmpty args (goalRows iface args)) then
+    reportUndeterminedNoImpl iface args loc
 
 -- the CALL-obligation half of the constraint axis: recordCallObligations pushes
 -- (iface, [constraint-var mono], loc) for each dict slot a constrained CALLEE
@@ -42218,7 +42227,8 @@ expandAliasHeadTy ty = expandAliasHeadTyWith perRun.value.aliasTableRef.value ty
 -- same function body with stage K's module-scoped alias projection.  Keeping the
 -- table as an argument here means lowering does not grow a second alias expander
 -- (or a third alias registry) merely because it runs after the per-module Ref has
--- been reset.
+-- been reset.  It expands the head position only; an impl head's alias normal form,
+-- arguments included, is `tyAliasNormalForm`'s.
 expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
 expandAliasHeadTyWith aliases (t@(TyCon { tyConName = n, tyConOrigin = o })) =
   match lookupTab (tyTabKey o n) aliases
@@ -52563,7 +52573,7 @@ stampGraphDecls : List Decl ->
   (List Decl, List (String, List Decl))
 stampGraphDecls coreDecls0 modules0 =
   let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
-  let aliases = flatMap graphAliasRows (coreDecls :: map snd modules)
+  let aliases = flatMap graphAliasRow (coreDecls ++ flatMap snd modules)
   if isEmptyL aliases then
     (coreDecls, modules)
   else
@@ -52571,9 +52581,6 @@ stampGraphDecls coreDecls0 modules0 =
       map (implHeadNormalDecl aliases) coreDecls,
       map (m => (fst m, map (implHeadNormalDecl aliases) (snd m))) modules,
     )
-
-graphAliasRows : List Decl -> List (TabKey, (List String, Ty))
-graphAliasRows decls = flatMap graphAliasRow decls
 
 graphAliasRow : Decl -> List (TabKey, (List String, Ty))
 graphAliasRow (DAttrib _ d) = graphAliasRow d

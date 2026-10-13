@@ -4981,6 +4981,109 @@ test "a mixed arrow goal defers to its use, as a mixed Box goal does" = expectEa
     ),
   ]
 
+-- In an impl body the head variable is rigid, so the same mixed goal is decided
+-- there: a `requires` declares it, and otherwise it is rejected at the body.
+implMixedProgram : (Bool -> List String) -> Bool -> (List String, String)
+implMixedProgram lines arrow =
+  aliasHeadOutcome
+    (aliasHeadModule
+      ([
+          "interface C a b where",
+          "  c : a -> b -> String",
+          "impl C Int Int where",
+          "  c _ _ = \"ii\"",
+          "interface Def a b where",
+          "  def : b -> a",
+          "impl Def Int Int where",
+          "  def x = x + 41",
+          "data Box a = Box a",
+          "isPos : Int -> Bool",
+          "isPos _ = True",
+          "interface Q a where",
+          "  q : a -> String",
+          "interface R a where",
+          "  r : a -> b -> String",
+        ]
+        ++ lines arrow))
+
+-- The constructed argument's type, then one built around a variable the body owns,
+-- then one built around the impl-head variable `x`.
+mixedType : Bool -> String
+mixedType arrow = if arrow then "(Int -> Bool)" else "(Box Bool)"
+
+mixedOpenValue : Bool -> String
+mixedOpenValue arrow = if arrow then "(y => y)" else "(Box [])"
+
+mixedHeadValue : Bool -> String
+mixedHeadValue arrow = if arrow then "(z => x)" else "(Box x)"
+
+test "a mixed goal in an impl body is declared or rejected there" = expectEach [
+  (
+    "parametric head",
+    aliasHeadVerdicts
+      (["T-IMPL-MISSING-REQUIRES"], "")
+      (implMixedProgram (arrow => [
+        "impl Q (Box a) where",
+        "  q (Box x) = c \{arrowHeadValue arrow} x",
+        "main = q (Box (1 : Int))",
+      ])),
+  ),
+  (
+    "blanket head",
+    aliasHeadVerdicts
+      (["T-IMPL-MISSING-REQUIRES"], "")
+      (implMixedProgram (arrow => [
+        "impl Q a where",
+        "  q x = c \{arrowHeadValue arrow} x",
+        "main = q (1 : Int)",
+      ])),
+  ),
+  (
+    "exact return",
+    aliasHeadVerdicts
+      (["T-IMPL-MISSING-REQUIRES"], "")
+      (implMixedProgram (arrow => [
+        "impl Q (Box a) where",
+        "  q (Box x) =",
+        "    let f : \{mixedType arrow} = def x",
+        "    \"Q\"",
+        "main = q (Box (1 : Int))",
+      ])),
+  ),
+  (
+    "declared by requires",
+    aliasHeadVerdicts
+      ([], "R")
+      (implMixedProgram (arrow => [
+        "impl C \{mixedType arrow} Int where",
+        "  c _ _ = \"R\"",
+        "impl Q (Box a) requires C \{mixedType arrow} a where",
+        "  q (Box x) = c \{arrowHeadValue arrow} x",
+        "main = q (Box (1 : Int))",
+      ])),
+  ),
+  (
+    "with a body variable no instance unifies with",
+    aliasHeadVerdicts
+      (["T-NO-IMPL"], "")
+      (implMixedProgram (arrow => [
+        "impl Q (Box a) where",
+        "  q (Box x) = c \{mixedOpenValue arrow} x",
+        "main = q (Box (1 : Int))",
+      ])),
+  ),
+  (
+    "with a method variable no instance unifies with",
+    aliasHeadVerdicts
+      (["T-NO-IMPL"], "")
+      (implMixedProgram (arrow => [
+        "impl R (Box a) where",
+        "  r (Box x) y = c \{mixedHeadValue arrow} y",
+        "main = r (Box (1 : Int)) True",
+      ])),
+  ),
+]
+
 -- A declared `Num` impl over an arrow answers a literal at that arrow, as one over a
 -- `Box` does; a literal applied as a function is rejected where it is used.
 arrowNumOutcome : List String -> (List String, String)
@@ -5260,6 +5363,8 @@ test "super-goal judgment matrix: generalized scheme" =
     (s => "g : Sub (Wrap Bool) \{superShapeType s "a"} => a -> String")
     (s => superGoalScheme "g" (superShapeOverlap s []))
 
+-- Pins the scheme only: the variable shape's program builds the wrong super
+-- dictionary and crashes on run, a separate open defect.
 test "super-goal judgment matrix: carry" =
   superShapeVerdicts
     (s =>
